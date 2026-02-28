@@ -1,0 +1,11 @@
+# Skill evaluation workspaces (iteration artifacts, grading, benchmarks)
+*-workspace/
+
+# Claude Code local settings
+.claude/
+
+# Plan mode scratch files
+plans/
+
+# OS files
+.DS_Store
