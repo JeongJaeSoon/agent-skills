@@ -1,0 +1,23 @@
+{
+  "skill_name": "obsidian-cli",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want to add a quick task to my daily note from the terminal without opening Obsidian. Something like '- [ ] Buy groceries after work'. How do I do that?",
+      "expected_output": "Should provide the exact obsidian daily:append command with proper content= syntax, including the checkbox markdown. Should mention the inline flag option and that Obsidian must be running.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I have about 800 notes in my vault and I want to find all notes that have no links pointing to them — basically orphan notes that nobody references. Then I want to bulk-add a 'status: orphan' property to each one. Can you help me write a shell script for this?",
+      "expected_output": "Should use obsidian orphans to list orphan files, pipe through a loop, and use obsidian property:set for each. Should use correct param=value syntax throughout, not POSIX-style flags. Should mention format=json if appropriate for parsing.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I just installed Obsidian on my Linux machine (AppImage version) and enabled the CLI in settings, but when I type 'obsidian' in my terminal it says command not found. What's going on?",
+      "expected_output": "Should diagnose the AppImage symlink issue specifically. Should explain that AppImage may not auto-create the symlink and provide the manual ln -s command. Should mention restarting the terminal and checking PATH.",
+      "files": []
+    }
+  ]
+}
