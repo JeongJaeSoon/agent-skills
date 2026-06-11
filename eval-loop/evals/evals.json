@@ -1,0 +1,35 @@
+{
+  "skill_name": "eval-loop",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We keep tweaking the prompt for our summarization agent and the accuracy on our test cases keeps going up, but real users still complain. Every time we 'fix' it, it breaks something else. What are we doing wrong and how should we set up evaluation properly?",
+      "expected_output": "Should diagnose prompt overfitting: tuning and scoring on the same examples measures memorization, not capability. Should prescribe a holdout set the model/author never saw during iteration, and only trusting accuracy measured there. Should mention adding control cases (always-pass guards) and past-failure cases as regression anchors so fixes don't silently break other things. Bonus: note that user complaints suggest the success metric itself may be wrong for an open-ended task (measure job-completion/reuse, not one-shot quality).",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I'm building an agent that generates marketing copy. There's no single 'correct' output, so I don't know how to write evals or grade it. How do I even measure if it's working?",
+      "expected_output": "Should recognize this as an ambiguous/subjective task with no single correct answer and steer away from one-shot quality scoring. Should redefine success around outcome metrics: job-completion rate, reuse/retention, edit-to-acceptance. Should describe LLM-as-judge done correctly: concrete discrete pass/fail rubric criteria rather than a 1-10 vibe score, hiding which system produced the output, randomizing order for A/B, and spot-checking the judge against human labels. Should prefer real outcome signals over judge opinion where available.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "A new, much stronger model just came out. Do I need to rewrite all my evals for it? And what should I do with my existing prompt harness?",
+      "expected_output": "Should state the core principle: the harness is disposable, the evals are the asset — you do NOT rewrite the evals. Should prescribe running the existing holdout + control sets unchanged against the new model, comparing pass counts to the incumbent, and migrating immediately if there's a large jump. Should say to DELETE harness scaffolding the new model no longer needs (native reasoning replacing chain-of-thought prompting, fewer tools, smaller system prompt) and frame a shrinking harness as success, not loss.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Our eval suite for an agentic coding task has gotten really expensive to run — each task burns a huge number of tokens and we run the suite constantly. How do we keep the cost under control without just running it less often?",
+      "expected_output": "Should give concrete cost-tiering tactics rather than 'run it less': per-task token budgets (e.g., 32K-50K) so the model self-limits; model tiering with a mid-tier orchestrator dispatching a heavy model only for hard subtasks and a light model for bulk/cheap work; and prefix caching by putting the stable context first to keep cache hit rate high (80-90%) so re-runs cost a fraction of the first pass. Should mention parallelizing independent sub-agents over a long serial chain.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "I have an agent task that keeps failing in a different way every time I retry it. The prompt is kind of vague and there are a couple of ways to interpret it. Each rerun basically starts from scratch and guesses differently. How do I make it actually converge instead of flailing?",
+      "expected_output": "Should identify this as an orphan/diverging task: there's no judge scoring the output, so every retry re-guesses from scratch instead of converging. Should walk the orphan-reaping steps: name the conflicting signals, define a single explicit pass condition (fix the under-specified spec first), attach the cheapest judge that can check it, add a control case to verify the loop machinery, then run score->diagnose->feedback->re-run against the FIXED target until convergence, and finally record the result and promote the failure into a permanent regression case. Key insight: the fix is a loop with a judge, not a better one-shot prompt.",
+      "files": []
+    }
+  ]
+}
