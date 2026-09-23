@@ -30,9 +30,11 @@ bug, a missing validation, a contract inconsistency. Decide yourself, at the mom
 it, and never end a turn on "말씀 주시면 티켓으로 만들겠습니다":
 
 - Fixable in this diff and inside the ticket's scope → fix it here.
-- Needs its own investigation, decision, or diff → file it now with `write-ticket` (its
-  approval gate does not apply); check `list_issues` first so you do not duplicate one.
-  One ticket per independent diff; findings that must land together share one.
+- Needs its own investigation, decision, or diff → file it now with `write-ticket` as a
+  follow-up (its approval gate does not apply, its follow-up format does); check `list_issues`
+  first so you do not duplicate one. One ticket per independent diff; findings that must land
+  together share one. Inside a `run-program` worker, filing is where it stops: do not start
+  the follow-up; the coordinator decides whether it enters the program.
 - Speculative, or not reproduced in the repo → write it in the worklog only, no ticket.
 
 Name every ticket you filed in the report. The user's review happens on the ticket, not
@@ -71,9 +73,17 @@ node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs ta
 A design you are unsure of is exactly that case: run `adversarial-review` for the sweep, and
 put the one question it cannot settle to astra as a `task`. Do not reach for astra by default —
 sol is the workhorse, astra is the escalation. Start them in
-the background and do other work while they run. Then apply every finding, or say in the PR
-why you are rejecting it, and re-run until a pass comes back with nothing material — that
-verdict, not your own reading of the diff, is what closes the review. For an investigation or
+the background and do other work while they run.
+
+Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
+Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
+verdict, not your own reading of the diff, is what closes the review. **Five rounds is the cap**
+unless the ticket or the program's standing orders set another. The cap never waives an Act-on
+finding: fix it. What it ends is the stream of Consider items: past the cap they go into a
+"남은 검토" checklist in the PR body, each with its one-line reason, and become tickets only
+when they are reproduced defects (§2). A change with a wide blast radius — auth, migrations,
+concurrency, a public contract — gets `blast-radius`, or `interrogate` for a multi-model pass,
+before the first round rather than more rounds after it. For an investigation or
 a fix you want Codex to drive end to end, use the `codex:rescue` skill.
 
 ## 4. Commit
@@ -136,7 +146,10 @@ threads are resolved** (`gh pr checks` / `gh pr view`).
 - Review comments → respond and fix.
 - CI failures → re-cycle through steps 1–4.
 
-Then merge it.
+Then merge it — unless this session is a `run-program` worker (its prompt carries an Orca
+preamble with Task and Dispatch IDs). There the brief's REPORT is the end: send `worker_done`
+with the PR, head SHA, review rounds, and the evidence, and stop. The coordinator lands PRs one
+at a time, and a worker that merges itself breaks that order.
 
 ```bash
 gh pr merge <n> --squash --delete-branch      # a stack merges bottom-up, see §5

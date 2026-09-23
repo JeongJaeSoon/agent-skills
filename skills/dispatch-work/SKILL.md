@@ -33,6 +33,8 @@ Where the work goes is a separate question, and only one answer is this skill:
 - "서브에이전트로", "sub-agent 로 진행해두고" → the Agent tool, in this session. Not this skill.
 - "코덱스에게 위임", "codex 와 함께" → `codex:rescue`. Not this skill.
 - A new Orca card / worktree, in this repo or another → this skill.
+- Several tickets supervised to a finish line, with this session as the coordinator that lands
+  their PRs → `run-program`. Not this skill.
 
 "병렬로" by itself says nothing about which: most of the time it is same-repo, ticket-based
 parallel work (handoff) or sub-agents. Read the rest of the sentence.
