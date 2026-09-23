@@ -162,7 +162,9 @@ Then land it. How depends on where you run:
   Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
   Under human-gate it refuses; report READY and stop. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence.
-- **A standalone card** merges its own verified PR unless the user set a hold:
+- **A standalone card** merges its own verified PR unless the user set a hold. When the
+  ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
+  a landing order, a baton), follow that procedure instead of merging at will:
 
 ```bash
 gh pr merge <n> --squash --delete-branch      # a stack lands from its top, see §5
