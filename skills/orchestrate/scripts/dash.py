@@ -5,12 +5,12 @@ Usage: python3 dash.py <command> [options]
 
   collect <slug>                     rebuild <store>/<slug>/dashboard/state.json from program.json,
                                      the ledger, the tracker, GitHub and Orca (each source optional)
-  serve [--port 4777] [--interval 60] [--host 127.0.0.1]
+  serve [--port 4780] [--interval 60] [--host 127.0.0.1]
                                      serve the dashboard; full collect every --interval seconds,
                                      ledger and notes re-read every 3 s
   note <slug> --kind risk|digest|decision --text TEXT [--author NAME]
                                      add a human-readable line to the dashboard
-  demo [--port 4777] [--live] [--no-serve]
+  demo [--port 4780] [--live] [--no-serve]
                                      a realistic fake program in a temp store, served offline
 
 Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <slug>/dashboard/.
@@ -977,7 +977,7 @@ def cmd_collect(argv):
 
 
 def cmd_serve(argv):
-    serve(prog.opt(argv, "--host", "127.0.0.1"), int(prog.opt(argv, "--port", "4777")),
+    serve(prog.opt(argv, "--host", "127.0.0.1"), int(prog.opt(argv, "--port", "4780")),
           int(prog.opt(argv, "--interval", "60")))
 
 
@@ -1007,7 +1007,7 @@ def cmd_demo(argv):
         return
     if "--live" in argv:
         threading.Thread(target=dash_demo.live, args=(root,), daemon=True).start()
-    serve("127.0.0.1", int(prog.opt(argv, "--port", "4777")), 20)
+    serve("127.0.0.1", int(prog.opt(argv, "--port", "4780")), 20)
 
 
 COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "note": cmd_note, "demo": cmd_demo}
