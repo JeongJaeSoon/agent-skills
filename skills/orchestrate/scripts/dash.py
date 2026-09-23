@@ -716,7 +716,11 @@ def _merge(slug, d, cfg, fetched, interval):
         pr_rows = read_json(rows_path, [])
     raw_orca, fresh_orca = outcome("orca")
     try:
-        order = land_order(events, pr_rows, cfg, tnow, raw_orca.get("tasks") if fresh_orca else None)
+        # Orca down: rank on the last shaped tasks, or dependent PRs would look ready.
+        dep_tasks = raw_orca.get("tasks") if fresh_orca else [
+            {"id": t["id"], "display_name": t["title"], "status": t["status"], "deps": t["deps"]}
+            for t in prev.get("tasks") or []]
+        order = land_order(events, pr_rows, cfg, tnow, dep_tasks)
     except Exception as e:  # a bug in the ranking must not take the rest of the dashboard down
         order = prev.get("land_order") or []
         errors.append(f"land_order: {e!r}"[:300])
