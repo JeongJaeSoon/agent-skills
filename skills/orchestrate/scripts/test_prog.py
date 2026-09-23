@@ -75,7 +75,7 @@ def ready(n, t, hours_ago, **kw):
     return [at(hours_ago, "ready", pr=n, ticket=t, **kw), at(hours_ago, "verdict", pr=n, sha=f"h{n}", result="pass", patch_id="p")]
 
 
-# The dependency root goes first even when a newer, easy PR is ready: the 94S-288 starvation.
+# The dependency root goes first even when a newer, easy PR is ready: the migration-chain starvation.
 events = ready(10, "A-288", 1) + ready(11, "A-278", 1.5) + ready(12, "A-252", 1.2) + ready(13, "A-297", 0.2) \
     + [at(3, "dep", ticket="A-278", after=["A-288"]), at(3, "dep", ticket="A-252", after=["A-278"])]
 order = prog.land_order(events, [row(10, "BEHIND"), row(11), row(12), row(13)], CFG, NOW)

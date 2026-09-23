@@ -1,30 +1,46 @@
 ---
 name: measure-delivery
-description: Use when asked how a project or autonomous run actually went — "성과 측정", follow-up/derived ticket growth after the initial design, whether the backlog is converging, accepted changes, rework, escaped defects, or token cost per merged PR — and at the Close of a orchestrate.
+description: Use when asked how a project or autonomous run actually went — "성과 측정", follow-up/derived ticket growth after the initial design, whether the backlog is converging, accepted changes, rework, escaped defects, or token cost per merged PR — and at the Close of an `orchestrate` program.
 ---
 
 # Measure delivery
 
-Numbers for one repo and one Linear project over a window, computed from Linear, GitHub and local transcripts. The script only reads.
+Numbers for one repo and one tracker project over a window, computed from the tracker, GitHub
+and this machine's transcripts. The script only reads.
 
-## Get the issues first
+## Get the issues
 
-`completedAt` decides every "done" count, and `orca linear list-issues` does not return it. Fetch with the Linear MCP instead and save the raw result:
+Every "done" count keys on the issue's close time, so where the issues come from decides how
+exact those counts are:
 
-- `list_issues` with the project, `includeArchived: true`, limit 250, following the cursor until done.
-- Write the combined array to a file in the scratchpad (e.g. `issues.json`).
+| Source | Close time | Use when |
+|---|---|---|
+| `--project P` (reads through `use-tracker`'s `tracker.py`) | Jira: exact (`resolutiondate`). Linear: `tracker.py` goes through `orca linear`, which has no `completedAt`, so closed issues get `updatedAt` — and the report does **not** say so on this path | Jira, or a quick Linear read where an edited-after-close issue shifting a block is acceptable |
+| `--issues F` with a Linear MCP `list_issues` result | exact `completedAt` / `canceledAt` | Linear, when the 6h blocks must be right |
+| `--issues F` with `orca linear list-issues --json` output | `updatedAt`; the report says it approximated | only when MCP is unavailable |
 
-An `orca linear list-issues --project <p> --include-archived --json` file also works; the report then says completion times are approximated from `updatedAt`.
+For the Linear MCP file: `list_issues` with the project, `includeArchived: true`, limit 250,
+`fields: [createdAt, updatedAt, completedAt, canceledAt, statusType, labels, description]`
+(the script needs `createdAt` on every issue), following the pagination until done. Write
+the combined array to a file in the scratchpad (e.g. `issues.json`). `tracker.py list` output
+saved to a file also works as `--issues`.
 
 ## Run
 
 ```bash
 python3 ~/.claude/skills/measure-delivery/scripts/measure.py \
-  --repo OWNER/NAME --issues issues.json --since 2026-09-21T00:00:00+09:00 [--until …] \
-  [--baseline-until <end of the initial design batch>] [--bug-label Bug] [--usage-match <dir fragment>]
+  --repo OWNER/NAME (--project P | --issues issues.json) --since 2026-09-21T00:00:00+09:00 [--until …] \
+  [--baseline-until <end of the initial design batch>] [--tz +09:00] [--bug-label Bug] \
+  [--usage-match <dir fragment>] [--json out.json]
 ```
 
-It prints a Korean markdown report. Put it in the project's Obsidian note (`use-notes`), not only in chat.
+- `--issues` accepts a top-level list, `{"issues": [...]}` or `{"result": {"issues": [...]}}`.
+- `--tz` sets the report's local time (default `+09:00`); `--json` also writes the headline
+  numbers as JSON.
+- `--usage-match` picks the Claude project dirs / Codex session cwds to count tokens for
+  (default: the repo name).
+
+It prints a Korean markdown report. Put it in the project's note (`use-notes`), not only in chat.
 
 ## What each number means
 
@@ -38,8 +54,14 @@ It prints a Korean markdown report. Put it in the project's Obsidian note (`use-
 | escaped | Bug-labeled issues created, main push CI failures, revert PRs | Candidates only: read each Bug to confirm it came from merged code |
 | 비용 | Claude and Codex tokens from this machine's transcripts in the window, per merged PR. Codex sessions count only the growth inside the window | No prices applied; other machines are missing |
 
-Reproduced on agent-platform 2026-09-21~23: derived 94, completed 84, ratio 1.12, and the 6h blocks match the hand analysis. Counts differ by ±1–3 at window edges and because this script counts every issue, not only leaves. GitHub caps one run query at 1000 results; the script splits the window until each query fits, so on a busy repo it makes several calls.
+Checked against a hand analysis of a real three-day program: the ratio and the 6h blocks
+matched. Counts differ by ±1–3 at window edges and because this script counts every issue, not
+only leaves. GitHub caps one run query at 1000 results; the script splits the window until each
+query fits, so on a busy repo it makes several calls.
 
 ## Report shape
 
-Lead with the one number the user asked about, then the table, then what the numbers do not cover (other machines, unmarked follow-ups, Bug candidates not yet confirmed). Numbers come from the script output, not from memory of the run.
+Lead with the one number the user asked about, then the table, then what the numbers do not
+cover (other machines, unmarked follow-ups, Bug candidates not yet confirmed, and close times
+approximated from `updatedAt` when the issues came from `orca linear`, whether or not the report
+says so). Numbers come from the script output, not from memory of the run.

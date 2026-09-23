@@ -246,6 +246,7 @@ class NormalizeLinear(unittest.TestCase):
         self.assertEqual(done["state_type"], "completed")
         self.assertEqual(done["created_at"], "2026-09-21T08:18:45Z")
         self.assertEqual(done["completed_at"], done["updated_at"])
+        self.assertTrue(done["closed_approx"])
         self.assertEqual(done["labels"], ["Spike"])
         self.assertEqual(done["assignee"], "alice")
         self.assertIsNone(done["parent"])

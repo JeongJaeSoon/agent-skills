@@ -52,7 +52,7 @@ def load_issues(path=None, project=None):
     for i in d:
         if "state_type" in i:  # tracker.py normalized schema
             out.append({"id": i["id"], "created": ts(i["created_at"]), "done": ts(i.get("completed_at")),
-                        "done_approx": False, "canceled": ts(i.get("canceled_at")), "type": i["state_type"],
+                        "done_approx": i.get("closed_approx", False), "canceled": ts(i.get("canceled_at")), "type": i["state_type"],
                         "labels": i.get("labels") or [], "desc": i.get("description") or ""})
             continue
         state = i.get("state")

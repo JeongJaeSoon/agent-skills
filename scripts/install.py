@@ -19,7 +19,7 @@ TARGET = pathlib.Path(os.environ.get("CLAUDE_SKILLS_DIR", "~/.claude/skills")).e
 SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS", "~/.claude/settings.json")).expanduser()
 # Old name → directory under legacy/ that keeps the old name resolvable while sessions started
 # before the rename still reference it. Drop an entry once nothing running uses the old name.
-LEGACY = {"use-obsidian": "legacy/use-obsidian"}
+LEGACY = {"use-obsidian": "legacy/use-obsidian", "ship-pr": "legacy/ship-pr", "dispatch-work": "legacy/dispatch-work"}
 
 O = "orca orchestration "
 S = "~/.claude/skills"

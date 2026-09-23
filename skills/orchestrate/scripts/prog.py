@@ -28,6 +28,10 @@ Usage: python3 prog.py <command> <slug> [options]
   land-check <slug> --pr N [--main-fix]
                                      readiness only, no merge (coordinator diagnostics)
   landed <slug> --pr N               record a merge made outside `land` and print the main-CI watch
+  heavy <slug|-> [--wait-minutes 60] -- <command…>
+                                     run a heavy local command (compose stack, image build, local
+                                     E2E) holding one of heavy_slots (2) machine-wide slots; `-`
+                                     outside a program
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      block until the Run inbox holds actionable mail; acks
                                      heartbeat-only batches; never acks actionable ones
@@ -170,7 +174,7 @@ def stopped(events):
 
 KLASS = {"main-fix": 0, "gate": 1, "urgent": 2, "normal": 3}
 LANDING = {"aging_hours": 2.0, "stale_hours": 3.0, "reserve_minutes": 40, "max_backlog_hours": 2.0,
-           "land_interval_minutes": 25, "lock_stale_minutes": 20}
+           "land_interval_minutes": 25, "lock_stale_minutes": 20, "heavy_slots": 2}
 
 
 def knob(cfg, key):
@@ -864,9 +868,52 @@ def cmd_wait(argv):
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal)")
 
 
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def cmd_heavy(argv):
+    """Docker stacks from parallel cards starved the whole machine (Orca UI included), so heavy local work
+    queues on slots shared by every program on this machine, like CI shares its runners."""
+    if "--" not in argv or argv.index("--") == len(argv) - 1:
+        sys.exit("heavy <slug|-> [--wait-minutes 60] -- <command…>")
+    cut = argv.index("--")
+    cmd = argv[cut + 1:]
+    cfg, owner = ({}, "-") if argv[0] == "-" else (Program(argv[0]).cfg, argv[0])
+    slots = HOME / "_heavy"
+    slots.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + 60 * float(opt(argv[:cut], "--wait-minutes", "60"))
+    while True:
+        for i in range(int(knob(cfg, "heavy_slots"))):
+            path = slots / f"slot-{i}"
+            held = json.loads(path.read_text() or "{}") if path.exists() else {}
+            if held and not pid_alive(held.get("pid", 0)):
+                path.unlink(missing_ok=True)
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                continue
+            os.write(fd, json.dumps({"pid": os.getpid(), "program": owner, "cmd": " ".join(cmd)[:200], "ts": now()}).encode())
+            os.close(fd)
+            try:
+                sys.exit(subprocess.run(cmd).returncode)
+            finally:
+                path.unlink(missing_ok=True)
+        if time.monotonic() >= deadline:
+            holders = [json.loads(f.read_text() or "{}") for f in sorted(slots.glob("slot-*"))]
+            sys.exit(f"heavy: every slot busy after waiting: {json.dumps(holders, ensure_ascii=False)}")
+        time.sleep(15)
+
+
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
-            "landed": cmd_landed, "wait": cmd_wait}
+            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait}
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS:

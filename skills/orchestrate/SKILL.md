@@ -48,9 +48,11 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Record `prog.py dep` for its ORDER.
    - Run `worker-start --spec "<the brief>" --display-name "<ID> <title>" [--deps …]`.
    - Rename its terminal tab.
+   - Close its setup terminal once setup exits: in `orca terminal list --worktree <card> --json` it is the row without `agentIdentity`; `orca terminal wait --terminal <h> --for exit`, then `orca terminal close --terminal <h>`. Finished setup terminals left open made Orca itself slow (22 of 50 terminals in one run).
 5. **Drain.**
    - Wait only with `prog.py wait <slug>` under `run_in_background`. It wakes on worker_done, escalation or question, and acks batches that hold only heartbeats. Keep exactly one wait running.
    - Process every message in the batch, decide each settled worker's next owner (reuse or release), then ack.
+   - A worker whose PR landed and whose main CI was recorded: `worker-release`, then remove its worktree in the same turn (`orca worktree rm`, after the checks in `end-session` §4). Leftover cards cost terminals and memory.
    - End every drain with `prog.py status`; its lines are how a drain ends. `dash.py collect <slug>` runs after it, and `dash.py note` records a risk or decision the dashboard should show.
    - Under `/goal`, a running background task defers the Stop hook's goal check. If the hook re-prompts anyway with no new event, answer in one line with no tool call. If it fires back-to-back, switch to a foreground `prog.py wait <slug> --rounds 1 --timeout-ms 540000` (Bash timeout 600000).
 6. **Triage.** A new ticket from review or discovery parks by default: label `follow-up`, then `prog.py record <slug> parked --ticket X`. Admit it only if it blocks a named predicate item, or if it is a reproduced correctness, security or data defect in code this program merged. Then `record admitted` and name the item or defect.
@@ -65,7 +67,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 9. **Close.**
    - When `status` says the tickets are done, run the predicate's final check on the real artifact (a verifier worker driving `verify-<app>` on main).
    - `prog.py record <slug> predicate_verified --note <evidence>`.
-   - Release the remaining workers and remove landed PRs' worktrees (checks in `end-session` §4).
+   - Release the remaining workers and remove any worktree still left (checks in `end-session` §4).
    - Run `measure-delivery` and audit the trail per `show-me-your-work`.
    - Write the lessons into standing orders, skills or memory.
 
@@ -101,13 +103,15 @@ The dashboard, plus the digest line in the program note, batched. The digest hol
 | Landing a dependency chain one PR at a time (rebase + CI between each) | Stack it; the top's `land` merges the chain in one `merge-async` |
 | Workers idling for hours "waiting for the merge slot" with nothing to do | `land --wait-minutes` in the background. `status` STALE lines and backlog hours make the wait visible and actionable |
 | A worker calling `gh api … merge-async` itself and the classifier refusing it as "Merge Without Review" | Merges happen only inside `prog.py land`, which is the review gate and the allowed command |
-| Cards named by Orca's automatic title ("Orca 외부 카드 진행 추적" for 94S-252) | `--display-name` and `orca terminal rename` with the ticket ID and title |
+| Cards named by Orca's automatic title ("Orca 외부 카드 진행 추적" for ENG-252) | `--display-name` and `orca terminal rename` with the ticket ID and title |
 | Waiting with `sleep`, a hand-built watcher, or invented `orca … events/status` | `prog.py wait` in the background. One empty wait is a checkpoint; after three, run `worker-list --run` |
 | Nudge-only turns ("You have N orchestration messages") burning coordinator turns | End such a turn with no tool call; real work arrives through `prog.py wait` |
 | A worker shows `live` but has done nothing for many minutes | It may be sitting on a permission prompt (`status` lists `idle-waiting`): `worker-read --dispatch <id> --source terminal`. You cannot approve it for the worker, and waiting output does not prove the agent stopped, so do not stop or retry it. Put it in the digest for the human and keep draining |
 | A handoff prompt that retypes the rules | The note is the handoff; the prompt is one line |
 | Follow-ups spawned the moment they are filed | Park them; `status` shows derived tickets per predicate item |
 | Parallel CI jobs named `1/3 2/3 3/3` | Name jobs by what they check (typecheck, lint, unit, db, api…) |
+| Several cards running docker compose stacks and image builds at once; the machine and the Orca UI crawled | Heavy local runs go through `prog.py heavy`, 2 machine-wide slots (`landing.heavy_slots`) |
+| Finished setup terminals and landed cards left open (50 terminals) | Close setup terminals when they exit; `worktree rm` in the turn a worker's landing is recorded |
 | Typing `/model` into a worker terminal | Pass `--model` to `worker-start`; `/model` changes the global setting |
 
 ## Resume (handoff)

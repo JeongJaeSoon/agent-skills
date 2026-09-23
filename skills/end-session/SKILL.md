@@ -1,9 +1,15 @@
 ---
 name: end-session
-description: Ending the current session — deciding which ending applies, leaving the record behind, and running it. Triggers, all meaning this skill: "종료해줘", "세션 종료해줘", "대화 종료해줘", "이제 종료하자", "끝내줘", "그만하자", "여기서 마치자"; "세션 정리해줘", "이 세션 닫아줘", "카드 정리해줘", "worktree 정리해줘"; "end this session", "close this session", "end the conversation". Also when `handoff-ticket` reaches the point where this session should disappear. **Bare "정리해줘" / "마무리해줘" with no object is not this skill** — that means wrap up the record and keep talking. The object decides: 세션·카드·worktree 정리 ends it, 정리 alone does not.
+description: Use when the user asks to end or close this session, card or worktree — "종료해줘", "세션 종료해줘", "끝내줘", "그만하자", "세션·카드·worktree 정리해줘", "end this session" — or when handoff-ticket reaches the point where this session should disappear. Not bare "정리해줘"/"마무리해줘" with no object: that means wrap up the record and keep talking.
 ---
 
 # Ending the session
+
+Triggers, all meaning this skill: "종료해줘", "세션 종료해줘", "대화 종료해줘", "이제 종료하자",
+"끝내줘", "그만하자", "여기서 마치자"; "세션 정리해줘", "이 세션 닫아줘", "카드 정리해줘",
+"worktree 정리해줘"; "end this session", "close this session", "end the conversation".
+**Bare "정리해줘" / "마무리해줘" with no object is not this skill** — the object decides:
+세션·카드·worktree 정리 ends it, 정리 alone does not.
 
 Claude Code on this machine runs inside an Orca terminal, so ending a session is an `orca`
 command. `EndConversation` is the fallback for what Orca cannot reach, not the default.
@@ -28,8 +34,8 @@ several turns later. Do not collapse them.
 orca worktree current --json    # read isMainWorktree and branch
 ```
 
-It answers in **every** session, including a plain folder context with no git repo —
-`~/workspace/memo` reports a worktree with `isMainWorktree: true` and an empty `branch`. "There
+It answers in **every** session, including a plain folder context with no git repo — a memo
+or scratch folder reports a worktree with `isMainWorktree: true` and an empty `branch`. "There
 is no card here" is almost never true, and cwd never proves it. Run the command.
 
 | `orca worktree current` | What this session is | Ending |
@@ -53,10 +59,11 @@ they actually asked for.
 Orca metadata and this transcript die with the session. Before the command runs, the record must
 already exist where it survives:
 
-- Linear ticket linked to this card → final state (Done, or In Review with the PR link) and a
-  completion comment with "남은 확인 사항". If the latest comment already says this, do not repeat it.
-- Obsidian worklog for the project (find it per `use-notes`) → one line on what this session
-  did, if not already written.
+- The ticket linked to this card (`use-tracker`) → final state (moved to completed, or left
+  `started` in review with the PR link) and a completion comment with "남은 확인 사항". If the
+  latest comment already says this, do not repeat it.
+- The project's worklog (`use-notes`) → one line on what this session did, if not already
+  written.
 - No ticket (a local diagnosis, a probe) → the worklog line is enough. Do not file a ticket
   just to close it.
 - Anything learned here that outlives the task → memory, now, not "later".
@@ -66,9 +73,9 @@ If the record is already written, say so in one line and move on. Do not rewrite
 
 ## 4. Removing a worktree card
 
-An `orchestrate` worker (Orca preamble with Task and Dispatch IDs) does not remove its own
-worktree: the coordinator releases it and removes the worktree after landing. It ends with
-`worker_done` and idles.
+A program worker — its brief or prompt has a `PROGRAM: <slug>` line (`orchestrate`
+`references/brief.md`) — does not remove its own worktree: the coordinator releases it and
+removes the worktree after landing. It ends with `worker_done` and idles.
 
 Only for `isMainWorktree: false`. Read the state with real output, not memory:
 
@@ -76,13 +83,13 @@ Only for `isMainWorktree: false`. Read the state with real output, not memory:
 git fetch -q origin main
 git status --short                       # must be empty
 git log --oneline origin/main..HEAD      # must be empty
-orca worktree current --json             # linkedLinearIssue, linkedPR; workspaceStatus does not decide anything
+orca worktree current --json             # linked ticket (linkedLinearIssue / linkedIssue / linkedWorkItem), linkedPR; workspaceStatus does not decide anything
 gh pr list --head "$(git branch --show-current)" --state open --json number,url
 ```
 
 | State | Action |
 |---|---|
-| Tree clean, 0 commits ahead of `origin/main`, no open PR, ticket Done or no ticket | **Remove**: `orca worktree rm --worktree current --json` |
+| Tree clean, 0 commits ahead of `origin/main`, no open PR, ticket completed or no ticket | **Remove**: `orca worktree rm --worktree current --json` |
 | A criterion still open, PR still open, or the user said to hold | **Keep the worktree.** Close its terminals with `orca terminal close --worktree current --all --json` only if the user wants this agent stopped — that is not Sleep, the terminals do not come back. If the work resumes later, leave them alone and say Sleep is theirs from the app. |
 | Dirty tree, unpushed commits, or an unexpected state | **Stop and ask** with `AskUserQuestion`: show the exact `git status` / `git log` lines and offer commit-and-push, discard, or keep |
 

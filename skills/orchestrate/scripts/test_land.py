@@ -135,4 +135,22 @@ assert code == 1 and "main is red" in out, out
 code, out = prog(env, "land", "t", "--pr", "9", "--class", "main-fix")
 assert code == 0, out
 
+# 7. heavy: slots are shared machine-wide; a full set makes the next caller wait, a dead holder frees its slot.
+d, env = setup({})
+env["PROGRAMS_HOME"] = str(d / "programs")
+with (d / "programs" / "t" / "program.json").open("r+") as f:
+    cfg = json.load(f); cfg["landing"] = {"heavy_slots": 1}; f.seek(0); json.dump(cfg, f); f.truncate()
+holder = subprocess.Popen([sys.executable, HERE / "prog.py", "heavy", "t", "--", "sleep", "3"], env=env)
+import time; time.sleep(1)
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 1 and "every slot busy" in out, out
+holder.wait()
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "sh", "-c", "exit 7")
+assert code == 7, out
+(d / "programs" / "_heavy" / "slot-0").write_text(json.dumps({"pid": 999999}))
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 0 and not (d / "programs" / "_heavy" / "slot-0").exists(), out
+code, out = prog(env, "heavy", "-", "--", "true")
+assert code == 0, out
+
 print("prog.py land against fake gh: all pass")

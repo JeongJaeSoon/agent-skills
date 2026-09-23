@@ -1,6 +1,6 @@
 # Program note template
 
-Create it at `Project/<project>/program-<slug>.md` with `vault_write` (see `use-notes`; check the vault's own CLAUDE.md for tags and headings). Korean prose, identifiers as-is. The note is the handoff: a new coordinator reads only this note and `program.json`.
+Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create or replace; check the vault's own CLAUDE.md for tags and headings). Korean prose, identifiers as-is. The note is the handoff: a new coordinator reads only this note and `program.json`.
 
 ```markdown
 #<project> #program

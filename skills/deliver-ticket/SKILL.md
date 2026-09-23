@@ -1,6 +1,6 @@
 ---
-name: ship-pr
-description: Use before starting multi-file work, opening a PR, or declaring a ticket done — this user's path from non-trivial work to a finished ticket: written plan, test with every change, review by scope with Codex, GitHub stacks for dependent PRs, the E2E gate before pushing, the sticky test-results comment, and what "done" means.
+name: deliver-ticket
+description: Use when working a ticket from the first edit to done — before multi-file work, before opening, updating or merging a PR ("PR 올려줘", "머지해줘", "ship it"), before declaring a ticket done ("이 티켓 끝내줘"), or when reviewing, stacking or verifying a change on its way to main. Formerly ship-pr.
 ---
 
 # Shipping a ticket
@@ -100,7 +100,9 @@ exists — commit it or copy it aside first.
 Before pushing, run **both**:
 
 - the test suite
-- an E2E check against a running system — CLI / `curl` for backend and APIs, **Aside** for UI
+- an E2E check against a running system (a local compose stack, image build or E2E run goes
+  through `python3 ~/.claude/skills/orchestrate/scripts/prog.py heavy - -- <command>`, which
+  caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, **Aside** for UI
   and web flows (it is the browser for everything, logged-in sites included), IDE diagnostics
   for type and lint
 

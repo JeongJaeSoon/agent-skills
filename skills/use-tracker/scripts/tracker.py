@@ -102,7 +102,7 @@ def read_body(path):
 def issue_template():
     return {"id": None, "title": None, "url": None, "state": None, "state_type": None,
             "created_at": None, "updated_at": None, "completed_at": None, "canceled_at": None,
-            "labels": [], "parent": None, "description": "", "assignee": None, "priority": 0}
+            "closed_approx": False, "labels": [], "parent": None, "description": "", "assignee": None, "priority": 0}
 
 
 def finish_list(issues, since, limit):
@@ -177,6 +177,7 @@ def normalize_linear(raw):
         "updated_at": updated,
         "completed_at": completed,
         "canceled_at": canceled,
+        "closed_approx": bool((completed and not raw.get("completedAt")) or (canceled and not raw.get("canceledAt"))),
         "labels": [l.get("name") for l in labels if isinstance(l, dict) and l.get("name")],
         "parent": (parent.get("identifier") if isinstance(parent, dict) else parent) or None,
         "description": raw.get("description") or "",

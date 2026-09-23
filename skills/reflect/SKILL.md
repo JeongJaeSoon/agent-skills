@@ -52,7 +52,7 @@ Before applying any Accepted edit, present the synthesizer's full Accepted/Rejec
 
 Backlog items file to the user's ticket tracker (the **use-tracker** skill) automatically. Only the Accepted list waits for approval.
 
-Skills live in the user's agent-skills repo (`~/workspace/project/agent-skills`; `~/.claude/skills/<name>` is a symlink into it). Make every edit there, on a worktree branch, never in `~/.claude/skills/` directly. A plugin-installed skill is not edited in place; record the finding as Backlog instead.
+Skills live in the repo that `~/.claude/skills/<name>` symlinks into (`readlink ~/.claude/skills/<name>`). Make every edit there, on a worktree branch, never in `~/.claude/skills/` directly. A plugin-installed skill is not edited in place; record the finding as Backlog instead.
 
 For each approved Accepted item, follow the Routing field exactly:
 

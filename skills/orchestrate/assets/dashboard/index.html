@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Program Dashboard</title>
+<meta name="description" content="Live progress of an orchestrate program: predicate, land order, workers, tasks and follow-up growth.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23161618'/%3E%3Cpath d='M8 22h4v-6H8zM14 22h4V10h-4zM20 22h4v-9h-4z' fill='%233987e5'/%3E%3C/svg%3E">
+<script>
+  // Before first paint: a pinned theme and the sidebar mode, so nothing flashes or jumps.
+  (function () {
+    var root = document.documentElement, pref = null;
+    try {
+      var t = localStorage.getItem("orch-dash:theme");
+      if (t === "light" || t === "dark") root.dataset.theme = t;
+      pref = localStorage.getItem("orch-dash:sidebar");
+    } catch (e) {}
+    var w = window.innerWidth;
+    root.dataset.sb = w <= 600 ? "drawer" : w <= 960 ? "icons" : pref === "collapsed" ? "icons" : "full";
+  })();
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#view">본문으로 건너뛰기</a>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Navigation">
+    <div class="sb-head">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M3 16h3.5v-5H3zM8.25 16h3.5V4h-3.5zM13.5 16H17V8.5h-3.5z"/></svg></span>
+      <span class="wordmark">orchestrate</span>
+      <button class="icon-btn sb-close" id="sb-close" type="button" aria-label="Close navigation"></button>
+    </div>
+    <nav class="sb-nav">
+      <div class="sb-group">
+        <div class="sb-title eyebrow sb-text">Programs</div>
+        <ul id="program-list" class="sb-list"></ul>
+      </div>
+      <div class="sb-group">
+        <div class="sb-title eyebrow sb-text">Sections</div>
+        <ul id="section-list" class="sb-list"></ul>
+      </div>
+    </nav>
+    <div class="sb-foot">
+      <div class="live" id="live"><span class="dot"></span><span class="sb-text" id="live-text">Connecting</span></div>
+      <button class="nav-item" id="theme-toggle" type="button"></button>
+      <button class="nav-item" id="sb-toggle" type="button" aria-controls="sidebar"></button>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"></button>
+      <div class="headline" id="headline"></div>
+      <div class="top-right" id="top-right"></div>
+    </header>
+    <div class="freshbar" id="fresh" role="group" aria-label="Data freshness per source"></div>
+    <section id="view" class="view" tabindex="-1"></section>
+  </main>
+</div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

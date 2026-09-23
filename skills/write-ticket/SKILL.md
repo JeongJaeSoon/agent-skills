@@ -1,30 +1,46 @@
 ---
 name: write-ticket
-description: Turn a one-line request into a Linear ticket that both this user and a coding agent can act on — repo-verified implementation hints, checkable acceptance criteria, explicit out-of-scope. Use when asked to write, create, or file a ticket or issue.
+description: Use when asked to write, create, or file a ticket or issue ("티켓 만들어줘", "이슈로 남겨줘") — including a one-line ticket request mixed into another question, feedback on in-flight work that should become its own ticket, and follow-up tickets filed from a finding.
 ---
 
 # Writing a Ticket
 
-Tickets land in Linear team `94soon`. The body skeleton lives in Linear issue templates,
-not here — read it, never retype it.
+Turn a one-line request into a ticket that both this user and a coding agent can act on:
+repo-verified implementation hints, checkable acceptance criteria, explicit out-of-scope.
+Every tracker operation here ("file a ticket", "read a template", "search the tracker",
+"relate") goes through `use-tracker`, whichever tracker is active.
+
+## 0. Where the request came from
+
+- **A ticket request inside another question** ("…왜 이래? 그리고 이거 티켓 만들어줘"). Split
+  it out and file it first, then answer the question. The ticket must not wait on the answer,
+  and the answer must not swallow the ticket.
+- **Improvement feedback on in-flight work** ("이거 더 낫게", "이 부분도 고쳐줘" about a
+  running card or PR). It becomes its own ticket. Never append it to the running task's scope,
+  brief or PR.
+- **A finding made while working** (review, E2E, `handoff-ticket` §0). A follow-up (§4).
 
 ## 1. Classify
 
-| Type | Label | Template |
+| Type | Label | Skeleton |
 |---|---|---|
-| New behavior | `Feature` | `개발 티켓` |
-| Something is broken | `Bug` | `개발 티켓` |
-| Refactor, infra, cleanup | `Improvement` | `개발 티켓` |
-| Find something out | `Spike` | `조사 티켓` |
+| New behavior | `Feature` | 개발 티켓 |
+| Something is broken | `Bug` | 개발 티켓 |
+| Refactor, infra, cleanup | `Improvement` | 개발 티켓 |
+| Find something out | `Spike` | 조사 티켓 |
 
 A Spike's output is a conclusion, not code. Prefix its title with `[조사]`.
 
-## 2. Read the template
+## 2. Read the skeleton
 
-`get_template("개발 티켓")` or `get_template("조사 티켓")`.
+Where the skeleton lives depends on the config (`use-tracker` → `references/linear.md`,
+"Config"):
 
-**If this fails, stop and say so.** Never write a ticket from a remembered skeleton —
-a stale copy is how the two sources drift apart.
+- `tracker.<adapter>.templates` names the tracker templates (e.g. `{"dev": "개발 티켓",
+  "spike": "조사 티켓"}`) → read that template from the tracker. **If the read fails, stop and
+  say so.** Never write the ticket from a remembered skeleton; a stale copy is how two sources
+  drift apart.
+- No templates configured → [references/templates.md](references/templates.md) is the source.
 
 ## 3. Fill it against the repo
 
@@ -41,14 +57,14 @@ actually opened.
 **No repo context (invoked outside a repo)? Drop the whole `🛠 구현 힌트` section.** A guessed
 file path is the most harmful thing this skill can produce — an agent will believe it.
 
-Then: delete sections that don't apply, strip the italic hint lines, and add the conditional
-sections when they apply — before `## 🔗 참고`:
+Then delete sections that don't apply, strip the italic hint lines, and add the conditional
+sections when they apply, before `## 🔗 참고`:
 
 - `## ↩️ 롤백` — deploys, migrations, data changes. Feature flag or revert? Is the data recoverable?
 - `## 🔒 보안` — auth, crypto, untrusted input. This ticket's specifics only.
 
-Section headings carry an emoji. Keep the ones the template gives you exactly as they are,
-and match that style on the conditional sections above.
+Section headings carry an emoji. Keep the skeleton's headings exactly as they are, and match
+that style on the conditional sections above.
 
 ## Writing rules
 
@@ -62,42 +78,48 @@ and match that style on the conditional sections above.
 
 ## Structure
 
-Native fields carry structure; the body does not repeat it.
+The tracker's native fields carry structure; the body does not repeat it.
 
-- Dependencies → `blockedBy`, never a prose list
-- **One ticket is one PR.** Too big to review as a single PR → propose sub-issues (`parentId`)
-  now; splitting the PR later instead of the ticket is not an option
+- **Dependencies are tracker relations** (blocks / blocked-by), never a prose list.
+- **Dependent tickets that will both be PRs are planned as a GitHub stack**: the lower ticket's
+  branch is the upper's base, so the chain lands in one merge (`deliver-ticket` §5,
+  `orchestrate` `references/landing.md` "GitHub stacks"). Say it in the upper ticket's
+  `🛠 구현 힌트` → `제약`: "base: <lower ticket> 브랜치 위에 stack".
+- **One ticket is one PR.** Too big to review as a single PR → propose sub-issues (parent
+  relation) now; splitting the PR later instead of the ticket is not an option.
 - **A parent issue's body has no acceptance criteria and no implementation hints** — those
   belong to the children, and duplicating them guarantees they diverge. Keep
   `🎯 배경 & 목표` + `🚫 범위 밖`.
-- Clear outcome and a foreseeable end date → suggest a Project. Until then a parent issue
-  is enough; Linear converts one to a project later if it grows.
-- Only offer a project/milestone that already exists. Don't create structure ahead of need.
+- Clear outcome and a foreseeable end date → suggest a project. Until then a parent issue is
+  enough. Only offer a project or milestone that already exists; don't create structure ahead
+  of need.
+- Search the tracker first so you do not file a duplicate.
 
-## 4. Get approval, then create
+## 4. Get approval, then file
 
 Show the full draft in chat first. Several tickets? Show **all** of them — title, type,
 relationships — and take **one** approval for the batch.
 
-**Exception:** a follow-up ticket a session files on its own — from a finding made while
-working a ticket, at `handoff-ticket` §0, or from a review or E2E run — skips this gate:
-create it, then name it in the report. The user is not necessarily there, and losing the
-finding is worse than filing it unreviewed. Whether to file, and whether two findings share
-one ticket, is the session's call (`ship-pr` §2 "Findings outside the ticket"); "shall I file
-this?" is not a question to put to the user.
+**Exceptions — file first, then name the ticket and its URL:**
 
-A follow-up is marked as one, so growth after the initial design can be counted
-(`measure-delivery`, `orchestrate`): add the `follow-up` label next to its type, make the first
-body line `파생: <originating ticket> · 원인: <리뷰 지적 | 계약 불일치 | QA | 스펙 공백 | 구현 한계 | 기타>`,
-and relate it to the originating ticket (`relatedTo`, or `blockedBy` when it truly blocks).
+- A ticket request split out of another question (§0). The user already asked for it.
+- A follow-up a session files on its own — from a finding made while working a ticket, at
+  `handoff-ticket` §0, or from a review or E2E run. The user is not necessarily there, and
+  losing the finding is worse than filing it unreviewed. Whether to file, and whether two
+  findings share one ticket, is the session's call (`deliver-ticket` §2 "Findings outside the
+  ticket"); "shall I file this?" is not a question to put to the user.
 
-Then `save_issue` per ticket:
+A follow-up is marked as one so growth after the initial design can be counted
+(`measure-delivery`, `orchestrate`). Use `use-tracker`'s follow-up format: the `follow-up`
+label next to its type, first body line
+`파생: <originating ticket> · 원인: <리뷰 지적 | 계약 불일치 | QA | 스펙 공백 | 구현 한계 | 기타>`,
+and a related relation to the originating ticket (blocked-by when it truly blocks).
 
-```
-team="94soon", assignee="me", addLabels=[<type>], description=<filled body>
-```
+Then file each ticket through `use-tracker`: assignee me, the type label, the filled body. The
+team and project come from the program or the originating ticket, else from
+`tracker.<adapter>.team` / `project` in the config; if none is set, ask. File the body only —
+do not also apply the tracker template (on Linear a description replaces the template body, so
+passing both silently discards your work). File parents before children, and the lower layer
+of a dependency before the one it blocks.
 
-Do **not** pass `template` — a `description` replaces the template body rather than merging
-with it, so passing both silently discards your work. Create parents before children.
-
-Print the issue URLs. Stop there — branch, implementation, PR and merge belong to `ship-pr`.
+Print the ticket URLs. Stop there — branch, implementation, PR and merge belong to `deliver-ticket`.

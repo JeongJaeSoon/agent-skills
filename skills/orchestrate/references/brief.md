@@ -19,7 +19,8 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             coordinator only what changes scope, order or the predicate.
 ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
-            plus known gotchas.
+            plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
+            through `prog.py heavy <slug> -- <command>`, which caps them machine-wide.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        python3 ~/.claude/skills/orchestrate/scripts/prog.py land <slug> --pr <N> --ticket <ID>
             --wait-minutes 50, run in the background. Act on exit 3, report on exit 1. Never merge
@@ -38,9 +39,9 @@ STANDING    <the program note's standing orders, pasted verbatim, numbered>
 
 ## Rules for filling it
 
-- The spec starts with the ticket ID, never `/`. The second line, `PROGRAM: <slug>`, is how the user's own skills (`ship-pr`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
-- The worker runs the user's normal flow (`ship-pr`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program.
-- **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was 94S-278). Pass `worker-start --display-name "<ID> <short title>"`. Right after the start, run `orca terminal rename --terminal <agentTerminalHandle> --title "<ID> <short title>"`.
+- The spec starts with the ticket ID, never `/`. The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
+- The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program.
+- **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was ENG-278). Pass `worker-start --display-name "<ID> <short title>"`. Right after the start, run `orca terminal rename --terminal <agentTerminalHandle> --title "<ID> <short title>"`.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record `prog.py dep` and pass `--deps` to `worker-start` at the same time.
 - Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.

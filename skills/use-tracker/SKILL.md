@@ -43,7 +43,7 @@ Global flags: `--adapter linear|jira` (overrides config), `--config PATH`.
 
 ```json
 {"id": "ENG-12", "title": "...", "url": "...", "state": "In Progress", "state_type": "started",
- "created_at": "2026-09-01T10:00:00Z", "updated_at": "...", "completed_at": null, "canceled_at": null,
+ "created_at": "2026-09-01T10:00:00Z", "updated_at": "...", "completed_at": null, "canceled_at": null, "closed_approx": false,
  "labels": ["follow-up"], "parent": null, "description": "...", "assignee": "alice", "priority": 0}
 ```
 
@@ -79,7 +79,7 @@ Work found while doing another ticket becomes its own ticket, shaped the same wa
 `measure-delivery` and the dashboard can count it:
 
 - label `follow-up`
-- body starts with the line `파생: <source ID> · 원인: <분류>` (분류 e.g. 누락, 리뷰 지적, 회귀, 범위 밖 발견)
+- body starts with the line `파생: <source ID> · 원인: <분류>` (분류: 리뷰 지적 | 계약 불일치 | QA | 스펙 공백 | 구현 한계 | 기타)
 - a **related** relation to the source ticket (not parent, unless it really is a sub-task)
 - same project as the source
 
