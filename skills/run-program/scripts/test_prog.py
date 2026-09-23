@@ -25,6 +25,19 @@ events += [ev("landed", pr=3, sha="c"), ev("main_green", pr=3, sha="c")]
 assert prog.main_state(events) == "green"
 # Newest landing without a result yet is pending.
 assert prog.main_state(events + [ev("landed", pr=4, sha="d")]) == "pending"
+# Red stays red while the repair that landed after it is still pending.
+events = [ev("landed", pr=1, sha="a"), ev("main_red", pr=1, sha="a"), ev("landed", pr=2, sha="b")]
+assert prog.main_state(events) == "red"
+assert prog.main_state(events + [ev("main_green", pr=2, sha="b")]) == "green"
+# A legacy red without a sha still stops landing.
+assert prog.main_state([ev("landed", pr=1, sha="a"), ev("main_red", pr=1)]) == "red"
+
+# A predicate edit or a later landing voids the final check.
+events = [ev("landed", pr=1, sha="a"), ev("predicate_verified")]
+assert prog.final_check_current(events)
+assert not prog.final_check_current(events + [ev("config", note="predicate=A-1,A-2")])
+assert not prog.final_check_current(events + [ev("landed", pr=2, sha="b")])
+assert prog.final_check_current(events + [ev("config", note="ceiling=4")])
 
 # stop then resume in the same second resumes.
 assert prog.stopped([ev("stop"), ev("resume")]) is False

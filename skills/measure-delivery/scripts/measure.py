@@ -77,8 +77,10 @@ def runs_between(repo, a, b):
     # The runs API returns at most 1000 results per query, so split any window that hits it.
     got = gh("run", "list", "--repo", repo, "--limit", "1000", "--created", f"{utc_q(a)}..{utc_q(b)}",
              "--json", "databaseId,headBranch,event,conclusion,createdAt,workflowName")
-    if len(got) < 1000 or b - a <= dt.timedelta(minutes=10):
+    if len(got) < 1000:
         return got
+    if b - a <= dt.timedelta(minutes=10):
+        sys.exit(f"1000+ workflow runs between {utc_q(a)} and {utc_q(b)}: the API cannot list them all, so run counts would be wrong")
     mid = a + (b - a) / 2
     left = runs_between(repo, a, mid)
     seen = {r["databaseId"] for r in left}

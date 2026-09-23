@@ -104,13 +104,34 @@ def cap_from(events, ceiling):
 
 
 def main_state(events):
-    """green, red or pending for the newest landed merge commit; results for older commits never clear it."""
-    landed = [e for e in events if e["ev"] == "landed" and e.get("sha")]
-    if not landed:
+    """red, pending or green, judged in landing order.
+
+    The newest landed commit that has a result decides: a red there stays red while the repair
+    landed after it is still pending, and a late green for an older commit never clears it.
+    A result without --sha (ledgers from before it was required) belongs to the last landing
+    before it.
+    """
+    order, result, last = [], {}, None
+    for e in events:
+        if e["ev"] == "landed" and e.get("sha"):
+            order.append(e["sha"]); last = e["sha"]
+        elif e["ev"] in ("main_green", "main_red"):
+            sha = e.get("sha") or last
+            if sha in order:
+                result[sha] = e["ev"]
+    if not order:
         return "green"
-    sha = landed[-1]["sha"]
-    results = [e["ev"] for e in events if e["ev"] in ("main_green", "main_red") and e.get("sha") == sha]
-    return {"main_green": "green", "main_red": "red"}[results[-1]] if results else "pending"
+    decided = [s for s in order if s in result]
+    if decided and result[decided[-1]] == "main_red":
+        return "red"
+    return "green" if order[-1] in result else "pending"
+
+
+def final_check_current(events):
+    """A predicate_verified counts only if nothing it covered changed after it: no landing, no predicate edit."""
+    since = max((i for i, e in enumerate(events) if e["ev"] == "landed"
+                 or (e["ev"] == "config" and (e.get("note") or "").startswith("predicate="))), default=-1)
+    return any(e["ev"] == "predicate_verified" for e in events[since + 1:])
 
 
 def pr_state(events):
@@ -207,8 +228,7 @@ def cmd_status(argv):
     done = [t for t in pred if (by_id.get(t, {}).get("state") or {}).get("type") in ("completed",)]
     open_ = [t for t in pred if t not in done]
     tickets_done = bool(pred) and not open_ and issues is not None
-    last_land = max((i for i, e in enumerate(events) if e["ev"] == "landed"), default=-1)
-    verified = any(e["ev"] == "predicate_verified" for e in events[last_land + 1:])
+    verified = final_check_current(events)
     lines.append(f"predicate: {len(done)}/{len(pred)} tickets done"
                  + ((" — final check recorded" if verified else " — final check not yet recorded") if tickets_done
                     else f" (open: {', '.join(open_[:8])}{'…' if len(open_) > 8 else ''})")
