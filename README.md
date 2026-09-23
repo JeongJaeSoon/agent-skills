@@ -4,8 +4,9 @@
 
 ## 설치
 
-- 2026-09-24에 추가한 스킬 8개(`run-program`, `measure-delivery`, `create-verification-skill`, `maintain-verification-skill`, `interrogate`, `show-me-your-work`, `blast-radius`, `pstack-principles`)는 `~/.claude/skills/<name>` → 이 저장소 메인 체크아웃의 `skills/<name>` symlink다. 메인 브랜치가 fast-forward될 때만 설치본이 바뀐다.
-- 그 전부터 있던 7개(`aside-browser`, `use-obsidian`, `dispatch-work`, `end-session`, `handoff-ticket`, `ship-pr`, `write-ticket`)는 `~/.claude/skills`에 실제 디렉터리로 설치돼 있다. 여기 사본은 그 원문이다.
+`~/.claude/skills/<name>` → 이 저장소 메인 체크아웃의 `skills/<name>` symlink다(15개 전부). 메인 브랜치가 fast-forward될 때만 설치본이 바뀐다. 작업은 worktree 브랜치에서 하고, 검토가 끝나면 메인에 fast-forward한다.
+
+`~/.claude/skills/synced/`는 claude.ai 계정 동기화가 관리하는 폴더라 이 저장소에 넣지 않는다.
 
 ## pstack
 
