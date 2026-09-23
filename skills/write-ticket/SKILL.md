@@ -1,0 +1,98 @@
+---
+name: write-ticket
+description: Turn a one-line request into a Linear ticket that both this user and a coding agent can act on — repo-verified implementation hints, checkable acceptance criteria, explicit out-of-scope. Use when asked to write, create, or file a ticket or issue.
+---
+
+# Writing a Ticket
+
+Tickets land in Linear team `94soon`. The body skeleton lives in Linear issue templates,
+not here — read it, never retype it.
+
+## 1. Classify
+
+| Type | Label | Template |
+|---|---|---|
+| New behavior | `Feature` | `개발 티켓` |
+| Something is broken | `Bug` | `개발 티켓` |
+| Refactor, infra, cleanup | `Improvement` | `개발 티켓` |
+| Find something out | `Spike` | `조사 티켓` |
+
+A Spike's output is a conclusion, not code. Prefix its title with `[조사]`.
+
+## 2. Read the template
+
+`get_template("개발 티켓")` or `get_template("조사 티켓")`.
+
+**If this fails, stop and say so.** Never write a ticket from a remembered skeleton —
+a stale copy is how the two sources drift apart.
+
+## 3. Fill it against the repo
+
+Explore the repo before writing `🛠 구현 힌트`. Every path and symbol in it must be one you
+actually opened.
+
+- `진입점` — the file the change starts in, with a line number where it helps
+- `재사용` — **search for this first.** Existing helpers, utils, patterns, types, with paths.
+  Not finding what already exists, and building it again, is the default failure mode of
+  agent implementation. This line is the fix.
+- `흐름` — the real call path, end to end
+- `제약` — only what is specific to this ticket. General repo rules live in CLAUDE.md.
+
+**No repo context (invoked outside a repo)? Drop the whole `🛠 구현 힌트` section.** A guessed
+file path is the most harmful thing this skill can produce — an agent will believe it.
+
+Then: delete sections that don't apply, strip the italic hint lines, and add the conditional
+sections when they apply — before `## 🔗 참고`:
+
+- `## ↩️ 롤백` — deploys, migrations, data changes. Feature flag or revert? Is the data recoverable?
+- `## 🔒 보안` — auth, crypto, untrusted input. This ticket's specifics only.
+
+Section headings carry an emoji. Keep the ones the template gives you exactly as they are,
+and match that style on the conditional sections above.
+
+## Writing rules
+
+- **Title**: start with a verb, name the outcome. Not "대시보드 수정" but
+  "대시보드 메트릭 로딩 실패 시 fallback 노출". The list view shows nothing else.
+- **Body in Korean.** Code identifiers, logs, error messages, and commands stay verbatim.
+- **Acceptance criteria must be checkable**, each with how to check it. "잘 동작한다" has no
+  check, so it isn't a criterion. Bug reports keep error text and stack traces unsummarized.
+- **`🚫 범위 밖` is not optional.** Write "없음" rather than leaving it blank — it is the line
+  that stops an agent from widening the work.
+
+## Structure
+
+Native fields carry structure; the body does not repeat it.
+
+- Dependencies → `blockedBy`, never a prose list
+- **One ticket is one PR.** Too big to review as a single PR → propose sub-issues (`parentId`)
+  now; splitting the PR later instead of the ticket is not an option
+- **A parent issue's body has no acceptance criteria and no implementation hints** — those
+  belong to the children, and duplicating them guarantees they diverge. Keep
+  `🎯 배경 & 목표` + `🚫 범위 밖`.
+- Clear outcome and a foreseeable end date → suggest a Project. Until then a parent issue
+  is enough; Linear converts one to a project later if it grows.
+- Only offer a project/milestone that already exists. Don't create structure ahead of need.
+
+## 4. Get approval, then create
+
+Show the full draft in chat first. Several tickets? Show **all** of them — title, type,
+relationships — and take **one** approval for the batch.
+
+**Exception:** a follow-up ticket a session files on its own — from a finding made while
+working a ticket, at `handoff-ticket` §0, or from a review or E2E run — skips this gate:
+create it, then name it in the report. The user is not necessarily there, and losing the
+finding is worse than filing it unreviewed. Whether to file, and whether two findings share
+one ticket, is the session's call (`ship-pr` §2 "Findings outside the ticket"); "shall I file
+this?" is not a question to put to the user.
+
+Then `save_issue` per ticket:
+
+```
+team="94soon", assignee="me", addLabels=[<type>], description=<filled body>
+```
+
+Do **not** pass `template` — a `description` replaces the template body rather than merging
+with it, so passing both silently discards your work. Create parents before children.
+
+Print the issue URLs. Stop there — branch, implementation, PR and merge belong to `ship-pr`.
