@@ -356,6 +356,10 @@ def pr_view(repo, pr):
 
 
 def ci_summary(rollup):
+    # No checks on a head usually means CI has not reported yet, so it never counts as green.
+    # A repo with no CI at all therefore cannot land; add a require_ci knob if one ever joins a program.
+    if not rollup:
+        return [], ["no CI checks reported yet"], []
     failed, pending, runs = [], [], set()
     for c in rollup or []:
         name = c.get("name") or c.get("context")
@@ -590,7 +594,7 @@ def cmd_queue(argv):
 
 
 class BaseLock:
-    """One lander per base branch at a time: an O_EXCL file in the program store.
+    """One lander per repo base branch at a time, across every program: an O_EXCL file under HOME/_locks.
 
     A lock older than lock_stale_minutes belongs to a lander that died mid-way; it is broken and
     the break is recorded, because the merge it may have made is caught by `landed` checks below.
@@ -598,10 +602,10 @@ class BaseLock:
 
     def __init__(self, p, base, pr):
         self.p, self.pr = p, pr
-        self.path = p.dir / "locks" / f"{base.replace('/', '__')}.lock"
+        self.path = HOME / "_locks" / (f"{p.cfg['repo']}@{base}".replace("/", "__") + ".lock")
 
     def __enter__(self):
-        self.path.parent.mkdir(exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         for _ in range(2):
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)

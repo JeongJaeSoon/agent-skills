@@ -22,28 +22,30 @@ SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS", "~/.claude/settings.js
 LEGACY = {"use-obsidian": "legacy/use-obsidian", "ship-pr": "legacy/ship-pr", "dispatch-work": "legacy/dispatch-work"}
 
 O = "orca orchestration "
-S = "~/.claude/skills"
-ALLOW = (
+# The user runs in auto mode, where the classifier already judges everything else (reads, heavy runs,
+# tracker writes). Allow only what it must not second-guess: Orca's worker protocol, and `prog.py land`,
+# the program's review-and-merge gate (a raw merge there was refused as "Merge Without Review").
+# No wildcard over skill scripts: `prog.py heavy -- <command>` runs an arbitrary command.
+ALLOW = ["Bash(orca orchestration:*)", "Bash(python3 ~/.claude/skills/orchestrate/scripts/prog.py land:*)"]
+DENY = [f"Bash({O}reset:*)", f"Bash({O}worker-abandon:*)"]
+ASK = ["Bash(orca terminal send:*)", f"Bash({O}gate-resolve:*)"]
+# Rules an earlier version of this script added one by one; the two ALLOW rules above cover or replace them.
+RETIRED = (
     [f"Bash({O}{v}:*)" for v in (
-        # worker contract: own mailbox, reports, questions
-        "check", "send", "ask", "reply", "inbox", "dispatch-show", "run-current",
-        # coordinator loop
-        "run-show", "run-list", "run-create", "run-use", "task-create", "task-list", "task-update", "dispatch",
-        "worker-start", "worker-show", "worker-read", "worker-release", "worker-list", "gate-create", "gate-list")]
+        "check", "send", "ask", "reply", "inbox", "dispatch-show", "run-current", "run-show", "run-list",
+        "run-create", "run-use", "task-create", "task-list", "task-update", "dispatch", "worker-start",
+        "worker-show", "worker-read", "worker-release", "worker-list", "gate-create", "gate-list")]
     + ["Bash(orca terminal rename:*)", "Bash(orca terminal read:*)", "Bash(orca terminal list:*)"]
     + [f"Bash(orca linear {v}:*)" for v in (
         "issue", "list-issues", "list", "search", "team list", "team members", "team states", "team labels",
         "project list")]
-    # prog.py land is the program's merge gate (verdict patch-id, CI at head, land order, lock)
-    + [f"Bash(python3 {S}/orchestrate/scripts/prog.py:*)"]
-    + [f"Bash(python3 {S}/orchestrate/scripts/dash.py {v}:*)" for v in ("collect", "note", "serve")]
-    + [f"Bash(python3 {S}/use-tracker/scripts/tracker.py {v}:*)" for v in ("list", "get")]
+    + ["Bash(python3 ~/.claude/skills/orchestrate/scripts/prog.py:*)"]
+    + [f"Bash(python3 ~/.claude/skills/orchestrate/scripts/dash.py {v}:*)" for v in ("collect", "note", "serve")]
+    + [f"Bash(python3 ~/.claude/skills/use-tracker/scripts/tracker.py {v}:*)" for v in ("list", "get")]
     + [f"Bash(gh {v}:*)" for v in (
         "pr view", "pr list", "pr checks", "pr diff", "pr update-branch", "run view", "run list", "run watch",
         "issue view", "issue list")]
 )
-DENY = [f"Bash({O}reset:*)", f"Bash({O}worker-abandon:*)"]
-ASK = ["Bash(orca terminal send:*)", f"Bash({O}gate-resolve:*)"]
 HOOK_CMD = f'f="$HOME/.claude/skills/orchestrate/scripts/mailbox_guard.py"; [ -f "$f" ] && python3 "$f" || true'
 
 
@@ -84,6 +86,9 @@ def merge_settings(write):
     d = json.loads(SETTINGS.read_text())
     perm = d.setdefault("permissions", {})
     changes = []
+    allow = perm.setdefault("allow", [])
+    for r in [r for r in allow if r in RETIRED and r not in ALLOW]:
+        allow.remove(r); changes.append(f"drop  {r}")
     for key, rules in (("allow", ALLOW), ("deny", DENY), ("ask", ASK)):
         cur = perm.setdefault(key, [])
         for r in rules:

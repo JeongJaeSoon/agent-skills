@@ -86,7 +86,22 @@ code, out = prog(env, "land", "t", "--pr", "1")
 assert code == 0 and "landed #1" in out, out
 evs = [e["ev"] for e in ledger(d)]
 assert evs[-3:] == ["lock_acquired", "landed", "lock_released"], evs
-assert not list((d / "programs" / "t" / "locks").iterdir())
+assert not list((d / "programs" / "_locks").iterdir())
+
+# 1b. A lock is per repo and base across programs: another program on the same repo holding it makes this one yield.
+d, env = setup({"1": pr(1)})
+verdict(d, 1, "T-1")
+(d / "programs" / "_locks").mkdir()
+(d / "programs" / "_locks" / "o__r@main.lock").write_text(json.dumps({"pr": 50, "ts": "2999-01-01T00:00:00+00:00"}))
+code, out = prog(env, "land", "t", "--pr", "1")
+assert code == 2 and "lock" in out, out
+
+# 1c. A head with no checks reported yet is not green.
+p0 = pr(10); p0["statusCheckRollup"] = []
+d, env = setup({"10": p0})
+verdict(d, 10, "T-10")
+code, out = prog(env, "land", "t", "--pr", "10")
+assert code == 2 and "CI pending" in out, out
 
 # 2. The dependency root lands before the dependent; the dependent yields, then lands.
 d, env = setup({"2": pr(2), "3": pr(3)})
