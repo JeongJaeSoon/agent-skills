@@ -66,6 +66,10 @@ If the record is already written, say so in one line and move on. Do not rewrite
 
 ## 4. Removing a worktree card
 
+A `run-program` worker (Orca preamble with Task and Dispatch IDs) does not remove its own
+worktree: the coordinator releases it and removes the worktree after landing. It ends with
+`worker_done` and idles.
+
 Only for `isMainWorktree: false`. Read the state with real output, not memory:
 
 ```bash
