@@ -583,17 +583,18 @@ function landOrderCard(st) {
   const order = st.land_order || [];
   const lanes = Object.entries(st.landing || {}).filter(([, l]) => l.holder);
   const holders = lanes.length ? lanes.map(([base, l]) => `<div class="holder">${icon("lock")}<span class="mono">#${esc(l.holder.pr)}</span>
-      <span class="mono dim">${esc(l.holder.ticket || "")}</span><span class="grow"></span><span class="muted">${esc(base)} · 잠금 ${relSpan(l.holder.since)}</span></div>`).join("")
-    : `<div class="holder idle">${icon("lock")}<span>no one landing</span></div>`;
+      <span class="mono dim">${esc(l.holder.ticket || "")}</span><span class="grow"></span><span class="muted">${esc(base)} · 독점 레인 ${relSpan(l.holder.since)}</span></div>`).join("")
+    : `<div class="holder idle">${icon("lock")}<span>exclusive lane free</span></div>`;
   const prUrl = (n) => (st.prs || []).find((p) => p.number === n)?.url;
   const rows = order.map((e, i) => `<li>
       <span class="pos">${i + 1}</span>${link(prUrl(e.pr), `<span class="mono">#${esc(e.pr)}</span>`)}
       <span class="mono dim">${esc(e.ticket || "—")}</span>${ageTag(e.since)}
       ${tag(String(e.state || "?").replace("_", " "), ORDER_TONE[e.state] ?? "")}
       ${e.klass && e.klass !== "normal" ? tag(e.klass, e.klass === "main-fix" ? "bad" : "warn", null) : ""}
+      ${e.exclusive ? tag("exclusive", "accent", "lock") : ""}
       <span class="grow ellipsis muted" title="${esc((e.reasons || []).join(" · "))}">${esc(e.reasons?.[0] || (e.unblocks ? `unblocks ${e.unblocks}` : ""))}</span>
     </li>`).join("");
-  return `<div class="card" data-src="ledger github"><div class="card-head"><h3>Land order</h3><span class="aside">${order.length} waiting · one lock per base</span></div>
+  return `<div class="card" data-src="ledger github"><div class="card-head"><h3>Land order</h3><span class="aside">${order.length} waiting · parallel, one exclusive per base</span></div>
     ${holders}<ul class="rows">${rows || '<li class="muted">Nothing is waiting to land.</li>'}</ul></div>`;
 }
 

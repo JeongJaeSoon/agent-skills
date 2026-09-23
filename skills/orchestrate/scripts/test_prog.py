@@ -81,16 +81,23 @@ events = ready(10, "A-288", 1) + ready(11, "A-278", 1.5) + ready(12, "A-252", 1.
 order = prog.land_order(events, [row(10, "BEHIND"), row(11), row(12), row(13)], CFG, NOW)
 assert [e["pr"] for e in order][0] == 10 and order[0]["unblocks"] == 2, order
 assert {e["pr"]: e["state"] for e in order} == {10: "catching_up", 11: "waiting", 12: "waiting", 13: "ready"}
-# Without a reservation the behind root does not hold the line: the ready PR may land.
-assert prog.turn(order, 13) is None
-# Once the root's lander has started catching up, the line is held for it.
-events += [at(0.1, "land_check", pr=10, outcome="catching_up")]
-order = prog.land_order(events, [row(10, "BEHIND"), row(11), row(12), row(13)], CFG, NOW)
-assert order[0]["reserved_until"] and prog.turn(order, 13)["pr"] == 10
-# ... but a reservation expires, so a dead lander cannot hold it forever.
-events[-1] = at(1, "land_check", pr=10, outcome="catching_up")
-order = prog.land_order(events, [row(10, "BEHIND"), row(11), row(12), row(13)], CFG, NOW)
-assert prog.turn(order, 13) is None
+# Orca task deps feed the same order as ledger deps.
+order = prog.land_order(ready(60, "F-1", 1) + ready(61, "F-2", 1), [row(60), row(61)], CFG, NOW, deps={"F-2": {"F-1"}})
+assert {e["pr"]: e["state"] for e in order} == {60: "ready", 61: "waiting"}
+tasks = [{"id": "t1", "display_name": "F-1 root", "status": "completed", "deps": "[]"},
+         {"id": "t2", "task_title": "F-2", "status": "failed", "deps": "[]"},
+         {"id": "t3", "task_title": "F-2", "status": "pending", "deps": '["t1"]'}]
+assert prog.ticket_of(tasks[0]) == "F-1" and prog.ticket_of({"spec": "/goal x"}) is None
+
+# The exclusive lane: only exclusive entries contend, in land order, per base; normal ones never wait on it.
+events = ready(70, "G-1", 1) + ready(71, "G-2", 0.5) + ready(72, "G-3", 2) \
+    + [at(1, "lane", pr=70, exclusive=True), at(0.5, "lane", pr=71, exclusive=True)]
+order = prog.land_order(events, [row(70, "BEHIND"), row(71), row(72)], CFG, NOW)
+assert [e["exclusive"] for e in order if e["pr"] in (70, 71)] == [True, True]
+assert prog.exclusive_turn(order, 71)["pr"] == 70 and prog.exclusive_turn(order, 70) is None
+assert prog.exclusive_turn(order, 72) is None
+assert prog.is_exclusive({}, ["db/migrations/0003.sql", "src/a.py"]) == ["db/migrations/0003.sql"]
+assert prog.is_exclusive({"landing": {"exclusive_paths": ["contracts/*"]}}, ["src/a.py", "contracts/x.md"]) == ["contracts/x.md"]
 
 # Aging: a normal PR that waited past aging_hours ranks with urgent ones, ahead of a fresh urgent.
 events = ready(20, "B-1", 3) + ready(21, "B-2", 0.1, klass="urgent")
@@ -104,7 +111,6 @@ assert [e["pr"] for e in prog.land_order(events, [row(n) for n in (20, 21, 22, 2
 events = ready(30, "C-1", 2) + ready(31, "C-2", 1)
 order = prog.land_order(events, [row(30, "DIRTY"), row(31, base="feat/x")], CFG, NOW)
 assert order[0]["state"] == "blocked" and "conflicts with base" in order[0]["reasons"]
-assert prog.turn(order, 31) is None
 failed = prog.land_order(events, [row(30, checks=("FAILURE",)), row(31)], CFG, NOW)
 assert failed[0]["state"] == "blocked" and failed[0]["reasons"][0].startswith("CI failed")
 

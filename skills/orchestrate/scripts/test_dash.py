@@ -45,12 +45,9 @@ assert "ACME-090" not in {i["id"] for i in st["issues"]}, "issues the program ne
 assert st["landing"]["main"]["holder"]["pr"] == 207 and [q["pr"] for q in st["landing"]["main"]["queue"]] == [208]
 assert len(st["series"]) > 10 and st["series"][-1]["done"] == 6, "backfilled from ledger and tracker timestamps"
 assert [n["kind"] for n in st["notes"]] == ["risk", "decision", "digest"]
-lo = st["land_order"]  # prog.land_order when present, else the stub; both must agree on this much
+lo = st["land_order"]
 assert [(e["pr"], e["state"]) for e in lo][:1] == [(207, "ready")] and lo[1]["pr"] == 208, lo
 assert lo[1]["ticket"] == "ACME-125" and "behind base" in lo[1]["reasons"] and lo[1]["state"] != "ready"
-stub = dash._land_order_stub(dash.read_jsonl(store / A / "ledger.jsonl"),
-                             json.loads((store / A / "dashboard" / "pr_rows.json").read_text()), {}, dash.utcnow())
-assert [e["pr"] for e in stub] == [207, 208]
 assert st["summary"]["oldest_open_pr"]["pr"] == 207 and 11.9 < st["summary"]["oldest_open_pr"]["age_h"] < 12.1
 dep = next(a for a in st["activity"] if a["kind"] == "dep")
 assert dep["text"] == "dependency recorded (ACME-107) · after=ACME-106", dep["text"]

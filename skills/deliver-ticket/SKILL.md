@@ -159,14 +159,19 @@ frontier; you still own your PR to landing.
 Then land it. How depends on where you run:
 
 - **Inside a program** — the brief has a `PROGRAM: <slug>` line. Land only with the brief's LAND
-  command (`prog.py land`), which takes your turn in the program's priority and dependency
-  order and merges under the base-branch lock after re-checking readiness at the current head.
+  command (`prog.py land`), which re-checks readiness at the current head, waits for your
+  dependencies, and puts migrations, CI and other shared files in the exclusive lane; other PRs
+  land in parallel, behind or not.
   Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
   Under human-gate it refuses; report READY and stop. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence.
 - **A standalone card** merges its own verified PR unless the user set a hold. When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
-  a landing order, a baton), follow that procedure instead of merging at will:
+  a landing order, an exclusive lane), follow that procedure instead of merging at will.
+  Otherwise merge when the PR is ready at its current head — CI green (read the log), review
+  done, no conflict — whether or not it is behind. Spend one minute first on
+  `git diff --name-only <CI base>..origin/main`: if it touches a contract or test premise this
+  PR relies on, merge main in and let CI rerun. Do not rebase only because the branch is behind.
 
 ```bash
 gh pr merge <n> --squash --delete-branch      # a stack lands from its top, see §5

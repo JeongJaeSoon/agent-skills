@@ -270,14 +270,14 @@ def shape_workers(raw, events):
 
 
 EV_TEXT = {
-    "dep": "dependency recorded", "land_check": "land-check on #{pr}", "yield": "#{pr} yielded the landing lock",
+    "dep": "dependency recorded", "land_check": "land-check on #{pr}", "yield": "#{pr} yielded",
     "reprioritized": "land order reprioritized",
     "spawned": "spawned {ticket}", "ready": "#{pr} ready for review", "landed": "landed #{pr} as {sha7}",
     "main_green": "main green at {sha7}", "main_red": "main red at {sha7}", "land_failed": "landing #{pr} failed",
     "admitted": "{ticket} admitted into scope", "parked": "{ticket} parked as follow-up",
     "approved": "#{pr} approved for landing", "stop": "STOP line set", "resume": "resumed",
     "predicate_verified": "predicate verified on the real artifact", "config": "config changed",
-    "lock_acquired": "#{pr} took the landing lock", "lock_released": "#{pr} released the landing lock",
+    "lock_acquired": "#{pr} took the exclusive lane", "lock_released": "#{pr} left the exclusive lane", "lane": "#{pr} lane classified",
 }
 
 
@@ -635,7 +635,7 @@ def collect(slug, sources=SOURCES, interval=None):
 
 
 def landing_of(cfg, events, prs):
-    """Per base branch: who holds the landing lock (ledger lock_acquired/lock_released) and who is ready behind it."""
+    """Per base branch: who holds the exclusive lane (ledger lock_acquired/lock_released) and who is ready behind it."""
     base_of = {p["number"]: p.get("base") for p in prs}
     ticket_of = {p["number"]: p.get("ticket") for p in prs}
     default = cfg.get("base") or "main"
@@ -665,47 +665,8 @@ def landing_of(cfg, events, prs):
     return out
 
 
-def _land_order_stub(events, pr_rows, cfg, now):
-    """Stand-in with prog.land_order's signature until prog.py ships it; replace, do not extend."""
-    main_red = prog.main_state(events) == "red"
-    st = prog.pr_state(events)
-    out = []
-    for row in pr_rows:
-        if row.get("isDraft"):
-            continue
-        n = row["number"]
-        s = st.get(n, {})
-        first = s.get("ready") or s.get("verdict")
-        since = first["ts"] if first else None
-        failed, pending, _ = prog.ci_summary(row.get("statusCheckRollup"))
-        verdict = s.get("verdict")
-        reasons = []
-        if main_red:
-            reasons.append("main is red")
-        if failed:
-            reasons.append("CI failed: " + ", ".join(failed[:2]))
-        if row.get("mergeStateStatus") == "DIRTY":
-            reasons.append("conflicts with base")
-        blocked = bool(reasons)
-        if row.get("mergeStateStatus") == "BEHIND":
-            reasons.append("behind base")
-        if pending:
-            reasons.append("CI running")
-        catching = not blocked and bool(reasons)
-        if not verdict or verdict.get("result") != "pass":
-            reasons.append("no passing verdict")
-        state = "blocked" if blocked else "catching_up" if catching else "waiting" if reasons else "ready"
-        age = (now - prog.parse_ts(since)).total_seconds() / 3600 if since else None
-        out.append({"pr": n, "ticket": (first or {}).get("ticket"), "klass": None, "unblocks": 0, "since": since,
-                    "age_h": round(age, 2) if age is not None else None, "state": state, "reasons": reasons,
-                    "reserved_until": None})
-    rank = {"ready": 0, "catching_up": 1, "waiting": 2, "blocked": 3}
-    out.sort(key=lambda e: (rank[e["state"]], -(e["age_h"] or 0)))
-    return out
-
-
-def land_order(events, pr_rows, cfg, now):
-    return (getattr(prog, "land_order", None) or _land_order_stub)(events, pr_rows, cfg, now)
+def land_order(events, pr_rows, cfg, now, tasks=None):
+    return prog.land_order(events, pr_rows, cfg, now, deps=prog.deps_from_tasks(tasks or []))
 
 
 def _merge(slug, d, cfg, fetched, interval):
@@ -753,8 +714,9 @@ def _merge(slug, d, cfg, fetched, interval):
         write_atomic(rows_path, json.dumps(pr_rows))
     else:
         pr_rows = read_json(rows_path, [])
+    raw_orca, fresh_orca = outcome("orca")
     try:
-        order = land_order(events, pr_rows, cfg, tnow)
+        order = land_order(events, pr_rows, cfg, tnow, raw_orca.get("tasks") if fresh_orca else None)
     except Exception as e:  # a bug in the ranking must not take the rest of the dashboard down
         order = prev.get("land_order") or []
         errors.append(f"land_order: {e!r}"[:300])
@@ -769,8 +731,7 @@ def _merge(slug, d, cfg, fetched, interval):
         entry.setdefault("ticket", None)
         entry["ticket"] = entry["ticket"] or ticket_of.get(entry.get("pr"))
 
-    raw_orca, fresh = outcome("orca")
-    if fresh:
+    if fresh_orca:
         workers = shape_workers(raw_orca["workers"], events)
         tasks = shape_tasks(raw_orca["tasks"], workers)
         objective = (raw_orca.get("run") or {}).get("objective")

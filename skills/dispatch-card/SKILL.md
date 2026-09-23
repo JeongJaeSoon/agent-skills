@@ -95,6 +95,9 @@ orca worktree create \
 # name the card and its tab by what it does, not Orca's automatic title
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID or target> <short title>" --json
 orca terminal rename --terminal <result.agentTerminalHandle> --title "<ID or target> <short title>"
+# the setup terminal is the card's row without agentIdentity; close it once setup exits
+orca terminal list --worktree "path:<result.worktree.path>" --json
+orca terminal wait --terminal <setup handle> --for exit --timeout-ms 1800000 && orca terminal close --terminal <setup handle>
 ```
 
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in

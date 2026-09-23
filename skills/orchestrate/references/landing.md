@@ -1,46 +1,85 @@
-# Landing: parallel development, one priority-ordered line into each base
+# Landing: parallel by default, exclusive where a merge can break what it does not touch
 
-Development, review, conflict fixes and CI all run in parallel. Only the merge into a base branch is serial, because strict branch protection makes every landing push the others behind. Each worker lands its own PR through `prog.py land`. That command is the lock, the line and the checks in one, so no coordinator has to hand out merge slots.
+Development, review, CI and landing all run in parallel. Each worker lands its own PR through `prog.py land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No coordinator hands out merge slots.
 
-This design replaced two that failed on a real program (2026-09-23):
+This design replaced three that failed on a real program (2026-09-23/24):
 
 - **A coordinator that granted each merge.** It became the slowest part of the system. Ready PRs waited on the coordinator's turn, not on CI.
-- **"Whoever is ready lands next."** A migration chain (288 → 278 → 252) waited more than five hours while eleven newer, easier PRs landed ahead of it. Each of those landings put the chain's root behind again and cost it another CI cycle. That is starvation, and the priority and dependency order existed only in the coordinator's head.
+- **"Whoever is ready lands next."** A migration chain waited more than five hours while eleven newer, easier PRs landed ahead of it. The priority and dependency order existed only in the coordinator's head.
+- **One baton, strict up-to-date branches.** Every landing put every other PR behind, which meant a rebase and another 30–40 minute CI run each. The user's verdict: "동시에 여러 pr 을 빠르게 머지하면서도 적절히 안정적으로… 1개씩 확인하고 머지하는건 너무 별로야". They turned off "require branches to be up to date" and kept the required checks. Landings went parallel.
 
 The rules below come from pstack Shipping (MIT, Lauren Tan). "CI green is not a verdict." A verdict holds across a rebase only while the patch-id is unchanged.
 
+## Repository settings this assumes
+
+- Branch protection keeps the required checks, with **"require branches to be up to date" off**. No admin bypass.
+- Squash merges. Squashing did not cause conflicts; strict mode plus serial landing did.
+- If a repo keeps strict mode on, GitHub reports behind PRs as `BEHIND`. `land` then asks for `gh pr update-branch` before merging, which is correct but slow. Say so in the program note's digest.
+
+## Two lanes
+
+**Normal lane** (most PRs). `land` merges as soon as all of these hold at the current head:
+
+- a passing verdict whose patch-id matches the PR now
+- CI completed and green. No checks yet counts as pending, and a green check is not proof, so read the logs of the runs it prints.
+- no conflict, not a draft
+- its dependencies landed
+- main is not red
+
+Behind is fine. The one mechanical self-check: if the base changed any file this PR also changes since the PR branched, `land` exits 3 and asks you to `gh pr update-branch`, re-check your contract and test assumptions, and let CI run again. Before calling `land`, the worker also spends a minute on the judgment the tool cannot make. Run `git diff --name-only <CI base>..origin/main` and ask whether any of it touches a contract or a test premise this PR relies on.
+
+**Exclusive lane.** A PR is in it if any of these hold:
+
+- it touches `exclusive_paths`. The defaults are `*migrations/*`, `.github/*`, `*Dockerfile*` and `*compose*.y*ml`. Add shared contracts per program with `prog.py set <slug> exclusive_paths "a/*,b.md"`.
+- its class is `gate`
+
+The lane works like this:
+
+- One PR per repo base at a time, across every program on the machine. The lock lives in `~/.claude/programs/_locks/`.
+- Among waiting exclusive PRs, the land order decides who takes the lane next.
+- The holder keeps the lane from its first turn through the update, the restack (migrations) and CI, until it lands. Each attempt refreshes the lock. A holder idle for `exclusive_stale_minutes` (90) is presumed dead, and its lock is broken.
+- It lands only on the latest base: not behind at all.
+
+Normal-lane PRs never wait for the exclusive lane.
+
+Proposals to serialize the normal lane for safety are rejected by default ("one CI at a time", "land one per N minutes"). They kill throughput, and GitHub already queues CI jobs. The safety comes from the self-check and the exclusive lane.
+
 ## The land order
 
-`prog.py queue <slug>` prints the order and why each PR is not moving. `prog.py status` prints its first line.
+`prog.py queue <slug>` prints the order and why each PR is not moving. `prog.py status` prints its first line. The order decides who takes the exclusive lane, and what the coordinator unsticks first.
 
 1. **Class:** `main-fix` → `gate` → `urgent` → `normal`. `record reprioritized --pr N --class urgent` moves a PR.
-2. **Aging.** A PR that has waited `aging_hours` (default 2) ranks with urgent ones. Nothing starves behind a stream of fresh PRs.
-3. **Unblocking.** Within a class, the PR that more open tickets depend on goes first. Dependencies are `prog.py dep <slug> --ticket A --after B`, recorded when you spawn A. Then waiting the longest.
+2. **Aging.** A PR that has waited `aging_hours` (default 2) ranks with urgent ones.
+3. **Unblocking.** The PR that more open tickets depend on goes first, then the one that has waited the longest.
 
 Each entry is in one of four states:
 
 - `ready`
-- `catching_up`: behind, or CI pending
-- `blocked`: conflicts, CI failed, draft, no verdict, protection. It is passed over and never holds the line.
-- `waiting`: on a dependency, on its stack's top, or on the human gate.
+- `catching_up`: CI pending, or behind on a strict base
+- `blocked`: conflicts, CI failed, draft, no verdict, protection
+- `waiting`: on a dependency, on its stack's top, or on the human gate
 
-The first `catching_up` PR holds the line for `reserve_minutes` (default 40) from its lander's last attempt. It needs one update and one CI cycle without being pushed behind again. A dead lander loses the reservation by itself.
+## Dependencies: Orca task deps
+
+Dependencies are what Orca orchestration is for. Declare them where Orca enforces them:
+
+- `task-create --deps '["<task id>", …]'` or `worker-start --deps`, and start work from `task-list --ready`.
+- `prog.py` reads the Run's task deps and keys them by the ticket ID that starts each task's display name. A dependent PR `waiting` in the land order ("lands after X") is the same edge Orca holds.
+- Deps are immutable once a task exists. To add a prerequisite to a task that has no dispatch yet, create a new task with the full deps list and retire the old one: `task-update --status failed --result '{"superseded_by":"<new id>"}'`. `prog.py` skips failed tasks.
+- A dependency found after dispatch cannot be added in Orca. Record it with `prog.py dep <slug> --ticket A --after B`.
+- A condition that needs judgment ("after the human checks X") is an Orca gate (`gate-create`), not a dep.
 
 ## GitHub stacks: several PRs, one merge
 
-When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. Don't land them one by one with a rebase and a CI cycle between each. The top layer's CI tests the whole chain, and `prog.py land --pr <top>` merges every layer in one `merge-async` call.
+When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `prog.py land --pr <top>` merges every layer in one `merge-async` call.
 
-- Create it with `gh stack link <bottom> <top> [--base main]`, or `gh stack init` / `add` / `submit`.
-- Confirm it with `gh pr view` (stack icon) or `gh api repos/<o>/<r>/pulls/<n> --jq .stack`.
-- In the land order a lower layer is `waiting` ("lands with its stack from #top") while the top is not blocked. The top is `ready` only when every open layer below it is ready at its own head.
-- A blocked top releases the lower layers to land alone.
-- Two independent READY PRs can ride one merge the same way: stack B on A (rebase onto A's branch, `gh stack link A B`, push). When B's CI is green, landing B lands both. `land` suggests this when it makes a PR yield to another ready one.
-- Stacked PRs refuse `gh pr merge`. `land` uses `merge-async` and polls until every layer is MERGED.
-- `gh stack merge` (v0.0.3) only prints guidance.
+- Create it with `gh stack link <bottom> <top> [--base main]`, or `gh stack init` / `add` / `submit`. Confirm it with `gh pr view` (stack icon).
+- A lower layer is `waiting` ("lands with its stack from #top") while the top is not blocked. The top is `ready` only when every open layer below it is ready at its own head. A blocked top releases the lower layers to land alone.
+- Stacked PRs refuse `gh pr merge`. `land` uses `merge-async` and polls until every layer is MERGED. If any layer is exclusive, the stack takes the exclusive lane as one unit.
 
 ## Feature integration branches
 
-A series of cards reworking the same area (a big refactor, a directory move) works on `feat/<topic>`, which is branched from main and unprotected. Sub-PRs take `feat/<topic>` as their base. They land into it with the same `prog.py land`, which uses a per-base lock and line, so they never wait for main. The branch merges `origin/main` periodically. When the series is done, one `feat/<topic>` → main PR takes its turn in main's line. main never holds a half-finished state.
+A series of cards reworking one area works on `feat/<topic>`, branched from main and unprotected. Sub-PRs take it as their base and land into it with the same `prog.py land` (lanes are per base). The branch merges `origin/main` periodically. When the series is done, one `feat/<topic>` → main PR lands.
 
 ## What a worker does: `prog.py land <slug> --pr N [--wait-minutes 50]`
 
@@ -49,35 +88,51 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 | Exit | Meaning | Do |
 |---|---|---|
 | 0 | Landed. It printed the merge commit and the main-CI watch command. | Watch main CI, `record main_green\|main_red --sha`, finish the ticket, `worker_done` |
-| 2 | Yield: not your turn, or CI is running on your held turn | Nothing. Run it again, or keep the `--wait-minutes` loop |
-| 3 | Act: your PR needs something now. The message says what (conflicts, failed CI, a changed patch that needs re-review, or "your turn: update the branch") | Do it, then `land` again |
+| 2 | Yield: CI still running, a dependency or the stack top first, or another PR holds the exclusive lane | Nothing. Keep the `--wait-minutes` loop |
+| 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again |
 | 1 | Refused: STOP line, main red (only `--class main-fix` lands), or the human gate | Report and stop |
 
-Readiness is re-checked at the current head, under the base's lock, right before the merge:
+Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
 
-- a passing verdict whose patch-id matches the PR now
-- CI completed and passing (read the logs of the runs it prints; a green check is not proof)
-- not BEHIND or DIRTY
-- every lower stack layer the same
+## Main red: the guardian decides, the coordinator coordinates
 
-Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed. Past greens and earlier heads are not evidence.
+A standing **main guardian** worker (`references/roles.md`) owns red main. It re-runs a failed main run once and reads the logs.
 
-Do not update your branch while you are yielding. Another landing would push it behind again and spend the CI budget. `land` tells you when it is your turn.
+- **Flake.** Record it in the program note's digest and freeze nothing.
+- **Real defect.** It freezes landing (`prog.py record <slug> main_red --sha <merge commit>`) and narrows the culprit to a commit since the last green. It then chooses:
+  - **hotfix** when the cause is clear and small, and the fix verifies in about 30 minutes
+  - **revert** otherwise
+
+  It never mechanically reverts a migration or a commit later PRs depend on. It lands the repair with `--class main-fix`, records `main_green`, and tells the culprit's card, the affected cards and the coordinator.
 
 ## What the coordinator does
 
-- Record `dep` edges when spawning, and pass the same edges to Orca as `worker-start --deps`.
-- Plan dependent chains as stacks from the start. The brief says "stack on #N".
-- Read `status` on every drain. `STALE` lines are PRs that have waited `stale_hours` (default 3). Each one gets an action on the reason `queue` gives: a fix task, stacking the chain, reprioritizing, or releasing a blocker. More parallel work does not fix a stale PR.
-- A landing backlog over `max_backlog_hours` (default 2) means **stop starting, start finishing**. `status` says so, and spawning waits.
-- Red main: the one fix task lands with `--class main-fix`, then `record main_green --sha`.
-- Merges you did not make: on each wake, `gh pr list --state merged --search "merged:>=<last drain>"`. `land` also records a PR that was merged outside it.
-- Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `reserve_minutes`, `max_backlog_hours`, `land_interval_minutes`, `lock_stale_minutes`.
+- Declare dependencies as Orca task deps when creating tasks, and plan dependent chains as stacks from the start.
+- Read `status` on every drain:
+  - `STALE` lines are PRs that have waited `stale_hours` (default 3). Each gets an action on the reason `queue` gives.
+  - `LANDED-BUT-OPEN` lines are workers whose PR landed. Release them and remove their worktrees in the same turn.
+- A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
+- Merges you did not make: `land` records a PR that was merged outside it.
+- Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes`, `exclusive_stale_minutes`, `exclusive_paths`, `heavy_slots`.
+- Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it. A shared JSON file overwritten in place was once left empty mid-write.
 
 ## human-gate
 
-Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `prog.py gate <slug> --pr N`, which creates an Orca decision gate on a coordinator-owned Task. The user resolves it in Orca. You then run `prog.py land <slug> --pr N`: it sees the resolution, records `approved`, and lands in order.
+Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `prog.py gate <slug> --pr N`, which creates an Orca decision gate on a coordinator-owned Task. The user resolves it in Orca. You then run `prog.py land <slug> --pr N`: it sees the resolution, records `approved`, and lands.
 
 ## Permissions
 
-Merging inside `prog.py land` is what lets a worker land without a per-merge approval prompt. `scripts/install.py --settings --write` adds the few rules a program needs: allow `orca orchestration` and `prog.py land` (the checks above are the review gate), deny `reset` and `worker-abandon`, ask before `gate-resolve` and `orca terminal send`, and a hook that refuses reading another session's mailbox. Everything else goes to auto mode's classifier. A skill's `allowed-tools` cannot replace these: it lasts only for the turn that loads the skill, a worker runs LAND from its brief hours later, and deny rules and hooks cannot be declared in a skill. A worker that calls `gh pr merge` or `gh api … merge-async` by hand is doing it outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.
+Merging inside `prog.py land` is what lets a worker land without a per-merge approval prompt. `scripts/install.py --settings --write` adds the few rules a program needs:
+
+- allow `orca orchestration` and `prog.py land` (the checks above are the review gate)
+- deny `reset` and `worker-abandon`
+- ask before `gate-resolve` and `orca terminal send`
+- a hook that refuses reading another session's mailbox
+
+Everything else goes to auto mode's classifier. A skill's `allowed-tools` cannot replace these rules, for three reasons:
+
+- it lasts only for the turn that loads the skill
+- a worker runs LAND from its brief hours later
+- deny rules and hooks cannot be declared in a skill
+
+A worker that calls `gh pr merge` or `gh api … merge-async` by hand is merging outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.

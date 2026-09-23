@@ -30,7 +30,13 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 ## 의존 관계와 stack
 
-- <티켓 A> ← <티켓 B> (B는 A 뒤에 착지, `prog.py dep` 기록) · stack: #<하위> → #<상위>
+- <티켓 A> ← <티켓 B> (B는 A 뒤에 착지. Orca task deps가 정본이고, 디스패치 뒤에 찾은 의존만 `prog.py dep`) · stack: #<하위> → #<상위>
+
+## 착지와 역할
+
+- 레인: 일반은 병렬. 독점 경로는 <기본값 + 이 프로그램의 공유 계약 경로> (`prog.py set <slug> exclusive_paths …`)
+- 저장소 설정: required checks <목록>, up-to-date 요구 <꺼짐|켜짐: 비용을 digest에>, squash
+- main 가디언: <dispatch id> · QA 리드: <dispatch id>, e2e 주기 착지 <5>건마다 · <2>시간마다 · 게이트 PR 직전, 설계 기준 문서 <경로>
 
 ## 사람 대기
 

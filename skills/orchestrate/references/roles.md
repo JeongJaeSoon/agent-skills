@@ -1,0 +1,68 @@
+# Standing roles
+
+A program of more than a handful of tickets runs three standing roles beside the ticket workers. Each is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker. None of them lands feature work.
+
+| Role | Owns | Does not |
+|---|---|---|
+| Coordinator (this session) | Order, deps, briefs, triage, gates, the digest | Diagnose red main, run QA, rework the process |
+| Main guardian | Red main: flake or defect, freeze, hotfix or revert, notify | Pick up tickets |
+| QA lead | Ticket verification, periodic E2E on main, design-vs-code audit | Fix what it finds (it files tickets) |
+| Flow improver (a subagent or a separate session, on demand) | Turning the human's process feedback into skill or standing-order changes | Touch the running program |
+
+They came from the user's own calls on a real program (2026-09-24):
+
+- On red main: "무조건 revert 하기보다는 별도의 agent에 위임해서 revert/hotfix를 자율 판단·대응하고 결과를 너에게 보고 + 필요한 세션에 공유, 너는 조율만".
+- On QA: "중간중간 동작확인 QA, e2e 테스트, 설계구현 정합성 확인도 전문 QA 오케스트레이터로 해야 한다".
+- On process feedback: the coordinator stays on the mission. Feedback about how the work flows goes to a separate session or subagent, which improves the skills and shares the result.
+
+## Main guardian brief
+
+```
+GUARDIAN: main guardian for <repo> <base>
+PROGRAM: <slug>
+
+GOAL        Keep <base> green without stopping the program for flakes.
+WATCH       Every landing's main run: prog.py status shows `main pending`; gh run list --repo <repo>
+            --branch <base> --json databaseId,headSha,conclusion. Wake with prog.py wait or a
+            background `gh run watch`.
+ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --failed) and read the log.
+               Flake → note it in the digest (dash.py note <slug> --kind risk --text …), freeze nothing.
+            2. Defect → prog.py record <slug> main_red --sha <merge commit>. That freezes every lane
+               except --class main-fix.
+            3. Narrow the culprit among the commits since the last green.
+            4. Choose: hotfix when the cause is clear and small and verifies in ~30 min; revert
+               otherwise. Never mechanically revert a migration or a commit later PRs build on.
+            5. Open the repair PR, review it (deliver-ticket §3, scaled to the diff), and land it with
+               prog.py land <slug> --pr N --class main-fix. Required checks, no bypass.
+            6. On green: prog.py record <slug> main_green --pr N --sha <sha>.
+            7. Tell the culprit's card, the affected cards (orca orchestration send --to dispatch:<id>)
+               and the coordinator (worker report, not worker_done). Append a row to
+               ~/.claude/programs/<slug>/guardian-log.tsv: time, sha, verdict, action, PR.
+FORBIDDEN   Feature work. Force-push. Disabling or skipping checks.
+REPORT      One message per incident; worker_done only when the coordinator releases the role.
+```
+
+## QA lead brief
+
+```
+QA: QA lead for <program>
+PROGRAM: <slug>
+
+GOAL        Catch what per-PR CI cannot: tickets that do not do what they claim, main that no longer
+            works end to end, and code that drifted from the design.
+LANES       Run all three continuously; fan each unit out to a subagent (swarm), in parallel.
+  1 Ticket verification  For every landed ticket (prog.py status, `landed` events), one verifier
+                          drives the ticket's acceptance criteria on main with the repo's
+                          verify-<app> skill. PASS / PASS+NOTES / FAIL with what it drove. Oldest first.
+  2 Periodic E2E          The repo's full E2E suite on the latest main, every <qa_every_landings, 5>
+                          landings, every <qa_every_hours, 2> h, and right before each gate PR lands.
+                          Heavy local runs go through prog.py heavy <slug> -- <command>.
+  3 Design audit          One standing reader compares <design doc(s)> with the code on main. Each
+                          finding is filed as 문서 오류 (the doc is wrong) or 코드 오류 (the code is wrong).
+FINDINGS    File each reproduced failure as a ticket (write-ticket follow-up format, label follow-up,
+            파생: <ticket or QA> · 원인: QA). A failure on main that blocks others → tell the guardian.
+FORBIDDEN   Fixing findings. Landing anything.
+REPORT      A digest per lane round: counts, links to tickets filed, what was driven.
+```
+
+Set the cadence in the program note's standing orders so a resumed coordinator re-briefs the same way.

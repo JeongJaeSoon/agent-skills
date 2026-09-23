@@ -13,7 +13,9 @@ SCOPE       Paths this unit may write and paths it may not. Its own worktree and
             Base: main | feat/<topic> | stacked on #<PR> (gh stack link <lower> <this>).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them.
-ORDER       Lands after <TICKET…> (recorded with prog.py dep). Class: normal | urgent | gate.
+ORDER       Lands after <TICKET…> (the task's Orca deps). Class: normal | urgent | gate.
+            Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
+            program's exclusive_paths (land handles it; say it here so the worker expects it).
 PEERS       Who to settle shared files and landing order with directly, and about what:
             `orca orchestration send --to dispatch:<id> --subject … --body …`. Tell the
             coordinator only what changes scope, order or the predicate.
@@ -22,12 +24,14 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
             through `prog.py heavy <slug> -- <command>`, which caps them machine-wide.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
-LAND        python3 ~/.claude/skills/orchestrate/scripts/prog.py land <slug> --pr <N> --ticket <ID>
-            --wait-minutes 50, run in the background. Act on exit 3, report on exit 1. Never merge
-            any other way. (human-gate: stop at READY and report instead.)
+LAND        First the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            of it touches a contract or test premise this PR relies on, merge main in and let CI
+            rerun. Then python3 ~/.claude/skills/orchestrate/scripts/prog.py land <slug> --pr <N>
+            --ticket <ID> --wait-minutes 50, run in the background. Act on exit 3, report on exit 1.
+            Never merge any other way. (human-gate: stop at READY and report instead.)
 FORBIDDEN   Do not start other tickets. File follow-ups with the label `follow-up` and the first
             body line `파생: <this ticket> · 원인: <분류>`, and do not work on them. No force-push
-            to shared branches. Do not update your branch while `land` says yield.
+            to shared branches. Do not rebase only because the branch is behind; `land` says when.
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
@@ -42,7 +46,7 @@ STANDING    <the program note's standing orders, pasted verbatim, numbered>
 - The spec starts with the ticket ID, never `/`. The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was ENG-278). Pass `worker-start --display-name "<ID> <short title>"`. Right after the start, run `orca terminal rename --terminal <agentTerminalHandle> --title "<ID> <short title>"`.
-- **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record `prog.py dep` and pass `--deps` to `worker-start` at the same time.
+- **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Declare the same edge as the task's Orca deps.
 - Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` before `worker-start`. Afterwards run `prog.py record <slug> spawned --ticket <id> --note <dispatchId>`.
