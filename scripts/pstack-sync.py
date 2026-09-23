@@ -83,7 +83,9 @@ def main():
         if local is None:
             merged, state = new, "new"
         elif base == new:
-            rows.append((f["upstream"], "unchanged", "")); continue
+            # A verbatim file must still equal upstream even when upstream did not move.
+            drift = f["mode"] == "verbatim" and local != base
+            rows.append((f["upstream"], "drift" if drift else "unchanged", "")); blocked += drift; continue
         elif local == base:
             merged, state = new, "clean"
         else:
@@ -116,8 +118,11 @@ def main():
         if path.suffix == ".sh":
             path.chmod(0o755)
     m["pin"] = target
+    plugin = show(target, f"{up}/.cursor-plugin/plugin.json")
+    if plugin:
+        m["upstream_version"] = json.loads(plugin).get("version", m.get("upstream_version"))
     manifest_path.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
-    print(f"wrote {len(writes)} file(s), pin -> {target[:12]}")
+    print(f"wrote {len(writes)} file(s), pin -> {target[:12]} (version {m.get('upstream_version', '?')})")
 
 
 if __name__ == "__main__":

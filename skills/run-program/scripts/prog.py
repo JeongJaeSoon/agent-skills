@@ -5,10 +5,15 @@ Usage: python3 prog.py <command> <slug> [options]
 
   init <slug> --repo OWNER/NAME --run RUN_ID [--linear-project NAME] [--predicate ID,ID,...]
               [--merge-policy autonomous|human-gate] [--ceiling 6] [--deadline ISO8601]
+  set <slug> <merge_policy|ceiling|deadline|predicate> VALUE
+                                     mirror a change made in the program note
   status <slug>                      predicate, flow, growth and the next move, from live sources
   record <slug> <event> [--ticket T] [--pr N] [--sha S] [--note TEXT]
-  verdict <slug> --pr N --source WHO [--result pass|fail] [--note TEXT]
-  land-check <slug> --pr N           may this PR land now? prints the exact merge command if so
+                                     main_green / main_red need --sha of a landed merge commit
+  verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
+  land-check <slug> --pr N [--main-fix]
+                                     may this PR land now? prints the exact merge command if so;
+                                     --main-fix lets the PR that repairs a red main through
   landed <slug> --pr N               record the merge and print the main-CI watch command
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      block until the Run inbox holds actionable mail; acks
@@ -16,9 +21,9 @@ Usage: python3 prog.py <command> <slug> [options]
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
-admitted, parked, approved, stop, resume.
+admitted, parked, approved, stop, resume, predicate_verified, config.
 """
-import datetime as dt, json, math, os, pathlib, subprocess, sys
+import datetime as dt, json, os, pathlib, subprocess, sys
 
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 PASSING = {"SUCCESS", "SKIPPED", "NEUTRAL"}
@@ -77,10 +82,20 @@ class Program:
         return row
 
 
+def landed_shas(events):
+    return {e["sha"] for e in events if e["ev"] == "landed" and e.get("sha")}
+
+
 def cap_from(events, ceiling):
-    # AIMD: +1 per landing proven green on main, halve on red main or a failed landing.
-    cap = 1
+    # AIMD over merge commits: +1 the first time a landed commit is proven green on main,
+    # halve the first time one goes red, and on every failed landing.
+    landed, seen, cap = landed_shas(events), set(), 1
     for e in events:
+        if e["ev"] in ("main_green", "main_red"):
+            key = (e["ev"], e.get("sha"))
+            if e.get("sha") not in landed or key in seen:
+                continue
+            seen.add(key)
         if e["ev"] == "main_green":
             cap = min(ceiling, cap + 1)
         elif e["ev"] in ("main_red", "land_failed"):
@@ -88,24 +103,38 @@ def cap_from(events, ceiling):
     return cap
 
 
+def main_state(events):
+    """green, red or pending for the newest landed merge commit; results for older commits never clear it."""
+    landed = [e for e in events if e["ev"] == "landed" and e.get("sha")]
+    if not landed:
+        return "green"
+    sha = landed[-1]["sha"]
+    results = [e["ev"] for e in events if e["ev"] in ("main_green", "main_red") and e.get("sha") == sha]
+    return {"main_green": "green", "main_red": "red"}[results[-1]] if results else "pending"
+
+
 def pr_state(events):
-    """Latest lifecycle state per PR: ready -> verdict -> landed -> main_green|main_red."""
+    """Latest event of each kind per PR, in ledger order."""
     st = {}
     for e in events:
-        pr = e.get("pr")
-        if pr is None:
-            continue
-        s = st.setdefault(pr, {"pr": pr})
-        if e["ev"] in ("ready", "verdict", "landed", "main_green", "main_red", "land_failed", "approved"):
-            s[e["ev"]] = e
-            if e["ev"] != "approved":
-                s["state"] = e["ev"]
+        if e.get("pr") is not None:
+            st.setdefault(e["pr"], {"pr": e["pr"]})[e["ev"]] = e
     return st
+
+
+def ready_prs(events):
+    return [s for s in pr_state(events).values() if ("ready" in s or "verdict" in s) and "landed" not in s]
+
+
+def stopped(events):
+    marks = [e["ev"] for e in events if e["ev"] in ("stop", "resume")]
+    return bool(marks) and marks[-1] == "stop"
 
 
 def patch_id(repo, pr):
     diff = run(["gh", "pr", "diff", str(pr), "--repo", repo]).stdout
-    r = subprocess.run(["git", "patch-id", "--stable"], input=diff, capture_output=True, text=True)
+    # --verbatim: whitespace-only edits (Python indentation) must change the id and void the verdict.
+    r = subprocess.run(["git", "patch-id", "--verbatim"], input=diff, capture_output=True, text=True)
     return (r.stdout.split() or [""])[0]
 
 
@@ -177,24 +206,28 @@ def cmd_status(argv):
     pred = cfg["predicate"]
     done = [t for t in pred if (by_id.get(t, {}).get("state") or {}).get("type") in ("completed",)]
     open_ = [t for t in pred if t not in done]
-    met = pred and not open_
-    lines.append(f"predicate: {len(done)}/{len(pred)} done" + (" — met" if met else f" (open: {', '.join(open_[:8])}{'…' if len(open_) > 8 else ''})")
+    tickets_done = bool(pred) and not open_ and issues is not None
+    last_land = max((i for i, e in enumerate(events) if e["ev"] == "landed"), default=-1)
+    verified = any(e["ev"] == "predicate_verified" for e in events[last_land + 1:])
+    lines.append(f"predicate: {len(done)}/{len(pred)} tickets done"
+                 + ((" — final check recorded" if verified else " — final check not yet recorded") if tickets_done
+                    else f" (open: {', '.join(open_[:8])}{'…' if len(open_) > 8 else ''})")
                  if issues is not None else f"predicate: {len(pred)} items (no linear_project; check by hand)")
 
     # 2. flow
     workers = orca_json("orchestration", "worker-list", "--run", cfg["run"]).get("workers", [])
     live = [w for w in workers if (w.get("projection") or {}).get("outcome") == "in_progress"]
     waiting = [w["dispatchId"] for w in live if ((w.get("projection") or {}).get("stage") or {}).get("activity") == "waiting"]
-    st = pr_state(events)
-    ready = [s for s in st.values() if s.get("state") in ("ready", "verdict")]
+    ready = ready_prs(events)
     human = [s for s in ready if cfg["merge_policy"] == "human-gate" and "approved" not in s]
+    main = main_state(events)
     window = dt.timedelta(hours=3)
     landed_recent = [e for e in events if e["ev"] == "landed" and tnow - parse_ts(e["ts"]) <= window]
     fails_recent = [e for e in events if e["ev"] in ("main_red", "land_failed") and tnow - parse_ts(e["ts"]) <= window]
     cap = cap_from(events, cfg["ceiling"])
     hours = max((tnow - t0).total_seconds() / 3600, 0.25)
     rate = len([e for e in events if e["ev"] == "landed"]) / hours
-    lines.append(f"flow: in-flight {len(live)}/{cap} cap (ceiling {cfg['ceiling']}) · ready-to-land {len(ready)}"
+    lines.append(f"flow: main {main} · in-flight {len(live)}/{cap} cap (ceiling {cfg['ceiling']}) · ready-to-land {len(ready)}"
                  f" · human-wait {len(human)} · landed {len(landed_recent)} in 3h · {rate:.1f}/h overall"
                  + (f" · idle-waiting: {', '.join(waiting)} (prompt? worker-read --source terminal)" if waiting else ""))
 
@@ -212,24 +245,22 @@ def cmd_status(argv):
                      f" · admitted {len(admitted)} · parked {len(parked)}"
                      + (f" · untriaged: {', '.join(untriaged[:6])}" if untriaged else ""))
 
-    # 4. next move, first matching rule wins
-    last_red = max((e["ts"] for e in events if e["ev"] == "main_red"), default=None)
-    last_green = max((e["ts"] for e in events if e["ev"] == "main_green"), default=None)
-    stopped = any(e["ev"] == "stop" for e in events) and \
-        max(e["ts"] for e in events if e["ev"] in ("stop", "resume")) in [e["ts"] for e in events if e["ev"] == "stop"]
-    budget_note = ""
+    # 4. next move, first matching rule wins; safety outranks completion
+    budget_note, used = "", 0
     if cfg.get("deadline"):
         dl = parse_ts(cfg["deadline"])
         used = (tnow - t0) / max(dl - t0, dt.timedelta(seconds=1))
         budget_note = f" (budget {used:.0%} used)"
-    if met:
-        nxt = "predicate met: confirm on the real artifact, then Close"
-    elif stopped:
+    if stopped(events):
         nxt = "STOP line active: spawn nothing; let in-flight finish"
-    elif last_red and (not last_green or last_red > last_green):
-        nxt = "SAFETY STOP: main is red — land nothing, one fix task, then record main_green"
-    elif budget_note and used >= 0.7:
-        nxt = f"stop spawning{budget_note}: land what is verified"
+    elif main == "red":
+        nxt = "SAFETY STOP: main is red — land only the fix (land-check --main-fix), then record main_green --sha"
+    elif tickets_done and verified:
+        nxt = "predicate met and verified: Close"
+    elif tickets_done:
+        nxt = "tickets done: run the final check on the real artifact, then record predicate_verified"
+    elif used >= 0.7:
+        nxt = "stop spawning: land what is verified"
     elif len(ready) >= 3 or len(human) >= 3:
         nxt = "stop spawning implementation: land the ready queue first"
     elif len(landed_recent) == 0 and len(fails_recent) >= 2:
@@ -238,26 +269,44 @@ def cmd_status(argv):
         nxt = f"may spawn {cap - len(live)} more"
     else:
         nxt = "at cap: drain and land"
-    lines.append(f"next: {nxt}{budget_note if 'budget' not in nxt else ''}")
+    lines.append(f"next: {nxt}{budget_note}")
     print("\n".join(lines))
 
 
 def cmd_record(argv):
     p = Program(argv[0])
     ev = argv[1]
-    pr = opt(argv, "--pr")
-    row = p.append(ev, ticket=opt(argv, "--ticket"), pr=int(pr) if pr else None, sha=opt(argv, "--sha"), note=opt(argv, "--note"))
+    pr, sha = opt(argv, "--pr"), opt(argv, "--sha")
+    if ev in ("main_green", "main_red") and sha not in landed_shas(p.events()):
+        sys.exit(f"{ev} needs --sha of a merge commit recorded by `landed` (the commit that CI run tested)")
+    if ev == "verdict":
+        sys.exit("use the verdict command; it pins the reviewed head and its patch-id")
+    row = p.append(ev, ticket=opt(argv, "--ticket"), pr=int(pr) if pr else None, sha=sha, note=opt(argv, "--note"))
     print(json.dumps(row, ensure_ascii=False))
+
+
+def cmd_set(argv):
+    p = Program(argv[0])
+    key, value = argv[1], argv[2]
+    if key == "merge_policy" and value not in ("autonomous", "human-gate"):
+        sys.exit("merge_policy is autonomous or human-gate")
+    conv = {"ceiling": int, "predicate": lambda v: [x for x in v.split(",") if x]}.get(key, str)
+    if key not in ("merge_policy", "ceiling", "deadline", "predicate"):
+        sys.exit("settable: merge_policy, ceiling, deadline, predicate")
+    p.cfg[key] = conv(value)
+    (p.dir / "program.json").write_text(json.dumps(p.cfg, indent=2, ensure_ascii=False) + "\n")
+    print(json.dumps(p.append("config", note=f"{key}={value}"), ensure_ascii=False))
 
 
 def cmd_verdict(argv):
     p = Program(argv[0])
-    pr = int(opt(argv, "--pr"))
-    src = opt(argv, "--source")
-    if not src:
-        sys.exit("--source names who produced the verdict (e.g. codex-review, verifier:codex, worker-selfproof)")
-    v = pr_view(p.cfg["repo"], pr)
-    row = p.append("verdict", pr=pr, sha=v["headRefOid"], patch_id=patch_id(p.cfg["repo"], pr),
+    pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
+    if not src or not sha:
+        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
+    head = pr_view(p.cfg["repo"], pr)["headRefOid"]
+    if not head.startswith(sha):
+        sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
+    row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),
                    source=src, result=opt(argv, "--result", "pass"), note=opt(argv, "--note"))
     print(json.dumps(row, ensure_ascii=False))
 
@@ -269,10 +318,13 @@ def cmd_land_check(argv):
     st = pr_state(events).get(pr, {})
     v = pr_view(repo, pr)
     problems = []
-    last_red = max((e["ts"] for e in events if e["ev"] == "main_red"), default=None)
-    last_green = max((e["ts"] for e in events if e["ev"] == "main_green"), default=None)
-    if last_red and (not last_green or last_red > last_green):
-        problems.append("safety stop: main is red")
+    main = main_state(events)
+    if main == "red" and "--main-fix" not in argv:
+        problems.append("safety stop: main is red (only the repairing PR lands, with --main-fix)")
+    if stopped(events):
+        problems.append("STOP line active")
+    if main == "pending":
+        print("note: main CI for the last landing has not reported yet")
     if v["state"] != "OPEN" or v["isDraft"]:
         problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
     verdict = st.get("verdict")
@@ -351,7 +403,7 @@ def cmd_wait(argv):
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal)")
 
 
-COMMANDS = {"init": cmd_init, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
+COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "land-check": cmd_land_check, "landed": cmd_landed, "wait": cmd_wait}
 
 if __name__ == "__main__":

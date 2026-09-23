@@ -47,4 +47,4 @@ Index text adapted from `cursor/plugins` `pstack/skills/poteto-mode/SKILL.md` `#
 
 - **Encode Lessons in Structure** (`references/principle-encode-lessons-in-structure.md`). You catch yourself writing the same instruction a second time.
 
-The leaf files keep upstream's frontmatter and occasionally name other pstack skills that are not installed here; read those mentions as background, not as a skill to load.
+The leaf files keep upstream's text verbatim. A link to `../principle-<name>/SKILL.md` inside one means `references/principle-<name>.md` here; fix-root-causes and never-block-on-the-human map to the two lines above. Mentions of other pstack skills that are not installed here are background, not a skill to load.

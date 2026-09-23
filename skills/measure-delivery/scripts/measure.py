@@ -62,6 +62,29 @@ def baseline_cut(issues):
     return cs[-1]
 
 
+def parse_tz(s):
+    sign = -1 if s.startswith("-") else 1
+    h, _, m = s.lstrip("+-").partition(":")
+    return dt.timezone(sign * dt.timedelta(hours=int(h), minutes=int(m or 0)))
+
+
+def utc_q(t):
+    """GitHub search qualifiers take a full UTC timestamp; a local date would cut hours off the window."""
+    return t.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def runs_between(repo, a, b):
+    # The runs API returns at most 1000 results per query, so split any window that hits it.
+    got = gh("run", "list", "--repo", repo, "--limit", "1000", "--created", f"{utc_q(a)}..{utc_q(b)}",
+             "--json", "databaseId,headBranch,event,conclusion,createdAt,workflowName")
+    if len(got) < 1000 or b - a <= dt.timedelta(minutes=10):
+        return got
+    mid = a + (b - a) / 2
+    left = runs_between(repo, a, mid)
+    seen = {r["databaseId"] for r in left}
+    return left + [r for r in runs_between(repo, mid, b) if r["databaseId"] not in seen]
+
+
 def blocks(start, end, step):
     t = start
     while t < end:
@@ -95,7 +118,9 @@ def usage(match, since, until):
                 c["claude_cache_read"] += u.get("cache_read_input_tokens") or 0
                 c["claude_cache_write"] += u.get("cache_creation_input_tokens") or 0
     for f in glob.glob(f"{home}/.codex/sessions/*/*/*/*.jsonl"):
-        cwd, last, last_t = None, None, None
+        # total_token_usage is cumulative per session, so count only the growth between events
+        # that fall inside the window; a session that straddles `since` contributes its tail.
+        cwd, prev, got = None, None, collections.Counter()
         for line in open(f, errors="replace"):
             if cwd is None and '"session_meta"' in line:
                 try:
@@ -104,18 +129,24 @@ def usage(match, since, until):
                     cwd = ""
                 if match not in cwd:
                     break
-            if '"token_count"' in line:
-                try:
-                    o = json.loads(line)
-                except ValueError:
-                    continue
-                info = (o.get("payload") or {}).get("info")
-                if info and info.get("total_token_usage"):
-                    last, last_t = info["total_token_usage"], ts(o["timestamp"])
-        if cwd and match in cwd and last and since <= last_t < until:
+            if '"token_count"' not in line:
+                continue
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            info = (o.get("payload") or {}).get("info") or {}
+            tot, t = info.get("total_token_usage"), ts(o.get("timestamp"))
+            if not tot or not t:
+                continue
+            if since <= t < until:
+                for k in ("input_tokens", "output_tokens"):
+                    got[k] += max(0, tot.get(k, 0) - (prev or {}).get(k, 0))
+            prev = tot
+        if cwd and match in cwd and got:
             c["codex_sessions"] += 1
-            c["codex_input"] += last.get("input_tokens", 0)
-            c["codex_output"] += last.get("output_tokens", 0)
+            c["codex_input"] += got["input_tokens"]
+            c["codex_output"] += got["output_tokens"]
     return c
 
 
@@ -125,7 +156,7 @@ def main():
         sys.exit(__doc__)
     since = ts(since)
     until = ts(opt("--until")) or dt.datetime.now(dt.timezone.utc)
-    tz = dt.timezone(dt.timedelta(hours=int(opt("--tz", "+09:00").split(":")[0])))
+    tz = parse_tz(opt("--tz", "+09:00"))
     bug = opt("--bug-label", "Bug")
     local = lambda t: t.astimezone(tz).strftime("%m-%d %H:%M")
 
@@ -146,8 +177,7 @@ def main():
 
     w("\n## 파생 증가\n")
     w("| 구간 | 파생 생성 | 완료 | 파생÷완료 | 열린 이슈(끝) |\n|---|---:|---:|---:|---:|")
-    start = since.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    for a, b in blocks(start, until, H6):
+    for a, b in blocks(since, until, H6):
         made = sum(a <= i["created"] < b for i in derived)
         done = sum(bool(i["done"]) and a <= i["done"] < b for i in issues)
         open_ = sum(i["created"] < b and not (i["done"] and i["done"] < b) and not (i["canceled"] and i["canceled"] < b) for i in issues)
@@ -159,19 +189,21 @@ def main():
     w(f"\n구간 합계: 파생 {made} · 완료 {done} · 파생÷완료 {made / max(done, 1):.2f} · 기준선 대비 {len(derived) / max(len(base), 1):.1f}배")
 
     prs = gh("pr", "list", "--repo", repo, "--state", "merged", "--limit", "1000", "--search",
-             f"merged:>={since.date().isoformat()}", "--json", "number,title,createdAt,mergedAt,headRefName")
+             f"merged:>={utc_q(since)}", "--json", "number,title,createdAt,mergedAt,headRefName")
     prs = [p for p in prs if since <= ts(p["mergedAt"]) < until]
     for p in prs:
         # Author dates survive rebases, so they separate commits written after the PR opened.
         p["commits"] = [{"authoredDate": c["commit"]["author"]["date"]}
                         for c in gh("api", f"repos/{repo}/pulls/{p['number']}/commits?per_page=100")]
-    runs = gh("run", "list", "--repo", repo, "--limit", "1000", "--created", f">={since.date().isoformat()}",
-              "--json", "databaseId,headBranch,event,conclusion,createdAt,workflowName")
-    runs = [r for r in runs if since <= ts(r["createdAt"]) < until]
-    by_branch = collections.Counter(r["headBranch"] for r in runs if r["event"] == "pull_request")
+    # PR runs are attributed by branch inside each PR's open interval, which may start before `since`.
+    first = min([since] + [ts(p["createdAt"]) for p in prs])
+    all_runs = sorted(runs_between(repo, first, until), key=lambda r: r["createdAt"], reverse=True)
+    runs = [r for r in all_runs if since <= ts(r["createdAt"]) < until]
+    pr_runs = lambda p: sum(r["event"] == "pull_request" and r["headBranch"] == p["headRefName"]
+                            and ts(p["createdAt"]) <= ts(r["createdAt"]) <= ts(p["mergedAt"]) for r in all_runs)
     late = [sum(ts(c["authoredDate"]) > ts(p["createdAt"]) for c in p.get("commits") or []) for p in prs]
     to_merge = [(ts(p["mergedAt"]) - ts(p["createdAt"])).total_seconds() / 60 for p in prs]
-    ci_per = [by_branch.get(p["headRefName"], 0) for p in prs]
+    ci_per = [pr_runs(p) for p in prs]
     med = lambda xs: statistics.median(xs) if xs else 0
 
     w("\n## 수용된 변경과 재작업\n")
