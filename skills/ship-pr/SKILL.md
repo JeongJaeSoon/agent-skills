@@ -78,8 +78,9 @@ the background and do other work while they run.
 Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
 Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
 verdict, not your own reading of the diff, is what closes the review. **Five rounds is the cap**
-unless the ticket or the program's standing orders set another. The cap never waives an Act-on
-finding: fix it. What it ends is the stream of Consider items: past the cap they go into a
+unless the ticket or the program's standing orders set another. The cap bounds rounds, never
+fixes: an Act-on finding from the last round is still fixed, and one more pass reviews only
+those fixes. What the cap ends is the stream of Consider items: past the cap they go into a
 "남은 검토" checklist in the PR body, each with its one-line reason, and become tickets only
 when they are reproduced defects (§2). A change with a wide blast radius — auth, migrations,
 concurrency, a public contract — gets `blast-radius`, or `interrogate` for a multi-model pass,
