@@ -4,9 +4,9 @@
 
 ## 설치
 
-`~/.claude/skills/<name>` → 이 저장소 메인 체크아웃의 `skills/<name>` symlink다(15개 전부). 메인 브랜치가 fast-forward될 때만 설치본이 바뀐다. 작업은 worktree 브랜치에서 하고, 검토가 끝나면 메인에 fast-forward한다.
+`~/.claude/skills/<name>` → 이 저장소 메인 체크아웃의 `skills/<name>` symlink다(이 저장소의 스킬 전부). 메인 브랜치가 fast-forward될 때만 설치본이 바뀐다. 작업은 worktree 브랜치에서 하고, 검토가 끝나면 메인에 fast-forward한다.
 
-`~/.claude/skills/synced/`는 claude.ai 계정 동기화가 관리하는 폴더라 이 저장소에 넣지 않는다.
+이 저장소에 없는 설치본도 있다. `~/.claude/skills/synced/`는 claude.ai 계정 동기화가, `aside-browser`는 Aside가 관리하므로 여기서 다루지 않는다.
 
 ## pstack
 
