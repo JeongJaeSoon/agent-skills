@@ -77,107 +77,187 @@
     },
     {
       "upstream": "skills/principle-attack-the-premise/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-attack-the-premise.md",
+      "local": "skills/principles/references/principle-attack-the-premise.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-boundary-discipline/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-boundary-discipline.md",
+      "local": "skills/principles/references/principle-boundary-discipline.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-build-the-lever/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-build-the-lever.md",
+      "local": "skills/principles/references/principle-build-the-lever.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-encode-lessons-in-structure/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-encode-lessons-in-structure.md",
+      "local": "skills/principles/references/principle-encode-lessons-in-structure.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-exhaust-the-design-space/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-exhaust-the-design-space.md",
+      "local": "skills/principles/references/principle-exhaust-the-design-space.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-experience-first/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-experience-first.md",
+      "local": "skills/principles/references/principle-experience-first.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-foundational-thinking/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-foundational-thinking.md",
+      "local": "skills/principles/references/principle-foundational-thinking.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-guard-the-context-window/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-guard-the-context-window.md",
+      "local": "skills/principles/references/principle-guard-the-context-window.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-laziness-protocol/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-laziness-protocol.md",
+      "local": "skills/principles/references/principle-laziness-protocol.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-make-operations-idempotent/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-make-operations-idempotent.md",
+      "local": "skills/principles/references/principle-make-operations-idempotent.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-migrate-callers-then-delete-legacy-apis.md",
+      "local": "skills/principles/references/principle-migrate-callers-then-delete-legacy-apis.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-minimize-reader-load/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-minimize-reader-load.md",
+      "local": "skills/principles/references/principle-minimize-reader-load.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-model-the-domain/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-model-the-domain.md",
+      "local": "skills/principles/references/principle-model-the-domain.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-outcome-oriented-execution/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-outcome-oriented-execution.md",
+      "local": "skills/principles/references/principle-outcome-oriented-execution.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-prove-it-works/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-prove-it-works.md",
+      "local": "skills/principles/references/principle-prove-it-works.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-redesign-from-first-principles/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-redesign-from-first-principles.md",
+      "local": "skills/principles/references/principle-redesign-from-first-principles.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-separate-before-serializing-shared-state/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-separate-before-serializing-shared-state.md",
+      "local": "skills/principles/references/principle-separate-before-serializing-shared-state.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-sequence-verifiable-units/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-sequence-verifiable-units.md",
+      "local": "skills/principles/references/principle-sequence-verifiable-units.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-subtract-before-you-add/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-subtract-before-you-add.md",
+      "local": "skills/principles/references/principle-subtract-before-you-add.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-test-behavior-not-implementation/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-test-behavior-not-implementation.md",
+      "local": "skills/principles/references/principle-test-behavior-not-implementation.md",
       "mode": "verbatim"
     },
     {
       "upstream": "skills/principle-type-system-discipline/SKILL.md",
-      "local": "skills/pstack-principles/references/principle-type-system-discipline.md",
+      "local": "skills/principles/references/principle-type-system-discipline.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/architect/SKILL.md",
+      "local": "skills/architect/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/architect/references/design-red-flags.md",
+      "local": "skills/architect/references/design-red-flags.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/architect/references/rationale-template.md",
+      "local": "skills/architect/references/rationale-template.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/architect/references/runner-prompt.md",
+      "local": "skills/architect/references/runner-prompt.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/tdd/SKILL.md",
+      "local": "skills/tdd/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/swarm/SKILL.md",
+      "local": "skills/swarm/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/reflect/SKILL.md",
+      "local": "skills/reflect/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/reflect/references/judgment-reviewer.md",
+      "local": "skills/reflect/references/judgment-reviewer.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/reflect/references/tooling-reviewer.md",
+      "local": "skills/reflect/references/tooling-reviewer.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/reflect/references/divergent-reviewer.md",
+      "local": "skills/reflect/references/divergent-reviewer.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/reflect/references/synthesizer.md",
+      "local": "skills/reflect/references/synthesizer.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/how/SKILL.md",
+      "local": "skills/how/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/how/references/explorer-prompt.md",
+      "local": "skills/how/references/explorer-prompt.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/how/references/explainer-prompt.md",
+      "local": "skills/how/references/explainer-prompt.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-fix-root-causes/SKILL.md",
+      "local": "skills/principles/references/principle-fix-root-causes.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-never-block-on-the-human/SKILL.md",
+      "local": "skills/principles/references/principle-never-block-on-the-human.md",
       "mode": "verbatim"
     }
   ]

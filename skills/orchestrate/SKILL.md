@@ -1,0 +1,123 @@
+---
+name: orchestrate
+description: Use when one session must drive a project or milestone to done through several Orca workers — "PM 겸 오케스트레이터로 끝까지", 3+ tickets in parallel with their PRs landed, follow-up tickets kept from swallowing the plan, a progress dashboard — or when taking over ("resume") a program another coordinator ran, or asked why a program's PRs are not moving.
+---
+
+# Orchestrate a program
+
+You own the program, not the code. You frame it, write briefs, drain the inbox, keep the land order honest, and decide. This is pstack's Orchestrate (Lauren Tan) moved onto Orca. Orca already owns the mechanics: Run, Task, Dispatch, `check --wait`/ack, `ask`/`reply`, gates, the worker contract, recovery and release. This skill adds only the program layer.
+
+**REQUIRED BACKGROUND:** at the start of every coordinator session, run `orca skills get orchestration` and read it. Every Orca command here comes from it; never compose one from memory.
+
+## When not to use
+
+- One agent could finish inside the budget → do it in this session, or give it to one card with `handoff-ticket`. A program costs a coordinator.
+- A single ticket handed to another session → `handoff-ticket`.
+
+## Where each fact lives
+
+| Fact | Owner |
+|---|---|
+| Goal | Orca Run `objective` (`run-create`), shown as the dashboard headline |
+| Standing orders, predicate, merge policy, decisions, human digest | Program note in the notes store (`use-notes`), template `references/program-note.md` |
+| Tickets, their state, which are derived | The tracker, through `use-tracker` (`tracker.py`) |
+| PRs, CI, merges, stacks | GitHub |
+| Runs, tasks and their deps, workers, questions, gates | Orca |
+| Verdicts, dependencies, land order, landings, main red/green, the concurrency cap | `~/.claude/programs/<slug>/ledger.jsonl`, written only through `prog.py` |
+| Briefs as sent | `~/.claude/programs/<slug>/briefs/<ticket>.md` |
+| Decision trail | `~/.claude/programs/<slug>/decisions.tsv` (`show-me-your-work`) |
+| What the human watches | `dash.py` dashboard (`references/dashboard.md`) |
+
+`prog.py` means `python3 ~/.claude/skills/orchestrate/scripts/prog.py`, and `dash.py` sits next to it. Run either with no arguments for usage.
+
+## Steps
+
+1. **Frame.**
+   - Read every ticket in scope.
+   - Write the predicate as countable ticket IDs plus a final check on the real artifact ("A-246, 247, 117 Done and `verify-<app>` drives the quickstart on main"). Derive it yourself. If the tickets have no countable end, write your best predicate, mark it proposed in the digest, and go on.
+   - Copy the human's goal into the standing orders verbatim, one sentence per order.
+   - Map the dependencies between tickets. Chains that must land in order become GitHub stacks (`references/landing.md`).
+   - Pick the merge policy.
+   - Create the Run with the goal as `--objective`.
+   - `prog.py init <slug> --repo … --run … --tracker-project … --predicate …`
+   - `dash.py serve <slug>` in the background. Give the human the URL once.
+2. **Verification first.** If the target repo has no `.claude/skills/verify-*`, the pilot task is "read and follow `~/.claude/skills/create-verification-skill/SKILL.md`".
+3. **Pilot.** Run one worker through brief → PR → verdict → `prog.py land` → main green. Fix the brief, the unit size and VERIFY from whatever broke. Also confirm that the chosen worker model gets through its first `orca orchestration` call and its `prog.py land` without a permission prompt.
+4. **Scale.** Spawn up to the cap that `prog.py status` prints. The cap starts at 1, grows by one per landing proven green on main, and halves on red. For each spawn:
+   - Write the brief per `references/brief.md`.
+   - Record `prog.py dep` for its ORDER.
+   - Run `worker-start --spec "<the brief>" --display-name "<ID> <title>" [--deps …]`.
+   - Rename its terminal tab.
+5. **Drain.**
+   - Wait only with `prog.py wait <slug>` under `run_in_background`. It wakes on worker_done, escalation or question, and acks batches that hold only heartbeats. Keep exactly one wait running.
+   - Process every message in the batch, decide each settled worker's next owner (reuse or release), then ack.
+   - End every drain with `prog.py status`; its lines are how a drain ends. `dash.py collect <slug>` runs after it, and `dash.py note` records a risk or decision the dashboard should show.
+   - Under `/goal`, a running background task defers the Stop hook's goal check. If the hook re-prompts anyway with no new event, answer in one line with no tool call. If it fires back-to-back, switch to a foreground `prog.py wait <slug> --rounds 1 --timeout-ms 540000` (Bash timeout 600000).
+6. **Triage.** A new ticket from review or discovery parks by default: label `follow-up`, then `prog.py record <slug> parked --ticket X`. Admit it only if it blocks a named predicate item, or if it is a reproduced correctness, security or data defect in code this program merged. Then `record admitted` and name the item or defect.
+7. **Land** (`references/landing.md`). Workers land their own PRs with `prog.py land`, which enforces the priority and dependency order, the base-branch lock and readiness at the current head. You keep the order honest:
+   - dependencies recorded
+   - chains stacked
+   - `STALE` PRs unstuck
+   - classes set (`record reprioritized`)
+
+   You land only under human-gate, after the Orca gate resolves.
+8. **Verify main.** The lander watches its merge's main CI and records `main_green` or `main_red --sha <merge commit>`. On red, only the repairing PR lands (`--class main-fix`). Every 3 landings, a verifier worker drives main with the repo's `verify-<app>` skill.
+9. **Close.**
+   - When `status` says the tickets are done, run the predicate's final check on the real artifact (a verifier worker driving `verify-<app>` on main).
+   - `prog.py record <slug> predicate_verified --note <evidence>`.
+   - Release the remaining workers and remove landed PRs' worktrees (checks in `end-session` §4).
+   - Run `measure-delivery` and audit the trail per `show-me-your-work`.
+   - Write the lessons into standing orders, skills or memory.
+
+## How the human's words change the program
+
+| The human says | Do, in the same turn |
+|---|---|
+| "I'll watch X myself, don't bother" (usage, a metric, a channel) | Delete X from the standing orders and from every judgment rule now, and never defer work on X's account again |
+| "Can it go faster?" | Offer structural levers: parallelize the critical path, stack dependent chains, reorder the land order, risk-tiered review depth, split CI jobs by role. Not "work harder". Apply the approved ones at once |
+| "Make it better" about in-flight work | A new ticket with its own brief. Never append it to the running task |
+| "Make a ticket for …" inside another question | Split it out and file it immediately, then answer the question |
+| Doubts your report ("is that right?", "불안하다") | A read-only verifier agent re-checks it. Your self-report is not evidence |
+| "Check" (점검) one section | Check the whole related scope. "Check and align" (점검하고 얼라인) is two tracked steps: findings, then the alignment changes, each reported done separately |
+| "Why is #N not moving?" / priority doubts | `prog.py queue <slug>`: answer with its order and reasons, then fix the reason (stack, dep, class, fix task) |
+| "Update the dashboard and summarize" | `dash.py collect`, then a human summary of the same numbers, as one action |
+
+## Merge policy
+
+- `autonomous` (default): workers land with `prog.py land`.
+- `human-gate`: workers stop at READY. You `prog.py gate <slug> --pr N` (an Orca decision gate), and after the user resolves it, `prog.py land`.
+- Either way, stop and ask only before irreversible acts: destructive migrations, force-pushing shared branches, sending anything outside, changing repo or branch protection.
+
+## What reaches the human
+
+The dashboard, plus the digest line in the program note, batched. The digest holds open gates, a proposed predicate, irreversible acts, and any standing order that contradicts reality. Never retries, CI flakes, review-thread triage, rebases, or "should I continue".
+
+## Traps seen in real runs
+
+| Trap | Instead |
+|---|---|
+| A coordinator granting each merge | Workers land through `prog.py land`. The coordinator became the slowest lane |
+| "Whoever is ready lands next" | The land order: class, aging, unblocking. A dependency root starved for 5h behind newer PRs |
+| Landing a dependency chain one PR at a time (rebase + CI between each) | Stack it; the top's `land` merges the chain in one `merge-async` |
+| Workers idling for hours "waiting for the merge slot" with nothing to do | `land --wait-minutes` in the background. `status` STALE lines and backlog hours make the wait visible and actionable |
+| A worker calling `gh api … merge-async` itself and the classifier refusing it as "Merge Without Review" | Merges happen only inside `prog.py land`, which is the review gate and the allowed command |
+| Cards named by Orca's automatic title ("Orca 외부 카드 진행 추적" for 94S-252) | `--display-name` and `orca terminal rename` with the ticket ID and title |
+| Waiting with `sleep`, a hand-built watcher, or invented `orca … events/status` | `prog.py wait` in the background. One empty wait is a checkpoint; after three, run `worker-list --run` |
+| Nudge-only turns ("You have N orchestration messages") burning coordinator turns | End such a turn with no tool call; real work arrives through `prog.py wait` |
+| A worker shows `live` but has done nothing for many minutes | It may be sitting on a permission prompt (`status` lists `idle-waiting`): `worker-read --dispatch <id> --source terminal`. You cannot approve it for the worker, and waiting output does not prove the agent stopped, so do not stop or retry it. Put it in the digest for the human and keep draining |
+| A handoff prompt that retypes the rules | The note is the handoff; the prompt is one line |
+| Follow-ups spawned the moment they are filed | Park them; `status` shows derived tickets per predicate item |
+| Parallel CI jobs named `1/3 2/3 3/3` | Name jobs by what they check (typecheck, lint, unit, db, api…) |
+| Typing `/model` into a worker terminal | Pass `--model` to `worker-start`; `/model` changes the global setting |
+
+## Resume (handoff)
+
+The new coordinator's whole prompt is `/goal orchestrate resume <slug>`. On resume:
+
+1. Read the program note.
+2. `orca orchestration run-use --id <run>`.
+3. Make `program.json` match the note: `prog.py set <slug> merge_policy|ceiling|deadline|predicate …` for any difference. The note wins.
+4. `prog.py status`.
+5. Continue at Drain.
+
+Whenever the note's policy, ceiling, deadline or predicate changes mid-run, mirror it with `prog.py set` in the same turn. Workers report to the Run inbox, not to a session name, so nothing needs re-pointing. The old coordinator ends only after the new one has printed `status`.

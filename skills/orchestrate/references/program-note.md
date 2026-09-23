@@ -1,6 +1,6 @@
 # Program note template
 
-Create it at `Project/<project>/program-<slug>.md` with `vault_write` (see `use-obsidian`; check the vault's own CLAUDE.md for tags and headings). Korean prose, identifiers as-is. The note is the handoff: a new coordinator reads only this note and `program.json`.
+Create it at `Project/<project>/program-<slug>.md` with `vault_write` (see `use-notes`; check the vault's own CLAUDE.md for tags and headings). Korean prose, identifiers as-is. The note is the handoff: a new coordinator reads only this note and `program.json`.
 
 ```markdown
 #<project> #program
@@ -8,8 +8,10 @@ Create it at `Project/<project>/program-<slug>.md` with `vault_write` (see `use-
 ## 개요
 
 - 목표: <사람이 준 목표 한 문장>
-- slug `<slug>` · Orca run `<run id>` · 저장소 `<owner/repo>` · Linear 프로젝트 `<name>`
+- slug `<slug>` · Orca run `<run id>` · 저장소 `<owner/repo>` · 트래커 `<adapter>:<project>`
+- 대시보드: `dash.py serve <slug>` → <URL>
 - 머지 정책: autonomous | human-gate · 동시성 천장 6 · 마감 <ISO8601 또는 없음>
+- 착지 순서: 등급(main-fix → gate → urgent → normal) · 대기 2시간이 넘으면 urgent 취급 · 의존 체인은 stack으로 한 번에 착지 (`prog.py queue <slug>`)
 - 장부: `~/.claude/programs/<slug>/` (ledger.jsonl, briefs/, decisions.tsv)
 
 ## 완료 조건 (predicate)
@@ -25,6 +27,10 @@ Create it at `Project/<project>/program-<slug>.md` with `vault_write` (see `use-
 2. ...
 
 같은 지시를 두 번 하게 되면 행동하기 전에 여기 한 줄을 먼저 추가한다. 이 목록은 모든 브리프의 STANDING에 그대로 붙는다.
+
+## 의존 관계와 stack
+
+- <티켓 A> ← <티켓 B> (B는 A 뒤에 착지, `prog.py dep` 기록) · stack: #<하위> → #<상위>
 
 ## 사람 대기
 

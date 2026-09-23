@@ -48,7 +48,7 @@ Commit it only when the work is ambitious enough that a reviewer needs the trail
 ## Rules
 
 - Append-only. A wrong call gets a new row that supersedes it. Never edit or delete history.
-- Prefer evidence produced by committed scripts over hand-made one-offs (`pstack-principles` → encode-lessons-in-structure).
+- Prefer evidence produced by committed scripts over hand-made one-offs (`principles` → encode-lessons-in-structure).
 
 ## Audit the log against the transcript
 

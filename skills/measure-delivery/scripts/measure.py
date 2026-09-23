@@ -2,18 +2,22 @@
 """Delivery metrics for one repo + Linear project over a window. Read-only.
 
 Usage:
-  python3 measure.py --repo OWNER/NAME --issues ISSUES.json --since ISO8601 [--until ISO8601]
+  python3 measure.py --repo OWNER/NAME (--project TRACKER_PROJECT | --issues ISSUES.json) --since ISO8601 [--until ISO8601]
                      [--baseline-until ISO8601] [--tz +09:00] [--bug-label Bug]
                      [--usage-match TEXT] [--json OUT.json]
 
---issues: Linear issues as JSON. Either a Linear MCP list_issues result (has completedAt) or
-`orca linear list-issues --json` output (no completedAt: completed issues fall back to updatedAt,
+--project: read issues through the tracker adapter (use-tracker/scripts/tracker.py; Linear or Jira
+per ~/.claude/agent-skills.json).
+--issues: a saved issue list instead: tracker.py's normalized JSON, a Linear MCP list_issues result,
+or `orca linear list-issues --json` output (no completedAt: completed issues fall back to updatedAt,
 and the report says so). A top-level list, {"issues": [...]}, or {"result": {"issues": [...]}}.
 --baseline-until: end of the initial design batch. Default: the first gap of 6h+ in creation times.
 --usage-match: substring of Claude project dirs / Codex session cwds to count tokens for
 (default: the repo name). No prices are applied.
 """
-import collections, datetime as dt, glob, json, os, statistics, subprocess, sys
+import collections, datetime as dt, glob, json, os, pathlib, statistics, subprocess, sys
+
+TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 
 H6 = dt.timedelta(hours=6)
 
@@ -34,12 +38,23 @@ def gh(*args):
     return json.loads(r.stdout)
 
 
-def load_issues(path):
-    d = json.load(open(path))
+def load_issues(path=None, project=None):
+    if project:
+        r = subprocess.run([sys.executable, str(TRACKER), "list", "--project", project], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"tracker list failed: {r.stderr.strip()[:300]}")
+        d = json.loads(r.stdout)
+    else:
+        d = json.load(open(path))
     if isinstance(d, dict):
         d = (d.get("result") or d).get("issues", d.get("nodes", []))
     out = []
     for i in d:
+        if "state_type" in i:  # tracker.py normalized schema
+            out.append({"id": i["id"], "created": ts(i["created_at"]), "done": ts(i.get("completed_at")),
+                        "done_approx": False, "canceled": ts(i.get("canceled_at")), "type": i["state_type"],
+                        "labels": i.get("labels") or [], "desc": i.get("description") or ""})
+            continue
         state = i.get("state")
         stype = (state or {}).get("type") if isinstance(state, dict) else (i.get("statusType") or "")
         labels = [l.get("name") if isinstance(l, dict) else l for l in i.get("labels") or []]
@@ -153,8 +168,8 @@ def usage(match, since, until):
 
 
 def main():
-    repo, issues_path, since = opt("--repo"), opt("--issues"), opt("--since")
-    if not (repo and issues_path and since):
+    repo, issues_path, project, since = opt("--repo"), opt("--issues"), opt("--project"), opt("--since")
+    if not (repo and (issues_path or project) and since):
         sys.exit(__doc__)
     since = ts(since)
     until = ts(opt("--until")) or dt.datetime.now(dt.timezone.utc)
@@ -162,11 +177,11 @@ def main():
     bug = opt("--bug-label", "Bug")
     local = lambda t: t.astimezone(tz).strftime("%m-%d %H:%M")
 
-    issues = [i for i in load_issues(issues_path) if i["created"] < until]
+    issues = [i for i in load_issues(issues_path, project) if i["created"] < until]
     cut = ts(opt("--baseline-until")) or baseline_cut(issues)
     base = [i for i in issues if i["created"] <= cut]
     derived = [i for i in issues if i["created"] > cut]
-    marked = [i for i in derived if "follow-up" in i["labels"] or i["desc"].startswith("파생:")]
+    marked = [i for i in derived if "follow-up" in i["labels"] or i["desc"].lstrip().startswith("파생:")]
     approx = any(i["done_approx"] for i in issues)
     out = []
     w = out.append

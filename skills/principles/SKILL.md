@@ -1,5 +1,5 @@
 ---
-name: pstack-principles
+name: principles
 description: Use when a design, refactor, verification, or delegation decision needs a named engineering principle — sizing a diff, choosing where validation goes, deciding whether work is proven, splitting work across agents, or noticing the same instruction being written a second time.
 ---
 
@@ -36,15 +36,15 @@ Index text adapted from `cursor/plugins` `pstack/skills/poteto-mode/SKILL.md` `#
 - **Prove It Works** (`references/principle-prove-it-works.md`). After a task, before declaring done; and when trusting a delegate's report.
 - **Sequence Work into Verifiable Units** (`references/principle-sequence-verifiable-units.md`). Multi-step work and how commits and PRs stack.
 - **Test Behavior, Not Implementation** (`references/principle-test-behavior-not-implementation.md`). Writing, changing, or keeping a test.
-- Debugging to a root cause: `superpowers:systematic-debugging` (pstack's fix-root-causes is not vendored; it overlaps).
+- **Fix Root Causes** (`references/principle-fix-root-causes.md`). Debugging: trace each symptom to its root cause and fix the pattern there, not the instance.
 
 **Delegation**
 
 - **Guard the Context Window** (`references/principle-guard-the-context-window.md`). Large outputs, long files, repeated reads, fan-out planning.
-- Asking "should I do X?" on reversible work: `~/.claude/CLAUDE.md` already rules it out (pstack's never-block-on-the-human is not vendored). Irreversible actions — force-push, deleting production data, sending external messages — still need confirmation.
+- **Never Block on the Human** (`references/principle-never-block-on-the-human.md`). Tempted to ask "should I do X?" on reversible work; irreversible actions still need confirmation.
 
 **Meta**
 
 - **Encode Lessons in Structure** (`references/principle-encode-lessons-in-structure.md`). You catch yourself writing the same instruction a second time.
 
-The leaf files keep upstream's text verbatim. A link to `../principle-<name>/SKILL.md` inside one means `references/principle-<name>.md` here; fix-root-causes and never-block-on-the-human map to the two lines above. Mentions of other pstack skills that are not installed here are background, not a skill to load.
+The leaf files keep upstream's text verbatim. A link to `../principle-<name>/SKILL.md` inside one means `references/principle-<name>.md` here. Mentions of other pstack skills that are not installed here are background, not a skill to load.

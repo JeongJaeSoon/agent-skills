@@ -34,7 +34,7 @@ Where the work goes is a separate question, and only one answer is this skill:
 - "코덱스에게 위임", "codex 와 함께" → `codex:rescue`. Not this skill.
 - A new Orca card / worktree, in this repo or another → this skill.
 - Several tickets supervised to a finish line, with this session as the coordinator that lands
-  their PRs → `run-program`. Not this skill.
+  their PRs → `orchestrate`. Not this skill.
 
 "병렬로" by itself says nothing about which: most of the time it is same-repo, ticket-based
 parallel work (handoff) or sub-agents. Read the rest of the sentence.
@@ -56,7 +56,7 @@ you have been working in from a plain shell is not automatically an Orca repo.
 
 This is the whole point of the skill. The new session knows nothing about repo A — not what
 you did there, not why this task exists, not where the outputs are. Default: one Obsidian note
-per `use-obsidian` (ask the vault `CLAUDE.md` where it goes), and a `--prompt` of the note path
+per `use-notes` (ask the vault `CLAUDE.md` where it goes), and a `--prompt` of the note path
 plus a three-line summary. The brief has:
 
 - **Background** — what happened in repo A and why this work follows from it.

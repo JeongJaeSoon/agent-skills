@@ -87,7 +87,7 @@ one ticket, is the session's call (`ship-pr` §2 "Findings outside the ticket");
 this?" is not a question to put to the user.
 
 A follow-up is marked as one, so growth after the initial design can be counted
-(`measure-delivery`, `run-program`): add the `follow-up` label next to its type, make the first
+(`measure-delivery`, `orchestrate`): add the `follow-up` label next to its type, make the first
 body line `파생: <originating ticket> · 원인: <리뷰 지적 | 계약 불일치 | QA | 스펙 공백 | 구현 한계 | 기타>`,
 and relate it to the originating ticket (`relatedTo`, or `blockedBy` when it truly blocks).
 

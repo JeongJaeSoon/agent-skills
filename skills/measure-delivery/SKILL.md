@@ -1,6 +1,6 @@
 ---
 name: measure-delivery
-description: Use when asked how a project or autonomous run actually went — "성과 측정", follow-up/derived ticket growth after the initial design, whether the backlog is converging, accepted changes, rework, escaped defects, or token cost per merged PR — and at the Close of a run-program.
+description: Use when asked how a project or autonomous run actually went — "성과 측정", follow-up/derived ticket growth after the initial design, whether the backlog is converging, accepted changes, rework, escaped defects, or token cost per merged PR — and at the Close of a orchestrate.
 ---
 
 # Measure delivery
@@ -24,7 +24,7 @@ python3 ~/.claude/skills/measure-delivery/scripts/measure.py \
   [--baseline-until <end of the initial design batch>] [--bug-label Bug] [--usage-match <dir fragment>]
 ```
 
-It prints a Korean markdown report. Put it in the project's Obsidian note (`use-obsidian`), not only in chat.
+It prints a Korean markdown report. Put it in the project's Obsidian note (`use-notes`), not only in chat.
 
 ## What each number means
 

@@ -27,7 +27,7 @@ no count ends a session; compaction is the brake. Anything that stands on its ow
 off. If this session has already compacted, hand off the small ones too — a fresh card with a
 well-written `--prompt` beats a session that lost its own first half.
 
-**Inside a `run-program`.** A session started by `orca orchestration worker-start` (its prompt
+**Inside an `orchestrate`.** A session started by `orca orchestration worker-start` (its prompt
 carries a Task and Dispatch preamble) does not pick or spawn the next ticket: after `worker_done`
 it idles, and the coordinator decides what runs next. The rest of this section is for cards
 started outside a program.

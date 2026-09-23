@@ -1,0 +1,165 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "ok": true,
+  "result": {
+    "issues": [
+      {
+        "id": "00000000-0000-0000-0000-000000000010",
+        "identifier": "ENG-10",
+        "title": "Investigate hook ordering",
+        "url": "https://linear.app/acme/issue/ENG-10/investigate-hook-ordering",
+        "description": "## Background\n\nFake description for Investigate hook ordering.",
+        "state": {
+          "id": "00000000-0000-0000-0000-0000000000ee",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "00000000-0000-0000-0000-0000000000aa",
+          "name": "Acme",
+          "key": "ENG",
+          "color": "#00b2bf"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-0000000000bb",
+          "name": "demo",
+          "color": "#5e6ad2"
+        },
+        "cycle": null,
+        "assignee": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "displayName": "alice",
+          "avatarUrl": "https://example.invalid/a.png"
+        },
+        "labels": [
+          {
+            "id": "00000000-0000-0000-0000-0000000000dd",
+            "name": "Spike",
+            "color": "#F2C94C"
+          }
+        ],
+        "priority": 0,
+        "priorityLabel": "none",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "user/eng-10",
+        "createdAt": "2026-09-21T08:18:45.492Z",
+        "updatedAt": "2026-09-21T16:32:43.652Z",
+        "workspace": {
+          "id": "00000000-0000-0000-0000-0000000000cc",
+          "name": "acme"
+        }
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000011",
+        "identifier": "ENG-11",
+        "title": "Add adapter module",
+        "url": "https://linear.app/acme/issue/ENG-11/add-adapter-module",
+        "description": "## Background\n\nFake description for Add adapter module.",
+        "state": {
+          "id": "00000000-0000-0000-0000-0000000000ee",
+          "name": "Backlog",
+          "type": "backlog",
+          "color": "#bec2c8"
+        },
+        "team": {
+          "id": "00000000-0000-0000-0000-0000000000aa",
+          "name": "Acme",
+          "key": "ENG",
+          "color": "#00b2bf"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-0000000000bb",
+          "name": "demo",
+          "color": "#5e6ad2"
+        },
+        "cycle": null,
+        "assignee": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "displayName": "alice",
+          "avatarUrl": "https://example.invalid/a.png"
+        },
+        "labels": [
+          {
+            "id": "00000000-0000-0000-0000-0000000000dd",
+            "name": "Feature",
+            "color": "#BB87FC"
+          }
+        ],
+        "priority": 0,
+        "priorityLabel": "none",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "user/eng-11",
+        "createdAt": "2026-09-21T08:19:06.605Z",
+        "updatedAt": "2026-09-21T08:25:01.220Z",
+        "workspace": {
+          "id": "00000000-0000-0000-0000-0000000000cc",
+          "name": "acme"
+        }
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000012",
+        "identifier": "ENG-12",
+        "title": "Tighten masking rule",
+        "url": "https://linear.app/acme/issue/ENG-12/tighten-masking-rule",
+        "description": "## Background\n\nFake description for Tighten masking rule.",
+        "state": {
+          "id": "00000000-0000-0000-0000-0000000000ee",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "00000000-0000-0000-0000-0000000000aa",
+          "name": "Acme",
+          "key": "ENG",
+          "color": "#00b2bf"
+        },
+        "project": {
+          "id": "00000000-0000-0000-0000-0000000000bb",
+          "name": "demo",
+          "color": "#5e6ad2"
+        },
+        "cycle": null,
+        "assignee": {
+          "id": "00000000-0000-0000-0000-000000000001",
+          "displayName": "alice",
+          "avatarUrl": "https://example.invalid/a.png"
+        },
+        "labels": [
+          {
+            "id": "00000000-0000-0000-0000-0000000000dd",
+            "name": "Improvement",
+            "color": "#4EA7FC"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "user/eng-12",
+        "createdAt": "2026-09-17T02:56:26.517Z",
+        "updatedAt": "2026-09-17T17:39:17.678Z",
+        "workspace": {
+          "id": "00000000-0000-0000-0000-0000000000cc",
+          "name": "acme"
+        }
+      }
+    ],
+    "truncated": false,
+    "meta": {
+      "limit": null,
+      "returned": 3,
+      "hasMore": false,
+      "orderBy": "updatedAt",
+      "workspaceId": "00000000-0000-0000-0000-0000000000cc",
+      "partial": false,
+      "workspaceErrors": []
+    }
+  },
+  "_meta": {
+    "runtimeId": "00000000-0000-0000-0000-000000000000"
+  }
+}

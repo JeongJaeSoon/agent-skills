@@ -55,7 +55,7 @@ already exist where it survives:
 
 - Linear ticket linked to this card → final state (Done, or In Review with the PR link) and a
   completion comment with "남은 확인 사항". If the latest comment already says this, do not repeat it.
-- Obsidian worklog for the project (find it per `use-obsidian`) → one line on what this session
+- Obsidian worklog for the project (find it per `use-notes`) → one line on what this session
   did, if not already written.
 - No ticket (a local diagnosis, a probe) → the worklog line is enough. Do not file a ticket
   just to close it.
@@ -66,7 +66,7 @@ If the record is already written, say so in one line and move on. Do not rewrite
 
 ## 4. Removing a worktree card
 
-A `run-program` worker (Orca preamble with Task and Dispatch IDs) does not remove its own
+An `orchestrate` worker (Orca preamble with Task and Dispatch IDs) does not remove its own
 worktree: the coordinator releases it and removes the worktree after landing. It ends with
 `worker_done` and idles.
 
