@@ -1,0 +1,184 @@
+{
+  "remote": "https://github.com/cursor/plugins.git",
+  "remote_slug": "cursor/plugins",
+  "upstream_root": "pstack",
+  "upstream_version": "0.15.3",
+  "pin": "b42effe0aa50f59c693d7e2924714e015e00bf7c",
+  "files": [
+    {
+      "upstream": "skills/create-verification-skill/SKILL.md",
+      "local": "skills/create-verification-skill/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/create-verification-skill/references/feature-map-example/README.md",
+      "local": "skills/create-verification-skill/references/feature-map-example/README.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/create-verification-skill/references/feature-map-example/search.md",
+      "local": "skills/create-verification-skill/references/feature-map-example/search.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/create-verification-skill/references/feature-map-example/create-note.md",
+      "local": "skills/create-verification-skill/references/feature-map-example/create-note.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/maintain-verification-skill/SKILL.md",
+      "local": "skills/maintain-verification-skill/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/interrogate/SKILL.md",
+      "local": "skills/interrogate/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/interrogate/references/reviewer-prompt.md",
+      "local": "skills/interrogate/references/reviewer-prompt.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/interrogate/references/rubric.md",
+      "local": "skills/interrogate/references/rubric.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/interrogate/references/code-quality-review.md",
+      "local": "skills/interrogate/references/code-quality-review.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/interrogate/references/lead-judgment.md",
+      "local": "skills/interrogate/references/lead-judgment.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/show-me-your-work/SKILL.md",
+      "local": "skills/show-me-your-work/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/show-me-your-work/references/decision-log-template.tsv",
+      "local": "skills/show-me-your-work/references/decision-log-template.tsv",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/show-me-your-work/scripts/log.sh",
+      "local": "skills/show-me-your-work/scripts/log.sh",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/blast-radius/SKILL.md",
+      "local": "skills/blast-radius/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/principle-attack-the-premise/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-attack-the-premise.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-boundary-discipline/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-boundary-discipline.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-build-the-lever/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-build-the-lever.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-encode-lessons-in-structure/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-encode-lessons-in-structure.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-exhaust-the-design-space/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-exhaust-the-design-space.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-experience-first/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-experience-first.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-foundational-thinking/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-foundational-thinking.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-guard-the-context-window/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-guard-the-context-window.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-laziness-protocol/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-laziness-protocol.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-make-operations-idempotent/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-make-operations-idempotent.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-migrate-callers-then-delete-legacy-apis.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-minimize-reader-load/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-minimize-reader-load.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-model-the-domain/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-model-the-domain.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-outcome-oriented-execution/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-outcome-oriented-execution.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-prove-it-works/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-prove-it-works.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-redesign-from-first-principles/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-redesign-from-first-principles.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-separate-before-serializing-shared-state/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-separate-before-serializing-shared-state.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-sequence-verifiable-units/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-sequence-verifiable-units.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-subtract-before-you-add/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-subtract-before-you-add.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-test-behavior-not-implementation/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-test-behavior-not-implementation.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/principle-type-system-discipline/SKILL.md",
+      "local": "skills/pstack-principles/references/principle-type-system-discipline.md",
+      "mode": "verbatim"
+    }
+  ]
+}
