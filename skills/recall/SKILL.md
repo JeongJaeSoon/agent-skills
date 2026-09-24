@@ -31,8 +31,8 @@ When `orca search --index-status` reports `enabled: true`, `orca search "<topic>
 Lead with the capsule, then the thread status, then the problems, then the next move. Deeper detail goes below or gets cut.
 
 - **Capsule.** At most 5 bullets. What this work is and where it stands overall.
-- **Threads.** One line each, prefixed with exactly one status tag: `[merged #N]`, `[open PR #N]`, `[in flight <branch>]`, `[verified, uncommitted]`, `[reverted #N]`, or `[planned, not started]`. A thread with no tag is not done yet, so tag it.
+- **Threads.** One line each, prefixed with exactly one status tag: `[merged #N]`, `[open PR #N]`, `[in flight <branch>]`, `[verified, uncommitted]`, `[reverted #N]`, `[planned, not started]`, or `[unverified]` when step 5 could not check it. A thread with no tag is not done yet, so tag it.
 - **Problems.** At most 5, the recurring ones. Include the symptoms users keep reporting and any fix that shipped and was reverted, so the next attempt starts where the last one failed.
 - **Next move.** The single most useful next action, concrete.
 
-An adjacent feature or ticket stays out unless it blocks this one. When the brief outgrows a screen, cut detail before threads. Write it with `write-plainly`, in the user's language. Cite session findings by session file and shared-record findings by source (PR `owner/repo#N`, ticket ID, note path). Leave private context out of anything that will be posted publicly.
+A source you could not read goes in one closing line as a gap; never turn it into a claim ("nothing changed since"). An adjacent feature or ticket stays out unless it blocks this one. When the brief outgrows a screen, cut detail before threads. Write it with `write-plainly`, in the user's language. Cite session findings by session file and shared-record findings by source (PR `owner/repo#N`, ticket ID, note path). Leave private context out of anything that will be posted publicly.
