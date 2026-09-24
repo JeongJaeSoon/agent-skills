@@ -183,8 +183,12 @@ ledger = (store / A / "ledger.jsonl").read_text()
 (store / A / "ledger.jsonl").write_text(json.dumps({"ts": early, "ev": "landed", "pr": 150, "sha": "m150", "note": "backfill"})
                                         + "\n" + ledger)
 assert json.loads(history(A)[0])["t"] > early
+sampled = [json.loads(r) for r in history(A) if "tokens" in json.loads(r)]
 st = dash.collect(A, sources=())
 assert json.loads(history(A)[0])["t"] == early and st["series"][0]["landed"] == 1, history(A)[:2]
+kept = [r for r in map(json.loads, history(A)) if "tokens" in r]
+assert [r["tokens"] for r in kept[:len(sampled)]] == [r["tokens"] for r in sampled] and sampled, "live samples keep their tokens"
+assert all(k["landed"] > r["landed"] for k, r in zip(kept, sampled)), "the ledger's counts under them include the backfill"
 n = len(history(A))
 dash.collect(A, sources=())
 assert len(history(A)) == n, "rebuilt once, then appended as usual"

@@ -760,7 +760,14 @@ def _merge(slug, d, cfg, fetched, interval):
     # `orch backfill` puts landings before the series began: rebuild it, as a rebuilt series starts at the first one.
     stale = bool(history) and first is not None and first < prog.parse_ts(history[0]["t"])
     if (not history or stale) and issues is not None:
-        history = backfill(cfg, events, issues)
+        rebuilt = backfill(cfg, events, issues)
+        if stale:
+            # Keep what only a live collect saw (in-flight, tokens) and recount the ledger's values under it.
+            start = prog.parse_ts(history[0]["t"])
+            rebuilt = [r for r in rebuilt if prog.parse_ts(r["t"]) < start] + [
+                {**r, **series_row(prog.parse_ts(r["t"]), cfg, [e for e in events if prog.parse_ts(e["ts"]) <= prog.parse_ts(r["t"])],
+                                   issues, r.get("in_flight"))} for r in history]
+        history = rebuilt
         if history:
             write_atomic(hist_path, "".join(json.dumps(r) + "\n" for r in history))
     row = series_row(tnow, cfg, events, issues, summary["in_flight"])
