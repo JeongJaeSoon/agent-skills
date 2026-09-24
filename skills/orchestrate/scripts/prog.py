@@ -19,8 +19,9 @@ Usage: python3 prog.py <command> <slug> [options]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      coordinator-owned landing Task; the user resolves it in Orca
   dep <slug> --ticket A --after B[,C]
-                                     A cannot land before B and C. Orca task deps (task-create --deps)
-                                     are read first; this is for a dependency found after dispatch
+                                     A cannot land before B and C: a land-after edge (A stacked on
+                                     B's branch), or one found after dispatch. Start-after edges are
+                                     Orca task deps (task-create --deps), read from the Run
   queue <slug> [--json]              the land order and why each PR is not moving
   land <slug> --pr N [--class main-fix|gate|urgent|normal] [--wait-minutes M]
                                      the one way a program PR reaches its base. Normal lane: lands
@@ -39,8 +40,8 @@ Usage: python3 prog.py <command> <slug> [options]
                                      E2E) holding one of heavy_slots (2) machine-wide slots; `-`
                                      outside a program
   wait <slug> [--timeout-ms 540000] [--rounds 3]
-                                     block until the Run inbox holds actionable mail; acks
-                                     heartbeat-only batches; never acks actionable ones
+                                     coordinator only: block until the Run inbox holds actionable
+                                     mail; acks heartbeat-only batches; never acks actionable ones
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -829,7 +830,7 @@ def merge_unit(p, pr, unit, klass, events):
             return 3, "act: the base requires up-to-date branches: " + ADVICE["behind base"].format(pr=pr, repo=repo)
         return 1, f"merge refused: {why}"
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
-    return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (top {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
+    return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
                f"then gh run watch <id> --repo {repo} --exit-status and prog.py record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
 
@@ -1106,6 +1107,6 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS:
+    if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])
