@@ -22,7 +22,7 @@ def main():
     own = os.environ.get("ORCA_TERMINAL_HANDLE")
     cmd = (event.get("tool_input") or {}).get("command") or ""
     # The hook sees unexpanded text: the variable is the caller's own handle unless the command rebinds it.
-    rebinds = re.search(r"ORCA_TERMINAL_HANDLE\s*=|\bread\b[^;&|\n]*ORCA_TERMINAL_HANDLE", cmd)
+    rebinds = re.search(r"(?:^|[\s;&|(])ORCA_TERMINAL_HANDLE=(?!=)|\bread\b[^;&|\n]*\bORCA_TERMINAL_HANDLE", cmd)
     for handle in MAILBOX.findall(cmd):
         handle = handle.strip("'\"")
         if handle != own and (rebinds or handle not in ("$ORCA_TERMINAL_HANDLE", "${ORCA_TERMINAL_HANDLE}")):

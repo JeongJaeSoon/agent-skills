@@ -20,6 +20,8 @@ assert decide(f"{CHECK} --terminal $ORCA_TERMINAL_HANDLE --wait") == "pass"  # t
 assert decide(f'{CHECK} --terminal "${{ORCA_TERMINAL_HANDLE}}" --ack d1') == "pass"
 assert decide(f'ORCA_TERMINAL_HANDLE=term_other; {CHECK} --terminal "$ORCA_TERMINAL_HANDLE" --ack d1') == "deny"
 assert decide(f"export ORCA_TERMINAL_HANDLE=term_other && {CHECK} --terminal $ORCA_TERMINAL_HANDLE") == "deny"
+assert decide(f'[[ $ORCA_TERMINAL_HANDLE == term_me ]] && {CHECK} --terminal "$ORCA_TERMINAL_HANDLE"') == "pass"
+assert decide(f"env ORCA_TERMINAL_HANDLE=term_other {CHECK} --terminal $ORCA_TERMINAL_HANDLE") == "deny"
 assert decide(f"{CHECK} --terminal term_other --ack d1") == "deny"
 assert decide("orca orchestration inbox --terminal 'term_other'") == "deny"
 assert decide(f"echo hi; {CHECK} --terminal term_other") == "deny"
