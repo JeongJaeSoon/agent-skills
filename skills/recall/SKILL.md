@@ -15,7 +15,7 @@ Context lives in two records. Past sessions hold what was done and decided. The 
 
 Claude Code writes each session to `~/.claude/projects/<dir>/<session-id>.jsonl`, where `<dir>` is the session's working directory with every `/` and `.` replaced by `-`. One JSON object per line. Orca cards each run in their own worktree, so one repo's history spans many `<dir>`s: its main checkout, every path in `git worktree list`, and cards already removed, whose `<dir>` starts with the encoded parent folder of the repo's worktrees (for Orca, `~/orca/workspaces/<repo>/`).
 
-When `orca search --index-status` reports `enabled: true`, `orca search "<topic>" --since <iso> --sort newest --json` finds the matching sessions faster than grep. Otherwise grep the `<dir>`s above.
+When `orca search --index-status` reports `enabled: true`, `orca search "<topic>" --since <iso> --sort newest --json` with one `--path <worktree>` per worktree path above finds the matching sessions faster than grep; drop any hit outside those paths before reading it. Otherwise grep the `<dir>`s above. With no topic ("이번 주에 뭐 했지"), list the `<dir>`s' session files modified inside the window (`ls -t`, or `find <dir> -name '*.jsonl' -newermt <date>`) and read each one's first user prompt and last turns.
 
 ## Steps
 
