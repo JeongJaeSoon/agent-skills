@@ -59,9 +59,18 @@ Each entry is in one of four states:
 - `blocked`: conflicts, CI failed, draft, no verdict, protection
 - `waiting`: on a dependency, on its stack's top, or on the human gate
 
-## Dependencies: Orca task deps
+## Dependencies: start-after or land-after
 
-Dependencies are what Orca orchestration is for. Declare them where Orca enforces them:
+Two kinds of edge, declared in two places. Pick per edge:
+
+| B needs A… | Edge | Where |
+|---|---|---|
+| **before B can start**: A's result on main, A's report, an API A creates that B cannot stub | start-after | Orca task deps. Orca keeps B out of `task-list --ready` until A's task completes |
+| **only to land first**: B can be written on top of A's branch now | land-after | A GitHub stack (B on A's branch) plus `prog.py dep <slug> --ticket B --after A`. No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
+
+A real run proved the second row: migrations 0001 and 0002 had an Orca dep between them, so 0002's worker could not start while 0001's PR was open, and the "stack" landed as two merges.
+
+Start-after edges in Orca:
 
 - `task-create --deps '["<task id>", …]'` or `worker-start --deps`, and start work from `task-list --ready`.
 - `prog.py` reads the Run's task deps and keys them by the ticket ID that starts each task's display name. A dependent PR `waiting` in the land order ("lands after X") is the same edge Orca holds.
@@ -107,7 +116,7 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
 
 ## What the coordinator does
 
-- Declare dependencies as Orca task deps when creating tasks, and plan dependent chains as stacks from the start.
+- Declare start-after edges as Orca task deps when creating tasks; plan land-after chains as stacks from the start, with `prog.py dep`.
 - Read `status` on every drain:
   - `STALE` lines are PRs that have waited `stale_hours` (default 3). Each gets an action on the reason `queue` gives.
   - `LANDED-BUT-OPEN` lines are workers whose PR landed. Release them and remove their worktrees in the same turn.

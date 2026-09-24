@@ -35,7 +35,7 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 ## 의존 관계와 stack
 
-- <티켓 A> ← <티켓 B> (B는 A 뒤에 착지. Orca task deps가 정본이고, 디스패치 뒤에 찾은 의존만 `prog.py dep`) · stack: #<하위> → #<상위>
+- <티켓 A> ← <티켓 B> (시작 전 필요 → Orca task deps, 착지 순서만 → stack + `prog.py dep`) · stack: #<하위> → #<상위>
 
 ## 착지와 역할
 

@@ -37,7 +37,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Read every ticket in scope.
    - Write the predicate as countable ticket IDs plus a final check on the real artifact ("A-246, 247, 117 Done and `verify-<app>` drives the quickstart on main"). Derive it yourself. If the tickets have no countable end, write your best predicate, mark it proposed in the digest, and go on.
    - Copy the human's goal into the standing orders verbatim, one sentence per order.
-   - Map the dependencies between tickets. They become Orca task deps; chains that must land in order also become GitHub stacks (`references/landing.md`).
+   - Map the dependencies between tickets and split them by kind (`references/landing.md`): **start-after** (B needs A's result before it can begin) becomes an Orca task dep; **land-after** (B can be built on A's branch now) becomes a GitHub stack plus `prog.py dep`, never an Orca dep.
    - Check that the repo can land in parallel: required checks on, "require branches to be up to date" off, squash merges. Add the program's shared contracts to `exclusive_paths`. If strict mode has to stay, put its cost in the digest.
    - Pick the merge policy.
    - Create the Run with the goal as `--objective`.
@@ -51,7 +51,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 
    For each ticket worker:
    - Write the brief per `references/brief.md`. The spec starts with the ticket ID, never `/goal`.
-   - Create its task with its prerequisites as Orca deps (`task-create --deps '[…]'`), and start what `task-list --ready` offers. A prerequisite found after dispatch goes in `prog.py dep`.
+   - Create its task with its start-after prerequisites as Orca deps (`task-create --deps '[…]'`), and start what `task-list --ready` offers. A land-after layer starts at once, stacked on the lower layer's branch, with `prog.py dep`. A prerequisite found after dispatch goes in `prog.py dep`.
    - Run `worker-start --task <id> --worktree new-top-level --repo <selector> --base-branch <main, feat/<topic> or the lower layer's branch> --name <ticket id, lowercase> --display-name "<ID> <title>" --agent claude [--model <id>]`, or `--spec "<the brief>" --deps …` instead of `--task`. The model is the program note's worker model (default: the coordinator's own); a verifier runs on another family (`--agent codex`). The display name is the card's durable name; the terminal tab title is the agent's own and it overwrites any rename.
    - Close its setup terminal once setup exits. In `orca terminal list --worktree <card> --json` it is the row without `agentIdentity`: run `orca terminal wait --terminal <h> --for exit`, then `orca terminal close --terminal <h>`. Finished setup terminals left open made Orca itself slow (22 of 50 terminals in one run).
 5. **Drain.**
@@ -68,8 +68,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Dependencies land first.
 
    You keep it honest:
-   - dependencies declared in Orca
-   - chains stacked
+   - start-after edges in Orca, land-after chains stacked with `prog.py dep`
    - `STALE` PRs unstuck
    - classes set (`record reprioritized`)
 

@@ -743,6 +743,8 @@ def note_attempt(p, events, pr, outcome, reasons):
     p.append("land_check", pr=pr, outcome=outcome, note="; ".join(reasons)[:300])
 
 
+KEEP = " A clean update keeps the verdict (same patch-id); re-review only if you resolved conflicts."
+
 ADVICE = {
     "conflicts with base": "rebase onto the base, resolve, re-run the review on the resolution, record a new verdict",
     "no passing verdict": "finish the review loop, then prog.py verdict",
@@ -849,10 +851,10 @@ def attempt(p, pr, klass):
         if me["state"] == "catching_up":
             note_attempt(p, events, pr, "catching_up", me["reasons"])
             return 3, ("act: you hold the exclusive lane; bring the branch onto the latest base (restack migrations),"
-                       f" let CI run, land again — {'; '.join(me['reasons'])}")
+                       f" let CI run, land again — {'; '.join(me['reasons'])}." + KEEP)
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
             return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: gh pr update-branch {pr}"
-                       f" --repo {repo} (or rebase and restack), let CI run, land again")
+                       f" --repo {repo} (or rebase and restack), let CI run, land again." + KEEP)
         code, msg = merge_unit(p, pr, unit, klass, events)
         if code == 0:
             lane.release(pr)
@@ -868,7 +870,7 @@ def attempt(p, pr, klass):
         note_attempt(p, events, pr, "act", [f"base changed {', '.join(overlap[:5])}"])
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
                    f" gh pr update-branch {pr} --repo {repo}, check your contract and test assumptions still hold,"
-                   " let CI run, land again")
+                   " let CI run, land again." + KEEP)
     return merge_unit(p, pr, unit, klass, events)
 
 
