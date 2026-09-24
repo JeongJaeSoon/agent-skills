@@ -70,7 +70,7 @@ claude plugin install agent-skills@jeongjaesoon
 
 **글쓰기**: `write-plainly`(한국어·영어 문체), `prune-comments`(diff의 주석 정리).
 
-**pstack**: `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `why`. 원본 이름을 유지해 upstream을 따라간다.
+**pstack**: `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why`. 원본 이름을 유지해 upstream을 따라간다.
 
 ```bash
 python3 scripts/pstack-sync.py            # upstream 변경 확인 (쓰지 않음)

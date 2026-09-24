@@ -659,6 +659,7 @@ function kpi(label, value, sub, { extra = "", src = "", note = "" } = {}) {
 function landOrderCard(st) {
   const order = st.land_order || [];
   const lanes = Object.entries(st.landing || {}).filter(([, l]) => l.holder);
+  if (!order.length && !lanes.length) return "";  // the card only matters while something lands; the grid refills the row
   const holders = lanes.length ? lanes.map(([base, l]) => `<div class="holder">${icon("lock")}<span class="mono">#${esc(l.holder.pr)}</span>
       <span class="mono dim">${esc(l.holder.ticket || "")}</span><span class="grow"></span><span class="muted">${esc(base)} · 독점 레인 ${relSpan(l.holder.since)}</span></div>`).join("")
     : `<div class="holder idle">${icon("lock")}<span>exclusive lane free</span></div>`;

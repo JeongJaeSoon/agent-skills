@@ -66,7 +66,7 @@ Every table sorts by a column when its head is clicked. A relative-time column s
   - KPI tiles: predicate done (with what the last open item waits on, and the current scope: predicate items plus admitted follow-ups, done out of total, and how many untriaged follow-ups may still join; a count, not a percentage, because the scope can grow), main (with the commit and, when the ledger note names one, its CI run), in-flight/cap with free slots, oldest open PR, PRs awaiting landing, landed in 24 h; human wait only under human-gate.
   - **Now.** Every in-flight worker and what its session is doing, from the tail of its transcript: a tool call (with its description or command), thinking, a finished turn waiting for input, or waiting for a wake-up it armed itself (ScheduleWakeup, Monitor, a background command). A pulse marks the ones moving; a row flashes once when its state changes. Codex workers leave no transcript here and show Orca's activity only.
   - **Stages.** Each top-level issue of the tracker project that has children, with its leaf tickets done (green) and in progress (moving stripes). Linear's list carries no parent links, so the tree is crawled with `tracker.py children` a few nodes per collect and cached in `tree.json`: a new program shows "counting N" for a few minutes. Canceled leaves are left out.
-  - **Land order**, from `prog.land_order`. Each row shows:
+  - **Land order**, from `prog.land_order`, shown only while a PR waits to land or a base's exclusive lane is held. Each row shows:
     - position, PR and ticket
     - an age badge (amber over 2 h, red over 3 h)
     - a state chip: ready, catching up, blocked or waiting

@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 25개, 별칭 3개, 명령 2개(`orch`, `orch-dash`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 27개, 별칭 3개, 명령 2개(`orch`, `orch-dash`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -248,6 +248,16 @@
 - **내용:** 원칙 23개의 인덱스다(Core, Architecture, Verification, Delegation, Meta). 적용할 원칙은 leaf 파일을 끝까지 읽는다. 예: 근본 원인 수정, 동작을 테스트, 빼고 나서 더하기, 사람을 기다리지 않기.
 - **동봉:** `references/principle-*.md` 23개.
 
+### recall
+- **언제:** "어디까지 했지", "X 작업 어디까지 했더라", "최근 작업 정리해줘", "이번 주에 뭐 했지", 'catch me up'. 앞선 세션이 건드린 일을 시작하거나 이어 가기 전.
+- **내용:**
+  - 범위(기간 기본 7일, 주제, 저장소)를 먼저 정해 말한다. 다른 저장소의 세션은 묻지 않고 읽지 않는다.
+  - 지난 세션은 `~/.claude/projects/<인코딩한 경로>/`에서 찾는다. Orca 카드는 worktree마다 경로가 달라서 main 체크아웃, `git worktree list`, 이미 지운 카드(같은 상위 폴더)를 모두 본다. `orca search` 색인이 켜져 있으면 그것을 먼저 쓴다.
+  - 세션이 많으면 haiku 서브에이전트가 나눠 읽고 세션마다 목표, 결정, 남은 일, 막힌 곳, 산출물을 돌려준다. 원문은 서브에이전트 안에 둔다.
+  - 주제가 기능·파일·버그를 가리키면 `why`의 출처 조사, worklog(`use-notes`), 티켓(`use-tracker`)도 함께 본다. 되돌린 수정과 계속 보고되는 증상이 여기서 나온다.
+  - PR·브랜치·티켓·카드는 `git`, `gh`, 트래커, `orca worktree list`로 지금 상태를 확인한다.
+  - 답은 요약 5줄 이하, 스레드마다 상태 태그(`[merged #N]`, `[open PR #N]`, `[in flight <branch>]` 등), 반복된 문제 5개 이하, 다음 할 일 하나다.
+
 ### reflect
 - **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다.
 - **내용:**
@@ -274,6 +284,14 @@
   - 워커를 `Agent`(worktree 격리, 백그라운드)로 띄우고, 오래 도는 일은 Orca 워커로 띄운다. Orca 워커의 `--base-branch`는 new-top-level·new-child 배치에서만 받는다.
   - 워커는 PASS / ISSUES / BLOCKED로 보고한다. 커밋과 방법이 빠진 보고는 한 번 다시 돌린다.
   - 결과를 표 하나로 모은다.
+
+### teach
+- **언제:** 'teach me this', "이거 제대로 이해하고 싶어", "이 변경 이해시켜줘", "처음 보는데 이 구조 설명해줘". 한 가지 동작 질문은 `how`, 이유 질문은 `why`.
+- **내용:**
+  - 왜 묻는지(바꾸려는지, 리뷰하는지, 처음인지)에 맞춰 가져갈 것 몇 가지를 정하고, `how`와 `why`를 병렬로 불러 하나의 설명으로 엮는다. `why`의 확신도 표현은 그대로 둔다.
+  - 일반적인 정의부터 말하고 지금 코드에 잇는다. 가장 작은 완결된 답을 먼저 주고, 물으면 더 들어간다.
+  - 움직이는 부분이 셋 이상이면 그림을 한 장씩 늘려 가며 그린다(mermaid, ASCII).
+  - 글은 `write-plainly`로, 사용자의 언어로 쓴다.
 
 ### tdd
 - **언제:** TDD나 실패 테스트를 명시적으로 요청할 때, 또는 싼 로컬 테스트 대상이 뻔한 버그.
@@ -334,7 +352,7 @@
   - Now: 워커마다 도구를 실행 중인지, 생각 중인지, 입력을 기다리는지, 스스로 건 대기 중인지.
   - Needs attention: 멈춘 워커, 빈 슬롯, 원장 누락, 정리할 카드.
   - Stages: 트래커 최상위 이슈별 진척.
-  - 착지 순서와 burn-up.
+  - 착지 순서(착지를 기다리는 PR이나 독점 레인을 쥔 PR이 있을 때만)와 burn-up.
   - 표는 열 머리를 눌러 정렬한다. 두 번째는 역순, 세 번째는 원래 순서이고, 브라우저가 선택을 기억한다.
 - **부하:** 브라우저는 5초마다 묻지만 바뀐 게 없으면 304로 본문 없이 끝나고, 탭이 숨겨져 있으면 묻지 않는다. 서버는 원장 3초, Orca 20초, 트래커·GitHub 60초 주기로 모으며, 끝난 프로그램(최종 확인 기록이 유효)은 원장만 본다.
 - **명령:** `collect`, `serve`, `ensure`, `note`(위험·결정 한 줄), `demo`. 환경 변수는 `ORCH_DASH_PORT`, `ORCH_DASH=off`다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`에 있다.
@@ -394,11 +412,11 @@
 | 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어, 문서·티켓·PR은 한국어. 문체는 `write-plainly`(한국어·영어) |
 
 ### 가져온 것
-pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 13개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
+pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 15개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
 
 - **거의 그대로 가져온 것:** 원칙 23개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
   - 원칙은 pstack에서 스킬 23개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
-- **고쳐서 가져온 것:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, reflect, show-me-your-work, swarm, tdd, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
+- **고쳐서 가져온 것:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
   - 모델이 스스로 부를 수 있게 했다.
   - Cursor 전용 요소를 Claude Code 대응물로 바꿨다. 경로는 `.cursor/` → `.claude/`, 워커는 `generalPurpose`/클라우드 → `Agent`/Orca 워커, transcript는 `agent-transcripts` → `~/.claude/projects`.
   - 모델 패널을 Claude + Codex로 바꿨다.
@@ -415,7 +433,6 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 | pstack 스킬 | 하는 일 | 가져오지 않은 이유 |
 |---|---|---|
 | poteto-mode | 항상 켜진 모드 라우터와 플레이북 23개 | 스킬별 트리거로 대신한다. Claude Code의 output style로 모드를 흉내 낼 수 있지만, 강제 적용은 사용자 설정을 덮어쓰고 선택 적용은 켜지 않게 되어 만들지 않았다. 운영 규칙은 `orchestrate`, PR·리뷰·증거 플레이북은 `deliver-ticket`, 답변 규칙은 `write-plainly`에 옮겼다 |
-| recall, teach | 최근 맥락 복원, how+why 설명 | 다음 후보다(recall은 `orca search`와 `~/.claude/projects` 기반으로 바꿔야 한다) |
 | no-comments | 주석 제거 | Cursor 전용 Comment Sicko 에이전트에 기댄다. 규칙은 `prune-comments`로 옮겼다. unslop과 technical-writing은 `write-plainly`로 합쳤다 |
 | typescript-best-practices | TS 규칙 | 범용 스킬이 아니다 |
 | setup-pstack, make-bot-ui, bro, automate-me, benny 자동화 | Cursor 모델 설정, Grok Bot 등 | Cursor나 Grok에 묶여 있다 |
