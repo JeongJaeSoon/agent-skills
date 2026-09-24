@@ -51,6 +51,11 @@ By scope, not by vendor:
 - `/review` — once a PR exists
 - `/security-review` — the diff touches auth, crypto, or untrusted input
 
+**Trivial** means all of these: about 20 changed lines or fewer, no auth, crypto, migration,
+concurrency, CI or public-contract change, and a test that covers it. A trivial diff still gets
+a reviewer other than its author: one subagent running `/code-review` on it (verdict source
+`subagent-review`). Your own reading is never the verdict.
+
 **Codex is the second pair of eyes on anything non-trivial**, not an optional extra. The
 `/codex:*` slash commands are user-only, but you run the same reviews yourself through the
 companion:

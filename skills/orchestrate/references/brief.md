@@ -30,7 +30,9 @@ LAND        After review, record the verdict on the reviewed head: prog.py verdi
             never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then python3 ~/.claude/skills/orchestrate/scripts/prog.py land <slug> --pr <N>
-            --ticket <ID> --wait-minutes 50, run in the background. Act on exit 3, report on exit 1.
+            --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
+            `&` or a redirect: the completion notice carries its output and exit code). Act on
+            exit 3, report on exit 1.
             Never merge any other way. (human-gate: stop at READY and report instead.)
 FORBIDDEN   Do not start other tickets. File follow-ups with the label `follow-up` and the first
             body line `파생: <this ticket> · 원인: <분류>`, and do not work on them. No force-push

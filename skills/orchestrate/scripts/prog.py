@@ -644,7 +644,7 @@ def cmd_verdict(argv):
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
     if src.lower().startswith(("self", "author", "implementer")):
-        sys.exit("a verdict comes from a reviewer other than the implementer (codex-review, verifier:<model>, live:<feature>)")
+        sys.exit("a verdict comes from a reviewer other than the implementer (codex-review; subagent-review for a trivial diff, deliver-ticket §3; verifier:<model>; live:<feature>)")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
