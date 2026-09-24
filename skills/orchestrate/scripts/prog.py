@@ -570,36 +570,53 @@ def cmd_status(argv):
                      f" · admitted {len(admitted)} · parked {len(parked)}"
                      + (f" · untriaged: {', '.join(untriaged[:6])}" if untriaged else ""))
 
-    # 4. next move, first matching rule wins; safety outranks completion
-    budget_note, used = "", 0
-    if cfg.get("deadline"):
-        dl = parse_ts(cfg["deadline"])
-        used = (tnow - t0) / max(dl - t0, dt.timedelta(seconds=1))
-        budget_note = f" (budget {used:.0%} used)"
-    if stopped(events):
-        nxt = "STOP line active: spawn nothing; let in-flight finish"
-    elif main == "red":
-        nxt = "SAFETY STOP: main is red — land only the fix (land-check --main-fix), then record main_green --sha"
-    elif tickets_done and verified:
-        nxt = "predicate met and verified: Close"
-    elif tickets_done:
-        nxt = "tickets done: run the final check on the real artifact, then record predicate_verified"
-    elif used >= 0.7:
-        nxt = "stop spawning: land what is verified"
-    elif stale:
-        nxt = (f"unstick first: {len(stale)} PR(s) waited ≥{knob(cfg, 'stale_hours'):g}h — for each, remove the reason"
-               " `queue` gives (fix task, stack the dependent chain, reprioritize), not more parallel work")
-    elif backlog_h > knob(cfg, "max_backlog_hours") or len(human) >= 3:
-        nxt = (f"stop spawning implementation: landing backlog ~{backlog_h:.1f}h — finish before starting"
-               " (stack dependent or independent ready PRs so one merge lands several)")
-    elif len(landed_recent) == 0 and len(fails_recent) >= 2:
-        nxt = "stop spawning: no landing and 2+ failures in 3h — find the cause"
-    elif len(live) < cap:
-        nxt = f"may spawn {cap - len(live)} more"
-    else:
-        nxt = "at cap: drain and land"
+    # 4. next move
+    nxt, used = next_move(cfg, events, tnow, tickets_done=tickets_done if issues is not None else None,
+                          live=len(live), human=len(human), order=order)
+    budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
     print("\n".join(lines))
+
+
+def next_move(cfg, events, tnow, *, tickets_done, live, human, order):
+    """Step 4 of `status`, first matching rule wins; safety outranks completion. dash.py shows the same line.
+
+    tickets_done is None when the tracker could not say: a current predicate_verified then decides Close.
+    Returns (next line, share of the deadline used or None)."""
+    used = None
+    if cfg.get("deadline"):
+        t0, dl = parse_ts(cfg["created_at"]), parse_ts(cfg["deadline"])
+        used = (tnow - t0) / max(dl - t0, dt.timedelta(seconds=1))
+    verified = final_check_current(events)
+    window = dt.timedelta(hours=3)
+    landed_recent = [e for e in events if e["ev"] == "landed" and tnow - parse_ts(e["ts"]) <= window]
+    fails_recent = [e for e in events if e["ev"] in ("main_red", "land_failed") and tnow - parse_ts(e["ts"]) <= window]
+    gaps = sorted(parse_ts(b["ts"]) - parse_ts(a["ts"]) for a, b in zip(landed_recent, landed_recent[1:]))
+    interval = gaps[len(gaps) // 2].total_seconds() / 60 if gaps else knob(cfg, "land_interval_minutes")
+    backlog_h = len(order) * interval / 60
+    stale = [e for e in order if e.get("age_h", 0) >= knob(cfg, "stale_hours")]
+    cap = cap_from(events, cfg.get("ceiling", 6))
+    if stopped(events):
+        return "STOP line active: spawn nothing; let in-flight finish", used
+    if main_state(events) == "red":
+        return "SAFETY STOP: main is red — land only the fix (land-check --main-fix), then record main_green --sha", used
+    if verified and tickets_done is not False:
+        return "predicate met and verified: Close", used
+    if tickets_done:
+        return "tickets done: run the final check on the real artifact, then record predicate_verified", used
+    if (used or 0) >= 0.7:
+        return "stop spawning: land what is verified", used
+    if stale:
+        return (f"unstick first: {len(stale)} PR(s) waited ≥{knob(cfg, 'stale_hours'):g}h — for each, remove the reason"
+                " `queue` gives (fix task, stack the dependent chain, reprioritize), not more parallel work"), used
+    if backlog_h > knob(cfg, "max_backlog_hours") or human >= 3:
+        return (f"stop spawning implementation: landing backlog ~{backlog_h:.1f}h — finish before starting"
+                " (stack dependent or independent ready PRs so one merge lands several)"), used
+    if not landed_recent and len(fails_recent) >= 2:
+        return "stop spawning: no landing and 2+ failures in 3h — find the cause", used
+    if live < cap:
+        return f"may spawn {cap - live} more", used
+    return "at cap: drain and land", used
 
 
 def cmd_record(argv):

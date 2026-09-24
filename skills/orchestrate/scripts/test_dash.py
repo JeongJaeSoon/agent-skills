@@ -37,7 +37,7 @@ assert s["main"] == "green" and s["cap"] == 4 and s["in_flight"] == 3, s
 assert s["ready_prs"] == [207, 208] and s["landed_total"] == 6 and s["landed_24h"] == 3, s
 assert s["idle_waiting"] == ["ctx_a1000009"] and s["untriaged"] == ["ACME-127"], s
 assert s["derived_total"] == 8 and s["admitted"] == 2 and s["parked"] == 5, s
-assert s["next"] == "may spawn 1 more", s["next"]
+assert s["next"].startswith("unstick first: 1 PR"), s["next"]  # same rule as `prog.py status`: a PR has waited 3h+
 prs = {p["number"]: p for p in st["prs"]}
 assert (prs[207]["ci"], prs[207]["verdict"], prs[207]["review_rounds"], prs[207]["ticket"]) == ("pass", "pass", 3, "ACME-106")
 assert (prs[208]["ci"], prs[208]["verdict"]) == ("pending", "none")

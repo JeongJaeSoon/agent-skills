@@ -133,4 +133,16 @@ events = ready(50, "E-288", 1) + ready(51, "E-278", 1) + [at(2, "dep", ticket="E
 order = {e["pr"]: e for e in prog.land_order(events, [row(50), row(51, base="b50")], CFG, NOW, {3: [50, 51]})}
 assert order[51]["state"] == "ready" and order[50]["state"] == "waiting", order
 
+# The next move, shared by `status` and the dashboard. A verified predicate closes even when the tracker
+# cannot answer (the dashboard once said "may spawn 4 more" after Close because the tracker call failed).
+NCFG = {"merge_policy": "autonomous", "ceiling": 4, "created_at": at(5, "x")["ts"]}
+done = [at(1, "landed", pr=1, sha="m1"), at(0.5, "predicate_verified")]
+nm = lambda ev, td, live=0, order=(): prog.next_move(NCFG, ev, NOW, tickets_done=td, live=live, human=0, order=list(order))[0]
+assert nm(done, None) == nm(done, True) == "predicate met and verified: Close"
+assert nm(done, False).startswith("may spawn")  # the tracker says a ticket reopened
+assert nm(done + [at(0.1, "landed", pr=2, sha="m2")], None).startswith("may spawn"), nm(done + [at(0.1, "landed", pr=2, sha="m2")], None)  # a later landing voids the check
+assert nm([], True).startswith("tickets done")
+assert nm([], None, live=4) == "at cap: drain and land"
+assert nm([], None, order=[{"age_h": 3.5}]).startswith("unstick first: 1 PR")
+
 print("prog.py land order: all pass")

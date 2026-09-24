@@ -485,46 +485,24 @@ def collect_usage(dash, workers, cfg):
 
 # ---------------------------------------------------------------- summary and series
 
-def next_move(*, stop, main, tickets_done, verified, used, ready, human, landed_3h, fails_3h, live, cap):
-    # Mirrors step 4 of `prog.py status` (first matching rule wins); keep the two in step.
-    if stop:
-        return "STOP line active: spawn nothing; let in-flight finish"
-    if main == "red":
-        return "SAFETY STOP: main is red — land only the fix (land-check --main-fix), then record main_green --sha"
-    if tickets_done and verified:
-        return "predicate met and verified: Close"
-    if tickets_done:
-        return "tickets done: run the final check on the real artifact, then record predicate_verified"
-    if used >= 0.7:
-        return "stop spawning: land what is verified"
-    if ready >= 3 or human >= 3:
-        return "stop spawning implementation: land the ready queue first"
-    if landed_3h == 0 and fails_3h >= 2:
-        return "stop spawning: no landing and 2+ failures in 3h — find the cause"
-    if live < cap:
-        return f"may spawn {cap - live} more"
-    return "at cap: drain and land"
-
-
-def summarize(cfg, events, issues, workers, tnow):
+def summarize(cfg, events, issues, workers, tnow, order):
     pred = cfg.get("predicate") or []
     by_id = {i["id"]: i for i in issues or []}
     done = [p for p in pred if by_id.get(p, {}).get("state_type") == "completed"]
-    tickets_done = bool(pred) and issues is not None and len(done) == len(pred)
+    tickets_done = bool(pred) and len(done) == len(pred) if issues is not None else None
     verified = prog.final_check_current(events)
-    live = [w for w in workers if w.get("outcome") == "in_progress"]
+    roles = {e.get("note") for e in events if e["ev"] == "spawned" and e.get("role")}
+    live = [w for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in roles]
     ready = prog.ready_prs(events)
     human = [s for s in ready if cfg.get("merge_policy") == "human-gate" and "approved" not in s]
     main, cap = prog.main_state(events), prog.cap_from(events, cfg.get("ceiling", 6))
     within = lambda e, h: tnow - prog.parse_ts(e["ts"]) <= dt.timedelta(hours=h)
     landed = [e for e in events if e["ev"] == "landed"]
-    fails_3h = [e for e in events if e["ev"] in ("main_red", "land_failed") and within(e, 3)]
     triage = triage_map(events)
     derived = [i for i in issues or [] if i.get("derived")]
-    used = None
-    if cfg.get("deadline"):
-        t0, dl = prog.parse_ts(cfg["created_at"]), prog.parse_ts(cfg["deadline"])
-        used = round((tnow - t0) / max(dl - t0, dt.timedelta(seconds=1)), 3)
+    nxt, used = prog.next_move(cfg, events, tnow, tickets_done=tickets_done,
+                               live=len(live), human=len(human),
+                               order=[e for e in order if e.get("state") not in ("gone", "unknown")])
     return {
         "predicate_total": len(pred), "predicate_done": len(done) if issues is not None else None,
         "final_check": verified, "main": main, "cap": cap, "ceiling": cfg.get("ceiling", 6),
@@ -534,14 +512,11 @@ def summarize(cfg, events, issues, workers, tnow):
         "derived_per_item": round(len(derived) / max(len(pred), 1), 2) if issues is not None else None,
         "parked": sum(1 for v in triage.values() if v == "parked"),
         "admitted": sum(1 for v in triage.values() if v == "admitted"),
-        "budget_used": used, "stopped": prog.stopped(events),
+        "budget_used": round(used, 3) if used is not None else None, "stopped": prog.stopped(events),
         "ready_prs": [s["pr"] for s in ready], "human_wait_prs": [s["pr"] for s in human],
         "idle_waiting": [w["dispatch"] for w in live if w.get("activity") == "waiting"],
         "untriaged": [i["id"] for i in derived if not i.get("triage")],
-        "next": next_move(stop=prog.stopped(events), main=main, tickets_done=tickets_done, verified=verified,
-                          used=used or 0, ready=len(ready), human=len(human),
-                          landed_3h=sum(1 for e in landed if within(e, 3)), fails_3h=len(fails_3h),
-                          live=len(live), cap=cap),
+        "next": nxt,
     }
 
 
@@ -752,7 +727,7 @@ def _merge(slug, d, cfg, fetched, interval):
     srcs["ledger"] = {"updated_at": iso(tnow), "ok": True, "events": len(events)}
 
     notes = read_jsonl(dash / "notes.jsonl")
-    summary = summarize(cfg, events, issues, workers, tnow)
+    summary = summarize(cfg, events, issues, workers, tnow, order)
     open_prs = [p for p in prs if p["state"] == "open" and not p.get("draft") and p.get("created_at")]
     oldest = min(open_prs, key=lambda p: p["created_at"], default=None)
     summary["oldest_open_pr"] = ({"pr": oldest["number"], "since": oldest["created_at"],

@@ -91,9 +91,8 @@ orca worktree create \
   --prompt "/goal <TICKET-ID>" \
   --comment "<ticket URL>" \
   --json
-# name the card and its tab after the ticket, not Orca's automatic title
+# name the card after the ticket, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<TICKET-ID> <short title>" --json
-orca terminal rename --terminal <result.agentTerminalHandle> --title "<TICKET-ID> <short title>"
 # the setup terminal is the card's row without agentIdentity; close it once setup exits
 orca terminal list --worktree "path:<result.worktree.path>" --json
 orca terminal wait --terminal <setup handle> --for exit --timeout-ms 1800000 && orca terminal close --terminal <setup handle>
