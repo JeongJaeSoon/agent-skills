@@ -225,9 +225,36 @@ def live_units(events, dispatches):
     return len({find(t) for t in live})
 
 
+TICKET_ID = re.compile(r"\b[A-Z0-9]*[A-Z][A-Z0-9]*-\d+\b")  # 94S-12, ENG-3
+
+
 def ticket_of(task):
-    word = ((task.get("display_name") or task.get("task_title") or task.get("spec") or "").split() or [""])[0]
-    return word if "-" in word and word.split("-")[-1].isdigit() else None
+    # The brief opens with the ticket ID; a card name like "W-372" only looks like one.
+    m = TICKET_ID.search(((task.get("spec") or "").splitlines() or [""])[0])
+    if m:
+        return m.group(0)
+    word = ((task.get("display_name") or task.get("task_title") or "").split() or [""])[0]
+    return word if TICKET_ID.fullmatch(word) else None
+
+
+def landed_but_open(events, workers, tasks, worktrees):
+    """Cards left behind: (ticket, dispatch, terminal still active, path) for each Orca worktree whose every
+    dispatch worked a ticket that has landed. A released worker's card stays until `orca worktree rm`."""
+    ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
+    landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed"} - {None}
+    present = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
+    cards = {}
+    for w in workers:
+        wt = (w.get("resource") or {}).get("worktreeId")
+        if wt in present:
+            cards.setdefault(wt, []).append(w)
+    out = []
+    for wt, ws in cards.items():
+        tickets = {ticket_by_task.get(w.get("taskId")) for w in ws}
+        if tickets <= landed:
+            active = [w for w in ws if w.get("terminalState") == "active"]
+            out.append((sorted(tickets)[0], (active or ws)[-1]["dispatchId"], bool(active), present[wt]))
+    return sorted(out)
 
 
 def run_tasks(run_id):
@@ -574,13 +601,12 @@ def cmd_status(argv):
                  + ("  (* ready; `orch queue` says why the rest wait)" if order else ""))
     for e in stale:
         lines.append(f"  STALE {fmt_entry(order.index(e) + 1, e)}")
-    ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
-    landed_t = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed"} - {None}
-    for w in workers:
-        tk = ticket_by_task.get(w.get("taskId"))
-        if tk in landed_t and w.get("terminalState") == "active":
-            lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {w['dispatchId']}): once its main CI is recorded,"
-                         " worker-release, close its terminals and `orca worktree rm` it")
+    worktrees = orca_json("worktree", "list").get("worktrees", [])
+    for tk, dispatch, active, path in landed_but_open(events, workers, tasks, worktrees):
+        rm = f"`orca worktree rm --worktree path:{path}`"
+        lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
+                     + (f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
+                        else f"released, but its card is still there: {rm}"))
 
     # 3. growth
     admitted = {e.get("ticket") for e in events if e["ev"] == "admitted"}

@@ -88,6 +88,8 @@ tasks = [{"id": "t1", "display_name": "F-1 root", "status": "completed", "deps":
          {"id": "t2", "task_title": "F-2", "status": "failed", "deps": "[]"},
          {"id": "t3", "task_title": "F-2", "status": "pending", "deps": '["t1"]'}]
 assert prog.ticket_of(tasks[0]) == "F-1" and prog.ticket_of({"spec": "/goal x"}) is None
+assert prog.ticket_of({"display_name": "W-372", "spec": "94S-372 https://linear.app/x — fix"}) == "94S-372"
+assert prog.ticket_of({"display_name": "W-362", "spec": "CI 위생 묶음: 94S-362 https://…"}) == "94S-362"
 
 # The exclusive lane: only exclusive entries contend, in land order, per base; normal ones never wait on it.
 events = ready(70, "G-1", 1) + ready(71, "G-2", 0.5) + ready(72, "G-3", 2) \
@@ -152,3 +154,22 @@ assert prog.live_units(ev, ["ctx_a1", "ctx_b2", "ctx_c3"]) == 2
 assert prog.live_units(ev, ["ctx_b2", "ctx_c3", "ctx_ff"]) == 3  # the lower layer landed; an unrecorded worker counts
 
 print("prog.py land order: all pass")
+
+# landed_but_open: a released worker's card still counts until the worktree is removed
+ev = [{"ev": "landed", "pr": 1, "ticket": "A-1", "ts": "2026-09-24T00:00:00+00:00"},
+      {"ev": "landed", "pr": 2, "ticket": "A-2", "ts": "2026-09-24T00:00:00+00:00"}]
+tasks = [{"id": "t1", "display_name": "A-1 x"}, {"id": "t2", "display_name": "A-2 y"}, {"id": "t3", "display_name": "A-3 z"},
+         {"id": "tq", "display_name": "QA lead"}]
+wts = [{"id": "main", "path": "/r", "isMainWorktree": True}, {"id": "w1", "path": "/w/1"}, {"id": "w2", "path": "/w/2"},
+       {"id": "w3", "path": "/w/3"}, {"id": "wq", "path": "/w/q"}]
+workers = [
+    {"dispatchId": "d1", "taskId": "t1", "terminalState": "released", "resource": {"worktreeId": "w1"}},
+    {"dispatchId": "d2", "taskId": "t2", "terminalState": "active", "resource": {"worktreeId": "w2"}},
+    {"dispatchId": "d3a", "taskId": "t1", "terminalState": "released", "resource": {"worktreeId": "w3"}},
+    {"dispatchId": "d3b", "taskId": "t3", "terminalState": "active", "resource": {"worktreeId": "w3"}},  # card reused for A-3
+    {"dispatchId": "dq", "taskId": "tq", "terminalState": "active", "resource": {"worktreeId": "wq"}},
+    {"dispatchId": "d9", "taskId": "t2", "terminalState": "released", "resource": {"worktreeId": "gone"}},  # already removed
+]
+assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/w/1"), ("A-2", "d2", True, "/w/2")], \
+    prog.landed_but_open(ev, workers, tasks, wts)
+print("prog.py landed_but_open: all pass")
