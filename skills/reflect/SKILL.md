@@ -28,7 +28,7 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 - **ID** `L-<n>`, never reused. **Source** the program slug or session. **Kind** a signal kind (`human_correction`, `brief_gap`, `stall`, `tooling`) or `land_failed`, `main_red`, `verdict_fail`. **Evidence** pointers only (message ID, PR comment URL, transcript path and line), never copied text.
 - **Status** is `candidate`, then `proposed` (a draft PR exists), then `applied` (merged) or `rejected`; `retired` once its target is gone or it stopped being true.
 - **Verification** holds only what a script, CI or `measure-delivery` printed (trigger-probe counts before and after, test names). A reviewer's opinion is not verification.
-- **Outcome** is filled by a later program or session: `recurred (<source>)` or `held through <n> programs`.
+- **Outcome** is filled by later programs: `recurred (<source>)`, or `held through <n> programs (<slug>, ...)` listing each program counted, so no program counts twice.
 - A change to a row edits that row in place and appends one dated line to `## History` (`2026-09-25 L-4 candidate to proposed: <PR URL>`), so the history survives.
 
 ## Process
@@ -39,9 +39,9 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 - From the ledger: every `signal` row, every `land_failed`, `main_red` and failed `verdict`, each with its ticket, PR and evidence pointer.
 - `decisions.tsv`, the program note's digest and standing orders as they ended, and the `measure-delivery` report.
 - The transcripts behind the signals: the coordinator's own, and a worker's when a signal names it (its worktree path encoded as below).
-- Every `applied` ledger row whose Outcome is empty. Fill its Outcome now: `recurred (<slug>)` when this program shows the same kind of failure again, otherwise add this program to its `held through` count.
+- Every `applied` ledger row whose Outcome is not `recurred`. Update its Outcome now: `recurred (<slug>)` when this program shows the same kind of failure again; otherwise add this slug to its `held through` list unless it is already there.
 
-Pass the pack path to the reviewers in place of the transcript path.
+With no signal and no failure in the pack, stop after the Outcome update. Otherwise pass the pack path to the reviewers in place of the transcript path.
 
 **Session mode.** The parent finds its own transcript file before fanning out. Claude Code writes it under `~/.claude/projects/<cwd with every / and . replaced by ->/`, for this session's working directory. Use that path. Do not glob across `~/.claude/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.
 
@@ -81,7 +81,10 @@ Write every Accepted, Backlog and Rejected finding to the lessons ledger. A find
 
 **Program mode** runs with nobody to approve, so it proposes instead of applying:
 1. Make the Accepted edits in one worktree branch of the `agent-skills` checkout (routing below).
-2. Verify each against the change it makes. A description change: `bash scripts/trigger-probe.sh` on the old and the new checkout, at least 3 runs each, with one prompt that should fire the skill and one that should not. A body or script change: the tests under the skill, `claude plugin validate <checkout>`, and the incident's prompt replayed through `trigger-probe.sh` on both checkouts. Record the printed numbers in Verification.
+2. Verify each against the change it makes, and record the printed result in Verification.
+   - A description change: `bash scripts/trigger-probe.sh` on the old and the new checkout, at least 3 runs each, with one prompt that should fire the skill and one that should not.
+   - A body or script change: `claude plugin validate <checkout>` and a check of the changed path itself: a test under the skill that fails without the change, or the incident replayed with the tools it needs in a scratch copy of the repo, with the asserted result. `trigger-probe.sh` denies writes and shell commands and reports only which skills fired, so it verifies triggering, never behavior.
+   - With no such check, write `Verification: none` in the row and the PR body.
 3. Open at most one draft PR (`gh pr create --draft`) titled with the lesson IDs, body per `write-plainly`. Never merge it.
 4. Mark the rows `proposed`, and put one line per lesson plus the PR link in the program digest for approval.
 

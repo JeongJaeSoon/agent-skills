@@ -88,7 +88,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - The program ends only when `orca orchestration worker-list --run <run> --terminal-state reclaimable --json` returns no rows. That is Orca's own end condition: every settled worker has been released or retained. Release what it lists.
    - The dashboard server is detached and serves every program, so it neither needs stopping nor defers the `/goal` stop check. `state.json` stays for later reading.
    - Run `measure-delivery` and audit the trail per `show-me-your-work`.
-   - Run `reflect` in program mode. It turns the signals and the ledger's failures into lessons in the lessons ledger, fills in whether earlier lessons held, and opens at most one draft PR against `agent-skills` for the lessons that recurred. Put its digest lines and the PR link in the digest; the human approves and merges. With no signals and no failures, write that in one digest line instead.
+   - Run `reflect` in program mode. It turns the signals and the ledger's failures into lessons in the lessons ledger, fills in whether earlier lessons held, and opens at most one draft PR against `agent-skills` for the lessons that recurred. Put its digest lines and the PR link in the digest; the human approves and merges. Run it even with no signals and no failures: it then only records that the applied lessons held, and the digest gets one line saying so.
 
 ## How the human's words change the program
 

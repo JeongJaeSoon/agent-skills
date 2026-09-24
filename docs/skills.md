@@ -254,7 +254,8 @@
   - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, `measure-delivery` 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단 opus, 도구 사용 Codex, 발산 opus)이다.
   - 종합자(opus)가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 모두 교훈 장부(노트 저장소의 `Project/agent-skills/learnings.md`)에 한 줄씩 남는다. 장부는 교훈마다 신호, 근거 포인터, 발생 횟수, 고친 대상, 변경(PR·커밋), 스크립트가 낸 검증 수치, 이후 재발 여부를 적는다.
   - 스킬을 바꾸는 건 서로 다른 사례가 두 번 이상일 때만이다(재현된 보안·데이터 결함은 예외). 한 번뿐이면 후보로 남겨 두고 다음 발생을 기다린다.
-  - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 `trigger-probe.sh`·테스트로 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다.
+  - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다. description 변경은 `trigger-probe.sh`로 발동을, 본문·스크립트 변경은 바뀐 경로를 도는 테스트나 사례 재현으로 동작을 확인한다. 검증이 없으면 `none`으로 적는다.
+  - 신호도 실패도 없는 프로그램에서도 Close마다 돌아, 적용된 교훈이 이번 프로그램에서 버텼는지(`held through`, 프로그램 slug로 중복 없이) 기록한다.
   - 권한 hook, `orch land` 게이트, 테스트와 채점기, reflect 자신은 고치자고 제안하지 않고 Backlog로 보낸다.
   - Backlog는 `use-tracker`로 등록한다.
 
