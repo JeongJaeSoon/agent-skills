@@ -17,7 +17,7 @@ claude plugin marketplace add JeongJaeSoon/agent-skills
 claude plugin install agent-skills@jeongjaesoon
 ```
 
-Claude Code 안에서는 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon`. 버전을 고정하지 않아 커밋마다 새 버전이다. 갱신은 `claude plugin marketplace update jeongjaesoon` 뒤 `claude plugin update agent-skills@jeongjaesoon`, 새 세션부터 반영된다.
+Claude Code 안에서는 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon`. 버전을 고정하지 않아 커밋마다 새 버전이다. 갱신은 `claude plugin marketplace update jeongjaesoon` 뒤 `claude plugin update agent-skills@jeongjaesoon`. 새 세션은 새 버전으로 뜨고, 떠 있는 세션은 `/reload-plugins`로 바로 반영한다.
 
 - 스킬 이름은 `/agent-skills:<이름>`. 다른 플러그인과 겹치지 않으면 `/<이름>`도 된다.
 - 권한: 플러그인은 권한 규칙을 설정으로 실을 수 없어 `hooks/guard.py`가 대신 결정한다. 이 플러그인의 스킬, `orca orchestration` 명령(reset·worker-abandon·gate-resolve 제외), `orch` 명령(`heavy`·`set`·`init` 제외)을 허용하고, 다른 터미널의 Orca 메일함 읽기를 거부한다. 나머지는 평소 권한 흐름을 탄다. 자세한 규칙은 [스킬 카탈로그](docs/skills.md#플러그인이-대신-내리는-권한-결정).
@@ -32,7 +32,7 @@ python3 scripts/migrate.py --write    # symlink·옛 규칙·옛 hook 제거(set
 
 스킬을 고칠 때는 이 저장소를 worktree 브랜치에서 수정하고 `claude --plugin-dir <체크아웃>`으로 확인한다.
 
-직접 고쳐 쓰는 경우에는 GitHub 대신 로컬 체크아웃을 마켓플레이스로 둔다(`migrate.py`가 이렇게 설치한다). 설치본은 커밋된 내용의 복사본이라, worktree에서 고친 것을 메인 체크아웃에 fast-forward한 뒤 `claude plugin update agent-skills@jeongjaesoon`을 실행하면 새 세션부터 반영된다. 이미 떠 있는 세션은 시작할 때의 버전을 계속 쓰므로, 긴 프로그램 도중에 스킬을 바꿔도 돌고 있는 워커가 흔들리지 않는다.
+직접 고쳐 쓰는 경우에는 GitHub 대신 로컬 체크아웃을 마켓플레이스로 둔다(`migrate.py`가 이렇게 설치한다). 설치본은 커밋된 내용의 복사본이라, worktree에서 고친 것을 메인 체크아웃에 fast-forward한 뒤 `claude plugin update agent-skills@jeongjaesoon`을 실행하면 새 세션부터 반영된다. 이미 떠 있는 세션은 `/reload-plugins`를 입력하기 전까지 시작할 때의 버전을 쓰므로, 긴 프로그램 도중에 스킬을 바꿔도 돌고 있는 워커가 저절로 바뀌지는 않는다.
 
 ```bash
 claude plugin marketplace add ~/workspace/project/agent-skills

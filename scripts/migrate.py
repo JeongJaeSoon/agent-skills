@@ -67,7 +67,7 @@ def main():
     for cmd in PLUGIN_CMDS:  # each runs even if the one before failed: the marketplace may already be added
         print("$ " + " ".join(cmd), flush=True)
         failed |= subprocess.run(cmd).returncode
-    print("failed: see the output above" if failed else "done: restart Claude Code sessions to load the plugin")
+    print("failed: see the output above" if failed else "done: in each running session, /reload-skills (drops the unlinked skills) then /reload-plugins")
     return 1 if failed else 0
 
 
