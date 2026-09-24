@@ -169,14 +169,14 @@ def fetch_stages(cfg):
     top = children(None)  # a failure here fails the source: the last good stages stay on screen
 
     def below(roots):  # a reparent seen half-way can leave a cycle in the cache: visit each node once
-        out, seen_here, stack = [], set(), list(roots)
+        out, seen_here, stack = [], set(), list(reversed(roots))  # tracker order: oldest (the epics) first
         while stack:
             n = stack.pop()
             if n in seen_here:
                 continue
             seen_here.add(n)
             out.append(n)
-            stack += kids.get(n) or []
+            stack += reversed(kids.get(n) or [])
         return out
 
     nodes, recheck = below(top), iso(utcnow() - dt.timedelta(hours=STAGE_RECHECK_H))
