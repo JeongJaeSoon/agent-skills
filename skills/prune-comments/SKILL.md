@@ -1,6 +1,6 @@
 ---
 name: prune-comments
-description: "Use to cut comments in a diff down to what the code cannot say: /prune-comments, \"주석 정리해줘\", \"불필요한 주석 지워줘\", \"주석 너무 많아\", and deliver-ticket's step before review. Flags the code a deleted comment was propping up, and turns claimed constraints (\"do not remove\") into tests or types where cheap. Scoped to the diff or the files the caller names; for prose in docs and PR bodies, use write-plainly."
+description: "Use to cut comments in a diff down to what the code cannot say: /prune-comments, a request to clean up or remove comments (\"주석 정리해줘\"), and deliver-ticket's step before review. Scoped to the diff or the files the caller names; for prose in docs and PR bodies, use write-plainly."
 ---
 
 # Prune comments
@@ -9,9 +9,9 @@ A fresh reader prunes the comments in scope; you check its work and act on its f
 
 ## Scope
 
-The caller's files or diff. Otherwise the current branch against its base (default `origin/main`) plus the working tree: `git diff $(git merge-base origin/main HEAD)`. Within a diff, the scope is the comments on added or changed lines, plus any nearby comment the diff made false. Untouched code elsewhere is out of scope, however noisy.
+The caller's files or diff. Otherwise the current branch against its base (default `origin/main`) plus the working tree: `git diff $(git merge-base origin/main HEAD)`, and every new file from `git ls-files --others --exclude-standard`, which that diff leaves out. Within a diff, the scope is the comments on added or changed lines, plus any nearby comment the diff made false. Untouched code elsewhere is out of scope, however noisy.
 
-If the scope adds or changes no comment, say "no comments in scope" and stop.
+If the diff adds or changes no comment, and no existing comment sits beside the code it changed, say "no comments in scope" and stop.
 
 ## Steps
 

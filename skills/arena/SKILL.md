@@ -36,7 +36,7 @@ If a candidate fails to produce output, proceed with N-1 and note the dropout in
 
 ## Phase C: Cross-judge
 
-After every Phase B candidate completes, spawn one read-only judge from a model family other than yours: Codex `task` when you are Claude. It sees the rubric and the candidates by path label, scores each criterion, and recommends a base with rationale. It runs in parallel with your reading in Phase D, not with the candidates themselves. Don't spawn the judge while candidates are still writing.
+After every Phase B candidate completes, spawn one read-only judge from a model family other than yours: Codex `task` when you are Claude. It sees the rubric and the candidates by path label, scores each criterion, and recommends a base with rationale, while you do your own reading in Phase D.
 
 ## Phase D: Pick a base
 

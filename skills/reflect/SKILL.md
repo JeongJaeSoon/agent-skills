@@ -39,7 +39,7 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 - From the ledger: every `signal` row, every `land_failed`, `main_red` and failed `verdict`, each with its ticket, PR and evidence pointer.
 - `decisions.tsv`, the program note's digest and standing orders as they ended, and the `measure-delivery` report.
 - The transcripts behind the signals: the coordinator's own, and a worker's when a signal names it (its worktree path encoded as below).
-- Every `applied` ledger row whose Outcome is not `recurred`. Update its Outcome now: `recurred (<slug>)` when this program shows the same kind of failure again; otherwise add this slug to its `held through` list unless it is already there.
+- Every `applied` ledger row whose Outcome is not `recurred`. Update its Outcome now, judged against the lesson's own Learning, not its Kind: `recurred (<slug>)` when this program repeats the failure that lesson targets; add this slug to its `held through` list when the program ran the step the lesson changed and the failure did not return. A program that never ran that step leaves the row unchanged.
 
 With no signal and no failure in the pack, stop after the Outcome update. Otherwise pass the pack path to the reviewers in place of the transcript path.
 
@@ -90,7 +90,7 @@ Write every Accepted, Backlog and Rejected finding to the lessons ledger. A find
 
 With no Accepted finding, skip the PR and write one digest line saying why.
 
-**Session mode.** Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes affect every future agent in the org. Do not auto-apply.
+**Session mode.** Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes reach every session that loads this plugin, so nothing is applied without that approval.
 
 Backlog items file to the user's ticket tracker (the **use-tracker** skill) automatically. Only the Accepted list waits for approval.
 
