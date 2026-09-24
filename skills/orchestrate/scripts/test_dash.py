@@ -205,6 +205,14 @@ assert json.loads(history(A)[0])["t"] > early
 sampled = [json.loads(r) for r in history(A) if "tokens" in json.loads(r)]
 st = dash.collect(A, sources=())
 assert json.loads(history(A)[0])["t"] == early and st["series"][0]["landed"] == 1, history(A)[:2]
+assert st["series_from"] == early and st["series"][0]["t"] == early, "the charts start where the program did"
+dash.SERIES_DAYS = 1  # a program older than the window: the lines start at its edge with the values then in force
+st = dash.collect(A, sources=())
+dash.SERIES_DAYS = 30
+rows_ = [json.loads(r) for r in history(A)]
+edge = dash.prog.parse_ts(st["series_from"])
+then = [r for r in rows_ if dash.prog.parse_ts(r["t"]) < edge][-1]
+assert st["series"][0] == {**then, "t": st["series_from"]} and len(st["series"]) < len(rows_), st["series"][0]
 kept = [r for r in map(json.loads, history(A)) if "tokens" in r]
 assert [r["tokens"] for r in kept[:len(sampled)]] == [r["tokens"] for r in sampled] and sampled, "live samples keep their tokens"
 assert all(k["landed"] > r["landed"] for k, r in zip(kept, sampled)), "the ledger's counts under them include the backfill"

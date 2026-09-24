@@ -24,7 +24,7 @@ import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "github", "orca")
 NOTE_KINDS = ("risk", "digest", "decision")
-SERIES_DAYS = 7
+SERIES_DAYS = 30  # charts cover the program from its start, up to this far back
 SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
 # A team key may start with a digit (94S-135) but has a letter, so a date (2026-09) is not a ticket.
 TICKET_RE = re.compile(r"\b((?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,10}-\d+)\b")
@@ -805,8 +805,12 @@ def _merge(slug, d, cfg, fetched, interval):
         with hist_path.open("a") as f:
             f.write(json.dumps(row) + "\n")
         history.append(row)
-    horizon = tnow - dt.timedelta(days=SERIES_DAYS)
+    horizon = max(t0, tnow - dt.timedelta(days=SERIES_DAYS))
     series = [r for r in history if prog.parse_ts(r["t"]) >= horizon]
+    before = [r for r in history if prog.parse_ts(r["t"]) < horizon]
+    if before and (not series or prog.parse_ts(series[0]["t"]) > horizon):
+        # The values in force when the window opens, so every line starts at its left edge.
+        series.insert(0, {**before[-1], "t": iso(horizon)})
 
     state = {
         "generated_at": iso(tnow), "slug": slug, "repo": cfg.get("repo"), "run": cfg.get("run"),
@@ -815,7 +819,7 @@ def _merge(slug, d, cfg, fetched, interval):
         "run_objective": objective, "summary": summary, "predicate": predicate, "landing": landing,
         "land_order": order, "landed_open": cards, "tasks": tasks, "graph": build_graph(tasks, events, issues, order, landing), "usage": usage,
         "issues": issues, "prs": sorted(prs, key=lambda p: -p["number"]), "workers": workers,
-        "series": series, "activity": activity_of(events, notes), "notes": notes[-100:][::-1],
+        "series": series, "series_from": iso(horizon), "activity": activity_of(events, notes), "notes": notes[-100:][::-1],
         "errors": errors, "sources": srcs,
     }
     write_atomic(dash / "state.json", json.dumps(state, ensure_ascii=False, indent=1))

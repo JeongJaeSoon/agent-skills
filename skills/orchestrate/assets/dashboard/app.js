@@ -425,7 +425,8 @@ function drawCharts(st) {
   const C = { accent: cssVar("--accent"), ink3: cssVar("--ink-3"), derived: cssVar("--derived") };
   const now = ms(st.generated_at);
   const rows = (st.series || []).map((r) => ({ ...r, t: ms(r.t) })).filter((r) => !isNaN(r.t));
-  const t0 = Math.min(ms(st.created_at) || Infinity, rows[0]?.t ?? now);
+  // The series window: the program's start, or its last SERIES_DAYS; older states read an empty series_from.
+  const t0 = ms(st.series_from) || Math.min(ms(st.created_at) || Infinity, rows[0]?.t ?? now);
   const burn = $("#chart-burn");
   if (burn) {
     const pts = rows.filter((r) => r.done != null);
