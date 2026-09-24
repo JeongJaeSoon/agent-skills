@@ -81,17 +81,19 @@ Only for `isMainWorktree: false`. Read the state with real output, not memory:
 
 ```bash
 git fetch -q origin main
-git status --short                       # must be empty
-git log --oneline origin/main..HEAD      # must be empty
+git status --short --untracked-files=no # must be empty (tracked changes)
+git status --short --ignored             # untracked leftovers: build caches like __pycache__ only?
+git diff --stat origin/main...HEAD       # squash merges leave commits "ahead"; count the diff, not commits
+gh pr list --head "$(git branch --show-current)" --state merged --json number,mergeCommit
 orca worktree current --json             # linked ticket (linkedLinearIssue / linkedIssue / linkedWorkItem), linkedPR; workspaceStatus does not decide anything
 gh pr list --head "$(git branch --show-current)" --state open --json number,url
 ```
 
 | State | Action |
 |---|---|
-| Tree clean, 0 commits ahead of `origin/main`, no open PR, ticket completed or no ticket | **Remove**: `orca worktree rm --worktree current --json` |
+| No tracked changes; the branch's work is on `origin/main` (its PR merged, or `git diff origin/main...HEAD` empty); no open PR; ticket completed or no ticket | **Remove**: delete untracked build caches (`__pycache__`, `.pytest_cache`, `node_modules/.cache`) first, since `orca worktree rm` refuses any untracked file, then `orca worktree rm --worktree current --json` |
 | A criterion still open, PR still open, or the user said to hold | **Keep the worktree.** Close its terminals with `orca terminal close --worktree current --all --json` only if the user wants this agent stopped — that is not Sleep, the terminals do not come back. If the work resumes later, leave them alone and say Sleep is theirs from the app. |
-| Dirty tree, unpushed commits, or an unexpected state | **Stop and ask** with `AskUserQuestion`: show the exact `git status` / `git log` lines and offer commit-and-push, discard, or keep |
+| Tracked changes, untracked files that are not build caches, unpushed commits with no merged PR, or an unexpected state | **Stop and ask** with `AskUserQuestion`: show the exact `git status` / `git log` lines and offer commit-and-push, discard, or keep |
 
 `orca worktree rm` also deletes the local branch when Orca can prove it is merged; a branch it
 cannot prove merged is kept, which is fine. No separate `git branch -d`, no `git worktree remove`.

@@ -9,9 +9,10 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 - 목표: <사람이 준 목표 한 문장>
 - slug `<slug>` · Orca run `<run id>` · 저장소 `<owner/repo>` · 트래커 `<adapter>:<project>`
-- 대시보드: `dash.py serve <slug>` → <URL>
+- 대시보드: `dash.py serve` (모든 프로그램을 띄운다) → <URL>
+- 워커 모델: <agent/model, 기본은 코디네이터와 같은 모델> · 검증 워커는 다른 계열(codex)
 - 머지 정책: autonomous | human-gate · 동시성 천장 6 · 마감 <ISO8601 또는 없음>
-- 착지 순서: 등급(main-fix → gate → urgent → normal) · 대기 2시간이 넘으면 urgent 취급 · 의존 체인은 stack으로 한 번에 착지 (`prog.py queue <slug>`)
+- 착지: 일반 레인은 준비되면 병렬 착지, 독점 레인은 base당 하나씩 착지 순서대로(등급 main-fix → gate → urgent → normal, 대기 2시간이 넘으면 urgent) · 의존 체인은 stack으로 한 번에 착지 (`prog.py queue <slug>`)
 - 장부: `~/.claude/programs/<slug>/` (ledger.jsonl, briefs/, decisions.tsv)
 
 ## 완료 조건 (predicate)
@@ -21,12 +22,16 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 (제안 상태면 "제안" 표시와 근거 한 줄)
 
-## 상시 지시
+## 상시 지시 (워커 공통)
 
-1. <사람의 원 goal 문장을 그대로, 한 문장씩>
+1. <사람의 원 goal 문장 중 워커가 지켜야 할 것을 그대로, 한 문장씩>
 2. ...
 
-같은 지시를 두 번 하게 되면 행동하기 전에 여기 한 줄을 먼저 추가한다. 이 목록은 모든 브리프의 STANDING에 그대로 붙는다.
+## 상시 지시 (코디네이터 전용)
+
+1. <코디네이터만 하는 일: 기록, 보고, 운영 지시>
+
+같은 지시를 두 번 하게 되면 행동하기 전에 알맞은 목록에 한 줄을 먼저 추가한다. 워커 공통 목록만 모든 브리프의 STANDING에 그대로 붙는다. 워커 worktree 밖에 쓰게 하는 지시는 코디네이터 전용이다.
 
 ## 의존 관계와 stack
 

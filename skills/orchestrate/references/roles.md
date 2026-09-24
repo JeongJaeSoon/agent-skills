@@ -1,6 +1,6 @@
 # Standing roles
 
-A program of more than a handful of tickets runs three standing roles beside the ticket workers. Each is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker. None of them lands feature work.
+A program of more than a handful of tickets runs three standing roles beside the ticket workers. Each is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker, and the coordinator records each with `prog.py record <slug> spawned --role <name> --note <dispatchId>` so they stay outside the concurrency cap. None of them lands feature work.
 
 | Role | Owns | Does not |
 |---|---|---|
@@ -35,9 +35,11 @@ ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --fai
             5. Open the repair PR, review it (deliver-ticket §3, scaled to the diff), and land it with
                prog.py land <slug> --pr N --class main-fix. Required checks, no bypass.
             6. On green: prog.py record <slug> main_green --pr N --sha <sha>.
-            7. Tell the culprit's card, the affected cards (orca orchestration send --to dispatch:<id>)
-               and the coordinator (worker report, not worker_done). Append a row to
-               ~/.claude/programs/<slug>/guardian-log.tsv: time, sha, verdict, action, PR.
+            7. Tell the culprit's card and the affected cards (orca orchestration send --to
+               dispatch:<id>), and the coordinator: orca orchestration send --to run:<run id>
+               --type escalation --subject "main <red|green> <sha>" --body "<time, sha, flake|defect,
+               hotfix|revert, PR>". The coordinator appends that line to guardian-log.tsv; you
+               write nothing outside your worktree.
 FORBIDDEN   Feature work. Force-push. Disabling or skipping checks.
 REPORT      One message per incident; worker_done only when the coordinator releases the role.
 ```
@@ -62,7 +64,8 @@ LANES       Run all three continuously; fan each unit out to a subagent (swarm),
 FINDINGS    File each reproduced failure as a ticket (write-ticket follow-up format, label follow-up,
             파생: <ticket or QA> · 원인: QA). A failure on main that blocks others → tell the guardian.
 FORBIDDEN   Fixing findings. Landing anything.
-REPORT      A digest per lane round: counts, links to tickets filed, what was driven.
+REPORT      A digest per lane round to the coordinator (send --to run:<run id> --type escalation):
+            counts, links to tickets filed, what was driven. worker_done only when released.
 ```
 
 Set the cadence in the program note's standing orders so a resumed coordinator re-briefs the same way.

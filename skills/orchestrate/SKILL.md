@@ -41,25 +41,24 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Check that the repo can land in parallel: required checks on, "require branches to be up to date" off, squash merges. Add the program's shared contracts to `exclusive_paths`. If strict mode has to stay, put its cost in the digest.
    - Pick the merge policy.
    - Create the Run with the goal as `--objective`.
-   - `prog.py init <slug> --repo … --run … --tracker-project … --predicate …`
-   - `dash.py serve <slug>` in the background. Give the human the URL once.
+   - `prog.py init <slug> --repo … --run … --tracker-project … --predicate <IDs> --final-check "<the real-artifact check>" --note <program note path>`
+   - `dash.py serve` in the background, unless one is already running (it serves every program; this one appears in its sidebar). Give the human the URL once.
 2. **Verification first.** If the target repo has no `.claude/skills/verify-*`, the pilot task is "read and follow `~/.claude/skills/create-verification-skill/SKILL.md`".
 3. **Pilot.** Run one worker through brief → PR → verdict → `prog.py land` → main green. Fix the brief, the unit size and VERIFY from whatever broke. Also confirm that the chosen worker model gets through its first `orca orchestration` call and its `prog.py land` without a permission prompt.
 4. **Scale.**
-   - Spawn the standing roles (`references/roles.md`): a main guardian, and a QA lead once the first tickets land.
+   - Spawn the standing roles (`references/roles.md`): a main guardian, and a QA lead once the first tickets land. Record each with `prog.py record <slug> spawned --role <guardian|qa> --note <dispatchId>`; roles do not count against the cap.
    - Then spawn ticket workers up to the cap that `prog.py status` prints. The cap starts at 1, grows by one per landing proven green on main, and halves on red.
 
    For each ticket worker:
    - Write the brief per `references/brief.md`. The spec starts with the ticket ID, never `/goal`.
    - Create its task with its prerequisites as Orca deps (`task-create --deps '[…]'`), and start what `task-list --ready` offers. A prerequisite found after dispatch goes in `prog.py dep`.
-   - Run `worker-start --task <id> --display-name "<ID> <title>"`, or `--spec "<the brief>" --deps …`.
-   - Rename its terminal tab.
+   - Run `worker-start --task <id> --worktree new-top-level --repo <selector> --base-branch <main, feat/<topic> or the lower layer's branch> --name <ticket id, lowercase> --display-name "<ID> <title>" --agent claude [--model <id>]`, or `--spec "<the brief>" --deps …` instead of `--task`. The model is the program note's worker model (default: the coordinator's own); a verifier runs on another family (`--agent codex`). The display name is the card's durable name; the terminal tab title is the agent's own and it overwrites any rename.
    - Close its setup terminal once setup exits. In `orca terminal list --worktree <card> --json` it is the row without `agentIdentity`: run `orca terminal wait --terminal <h> --for exit`, then `orca terminal close --terminal <h>`. Finished setup terminals left open made Orca itself slow (22 of 50 terminals in one run).
 5. **Drain.**
    - Wait only with `prog.py wait <slug>` under `run_in_background`. It wakes on worker_done, escalation or question, and acks batches that hold only heartbeats. Keep exactly one wait running.
    - Process every message in the batch, decide each settled worker's next owner (reuse or release), then ack.
    - On a worker's `worker_done` after landing, in the same turn: `worker-release`, close its terminals, and `orca worktree rm` it (checks in `end-session` §4). `status` lists any you missed as `LANDED-BUT-OPEN`. Leftover cards made Orca itself slow.
-   - A start that ended `outcome_unknown` with an empty composer: `worker-stop --dispatch <id>`, then `worker-start --retry-of <id> --task <task> --worktree <that card> --agent <agent>` (a retry does not inherit placement).
+   - A start that ended `outcome_unknown` with an empty composer: `worker-stop --dispatch <id>`, then `worker-start --retry-of <id> --task <task> --worktree <that card> --agent <agent> [--model <id>]` (a retry inherits neither placement nor model).
    - End every drain with `prog.py status`; its lines are how a drain ends. `dash.py collect <slug>` runs after it, and `dash.py note` records a risk or decision the dashboard should show.
    - Under `/goal`, a running background task defers the Stop hook's goal check. If the hook re-prompts anyway with no new event, answer in one line with no tool call. If it fires back-to-back, switch to a foreground `prog.py wait <slug> --rounds 1 --timeout-ms 540000` (Bash timeout 600000).
 6. **Triage.** A new ticket from review, QA or discovery parks by default: label `follow-up`, then `prog.py record <slug> parked --ticket X`. Admit it only if it blocks a named predicate item, or if it is a reproduced correctness, security or data defect in code this program merged. Then `record admitted` and name the item or defect.
@@ -121,7 +120,7 @@ The dashboard, plus the digest line in the program note, batched. The digest hol
 | Workers idling for hours "waiting for the merge slot" with nothing to do | `land --wait-minutes` in the background. `status` STALE lines and backlog hours make the wait visible and actionable |
 | A worker calling `gh api … merge-async` itself and the classifier refusing it as "Merge Without Review" | Merges happen only inside `prog.py land`, which is the review gate and the allowed command |
 | Reverting every red main by reflex, or the coordinator debugging it | The main guardian: flake check first, then hotfix or revert by the rule in `references/roles.md` |
-| Cards named by Orca's automatic title ("Orca 외부 카드 진행 추적" for ENG-252) | `--display-name` and `orca terminal rename` with the ticket ID and title |
+| Cards named by Orca's automatic title ("Orca 외부 카드 진행 추적" for ENG-252) | `--display-name "<ID> <title>"` on every start; a terminal rename does not stick |
 | A spec starting with `/goal` | Start the spec with the ticket ID; Orca already delivers it as the worker's task |
 | Waiting with `sleep`, a hand-built watcher, or invented `orca … events/status` | `prog.py wait` in the background. One empty wait is a checkpoint; after three, run `worker-list --run` |
 | Nudge-only turns ("You have N orchestration messages") burning coordinator turns | End such a turn with no tool call; real work arrives through `prog.py wait` |

@@ -24,7 +24,9 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
             through `prog.py heavy <slug> -- <command>`, which caps them machine-wide.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
-LAND        First the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+LAND        After review, record the verdict on the reviewed head: prog.py verdict <slug> --pr <N>
+            --sha <head> --source <the reviewer: codex-review, verifier:<model>, live:<feature>;
+            never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then python3 ~/.claude/skills/orchestrate/scripts/prog.py land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50, run in the background. Act on exit 3, report on exit 1.
@@ -38,16 +40,17 @@ REPORT      worker_done once, after landing and main CI (or at READY under human
             merge commit, review rounds and who reviewed, the VERIFY output you actually saw,
             the main-CI run you read, and any follow-up tickets filed. --outcome succeeded only
             when the ticket's acceptance criteria hold.
-STANDING    <the program note's standing orders, pasted verbatim, numbered>
+STANDING    <the program note's standing orders for workers, pasted verbatim, numbered; the
+            coordinator-only ones stay in the note>
 ```
 
 ## Rules for filling it
 
 - The spec starts with the ticket ID, never `/`. The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program.
-- **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was ENG-278). Pass `worker-start --display-name "<ID> <short title>"`. Right after the start, run `orca terminal rename --terminal <agentTerminalHandle> --title "<ID> <short title>"`.
+- **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was ENG-278). Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Declare the same edge as the task's Orca deps.
-- Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`.
+- Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` before `worker-start`. Afterwards run `prog.py record <slug> spawned --ticket <id> --note <dispatchId>`.
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.

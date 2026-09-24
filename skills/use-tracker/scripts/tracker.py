@@ -229,7 +229,8 @@ class LinearAdapter:
         while True:
             args = list(base)
             if limit:
-                args += ["--limit", str(limit - len(issues))]
+                # Orca rejects a page over 250; the cursor loop fetches the rest.
+                args += ["--limit", str(min(250, limit - len(issues)))]
             # A cursor does not carry the filters, so every page repeats them.
             if cursor:
                 args += ["--cursor", cursor]

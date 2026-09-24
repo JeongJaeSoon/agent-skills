@@ -5,11 +5,13 @@ Usage: python3 prog.py <command> <slug> [options]
 
   init <slug> --repo OWNER/NAME --run RUN_ID [--tracker-project NAME] [--tracker linear|jira]
               [--predicate ID,ID,...] [--merge-policy autonomous|human-gate] [--ceiling 6]
-              [--deadline ISO8601]
-  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths> VALUE
+              [--deadline ISO8601] [--note NOTES_PATH] [--final-check TEXT]
+  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths|note|final_check> VALUE
                                      mirror a change made in the program note
   status <slug>                      predicate, flow, growth and the next move, from live sources
-  record <slug> <event> [--ticket T] [--pr N] [--sha S] [--class K] [--note TEXT]
+  record <slug> <event> [--ticket T] [--pr N] [--sha S] [--class K] [--role R] [--note TEXT]
+                                     `record spawned --role guardian --note <dispatchId>` for a standing
+                                     role; roles do not count against the cap
                                      `record reprioritized --pr N --class urgent` moves a PR in the land order
                                      main_green / main_red need --sha of a landed merge commit
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
@@ -489,7 +491,7 @@ def cmd_init(argv):
         "predicate": [p for p in (opt(argv, "--predicate", "") or "").split(",") if p],
         "merge_policy": policy, "ceiling": int(opt(argv, "--ceiling", "6")),
         "deadline": opt(argv, "--deadline"), "created_at": now(), "skills_commit": skills_commit,
-        "note": opt(argv, "--note"),
+        "note": opt(argv, "--note"), "final_check": opt(argv, "--final-check"),
     }
     (d / "briefs").mkdir(parents=True, exist_ok=True)
     (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
@@ -517,7 +519,10 @@ def cmd_status(argv):
 
     # 2. flow
     workers = orca_json("orchestration", "worker-list", "--run", cfg["run"]).get("workers", [])
-    live = [w for w in workers if (w.get("projection") or {}).get("outcome") == "in_progress"]
+    roles = {e.get("note"): e["role"] for e in events if e["ev"] == "spawned" and e.get("role")}
+    running = [w for w in workers if (w.get("projection") or {}).get("outcome") == "in_progress"]
+    live = [w for w in running if w["dispatchId"] not in roles]
+    role_live = [f"{roles[w['dispatchId']]} {w['dispatchId']}" for w in running if w["dispatchId"] in roles]
     waiting = [w["dispatchId"] for w in live if ((w.get("projection") or {}).get("stage") or {}).get("activity") == "waiting"]
     ready = ready_prs(events)
     human = [s for s in ready if cfg["merge_policy"] == "human-gate" and "approved" not in s]
@@ -537,7 +542,8 @@ def cmd_status(argv):
     stale = [e for e in order if e["age_h"] >= knob(cfg, "stale_hours")]
     lines.append(f"flow: main {main} · in-flight {len(live)}/{cap} cap (ceiling {cfg['ceiling']}) · ready-to-land {len(ready)}"
                  f" · human-wait {len(human)} · landed {len(landed_recent)} in 3h · {rate:.1f}/h overall"
-                 + (f" · idle-waiting: {', '.join(waiting)} (prompt? worker-read --source terminal)" if waiting else ""))
+                 + (f" · idle-waiting: {', '.join(waiting)} (prompt? worker-read --source terminal)" if waiting else "")
+                 + (f" · roles: {', '.join(role_live)}" if role_live else ""))
     lines.append(f"land order ({len(order)}, ~{interval:.0f} min per landing, backlog ~{backlog_h:.1f}h): "
                  + (" → ".join(f"#{e['pr']}{'*' if e['state'] == 'ready' else ''}" for e in order[:8]) or "empty")
                  + ("  (* ready; `prog.py queue` says why the rest wait)" if order else ""))
@@ -607,7 +613,8 @@ def cmd_record(argv):
     klass = opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
-    row = p.append(ev, ticket=opt(argv, "--ticket"), pr=int(pr) if pr else None, sha=sha, klass=klass, note=opt(argv, "--note"))
+    row = p.append(ev, ticket=opt(argv, "--ticket"), pr=int(pr) if pr else None, sha=sha, klass=klass,
+                   role=opt(argv, "--role"), note=opt(argv, "--note"))
     print(json.dumps(row, ensure_ascii=False))
 
 
@@ -618,8 +625,8 @@ def cmd_set(argv):
         sys.exit("merge_policy is autonomous or human-gate")
     split = lambda v: [x for x in v.split(",") if x]
     conv = {"ceiling": int, "predicate": split, "exclusive_paths": split}.get(key, str)
-    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths"):
-        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths")
+    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "note", "final_check"):
+        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, note, final_check")
     if key == "exclusive_paths":
         p.cfg.setdefault("landing", {})[key] = conv(value)
     else:
@@ -636,6 +643,8 @@ def cmd_verdict(argv):
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
+    if src.lower().startswith(("self", "author", "implementer")):
+        sys.exit("a verdict comes from a reviewer other than the implementer (codex-review, verifier:<model>, live:<feature>)")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
