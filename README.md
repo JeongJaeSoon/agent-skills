@@ -30,9 +30,13 @@ python3 scripts/migrate.py            # 바뀔 내용 보기
 python3 scripts/migrate.py --write    # symlink·옛 규칙·옛 hook 제거(settings 백업) 후 플러그인 설치
 ```
 
-스킬을 고칠 때는 이 저장소를 worktree 브랜치에서 수정하고 `claude --plugin-dir <체크아웃>`으로 확인한다.
+스킬을 고칠 때는 이 저장소를 worktree 브랜치에서 수정하고 `claude --plugin-dir <체크아웃>`으로 확인한다. description이나 트리거 문구를 바꿨으면 고치기 전 체크아웃과 나란히 `scripts/trigger-probe.sh`를 돌려 발동이 달라졌는지 본다. 임시 저장소에서 헤드리스 세션을 띄우고 쓰기·셸·MCP 호출은 모두 거부하므로 다른 곳을 건드리지 않는다. 한 번에 0.2달러 안팎이 든다.
 
-직접 고쳐 쓰는 경우에는 GitHub 대신 로컬 체크아웃을 마켓플레이스로 둔다(`migrate.py`가 이렇게 설치한다). 설치본은 커밋된 내용의 복사본이라, worktree에서 고친 것을 메인 체크아웃에 fast-forward한 뒤 `claude plugin update agent-skills@jeongjaesoon`을 실행하면 새 세션부터 반영된다. 이미 떠 있는 세션은 `/reload-plugins`를 입력하기 전까지 시작할 때의 버전을 쓰므로, 긴 프로그램 도중에 스킬을 바꿔도 돌고 있는 워커가 저절로 바뀌지는 않는다.
+```bash
+bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행해줘" 3 [복사할 저장소]
+```
+
+직접 고쳐 쓰는 경우에는 GitHub 대신 로컬 체크아웃을 마켓플레이스로 둔다(`migrate.py`가 이렇게 설치한다). 설치본은 커밋된 내용의 복사본이라, worktree에서 고친 것을 메인 체크아웃에 fast-forward한 뒤 `claude plugin update agent-skills@jeongjaesoon`을 실행하면 새 세션부터 반영된다. 이미 떠 있는 세션은 `/reload-plugins`를 입력하기 전까지 시작할 때의 버전을 쓰므로, 긴 프로그램 도중에 스킬을 바꿔도 돌고 있는 워커가 저절로 바뀌지는 않는다. Orca 카드에는 밖에서 `orca terminal send --terminal <handle> --text "/reload-plugins" --enter`로 보낸다. 작업 중인 세션이면 대기열에 들어갔다가 그 턴이 끝난 직후 실행되고, 모델에게 메시지로 가지 않으므로 idle을 기다릴 필요가 없다.
 
 ```bash
 claude plugin marketplace add ~/workspace/project/agent-skills
