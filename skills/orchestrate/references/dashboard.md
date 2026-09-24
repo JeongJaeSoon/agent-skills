@@ -22,7 +22,7 @@ orch-dash demo [--port 4780] [--live] [--no-serve]   # fixture programs, no netw
 | Orca (`worker-list`, `task-list`, `run-show`) | Every 20 s |
 | Ledger | Checked every 3 s; re-collected when it changes, and at least every 30 s |
 
-A closed program (its `predicate_verified` is current) keeps only the ledger check. Its tracker, GitHub and Orca sections stay as last collected, and a landing or predicate edit after the check reopens it.
+A closed program (its `predicate_verified` is current) keeps only the ledger check. Its tracker, GitHub and Orca sections stay as last collected, and a landing, a predicate edit or an admitted follow-up after the check reopens it.
 
 The page polls `/api/<slug>/state` every 5 s with `If-None-Match`, so a poll with nothing new gets a 304 and no body. Keep `--host` at 127.0.0.1: the page shows PR titles and worker paths.
 

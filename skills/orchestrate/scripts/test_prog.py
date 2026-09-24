@@ -401,7 +401,10 @@ print("prog.py signal: all pass")
 by = {"A-1": {"state_type": "completed"}, "F-1": {"state_type": "started"}, "F-2": {"state_type": "canceled"}}
 evs = [{"ev": "admitted", "ticket": "F-1"}, {"ev": "admitted", "ticket": "F-2"}, {"ev": "admitted", "ticket": "F-1"}]
 assert prog.open_admitted(evs, by) == ["F-1"], "an open admitted follow-up blocks Close; a canceled one does not"
+assert prog.open_admitted(evs + [{"ev": "parked", "ticket": "F-1"}], by) == [], "the latest triage decides"
 by["F-1"]["state_type"] = "completed"
 assert prog.open_admitted(evs, by) == []
+assert not prog.final_check_current([{"ev": "predicate_verified"}, {"ev": "admitted", "ticket": "F-3"}]), \
+    "admitting a follow-up after the final check makes the check stale"
 
 print("prog.py admitted gate: all pass")

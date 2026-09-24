@@ -1056,8 +1056,8 @@ def programs():
 
 
 def closed(slug):
-    """A program with a current final check has stopped moving, so only its ledger is still watched. A landing or a
-    predicate edit after the check reopens it."""
+    """A program with a current final check has stopped moving, so only its ledger is still watched. A landing, a
+    predicate edit or an admitted follow-up after the check reopens it."""
     return prog.final_check_current(read_jsonl(program_dir(slug) / "ledger.jsonl"))
 
 

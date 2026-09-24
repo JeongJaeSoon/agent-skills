@@ -195,8 +195,9 @@ def main_state(events):
 
 
 def final_check_current(events):
-    """A predicate_verified counts only if nothing it covered changed after it: no landing, no predicate edit."""
-    since = max((i for i, e in enumerate(events) if e["ev"] == "landed"
+    """A predicate_verified counts only if nothing it covered changed after it: no landing, no predicate edit,
+    no newly admitted follow-up."""
+    since = max((i for i, e in enumerate(events) if e["ev"] in ("landed", "admitted")
                  or (e["ev"] == "config" and (e.get("note") or "").startswith("predicate="))), default=-1)
     return any(e["ev"] == "predicate_verified" for e in events[since + 1:])
 
@@ -659,8 +660,12 @@ def dashboard_lines(slug):
 
 def open_admitted(events, by_id):
     """Admitted follow-ups block Close like predicate items: admission means they block one or fix a defect."""
-    admitted = dict.fromkeys(e.get("ticket") for e in events if e["ev"] == "admitted" and e.get("ticket"))
-    return [t for t in admitted if by_id.get(t, {}).get("state_type") not in ("completed", "canceled")]
+    triage = {}
+    for e in events:
+        if e["ev"] in ("admitted", "parked") and e.get("ticket"):
+            triage[e["ticket"]] = e["ev"]
+    return [t for t, ev in triage.items()
+            if ev == "admitted" and by_id.get(t, {}).get("state_type") not in ("completed", "canceled")]
 
 
 def cmd_status(argv):
