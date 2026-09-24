@@ -1144,6 +1144,10 @@ def cmd_backfill(argv):
     decided = {e.get("sha") for e in events if e["ev"] in ("main_green", "main_red")}
     pending = [e for e in events if e["ev"] == "landed" and e.get("note") == "backfill" and e.get("sha") not in decided]
     rows = backfill_rows(cfg, merged, pending, events) if merged or pending else []
+    if "--dry-run" in argv:
+        # The window is the coordinator's judgment: in a repo shared with other work, read what it holds.
+        for m in merged:
+            print(f"  #{m['number']} {m['mergedAt']} {m['title']}")
     if rows:
         write_backfill(p, text, events, rows, "--dry-run" in argv)
     else:

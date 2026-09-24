@@ -42,7 +42,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Pick the merge policy.
    - Create the Run with the goal as `--objective`.
    - `orch init <slug> --repo … --run … --tracker-project … --predicate <IDs> --final-check "<the real-artifact check>" --note <program note path>`
-   - Registering a program that has already merged PRs: `orch backfill <slug> --dry-run`, then without `--dry-run`. It adds those merges to the ledger at their merge time with their main CI result and moves `created_at` to the first one, so the cap, the rate and the dashboard count them. Never hand-edit the ledger for this.
+   - Registering a program that has already merged PRs: `orch backfill <slug> --since <when its work began> --dry-run`, check the PRs it lists belong to the program, then the same without `--dry-run`. It adds those merges to the ledger at their merge time with their main CI result and moves `created_at` to the first one, so the cap, the rate and the dashboard count them. Never hand-edit the ledger for this.
    - `orch-dash serve` in the background, unless one is already running (it serves every program; this one appears in its sidebar). Give the human the URL once.
 2. **Verification first.** If the target repo has no `.claude/skills/verify-*`, the pilot task is "invoke the `create-verification-skill` skill and follow it".
 3. **Pilot.** Run one worker through brief → PR → verdict → `orch land` → main green. Fix the brief, the unit size and VERIFY from whatever broke. Also confirm that the chosen worker model gets through its first `orca orchestration` call and its `orch land` without a permission prompt.

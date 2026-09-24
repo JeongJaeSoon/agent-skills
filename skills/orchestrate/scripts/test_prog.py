@@ -234,6 +234,7 @@ try:
 except SystemExit as e:
     assert "needs --since" in str(e), "a repo's older merges are not the program's landings"
 out = backfill("--since", "2026-09-01", "--dry-run")
+assert "#3 2026-09-20T03:00:00Z chore: no ticket" in out and "#5 " not in out, "a dry run lists what it would add"
 assert "backfill 4 landings (3 with a ticket" in out and "1 main green, 1 main red" in out, out
 assert rows() == OWN and not list(d.glob("ledger.jsonl.bak-*")), "a dry run writes nothing"
 backfill()
