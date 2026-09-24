@@ -1,6 +1,6 @@
 ---
 name: write-plainly
-description: "Use before writing a ticket, PR body, commit message, note, worklog, report to the user, code comment, or skill text, and whenever asked to fix prose that reads padded, vague, translated, or machine-written, such as \"문서 다듬어줘\", \"읽기 쉽게 고쳐줘\", \"AI 티 안 나게\", \"번역투 고쳐줘\", \"문장 다듬어줘\", \"unslop\", \"make this plain\", \"tighten this up\". Covers Korean and English. Product UI strings follow the product's own copy guidelines instead."
+description: "Use when drafting or revising durable prose: a ticket, PR body, commit message, design doc, note, worklog, standalone report, or skill text; when asked to edit a code comment; or when asked to fix padded, vague, translated, or machine-written prose (\"문서 다듬어줘\", \"문장 다듬어줘\", \"읽기 쉽게 고쳐줘\", \"AI 티 안 나게\", \"번역투 고쳐줘\", \"unslop\", \"make this plain\", \"tighten this up\"). Covers Korean and English. Product UI strings follow the product's own copy guidelines."
 ---
 
 # Writing plainly

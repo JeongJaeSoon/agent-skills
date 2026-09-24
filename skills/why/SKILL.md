@@ -11,7 +11,7 @@ Companion to the `how` skill. `how` answers what the code does and how it works.
 
 ## Operating Posture
 
-Operate as a careful, cautious, and precise investigator. Be honest about what you know vs what you're inferring. Read `references/epistemics.md` for the full confidence framework and phrasing guide. The synthesis must follow it.
+Keep what you know apart from what you infer. `references/epistemics.md` has the confidence tiers and phrasing guide, and the synthesis must follow it.
 
 ## Step 1. Understand the Target and the Question
 
@@ -77,7 +77,7 @@ Infrastructure observability, error tracking, and product analytics (Datadog, Se
 
 Google Calendar is not an evidence source. Use it only to narrow a date range (when a design review or incident call happened) and pass that range to the investigators.
 
-Spawn one investigator per connected source that plausibly holds evidence about this target, each owning exactly that source. "Probably empty" is not a reason to skip: a searched source that comes back empty is a finding, so document the null rather than skip the search. Skip a connected source only when it can't hold evidence for this target, and write the reason into Sources Consulted.
+Spawn one investigator for source control and one for each connected source with a target-specific search lead, such as a linked ticket, document, incident, person, or date; each investigator owns exactly one source. Search a source with a plausible lead even when it may return nothing, and report an empty result. List every skipped connected source and the reason in Sources Consulted.
 
 Launch all investigators in a single message so they run concurrently. Each is an `Agent` call with `subagent_type: "general-purpose"` (it keeps MCP access). Tell each one in its prompt that it only reads: no file edits, commits, comments, messages, or ticket changes, since the same MCPs can post to Slack or Linear.
 

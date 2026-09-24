@@ -1,6 +1,6 @@
 ---
 name: handoff-ticket
-description: "Use when handing tickets to fresh Orca worktree cards — \"핸드오프\", \"다음 작업으로 넘어가자\", \"다음 티켓/작업 진행해줘\", \"남은 작업 있어?\", \"진행 가능한 다음 작업\", \"머지하고 다음 진행해줘\", \"새 worktree 세션 띄우고 /goal\", \"병렬로 진행\", \"handoff\" — and the moment this session's ticket is done (every acceptance criterion met) to decide what runs next. Not when the target is another repo or this session keeps working (dispatch-card)."
+description: "Use when handing tickets to fresh Orca worktree cards — \"핸드오프\", \"다음 작업으로 넘어가자\", \"다음 티켓/작업 진행해줘\", \"남은 작업 있어?\", \"진행 가능한 다음 작업\", \"머지하고 다음 진행해줘\", \"새 worktree 세션 띄우고 /goal\", \"handoff\" — and the moment this session's ticket is done (every acceptance criterion met) to decide what runs next. \"병렬로 진행\" belongs here only when it means same-repo ticket cards; check whether the user instead means subagents or work dispatched while this session continues. Not when the target is another repo or this session keeps working (dispatch-card)."
 ---
 
 # Orca handoff
@@ -12,8 +12,10 @@ Finish here, start each follow-up ticket in its own worktree card, never in this
 Triggers, all meaning this skill: "핸드오프", "핸드오프해줘", "핸드오프해서 진행해줘"; "다음 티켓",
 "다음 작업", "다음 개발 아이템" (진행해줘·제안해줘·정해줘·확인해줄래); "남은 것 진행해줘",
 "나머지 진행해줘"; "새 세션", "새 worktree 세션", "새 카드 띄워줘", "새세션 실행하고 /goal";
-"병렬로 진행", "동시에 진행", "병렬 세션 실행"; "handoff", "handoff to next session". In this
-setup a handoff always means an Orca worktree card — no other dispatch mechanism.
+"병렬 세션 실행"; "handoff", "handoff to next session". In this setup a handoff always means an
+Orca worktree card — no other dispatch mechanism. "병렬로 진행" and "동시에 진행" mean this skill
+only when they name same-repo ticket cards; they can also mean sub-agents or work dispatched
+while this session continues (dispatch-card), so settle which before creating cards.
 
 Not a handoff: the target is another repo, or this session still has its own work to finish
 after spawning. That is `dispatch-card` — it never closes this session.
