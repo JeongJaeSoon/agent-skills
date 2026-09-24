@@ -32,6 +32,13 @@ python3 scripts/migrate.py --write    # symlink·옛 규칙·옛 hook 제거(set
 
 스킬을 고칠 때는 이 저장소를 worktree 브랜치에서 수정하고 `claude --plugin-dir <체크아웃>`으로 확인한다.
 
+직접 고쳐 쓰는 경우에는 GitHub 대신 로컬 체크아웃을 마켓플레이스로 둔다(`migrate.py`가 이렇게 설치한다). 설치본은 커밋된 내용의 복사본이라, worktree에서 고친 것을 메인 체크아웃에 fast-forward한 뒤 `claude plugin update agent-skills@jeongjaesoon`을 실행하면 새 세션부터 반영된다. 이미 떠 있는 세션은 시작할 때의 버전을 계속 쓰므로, 긴 프로그램 도중에 스킬을 바꿔도 돌고 있는 워커가 흔들리지 않는다.
+
+```bash
+claude plugin marketplace add ~/workspace/project/agent-skills
+claude plugin install agent-skills@jeongjaesoon
+```
+
 설정 파일(`~/.claude/agent-skills.json`)로 트래커와 노트 저장소를 고른다. 형식은 `use-tracker`, `use-notes` 스킬에 있다.
 
 ## 스킬

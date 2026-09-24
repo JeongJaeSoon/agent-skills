@@ -16,7 +16,9 @@ import json, os, pathlib, shutil, subprocess, sys, time
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SKILLS = pathlib.Path(os.environ.get("CLAUDE_SKILLS_DIR", "~/.claude/skills")).expanduser()
 SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS", "~/.claude/settings.json")).expanduser()
-PLUGIN_CMDS = [["claude", "plugin", "marketplace", "add", "JeongJaeSoon/agent-skills"],
+# The marketplace is this checkout, not GitHub: `claude plugin update` then installs whatever it has committed,
+# with no push. Run this from the checkout that should be the installed version (the main one, not a worktree).
+PLUGIN_CMDS = [["claude", "plugin", "marketplace", "add", str(REPO)],
                ["claude", "plugin", "install", "agent-skills@jeongjaesoon"]]
 
 
