@@ -1029,6 +1029,12 @@ def cmd_wait(argv):
     timeout = opt(argv, "--timeout-ms", "540000")
     rounds = int(opt(argv, "--rounds", "3"))
     run_id = p.cfg["run"]
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    workers = orca_json("orchestration", "worker-list", "--run", run_id).get("workers", []) if me else []
+    if me and me in {w.get("agentTerminalHandle") for w in workers}:
+        sys.exit("prog.py wait reads and acks the coordinator's Run inbox, and this terminal is one of the Run's"
+                 " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
+                 " background command such as `gh run watch <id>`.")
     for i in range(rounds):
         res = orca_json("orchestration", "check", "--run", run_id, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
                         "--timeout-ms", timeout)

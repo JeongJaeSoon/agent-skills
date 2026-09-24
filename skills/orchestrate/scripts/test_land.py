@@ -4,7 +4,8 @@ import json, os, pathlib, subprocess, sys, tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 FAKE_ORCA = r'''#!/usr/bin/env python3
 import json, os
-print(json.dumps({"ok": True, "result": {"tasks": json.load(open(os.environ["FAKE_GH_STATE"])).get("tasks", [])}}))
+st = json.load(open(os.environ["FAKE_GH_STATE"]))
+print(json.dumps({"ok": True, "result": {"tasks": st.get("tasks", []), "workers": st.get("workers", [])}}))
 '''
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -228,5 +229,11 @@ code, out = prog(env, "status", "t")
 assert code == 0 and "land order (2" in out and "next:" in out, out
 code, out = prog(env, "queue", "t")
 assert code == 0 and "#17" in out, out
+
+# wait reads the coordinator's Run inbox: a worker of the Run (a standing role, say) is refused.
+st = json.loads((d / "state.json").read_text()); st["workers"] = [{"agentTerminalHandle": "term_role"}]
+(d / "state.json").write_text(json.dumps(st))
+code, out = prog(dict(env, ORCA_TERMINAL_HANDLE="term_role"), "wait", "t", "--rounds", "1")
+assert code == 1 and "coordinator's Run inbox" in out, out
 
 print("prog.py land against fake gh: all pass")
