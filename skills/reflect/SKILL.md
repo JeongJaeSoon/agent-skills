@@ -36,9 +36,10 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 ### 1. Gather the input
 
 **Program mode.** Build an evidence pack at `~/.claude/programs/<slug>/reflect/pack.md`:
-- From the ledger: every `signal` row, every `land_failed`, `main_red` and failed `verdict`, each with its ticket, PR and evidence pointer.
-- `decisions.tsv`, the program note's digest and standing orders as they ended, and the `measure-delivery` report.
-- The transcripts behind the signals: the coordinator's own, and a worker's when a signal names it (its worktree path encoded as below).
+- From the ledger: every `signal` row, every `land_failed`, `main_red` and failed `verdict`, each with its ticket, PR and evidence pointer. A `main_red` row carries only a sha: its PRs are every `landed` row with that sha (a stack lands several at once), and each PR's ticket is on its `ready` row or, when the ledger has none, in the PR's title, branch or body (`gh pr view`); write "no ticket" when none names one. When the ledger has no `verdict` rows at all, write "verdicts not recorded", not 0.
+- Rows with note `backfill` were recorded by `orch backfill` for merges before the program was registered. They carry no process evidence: give their count on one line, and leave them out of everything below, the stop rule included.
+- The decision trail (`decisions.tsv`, or the `decision` rows in `dashboard/notes.jsonl`), the program note's digest and standing orders as they ended, and the `measure-delivery` output from this Close, saved as `reflect/delivery.md` beside the pack. Write "missing" for any that do not exist.
+- The transcripts behind the signals: the coordinator's own (reflect runs in the coordinator's session, so find it as in session mode below), and a worker's when a signal names it (its worktree path encoded the same way).
 - Every `applied` ledger row whose Outcome is not `recurred`. Update its Outcome now, judged against the lesson's own Learning, not its Kind: `recurred (<slug>)` when this program repeats the failure that lesson targets; add this slug to its `held through` list when the program ran the step the lesson changed and the failure did not return. A program that never ran that step leaves the row unchanged.
 
 With no signal and no failure in the pack, stop after the Outcome update. Otherwise pass the pack path to the reviewers in place of the transcript path.
