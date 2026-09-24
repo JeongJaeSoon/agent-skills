@@ -264,10 +264,10 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     dispatch worked a ticket that has landed. A released worker's card stays until `orca worktree rm`.
 
     A ticket can take several PRs, a backfilled landing among them: while the tracker says it is open,
-    a landing is not its worker's end. Without the tracker, a landing is."""
+    a landing is not its live worker's end. Without the tracker, a landing is."""
     ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
-    landed = {t for t in {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed"} - {None}
-              if ((issues_by_id or {}).get(t) or {}).get("state_type") not in OPEN_STATES}
+    landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed"} - {None}
+    still_open = {t for t in landed if ((issues_by_id or {}).get(t) or {}).get("state_type") in OPEN_STATES}
     present = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     cards = {}
     for w in workers:
@@ -279,6 +279,8 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
         tickets = {ticket_by_task.get(w.get("taskId")) for w in ws}
         if tickets <= landed:
             active = [w for w in ws if w.get("terminalState") == "active"]
+            if active and tickets & still_open:
+                continue
             out.append((sorted(tickets)[0], (active or ws)[-1]["dispatchId"], bool(active), present[wt]))
     return sorted(out)
 

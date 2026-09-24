@@ -318,5 +318,8 @@ open_ = lambda issues: prog.landed_but_open(rows(), workers, tasks, wts, issues)
 assert open_({"T-1": {"state_type": "started"}}) == []
 assert open_({"T-1": {"state_type": "completed"}}) == open_({}) == open_(None) == [("T-1", "ctx_1", True, "/w/1")], \
     "a closed ticket, or no tracker: the landing is the end"
+released = [dict(workers[0], terminalState="released")]
+assert prog.landed_but_open(rows(), released, tasks, wts, {"T-1": {"state_type": "started"}}) == [("T-1", "ctx_1", False, "/w/1")], \
+    "a released worker's card is left behind whatever the ticket's state"
 
 print("prog.py backfill: all pass")
