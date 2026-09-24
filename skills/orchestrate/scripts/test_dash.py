@@ -36,6 +36,17 @@ assert (s["predicate_done"], s["predicate_total"]) == (5, 7), s
 assert s["main"] == "green" and s["cap"] == 4 and s["in_flight"] == 3, s
 assert s["ready_prs"] == [207, 208] and s["landed_total"] == 6 and s["landed_24h"] == 3, s
 assert s["idle_waiting"] == ["ctx_a1000009"] and s["untriaged"] == ["ACME-127"], s
+assert s["stale_workers"] == ["ctx_a1000010"], s["stale_workers"]
+w10 = next(w for w in st["workers"] if w["dispatch"] == "ctx_a1000010")
+assert w10["liveness_reason"] == "stale_status" and w10["seen_at"] and w10["since"] != w10["seen_at"], w10
+assert [c["ticket"] for c in st["landed_open"]] == ["ACME-105"], st["landed_open"]
+sup = {t["id"]: t["superseded_by"] for t in st["tasks"]}
+assert sup["task_107x"] == "task_107" and sup["task_103"] is None, sup
+green = next(a for a in st["activity"] if a["kind"] == "main_green")
+assert green["sha"] == "m206", green
+cfg_a, ev_a = json.loads((store / A / "program.json").read_text()), dash.read_jsonl(store / A / "ledger.jsonl")
+closed = [{**i, "state_type": "completed"} if i["id"] == "ACME-127" else i for i in st["issues"]]
+assert dash.summarize(cfg_a, ev_a, closed, st["workers"], dash.utcnow(), [])["untriaged"] == [], "a closed follow-up needs no triage"
 assert s["derived_total"] == 8 and s["admitted"] == 2 and s["parked"] == 5, s
 assert s["next"].startswith("unstick first: 1 PR"), s["next"]  # same rule as `prog.py status`: a PR has waited 3h+
 prs = {p["number"]: p for p in st["prs"]}

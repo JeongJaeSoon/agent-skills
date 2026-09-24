@@ -78,6 +78,7 @@ function rel(iso, now = Date.now()) {
 }
 const relSpan = (iso) => `<span data-rel="${esc(iso || "")}" title="${esc(iso ? new Date(iso).toLocaleString() : "")}">${rel(iso)}</span>`;
 const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+const shortDate = (t) => new Date(t).toLocaleDateString([], { month: "short", day: "numeric" });
 const dayLabel = (t) => new Date(t).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 const num = (v, d = 0) => (v == null || isNaN(v) ? "—" : Number(v).toFixed(d));
 const compact = (n) => (n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k` : String(n));
@@ -293,11 +294,17 @@ function timeTicks(t0, t1, width) {
   const step = steps.find((s) => (t1 - t0) / s <= want) || steps[steps.length - 1];
   const out = [];
   const d = new Date(t0); d.setMinutes(0, 0, 0);
-  let t = d.getTime();
   const hs = step / H;
-  while (hs <= 24 && new Date(t).getHours() % hs !== 0) t += H;
+  if (hs >= 24) {
+    // Day steps start at local midnight and walk the calendar, so a DST change cannot pull them off it.
+    d.setHours(0);
+    for (; d.getTime() <= t1; d.setDate(d.getDate() + hs / 24)) if (d.getTime() >= t0) out.push(d.getTime());
+    return out.map((t) => ({ t, label: shortDate(t) }));
+  }
+  let t = d.getTime();
+  while (new Date(t).getHours() % hs !== 0) t += H;
   for (; t <= t1; t += step) if (t >= t0) out.push(t);
-  return out.map((t) => ({ t, label: new Date(t).getHours() === 0 ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric" }) : hhmm(t) }));
+  return out.map((t) => ({ t, label: new Date(t).getHours() === 0 ? shortDate(t) : hhmm(t) }));
 }
 
 function valueAt(points, t) {
@@ -448,7 +455,7 @@ function drawCharts(st) {
     const buckets = edges.map((b0) => {
       const inB = (iso) => { const t = ms(iso); return t >= b0 && t < b0 + B; };
       return {
-        label: new Date(b0).getHours() === 0 ? new Date(b0).toLocaleDateString([], { month: "short", day: "numeric" }) : hhmm(b0),
+        label: new Date(b0).getHours() === 0 ? shortDate(b0) : hhmm(b0),
         title: `${dayLabel(b0)} ${hhmm(b0)}–${hhmm(b0 + B)}`,
         values: [st.issues.filter((i) => i.derived && inB(i.created_at)).length,
                  st.issues.filter((i) => inScope(i) && i.state_type === "completed" && inB(i.completed_at)).length],
@@ -566,6 +573,13 @@ function attentionItems(st) {
     const w = workers[d] || {};
     out.push(["warn", "clock", `Worker ${d}${w.ticket ? ` (${w.ticket})` : ""} is waiting — maybe a permission prompt in its terminal.`, "workers"]);
   }
+  for (const d of s.stale_workers || []) {
+    const w = workers[d] || {};
+    out.push(["warn", "clock", `Worker ${d}${w.ticket ? ` (${w.ticket})` : ""} has not reported for ${ageText(w.seen_at)} — Orca cannot tell if it is alive; look at its terminal.`, "workers"]);
+  }
+  for (const c of st.landed_open || []) {
+    out.push(["warn", "merge", `${c.ticket} landed but its card is still open${c.active ? " (terminal still active)" : ""} — orca worktree rm --worktree path:${c.path}`, "workers"]);
+  }
   if ((s.untriaged || []).length) out.push(["accent", "issues", `Untriaged follow-up: ${s.untriaged.join(", ")} — admit or park.`, "issues"]);
   const risk = (st.notes || []).find((n) => n.kind === "risk" && Date.now() - ms(n.ts) < 24 * 3600e3);
   if (risk) out.push(["warn", "note", risk.text, "activity"]);
@@ -605,6 +619,10 @@ function viewOverview(st) {
   const segs = `<div class="segs" aria-hidden="true">${(st.predicate || []).map((p) => `<i class="${p.state_type === "completed" ? "done" : p.state_type === "started" ? "started" : ""}"></i>`).join("")}</div>`;
   const cells = `<div class="cells" aria-hidden="true">${Array.from({ length: s.ceiling || 0 }, (_, i) => `<i class="${i < s.in_flight ? "on" : ""} ${i < s.cap ? "cap" : ""}"></i>`).join("")}</div>`;
   const mainEv = (st.activity || []).find((a) => a.kind === "main_green" || a.kind === "main_red");
+  const mainRun = /\brun (\d{6,})/.exec(mainEv?.note || "")?.[1];
+  const mainAt = mainEv ? [`${mainEv.kind === "main_red" ? "red" : "green"} ${relSpan(mainEv.ts)}`,
+    mainEv.sha && link(st.repo && `https://github.com/${st.repo}/commit/${mainEv.sha}`, `<span class="mono">${esc(mainEv.sha.slice(0, 7))}</span>`),
+    mainRun && link(st.repo && `https://github.com/${st.repo}/actions/runs/${mainRun}`, "CI run")].filter(Boolean).join(" · ") : "no landing yet";
   const mt = mainTone(s.main);
   const oldest = s.oldest_open_pr;
   const budget = s.budget_used != null ? `<div class="budget"><div style="display:flex;justify-content:space-between"><span>Budget</span><span>${Math.round(s.budget_used * 100)}% used</span></div>
@@ -619,7 +637,7 @@ function viewOverview(st) {
   </div>
   <div class="kpis">
     ${kpi("Predicate", pct == null ? "—" : `${pct}%<small>${s.predicate_done}/${s.predicate_total}</small>`, pct == null ? "no tracker data" : s.final_check ? "final check recorded" : "final check not recorded", { extra: segs, src: "tracker" })}
-    ${kpi("Main CI", tag(s.main || "—", mt, mt === "good" ? "check" : mt === "bad" ? "fail" : "clock"), mainEv ? `${mainEv.kind === "main_red" ? "red" : "green"} ${relSpan(mainEv.ts)}` : "no landing yet", { src: "ledger" })}
+    ${kpi("Main CI", tag(s.main || "—", mt, mt === "good" ? "check" : mt === "bad" ? "fail" : "clock"), mainAt, { src: "ledger" })}
     ${kpi("In-flight / cap", `${num(s.in_flight)}<small>/ ${num(s.cap)}</small>`, `ceiling ${num(s.ceiling)}`, { extra: cells, src: "orca" })}
     ${kpi("Oldest open PR", oldest ? `<span class="age-v ${ageTone(oldest.since) ? "tone-" + ageTone(oldest.since) : ""}" data-age-text="${esc(oldest.since)}">${ageText(oldest.since)}</span>` : "—", oldest ? `#${oldest.pr} · opened ${relSpan(oldest.since)}` : "no open PRs", { src: "github" })}
     ${kpi("Ready to land", num(s.ready_to_land), (s.ready_prs || []).map((n) => "#" + n).join(" ") || "queue empty", { src: "ledger" })}
@@ -710,15 +728,22 @@ function viewTasks(st) {
   for (const n of g.nodes) counts[n.status] = (counts[n.status] || 0) + 1;
   const title = Object.fromEntries(tasks.map((t) => [t.id, t.ticket || t.title]));
   const TT = { completed: "good", dispatched: "accent", blocked: "bad", ready: "warn" };
+  // Open work first; finished and superseded tasks are history, shown with "Show done".
+  const done = (t) => t.status === "completed" || t.superseded_by;
+  const rank = (t) => (t.superseded_by ? 3 : t.status === "completed" ? 2 : t.status === "failed" ? 1 : 0);
+  const rows = tasks.filter((t) => S.showDone || !done(t)).sort((a, b) => rank(a) - rank(b));
+  const hidden = tasks.length - rows.length;
+  const status = (t) => t.superseded_by ? tag(`superseded by ${title[t.superseded_by] || t.superseded_by}`, "", null) : tag(t.status || "?", TT[t.status] ?? "");
   return `<div class="view-head"><div><h2>Tasks</h2><p>Orca tasks and ledger dependencies, left to right by depth. The accent chain is the critical path: the longest run of unfinished work.</p></div></div>
   <div class="toolbar"><div class="chips">${Object.keys(NODE_LABEL).filter((k) => counts[k]).map((k) => tag(`${NODE_LABEL[k]} ${counts[k]}`, NODE_TONE[k])).join(" ")}</div>
     <button class="chip" type="button" id="show-done" aria-pressed="${S.showDone}">Show done</button></div>
   <div class="card" data-src="orca ledger"><div class="card-head"><h3>Dependency graph</h3><span class="aside">${(g.critical || []).length ? `critical path ${esc(g.critical.join(" → "))}` : ""}</span></div>
     <div class="card-body dag" id="dag"></div></div>
   <div class="card table-wrap" data-src="orca"><table><thead><tr><th>Task</th><th>Status</th><th class="hide-md">After</th><th class="hide-md">Dispatch</th><th>Created</th><th>Done</th></tr></thead><tbody>
-  ${tasks.map((t) => `<tr><td class="title"><span class="mono">${esc(t.ticket || "")}</span> <span class="dim">${t.title !== t.ticket ? esc(t.title) : ""}</span></td>
-    <td>${tag(t.status || "?", TT[t.status] ?? "")}</td><td class="hide-md muted">${esc(t.deps.map((d) => title[d] || d).join(", ") || "—")}</td>
-    <td class="hide-md mono muted">${esc(t.dispatch || "—")}</td><td class="muted">${relSpan(orcaTime(t.created_at))}</td><td class="muted">${t.completed_at ? relSpan(orcaTime(t.completed_at)) : "—"}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No Orca tasks on this run.</td></tr>`}
+  ${rows.map((t) => `<tr><td class="title"><span class="mono">${esc(t.ticket || "")}</span> <span class="dim">${t.title !== t.ticket ? esc(t.title) : ""}</span></td>
+    <td>${status(t)}</td><td class="hide-md muted">${esc(t.deps.map((d) => title[d] || d).join(", ") || "—")}</td>
+    <td class="hide-md mono muted">${esc(t.dispatch || "—")}</td><td class="muted">${relSpan(orcaTime(t.created_at))}</td><td class="muted">${t.completed_at ? relSpan(orcaTime(t.completed_at)) : "—"}</td></tr>`).join("") || (hidden ? "" : `<tr><td colspan="6" class="muted">No Orca tasks on this run.</td></tr>`)}
+  ${hidden ? `<tr><td colspan="6" class="muted">${hidden} done or superseded — “Show done” lists them.</td></tr>` : ""}
   </tbody></table></div>`;
 }
 // Orca task timestamps are "YYYY-MM-DD HH:MM:SS" in UTC.
@@ -731,6 +756,7 @@ function viewWorkers(st) {
   const u = st.usage?.total;
   const trend = (st.series || []).map((r) => r.tokens).filter((v) => v != null);
   const act = (w) => w.outcome !== "in_progress" ? `<span class="muted">${esc(w.outcome || "—")}</span>`
+    : w.stale ? tag("no signal", "warn", "clock")
     : w.activity === "running" ? `<span style="display:inline-flex;align-items:center;gap:6px"><span class="pulse"></span>running</span>`
     : w.activity === "waiting" ? tag("waiting", "warn", "clock") : `<span class="muted">idle</span>`;
   const tok = (w) => w.tokens ? `<span title="in ${compact(w.tokens.input_tokens)} · out ${compact(w.tokens.output_tokens)} · cache write ${compact(w.tokens.cache_creation_input_tokens)} · cache read ${compact(w.tokens.cache_read_input_tokens)}">${compact(w.tokens.total)}</span>`
@@ -744,7 +770,7 @@ function viewWorkers(st) {
   <div class="toolbar">${chips("workers", [["active", "In flight", ws.filter(F.active).length], ["all", "All", ws.length]], f)}</div>
   <div class="card table-wrap" data-src="orca"><table><thead><tr><th>Dispatch</th><th>Ticket</th><th>Activity</th><th class="hide-md">Liveness</th><th class="hide-md">Model</th><th class="num">Tokens</th><th>Since</th></tr></thead><tbody>
   ${ws.filter(F[f]).map((w) => `<tr><td class="mono">${esc(w.dispatch)}</td><td class="mono">${esc(w.ticket || w.worktree || "—")}</td><td>${act(w)}</td>
-    <td class="hide-md">${tag(w.liveness || "—", w.liveness === "live" ? "good" : "")}</td>
+    <td class="hide-md">${tag(w.liveness || "—", w.liveness === "live" ? "good" : w.outcome === "in_progress" ? "warn" : "")}${w.outcome === "in_progress" && w.liveness !== "live" && w.seen_at ? ` <span class="muted" title="${esc(w.liveness_reason || "")}">seen ${relSpan(w.seen_at)}</span>` : ""}</td>
     <td class="hide-md dim">${esc(w.model || "—")}</td><td class="num">${tok(w)}</td><td class="muted">${relSpan(w.since)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">No workers ${f === "active" ? "in flight" : "yet"}.</td></tr>`}
   </tbody></table></div>`;
 }

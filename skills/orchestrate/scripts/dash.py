@@ -156,10 +156,12 @@ def orca_result(*args):
 
 
 def fetch_orca(cfg):
-    """Workers, tasks and the Run's objective: three local, read-only CLI calls."""
+    """Workers, tasks, the Run's objective and the worktrees (cards) still on disk: local, read-only CLI calls."""
+    wts = sh(["orca", "worktree", "list", "--json"])
     return {"workers": orca_result("worker-list", "--run", cfg["run"]).get("workers", []),
             "tasks": orca_result("task-list", "--run", cfg["run"]).get("tasks", []),
-            "run": orca_result("run-show", "--id", cfg["run"]).get("run") or {}}
+            "run": orca_result("run-show", "--id", cfg["run"]).get("run") or {},
+            "worktrees": (wts.get("result", wts) if isinstance(wts, dict) else {}).get("worktrees", [])}
 
 
 # ---------------------------------------------------------------- shaping
@@ -252,12 +254,18 @@ def refresh_pr(pr, events):
                                 events, set()) or pr.get("ticket")}
 
 
+def orca_time(s):
+    """Orca task timestamps are "YYYY-MM-DD HH:MM:SS" in UTC."""
+    return s.replace(" ", "T") + "Z" if s and "T" not in s and not s.endswith("Z") else s
+
+
 def ms_iso(ms):
     return iso(dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)) if ms else None
 
 
-def shape_workers(raw, events):
+def shape_workers(raw, events, tasks=()):
     by_dispatch, spawned_at = {}, {}
+    created = {t.get("id"): orca_time(t.get("created_at")) for t in tasks}
     for e in events:
         if e["ev"] == "spawned" and e.get("ticket"):
             spawned_at.setdefault(e["ticket"], e["ts"])
@@ -280,7 +288,10 @@ def shape_workers(raw, events):
                     "liveness": live.get("verdict") or w.get("terminalState"),
                     "activity": {"working": "running", "waiting": "waiting"}.get(act, "idle"),
                     "outcome": p.get("outcome") or w.get("workerState"), "stage": stage.get("detail"),
-                    "since": spawned_at.get(ticket) or ms_iso(live.get("observedAt"))})
+                    "since": spawned_at.get(ticket) or created.get(w.get("taskId")),
+                    "seen_at": ms_iso(live.get("observedAt")), "liveness_reason": live.get("reason"),
+                    # Orca stopped hearing from a worker it still counts as in progress.
+                    "stale": "stale" in ((p.get("attention") or {}).get("categories") or [])})
     out.sort(key=lambda w: (w["outcome"] != "in_progress", w["activity"] != "waiting", w.get("since") or ""))
     return out
 
@@ -317,7 +328,8 @@ def activity_of(events, notes):
             text += " · " + " ".join(extra)
         if e.get("note"):
             text += f" — {e['note']}"
-        rows.append({"ts": e["ts"], "kind": e["ev"], "text": text, "ticket": e.get("ticket"), "pr": e.get("pr")})
+        rows.append({"ts": e["ts"], "kind": e["ev"], "text": text, "ticket": e.get("ticket"), "pr": e.get("pr"),
+                     "sha": e.get("sha"), "note": e.get("note")})
     for n in notes:
         rows.append({"ts": n["ts"], "kind": "note", "note_kind": n.get("kind"), "text": n.get("text"),
                      "author": n.get("author")})
@@ -334,7 +346,7 @@ DEP_FIELDS = ("on", "after", "blocked_by", "depends_on")
 def shape_tasks(raw, workers):
     ticket_of = {w["dispatch"]: w.get("ticket") for w in workers}
     out = []
-    for t in raw:
+    for t in sorted(raw, key=lambda t: t.get("created_at") or ""):
         deps = t.get("deps") or []
         if isinstance(deps, str):
             try:
@@ -346,7 +358,12 @@ def shape_tasks(raw, workers):
         out.append({"id": t.get("id"), "title": title, "status": t.get("status"), "deps": list(deps),
                     "parent": t.get("parent_id"), "dispatch": t.get("dispatch_id"),
                     "ticket": (m.group(1).upper() if m else None) or ticket_of.get(t.get("dispatch_id")),
-                    "created_at": t.get("created_at"), "completed_at": t.get("completed_at")})
+                    "created_at": t.get("created_at"), "completed_at": t.get("completed_at"), "superseded_by": None})
+    # A failed or canceled task is history once a later task took its ticket.
+    for i, t in enumerate(out):
+        later = next((u["id"] for u in out[i + 1:] if t["ticket"] and u["ticket"] == t["ticket"]), None)
+        if t["status"] in ("failed", "canceled", "cancelled") and later:
+            t["superseded_by"] = later
     return out
 
 
@@ -519,6 +536,8 @@ def summarize(cfg, events, issues, workers, tnow, order):
     landed = [e for e in events if e["ev"] == "landed"]
     triage = triage_map(events)
     derived = [i for i in issues or [] if i.get("derived")]
+    pr_tk = prog.pr_ticket(events)
+    acted = {e.get("ticket") for e in events if e["ev"] == "spawned"} | {pr_tk.get(e.get("pr")) for e in landed}
     nxt, used = prog.next_move(cfg, events, tnow, tickets_done=tickets_done,
                                live=units, human=len(human),
                                order=[e for e in order if e.get("state") not in ("gone", "unknown")])
@@ -534,7 +553,10 @@ def summarize(cfg, events, issues, workers, tnow, order):
         "budget_used": round(used, 3) if used is not None else None, "stopped": prog.stopped(events),
         "ready_prs": [s["pr"] for s in ready], "human_wait_prs": [s["pr"] for s in human],
         "idle_waiting": [w["dispatch"] for w in live if w.get("activity") == "waiting"],
-        "untriaged": [i["id"] for i in derived if not i.get("triage")],
+        "stale_workers": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w.get("stale")],
+        # Work that already landed or started on a ticket, or its close, is the coordinator's answer.
+        "untriaged": [i["id"] for i in derived if not i.get("triage") and i.get("state_type") in prog.OPEN_STATES
+                      and i["id"] not in acted],
         "next": nxt,
     }
 
@@ -731,8 +753,10 @@ def _merge(slug, d, cfg, fetched, interval):
         entry["ticket"] = entry["ticket"] or ticket_of.get(entry.get("pr"))
 
     if fresh_orca:
-        workers = shape_workers(raw_orca["workers"], events)
+        workers = shape_workers(raw_orca["workers"], events, raw_orca["tasks"])
         tasks = shape_tasks(raw_orca["tasks"], workers)
+        cards = [{"ticket": tk, "dispatch": d, "active": a, "path": path} for tk, d, a, path in prog.landed_but_open(
+            events, raw_orca["workers"], raw_orca["tasks"], raw_orca.get("worktrees") or [], {i["id"]: i for i in issues or []})]
         objective = (raw_orca.get("run") or {}).get("objective")
         try:
             usage = collect_usage(dash, workers, cfg)
@@ -740,7 +764,7 @@ def _merge(slug, d, cfg, fetched, interval):
             usage = prev.get("usage")
             errors.append(f"usage: {e!r}"[:300])
     else:
-        workers, tasks = prev.get("workers") or [], prev.get("tasks") or []
+        workers, tasks, cards = prev.get("workers") or [], prev.get("tasks") or [], prev.get("landed_open") or []
         objective, usage = prev.get("run_objective"), prev.get("usage")
     for w in workers:
         w["tokens"] = ((usage or {}).get("workers") or {}).get(w["dispatch"])
@@ -789,7 +813,7 @@ def _merge(slug, d, cfg, fetched, interval):
         "merge_policy": cfg.get("merge_policy"), "created_at": cfg.get("created_at"),
         "deadline": cfg.get("deadline"), "interval": interval or prev.get("interval") or 60,
         "run_objective": objective, "summary": summary, "predicate": predicate, "landing": landing,
-        "land_order": order, "tasks": tasks, "graph": build_graph(tasks, events, issues, order, landing), "usage": usage,
+        "land_order": order, "landed_open": cards, "tasks": tasks, "graph": build_graph(tasks, events, issues, order, landing), "usage": usage,
         "issues": issues, "prs": sorted(prs, key=lambda p: -p["number"]), "workers": workers,
         "series": series, "activity": activity_of(events, notes), "notes": notes[-100:][::-1],
         "errors": errors, "sources": srcs,

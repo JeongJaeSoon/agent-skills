@@ -12,6 +12,10 @@ name, a = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 opt = lambda n: a[a.index(n) + 1] if n in a else ""
 if name == "gh" and a[:2] == ["pr", "list"]:
     f = fx / "gh" / (opt("--repo").replace("/", "__") + ".json")
+elif name == "orca" and a[:2] == ["worktree", "list"]:
+    print(json.dumps({"ok": True, "result": {"worktrees": [w for f in sorted((fx / "orca").glob("*.json"))
+                                                          for w in json.loads(f.read_text()).get("worktrees") or []]}}))
+    sys.exit(0)
 elif name == "orca" and a[:1] == ["orchestration"] and a[1:2] in (["worker-list"], ["task-list"], ["run-show"]):
     f = fx / "orca" / ((opt("--run") or opt("--id")) + ".json")
 elif name == "tracker.py" and a and a[0] in ("list", "get"):
@@ -85,14 +89,16 @@ def _pr(now, repo, n, title, branch, state, created_h, merged_h=None, ci="pass",
             "reviews": [{"state": "COMMENTED", "submittedAt": _ago(now, h), "commit": {"oid": oid}} for oid, h in reviews]}
 
 
-def _worker(now, ctx, ticket_wt, outcome, activity, model, observed_h, liveness="live"):
+def _worker(now, ctx, ticket_wt, outcome, activity, model, observed_h, liveness="live", attention=()):
     detail = {"in_progress": "input_accepted", "succeeded": "settled", "failed": "process_stopped"}[outcome]
     return {"dispatchId": ctx, "taskId": ctx.replace("ctx_", "task_"), "runId": "run_demo", "workerState": "ready",
             "resource": {"worktreeId": f"repo::/workspaces/{ticket_wt}"},
             "projection": {"outcome": outcome, "provider": {"id": "claude", "model": model},
                            "stage": {"detail": detail, "activity": activity},
                            "liveness": {"verdict": liveness,
-                                        "observedAt": int((now - dt.timedelta(hours=observed_h)).timestamp() * 1000)}}}
+                                        "reason": "stale_status" if "stale" in attention else None,
+                                        "observedAt": int((now - dt.timedelta(hours=observed_h)).timestamp() * 1000)},
+                           "attention": {"categories": list(attention)}}}
 
 
 def alpha(now):
@@ -185,7 +191,7 @@ def alpha(now):
     workers = [
         _worker(now, "ctx_a1000009", "acme-107", "in_progress", "waiting", "sonnet", 0.7),
         _worker(now, "ctx_a1000008", "acme-125", "in_progress", "working", "opus", 0.02),
-        _worker(now, "ctx_a1000010", "acme-verify-main", "in_progress", "working", "haiku", 0.05),
+        _worker(now, "ctx_a1000010", "acme-verify-main", "in_progress", "unknown", "haiku", 1.4, "unverifiable", ("stale",)),
         _worker(now, "ctx_a1000007", "acme-106", "succeeded", "unknown", "gpt-6-sol", 3.9, "exited"),
         _worker(now, "ctx_a1000006", "acme-105", "succeeded", "unknown", "opus", 9.9, "exited"),
         _worker(now, "ctx_a1000005", "acme-121", "succeeded", "unknown", "opus", 21.9, "exited"),
@@ -217,10 +223,18 @@ def alpha(now):
         task("task_105", "ACME-105", "completed", ("task_104",), 15.5, 6.5, "ctx_a1000006"),
         task("task_106", "ACME-106", "completed", ("task_104",), 15.5, 3.9, "ctx_a1000007"),
         task("task_125", "ACME-125", "dispatched", (), 5, None, "ctx_a1000008"),
+        task("task_107x", "ACME-107", "failed", ("task_106",), 3, 2.7),
         task("task_107", "ACME-107", "dispatched", ("task_106",), 2.5, None, "ctx_a1000009"),
         task("task_ver", "verify launchpad quickstart on main", "pending", ("task_107", "task_125"), 2.5),
     ]
-    orca = {"workers": workers, "tasks": tasks,
+    task_of = {t["dispatch_id"]: t["id"] for t in tasks}
+    for w in workers:
+        w["taskId"] = task_of.get(w["dispatchId"], w["taskId"])
+    # ACME-105 landed but its card is still on disk; ACME-107 is still being worked.
+    worktrees = [{"id": "repo::/workspaces/repo", "path": "/workspaces/repo", "isMainWorktree": True}] + [
+        {"id": f"repo::/workspaces/{wt}", "path": f"/workspaces/{wt}", "isMainWorktree": False}
+        for wt in ("acme-105", "acme-107")]
+    orca = {"workers": workers, "tasks": tasks, "worktrees": worktrees,
             "run": {"id": cfg["run"], "objective": "Launchpad GA — ship SSO, promotion, rollback, secrets and the "
                                                     "five-minute quickstart to design partners"}}
     return cfg, L, issues, prs, orca, notes

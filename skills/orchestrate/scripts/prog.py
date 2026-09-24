@@ -646,7 +646,10 @@ def cmd_status(argv):
     if issues is not None:
         new = [i for i in issues if parse_ts(i["created_at"]) > t0 and i["id"] not in pred]
         derived = [i for i in new if is_derived(i)]
-        untriaged = [i["id"] for i in derived if i["id"] not in admitted | parked]
+        # A follow-up already closed, or already being worked, needs no admit/park call.
+        spawned = {e.get("ticket") for e in events if e["ev"] == "spawned"}
+        untriaged = [i["id"] for i in derived
+                     if i["id"] not in admitted | parked | spawned and i.get("state_type") in OPEN_STATES]
         ratio = len(new) / max(len(pred), 1)
         lines.append(f"growth: {len(new)} tickets filed since start outside the predicate ({ratio:.1f} per predicate item),"
                      f" {len(derived)} marked derived"
