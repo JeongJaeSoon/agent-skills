@@ -251,6 +251,56 @@
       "mode": "verbatim"
     },
     {
+      "upstream": "skills/why/SKILL.md",
+      "local": "skills/why/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/why/references/epistemics.md",
+      "local": "skills/why/references/epistemics.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/why/references/investigator-prompt.md",
+      "local": "skills/why/references/investigator-prompt.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/why/references/synthesizer-prompt.md",
+      "local": "skills/why/references/synthesizer-prompt.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/why/references/source-playbook.md",
+      "local": "skills/why/references/source-playbook.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/why/references/sources/code-archaeology.md",
+      "local": "skills/why/references/sources/code-archaeology.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/why/references/sources/linear.md",
+      "local": "skills/why/references/sources/linear.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/why/references/sources/notion.md",
+      "local": "skills/why/references/sources/notion.md",
+      "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/why/references/sources/slack.md",
+      "local": "skills/why/references/sources/slack.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/why/references/sources/incident-postmortem.md",
+      "local": "skills/why/references/sources/incident-postmortem.md",
+      "mode": "adapted"
+    },
+    {
       "upstream": "skills/principle-fix-root-causes/SKILL.md",
       "local": "skills/principles/references/principle-fix-root-causes.md",
       "mode": "verbatim"

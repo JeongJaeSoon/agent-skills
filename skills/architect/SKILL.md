@@ -13,7 +13,7 @@ A **<name>** principle skill below is `references/principle-<name>.md` in the **
 
 Build a real mental model of every system the new code touches. Run the **how** skill over the relevant subsystems.
 
-Naming a file isn't grounding. Produce the traced model `how` prescribes. If the design redefines ownership or layering, also recover why the existing shape is the way it is (`git log -S` / `git blame` on the load-bearing lines, and the PRs and tickets they cite) so the rationale becomes a constraint, not a guess.
+Naming a file isn't grounding. Produce the traced model `how` prescribes. If the design redefines ownership or layering, also run the **why** skill on the existing shape so the rationale becomes a constraint, not a guess.
 
 Skip Phase A only when the work is genuinely greenfield with no surrounding system to integrate.
 
