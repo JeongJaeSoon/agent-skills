@@ -15,7 +15,7 @@ exact those counts are:
 
 | Source | Close time | Use when |
 |---|---|---|
-| `--project P` (reads through `use-tracker`'s `tracker.py`) | Jira: exact (`resolutiondate`). Linear: `tracker.py` goes through `orca linear`, which has no `completedAt`, so closed issues get `updatedAt` — and the report does **not** say so on this path | Jira, or a quick Linear read where an edited-after-close issue shifting a block is acceptable |
+| `--project P` (reads through `use-tracker`'s `tracker.py`) | Jira: exact (`resolutiondate`). Linear: `tracker.py` goes through `orca linear`, which has no `completedAt`, so closed issues get `updatedAt`, and the report says it approximated | Jira, or a quick Linear read where an edited-after-close issue shifting a block is acceptable |
 | `--issues F` with a Linear MCP `list_issues` result | exact `completedAt` / `canceledAt` | Linear, when the 6h blocks must be right |
 | `--issues F` with `orca linear list-issues --json` output | `updatedAt`; the report says it approximated | only when MCP is unavailable |
 

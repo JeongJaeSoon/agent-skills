@@ -53,5 +53,5 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 ## 진행 기록
 
-- <시각> <prog.py status 네 줄 요약 + 이번 drain에서 바뀐 것>
+- <시각> <prog.py status 요약 + 이번 drain에서 바뀐 것>
 ```

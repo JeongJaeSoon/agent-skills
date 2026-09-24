@@ -556,7 +556,7 @@ function nextTone(n) {
 function attentionItems(st) {
   const s = st.summary || {}, out = [];
   const workers = Object.fromEntries((st.workers || []).map((w) => [w.dispatch, w]));
-  if (s.main === "red") out.push(["bad", "fail", "main is red — only the repairing PR may land (land-check --main-fix).", "prs"]);
+  if (s.main === "red") out.push(["bad", "fail", "main is red — only the repairing PR may land (prog.py land --class main-fix).", "prs"]);
   if (s.stopped) out.push(["bad", "stop", "STOP line is active — nothing new is spawned.", "activity"]);
   for (const e of st.land_order || []) {
     if ((Date.now() - ms(e.since)) / 3600e3 > 3 && e.state !== "gone") out.push(["bad", "clock", `#${e.pr}${e.ticket ? ` (${e.ticket})` : ""} has waited ${ageText(e.since)} to land — ${e.reasons?.[0] || e.state}`, "overview"]);

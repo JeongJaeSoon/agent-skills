@@ -3,7 +3,7 @@ name: deliver-ticket
 description: Use when working a ticket from the first edit to done — before multi-file work, before opening, updating or merging a PR ("PR 올려줘", "머지해줘", "ship it"), before declaring a ticket done ("이 티켓 끝내줘"), or when reviewing, stacking or verifying a change on its way to main. Formerly ship-pr.
 ---
 
-# Shipping a ticket
+# Delivering a ticket
 
 ## 1. Plan
 
@@ -133,13 +133,13 @@ or `gh stack init` / `add` / `submit` from scratch) and confirm it with
 top of the layer below. A stack lands from its top in one merge: once every layer is verified
 and green, `gh api -X PUT repos/<owner>/<repo>/pulls/<top>/merge-async -f merge_method=squash
 -f sha=<top head>` merges the top and every layer below it; confirm each layer MERGED with
-`gh pr view`. Stacked PRs reject `gh pr merge`. Inside a program, `prog.py land --pr <top>` does
+`gh pr view`. Stacked PRs reject `gh pr merge`. Inside a program, `prog.py land <slug> --pr <top>` does
 this for you — never call merge-async by hand there.
 
 Post the results as a **sticky comment**:
 
 ```bash
-bash ~/.claude/scripts/sticky-comment.sh <pr> <body-file>
+bash ~/.claude/skills/deliver-ticket/scripts/sticky-comment.sh <pr> <body-file>
 ```
 
 It upserts on the `<!-- test-results -->` marker, so results never stack. Include suite

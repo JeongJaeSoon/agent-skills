@@ -623,7 +623,7 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order):
     if stopped(events):
         return "STOP line active: spawn nothing; let in-flight finish", used
     if main_state(events) == "red":
-        return "SAFETY STOP: main is red — land only the fix (land-check --main-fix), then record main_green --sha", used
+        return "SAFETY STOP: main is red — land only the fix (prog.py land <slug> --pr N --class main-fix), then record main_green --sha", used
     if verified and tickets_done is not False:
         return "predicate met and verified: Close", used
     if tickets_done:
@@ -956,7 +956,7 @@ def cmd_land_check(argv):
     problems = []
     main = main_state(events)
     if main == "red" and "--main-fix" not in argv:
-        problems.append("safety stop: main is red (only the repairing PR lands, with --main-fix)")
+        problems.append("safety stop: main is red (only the repairing PR lands, with land --class main-fix)")
     if stopped(events):
         problems.append("STOP line active")
     if main == "pending":
@@ -998,7 +998,7 @@ def cmd_land_check(argv):
     if problems:
         print("HOLD: " + " | ".join(problems))
         sys.exit(1)
-    print(f"LAND: gh pr merge {pr} --repo {repo} --squash --match-head-commit {v['headRefOid']}")
+    print(f"READY: prog.py land {p.slug} --pr {pr}")
 
 
 def cmd_landed(argv):
@@ -1019,9 +1019,9 @@ def cmd_gate(argv):
     p = Program(argv[0])
     pr = int(opt(argv, "--pr"))
     if p.cfg["merge_policy"] != "human-gate":
-        sys.exit("gates are for merge_policy human-gate; autonomous programs land after land-check")
+        sys.exit("gates are for merge_policy human-gate; autonomous programs land with prog.py land")
     v = pr_view(p.cfg["repo"], pr)
-    spec = (f"Land PR #{pr} ({v['url']}) with prog.py land-check once the user resolves the gate. "
+    spec = (f"Land PR #{pr} ({v['url']}) with prog.py land once the user resolves the gate. "
             "Coordinator-owned; no worker is dispatched for this Task.")
     args = ["orchestration", "task-create", "--run", p.cfg["run"], "--spec", spec, "--task-title", f"Land #{pr}"]
     if opt(argv, "--parent"):

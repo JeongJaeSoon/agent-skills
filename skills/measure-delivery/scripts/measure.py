@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Delivery metrics for one repo + Linear project over a window. Read-only.
+"""Delivery metrics for one repo + tracker project over a window. Read-only.
 
 Usage:
   python3 measure.py --repo OWNER/NAME (--project TRACKER_PROJECT | --issues ISSUES.json) --since ISO8601 [--until ISO8601]

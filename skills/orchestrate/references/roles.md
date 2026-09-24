@@ -1,6 +1,6 @@
 # Standing roles
 
-A program of more than a handful of tickets runs three standing roles beside the ticket workers. Each is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker, and the coordinator records each with `prog.py record <slug> spawned --role <name> --note <dispatchId>` so they stay outside the concurrency cap. None of them lands feature work.
+A program of more than a handful of tickets runs two standing workers beside the ticket workers, the main guardian and the QA lead, plus a flow improver on demand. Each standing worker is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker, and the coordinator records each with `prog.py record <slug> spawned --role <name> --note <dispatchId>` so they stay outside the concurrency cap. None of them lands feature work.
 
 | Role | Owns | Does not |
 |---|---|---|

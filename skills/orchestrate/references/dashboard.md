@@ -7,10 +7,10 @@
 ```sh
 python3 ~/.claude/skills/orchestrate/scripts/dash.py serve [--port 4780] [--interval 60] [--host 127.0.0.1]
 python3 ~/.claude/skills/orchestrate/scripts/dash.py collect <slug>   # one collect, prints a one-line summary
-python3 ~/.claude/skills/orchestrate/scripts/dash.py demo [--port 4778] [--live]   # fixture programs, no network
+python3 ~/.claude/skills/orchestrate/scripts/dash.py demo [--port 4780] [--live] [--no-serve]   # fixture programs, no network
 ```
 
-`serve` collects in the background at four rates:
+`serve` collects in the background at three rates:
 
 | Source | How often |
 |---|---|

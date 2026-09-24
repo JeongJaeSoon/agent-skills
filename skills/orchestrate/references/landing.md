@@ -80,7 +80,7 @@ Start-after edges in Orca:
 
 ## GitHub stacks: several PRs, one merge
 
-When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `prog.py land --pr <top>` merges every layer in one `merge-async` call.
+When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `prog.py land <slug> --pr <top>` merges every layer in one `merge-async` call.
 
 - Create it with `gh stack link <bottom> <top> --base main`, or `gh stack init` / `add` / `submit`. Confirm it with `gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks, and `gh stack view` needs a locally tracked stack).
 - Bring a stack onto the latest base bottom-up: `gh pr update-branch` merges a PR's own base into it, so on the top it pulls only the layer below. `land` prints the sequence.
@@ -125,7 +125,7 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
   - `LANDED-BUT-OPEN` lines are workers whose PR landed. Release them and remove their worktrees in the same turn.
 - A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
 - Merges you did not make: `land` records a PR that was merged outside it.
-- Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes`, `exclusive_stale_minutes`, `exclusive_paths`, `heavy_slots`.
+- Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `heavy_slots`.
 - Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it. A shared JSON file overwritten in place was once left empty mid-write.
 
 ## human-gate

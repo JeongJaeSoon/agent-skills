@@ -4,6 +4,10 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 
 전제는 Orca(멀티 에이전트 IDE, `orca` CLI), GitHub, 티켓 트래커(Linear, Jira 어댑터 준비)다. 노트는 Obsidian vault 또는 일반 Markdown 폴더를 쓴다.
 
+선택 도구: 교차 검토는 [Codex 플러그인](https://github.com/openai/codex-plugin-cc)의 companion 스크립트, 브라우저 검증은 Aside를 쓴다. 없으면 그 단계만 다른 도구로 바꾼다.
+
+작업 방식은 pstack이 기준이다. superpowers 플러그인과 함께 쓰면 두 흐름이 겹치므로 끄고 쓴다(`enabledPlugins`에서 `superpowers@claude-plugins-official: false`).
+
 ## 설치
 
 ```bash
@@ -73,3 +77,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
+
+## 라이선스
+
+MIT. `vendor/pstack`과 거기서 가져온 스킬은 원저작자의 MIT 라이선스를 따른다(`vendor/pstack/LICENSE`).

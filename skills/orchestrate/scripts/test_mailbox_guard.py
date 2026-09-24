@@ -16,6 +16,8 @@ def decide(cmd, own="term_me"):
 assert decide(f"{CHECK} --terminal term_me --json") == "pass"
 assert decide(f"{CHECK} --terminal=term_me --json") == "pass"
 assert decide(f"{CHECK} --json") == "pass"
+assert decide(f"{CHECK} --terminal $ORCA_TERMINAL_HANDLE --wait") == "pass"  # the form the brief gives workers
+assert decide(f'{CHECK} --terminal "${{ORCA_TERMINAL_HANDLE}}" --ack d1') == "pass"
 assert decide(f"{CHECK} --terminal term_other --ack d1") == "deny"
 assert decide("orca orchestration inbox --terminal 'term_other'") == "deny"
 assert decide(f"echo hi; {CHECK} --terminal term_other") == "deny"

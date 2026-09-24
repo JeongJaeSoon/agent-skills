@@ -5,8 +5,8 @@ description: Use when doing any ticket operation — reading, listing, searching
 
 # use-tracker
 
-One way to touch tickets, whichever tracker is active. No other skill or script names Linear or
-Jira directly: they say "file a ticket", "move to completed", and this skill says how.
+One way to touch tickets, whichever tracker is active. Other skills and scripts go through it: they say "file a ticket", "move to completed", and this skill
+says how. They name Linear only for things outside the adapter (a `--linear-issue` card link).
 
 ## Which tracker is active
 

@@ -10,7 +10,7 @@ PROGRAM: <slug>
 
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
-            Base: main | feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
+            Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / prog.py dep).
