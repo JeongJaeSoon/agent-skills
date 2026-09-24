@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """PreToolUse hook: an agent reads only its own Orca mailbox.
 
-`orca orchestration check` is allowed without a prompt so workers never stall on it, but
-`check`/`inbox --terminal <handle>` would read, and with --ack consume, another agent's
-messages. Static permission rules match prefixes only, so this hook refuses that one form.
+`orca orchestration check` is allowed without a prompt so workers never stall on it. Orca's worker
+contract has each worker read its follow-ups with `check --terminal <its own handle>`, but the same
+form with another terminal's handle would read, and with --ack consume, that agent's messages.
+Static permission rules match prefixes only, so this hook refuses a handle that is not the caller's
+own ($ORCA_TERMINAL_HANDLE, set in every Orca terminal).
 """
-import json, re, sys
+import json, os, re, sys
 
-OTHER_MAILBOX = re.compile(r"\borca\s+orchestration\s+(check|inbox)\b[^;&|\n]*\s--terminal\b")
+MAILBOX = re.compile(r"\borca\s+orchestration\s+(?:check|inbox)\b[^;&|\n]*?\s--terminal(?:\s+|=)(\S+)")
 
 
 def main():
@@ -17,11 +19,14 @@ def main():
         return 0
     if event.get("tool_name") != "Bash":
         return 0
-    if OTHER_MAILBOX.search((event.get("tool_input") or {}).get("command") or ""):
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse", "permissionDecision": "deny",
-            "permissionDecisionReason": "Reading another terminal's Orca mailbox (check/inbox --terminal) "
-                                        "can consume its messages. Check your own: drop --terminal."}}))
+    own = os.environ.get("ORCA_TERMINAL_HANDLE")
+    for handle in MAILBOX.findall((event.get("tool_input") or {}).get("command") or ""):
+        if handle.strip("'\"") != own:
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": f"check/inbox --terminal {handle} reads another terminal's Orca mailbox "
+                                            f"and can consume its messages. Your own handle is {own or 'unknown'}."}}))
+            break
     return 0
 
 
