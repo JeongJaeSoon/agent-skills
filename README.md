@@ -64,8 +64,6 @@ claude plugin install agent-skills@jeongjaesoon
 
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
-**플러그인 밖**: `extras/obsidian-cli`(Obsidian CLI 명령 안내). 플러그인에 포함되지 않으니 필요하면 `~/.claude/skills`에 따로 복사한다.
-
 **pstack**: `architect`, `blast-radius`, `create-verification-skill`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `reflect`, `show-me-your-work`, `swarm`, `tdd`. 원본 이름을 유지해 upstream을 따라간다.
 
 ```bash

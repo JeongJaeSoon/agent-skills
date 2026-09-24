@@ -28,7 +28,7 @@ def old_rule(rule):
 
 
 def links():
-    names = {p.parent.name for d in ("skills", "legacy", "extras") for p in (REPO / d).glob("*/SKILL.md")}
+    names = {p.parent.name for d in ("skills", "legacy") for p in (REPO / d).glob("*/SKILL.md")}
     for dst in sorted(SKILLS.iterdir()) if SKILLS.is_dir() else []:
         if dst.is_symlink() and dst.name in names and "agent-skills" in os.readlink(dst):
             print(f"unlink  {dst} -> {os.readlink(dst)}")
