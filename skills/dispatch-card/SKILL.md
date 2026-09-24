@@ -1,6 +1,6 @@
 ---
 name: dispatch-card
-description: Use when sending work to another repo, or to a side branch of this one, as a new Orca card while this session keeps going — "~ repo 에 지시해줘", "~ 에 위임하고 너는 X 계속해", "기존 작업 하면서 ~ 도 진행해줘", "다른 repo 에 맡겨줘", "곁가지로 띄워줘", "dispatch to <repo>". Not "끝났으니 다음" (handoff-ticket), sub-agents, or Codex.
+description: "Use when sending work to another repo, or to a side branch of this one, as a new Orca card while this session keeps going — \"별도의 세션을 만들어서 ~ 해줘\", \"별도 세션으로 진행해줘\", \"현재 세션은 두고 ~\", \"~ 에 위임하고 너는 X 계속해\", \"~ repo 에 작업 지시해줘\", \"dispatch to <repo>\". Not \"끝났으니 다음\" (handoff-ticket), sub-agents, or Codex."
 ---
 
 # Orca dispatch
@@ -95,6 +95,7 @@ orca worktree create \
 # name the card by what it does, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID or target> <short title>" --json
 # the setup terminal is the card's row without agentIdentity; close it once setup exits
+# (run the wait in the background: 30 min outlives the 10-min foreground Bash limit)
 orca terminal list --worktree "path:<result.worktree.path>" --json
 orca terminal wait --terminal <setup handle> --for exit --timeout-ms 1800000 && orca terminal close --terminal <setup handle>
 ```

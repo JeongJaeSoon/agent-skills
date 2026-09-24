@@ -1,6 +1,6 @@
 ---
 name: write-ticket
-description: Use when asked to write, create, or file a ticket or issue ("티켓 만들어줘", "이슈로 남겨줘") — including a one-line ticket request mixed into another question, feedback on in-flight work that should become its own ticket, and follow-up tickets filed from a finding.
+description: "Use when asked to write, create, or file a ticket or issue (\"티켓 만들어줘\", \"티켓 기표해줘\", \"Linear 티켓으로 만들어줘\", \"티켓으로 남겨두고 종료하자\", \"이슈로 남겨줘\") — including a one-line ticket request mixed into another question, feedback on in-flight work that should become its own ticket, and follow-up tickets filed from a finding."
 ---
 
 # Writing a Ticket

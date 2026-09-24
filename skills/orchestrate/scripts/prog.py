@@ -1290,6 +1290,7 @@ def close_out(msgs, workers, worktrees):
     """What to do with each worker_done's card, printed beside the message: after a compaction a coordinator kept
     releasing workers but dropped `worktree rm`, and eight cards stayed open."""
     card = {w["dispatchId"]: (w.get("resource") or {}).get("worktreeId") for w in workers}
+    task = {w["dispatchId"]: w.get("taskId") or "<task>" for w in workers}
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     out = []
     for m in msgs:
@@ -1316,7 +1317,8 @@ def close_out(msgs, workers, worktrees):
             out += [f"CLOSE OUT {d}: release it; its card stays, {', '.join(busy)} works on it", release]
         elif payload.get("outcome") != "succeeded":
             out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
-                    f" (worker-start --retry-of {d} --worktree path:{shlex.quote(p)}) or remove the card", release]
+                    f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])"
+                    " or remove the card", release]
         else:
             out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks in end-session §4),"
                     " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]

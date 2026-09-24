@@ -186,7 +186,7 @@ assert co({"dispatchId": "d1", "outcome": "succeeded"})[-1] == "  orca worktree 
 assert co('{"dispatchId": "d1", "outcome": "succeeded"}') == co({"dispatchId": "d1", "outcome": "succeeded"})
 assert not any("worktree rm" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
 failed = co({"dispatchId": "d1", "outcome": "failed"})
-assert "--retry-of d1" in failed[0] and not any(l.strip().startswith("orca worktree rm") for l in failed), failed
+assert "--retry-of d1 --task t1 " in failed[0] and not any(l.strip().startswith("orca worktree rm") for l in failed), failed
 assert "not in `orca worktree list`" in co({"dispatchId": "d9", "outcome": "succeeded"})[0]
 spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktreeId": "wx"}}]
 assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"

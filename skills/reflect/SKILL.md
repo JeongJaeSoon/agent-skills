@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: Spawn three parallel review subagents over the active transcript, surface learnings, and route each to a concrete edit on an existing skill. Use when the user says reflect.
+description: "Spawn three parallel review subagents over the active transcript, surface learnings, and route each to a concrete edit on an existing skill. Use when the user says reflect, \"스킬에 반영해줘\", \"스킬이 왜 안 떴어\", \"스킬 갱신이 필요해\", or \"이 세션 돌아보고 스킬 개선해줘\"."
 ---
 
 # Reflect

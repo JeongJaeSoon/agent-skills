@@ -1,6 +1,6 @@
 ---
 name: interrogate
-description: "Use for \"interrogate\", \"adversarial review\", \"multi-model review\", \"challenge this\", \"stress test this code\", \"find blind spots\", or \"tear this apart\". Multiple LLM reviewers challenge changes from independent angles."
+description: "Use for \"interrogate\", \"adversarial review\", \"multi-model review\", \"codex 교차 검증\", \"적대적 리뷰\", \"codex 로 설계안/계획 점검\", \"문제없는지 codex 에게 리뷰\", \"challenge this\", or \"find blind spots\" on a design, plan or diff. Multiple LLM reviewers challenge it from independent angles. A PR on its way to main goes through deliver-ticket's Codex review instead."
 ---
 
 # Interrogate

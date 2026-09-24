@@ -68,6 +68,8 @@ LANES       Run all three continuously. Give a unit its own subagent (swarm) whe
                           finding is filed as 문서 오류 (the doc is wrong) or 코드 오류 (the code is wrong).
 FINDINGS    File each reproduced failure as a ticket (write-ticket follow-up format, label follow-up,
             파생: <ticket or QA> · 원인: QA). A failure on main that blocks others → tell the guardian.
+            A feature verify-<app> could not drive, or described wrongly, goes in your report as
+            "verify skill stale: <feature>" so the coordinator can ask for /maintain-verification-skill.
 FORBIDDEN   Fixing findings. Landing anything.
 REPORT      A digest per lane round to the coordinator (send --to run:<run id> --type escalation):
             counts, links to tickets filed, what was driven. On the coordinator's "release" message,

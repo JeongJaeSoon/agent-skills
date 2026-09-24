@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Use when one session must drive a project or milestone to done through several Orca workers — "PM 겸 오케스트레이터로 끝까지", 3+ tickets in parallel with their PRs landed, follow-up tickets kept from swallowing the plan, a progress dashboard — or when taking over ("resume") a program another coordinator ran, or asked why a program's PRs are not moving.
+description: "Use when one session must drive a project or milestone to done through several Orca workers — \"PM 겸 오케스트레이터로 끝까지\", 3+ tickets in parallel with their PRs landed, follow-up tickets kept from swallowing the plan, a progress dashboard (\"대시보드 갱신해줘\", \"전체 진행상황 몇 퍼센트\") — or when taking over (\"resume\") a program another coordinator ran, or asked why a program's PRs are not moving."
 ---
 
 # Orchestrate a program
@@ -44,7 +44,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - `orch init <slug> --repo … --run … --tracker-project … --predicate <IDs> --final-check "<the real-artifact check>" --note <program note path>`
    - Registering a program that has already merged PRs: `orch backfill <slug> --since <when its work began> --dry-run`, check the PRs it lists belong to the program, then the same without `--dry-run`. It adds those merges to the ledger at their merge time with their main CI result and moves `created_at` to the first one, so the cap, the rate and the dashboard count them. Never hand-edit the ledger for this.
    - `orch init` and every `orch status` start the dashboard (`orch-dash ensure`: one detached server per store, restarted when its code is older) and print its URL; give it to the human once. Nothing on it is kept by hand: every number comes from the ledger, Orca, GitHub and the tracker, so record events instead of writing status files.
-2. **Verification first.** If the target repo has no `.claude/skills/verify-*`, the pilot task is "invoke the `create-verification-skill` skill and follow it".
+2. **Verification first.** If the target repo has no `.claude/skills/verify-*`, the first digest asks the human to run `/create-verification-skill` in that repo. It is user-invoked, so neither you nor a worker can start it. Pilot anyway, with VERIFY driven by hand until the skill lands.
 3. **Pilot.** Run one worker through brief → PR → verdict → `orch land` → main green. Fix the brief, the unit size and VERIFY from whatever broke. Also confirm that the chosen worker model gets through its first `orca orchestration` call and its `orch land` without a permission prompt.
 4. **Scale.**
    - Spawn the standing roles (`references/roles.md`): a main guardian, and a QA lead once the first tickets land. Record each with `orch record <slug> spawned --role <guardian|qa> --note <dispatchId>`; roles do not count against the cap.
@@ -54,7 +54,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Write the brief per `references/brief.md`. The spec starts with the ticket ID, never `/goal`.
    - Create its task with its start-after prerequisites as Orca deps (`task-create --deps '[…]'`), and start what `task-list --ready` offers. A land-after layer starts at once, stacked on the lower layer's branch, with `orch dep`. A prerequisite found after dispatch goes in `orch dep`.
    - Run `worker-start --task <id> --worktree new-top-level --repo <selector> --base-branch <origin/main, origin/feat/<topic> or the lower layer's branch> --name <ticket id, lowercase> --display-name "<ID> <title>" --agent claude [--model <id>]`, or `--spec "<the brief>" --deps …` instead of `--task`. The model is the program note's worker model (default: the coordinator's own); a verifier runs on another family (`--agent codex`). Run `git -C <repo> fetch origin` first: a bare `main` is the local branch, which can be landings behind. The display name is the card's durable name; the terminal tab title is the agent's own and it overwrites any rename.
-   - Close its setup terminal once setup exits. In `orca terminal list --worktree <card> --json` it is the row without `agentIdentity`: run `orca terminal wait --terminal <h> --for exit`, then `orca terminal close --terminal <h>`. Finished setup terminals left open made Orca itself slow (22 of 50 terminals in one run).
+   - Close its setup terminal once setup exits. In `orca terminal list --worktree <card> --json` it is the row without `agentIdentity`: run `orca terminal wait --terminal <h> --for exit --timeout-ms 1800000` in the background, then `orca terminal close --terminal <h>`. Finished setup terminals left open made Orca itself slow (22 of 50 terminals in one run).
 5. **Drain.**
    - Wait only with `orch wait <slug>` under `run_in_background`. It wakes on worker_done, escalation or question, and acks batches that hold only heartbeats. Keep exactly one wait running, and no other inbox watcher: a coordinator that kept its old Monitor after taking up this skill mid-run never saw a `CLOSE OUT` or `status` line again.
    - Process every message in the batch, decide each settled worker's next owner (reuse or release), then ack.
@@ -78,10 +78,11 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - The lander watches its merge's main CI and records `main_green`.
    - Red main belongs to the main guardian: flake check, freeze, hotfix or revert, notify (`references/roles.md`). While main is red, only `--class main-fix` lands.
    - The QA lead verifies each landed ticket and audits design against code. It also runs the E2E suite on main every 5 landings, every 2 h, and before each gate PR.
+   - When the QA lead reports that `verify-<app>` could not drive a landed feature, or described it wrongly, the next digest asks the human to run `/maintain-verification-skill`.
 9. **Close.**
    - When `status` says the tickets are done, run the predicate's final check on the real artifact: the QA lead drives `verify-<app>` on main, or, without a QA lead, you run the program's `final_check` on a fresh `origin/main` checkout (`git archive` into a scratch directory), never on a worker's tree.
    - `orch record <slug> predicate_verified --note <evidence>`.
-   - Release the standing roles: `orca orchestration send --to dispatch:<role> --subject release --body "program closing: send worker_done"`, then `worker-release` once its `worker_done` arrives (Orca releases only settled workers). Release any remaining workers and remove any worktree still left (checks in `end-session` §4).
+   - Release the standing roles: `orca orchestration send --to dispatch:<the role's dispatchId from its spawned record> --subject release --body "program closing: send worker_done"`, then `worker-release` once its `worker_done` arrives (Orca releases only settled workers). Release any remaining workers and remove any worktree still left (checks in `end-session` §4).
    - The dashboard server is detached and serves every program, so it neither needs stopping nor defers the `/goal` stop check. `state.json` stays for later reading.
    - Run `measure-delivery` and audit the trail per `show-me-your-work`.
    - Write the lessons into standing orders, skills or memory.

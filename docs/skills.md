@@ -15,7 +15,7 @@
 ## 티켓 하나
 
 ### write-ticket
-- **언제:** "티켓 만들어줘", "이슈로 남겨줘". 다른 질문에 섞인 한 줄 요청, 진행 중인 작업에 대한 피드백, 작업 중 발견한 후속 티켓도 여기로 온다.
+- **언제:** "티켓 만들어줘", "티켓 기표해줘", "Linear 티켓으로 만들어줘", "티켓으로 남겨두고 종료하자". 다른 질문에 섞인 한 줄 요청, 진행 중인 작업에 대한 피드백, 작업 중 발견한 후속 티켓도 여기로 온다.
 - **내용:**
   - 먼저 요청 출처를 가린다. 섞인 요청은 먼저 등록한 뒤 질문에 답하고, 진행 중 작업에 대한 피드백은 별도 티켓으로 만든다.
   - 유형은 Feature, Bug, Improvement, Spike로 나눈다. Spike는 제목에 `[조사]`를 붙인다.
@@ -28,7 +28,7 @@
 - **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `measure-delivery`가 센다.
 
 ### deliver-ticket (옛 이름 `ship-pr`)
-- **언제:** 여러 파일을 고치기 전부터 완료까지 쓴다. PR 생성·갱신·머지, "이 티켓 끝내줘", stack 작업과 검증도 여기에 들어간다.
+- **언제:** 여러 파일을 고치기 전부터 완료까지 쓴다. PR 생성·갱신·머지("pr 작성까지", "머지까지 진행해줘"), 릴리즈, 리뷰 코멘트 대응, codex 교차 검증, "동작확인", "내가 확인할 거 있어?", "이 티켓 끝내줘", stack 작업도 여기에 들어간다.
 - **내용:**
   - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 계획은 티켓 댓글, PR, worklog에 남기고 바로 시작한다.
   - **구현:** worktree 브랜치에서만 한다. 사소하지 않은 로직은 실행 가능한 테스트 없이 커밋하지 않는다. 버그는 실패하는 재현 테스트부터 쓴다. 범위 밖에서 발견한 것은 이 diff에서 고치거나, follow-up 티켓으로 올리거나, worklog에만 적는다.
@@ -46,7 +46,7 @@
 - **관계:** `tdd`, `interrogate`의 판정 틀, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `handoff-ticket`.
 
 ### handoff-ticket
-- **언제:** "핸드오프", "다음 티켓 진행해줘", "남은 것 진행해줘", 그리고 티켓이 끝난 순간. 이 세션이 계속 일해야 하면 `dispatch-card`를 쓴다.
+- **언제:** "핸드오프", "다음 작업으로 넘어가자", "남은 작업 있어?", "머지하고 다음 진행해줘", 그리고 티켓이 끝난 순간. 이 세션이 계속 일해야 하면 `dispatch-card`를 쓴다.
 - **내용:**
   - 다음 할 일을 스스로 고른다. 자투리는 여기서 처리하고 독립된 일은 티켓으로 만든다. 다음 티켓은 우선순위, 의존, 파일 충돌로 순위를 매긴다. 물어도 되는 것은 "어느 티켓이 다음인가"뿐이다.
   - 프로그램 워커(브리프에 `PROGRAM:` 줄이 있는 경우)는 worker_done을 보낸 뒤 코디네이터의 결정을 기다린다.
@@ -55,7 +55,7 @@
 - **관계:** `deliver-ticket` 다음 단계다. 끝은 반드시 `end-session`으로 맺는다.
 
 ### dispatch-card (옛 이름 `dispatch-work`)
-- **언제:** "~ repo에 지시해줘", "곁가지로 띄워줘"처럼 다른 저장소나 곁가지로 일을 보내면서 이 세션은 계속 일할 때.
+- **언제:** "별도의 세션을 만들어서 ~ 해줘", "~ repo에 작업 지시해줘"처럼 다른 저장소나 곁가지로 일을 보내면서 이 세션은 계속 일할 때.
 - **내용:**
   - 대상 저장소를 `orca repo list`로 확인한다.
   - 브리프(배경, 출처, 산출물·완료 조건, 금지 사항, "그 저장소의 CLAUDE.md를 따르라")를 노트에 쓰고, 카드 프롬프트에는 노트 경로와 요약만 넣는다.
@@ -64,7 +64,7 @@
 - **관계:** `use-notes`, `write-ticket`. 이 세션을 닫고 넘기는 경우는 `handoff-ticket`이 맡는다.
 
 ### end-session
-- **언제:** "세션 종료해줘", "카드·worktree 정리해줘", 그리고 `handoff-ticket`의 마지막 단계. 대상 없이 "정리해줘"만 하면 기록만 남기고 대화를 이어 간다.
+- **언제:** "세션 종료해줘", "현재 세션 정리해줘", "아카이브해줘", "머지하고 종료하자", 그리고 `handoff-ticket`의 마지막 단계. 대상 없이 "정리해줘"만 하면 기록만 남기고 대화를 이어 간다.
 - **내용:**
   - 먼저 티켓 최종 상태, 완료 댓글, worklog, 메모리를 남긴다.
   - `orca worktree current --json`의 결과로 닫는 방법을 고른다.
@@ -77,10 +77,10 @@
 ## 프로젝트 하나 (Orca 워커 여러 개)
 
 ### orchestrate
-- **언제:** 한 세션이 Orca 워커 여러 개(대개 3개 이상)로 마일스톤을 끝까지 끌고 갈 때, 다른 코디네이터가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
+- **언제:** 한 세션이 Orca 워커 여러 개(대개 3개 이상)로 마일스톤을 끝까지 끌고 갈 때, "대시보드 갱신해줘", "전체 진행상황 몇 퍼센트", 다른 코디네이터가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
 - **내용:** 코디네이터는 코드가 아니라 프로그램을 소유한다. 매 세션 `orca skills get orchestration`부터 읽는다.
   1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. Run을 만들고 `orch init`으로 등록한다.
-  2. **검증 준비와 Pilot:** verify 스킬이 없으면 `create-verification-skill`을 먼저 돌리고, 워커 하나로 끝까지 한 번 돌려 본다.
+  2. **검증 준비와 Pilot:** verify 스킬이 없으면 첫 digest에서 사용자에게 `/create-verification-skill` 실행을 요청하고, 그동안은 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
   3. **Scale:** 상시 역할(main 가디언, QA 리드)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
   4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다.
   5. **Triage:** follow-up은 기본적으로 미룬다(park). predicate를 막거나 재현된 결함만 받아들인다.
@@ -128,7 +128,7 @@
 - **동봉:** `scripts/tracker.py`(표준 라이브러리만 쓰는 Linear·Jira 어댑터, fixture 모드 포함), `references/linear.md`, `references/jira.md`.
 
 ### use-notes (옛 이름 `use-obsidian`)
-- **언제:** 설계 문서, worklog, 프로그램 노트를 읽고 쓸 때.
+- **언제:** 설계 문서, worklog, 프로그램 노트를 읽고 쓸 때. "obs 에 기록해줘"도 여기로 온다.
 - **내용:**
   - 어댑터는 obsidian(기본)과 markdown이고, 프로그램마다 따로 정할 수 있다.
   - 노트는 `Project/<project>/`에 `worklog-*.md`, `program-<slug>.md`로 둔다. 저장소 자체 규칙이 있으면 그쪽이 우선한다.
@@ -140,7 +140,7 @@
 [pstack](https://github.com/cursor/plugins)에서 가져와 Claude Code에 맞게 고친 스킬이다. 무엇이 다른지는 아래 [pstack과의 차이](#pstack과의-차이)에 있다.
 
 ### architect
-- **언제:** `/architect`, "설계해줘", 코드부터 쓰면 모양이 굳어 버릴 작업.
+- **언제:** `/architect`, "상세 설계안 작성해줘", "설계안 다듬어줘", "구현 계획 짜줘", 코드부터 쓰면 모양이 굳어 버릴 작업.
 - **내용:** 다섯 단계로 진행한다.
   1. **Ground:** `how`와 git 기록으로 주변 시스템을 파악한다.
   2. **Sketch:** 설계 러너를 병렬로 띄운다(Claude opus, Claude fable, Codex). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
@@ -166,7 +166,7 @@
 - **동봉:** `explorer-prompt.md`, `explainer-prompt.md`.
 
 ### interrogate
-- **언제:** "적대적 리뷰", "다른 모델로 검토", "빈틈 찾아줘".
+- **언제:** "적대적 리뷰", "codex 교차 검증", "codex 로 설계안 점검", "빈틈 찾아줘". main으로 가는 PR은 `deliver-ticket`의 Codex 리뷰가 맡는다.
 - **내용:**
   - 핵심은 모델 계열의 다양성이다. Claude(opus)와 Codex가 같은 프롬프트와 rubric으로 따로 리뷰한다.
   - 리드가 결과를 합쳐 Act on / Consider / Noted / Dismissed로 판정하고 합의 지도를 쓴다.
@@ -179,7 +179,7 @@
 - **동봉:** `references/principle-*.md` 23개.
 
 ### reflect
-- **언제:** "reflect".
+- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘".
 - **내용:**
   - 이 세션의 transcript를 리뷰어 셋(판단 opus, 도구 사용 Codex, 발산 opus)이 읽는다.
   - 종합자(opus)가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 구조로 강제할 수 있는 것은 따로 표시한다.
@@ -213,6 +213,7 @@
   - 저장소를 조사해 앱을 사용자처럼 띄우고 조작하고 관찰하는 저장소 전용 스킬 `.claude/skills/verify-<app>/`을 만든다. Launch, Doctor, Drive, Evidence, Cleanup 단계를 둔다.
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
   - 직접 끝까지 한 번 돌려 증명한다.
+  - 모델이 부를 수 없으므로 `deliver-ticket`(남은 확인 사항)과 `orchestrate`(첫 digest)가 필요할 때 사용자에게 실행을 권한다.
 - **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도).
 
 ### maintain-verification-skill (사용자 호출 전용)
@@ -220,6 +221,7 @@
   - 기능마다 소스를 읽고, 모든 기능을 실제로 구동해 기능 지도와 대조한다.
   - 문제는 문서 drift, 하니스 결함, 제품 결함으로 나눈다. 제품 결함은 보고만 한다.
   - 결과는 clean, changed(증명된 수정만 PR 하나), blocked 중 하나다.
+  - verify 스킬이 기능을 못 다루거나 잘못 설명하면 `deliver-ticket`과 QA lead 보고를 거쳐 사용자에게 실행을 권한다.
 
 ## 별칭
 

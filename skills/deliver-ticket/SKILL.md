@@ -1,6 +1,6 @@
 ---
 name: deliver-ticket
-description: Use when working a ticket from the first edit to done — before multi-file work, before opening, updating or merging a PR ("PR 올려줘", "머지해줘", "ship it"), before declaring a ticket done ("이 티켓 끝내줘"), or when reviewing, stacking or verifying a change on its way to main.
+description: "Use when working a ticket from the first edit to done — before multi-file work; before opening, updating or merging a PR (\"PR 올려줘\", \"pr 작성까지 진행해줘\", \"머지해줘\", \"머지까지 진행해줘\", \"머지되면 이어서\"); before a release that follows the merge (\"릴리즈까지 진행해줘\"); when answering review comments (\"리뷰 코멘트 대응해줘\") or getting Codex to cross-check the change (\"codex 교차 검증\", \"적대적 리뷰\", \"codex 따봉\"); when proving it works (\"동작확인하고 머지\", \"동작확인 절차\", \"내가 확인할 거 있어?\"); before declaring a ticket done (\"이 티켓 끝내줘\", \"ship it\"); or when stacking or verifying a change on its way to main."
 ---
 
 # Delivering a ticket
@@ -214,7 +214,9 @@ that can be verified, the merely tedious checks included. What is
 left for the user is what genuinely needs them — a judgment call you made on their behalf, how
 something feels to use, data or an account only they have, a decision the ticket left open.
 Name each one with the exact command or URL, and say why it is theirs. If nothing is left, say
-that too. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
+that too. Two user-invoked skills belong on this list when they apply: `/create-verification-skill`
+when the repo has no `.claude/skills/verify-*` and you had to drive the app by hand, and
+`/maintain-verification-skill` when a `verify-*` skill missed or misdescribed a feature you touched. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
 survives this session.
 
 **The completion comment does not end the turn** (outside a program; inside one, `worker_done`

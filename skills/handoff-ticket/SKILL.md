@@ -1,6 +1,6 @@
 ---
 name: handoff-ticket
-description: Use when handing tickets to fresh Orca worktree cards — "핸드오프", "다음 티켓/작업 진행해줘", "남은 것 진행해줘", "새 카드 띄워줘", "새세션 실행하고 /goal", "병렬로 진행", "handoff" — and the moment this session's ticket is done (every acceptance criterion met) to decide what runs next. Not when the target is another repo or this session keeps working (dispatch-card).
+description: "Use when handing tickets to fresh Orca worktree cards — \"핸드오프\", \"다음 작업으로 넘어가자\", \"다음 티켓/작업 진행해줘\", \"남은 작업 있어?\", \"진행 가능한 다음 작업\", \"머지하고 다음 진행해줘\", \"새 worktree 세션 띄우고 /goal\", \"병렬로 진행\", \"handoff\" — and the moment this session's ticket is done (every acceptance criterion met) to decide what runs next. Not when the target is another repo or this session keeps working (dispatch-card)."
 ---
 
 # Orca handoff
@@ -94,6 +94,7 @@ orca worktree create \
 # name the card after the ticket, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<TICKET-ID> <short title>" --json
 # the setup terminal is the card's row without agentIdentity; close it once setup exits
+# (run the wait in the background: 30 min outlives the 10-min foreground Bash limit)
 orca terminal list --worktree "path:<result.worktree.path>" --json
 orca terminal wait --terminal <setup handle> --for exit --timeout-ms 1800000 && orca terminal close --terminal <setup handle>
 ```
