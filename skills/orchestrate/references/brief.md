@@ -18,7 +18,9 @@ ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (sta
             Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
             program's exclusive_paths (land handles it; say it here so the worker expects it).
 PEERS       Who to settle shared files and landing order with directly, and about what:
-            `orca orchestration send --to dispatch:<id> --subject … --body …`. Tell the
+            `orca orchestration send --to dispatch:<id> --subject … --body …`, plus the exact
+            --from and --dispatch-capability values from your Orca preamble (Orca ties the message
+            to your Dispatch only through them; never rebuild them). Tell the
             coordinator only what changes scope, order or the predicate. Read your own mail with
             `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
             or the same batch comes back. Blocked on a decision or an act you cannot take: `ask`,
@@ -38,8 +40,13 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             `&` or a redirect: the completion notice carries its output and exit code). Act on
             exit 3, report on exit 1.
             Never merge any other way. (human-gate: stop at READY and report instead.)
-FORBIDDEN   Do not start other tickets. File follow-ups with the label `follow-up` and the first
-            body line `파생: <this ticket> · 원인: <분류>`, and do not work on them. No force-push
+FORBIDDEN   Do not start other tickets. File follow-ups with the label `follow-up`, the first
+            body line `파생: <this ticket> · 원인: <분류>`, and a `related` relation to this ticket,
+            not a parent (use-tracker: create --label follow-up --related <this ticket>; not
+            orca-linear's --parent-current), and do not work on them. measure-delivery and the
+            dashboard count follow-ups by the label and the 파생 line, and the dashboard's stage
+            bars count the leaves under each parent, so a parented follow-up would show up as
+            planned work of this ticket's stage. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).

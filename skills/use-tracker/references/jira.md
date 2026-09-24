@@ -11,7 +11,7 @@ it, and always from scripts, use `tracker.py --adapter jira` (Jira Cloud REST v3
 | File | `createJiraIssue` | `create --project P --title T --body-file F [--label L] [--parent ID] [--related ID]` |
 | Add labels | `editJiraIssue` (`update.labels: [{add: L}]`) | `label ABC-1 --add L` |
 | Comment | `addCommentToJiraIssue` | `comment ABC-1 --body-file F` |
-| Move | `getTransitionsForJiraIssue`, then `transitionJiraIssue` | `transition ABC-1 --to started\|completed\|canceled` |
+| Move | `getTransitionsForJiraIssue`, then `transitionJiraIssue` | `transition ABC-1 --to started\|review\|completed\|canceled` |
 | Relate | issue-link tool if the server has one, else `tracker.py` | `create --related ID` (link type "Relates") |
 
 ## How tracker.py maps Jira
@@ -27,8 +27,9 @@ it, and always from scripts, use `tracker.py --adapter jira` (Jira Cloud REST v3
 - `completed_at` / `canceled_at` come from `resolutiondate`; `parent` from `fields.parent.key`;
   `description` is ADF flattened to plain text; `priority` maps Highest→1, High→2, Medium→3, Low/Lowest→4.
 - `transition` picks the first transition whose `to.statusCategory.key` matches the target
-  (`indeterminate` for started, `done` for completed/canceled). A done-category transition whose name
+  (`indeterminate` for started and review, `done` for completed/canceled). A done-category transition whose name
   mentions cancel / won't do / reject / decline / duplicate counts as canceled, any other as completed.
+  `review` needs the one target status whose name contains "review".
   If none fits, it fails and lists the available transitions. It does not set a resolution field.
 - `create` uses issue type `tracker.jira.issue_type` (default `Task`) and turns the body file into ADF
   paragraphs.

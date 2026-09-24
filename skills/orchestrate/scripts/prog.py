@@ -559,6 +559,18 @@ def gate_resolution(cfg, events, pr):
     return None
 
 
+GATE_TASK = "Land #"
+
+
+def close_gate_task(p, pr, status):
+    """No worker settles the coordinator-owned `Land #N` Task, so it would sit in `task-list --ready` for good:
+    completed when the PR lands, failed when the gate is held or the PR is closed. A new gate makes a new Task."""
+    opened = [e for e in p.events() if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    if opened:
+        run(["orca", "orchestration", "task-update", "--id", opened[-1]["task"], "--status", status,
+             "--run", p.cfg["run"], "--json"], check=False)
+
+
 def is_derived(issue):
     """The follow-up convention from use-tracker: label `follow-up` or a first body line `파생: …`."""
     return "follow-up" in (issue.get("labels") or []) or (issue.get("description") or "").lstrip().startswith("파생:")
@@ -596,7 +608,8 @@ def cmd_init(argv):
 
 STALL_TEXT = {
     "idle": "turn ended {minutes} min ago with its task open and no wake-up armed; an orchestration message "
-            "does not wake an idle session: type into its terminal",
+            "does not wake an idle session: send the content to dispatch:{dispatch}, then nudge its terminal with "
+            "one line (orca terminal send --text 'run your orchestration check' --enter)",
     "start_unconfirmed": "dispatched {minutes} min ago and its session has written nothing: check it got the brief",
     "long_tool": "one {tool} call running for {minutes} min ({detail}): still waiting on purpose?",
 }
@@ -963,6 +976,7 @@ def merge_unit(p, pr, unit, klass, events):
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
                      klass=klass if klass != "normal" else None, note=f"stack of {len(unit)}" if len(unit) > 1 else None)
+            close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
         why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
         p.append("land_failed", pr=pr, note=why)
@@ -984,9 +998,13 @@ def attempt(p, pr, klass):
     if stopped(events):
         return 1, "STOP line active: nothing lands"
     if cfg["merge_policy"] == "human-gate" and "approved" not in st and "gate_opened" in st:
-        if gate_resolution(cfg, events, pr) == "land":
+        resolution = gate_resolution(cfg, events, pr)
+        if resolution == "land":
             p.append("approved", pr=pr, note="orca gate resolved: land")
             events, st = p.events(), pr_state(p.events()).get(pr, {})
+        elif resolution:
+            close_gate_task(p, pr, "failed")
+            return 1, f"human-gate: the user resolved the gate as '{resolution}'"
     main = main_state(events)
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"
@@ -1001,7 +1019,10 @@ def attempt(p, pr, klass):
                 return 0, (f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]} ({st['landed'].get('note') or 'recorded'});"
                            " main CI ran once on the stack top's commit, and the top's owner records it")
             p.append("landed", pr=pr, sha=sha, note="merged outside land")
+            close_gate_task(p, pr, "completed")
             return 0, f"#{pr} was merged outside land; recorded"
+        if v["state"] == "CLOSED":
+            close_gate_task(p, pr, "failed")
         return 1, f"#{pr} is {v['state']}"
     if me["state"] == "waiting":
         if st.get("yield", {}).get("note") != me["reasons"][0]:
@@ -1107,6 +1128,7 @@ def cmd_land_check(argv):
         if resolution == "land":
             p.append("approved", pr=pr, note="orca gate resolved: land")
         elif resolution:
+            close_gate_task(p, pr, "failed")
             problems.append(f"human-gate: the user resolved the gate as '{resolution}'")
         elif any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in events):
             problems.append("human-gate: gate open in Orca, waiting for the user")
@@ -1137,9 +1159,12 @@ def cmd_landed(argv):
     v = pr_view(repo, pr)
     if v["state"] != "MERGED":
         p.append("land_failed", pr=pr, note=f"state {v['state']}")
+        if v["state"] == "CLOSED":
+            close_gate_task(p, pr, "failed")
         sys.exit(f"PR {pr} is {v['state']}, recorded land_failed")
     sha = (v.get("mergeCommit") or {}).get("oid")
     p.append("landed", pr=pr, sha=sha)
+    close_gate_task(p, pr, "completed")
     print(f"landed #{pr} as {sha[:8]}. Watch main CI in the background, then record main_green or main_red:")
     print(f"  gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status")
     print(f"  gh run watch <databaseId> --repo {repo} --exit-status")
@@ -1153,7 +1178,7 @@ def cmd_gate(argv):
     v = pr_view(p.cfg["repo"], pr)
     spec = (f"Land PR #{pr} ({v['url']}) with orch land once the user resolves the gate. "
             "Coordinator-owned; no worker is dispatched for this Task.")
-    args = ["orchestration", "task-create", "--run", p.cfg["run"], "--spec", spec, "--task-title", f"Land #{pr}"]
+    args = ["orchestration", "task-create", "--run", p.cfg["run"], "--spec", spec, "--task-title", f"{GATE_TASK}{pr}"]
     if opt(argv, "--parent"):
         args += ["--parent", opt(argv, "--parent")]
     task = orca_json(*args)
@@ -1320,7 +1345,7 @@ def close_out(msgs, workers, worktrees):
                     f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])"
                     " or remove the card", release]
         else:
-            out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks in end-session §4),"
+            out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks and --run-hooks in end-session §4),"
                     " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]
     return out
 
@@ -1363,8 +1388,11 @@ def cmd_wait(argv):
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) acked)", flush=True)
     print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
-          f" one that ended its turn without worker_done does not wake on send: orca terminal send --terminal"
-          f" <agentTerminalHandle> --text '<the instruction>' --enter, then read the terminal to see the turn start")
+          f" one that ended its turn without worker_done does not wake on send: send the instruction with"
+          f" orca orchestration send --to dispatch:<id>, then nudge it in one line, orca terminal send --terminal"
+          f" <agentTerminalHandle> --text 'run your orchestration check' --enter, and read the terminal to see the turn"
+          f" start; a worker with no terminal gets Orca's recovery (worker-stop or worker-abandon:"
+          f" orca skills get orchestration --reference references/recovery-and-cleanup.md)")
 
 
 def pid_alive(pid):

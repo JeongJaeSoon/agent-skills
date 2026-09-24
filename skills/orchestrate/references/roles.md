@@ -40,9 +40,13 @@ ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --fai
             6. On green: orch record <slug> main_green --pr N --sha <sha>.
             7. Tell the culprit's card and the affected cards (orca orchestration send --to
                dispatch:<id>), and the coordinator: orca orchestration send --to run:<run id>
-               --type escalation --subject "main <red|green> <sha>" --body "<time, sha, flake|defect,
-               hotfix|revert, PR>". The coordinator appends that line to guardian-log.tsv; you
-               write nothing outside your worktree.
+               --type status --subject "main <red|green> <sha>" --body "<time, sha, flake|defect,
+               hotfix|revert, PR>". Use --type escalation only when a red main needs the coordinator
+               to act because you cannot repair it yourself: Orca keeps escalation for work that is
+               blocked, and it wakes the coordinator. The coordinator appends that line to
+               guardian-log.tsv; you write nothing outside your worktree.
+            Every send copies the exact --from and --dispatch-capability values from your Orca
+            preamble; Orca ties a message to your Dispatch only through them, so never rebuild them.
 FORBIDDEN   Feature work. Force-push. Disabling or skipping checks.
 REPORT      One message per incident. When the coordinator sends "release" (send --to dispatch:<you>),
             send worker_done with a summary of the incidents and stop.
@@ -71,9 +75,11 @@ FINDINGS    File each reproduced failure as a ticket (write-ticket follow-up for
             A feature verify-<app> could not drive, or described wrongly, goes in your report as
             "verify skill stale: <feature>" so the coordinator can ask for /maintain-verification-skill.
 FORBIDDEN   Fixing findings. Landing anything.
-REPORT      A digest per lane round to the coordinator (send --to run:<run id> --type escalation):
-            counts, links to tickets filed, what was driven. On the coordinator's "release" message,
-            worker_done with the totals and stop.
+REPORT      A digest per lane round to the coordinator (send --to run:<run id> --type status, with the
+            exact --from and --dispatch-capability from your Orca preamble): counts, links to tickets
+            filed, what was driven. It is a routine report, not an escalation; the coordinator reads it
+            with the next batch. On the coordinator's "release" message, worker_done with the totals
+            and stop.
 ```
 
 Set the cadence in the program note's standing orders so a resumed coordinator re-briefs the same way.
