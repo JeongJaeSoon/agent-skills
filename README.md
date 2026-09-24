@@ -10,7 +10,7 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 
 ## 설치
 
-Claude Code 플러그인 하나로 설치한다. 스킬, `orch`·`orch-dash` 명령, 권한 hook이 함께 들어온다.
+Claude Code 플러그인 하나로 설치한다. 스킬, `orch`·`orch-dash` 명령, hook(권한 결정, 압축 직후 코디네이터 재정렬)이 함께 들어온다.
 
 ```bash
 claude plugin marketplace add JeongJaeSoon/agent-skills
@@ -85,7 +85,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py hooks/test_guard.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py hooks/test_*.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

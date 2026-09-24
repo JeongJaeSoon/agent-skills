@@ -136,7 +136,7 @@ Workers stop at READY. `land` refuses them with exit 1, and they report. You ope
 
 Merging inside `orch land` is what lets a worker land without a per-merge approval prompt. The plugin's PreToolUse hook (`hooks/guard.py`) makes the permission decisions a program needs, for every session and subagent where the plugin is enabled:
 
-- allow this plugin's skills, `orca orchestration <verb>` except reset, worker-abandon and gate-resolve, and `orch <subcommand>` except heavy, set and init (the checks above are the review gate)
+- allow this plugin's skills, `orca orchestration <verb>` except reset, worker-abandon and gate-resolve, and `orch <subcommand>` except heavy, set, init and backfill (the checks above are the review gate)
 - only for one simple command: an operator, redirection or substitution gets no decision
 - deny reading another terminal's Orca mailbox
 

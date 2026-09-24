@@ -5,6 +5,12 @@
         "matcher": "Bash|Skill",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 5 }]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/reorient.py\"", "timeout": 10 }]
+      }
     ]
   }
 }

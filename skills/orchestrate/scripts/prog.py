@@ -54,7 +54,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, shlex, subprocess, sys, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
@@ -82,6 +82,18 @@ def orca_json(*args):
     if not out.get("ok", True):
         sys.exit(f"orca {' '.join(args[:2])}: {json.dumps(out.get('error'))[:400]}")
     return out.get("result", out)
+
+
+def run_workers(run_id):
+    """Every Dispatch of the Run. worker-list pages at 100, newest first, and a program passed 86 in two days:
+    one page would drop the oldest cards from LANDED-BUT-OPEN."""
+    workers, cursor = [], None
+    while True:
+        res = orca_json("orchestration", "worker-list", "--run", run_id, "--limit", "100", *(["--cursor", cursor] if cursor else []))
+        workers += res.get("workers", [])
+        cursor = (res.get("page") or {}).get("nextCursor")
+        if not (res.get("page") or {}).get("hasMore") or not cursor:
+            return workers
 
 
 def gh_json(*args):
@@ -601,7 +613,7 @@ def cmd_status(argv):
                  if issues is not None else f"predicate: {len(pred)} items (no tracker project; check by hand)")
 
     # 2. flow
-    workers = orca_json("orchestration", "worker-list", "--run", cfg["run"]).get("workers", [])
+    workers = run_workers(cfg["run"])
     roles = {e.get("note"): e["role"] for e in events if e["ev"] == "spawned" and e.get("role")}
     running = [w for w in workers if (w.get("projection") or {}).get("outcome") == "in_progress"]
     live = [w for w in running if w["dispatchId"] not in roles]
@@ -634,7 +646,8 @@ def cmd_status(argv):
     for e in stale:
         lines.append(f"  STALE {fmt_entry(order.index(e) + 1, e)}")
     worktrees = orca_json("worktree", "list").get("worktrees", [])
-    for tk, dispatch, active, path in landed_but_open(events, workers, tasks, worktrees, by_id):
+    leftover = landed_but_open(events, workers, tasks, worktrees, by_id)
+    for tk, dispatch, active, path in leftover:
         rm = f"`orca worktree rm --worktree path:{path}`"
         lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
                      + (f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
@@ -658,16 +671,19 @@ def cmd_status(argv):
 
     # 4. next move
     nxt, used = next_move(cfg, events, tnow, tickets_done=tickets_done if issues is not None else None,
-                          live=units, human=len(human), order=order)
+                          live=units, human=len(human), order=order,
+                          leftover=sum(not active for _, _, active, _ in leftover))
     budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
     print("\n".join(lines))
 
 
-def next_move(cfg, events, tnow, *, tickets_done, live, human, order):
+def next_move(cfg, events, tnow, *, tickets_done, live, human, order, leftover=0):
     """Step 4 of `status`, first matching rule wins; safety outranks completion. orch-dash shows the same line.
 
     tickets_done is None when the tracker could not say: a current predicate_verified then decides Close.
+    leftover counts released LANDED-BUT-OPEN cards; they go before spawning. While "may spawn 3 more" topped
+    them, a compacted coordinator left eight open.
     Returns (next line, share of the deadline used or None)."""
     used = None
     if cfg.get("deadline"):
@@ -700,6 +716,8 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order):
                 " (stack dependent or independent ready PRs so one merge lands several)"), used
     if not landed_recent and len(fails_recent) >= 2:
         return "stop spawning: no landing and 2+ failures in 3h — find the cause", used
+    if leftover:
+        return f"close out {leftover} released card(s) before spawning: remove each LANDED-BUT-OPEN card", used
     if live < cap:
         return f"may spawn {cap - live} more", used
     return "at cap: drain and land", used
@@ -1222,13 +1240,50 @@ def batch(res):
     return res.get("deliveryId"), res.get("messages") or []
 
 
+def close_out(msgs, workers, worktrees):
+    """What to do with each worker_done's card, printed beside the message: after a compaction a coordinator kept
+    releasing workers but dropped `worktree rm`, and eight cards stayed open."""
+    card = {w["dispatchId"]: (w.get("resource") or {}).get("worktreeId") for w in workers}
+    path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
+    out = []
+    for m in msgs:
+        if m.get("type") != "worker_done":
+            continue
+        payload = m.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        d = payload.get("dispatchId")
+        if not d:
+            continue
+        release = f"  orca orchestration worker-release --dispatch {d}"
+        wt = card.get(d)
+        p = path.get(wt)
+        busy = [w["dispatchId"] for w in workers if w["dispatchId"] != d and w.get("terminalState") == "active"
+                and (w.get("resource") or {}).get("worktreeId") == wt]
+        if not p:
+            out += [f"CLOSE OUT {d}: release it; its card is not in `orca worktree list`", release]
+        elif busy:
+            out += [f"CLOSE OUT {d}: release it; its card stays, {', '.join(busy)} works on it", release]
+        elif payload.get("outcome") != "succeeded":
+            out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
+                    f" (worker-start --retry-of {d} --worktree path:{shlex.quote(p)}) or remove the card", release]
+        else:
+            out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks in end-session §4),"
+                    " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]
+    return out
+
+
 def cmd_wait(argv):
     p = Program(argv[0])
     timeout = opt(argv, "--timeout-ms", "540000")
     rounds = int(opt(argv, "--rounds", "3"))
     run_id = p.cfg["run"]
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
-    workers = orca_json("orchestration", "worker-list", "--run", run_id).get("workers", []) if me else []
+    workers = run_workers(run_id) if me else []
     if me and me in {w.get("agentTerminalHandle") for w in workers}:
         sys.exit("orch wait reads and acks the coordinator's Run inbox, and this terminal is one of the Run's"
                  " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
@@ -1246,6 +1301,12 @@ def cmd_wait(argv):
                 body = (m.get("body") or "").replace("\n", " ")
                 print(f"INBOX id={m.get('id')} type={m.get('type')} from={m.get('from_handle')} "
                       f"subject={m.get('subject')} payload={str(m.get('payload'))[:200]} body={body[:800]}")
+            if any(m.get("type") == "worker_done" for m in work):
+                try:
+                    lines = close_out(work, run_workers(run_id), orca_json("worktree", "list").get("worktrees", []))
+                except SystemExit as e:  # the batch and its ack line matter more than the hint
+                    lines = [f"CLOSE OUT: could not read the cards ({e}); `orch status` lists them"]
+                print("\n".join(lines))
             print(f"ACTIONABLE delivery={did} ({len(work)} of {len(msgs)}): process every message, then "
                   f"orca orchestration check --run {run_id} --ack {did} --json")
             return
@@ -1253,7 +1314,9 @@ def cmd_wait(argv):
             orca_json("orchestration", "check", "--run", run_id, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) acked)", flush=True)
     print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
-          f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal)")
+          f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
+          f" one that ended its turn without worker_done does not wake on send: orca terminal send --terminal"
+          f" <agentTerminalHandle> --text '<the instruction>' --enter, then read the terminal to see the turn start")
 
 
 def pid_alive(pid):

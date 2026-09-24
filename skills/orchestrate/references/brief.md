@@ -21,7 +21,9 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             `orca orchestration send --to dispatch:<id> --subject … --body …`. Tell the
             coordinator only what changes scope, order or the predicate. Read your own mail with
             `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
-            or the same batch comes back.
+            or the same batch comes back. Blocked on a decision or an act you cannot take: `ask`,
+            which waits for the answer (after a timeout, resume the same message ID). Never send
+            a status and end your turn: waking an idle agent on mail is best-effort.
 ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go

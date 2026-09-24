@@ -146,6 +146,13 @@ assert nm(done + [at(0.1, "landed", pr=2, sha="m2")], None).startswith("may spaw
 assert nm([], True).startswith("tickets done")
 assert nm([], None, live=4) == "at cap: drain and land"
 assert nm([], None, order=[{"age_h": 3.5}]).startswith("unstick first: 1 PR")
+# Released cards still open go before spawning, never before a safety stop, Close or a stale PR.
+left = lambda ev, td=None, live=0, order=(): prog.next_move(NCFG, ev, NOW, tickets_done=td, live=live, human=0,
+                                                              order=list(order), leftover=8)[0]
+assert left([]).startswith("close out 8 released card(s)") and left([], live=4).startswith("close out 8")
+assert left(done, True) == "predicate met and verified: Close"
+assert left([], order=[{"age_h": 3.5}]).startswith("unstick first")
+assert left([at(1, "landed", pr=1, sha="m1"), at(0.5, "main_red", sha="m1")]).startswith("SAFETY STOP")
 
 # A land-after chain counts once against the cap; a start-after or unrelated worker counts on its own.
 ev = [at(1, "spawned", ticket="S-1", note="ctx_a1"), at(1, "spawned", ticket="S-2", note="ctx_b2"),
@@ -172,6 +179,25 @@ workers = [
 ]
 assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/w/1"), ("A-2", "d2", True, "/w/2")], \
     prog.landed_but_open(ev, workers, tasks, wts)
+# orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
+def co(payload, workers=workers):
+    return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
+assert co({"dispatchId": "d1", "outcome": "succeeded"})[-1] == "  orca worktree rm --worktree path:/w/1"
+assert co('{"dispatchId": "d1", "outcome": "succeeded"}') == co({"dispatchId": "d1", "outcome": "succeeded"})
+assert not any("worktree rm" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
+failed = co({"dispatchId": "d1", "outcome": "failed"})
+assert "--retry-of d1" in failed[0] and not any(l.strip().startswith("orca worktree rm") for l in failed), failed
+assert "not in `orca worktree list`" in co({"dispatchId": "d9", "outcome": "succeeded"})[0]
+spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktreeId": "wx"}}]
+assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"
+assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
+                       {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
+# worker-list pages at 100, newest first: the oldest cards are on the last page.
+pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},
+         "c1": {"workers": [{"dispatchId": "old"}], "page": {"hasMore": False, "nextCursor": None}}}
+real, prog.orca_json = prog.orca_json, lambda *a: pages[a[a.index("--cursor") + 1] if "--cursor" in a else None]
+assert [w["dispatchId"] for w in prog.run_workers("run_x")] == ["new", "old"]
+prog.orca_json = real
 print("prog.py landed_but_open: all pass")
 
 # --- backfill ----------------------------------------------------------------------------

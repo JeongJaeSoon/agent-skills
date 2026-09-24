@@ -56,9 +56,9 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Run `worker-start --task <id> --worktree new-top-level --repo <selector> --base-branch <origin/main, origin/feat/<topic> or the lower layer's branch> --name <ticket id, lowercase> --display-name "<ID> <title>" --agent claude [--model <id>]`, or `--spec "<the brief>" --deps …` instead of `--task`. The model is the program note's worker model (default: the coordinator's own); a verifier runs on another family (`--agent codex`). Run `git -C <repo> fetch origin` first: a bare `main` is the local branch, which can be landings behind. The display name is the card's durable name; the terminal tab title is the agent's own and it overwrites any rename.
    - Close its setup terminal once setup exits. In `orca terminal list --worktree <card> --json` it is the row without `agentIdentity`: run `orca terminal wait --terminal <h> --for exit`, then `orca terminal close --terminal <h>`. Finished setup terminals left open made Orca itself slow (22 of 50 terminals in one run).
 5. **Drain.**
-   - Wait only with `orch wait <slug>` under `run_in_background`. It wakes on worker_done, escalation or question, and acks batches that hold only heartbeats. Keep exactly one wait running.
+   - Wait only with `orch wait <slug>` under `run_in_background`. It wakes on worker_done, escalation or question, and acks batches that hold only heartbeats. Keep exactly one wait running, and no other inbox watcher: a coordinator that kept its old Monitor after taking up this skill mid-run never saw a `CLOSE OUT` or `status` line again.
    - Process every message in the batch, decide each settled worker's next owner (reuse or release), then ack.
-   - On a worker's `worker_done` after landing, in the same turn: `worker-release`, close its terminals, and `orca worktree rm` it (checks in `end-session` §4). `status` lists any you missed as `LANDED-BUT-OPEN`. Leftover cards made Orca itself slow.
+   - On a worker's `worker_done`, in the same turn, act on the `CLOSE OUT` lines `orch wait` prints beside it: release the worker; remove a finished card nobody else uses (`orca worktree rm`, checks in `end-session` §4) unless its next task starts there; keep a failed one only for its retry. `status` lists cards you missed as `LANDED-BUT-OPEN`, and its `next` line puts them before spawning. Leftover cards made Orca itself slow.
    - A start that ended `outcome_unknown` with an empty composer: `worker-stop --dispatch <id>`, then `worker-start --retry-of <id> --task <task> --worktree <that card> --agent <agent> [--model <id>]` (a retry inherits neither placement nor model).
    - End every drain with `orch status`; its lines are how a drain ends. `orch-dash collect <slug>` runs after it, and `orch-dash note` records a risk or decision the dashboard should show.
    - Under `/goal`, a running background task defers the Stop hook's goal check. If the hook re-prompts anyway with no new event, answer in one line with no tool call. If it fires back-to-back, switch to a foreground `orch wait <slug> --rounds 1 --timeout-ms 540000` (Bash timeout 600000).
@@ -126,11 +126,12 @@ The dashboard, plus the digest line in the program note, batched. The digest hol
 | Waiting with `sleep`, a hand-built watcher, or invented `orca … events/status` | `orch wait` in the background. One empty wait is a checkpoint; after three, run `worker-list --run` |
 | Nudge-only turns ("You have N orchestration messages") burning coordinator turns | End such a turn with no tool call; real work arrives through `orch wait` |
 | A worker shows `live` but has done nothing for many minutes | It may be sitting on a permission prompt (`status` lists `idle-waiting`): `worker-read --dispatch <id> --source terminal`. You cannot approve it for the worker, and waiting output does not prove the agent stopped, so do not stop or retry it. Put it in the digest for the human and keep draining |
+| A worker that sent a blocker as a status and ended its turn sat 80 min after your `send` answered it | `send` does not wake an idle agent. Type the answer into its terminal (`orca terminal send --terminal <agentTerminalHandle> --text … --enter`) and read the terminal until the turn starts |
 | A handoff prompt that retypes the rules | The note is the handoff; the prompt is one line |
 | Follow-ups spawned the moment they are filed | Park them; `status` shows derived tickets per predicate item |
 | Parallel CI jobs named `1/3 2/3 3/3` | Name jobs by what they check (typecheck, lint, unit, db, api…) |
 | Several cards running docker compose stacks and image builds at once; the machine and the Orca UI crawled | Heavy local runs go through `orch heavy`, 2 machine-wide slots (`landing.heavy_slots`) |
-| Finished setup terminals and landed cards left open (50 terminals) | Close setup terminals when they exit; `worktree rm` in the turn a worker reports done |
+| Finished setup terminals and landed cards left open (50 terminals; 8 cards after one compaction dropped the step) | Close setup terminals when they exit; act on the `CLOSE OUT` lines in the turn a worker reports done |
 | A shared state file overwritten in place and left empty | Append-only ledger; anything else is written to a temp file and renamed |
 | Typing `/model` into a worker terminal | Pass `--model` to `worker-start`; `/model` changes the global setting |
 
@@ -142,6 +143,8 @@ The new coordinator's whole prompt is `/goal orchestrate resume <slug>`. On resu
 2. `orca orchestration run-use --id <run>`.
 3. Make `program.json` match the note: `orch set <slug> merge_policy|ceiling|deadline|predicate|exclusive_paths …` for any difference. The note wins.
 4. `orch status`.
-5. Continue at Drain.
+5. Stop any inbox watcher the program ran before (a Monitor, a script) and continue at Drain.
+
+After an automatic compaction, the plugin's SessionStart hook tells a coordinator to do steps 1 and 4 again.
 
 Whenever the note's policy, ceiling, deadline, predicate or exclusive paths change mid-run, mirror them with `orch set` in the same turn. Workers report to the Run inbox, not to a session name, so nothing needs re-pointing. The old coordinator ends only after the new one has printed `status`.
