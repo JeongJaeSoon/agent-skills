@@ -288,6 +288,13 @@ t = _time.monotonic()
 prog.Program("bf").append("resume")
 assert _time.monotonic() - t >= 0.4 and rows()[-1]["ev"] == "resume"
 
+# A setting changed while backfill fetched is kept when created_at moves.
+(d / "program.json").write_text(json.dumps(dict(json.loads((d / "program.json").read_text()), created_at="2026-09-21T00:00:00+00:00")))
+stale = prog.Program("bf")
+(d / "program.json").write_text(json.dumps(dict(json.loads((d / "program.json").read_text()), merge_policy="human-gate")))
+stale.update(lambda cfg: cfg.__setitem__("created_at", "2026-09-20T01:00:00+00:00"))
+assert json.loads((d / "program.json").read_text())["merge_policy"] == "human-gate"
+
 # A run stopped after the ledger but before program.json is repaired by the next run.
 MERGED.pop()
 prog.gh_json = fake_gh

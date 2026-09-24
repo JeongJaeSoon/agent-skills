@@ -93,6 +93,11 @@ assert (st["prs"][0]["ci"], st["prs"][0]["state"]) == ("pass", "merged"), st["pr
 moved = dash_demo._pr(dash.utcnow(), "acme/billing", 303, "Tax ID validation", "bill-13-tax", "MERGED", 5, 1, head="f" * 40)
 gh_fixture.write_text(json.dumps([moved]))
 assert dash.collect(B)["prs"][0]["ci"] == "unknown", "a head pushed after the last look was never checked"
+running = dash_demo._pr(dash.utcnow(), "acme/billing", 304, "Tax rounding", "bill-14-round", "OPEN", 2, ci="pending")
+gh_fixture.write_text(json.dumps([running]))
+assert dash.collect(B)["prs"][0]["ci"] == "pending"
+gh_fixture.write_text(json.dumps([dict(running, state="MERGED")]))
+assert dash.collect(B)["prs"][0]["ci"] == "unknown", "a run seen going is not shown running forever"
 assert {p["ci"] for p in state(A)["prs"] if p["state"] != "open"} == {"unknown"}, "never seen open: not fetched"
 gh_fixture.write_text(json.dumps([dash_demo._pr(dash.utcnow(), "acme/billing", 303, "Tax ID validation", "bill-13-tax", "OPEN", 5)]))
 good = dash.collect(B)

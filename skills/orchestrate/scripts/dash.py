@@ -233,7 +233,9 @@ def shape_pr(raw, events, known, prev=None):
     else:
         # Only what was seen at this head: a commit pushed just before the merge was never checked here.
         seen = prev if prev and prev.get("head") == raw.get("headRefOid") else {}
-        ci, rounds = seen.get("ci") or "unknown", seen.get("review_rounds") or 0
+        # A run still going when it closed is never seen finishing, so only a finished result carries over.
+        ci = seen.get("ci") if seen.get("ci") in ("pass", "fail") else "unknown"
+        rounds = seen.get("review_rounds") or 0
     return {"number": raw["number"], "title": raw.get("title"), "url": raw.get("url"),
             "state": (raw.get("state") or "").lower(), "draft": bool(raw.get("isDraft")),
             "head": raw.get("headRefOid"), "branch": raw.get("headRefName"), "base": raw.get("baseRefName"),

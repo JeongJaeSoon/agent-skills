@@ -107,11 +107,15 @@ class Program:
             return []
         return [json.loads(l) for l in self.ledger_path.read_text().splitlines() if l.strip()]
 
-    def save(self):
-        # A shared file overwritten in place was once left empty mid-write; replace it whole.
-        tmp = self.dir / "program.json.tmp"
-        tmp.write_text(json.dumps(self.cfg, indent=2, ensure_ascii=False) + "\n")
-        os.replace(tmp, self.dir / "program.json")
+    def update(self, change):
+        """Apply change(cfg) to program.json as it is now, so a concurrent `set` or backfill is not reverted."""
+        with self.locked():
+            self.cfg = json.loads((self.dir / "program.json").read_text())
+            change(self.cfg)
+            # A shared file overwritten in place was once left empty mid-write; replace it whole.
+            tmp = self.dir / "program.json.tmp"
+            tmp.write_text(json.dumps(self.cfg, indent=2, ensure_ascii=False) + "\n")
+            os.replace(tmp, self.dir / "program.json")
 
     @contextlib.contextmanager
     def locked(self):
@@ -732,10 +736,9 @@ def cmd_set(argv):
     if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "note", "final_check"):
         sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, note, final_check")
     if key == "exclusive_paths":
-        p.cfg.setdefault("landing", {})[key] = conv(value)
+        p.update(lambda cfg: cfg.setdefault("landing", {}).__setitem__(key, conv(value)))
     else:
-        p.cfg[key] = conv(value)
-    p.save()
+        p.update(lambda cfg: cfg.__setitem__(key, conv(value)))
     print(json.dumps(p.append("config", note=f"{key}={value}"), ensure_ascii=False))
 
 
@@ -1158,9 +1161,14 @@ def cmd_backfill(argv):
     # history. Reconciled from the ledger on every run, so a run stopped between the two files is repaired.
     first = min((e["ts"] for e in p.events() if e["ev"] == "landed" and e.get("note") == "backfill"),
                 key=parse_ts, default=None)
-    if first and parse_ts(first) < parse_ts(p.cfg["created_at"]):
-        p.cfg["created_at"] = first
-        p.save()
+    moved = []
+
+    def earlier(cfg):
+        if first and parse_ts(first) < parse_ts(cfg["created_at"]):
+            cfg["created_at"] = first
+            moved.append(first)
+    p.update(earlier)
+    if moved:
         p.append("config", note=f"created_at={first} (backfill)")
         print(f"created_at moved to {first}")
 
