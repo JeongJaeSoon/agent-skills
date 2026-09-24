@@ -192,6 +192,16 @@ Merging is yours to do; no need to ask. Ask first only when the user said to hol
 said they wanted to look at this one themselves, or when the state is off-script — a check that
 keeps flaking, a thread you resolved on the author's behalf, a migration you cannot roll back.
 
+- **Someone else merges** — a fork PR to a repo you can only read, or a maintainer who lands it
+  themselves. Once the PR is ready, do not end the turn waiting. Watch it: a `Monitor` until-loop
+  on `gh pr view <n> --json state,mergedAt,mergeCommit,reviewDecision,latestReviews` every few
+  minutes, or `ScheduleWakeup` at 20–30 min under `/loop`. Give the watch a timeout and stop it
+  when the session ends. Wake on a merge, a close, or a new review; `CHANGES_REQUESTED` sends you
+  back to the review loop above. A merge detected this way is where this section continues, not
+  the end: confirm the merge commit, read main's CI log for it, check the linked issue's state
+  and `stateReason`, then walk the criteria below. If the maintainer changed the patch, took only
+  part of it, or closed the PR unmerged, report that and ask before calling the ticket done.
+
 After the merge commit is confirmed, finish whatever the ticket still asks for — a release, a
 deploy, a migration run, a verification that only makes sense on main. A merged PR with a
 criterion left open is not done, and the session stays open until that criterion is met or the
