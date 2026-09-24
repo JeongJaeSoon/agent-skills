@@ -30,3 +30,4 @@ Read the adapter's reference before the first read or write in a session:
 - A note is the source of truth; anything shown to the user (an Artifact page, a chat summary)
   is a view re-read from the store at that moment, never from an older copy.
 - Prose follows the user's language rule in CLAUDE.md; identifiers stay as they are.
+- Write the prose per `write-plainly`.

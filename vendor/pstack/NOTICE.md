@@ -3,7 +3,7 @@
 이 저장소의 일부 파일은 [cursor/plugins](https://github.com/cursor/plugins)의 `pstack`(Lauren Tan, MIT)에서 가져왔다. 라이선스 전문은 같은 폴더의 `LICENSE`에 있다. 고정 커밋(`pin`), pstack 버전(`upstream_version`), 파일 목록은 `manifest.json`이 정본이다.
 
 - 스킬 파일 자체에는 출처 줄을 두지 않는다. 출처와 라이선스 고지는 이 문서, `LICENSE`, `manifest.json`, README가 맡는다. 이 폴더는 플러그인에 함께 실린다.
-- `verbatim`은 upstream과 바이트 단위로 같다. `adapted`는 아래 표의 수정만 했다. `derived`는 upstream 규칙을 옮겨 이 저장소 스킬에 새로 쓴 부분이라 `manifest.json`에 없고 동기화하지 않는다. upstream이 바뀌면 사람이 읽고 반영한다.
+- `verbatim`은 upstream과 바이트 단위로 같다. `adapted`는 아래 표의 수정만 했다. `derived`는 upstream 여러 파일을 합치거나 번역해 새로 쓴 파일이다. 3-way 병합이 맞지 않아 `manifest.json`에 넣지 않으므로 동기화 스크립트가 다루지 않고, upstream이 바뀌면 사람이 읽고 손으로 반영한다.
 - 동기화: `python3 scripts/pstack-sync.py`(기본 dry-run, `--write`는 충돌 0일 때만 쓰고 pin을 올린다). 스크립트 자체 검사는 `bash scripts/pstack-sync-test.sh`.
 - 3-way 병합은 텍스트 충돌만 잡는다. 동기화 PR에서는 새로 들어온 문장이 사용자 규칙(`~/.claude/CLAUDE.md`)과 부딪히지 않는지, 설치되지 않은 스킬을 부르지 않는지 사람이 읽고 확인한다.
 
@@ -36,6 +36,9 @@
 | `skills/deliver-ticket/SKILL.md` §2 증거 규칙 | `pstack/skills/poteto-mode/playbooks/bug-fix.md`, `refactoring.md` | derived | 배포하는 줄마다 런타임 증거, 반박된 가설이 낳은 변경은 되돌림, 사용자가 본 화면(브라우저는 Aside)에서 재현. 리팩터링 전 동작 고정("타입 체크와 lint는 고정이 아니다"), 읽는 부담을 줄이지 못하면 되돌림 |
 | `skills/deliver-ticket/SKILL.md` §5 판정어 | `pstack/skills/figure-it-out/SKILL.md` | derived | VERIFIED / NOT VERIFIED / INCONCLUSIVE 판정, inconclusive·다른 화면 결과는 통과가 아님, 너무 쉽게 통과하면 관찰 방법부터 의심 |
 | `skills/deliver-ticket/SKILL.md` §2 기존 수정 검증 | `pstack/automations/benny/skills/reproduce-and-fix-issues/references/verify-existing-fix.md` | derived | 이미 수정을 주장하는 PR·커밋이 있으면 경쟁 수정 대신 검증. baseline과 patched를 같은 데이터로 두 번씩 재현해 비교 |
+| `skills/write-plainly/SKILL.md` | `pstack/skills/technical-writing/SKILL.md`, `pstack/skills/poteto-mode/SKILL.md` | derived | 모델 호출 허용. technical-writing의 상위 규칙 세 개·Diátaxis·STE·Global English에서 원칙 8개와 문서 종류 고르기를 추렸다. poteto-mode의 Writing the reply와 Autonomy의 "No is an acceptable answer"를 답변 절로 옮겼다. 출처 줄, `unslop`·`technical-writing` 참조, Cursor repo 전용 규칙(탭 들여쓰기 등)은 뺐다 |
+| `skills/write-plainly/references/english.md` | `pstack/skills/unslop/SKILL.md`, `pstack/skills/technical-writing/SKILL.md`, `pstack/skills/poteto-mode/SKILL.md` | derived | unslop 규칙 번호와 내용을 유지하고 문장을 다듬었다. Process 절(초안 뒤 훑기)은 "쓰면서 적용"과 맞지 않아 뺐다. technical-writing의 Google·STE·Global English 문장 규칙, poteto-mode의 Comments 절, 스킬 본문 작성 규칙을 더했다 |
+| `skills/write-plainly/references/korean.md` | `pstack/skills/unslop/SKILL.md` | derived | unslop의 서식 금지(긴 대시, 문장 중간 콜론, 굵은 글씨+콜론 목록, 장식 이모지)와 챗봇 문구 규칙을 한국어로 옮겼다. 상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, 문체 규칙과 예문은 여기서 새로 썼다 |
 
 `skills/principles/SKILL.md`는 vendoring 대상이 아니다. poteto-mode의 `## Principles` 절을 참고해 여기서 새로 쓴 인덱스이며, 본문에 출처를 적었다.
 

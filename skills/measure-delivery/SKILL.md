@@ -64,4 +64,5 @@ query fits, so on a busy repo it makes several calls.
 Lead with the one number the user asked about, then the table, then what the numbers do not
 cover (other machines, unmarked follow-ups, Bug candidates not yet confirmed, and close times
 approximated from `updatedAt` when the issues came from `orca linear`, whether or not the report
-says so). Numbers come from the script output, not from memory of the run.
+says so). Numbers come from the script output, not from memory of the run. Write the prose
+around them per `write-plainly`.
