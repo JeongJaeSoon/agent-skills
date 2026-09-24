@@ -18,8 +18,8 @@
 | `skills/interrogate/references/*.md` | 같은 경로 | verbatim | — |
 | `skills/show-me-your-work/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 Claude Code 형식으로. 교차 모델 리뷰를 Codex로. 설치하지 않은 `unslop` 언급 제거. 감사 단계를 append-only와 맞춰 틀린 줄은 정정 줄로 바로잡게 함 |
 | `skills/show-me-your-work/references/decision-log-template.tsv`, `scripts/log.sh` | 같은 경로 | verbatim | — |
-| `skills/blast-radius/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 설치하지 않은 `why`·`arena`·`unslop`과 당시 없던 `how` 언급을 `gh`·Codex·평이한 문장으로 |
-| `skills/architect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. Phase B의 runner 기본값(opus·sol·grok)과 설치하지 않은 `arena` 위임을 Agent(opus, fable) + Codex `task`(설정 기본 모델, 가장 어려운 설계 문제만 astra) 병렬 실행과 직접 종합으로. 설치하지 않은 `why`는 `git log -S`/`git blame`과 인용 PR·티켓 확인으로. principle 스킬 이름을 `principles`의 references로 연결하는 한 줄 추가. 단계별 todolist와 upstream 비교 문장 삭제 |
+| `skills/blast-radius/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 설치하지 않은 `arena`·`unslop` 언급을 Codex·평이한 문장으로(`how`·`why` 언급은 upstream 그대로) |
+| `skills/architect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. Phase B의 runner 기본값(opus·sol·grok)과 설치하지 않은 `arena` 위임을 Agent(opus, fable) + Codex `task`(설정 기본 모델, 가장 어려운 설계 문제만 astra) 병렬 실행과 직접 종합으로. principle 스킬 이름을 `principles`의 references로 연결하는 한 줄 추가. 단계별 todolist와 upstream 비교 문장 삭제 |
 | `skills/architect/references/rationale-template.md` | 같은 경로 | adapted | "Synthesis decision" 작성 주체를 `arena` 링크에서 architect lead(Phase B)로. checkpoint 참조를 Phase C로 바로잡음 |
 | `skills/architect/references/design-red-flags.md`, `runner-prompt.md` | 같은 경로 | verbatim | — |
 | `skills/tdd/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용(`disable-model-invocation` 삭제). 중복된 "signal이 약하면 테스트를 더하지 않는다" 줄 삭제(upstream #419도 같은 줄을 지움) |
@@ -27,11 +27,21 @@
 | `skills/reflect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 `~/.claude/projects/<encoded-cwd>/`의 session·subagent 두 형식으로. 리뷰어를 Agent(opus, MCP가 있는 general-purpose) 둘 + Codex `task`(tooling)로, 종합도 Agent(opus). `create-skill` → `skill-creator`. 편집 대상을 agent-skills repo의 worktree 브랜치로 한정하고 plugin 스킬은 Backlog로. Backlog는 `use-tracker`로. 조건부 validator 단계를 `claude plugin validate <checkout>`으로 |
 | `skills/reflect/references/{judgment,tooling,divergent}-reviewer.md` | 같은 경로 | adapted | 스킬 사용 판정 경로를 `.claude/skills`·`~/.claude/skills`·`~/.claude/plugins`로, `Task` → `Agent`, `Skill` 도구 호출을 판정 근거에 추가. judgment·divergent의 "3-5개"를 "미래 행동을 바꾸는 것만, 빈 목록도 가능"으로 |
 | `skills/reflect/references/synthesizer.md` | 같은 경로 | adapted | `create-skill` → `skill-creator` |
-| `skills/how/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. explorer는 내장 `Explore`, 단순 질문은 lead가 직접 탐색·설명, 종합은 general-purpose(opus) 한 번. `Task`·`generalPurpose`·`readonly`·grok 기본값 제거. description의 설치하지 않은 `why` 안내를 git history 확인으로 |
+| `skills/how/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. explorer는 내장 `Explore`, 단순 질문은 lead가 직접 탐색·설명, 종합은 general-purpose(opus) 한 번. `Task`·`generalPurpose`·`readonly`·grok 기본값 제거. description의 `why` 안내에 "왜 그렇게 결정됐는지"를 더함 |
 | `skills/how/references/explorer-prompt.md`, `explainer-prompt.md` | 같은 경로 | verbatim | — |
+| `skills/why/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용, description에 한국어 트리거. Cursor `mcps/` 탐색 대신 세션 도구 목록의 MCP로 출처를 고르고, 출처→playbook 표(git·`gh`, Linear/Jira는 `use-tracker`, Notion, Google Drive, Obsidian은 `use-notes`, Slack)를 둠. Datadog·Sentry·warehouse는 연결이 없어 조사자를 띄우지 않고 Sources Consulted에 "접근 없음"으로 남김. Calendar는 날짜 범위 좁히기에만. 좁은 질문은 git·`gh`만으로 답하는 narrow mode(Step 3) 추가. 조사자는 general-purpose Agent이고 쓰기·댓글·메시지 금지를 프롬프트로 전달, 종합은 lead가 직접 하거나 opus Agent 하나. `generalPurpose`·`readonly`·`pstack-models.mdc`·모델 slug 제거. 7개 카테고리 roster를 이 환경에 있는 4개로 줄임. "Default to the full parallel investigation"과 일곱 카테고리 모두 확인 후에만 inline 답을 허용하던 문장 삭제 |
+| `skills/why/references/epistemics.md`, `investigator-prompt.md`, `synthesizer-prompt.md` | 같은 경로 | verbatim | — |
+| `skills/why/references/source-playbook.md` | 같은 경로 | adapted | 표를 이 환경의 출처(Google Drive·Obsidian 추가, Datadog·Sentry·Databricks 제거)로 |
+| `skills/why/references/sources/code-archaeology.md` | 같은 경로 | adapted | `--json reviews`에 없는 줄 단위 리뷰 스레드를 `gh api .../pulls/<n>/comments`로 읽는 한 줄 추가 |
+| `skills/why/references/sources/linear.md` | 같은 경로 | adapted | Jira는 `use-tracker`로. 댓글은 `list_comments`, 프로젝트 문서는 `list_documents`·`get_document`로 읽도록 도구 이름을 이 Linear MCP에 맞춤 |
+| `skills/why/references/sources/notion.md` | 같은 경로 | verbatim | — |
+| `skills/why/references/sources/slack.md` | 같은 경로 | adapted | Cursor `mcp_auth` 언급을 이 Slack MCP의 검색·스레드 도구 이름으로 |
+| `skills/why/references/sources/incident-postmortem.md` | 같은 경로 | adapted | Datadog·Sentry·Databricks 항목을 지우고 "접근 없음을 Gaps에 적는다"로. Notion 항목을 긴 문서(Notion·Google Drive·Obsidian)로 |
 | `skills/principles/references/principle-*.md` (23개) | `pstack/skills/principle-*/SKILL.md` | verbatim | — |
 
 `skills/principles/SKILL.md`는 vendoring 대상이 아니다. poteto-mode의 `## Principles` 절을 참고해 여기서 새로 쓴 인덱스이며, 본문에 출처를 적었다.
+
+`skills/why/references/sources/google-drive.md`, `obsidian.md`도 vendoring 대상이 아니다. upstream playbook 형식을 따라 여기서 새로 썼다. upstream의 `datadog.md`, `sentry.md`, `databricks.md`는 연결된 MCP가 없어 가져오지 않았다.
 
 ## 흡수한 규칙
 
