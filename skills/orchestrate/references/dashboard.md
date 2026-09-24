@@ -62,7 +62,7 @@ When a source is stale, the panels built from it are greyed out. Treat a grey pa
     - the first reason it is not moving
   - **Landing.** Who holds each base's lock, from `lock_acquired`/`lock_released`. If there are no lock events, it reads "no one landing".
   - **Needs attention.** A red main, PRs waiting on the human gate, idle workers (often a permission prompt), untriaged follow-ups, the latest risk note, and source errors.
-  - Charts, predicate progress and recent activity.
+  - Charts, predicate progress and recent activity. The charts run from the program's `created_at`, or from 30 days back in a longer program; each line starts at the left edge with the values then in force. Before registration (`orch backfill`) the ledger has no spawns, so in-flight reads 0 there.
 - **Issues.** Tracker issues the program touched, with state, class and PR.
 - **PRs.** Open and recent PRs, showing:
   - CI. Closed and merged PRs come without checks and reviews (with them, a 200-PR window timed out); they keep what a collect saw while they were open, or read "not fetched"
