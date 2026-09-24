@@ -731,7 +731,8 @@ def summarize(cfg, events, issues, workers, tnow, order, leftover=0):
     pred = cfg.get("predicate") or []
     by_id = {i["id"]: i for i in issues or []}
     done = [p for p in pred if by_id.get(p, {}).get("state_type") == "completed"]
-    tickets_done = bool(pred) and len(done) == len(pred) if issues is not None else None
+    tickets_done = (bool(pred) and len(done) == len(pred) and not prog.open_admitted(events, by_id)
+                    if issues is not None else None)
     verified = prog.final_check_current(events)
     roles = {e.get("note") for e in events if e["ev"] == "spawned" and e.get("role")}
     live = [w for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in roles]

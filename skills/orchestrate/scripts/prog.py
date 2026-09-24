@@ -657,6 +657,12 @@ def dashboard_lines(slug):
     return out
 
 
+def open_admitted(events, by_id):
+    """Admitted follow-ups block Close like predicate items: admission means they block one or fix a defect."""
+    admitted = dict.fromkeys(e.get("ticket") for e in events if e["ev"] == "admitted" and e.get("ticket"))
+    return [t for t in admitted if by_id.get(t, {}).get("state_type") not in ("completed", "canceled")]
+
+
 def cmd_status(argv):
     p = Program(argv[0])
     cfg, events = p.cfg, p.events()
@@ -669,11 +675,12 @@ def cmd_status(argv):
     pred = cfg["predicate"]
     done = [t for t in pred if by_id.get(t, {}).get("state_type") == "completed"]
     open_ = [t for t in pred if t not in done]
-    tickets_done = bool(pred) and not open_ and issues is not None
+    blocking = open_ + [t for t in open_admitted(events, by_id) if t not in pred]
+    tickets_done = bool(pred) and not blocking and issues is not None
     verified = final_check_current(events)
     lines.append(f"predicate: {len(done)}/{len(pred)} tickets done"
                  + ((" — final check recorded" if verified else " — final check not yet recorded") if tickets_done
-                    else f" (open: {', '.join(open_[:8])}{'…' if len(open_) > 8 else ''})")
+                    else f" (open: {', '.join(blocking[:8])}{'…' if len(blocking) > 8 else ''})")
                  if issues is not None else f"predicate: {len(pred)} items (no tracker project; check by hand)")
 
     # 2. flow

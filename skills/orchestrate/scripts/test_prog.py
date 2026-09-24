@@ -396,3 +396,12 @@ for bad in (["--kind", "vibes", "--evidence", "x"], ["--kind", "stall"]):
         assert "--kind" in str(e), e
 
 print("prog.py signal: all pass")
+
+# --- admitted follow-ups block Close ---------------------------------------------------------
+by = {"A-1": {"state_type": "completed"}, "F-1": {"state_type": "started"}, "F-2": {"state_type": "canceled"}}
+evs = [{"ev": "admitted", "ticket": "F-1"}, {"ev": "admitted", "ticket": "F-2"}, {"ev": "admitted", "ticket": "F-1"}]
+assert prog.open_admitted(evs, by) == ["F-1"], "an open admitted follow-up blocks Close; a canceled one does not"
+by["F-1"]["state_type"] = "completed"
+assert prog.open_admitted(evs, by) == []
+
+print("prog.py admitted gate: all pass")
