@@ -90,11 +90,11 @@
   1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. Run을 만들고 `orch init`으로 등록한다.
   2. **검증 준비와 Pilot:** verify 스킬이 없으면 첫 digest에서 사용자에게 `/create-verification-skill` 실행을 요청하고, 그동안은 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
   3. **Scale:** 상시 역할(main 가디언, QA 리드)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
-  4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다.
+  4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다. 제품이 아니라 일하는 방식이 틀어졌으면(사람의 교정, 브리프가 답했어야 할 질문, 과정 탓의 정체, 스킬·스크립트 결함) `orch record <slug> signal`로 한 줄만 남기고 분석은 Close로 미룬다.
   5. **Triage:** follow-up은 기본적으로 미룬다(park). predicate를 막거나 재현된 결함만 받아들인다. 브리프는 follow-up을 parent가 아닌 related로 잇게 한다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
   6. **Land:** 워커가 `orch land`로 직접 착지한다. 일반 PR은 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 머지된다.
   7. **main 검증:** red가 되면 가디언이 flake 여부부터 보고 hotfix나 revert를 고르며, 그동안은 main 수정만 착지한다. QA 리드는 티켓 검증, 주기적 E2E, 설계 정합성 감사를 맡는다.
-  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `measure-delivery`를 돌린 뒤 교훈을 반영한다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
+  8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `measure-delivery`를 돌린 뒤 `reflect`를 프로그램 모드로 돌린다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
   - human-gate의 "Land #N" Task는 `orch land`가 착지 때 completed로, 보류나 PR 닫힘 때 failed로 닫는다. 보류로 결정된 PR은 `orch land`가 머지하지 않는다.
   - 턴을 끝낸 워커에게는 내용을 `orchestration send --to dispatch:<id>`로 보내고, 터미널에는 "orchestration check를 돌려라" 한 줄만 보낸다. 터미널이 없는 워커는 Orca의 복구 절차를 따른다.
   - 상시 역할의 평상시 보고는 `--type status`로 보낸다. escalation은 코디네이터가 나서야 할 때만 쓴다.
@@ -115,7 +115,7 @@
     - `mailbox_guard.py`: 옛 설치에서 hook으로 넘어가는 전환용 shim.
     - 테스트 파일.
   - `assets/dashboard/`: 대시보드 화면.
-- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `end-session`을 가져다 쓴다.
+- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reflect`, `end-session`을 가져다 쓴다.
 
 ### measure-delivery
 - **언제:** "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 토큰 비용을 물을 때. `orchestrate`의 Close 단계에서도 부른다.
@@ -216,11 +216,13 @@
 - **동봉:** `references/principle-*.md` 23개.
 
 ### reflect
-- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘".
+- **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다.
 - **내용:**
-  - 이 세션의 transcript를 리뷰어 셋(판단 opus, 도구 사용 Codex, 발산 opus)이 읽는다.
-  - 종합자(opus)가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 구조로 강제할 수 있는 것은 따로 표시한다.
-  - Accepted는 사용자 승인 뒤 이 저장소의 worktree에서 스킬 수정으로 반영하고, `claude plugin validate`로 확인한다.
+  - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, `measure-delivery` 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단 opus, 도구 사용 Codex, 발산 opus)이다.
+  - 종합자(opus)가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 모두 교훈 장부(노트 저장소의 `Project/agent-skills/learnings.md`)에 한 줄씩 남는다. 장부는 교훈마다 신호, 근거 포인터, 발생 횟수, 고친 대상, 변경(PR·커밋), 스크립트가 낸 검증 수치, 이후 재발 여부를 적는다.
+  - 스킬을 바꾸는 건 서로 다른 사례가 두 번 이상일 때만이다(재현된 보안·데이터 결함은 예외). 한 번뿐이면 후보로 남겨 두고 다음 발생을 기다린다.
+  - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 `trigger-probe.sh`·테스트로 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다.
+  - 권한 hook, `orch land` 게이트, 테스트와 채점기, reflect 자신은 고치자고 제안하지 않고 Backlog로 보낸다.
   - Backlog는 `use-tracker`로 등록한다.
 
 ### show-me-your-work

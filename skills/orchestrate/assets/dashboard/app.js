@@ -915,7 +915,7 @@ const EV_STYLE = {
   ready: ["", "prs"], spawned: ["", "spark"], admitted: ["good", "arrow"], parked: ["", "park"], approved: ["good", "user"],
   stop: ["bad", "stop"], resume: ["good", "arrow"], predicate_verified: ["good", "flag"], config: ["", "gear"],
   lock_acquired: ["accent", "lock"], lock_released: ["", "lock"], dep: ["", "link"], land_check: ["", "check"],
-  yield: ["warn", "yield"], reprioritized: ["warn", "sort"],
+  yield: ["warn", "yield"], reprioritized: ["warn", "sort"], signal: ["warn", "note"],
 };
 
 function evRow(a) {

@@ -26,6 +26,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 | Verdicts, lanes, land order, landings, main red/green, the concurrency cap, deps found after dispatch | `~/.claude/programs/<slug>/ledger.jsonl`, written only through `orch` |
 | Briefs as sent | `~/.claude/programs/<slug>/briefs/<ticket>.md` |
 | Decision trail | `~/.claude/programs/<slug>/decisions.tsv` (`show-me-your-work`) |
+| Lessons: raw signals / what became of them | `signal` rows in the ledger / the lessons ledger in the notes store (`reflect`) |
 | What the human watches | `orch-dash` dashboard (`references/dashboard.md`) |
 | Who does what beside the ticket workers | Standing roles: main guardian, QA lead (`references/roles.md`) |
 
@@ -60,6 +61,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Process every message in the batch, decide each settled worker's next owner (reuse or release), then ack.
    - On a worker's `worker_done`, in the same turn, act on the `CLOSE OUT` lines `orch wait` prints beside it: release the worker; remove a finished card nobody else uses (`orca worktree rm`; checks and when to pass `--run-hooks` in `end-session` §4) unless its next task starts there; keep a failed one only for its retry. `status` lists cards you missed as `LANDED-BUT-OPEN`, and its `next` line puts them before spawning. Leftover cards made Orca itself slow.
    - A start that ended `outcome_unknown` with an empty composer: `worker-stop --dispatch <id>`, then `worker-start --retry-of <id> --task <task> --worktree <that card> --agent <agent> [--model <id>]` (a retry inherits neither placement nor model).
+   - Record a lesson signal when the process, not the product, went wrong: `orch record <slug> signal --kind <human_correction|brief_gap|stall|tooling> --evidence <message id, PR comment URL or transcript path:line> [--ticket T] --note "<one line>"`. A human correction of how the work runs, a worker question the brief should have answered, a stall the process caused, a skill or script that misbehaved. Only record; the analysis waits for Close. `land_failed`, `main_red` and failed verdicts are in the ledger already.
    - End every drain with `orch status`; its lines are how a drain ends. `status` also prints what only the dashboard's collector sees: `STALLED` workers (turn ended with the task open, no session activity since dispatch, one tool call running too long), `SPARE` slots with ready tasks, and `LEDGER GAP`s. Act on them like the other lines. `orch-dash note` records a risk or decision the dashboard should show.
    - Under `/goal`, a running background task defers the Stop hook's goal check. If the hook re-prompts anyway with no new event, answer in one line with no tool call. If it fires back-to-back, switch to a foreground `orch wait <slug> --rounds 1 --timeout-ms 540000` (Bash timeout 600000).
 6. **Triage.** A new ticket from review, QA or discovery parks by default: label `follow-up`, then `orch record <slug> parked --ticket X`. Admit it only if it blocks a named predicate item, or if it is a reproduced correctness, security or data defect in code this program merged. Then `record admitted` and name the item or defect.
@@ -86,7 +88,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - The program ends only when `orca orchestration worker-list --run <run> --terminal-state reclaimable --json` returns no rows. That is Orca's own end condition: every settled worker has been released or retained. Release what it lists.
    - The dashboard server is detached and serves every program, so it neither needs stopping nor defers the `/goal` stop check. `state.json` stays for later reading.
    - Run `measure-delivery` and audit the trail per `show-me-your-work`.
-   - Write the lessons into standing orders, skills or memory.
+   - Run `reflect` in program mode. It turns the signals and the ledger's failures into lessons in the lessons ledger, fills in whether earlier lessons held, and opens at most one draft PR against `agent-skills` for the lessons that recurred. Put its digest lines and the PR link in the digest; the human approves and merges. With no signals and no failures, write that in one digest line instead.
 
 ## How the human's words change the program
 
@@ -94,7 +96,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 |---|---|
 | "I'll watch X myself, don't bother" (usage, a metric, a channel) | Delete X from the standing orders and from every judgment rule now, and never defer work on X's account again |
 | "Can it go faster?" | Offer structural levers: parallelize the critical path, stack dependent chains, reorder the land order, narrow `exclusive_paths`, risk-tiered review depth, split CI jobs by role. Apply the approved ones at once. Not "work harder", and not serializing for safety (one CI at a time, one landing per N minutes) |
-| Feedback about how the work flows, not about the product | Hand it to a flow improver (a subagent or a separate session). It changes the skills or standing orders and shares the result, while you stay on the program |
+| Feedback about how the work flows, not about the product | Record a `signal --kind human_correction`, and hand the feedback to a flow improver (a subagent or a separate session). It changes the standing orders now and shares the result, while you stay on the program. Skill changes wait for `reflect` at Close |
 | "Make it better" about in-flight work | A new ticket with its own brief. Never append it to the running task |
 | "Make a ticket for …" inside another question | Split it out and file it immediately, then answer the question |
 | Doubts your report ("is that right?", "불안하다") | A read-only verifier agent re-checks it. Your self-report is not evidence |

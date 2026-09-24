@@ -401,12 +401,13 @@ EV_TEXT = {
     "admitted": "{ticket} admitted into scope", "parked": "{ticket} parked as follow-up",
     "approved": "#{pr} approved for landing", "stop": "STOP line set", "resume": "resumed",
     "predicate_verified": "predicate verified on the real artifact", "config": "config changed",
+    "signal": "lesson signal: {kind}",
     "lock_acquired": "#{pr} took the exclusive lane", "lock_released": "#{pr} left the exclusive lane", "lane": "#{pr} lane classified",
 }
 
 
 # Fields already said by the text; anything else an event carries (base, blocks, reason, ...) is appended.
-KNOWN_FIELDS = {"ts", "ev", "ticket", "pr", "sha", "note", "patch_id", "source", "result"}
+KNOWN_FIELDS = {"ts", "ev", "ticket", "pr", "sha", "note", "patch_id", "source", "result", "kind"}
 
 
 def activity_of(events, notes):
@@ -416,7 +417,7 @@ def activity_of(events, notes):
             text = f"verdict {e.get('result', 'pass')} on #{e.get('pr')} by {e.get('source') or '?'}"
         else:
             text = EV_TEXT.get(e["ev"], e["ev"]).format(ticket=e.get("ticket") or "?", pr=e.get("pr") or "?",
-                                                        sha7=(e.get("sha") or "?")[:7])
+                                                        sha7=(e.get("sha") or "?")[:7], kind=e.get("kind") or "?")
         if e.get("ticket") and "{ticket}" not in EV_TEXT.get(e["ev"], e["ev"]):
             text += f" ({e['ticket']})"
         extra = [f"{k}={','.join(map(str, v)) if isinstance(v, list) else v}" for k, v in e.items()

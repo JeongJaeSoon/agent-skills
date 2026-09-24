@@ -14,6 +14,11 @@ Usage: orch <command> <slug> [options]
                                      role; roles do not count against the cap
                                      `record reprioritized --pr N --class urgent` moves a PR in the land order
                                      main_green / main_red need --sha of a landed merge commit
+  record <slug> signal --kind human_correction|brief_gap|stall|tooling --evidence PTR [--ticket T] [--note TEXT]
+                                     a lesson candidate for reflect at Close: a human correction, a
+                                     question the brief should have answered, a stall the process
+                                     caused, a skill or script defect. PTR points at the proof (message
+                                     id, PR comment URL, transcript path:line); nothing is copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
@@ -51,7 +56,7 @@ Usage: orch <command> <slug> [options]
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
 admitted, parked, approved, gate_opened, stop, resume, predicate_verified, config, dep,
-land_check, yield, lane, lock_acquired, lock_released, reprioritized.
+land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
 import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, shlex, subprocess, sys, time
@@ -787,6 +792,10 @@ OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, lande
          "lock_acquired": "land", "lock_released": "land", "dep": "dep", "config": "set"}
 
 
+# land_failed, main_red and failed verdicts are already in the ledger; a signal records what only the coordinator sees.
+SIGNAL_KINDS = ("human_correction", "brief_gap", "stall", "tooling")
+
+
 def cmd_record(argv):
     p = Program(argv[0])
     ev = argv[1]
@@ -801,8 +810,11 @@ def cmd_record(argv):
     klass = opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
+    kind, evidence = opt(argv, "--kind"), opt(argv, "--evidence")
+    if ev == "signal" and (kind not in SIGNAL_KINDS or not evidence):
+        sys.exit(f"signal needs --kind ({', '.join(SIGNAL_KINDS)}) and --evidence pointing at the proof")
     row = p.append(ev, ticket=opt(argv, "--ticket"), pr=int(pr) if pr else None, sha=sha, klass=klass,
-                   role=opt(argv, "--role"), note=opt(argv, "--note"))
+                   role=opt(argv, "--role"), note=opt(argv, "--note"), kind=kind, evidence=evidence)
     print(json.dumps(row, ensure_ascii=False))
 
 

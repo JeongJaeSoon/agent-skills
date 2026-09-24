@@ -383,3 +383,16 @@ assert updates[-1] == ["task_h", "--status", "failed"], "a held gate closes its 
 prog.run, prog.pr_view, prog.gate_resolution = real_run, real_view, real_res
 
 print("prog.py gate task: all pass")
+
+# --- signal ---------------------------------------------------------------------------------
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_record(["gt", "signal", "--kind", "brief_gap", "--evidence", "msg_1", "--ticket", "T-9"])
+assert prog.Program("gt").events()[-1] == {**prog.Program("gt").events()[-1], "ev": "signal", "kind": "brief_gap", "evidence": "msg_1"}
+for bad in (["--kind", "vibes", "--evidence", "x"], ["--kind", "stall"]):
+    try:
+        prog.cmd_record(["gt", "signal", *bad])
+        raise AssertionError(f"signal accepted {bad}")
+    except SystemExit as e:
+        assert "--kind" in str(e), e
+
+print("prog.py signal: all pass")

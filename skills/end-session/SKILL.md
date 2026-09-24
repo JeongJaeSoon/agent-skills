@@ -67,6 +67,9 @@ already exist where it survives:
 - No ticket (a local diagnosis, a probe) → the worklog line is enough. Do not file a ticket
   just to close it.
 - Anything learned here that outlives the task → memory, now, not "later".
+- The human corrected how the work was done (not what to build), and no program's Close
+  covers this session → run `reflect` in session mode before ending. It records the lessons in
+  the lessons ledger; apply only what the user approves now.
 - Temp files you remember making outside the worktree (scratchpad excluded) → delete them.
 
 If the record is already written, say so in one line and move on. Do not rewrite it.

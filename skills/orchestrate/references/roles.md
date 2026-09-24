@@ -7,7 +7,7 @@ A program of more than a handful of tickets runs two standing workers beside the
 | Coordinator (this session) | Order, deps, briefs, triage, gates, the digest | Diagnose red main, run QA, rework the process |
 | Main guardian | Red main: flake or defect, freeze, hotfix or revert, notify | Pick up tickets |
 | QA lead | Ticket verification, periodic E2E on main, design-vs-code audit | Fix what it finds (it files tickets) |
-| Flow improver (a subagent or a separate session, on demand) | Turning the human's process feedback into skill or standing-order changes | Touch the running program |
+| Flow improver (a subagent or a separate session, on demand) | Turning the human's process feedback into standing-order changes now | Touch the running program, or edit skills mid-program (those wait for `reflect` at Close) |
 
 They came from the user's own calls on a real program (2026-09-24):
 
