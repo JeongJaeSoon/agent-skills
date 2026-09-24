@@ -26,7 +26,8 @@ SOURCES = ("tracker", "github", "orca")
 NOTE_KINDS = ("risk", "digest", "decision")
 SERIES_DAYS = 7
 SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
-TICKET_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]{0,9}-\d+)\b")
+# A team key may start with a digit (94S-135) but has a letter, so a date (2026-09) is not a ticket.
+TICKET_RE = re.compile(r"\b((?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,10}-\d+)\b")
 STATE_ORDER = {"started": 0, "unstarted": 1, "triage": 2, "backlog": 3, "completed": 4, "canceled": 5}
 
 
@@ -128,15 +129,21 @@ def fetch_issues(cfg):
     return issues
 
 
-PR_FIELDS = "number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,createdAt,mergedAt,statusCheckRollup,reviews"
+PR_FIELDS = "number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,createdAt,mergedAt"
+CHECK_FIELDS = ",statusCheckRollup,reviews"
 
 
 def fetch_prs(cfg):
-    """Every open PR (the land order needs them all), plus closed and merged ones from the program window."""
-    base = ["gh", "pr", "list", "--repo", cfg["repo"], "--json", PR_FIELDS]
-    open_ = sh(base + ["--state", "open", "--limit", "100"])
+    """Every open PR with its checks and reviews (the land order needs them all), plus closed and merged ones
+    from the program window without them.
+
+    gh asks GraphQL for 100 PRs a page; with rollups and reviews, a page of a repo with 200 PRs timed out
+    (HTTP 504) on every collect. A closed PR keeps the CI and rounds it had when a collect saw it open.
+    """
+    base = ["gh", "pr", "list", "--repo", cfg["repo"]]
+    open_ = sh(base + ["--json", PR_FIELDS + CHECK_FIELDS, "--state", "open", "--limit", "100"])
     since = (prog.parse_ts(cfg["created_at"]) - dt.timedelta(days=1)).date().isoformat()
-    window = sh(base + ["--state", "all", "--search", f"created:>={since}", "--limit", "200"])
+    window = sh(base + ["--json", PR_FIELDS, "--state", "all", "--search", f"created:>={since}", "--limit", "500"])
     seen = {p["number"] for p in open_}
     return open_ + [p for p in window if p["number"] not in seen]
 
@@ -214,16 +221,21 @@ def verdict_of(number, head, events):
     return "pass" if not head or not vsha or head.startswith(vsha) or vsha.startswith(head) else "stale"
 
 
-def shape_pr(raw, events, known):
+def shape_pr(raw, events, known, prev=None):
+    """prev: this PR as an earlier collect shaped it, for the checks a closed PR is fetched without."""
     rollup = raw.get("statusCheckRollup") or []
     failed, pending, _ = prog.ci_summary(rollup)
     reviews = [r for r in raw.get("reviews") or [] if r.get("state") != "PENDING"]
     rounds = len({(r.get("commit") or {}).get("oid") or r.get("submittedAt") for r in reviews})
     verdicts = sum(1 for e in events if e["ev"] == "verdict" and e.get("pr") == raw["number"])
+    if "statusCheckRollup" in raw:
+        ci = "none" if not rollup else "fail" if failed else "pending" if pending else "pass"
+    else:
+        ci, rounds = (prev or {}).get("ci") or "unknown", (prev or {}).get("review_rounds") or 0
     return {"number": raw["number"], "title": raw.get("title"), "url": raw.get("url"),
             "state": (raw.get("state") or "").lower(), "draft": bool(raw.get("isDraft")),
             "head": raw.get("headRefOid"), "branch": raw.get("headRefName"), "base": raw.get("baseRefName"),
-            "ci": "none" if not rollup else "fail" if failed else "pending" if pending else "pass",
+            "ci": ci,
             "verdict": verdict_of(raw["number"], raw.get("headRefOid"), events),
             "review_rounds": max(rounds, verdicts), "ticket": pr_ticket(raw, events, known),
             "created_at": raw.get("createdAt"), "merged_at": raw.get("mergedAt")}
@@ -356,14 +368,16 @@ def build_graph(tasks, events, issues, order, landing):
     issue = {i["id"]: i for i in issues or []}
     landed = {e.get("ticket") for e in events if e["ev"] == "landed" and e.get("ticket")}
     pr_ticket = {e.get("pr"): e.get("ticket") for e in events if e.get("pr") and e.get("ticket")}
-    landed |= {pr_ticket.get(e.get("pr")) for e in events if e["ev"] == "landed"}
+    landed = (landed | {pr_ticket.get(e.get("pr")) for e in events if e["ev"] == "landed"}) - {None}
     holders = {(l.get("holder") or {}).get("ticket") for l in (landing or {}).values()}
     order_state = {o.get("ticket"): o.get("state") for o in order or [] if o.get("ticket")}
     spawned = {e.get("ticket") for e in events if e["ev"] == "spawned"}
     for n in nodes.values():
         tk, sts = n["ticket"], {t["status"] for t in n["tasks"]}
         title = issue.get(tk, {}).get("title") or next((t["title"] for t in n["tasks"]), None)
-        if issue.get(tk, {}).get("state_type") == "completed" or tk in landed:
+        # A ticket can take several PRs: while the tracker says it is open, a landing does not finish it.
+        if issue.get(tk, {}).get("state_type") == "completed" or \
+                (tk in landed and issue.get(tk, {}).get("state_type") not in prog.OPEN_STATES):
             status = "done"
         elif tk in holders or order_state.get(tk) == "ready":
             status = "landing"
@@ -679,7 +693,8 @@ def _merge(slug, d, cfg, fetched, interval):
     known = {i["id"] for i in issues or []}
 
     raw_prs, fresh = outcome("github")
-    prs = ([shape_pr(p, events, known) for p in raw_prs] if fresh
+    prev_pr = {p["number"]: p for p in prev.get("prs") or []}
+    prs = ([shape_pr(p, events, known, prev_pr.get(p["number"])) for p in raw_prs] if fresh
            else [refresh_pr(p, events) for p in prev.get("prs") or []])
     # Raw open rows feed land_order; kept beside state.json so a ledger-only refresh can re-rank them.
     rows_path = dash / "pr_rows.json"
@@ -740,7 +755,11 @@ def _merge(slug, d, cfg, fetched, interval):
 
     hist_path = dash / "history.jsonl"
     history = read_jsonl(hist_path)
-    if not history and issues is not None:
+    t0 = prog.parse_ts(cfg["created_at"])
+    first = min((t for t in (prog.parse_ts(e["ts"]) for e in events) if t >= t0), default=None)
+    # `orch backfill` puts landings before the series began: rebuild it, as a rebuilt series starts at the first one.
+    stale = bool(history) and first is not None and first < prog.parse_ts(history[0]["t"])
+    if (not history or stale) and issues is not None:
         history = backfill(cfg, events, issues)
         if history:
             write_atomic(hist_path, "".join(json.dumps(r) + "\n" for r in history))

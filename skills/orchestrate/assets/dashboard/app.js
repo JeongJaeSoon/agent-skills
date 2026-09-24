@@ -96,7 +96,7 @@ function ageText(iso) { const m = Math.max(0, Math.floor((Date.now() - ms(iso)) 
 const ageTag = (iso) => iso ? `<span class="tag ${ageTone(iso) ? "tone-" + ageTone(iso) : ""}" data-age="${esc(iso)}">${icon("clock")}<span>${ageText(iso)}</span></span>` : "";
 
 const STATE_TONE = { completed: "good", started: "accent", triage: "warn" };
-const CI = { pass: ["passing", "good", "check"], fail: ["failing", "bad", "fail"], pending: ["running", "warn", "clock"], none: ["no checks", "", null] };
+const CI = { pass: ["passing", "good", "check"], fail: ["failing", "bad", "fail"], pending: ["running", "warn", "clock"], none: ["no checks", "", null], unknown: ["not fetched", "", null] };
 const VERDICT = { pass: ["pass", "good", "check"], fail: ["fail", "bad", "fail"], stale: ["stale", "warn", "clock"], none: ["none", "", null] };
 const ORDER_TONE = { ready: "good", catching_up: "accent", waiting: "warn", blocked: "bad", gone: "", unknown: "" };
 const NODE_TONE = { done: "good", landing: "accent", in_progress: "accent", blocked: "bad", waiting: "" };

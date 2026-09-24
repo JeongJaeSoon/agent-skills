@@ -25,7 +25,7 @@ Each program's files are in `<program>/dashboard/`:
 | File | Contents |
 |---|---|
 | `state.json` | The page's data, written atomically |
-| `history.jsonl` | One row per change in the charted values |
+| `history.jsonl` | One row per change in the charted values; rebuilt from the ledger once `orch backfill` puts landings before its first row |
 | `notes.jsonl` | Notes (see below) |
 | `pr_rows.json` | The last GitHub rows, so the land order can re-rank on a ledger-only refresh |
 | `usage-cache.json` | Byte offsets for reading transcripts incrementally |
@@ -65,7 +65,7 @@ When a source is stale, the panels built from it are greyed out. Treat a grey pa
   - Charts, predicate progress and recent activity.
 - **Issues.** Tracker issues the program touched, with state, class and PR.
 - **PRs.** Open and recent PRs, showing:
-  - CI
+  - CI. Closed and merged PRs come without checks and reviews (with them, a 200-PR window timed out); they keep what a collect saw while they were open, or read "not fetched"
   - the review verdict against the current head
   - review rounds
   - merge state

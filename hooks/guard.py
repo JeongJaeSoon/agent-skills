@@ -8,8 +8,8 @@ agent's messages.
 Allow, so workers never stall on a prompt hours after they loaded a skill:
 - this plugin's skills
 - `orca orchestration <verb>`, except reset, worker-abandon and gate-resolve
-- `orch <subcommand>` (the program ledger and the landing gate), except heavy, which runs any command, and
-  set and init, which can change a program's merge policy
+- `orch <subcommand>` (the program ledger and the landing gate), except heavy, which runs any command,
+  set and init, which can change a program's merge policy, and backfill, which rewrites the ledger
 
 An allow here skips the auto mode classifier, so it covers only one simple command whose words bash passes
 as written: outside quotes, plain characters only (no operators, redirections, substitutions, expansions or
@@ -29,7 +29,7 @@ PLAIN = set(string.ascii_letters + string.digits + " \t_./:=,@%+-")
 REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_HANDLE:?=|"
                      r"\b(?:read|printf\s+-v)\b[^;&|\n]*\bORCA_TERMINAL_HANDLE")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
-ORCH_ASK = {"heavy", "set", "init"}
+ORCH_ASK = {"heavy", "set", "init", "backfill"}
 
 
 def decide(decision, reason):

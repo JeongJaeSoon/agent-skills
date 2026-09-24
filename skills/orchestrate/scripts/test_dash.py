@@ -84,6 +84,15 @@ gh_fixture = fx / "gh" / "acme__billing.json"
 gh_fixture.write_text(json.dumps([dash_demo._pr(dash.utcnow(), "acme/billing", 303, "Tax ID validation", "bill-13-tax", "OPEN", 5)]))
 good = dash.collect(B)
 assert good["errors"] == [] and [p["number"] for p in good["prs"]] == [303]
+# Closed PRs come without checks (the window query that timed out); one seen open keeps its CI and rounds.
+assert (good["prs"][0]["ci"], good["prs"][0]["state"]) == ("pass", "open")
+gh_fixture.write_text(json.dumps([dash_demo._pr(dash.utcnow(), "acme/billing", 303, "Tax ID validation", "bill-13-tax",
+                                                "MERGED", 5, 1, ci="fail")]))
+st = dash.collect(B)
+assert (st["prs"][0]["ci"], st["prs"][0]["state"]) == ("pass", "merged"), st["prs"]
+assert {p["ci"] for p in state(A)["prs"] if p["state"] != "open"} == {"unknown"}, "never seen open: not fetched"
+gh_fixture.write_text(json.dumps([dash_demo._pr(dash.utcnow(), "acme/billing", 303, "Tax ID validation", "bill-13-tax", "OPEN", 5)]))
+good = dash.collect(B)
 gh_fixture.write_text(json.dumps({"fail": "HTTP 502"}))
 st = dash.collect(B)
 assert [p["number"] for p in st["prs"]] == [303], "last good PR section survives a failure"
@@ -163,6 +172,34 @@ progs = json.loads(urllib.request.urlopen(f"{base}/api/programs").read())
 assert [p["slug"] for p in progs] == [B, A]
 assert b"<title>" in urllib.request.urlopen(f"{base}/").read()
 srv.shutdown()
+
+# A ledger backfilled with landings from before the series began rebuilds the series once.
+cfg_path = store / A / "program.json"
+cfg = json.loads(cfg_path.read_text())
+early = dash.iso(dash.utcnow() - dash.dt.timedelta(days=3))
+cfg["created_at"] = early
+cfg_path.write_text(json.dumps(cfg))
+ledger = (store / A / "ledger.jsonl").read_text()
+(store / A / "ledger.jsonl").write_text(json.dumps({"ts": early, "ev": "landed", "pr": 150, "sha": "m150", "note": "backfill"})
+                                        + "\n" + ledger)
+assert json.loads(history(A)[0])["t"] > early
+st = dash.collect(A, sources=())
+assert json.loads(history(A)[0])["t"] == early and st["series"][0]["landed"] == 1, history(A)[:2]
+n = len(history(A))
+dash.collect(A, sources=())
+assert len(history(A)) == n, "rebuilt once, then appended as usual"
+
+assert [m.upper() for m in dash.TICKET_RE.findall("JeongJaeSoon/94s-135-prep on 2026-09-24, ACME-7")] == ["94S-135", "ACME-7"]
+
+# A landing does not finish a ticket the tracker still has open: a ticket can take several PRs.
+tasks = [{"id": "t1", "ticket": "X-1", "title": "X-1", "status": "dispatched", "deps": []}]
+landed = [{"ts": early, "ev": "landed", "pr": 1, "ticket": "X-1"}]
+node = lambda issues: dash.build_graph(tasks, landed, issues, [], {})["nodes"][0]["status"]
+assert node([{"id": "X-1", "state_type": "started"}]) == "in_progress"
+assert node([{"id": "X-1", "state_type": "completed"}]) == node([]) == node(None) == "done"
+ticketless = [{"id": "t9", "ticket": None, "title": "QA lead", "status": "dispatched", "deps": []}]
+assert dash.build_graph(ticketless, [{"ts": early, "ev": "landed", "pr": 3}], [], [], {})["nodes"][0]["status"] == "in_progress", \
+    "a landing with no ticket does not finish every ticketless task"
 
 # The real tracker adapter, when present, satisfies the same interface through TRACKER_FIXTURES.
 real = pathlib.Path(__file__).resolve().parents[2] / "use-tracker/scripts/tracker.py"

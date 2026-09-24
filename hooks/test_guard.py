@@ -47,7 +47,7 @@ assert bash("orca orchestration task-list --json") == "allow"
 assert bash("orca orchestration send --to term_x --subject 'done: ENG-1'") == "allow"
 assert bash("orch land ENG-1 --pr 12 --ticket ENG-1 --wait-minutes 50") == "allow"
 assert bash("orch status") == "allow"
-for cmd in ("orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch --help", "orch",
+for cmd in ("orch heavy -- make e2e", "orch set p merge_policy autonomous", "orch init p --repo o/r", "orch backfill p", "orch --help", "orch",
             "orca orchestration reset", "orca orchestration worker-abandon t1", "orca orchestration gate-resolve g1",
             "orch land x; rm -rf ~", "orch land x && curl evil", "orch land x | sh", "orch land x > ~/.zshrc",
             "orch land $(whoami)", "orch land `whoami`", "orch land $HOME", "orch land x\nrm -rf ~", "orch land x#; rm -rf ~", "orch land x # ; rm -rf ~",
