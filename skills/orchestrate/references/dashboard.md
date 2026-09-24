@@ -22,6 +22,8 @@ orch-dash demo [--port 4780] [--live] [--no-serve]   # fixture programs, no netw
 | Orca (`worker-list`, `task-list`, `run-show`) | Every 20 s |
 | Ledger | Checked every 3 s; re-collected when it changes, and at least every 30 s |
 
+A closed program (its `predicate_verified` is current) keeps only the ledger check. Its tracker, GitHub and Orca sections stay as last collected, and a landing or predicate edit after the check reopens it.
+
 The page polls `/api/<slug>/state` every 5 s with `If-None-Match`, so a poll with nothing new gets a 304 and no body. Keep `--host` at 127.0.0.1: the page shows PR titles and worker paths.
 
 Each program's files are in `<program>/dashboard/`:
@@ -52,7 +54,9 @@ The bar under the headline shows each source's last success, both as a local tim
 | Ledger, Orca | 60 s | 180 s |
 | Tracker, GitHub | 3 × interval | 6 × interval |
 
-When a source is stale, the panels built from it are greyed out. Treat a grey panel as possibly wrong, not as current.
+When a source is stale, the panels built from it are greyed out. Treat a grey panel as possibly wrong, not as current. A closed program's unpolled sources are not greyed out.
+
+Every table sorts by a column when its head is clicked. A relative-time column sorts by how long ago, so ascending is newest first. The second click reverses, the third returns to the view's own order, and the browser remembers the choice.
 
 ## Panels
 

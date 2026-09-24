@@ -299,6 +299,8 @@
   - Needs attention: 멈춘 워커, 빈 슬롯, 원장 누락, 정리할 카드.
   - Stages: 트래커 최상위 이슈별 진척.
   - 착지 순서와 burn-up.
+  - 표는 열 머리를 눌러 정렬한다. 두 번째는 역순, 세 번째는 원래 순서이고, 브라우저가 선택을 기억한다.
+- **부하:** 브라우저는 5초마다 묻지만 바뀐 게 없으면 304로 본문 없이 끝나고, 탭이 숨겨져 있으면 묻지 않는다. 서버는 원장 3초, Orca 20초, 트래커·GitHub 60초 주기로 모으며, 끝난 프로그램(최종 확인 기록이 유효)은 원장만 본다.
 - **명령:** `collect`, `serve`, `ensure`, `note`(위험·결정 한 줄), `demo`. 환경 변수는 `ORCH_DASH_PORT`, `ORCH_DASH=off`다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`에 있다.
 
 ## 설정 파일

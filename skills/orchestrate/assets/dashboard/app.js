@@ -4,7 +4,7 @@
 
 const POLL_MS = 5000;
 const PROGRAMS_MS = 15000;
-const LS = { theme: "orch-dash:theme", sidebar: "orch-dash:sidebar" };
+const LS = { theme: "orch-dash:theme", sidebar: "orch-dash:sidebar", sort: "orch-dash:sort" };
 
 const SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
@@ -62,6 +62,7 @@ const store = {
 const S = {
   programs: [], slug: null, section: "overview", state: null, etag: null, lastOk: 0, down: false, sbOpen: false,
   filters: { issues: "all", prs: "open", workers: "active", activity: "all" }, q: "", showDone: false,
+  sort: (() => { try { return JSON.parse(store.get(LS.sort)) || {}; } catch (e) { return {}; } })(),
 };
 
 // ------------------------------------------------------------ formatting
@@ -251,6 +252,7 @@ function sourceLevel(name) {
   const st = S.state, src = st?.sources?.[name], meta = SOURCE_META.find((m) => m[0] === name);
   if (!src || !meta) return "none";
   if (src.configured === false) return "off";
+  if (st.summary?.final_check && name !== "ledger") return "good";  // a closed program's sources are no longer polled
   const age = (Date.now() - ms(src.updated_at)) / 1000;
   if (isNaN(age)) return "stale";
   const [warn, stale] = meta[2](st.interval || 60);
@@ -757,6 +759,27 @@ function chips(group, options, current) {
     `<button class="chip" type="button" data-group="${group}" data-val="${id}" aria-pressed="${id === current}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</button>`).join("")}</div>`;
 }
 
+// A column head sorts by what the column shows: a relative time sorts by how long ago, so ascending is newest first.
+// The second click reverses, the third returns to the view's own order. Empty cells stay last either way.
+function sorted(table, rows, keys) {
+  const s = S.sort[table], key = s && keys[s.col];
+  if (!key) return rows;
+  const dir = s.dir === "desc" ? -1 : 1, blank = (v) => v == null || v === "" || Number.isNaN(v);
+  return [...rows].sort((a, b) => {
+    const x = key(a), y = key(b);
+    if (blank(x) || blank(y)) return blank(x) - blank(y);
+    return dir * (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true }));
+  });
+}
+function th(table, col, label, cls = "") {
+  const s = S.sort[table], on = s?.col === col, desc = on && s.dir === "desc";
+  return `<th class="${cls}" aria-sort="${on ? (desc ? "descending" : "ascending") : "none"}"><button type="button" class="th-sort" data-sort="${table}:${col}">${label}<span class="sort-ic" aria-hidden="true">${on ? (desc ? "↓" : "↑") : ""}</span></button></th>`;
+}
+const ago = (iso) => -ms(iso);
+const ISSUE_STATE_ORDER = { started: 0, unstarted: 1, triage: 2, backlog: 3, completed: 4, canceled: 5 };
+const CI_ORDER = { fail: 0, pending: 1, pass: 2, none: 3, unknown: 4 };
+const VERDICT_ORDER = { fail: 0, stale: 1, none: 2, pass: 3 };
+
 const ISSUE_FILTERS = {
   all: [() => true, "All"],
   predicate: [(i) => i.in_predicate, "Predicate"],
@@ -773,7 +796,9 @@ function viewIssues(st) {
   if (!issues) return `<div class="view-head"><div><h2>Issues</h2><p>No tracker data — set a tracker project in program.json.</p></div></div>`;
   const f = ISSUE_FILTERS[S.filters.issues] ? S.filters.issues : "all";
   const q = S.q.trim().toLowerCase();
-  const rows = issues.filter(ISSUE_FILTERS[f][0]).filter((i) => !q || `${i.id} ${i.title} ${(i.labels || []).join(" ")}`.toLowerCase().includes(q));
+  const rows = sorted("issues", issues.filter(ISSUE_FILTERS[f][0]).filter((i) => !q || `${i.id} ${i.title} ${(i.labels || []).join(" ")}`.toLowerCase().includes(q)), {
+    id: (i) => i.id, title: (i) => i.title, state: (i) => ISSUE_STATE_ORDER[i.state_type], updated: (i) => ago(i.updated_at), assignee: (i) => i.assignee,
+  });
   const opts = Object.entries(ISSUE_FILTERS).map(([id, [fn, label]]) => [id, label, issues.filter(fn).length]);
   const s = st.summary || {};
   return `<div class="view-head"><div><h2>Issues</h2><p>Predicate items, admitted and derived tickets this program touched.
@@ -781,7 +806,7 @@ function viewIssues(st) {
   <div class="card" data-src="tracker"><div class="card-head"><h3>Derived vs done · per 6h</h3><span class="aside legend"><span><i class="key sq" style="background:var(--derived)"></i>Derived</span><span><i class="key sq" style="background:var(--accent)"></i>Done</span></span></div>
     <div class="card-body"><div class="chart" id="chart-growth"></div></div></div>
   <div class="toolbar">${chips("issues", opts, f)}<input class="search" id="issue-search" type="search" placeholder="Filter by ID or title" value="${esc(S.q)}" aria-label="Filter issues"></div>
-  <div class="card table-wrap" data-src="tracker"><table><thead><tr><th>ID</th><th>Title</th><th>State</th><th>Flags</th><th class="hide-md">Updated</th><th class="hide-md">Assignee</th></tr></thead><tbody>
+  <div class="card table-wrap" data-src="tracker"><table><thead><tr>${th("issues", "id", "ID")}${th("issues", "title", "Title")}${th("issues", "state", "State")}<th>Flags</th>${th("issues", "updated", "Updated", "hide-md")}${th("issues", "assignee", "Assignee", "hide-md")}</tr></thead><tbody>
   ${rows.map((i) => `<tr><td class="mono">${link(i.url, esc(i.id))}</td><td class="title"><span class="ellipsis" style="display:block" title="${esc(i.title)}">${esc(i.title)}</span></td>
     <td>${tag(i.state || i.state_type || "?", STATE_TONE[i.state_type] ?? "")}</td>
     <td><span class="flags">${i.in_predicate ? tag("predicate", "accent", null) : ""}${i.derived ? tag("derived", "derived") : ""}${i.triage ? tag(i.triage, i.triage === "admitted" ? "good" : "", null) : i.derived && OPEN_STATES.has(i.state_type) ? tag("untriaged", "warn", null) : ""}</span></td>
@@ -797,8 +822,11 @@ function viewPrs(st) {
   const pos = Object.fromEntries((st.land_order || []).map((e, i) => [e.pr, i + 1]));
   return `<div class="view-head"><div><h2>Pull requests</h2><p>Open PRs plus everything opened in the program window, with CI, the recorded verdict and review rounds.</p></div></div>
   <div class="toolbar">${chips("prs", [["open", "Open", prs.filter(F.open).length], ["merged", "Merged", prs.filter(F.merged).length], ["closed", "Closed", prs.filter(F.closed).length], ["all", "All", prs.length]], f)}</div>
-  <div class="card table-wrap" data-src="github"><table><thead><tr><th>PR</th><th>Title</th><th>Ticket</th><th>CI</th><th>Verdict</th><th class="num hide-md">Rounds</th><th class="hide-md">State</th><th>Age</th></tr></thead><tbody>
-  ${prs.filter(F[f]).map((p) => {
+  <div class="card table-wrap" data-src="github"><table><thead><tr>${th("prs", "pr", "PR")}${th("prs", "title", "Title")}${th("prs", "ticket", "Ticket")}${th("prs", "ci", "CI")}${th("prs", "verdict", "Verdict")}${th("prs", "rounds", "Rounds", "num hide-md")}${th("prs", "state", "State", "hide-md")}${th("prs", "age", "Age")}</tr></thead><tbody>
+  ${sorted("prs", prs.filter(F[f]), {
+    pr: (p) => p.number, title: (p) => p.title, ticket: (p) => p.ticket, ci: (p) => CI_ORDER[p.ci], verdict: (p) => VERDICT_ORDER[p.verdict],
+    rounds: (p) => p.review_rounds ?? 0, state: (p) => (p.state === "open" ? pos[p.number] ?? 0 : p.state === "merged" ? 1000 : 2000), age: (p) => ago(p.state === "open" ? p.created_at : p.merged_at || p.created_at),
+  }).map((p) => {
     const issue = (st.issues || []).find((i) => i.id === p.ticket);
     const state = p.state === "merged" ? tag("merged", "accent", "merge") : p.state === "open" ? tag(p.draft ? "draft" : pos[p.number] ? `land #${pos[p.number]}` : "open", p.draft ? "" : "good") : tag(p.state, "");
     return `<tr><td class="mono">${link(p.url, "#" + esc(p.number))}</td><td class="title"><span class="ellipsis" style="display:block" title="${esc(p.title)}">${esc(p.title)}</span></td>
@@ -818,7 +846,9 @@ function viewTasks(st) {
   // Open work first; finished and superseded tasks are history, shown with "Show done".
   const done = (t) => t.status === "completed" || t.superseded_by;
   const rank = (t) => (t.superseded_by ? 3 : t.status === "completed" ? 2 : t.status === "failed" ? 1 : 0);
-  const rows = tasks.filter((t) => S.showDone || !done(t)).sort((a, b) => rank(a) - rank(b));
+  const rows = sorted("tasks", tasks.filter((t) => S.showDone || !done(t)).sort((a, b) => rank(a) - rank(b)), {
+    task: (t) => t.ticket || t.title, status: rank, created: (t) => ago(orcaTime(t.created_at)), done: (t) => ago(orcaTime(t.completed_at)),
+  });
   const hidden = tasks.length - rows.length;
   const status = (t) => t.superseded_by ? tag(`superseded by ${title[t.superseded_by] || t.superseded_by}`, "", null) : tag(t.status || "?", TT[t.status] ?? "");
   return `<div class="view-head"><div><h2>Tasks</h2><p>Orca tasks and ledger dependencies, left to right by depth. The accent chain is the critical path: the longest run of unfinished work.</p></div></div>
@@ -826,7 +856,7 @@ function viewTasks(st) {
     <button class="chip" type="button" id="show-done" aria-pressed="${S.showDone}">Show done</button></div>
   <div class="card" data-src="orca ledger"><div class="card-head"><h3>Dependency graph</h3><span class="aside">${(g.critical || []).length ? `critical path ${esc(g.critical.join(" → "))}` : ""}</span></div>
     <div class="card-body dag" id="dag"></div></div>
-  <div class="card table-wrap" data-src="orca"><table><thead><tr><th>Task</th><th>Status</th><th class="hide-md">After</th><th class="hide-md">Dispatch</th><th>Created</th><th>Done</th></tr></thead><tbody>
+  <div class="card table-wrap" data-src="orca"><table><thead><tr>${th("tasks", "task", "Task")}${th("tasks", "status", "Status")}<th class="hide-md">After</th><th class="hide-md">Dispatch</th>${th("tasks", "created", "Created")}${th("tasks", "done", "Done")}</tr></thead><tbody>
   ${rows.map((t) => `<tr><td class="title"><span class="mono">${esc(t.ticket || "")}</span> <span class="dim">${t.title !== t.ticket ? esc(t.title) : ""}</span></td>
     <td>${status(t)}</td><td class="hide-md muted">${esc(t.deps.map((d) => title[d] || d).join(", ") || "—")}</td>
     <td class="hide-md mono muted">${esc(t.dispatch || "—")}</td><td class="muted">${relSpan(orcaTime(t.created_at))}</td><td class="muted">${t.completed_at ? relSpan(orcaTime(t.completed_at)) : "—"}</td></tr>`).join("") || (hidden ? "" : `<tr><td colspan="6" class="muted">No Orca tasks on this run.</td></tr>`)}
@@ -861,8 +891,11 @@ function viewWorkers(st) {
   <div class="card" data-src="orca"><div class="card-head"><h3>In-flight vs cap</h3><span class="aside legend"><span><i class="key" style="background:var(--ink-3)"></i>Cap</span><span><i class="key" style="background:var(--accent)"></i>In-flight</span></span></div>
     <div class="card-body"><div class="chart" id="chart-flow"></div></div></div>
   <div class="toolbar">${chips("workers", [["active", "In flight", ws.filter(F.active).length], ["all", "All", ws.length]], f)}</div>
-  <div class="card table-wrap" data-src="orca"><table><thead><tr><th>Dispatch</th><th>Ticket</th><th>Activity</th><th class="hide-md">Liveness</th><th class="hide-md">Model</th><th class="num">Tokens</th><th>Since</th></tr></thead><tbody>
-  ${ws.filter(F[f]).map((w) => `<tr><td class="mono">${esc(w.dispatch)}</td><td class="mono">${esc(w.ticket || w.worktree || "—")}</td><td>${act(w)}</td>
+  <div class="card table-wrap" data-src="orca"><table><thead><tr>${th("workers", "dispatch", "Dispatch")}${th("workers", "ticket", "Ticket")}${th("workers", "activity", "Activity")}${th("workers", "liveness", "Liveness", "hide-md")}${th("workers", "model", "Model", "hide-md")}${th("workers", "tokens", "Tokens", "num")}${th("workers", "since", "Since")}</tr></thead><tbody>
+  ${sorted("workers", ws.filter(F[f]), {
+    dispatch: (w) => w.dispatch, ticket: (w) => w.ticket || w.worktree, liveness: (w) => w.liveness, model: (w) => w.model, tokens: (w) => w.tokens?.total, since: (w) => ago(w.since),
+    activity: (w) => { if (w.outcome !== "in_progress") return 9; const mo = motionOf(w); return mo.tone === "bad" ? 0 : mo.tone === "warn" ? 1 : mo.moving ? 3 : 2; },
+  }).map((w) => `<tr><td class="mono">${esc(w.dispatch)}</td><td class="mono">${esc(w.ticket || w.worktree || "—")}</td><td>${act(w)}</td>
     <td class="hide-md">${tag(w.liveness || "—", w.liveness === "live" ? "good" : w.outcome === "in_progress" ? "warn" : "")}${w.outcome === "in_progress" && w.liveness !== "live" && w.seen_at ? ` <span class="muted" title="${esc(w.liveness_reason || "")}">seen ${relSpan(w.seen_at)}</span>` : ""}</td>
     <td class="hide-md dim">${esc(w.model || "—")}</td><td class="num">${tok(w)}</td><td class="muted">${relSpan(w.since)}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">No workers ${f === "active" ? "in flight" : "yet"}.</td></tr>`}
   </tbody></table></div>`;
@@ -975,7 +1008,16 @@ initChrome();
 document.addEventListener("click", (e) => {
   const chip = e.target.closest(".chip[data-group]");
   if (chip) { S.filters[chip.dataset.group] = chip.dataset.val; renderView(); return; }
-  if (e.target.closest("#show-done")) { S.showDone = !S.showDone; renderView(); }
+  if (e.target.closest("#show-done")) { S.showDone = !S.showDone; renderView(); return; }
+  const head = e.target.closest("[data-sort]");
+  if (head) {
+    const [table, col] = head.dataset.sort.split(":"), s = S.sort[table];
+    if (s?.col !== col) S.sort[table] = { col, dir: "asc" };
+    else if (s.dir === "asc") S.sort[table] = { col, dir: "desc" };
+    else delete S.sort[table];
+    store.set(LS.sort, JSON.stringify(S.sort));
+    renderView();
+  }
 });
 document.addEventListener("input", (e) => { if (e.target.id === "issue-search") { S.q = e.target.value; renderView(); } });
 addEventListener("hashchange", route);

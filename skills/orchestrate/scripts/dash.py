@@ -1053,6 +1053,12 @@ def programs():
     return sorted(p.name for p in root.iterdir() if (p / "program.json").exists() and SLUG_RE.fullmatch(p.name))
 
 
+def closed(slug):
+    """A program with a current final check has stopped moving, so only its ledger is still watched. A landing or a
+    predicate edit after the check reopens it."""
+    return prog.final_check_current(read_jsonl(program_dir(slug) / "ledger.jsonl"))
+
+
 def signature(slug):
     d = home() / slug
     out = []
@@ -1074,6 +1080,8 @@ def slow_loop(interval):
     first = True
     while True:
         for slug in programs():
+            if not first and closed(slug):
+                continue
             try:
                 st = collect(slug, SOURCES if first else ("tracker", "stages", "github"), interval)
                 if st["errors"]:
@@ -1094,7 +1102,7 @@ def fast_loop(interval):
         now = time.monotonic()
         for slug in programs():
             sig = signature(slug)
-            orca_due = now - last_orca.get(slug, now) >= ORCA_EVERY
+            orca_due = now - last_orca.get(slug, now) >= ORCA_EVERY and not closed(slug)
             last_orca.setdefault(slug, now)
             ledger_due = seen.get(slug) not in (None, sig) or now - last_write.get(slug, now) >= LEDGER_EVERY
             last_write.setdefault(slug, now)

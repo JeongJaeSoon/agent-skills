@@ -325,4 +325,11 @@ if real.exists():
     assert st["sources"]["stages"]["ok"] and [x["id"] for x in st["stages"]["stages"]] == ["ACME-100", "ACME-110", "ACME-111"], st["errors"]
     print("  (checked against the real use-tracker/scripts/tracker.py)")
 
+# A current final check stops polling the program's sources; a landing after it reopens the program.
+assert not dash.closed(B)
+append(B, ev="predicate_verified", note="final check")
+assert dash.closed(B)
+append(B, ev="landed", pr=999, sha="m999")
+assert not dash.closed(B)
+
 print("dash.py collect/serve: all pass")
