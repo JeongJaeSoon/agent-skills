@@ -20,9 +20,12 @@ def main():
     if event.get("tool_name") != "Bash":
         return 0
     own = os.environ.get("ORCA_TERMINAL_HANDLE")
-    for handle in MAILBOX.findall((event.get("tool_input") or {}).get("command") or ""):
+    cmd = (event.get("tool_input") or {}).get("command") or ""
+    # The hook sees unexpanded text: the variable is the caller's own handle unless the command rebinds it.
+    rebinds = re.search(r"ORCA_TERMINAL_HANDLE\s*=|\bread\b[^;&|\n]*ORCA_TERMINAL_HANDLE", cmd)
+    for handle in MAILBOX.findall(cmd):
         handle = handle.strip("'\"")
-        if handle not in (own, "$ORCA_TERMINAL_HANDLE", "${ORCA_TERMINAL_HANDLE}"):  # the hook sees unexpanded text
+        if handle != own and (rebinds or handle not in ("$ORCA_TERMINAL_HANDLE", "${ORCA_TERMINAL_HANDLE}")):
             print(json.dumps({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse", "permissionDecision": "deny",
                 "permissionDecisionReason": f"check/inbox --terminal {handle} reads another terminal's Orca mailbox "
