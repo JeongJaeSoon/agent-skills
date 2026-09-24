@@ -856,7 +856,10 @@ def attempt(p, pr, klass):
     if me is None or me["state"] == "gone":
         v = pr_view(repo, pr)
         if v["state"] == "MERGED":
-            p.append("landed", pr=pr, sha=(v.get("mergeCommit") or {}).get("oid"), note="merged outside land")
+            sha = (v.get("mergeCommit") or {}).get("oid")
+            if "landed" in st:  # a stack layer lands with its top, whose land call recorded it
+                return 0, f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]}"
+            p.append("landed", pr=pr, sha=sha, note="merged outside land")
             return 0, f"#{pr} was merged outside land; recorded"
         return 1, f"#{pr} is {v['state']}"
     if me["state"] == "waiting":

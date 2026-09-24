@@ -110,6 +110,8 @@ Before pushing, run **both**:
   caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, **Aside** for UI
   and web flows (it is the browser for everything, logged-in sites included), IDE diagnostics
   for type and lint
+- a change with no runtime behavior (docs, comments): run every command and example it
+  documents, exactly as written; that is its E2E
 
 After the test suite and E2E check, push and open a ready PR with `gh pr create` (`Closes #n`
 to link an issue). The PR body must carry a functional-verification section describing the

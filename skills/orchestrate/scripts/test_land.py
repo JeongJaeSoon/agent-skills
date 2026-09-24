@@ -192,6 +192,10 @@ assert code == 0 and "#7 #8" in out, out
 landed = [e for e in ledger(d) if e["ev"] == "landed"]
 assert [e["pr"] for e in landed] == [7, 8] and landed[1]["sha"] == "m8"
 assert any("merge-async" in " ".join(c) for c in json.loads((d / "state.json").read_text())["log"])
+# The bottom layer's own land loop then finds it merged and does not record it a second time.
+code, out = prog(env, "land", "t", "--pr", "7")
+assert code == 0 and "already landed" in out, out
+assert len([e for e in ledger(d) if e["ev"] == "landed"]) == 2
 
 # 6. Red main stops everything but the fix.
 d, env = setup({"9": pr(9)})
