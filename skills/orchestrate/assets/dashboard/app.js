@@ -643,8 +643,17 @@ function predSub(st, pct) {
   const pw = predWait(st, open[0]);
   return `waiting on ${esc(open[0].id)} · ${esc(pw.text)}${pw.since ? ` ${agoSpan(pw.since)}` : ""}`;
 }
-function kpi(label, value, sub, { extra = "", src = "" } = {}) {
-  return `<div class="card kpi" ${src ? `data-src="${src}"` : ""}><div class="eyebrow">${label}</div><div class="v">${value}</div>${extra}<div class="sub">${sub}</div></div>`;
+// The tickets the program must still finish: predicate items plus admitted follow-ups. Untriaged follow-ups may
+// still join, so this is a count against the current scope, never a percentage.
+function scopeLine(st) {
+  if (!st.issues) return "";
+  const scope = st.issues.filter((i) => (i.in_predicate || i.triage === "admitted") && i.state_type !== "canceled");
+  const done = scope.filter((i) => i.state_type === "completed").length;
+  const waiting = (st.summary?.untriaged || []).length;
+  return `scope ${done}/${scope.length} done · ${scope.length - done} left${waiting ? ` · ${waiting} untriaged may join` : ""}`;
+}
+function kpi(label, value, sub, { extra = "", src = "", note = "" } = {}) {
+  return `<div class="card kpi" ${src ? `data-src="${src}"` : ""}><div class="eyebrow">${label}</div><div class="v">${value}</div>${extra}<div class="sub">${sub}</div>${note ? `<div class="sub">${note}</div>` : ""}</div>`;
 }
 
 function landOrderCard(st) {
@@ -723,7 +732,7 @@ function viewOverview(st) {
     ${budget}
   </div>
   <div class="kpis" style="--n:${st.merge_policy === "human-gate" ? 4 : 6}">
-    ${kpi("Predicate", pct == null ? "—" : `${pct}%<small>${s.predicate_done}/${s.predicate_total}</small>`, predSub(st, pct), { extra: segs, src: "tracker" })}
+    ${kpi("Predicate", pct == null ? "—" : `${pct}%<small>${s.predicate_done}/${s.predicate_total}</small>`, predSub(st, pct), { extra: segs, src: "tracker", note: scopeLine(st) })}
     ${kpi("Main CI", tag(s.main || "—", mt, mt === "good" ? "check" : mt === "bad" ? "fail" : "clock"), mainAt, { src: "ledger" })}
     ${kpi("In-flight / cap", `${num(s.in_flight)}<small>/ ${num(s.cap)}</small>`, s.spare?.slots ? `${s.spare.slots} free · ceiling ${num(s.ceiling)}` : `ceiling ${num(s.ceiling)}`, { extra: cells, src: "orca" })}
     ${kpi("Oldest open PR", oldest ? `<span class="age-v ${ageTone(oldest.since) ? "tone-" + ageTone(oldest.since) : ""}" data-age-text="${esc(oldest.since)}">${ageText(oldest.since)}</span>` : "—", oldest ? `#${oldest.pr} · opened ${relSpan(oldest.since)}` : "no open PRs", { src: "github" })}
