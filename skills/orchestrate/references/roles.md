@@ -41,7 +41,8 @@ ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --fai
                hotfix|revert, PR>". The coordinator appends that line to guardian-log.tsv; you
                write nothing outside your worktree.
 FORBIDDEN   Feature work. Force-push. Disabling or skipping checks.
-REPORT      One message per incident; worker_done only when the coordinator releases the role.
+REPORT      One message per incident. When the coordinator sends "release" (send --to dispatch:<you>),
+            send worker_done with a summary of the incidents and stop.
 ```
 
 ## QA lead brief
@@ -65,7 +66,8 @@ FINDINGS    File each reproduced failure as a ticket (write-ticket follow-up for
             파생: <ticket or QA> · 원인: QA). A failure on main that blocks others → tell the guardian.
 FORBIDDEN   Fixing findings. Landing anything.
 REPORT      A digest per lane round to the coordinator (send --to run:<run id> --type escalation):
-            counts, links to tickets filed, what was driven. worker_done only when released.
+            counts, links to tickets filed, what was driven. On the coordinator's "release" message,
+            worker_done with the totals and stop.
 ```
 
 Set the cadence in the program note's standing orders so a resumed coordinator re-briefs the same way.

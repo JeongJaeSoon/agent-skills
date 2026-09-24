@@ -80,7 +80,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 9. **Close.**
    - When `status` says the tickets are done, run the predicate's final check on the real artifact (the QA lead drives `verify-<app>` on main).
    - `prog.py record <slug> predicate_verified --note <evidence>`.
-   - Release the standing roles and any remaining workers, and remove any worktree still left (checks in `end-session` §4).
+   - Release the standing roles: `orca orchestration send --to dispatch:<role> --subject release --body "program closing: send worker_done"`, then `worker-release` once its `worker_done` arrives (Orca releases only settled workers). Release any remaining workers and remove any worktree still left (checks in `end-session` §4).
    - Run `measure-delivery` and audit the trail per `show-me-your-work`.
    - Write the lessons into standing orders, skills or memory.
 
