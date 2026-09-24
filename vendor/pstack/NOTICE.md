@@ -13,21 +13,21 @@
 |---|---|---|---|
 | `skills/create-verification-skill/SKILL.md` | `pstack/skills/create-verification-skill/SKILL.md` | adapted | 생성 위치 `.cursor/skills/` → `.claude/skills/`. Claude Code는 Bash 호출마다 새 셸이라 Launch가 PID·포트·실행 폴더를 상태 파일에 남기도록 한 줄 추가 |
 | `skills/create-verification-skill/references/feature-map-example/*.md` | 같은 경로 | verbatim | — |
-| `skills/maintain-verification-skill/SKILL.md` | 같은 경로 | adapted | 대상 위치 `.cursor/skills/` → `.claude/skills/` |
-| `skills/interrogate/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 리뷰어를 Claude(Agent) + Codex(codex-companion, 설정 기본 모델, 어려운 설계 문제만 astra)로. 의도가 모호하면 묻지 않고 가정으로 표시 |
+| `skills/maintain-verification-skill/SKILL.md` | 같은 경로 | adapted | 대상 위치 `.cursor/skills/` → `.claude/skills/`. changed 결과 전 "모든 변경 파일 다시 읽기" 지시 삭제 |
+| `skills/interrogate/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 리뷰어를 Claude(Agent) + Codex(codex-companion, 설정 기본 모델, 어려운 설계 문제만 astra)로. 의도가 모호하면 묻지 않고 가정으로 표시. Step 4의 번호 매긴 종합 단계를 한 문단으로 |
 | `skills/interrogate/references/*.md` | 같은 경로 | verbatim | — |
-| `skills/show-me-your-work/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 Claude Code 형식으로. 교차 모델 리뷰를 Codex로. 설치하지 않은 `unslop` 언급 제거 |
+| `skills/show-me-your-work/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 Claude Code 형식으로. 교차 모델 리뷰를 Codex로. 설치하지 않은 `unslop` 언급 제거. 감사 단계를 append-only와 맞춰 틀린 줄은 정정 줄로 바로잡게 함 |
 | `skills/show-me-your-work/references/decision-log-template.tsv`, `scripts/log.sh` | 같은 경로 | verbatim | — |
-| `skills/blast-radius/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 설치하지 않은 `how`·`why`·`arena`·`unslop` 언급을 `gh`·Codex·평이한 문장으로 |
-| `skills/architect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. Phase B의 runner 기본값(opus·sol·grok)과 설치하지 않은 `arena` 위임을 Agent(opus, fable) + Codex `task`(설정 기본 모델, 가장 어려운 설계 문제만 astra) 병렬 실행과 직접 종합으로. 설치하지 않은 `why`는 `git log -S`/`git blame`과 인용 PR·티켓 확인으로. principle 스킬 이름을 `principles`의 references로 연결하는 한 줄 추가 |
-| `skills/architect/references/rationale-template.md` | 같은 경로 | adapted | "Synthesis decision" 작성 주체를 `arena` 링크에서 architect lead(Phase B)로 |
+| `skills/blast-radius/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 설치하지 않은 `why`·`arena`·`unslop`과 당시 없던 `how` 언급을 `gh`·Codex·평이한 문장으로 |
+| `skills/architect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. Phase B의 runner 기본값(opus·sol·grok)과 설치하지 않은 `arena` 위임을 Agent(opus, fable) + Codex `task`(설정 기본 모델, 가장 어려운 설계 문제만 astra) 병렬 실행과 직접 종합으로. 설치하지 않은 `why`는 `git log -S`/`git blame`과 인용 PR·티켓 확인으로. principle 스킬 이름을 `principles`의 references로 연결하는 한 줄 추가. 단계별 todolist와 upstream 비교 문장 삭제 |
+| `skills/architect/references/rationale-template.md` | 같은 경로 | adapted | "Synthesis decision" 작성 주체를 `arena` 링크에서 architect lead(Phase B)로. checkpoint 참조를 Phase C로 바로잡음 |
 | `skills/architect/references/design-red-flags.md`, `runner-prompt.md` | 같은 경로 | verbatim | — |
-| `skills/tdd/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용(`disable-model-invocation` 삭제)만. 본문은 upstream 그대로 |
-| `skills/swarm/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. cloud worker·`generalPurpose`·`cloud_base_branch`·`pstack-models.mdc`·grok 기본값을 Agent(`isolation: "worktree"`, `run_in_background`)나 Orca worker(`orca skills get orchestration` 먼저 읽고 `worker-start`, `--base-branch`)로. 모델 경주에서 Codex arm은 `codex-companion.mjs task` |
-| `skills/reflect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 `~/.claude/projects/<encoded-cwd>/`의 session·subagent 두 형식으로. 리뷰어를 Agent(opus, MCP가 있는 general-purpose) 둘 + Codex `task`(tooling)로, 종합도 Agent(opus). `create-skill` → `skill-creator`. 편집 대상을 agent-skills repo의 worktree 브랜치로 한정하고 plugin 스킬은 Backlog로. Backlog는 `use-tracker`로 |
-| `skills/reflect/references/{judgment,tooling,divergent}-reviewer.md` | 같은 경로 | adapted | 스킬 사용 판정 경로를 `.claude/skills`·`~/.claude/skills`·`~/.claude/plugins`로, `Task` → `Agent`, `Skill` 도구 호출을 판정 근거에 추가 |
+| `skills/tdd/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용(`disable-model-invocation` 삭제). 중복된 "signal이 약하면 테스트를 더하지 않는다" 줄 삭제(upstream #419도 같은 줄을 지움) |
+| `skills/swarm/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. cloud worker·`generalPurpose`·`cloud_base_branch`·`pstack-models.mdc`·grok 기본값을 Agent(`isolation: "worktree"`, `run_in_background`)나 Orca worker(`orca skills get orchestration` 먼저 읽고 `worker-start`, `--base-branch`)로. 모델 경주에서 Codex arm은 `codex-companion.mjs task`. 단계별 todolist 삭제 |
+| `skills/reflect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 `~/.claude/projects/<encoded-cwd>/`의 session·subagent 두 형식으로. 리뷰어를 Agent(opus, MCP가 있는 general-purpose) 둘 + Codex `task`(tooling)로, 종합도 Agent(opus). `create-skill` → `skill-creator`. 편집 대상을 agent-skills repo의 worktree 브랜치로 한정하고 plugin 스킬은 Backlog로. Backlog는 `use-tracker`로. 조건부 validator 단계를 `claude plugin validate <checkout>`으로 |
+| `skills/reflect/references/{judgment,tooling,divergent}-reviewer.md` | 같은 경로 | adapted | 스킬 사용 판정 경로를 `.claude/skills`·`~/.claude/skills`·`~/.claude/plugins`로, `Task` → `Agent`, `Skill` 도구 호출을 판정 근거에 추가. judgment·divergent의 "3-5개"를 "미래 행동을 바꾸는 것만, 빈 목록도 가능"으로 |
 | `skills/reflect/references/synthesizer.md` | 같은 경로 | adapted | `create-skill` → `skill-creator` |
-| `skills/how/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. explorer는 내장 `Explore`, 단순 질문은 `Explore`(opus) 한 번, 종합은 general-purpose(opus) 한 번. `Task`·`generalPurpose`·`readonly`·grok 기본값 제거. description의 설치하지 않은 `why` 안내를 git history 확인으로 |
+| `skills/how/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. explorer는 내장 `Explore`, 단순 질문은 lead가 직접 탐색·설명, 종합은 general-purpose(opus) 한 번. `Task`·`generalPurpose`·`readonly`·grok 기본값 제거. description의 설치하지 않은 `why` 안내를 git history 확인으로 |
 | `skills/how/references/explorer-prompt.md`, `explainer-prompt.md` | 같은 경로 | verbatim | — |
 | `skills/principles/references/principle-*.md` (23개) | `pstack/skills/principle-*/SKILL.md` | verbatim | — |
 

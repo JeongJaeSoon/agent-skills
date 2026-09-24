@@ -20,7 +20,7 @@ claude plugin install agent-skills@jeongjaesoon
 Claude Code 안에서는 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon`. 버전을 고정하지 않아 커밋마다 새 버전이다. 갱신은 `claude plugin marketplace update jeongjaesoon` 뒤 `claude plugin update agent-skills@jeongjaesoon`. 새 세션은 새 버전으로 뜨고, 떠 있는 세션은 `/reload-plugins`로 바로 반영한다.
 
 - 스킬 이름은 `/agent-skills:<이름>`. 다른 플러그인과 겹치지 않으면 `/<이름>`도 된다.
-- 권한: 플러그인은 권한 규칙을 설정으로 실을 수 없어 `hooks/guard.py`가 대신 결정한다. 이 플러그인의 스킬, `orca orchestration` 명령(reset·worker-abandon·gate-resolve 제외), `orch` 명령(`heavy`·`set`·`init`·`backfill` 제외)을 허용하고, 다른 터미널의 Orca 메일함 읽기를 거부한다. 나머지는 평소 권한 흐름을 탄다. 자세한 규칙은 [스킬 카탈로그](docs/skills.md#플러그인이-대신-내리는-권한-결정).
+- 권한: 플러그인은 권한 규칙을 설정으로 실을 수 없어 `hooks/guard.py`가 대신 결정한다. 이 플러그인의 스킬, `orca orchestration` 명령(reset·worker-abandon·gate-resolve 제외), `orch` 명령(`heavy`·`set`·`init`·`backfill` 제외)을 허용하고, 다른 터미널의 Orca 메일함 읽기를 거부한다. 나머지는 평소 권한 흐름을 탄다. 자세한 규칙은 [스킬 카탈로그](docs/skills.md#권한-결정).
 - 이름이 바뀐 스킬(`ship-pr` → `deliver-ticket`, `dispatch-work` → `dispatch-card`, `use-obsidian` → `use-notes`)은 `legacy/`의 안내용 별칭으로 남아 있다.
 
 예전 `scripts/install.py`(symlink와 settings 병합)로 설치했다면, 그 설치로 시작한 프로그램이 모두 끝난 뒤 옮긴다.
@@ -43,7 +43,7 @@ claude plugin install agent-skills@jeongjaesoon
 
 ## 스킬
 
-스킬별 호출 시점, 하는 일, 동봉 스크립트는 [스킬 카탈로그](docs/skills.md)에 있다.
+스킬별 호출 시점, 실제 내용, 동봉 파일, `orch` 명령, hook, pstack과의 차이는 [스킬 카탈로그](docs/skills.md)에 있다.
 
 **티켓 하나**
 
