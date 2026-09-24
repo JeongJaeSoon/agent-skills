@@ -11,7 +11,7 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 ## 설치
 
 ```bash
-git clone <this repo> ~/workspace/project/agent-skills
+git clone https://github.com/JeongJaeSoon/agent-skills.git ~/workspace/project/agent-skills
 cd ~/workspace/project/agent-skills
 python3 scripts/install.py                       # 무엇이 바뀌는지 보기
 python3 scripts/install.py --write               # ~/.claude/skills 에 symlink
