@@ -99,6 +99,11 @@ gh pr list --head "$(git branch --show-current)" --state open --json number,url
 cannot prove merged is kept, which is fine. No separate `git branch -d`, no `git worktree remove`.
 Never pass `--force` to get past a dirty tree — that is the ask-first case.
 
+`orca worktree rm` skips the repo's `orca.yaml` archive hooks unless you pass `--run-hooks`. Pass it
+when the repo's `orca.yaml` defines an archive hook, so the cleanup the repo asked for runs. A failed
+hook then blocks the removal and changes nothing; treat that as the ask-first case too, not a reason
+for `--allow-failed-archive-hook`.
+
 ## 5. `EndConversation` asks first — the Orca paths do not
 
 The asymmetry is not a style choice. The Orca commands run on the user's request alone. The

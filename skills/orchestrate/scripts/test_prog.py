@@ -357,3 +357,29 @@ assert prog.landed_but_open(rows(), released, tasks, wts, {"T-1": {"state_type":
     "a released worker's card is left behind whatever the ticket's state"
 
 print("prog.py backfill: all pass")
+
+# --- human-gate Land task -----------------------------------------------------------------
+d3 = prog.HOME / "gt"
+d3.mkdir()
+(d3 / "program.json").write_text(json.dumps(dict(cfg, slug="gt", merge_policy="human-gate")))
+(d3 / "ledger.jsonl").write_text(json.dumps({"ts": T, "ev": "gate_opened", "pr": 12, "task": "task_g", "gate": "g1"}) + "\n")
+updates, real_run, real_view = [], prog.run, prog.pr_view
+prog.run = lambda cmd, check=True: (updates.append(cmd[cmd.index("--id") + 1:cmd.index("--status") + 2]),
+                                   subprocess.CompletedProcess(cmd, 0, "{}", ""))[1]
+views = {12: {"state": "MERGED", "mergeCommit": {"oid": "m12"}}, 13: {"state": "CLOSED"}}
+prog.pr_view = lambda repo, n: views[n]
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_landed(["gt", "--pr", "12"])
+assert updates == [["task_g", "--status", "completed"]], "no worker settles the gate's Land task; the landing does"
+try:
+    prog.cmd_landed(["gt", "--pr", "13"])
+except SystemExit:
+    pass
+assert len(updates) == 1, "a PR without a gate has no Land task to close"
+prog.Program("gt").append("gate_opened", pr=14, task="task_h", gate="g2")
+real_res, prog.gate_resolution = prog.gate_resolution, lambda cfg, events, pr: "hold"
+assert prog.attempt(prog.Program("gt"), 14, "normal") == (1, "human-gate: the user resolved the gate as 'hold'")
+assert updates[-1] == ["task_h", "--status", "failed"], "a held gate closes its Land task; a new gate makes a new one"
+prog.run, prog.pr_view, prog.gate_resolution = real_run, real_view, real_res
+
+print("prog.py gate task: all pass")

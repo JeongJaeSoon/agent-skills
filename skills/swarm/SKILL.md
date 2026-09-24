@@ -19,7 +19,7 @@ Fan out N parallel workers. They may cover separate slices, race the same brief,
 
 Spawn all N workers in one message with the `Agent` tool: `subagent_type: "general-purpose"`, `isolation: "worktree"`, `run_in_background: true`, and the chosen model. Drop `isolation` only when the worker reads and never writes. When workers must outlive this session or run long enough to need their own terminals, start them as Orca workers instead: read `orca skills get orchestration` first, then run `orca orchestration worker-start` once per worker.
 
-When a worker must start from a non-default pushed branch, name it in the brief and have the worker check it out in its worktree first, or pass `--base-branch` to `orca orchestration worker-start`.
+When a worker must start from a non-default pushed branch, name it in the brief and have the worker check it out in its worktree first, or pass `--base-branch` to `orca orchestration worker-start`. `--base-branch` only works with `--worktree new-top-level` or `new-child`, since it names the base of the worktree Orca creates; Orca rejects it for `current` or an existing worktree.
 
 Every brief stands alone. Include the goal, scope, exact slice or race arm, how to verify, and what to report. Reports use `PASS`, `ISSUES`, or `BLOCKED` with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
 

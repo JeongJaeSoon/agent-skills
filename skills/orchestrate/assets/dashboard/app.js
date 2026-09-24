@@ -582,7 +582,7 @@ const moveDot = (mo) => mo.moving ? '<span class="pulse" aria-label="moving"></s
 const agoSpan = (iso) => iso ? `<span class="muted" data-age-text="${esc(iso)}">${ageText(iso)}</span>` : "";
 
 const STALL_TEXT = {
-  idle: (x) => `${x.ticket || x.dispatch}: turn ended ${x.minutes} min ago with its task open — an orchestration message does not wake an idle session; type into its terminal.`,
+  idle: (x) => `${x.ticket || x.dispatch}: turn ended ${x.minutes} min ago with its task open — an orchestration message does not wake an idle session; send the content to dispatch:${x.dispatch}, then nudge its terminal with one line ("run your orchestration check").`,
   start_unconfirmed: (x) => `${x.ticket || x.dispatch}: dispatched ${x.minutes} min ago and its session has written nothing — did it get the brief?`,
   long_tool: (x) => `${x.ticket || x.dispatch}: one ${x.tool} call has run ${x.minutes} min${x.detail ? ` (${x.detail})` : ""} — still waiting on purpose?`,
 };

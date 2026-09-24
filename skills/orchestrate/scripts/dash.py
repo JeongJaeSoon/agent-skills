@@ -715,12 +715,14 @@ def ledger_gaps(cfg, events, workers, prs, tnow):
 
 def spare(summary, tasks):
     """Free landing units under the cap and the Orca tasks whose deps are done. Slots are offered only when the
-    next move (the rule `orch status` prints) is "may spawn N more"; otherwise its line says why not."""
+    next move (the rule `orch status` prints) is "may spawn N more"; otherwise its line says why not.
+    A human-gate `Land #N` task is the coordinator's, never a worker's, so it is not offered."""
     if not (summary.get("next") or "").startswith("may spawn"):
         return {"slots": 0, "ready": [], "held": summary.get("next")}
     done = {t["id"] for t in tasks if t["status"] == "completed"}
     ready = [t.get("ticket") or t["title"] for t in tasks
-             if t["status"] in ("ready", "pending") and set(t["deps"]) <= done]
+             if t["status"] in ("ready", "pending") and set(t["deps"]) <= done
+             and not (t["title"] or "").startswith(prog.GATE_TASK)]
     return {"slots": max(0, (summary["cap"] or 0) - (summary["in_flight"] or 0)), "ready": ready}
 
 
