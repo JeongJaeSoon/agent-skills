@@ -1,0 +1,3 @@
+# Kept in the repo, not linked into ~/.claude/skills.
+# obsidian-cli: the Obsidian plugin ships its own copy, and vault content goes through use-notes (MCP).
+obsidian-cli

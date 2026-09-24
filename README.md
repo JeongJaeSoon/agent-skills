@@ -55,6 +55,8 @@ python3 scripts/install.py --settings --write    # orchestrate용 권한 규칙�
 
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
+**참고용**: `obsidian-cli`(Obsidian CLI 명령 안내). `.install-ignore`에 있어 기본 설치에서 빠진다.
+
 **pstack**: `architect`, `blast-radius`, `create-verification-skill`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `reflect`, `show-me-your-work`, `swarm`, `tdd`. 원본 이름을 유지해 upstream을 따라간다.
 
 ```bash
