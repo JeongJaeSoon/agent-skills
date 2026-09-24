@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 22개, 별칭 3개, 명령 2개(`orch`, `orch-dash`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 23개, 별칭 3개, 명령 2개(`orch`, `orch-dash`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -167,11 +167,21 @@
 - **언제:** `/architect`, "상세 설계안 작성해줘", "설계안 다듬어줘", "구현 계획 짜줘", 코드부터 쓰면 모양이 굳어 버릴 작업.
 - **내용:** 다섯 단계로 진행한다.
   1. **Ground:** `how`와 `why`로 주변 시스템과 지금 모양의 이유를 파악한다.
-  2. **Sketch:** 설계 러너를 병렬로 띄운다(Claude opus, Claude fable, Codex). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
+  2. **Sketch:** `arena`로 설계 러너를 병렬로 띄운다(Claude opus, Claude fable, Codex). 구조가 다른 후보를 두 개 이상 받아, red flag로 거르고 인터페이스 깊이를 기준으로 합친다.
   3. **Agree:** 요청할 때만 사람 확인을 받는다.
   4. **Implement:** 스케치를 계약으로 삼아 구현한다.
   5. **Scrap:** 같은 모양의 우회가 반복되면 스케치를 버리고 다시 그린다.
 - **동봉:** `design-red-flags.md`, `rationale-template.md`(설계 근거 문서), `runner-prompt.md`.
+
+### arena
+- **언제:** `/arena`, "경쟁시켜줘", "여러 안 뽑아서 제일 나은 걸로", "여러 버전 만들어서 비교해줘", 한 번의 시도로는 모양이 굳어 버릴 결과물. `architect`의 Sketch 단계가 부른다.
+- **내용:**
+  - 같은 일을 후보 N개(기본 Claude opus, Claude fable, Codex)에게 동시에 시키기 전에, 채점 기준 3~6개를 먼저 정한다. 후보는 과제만 보고 기준은 모른다.
+  - 후보가 다 끝나면 다른 모델 계열의 심판(Claude가 부르면 Codex)이 기준별로 채점하고 기반안을 추천한다.
+  - 모든 후보를 끝까지 읽고 기준별로 채점해 기반안을 고른다. 나머지 후보에서 나은 한두 가지를 손으로 접붙인다.
+  - 후보들이 같은 모양으로 모이면 그대로 쓰고, 크게 갈리면 과제 정의부터 다시 한다.
+  - 결과물 하나와, 기반안·접붙인 것·버린 것·검증 결과를 적은 짧은 종합 노트를 돌려준다.
+- **swarm과의 차이:** swarm은 일을 나눠 훑고 보고서를 돌려준다. arena는 같은 일을 경쟁시켜 결과물 하나를 만든다.
 
 ### blast-radius
 - **언제:** "이거 바꾸면 뭐가 깨져?", 작지만 믿기 어려운 diff.
@@ -234,9 +244,9 @@
 - **동봉:** `scripts/log.sh`(행 추가), `references/decision-log-template.tsv`.
 
 ### swarm
-- **언제:** `/swarm`, 넓게 병렬로 훑거나 경쟁시킬 때.
+- **언제:** `/swarm`, "병렬로 훑어줘", "나눠서 동시에 확인해줘", 넓게 나눠 훑거나 먼저 결과를 내는 쪽을 가리는 경주. 경쟁시켜 결과물 하나로 합치는 일은 `arena`.
 - **내용:**
-  - 완료 조건과 모양(나눠 맡기, 경쟁, 혼합)을 먼저 정한다.
+  - 완료 조건과 모양(나눠 맡기, 경주, 혼합)을 먼저 정한다. 경주는 먼저 통과한 쪽(first pass)이나 전체 순위(rank all)로 가린다.
   - 워커를 `Agent`(worktree 격리, 백그라운드)로 띄우고, 오래 도는 일은 Orca 워커로 띄운다. Orca 워커의 `--base-branch`는 new-top-level·new-child 배치에서만 받는다.
   - 워커는 PASS / ISSUES / BLOCKED로 보고한다. 커밋과 방법이 빠진 보고는 한 번 다시 돌린다.
   - 결과를 표 하나로 모은다.
@@ -360,15 +370,15 @@
 | 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어, 문서·티켓·PR은 한국어. 문체는 `write-plainly`(한국어·영어) |
 
 ### 가져온 것
-pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 11개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
+pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 12개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
 
 - **거의 그대로 가져온 것:** 원칙 23개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
   - 원칙은 pstack에서 스킬 23개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
-- **고쳐서 가져온 것:** architect, blast-radius, how, why, interrogate, reflect, show-me-your-work, swarm, tdd, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
+- **고쳐서 가져온 것:** architect, arena, blast-radius, how, why, interrogate, reflect, show-me-your-work, swarm, tdd, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
   - 모델이 스스로 부를 수 있게 했다.
   - Cursor 전용 요소를 Claude Code 대응물로 바꿨다. 경로는 `.cursor/` → `.claude/`, 워커는 `generalPurpose`/클라우드 → `Agent`/Orca 워커, transcript는 `agent-transcripts` → `~/.claude/projects`.
   - 모델 패널을 Claude + Codex로 바꿨다.
-  - 설치하지 않은 스킬(`arena`, `unslop`)을 부르던 곳을 `gh`, Codex, `write-plainly`로 바꿨다. `why`는 2026-09-25에 들여와 원래 연결을 되살렸다.
+  - 설치하지 않은 스킬(`unslop`)을 부르던 곳을 `write-plainly`로 바꿨다. `why`와 `arena`는 2026-09-25에 들여와 원래 연결을 되살렸다(architect → arena).
   - `why`는 Cursor MCP 탐색 대신 세션에 있는 MCP 도구로 출처를 고르고, 한 줄 질문용 narrow mode를 더했다. 연결 없는 Datadog·Sentry·warehouse 출처 파일은 빼고 Google Drive·Obsidian 출처를 새로 썼다.
 - **2026-09-25 추가 수정:** Opus 5.5에 맞춰 프롬프트를 감사하고 더 고쳤다(`6eec9fa`). architect와 swarm의 단계별 할 일 목록을 없앴고, how의 단순 질문은 직접 처리한다. reflect 리뷰어의 개수 하한을 없앴고, show-me-your-work는 추가만 하는 기록으로 바꿨다. 파일별 수정 내역은 `vendor/pstack/NOTICE.md`에 있다.
 - **옮겨 쓴 것(derived):** 파일을 통째로 가져오지 않고 규칙만 옮겨 새로 쓴 부분이다. `manifest.json`에 없어 동기화하지 않고, upstream이 바뀌면 사람이 읽고 반영한다.
@@ -380,7 +390,6 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 | pstack 스킬 | 하는 일 | 가져오지 않은 이유 |
 |---|---|---|
 | poteto-mode | 항상 켜진 모드 라우터와 플레이북 23개 | 스킬별 트리거로 대신한다. Claude Code의 output style로 모드를 흉내 낼 수 있지만, 강제 적용은 사용자 설정을 덮어쓰고 선택 적용은 켜지 않게 되어 만들지 않았다. 운영 규칙은 `orchestrate`, PR·리뷰·증거 플레이북은 `deliver-ticket`, 답변 규칙은 `write-plainly`에 옮겼다 |
-| arena | 후보 N개를 경쟁시켜 접붙인다 | architect에 병렬 러너와 종합을 직접 넣었다 |
 | recall, teach, figure-it-out | 최근 맥락 복원, how+why 설명, 맞춤 플레이북 설계 | recall과 teach는 다음 후보다(recall은 `orca search`와 `~/.claude/projects` 기반으로 바꿔야 한다). figure-it-out은 판정어만 `deliver-ticket`에 옮겼다 |
 | no-comments | 주석 제거 | 사용자 규칙과 겹친다. diff 범위에 한정한 `prune-comments`로 들일 후보다. unslop과 technical-writing은 `write-plainly`로 합쳤다 |
 | typescript-best-practices | TS 규칙 | 범용 스킬이 아니다 |

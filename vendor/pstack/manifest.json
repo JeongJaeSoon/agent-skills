@@ -309,6 +309,11 @@
       "upstream": "skills/principle-never-block-on-the-human/SKILL.md",
       "local": "skills/principles/references/principle-never-block-on-the-human.md",
       "mode": "verbatim"
+    },
+    {
+      "upstream": "skills/arena/SKILL.md",
+      "local": "skills/arena/SKILL.md",
+      "mode": "adapted"
     }
   ]
 }

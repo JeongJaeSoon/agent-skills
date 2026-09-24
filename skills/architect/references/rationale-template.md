@@ -16,7 +16,7 @@ The prose that ships alongside the type sketch. One page. Sentence-case headings
 
 ## Synthesis decision
 
-*Filled in by the architect lead at synthesis ([Phase B](../SKILL.md#phase-b-sketch)). Records which candidate became the base and why, what was adapted from each of the others, and what was rejected and why.*
+*Filled in by [arena](../../arena/SKILL.md). Records which candidate became the base and why, what was adapted from each of the others, and what was rejected and why.*
 
 ## Tradeoffs accepted
 

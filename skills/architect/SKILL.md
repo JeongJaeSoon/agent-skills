@@ -19,15 +19,7 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 ## Phase B: Sketch
 
-Fan out one runner per row below, launched in the same message, with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt, with the absolute paths of this `SKILL.md` and `references/rationale-template.md` so a runner can read them, and a separate output path per runner so candidates stay independent. Each candidate produces a design package shaped per `references/rationale-template.md`.
-
-| Runner | How to run it |
-|--------|---------------|
-| Claude (opus) | `Agent` tool, `subagent_type: "general-purpose"`, `model: "opus"`, `isolation: "worktree"` when it writes sketch files into the repo. |
-| Claude (fable) | Same, with `model: "fable"`. |
-| Codex | `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"` — the configured default model; add `--model gpt-6-astra --effort medium` only for the hardest design question in the work (never `high`/`xhigh`). Then `status` / `result` with the job id. `task` without `--write` is read-only, so it returns the package in its result and you save it. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. |
-
-Run one Codex job at a time; two concurrent jobs kill each other. If a model name is rejected, use the closest available tier of the same family and say which one ran.
+Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt, with the absolute paths of this `SKILL.md` and `references/rationale-template.md` so a runner can read them. Each candidate produces a design package shaped per `references/rationale-template.md`. Arena's default runners (Claude opus, Claude fable, Codex) are the design runners; a Claude runner that writes sketch files into the repo gets `isolation: "worktree"`.
 
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape.
 
@@ -35,7 +27,7 @@ Screen every candidate against [`references/design-red-flags.md`](references/des
 
 Compare viable candidates on interface depth. Prefer the design that hides more complexity behind a smaller, simpler public surface. A rich interface can keep call chains short by concentrating capability instead of scattering it across layers.
 
-You synthesize the viable candidates into one design package: pick the base, graft what each other candidate did better, and record the choice in the rationale's "Synthesis decision" section.
+Arena returns one synthesized design package. Its synthesis decision fills the rationale's "Synthesis decision" section.
 
 ## Phase C: Agree (opt-in)
 

@@ -19,8 +19,9 @@
 | `skills/show-me-your-work/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 Claude Code 형식으로. 교차 모델 리뷰를 Codex로. 설치하지 않은 `unslop` 언급 제거. 감사 단계를 append-only와 맞춰 틀린 줄은 정정 줄로 바로잡게 함 |
 | `skills/show-me-your-work/references/decision-log-template.tsv`, `scripts/log.sh` | 같은 경로 | verbatim | — |
 | `skills/blast-radius/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 설치하지 않은 `arena`·`unslop` 언급을 Codex·평이한 문장으로(`how`·`why` 언급은 upstream 그대로) |
-| `skills/architect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. Phase B의 runner 기본값(opus·sol·grok)과 설치하지 않은 `arena` 위임을 Agent(opus, fable) + Codex `task`(설정 기본 모델, 가장 어려운 설계 문제만 astra) 병렬 실행과 직접 종합으로. principle 스킬 이름을 `principles`의 references로 연결하는 한 줄 추가. 단계별 todolist와 upstream 비교 문장 삭제 |
-| `skills/architect/references/rationale-template.md` | 같은 경로 | adapted | "Synthesis decision" 작성 주체를 `arena` 링크에서 architect lead(Phase B)로. checkpoint 참조를 Phase C로 바로잡음 |
+| `skills/architect/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. Phase B는 upstream처럼 `arena`를 부르되, runner 기본값(opus·sol·grok)과 `pstack-models.mdc` 대신 arena의 Claude(opus, fable) + Codex 러너를 쓰고 저장소에 스케치를 쓰는 Claude 러너는 worktree 격리. principle 스킬 이름을 `principles`의 references로 연결하는 한 줄 추가. 단계별 todolist와 upstream 비교 문장 삭제 |
+| `skills/arena/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용, 한국어 트리거와 swarm과의 구분을 description에. 단계별 todolist 삭제. 러너를 Agent(opus, fable) + Codex `task`(설정 기본 모델, 가장 어려운 설계 문제만 astra)로, 교차 심판을 다른 모델 계열(Claude가 부르면 Codex)로. `/tmp` 출력 경로를 scratchpad로. principle 스킬 이름을 `principles`의 references로 연결 |
+| `skills/architect/references/rationale-template.md` | 같은 경로 | adapted | checkpoint 참조를 Phase C로 바로잡음 |
 | `skills/architect/references/design-red-flags.md`, `runner-prompt.md` | 같은 경로 | verbatim | — |
 | `skills/tdd/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용(`disable-model-invocation` 삭제). 중복된 "signal이 약하면 테스트를 더하지 않는다" 줄 삭제(upstream #419도 같은 줄을 지움) |
 | `skills/swarm/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. cloud worker·`generalPurpose`·`cloud_base_branch`·`pstack-models.mdc`·grok 기본값을 Agent(`isolation: "worktree"`, `run_in_background`)나 Orca worker(`orca skills get orchestration` 먼저 읽고 `worker-start`, `--base-branch`)로. 모델 경주에서 Codex arm은 `codex-companion.mjs task`. 단계별 todolist 삭제 |

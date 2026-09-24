@@ -1,16 +1,16 @@
 ---
 name: swarm
-description: "Fan out N parallel workers, drain them, and return one report. Use for /swarm, 'swarm this', or parallel coverage, races, gauntlets, and exploration."
+description: "Fan out N parallel workers, drain them, and return one report. Use for /swarm, 'swarm this', \"병렬로 훑어줘\", \"나눠서 동시에 확인해줘\", or parallel coverage, races to a first result, gauntlets, and exploration. For competing candidates merged into one artifact, use arena."
 ---
 
 # Swarm
 
-Fan out N parallel workers. They may cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report.
+Fan out N parallel workers. They may cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report. When the goal is one artifact built from the best of competing attempts, run the **arena** skill instead.
 
 ## Phase A: Frame
 
 1. State the done predicate and the artifact or report the swarm must return.
-2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass`, `rank all`, or `best-of` before spawning.
+2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass` or `rank all` before spawning.
 3. Set N from the user or derive it from the shape. N is total workers, not the concurrency limit.
 4. Pick the worker model up front: an `Agent` worker takes `model: "sonnet"`, `"opus"`, or `"fable"`; an Orca worker takes `--model`. For a model race, name each arm's model up front. A Codex arm runs through `codex-companion.mjs task` (see the **interrogate** skill), one Codex job at a time.
 5. Give each worker its own writable output when it writes. When workers verify or measure commits, each brief names the exact SHAs. A measurement brief also names the method (sample count, what one sample is, order). The worker records both in its result.
@@ -27,7 +27,7 @@ If a worker drops out, proceed with N-1 and note it.
 
 ## Phase C: Aggregate
 
-Read the terminal results. Drop a result that does not record the SHAs and method its brief names, and rerun that worker once. After a second miss, record a gap. A gap does not count as a pass. For coverage, every required slice needs a result. For a race, apply the selection rule declared up front. Use first pass, rank all, or best-of. Do not paste raw worker dumps.
+Read the terminal results. Drop a result that does not record the SHAs and method its brief names, and rerun that worker once. After a second miss, record a gap. A gap does not count as a pass. For coverage, every required slice needs a result. For a race, apply the selection rule declared up front: first pass or rank all. Do not paste raw worker dumps.
 
 Keep a compact result table, one-line evidenced issues, and explicit gaps or dropouts.
 
