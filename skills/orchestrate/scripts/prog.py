@@ -48,7 +48,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import datetime as dt, fnmatch, json, os, pathlib, subprocess, sys, time
+import datetime as dt, fnmatch, json, os, pathlib, re, subprocess, sys, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
@@ -200,6 +200,28 @@ def dep_map(events, extra=None):
         if e["ev"] == "dep":
             after.setdefault(e["ticket"], set()).update(e.get("after") or [])
     return after
+
+
+def live_units(events, dispatches):
+    """Live workers as the cap counts them: the layers of one land-after chain (ledger `dep`) land as one
+    merge, so they count once."""
+    ticket = {}
+    for e in events:
+        if e["ev"] == "spawned" and e.get("ticket"):
+            for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or "")):
+                ticket[d] = e["ticket"]
+    live = {ticket.get(d, d) for d in dispatches}
+    root = {t: t for t in live}
+
+    def find(t):
+        while root[t] != t:
+            t = root[t]
+        return t
+    for t, below in dep_map(events).items():
+        for b in below:
+            if t in root and b in root:
+                root[find(t)] = find(b)
+    return len({find(t) for t in live})
 
 
 def ticket_of(task):
@@ -523,6 +545,7 @@ def cmd_status(argv):
     running = [w for w in workers if (w.get("projection") or {}).get("outcome") == "in_progress"]
     live = [w for w in running if w["dispatchId"] not in roles]
     role_live = [f"{roles[w['dispatchId']]} {w['dispatchId']}" for w in running if w["dispatchId"] in roles]
+    units = live_units(events, [w["dispatchId"] for w in live])
     waiting = [w["dispatchId"] for w in live if ((w.get("projection") or {}).get("stage") or {}).get("activity") == "waiting"]
     ready = ready_prs(events)
     human = [s for s in ready if cfg["merge_policy"] == "human-gate" and "approved" not in s]
@@ -540,7 +563,7 @@ def cmd_status(argv):
     interval = (gaps[len(gaps) // 2].total_seconds() / 60 if gaps else knob(cfg, "land_interval_minutes"))
     backlog_h = len(order) * interval / 60
     stale = [e for e in order if e["age_h"] >= knob(cfg, "stale_hours")]
-    lines.append(f"flow: main {main} · in-flight {len(live)}/{cap} cap (ceiling {cfg['ceiling']}) · ready-to-land {len(ready)}"
+    lines.append(f"flow: main {main} · in-flight {units}/{cap} cap (ceiling {cfg['ceiling']}) · ready-to-land {len(ready)}"
                  f" · human-wait {len(human)} · landed {len(landed_recent)} in 3h · {rate:.1f}/h overall"
                  + (f" · idle-waiting: {', '.join(waiting)} (prompt? worker-read --source terminal)" if waiting else "")
                  + (f" · roles: {', '.join(role_live)}" if role_live else ""))
@@ -572,7 +595,7 @@ def cmd_status(argv):
 
     # 4. next move
     nxt, used = next_move(cfg, events, tnow, tickets_done=tickets_done if issues is not None else None,
-                          live=len(live), human=len(human), order=order)
+                          live=units, human=len(human), order=order)
     budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
     print("\n".join(lines))

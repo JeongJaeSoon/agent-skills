@@ -493,6 +493,7 @@ def summarize(cfg, events, issues, workers, tnow, order):
     verified = prog.final_check_current(events)
     roles = {e.get("note") for e in events if e["ev"] == "spawned" and e.get("role")}
     live = [w for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in roles]
+    units = prog.live_units(events, [w["dispatch"] for w in live])
     ready = prog.ready_prs(events)
     human = [s for s in ready if cfg.get("merge_policy") == "human-gate" and "approved" not in s]
     main, cap = prog.main_state(events), prog.cap_from(events, cfg.get("ceiling", 6))
@@ -501,12 +502,12 @@ def summarize(cfg, events, issues, workers, tnow, order):
     triage = triage_map(events)
     derived = [i for i in issues or [] if i.get("derived")]
     nxt, used = prog.next_move(cfg, events, tnow, tickets_done=tickets_done,
-                               live=len(live), human=len(human),
+                               live=units, human=len(human),
                                order=[e for e in order if e.get("state") not in ("gone", "unknown")])
     return {
         "predicate_total": len(pred), "predicate_done": len(done) if issues is not None else None,
         "final_check": verified, "main": main, "cap": cap, "ceiling": cfg.get("ceiling", 6),
-        "in_flight": len(live), "ready_to_land": len(ready), "human_wait": len(human),
+        "in_flight": units, "ready_to_land": len(ready), "human_wait": len(human),
         "landed_total": len(landed), "landed_24h": sum(1 for e in landed if within(e, 24)),
         "derived_total": len(derived) if issues is not None else None,
         "derived_per_item": round(len(derived) / max(len(pred), 1), 2) if issues is not None else None,

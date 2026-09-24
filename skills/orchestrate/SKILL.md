@@ -36,7 +36,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 1. **Frame.**
    - Read every ticket in scope.
    - Write the predicate as countable ticket IDs plus a final check on the real artifact ("A-246, 247, 117 Done and `verify-<app>` drives the quickstart on main"). Derive it yourself. If the tickets have no countable end, write your best predicate, mark it proposed in the digest, and go on.
-   - Copy the human's goal into the standing orders verbatim, one sentence per order.
+   - Copy the human's goal into the standing orders verbatim, one sentence per order. A sentence that would have a worker write outside its worktree stays verbatim in the coordinator's list, and the workers' list gets its worker form: "put it in the worker_done body; the coordinator writes it".
    - Map the dependencies between tickets and split them by kind (`references/landing.md`): **start-after** (B needs A's result before it can begin) becomes an Orca task dep; **land-after** (B can be built on A's branch now) becomes a GitHub stack plus `prog.py dep`, never an Orca dep.
    - Check that the repo can land in parallel: required checks on, "require branches to be up to date" off, squash merges. Add the program's shared contracts to `exclusive_paths`. If strict mode has to stay, put its cost in the digest.
    - Pick the merge policy.
@@ -47,7 +47,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 3. **Pilot.** Run one worker through brief → PR → verdict → `prog.py land` → main green. Fix the brief, the unit size and VERIFY from whatever broke. Also confirm that the chosen worker model gets through its first `orca orchestration` call and its `prog.py land` without a permission prompt.
 4. **Scale.**
    - Spawn the standing roles (`references/roles.md`): a main guardian, and a QA lead once the first tickets land. Record each with `prog.py record <slug> spawned --role <guardian|qa> --note <dispatchId>`; roles do not count against the cap.
-   - Then spawn ticket workers up to the cap that `prog.py status` prints. The cap starts at 1, grows by one per landing proven green on main, and halves on red.
+   - Then spawn ticket workers up to the cap that `prog.py status` prints. The cap starts at 1, grows by one per landing proven green on main, and halves on red. The layers of one land-after chain (`prog.py dep`) count once, since they land as one merge; start the whole chain together.
 
    For each ticket worker:
    - Write the brief per `references/brief.md`. The spec starts with the ticket ID, never `/goal`.

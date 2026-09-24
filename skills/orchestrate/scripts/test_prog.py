@@ -145,4 +145,10 @@ assert nm([], True).startswith("tickets done")
 assert nm([], None, live=4) == "at cap: drain and land"
 assert nm([], None, order=[{"age_h": 3.5}]).startswith("unstick first: 1 PR")
 
+# A land-after chain counts once against the cap; a start-after or unrelated worker counts on its own.
+ev = [at(1, "spawned", ticket="S-1", note="ctx_a1"), at(1, "spawned", ticket="S-2", note="ctx_b2"),
+      at(1, "spawned", ticket="S-3", note="ctx_c3"), at(1, "dep", ticket="S-2", after=["S-1"])]
+assert prog.live_units(ev, ["ctx_a1", "ctx_b2", "ctx_c3"]) == 2
+assert prog.live_units(ev, ["ctx_b2", "ctx_c3", "ctx_ff"]) == 3  # the lower layer landed; an unrecorded worker counts
+
 print("prog.py land order: all pass")
