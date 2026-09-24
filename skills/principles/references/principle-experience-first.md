@@ -3,7 +3,6 @@ name: principle-experience-first
 description: "Apply when product, UX, or feature-scope tradeoffs come up. Choose user delight over implementation convenience; ship fewer polished features over more rough ones."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-experience-first/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Experience First
 

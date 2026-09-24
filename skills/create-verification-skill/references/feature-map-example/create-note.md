@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/create-verification-skill/references/feature-map-example/create-note.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Create a note
 
 Create note lets a user save a titled note from the browser or CLI, cancel an unfinished draft, and confirm the saved note from a second user-facing view.

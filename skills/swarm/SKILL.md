@@ -2,7 +2,6 @@
 name: swarm
 description: "Fan out N parallel workers, drain them, and return one report. Use for /swarm, 'swarm this', or parallel coverage, races, gauntlets, and exploration."
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/swarm/SKILL.md (adapted) MIT (c) 2026 Lauren Tan -->
 
 # Swarm
 

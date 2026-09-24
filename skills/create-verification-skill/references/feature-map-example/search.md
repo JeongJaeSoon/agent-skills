@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/create-verification-skill/references/feature-map-example/search.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Search notes
 
 Search lets a user find notes by title or body text, inspect a matching note, and distinguish no matches from an unavailable search.

@@ -2,7 +2,6 @@
 name: show-me-your-work
 description: "Keep a reviewable decision trail for long-running or unattended work: a TSV log with one row per decision (what, why, evidence, result). Local by default; commit it when a reviewer needs the trail to trust the result. Use for /show-me-your-work, autonomous or multi-phase runs, or work a human reviews after stepping away."
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/show-me-your-work/SKILL.md (adapted) MIT (c) 2026 Lauren Tan -->
 
 # Show me your work
 

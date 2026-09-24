@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/interrogate/references/code-quality-review.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Code Quality Review
 
 Each reviewer applies this code-quality lens in addition to the rubric. It is a strict standard focused on implementation quality, maintainability, abstraction quality, and codebase health.

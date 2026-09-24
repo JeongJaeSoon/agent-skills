@@ -11,7 +11,6 @@ import json, os, re, subprocess, sys, tempfile, pathlib
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CACHE = os.path.expanduser(os.environ.get("PSTACK_CACHE", "~/.cache/pstack-upstream"))
-HEADER = re.compile(r"^(<!-- pstack-vendor: .* -->|# pstack-vendor: .*)\n", re.M)
 # Cursor-only tokens that should not survive in an adapted file. Advisory: negated mentions
 # ("never require gt") also match, so a hit is a prompt to look, not a failure.
 DENY = [r"\.cursor/", r"agent-transcripts", r"cursor-team-kit", r'environment: ?"cloud"',
@@ -29,22 +28,6 @@ def git(*args, check=True):
 def show(ref, path):
     r = git("show", f"{ref}:{path}", check=False)
     return r.stdout if r.returncode == 0 else None
-
-
-def with_header(text, m, ref, f):
-    tag = f"pstack-vendor: {m['remote_slug']}@{ref[:12]} {m['upstream_root']}/{f['upstream']} ({f['mode']}) MIT (c) 2026 Lauren Tan"
-    ext = pathlib.Path(f["local"]).suffix
-    if ext == ".md":
-        line = f"<!-- {tag} -->\n"
-        if text.startswith("---\n"):
-            end = text.index("\n---\n", 4) + 5
-            return text[:end] + line + text[end:]
-        return line + text
-    if ext == ".sh":
-        first, _, rest = text.partition("\n")
-        return f"{first}\n# {tag}\n{rest}" if first.startswith("#!") else f"# {tag}\n{text}"
-    # Formats without a comment syntax (tsv) carry provenance in NOTICE.md only.
-    return text
 
 
 def merge3(local, base, new):
@@ -77,7 +60,7 @@ def main():
     for f in m["files"]:
         base, new = show(pin, f"{up}/{f['upstream']}"), show(target, f"{up}/{f['upstream']}")
         local_path = REPO / f["local"]
-        local = HEADER.sub("", local_path.read_text(), count=1) if local_path.exists() else None
+        local = local_path.read_text() if local_path.exists() else None
         if new is None:
             rows.append((f["upstream"], "deleted-upstream", "")); blocked += 1; continue
         if local is None:
@@ -97,7 +80,7 @@ def main():
             blocked += n > 0 or f["mode"] == "verbatim"
         hits = sorted({p for p in DENY if re.search(p, merged)}) if f["mode"] == "adapted" else []
         rows.append((f["upstream"], state, ",".join(hits)))
-        writes[local_path] = with_header(merged, m, target, f)
+        writes[local_path] = merged
 
     tracked = {f["upstream"] for f in m["files"]}
     names = git("ls-tree", "-r", "--name-only", target, "--", f"{up}/skills").stdout.split()

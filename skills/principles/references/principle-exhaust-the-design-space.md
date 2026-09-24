@@ -3,7 +3,6 @@ name: principle-exhaust-the-design-space
 description: "Apply when facing a novel UI interaction or architectural decision with no precedent in the codebase. Build 2-3 competing prototypes and compare side by side before committing."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-exhaust-the-design-space/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Exhaust the Design Space
 

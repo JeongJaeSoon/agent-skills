@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/interrogate/references/rubric.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Review Rubric
 
 Review through whichever lenses are relevant. Not every lens applies to every change. Use judgment.

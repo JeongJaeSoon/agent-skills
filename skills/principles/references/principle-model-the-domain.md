@@ -3,7 +3,6 @@ name: principle-model-the-domain
 description: "Apply when writing stateful logic, or when code branches a lot or repeats a shape assumption across files. Encode the domain in a structure instead of scattered conditionals."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-model-the-domain/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Model the Domain
 

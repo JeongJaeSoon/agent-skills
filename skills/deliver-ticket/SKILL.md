@@ -24,8 +24,8 @@ On a new branch in its own worktree — never in the main checkout. A handoff ca
 one; starting by hand, create one first. The ticket carries the what and the implementation
 hints; how you get there is your call. One invariant: **no commit of non-trivial logic without a runnable
 test** written alongside the change and actually run. A bug fix starts from a test that reproduces
-the failure and fails before the fix — watch it fail, then make it pass (pstack `tdd`,
-`fix-root-causes`).
+the failure and fails before the fix — watch it fail, then make it pass (`tdd`,
+Fix Root Causes in `principles`).
 
 **Findings outside the ticket.** Work turns up things the ticket did not ask for — a latent
 bug, a missing validation, a contract inconsistency. Decide yourself, at the moment you find

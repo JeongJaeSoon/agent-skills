@@ -3,7 +3,6 @@ name: principle-subtract-before-you-add
 description: "Apply when sequencing an addition, refactor, or rewrite. Remove dead code, redundant validators, and stub references first, then build on the simpler base."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-subtract-before-you-add/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Subtract Before You Add
 

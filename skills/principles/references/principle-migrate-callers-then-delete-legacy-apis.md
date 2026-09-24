@@ -3,7 +3,6 @@ name: principle-migrate-callers-then-delete-legacy-apis
 description: "Apply when introducing a new internal API while old callers still exist. Migrate callers and delete the old API in the same wave instead of preserving compatibility layers."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Migrate Callers Then Delete Legacy APIs
 

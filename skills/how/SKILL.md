@@ -2,7 +2,6 @@
 name: how
 description: "Use for \"how does X work\", code walkthroughs before changing something, and placement / ownership / layering questions (\"where should this live\", \"which package owns this\", \"is this the right layer\"). Explains subsystem architecture, runtime flow, onboarding mental models. For motivation (why it is this way), read git history and the PRs it cites."
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/how/SKILL.md (adapted) MIT (c) 2026 Lauren Tan -->
 
 # How
 

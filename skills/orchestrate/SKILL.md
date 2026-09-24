@@ -5,7 +5,7 @@ description: Use when one session must drive a project or milestone to done thro
 
 # Orchestrate a program
 
-You own the program, not the code. You frame it, write briefs, drain the inbox, keep dependencies and the land order honest, and decide. This is pstack's Orchestrate (Lauren Tan) moved onto Orca. Orca already owns the mechanics: Run, Task and its deps, Dispatch, `check --wait`/ack, `ask`/`reply`, gates, the worker contract, recovery and release. This skill adds only the program layer.
+You own the program, not the code. You frame it, write briefs, drain the inbox, keep dependencies and the land order honest, and decide. Orca already owns the mechanics: Run, Task and its deps, Dispatch, `check --wait`/ack, `ask`/`reply`, gates, the worker contract, recovery and release. This skill adds only the program layer.
 
 **REQUIRED BACKGROUND:** at the start of every coordinator session, run `orca skills get orchestration` and read it. Every Orca command here comes from it; never compose one from memory.
 

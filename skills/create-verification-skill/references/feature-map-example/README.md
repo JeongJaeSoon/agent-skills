@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/create-verification-skill/references/feature-map-example/README.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Notes verification map
 
 This directory is the maintained source for verifying the user-facing behavior of Notes. Read the index before driving the app, then use the matching feature file as the recipe.

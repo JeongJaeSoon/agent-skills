@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/how/references/explainer-prompt.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Explainer Prompt Template
 
 Build the explainer subagent's prompt from this template. Fill in the placeholders.

@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/interrogate/references/lead-judgment.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Lead Judgment Framework
 
 You are the lead reviewer. The configured reviewers have produced their findings. Apply pragmatic engineering judgment. Don't aggregate. Filter, contextualize, and decide.

@@ -3,7 +3,6 @@ name: maintain-verification-skill
 description: "Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. Use for /maintain-verification-skill or \"audit the verify skill\"."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/maintain-verification-skill/SKILL.md (adapted) MIT (c) 2026 Lauren Tan -->
 
 # Maintain a verification skill
 

@@ -3,7 +3,6 @@ name: principle-foundational-thinking
 description: "Apply before writing logic: choosing core types and data structures, sequencing scaffold-vs-feature work, asking what concurrent actors share. Get the data structures right so downstream code becomes obvious."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-foundational-thinking/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Foundational Thinking
 

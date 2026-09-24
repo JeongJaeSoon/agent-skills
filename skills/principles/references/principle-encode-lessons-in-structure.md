@@ -3,7 +3,6 @@ name: principle-encode-lessons-in-structure
 description: "Apply when you catch yourself writing the same instruction a second time, or notice a recurring correction. Encode the rule as a lint, metadata flag, runtime check, or script instead of more text."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-encode-lessons-in-structure/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Encode Lessons in Structure
 

@@ -2,7 +2,6 @@
 name: interrogate
 description: "Use for \"interrogate\", \"adversarial review\", \"multi-model review\", \"challenge this\", \"stress test this code\", \"find blind spots\", or \"tear this apart\". Multiple LLM reviewers challenge changes from independent angles."
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/interrogate/SKILL.md (adapted) MIT (c) 2026 Lauren Tan -->
 
 # Interrogate
 

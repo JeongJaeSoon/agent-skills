@@ -3,7 +3,6 @@ name: principle-fix-root-causes
 description: "Apply when debugging. Trace each symptom to its root cause and fix it there; reproduce first, ask why until you reach it, resist nil-check guards that silence crashes."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-fix-root-causes/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Fix Root Causes
 

@@ -8,7 +8,7 @@ This design replaced three that failed on a real program (2026-09-23/24):
 - **"Whoever is ready lands next."** A migration chain waited more than five hours while eleven newer, easier PRs landed ahead of it. The priority and dependency order existed only in the coordinator's head.
 - **One baton, strict up-to-date branches.** Every landing put every other PR behind, which meant a rebase and another 30–40 minute CI run each. The user's verdict: "동시에 여러 pr 을 빠르게 머지하면서도 적절히 안정적으로… 1개씩 확인하고 머지하는건 너무 별로야". They turned off "require branches to be up to date" and kept the required checks. Landings went parallel.
 
-The rules below come from pstack Shipping (MIT, Lauren Tan). "CI green is not a verdict." A verdict holds across a rebase only while the patch-id is unchanged.
+"CI green is not a verdict." A verdict holds across a rebase only while the patch-id is unchanged.
 
 ## Repository settings this assumes
 

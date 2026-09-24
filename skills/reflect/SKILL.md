@@ -2,7 +2,6 @@
 name: reflect
 description: Spawn three parallel review subagents over the active transcript, surface learnings, and route each to a concrete edit on an existing skill. Use when the user says reflect.
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/reflect/SKILL.md (adapted) MIT (c) 2026 Lauren Tan -->
 
 # Reflect
 

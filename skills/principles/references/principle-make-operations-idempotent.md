@@ -3,7 +3,6 @@ name: principle-make-operations-idempotent
 description: "Apply when designing commands, lifecycle steps, or processing loops that run amid crashes, restarts, and retries. Converge to the same end state regardless of partial prior runs."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-make-operations-idempotent/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Make Operations Idempotent
 

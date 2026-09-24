@@ -3,7 +3,6 @@ name: create-verification-skill
 description: "Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. Use for /create-verification-skill, \"make a control skill for this repo\", or when a project has no scripted way to prove UI/CLI/service behavior."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/create-verification-skill/SKILL.md (adapted) MIT (c) 2026 Lauren Tan -->
 
 # Create a verification skill
 

@@ -1,6 +1,6 @@
 # The brief
 
-The brief is the coordinator's product. A worker cannot see this session, its siblings or the program note. Everything it needs has to be in the spec. If you cannot fill a field, you have not scoped the unit yet, so do not spawn it. (After pstack Orchestrate, "The brief"; MIT, Lauren Tan.)
+The brief is the coordinator's product. A worker cannot see this session, its siblings or the program note. Everything it needs has to be in the spec. If you cannot fill a field, you have not scoped the unit yet, so do not spawn it.
 
 GOAL, SCOPE, FORBIDDEN and ACCEPTANCE below cover Orca's own Task-spec contract (Target, Change, Constraints, Ownership, Observable acceptance).
 

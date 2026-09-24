@@ -3,7 +3,6 @@ name: principle-laziness-protocol
 description: "Apply when refactoring, evaluating diff size, or tempted to add abstractions, layers, or signal threading. Bias toward deletion and the smallest change that solves the problem."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-laziness-protocol/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Laziness Protocol
 

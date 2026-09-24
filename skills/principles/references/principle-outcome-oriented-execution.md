@@ -3,7 +3,6 @@ name: principle-outcome-oriented-execution
 description: "Apply during planned rewrites and migrations with explicit phase boundaries. Converge on the target architecture; don't preserve smooth intermediate states with throwaway compatibility code."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-outcome-oriented-execution/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Outcome-Oriented Execution
 

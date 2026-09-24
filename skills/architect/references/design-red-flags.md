@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/architect/references/design-red-flags.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Design red flags
 
 Screen every candidate before synthesis. A red flag is a reason to revise or reject the shape.

@@ -1,4 +1,3 @@
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/interrogate/references/reviewer-prompt.md (verbatim) MIT (c) 2026 Lauren Tan -->
 # Reviewer Prompt Template
 
 Build each reviewer subagent's prompt from this template, filling in the placeholders.

@@ -3,7 +3,6 @@ name: principle-boundary-discipline
 description: "Apply when wiring validation, error handling, or framework adapters. Concentrate guards at system boundaries (CLI, config, network, external APIs); trust internal types and keep business logic in pure functions."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-boundary-discipline/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Boundary Discipline
 

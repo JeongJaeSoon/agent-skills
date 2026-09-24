@@ -3,7 +3,6 @@ name: principle-redesign-from-first-principles
 description: "Apply when integrating a new requirement into an existing design. Redesign as if the requirement had been a foundational assumption from day one, instead of bolting it on."
 disable-model-invocation: true
 ---
-<!-- pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/principle-redesign-from-first-principles/SKILL.md (verbatim) MIT (c) 2026 Lauren Tan -->
 
 # Redesign From First Principles
 

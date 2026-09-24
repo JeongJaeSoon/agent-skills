@@ -3,11 +3,9 @@ name: principles
 description: Use when a design, refactor, verification, or delegation decision needs a named engineering principle — sizing a diff, choosing where validation goes, deciding whether work is proven, splitting work across agents, or noticing the same instruction being written a second time.
 ---
 
-# pstack principles
+# Engineering principles
 
-Lauren Tan's pstack principles, vendored verbatim under `references/`. Read the leaf file in full for any principle you apply; the line below only says when it applies.
-
-Index text adapted from `cursor/plugins` `pstack/skills/poteto-mode/SKILL.md` `## Principles` (MIT, (c) 2026 Lauren Tan). Pin and file list: `vendor/pstack/manifest.json` in the agent-skills repo.
+Each principle lives in its own file under `references/`. Read the leaf file in full for any principle you apply; the line below only says when it applies.
 
 **Core**
 
@@ -47,4 +45,4 @@ Index text adapted from `cursor/plugins` `pstack/skills/poteto-mode/SKILL.md` `#
 
 - **Encode Lessons in Structure** (`references/principle-encode-lessons-in-structure.md`). You catch yourself writing the same instruction a second time.
 
-The leaf files keep upstream's text verbatim. A link to `../principle-<name>/SKILL.md` inside one means `references/principle-<name>.md` here. Mentions of other pstack skills that are not installed here are background, not a skill to load.
+A link to `../principle-<name>/SKILL.md` inside a leaf file means `references/principle-<name>.md` here. A skill a leaf file names that is not installed here is background, not a skill to load.

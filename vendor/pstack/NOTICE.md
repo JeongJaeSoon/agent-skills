@@ -1,9 +1,9 @@
 # pstack vendoring 고지
 
-이 저장소의 일부 파일은 [cursor/plugins](https://github.com/cursor/plugins)의 `pstack`(Lauren Tan, MIT)에서 가져왔다. 라이선스 전문은 같은 폴더의 `LICENSE`에 있다. 고정 커밋(`pin`), pstack 버전(`upstream_version`), 파일 목록은 `manifest.json`이 정본이다. 각 파일 머리의 `pstack-vendor:` 줄은 그 파일을 마지막으로 가져온 커밋을 적는다.
+이 저장소의 일부 파일은 [cursor/plugins](https://github.com/cursor/plugins)의 `pstack`(Lauren Tan, MIT)에서 가져왔다. 라이선스 전문은 같은 폴더의 `LICENSE`에 있다. 고정 커밋(`pin`), pstack 버전(`upstream_version`), 파일 목록은 `manifest.json`이 정본이다.
 
-- 파일마다 frontmatter 바로 뒤(스크립트는 shebang 뒤)에 `pstack-vendor:` 출처 줄이 있다. TSV처럼 주석이 없는 형식은 이 문서로 갈음한다.
-- `verbatim`은 upstream과 바이트 단위로 같다(출처 줄 제외). `adapted`는 아래 표의 수정만 했다.
+- 스킬 파일 자체에는 출처 줄을 두지 않는다. 출처와 라이선스 고지는 이 문서, `LICENSE`, `manifest.json`, README가 맡는다. 이 폴더는 플러그인에 함께 실린다.
+- `verbatim`은 upstream과 바이트 단위로 같다. `adapted`는 아래 표의 수정만 했다.
 - 동기화: `python3 scripts/pstack-sync.py`(기본 dry-run, `--write`는 충돌 0일 때만 쓰고 pin을 올린다). 스크립트 자체 검사는 `bash scripts/pstack-sync-test.sh`.
 - 3-way 병합은 텍스트 충돌만 잡는다. 동기화 PR에서는 새로 들어온 문장이 사용자 규칙(`~/.claude/CLAUDE.md`)과 부딪히지 않는지, 설치되지 않은 스킬을 부르지 않는지 사람이 읽고 확인한다.
 
@@ -35,4 +35,4 @@
 
 ## 흡수한 규칙
 
-`orchestrate`과 기존 스킬 수정안은 pstack의 Orchestrate·Autopilot·Shipping 플레이북에서 운영 규칙을 옮겨 왔다. 문장을 그대로 인용한 곳에는 해당 파일에 "출처: cursor/plugins pstack (MIT, Lauren Tan)"을 적었다.
+`orchestrate`과 기존 스킬 수정안은 pstack의 Orchestrate·Autopilot·Shipping 플레이북에서 운영 규칙을 옮겨 왔다. 옮겨 온 규칙의 출처는 이 문서로 갈음한다.

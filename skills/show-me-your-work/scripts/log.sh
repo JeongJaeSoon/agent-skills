@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# pstack-vendor: cursor/plugins@b42effe0aa50 pstack/skills/show-me-your-work/scripts/log.sh (verbatim) MIT (c) 2026 Lauren Tan
 # Append a well-formed row to a show-me-your-work decision log (TSV).
 # Usage: log.sh <logfile> <phase> <decision> <why> <evidence> <result>
 set -euo pipefail
