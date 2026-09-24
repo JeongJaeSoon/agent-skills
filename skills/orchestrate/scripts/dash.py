@@ -129,8 +129,9 @@ def fetch_issues(cfg):
     out = sh(base + ["list", "--project", project, "--limit", "500"])
     issues = out.get("issues", []) if isinstance(out, dict) else list(out)
     have = {i.get("id") for i in issues}
-    for pid in cfg.get("predicate") or []:
-        if pid not in have:  # predicate items can live outside the project
+    admitted = prog.admitted_tickets(read_jsonl(program_dir(cfg["slug"]) / "ledger.jsonl")) if cfg.get("slug") else []
+    for pid in dict.fromkeys((cfg.get("predicate") or []) + admitted):
+        if pid not in have:  # predicate items and admitted follow-ups can live outside the project
             try:
                 got = sh(base + ["get", pid], timeout=20)
                 issues.append(got.get("issue", got) if isinstance(got, dict) else got)

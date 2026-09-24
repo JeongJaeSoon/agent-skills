@@ -543,14 +543,33 @@ def ci_summary(rollup):
     return failed, pending, sorted(runs)
 
 
-def tracker_issues(cfg):
-    """Normalized issues (use-tracker schema) for the program's tracker project, or None if unset."""
+def tracker_issues(cfg, ids=()):
+    """Normalized issues (use-tracker schema) for the program's tracker project, or None if unset.
+    `ids` that the project list lacks (tickets filed elsewhere) are fetched one by one."""
     t = cfg.get("tracker") or {}
     proj = t.get("project") or cfg.get("linear_project")  # linear_project: programs made before the adapter
     if not proj:
         return None
-    cmd = [sys.executable, str(TRACKER)] + (["--adapter", t["adapter"]] if t.get("adapter") else []) + ["list", "--project", proj]
-    return json.loads(run(cmd).stdout)
+    base = [sys.executable, str(TRACKER)] + (["--adapter", t["adapter"]] if t.get("adapter") else [])
+    issues = json.loads(run(base + ["list", "--project", proj]).stdout)
+    have = {i.get("id") for i in issues}
+    for tid in dict.fromkeys(ids):
+        if tid in have:
+            continue
+        r = run(base + ["get", tid], check=False)
+        if r.returncode == 0:
+            got = json.loads(r.stdout)
+            issues.append(got.get("issue", got) if isinstance(got, dict) else got)
+    return issues
+
+
+def admitted_tickets(events):
+    """Tickets whose latest triage is `admitted`."""
+    triage = {}
+    for e in events:
+        if e["ev"] in ("admitted", "parked") and e.get("ticket"):
+            triage[e["ticket"]] = e["ev"]
+    return [t for t, ev in triage.items() if ev == "admitted"]
 
 
 def gate_resolution(cfg, events, pr):
@@ -660,12 +679,8 @@ def dashboard_lines(slug):
 
 def open_admitted(events, by_id):
     """Admitted follow-ups block Close like predicate items: admission means they block one or fix a defect."""
-    triage = {}
-    for e in events:
-        if e["ev"] in ("admitted", "parked") and e.get("ticket"):
-            triage[e["ticket"]] = e["ev"]
-    return [t for t, ev in triage.items()
-            if ev == "admitted" and by_id.get(t, {}).get("state_type") not in ("completed", "canceled")]
+    return [t for t in admitted_tickets(events)
+            if by_id.get(t, {}).get("state_type") not in ("completed", "canceled")]
 
 
 def cmd_status(argv):
@@ -675,9 +690,9 @@ def cmd_status(argv):
     lines = []
 
     # 1. predicate
-    issues = tracker_issues(cfg)
-    by_id = {i["id"]: i for i in issues or []}
     pred = cfg["predicate"]
+    issues = tracker_issues(cfg, pred + admitted_tickets(events))
+    by_id = {i["id"]: i for i in issues or []}
     done = [t for t in pred if by_id.get(t, {}).get("state_type") == "completed"]
     open_ = [t for t in pred if t not in done]
     blocking = open_ + [t for t in open_admitted(events, by_id) if t not in pred]

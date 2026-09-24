@@ -408,3 +408,16 @@ assert not prog.final_check_current([{"ev": "predicate_verified"}, {"ev": "admit
     "admitting a follow-up after the final check makes the check stale"
 
 print("prog.py admitted gate: all pass")
+
+import types
+# admitted tickets outside the project are fetched by ID; a failed get leaves them out
+real_run = prog.run
+def fake_run(cmd, check=True):
+    out = {"list": '[{"id": "A-1", "state_type": "completed"}]', "get": '{"id": "X-9", "state_type": "canceled"}'}
+    return types.SimpleNamespace(returncode=0 if cmd[-1] != "X-404" else 1, stdout=out[cmd[-2] if cmd[-2] == "get" else "list"], stderr="")
+prog.run = fake_run
+got = prog.tracker_issues({"tracker": {"project": "P"}}, ["A-1", "X-9", "X-404"])
+prog.run = real_run
+assert [i["id"] for i in got] == ["A-1", "X-9"], got
+
+print("prog.py tracker ids: all pass")
