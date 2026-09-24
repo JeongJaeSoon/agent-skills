@@ -81,6 +81,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - When `status` says the tickets are done, run the predicate's final check on the real artifact: the QA lead drives `verify-<app>` on main, or, without a QA lead, you run the program's `final_check` on a fresh `origin/main` checkout (`git archive` into a scratch directory), never on a worker's tree.
    - `prog.py record <slug> predicate_verified --note <evidence>`.
    - Release the standing roles: `orca orchestration send --to dispatch:<role> --subject release --body "program closing: send worker_done"`, then `worker-release` once its `worker_done` arrives (Orca releases only settled workers). Release any remaining workers and remove any worktree still left (checks in `end-session` §4).
+   - Stop the `dash.py serve` you started, unless another program still uses it: it serves every program, and a running background process keeps deferring the `/goal` stop check. `state.json` stays for later reading.
    - Run `measure-delivery` and audit the trail per `show-me-your-work`.
    - Write the lessons into standing orders, skills or memory.
 

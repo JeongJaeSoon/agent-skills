@@ -134,7 +134,7 @@ Workers stop at READY. `land` refuses them with exit 1, and they report. You ope
 
 ## Permissions
 
-Merging inside `prog.py land` is what lets a worker land without a per-merge approval prompt. `scripts/install.py --settings --write` adds the few rules a program needs:
+Merging inside `prog.py land` is what lets a worker land without a per-merge approval prompt. `python3 scripts/install.py --settings --write`, run from the agent-skills repository checkout (not this skill's `scripts/`), adds the few rules a program needs. Check `~/.claude/settings.json` for them; a later hand edit may have removed some:
 
 - allow `orca orchestration` and `prog.py land` (the checks above are the review gate)
 - deny `reset` and `worker-abandon`
