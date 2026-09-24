@@ -1,0 +1,14 @@
+{
+  "name": "agent-skills",
+  "owner": {
+    "name": "JeongJaeSoon"
+  },
+  "description": "JeongJaeSoon의 개인 Claude Code 플러그인 마켓플레이스",
+  "plugins": [
+    {
+      "name": "agent-skills",
+      "source": "./",
+      "description": "pstack 기반 개인 스킬 모음: 티켓 작성·전달, Orca 오케스트레이션, 교차 검토, 회고"
+    }
+  ]
+}

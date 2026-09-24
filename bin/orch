@@ -1,0 +1,3 @@
+#!/bin/sh
+# The program ledger and landing gate of the orchestrate skill.
+exec python3 "$(dirname "$0")/../skills/orchestrate/scripts/prog.py" "$@"

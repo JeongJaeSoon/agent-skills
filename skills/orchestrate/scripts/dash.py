@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Progress dashboard for an orchestrate program: JSON-first and model-free.
 
-Usage: python3 dash.py <command> [options]
+Usage: orch-dash <command> [options]
 
   collect <slug>                     rebuild <store>/<slug>/dashboard/state.json from program.json,
                                      the ledger, the tracker, GitHub and Orca (each source optional)

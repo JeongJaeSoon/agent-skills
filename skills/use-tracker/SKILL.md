@@ -29,7 +29,7 @@ says how. They name Linear only for things outside the adapter (a `--linear-issu
 `scripts/tracker.py` (python3 stdlib). JSON on stdout; errors on stderr with exit 1.
 
 ```bash
-T=~/.claude/skills/use-tracker/scripts/tracker.py
+T="${CLAUDE_SKILL_DIR}/scripts/tracker.py"
 python3 $T list --project P [--since 2026-09-01T00:00:00Z] [--limit N]   # created_at ascending; --limit keeps the newest N
 python3 $T get ID
 python3 $T create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]

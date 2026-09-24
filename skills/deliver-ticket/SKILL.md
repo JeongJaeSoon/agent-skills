@@ -109,7 +109,7 @@ Before pushing, run **both**:
 
 - the test suite
 - an E2E check against a running system (a local compose stack, image build or E2E run goes
-  through `python3 ~/.claude/skills/orchestrate/scripts/prog.py heavy - -- <command>`, which
+  through `orch heavy - -- <command>`, which
   caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, **Aside** for UI
   and web flows (it is the browser for everything, logged-in sites included), IDE diagnostics
   for type and lint
@@ -133,13 +133,13 @@ or `gh stack init` / `add` / `submit` from scratch) and confirm it with
 top of the layer below. A stack lands from its top in one merge: once every layer is verified
 and green, `gh api -X PUT repos/<owner>/<repo>/pulls/<top>/merge-async -f merge_method=squash
 -f sha=<top head>` merges the top and every layer below it; confirm each layer MERGED with
-`gh pr view`. Stacked PRs reject `gh pr merge`. Inside a program, `prog.py land <slug> --pr <top>` does
+`gh pr view`. Stacked PRs reject `gh pr merge`. Inside a program, `orch land <slug> --pr <top>` does
 this for you — never call merge-async by hand there.
 
 Post the results as a **sticky comment**:
 
 ```bash
-bash ~/.claude/skills/deliver-ticket/scripts/sticky-comment.sh <pr> <body-file>
+bash "${CLAUDE_SKILL_DIR}/scripts/sticky-comment.sh" <pr> <body-file>
 ```
 
 It upserts on the `<!-- test-results -->` marker, so results never stack. Include suite
@@ -169,7 +169,7 @@ frontier; you still own your PR to landing.
 Then land it. How depends on where you run:
 
 - **Inside a program** — the brief has a `PROGRAM: <slug>` line. Land only with the brief's LAND
-  command (`prog.py land`), which re-checks readiness at the current head, waits for your
+  command (`orch land`), which re-checks readiness at the current head, waits for your
   dependencies, and puts migrations, CI and other shared files in the exclusive lane; other PRs
   land in parallel, behind or not.
   Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.

@@ -1,0 +1,10 @@
+{
+  "name": "agent-skills",
+  "description": "pstack 기반 개인 스킬 모음: 티켓 작성·전달, Orca 오케스트레이션(프로그램 원장·착지 게이트·대시보드), 교차 검토, 회고",
+  "author": { "name": "JeongJaeSoon", "url": "https://github.com/JeongJaeSoon" },
+  "homepage": "https://github.com/JeongJaeSoon/agent-skills",
+  "repository": "https://github.com/JeongJaeSoon/agent-skills",
+  "license": "MIT",
+  "keywords": ["pstack", "orca", "linear", "orchestration", "code-review"],
+  "skills": ["./legacy/"]
+}

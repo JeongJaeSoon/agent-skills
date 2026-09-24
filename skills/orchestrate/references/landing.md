@@ -1,6 +1,6 @@
 # Landing: parallel by default, exclusive where a merge can break what it does not touch
 
-Development, review, CI and landing all run in parallel. Each worker lands its own PR through `prog.py land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No coordinator hands out merge slots.
+Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No coordinator hands out merge slots.
 
 This design replaced three that failed on a real program (2026-09-23/24):
 
@@ -30,7 +30,7 @@ Behind is fine. The one mechanical self-check: if the base changed any file this
 
 **Exclusive lane.** A PR is in it if any of these hold:
 
-- it touches `exclusive_paths`. The defaults are `*migrations/*`, `.github/*`, `*Dockerfile*` and `*compose*.y*ml`. Add shared contracts per program with `prog.py set <slug> exclusive_paths "a/*,b.md"`.
+- it touches `exclusive_paths`. The defaults are `*migrations/*`, `.github/*`, `*Dockerfile*` and `*compose*.y*ml`. Add shared contracts per program with `orch set <slug> exclusive_paths "a/*,b.md"`.
 - its class is `gate`
 
 The lane works like this:
@@ -46,7 +46,7 @@ Proposals to serialize the normal lane for safety are rejected by default ("one 
 
 ## The land order
 
-`prog.py queue <slug>` prints the order and why each PR is not moving. `prog.py status` prints its first line. The order decides who takes the exclusive lane, and what the coordinator unsticks first.
+`orch queue <slug>` prints the order and why each PR is not moving. `orch status` prints its first line. The order decides who takes the exclusive lane, and what the coordinator unsticks first.
 
 1. **Class:** `main-fix` → `gate` → `urgent` → `normal`. `record reprioritized --pr N --class urgent` moves a PR.
 2. **Aging.** A PR that has waited `aging_hours` (default 2) ranks with urgent ones.
@@ -66,21 +66,21 @@ Two kinds of edge, declared in two places. Pick per edge:
 | B needs A… | Edge | Where |
 |---|---|---|
 | **before B can start**: A's result on main, A's report, an API A creates that B cannot stub | start-after | Orca task deps. Orca keeps B out of `task-list --ready` until A's task completes |
-| **only to land first**: B can be written on top of A's branch now | land-after | A GitHub stack (B on A's branch) plus `prog.py dep <slug> --ticket B --after A`. No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
+| **only to land first**: B can be written on top of A's branch now | land-after | A GitHub stack (B on A's branch) plus `orch dep <slug> --ticket B --after A`. No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
 
 A real run proved the second row: migrations 0001 and 0002 had an Orca dep between them, so 0002's worker could not start while 0001's PR was open, and the "stack" landed as two merges.
 
 Start-after edges in Orca:
 
 - `task-create --deps '["<task id>", …]'` or `worker-start --deps`, and start work from `task-list --ready`.
-- `prog.py` reads the Run's task deps and keys them by the ticket ID that starts each task's display name. A dependent PR `waiting` in the land order ("lands after X") is the same edge Orca holds.
-- Deps are immutable once a task exists. To add a prerequisite to a task that has no dispatch yet, create a new task with the full deps list and retire the old one: `task-update --status failed --result '{"superseded_by":"<new id>"}'`. `prog.py` skips failed tasks.
-- A dependency found after dispatch cannot be added in Orca. Record it with `prog.py dep <slug> --ticket A --after B`.
+- `orch` reads the Run's task deps and keys them by the ticket ID that starts each task's display name. A dependent PR `waiting` in the land order ("lands after X") is the same edge Orca holds.
+- Deps are immutable once a task exists. To add a prerequisite to a task that has no dispatch yet, create a new task with the full deps list and retire the old one: `task-update --status failed --result '{"superseded_by":"<new id>"}'`. `orch` skips failed tasks.
+- A dependency found after dispatch cannot be added in Orca. Record it with `orch dep <slug> --ticket A --after B`.
 - A condition that needs judgment ("after the human checks X") is an Orca gate (`gate-create`), not a dep.
 
 ## GitHub stacks: several PRs, one merge
 
-When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `prog.py land <slug> --pr <top>` merges every layer in one `merge-async` call.
+When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `orch land <slug> --pr <top>` merges every layer in one `merge-async` call.
 
 - Create it with `gh stack link <bottom> <top> --base main`, or `gh stack init` / `add` / `submit`. Confirm it with `gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks, and `gh stack view` needs a locally tracked stack).
 - Bring a stack onto the latest base bottom-up: `gh pr update-branch` merges a PR's own base into it, so on the top it pulls only the layer below. `land` prints the sequence.
@@ -91,9 +91,9 @@ When PRs must land in order (a dependency chain, consecutive migrations, layers 
 
 ## Feature integration branches
 
-A series of cards reworking one area works on `feat/<topic>`, branched from main and unprotected. Sub-PRs take it as their base and land into it with the same `prog.py land` (lanes are per base). The branch merges `origin/main` periodically. When the series is done, one `feat/<topic>` → main PR lands.
+A series of cards reworking one area works on `feat/<topic>`, branched from main and unprotected. Sub-PRs take it as their base and land into it with the same `orch land` (lanes are per base). The branch merges `origin/main` periodically. When the series is done, one `feat/<topic>` → main PR lands.
 
-## What a worker does: `prog.py land <slug> --pr N [--wait-minutes 50]`
+## What a worker does: `orch land <slug> --pr N [--wait-minutes 50]`
 
 Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields and returns when something needs you.
 
@@ -111,7 +111,7 @@ Rebase conflicts change the patch-id. That voids the verdict, so the resolution 
 A standing **main guardian** worker (`references/roles.md`) owns red main. It re-runs a failed main run once and reads the logs.
 
 - **Flake.** Record it in the program note's digest and freeze nothing.
-- **Real defect.** It freezes landing (`prog.py record <slug> main_red --sha <merge commit>`) and narrows the culprit to a commit since the last green. It then chooses:
+- **Real defect.** It freezes landing (`orch record <slug> main_red --sha <merge commit>`) and narrows the culprit to a commit since the last green. It then chooses:
   - **hotfix** when the cause is clear and small, and the fix verifies in about 30 minutes
   - **revert** otherwise
 
@@ -119,7 +119,7 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
 
 ## What the coordinator does
 
-- Declare start-after edges as Orca task deps when creating tasks; plan land-after chains as stacks from the start, with `prog.py dep`.
+- Declare start-after edges as Orca task deps when creating tasks; plan land-after chains as stacks from the start, with `orch dep`.
 - Read `status` on every drain:
   - `STALE` lines are PRs that have waited `stale_hours` (default 3). Each gets an action on the reason `queue` gives.
   - `LANDED-BUT-OPEN` lines are workers whose PR landed. Release them and remove their worktrees in the same turn.
@@ -130,21 +130,16 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
 
 ## human-gate
 
-Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `prog.py gate <slug> --pr N`, which creates an Orca decision gate on a coordinator-owned Task. The user resolves it in Orca. You then run `prog.py land <slug> --pr N`: it sees the resolution, records `approved`, and lands.
+Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `orch gate <slug> --pr N`, which creates an Orca decision gate on a coordinator-owned Task. The user resolves it in Orca. You then run `orch land <slug> --pr N`: it sees the resolution, records `approved`, and lands.
 
 ## Permissions
 
-Merging inside `prog.py land` is what lets a worker land without a per-merge approval prompt. `python3 scripts/install.py --settings --write`, run from the agent-skills repository checkout (not this skill's `scripts/`), adds the few rules a program needs. Check `~/.claude/settings.json` for them; a later hand edit may have removed some:
+Merging inside `orch land` is what lets a worker land without a per-merge approval prompt. The plugin's PreToolUse hook (`hooks/guard.py`) makes the permission decisions a program needs, for every session and subagent where the plugin is enabled:
 
-- allow `orca orchestration` and `prog.py land` (the checks above are the review gate)
-- deny `reset` and `worker-abandon`
-- ask before `gate-resolve` and `orca terminal send`
-- a hook that refuses reading another session's mailbox
+- allow this plugin's skills, `orca orchestration <verb>` except reset, worker-abandon and gate-resolve, and `orch <subcommand>` except heavy, set and init (the checks above are the review gate)
+- only for one simple command: an operator, redirection or substitution gets no decision
+- deny reading another terminal's Orca mailbox
 
-Everything else goes to auto mode's classifier. A skill's `allowed-tools` cannot replace these rules, for three reasons:
-
-- it lasts only for the turn that loads the skill
-- a worker runs LAND from its brief hours later
-- deny rules and hooks cannot be declared in a skill
+Everything else goes to the normal permission flow: the user's own deny and ask rules, then auto mode's classifier. A skill's `allowed-tools` cannot replace the hook, because it lasts only for the turn that loads the skill and a worker runs LAND from its brief hours later.
 
 A worker that calls `gh pr merge` or `gh api … merge-async` by hand is merging outside the gate. The classifier rightly refuses that as "Merge Without Review": use `land`.

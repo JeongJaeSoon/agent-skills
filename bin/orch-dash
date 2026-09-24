@@ -1,0 +1,3 @@
+#!/bin/sh
+# The dashboard of the orchestrate skill.
+exec python3 "$(dirname "$0")/../skills/orchestrate/scripts/dash.py" "$@"

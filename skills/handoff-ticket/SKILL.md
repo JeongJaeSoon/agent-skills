@@ -120,8 +120,8 @@ agent picked up `/goal` before reporting success. Report the worktree path, bran
 
 ## 5. Close this session
 
-Only after step 4 is verified. **REQUIRED SUB-SKILL:** read and follow `end-session`
-(`~/.claude/skills/end-session/SKILL.md`) for the state check, the command and the order inside
+Only after step 4 is verified. **REQUIRED SUB-SKILL:** read and follow the `end-session`
+skill for the state check, the command and the order inside
 the final turn. Which ending applies comes from `orca worktree current`, never from an
 assumption that this session is a card — `isMainWorktree: true` rules out `worktree rm`.
 In addition to what that skill asks for, the report names the cards you spawned (path,

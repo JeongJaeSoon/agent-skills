@@ -1,6 +1,6 @@
 # Standing roles
 
-A program of more than a handful of tickets runs two standing workers beside the ticket workers, the main guardian and the QA lead, plus a flow improver on demand. Each standing worker is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker, and the coordinator records each with `prog.py record <slug> spawned --role <name> --note <dispatchId>` so they stay outside the concurrency cap. None of them lands feature work.
+A program of more than a handful of tickets runs two standing workers beside the ticket workers, the main guardian and the QA lead, plus a flow improver on demand. Each standing worker is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker, and the coordinator records each with `orch record <slug> spawned --role <name> --note <dispatchId>` so they stay outside the concurrency cap. None of them lands feature work.
 
 | Role | Owns | Does not |
 |---|---|---|
@@ -23,21 +23,21 @@ PROGRAM: <slug>
 
 GOAL        Keep <base> green without stopping the program for flakes.
 WATCH       Every main run, read from GitHub: gh run list --repo <repo> --branch <base> --json
-            databaseId,headSha,status,conclusion (prog.py status stays `main pending` until a lander
+            databaseId,headSha,status,conclusion (orch status stays `main pending` until a lander
             records the result). Wake with a Bash call under run_in_background: a loop that exits
             when a new run on <base> completes or after 4.5 minutes, whichever is first, so each
-            wake-up also carries your heartbeat and your own mail check. Never prog.py wait or
+            wake-up also carries your heartbeat and your own mail check. Never orch wait or
             `check --run`: they read the coordinator's Run inbox.
 ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --failed) and read the log.
-               Flake → note it in the digest (dash.py note <slug> --kind risk --text …), freeze nothing.
-            2. Defect → prog.py record <slug> main_red --sha <merge commit>. That freezes every lane
+               Flake → note it in the digest (orch-dash note <slug> --kind risk --text …), freeze nothing.
+            2. Defect → orch record <slug> main_red --sha <merge commit>. That freezes every lane
                except --class main-fix.
             3. Narrow the culprit among the commits since the last green.
             4. Choose: hotfix when the cause is clear and small and verifies in ~30 min; revert
                otherwise. Never mechanically revert a migration or a commit later PRs build on.
             5. Open the repair PR, review it (deliver-ticket §3, scaled to the diff), and land it with
-               prog.py land <slug> --pr N --class main-fix. Required checks, no bypass.
-            6. On green: prog.py record <slug> main_green --pr N --sha <sha>.
+               orch land <slug> --pr N --class main-fix. Required checks, no bypass.
+            6. On green: orch record <slug> main_green --pr N --sha <sha>.
             7. Tell the culprit's card and the affected cards (orca orchestration send --to
                dispatch:<id>), and the coordinator: orca orchestration send --to run:<run id>
                --type escalation --subject "main <red|green> <sha>" --body "<time, sha, flake|defect,
@@ -57,12 +57,12 @@ PROGRAM: <slug>
 GOAL        Catch what per-PR CI cannot: tickets that do not do what they claim, main that no longer
             works end to end, and code that drifted from the design.
 LANES       Run all three continuously; fan each unit out to a subagent (swarm), in parallel.
-  1 Ticket verification  For every landed ticket (prog.py status, `landed` events), one verifier
+  1 Ticket verification  For every landed ticket (orch status, `landed` events), one verifier
                           drives the ticket's acceptance criteria on main with the repo's
                           verify-<app> skill. PASS / PASS+NOTES / FAIL with what it drove. Oldest first.
   2 Periodic E2E          The repo's full E2E suite on the latest main, every <qa_every_landings, 5>
                           landings, every <qa_every_hours, 2> h, and right before each gate PR lands.
-                          Heavy local runs go through prog.py heavy <slug> -- <command>.
+                          Heavy local runs go through orch heavy <slug> -- <command>.
   3 Design audit          One standing reader compares <design doc(s)> with the code on main. Each
                           finding is filed as 문서 오류 (the doc is wrong) or 코드 오류 (the code is wrong).
 FINDINGS    File each reproduced failure as a ticket (write-ticket follow-up format, label follow-up,

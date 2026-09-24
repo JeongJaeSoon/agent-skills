@@ -9,10 +9,10 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 - 목표: <사람이 준 목표 한 문장>
 - slug `<slug>` · Orca run `<run id>` · 저장소 `<owner/repo>` · 트래커 `<adapter>:<project>`
-- 대시보드: `dash.py serve` (모든 프로그램을 띄운다) → <URL>
+- 대시보드: `orch-dash serve` (모든 프로그램을 띄운다) → <URL>
 - 워커 모델: <agent/model, 기본은 코디네이터와 같은 모델> · 검증 워커는 다른 계열(codex)
 - 머지 정책: autonomous | human-gate · 동시성 천장 6 · 마감 <ISO8601 또는 없음>
-- 착지: 일반 레인은 준비되면 병렬 착지, 독점 레인은 base당 하나씩 착지 순서대로(등급 main-fix → gate → urgent → normal, 대기 2시간이 넘으면 urgent) · 의존 체인은 stack으로 한 번에 착지 (`prog.py queue <slug>`)
+- 착지: 일반 레인은 준비되면 병렬 착지, 독점 레인은 base당 하나씩 착지 순서대로(등급 main-fix → gate → urgent → normal, 대기 2시간이 넘으면 urgent) · 의존 체인은 stack으로 한 번에 착지 (`orch queue <slug>`)
 - 장부: `~/.claude/programs/<slug>/` (ledger.jsonl, briefs/, decisions.tsv)
 
 ## 완료 조건 (predicate)
@@ -35,11 +35,11 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 ## 의존 관계와 stack
 
-- <티켓 A> ← <티켓 B> (시작 전 필요 → Orca task deps, 착지 순서만 → stack + `prog.py dep`) · stack: #<하위> → #<상위>
+- <티켓 A> ← <티켓 B> (시작 전 필요 → Orca task deps, 착지 순서만 → stack + `orch dep`) · stack: #<하위> → #<상위>
 
 ## 착지와 역할
 
-- 레인: 일반은 병렬. 독점 경로는 <기본값 + 이 프로그램의 공유 계약 경로> (`prog.py set <slug> exclusive_paths …`)
+- 레인: 일반은 병렬. 독점 경로는 <기본값 + 이 프로그램의 공유 계약 경로> (`orch set <slug> exclusive_paths …`)
 - 저장소 설정: required checks <목록>, up-to-date 요구 <꺼짐|켜짐: 비용을 digest에>, squash
 - main 가디언: <dispatch id> · QA 리드: <dispatch id>, e2e 주기 착지 <5>건마다 · <2>시간마다 · 게이트 PR 직전, 설계 기준 문서 <경로>
 
@@ -53,5 +53,5 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 ## 진행 기록
 
-- <시각> <prog.py status 요약 + 이번 drain에서 바뀐 것>
+- <시각> <orch status 요약 + 이번 drain에서 바뀐 것>
 ```

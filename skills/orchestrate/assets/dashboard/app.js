@@ -1,6 +1,6 @@
 "use strict";
 // orchestrate dashboard: polls /api/<slug>/state with If-None-Match and renders it. No build step, no network
-// beyond this server, no model calls. Everything on screen comes from state.json, written by dash.py.
+// beyond this server, no model calls. Everything on screen comes from state.json, written by orch-dash.
 
 const POLL_MS = 5000;
 const PROGRAMS_MS = 15000;
@@ -556,7 +556,7 @@ function nextTone(n) {
 function attentionItems(st) {
   const s = st.summary || {}, out = [];
   const workers = Object.fromEntries((st.workers || []).map((w) => [w.dispatch, w]));
-  if (s.main === "red") out.push(["bad", "fail", "main is red — only the repairing PR may land (prog.py land --class main-fix).", "prs"]);
+  if (s.main === "red") out.push(["bad", "fail", "main is red — only the repairing PR may land (orch land --class main-fix).", "prs"]);
   if (s.stopped) out.push(["bad", "stop", "STOP line is active — nothing new is spawned.", "activity"]);
   for (const e of st.land_order || []) {
     if ((Date.now() - ms(e.since)) / 3600e3 > 3 && e.state !== "gone") out.push(["bad", "clock", `#${e.pr}${e.ticket ? ` (${e.ticket})` : ""} has waited ${ageText(e.since)} to land — ${e.reasons?.[0] || e.state}`, "overview"]);
@@ -777,7 +777,7 @@ function viewActivity(st) {
     if (d !== day) { html += `<li class="day eyebrow">${esc(d)}</li>`; day = d; }
     html += evRow(a);
   }
-  return `<div class="view-head"><div><h2>Activity</h2><p>Ledger events as prog.py records them, and notes added with <span class="mono">dash.py note</span>.</p></div></div>
+  return `<div class="view-head"><div><h2>Activity</h2><p>Ledger events as orch records them, and notes added with <span class="mono">orch-dash note</span>.</p></div></div>
   <div class="toolbar">${chips("activity", [["all", "All", all.length], ["ledger", "Ledger", all.filter(F.ledger).length], ["notes", "Notes", all.filter(F.notes).length]], f)}</div>
   <div class="card" data-src="ledger"><ul class="rows feed">${html || '<li class="muted">Nothing recorded yet.</li>'}</ul></div>`;
 }
@@ -787,7 +787,7 @@ const VIEWS = { overview: viewOverview, issues: viewIssues, prs: viewPrs, tasks:
 function renderView() {
   const view = $("#view"), st = S.state;
   const focusId = document.activeElement?.id, sel = document.activeElement?.selectionStart;
-  if (!S.slug) view.innerHTML = `<div class="loading">${S.programs.length ? "Choose a program." : `No programs under the store yet. Start one with <span class="mono">prog.py init</span>.`}</div>`;
+  if (!S.slug) view.innerHTML = `<div class="loading">${S.programs.length ? "Choose a program." : `No programs under the store yet. Start one with <span class="mono">orch init</span>.`}</div>`;
   else if (!st) view.innerHTML = `<div class="loading">${S.down ? "Cannot reach the dashboard server." : "Loading…"}</div>`;
   else { view.innerHTML = VIEWS[S.section](st); redrawCharts(); applyFreshness(); }
   if (focusId && $("#" + focusId)) { const el = $("#" + focusId); el.focus(); if (sel != null && el.setSelectionRange) el.setSelectionRange(sel, sel); }

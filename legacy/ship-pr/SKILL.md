@@ -5,4 +5,4 @@ description: Legacy alias of deliver-ticket, kept only for sessions started befo
 
 # ship-pr → deliver-ticket
 
-This skill was renamed to `deliver-ticket`. Read `~/.claude/skills/deliver-ticket/SKILL.md` and follow it; its sections keep the same numbers.
+This skill was renamed to `deliver-ticket`. Read `${CLAUDE_PLUGIN_ROOT}/skills/deliver-ticket/SKILL.md` and follow it; its sections keep the same numbers.

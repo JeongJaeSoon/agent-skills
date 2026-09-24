@@ -28,7 +28,7 @@ saved to a file also works as `--issues`.
 ## Run
 
 ```bash
-python3 ~/.claude/skills/measure-delivery/scripts/measure.py \
+python3 "${CLAUDE_SKILL_DIR}/scripts/measure.py" \
   --repo OWNER/NAME (--project P | --issues issues.json) --since 2026-09-21T00:00:00+09:00 [--until …] \
   [--baseline-until <end of the initial design batch>] [--tz +09:00] [--bug-label Bug] \
   [--usage-match <dir fragment>] [--json out.json]

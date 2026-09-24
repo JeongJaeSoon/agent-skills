@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Program bookkeeping for orchestrate: the numbers a coordinator decides from.
 
-Usage: python3 prog.py <command> <slug> [options]
+Usage: orch <command> <slug> [options]
 
   init <slug> --repo OWNER/NAME --run RUN_ID [--tracker-project NAME] [--tracker linear|jira]
               [--predicate ID,ID,...] [--merge-policy autonomous|human-gate] [--ceiling 6]
@@ -245,7 +245,7 @@ def orca_deps(run_id):
 
     Orca deps are the source of truth; they are immutable once set, so a superseded task
     (status failed) is skipped in favour of its replacement, and a dependency found after
-    dispatch is recorded with `prog.py dep` instead. Returns {} when Orca cannot answer.
+    dispatch is recorded with `orch dep` instead. Returns {} when Orca cannot answer.
     """
     return deps_from_tasks(run_tasks(run_id))
 
@@ -504,9 +504,10 @@ def cmd_init(argv):
     policy = opt(argv, "--merge-policy", "autonomous")
     if policy not in ("autonomous", "human-gate"):
         sys.exit("--merge-policy is autonomous or human-gate")
-    skills_commit = subprocess.run(
-        ["git", "-C", str(pathlib.Path(__file__).resolve().parents[3]), "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True).stdout.strip() or None
+    root = pathlib.Path(__file__).resolve().parents[3]
+    # A checkout answers with its commit; an installed plugin sits in a cache dir named by its version.
+    skills_commit = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                                   capture_output=True, text=True).stdout.strip() or root.name
     cfg = {
         "slug": slug, "repo": repo, "run": run_id,
         "tracker": {k: v for k, v in {"adapter": opt(argv, "--tracker"),
@@ -570,7 +571,7 @@ def cmd_status(argv):
                  + (f" · roles: {', '.join(role_live)}" if role_live else ""))
     lines.append(f"land order ({len(order)}, ~{interval:.0f} min per landing, backlog ~{backlog_h:.1f}h): "
                  + (" → ".join(f"#{e['pr']}{'*' if e['state'] == 'ready' else ''}" for e in order[:8]) or "empty")
-                 + ("  (* ready; `prog.py queue` says why the rest wait)" if order else ""))
+                 + ("  (* ready; `orch queue` says why the rest wait)" if order else ""))
     for e in stale:
         lines.append(f"  STALE {fmt_entry(order.index(e) + 1, e)}")
     ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
@@ -603,7 +604,7 @@ def cmd_status(argv):
 
 
 def next_move(cfg, events, tnow, *, tickets_done, live, human, order):
-    """Step 4 of `status`, first matching rule wins; safety outranks completion. dash.py shows the same line.
+    """Step 4 of `status`, first matching rule wins; safety outranks completion. orch-dash shows the same line.
 
     tickets_done is None when the tracker could not say: a current predicate_verified then decides Close.
     Returns (next line, share of the deadline used or None)."""
@@ -623,7 +624,7 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order):
     if stopped(events):
         return "STOP line active: spawn nothing; let in-flight finish", used
     if main_state(events) == "red":
-        return "SAFETY STOP: main is red — land only the fix (prog.py land <slug> --pr N --class main-fix), then record main_green --sha", used
+        return "SAFETY STOP: main is red — land only the fix (orch land <slug> --pr N --class main-fix), then record main_green --sha", used
     if verified and tickets_done is not False:
         return "predicate met and verified: Close", used
     if tickets_done:
@@ -643,6 +644,11 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order):
     return "at cap: drain and land", used
 
 
+OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, landed", "land_check": "land",
+         "land_failed": "land", "ready": "land-check", "lane": "land", "yield": "land",
+         "lock_acquired": "land", "lock_released": "land", "dep": "dep", "config": "set"}
+
+
 def cmd_record(argv):
     p = Program(argv[0])
     ev = argv[1]
@@ -651,6 +657,9 @@ def cmd_record(argv):
         sys.exit(f"{ev} needs --sha of a merge commit recorded by `landed` (the commit that CI run tested)")
     if ev == "verdict":
         sys.exit("use the verdict command; it pins the reviewed head and its patch-id")
+    if ev in OWNED:
+        # A hand-written `approved` would pass a human gate nobody resolved.
+        sys.exit(f"{ev} is written only by the command that checks it ({OWNED[ev]})")
     klass = opt(argv, "--class")
     if klass and klass not in KLASS:
         sys.exit(f"--class is one of {', '.join(KLASS)}")
@@ -788,7 +797,7 @@ KEEP = " A clean update keeps the verdict (same patch-id); re-review only if you
 
 ADVICE = {
     "conflicts with base": "rebase onto the base, resolve, re-run the review on the resolution, record a new verdict",
-    "no passing verdict": "finish the review loop, then prog.py verdict",
+    "no passing verdict": "finish the review loop, then orch verdict",
     "draft": "gh pr ready",
     "behind base": "gh pr update-branch {pr} --repo {repo} (or rebase and restack migrations), then land again",
 }
@@ -811,7 +820,7 @@ def merge_unit(p, pr, unit, klass, events):
         v = pr_view(repo, n)
         if patch_id(repo, n) != (states.get(n, {}).get("verdict") or {}).get("patch_id"):
             note_attempt(p, events, pr, "blocked", [f"patch of #{n} changed since its verdict"])
-            return 3, f"act: the patch of #{n} changed since its verdict (conflict fix, restack or edit): re-review, then prog.py verdict"
+            return 3, f"act: the patch of #{n} changed since its verdict (conflict fix, restack or edit): re-review, then orch verdict"
         failed, pending, r_ = ci_summary(v["statusCheckRollup"])
         runs += r_
         if failed or pending or v["mergeStateStatus"] in ("BEHIND", "DIRTY"):
@@ -842,7 +851,7 @@ def merge_unit(p, pr, unit, klass, events):
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
-               f"then gh run watch <id> --repo {repo} --exit-status and prog.py record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
+               f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
 
 
 def attempt(p, pr, klass):
@@ -965,7 +974,7 @@ def cmd_land_check(argv):
         problems.append(f"PR is {v['state']}{' draft' if v['isDraft'] else ''}")
     verdict = st.get("verdict")
     if not verdict or verdict.get("result") != "pass":
-        problems.append("no passing verdict recorded (prog.py verdict)")
+        problems.append("no passing verdict recorded (orch verdict)")
     else:
         cur = patch_id(repo, pr)
         if cur != verdict.get("patch_id"):
@@ -981,7 +990,7 @@ def cmd_land_check(argv):
         elif any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in events):
             problems.append("human-gate: gate open in Orca, waiting for the user")
         else:
-            problems.append(f"human-gate: open the gate first (prog.py gate {p.slug} --pr {pr})")
+            problems.append(f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})")
     mss = v["mergeStateStatus"]
     if mss == "DIRTY":
         problems.append("conflicts with base: fix task in the PR's worktree")
@@ -998,7 +1007,7 @@ def cmd_land_check(argv):
     if problems:
         print("HOLD: " + " | ".join(problems))
         sys.exit(1)
-    print(f"READY: prog.py land {p.slug} --pr {pr}")
+    print(f"READY: orch land {p.slug} --pr {pr}")
 
 
 def cmd_landed(argv):
@@ -1019,9 +1028,9 @@ def cmd_gate(argv):
     p = Program(argv[0])
     pr = int(opt(argv, "--pr"))
     if p.cfg["merge_policy"] != "human-gate":
-        sys.exit("gates are for merge_policy human-gate; autonomous programs land with prog.py land")
+        sys.exit("gates are for merge_policy human-gate; autonomous programs land with orch land")
     v = pr_view(p.cfg["repo"], pr)
-    spec = (f"Land PR #{pr} ({v['url']}) with prog.py land once the user resolves the gate. "
+    spec = (f"Land PR #{pr} ({v['url']}) with orch land once the user resolves the gate. "
             "Coordinator-owned; no worker is dispatched for this Task.")
     args = ["orchestration", "task-create", "--run", p.cfg["run"], "--spec", spec, "--task-title", f"Land #{pr}"]
     if opt(argv, "--parent"):
@@ -1047,7 +1056,7 @@ def cmd_wait(argv):
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     workers = orca_json("orchestration", "worker-list", "--run", run_id).get("workers", []) if me else []
     if me and me in {w.get("agentTerminalHandle") for w in workers}:
-        sys.exit("prog.py wait reads and acks the coordinator's Run inbox, and this terminal is one of the Run's"
+        sys.exit("orch wait reads and acks the coordinator's Run inbox, and this terminal is one of the Run's"
                  " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
                  " background command such as `gh run watch <id>`.")
     for i in range(rounds):

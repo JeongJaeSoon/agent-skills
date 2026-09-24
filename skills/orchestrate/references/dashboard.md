@@ -1,13 +1,13 @@
 # Dashboard: live program progress without spending tokens
 
-`scripts/dash.py` is a local, stdlib-only page for every program under `$PROGRAMS_HOME`. It reads the same sources as `prog.py status` (the ledger, the tracker, GitHub and Orca) and spends no model tokens. Collecting data is deterministic Python. A model is involved only if you add the optional annotator described at the end.
+`scripts/dash.py` is a local, stdlib-only page for every program under `$PROGRAMS_HOME`. It reads the same sources as `orch status` (the ledger, the tracker, GitHub and Orca) and spends no model tokens. Collecting data is deterministic Python. A model is involved only if you add the optional annotator described at the end.
 
 ## Start it
 
 ```sh
-python3 ~/.claude/skills/orchestrate/scripts/dash.py serve [--port 4780] [--interval 60] [--host 127.0.0.1]
-python3 ~/.claude/skills/orchestrate/scripts/dash.py collect <slug>   # one collect, prints a one-line summary
-python3 ~/.claude/skills/orchestrate/scripts/dash.py demo [--port 4780] [--live] [--no-serve]   # fixture programs, no network
+orch-dash serve [--port 4780] [--interval 60] [--host 127.0.0.1]
+orch-dash collect <slug>   # one collect, prints a one-line summary
+orch-dash demo [--port 4780] [--live] [--no-serve]   # fixture programs, no network
 ```
 
 `serve` collects in the background at three rates:
@@ -53,7 +53,7 @@ When a source is stale, the panels built from it are greyed out. Treat a grey pa
 
 - **Headline.** The Orca run objective, with one segment per predicate ticket underneath.
 - **Overview**
-  - The `next` line mirrors `prog.py status` step 4, for example "may spawn 1 more" or "SAFETY STOP: main is red".
+  - The `next` line mirrors `orch status` step 4, for example "may spawn 1 more" or "SAFETY STOP: main is red".
   - KPI tiles: predicate done, main, in-flight/cap, ready PRs, landed, oldest open PR, follow-ups admitted/parked, and tokens.
   - **Land order**, from `prog.land_order`. Each row shows:
     - position, PR and ticket
@@ -91,7 +91,7 @@ Codex workers show `n/a`. Subagent transcripts in subdirectories are not counted
 A note is a short line of human or model judgement that the collectors can't compute. The newest risk note also appears under Needs attention.
 
 ```sh
-dash.py note <slug> --kind risk|digest|decision --text "..." [--author name]
+orch-dash note <slug> --kind risk|digest|decision --text "..." [--author name]
 ```
 
 Notes are appended to `notes.jsonl`, capped at 500 characters, and appear from the next collect, which happens within 3 s while `serve` runs. Use them for:
@@ -107,7 +107,7 @@ The dashboard is complete without one. If you want a periodic digest, schedule a
 ```sh
 orca automations create --name "dash notes: <slug>" --trigger "*/15 * * * *" --provider claude \
   --workspace <selector> --workspace-mode existing \
-  --prompt "Read \$PROGRAMS_HOME/<slug>/dashboard/state.json only. If something needs a human (stalled land order, idle worker, stale source, main red), write at most 3 lines with: python3 ~/.claude/skills/orchestrate/scripts/dash.py note <slug> --kind risk|digest --text '...' --author annotator. Otherwise write nothing."
+  --prompt "Read \$PROGRAMS_HOME/<slug>/dashboard/state.json only. If something needs a human (stalled land order, idle worker, stale source, main red), write at most 3 lines with: orch-dash note <slug> --kind risk|digest --text '...' --author annotator. Otherwise write nothing."
 ```
 
 Before you run this, check `orca automations create --help`. Flags vary by Orca version.
