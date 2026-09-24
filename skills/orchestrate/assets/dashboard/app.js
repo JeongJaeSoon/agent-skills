@@ -244,6 +244,7 @@ const SOURCE_META = [
   ["orca", "Orca", () => [60, 180]],
   ["github", "GitHub", (iv) => [3 * iv, 6 * iv]],
   ["tracker", "Tracker", (iv) => [3 * iv, 6 * iv]],
+  ["stages", "Stages", (iv) => [3 * iv, 6 * iv]],
 ];
 
 function sourceLevel(name) {
@@ -438,10 +439,12 @@ function drawCharts(st) {
   }
   const flow = $("#chart-flow");
   if (flow) {
-    if (!rows.length) flow.innerHTML = `<div class="empty-chart">No samples yet.</div>`;
-    else stepChart(flow, { domain: [t0, now], height: 170, label: "In-flight workers versus concurrency cap", series: [
-      { name: "Cap", color: C.ink3, points: rows.map((r) => ({ t: r.t, v: r.cap })) },
-      { name: "In-flight", color: C.accent, points: rows.map((r) => ({ t: r.t, v: r.in_flight })) },
+    // Backfilled rows carry no Orca sample: in-flight there is unknown, not zero. Live rows carry tokens.
+    const live = rows.slice(Math.max(0, rows.findIndex((r) => r.tokens != null)));
+    if (!live.length || live[0].tokens == null) flow.innerHTML = `<div class="empty-chart">No live samples yet.</div>`;
+    else stepChart(flow, { domain: [live[0].t, now], height: 170, label: "In-flight workers versus concurrency cap", series: [
+      { name: "Cap", color: C.ink3, points: live.map((r) => ({ t: r.t, v: r.cap })) },
+      { name: "In-flight", color: C.accent, points: live.map((r) => ({ t: r.t, v: r.in_flight })) },
     ] });
   }
   const bars = $("#chart-growth");
@@ -469,7 +472,7 @@ function drawCharts(st) {
 
 function redrawCharts() {
   if (!S.state) return;
-  if (S.section === "overview") drawCharts(S.state);
+  if (["overview", "workers", "issues"].includes(S.section)) drawCharts(S.state);
   if (S.section === "tasks") drawDag(S.state);
 }
 
@@ -561,6 +564,29 @@ function nextTone(n) {
   return "accent";
 }
 
+const CODEX = /^(gpt|o3|o4|codex)/;
+const OPEN_STATES = new Set(["triage", "backlog", "unstarted", "started"]);
+// What a worker's session is doing, from the last rows of its transcript (dash.py step_motion).
+function motionOf(w) {
+  const m = w.motion, mins = (Date.now() - ms(m?.since || w.since)) / 60000 || 0;
+  if (w.activity === "waiting") return { tone: "warn", moving: false, text: "waiting — a permission prompt?", since: w.seen_at };
+  if (!m) return CODEX.test(w.model || "")
+    ? { tone: "", moving: w.activity === "running", text: `Codex · ${w.activity === "running" ? "running" : "no transcript here"}` }
+    : { tone: mins > 10 ? "warn" : "", moving: false, text: "no session activity since dispatch", since: w.since };
+  if (m.state === "tool") return { tone: mins >= 45 ? "warn" : "", moving: true, text: `${m.tool}${m.detail ? ` · ${m.detail}` : ""}`, since: m.since };
+  if (m.state === "working") return { tone: "", moving: true, text: "thinking", since: m.since };
+  if (m.parked) return { tone: "", moving: false, text: "waiting for its own wake-up", since: m.since };
+  return { tone: mins >= 15 ? "bad" : mins >= 3 ? "warn" : "", moving: false, text: "turn ended — waiting for input", since: m.since };
+}
+const moveDot = (mo) => mo.moving ? '<span class="pulse" aria-label="moving"></span>' : `<span class="dot-s ${mo.tone ? "tone-" + mo.tone : ""}"></span>`;
+const agoSpan = (iso) => iso ? `<span class="muted" data-age-text="${esc(iso)}">${ageText(iso)}</span>` : "";
+
+const STALL_TEXT = {
+  idle: (x) => `${x.ticket || x.dispatch}: turn ended ${x.minutes} min ago with its task open — an orchestration message does not wake an idle session; type into its terminal.`,
+  start_unconfirmed: (x) => `${x.ticket || x.dispatch}: dispatched ${x.minutes} min ago and its session has written nothing — did it get the brief?`,
+  long_tool: (x) => `${x.ticket || x.dispatch}: one ${x.tool} call has run ${x.minutes} min${x.detail ? ` (${x.detail})` : ""} — still waiting on purpose?`,
+};
+
 function attentionItems(st) {
   const s = st.summary || {}, out = [];
   const workers = Object.fromEntries((st.workers || []).map((w) => [w.dispatch, w]));
@@ -574,13 +600,21 @@ function attentionItems(st) {
     const w = workers[d] || {};
     out.push(["warn", "clock", `Worker ${d}${w.ticket ? ` (${w.ticket})` : ""} is waiting — maybe a permission prompt in its terminal.`, "workers"]);
   }
+  const stalled = new Set((s.stalls || []).map((x) => x.dispatch));
   for (const d of s.stale_workers || []) {
+    if (stalled.has(d)) continue;  // the transcript already says what it is doing
     const w = workers[d] || {};
     out.push(["warn", "clock", `Worker ${d}${w.ticket ? ` (${w.ticket})` : ""} has not reported for ${ageText(w.seen_at)} — Orca cannot tell if it is alive; look at its terminal.`, "workers"]);
   }
-  for (const c of st.landed_open || []) {
-    out.push(["warn", "merge", `${c.ticket} landed but its card is still open${c.active ? " (terminal still active)" : ""} — orca worktree rm --worktree path:${c.path}`, "workers"]);
-  }
+  const cards = st.landed_open || [];
+  if (cards.length) out.push(["warn", "merge", `${cards.length} landed card${cards.length > 1 ? "s" : ""} still open (${cards.slice(0, 5).map((c) => c.ticket).join(", ")}${cards.length > 5 ? ", …" : ""}) — close out: release, then orca worktree rm`, "workers"]);
+  for (const x of s.stalls || []) out.push([x.kind === "idle" ? "bad" : "warn", "clock", STALL_TEXT[x.kind](x), "workers"]);
+  const sp = s.spare || {};
+  if (sp.slots && (sp.ready || []).length) out.push(["accent", "spark", `${sp.slots} slot${sp.slots > 1 ? "s" : ""} free under the cap — ready to start: ${sp.ready.slice(0, 6).join(", ")}`, "tasks"]);
+  const g = s.gaps || {};
+  if ((g.spawns || []).length) out.push(["warn", "alert", `Ledger gap: ${g.spawns.length} running dispatch${g.spawns.length > 1 ? "es" : ""} never recorded (${g.spawns.slice(0, 4).join(", ")}) — cap and roles are counted from the ledger: orch record … spawned --note <dispatchId>`, "workers"]);
+  if ((g.landings || []).length) out.push(["warn", "alert", `Ledger gap: merged PR${g.landings.length > 1 ? "s" : ""} the ledger never saw (#${g.landings.slice(0, 6).join(", #")}) — land through orch land; recover with orch backfill`, "prs"]);
+  if ((g.ci || []).length) out.push(["warn", "alert", `Ledger gap: landing${g.ci.length > 1 ? "s" : ""} with no main CI result (#${g.ci.slice(0, 6).join(", #")}) — record main_green or main_red`, "activity"]);
   if ((s.untriaged || []).length) out.push(["accent", "issues", `Untriaged follow-up: ${s.untriaged.join(", ")} — admit or park.`, "issues"]);
   const risk = (st.notes || []).find((n) => n.kind === "risk" && Date.now() - ms(n.ts) < 24 * 3600e3);
   if (risk) out.push(["warn", "note", risk.text, "activity"]);
@@ -607,10 +641,43 @@ function landOrderCard(st) {
       ${tag(String(e.state || "?").replace("_", " "), ORDER_TONE[e.state] ?? "")}
       ${e.klass && e.klass !== "normal" ? tag(e.klass, e.klass === "main-fix" ? "bad" : "warn", null) : ""}
       ${e.exclusive ? tag("exclusive", "accent", "lock") : ""}
-      <span class="grow ellipsis muted" title="${esc((e.reasons || []).join(" · "))}">${esc(e.reasons?.[0] || (e.unblocks ? `unblocks ${e.unblocks}` : ""))}</span>
+      <span class="grow ellipsis muted" title="${esc((e.reasons || []).join(" · "))}">${esc((e.reasons || []).slice(0, 2).join(" · ") || (e.unblocks ? `unblocks ${e.unblocks}` : ""))}</span>
     </li>`).join("");
   return `<div class="card" data-src="ledger github"><div class="card-head"><h3>Land order</h3><span class="aside">${order.length} waiting · parallel, one exclusive per base</span></div>
     ${holders}<ul class="rows">${rows || '<li class="muted">Nothing is waiting to land.</li>'}</ul></div>`;
+}
+
+function nowCard(st) {
+  const ws = (st.workers || []).filter((w) => w.outcome === "in_progress");
+  const rank = (mo) => (mo.tone === "bad" ? 0 : mo.tone === "warn" ? 1 : mo.moving ? 3 : 2);
+  const rows = ws.map((w) => [w, motionOf(w)]).sort((a, b) => rank(a[1]) - rank(b[1]));
+  const prev = S.motionSeen, seen = {};
+  const li = rows.map(([w, mo]) => {
+    const key = `${w.motion?.state}|${w.motion?.parked}|${w.activity}|${mo.tone}`;  // not each new tool call
+    seen[w.dispatch] = key;
+    // Highlight a row only when its state changed since the last render, not on every poll.
+    const changed = prev && prev[w.dispatch] !== undefined && prev[w.dispatch] !== key;
+    return `<li class="${changed ? "changed" : ""}">${moveDot(mo)}<span class="mono" style="width:120px;flex:none" title="${esc(w.dispatch)}">${esc(w.ticket || w.worktree || w.dispatch)}</span>
+      <span class="grow ellipsis ${mo.tone ? "tone-" + mo.tone + " toned" : ""}" title="${esc(mo.text)}">${esc(mo.text)}</span>${agoSpan(mo.since)}</li>`;
+  }).join("");
+  S.motionSeen = seen;
+  const moving = rows.filter(([, mo]) => mo.moving).length;
+  return `<div class="card" data-src="orca"><div class="card-head"><h3>Now</h3><span class="aside">${moving} moving · ${rows.length - moving} not</span></div>
+    <ul class="rows now">${li || '<li class="muted">No worker in flight.</li>'}</ul></div>`;
+}
+
+function stagesCard(st) {
+  const sg = st.stages?.stages || [];
+  if (!sg.length) return "";
+  const sum = (k) => sg.reduce((a, x) => a + (x[k] || 0), 0);
+  const pct = (n, t) => (t ? (100 * n) / t : 0);
+  const rows = sg.map((x) => `<li><span class="mono" style="width:78px;flex:none">${link(x.url, esc(x.id))}</span>
+      <span class="grow ellipsis" title="${esc(x.title || "")}">${esc(x.title || "")}</span>
+      <span class="stagebar" role="img" aria-label="${x.done} of ${x.total} done, ${x.started} in progress"><i class="done" style="width:${pct(x.done, x.total)}%"></i><i class="started" style="width:${pct(x.started, x.total)}%"></i></span>
+      <span class="num" style="width:58px;text-align:right">${x.done}/${x.total}</span>
+      ${x.unvisited ? tag(`counting ${x.unvisited}`, "", null) : ""}</li>`).join("");
+  return `<div class="card" data-src="stages"><div class="card-head"><h3>Stages</h3><span class="aside">${sum("done")}/${sum("total")} tickets done · ${sum("started")} in progress · top-level issues of ${esc(st.stages.project || "the project")}</span></div>
+    <ul class="rows">${rows}</ul></div>`;
 }
 
 function viewOverview(st) {
@@ -636,29 +703,26 @@ function viewOverview(st) {
     <div><div class="eyebrow">Next move</div><div class="text">${esc(s.next || "—")}</div></div>
     ${budget}
   </div>
-  <div class="kpis">
+  <div class="kpis" style="--n:${st.merge_policy === "human-gate" ? 4 : 6}">
     ${kpi("Predicate", pct == null ? "—" : `${pct}%<small>${s.predicate_done}/${s.predicate_total}</small>`, pct == null ? "no tracker data" : s.final_check ? "final check recorded" : "final check not recorded", { extra: segs, src: "tracker" })}
     ${kpi("Main CI", tag(s.main || "—", mt, mt === "good" ? "check" : mt === "bad" ? "fail" : "clock"), mainAt, { src: "ledger" })}
-    ${kpi("In-flight / cap", `${num(s.in_flight)}<small>/ ${num(s.cap)}</small>`, `ceiling ${num(s.ceiling)}`, { extra: cells, src: "orca" })}
+    ${kpi("In-flight / cap", `${num(s.in_flight)}<small>/ ${num(s.cap)}</small>`, s.spare?.slots ? `${s.spare.slots} free · ceiling ${num(s.ceiling)}` : `ceiling ${num(s.ceiling)}`, { extra: cells, src: "orca" })}
     ${kpi("Oldest open PR", oldest ? `<span class="age-v ${ageTone(oldest.since) ? "tone-" + ageTone(oldest.since) : ""}" data-age-text="${esc(oldest.since)}">${ageText(oldest.since)}</span>` : "—", oldest ? `#${oldest.pr} · opened ${relSpan(oldest.since)}` : "no open PRs", { src: "github" })}
-    ${kpi("Ready to land", num(s.ready_to_land), (s.ready_prs || []).map((n) => "#" + n).join(" ") || "queue empty", { src: "ledger" })}
-    ${kpi("Human wait", num(s.human_wait), st.merge_policy === "human-gate" ? ((s.human_wait_prs || []).map((n) => "#" + n).join(" ") || "nothing waiting") : "autonomous policy", { src: "ledger" })}
+    ${kpi("Awaiting landing", num(s.ready_to_land), (s.ready_prs || []).map((n) => "#" + n).join(" ") || "queue empty", { src: "ledger" })}
+    ${st.merge_policy === "human-gate" ? kpi("Human wait", num(s.human_wait), (s.human_wait_prs || []).map((n) => "#" + n).join(" ") || "nothing waiting", { src: "ledger" }) : ""}
     ${kpi("Landed · 24h", num(s.landed_24h), `${num(s.landed_total)} total`, { src: "ledger" })}
-    ${kpi("Derived / item", num(s.derived_per_item, 1), s.derived_total == null ? "no tracker data" : `${s.derived_total} derived · ${s.admitted} admitted · ${s.parked} parked`, { src: "tracker" })}
   </div>
   <div class="grid">
-    ${landOrderCard(st)}
+    ${nowCard(st)}
     <div class="card"><div class="card-head"><h3>Needs attention</h3><span class="aside">${att.length || ""}</span></div>
       ${att.length ? `<ul class="rows">${att.join("")}</ul>` : `<div class="empty">${icon("check")}Nothing needs a human right now.</div>`}</div>
   </div>
-  <div class="grid charts">
-    <div class="card wide" data-src="tracker"><div class="card-head"><h3>Burn-up</h3><span class="aside legend"><span><i class="key" style="background:var(--ink-3)"></i>Scope</span><span><i class="key" style="background:var(--accent)"></i>Done</span></span></div>
-      <div class="card-body"><div class="chart" id="chart-burn"></div></div></div>
-    <div class="card" data-src="orca"><div class="card-head"><h3>In-flight vs cap</h3><span class="aside legend"><span><i class="key" style="background:var(--ink-3)"></i>Cap</span><span><i class="key" style="background:var(--accent)"></i>In-flight</span></span></div>
-      <div class="card-body"><div class="chart" id="chart-flow"></div></div></div>
-    <div class="card" data-src="tracker"><div class="card-head"><h3>Derived vs done · per 6h</h3><span class="aside legend"><span><i class="key sq" style="background:var(--derived)"></i>Derived</span><span><i class="key sq" style="background:var(--accent)"></i>Done</span></span></div>
-      <div class="card-body"><div class="chart" id="chart-growth"></div></div></div>
+  <div class="grid">
+    ${landOrderCard(st)}
+    ${stagesCard(st) || `<div class="card" data-src="tracker"><div class="card-head"><h3>Burn-up</h3></div><div class="card-body"><div class="chart" id="chart-burn"></div></div></div>`}
   </div>
+  ${stagesCard(st) ? `<div class="grid"><div class="card wide" data-src="tracker"><div class="card-head"><h3>Burn-up</h3><span class="aside legend"><span><i class="key" style="background:var(--ink-3)"></i>Scope</span><span><i class="key" style="background:var(--accent)"></i>Done</span></span></div>
+      <div class="card-body"><div class="chart" id="chart-burn"></div></div></div></div>` : ""}
   <div class="grid">
     <div class="card" data-src="tracker"><div class="card-head"><h3>Predicate</h3><span class="aside">${s.predicate_done ?? "–"} of ${s.predicate_total} done</span></div>
       <ul class="rows">${(st.predicate || []).map((p) => `<li>
@@ -693,12 +757,16 @@ function viewIssues(st) {
   const q = S.q.trim().toLowerCase();
   const rows = issues.filter(ISSUE_FILTERS[f][0]).filter((i) => !q || `${i.id} ${i.title} ${(i.labels || []).join(" ")}`.toLowerCase().includes(q));
   const opts = Object.entries(ISSUE_FILTERS).map(([id, [fn, label]]) => [id, label, issues.filter(fn).length]);
-  return `<div class="view-head"><div><h2>Issues</h2><p>Predicate items, admitted and derived tickets this program touched.</p></div></div>
+  const s = st.summary || {};
+  return `<div class="view-head"><div><h2>Issues</h2><p>Predicate items, admitted and derived tickets this program touched.
+    ${s.derived_total != null ? `${s.derived_total} derived (${num(s.derived_per_item, 1)} per predicate item) · ${s.admitted} admitted · ${s.parked} parked.` : ""}</p></div></div>
+  <div class="card" data-src="tracker"><div class="card-head"><h3>Derived vs done · per 6h</h3><span class="aside legend"><span><i class="key sq" style="background:var(--derived)"></i>Derived</span><span><i class="key sq" style="background:var(--accent)"></i>Done</span></span></div>
+    <div class="card-body"><div class="chart" id="chart-growth"></div></div></div>
   <div class="toolbar">${chips("issues", opts, f)}<input class="search" id="issue-search" type="search" placeholder="Filter by ID or title" value="${esc(S.q)}" aria-label="Filter issues"></div>
   <div class="card table-wrap" data-src="tracker"><table><thead><tr><th>ID</th><th>Title</th><th>State</th><th>Flags</th><th class="hide-md">Updated</th><th class="hide-md">Assignee</th></tr></thead><tbody>
   ${rows.map((i) => `<tr><td class="mono">${link(i.url, esc(i.id))}</td><td class="title"><span class="ellipsis" style="display:block" title="${esc(i.title)}">${esc(i.title)}</span></td>
     <td>${tag(i.state || i.state_type || "?", STATE_TONE[i.state_type] ?? "")}</td>
-    <td><span class="flags">${i.in_predicate ? tag("predicate", "accent", null) : ""}${i.derived ? tag("derived", "derived") : ""}${i.triage ? tag(i.triage, i.triage === "admitted" ? "good" : "", null) : i.derived ? tag("untriaged", "warn", null) : ""}</span></td>
+    <td><span class="flags">${i.in_predicate ? tag("predicate", "accent", null) : ""}${i.derived ? tag("derived", "derived") : ""}${i.triage ? tag(i.triage, i.triage === "admitted" ? "good" : "", null) : i.derived && OPEN_STATES.has(i.state_type) ? tag("untriaged", "warn", null) : ""}</span></td>
     <td class="hide-md muted">${relSpan(i.updated_at)}</td><td class="hide-md dim">${esc(i.assignee || "—")}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No issues match.</td></tr>`}
   </tbody></table></div>`;
 }
@@ -756,18 +824,24 @@ function viewWorkers(st) {
   const f = F[S.filters.workers] ? S.filters.workers : "active";
   const u = st.usage?.total;
   const trend = (st.series || []).map((r) => r.tokens).filter((v) => v != null);
-  const act = (w) => w.outcome !== "in_progress" ? `<span class="muted">${esc(w.outcome || "—")}</span>`
-    : w.stale ? tag("no signal", "warn", "clock")
-    : w.activity === "running" ? `<span style="display:inline-flex;align-items:center;gap:6px"><span class="pulse"></span>running</span>`
-    : w.activity === "waiting" ? tag("waiting", "warn", "clock") : `<span class="muted">idle</span>`;
+  const act = (w) => {
+    if (w.outcome !== "in_progress") return `<span class="muted">${esc(w.outcome || "—")}</span>`;
+    const mo = motionOf(w);
+    return `<span class="move ${mo.tone ? "tone-" + mo.tone + " toned" : ""}" title="${esc(mo.text)}">${moveDot(mo)}<span class="ellipsis">${esc(mo.text)}</span>${agoSpan(mo.since)}</span>`;
+  };
   const tok = (w) => w.tokens ? `<span title="in ${compact(w.tokens.input_tokens)} · out ${compact(w.tokens.output_tokens)} · cache write ${compact(w.tokens.cache_creation_input_tokens)} · cache read ${compact(w.tokens.cache_read_input_tokens)}">${compact(w.tokens.total)}</span>`
     : `<span class="muted">${/^(gpt|o3|o4|codex)/.test(w.model || "") ? "n/a" : "—"}</span>`;
-  return `<div class="view-head"><div><h2>Workers</h2><p>Orca dispatches on run <span class="mono">${esc(st.run)}</span>. A worker stuck on “waiting” may be sitting on a permission prompt.</p></div></div>
+  return `<div class="view-head"><div><h2>Workers</h2><p>Orca dispatches on run <span class="mono">${esc(st.run)}</span>. Activity is read from each Claude worker's transcript: a tool it is running, thinking, or a finished turn waiting for input (an orchestration message does not wake it).</p></div></div>
   <div class="card" data-src="orca"><div class="card-head"><h3>Tokens</h3><span class="aside">from Claude Code transcripts · Codex workers n/a</span></div>
     <div class="card-body" style="display:flex;flex-wrap:wrap;align-items:center;gap:24px">
       <div><div class="eyebrow">Program total</div><div style="font-size:var(--t-2xl);font-weight:600">${compact(u?.total)}</div></div>
       ${u ? [["input", u.input_tokens], ["output", u.output_tokens], ["cache write", u.cache_creation_input_tokens], ["cache read", u.cache_read_input_tokens]].map(([k, v]) => `<div><div class="eyebrow">${k}</div><div>${compact(v)}</div></div>`).join("") : '<span class="muted">No transcripts found for these workers.</span>'}
       <span style="margin-left:auto">${sparkline(trend.slice(-60), cssVar("--accent"), 160, 32)}</span></div></div>
+  ${(st.landed_open || []).length ? `<div class="card" data-src="orca"><div class="card-head"><h3>Cards to close</h3><span class="aside">landed, card still on disk</span></div>
+    <ul class="rows">${st.landed_open.map((c) => `<li><span class="mono" style="width:78px;flex:none">${esc(c.ticket)}</span>
+      <span class="grow mono dim ellipsis" title="${esc(c.path)}">${c.active ? "worker-release, then " : ""}orca worktree rm --worktree path:${esc(c.path)}</span></li>`).join("")}</ul></div>` : ""}
+  <div class="card" data-src="orca"><div class="card-head"><h3>In-flight vs cap</h3><span class="aside legend"><span><i class="key" style="background:var(--ink-3)"></i>Cap</span><span><i class="key" style="background:var(--accent)"></i>In-flight</span></span></div>
+    <div class="card-body"><div class="chart" id="chart-flow"></div></div></div>
   <div class="toolbar">${chips("workers", [["active", "In flight", ws.filter(F.active).length], ["all", "All", ws.length]], f)}</div>
   <div class="card table-wrap" data-src="orca"><table><thead><tr><th>Dispatch</th><th>Ticket</th><th>Activity</th><th class="hide-md">Liveness</th><th class="hide-md">Model</th><th class="num">Tokens</th><th>Since</th></tr></thead><tbody>
   ${ws.filter(F[f]).map((w) => `<tr><td class="mono">${esc(w.dispatch)}</td><td class="mono">${esc(w.ticket || w.worktree || "—")}</td><td>${act(w)}</td>

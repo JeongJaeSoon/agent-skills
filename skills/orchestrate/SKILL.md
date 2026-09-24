@@ -43,7 +43,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Create the Run with the goal as `--objective`.
    - `orch init <slug> --repo … --run … --tracker-project … --predicate <IDs> --final-check "<the real-artifact check>" --note <program note path>`
    - Registering a program that has already merged PRs: `orch backfill <slug> --since <when its work began> --dry-run`, check the PRs it lists belong to the program, then the same without `--dry-run`. It adds those merges to the ledger at their merge time with their main CI result and moves `created_at` to the first one, so the cap, the rate and the dashboard count them. Never hand-edit the ledger for this.
-   - `orch-dash serve` in the background, unless one is already running (it serves every program; this one appears in its sidebar). Give the human the URL once.
+   - `orch init` and every `orch status` start the dashboard (`orch-dash ensure`: one detached server per store, restarted when its code is older) and print its URL; give it to the human once. Nothing on it is kept by hand: every number comes from the ledger, Orca, GitHub and the tracker, so record events instead of writing status files.
 2. **Verification first.** If the target repo has no `.claude/skills/verify-*`, the pilot task is "invoke the `create-verification-skill` skill and follow it".
 3. **Pilot.** Run one worker through brief → PR → verdict → `orch land` → main green. Fix the brief, the unit size and VERIFY from whatever broke. Also confirm that the chosen worker model gets through its first `orca orchestration` call and its `orch land` without a permission prompt.
 4. **Scale.**
@@ -60,7 +60,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - Process every message in the batch, decide each settled worker's next owner (reuse or release), then ack.
    - On a worker's `worker_done`, in the same turn, act on the `CLOSE OUT` lines `orch wait` prints beside it: release the worker; remove a finished card nobody else uses (`orca worktree rm`, checks in `end-session` §4) unless its next task starts there; keep a failed one only for its retry. `status` lists cards you missed as `LANDED-BUT-OPEN`, and its `next` line puts them before spawning. Leftover cards made Orca itself slow.
    - A start that ended `outcome_unknown` with an empty composer: `worker-stop --dispatch <id>`, then `worker-start --retry-of <id> --task <task> --worktree <that card> --agent <agent> [--model <id>]` (a retry inherits neither placement nor model).
-   - End every drain with `orch status`; its lines are how a drain ends. `orch-dash collect <slug>` runs after it, and `orch-dash note` records a risk or decision the dashboard should show.
+   - End every drain with `orch status`; its lines are how a drain ends. `status` also prints what only the dashboard's collector sees: `STALLED` workers (turn ended with the task open, no session activity since dispatch, one tool call running too long), `SPARE` slots with ready tasks, and `LEDGER GAP`s. Act on them like the other lines. `orch-dash note` records a risk or decision the dashboard should show.
    - Under `/goal`, a running background task defers the Stop hook's goal check. If the hook re-prompts anyway with no new event, answer in one line with no tool call. If it fires back-to-back, switch to a foreground `orch wait <slug> --rounds 1 --timeout-ms 540000` (Bash timeout 600000).
 6. **Triage.** A new ticket from review, QA or discovery parks by default: label `follow-up`, then `orch record <slug> parked --ticket X`. Admit it only if it blocks a named predicate item, or if it is a reproduced correctness, security or data defect in code this program merged. Then `record admitted` and name the item or defect.
 7. **Land** (`references/landing.md`). Workers land their own PRs with `orch land`:
@@ -82,7 +82,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
    - When `status` says the tickets are done, run the predicate's final check on the real artifact: the QA lead drives `verify-<app>` on main, or, without a QA lead, you run the program's `final_check` on a fresh `origin/main` checkout (`git archive` into a scratch directory), never on a worker's tree.
    - `orch record <slug> predicate_verified --note <evidence>`.
    - Release the standing roles: `orca orchestration send --to dispatch:<role> --subject release --body "program closing: send worker_done"`, then `worker-release` once its `worker_done` arrives (Orca releases only settled workers). Release any remaining workers and remove any worktree still left (checks in `end-session` §4).
-   - Stop the `orch-dash serve` you started, unless another program still uses it: it serves every program, and a running background process keeps deferring the `/goal` stop check. `state.json` stays for later reading.
+   - The dashboard server is detached and serves every program, so it neither needs stopping nor defers the `/goal` stop check. `state.json` stays for later reading.
    - Run `measure-delivery` and audit the trail per `show-me-your-work`.
    - Write the lessons into standing orders, skills or memory.
 
@@ -98,7 +98,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 | Doubts your report ("is that right?", "불안하다") | A read-only verifier agent re-checks it. Your self-report is not evidence |
 | "Check" (점검) one section | Check the whole related scope. "Check and align" (점검하고 얼라인) is two tracked steps: findings, then the alignment changes, each reported done separately |
 | "Why is #N not moving?" / priority doubts | `orch queue <slug>`: answer with its order and reasons, then fix the reason (stack, Orca dep, class, fix task) |
-| "Update the dashboard and summarize" | `orch-dash collect`, then a human summary of the same numbers, as one action |
+| "Update the dashboard and summarize" | It updates itself. Run `orch status` and summarize its numbers; if the dashboard looks stale, `orch-dash ensure` |
 
 ## Merge policy
 

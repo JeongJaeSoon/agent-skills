@@ -3,6 +3,7 @@
 
     tracker.py [--adapter linear|jira] [--config PATH] list --project P [--since ISO8601] [--limit N]
     tracker.py [...] get ID
+    tracker.py [...] children [ID] [--project P]   (ID's direct children; no ID: P's top-level issues)
     tracker.py [...] create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
     tracker.py [...] label ID --add L [--add L2]
     tracker.py [...] comment ID --body-file F
@@ -133,6 +134,9 @@ class FixtureAdapter:
     def list(self, project, since=None, limit=None):
         return finish_list(self._load(), since, limit)
 
+    def children(self, parent, project=None):
+        return finish_list([i for i in self._load() if i.get("parent") == parent], None, None)
+
     def get(self, issue_id):
         for issue in self._load():
             if issue.get("id") == issue_id:
@@ -225,6 +229,13 @@ class LinearAdapter:
         base = ["list-issues", "--project", project, "--include-archived", "--order-by", "createdAt"]
         if since:
             base += ["--created-at", iso_z(since)]
+        return finish_list(self._pages(base, limit), since, limit)
+
+    def children(self, parent, project=None):
+        base = ["list-issues", "--parent-id", parent or "null", "--include-archived", "--order-by", "createdAt"]
+        return finish_list(self._pages(base + (["--project", project] if project else []), None), None, None)
+
+    def _pages(self, base, limit):
         issues, cursor = [], None
         while True:
             args = list(base)
@@ -242,9 +253,8 @@ class LinearAdapter:
             issues += [normalize_linear(i) for i in result.get("issues") or []]
             cursor = meta.get("nextCursor")
             if not (meta.get("hasMore") and cursor) or (limit and len(issues) >= limit):
-                break
-        # Orca orders createdAt newest first, so a capped read already holds the newest N.
-        return finish_list(issues, since, limit)
+                # Orca orders createdAt newest first, so a capped read already holds the newest N.
+                return issues
 
     def get(self, issue_id):
         if ORCA_IDENTIFIER.match(issue_id):
@@ -465,14 +475,20 @@ class JiraAdapter:
         return jql + (" ORDER BY created DESC" if newest_first else " ORDER BY created ASC")
 
     def list(self, project, since=None, limit=None):
-        jql = self._jql(project, since, newest_first=bool(limit))
+        return finish_list(self._search(self._jql(project, since, newest_first=bool(limit)), limit), since, limit)
+
+    def children(self, parent, project=None):
+        jql = f'parent = "{parent}"' if parent else f'project = "{project}" AND parent is EMPTY'
+        return finish_list(self._search(jql + " ORDER BY created ASC", None), None, None)
+
+    def _search(self, jql, limit):
         try:
             raws = self._search_jql(jql, limit)
         except TrackerError as exc:
             if getattr(exc, "status", None) not in (404, 405, 410):
                 raise
             raws = self._search_legacy(jql, limit)
-        return finish_list([normalize_jira(r, self.base_url) for r in raws], since, limit)
+        return [normalize_jira(r, self.base_url) for r in raws]
 
     def _search_jql(self, jql, limit):
         out, token = [], None
@@ -581,6 +597,9 @@ def build_parser():
     s.add_argument("--limit", type=int)
     s = sub.add_parser("get")
     s.add_argument("id")
+    s = sub.add_parser("children")
+    s.add_argument("id", nargs="?")
+    s.add_argument("--project")
     s = sub.add_parser("create")
     s.add_argument("--project", required=True)
     s.add_argument("--title", required=True)
@@ -610,6 +629,10 @@ def run(argv):
         return adapter.list(args.project, args.since, args.limit)
     if args.cmd == "get":
         return adapter.get(args.id)
+    if args.cmd == "children":
+        if not (args.id or args.project):
+            raise TrackerError("children needs an ID or --project")
+        return adapter.children(args.id, args.project)
     if args.cmd == "create":
         read_body(args.body_file)
         return adapter.create(args.project, args.title, args.body_file, args.label, args.parent, args.related)

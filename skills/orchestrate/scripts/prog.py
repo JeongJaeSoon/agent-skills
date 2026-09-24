@@ -591,6 +591,52 @@ def cmd_init(argv):
     (d / "briefs").mkdir(parents=True, exist_ok=True)
     (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     print(f"initialised {d}")
+    print("\n".join(dashboard_lines(slug)))
+
+
+STALL_TEXT = {
+    "idle": "turn ended {minutes} min ago with its task open and no wake-up armed; an orchestration message "
+            "does not wake an idle session: type into its terminal",
+    "start_unconfirmed": "dispatched {minutes} min ago and its session has written nothing: check it got the brief",
+    "long_tool": "one {tool} call running for {minutes} min ({detail}): still waiting on purpose?",
+}
+
+
+def dashboard_lines(slug):
+    """Keep the dashboard server up (`orch-dash ensure`), and bring back what only its collector sees:
+    whether each worker's session is moving, free capacity and ledger gaps. Stale data prints nothing.
+    ORCH_DASH=off skips the server (tests)."""
+    out = []
+    if os.environ.get("ORCH_DASH") != "off":
+        try:
+            r = subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("dash.py")), "ensure",
+                                "--port", os.environ.get("ORCH_DASH_PORT", "4780")],
+                               capture_output=True, text=True, timeout=40)
+            out.append(((r.stdout or r.stderr).strip().splitlines() or ["dashboard: ensure printed nothing"])[-1])
+        except subprocess.TimeoutExpired:
+            out.append("dashboard: `orch-dash ensure` timed out; the lines below may be stale")
+    try:
+        st = json.loads((HOME / slug / "dashboard" / "state.json").read_text())
+    except (OSError, ValueError):
+        return out
+    if not st.get("generated_at") or dt.datetime.now(dt.timezone.utc) - parse_ts(st["generated_at"]) > dt.timedelta(minutes=3):
+        return out
+    s = st.get("summary") or {}
+    for x in s.get("stalls") or []:
+        out.append(f"  STALLED {x.get('ticket') or '?'} ({x['dispatch']}): " + STALL_TEXT[x["kind"]].format(**{"tool": "", "detail": "", **x}))
+    sp, gaps = s.get("spare") or {}, s.get("gaps") or {}
+    if sp.get("slots") and sp.get("ready"):
+        out.append(f"  SPARE {sp['slots']} slot(s) under the cap; tasks ready to start: {', '.join(map(str, sp['ready'][:6]))}")
+    if gaps.get("spawns"):
+        out.append(f"  LEDGER GAP: dispatches never recorded ({', '.join(gaps['spawns'][:6])}): "
+                   f"`orch record {slug} spawned --ticket T --note <dispatchId>`")
+    if gaps.get("landings"):
+        out.append(f"  LEDGER GAP: merged PRs the ledger never saw (#{', #'.join(map(str, gaps['landings'][:6]))}): "
+                   f"land through `orch land`; recover with `orch backfill {slug} --since ISO`")
+    if gaps.get("ci"):
+        out.append(f"  LEDGER GAP: landings with no main CI result (#{', #'.join(map(str, gaps['ci'][:6]))}): "
+                   f"record main_green or main_red --sha")
+    return out
 
 
 def cmd_status(argv):
@@ -675,7 +721,7 @@ def cmd_status(argv):
                           leftover=sum(not active for _, _, active, _ in leftover))
     budget_note = f" (budget {used:.0%} used)" if used is not None else ""
     lines.append(f"next: {nxt}{budget_note}")
-    print("\n".join(lines))
+    print("\n".join(lines + dashboard_lines(p.slug)))
 
 
 def next_move(cfg, events, tnow, *, tickets_done, live, human, order, leftover=0):

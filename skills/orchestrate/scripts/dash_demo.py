@@ -18,6 +18,12 @@ elif name == "orca" and a[:2] == ["worktree", "list"]:
     sys.exit(0)
 elif name == "orca" and a[:1] == ["orchestration"] and a[1:2] in (["worker-list"], ["task-list"], ["run-show"]):
     f = fx / "orca" / ((opt("--run") or opt("--id")) + ".json")
+elif name == "tracker.py" and a[:1] == ["children"]:
+    root = pathlib.Path(os.environ["TRACKER_FIXTURES"])
+    parent = a[1] if len(a) > 1 and not a[1].startswith("--") else None
+    files = [root / opt("--project") / "issues.json"] if opt("--project") else list(root.glob("*/issues.json"))
+    print(json.dumps([i for f in files if f.exists() for i in json.loads(f.read_text()) if i.get("parent") == parent]))
+    sys.exit(0)
 elif name == "tracker.py" and a and a[0] in ("list", "get"):
     root = pathlib.Path(os.environ["TRACKER_FIXTURES"])
     f = root / opt("--project") / "issues.json" if a[0] == "list" else None
@@ -168,7 +174,16 @@ def alpha(now):
         _issue(now, "ACME-126", "Dark-mode contrast on status badges", "backlog", 0.4, labels=fu, prio=4),
         _issue(now, "ACME-127", "Upload step ignores proxy settings", "triage", 0.2, labels=fu, prio=2),
         _issue(now, "ACME-090", "Old backlog item this program never touched", "backlog", 400),
+        _issue(now, "ACME-100", "M1 Deploy basics", "completed", 60, 21),
+        _issue(now, "ACME-110", "M2 Safe releases", "started", 60),
+        _issue(now, "ACME-111", "M3 First run", "started", 60),
     ]
+    # Stages: top-level issues with children. ACME-121 sits one level deeper, under ACME-103.
+    for parent, kids in (("ACME-100", ("ACME-101", "ACME-102", "ACME-103")), ("ACME-103", ("ACME-121",)),
+                         ("ACME-110", ("ACME-104", "ACME-105", "ACME-106", "ACME-125")), ("ACME-111", ("ACME-107",))):
+        for i in issues:
+            if i["id"] in kids:
+                i["parent"] = parent
     prs = [
         _pr(now, repo, 209, "WIP: try a websocket log stream", "acme-101-ws", "CLOSED", 38, ci="none", draft=True),
         _pr(now, repo, 208, "Secrets schema: per-environment scoping", "acme-125-secrets-schema", "OPEN", 1.4, ci="pending",
@@ -314,6 +329,17 @@ def _transcripts(root, now, workers):
             for _ in range(1 + m % 3):
                 rows.append({"type": "assistant", "timestamp": _iso(t),
                              "message": {"id": f"msg_{i}_{m}", "model": "claude-opus", "usage": usage}})
+        # How the session's last turn stands: a tool running, a tool waiting on a prompt, or a finished turn.
+        act, last = w["projection"]["stage"]["activity"], rows[-1]["timestamp"] if rows else _iso(now)
+        if w["projection"]["outcome"] == "in_progress" and act == "working":
+            rows.append({"type": "assistant", "timestamp": _ago(now, 0.05), "message": {"id": f"msg_{i}_t", "content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "bun test", "description": "Run the unit tests"}}]}})
+        elif w["projection"]["outcome"] == "in_progress" and act == "waiting":
+            rows.append({"type": "assistant", "timestamp": _ago(now, 0.7), "message": {"id": f"msg_{i}_t", "content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "git push --force-with-lease"}}]}})
+        else:
+            rows.append({"type": "assistant", "timestamp": last, "message": {"id": f"msg_{i}_e", "stop_reason": "end_turn",
+                                                                         "content": [{"type": "text", "text": "done"}]}})
         (d / "session.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     return base
 

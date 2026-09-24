@@ -44,6 +44,18 @@ sup = {t["id"]: t["superseded_by"] for t in st["tasks"]}
 assert sup["task_107x"] == "task_107" and sup["task_103"] is None, sup
 green = next(a for a in st["activity"] if a["kind"] == "main_green")
 assert green["sha"] == "m206", green
+# Stages: each collect visits one more level; ACME-121 sits under ACME-103, so the third one settles.
+assert st["stages"]["stages"][0]["unvisited"], st["stages"]
+dash.collect(A, sources=("stages",))
+st2 = dash.collect(A, sources=("stages",))
+assert [(x["id"], x["done"], x["started"], x["total"], x["unvisited"]) for x in st2["stages"]["stages"]] == [
+    ("ACME-100", 3, 0, 3, 0), ("ACME-110", 2, 2, 4, 0), ("ACME-111", 0, 1, 1, 0)], st2["stages"]
+# A cycle left in the cached tree (a reparent seen half-way) must not hang the crawl.
+tree_p = dash.program_dir(A) / "dashboard" / "tree.json"
+tree = json.loads(tree_p.read_text())
+tree["kids"]["ACME-101"] = ["ACME-100"]
+tree_p.write_text(json.dumps(tree))
+assert dash.collect(A, sources=("stages",))["sources"]["stages"]["ok"]
 cfg_a, ev_a = json.loads((store / A / "program.json").read_text()), dash.read_jsonl(store / A / "ledger.jsonl")
 closed = [{**i, "state_type": "completed"} if i["id"] == "ACME-127" else i for i in st["issues"]]
 assert dash.summarize(cfg_a, ev_a, closed, st["workers"], dash.utcnow(), [])["untriaged"] == [], "a closed follow-up needs no triage"
@@ -232,13 +244,84 @@ ticketless = [{"id": "t9", "ticket": None, "title": "QA lead", "status": "dispat
 assert dash.build_graph(ticketless, [{"ts": early, "ev": "landed", "pr": 3}], [], [], {})["nodes"][0]["status"] == "in_progress", \
     "a landing with no ticket does not finish every ticketless task"
 
+# Stalls: only in-flight Claude workers, each by its transcript's last state.
+now = dash.utcnow()
+ago = lambda m: dash.iso(now - dash.dt.timedelta(minutes=m))
+ws = [{"dispatch": "a", "outcome": "in_progress", "since": ago(60), "motion": {"state": "idle", "since": ago(20)}},
+      {"dispatch": "b", "outcome": "in_progress", "since": ago(60), "motion": {"state": "idle", "since": ago(20), "parked": True}},
+      {"dispatch": "c", "outcome": "in_progress", "since": ago(30), "motion": None},
+      {"dispatch": "d", "outcome": "in_progress", "since": ago(30), "motion": None, "model": "gpt-6"},
+      {"dispatch": "e", "outcome": "in_progress", "since": ago(90), "motion": {"state": "tool", "since": ago(50), "tool": "Bash"}},
+      {"dispatch": "f", "outcome": "in_progress", "since": ago(90), "motion": {"state": "working", "since": ago(1)}},
+      {"dispatch": "g", "outcome": "succeeded", "since": ago(90), "motion": {"state": "idle", "since": ago(80)}}]
+assert [(x["dispatch"], x["kind"]) for x in dash.stalls(ws, now)] == [("a", "idle"), ("c", "start_unconfirmed"), ("e", "long_tool")]
+held = dash.spare({"next": "stop spawning: land what is verified", "cap": 4, "in_flight": 1}, [])
+assert held["slots"] == 0 and held["held"].startswith("stop spawning"), held
+free = dash.spare({"next": "may spawn 3 more", "cap": 4, "in_flight": 1},
+                  [{"id": "t1", "status": "completed", "deps": [], "ticket": "X-1", "title": "X-1"},
+                   {"id": "t2", "status": "pending", "deps": ["t1"], "ticket": "X-2", "title": "X-2"},
+                   {"id": "t3", "status": "pending", "deps": ["t2"], "ticket": "X-3", "title": "X-3"}])
+assert free == {"slots": 3, "ready": ["X-2"]}, free
+
+# Transcript motion: a tool call, its result, the turn's end; a turn whose wake-up call succeeded is parked.
+def motion(rows, m=None):
+    m = m or {}
+    for row in rows:
+        m = dash.step_motion(m, row)
+    return m
+call = lambda t, i, name, inp: {"type": "assistant", "timestamp": t, "message": {"content": [{"type": "tool_use", "id": i, "name": name, "input": inp}]}}
+result = lambda t, i, err=False: {"type": "user", "timestamp": t, "message": {"content": [{"type": "tool_result", "tool_use_id": i, "is_error": err}]}}
+end = lambda t: {"type": "assistant", "timestamp": t, "message": {"content": [{"type": "text"}], "stop_reason": "end_turn"}}
+m = motion([call("t1", "u1", "Bash", {"command": "gh run watch 1"})])
+assert m["state"] == "tool" and m["detail"] == "gh run watch 1" and not m["parked"], m
+m = motion([result("t2", "u1"), call("t3", "u2", "ScheduleWakeup", {}), result("t4", "u2"), end("t5")], m)
+assert (m["state"], m["since"], m["parked"]) == ("idle", "t5", True), m
+m = dash.step_motion(m, {"type": "user", "timestamp": "t6", "message": {"content": "next task"}})
+assert (m["state"], m["since"], m["parked"]) == ("working", "t6", False), m
+m = motion([call("t1", "u3", "ScheduleWakeup", {}), result("t2", "u3", err=True), end("t3")])
+assert (m["state"], m["parked"]) == ("idle", False), m  # a refused wake-up arms nothing
+m = motion([call("t1", "u4", "Bash", {"command": "sleep 99", "run_in_background": True}), result("t2", "u4"), end("t3")])
+assert m["parked"], m
+
+# A retry of a ticket is dated by its own spawn row, not the ticket's first.
+ev_r = [{"ts": "2026-01-01T00:00:00Z", "ev": "spawned", "ticket": "X-1", "note": "ctx_01"},
+        {"ts": "2026-01-01T05:00:00Z", "ev": "spawned", "ticket": "X-1", "note": "retry ctx_02"}]
+ws_r = dash.shape_workers([{"dispatchId": "ctx_02", "taskId": "t"}, {"dispatchId": "ctx_01", "taskId": "t"}], ev_r)
+assert {w["dispatch"]: w["since"] for w in ws_r} == {"ctx_01": "2026-01-01T00:00:00Z", "ctx_02": "2026-01-01T05:00:00Z"}, ws_r
+
+# Ledger gaps: an unrecorded dispatch, a merge the ledger never saw, a landing without a main CI result.
+cfg_g = {"created_at": ago(600)}
+ev_g = [{"ts": ago(500), "ev": "spawned", "ticket": "X-1", "note": "ctx_aa"},
+        {"ts": ago(400), "ev": "landed", "pr": 1, "sha": "s1"}, {"ts": ago(390), "ev": "main_green", "sha": "s1"},
+        {"ts": ago(300), "ev": "landed", "pr": 2, "sha": "s2"}]
+prs_g = [{"number": n, "state": "merged", "merged_at": ago(t)} for n, t in ((1, 400), (2, 300), (3, 200), (4, 900))]
+gaps = dash.ledger_gaps(cfg_g, ev_g, [{"dispatch": "ctx_aa", "outcome": "in_progress"},
+                                     {"dispatch": "ctx_bb", "outcome": "in_progress"}], prs_g, now)
+assert gaps == {"spawns": ["ctx_bb"], "landings": [3], "ci": [2]}, gaps
+
+# ensure: starts this store's server once, then finds it; a second serve on the store refuses.
+import socket, subprocess, signal
+with socket.socket() as sk:
+    sk.bind(("127.0.0.1", 0))
+    port = sk.getsockname()[1]
+ok, msg = dash.ensure(port)
+assert ok and "started" in msg, msg
+h = dash.health(port)
+assert h["store"] == str(dash.home()) and h["version"] == dash.code_version(), h
+assert dash.ensure(port) == (True, f"dashboard: http://127.0.0.1:{port}/")
+again = subprocess.run([sys.executable, str(pathlib.Path(dash.__file__)), "serve", "--port", "0"], capture_output=True,
+                       text=True, timeout=20)
+assert again.returncode and "already serves" in again.stderr, again.stderr
+os.kill(h["pid"], signal.SIGTERM)
+
 # The real tracker adapter, when present, satisfies the same interface through TRACKER_FIXTURES.
 real = pathlib.Path(__file__).resolve().parents[2] / "use-tracker/scripts/tracker.py"
 if real.exists():
     os.environ["TRACKER_PY"] = str(real)
     os.environ["TRACKER_FIXTURES"] = str(fx / "tracker" / "Launchpad GA")
-    st = dash.collect(A, sources=("tracker",))
+    st = dash.collect(A, sources=("tracker", "stages"))
     assert st["sources"]["tracker"]["ok"] and st["summary"]["predicate_done"] == 5, st["errors"]
+    assert st["sources"]["stages"]["ok"] and [x["id"] for x in st["stages"]["stages"]] == ["ACME-100", "ACME-110", "ACME-111"], st["errors"]
     print("  (checked against the real use-tracker/scripts/tracker.py)")
 
 print("dash.py collect/serve: all pass")

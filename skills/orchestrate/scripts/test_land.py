@@ -1,5 +1,5 @@
 """`prog.py land` end to end against a fake gh. Run: python3 test_land.py"""
-import json, os, pathlib, subprocess, sys, tempfile
+import datetime as dt, json, os, pathlib, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 FAKE_ORCA = r'''#!/usr/bin/env python3
@@ -74,7 +74,7 @@ def setup(prs, stacks=()):
     (d / "bin" / "orca").chmod(0o755)
     (d / "state.json").write_text(json.dumps({"prs": prs, "stacks": [{"id": i, "pull_requests": s} for i, s in enumerate(stacks)]}))
     env = dict(os.environ, PATH=f"{d / 'bin'}:{os.environ['PATH']}", FAKE_GH_STATE=str(d / "state.json"),
-               PROGRAMS_HOME=str(d / "programs"))
+               PROGRAMS_HOME=str(d / "programs"), ORCH_DASH="off")
     subprocess.run([sys.executable, HERE / "prog.py", "init", "t", "--repo", "o/r", "--run", "run_x"], env=env, check=True,
                    capture_output=True)
     return d, env
@@ -240,6 +240,13 @@ code, out = prog(env, "status", "t")
 assert code == 0 and "land order (2" in out and "next:" in out, out
 code, out = prog(env, "queue", "t")
 assert code == 0 and "#17" in out, out
+# What only the dashboard's collector sees comes back in status while its state is fresh.
+(d / "programs" / "t" / "dashboard").mkdir()
+(d / "programs" / "t" / "dashboard" / "state.json").write_text(json.dumps({"generated_at": dt.datetime.now(dt.timezone.utc).isoformat(), "summary": {
+    "stalls": [{"dispatch": "ctx_1", "ticket": "T-17", "kind": "idle", "minutes": 22}],
+    "spare": {"slots": 2, "ready": ["T-20"]}, "gaps": {"spawns": ["ctx_9"], "landings": [], "ci": []}}}))
+code, out = prog(env, "status", "t")
+assert "STALLED T-17 (ctx_1): turn ended 22 min ago" in out and "SPARE 2 slot(s)" in out and "ctx_9" in out, out
 
 # wait reads the coordinator's Run inbox: a worker of the Run (a standing role, say) is refused.
 st = json.loads((d / "state.json").read_text()); st["workers"] = [{"agentTerminalHandle": "term_role"}]

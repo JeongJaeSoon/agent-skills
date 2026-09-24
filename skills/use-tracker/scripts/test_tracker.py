@@ -291,6 +291,18 @@ class LinearCli(unittest.TestCase):
             self.assertEqual(call[call.index("--project") + 1], "demo")
         self.assertIn("--cursor", calls[1])
 
+    def test_children(self):
+        proc, out = self.env.run("children", "94S-110")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        call = self.env.orca_calls()[0]
+        self.assertEqual(call[call.index("--parent-id") + 1], "94S-110")  # identifiers `issue` rejects work here
+        self.assertNotIn("--project", call)
+        self.env.run("children", "--project", "demo")
+        call = self.env.orca_calls()[-1]
+        self.assertEqual((call[call.index("--parent-id") + 1], call[call.index("--project") + 1]), ("null", "demo"))
+        proc, _ = self.env.run("children")
+        self.assertEqual(proc.returncode, 1)
+
     def test_list_since_and_limit(self):
         proc, out = self.env.run("list", "--project", "demo", "--since", "2026-01-01T00:00:00Z", "--limit", "2")
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -406,6 +418,13 @@ class JiraCli(unittest.TestCase):
         self.assertEqual(searches[0][2]["jql"], 'project = "ABC" ORDER BY created ASC')
         self.assertEqual(searches[1][2]["nextPageToken"], "2")
 
+    def test_children_jql(self):
+        self.env.run("children", "ABC-1")
+        self.env.run("children", "--project", "ABC")
+        jqls = [r[2]["jql"] for r in self.jira.requests if r[1] == "/rest/api/3/search/jql"]
+        self.assertEqual(jqls[0], 'parent = "ABC-1" ORDER BY created ASC')
+        self.assertIn('project = "ABC" AND parent is EMPTY', jqls[-1])
+
     def test_list_since_limit_and_legacy_fallback(self):
         proc, out = self.env.run("list", "--project", "ABC", "--since", "2026-09-02T00:00:00Z", "--limit", "2")
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -517,6 +536,8 @@ class ConfigAndFixtures(unittest.TestCase):
         self.assertEqual([i["id"] for i in out], ["F-3"])
         proc, out = self.env.run("get", "F-2", TRACKER_FIXTURES=fixtures)
         self.assertEqual(out["id"], "F-2")
+        proc, out = self.env.run("children", "--project", "any", TRACKER_FIXTURES=fixtures)
+        self.assertEqual([i["id"] for i in out], ["F-1", "F-2", "F-3"])
         proc, _ = self.env.run("label", "F-2", "--add", "x", TRACKER_FIXTURES=fixtures)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("write operations are disabled", proc.stderr)

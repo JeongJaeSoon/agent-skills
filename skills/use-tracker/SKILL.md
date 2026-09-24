@@ -32,6 +32,7 @@ says how. They name Linear only for things outside the adapter (a `--linear-issu
 T="${CLAUDE_SKILL_DIR}/scripts/tracker.py"
 python3 $T list --project P [--since 2026-09-01T00:00:00Z] [--limit N]   # created_at ascending; --limit keeps the newest N
 python3 $T get ID
+python3 $T children [ID] [--project P]   # ID's direct children; no ID: P's top-level issues
 python3 $T create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
 python3 $T label ID --add L [--add L2]
 python3 $T comment ID --body-file F
@@ -39,7 +40,7 @@ python3 $T transition ID --to started|completed|canceled
 ```
 
 Global flags: `--adapter linear|jira` (overrides config), `--config PATH`.
-`list`/`get` return normalized issues:
+`list`/`get`/`children` return normalized issues (Linear's list leaves `parent` null; walk `children` for the tree):
 
 ```json
 {"id": "ENG-12", "title": "...", "url": "...", "state": "In Progress", "state_type": "started",
@@ -51,7 +52,7 @@ Global flags: `--adapter linear|jira` (overrides config), `--config PATH`.
 `{"ok": true, "op": ..., "id": ...}`. If `create` succeeds but the relation fails, stdout still
 carries the new issue and the exit is 1, so never re-run a create blindly.
 
-`TRACKER_FIXTURES=<dir>` serves `list`/`get` from `<dir>/issues.json` (a list of normalized issues)
+`TRACKER_FIXTURES=<dir>` serves `list`/`get`/`children` from `<dir>/issues.json` (a list of normalized issues)
 and refuses writes. Use it for tests and demos.
 
 Tests: `python3 scripts/test_tracker.py` (offline; fake `orca` and a local fake Jira).
