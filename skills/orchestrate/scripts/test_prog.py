@@ -173,3 +173,161 @@ workers = [
 assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/w/1"), ("A-2", "d2", True, "/w/2")], \
     prog.landed_but_open(ev, workers, tasks, wts)
 print("prog.py landed_but_open: all pass")
+
+# --- backfill ----------------------------------------------------------------------------
+import io, json, tempfile, contextlib
+prog.HOME = pathlib.Path(tempfile.mkdtemp(prefix="test-backfill-"))
+d = prog.HOME / "bf"
+d.mkdir()
+(d / "program.json").write_text(json.dumps({"slug": "bf", "repo": "o/r", "run": "run_x", "predicate": ["T-9"],
+                                            "ceiling": 6, "merge_policy": "autonomous", "created_at": "2026-09-21T00:00:00+00:00"}))
+OWN = [{"ts": "2026-09-21T00:00:00+00:00", "ev": "spawned", "role": "qa", "note": "ctx_q"},
+       {"ts": "2026-09-21T01:00:00+00:00", "ev": "landed", "pr": 5, "sha": "m5", "ticket": "T-5"}]
+(d / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in OWN))
+
+
+def merged(n, at, title="x", branch="b"):
+    return {"number": n, "title": title, "headRefName": branch, "mergedAt": at, "mergeCommit": {"oid": f"m{n}"}}
+
+
+def run_(n, concl, status="completed", at="2026-09-20T05:00:00Z"):
+    return {"headSha": f"m{n}", "status": status, "conclusion": concl, "updatedAt": at}
+
+
+MERGED = [merged(1, "2026-09-20T01:00:00Z", "feat: T-1 first half"),
+          merged(2, "2026-09-20T02:00:00Z", branch="owner/t-2-lower-layer"),  # a stack's lower layer: base was a branch
+          merged(3, "2026-09-20T03:00:00Z", "chore: no ticket, mentions PR-12"),
+          merged(6, "2026-09-20T04:00:00Z", "feat: T-1 second half"),
+          merged(5, "2026-09-20T23:00:00Z", "T-5 already recorded"),
+          merged(7, "2026-09-22T00:00:00Z", "T-7 merged after registration")]
+RUNS = [run_(1, "success"), run_(1, "failure", at="2026-09-20T01:20:00Z"),  # one red workflow makes the commit red
+        run_(2, "success", at="2026-09-20T02:10:00Z"), run_(2, "cancelled"),  # a superseded run does not count
+        run_(3, "cancelled"),                                                  # nothing but a cancelled run: no result
+        run_(6, "success"), run_(6, None, status="in_progress")]              # still running: no result yet
+calls = []
+
+
+def fake_gh(*args):
+    calls.append(args)
+    if args[:2] == ("repo", "view"):
+        return {"defaultBranchRef": {"name": "trunk"}}
+    return MERGED if args[:2] == ("pr", "list") else RUNS
+
+
+prog.gh_json = fake_gh
+
+
+def backfill(*argv):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        prog.cmd_backfill(["bf", *(argv or ("--since", "2026-09-01"))])
+    return out.getvalue()
+
+
+def rows():
+    return [json.loads(l) for l in (d / "ledger.jsonl").read_text().splitlines()]
+
+
+try:
+    backfill("--dry-run")
+    raise AssertionError("expected an exit")
+except SystemExit as e:
+    assert "needs --since" in str(e), "a repo's older merges are not the program's landings"
+out = backfill("--since", "2026-09-01", "--dry-run")
+assert "#3 2026-09-20T03:00:00Z chore: no ticket" in out and "#5 " not in out, "a dry run lists what it would add"
+assert "backfill 4 landings (3 with a ticket" in out and "1 main green, 1 main red" in out, out
+assert rows() == OWN and not list(d.glob("ledger.jsonl.bak-*")), "a dry run writes nothing"
+backfill()
+got = rows()
+# In time order ahead of the program's own rows; a commit's result lands when its last workflow ends.
+assert [(r["ev"], r.get("pr") or r.get("sha")) for r in got] == [
+    ("landed", 1), ("landed", 2), ("main_green", "m2"), ("landed", 3), ("landed", 6), ("main_red", "m1"),
+    ("spawned", None), ("landed", 5), ("config", None)], got
+assert [r.get("ticket") for r in got if r["ev"] == "landed"] == ["T-1", "T-2", None, "T-1", "T-5"], got
+assert all(r["note"] == "backfill" for r in got[:6]) and got[6:8] == OWN, got
+assert json.loads((d / "program.json").read_text())["created_at"] == "2026-09-20T01:00:00+00:00"
+assert got[-1]["note"] == "created_at=2026-09-20T01:00:00+00:00 (backfill)"
+assert next(c for c in calls if c[:2] == ("run", "list"))[5] == "trunk", "CI of the repo's default branch"
+assert [p.read_text() for p in d.glob("ledger.jsonl.bak-*")] == ["".join(json.dumps(r) + "\n" for r in OWN)]
+# History counts: m2's green raised the cap and m1's later red halved it; #5 of the program's own is still pending.
+assert prog.main_state(got) == "pending" and prog.cap_from(got, 6) == 1
+# A rerun adds nothing; an earlier --since adds only what is older than the program's (moved) start.
+assert backfill().startswith("nothing to backfill") and rows() == got
+# A result that was still running at the first backfill is added by a rerun.
+RUNS[-1] = run_(6, "success", at="2026-09-21T02:00:00Z")
+assert "0 landings (0 with a ticket), 1 main green" in backfill()
+assert [(r["ev"], r.get("sha")) for r in rows()][-3:] == [("landed", "m5"), ("main_green", "m6"), ("config", None)]
+assert "nothing to backfill" in backfill()
+MERGED.append(merged(8, "2026-09-19T12:00:00+09:00", "T-8 older"))
+assert backfill("--since", "2026-09-20").startswith("nothing to backfill"), "--since bounds it (T-8 is 03:00Z on the 19th)"
+assert "backfill 1 landings" in backfill("--since", "2026-09-19")
+assert [r["pr"] for r in rows() if r["ev"] == "landed"] == [8, 1, 2, 3, 6, 5]
+# A lander appending while backfill runs is not overwritten.
+MERGED.append(merged(9, "2026-09-18T00:00:00Z", "T-9"))
+before = (d / "ledger.jsonl").read_text()
+prog.gh_json = lambda *a: (open(d / "ledger.jsonl", "a").write('{"ts": "2026-09-24T00:00:00+00:00", "ev": "ready", "pr": 10}\n'),
+                           fake_gh(*a))[1] if a[:2] == ("run", "list") else fake_gh(*a)
+try:
+    backfill("--since", "2026-09-01")
+    raise AssertionError("expected an exit")
+except SystemExit as e:
+    assert "changed while backfilling" in str(e)
+assert (d / "ledger.jsonl").read_text() == before + '{"ts": "2026-09-24T00:00:00+00:00", "ev": "ready", "pr": 10}\n'
+assert not (d / "ledger.jsonl.tmp").exists()
+
+# An append waits while backfill holds the ledger, so it lands in the new file, not the replaced one.
+import threading, time as _time
+held = threading.Event()
+def hold():
+    with prog.Program("bf").locked():
+        held.set()
+        _time.sleep(0.5)
+threading.Thread(target=hold).start()
+held.wait()
+t = _time.monotonic()
+prog.Program("bf").append("resume")
+assert _time.monotonic() - t >= 0.4 and rows()[-1]["ev"] == "resume"
+
+# A setting changed while backfill fetched is kept when created_at moves.
+(d / "program.json").write_text(json.dumps(dict(json.loads((d / "program.json").read_text()), created_at="2026-09-21T00:00:00+00:00")))
+stale = prog.Program("bf")
+(d / "program.json").write_text(json.dumps(dict(json.loads((d / "program.json").read_text()), merge_policy="human-gate")))
+stale.update(lambda cfg: cfg.__setitem__("created_at", "2026-09-20T01:00:00+00:00"))
+assert json.loads((d / "program.json").read_text())["merge_policy"] == "human-gate"
+
+# A run stopped after the ledger but before program.json is repaired by the next run.
+MERGED.pop()
+prog.gh_json = fake_gh
+cfg = json.loads((d / "program.json").read_text())
+(d / "program.json").write_text(json.dumps(dict(cfg, created_at="2026-09-21T00:00:00+00:00")))
+assert "created_at moved to 2026-09-19T03:00:00+00:00" in backfill()
+
+# A result that came in after the program's own rows takes its place in time: cap_from reads in order.
+d2 = prog.HOME / "bf2"
+d2.mkdir()
+(d2 / "program.json").write_text(json.dumps(dict(cfg, slug="bf2", created_at="2026-09-21T00:00:00+00:00")))
+own2 = [{"ts": "2026-09-21T01:00:00+00:00", "ev": "landed", "pr": 5, "sha": "m5"},
+        {"ts": "2026-09-21T02:00:00+00:00", "ev": "main_green", "sha": "m5"}]
+(d2 / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in own2))
+MERGED[:], RUNS[:] = [merged(1, "2026-09-20T23:00:00Z", "T-1")], [run_(1, "failure", at="2026-09-21T03:00:00Z")]
+prog.gh_json = fake_gh
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_backfill(["bf2", "--since", "2026-09-01"])
+got2 = [json.loads(l) for l in (d2 / "ledger.jsonl").read_text().splitlines()]
+assert [(r["ev"], r.get("sha")) for r in got2] == [("landed", "m1"), ("landed", "m5"), ("main_green", "m5"),
+                                                    ("main_red", "m1"), ("config", None)], got2
+assert prog.cap_from(got2, 6) == 1
+
+# A ticket that takes several PRs is not LANDED-BUT-OPEN while the tracker says it is open.
+tasks = [{"id": "task_1", "display_name": "T-1 both halves"}]
+workers = [{"dispatchId": "ctx_1", "taskId": "task_1", "terminalState": "active", "resource": {"worktreeId": "w1"}}]
+wts = [{"id": "w1", "path": "/w/1"}]
+open_ = lambda issues: prog.landed_but_open(rows(), workers, tasks, wts, issues)
+assert open_({"T-1": {"state_type": "started"}}) == []
+assert open_({"T-1": {"state_type": "completed"}}) == open_({}) == open_(None) == [("T-1", "ctx_1", True, "/w/1")], \
+    "a closed ticket, or no tracker: the landing is the end"
+released = [dict(workers[0], terminalState="released")]
+assert prog.landed_but_open(rows(), released, tasks, wts, {"T-1": {"state_type": "started"}}) == [("T-1", "ctx_1", False, "/w/1")], \
+    "a released worker's card is left behind whatever the ticket's state"
+
+print("prog.py backfill: all pass")

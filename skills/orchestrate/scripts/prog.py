@@ -35,6 +35,11 @@ Usage: orch <command> <slug> [options]
   land-check <slug> --pr N [--main-fix]
                                      readiness only, no merge (coordinator diagnostics)
   landed <slug> --pr N               record a merge made outside `land` and print the main-CI watch
+  backfill <slug> --since ISO8601 [--dry-run]
+                                     a program registered mid-flight: add the PRs merged from --since
+                                     (when its work began) until it, at their merge time with their main
+                                     push CI result, ahead of the program's own rows, and move created_at
+                                     to the first of them. Rerun to add CI results that came in since
   heavy <slug|-> [--wait-minutes 60] -- <command…>
                                      run a heavy local command (compose stack, image build, local
                                      E2E) holding one of heavy_slots (2) machine-wide slots; `-`
@@ -49,7 +54,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import datetime as dt, fnmatch, json, os, pathlib, re, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, subprocess, sys, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
@@ -102,9 +107,27 @@ class Program:
             return []
         return [json.loads(l) for l in self.ledger_path.read_text().splitlines() if l.strip()]
 
+    def update(self, change):
+        """Apply change(cfg) to program.json as it is now, so a concurrent `set` or backfill is not reverted."""
+        with self.locked():
+            self.cfg = json.loads((self.dir / "program.json").read_text())
+            change(self.cfg)
+            # A shared file overwritten in place was once left empty mid-write; replace it whole.
+            tmp = self.dir / "program.json.tmp"
+            tmp.write_text(json.dumps(self.cfg, indent=2, ensure_ascii=False) + "\n")
+            os.replace(tmp, self.dir / "program.json")
+
+    @contextlib.contextmanager
+    def locked(self):
+        """Held to append to the ledger or rewrite it: backfill replaces the file, and a row appended to the
+        file it replaced would be lost."""
+        with (self.dir / "ledger.lock").open("a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            yield
+
     def append(self, ev, **fields):
         row = {"ts": now(), "ev": ev, **{k: v for k, v in fields.items() if v is not None}}
-        with self.ledger_path.open("a") as f:
+        with self.locked(), self.ledger_path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
@@ -237,11 +260,18 @@ def ticket_of(task):
     return word if TICKET_ID.fullmatch(word) else None
 
 
-def landed_but_open(events, workers, tasks, worktrees):
+OPEN_STATES = {"triage", "backlog", "unstarted", "started"}
+
+
+def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     """Cards left behind: (ticket, dispatch, terminal still active, path) for each Orca worktree whose every
-    dispatch worked a ticket that has landed. A released worker's card stays until `orca worktree rm`."""
+    dispatch worked a ticket that has landed. A released worker's card stays until `orca worktree rm`.
+
+    A ticket can take several PRs, a backfilled landing among them: while the tracker says it is open,
+    a landing is not its live worker's end. Without the tracker, a landing is."""
     ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
     landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed"} - {None}
+    still_open = {t for t in landed if ((issues_by_id or {}).get(t) or {}).get("state_type") in OPEN_STATES}
     present = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     cards = {}
     for w in workers:
@@ -253,6 +283,8 @@ def landed_but_open(events, workers, tasks, worktrees):
         tickets = {ticket_by_task.get(w.get("taskId")) for w in ws}
         if tickets <= landed:
             active = [w for w in ws if w.get("terminalState") == "active"]
+            if active and tickets & still_open:
+                continue
             out.append((sorted(tickets)[0], (active or ws)[-1]["dispatchId"], bool(active), present[wt]))
     return sorted(out)
 
@@ -602,7 +634,7 @@ def cmd_status(argv):
     for e in stale:
         lines.append(f"  STALE {fmt_entry(order.index(e) + 1, e)}")
     worktrees = orca_json("worktree", "list").get("worktrees", [])
-    for tk, dispatch, active, path in landed_but_open(events, workers, tasks, worktrees):
+    for tk, dispatch, active, path in landed_but_open(events, workers, tasks, worktrees, by_id):
         rm = f"`orca worktree rm --worktree path:{path}`"
         lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
                      + (f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
@@ -704,13 +736,9 @@ def cmd_set(argv):
     if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "note", "final_check"):
         sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, note, final_check")
     if key == "exclusive_paths":
-        p.cfg.setdefault("landing", {})[key] = conv(value)
+        p.update(lambda cfg: cfg.setdefault("landing", {}).__setitem__(key, conv(value)))
     else:
-        p.cfg[key] = conv(value)
-    # A shared file overwritten in place was once left empty mid-write; replace it whole.
-    tmp = p.dir / "program.json.tmp"
-    tmp.write_text(json.dumps(p.cfg, indent=2, ensure_ascii=False) + "\n")
-    os.replace(tmp, p.dir / "program.json")
+        p.update(lambda cfg: cfg.__setitem__(key, conv(value)))
     print(json.dumps(p.append("config", note=f"{key}={value}"), ensure_ascii=False))
 
 
@@ -1070,6 +1098,123 @@ def cmd_gate(argv):
     print(f"the user resolves it in Orca (or: orca orchestration gate-resolve --id {gate_id} --resolution land)")
 
 
+def ticket_in(keys, *texts):
+    """The first ticket ID with one of the program's team keys in the texts (title, then branch)."""
+    for text in texts:
+        for key, num in re.findall(r"(?<![A-Za-z0-9])([A-Za-z0-9]+)-(\d+)", text or ""):
+            if key.upper() in keys:
+                return f"{key.upper()}-{num}"
+    return None
+
+
+def main_results(repo, base, since):
+    """{commit: (main_green|main_red, ts)} from the push CI on base. Every workflow of a commit counts;
+    a cancelled run (superseded) does not, and a commit with a run still going has no result yet."""
+    runs = gh_json("run", "list", "--repo", repo, "--branch", base, "--event", "push", "--created", f">={since}",
+                   "--limit", "5000", "--json", "headSha,status,conclusion,updatedAt")
+    by_sha = {}
+    for r in runs:
+        if r.get("conclusion") != "cancelled":
+            by_sha.setdefault(r["headSha"], []).append(r)
+    out = {}
+    for sha, rs in by_sha.items():
+        if all(r.get("status") == "completed" for r in rs):
+            red = any((r.get("conclusion") or "").upper() not in PASSING for r in rs)
+            out[sha] = ("main_red" if red else "main_green", max(r["updatedAt"] for r in rs))
+    return out
+
+
+def cmd_backfill(argv):
+    """Merges from before the program was registered, as landings at their real merge time with their
+    main push CI result, so cap, rate and the dashboard count them. Rows carry note "backfill" and go
+    before the program's own rows; a PR already in the ledger is skipped, so a rerun adds only what is new
+    and the results that came in since."""
+    p = Program(argv[0])
+    cfg, repo = p.cfg, p.cfg["repo"]
+    if not opt(argv, "--since"):
+        sys.exit("backfill needs --since ISO8601, when the program's work began: older merges in the repo are not its landings")
+    since = parse_ts(opt(argv, "--since"))
+    since = (since if since.tzinfo else since.replace(tzinfo=dt.timezone.utc)).astimezone(dt.timezone.utc)
+    text = p.ledger_path.read_text() if p.ledger_path.exists() else ""
+    events = [json.loads(l) for l in text.splitlines() if l.strip()]
+    until = parse_ts(cfg["created_at"])
+    have = {e.get("pr") for e in events if e["ev"] == "landed"}
+    merged = gh_json("pr", "list", "--repo", repo, "--state", "merged", "--limit", "5000",
+                     "--search", f"merged:>={since.date().isoformat()}", "--json", "number,title,headRefName,mergedAt,mergeCommit")
+    merged = sorted((m for m in merged if m.get("mergeCommit") and m["number"] not in have
+                     and since <= parse_ts(m["mergedAt"]) < until), key=lambda m: m["mergedAt"])
+    # CI still running at an earlier backfill: its landings are asked again.
+    decided = {e.get("sha") for e in events if e["ev"] in ("main_green", "main_red")}
+    pending = [e for e in events if e["ev"] == "landed" and e.get("note") == "backfill" and e.get("sha") not in decided]
+    rows = backfill_rows(cfg, merged, pending, events) if merged or pending else []
+    if "--dry-run" in argv:
+        # The window is the coordinator's judgment: in a repo shared with other work, read what it holds.
+        for m in merged:
+            print(f"  #{m['number']} {m['mergedAt']} {m['title']}")
+    if rows:
+        write_backfill(p, text, events, rows, "--dry-run" in argv)
+    else:
+        print(f"nothing to backfill: every PR merged between {since.isoformat()} and {cfg['created_at']} is in the ledger")
+    if "--dry-run" in argv:
+        return
+    # The program's clock starts at its first landing, or rate, growth and the dashboard window miss the
+    # history. Reconciled from the ledger on every run, so a run stopped between the two files is repaired.
+    first = min((e["ts"] for e in p.events() if e["ev"] == "landed" and e.get("note") == "backfill"),
+                key=parse_ts, default=None)
+    moved = []
+
+    def earlier(cfg):
+        if first and parse_ts(first) < parse_ts(cfg["created_at"]):
+            cfg["created_at"] = first
+            moved.append(first)
+    p.update(earlier)
+    if moved:
+        p.append("config", note=f"created_at={first} (backfill)")
+        print(f"created_at moved to {first}")
+
+
+def utc(ts):
+    return parse_ts(ts).astimezone(dt.timezone.utc).isoformat()
+
+
+def backfill_rows(cfg, merged, pending, events):
+    """Landing rows for the merged PRs, and result rows for them and for the pending backfilled landings."""
+    base = cfg.get("base") or gh_json("repo", "view", cfg["repo"], "--json", "defaultBranchRef")["defaultBranchRef"]["name"]
+    # Matched by commit, not by the PR's base: a stack's lower layer names a branch yet lands on the base.
+    results = main_results(cfg["repo"], base, min(utc(t) for t in [m["mergedAt"] for m in merged] + [e["ts"] for e in pending])[:10])
+    keys = {t.rsplit("-", 1)[0].upper() for t in cfg["predicate"] + [e["ticket"] for e in events if e.get("ticket")]}
+    rows = [{"ts": utc(m["mergedAt"]), "ev": "landed", "pr": m["number"], "sha": m["mergeCommit"]["oid"],
+             "ticket": ticket_in(keys, m["title"], m["headRefName"]), "note": "backfill"} for m in merged]
+    for sha in [r["sha"] for r in rows] + [e["sha"] for e in pending]:
+        if sha in results:
+            ev, at = results[sha]
+            rows.append({"ts": utc(at), "ev": ev, "sha": sha, "note": "backfill"})
+    return sorted(({k: v for k, v in r.items() if v is not None} for r in rows), key=lambda r: parse_ts(r["ts"]))
+
+
+def write_backfill(p, text, events, rows, dry_run):
+    landed = sum(r["ev"] == "landed" for r in rows)
+    red = sum(r["ev"] == "main_red" for r in rows)
+    print(f"backfill {landed} landings ({sum('ticket' in r for r in rows)} with a ticket),"
+          f" {len(rows) - landed - red} main green, {red} main red")
+    if dry_run:
+        return
+    old = [e for e in events if e.get("note") == "backfill"]
+    own = [e for e in events if e.get("note") != "backfill"]
+    # Every landing merged before the program's own rows, so history goes first; a result that came in
+    # later (CI finishing after registration) takes its place in time among them, as cap_from reads in order.
+    merged = heapq.merge(sorted(old + rows, key=lambda r: parse_ts(r["ts"])), own, key=lambda r: parse_ts(r["ts"]))
+    body = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in merged)
+    with p.locked():
+        if (p.ledger_path.read_text() if p.ledger_path.exists() else "") != text:
+            sys.exit("the ledger changed while backfilling (a lander appended); run backfill again")
+        (p.dir / f"ledger.jsonl.bak-{now().replace(':', '')}").write_text(text)
+        tmp = p.dir / "ledger.jsonl.tmp"
+        tmp.write_text(body)
+        os.replace(tmp, p.ledger_path)
+    print(f"written; the old ledger is kept beside it as {p.dir.name}/ledger.jsonl.bak-*")
+
+
 def batch(res):
     return res.get("deliveryId"), res.get("messages") or []
 
@@ -1153,7 +1298,7 @@ def cmd_heavy(argv):
 
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
-            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait}
+            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill}
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):

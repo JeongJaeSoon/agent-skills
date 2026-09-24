@@ -68,7 +68,7 @@
 |---|---|
 | 허용 | 이 플러그인의 스킬 호출 |
 | 허용 | `orca orchestration <명령>` (reset, worker-abandon, gate-resolve 제외) |
-| 허용 | `orch <명령>` (임의 명령을 실행하는 `heavy`, 머지 정책을 바꿀 수 있는 `set`·`init` 제외) |
+| 허용 | `orch <명령>` (임의 명령을 실행하는 `heavy`, 머지 정책을 바꿀 수 있는 `set`·`init`, 원장을 다시 쓰는 `backfill` 제외) |
 | 거부 | 다른 터미널의 Orca 메일함을 읽는 `check`/`inbox --terminal <남의 handle>` |
 
 허용은 셸 연산자·리다이렉션·치환·변수가 없는 단일 명령에만 준다. 허용 문자열 뒤에 다른 명령을 붙일 수 없게 하기 위해서다. 나머지는 평소 권한 흐름(auto mode 분류기, 사용자의 deny·ask 규칙)을 그대로 탄다.

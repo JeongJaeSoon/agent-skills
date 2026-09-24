@@ -28,6 +28,12 @@ if not f.exists():
 data = json.loads(f.read_text())
 if isinstance(data, dict) and "fail" in data:
     sys.exit(data["fail"])
+if name == "gh":
+    fields = opt("--json").split(",")
+    if "statusCheckRollup" in fields and opt("--state") != "open":
+        # What agent-platform's GitHub did to rollups and reviews over a 200-PR window.
+        sys.exit("HTTP 504: We couldn't respond to your request in time. (https://api.github.com/graphql)")
+    data = [{k: p[k] for k in fields if k in p} for p in data if opt("--state") != "open" or p["state"] == "OPEN"]
 if name == "orca" and data.get("ok") is not False:
     # One fixture per run: {"workers": [...], "tasks": [...], "run": {...}}
     key = {"worker-list": "workers", "task-list": "tasks", "run-show": "run"}[a[1]]
