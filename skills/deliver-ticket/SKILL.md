@@ -66,6 +66,9 @@ node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs ad
 node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs result <job-id>
 ```
 
+Run them as Bash calls with `run_in_background`: some companion versions answer inline
+instead of returning a job id, and the background call keeps you working either way.
+
 `review` hunts defects; `adversarial-review` challenges the approach itself and earns its own
 round whenever the design, not the defect count, is what you are unsure about.
 
@@ -125,8 +128,8 @@ the body.
 **Dependent PRs are a GitHub stack** — one ticket per layer, stacked because the lower one must
 merge first — not just a PR whose base is another branch. After
 opening them, link with the `gh stack` extension (`gh stack link <bottom> <top> --base main`,
-or `gh stack init` / `add` / `submit` from scratch) and confirm the stack icon with
-`gh pr view`. Each layer keeps its own verification section and sticky comment, verified on
+or `gh stack init` / `add` / `submit` from scratch) and confirm it with
+`gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks). Each layer keeps its own verification section and sticky comment, verified on
 top of the layer below. A stack lands from its top in one merge: once every layer is verified
 and green, `gh api -X PUT repos/<owner>/<repo>/pulls/<top>/merge-async -f merge_method=squash
 -f sha=<top head>` merges the top and every layer below it; confirm each layer MERGED with

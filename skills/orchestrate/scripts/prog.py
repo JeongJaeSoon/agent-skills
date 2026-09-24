@@ -794,6 +794,16 @@ ADVICE = {
 }
 
 
+def update_advice(unit, repo):
+    """How to bring a PR, or a stack bottom-up, onto the latest base. update-branch merges a PR's own base
+    into it, so on a stack top it pulls only the layer below."""
+    if len(unit) == 1:
+        return f"gh pr update-branch {unit[0]} --repo {repo}"
+    return ("update the stack bottom-up, each after the previous finishes: "
+            + "; ".join(f"gh pr update-branch {n} --repo {repo}" for n in unit)
+            + " (tell the lower layers' owners)")
+
+
 def merge_unit(p, pr, unit, klass, events):
     """Merge a PR (or a stack from its top) after re-checking every layer at its current head."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
@@ -827,7 +837,7 @@ def merge_unit(p, pr, unit, klass, events):
         why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
         p.append("land_failed", pr=pr, note=why)
         if "not up to date" in why or "behind" in why.lower():
-            return 3, "act: the base requires up-to-date branches: " + ADVICE["behind base"].format(pr=pr, repo=repo)
+            return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo)}, then land again"
         return 1, f"merge refused: {why}"
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
@@ -858,7 +868,8 @@ def attempt(p, pr, klass):
         if v["state"] == "MERGED":
             sha = (v.get("mergeCommit") or {}).get("oid")
             if "landed" in st:  # a stack layer lands with its top, whose land call recorded it
-                return 0, f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]}"
+                return 0, (f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]} ({st['landed'].get('note') or 'recorded'});"
+                           " main CI ran once on the stack top's commit, and the top's owner records it")
             p.append("landed", pr=pr, sha=sha, note="merged outside land")
             return 0, f"#{pr} was merged outside land; recorded"
         return 1, f"#{pr} is {v['state']}"
@@ -897,8 +908,8 @@ def attempt(p, pr, klass):
             return 3, ("act: you hold the exclusive lane; bring the branch onto the latest base (restack migrations),"
                        f" let CI run, land again — {'; '.join(me['reasons'])}." + KEEP)
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
-            return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: gh pr update-branch {pr}"
-                       f" --repo {repo} (or rebase and restack), let CI run, land again." + KEEP)
+            return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo)},"
+                       " let CI run, land again." + KEEP)
         code, msg = merge_unit(p, pr, unit, klass, events)
         if code == 0:
             lane.release(pr)
@@ -906,14 +917,14 @@ def attempt(p, pr, klass):
     if me["state"] == "catching_up":
         note_attempt(p, events, pr, "catching_up", me["reasons"])
         if "behind base" in me["reasons"]:
-            return 3, "act: " + ADVICE["behind base"].format(pr=pr, repo=repo)
+            return 3, f"act: {update_advice(unit, repo)}, then land again"
         return 2, f"not yet: {'; '.join(me['reasons'])}"
     base = me["base"] or "main"
     overlap = base_overlap(repo, base, compare(repo, base, pr_view(repo, pr)["headRefOid"]))
     if overlap:
         note_attempt(p, events, pr, "act", [f"base changed {', '.join(overlap[:5])}"])
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
-                   f" gh pr update-branch {pr} --repo {repo}, check your contract and test assumptions still hold,"
+                   f" {update_advice(unit, repo)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
     return merge_unit(p, pr, unit, klass, events)
 

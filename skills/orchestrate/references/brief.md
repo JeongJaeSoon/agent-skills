@@ -10,7 +10,7 @@ PROGRAM: <slug>
 
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
-            Base: main | feat/<topic> | stacked on #<PR> (gh stack link <lower> <this>).
+            Base: main | feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / prog.py dep).
@@ -19,7 +19,9 @@ ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (sta
             program's exclusive_paths (land handles it; say it here so the worker expects it).
 PEERS       Who to settle shared files and landing order with directly, and about what:
             `orca orchestration send --to dispatch:<id> --subject … --body …`. Tell the
-            coordinator only what changes scope, order or the predicate.
+            coordinator only what changes scope, order or the predicate. Read your own mail with
+            `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
+            or the same batch comes back.
 ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go

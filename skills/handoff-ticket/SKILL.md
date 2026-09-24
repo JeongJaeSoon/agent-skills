@@ -103,7 +103,7 @@ orca terminal wait --terminal <setup handle> --for exit --timeout-ms 1800000 && 
   `--comment` URL is enough and the new session moves the ticket itself.
 - `--name` becomes the branch name (with the user's branch prefix, if Orca adds one).
 - Stacked work: pass the lower ticket's branch as `--base-branch` and say in the prompt
-  "stack on <lower ticket> (`gh stack link <lower PR> <this PR>`)".
+  "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`)".
 - Do not use `orca terminal create`: that adds a tab to this worktree instead of a new card.
 - `--prompt` is the whole context the new session gets. It knows nothing from here, so put
   anything non-derivable from the ticket (decisions, base branch, gotchas) after the ticket id.

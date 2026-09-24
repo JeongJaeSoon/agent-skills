@@ -22,10 +22,12 @@ GUARDIAN: main guardian for <repo> <base>
 PROGRAM: <slug>
 
 GOAL        Keep <base> green without stopping the program for flakes.
-WATCH       Every landing's main run: prog.py status shows `main pending`; gh run list --repo <repo>
-            --branch <base> --json databaseId,headSha,conclusion. Wake with a Bash call under
-            run_in_background: `gh run watch <id>`, or a loop that exits when a new run on <base>
-            completes. Never prog.py wait or `check --run`: they read the coordinator's Run inbox.
+WATCH       Every main run, read from GitHub: gh run list --repo <repo> --branch <base> --json
+            databaseId,headSha,status,conclusion (prog.py status stays `main pending` until a lander
+            records the result). Wake with a Bash call under run_in_background: a loop that exits
+            when a new run on <base> completes or after 4.5 minutes, whichever is first, so each
+            wake-up also carries your heartbeat and your own mail check. Never prog.py wait or
+            `check --run`: they read the coordinator's Run inbox.
 ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --failed) and read the log.
                Flake → note it in the digest (dash.py note <slug> --kind risk --text …), freeze nothing.
             2. Defect → prog.py record <slug> main_red --sha <merge commit>. That freezes every lane

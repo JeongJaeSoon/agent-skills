@@ -197,6 +197,13 @@ code, out = prog(env, "land", "t", "--pr", "7")
 assert code == 0 and "already landed" in out, out
 assert len([e for e in ledger(d) if e["ev"] == "landed"]) == 2
 
+# A behind exclusive stack is updated bottom-up: update-branch on the top only pulls the layer below.
+d, env = setup({"7": pr(7, stacked=True, files=["migrations/3.sql"]),
+                "8": pr(8, base="b7", stacked=True, files=["migrations/4.sql"], behind=1)}, stacks=[[7, 8]])
+verdict(d, 7, "T-7"); verdict(d, 8, "T-8")
+code, out = prog(env, "land", "t", "--pr", "8")
+assert code == 3 and "update-branch 7 --repo o/r; gh pr update-branch 8" in out, out
+
 # 6. Red main stops everything but the fix.
 d, env = setup({"9": pr(9)})
 verdict(d, 9, "T-9")

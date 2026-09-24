@@ -82,7 +82,8 @@ Start-after edges in Orca:
 
 When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `prog.py land --pr <top>` merges every layer in one `merge-async` call.
 
-- Create it with `gh stack link <bottom> <top> [--base main]`, or `gh stack init` / `add` / `submit`. Confirm it with `gh pr view` (stack icon).
+- Create it with `gh stack link <bottom> <top> --base main`, or `gh stack init` / `add` / `submit`. Confirm it with `gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks, and `gh stack view` needs a locally tracked stack).
+- Bring a stack onto the latest base bottom-up: `gh pr update-branch` merges a PR's own base into it, so on the top it pulls only the layer below. `land` prints the sequence.
 - A lower layer is `waiting` ("lands with its stack from #top") while the top is not blocked. The top is `ready` only when every open layer below it is ready at its own head. A blocked top releases the lower layers to land alone.
 - Main CI runs once, on the top's merge commit. Record `main_green` or `main_red` for that sha only; the lower commits have no run of their own.
 - The layers of one chain count once against the concurrency cap, since they land as one merge. Start the whole chain together, even in the pilot.
