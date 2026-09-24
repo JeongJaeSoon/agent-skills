@@ -314,6 +314,11 @@
       "upstream": "skills/arena/SKILL.md",
       "local": "skills/arena/SKILL.md",
       "mode": "adapted"
+    },
+    {
+      "upstream": "skills/figure-it-out/SKILL.md",
+      "local": "skills/figure-it-out/SKILL.md",
+      "mode": "adapted"
     }
   ]
 }

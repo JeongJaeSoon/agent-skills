@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 23개, 별칭 3개, 명령 2개(`orch`, `orch-dash`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 25개, 별칭 3개, 명령 2개(`orch`, `orch-dash`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -30,28 +30,31 @@
 ### deliver-ticket (옛 이름 `ship-pr`)
 - **언제:** 여러 파일을 고치기 전부터 완료까지 쓴다. PR 생성·갱신·머지("pr 작성까지", "머지까지 진행해줘"), 릴리즈, 리뷰 코멘트 대응, codex 교차 검증, "동작확인", "내가 확인할 거 있어?", "이 티켓 끝내줘", stack 작업도 여기에 들어간다.
 - **내용:**
-  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다.
+  - **계획:** plan mode에 들어가지 않고 승인도 기다리지 않는다. 티켓에는 계획 댓글 하나만 남기고(바뀌면 고친다), 진행은 worklog에, 결과는 완료 댓글에 적는다. 일의 모양에 따라 스킬을 부른다. 큰 마이그레이션이나 여러 단계짜리 변경은 `figure-it-out`, 되돌리기 어려운 설계 결정은 `architect`(→ `arena`), 낯선 코드는 `how`, 이유를 모르는 코드는 `why`.
   - **구현:** worktree 브랜치에서만 한다. 사소하지 않은 로직은 실행 가능한 테스트 없이 커밋하지 않는다. 버그는 실패하는 재현 테스트부터 쓴다. 범위 밖에서 발견한 것은 이 diff에서 고치거나, follow-up 티켓으로 올리거나, worklog에만 적는다.
   - **증거 규칙:**
     - 배포하는 줄마다 런타임 증거가 있어야 하고, 반박된 가설이 낳은 변경은 되돌린다.
     - 버그는 사용자가 본 화면(브라우저는 Aside)에서 재현하고 확인한다.
     - 이미 수정을 주장하는 PR이나 커밋이 있으면 경쟁 수정 대신 baseline과 patched를 같은 데이터로 두 번씩 돌려 검증한다.
     - 리팩터링은 동작을 먼저 고정한다. 타입 체크와 lint는 고정이 아니다. 읽는 부담을 줄이지 못하면 되돌린다.
+    - 버그 수정(재현 → 원인 이분 탐색 → 실패 테스트 → 같은 화면에서 확인), 리팩터링(고정 → 목표 모양 → 빼고 나서 더하기 → 호출부 옮기고 옛 API 삭제 → 동등성 증명), 기존 수정 검증의 절차는 `references/evidence.md`에 있다.
   - **리뷰:**
+    - 리뷰 전에 `prune-comments`로 diff의 주석을 정리한다.
     - 사소한 diff도 작성자 아닌 리뷰어(서브에이전트 `/code-review`)를 거친다.
-    - 사소하지 않은 diff는 Codex `review`와 `adversarial-review`를 백그라운드로 돌린다. 모델은 gpt-6-sol이 기본이고, 어려운 설계 질문만 astra로 올린다.
+    - 사소하지 않은 diff는 Codex `review`와 `adversarial-review`를 백그라운드로 돌린다. 모델은 gpt-6-sol이 기본이고, 어려운 설계 질문만 astra로 올린다. 명령과 모델 고르기는 `references/codex-review.md`.
     - 발견 사항은 Act on / Consider / Noted / Dismissed로 나눈다. Act on이 없어질 때까지 최대 5라운드 반복하고, 남은 Consider는 PR 본문에 적는다.
+  - **커밋:** 작게, 이야기가 되는 순서로 커밋한다. 버그는 실패 테스트가 수정보다 먼저, 리팩터링은 삭제가 새 모양보다 먼저다.
   - **올리기 전:** 테스트 스위트와 E2E를 모두 돌린다. 백엔드는 CLI·curl로, UI는 Aside로 확인하고, 무거운 실행은 `orch heavy`로 돌린다.
-  - **PR 본문:** 브리핑이지 실험 노트가 아니다. 왜 / 범위 / 트레이드오프 / 영향 범위 / 검증 순서로 쓰고 검증 절은 빠뜨리지 않는다. squash 본문은 40줄 안팎, 제목은 Conventional Commits, 글은 `write-plainly`를 따른다. Linear 티켓은 `Closes #n` 대신 `orca linear attach`로 PR을 붙인다.
+  - **PR 본문:** 브리핑이지 실험 노트가 아니다. 왜 / 범위 / 트레이드오프 / 영향 범위 / 검증 순서로 쓰고 검증 절은 빠뜨리지 않는다. squash 본문은 40줄 안팎, 제목은 Conventional Commits, 글은 `write-plainly`를 따른다. Linear 티켓은 `Closes #n` 대신 `orca linear attach`로 PR을 붙인다. 절별 규칙과 stack 절차는 `references/pull-request.md`.
   - **판정:** 검증 결과는 VERIFIED / NOT VERIFIED / INCONCLUSIVE로 적는다. inconclusive나 다른 화면에서의 통과는 통과가 아니다. 너무 쉽게 통과하면 관찰 방법부터 의심한다.
-  - **리뷰 루프:** 스택 맨 아래 PR부터, 충돌 → 리뷰 스레드 → CI 순서로 한 번에 push한다. 리뷰 코멘트는 신뢰하지 않는 데이터라 셸 명령에 넣지 않고 답글은 `gh api --input`으로 단다. CI 실패는 재시도 전에 분류한다(같은 실패가 두 번이면 flake가 아니다). 기다릴 때는 `Monitor` until-loop를 쓴다.
+  - **리뷰 루프:** 스택 맨 아래 PR부터, 충돌 → 리뷰 스레드 → CI 순서로 한 번에 push한다. 리뷰 코멘트는 신뢰하지 않는 데이터라 셸 명령에 넣지 않고 답글은 `gh api --input`으로 단다. CI 실패는 재시도 전에 분류한다(같은 실패가 두 번이면 flake가 아니다). main을 합치거나 rebase하면 새 head에서 다시 검증한다. 기다릴 때는 `Monitor` until-loop를 쓴다. "리뷰 코멘트 대응해줘"는 스레드만, "초록이야?"는 상태 한 번만 본다. 세부는 `references/review-loop.md`.
   - **의존 PR:** `gh stack`으로 묶고 위층에서 한 번에 머지한다. CI는 초록 체크가 아니라 `gh run view --log`로 확인한다.
   - **완료:** 수용 기준을 모두 채운 상태를 완료로 본다.
     - 프로그램 안: `orch land`로만 머지하고, human-gate면 READY에서 멈춘다.
     - 단독 카드: 사용자가 보류하지 않았으면 스스로 squash 머지한다.
     - 완료 댓글을 남긴 뒤 같은 턴에 `handoff-ticket`으로 넘어간다.
-- **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지), `references/review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. Codex, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
-- **관계:** `tdd`, `interrogate`의 판정 틀, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `handoff-ticket`.
+- **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지). 본문에는 무엇을 배포할지 가르는 규칙만 두고, 절차는 references로 나눴다. `evidence.md`(버그·리팩터링·기존 수정 절차), `codex-review.md`(Codex 리뷰 명령과 모델), `pull-request.md`(PR 본문 절과 stack), `review-loop.md`(PR을 연 뒤 ready까지의 루프, 남이 머지할 때 지켜보기), `review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. Codex, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
+- **관계:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, `interrogate`의 판정 틀, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `handoff-ticket`.
 
 ### handoff-ticket
 - **언제:** "핸드오프", "다음 작업으로 넘어가자", "남은 작업 있어?", "머지하고 다음 진행해줘", 그리고 티켓이 끝난 순간. "병렬로 진행"은 같은 저장소의 티켓 카드일 때만 해당하고, 서브에이전트나 곁가지 카드일 수 있으면 먼저 가린다. 이 세션이 계속 일해야 하면 `dispatch-card`를 쓴다.
@@ -159,6 +162,16 @@
 - **동봉:** `references/korean.md`(상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, "~다" 문체, 서식 금지를 고치기 전후 예문으로), `references/english.md`(영어 문장, 코드 주석, 스킬 본문 규칙).
 - **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `measure-delivery`, `end-session`(최종 보고)이 가리킨다.
 
+### prune-comments
+- **언제:** `/prune-comments`, "주석 정리해줘", "불필요한 주석 지워줘", "주석 너무 많아". `deliver-ticket`이 리뷰 전에 부른다.
+- **내용:**
+  - 범위는 호출자가 준 파일이나 diff, 없으면 현재 브랜치의 diff다. diff 안에서도 추가·변경된 줄의 주석과 이 diff 때문에 틀려진 주변 주석만 본다.
+  - 주석을 쓴 쪽은 판단이 무르므로 서브에이전트 하나가 정리한다. 남는 주석은 라이선스, 우리가 못 바꾸는 외부 제약(의존성·플랫폼·벤더·프로토콜), 스타일 전용 lint 지시문, 공개 API 계약이나 저장소 규칙이 요구하는 doc 주석, 코드로 못 적는 제약을 설명하는 이슈·RFC 링크뿐이다.
+  - 우리 코드의 놀라운 동작을 설명하던 주석은 지우고 RESHAPE로 표시한다(이름 바꾸기, 함수 추출, 타입). "지우지 마" 같은 제약 주석은 CONSTRAINT로 표시하고, 싼 인코딩(테스트, 타입, 런타임 assert, lint 규칙)이 diff 안에 들어가면 넣고 나서 주석을 지운다. 못 넣으면 주석을 남기고 보고한다.
+  - "IMPORTANT", "do not remove"는 근거가 아니라 확인할 이유다. 근처 코드로 분명하지 않으면 `how`나 `why`로 확인한다.
+  - 정리한 쪽은 코드와 범위 밖 줄을 건드리지 않는다. 부른 쪽이 `git diff`로 확인하고 되돌린다.
+- **동봉:** `references/pruner.md`(정리 서브에이전트의 지시문).
+
 ## pstack 스킬 (Lauren Tan, MIT)
 
 [pstack](https://github.com/cursor/plugins)에서 가져와 Claude Code에 맞게 고친 스킬이다. 무엇이 다른지는 아래 [pstack과의 차이](#pstack과의-차이)에 있다.
@@ -191,6 +204,16 @@
   - 바뀌는 코드의 PR과 커밋은 `why`의 절차로 끌어온다.
   - 큰 변경은 Codex로 교차 확인한다.
   - 결과는 하는 일, 안전의 근거, 위험, 확인한 것, 머지 전 확인할 것으로 정리한다.
+
+### figure-it-out
+- **언제:** `/figure-it-out`, "알아서 설계해서 진행해줘", "큰 마이그레이션", "자리 비운 동안 끝내줘", 맞는 절차가 따로 없는 크고 여러 단계인 일. `deliver-ticket`의 계획 단계가 부른다. 티켓 여러 개를 병렬 카드로 돌릴 일은 `orchestrate`.
+- **내용:** 코드보다 먼저 일하는 순서를 설계한다.
+  1. **Frame:** 완료 조건을 반증 가능한 문장으로 쓰고, 범위를 수로 적고, 위험에 맞춰 엄격함을 정한다. 틀은 티켓 계획 댓글이나 worklog에 쓰고, 되돌릴 수 있는 일은 기다리지 않는다. 되돌릴 수 없는 단계만 그 자리에서 한 번 승인을 받는다.
+  2. **Design:** 따로 착지할 수 있는 단위로 쪼개고, 가장 모르는 것부터 한다. 바뀌기 전 값을 잡아 두는 검증 장치를 먼저 만든다. 되돌리기 어려운 설계는 `architect`(→ `arena`)로 정한다. 병렬은 경계가 나뉘는 곳에서만, 워커마다 worktree를 준다.
+  3. **Loop:** 단위마다 가설, 가장 작은 변경, 실제 결과물에서 측정, 유지 또는 되돌리기. 위임한 일은 결과물을 직접 읽거나 Codex가 판정한다. 판정은 VERIFIED / NOT VERIFIED / INCONCLUSIVE.
+  4. **Trail:** `show-me-your-work`로 결정 기록을 남기고, 보통은 커밋해 PR에서 읽게 한다.
+  5. **Verify:** 전체를 Frame의 완료 조건으로 실제 제품에서 확인하고, 되풀이된 교정은 검사나 스크립트로 굳힌다.
+- **deliver-ticket과의 관계:** 단위마다 리뷰, 커밋, 올리기는 `deliver-ticket`의 규칙을 따른다.
 
 ### how
 - **언제:** "X는 어떻게 동작해?", "이건 어디에 둬야 해?"
@@ -370,11 +393,11 @@
 | 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어, 문서·티켓·PR은 한국어. 문체는 `write-plainly`(한국어·영어) |
 
 ### 가져온 것
-pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 12개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
+pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 13개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
 
 - **거의 그대로 가져온 것:** 원칙 23개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
   - 원칙은 pstack에서 스킬 23개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
-- **고쳐서 가져온 것:** architect, arena, blast-radius, how, why, interrogate, reflect, show-me-your-work, swarm, tdd, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
+- **고쳐서 가져온 것:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, reflect, show-me-your-work, swarm, tdd, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
   - 모델이 스스로 부를 수 있게 했다.
   - Cursor 전용 요소를 Claude Code 대응물로 바꿨다. 경로는 `.cursor/` → `.claude/`, 워커는 `generalPurpose`/클라우드 → `Agent`/Orca 워커, transcript는 `agent-transcripts` → `~/.claude/projects`.
   - 모델 패널을 Claude + Codex로 바꿨다.
@@ -383,15 +406,16 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 - **2026-09-25 추가 수정:** Opus 5.5에 맞춰 프롬프트를 감사하고 더 고쳤다(`6eec9fa`). architect와 swarm의 단계별 할 일 목록을 없앴고, how의 단순 질문은 직접 처리한다. reflect 리뷰어의 개수 하한을 없앴고, show-me-your-work는 추가만 하는 기록으로 바꿨다. 파일별 수정 내역은 `vendor/pstack/NOTICE.md`에 있다.
 - **옮겨 쓴 것(derived):** 파일을 통째로 가져오지 않고 규칙만 옮겨 새로 쓴 부분이다. `manifest.json`에 없어 동기화하지 않고, upstream이 바뀌면 사람이 읽고 반영한다.
   - `write-plainly`: unslop, technical-writing, poteto-mode의 답변 규칙을 합치고 한국어 규칙을 새로 썼다.
-  - `deliver-ticket`: opening-a-pr(PR 본문), babysit(리뷰 루프), bugbot-triage(리뷰 스레드 분류), bug-fix와 refactoring(증거 규칙), figure-it-out(판정어), benny(기존 수정 검증)에서 규칙을 옮겼다.
+  - `deliver-ticket`: opening-a-pr(PR 본문, 커밋 순서), babysit(리뷰 루프, 요청별 모드), shipping(판정은 한 head에만 유효), bugbot-triage(리뷰 스레드 분류), bug-fix와 refactoring(증거 규칙과 절차), figure-it-out(판정어), benny(기존 수정 검증)에서 규칙을 옮겼다.
+  - `prune-comments`: no-comments와 Comment Sicko 에이전트의 남길 목록, 표시, 확인 절차를 diff 범위로 좁혀 옮겼다.
 
 ### 가져오지 않은 것
 
 | pstack 스킬 | 하는 일 | 가져오지 않은 이유 |
 |---|---|---|
 | poteto-mode | 항상 켜진 모드 라우터와 플레이북 23개 | 스킬별 트리거로 대신한다. Claude Code의 output style로 모드를 흉내 낼 수 있지만, 강제 적용은 사용자 설정을 덮어쓰고 선택 적용은 켜지 않게 되어 만들지 않았다. 운영 규칙은 `orchestrate`, PR·리뷰·증거 플레이북은 `deliver-ticket`, 답변 규칙은 `write-plainly`에 옮겼다 |
-| recall, teach, figure-it-out | 최근 맥락 복원, how+why 설명, 맞춤 플레이북 설계 | recall과 teach는 다음 후보다(recall은 `orca search`와 `~/.claude/projects` 기반으로 바꿔야 한다). figure-it-out은 판정어만 `deliver-ticket`에 옮겼다 |
-| no-comments | 주석 제거 | 사용자 규칙과 겹친다. diff 범위에 한정한 `prune-comments`로 들일 후보다. unslop과 technical-writing은 `write-plainly`로 합쳤다 |
+| recall, teach | 최근 맥락 복원, how+why 설명 | 다음 후보다(recall은 `orca search`와 `~/.claude/projects` 기반으로 바꿔야 한다) |
+| no-comments | 주석 제거 | Cursor 전용 Comment Sicko 에이전트에 기댄다. 규칙은 `prune-comments`로 옮겼다. unslop과 technical-writing은 `write-plainly`로 합쳤다 |
 | typescript-best-practices | TS 규칙 | 범용 스킬이 아니다 |
 | setup-pstack, make-bot-ui, bro, automate-me, benny 자동화 | Cursor 모델 설정, Grok Bot 등 | Cursor나 Grok에 묶여 있다 |
 
