@@ -56,7 +56,8 @@ PROGRAM: <slug>
 
 GOAL        Catch what per-PR CI cannot: tickets that do not do what they claim, main that no longer
             works end to end, and code that drifted from the design.
-LANES       Run all three continuously; fan each unit out to a subagent (swarm), in parallel.
+LANES       Run all three continuously. Give a unit its own subagent (swarm) when it is sizeable and independent
+            (driving one ticket on main, one E2E round), in parallel; do small checks yourself.
   1 Ticket verification  For every landed ticket (orch status, `landed` events), one verifier
                           drives the ticket's acceptance criteria on main with the repo's
                           verify-<app> skill. PASS / PASS+NOTES / FAIL with what it drove. Oldest first.

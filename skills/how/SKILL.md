@@ -27,12 +27,7 @@ Each explorer gets the prompt in `references/explorer-prompt.md` with its angle 
 
 ## Step 2b. Direct Explain (simple questions)
 
-Spawn one `Agent` subagent that explores and explains in one pass:
-
-- `subagent_type`: `Explore` (read-only)
-- `model`: `opus`
-
-Build its prompt from `references/explainer-prompt.md` without the explorer-findings section. Go to Step 4.
+Explore and explain it yourself in one pass, following the Instructions and Output Format in `references/explainer-prompt.md` (skip its explorer-findings parts). Go to Step 4.
 
 ## Step 3. Synthesize (complex questions only)
 

@@ -61,7 +61,7 @@ For each approved Accepted item, follow the Routing field exactly:
 - `tune description: <skill path>` (the skill exists but didn't trigger when it should have): hand to **skill-creator** and run its description-optimization loop.
 - `new skill via skill-creator: <kebab-name>`: hand creation to **skill-creator**. Do not invent the shape ad hoc.
 
-If your environment ships a SKILL.md validator, run it on every touched skill before declaring done. Skip this step if it doesn't.
+Before declaring done, run `claude plugin validate <checkout>` and fix what it reports.
 
 ### 6. Summarize for the user
 

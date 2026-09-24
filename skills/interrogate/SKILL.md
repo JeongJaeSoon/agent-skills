@@ -52,13 +52,7 @@ The same filled template goes to all reviewers, so every model applies the code-
 
 ## Step 4, Synthesize
 
-As results come back, build a unified picture:
-
-1. **Parse all findings** from the reviewers
-2. **Identify consensus**. Findings raised by 2+ models independently are highest signal.
-3. **Identify lone-model findings**. Still worth reading, but weight accordingly.
-4. **Deduplicate**. Different models may describe the same issue differently. Merge these and note which models raised it.
-5. **Note disagreements**. If one model flags something and another explicitly says the opposite, that's useful context for the verdict.
+Merge the reviewers' findings into one list. Different models describe the same issue differently: merge those and note which models raised each. A finding raised independently by 2+ models is the strongest signal; a lone-model finding still gets read, weighted accordingly. Where one model explicitly contradicts another, keep both sides for the verdict and the Agreement Map.
 
 ## Step 5, Lead Judgment
 

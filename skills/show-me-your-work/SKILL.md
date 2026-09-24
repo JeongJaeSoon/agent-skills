@@ -33,7 +33,7 @@ ts	phase	decision	why	evidence	result
 
 ## Logging a row
 
-Write each entry the way you'd tell a teammate what you did. Plain words, concrete actions, no AI speak or abstract jargon.
+Write each entry the way you'd tell a teammate what you did: plain words, concrete actions.
 
 Use the helper `bash "${CLAUDE_SKILL_DIR}/scripts/log.sh" <logfile> <phase> <decision> <why> <evidence> <result>`. It stamps `ts`, writes the header on first use, strips stray tabs/newlines, and prefixes any cell starting with `=`, `+`, `-`, or `@` with a single quote. A bare `printf` appending a row works too, but mind those same bytes if cells come from generated or user-supplied text.
 
@@ -54,12 +54,11 @@ Commit it only when the work is ambitious enough that a reviewer needs the trail
 
 At the end of the run, before handing back, check the log told the truth. Read this run's transcript: `~/.claude/projects/<cwd with every / and . replaced by ->/<session-id>.jsonl` for this session's working directory. Don't glob across `~/.claude/projects/*/`. That reads unrelated private chats. Walk the log against what actually happened:
 
-- Every row maps to a real action. Cut invented or aspirational entries.
+- Every row maps to a real action. An invented or aspirational entry gets a new row that supersedes it.
 - Each row's evidence resolves and shows what the row claims.
 - A fork, pivot, or abandoned approach that shaped the work but isn't logged is a gap. Add it.
-- Drop padding.
 
-Fix the log, not the story. If the work diverged from what a row claims, the row is wrong.
+Fix the log, not the story. If the work diverged from what a row claims, the row is wrong: append the correction, append-only as above.
 
 ## Cross-model review of the trail
 

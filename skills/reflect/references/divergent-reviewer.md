@@ -32,7 +32,7 @@ Two valid finding shapes:
 
 The "skill should have been invoked but wasn't" bullet above is the canonical missed-trigger case. Route those to `tune description`. If the skill was neither invoked nor a missed-trigger candidate, drop it.
 
-Surface 3-5 durable learnings. For each:
+Surface only the learnings that would change what a future agent does, strongest first. An empty list is a valid answer. For each:
 - Principle: one sentence naming the contrarian or second-order observation. Don't restate the obvious learning. Name the one beneath it.
 - Evidence: the exact moment in the transcript (turn number or short quote, including what was said AND what wasn't).
 - Routing: most relevant existing skill (give the `SKILL.md` path as it appears in the transcript), OR `tune description: <skill path>` when the skill should have triggered but didn't, OR "new skill: <kebab-name>".

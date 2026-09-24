@@ -9,7 +9,7 @@ Create it at `Project/<project>/program-<slug>.md` through `use-notes` (create o
 
 - 목표: <사람이 준 목표 한 문장>
 - slug `<slug>` · Orca run `<run id>` · 저장소 `<owner/repo>` · 트래커 `<adapter>:<project>`
-- 대시보드: `orch-dash serve` (모든 프로그램을 띄운다) → <URL>
+- 대시보드: `orch init`·`orch status`가 띄운다(`orch-dash ensure`, 모든 프로그램) → <URL>
 - 워커 모델: <agent/model, 기본은 코디네이터와 같은 모델> · 검증 워커는 다른 계열(codex)
 - 머지 정책: autonomous | human-gate · 동시성 천장 6 · 마감 <ISO8601 또는 없음>
 - 착지: 일반 레인은 준비되면 병렬 착지, 독점 레인은 base당 하나씩 착지 순서대로(등급 main-fix → gate → urgent → normal, 대기 2시간이 넘으면 urgent) · 의존 체인은 stack으로 한 번에 착지 (`orch queue <slug>`)

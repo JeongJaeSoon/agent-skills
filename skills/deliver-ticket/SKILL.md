@@ -1,6 +1,6 @@
 ---
 name: deliver-ticket
-description: Use when working a ticket from the first edit to done — before multi-file work, before opening, updating or merging a PR ("PR 올려줘", "머지해줘", "ship it"), before declaring a ticket done ("이 티켓 끝내줘"), or when reviewing, stacking or verifying a change on its way to main. Formerly ship-pr.
+description: Use when working a ticket from the first edit to done — before multi-file work, before opening, updating or merging a PR ("PR 올려줘", "머지해줘", "ship it"), before declaring a ticket done ("이 티켓 끝내줘"), or when reviewing, stacking or verifying a change on its way to main.
 ---
 
 # Delivering a ticket
@@ -82,9 +82,7 @@ node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs ta
 ```
 
 A design you are unsure of is exactly that case: run `adversarial-review` for the sweep, and
-put the one question it cannot settle to astra as a `task`. Astra runs at `medium`, or `low` for a bounded question — never `high`/`xhigh` (the user's call, 2026-09-24). Do not reach for astra by default —
-sol is the workhorse, astra is the escalation. Start them in
-the background and do other work while they run.
+put the one question it cannot settle to astra as a `task`. Astra runs at `medium`, or `low` for a bounded question — never `high`/`xhigh` (the user's call).
 
 Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
 Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
@@ -212,7 +210,7 @@ link, and each criterion with the evidence that it holds (`use-tracker`). Update
 (`use-notes`).
 
 **Say what the user should check themselves — without being asked.** First verify everything
-that can be verified: if a check is only tedious, delegate it to a subagent and run it. What is
+that can be verified, the merely tedious checks included. What is
 left for the user is what genuinely needs them — a judgment call you made on their behalf, how
 something feels to use, data or an account only they have, a decision the ticket left open.
 Name each one with the exact command or URL, and say why it is theirs. If nothing is left, say

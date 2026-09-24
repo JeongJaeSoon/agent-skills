@@ -117,7 +117,7 @@ Write the entire report as text **first**, then run the ending command or call
 `EndConversation` as the **last** tool call of that turn, and stop. Every ending here closes the
 channel — the Orca ones kill the process, `EndConversation` seals the conversation — so whatever
 you planned to say afterwards is never delivered. Never end a turn promising to clean
-up "next turn", and never write or think anything after `EndConversation`.
+up "next turn", and never write anything after `EndConversation`.
 
 The report says, in Korean: what this session delivered, where the record lives (worklog,
 ticket, PR), what the user should still check themselves — or plainly that nothing is left,
@@ -129,7 +129,7 @@ is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
 ## Common mistakes
 
 - **"제가 세션을 종료할 수는 없습니다" and pointing at `/exit`.** Orca can end it, and
-  `EndConversation` can end the conversation. This skill exists because that answer was given.
+  `EndConversation` can end the conversation.
 - **Deciding from cwd instead of `orca worktree current`.** A non-git folder is still an
   Orca-managed workspace. Checking cwd is how you conclude "no card" and reach for the wrong tool.
 - **`orca worktree rm` on `isMainWorktree: true`.** That selector is the repo checkout or the

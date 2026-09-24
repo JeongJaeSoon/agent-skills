@@ -8,23 +8,13 @@ description: "Sketch types, signatures, and module structure before code, then s
 
 Design before implementing. Sketch types, function signatures, class shapes, and module boundaries with `not implemented` bodies and pseudocode. Synthesize across multiple model perspectives, then fill in code against the chosen sketch. If implementation proves the sketch wrong, throw it out and redesign.
 
-## Start
-
-Open a todolist with one entry per phase before starting.
-
-1. Ground
-2. Sketch
-3. Agree
-4. Implement
-5. Scrap
-
 A **<name>** principle skill below is `references/principle-<name>.md` in the **principles** skill.
 
 ## Phase A: Ground the problem
 
 Build a real mental model of every system the new code touches. Run the **how** skill over the relevant subsystems.
 
-Naming a file isn't grounding. Produce the traced model `how` prescribes. If the design redefines ownership or layering, also recover why the existing shape is the way it is (`git log -S` / `git blame` on the load-bearing lines, and the PRs and tickets they cite) so the rationale becomes a constraint, not a guess. pstack's **why** skill, which upstream uses here, is not installed.
+Naming a file isn't grounding. Produce the traced model `how` prescribes. If the design redefines ownership or layering, also recover why the existing shape is the way it is (`git log -S` / `git blame` on the load-bearing lines, and the PRs and tickets they cite) so the rationale becomes a constraint, not a guess.
 
 Skip Phase A only when the work is genuinely greenfield with no surrounding system to integrate.
 
@@ -46,7 +36,7 @@ Screen every candidate against [`references/design-red-flags.md`](references/des
 
 Compare viable candidates on interface depth. Prefer the design that hides more complexity behind a smaller, simpler public surface. A rich interface can keep call chains short by concentrating capability instead of scattering it across layers.
 
-You synthesize the viable candidates into one design package: pick the base, graft what each other candidate did better, and record the choice in the rationale's "Synthesis decision" section. (Upstream hands this step to pstack's **arena** skill, which is not installed here.)
+You synthesize the viable candidates into one design package: pick the base, graft what each other candidate did better, and record the choice in the rationale's "Synthesis decision" section.
 
 ## Phase C: Agree (opt-in)
 

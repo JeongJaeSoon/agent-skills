@@ -8,15 +8,6 @@ description: "Fan out N parallel workers, drain them, and return one report. Use
 
 Fan out N parallel workers. They may cover separate slices, race the same brief, or mix both. The parent waits, aggregates, and returns one report.
 
-## Start
-
-Open a todolist with one entry per phase before launching anything.
-
-1. Frame
-2. Fan out
-3. Aggregate
-4. Report
-
 ## Phase A: Frame
 
 1. State the done predicate and the artifact or report the swarm must return.
