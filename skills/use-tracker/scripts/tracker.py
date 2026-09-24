@@ -7,7 +7,7 @@
     tracker.py [...] create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
     tracker.py [...] label ID --add L [--add L2]
     tracker.py [...] comment ID --body-file F
-    tracker.py [...] transition ID --to started|completed|canceled
+    tracker.py [...] transition ID --to started|review|completed|canceled
 
 stdout is always JSON; errors go to stderr with a non-zero exit.
 TRACKER_FIXTURES=<dir> serves list/get from <dir>/issues.json and refuses writes.
@@ -35,7 +35,9 @@ DEFAULT_CONFIG = {
     },
 }
 DEFAULT_CONFIG_PATH = "~/.claude/agent-skills.json"
-TRANSITION_TARGETS = ("started", "completed", "canceled")
+TRANSITION_TARGETS = ("started", "review", "completed", "canceled")
+# Lifecycle order: a transition never moves a ticket back, and a closed ticket stays closed.
+STAGE = {"triage": 0, "backlog": 1, "unstarted": 2, "started": 3, "completed": 4, "canceled": 4}
 
 
 class TrackerError(Exception):
@@ -98,6 +100,18 @@ def read_body(path):
             return fh.read()
     except OSError as exc:
         raise TrackerError(f"cannot read body file {path}: {exc}")
+
+
+def already_there(current, target, state_name):
+    """Whether moving `current` to `target` (resolved to the state `state_name`) would repeat or undo progress.
+    `review` is a started state, so it may follow another started state such as In Progress."""
+    have, want = STAGE.get(current.get("state_type"), -1), STAGE["started" if target == "review" else target]
+    return have > want or current.get("state") == state_name or (have == want and target != "review")
+
+
+def unchanged(issue_id, current):
+    return {"ok": True, "op": "transition", "id": issue_id, "state": current.get("state"),
+            "state_type": current.get("state_type"), "unchanged": True}
 
 
 def issue_template():
@@ -336,13 +350,24 @@ class LinearAdapter:
         self._check_id(issue_id, "transition")
         team = issue_id.rsplit("-", 1)[0]
         states = self._orca("team", "states", "--team", team).get("states") or []
-        matches = [s for s in states if (s.get("type") or "").lower() == target]
-        if not matches:
-            names = ", ".join(f"{s.get('name')} ({s.get('type')})" for s in states)
-            raise TrackerError(f"transition {issue_id}: team {team} has no '{target}' state; states: {names}")
+        names = ", ".join(f"{s.get('name')} ({s.get('type')})" for s in states)
+        if target == "review":
+            # orca-linear's rule: "In Review", else the one started state whose name says review.
+            matches = [s for s in states if (s.get("name") or "").lower() == "in review"] or [
+                s for s in states if (s.get("type") or "").lower() == "started" and "review" in (s.get("name") or "").lower()]
+            if len(matches) != 1:
+                raise TrackerError(f"transition {issue_id}: team {team} has no single review state, left unchanged; states: {names}")
+        else:
+            matches = [s for s in states if (s.get("type") or "").lower() == target]
+            if not matches:
+                raise TrackerError(f"transition {issue_id}: team {team} has no '{target}' state; states: {names}")
         state = min(matches, key=lambda s: s.get("position") or 0)
+        current = self.get(issue_id)
+        if already_there(current, target, state["name"]):
+            return unchanged(issue_id, current)
         self._orca("status", "set", issue_id, "--to", state["name"])
-        return {"ok": True, "op": "transition", "id": issue_id, "state": state["name"], "state_type": target}
+        return {"ok": True, "op": "transition", "id": issue_id, "state": state["name"],
+                "state_type": "started" if target == "review" else target}
 
 
 # ---------------------------------------------------------------- jira (REST v3)
@@ -353,7 +378,7 @@ JIRA_CANCEL_RESOLUTIONS = {"won't do", "wont do", "cancelled", "canceled", "dupl
 JIRA_CANCEL_NAME = re.compile(r"cancel|won'?t|reject|declin|duplicate", re.I)
 JIRA_CATEGORY = {"new": "unstarted", "indeterminate": "started", "done": "completed"}
 JIRA_PRIORITY = {"highest": 1, "high": 2, "medium": 3, "low": 4, "lowest": 4}
-TARGET_CATEGORY = {"started": "indeterminate", "completed": "done", "canceled": "done"}
+TARGET_CATEGORY = {"started": "indeterminate", "review": "indeterminate", "completed": "done", "canceled": "done"}
 
 
 def adf_to_text(node):
@@ -558,18 +583,25 @@ class JiraAdapter:
             to = t.get("to") or {}
             if ((to.get("statusCategory") or {}).get("key") or "").lower() != category:
                 return False
+            if target == "review":
+                return "review" in (to.get("name") or "").lower()
             if category != "done":
                 return True
             is_cancel = bool(JIRA_CANCEL_NAME.search(f"{t.get('name', '')} {to.get('name', '')}"))
             return is_cancel == (target == "canceled")
 
-        pick = next((t for t in transitions if matches(t)), None)
-        if not pick:
+        picks = [t for t in transitions if matches(t)]
+        if not picks or (target == "review" and len({(t.get("to") or {}).get("name") for t in picks}) > 1):
             avail = ", ".join(f"{t.get('name')} -> {(t.get('to') or {}).get('name')}" for t in transitions)
-            raise TrackerError(f"transition {issue_id}: no transition leads to '{target}'; available: {avail or 'none'}")
+            raise TrackerError(f"transition {issue_id}: no single transition leads to '{target}', left unchanged;"
+                               f" available: {avail or 'none'}")
+        pick = picks[0]
+        current = self.get(issue_id)
+        if already_there(current, target, (pick.get("to") or {}).get("name")):
+            return unchanged(issue_id, current)
         self._request("POST", path, {"transition": {"id": pick["id"]}})
-        return {"ok": True, "op": "transition", "id": issue_id,
-                "state": (pick.get("to") or {}).get("name"), "state_type": target}
+        return {"ok": True, "op": "transition", "id": issue_id, "state": (pick.get("to") or {}).get("name"),
+                "state_type": "started" if target == "review" else target}
 
 
 # ---------------------------------------------------------------- CLI

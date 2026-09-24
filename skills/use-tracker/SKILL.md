@@ -36,7 +36,7 @@ python3 $T children [ID] [--project P]   # ID's direct children; no ID: P's top-
 python3 $T create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
 python3 $T label ID --add L [--add L2]
 python3 $T comment ID --body-file F
-python3 $T transition ID --to started|completed|canceled
+python3 $T transition ID --to started|review|completed|canceled
 ```
 
 Global flags: `--adapter linear|jira` (overrides config), `--config PATH`.
@@ -70,9 +70,12 @@ Every skill reasons in these, never in a tracker's state names:
 | `completed` | done |
 | `canceled` | won't do, duplicate, canceled |
 
-Open = `triage|backlog|unstarted|started`. Closed = `completed|canceled`. Only `started`,
-`completed`, and `canceled` are transition targets; don't move a closed ticket back or move a
-`started` ticket to an earlier state.
+Open = `triage|backlog|unstarted|started`. Closed = `completed|canceled`. Only `started`
+(and `review`, a `started` state), `completed`, and `canceled` are transition targets; don't move a closed ticket back or move a
+`started` ticket to an earlier state. `transition` reads the current state first and leaves the
+ticket alone (`"unchanged": true`) when it is already there or further along, so `--to started` on a
+ticket In Review does nothing. `--to review` picks "In Review", or else the one `started` state whose
+name contains "review"; with none or several it changes nothing and exits 1.
 
 ## Follow-up (derived) tickets
 

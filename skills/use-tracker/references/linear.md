@@ -31,7 +31,7 @@ replaces the template body rather than merging with it, so passing both discards
 | File | `save_issue` (`team`, `project`, `title`, `description`, `labels`, `parentId`, `relatedTo`) | `create --title T --project P --team K --body-file F [--label L] [--parent ID]` | `create ...` |
 | Add labels | `save_issue` (`id`, `addLabels`) | `label add ID --label L` | `label ID --add L` |
 | Comment | `save_comment` | `comment add ID --body-file F` | `comment ID --body-file F` |
-| Move | `save_issue` (`id`, `state` = type or name) | `status set ID --to "<exact state name>"` | `transition ID --to started\|completed\|canceled` |
+| Move | `save_issue` (`id`, `state` = type or name) | `status set ID --to "<exact state name>"` | `transition ID --to started\|review\|completed\|canceled` |
 | Relate | `save_issue` (`id`, `relatedTo`) | `relation add ID --related OTHER --type related` | `create --related OTHER` |
 | Block (dependency) | `save_issue` (`id`, `blockedBy` / `blocks`) | `relation add ID --related OTHER --type blocked-by\|blocks` | — |
 | Read a template | `get_template` (name from `templates`) | — | — |

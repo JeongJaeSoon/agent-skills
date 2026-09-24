@@ -50,6 +50,9 @@ if cmd == "issue":
     if not re.match(r"^[A-Za-z][A-Za-z0-9_]*-\d+$", ident) or ident == "ENG-7":
         fail("linear_issue_required", "Pass a Linear issue identifier or issue URL.")
     issue = dict(sample[0], identifier=ident)
+    if os.environ.get("FAKE_ORCA_STATE"):
+        name, kind = os.environ["FAKE_ORCA_STATE"].split(":")
+        issue["state"] = {"name": name, "type": kind}
     ok({"issue": issue})
 if cmd == "search":
     if rest[0] == "94S-1":
@@ -356,11 +359,31 @@ class LinearCli(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(self.env.orca_calls()[-1][:5], ["linear", "comment", "add", "ENG-10", "--body-file"])
 
-        for target, name in (("started", "In Progress"), ("completed", "Done"), ("canceled", "Canceled")):
-            proc, out = self.env.run("transition", "ENG-10", "--to", target)
+        for target, name in (("started", "In Progress"), ("review", "In Review"), ("completed", "Done"),
+                             ("canceled", "Canceled")):
+            proc, out = self.env.run("transition", "ENG-10", "--to", target, FAKE_ORCA_STATE="Todo:unstarted")
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(out["state"], name)
             self.assertEqual(self.env.orca_calls()[-1][:6], ["linear", "status", "set", "ENG-10", "--to", name])
+
+    def test_transition_never_moves_back(self):
+        for current, target, moves_to in (("In Review:started", "started", None),
+                                          ("In Progress:started", "started", None),
+                                          ("In Progress:started", "review", "In Review"),
+                                          ("In Review:started", "review", None),
+                                          ("In Review:started", "completed", "Done"),
+                                          ("Done:completed", "started", None),
+                                          ("Done:completed", "review", None),
+                                          ("Canceled:canceled", "completed", None)):
+            before = len(self.env.orca_calls())
+            proc, out = self.env.run("transition", "ENG-10", "--to", target, FAKE_ORCA_STATE=current)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            sets = [c for c in self.env.orca_calls()[before:] if c[1] == "status"]
+            if moves_to:
+                self.assertEqual(sets[0][:6], ["linear", "status", "set", "ENG-10", "--to", moves_to])
+            else:
+                self.assertEqual((sets, out["state"], out.get("unchanged")), ([], current.split(":")[0], True),
+                                 f"{current} --to {target}")
 
     def test_writes_refuse_ids_orca_cannot_parse(self):
         proc, _ = self.env.run("label", "9X-5", "--add", "bug")
@@ -467,10 +490,19 @@ class JiraCli(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(self.jira.requests[-1][2], {"transition": {"id": tid}})
 
+        proc, out = self.env.run("transition", "ABC-3", "--to", "started")
+        self.assertEqual((out["state"], out.get("unchanged")), ("In Progress", True))
+        self.assertEqual(self.jira.requests[-1][0], "GET", "already started: nothing posted")
+        self.jira.transitions.append(
+            {"id": "41", "name": "Ask review", "to": {"name": "In Review", "statusCategory": {"key": "indeterminate"}}})
+        proc, out = self.env.run("transition", "ABC-3", "--to", "review")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.jira.requests[-1][2], {"transition": {"id": "41"}})
+
         self.jira.transitions = self.jira.transitions[:1]
         proc, _ = self.env.run("transition", "ABC-2", "--to", "completed")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("no transition leads to 'completed'", proc.stderr)
+        self.assertIn("no single transition leads to 'completed'", proc.stderr)
 
     def test_bad_token_error_never_leaks_secret(self):
         proc, _ = self.env.run("get", "ABC-1", JIRA_API_TOKEN="wrong-token-zzz")
