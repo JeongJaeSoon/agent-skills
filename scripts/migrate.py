@@ -17,7 +17,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 SKILLS = pathlib.Path(os.environ.get("CLAUDE_SKILLS_DIR", "~/.claude/skills")).expanduser()
 SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS", "~/.claude/settings.json")).expanduser()
 PLUGIN_CMDS = [["claude", "plugin", "marketplace", "add", "JeongJaeSoon/agent-skills"],
-               ["claude", "plugin", "install", "agent-skills@agent-skills"]]
+               ["claude", "plugin", "install", "agent-skills@jeongjaesoon"]]
 
 
 def old_rule(rule):

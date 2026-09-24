@@ -14,10 +14,10 @@ Claude Code 플러그인 하나로 설치한다. 스킬, `orch`·`orch-dash` 명
 
 ```bash
 claude plugin marketplace add JeongJaeSoon/agent-skills
-claude plugin install agent-skills@agent-skills
+claude plugin install agent-skills@jeongjaesoon
 ```
 
-Claude Code 안에서는 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@agent-skills`. 버전을 고정하지 않아 커밋마다 새 버전이다. 갱신은 `claude plugin marketplace update agent-skills` 뒤 `claude plugin update agent-skills@agent-skills`, 새 세션부터 반영된다.
+Claude Code 안에서는 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon`. 버전을 고정하지 않아 커밋마다 새 버전이다. 갱신은 `claude plugin marketplace update jeongjaesoon` 뒤 `claude plugin update agent-skills@jeongjaesoon`, 새 세션부터 반영된다.
 
 - 스킬 이름은 `/agent-skills:<이름>`. 다른 플러그인과 겹치지 않으면 `/<이름>`도 된다.
 - 권한: 플러그인은 권한 규칙을 설정으로 실을 수 없어 `hooks/guard.py`가 대신 결정한다. 이 플러그인의 스킬, `orca orchestration` 명령(reset·worker-abandon·gate-resolve 제외), `orch` 명령(`heavy`·`set`·`init` 제외)을 허용하고, 다른 터미널의 Orca 메일함 읽기를 거부한다. 나머지는 평소 권한 흐름을 탄다. 자세한 규칙은 [스킬 카탈로그](docs/skills.md#플러그인이-대신-내리는-권한-결정).
