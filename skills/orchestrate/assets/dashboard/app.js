@@ -578,6 +578,14 @@ function motionOf(w) {
   if (m.parked) return { tone: "", moving: false, text: "waiting for its own wake-up", since: m.since };
   return { tone: mins >= 15 ? "bad" : mins >= 3 ? "warn" : "", moving: false, text: "turn ended — waiting for input", since: m.since };
 }
+// What an open predicate item waits on: its live worker's motion, or no worker at all. A bar stuck at
+// n-1/n otherwise looks like a stalled program when the last item is simply waiting.
+function predWait(st, p) {
+  const w = (st.workers || []).find((x) => x.ticket === p.id && x.stage !== "settled" && x.liveness !== "exited");
+  if (!w) return { text: p.state_type === "started" ? "no live worker" : "not started", since: null };
+  const mo = motionOf(w);
+  return { text: mo.text, since: mo.since, tone: mo.tone };
+}
 const moveDot = (mo) => mo.moving ? '<span class="pulse" aria-label="moving"></span>' : `<span class="dot-s ${mo.tone ? "tone-" + mo.tone : ""}"></span>`;
 const agoSpan = (iso) => iso ? `<span class="muted" data-age-text="${esc(iso)}">${ageText(iso)}</span>` : "";
 
@@ -624,6 +632,15 @@ function attentionItems(st) {
     ${sec && sec !== "overview" ? `<a class="go" href="#/${slug}/${sec}">${esc(SECTIONS.find((x) => x.id === sec).label)} ${icon("arrow")}</a>` : ""}</li>`);
 }
 
+function predSub(st, pct) {
+  const s = st.summary || {};
+  if (pct == null) return "no tracker data";
+  const open = (st.predicate || []).filter((p) => p.state_type !== "completed");
+  if (!open.length) return s.final_check ? "final check recorded" : "all done · final check not recorded";
+  if (open.length > 1) return `${open.length} items open`;
+  const pw = predWait(st, open[0]);
+  return `waiting on ${esc(open[0].id)} · ${esc(pw.text)}${pw.since ? ` ${agoSpan(pw.since)}` : ""}`;
+}
 function kpi(label, value, sub, { extra = "", src = "" } = {}) {
   return `<div class="card kpi" ${src ? `data-src="${src}"` : ""}><div class="eyebrow">${label}</div><div class="v">${value}</div>${extra}<div class="sub">${sub}</div></div>`;
 }
@@ -704,7 +721,7 @@ function viewOverview(st) {
     ${budget}
   </div>
   <div class="kpis" style="--n:${st.merge_policy === "human-gate" ? 4 : 6}">
-    ${kpi("Predicate", pct == null ? "—" : `${pct}%<small>${s.predicate_done}/${s.predicate_total}</small>`, pct == null ? "no tracker data" : s.final_check ? "final check recorded" : "final check not recorded", { extra: segs, src: "tracker" })}
+    ${kpi("Predicate", pct == null ? "—" : `${pct}%<small>${s.predicate_done}/${s.predicate_total}</small>`, predSub(st, pct), { extra: segs, src: "tracker" })}
     ${kpi("Main CI", tag(s.main || "—", mt, mt === "good" ? "check" : mt === "bad" ? "fail" : "clock"), mainAt, { src: "ledger" })}
     ${kpi("In-flight / cap", `${num(s.in_flight)}<small>/ ${num(s.cap)}</small>`, s.spare?.slots ? `${s.spare.slots} free · ceiling ${num(s.ceiling)}` : `ceiling ${num(s.ceiling)}`, { extra: cells, src: "orca" })}
     ${kpi("Oldest open PR", oldest ? `<span class="age-v ${ageTone(oldest.since) ? "tone-" + ageTone(oldest.since) : ""}" data-age-text="${esc(oldest.since)}">${ageText(oldest.since)}</span>` : "—", oldest ? `#${oldest.pr} · opened ${relSpan(oldest.since)}` : "no open PRs", { src: "github" })}
@@ -728,6 +745,7 @@ function viewOverview(st) {
       <ul class="rows">${(st.predicate || []).map((p) => `<li>
         <span class="ic ${p.state_type === "completed" ? "tone-good" : p.state_type === "started" ? "tone-accent" : ""}">${icon(p.state_type === "completed" ? "check" : p.state_type === "started" ? "clock" : "issues")}</span>
         <span class="mono" style="width:78px;flex:none">${link(p.url, esc(p.id))}</span><span class="grow ellipsis" title="${esc(p.title)}">${esc(p.title || "")}</span>
+        ${p.state_type === "completed" ? "" : (() => { const pw = predWait(st, p); return `<span class="muted hide-sm ${pw.tone ? "tone-" + pw.tone : ""}">${esc(pw.text)}${pw.since ? ` · ${agoSpan(pw.since)}` : ""}</span>`; })()}
         <span class="hide-sm">${tag(p.state || "unknown", STATE_TONE[p.state_type] ?? "")}</span></li>`).join("") || `<li class="muted">No predicate set.</li>`}</ul></div>
     <div class="card" data-src="ledger"><div class="card-head"><h3>Recent activity</h3><span class="aside"><a class="link" href="#/${encodeURIComponent(st.slug)}/activity">All</a></span></div>
       <ul class="rows feed">${(st.activity || []).slice(0, 8).map(evRow).join("") || `<li class="muted">No events yet.</li>`}</ul></div>
