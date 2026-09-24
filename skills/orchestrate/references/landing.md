@@ -84,6 +84,7 @@ When PRs must land in order (a dependency chain, consecutive migrations, layers 
 
 - Create it with `gh stack link <bottom> <top> [--base main]`, or `gh stack init` / `add` / `submit`. Confirm it with `gh pr view` (stack icon).
 - A lower layer is `waiting` ("lands with its stack from #top") while the top is not blocked. The top is `ready` only when every open layer below it is ready at its own head. A blocked top releases the lower layers to land alone.
+- The layers of one chain count once against the concurrency cap, since they land as one merge. Start the whole chain together, even in the pilot.
 - Stacked PRs refuse `gh pr merge`. `land` uses `merge-async` and polls until every layer is MERGED. If any layer is exclusive, the stack takes the exclusive lane as one unit.
 
 ## Feature integration branches
