@@ -124,7 +124,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
 
 ## What reaches the human
 
-The dashboard, plus the digest line in the program note, batched. A decision you wait on the human for is also registered with `orch decide add` and closed with `orch decide done` once answered; a dashboard button closes it itself (`references/top-level.md`, "Asking the human"). The digest holds open gates, a proposed predicate, irreversible acts, and any standing order that contradicts reality. Never retries, CI flakes, review-thread triage, rebases, or "should I continue".
+The dashboard, plus the digest line in the program note, batched. A decision you wait on the human for is also registered with `orch decide add` and closed with `orch decide done` the moment the human answers or settles it in words; a dashboard button, or a prompt that starts with the id or a unique option label (the `UserPromptSubmit` hook), closes it itself (`references/top-level.md`, "Asking the human"). The digest holds open gates, a proposed predicate, irreversible acts, and any standing order that contradicts reality. Never retries, CI flakes, review-thread triage, rebases, or "should I continue".
 
 ## Where this differs from Orca, and why
 
