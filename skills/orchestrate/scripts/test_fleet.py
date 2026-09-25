@@ -464,6 +464,15 @@ process.stdout.write(JSON.stringify(out));"""
     assert '/api/fleet/avatar/rev-bob"' in got["user"] and 'onerror="avatarMissed(this)"' in got["user"], got["user"]
     assert "/api/fleet/avatar/lint-bot%5Bbot%5D" in got["bot"], got["bot"]
     assert "<image" not in got["again"], got["again"]
+
+    # A page open across a restart onto new code reloads once: not on the version it first saw, not twice for one version.
+    js = "\n".join(take(n) for n in ("LS", "store", "S", "versionChanged")) + """
+const out = [versionChanged(null), versionChanged("a"), versionChanged("a"), versionChanged("b"), versionChanged("b"), versionChanged("c")];
+process.stdout.write(JSON.stringify(out));"""
+    ss = ("const vm = require('vm'), kv = {}, sessionStorage = {getItem: (k) => kv[k] ?? null, setItem: (k, v) => { kv[k] = v; }};"
+          "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), {process, sessionStorage, localStorage: sessionStorage});")
+    got = json.loads(subprocess.run(["node", "-e", ss], input=js, capture_output=True, text=True, check=True).stdout)
+    assert got == [False, False, False, True, False, True], got
 else:
     print("test_fleet: node not found, rendering check skipped")
 

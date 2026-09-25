@@ -344,6 +344,10 @@ assert ok and "started" in msg, msg
 h = dash.health(port)
 assert h["store"] == str(dash.home()) and h["version"] == dash.code_version(), h
 assert dash.ensure(port) == (True, f"dashboard: http://127.0.0.1:{port}/")
+import urllib.request
+for p in ("/fleet.js", "/api/programs"):
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{p}") as r:
+        assert r.headers["X-Dash-Version"] == h["version"], (p, dict(r.headers))
 again = subprocess.run([sys.executable, str(pathlib.Path(dash.__file__)), "serve", "--port", "0"], capture_output=True,
                        text=True, timeout=20)
 assert again.returncode and "already serves" in again.stderr, again.stderr

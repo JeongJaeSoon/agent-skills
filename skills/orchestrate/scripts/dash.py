@@ -1145,6 +1145,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if HEALTH.get("version"):  # an open page compares it with the one it loaded under, and reloads on a change
+            self.send_header("X-Dash-Version", HEALTH["version"])
         if etag:
             self.send_header("ETag", etag)
         self.send_header("Content-Length", str(len(body)))

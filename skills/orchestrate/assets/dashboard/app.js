@@ -67,7 +67,7 @@ const store = {
 const isFleet = () => S.slug === "fleet";
 
 const S = {
-  programs: [], slug: null, section: "overview", state: null, etag: null, lastOk: 0, down: false, sbOpen: false,
+  programs: [], slug: null, section: "overview", state: null, etag: null, version: null, lastOk: 0, down: false, sbOpen: false,
   filters: { issues: "all", prs: "open", workers: "active", activity: "all" }, q: "", showDone: false,
   sort: (() => { try { return JSON.parse(store.get(LS.sort)) || {}; } catch (e) { return {}; } })(),
 };
@@ -982,11 +982,25 @@ async function pollPrograms() {
   } catch (e) { S.down = true; setLive(); }
 }
 
+// True once the server answers with code other than what this page first saw: a page left open across a restart
+// reloads itself onto the new assets. sessionStorage remembers the version it reloaded for, so a reload lands once
+// per new version and a page that cannot record that never reloads on its own.
+function versionChanged(v) {
+  if (!v || v === S.version) return false;
+  if (!S.version) { S.version = v; return false; }
+  try {
+    if (sessionStorage.getItem("orch-dash:reloaded-for") === v) return false;
+    sessionStorage.setItem("orch-dash:reloaded-for", v);
+  } catch (e) { return false; }
+  return true;
+}
+
 async function pollState() {
   const slug = S.slug;
   if (!slug || document.hidden) return;
   try {
     const r = await fetch(`/api/${encodeURIComponent(slug)}/state`, { cache: "no-store", headers: S.etag ? { "If-None-Match": S.etag } : {} });
+    if (versionChanged(r.headers.get("X-Dash-Version"))) { location.reload(); return; }
     if (slug !== S.slug) return;
     S.down = false; S.lastOk = Date.now();
     if (r.status === 304) { setLive(); return; }
