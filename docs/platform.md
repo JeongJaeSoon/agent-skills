@@ -124,10 +124,11 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
    - 갈라졌으면(양쪽 다 > 0) 멈춘다. rebase·merge·force는 하지 않는다.
    - 뒤처지기만 했으면 `git merge --ff-only origin/main`.
    - 앞서기만 했으면 push 판정으로 간다.
-5. push: 올라갈 커밋마다 `git log --format=%G?`가 `G` 또는 `U`(서명이 유효함; `U`는 신뢰 표시만 없는 것)여야 한다. 하나라도 `N`(서명 없음) 등이면 멈춘다. 통과하면 `git push origin main`(force 없음).
+5. push: 올라갈 커밋마다 서명이 있어야 한다. `git log --format=%G?`가 `N`(서명 없음)이나 `B`(서명이 틀림)인 커밋이 하나라도 있으면 멈춘다. `G`·`U`만 허용하지 않는 이유: `allowedSignersFile`이 없는 새 PC에서는 서명이 있어도 `E`(검증 불가)가 나올 수 있다. 이 PC의 최근 커밋은 모두 `U` 또는 `G`였다. 통과하면 `git push origin main`(force 없음).
 6. HEAD가 바뀌었으면 바뀐 경로로 reload 브로드캐스트를 정한다(§4).
 
 - **main 직접 push:** 이 저장소에는 branch protection과 ruleset이 없다(`gh api …/branches/main/protection` → 404 "Branch not protected", rulesets `[]`). 최근 main 커밋 15개는 모두 서명된 직접 커밋이고 PR은 2개뿐이다. 그래서 동기화는 main에 직접 push한다. 리뷰를 받고 싶은 큰 변경은 지금처럼 PR로 올리고, 동기화는 그 결과를 pull할 뿐이다.
+- **인증 대기로 멈추지 않기:** launchd에는 터미널이 없어서 인증을 물으면 영원히 기다린다. `GIT_TERMINAL_PROMPT=0`으로 돌리고, `git config credential.helper`가 비어 있으면 fetch 전에 멈춘다. git 명령마다 시간 제한(60초)을 건다.
 - **서명과 1Password:** 동기화는 커밋을 만들지 않는다. 이 체크아웃은 `commit.gpgsign=true`, `gpg.format=ssh`라 1Password 에이전트가 꺼져 있으면 커밋 자체가 실패한다. 그래도 서명 없는 커밋이 끼어 있으면 5단계에서 멈추고 "서명 없는 커밋 <sha>: 1Password SSH 에이전트를 확인한 뒤 다시 서명"이라고 알린다.
 - **알림:** macOS 알림 센터(`osascript display notification`)와 상태 파일 `~/.local/state/agent-skills/sync.json`(마지막 결과, 멈춘 이유, 시각). 터미널에는 아무것도 쓰지 않는다. 입력 중인 세션에 알림이 끼어드는 문제를 만들지 않기 위해서다. 같은 이유로 멈춘 상태가 이어지면 다시 알리지 않고, 상태가 바뀔 때만 알린다. 대시보드는 이 파일을 읽어 인박스에 올릴 수 있다(`orchestrator-dashboard` 몫).
 - **동시 실행:** `~/.local/state/agent-skills/sync.lock`에 파일 잠금(`fcntl.flock`, macOS에는 `flock` 명령이 없다)을 건다. launchd와 수동 실행이 겹쳐도 하나만 돈다.
@@ -139,6 +140,13 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 - `sync`가 HEAD를 옮겼고, 바뀐 경로가 §2 표에서 reload가 필요한 쪽일 때만 보낸다. 문서나 스크립트만 바뀌었으면 보내지 않는다.
 - 수동: `skills-sync broadcast [--skills|--plugins]`. 스킬을 고친 세션이 fast-forward 뒤 직접 부를 때 쓴다.
 - 이전에 못 보낸 세션이 남아 있으면 다음 `sync` 때마다 다시 시도한다.
+
+### 누가 보내는가
+
+터미널 목록·읽기·전송은 Orca CLI가 있어야 한다. launchd처럼 Orca 환경 변수가 없는 곳에서 `orca terminal list`가 도는지는 아직 재지 못했다(구현 첫 검증 항목). 그래서 두 단계로 나눈다.
+
+- launchd 작업은 fetch → ff-only → push까지만 하고, reload가 필요하면 `reload-pending.json`에 "모든 Claude 세션, `/reload-skills`" 같은 항목을 쓴다. 실측에서 launchd에서도 orca가 돌면 그 자리에서 바로 보낸다.
+- orca가 도는 곳(orchestrator 세션의 "Skills changed" 단계, 또는 사람이 친 `skills-sync broadcast`)이 대기 항목을 보내고 지운다.
 
 ### 대상과 안전장치
 
@@ -193,6 +201,8 @@ python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py --write   # 적용
 4. `agent-skills@jeongjaesoon`이 설치·활성화되어 있으면 `enabledPlugins`에서 false로 둔다(두 번 로드 방지). 바꾸기 전 값을 출력한다.
 5. macOS면 `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist`를 쓰고 `launchctl bootstrap`한다. Linux면 같은 명령을 넣을 crontab 한 줄을 출력만 한다.
 6. `skills-sync sync`를 한 번 돌린다.
+
+새 PC에서 체크아웃 폴더로 처음 `claude`를 띄우면 신뢰 창이 한 번 뜬다(신뢰는 원본 clone 경로에 기록된다, §6.2). 부트스트랩은 이 창을 대신 누르지 않고 "체크아웃에서 claude를 한 번 띄워 신뢰를 수락하라"고 출력한다.
 
 같은 PC에서 다시 돌려도 결과가 같다(이미 된 단계는 "ok"로 넘어간다). 체크아웃 경로는 PC마다 달라도 된다. 스크립트는 자기 위치를 체크아웃으로 쓴다.
 
@@ -263,7 +273,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 | `orchestrate/SKILL.md` 앞부분 | "Stay answerable" 절(§6.1 초안) | 사용자 지시, 긴 턴과 포그라운드 대기 |
 | `orchestrate/SKILL.md` description | 최상위 트리거 추가: "모든 세션 관리", "오케스트레이터로", "전체 태스크 현황", "이 세션도 편입해줘" | top-level 모드가 program 트리거와 다른 말로 불린다 |
 | 새 `orchestrate/references/top-level.md` | 계층, 라우팅 표(요청 → 서브에이전트 / 새 워커 / 기존 세션 / 프로젝트 코디네이터), 인박스에 올릴 것, 편입된 세션을 대하는 규칙 | §6.3 |
-| 같은 파일 "Start a worker" 절 | 기동 확인을 `--screen`으로 한다(stream 읽기에는 신뢰 창이 안 보였다). `outcome_unknown`은 실패 후보로 본다. 확인은 백그라운드 서브에이전트가 하고 결과만 알림으로 받는다. 신뢰 창이면: 이 orchestrator가 띄운 워커에 한해, 창이 그려지고 2초 뒤 ↓, 화면에서 `❯ Yes, I trust this folder`를 확인한 뒤 Enter(사용자가 2026-09-25에 키 전송으로 허용하라고 지시함). 셸만 남았으면: `^C`, `dispatch-show --preamble`을 파일로 저장, `claude "<그 파일을 읽어라>"`로 다시 띄운다. 파일로 옮길 때 `--dispatch-capability` 값이 들어 있는지 확인한다 | 워커 기동 실패 3회, 신뢰 창, 이번 워커의 heartbeat 거부 |
+| 같은 파일 "Start a worker" 절 | 기동 확인을 `--screen`으로 한다(stream 읽기에는 신뢰 창이 안 보였다). `outcome_unknown`은 실패 후보로 본다. 확인은 백그라운드 서브에이전트가 하고 결과만 알림으로 받는다. 신뢰 창이면 §6.5의 승인 항목에 따른다. 셸만 남았으면: `^C`, `dispatch-show --preamble`을 파일로 저장, `claude "<그 파일을 읽어라>"`로 다시 띄운다. 파일로 옮길 때 `--dispatch-capability` 값이 들어 있는지 확인한다 | 워커 기동 실패 3회, 신뢰 창, 이번 워커의 heartbeat 거부 |
 | 같은 파일 "Talking to sessions" 절 | 끝난 dispatch에는 `run:<id>`로 보내거나 새 dispatch. 모든 send는 종료 코드를 확인한다. `--wait-submit` 경고가 나면 다시 보내기 전에 `--screen`으로 턴이 시작됐는지 본다. 긴 본문과 kill·deploy 같은 단어가 들어간 본문은 파일에 쓰고 `--body "$(cat <file>)"`. 다른 세션 입력창에 글자를 치는 것은 §4의 안전장치를 통과한 한 줄 명령만 | 끝난 dispatch send 실패, 거짓 실패, 분류기 거부 |
 | 같은 파일 "Asking the human" 절 | AskUserQuestion은 orchestrator 턴을 막는다. 결정이 필요한 것은 답변 텍스트와 인박스에 모아 두고 턴을 끝낸다. 사용자가 고르면 다음 턴에 반영한다. 배포·머지·kill처럼 사용자가 직접 하거나 허락해야 하는 것은 인박스에 "명령 실행" 유형으로 올린다 | 44분 AskUserQuestion, `!` 명령 6분 대기 |
 | 같은 파일 "Injected notices" 절 | 사용자 메시지 끝에 `You have N orchestration message(s)…`가 붙어 있으면 그 앞까지가 사용자 문장이다. 잘렸을 수 있으니 "문장이 … 에서 끊겼다"고 한 줄로 알리고, 알림 처리는 백그라운드로 넘긴다 | 알림 끼어듦 21회 |
@@ -277,7 +287,15 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 - `dashboard.md`와 대시보드 코드: `orchestrator-dashboard` 워커 몫이라 건드리지 않는다.
 - 편입과 인박스의 데이터 쪽 구현: 같은 이유로 대시보드 워커 몫이다.
 
-### 6.5 대시보드 워커와 맞출 것
+### 6.5 신뢰 창 처리 (별도 승인 항목)
+
+§4와 이 저장소 규칙은 "권한·신뢰·질문 창이 떠 있는 세션에는 보내지 않는다", "다른 세션의 권한 창에 답하지 않는다"이다. 한편 트랜스크립트에는 사용자가 신뢰 창을 키 전송으로 허용하라고 한 기록이 있다(2026-09-25). 이 기록은 서브에이전트가 트랜스크립트에서 읽어 온 것이고, 이 워커가 직접 들은 말이 아니다. 그래서 규칙 안에 섞지 않고 따로 승인받는다.
+
+- 제안: 신뢰 창**만**, 이 orchestrator가 **방금 띄운** 워커에 **한해**, 창이 그려지고 2초 뒤 ↓, 화면에서 `❯ Yes, I trust this folder`로 바뀐 것을 확인한 뒤 Enter. 한 번 해서 안 바뀌면 멈추고 인박스에 올린다.
+- 권한 창, AskUserQuestion, 사용자가 직접 연 세션의 신뢰 창에는 절대 적용하지 않는다.
+- 승인되지 않으면: 신뢰 창을 발견한 즉시 인박스에 "로그인·확인" 유형으로 올리고 다음 일로 넘어간다.
+
+### 6.6 대시보드 워커와 맞출 것
 
 - 인박스 항목 유형: 스킬은 "승인", "명령 실행", "로그인", "검증 결과"를 올린다고 쓴다. 이름과 저장 위치는 대시보드 설계를 따른다.
 - `~/.local/state/agent-skills/sync.json`과 `reload-pending.json`을 대시보드가 읽어 "스킬 동기화 멈춤"과 "reload 못 보낸 세션"을 인박스에 올릴 수 있다. 형식은 구현 때 그쪽에 send로 알린다.
