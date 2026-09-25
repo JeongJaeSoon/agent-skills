@@ -1183,12 +1183,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f = d / "dashboard" / "state.json"
             if not f.exists():
                 collect(slug, sources=())  # ledger-only, cheap; the background loop fills the rest
-            body = f.read_bytes()
-            etag = '"' + hashlib.sha1(body).hexdigest()[:20] + '"'
-            if self.headers.get("If-None-Match") == etag:
-                return self.send(304, etag=etag)
-            return self.send(200, body, etag=etag)
+            return self.send_cached(f.read_bytes())
         self.send(404, b'{"error":"not found"}')
+
+    def send_cached(self, body, ctype="application/json"):
+        etag = '"' + hashlib.sha1(body).hexdigest()[:20] + '"'
+        if self.headers.get("If-None-Match") == etag:
+            return self.send(304, etag=etag)
+        return self.send(200, body, ctype, etag=etag)
 
     def local_only(self):
         """Host and Origin must name this server: a page on another site (or a rebinding DNS name) is refused."""
@@ -1207,16 +1209,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             f = fleet.state_dir() / "state.json"
             if not f.exists():
                 return self.send(503, b'{"error":"first fleet collect has not finished"}')
-            body = f.read_bytes()
-            etag = '"' + hashlib.sha1(body).hexdigest()[:20] + '"'
-            if self.headers.get("If-None-Match") == etag:
-                return self.send(304, etag=etag)
-            return self.send(200, body, etag=etag)
+            return self.send_cached(f.read_bytes())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
-        if m and (fleet.state_dir() / "avatars" / f"{m.group(1)}.png").exists():
-            return self.send(200, (fleet.state_dir() / "avatars" / f"{m.group(1)}.png").read_bytes(), "image/png")
+        png = m and fleet.state_dir() / "avatars" / f"{m.group(1)}.png"
+        if png and png.exists():
+            return self.send_cached(png.read_bytes(), "image/png")
         self.send(404, b'{"error":"not found"}')
 
     def do_POST(self):
@@ -1238,8 +1237,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(code, json.dumps(out).encode())
         else:
             return self.send(404, b'{"error":"not found"}')
-        if FLEET:
-            threading.Thread(target=FLEET.tick, daemon=True).start()
+        FLEET_WAKE.set()
         self.send(200, b'{"ok":true}')
 
 

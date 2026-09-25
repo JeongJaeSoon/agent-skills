@@ -8,7 +8,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash, dash_demo
 
 root = pathlib.Path(tempfile.mkdtemp(prefix="test-dash-"))
-os.environ.update(dash_demo.build(root))
+os.environ.update(dash_demo.build(root), ORCH_FLEET="off")  # the shims do not answer the fleet's calls
 store, fx = root / "programs", root / "fixtures"
 A, B = "launchpad-ga", "billing-q4"
 

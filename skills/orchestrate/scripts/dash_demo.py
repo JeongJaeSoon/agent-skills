@@ -2,7 +2,7 @@
 
 build(root) writes everything under root and returns the env that points dash.py at it.
 """
-import datetime as dt, json, os, pathlib, sys, time
+import datetime as dt, json, os, pathlib, re, sys, time
 
 SHIM = r'''#!/usr/bin/env python3
 # Replays fixtures for dash.py demo/tests. A fixture {"fail": "..."} makes the call fail like the real CLI.
@@ -423,19 +423,19 @@ class FakeFleetWorld:
                           term("term_scratch", "wt-scratch", "✳ scratch"), term("term_shell", "wt-scratch", "zsh", agent=False)]
         self.messages = [{"id": "m1", "type": "question", "from_handle": "term_export", "to_handle": "term_coord", "read": False,
                           "subject": "CSV or JSON for the export?", "body": "The ticket does not say which format finance needs.",
-                          "created_at": _iso(now - dt.timedelta(minutes=12))}]
+                          "created_at": _ago(now, 0.2)}]
         self.runs = {"runs": [{"id": "run_demo", "coordinator_handle": "term_coord", "updated_at": _iso(now)}],
                      "workers": [{"resource": {"worktreeId": w}, "runId": "run_demo", "dispatchId": f"ctx_{w[3:]}", "taskId": f"task_{w[3:]}",
                                   "dispatchStatus": "pending", "agentTerminalHandle": f"term_{w[3:]}"} for w in ("wt-login", "wt-export", "wt-docs")],
                      "tasks": [{"id": f"task_{w}", "display_name": t, "status": "dispatched"} for w, t in
                                (("login", "ACME-101 login flow"), ("export", "ACME-102 billing export"), ("docs", "ACME-103 docs"))],
                      "gates": [{"id": "g1", "status": "pending", "question": "Land #41 before #42?", "options": ["yes", "no"],
-                                "created_at": _iso(now - dt.timedelta(minutes=30))}]}
+                                "created_at": _ago(now, 0.5)}]}
         user = lambda login: {"__typename": "User", "login": login, "avatarUrl": None}
-        review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _iso(now - dt.timedelta(hours=h)),
+        review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _ago(now, h),
                                                            "author": user(login), "commit": {"oid": oid}}
-        roll = lambda st: {"nodes": [{"commit": {"statusCheckRollup": {"state": st}}}]}
-        base = lambda n, title, head, h, ci: {"number": n, "state": "OPEN", "isDraft": False, "updatedAt": _iso(now - dt.timedelta(hours=h)),
+        roll = self.roll
+        base = lambda n, title, head, h, ci: {"number": n, "state": "OPEN", "isDraft": False, "updatedAt": _ago(now, h),
                                               "headRefOid": head, "url": f"https://github.com/acme/launchpad/pull/{n}", "title": title,
                                               "commits": roll(ci), "author": user(self.ME), "reviewRequests": {"nodes": []},
                                               "latestOpinionatedReviews": {"nodes": []}, "reviews": {"nodes": []},
@@ -449,7 +449,7 @@ class FakeFleetWorld:
                    reviews={"nodes": [review("r2", "rev-bob", "CHANGES_REQUESTED", 0.3, "h42a"),
                                       review("r3", "lint-bot[bot]", "COMMENTED", 0.35, "h42a") | {"author": {"__typename": "Bot", "login": "lint-bot[bot]"}}]},
                    reviewThreads={"totalCount": 1, "nodes": [{"id": "t1", "isResolved": False, "comments": {"nodes": [
-                       {"id": "c1", "createdAt": _iso(now - dt.timedelta(hours=0.3)), "url": "https://github.com/acme/launchpad/pull/42#c1",
+                       {"id": "c1", "createdAt": _ago(now, 0.3), "url": "https://github.com/acme/launchpad/pull/42#c1",
                         "author": user("rev-bob")}]}}]})
         p43 = base(43, "docs: setup guide", "h43a", 3, "PENDING")
         p43.update(isDraft=True, reviewRequests={"nodes": [{"requestedReviewer": user("rev-carol")},
@@ -460,9 +460,13 @@ class FakeFleetWorld:
     def advance(self):
         """One step: #41 gets a new commit (its approval goes stale), #42's CI goes green."""
         self.step += 1
-        later = _iso(self.now + dt.timedelta(minutes=5 * self.step))
+        later = _ago(self.now, -self.step / 12)
         self.prs[41].update(headRefOid=f"h41{self.step}", updatedAt=later)
-        self.prs[42].update(commits={"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}, updatedAt=later)
+        self.prs[42].update(commits=self.roll("SUCCESS"), updatedAt=later)
+
+    @staticmethod
+    def roll(state):
+        return {"nodes": [{"commit": {"statusCheckRollup": {"state": state}}}]}
 
     def fetch_fast(self):
         return {"worktrees": self.worktrees, "terminals": self.terminals, "messages": self.messages}
@@ -471,7 +475,6 @@ class FakeFleetWorld:
         return self.runs
 
     def graphql(self, query):
-        import re
         data = {}
         for alias, branch in re.findall(r'(b\d+): repository\([^)]*\)\{ref\(qualifiedName:"refs/heads/([^"]+)"', query):
             n = self.branches.get(branch)

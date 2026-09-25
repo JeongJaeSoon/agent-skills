@@ -10,17 +10,16 @@ and the state lives outside the repository:
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
 """
-import datetime as dt, hashlib, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
+import collections, concurrent.futures, datetime as dt, hashlib, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 RUNS_EVERY = 120         # runs, workers, tasks, gates
 PR_TICK = 90             # PR probe tick; each PR is due per its tier below
 DISCOVER_EVERY = 600     # re-ask GitHub which PR a branch has, for sessions that had none
-TIER_EVERY = {"hot": 90, "warm": 300, "cold": 900}
+TIER_EVERY = {"hot": 90, "warm": 300, "cold": 900, "done": 86400}
 EVENTS_KEEP = 400
-PR_EVENTS_ROTATE = 5 * 1024 * 1024
+ROTATE_BYTES = 5 * 1024 * 1024  # events.jsonl and pr-events.jsonl move to *.1 past this
 STICKY_TYPES = ("approval", "run_command", "login", "verify_failed", "question")
-PR_TYPES = ("changes_requested", "review_comment_received", "ci_failed", "approval_stale", "ready_to_merge")
 BRANCH_SKIP = {"main", "master", "develop", "trunk"}
 LOGIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?")
 
@@ -74,7 +73,7 @@ def write_atomic(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "wb" if isinstance(text, bytes) else "w") as f:
             f.write(text)
         os.replace(tmp, path)
     except BaseException:
@@ -94,6 +93,14 @@ def append_line(path, row):
         os.write(fd, line)
     finally:
         os.close(fd)
+
+
+def rotate(path):
+    try:
+        if path.stat().st_size > ROTATE_BYTES:
+            os.replace(path, path.with_name(path.name + ".1"))
+    except OSError:
+        pass
 
 
 def read_lines(path, keep=None):
@@ -165,9 +172,11 @@ def orca(*args, timeout=30):
 
 
 def fetch_fast():
-    return {"worktrees": orca("worktree", "ps", "--limit", "500").get("worktrees", []),
-            "terminals": orca("terminal", "list").get("terminals", []),
-            "messages": orca("orchestration", "inbox", "--limit", "100").get("messages", [])}
+    calls = {"worktrees": ("worktree", "ps", "--limit", "500"), "terminals": ("terminal", "list"),
+             "messages": ("orchestration", "inbox", "--limit", "100")}
+    with concurrent.futures.ThreadPoolExecutor(len(calls)) as pool:
+        futures = {k: pool.submit(orca, *args) for k, args in calls.items()}
+        return {k: f.result().get(k, []) for k, f in futures.items()}
 
 
 def fetch_runs():
@@ -540,17 +549,23 @@ class Fleet:
         self.me = saved.get("me")
         self.mem = read_json(d / "memory.json", {}) or {}  # prompt hashes, last states, sticky inbox
         self.last = {"runs": 0.0, "prs": 0.0}
-        self.state = None
+        self.state, self.owner_of, self.saved = None, {}, {}
+        self.events = collections.deque(read_lines(d / "events.jsonl", EVENTS_KEEP), maxlen=EVENTS_KEEP)
 
     # -- persistence
 
-    def save(self):
-        d = state_dir()
-        write_atomic(d / "prs.json", json.dumps({"prs": self.prs, "branch_pr": self.branch_pr, "me": self.me}))
-        write_atomic(d / "memory.json", json.dumps(self.mem, ensure_ascii=False))
+    def save(self, **files):
+        """Write each {name: text} whose text differs from the last write (a tick usually changes nothing)."""
+        for name, text in files.items():
+            if self.saved.get(name) != text:
+                write_atomic(state_dir() / name, text)
+                self.saved[name] = text
 
     def event(self, row):
-        append_line(state_dir() / "events.jsonl", row)
+        path = state_dir() / "events.jsonl"
+        rotate(path)
+        append_line(path, row)
+        self.events.append(row)
 
     def ok(self, name, err=None):
         s = self.sources[name]
@@ -569,7 +584,7 @@ class Fleet:
                 self.ok("orca")
             except SourceError as e:
                 self.ok("orca", str(e))
-            if force or mono - self.last["runs"] >= RUNS_EVERY or not self.sources["runs"]["updated_at"]:
+            if force or not self.last["runs"] or mono - self.last["runs"] >= RUNS_EVERY:
                 try:
                     self.runs = self.fetch_runs()
                     self.ok("runs")
@@ -590,8 +605,9 @@ class Fleet:
                     self.ok("github", str(e))
                 self.last["prs"] = mono
             self.state = self.compose(sessions, root, cfg)
-            write_atomic(state_dir() / "state.json", json.dumps(self.state, ensure_ascii=False))
-            self.save()
+            self.save(**{"state.json": json.dumps(self.state, ensure_ascii=False),
+                         "prs.json": json.dumps({"prs": self.prs, "branch_pr": self.branch_pr, "me": self.me}),
+                         "memory.json": json.dumps(self.mem, ensure_ascii=False)})
             return self.state
 
     def refresh_prs(self, sessions, cfg):
@@ -633,6 +649,9 @@ class Fleet:
                     owner_of.setdefault(key, next(s["id"] for s in sessions.values()
                                                   if s.get("gh_repo") == repo and s["branch"] == branch))
         self.owner_of = owner_of
+        live = {f"{s['gh_repo']}@{s['branch']}" for s in sessions.values()}
+        self.prs = {k: v for k, v in self.prs.items() if k in owner_of}
+        self.branch_pr = {k: v for k, v in self.branch_pr.items() if k in live}
         # 2. Probe every PR whose tier says it is due; 3. detail for the ones that changed.
         due = []
         for k, sid in owner_of.items():
@@ -640,7 +659,7 @@ class Fleet:
             if entry and entry.get("detail"):
                 t = tier(entry["detail"], sessions.get(sid, {}).get("phase"), now)
                 last = parse(entry.get("probed_at"))
-                every = TIER_EVERY.get(t, 86400)
+                every = TIER_EVERY[t]
                 if last and (now - last).total_seconds() < every - 5:
                     continue
             due.append(k)
@@ -678,23 +697,18 @@ class Fleet:
     def emit_pr_event(self, pr, e, session, now):
         owner, kind = None, None
         if session:
+            term = next((t["handle"] for t in session["terminals"] if t.get("agent")), None)
             if session.get("dispatch") and session.get("dispatch_live"):
                 owner, kind = session["dispatch"], "dispatch"
             elif session["kind"] == "standalone":
-                agent_terms = [t for t in session["terminals"] if t.get("agent")]
-                owner, kind = (agent_terms[0]["handle"] if agent_terms else None), "human_session"
-            else:
-                agent_terms = [t for t in session["terminals"] if t.get("agent")]
-                owner, kind = (agent_terms[0]["handle"], "terminal") if agent_terms else (None, None)
+                owner, kind = term, "human_session"
+            elif term:
+                owner, kind = term, "terminal"
         row = {"v": 1, "id": digest(pr["key"], e["kind"], e["source"]), "at": iso(now), "repo": pr["repo"],
                "pr": pr["number"], "kind": e["kind"], "url": e["url"], "owner": owner, "owner_kind": kind,
                "actor": e.get("actor"), "checks": pr["ci"], "head": pr["head"]}
         path = state_dir() / "pr-events.jsonl"
-        try:
-            if path.stat().st_size > PR_EVENTS_ROTATE:
-                os.replace(path, path.with_name("pr-events.jsonl.1"))
-        except OSError:
-            pass
+        rotate(path)
         append_line(path, row)
         self.event({"at": row["at"], "kind": f"pr_{e['kind']}", "session": session and session["id"],
                     "pr": pr["key"], "actor": e.get("actor"), "url": e["url"],
@@ -715,7 +729,7 @@ class Fleet:
             except (OSError, subprocess.TimeoutExpired):
                 continue
             if r.returncode == 0 and r.stdout:
-                write_atomic_bytes(d / f"{login}.png", r.stdout)
+                write_atomic(d / f"{login}.png", r.stdout)
 
     # -- composing the page's state
 
@@ -746,8 +760,8 @@ class Fleet:
                 phases[pane] = a["state"]
                 if a["state"] == "done" and a["last"]:
                     k = f"msg:{pane}:{digest(a['last'])}"
-                    kind = classify(a["last"])
-                    if k not in sticky and kind != "fyi":
+                    kind = None if k in sticky else classify(a["last"])
+                    if kind and kind != "fyi":
                         sticky[k] = {"key": k, "type": kind, "session": s["id"], "title": first_line(a["last"]),
                                      "detail": a["last"][-600:], "at": iso(now), "source": "turn", "open": kind != "verify_ok"}
                         self.event({"at": iso(now), "kind": f"item_{kind}", "session": s["id"], "text": first_line(a["last"])})
@@ -774,11 +788,12 @@ class Fleet:
                               "detail": ", ".join(map(str, g.get("options") or [])), "at": g.get("created_at"), "source": "orca-gate"})
         # PRs: live items attached to the session that owns the PR.
         prs = []
-        for k, sid in getattr(self, "owner_of", {}).items():
+        for k, sid in self.owner_of.items():
             det = (self.prs.get(k) or {}).get("detail")
             if not det:
                 continue
-            prs.append({**det, "session": sid})
+            prs.append({f: det[f] for f in ("key", "number", "url", "title", "state", "ci", "decision", "reviewers", "updated")}
+                       | {"session": sid})
             for it in pr_items(det, self.me, cfg):
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
         # Skill-side items and sync state.
@@ -786,26 +801,30 @@ class Fleet:
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
-        dismissed = mem.setdefault("dismissed", {})
+        dismissed, raw_keys = mem.setdefault("dismissed", {}), {it["key"] for it in items}
         items = [it for it in items if it["key"] not in dismissed]
         items.sort(key=lambda i: i.get("at") or "", reverse=True)
         # Unread and missed, per session.
-        for s in sessions.values():
-            mark = max(filter(None, [seen.get(s["id"]), s.get("last_prompt_at")]), default="")
-            mine = [i for i in items if i.get("session") == s["id"]]
-            s["unread"] = sum(1 for i in mine if (i.get("at") or "") > mark)
-            s["missed"] = sum(1 for i in mine if i["type"] in STICKY_TYPES and s.get("last_prompt_at")
-                              and (i.get("at") or "") < s["last_prompt_at"])
-            s["open_items"] = len(mine)
         for i in items:
             s = sessions.get(i.get("session"))
             i["missed"] = bool(s and i["type"] in STICKY_TYPES and s.get("last_prompt_at")
                                and (i.get("at") or "") < s["last_prompt_at"])
+        for s in sessions.values():
+            mark = max(filter(None, [seen.get(s["id"]), s.get("last_prompt_at")]), default="")
+            mine = [i for i in items if i.get("session") == s["id"]]
+            s["unread"] = sum(1 for i in mine if (i.get("at") or "") > mark)
+            s["missed"] = sum(i["missed"] for i in mine)
         # Keep the sticky store bounded: closed ones older than a week go.
         cutoff = iso(now - dt.timedelta(days=7))
         for k in [k for k, v in sticky.items() if not v.get("open") and (v.get("at") or "") < cutoff]:
             del sticky[k]
-        timeline = read_lines(state_dir() / "events.jsonl", EVENTS_KEEP)
+        for k in [k for k, at in dismissed.items() if at < cutoff and k not in raw_keys]:
+            del dismissed[k]
+        panes = {a["pane"] or s["id"] for s in sessions.values() for a in s["agents"]}
+        for store in (prompts, phases):
+            for k in [k for k in store if k not in panes]:
+                del store[k]
+        timeline = list(self.events)
         timeline += [{"at": m.get("created_at"), "kind": f"mail_{m.get('type')}", "session": by_handle.get(m.get("from_handle")),
                       "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]
                      if m.get("type") != "heartbeat"]  # one every 5 min per worker: it would bury everything else
@@ -816,18 +835,7 @@ class Fleet:
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "sources": self.sources, "me": self.me,
-                "config": {"root_worktree": bool(cfg.get("root_worktree")), "write_orca_parent": bool((cfg.get("adopt") or {}).get("write_orca_parent")),
-                           "transcripts": bool(cfg.get("transcripts"))},
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
-
-
-def write_atomic_bytes(path, body):
-    path = pathlib.Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    with os.fdopen(fd, "wb") as f:
-        f.write(body)
-    os.replace(tmp, path)
 
 
 def external_items(sticky):
@@ -916,7 +924,7 @@ def dismiss(fleet, key):
         st = fleet.mem.get("sticky", {}).get(key)
         if st:
             st["open"] = False
-        fleet.save()
+        fleet.save(**{"memory.json": json.dumps(fleet.mem, ensure_ascii=False)})
 
 
 def inbox_add(kind, title, session=None, url=None, command=None, key=None, source="orchestrator"):

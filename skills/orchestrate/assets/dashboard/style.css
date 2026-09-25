@@ -353,17 +353,15 @@ td.when { white-space: nowrap; }
 .relgraph a:hover .box { stroke: var(--accent); }
 .relgraph text { fill: var(--ink); font-size: var(--t-sm); }
 .relgraph .num { font-family: var(--mono); fill: var(--ink-2); }
-.relgraph .muted, .relgraph tspan.muted { fill: var(--ink-3); }
+.relgraph .muted { fill: var(--ink-3); }
 .relgraph .pr.closed text { fill: var(--ink-3); }
 .relgraph .bar, .relgraph .ph { fill: var(--tone, var(--line-2)); }
 .relgraph .edge { fill: none; stroke: var(--tone, var(--line-2)); stroke-width: 1.5; }
-.edge.good { --tone: var(--good); } .edge.warn { --tone: var(--warn); stroke-dasharray: 5 3; } .edge.bad { --tone: var(--bad); stroke-width: 2; }
-.edge.accent { --tone: var(--accent); } .edge.req { --tone: var(--ink-3); stroke-dasharray: 2 3; }
+.relgraph .edge.rv.tone-warn { stroke-dasharray: 5 3; } .relgraph .edge.rv.tone-bad { stroke-width: 2; }
+.relgraph .edge.req, .legend .key.req { --tone: var(--ink-3); stroke-dasharray: 2 3; }
 .relgraph .av-bg { fill: var(--panel-2); stroke: var(--line-2); }
 .relgraph .av-tx { fill: var(--ink-2); font-size: 9px; font-weight: 700; text-transform: uppercase; }
-.legend .edge-key { background: var(--tone, var(--line-2)); }
-.legend .edge-key.good { --tone: var(--good); } .legend .edge-key.warn { --tone: var(--warn); } .legend .edge-key.bad { --tone: var(--bad); }
-.legend .edge-key.accent { --tone: var(--accent); } .legend .edge-key.req { --tone: var(--ink-3); }
+.legend .key[class*="tone-"], .legend .key.req { background: var(--tone); }
 
 .tip { position: fixed; z-index: 60; pointer-events: none; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-md); padding: 6px var(--s2); font-size: var(--t-sm); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); min-width: 120px; }
 .tip .tt { color: var(--ink-3); margin-bottom: 2px; }

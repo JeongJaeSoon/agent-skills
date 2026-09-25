@@ -38,25 +38,26 @@ const ITEM = {
 const itemMeta = (t) => ITEM[t] || [t, "", "dot"];
 
 const PHASE_TONE = { waiting: "warn", working: "accent", idle: "good", open: "", offline: "" };
-const KIND_LABEL = { orchestrator: "orchestrator", orchestration: "orchestration", task: "task", standalone: "standalone" };
 // Reviewer edge status -> [css class, label]
 const EDGE = {
-  approved: ["good", "approved"], approved_stale: ["warn", "approved, old commit"], changes_requested: ["bad", "changes requested"],
-  commented: ["accent", "commented"], requested: ["req", "review requested"], none: ["", "—"],
+  approved: ["tone-good", "approved"], approved_stale: ["tone-warn", "approved, old commit"], changes_requested: ["tone-bad", "changes requested"],
+  commented: ["tone-accent", "commented"], requested: ["req", "review requested"], none: ["", "—"],
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { type: "all", seenSent: {}, token: null, draft: {}, confirm: null, chat: {} };
+const F = { seenSent: {}, token: null, draft: {}, confirm: null, chat: {} };
 
-const fleetSection = () => {
-  const m = location.hash.match(/^#\/fleet\/([a-z]+)(?:\/(.+))?/);
-  F.sessionId = m && m[1] === "session" && m[2] ? decodeURIComponent(m[2]) : null;
-  return F.sessionId ? "session" : m && FLEET_SECTIONS.some((s) => s.id === m[1]) ? m[1] : "overview";
-};
-const byId = (st) => Object.fromEntries((st.sessions || []).map((s) => [s.id, s]));
+// route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
+function fleetSection(section, arg) {
+  F.sessionId = section === "session" && arg ? arg : null;
+  return F.sessionId ? "session" : FLEET_SECTIONS.some((s) => s.id === section) ? section : "overview";
+}
+const BY_ID = new WeakMap();  // one map per state, not one per rendered row
+const byId = (st) => BY_ID.get(st) || BY_ID.set(st, Object.fromEntries((st.sessions || []).map((s) => [s.id, s]))).get(st);
+// A tick that changed only timestamps needs the freshness bar redrawn, not the whole view (hover and scroll survive).
+const fleetBody = (st) => JSON.stringify({ ...st, generated_at: 0, sources: 0 });
 const sessionHref = (id) => `#/fleet/session/${encodeURIComponent(id)}`;
-const phaseDot = (s) => s.phase === "working" ? '<span class="pulse" aria-label="working"></span>'
-  : `<span class="dot-s ${PHASE_TONE[s.phase] ? "tone-" + PHASE_TONE[s.phase] : ""}" title="${esc(s.phase)}"></span>`;
+const phaseDot = (s) => moveDot({ moving: s.phase === "working", tone: PHASE_TONE[s.phase] });
 const badge = (n, missed) => n ? `<span class="badge ${missed ? "missed" : ""}" title="${n} unread${missed ? `, ${missed} missed` : ""}">${n}</span>` : "";
 
 async function fleetPost(path, body, retry = true) {
@@ -190,7 +191,7 @@ function relGraph(st, sessionId, openOnly = false) {
   }
   return `<div class="relgraph"><svg viewBox="0 0 ${W} ${y}" style="min-width:720px" role="img" aria-label="Sessions, pull requests and reviewers">${out.join("")}</svg></div>
     <div class="legend" style="padding:0 var(--s4) var(--s3)">${Object.entries(EDGE).filter(([k]) => k !== "none")
-      .map(([, [cls, label]]) => `<span><i class="key edge-key ${cls}"></i>${label}</span>`).join("")}</div>`;
+      .map(([, [cls, label]]) => `<span><i class="key ${cls}"></i>${label}</span>`).join("")}</div>`;
 }
 
 // ------------------------------------------------------------ views
@@ -224,12 +225,11 @@ function sessionRows(st, list) {
 }
 
 function fleetInbox(st) {
-  const items = st.items || [], types = [...new Set(items.map((i) => i.type))];
-  if (F.type !== "all" && !types.includes(F.type)) F.type = "all";
-  const shown = F.type === "all" ? items : items.filter((i) => i.type === F.type);
-  const chip = (val, label, count) => `<button class="chip" data-ftype="${val}" aria-pressed="${F.type === val}">${esc(label)} <span class="n">${count}</span></button>`;
+  const items = st.items || [], counts = st.counts || {};
+  const type = counts[S.filters.fleet_inbox] ? S.filters.fleet_inbox : "all";
+  const shown = type === "all" ? items : items.filter((i) => i.type === type);
   return `<div class="view-head"><div><h2>Inbox</h2><p>Things a session is waiting on you for. Missed items (raised before the session's latest prompt) stay pinned until dismissed.</p></div></div>
-    <div class="chips">${chip("all", "All", items.length)}${types.map((t) => chip(t, itemMeta(t)[0], items.filter((i) => i.type === t).length)).join("")}</div>
+    ${chips("fleet_inbox", [["all", "All", items.length], ...Object.entries(counts).map(([t, n]) => [t, itemMeta(t)[0], n])], type)}
     <div class="card">${itemList(st, shown)}</div>`;
 }
 
@@ -242,7 +242,7 @@ function fleetSessions(st) {
   const rows = sessionTree(st).map(([s, d]) => {
     const pr = (st.prs || []).find((p) => p.session === s.id);
     return `<tr><td><a class="tree-cell" style="--d:${Math.min(d, 4)}" href="${sessionHref(s.id)}">${phaseDot(s)}<b>${esc(s.name)}</b></a></td>
-      <td>${tag(KIND_LABEL[s.kind] || s.kind, s.kind === "orchestrator" ? "accent" : "")}</td><td>${esc(s.phase)}</td>
+      <td>${tag(s.kind, s.kind === "orchestrator" ? "accent" : "")}</td><td>${esc(s.phase)}</td>
       <td class="mono dim hide-md">${esc(s.repo_name || "")}${s.branch ? ` · ${esc(s.branch)}` : ""}</td>
       <td>${pr ? link(pr.url, `#${esc(pr.number)}`) : ""}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
   }).join("");
@@ -266,7 +266,7 @@ function fleetSession(st) {
   const items = (st.items || []).filter((i) => i.session === s.id);
   const tl = (st.timeline || []).filter((e) => e.session === s.id).slice(0, 30);
   return `<div class="view-head"><div><h2>${phaseDot(s)} ${esc(s.name)}</h2>
-      <p>${tag(KIND_LABEL[s.kind] || s.kind)} ${esc(s.phase)}${parent ? ` · under <a class="link" href="${sessionHref(parent.id)}">${esc(parent.name)}</a>` : ""}
+      <p>${tag(s.kind)} ${esc(s.phase)}${parent ? ` · under <a class="link" href="${sessionHref(parent.id)}">${esc(parent.name)}</a>` : ""}
       ${s.task_title ? ` · task: ${esc(s.task_title)}` : ""} · <span class="mono">${esc(s.repo_name || "")}${s.branch ? ` · ${esc(s.branch)}` : ""}</span></p></div></div>
     ${chatCard(s)}
     <div class="grid">
@@ -329,9 +329,8 @@ document.addEventListener("keydown", (e) => { if (e.target.id === "chat-input" &
 document.addEventListener("click", async (e) => {
   const chat = e.target.closest("[data-chat]");
   if (chat) { chatAction(chat.dataset.chat); return; }
-  const t = e.target.closest("[data-ftype],[data-copy],[data-dismiss]");
+  const t = e.target.closest("[data-copy],[data-dismiss]");
   if (!t) return;
-  if (t.dataset.ftype) { F.type = t.dataset.ftype; renderView(); return; }
   if (t.dataset.copy != null) {
     try { await navigator.clipboard.writeText(t.dataset.copy); t.classList.add("done"); setTimeout(() => t.classList.remove("done"), 1200); } catch (err) { /* clipboard blocked: the text is on screen */ }
     return;

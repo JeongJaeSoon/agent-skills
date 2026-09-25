@@ -985,22 +985,24 @@ async function pollState() {
   const slug = S.slug;
   if (!slug || document.hidden) return;
   try {
-    const r = await fetch(isFleet() ? "/api/fleet/state" : `/api/${encodeURIComponent(slug)}/state`, { cache: "no-store", headers: S.etag ? { "If-None-Match": S.etag } : {} });
+    const r = await fetch(`/api/${encodeURIComponent(slug)}/state`, { cache: "no-store", headers: S.etag ? { "If-None-Match": S.etag } : {} });
     if (slug !== S.slug) return;
     S.down = false; S.lastOk = Date.now();
     if (r.status === 304) { setLive(); return; }
     if (!r.ok) throw new Error(String(r.status));
     S.etag = r.headers.get("ETag");
-    S.state = await r.json();
-    render();
+    const next = await r.json();
+    const quiet = isFleet() && S.state && fleetBody(S.state) === fleetBody(next);
+    S.state = next;
+    if (quiet) { renderFresh(); setLive(); } else render();
   } catch (e) { S.down = true; setLive(); if (!S.state) renderView(); }
 }
 
 function route() {
-  const m = location.hash.match(/^#\/([^/]*)(?:\/([a-z]+))?/);
+  const m = location.hash.match(/^#\/([^/]*)(?:\/([a-z]+))?(?:\/(.+))?/);
   if (!m || !m[1]) { location.replace("#/fleet/overview"); return; }
   const slug = decodeURIComponent(m[1]);
-  const section = slug === "fleet" ? fleetSection() : VIEWS[m[2]] ? m[2] : "overview";
+  const section = slug === "fleet" ? fleetSection(m[2], m[3] && decodeURIComponent(m[3])) : VIEWS[m[2]] ? m[2] : "overview";
   const changed = slug !== S.slug;
   S.slug = slug; S.section = section;
   if (changed) { S.state = null; S.etag = null; S.q = ""; }
