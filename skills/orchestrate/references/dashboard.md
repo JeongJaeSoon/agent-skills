@@ -53,7 +53,7 @@ The first screen (`#/fleet/overview`) is not a program. It is every Orca worktre
 
 | What | Source | How often |
 |---|---|---|
-| Sessions, agents, terminals, orchestration mail | `orca worktree ps`, `orca terminal list`, `orca orchestration inbox` (read without consuming) | Every 10 s |
+| Sessions, agents, terminals, orchestration mail | `orca worktree ps`, `orca terminal list`, `orca orchestration inbox` (read without consuming) | Every 10 s while a page is open (it polled in the last 5 min), every 60 s otherwise; opening the page refreshes at once |
 | Runs, workers, tasks, decision gates | `orca orchestration run-list`, `worker-list`, `task-list`, `gate-list` | Every 120 s |
 | Which PR a session's branch has | One GraphQL query per 40 branches (`associatedPullRequests`); a branch without a PR is asked again after 10 min | With the PR tick |
 | PR reviews, review threads, requested reviewers, CI | A cheap probe (state, head, updated time, CI rollup) for every PR that is due, then a full read only for the PRs whose probe changed | Every 90 s; a PR is due every 90 s while hot (CI running, its session working, or updated in the last 2 h), 5 min when warm, 15 min when cold, once a day after it is merged or closed |

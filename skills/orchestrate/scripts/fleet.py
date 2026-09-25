@@ -807,7 +807,8 @@ class Fleet:
             del sticky[k]
         timeline = read_lines(state_dir() / "events.jsonl", EVENTS_KEEP)
         timeline += [{"at": m.get("created_at"), "kind": f"mail_{m.get('type')}", "session": by_handle.get(m.get("from_handle")),
-                      "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]]
+                      "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]
+                     if m.get("type") != "heartbeat"]  # one every 5 min per worker: it would bury everything else
         timeline.sort(key=lambda e: e.get("at") or "", reverse=True)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],

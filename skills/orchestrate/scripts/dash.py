@@ -1201,6 +1201,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self.local_only():
             return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/fleet/state":
+            if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
+                FLEET_WAKE.set()  # the page just opened: refresh now, not at the end of an idle sleep
+            FLEET_VIEWED[0] = time.monotonic()
             f = fleet.state_dir() / "state.json"
             if not f.exists():
                 return self.send(503, b'{"error":"first fleet collect has not finished"}')
@@ -1242,6 +1245,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 TOKEN = hashlib.sha256(os.urandom(32)).hexdigest()
 FLEET = None
+FLEET_VIEWED, FLEET_WAKE = [0.0], threading.Event()
+FLEET_VIEW_S, FLEET_IDLE_EVERY = 300, 60  # poll Orca every 10 s only while a page has polled in the last 5 min
 
 
 def fleet_loop():
@@ -1253,7 +1258,9 @@ def fleet_loop():
                 log("fleet: " + " | ".join(errs))
         except Exception as e:  # keep serving; the next tick retries
             log(f"fleet: tick failed: {e!r}")
-        time.sleep(fleet.ORCA_EVERY)
+        viewed = time.monotonic() - FLEET_VIEWED[0] < FLEET_VIEW_S
+        FLEET_WAKE.wait(fleet.ORCA_EVERY if viewed else FLEET_IDLE_EVERY)
+        FLEET_WAKE.clear()
 
 
 def code_files():
