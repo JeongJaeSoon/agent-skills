@@ -394,51 +394,11 @@ process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(fla
     assert "&lt;img src=x onerror=alert(1)&gt;" in html and "&lt;i&gt;CSV&lt;/i&gt;" in html
     assert 'href="https://example.com/a?b=1&amp;c=2"' in html, "a URL becomes a link, the trailing dot stays text"
     assert html.count('data-decide="opt:') == 2 and 'data-decide="text"' in html and 'id="decide-d1"' in html
+    # A click (or Enter/Space on the title) on a row with more to show opens the Details view; one line has none.
     assert 'data-group="fleet_project" data-val="&lt;u&gt;p&quot;q&lt;/u&gt;"' in html, "the project badge filters, escaped"
-    # Every row links to its item page; the chevron alone expands the text, in a full-width band outside the title column.
-    assert 'data-href="#/fleet/item/decision%3Ad1"' in html and '<a href="#/fleet/item/decision%3Ad1">' in html
-    assert 'data-toggle="decision:d1" aria-expanded="true"' in html and '<ol class="opts">' in html and "Details" not in html
-    assert '</span></span>\n    <div class="more"><div class="pre">Done.\n&lt;b&gt;Shall I merge?&lt;/b&gt;</div></div></li>' in turn_html, turn_html
-    assert 'data-toggle="msg:t2" aria-expanded="false"' in flat_html and 'class="more"' not in flat_html, "one line still expands to wrap"
-
-    # Per type: every kind of item opens its page, and has the toggle exactly when it has text past the summary.
-    # Then the click handler itself on a stub DOM: row -> page, chevron -> expand only, title link and open text -> neither.
-    js = f"""{helpers}
-{(assets / "fleet.js").read_text()}
-const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}};
-st.items = Object.keys(ITEM).map((type, i) => ({{key: `k:${{type}}/${{i}}#x`, type, session: i % 2 ? "wt-coord" : null, title: "t",
-  detail: type.startsWith("ci") ? "" : "line one\\nline two", at: new Date().toISOString()}}));
-const first = st.items[0].key, out = {{rows: st.items.map((it) => [it.type, itemRow(st, it)])}};
-out.section = fleetSection("item", first);
-out.page = fleetItem(st);
-F.itemKey = "gone"; out.gone = fleetItem(st);
-const matches = (el, sel) => sel.split(",").some((one) => one[0] === "[" ? one.slice(6, -1).replace(/-(\\w)/g, (_, c) => c.toUpperCase()) in el.dataset
-  : one[0] === "." ? el.cls.includes(one.slice(1)) : el.tag === one);
-const node = (tag, dataset = {{}}, parent = null, cls = []) => ({{tag, dataset, parent, cls,
-  closest(sel) {{ for (let n = this; n; n = n.parent) if (matches(n, sel)) return n; return null; }}}});
-const li = node("li", {{href: itemHref(first)}}), grow = node("div", {{}}, li), title = node("a", {{}}, node("div", {{}}, grow));
-const toggle = node("button", {{toggle: first}}, node("span", {{}}, li)), more = node("div", {{}}, node("div", {{}}, li, ["more"]));
-const click = (target) => {{ let stopped = false; location.hash = ""; F.open = {{}}; handlers.click({{target, stopPropagation() {{ stopped = true; }}}});
-  return {{hash: location.hash, open: !!F.open[first], stopped}}; }};
-out.clicks = {{row: click(grow), toggle: click(toggle), title: click(title), more: click(more)}};
-selection = "picked"; out.clicks.selecting = click(grow);
-process.stdout.write(JSON.stringify(out));"""
-    ctx = ("const vm = require('vm'), handlers = {}, sb = {process, handlers, location: {hash: ''}, selection: '', CSS: {escape: String},"
-           " getSelection: () => sb.selection, renderView() {},"
-           " document: {addEventListener(t, f) { handlers[t] = f; }, querySelector() { return null; }, activeElement: null}};"
-           "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), sb);")
-    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    for kind, row in got["rows"]:
-        assert f'data-href="#/fleet/item/k%3A{kind}' in row and f'<a href="#/fleet/item/k%3A{kind}' in row, (kind, row)
-        assert (f'data-toggle="k:{kind}/' in row) == (not kind.startswith("ci")), (kind, row)
-    assert got["section"] == "item"
-    assert 'class="rows items page"' in got["page"] and "data-href" not in got["page"] and "data-toggle" not in got["page"]
-    assert '<div class="more"><div class="pre">line one\nline two</div></div>' in got["page"], got["page"]
-    assert "no longer waiting on you" in got["gone"]
-    c = got["clicks"]
-    assert c["row"] == {"hash": "#/fleet/item/k%3Aprompt%2F0%23x", "open": False, "stopped": False}, c
-    assert c["toggle"] == {"hash": "", "open": True, "stopped": True}, c
-    assert c["title"]["hash"] == c["more"]["hash"] == c["selecting"]["hash"] == "", c
+    assert 'data-open="decision:d1"' in html and 'role="button" tabindex="0" aria-expanded="true" data-open-key="decision:d1"' in html
+    assert 'data-open-key="msg:t1"' in turn_html and '<div class="pre">Done.\n&lt;b&gt;Shall I merge?&lt;/b&gt;</div>' in turn_html, turn_html
+    assert "data-open" not in flat_html and 'class="pre"' not in flat_html
 else:
     print("test_fleet: node not found, rendering check skipped")
 
