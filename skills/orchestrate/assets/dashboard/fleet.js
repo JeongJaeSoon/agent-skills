@@ -146,7 +146,9 @@ const hasDetails = (it) => it.type === "decision" ? !!(it.body || (it.options ||
 function itemRow(st, it, { showSession = true } = {}) {
   const [label, tone, ic] = itemMeta(it.type), s = byId(st)[it.session];
   const copy = it.command || it.url || "", more = hasDetails(it), open = more && F.open[it.key];
-  return `<li class="item ${it.missed ? "is-missed" : ""}"><span class="ic tone-${tone}">${icon(ic)}</span>
+  // Outside its own session page a row opens that session; an item with no live session has nowhere to go.
+  const go = showSession && s ? `data-go="${sessionHref(s.id)}"` : "";
+  return `<li class="item ${it.missed ? "is-missed" : ""}" ${go}><span class="ic tone-${tone}">${icon(ic)}</span>
     <div class="grow" ${more ? `data-open="${esc(it.key)}"` : ""}><div class="ellipsis" ${more ? `role="button" tabindex="0" aria-expanded="${!!open}" data-open-key="${esc(it.key)}"` : ""}><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
       <div class="sub muted ellipsis">${projBadge(it.project)}${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}
       ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
@@ -443,9 +445,12 @@ document.addEventListener("click", async (e) => {
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const decide = e.target.closest("[data-decide]");
   if (decide) { decideAction(decide.dataset.key, decide.dataset.decide); return; }
-  // A click on the row opens its details; its own controls, links, the open text and a text selection keep theirs.
+  // A click on the row opens its session, else its details; its own controls, links, the open text and a text selection keep theirs.
+  const keep = e.target.closest("a,button,input,textarea,select,.pre,.opts") || String(getSelection());
+  const go = e.target.closest("[data-go]");
+  if (go && !keep) { location.hash = go.dataset.go; return; }
   const row = e.target.closest("[data-open]");
-  if (row && !e.target.closest("a,button,input,textarea,select,.pre,.opts") && !String(getSelection())) { toggleOpen(row.dataset.open); return; }
+  if (row && !keep) { toggleOpen(row.dataset.open); return; }
   const t = e.target.closest("[data-copy],[data-dismiss]");
   if (!t) return;
   if (t.dataset.copy != null) {

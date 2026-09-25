@@ -399,6 +399,30 @@ process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(fla
     assert 'data-open="decision:d1"' in html and 'role="button" tabindex="0" aria-expanded="true" data-open-key="decision:d1"' in html
     assert 'data-open-key="msg:t1"' in turn_html and '<div class="pre">Done.\n&lt;b&gt;Shall I merge?&lt;/b&gt;</div>' in turn_html, turn_html
     assert "data-open" not in flat_html and 'class="pre"' not in flat_html
+
+    # Outside its own session page a row opens that session: with no live session, or on that page, it stays put.
+    assert 'data-go="#/fleet/session/wt-coord"' in html and 'data-go="#/fleet/session/wt-coord"' in flat_html
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}};
+const it = (session) => ({{key: "mail:m1", type: "question", session, title: "t", detail: "one line"}});
+const out = {{gone: itemRow(st, it("wt-gone")), none: itemRow(st, it(null)), own: itemRow(st, it("wt-coord"), {{showSession: false}})}};
+const matches = (el, sel) => sel.split(",").some((one) => one[0] === "[" ? one.slice(6, -1).replace(/-(\\w)/g, (_, c) => c.toUpperCase()) in el.dataset
+  : one[0] === "." ? el.cls.includes(one.slice(1)) : el.tag === one);
+const node = (tag, dataset = {{}}, parent = null, cls = []) => ({{tag, dataset, parent, cls,
+  closest(sel) {{ for (let n = this; n; n = n.parent) if (matches(n, sel)) return n; return null; }}}});
+const li = node("li", {{go: "#/fleet/session/wt-coord"}}), grow = node("div", {{open: "msg:t1"}}, li);
+const click = (target) => {{ location.hash = ""; F.open = {{}}; handlers.click({{target}}); return [location.hash, !!F.open["msg:t1"]]; }};
+out.clicks = {{row: click(node("span", {{}}, grow)), text: click(node("div", {{}}, grow, ["pre"])), link: click(node("a", {{}}, grow))}};
+selection = "picked"; out.clicks.selecting = click(grow);
+process.stdout.write(JSON.stringify(out));"""
+    ctx = ("const vm = require('vm'), handlers = {}, sb = {process, handlers, location: {hash: ''}, selection: '', CSS: {escape: String},"
+           " getSelection: () => sb.selection, renderView() {}, document: {addEventListener(t, f) { handlers[t] = f; }, querySelector() { return null; }}};"
+           "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), sb);")
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert not any("data-go" in got[k] for k in ("gone", "none", "own")), got
+    assert got["clicks"] == {"row": ["#/fleet/session/wt-coord", False], "text": ["", False], "link": ["", False],
+                             "selecting": ["", False]}, got["clicks"]
 else:
     print("test_fleet: node not found, rendering check skipped")
 

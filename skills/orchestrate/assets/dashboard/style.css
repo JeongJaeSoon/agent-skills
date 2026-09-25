@@ -354,7 +354,7 @@ td.when { white-space: nowrap; }
 /* Each line is one 20px band; a mono run's taller metrics would otherwise stretch its line. */
 .rows.items .grow > .ellipsis { height: 20px; }
 .rows.items .sub { font-size: var(--t-sm); }
-.rows.items [data-open] { cursor: pointer; }
+.rows.items [data-open], .rows.items li[data-go] { cursor: pointer; }
 .rows.items [data-open] .pre, .rows.items [data-open] .opts, .rows.items [data-open] input { cursor: auto; }
 .rows.items .grow > .pre { margin-top: var(--s2); }
 .rows.items li.is-missed { box-shadow: inset 2px 0 0 var(--bad); }
