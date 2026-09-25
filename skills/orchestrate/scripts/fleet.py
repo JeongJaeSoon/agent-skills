@@ -213,6 +213,16 @@ def gql_str(s):
     return json.dumps(str(s))
 
 
+WORKSPACE_RE = re.compile(r"/orca/workspaces/([^/]+)/")
+
+
+def project_of(path, orca_repo=None, gh_repo=None):
+    """The project a worktree belongs to, from live state: Orca's own project name, else the workspace directory Orca
+    put it under (~/orca/workspaces/<project>/<worktree>), else the origin repository's name, else the directory."""
+    m = WORKSPACE_RE.search(f"{path or ''}/")
+    return orca_repo or (m and m.group(1)) or (gh_repo or "").partition("/")[2] or pathlib.Path(path or "").name or None
+
+
 def repo_of(path, cache):
     """owner/name of the worktree's GitHub origin, or None."""
     if path in cache:
@@ -689,6 +699,7 @@ class Fleet:
             sessions, root = build_sessions(self.fast, self.runs, cfg)
             for s in sessions.values():
                 s["gh_repo"] = repo_of(s["path"], self.repos) if s.get("path") else None
+                s["project"] = project_of(s.get("path"), s.get("repo_name"), s["gh_repo"])
             if force or mono - self.last["prs"] >= PR_TICK:
                 try:
                     self.refresh_prs(sessions, cfg)
@@ -895,9 +906,17 @@ class Fleet:
                               "title": mask(m.get("subject"), 160), "detail": mask(m.get("body"), 600),
                               "at": m.get("created_at"), "source": "orca-mail"})
         items += decision_items(by_handle, root)
+        # A task's project is the worktree its latest dispatch runs in (a released one is gone from Orca's list,
+        # but its worktree id still carries the path).
+        task_project = {}
+        for w in sorted(self.runs["workers"], key=lambda w: w.get("dispatchId") or ""):
+            wt = (w.get("resource") or {}).get("worktreeId") or ""
+            ws = sessions.get(wt)
+            task_project[w.get("taskId")] = ws["project"] if ws else project_of(wt.partition("::")[2] or None)
         for g in self.runs["gates"]:
             if g.get("status") not in ("resolved", "cancelled"):
                 items.append({"key": f"gate:{g['id']}", "type": "approval", "session": root, "title": mask(g.get("question"), 160),
+                              "project": task_project.get(g.get("task_id")),
                               "detail": ", ".join(map(str, g.get("options") or [])), "at": g.get("created_at"), "source": "orca-gate"})
         # PRs: live items attached to the session that owns the PR.
         prs = []
@@ -915,7 +934,8 @@ class Fleet:
             if it.get("open"):
                 items.append(it)
         dismissed, raw_keys = mem.setdefault("dismissed", {}), {it["key"] for it in items}
-        items = [it for it in items if it["key"] not in dismissed]
+        items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
+                 for it in items if it["key"] not in dismissed]
         items.sort(key=lambda i: i.get("at") or "", reverse=True)
         # Unread and missed, per session.
         for i in items:
@@ -945,6 +965,7 @@ class Fleet:
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),
+                           "project": task_project.get(t["id"]),
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "sources": self.sources, "me": self.me,

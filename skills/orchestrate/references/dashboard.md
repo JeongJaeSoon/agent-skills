@@ -67,9 +67,11 @@ The hierarchy comes from Orca's own records. The root is `root_worktree` from th
 - **Overview.** Session counts by phase (working, waiting on a prompt, idle, open, offline), what needs you, open PRs and runs. Below: the top of the inbox, the sessions moving now, the open-PR graph and the latest timeline.
 - **Inbox.** Everything a session is waiting on you for, filterable by type. Each row links to its session, opens the PR or copies the command, and can be dismissed.
 - **Graph.** Session → pull request → reviewer. The bar on a PR is its CI (green, red, amber). A reviewer edge is green for approved, dashed amber for an approval on an older commit, red for changes requested, blue for commented, grey dotted for requested and not yet answered.
-- **Sessions.** The whole tree as a table: kind, phase, repository and branch, PR, unread count, last activity.
+- **Sessions.** The whole tree as a table: kind, phase, project and branch, PR, unread count, last activity.
 - **Session.** One session's inbox, agents (current prompt, the tool running now, the last reply, all masked), its PRs and its timeline, plus the send box.
 - **Timeline.** Prompts, finished turns, PR review and CI changes, and orchestration mail, newest first.
+
+Every row that belongs to a session names its project in a small badge: Needs you items (a decision takes the terminal that registered it, a decision gate the worktree its task's dispatch runs in), Moving now, the Sessions table, the session page and the graph's session nodes. The project comes from live state on every collect: Orca's own project name for the worktree, else the workspace directory Orca put it under (`~/orca/workspaces/<project>/<worktree>`), else the origin repository's name, else the worktree directory's name. Only the origin lookup is cached, per path, so a session whose path changes is looked up again. Clicking a badge, or a chip in the project row of Overview, Inbox, Graph and Sessions, shows only that project; "All projects" clears it.
 
 Freshness works as for programs, with Orca warning after 30 s and stale after 90 s, runs after 5 and 15 min, GitHub after 10 and 30 min. The sidebar lists the live part of the tree (offline sessions without unread items are left to the Sessions table), each with a red badge for unread items.
 

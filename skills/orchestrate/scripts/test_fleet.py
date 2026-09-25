@@ -36,6 +36,16 @@ assert {w: ss[w]["phase"] for w in ss} == {"wt-coord": "working", "wt-login": "i
 assert ss["wt-login"]["task_title"] == "ACME-101 login flow" and ss["wt-login"]["terminal"] == "term_login"
 assert all(v["ok"] for v in st["sources"].values()), st["sources"]
 
+# Every row names its project: Orca's project for a session, the task's worktree for a gate, the terminal for a decision.
+assert {s["id"]: s["project"] for s in st["sessions"]} == {"wt-coord": "platform", "wt-login": "launchpad", "wt-export": "launchpad",
+                                                         "wt-docs": "launchpad", "wt-scratch": "tools", "wt-old": "tools"}
+assert [(i["project"], i["session"]) for i in items(st, "approval") if i["source"] == "orca-gate"] == [("launchpad", "wt-coord")]
+assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["project"] for i in items(st))
+assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad", "task_export": "launchpad", "task_docs": "launchpad"}
+assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", None, "o/other") == "acme-api"
+assert fleet.project_of("/src/app-wt", None, "o/app") == "app" and fleet.project_of("/src/app-wt") == "app-wt"
+assert fleet.project_of(None) is None
+
 # Secrets never reach disk.
 for name in ("state.json", "memory.json"):
     assert secret not in (state_dir / name).read_text(), name
@@ -347,7 +357,8 @@ if shutil.which("node"):
     hostile = {"key": "decision:d1", "type": "decision", "session": "wt-coord", "decision": "d1", "source": "orch decide",
                "title": "<script>alert(1)</script>", "detail": "<b>x</b>", "at": ago(0.1), "url": "javascript:alert(1)",
                "body": "<img src=x onerror=alert(1)> see https://example.com/a?b=1&c=2. and javascript:alert(2)",
-               "options": [{"label": "<i>CSV</i>", "description": "\"quoted\" 'x'"}, {"label": "JSON", "description": ""}], "recommend": 1}
+               "options": [{"label": "<i>CSV</i>", "description": "\"quoted\" 'x'"}, {"label": "JSON", "description": ""}], "recommend": 1,
+               "project": "<u>p\"q</u>"}
     turn = {"key": "msg:t1", "type": "approval", "session": "wt-coord", "title": "Merge?", "detail": "Done.\n<b>Shall I merge?</b>", "at": ago(0.1)}
     flat = {"key": "msg:t2", "type": "approval", "session": "wt-coord", "title": "Merge?", "detail": "one line", "at": ago(0.1)}
     js = f"""{helpers}
@@ -358,12 +369,13 @@ process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(fla
     html, turn_html, flat_html = subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
                                          "{document: {addEventListener() {}}, process});"],
                           input=js, capture_output=True, text=True, check=True).stdout.split("\n-----\n")
-    for raw in ("<script", "<img", "<i>", "<b>x", 'href="javascript', "\"quoted\""):
+    for raw in ("<script", "<img", "<i>", "<b>x", 'href="javascript', "\"quoted\"", "<u>", 'p"q'):
         assert raw not in html, (raw, html)
     assert "&lt;img src=x onerror=alert(1)&gt;" in html and "&lt;i&gt;CSV&lt;/i&gt;" in html
     assert 'href="https://example.com/a?b=1&amp;c=2"' in html, "a URL becomes a link, the trailing dot stays text"
     assert html.count('data-decide="opt:') == 2 and 'data-decide="text"' in html and 'id="decide-d1"' in html
     # A click (or Enter/Space on the title) on a row with more to show opens the Details view; one line has none.
+    assert 'data-group="fleet_project" data-val="&lt;u&gt;p&quot;q&lt;/u&gt;"' in html, "the project badge filters, escaped"
     assert 'data-open="decision:d1"' in html and 'role="button" tabindex="0" aria-expanded="true" data-open-key="decision:d1"' in html
     assert 'data-open-key="msg:t1"' in turn_html and '<div class="pre">Done.\n&lt;b&gt;Shall I merge?&lt;/b&gt;</div>' in turn_html, turn_html
     assert "data-open" not in flat_html and 'class="pre"' not in flat_html

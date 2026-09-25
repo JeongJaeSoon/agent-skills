@@ -124,6 +124,20 @@ function fleetHeader() {
 
 // ------------------------------------------------------------ pieces
 
+// The project a row belongs to (fleet.py project_of, from live Orca/git state). A badge filters every fleet view to it.
+const projNow = () => S.filters.fleet_project || "all";
+const inProject = (p) => projNow() === "all" || p === projNow();
+const projBadge = (p) => p ? `<button class="chip proj" type="button" data-group="fleet_project" data-val="${esc(p)}" title="Show only ${esc(p)}">${esc(p)}</button>` : "";
+
+function projectChips(st) {
+  const n = {}, cur = projNow();
+  (st.sessions || []).forEach((s) => { if (s.project) n[s.project] = (n[s.project] || 0) + 1; });
+  const names = Object.keys(n).sort();
+  if (names.length < 2 && cur === "all") return "";
+  const chip = (v, label, c) => `<button class="chip" type="button" data-group="fleet_project" data-val="${esc(v)}" aria-pressed="${v === cur}">${esc(label)}${c != null ? `<span class="n">${c}</span>` : ""}</button>`;
+  return `<div class="chips proj-chips" role="group" aria-label="Project">${chip("all", "All projects")}${names.map((x) => chip(x, x, n[x])).join("")}</div>`;
+}
+
 // What a click on the row opens: a decision's body and options (the Details chip's view), else the full detail text.
 const hasDetails = (it) => it.type === "decision" ? !!(it.body || (it.options || []).length) : String(it.detail || "").trim().includes("\n");
 
@@ -132,7 +146,7 @@ function itemRow(st, it, { showSession = true } = {}) {
   const copy = it.command || it.url || "", more = hasDetails(it), open = more && F.open[it.key];
   return `<li class="item ${it.missed ? "is-missed" : ""}"><span class="ic tone-${tone}">${icon(ic)}</span>
     <div class="grow" ${more ? `data-open="${esc(it.key)}"` : ""}><div class="ellipsis" ${more ? `role="button" tabindex="0" aria-expanded="${!!open}" data-open-key="${esc(it.key)}"` : ""}><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
-      <div class="sub muted ellipsis">${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}
+      <div class="sub muted ellipsis">${projBadge(it.project)}${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}
       ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
       ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : open ? `<div class="pre">${decisionBody(it.detail)}</div>` : ""}</div>
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
@@ -214,7 +228,7 @@ async function decideAction(key, action) {
 }
 
 function itemList(st, items, opts) {
-  const pinned = [...items].sort((a, b) => b.missed - a.missed);
+  const pinned = items.filter((i) => inProject(i.project)).sort((a, b) => b.missed - a.missed);
   return `<ul class="rows items">${pinned.map((it) => itemRow(st, it, opts)).join("") || `<li class="empty">${icon("check")}Nothing waiting on you.</li>`}</ul>`;
 }
 
@@ -238,7 +252,8 @@ function avatarNode(x, y, r, login) {
 // Session -> PR -> reviewer, three columns; each PR is as tall as its reviewer list.
 function relGraph(st, sessionId, openOnly = false) {
   const ss = byId(st);
-  const prs = (st.prs || []).filter((p) => (!sessionId || p.session === sessionId) && (!openOnly || p.state === "OPEN"));
+  const prs = (st.prs || []).filter((p) => (!sessionId || p.session === sessionId) && (!openOnly || p.state === "OPEN")
+    && (sessionId || inProject((ss[p.session] || {}).project)));
   if (!prs.length) return `<div class="empty-chart">No pull request linked to ${sessionId ? "this session" : "any session"} yet.</div>`;
   const groups = {};
   prs.forEach((p) => (groups[p.session] ||= []).push(p));
@@ -267,7 +282,8 @@ function relGraph(st, sessionId, openOnly = false) {
     mids.forEach(([mid, ci]) => out.push(`<path class="edge tone-${ci}" d="M${X[0] + 232} ${sy} C ${X[0] + 262} ${sy}, ${X[1] - 30} ${mid}, ${X[1]} ${mid}"/>`));
     out.push(`<g class="sess"><a href="${sessionHref(sid)}"><rect class="box" x="${X[0]}" y="${sy - 15}" width="232" height="30" rx="6"/>
       <circle class="ph ph-${esc(s.phase)}" cx="${X[0] + 14}" cy="${sy}" r="4"/>
-      <text x="${X[0] + 26}" y="${sy + 4}">${esc((s.name || "").slice(0, 26))}</text></a><title>${esc(s.name)} · ${esc(s.kind || "")} · ${esc(s.phase)}</title></g>`);
+      <text x="${X[0] + 26}" y="${sy + 4}">${s.project ? `<tspan class="proj-tx">${esc(s.project.slice(0, 14))}</tspan> ` : ""}${esc((s.name || "").slice(0, s.project ? 24 - Math.min(14, s.project.length) : 26))}</text></a>
+      <title>${esc(s.project || "")} · ${esc(s.name)} · ${esc(s.kind || "")} · ${esc(s.phase)}</title></g>`);
     y += 10;
   }
   return `<div class="relgraph"><svg viewBox="0 0 ${W} ${y}" style="min-width:720px" role="img" aria-label="Sessions, pull requests and reviewers">${out.join("")}</svg></div>
@@ -288,8 +304,9 @@ function fleetOverview(st) {
       ${kpi("Open PRs", `${open.length}`, `${open.filter((p) => p.ci === "failure").length} CI failing · ${open.filter((p) => p.decision === "APPROVED").length} approved`, { src: "github" })}
       ${kpi("Runs", `${(st.runs || []).length}`, `${(st.tasks || []).filter((t) => t.status !== "completed").length} open tasks`, { src: "runs" })}
     </div>
+    ${projectChips(st)}
     <div class="grid">
-      <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items.slice(0, 8))}</div>
+      <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items.filter((i) => inProject(i.project)).slice(0, 8))}</div>
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
       <div class="card wide" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside"><a class="go" href="#/fleet/graph">All ${icon("arrow")}</a></span></div>${relGraph(st, null, true)}</div>
       <div class="card wide"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>
@@ -297,10 +314,10 @@ function fleetOverview(st) {
 }
 
 function sessionRows(st, list) {
-  return `<ul class="rows">${list.map((s) => {
+  return `<ul class="rows">${list.filter((s) => inProject(s.project)).map((s) => {
     const a = (s.agents || [])[0];
     const doing = a ? (a.state === "working" ? `${a.tool || ""} ${a.detail || ""}` : a.state === "waiting" ? "waiting on a prompt" : "") : "";
-    return `<li>${phaseDot(s)}<a class="grow ellipsis" href="${sessionHref(s.id)}"><b>${esc(s.name)}</b> <span class="muted">${esc(doing.trim())}</span></a>
+    return `<li>${phaseDot(s)}${projBadge(s.project)}<a class="grow ellipsis" href="${sessionHref(s.id)}"><b>${esc(s.name)}</b> <span class="muted">${esc(doing.trim())}</span></a>
       <span class="acts"><span class="slot">${badge(s.unread, s.missed)}</span><span class="when">${relSpan(s.last_activity)}</span></span></li>`;
   }).join("") || '<li class="muted">Nothing running.</li>'}</ul>`;
 }
@@ -311,24 +328,25 @@ function fleetInbox(st) {
   const shown = type === "all" ? items : items.filter((i) => i.type === type);
   return `<div class="view-head"><div><h2>Inbox</h2><p>Things a session is waiting on you for. Missed items (raised before the session's latest prompt) stay pinned until dismissed.</p></div></div>
     ${chips("fleet_inbox", [["all", "All", items.length], ...Object.entries(counts).map(([t, n]) => [t, itemMeta(t)[0], n])], type)}
+    ${projectChips(st)}
     <div class="card">${itemList(st, shown)}</div>`;
 }
 
 function fleetGraph(st) {
   return `<div class="view-head"><div><h2>Graph</h2><p>Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn.</p></div></div>
-    <div class="card" data-src="github">${relGraph(st)}</div>`;
+    ${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
 }
 
 function fleetSessions(st) {
-  const rows = sessionTree(st).map(([s, d]) => {
+  const rows = sessionTree(st).filter(([s]) => inProject(s.project)).map(([s, d]) => {
     const pr = (st.prs || []).find((p) => p.session === s.id);
     return `<tr><td><a class="tree-cell" style="--d:${Math.min(d, 4)}" href="${sessionHref(s.id)}">${phaseDot(s)}<b>${esc(s.name)}</b></a></td>
       <td>${tag(s.kind, s.kind === "orchestrator" ? "accent" : "", "")}</td><td>${esc(s.phase)}</td>
-      <td class="mono dim hide-md">${esc(s.repo_name || "")}${s.branch ? ` · ${esc(s.branch)}` : ""}</td>
+      <td class="hide-md">${projBadge(s.project)}<span class="mono dim">${s.branch ? esc(s.branch) : ""}</span></td>
       <td>${pr ? link(pr.url, `#${esc(pr.number)}`) : ""}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
   }).join("");
   return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator by run membership. Standalone sessions you opened yourself sit under the root.</p></div>${phaseLegend()}</div>
-    <div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Repo · branch</th><th>PR</th><th class="num">Unread</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Unread</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function fleetSession(st) {
@@ -348,7 +366,7 @@ function fleetSession(st) {
   const tl = (st.timeline || []).filter((e) => e.session === s.id).slice(0, 30);
   return `<div class="view-head"><div><h2>${phaseDot(s)} ${esc(s.name)}</h2>
       <p>${tag(s.kind, "", "")} ${esc(s.phase)}${parent ? ` · under <a class="link" href="${sessionHref(parent.id)}">${esc(parent.name)}</a>` : ""}
-      ${s.task_title ? ` · task: ${esc(s.task_title)}` : ""} · <span class="mono">${esc(s.repo_name || "")}${s.branch ? ` · ${esc(s.branch)}` : ""}</span></p></div></div>
+      ${s.task_title ? ` · task: ${esc(s.task_title)}` : ""} · ${projBadge(s.project)}<span class="mono">${s.branch ? esc(s.branch) : ""}</span></p></div></div>
     ${chatCard(s)}
     <div class="grid">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside">${items.length}</span></div>${itemList(st, items, { showSession: false })}</div>

@@ -222,6 +222,8 @@ svg.i > * { vector-effect: non-scaling-stroke; }
 .chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .chip .n { opacity: 0.65; }
 .chips { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.chip.proj { height: 18px; padding: 0 6px; margin-right: var(--s1); border-radius: var(--r-sm); font-size: 11px; vertical-align: 1px; display: inline-flex; }
+.proj-chips { margin: 0 0 var(--s3); }
 .search { height: 28px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 0 var(--s2); min-width: 200px; font: inherit; font-size: var(--t-sm); }
 .search::placeholder { color: var(--ink-3); }
 
@@ -385,6 +387,7 @@ td.when { white-space: nowrap; }
 .relgraph a:hover .box { stroke: var(--accent); }
 .relgraph text { fill: var(--ink); font-size: var(--t-sm); }
 .relgraph .num { font-family: var(--mono); fill: var(--ink-2); }
+.relgraph .proj-tx { fill: var(--ink-3); font-size: 11px; }
 .relgraph .muted { fill: var(--ink-3); }
 .relgraph .pr.closed text { fill: var(--ink-3); }
 .relgraph .bar, .relgraph .ph { fill: var(--tone, var(--line-2)); }

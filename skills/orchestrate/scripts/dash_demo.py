@@ -429,7 +429,7 @@ class FakeFleetWorld:
                                   "dispatchStatus": "pending", "agentTerminalHandle": f"term_{w[3:]}"} for w in ("wt-login", "wt-export", "wt-docs")],
                      "tasks": [{"id": f"task_{w}", "display_name": t, "status": "dispatched"} for w, t in
                                (("login", "ACME-101 login flow"), ("export", "ACME-102 billing export"), ("docs", "ACME-103 docs"))],
-                     "gates": [{"id": "g1", "status": "pending", "question": "Land #41 before #42?", "options": ["yes", "no"],
+                     "gates": [{"id": "g1", "status": "pending", "question": "Land #41 before #42?", "options": ["yes", "no"], "task_id": "task_export",
                                 "created_at": _ago(now, 0.5)}]}
         user = lambda login: {"__typename": "User", "login": login, "avatarUrl": None}
         review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _ago(now, h),
