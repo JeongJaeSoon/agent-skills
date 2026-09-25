@@ -28,6 +28,9 @@ assert not got[10]["target"] and "claude" in got[10]["why"] and got[10]["procs"]
 assert got[20]["target"] and got[20]["why"] == "cwd에 claude 없음"
 assert got[30]["target"] and got[30]["why"] == "cwd 없음"
 assert not got[40]["target"]
+# A claude installed through npm runs as node; it still protects its cwd.
+assert reap.is_claude("node /n/lib/node_modules/@anthropic-ai/claude-code/cli.js -p")
+assert not reap.is_claude("node /x/app-server-broker.mjs serve") and not reap.is_claude("claudette")
 
 # Orphans: ppid 1 and the executable (or its script) under a configured path; never an argument or a prompt.
 rows = {
@@ -98,6 +101,11 @@ with tempfile.TemporaryDirectory() as tmp:
     (wt / "dirty").write_text("x")
     assert reap.judge_worktree(str(repo), w, 6, {}, old, projects)["why"] == "변경 있음"
     (wt / "dirty").unlink()
+    # Without a transcript, the worktree directory's mtime decides the idle time.
+    transcript.rename(transcript.with_suffix(".bak"))
+    assert not reap.judge_worktree(str(repo), w, 6, {}, time.time(), projects)["target"]
+    assert reap.judge_worktree(str(repo), w, 6, {}, old, projects)["target"]
+    transcript.with_suffix(".bak").rename(transcript)
     item = reap.judge_worktree(str(repo), w, 6, {}, old, projects)
     assert item["target"], item
     reap.act(item, [])

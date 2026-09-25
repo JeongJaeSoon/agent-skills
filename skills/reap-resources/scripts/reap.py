@@ -111,9 +111,14 @@ def proc_item(kind, r, rows, **kw):
             "cpu": sum(rows[p]["cpu"] for p in pids), **kw}
 
 
+def is_claude(cmd):
+    """The native binary, or an npm install run as `node …/@anthropic-ai/claude-code/cli.js`."""
+    argv = cmd.split()[:2]
+    return bool(argv) and (os.path.basename(argv[0]) == "claude" or "/@anthropic-ai/claude-code/" in argv[-1])
+
+
 def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
-    claude = {pid: real(c) for pid, c in cwd_of.items()
-              if pid in rows and os.path.basename(rows[pid]["cmd"].split(" ", 1)[0]) == "claude"}
+    claude = {pid: real(c) for pid, c in cwd_of.items() if pid in rows and is_claude(rows[pid]["cmd"])}
     out = []
     for r in rows.values():
         if not BROKER.match(r["cmd"]):
@@ -292,9 +297,10 @@ def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, git=run):
     if not m or w.get("bare"):
         return None
     transcript = projects_dir / m.group(1) / f"{m.group(2)}.jsonl"
-    idle = now - transcript.stat().st_mtime if transcript.exists() else None
+    # No transcript (another config dir): the worktree directory's own mtime stands in.
+    idle = now - (transcript if transcript.exists() else pathlib.Path(path)).stat().st_mtime
     users = [pid for pid, c in cwd_of.items() if under(real(c), real(path))]
-    if idle is not None and idle < hours * 3600:
+    if idle < hours * 3600:
         why = f"세션이 {hours}시간 안에 활동"
     elif users:
         why = f"pid {users[0]} 이 cwd 로 사용 중"
