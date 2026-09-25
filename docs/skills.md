@@ -95,7 +95,7 @@
   - 아래 1~8은 **program 모드**다.
   1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. Run을 만들고 `orch init`으로 등록한다.
   2. **검증 준비와 Pilot:** verify 스킬이 없으면 첫 digest에서 사용자에게 `/create-verification-skill` 실행을 요청하고, 그동안은 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
-  3. **Scale:** 상시 역할(main 가디언, QA 리드)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
+  3. **Scale:** 상시 역할(프로그램마다 main 가디언과 QA 리드, 머신에 하나씩 flow improver와 resource steward)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
   4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다. 제품이 아니라 일하는 방식이 틀어졌으면(사람의 교정, 브리프가 답했어야 할 질문, 과정 탓의 정체, 스킬·스크립트 결함) `orch record <slug> signal`로 한 줄만 남기고 분석은 Close로 미룬다.
   5. **Triage:** follow-up은 기본적으로 미룬다(park). predicate를 막거나 재현된 결함만 받아들인다. 브리프는 follow-up을 parent가 아닌 related로 잇게 한다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
   6. **Land:** 워커가 `orch land`로 직접 착지한다. 일반 PR은 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 머지된다.
@@ -111,7 +111,7 @@
   - `references/`
     - `brief.md`: 워커 브리프 템플릿.
     - `landing.md`: 레인, 착지 순서, stack, `land` 종료 코드.
-    - `roles.md`: 가디언, QA 리드, flow improver.
+    - `roles.md`: 가디언, QA 리드, flow improver(진행 중 스킬 개선), resource steward(끝난 worktree·프로세스 정리).
     - `program-note.md`: 프로그램 노트 템플릿.
     - `dashboard.md`: 대시보드 설명.
     - `top-level.md`: 최상위 orchestrator 모드.

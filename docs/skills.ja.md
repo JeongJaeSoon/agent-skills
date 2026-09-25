@@ -98,7 +98,7 @@
   - 以下の 1〜8 は **program モード**です。
   1. **Frame:** 完了条件（predicate）は、数えられるチケット ID と実際の成果物の検査で決めます。人の指示は standing order としてそのまま書き写します。依存は開始の順序（Orca task deps）と着地の順序（GitHub stack、`orch dep`）に分けます。Run を作り、`orch init` で登録します。
   2. **検証の準備と Pilot:** verify スキルがなければ、最初の digest でユーザーに `/create-verification-skill` の実行を頼みます。それまでは手で検証し、ワーカー一つで最後まで一度回してみます。
-  3. **Scale:** 常駐の役割（main ガーディアン、QA リード）を立ち上げます。チケットワーカーの同時実行の上限は1から始め、main に green で着地するたびに1ずつ増やし（既定の ceiling は6）、red になれば半分にします。
+  3. **Scale:** 常駐の役割（プログラムごとに main ガーディアンと QA リード、マシンに1つずつ flow improver と resource steward）を立ち上げます。チケットワーカーの同時実行の上限は1から始め、main に green で着地するたびに1ずつ増やし（既定の ceiling は6）、red になれば半分にします。
   4. **Drain:** `orch wait` をバックグラウンドで一つだけ回します。worker_done が来たら、同じターンで `CLOSE OUT` を処理します。毎回 `orch status` で締めくくり、STALLED、SPARE、LEDGER GAP、LANDED-BUT-OPEN の行に対応します。製品ではなく作業の進め方がずれたとき（人による修正、ブリーフが答えておくべきだった質問、プロセスが原因の停滞、スキルやスクリプトの欠陥）は、`orch record <slug> signal` で一行だけ残し、分析は Close に回します。
   5. **Triage:** follow-up は基本的に先送り（park）します。predicate を妨げるものと、再現した欠陥だけを受け入れます。ブリーフでは follow-up を parent ではなく related で結ばせます。Orca の既定は parent ですが、そうすると集計や段階のバーが元のチケットの計画済みの作業として数えてしまいます。
   6. **Land:** ワーカーが `orch land` で自分で着地させます。通常の PR は並列にマージされ、migration・CI・Dockerfile・compose のような共有ファイルは、専有レーンで base ごとに一つずつマージされます。
@@ -114,7 +114,7 @@
   - `references/`
     - `brief.md`: ワーカーのブリーフのテンプレート。
     - `landing.md`: レーン、着地の順序、stack、`land` の終了コード。
-    - `roles.md`: ガーディアン、QA リード、flow improver。
+    - `roles.md`: ガーディアン、QA リード、flow improver（進行中のスキル改善）、resource steward（終わった worktree・プロセスの片付け）。
     - `program-note.md`: プログラムノートのテンプレート。
     - `dashboard.md`: ダッシュボードの説明。
     - `top-level.md`: 最上位 orchestrator モード。

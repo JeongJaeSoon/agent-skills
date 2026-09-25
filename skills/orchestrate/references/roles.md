@@ -1,19 +1,22 @@
 # Standing roles
 
-A program of more than a handful of tickets runs two standing workers beside the ticket workers, the main guardian and the QA lead, plus a flow improver on demand. Each standing worker is an Orca worker with its own worktree and brief, spawned at Scale and kept until Close. They report to the Run inbox like any worker, and the coordinator records each with `orch record <slug> spawned --role <name> --note <dispatchId>` so they stay outside the concurrency cap. None of them lands feature work.
+A program of more than a handful of tickets runs standing workers beside the ticket workers: a main guardian and a QA lead per program, and one flow improver and one resource steward per machine. Each standing worker is an Orca worker with its own worktree and brief, spawned at Scale. They report to the Run inbox like any worker, and the coordinator records each with `orch record <slug> spawned --role <name> --note <dispatchId>` so they stay outside the concurrency cap. None of them lands feature work.
+
+The flow improver and the resource steward serve every program on the machine, so there is only one of each. The top-level orchestrator owns them when there is one; otherwise the first program to reach Scale spawns them, and a later program reuses the running one (`worker-list`). They are released at Close only when no other program still runs; the per-program roles are always released at Close.
 
 | Role | Owns | Does not |
 |---|---|---|
-| Coordinator (this session) | Order, deps, briefs, triage, gates, the digest | Diagnose red main, run QA, rework the process |
+| Coordinator (this session) | Order, deps, briefs, triage, gates, the digest | Diagnose red main, run QA, rework the process, reap worktrees |
 | Main guardian | Red main: flake or defect, freeze, hotfix or revert, notify | Pick up tickets |
 | QA lead | Ticket verification, periodic E2E on main, design-vs-code audit | Fix what it finds (it files tickets) |
-| Flow improver (a subagent or a separate session, on demand) | Turning the human's process feedback into standing-order changes now | Touch the running program, or edit skills mid-program (those wait for `reflect` at Close) |
+| Flow improver | Folding lesson signals and the human's process feedback into the skills while programs run: batched, audited, pushed, then reloaded | Touch a running program's work, or change its contract (merge policy, predicate, the brief's required fields, landing rules) before that program's coordinator confirms |
+| Resource steward | Reaping settled worktrees the coordinators missed, stopping orphaned heavy processes, watching machine load | Touch a live turn, a dirty tree, an open PR, a coordinator's or standing role's worktree, or the dashboard; `--force` |
 
 They came from the user's own calls on a real program (2026-09-24):
 
 - On red main: "무조건 revert 하기보다는 별도의 agent에 위임해서 revert/hotfix를 자율 판단·대응하고 결과를 너에게 보고 + 필요한 세션에 공유, 너는 조율만".
 - On QA: "중간중간 동작확인 QA, e2e 테스트, 설계구현 정합성 확인도 전문 QA 오케스트레이터로 해야 한다".
-- On process feedback: the coordinator stays on the mission. Feedback about how the work flows goes to a separate session or subagent, which improves the skills and shares the result.
+- On process feedback: the coordinator stays on the mission. Feedback about how the work flows goes to a separate session, which improves the skills while programs run and shares the result (2026-09-26).
 
 ## Main guardian brief
 
@@ -83,3 +86,71 @@ REPORT      A digest per lane round to the coordinator (send --to run:<run id> -
 ```
 
 Set the cadence in the program note's standing orders so a resumed coordinator re-briefs the same way.
+
+## Flow improver brief
+
+```
+FLOW: flow improver for the skills repo <repo>
+
+GOAL        Fold what the coordinators learn while running work into the skills, so each round
+            runs better than the last.
+INPUT       Lesson signals the coordinators send you (send --to dispatch:<you>), and the human's
+            process feedback they forward. Read your mail at each checkpoint.
+LOOP        About every 60 minutes, take everything that arrived and fold it in as one commit.
+            Before writing a candidate, judge whether it is needed. Drop it when any of these holds:
+              a. another part of the skill already says it
+              b. it was a one-off circumstance, not a mistake that would recur without the rule
+              c. it tells the model what it already does well by default
+              d. it would contradict an existing rule, or lengthen the skill until other rules get lost
+            Change as little as the round needs, and prefer rewriting an existing sentence to adding
+            one; a change that lengthens a skill gives its reason in the report. Write every rule
+            generically.
+USAGE       Periodically count Skill tool calls per skill name in the local transcripts (name, count,
+            last use; never read or copy their content). For a skill outside the development flow
+            that goes unused, judge why: its description misses the trigger, it overlaps another
+            skill, or it is no longer needed. Fix the first two with the smallest description change;
+            only propose deleting the third. The count goes in the report, never in a commit.
+EVERY COMMIT
+            - Run the claude-api skill's prompt audit on the changed skill files and apply what it finds.
+            - Keep the repo's translation markers current (the catalog's translated-from lines).
+            - The repo's tests pass. The commit is signed.
+            - Grep the diff for internal names (the local list, never committed); 0 hits.
+            - Fast-forward the loaded checkout and push; then tell the coordinator "reload needed".
+CONTRACTS   A change to a running program's contract (merge policy, predicate, the brief's required
+            fields, landing rules) waits for that coordinator's confirmation: ask, then commit.
+FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is editing.
+REPORT      One status per commit: the sha, the diff summary, the audit's findings and what was
+            applied, the grep and its result, each candidate dropped as
+            "not applied: <candidate> — <reason>", and whether a reload is needed. On "release",
+            worker_done and stop.
+```
+
+## Resource steward brief
+
+```
+STEWARD: resource steward for this machine
+
+GOAL        Keep settled workers, dead processes and leftover worktrees from eating CPU, memory
+            and disk, without touching live work.
+ROUND       Every 20 minutes, woken by a Bash loop under run_in_background. Take stock: orca
+            worktree list, orca terminal list, the orchestration task and dispatch state; per
+            worktree its git status, unpushed commits, PR state and whether its turn is live.
+WORKTREES   orca worktree rm (checks and --run-hooks per end-session §4) only when all hold: its
+            dispatch is settled (worker_done, released or stopped), no live turn, a clean tree, no
+            unpushed commits, and its PR merged or closed, or never opened. Never --force.
+            Never touch: a coordinator's worktree, the checkout that loads the skills
+            (docs/platform.md), a standing role's worktree, a live turn, an open PR, local changes.
+PROCESSES   Compose stacks, dev servers, headless browsers and test runners whose worktree is
+            gone or settled: stop them the normal way (docker compose down in that directory, the
+            tool's own stop). Kill a pid directly only when its cwd is a worktree that no longer
+            exists. A refused kill is not worked around: report it as "needs the owner to run"
+            with the exact command. Never touch the dashboard server, the Orca app, or a Claude
+            process whose turn is live.
+LOAD        Watch load average, memory pressure and free disk. When heavy local runs pile up,
+            tell the coordinator and suggest a heavy_slots value.
+FORBIDDEN   Any repo's code, PRs, tickets or chat.
+REPORT      The first round: the full inventory to the coordinator (--type status): removed,
+            kept with its reason (dirty, unpushed, open PR, live turn), needs owner action. Later
+            rounds only when something changed. --type escalation only when a resource is about
+            to run out. On "release", worker_done with a summary and stop.
+```

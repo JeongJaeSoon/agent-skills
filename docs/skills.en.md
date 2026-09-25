@@ -98,7 +98,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - Steps 1–8 below are **program mode**.
   1. **Frame:** The done condition (predicate) is set as countable ticket IDs plus checks on the real deliverables. Human instructions are carried over verbatim as standing orders. Dependencies are split into start order (Orca task deps) and landing order (GitHub stack, `orch dep`). It creates a Run and registers it with `orch init`.
   2. **Verification setup and Pilot:** If there is no verify skill, the first digest asks the user to run `/create-verification-skill`. Until then it verifies by hand and runs one worker end to end as a trial.
-  3. **Scale:** Starts the standing roles (main guardian, QA lead). The concurrency cap for ticket workers starts at 1, goes up by 1 with each green landing on main (default ceiling 6), and halves on red.
+  3. **Scale:** Starts the standing roles (a main guardian and a QA lead per program, one flow improver and one resource steward per machine). The concurrency cap for ticket workers starts at 1, goes up by 1 with each green landing on main (default ceiling 6), and halves on red.
   4. **Drain:** Runs exactly one `orch wait` in the background. When worker_done arrives, it handles `CLOSE OUT` in the same turn. Every pass ends with `orch status`, acting on the STALLED, SPARE, LEDGER GAP and LANDED-BUT-OPEN lines. When the way of working went wrong rather than the product (a human correction, a question the brief should have answered, a stall caused by process, a flaw in a skill or script), it leaves a single line with `orch record <slug> signal` and saves the analysis for Close.
   5. **Triage:** Follow-ups are parked by default. Only those that block the predicate or are reproduced defects are admitted. Briefs tell workers to link follow-ups as related, not as children of a parent. Orca defaults to parent, but then the counts and stage bars treat them as planned work of the original ticket.
   6. **Land:** Workers land their own PRs with `orch land`. Ordinary PRs merge in parallel; shared files such as migrations, CI, Dockerfiles and compose merge one at a time per base in an exclusive lane.
@@ -114,7 +114,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - `references/`
     - `brief.md`: worker brief template.
     - `landing.md`: lanes, landing order, stacks, `land` exit codes.
-    - `roles.md`: guardian, QA lead, flow improver.
+    - `roles.md`: guardian, QA lead, flow improver (improves the skills while programs run), resource steward (cleans up finished worktrees and processes).
     - `program-note.md`: program note template.
     - `dashboard.md`: guide to the dashboard.
     - `top-level.md`: the top-level orchestrator mode.

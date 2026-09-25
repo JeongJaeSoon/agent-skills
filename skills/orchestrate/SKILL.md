@@ -33,14 +33,14 @@ The human must get an answer from you within seconds, at any time. You route; yo
 | Goal | Orca Run `objective` (`run-create`), shown as the dashboard headline |
 | Standing orders, predicate, merge policy, decisions, human digest | Program note in the notes store (`use-notes`), template `references/program-note.md` |
 | Tickets, their state, which are derived | The tracker, through `use-tracker` (`tracker.py`) |
-| PRs, CI, merges, stacks | GitHub |
+| PRs, CI, merges, stacks | GitHub, read there directly (a tracker's PR panel is a cache and lags) |
 | Runs, tasks and their deps (the dependency graph), workers, questions, gates | Orca |
 | Verdicts, lanes, land order, landings, main red/green, the concurrency cap, deps found after dispatch | `~/.claude/programs/<slug>/ledger.jsonl`, written only through `orch` |
 | Briefs as sent | `~/.claude/programs/<slug>/briefs/<ticket>.md` |
 | Decision trail | `~/.claude/programs/<slug>/decisions.tsv` (`show-me-your-work`) |
 | Lessons: raw signals / what became of them | `signal` rows in the ledger / the lessons ledger in the notes store (`reflect`) |
 | What the human watches | `orch-dash` dashboard (`references/dashboard.md`) |
-| Who does what beside the ticket workers | Standing roles: main guardian, QA lead (`references/roles.md`) |
+| Who does what beside the ticket workers | Standing roles: main guardian, QA lead, flow improver, resource steward (`references/roles.md`) |
 
 `orch` runs `scripts/prog.py` and `orch-dash` runs `scripts/dash.py`; the plugin's `bin/` puts both on the Bash PATH. Run either with no arguments for usage.
 
@@ -60,7 +60,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
 2. **Verification first.** If the target repo has no `.claude/skills/verify-*`, the first digest asks the human to run `/create-verification-skill` in that repo. It is user-invoked, so neither you nor a worker can start it. Pilot anyway, with VERIFY driven by hand until the skill lands.
 3. **Pilot.** Run one worker through brief → PR → verdict → `orch land` → main green. Fix the brief, the unit size and VERIFY from whatever broke. Also confirm that the chosen worker model gets through its first `orca orchestration` call and its `orch land` without a permission prompt.
 4. **Scale.**
-   - Spawn the standing roles (`references/roles.md`): a main guardian, and a QA lead once the first tickets land. Record each with `orch record <slug> spawned --role <guardian|qa> --note <dispatchId>`; roles do not count against the cap.
+   - Spawn the standing roles (`references/roles.md`): a main guardian, a QA lead once the first tickets land, and the machine's flow improver and resource steward unless `worker-list` shows them running. Record each with `orch record <slug> spawned --role <guardian|qa|flow|steward> --note <dispatchId>`; roles do not count against the cap.
    - Then spawn ticket workers up to the cap that `orch status` prints. The cap starts at 1, grows by one per landing proven green on main, and halves on red. The layers of one land-after chain (`orch dep`) count once, since they land as one merge; start the whole chain together.
 
    For each ticket worker:
@@ -108,7 +108,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
 |---|---|
 | "I'll watch X myself, don't bother" (usage, a metric, a channel) | Delete X from the standing orders and from every judgment rule now, and never defer work on X's account again |
 | "Can it go faster?" | Offer structural levers: parallelize the critical path, stack dependent chains, reorder the land order, narrow `exclusive_paths`, risk-tiered review depth, split CI jobs by role. Apply the approved ones at once. Not "work harder", and not serializing for safety (one CI at a time, one landing per N minutes) |
-| Feedback about how the work flows, not about the product | Record a `signal --kind human_correction`, and hand the feedback to a flow improver (a subagent or a separate session). It changes the standing orders now and shares the result, while you stay on the program. Skill changes wait for `reflect` at Close |
+| Feedback about how the work flows, not about the product | Record a `signal --kind human_correction`, and send the feedback to the flow improver (`send --to dispatch:<its id>`) while you stay on the program. It folds feedback into the skills in batches, and asks you before changing this program's contract; after its "reload needed", run `skills-sync broadcast` |
 | "Make it better" about in-flight work | A new ticket with its own brief. Never append it to the running task |
 | "Make a ticket for …" inside another question | Split it out and file it immediately, then answer the question |
 | Doubts your report ("is that right?", "불안하다") | A read-only verifier agent re-checks it. Your self-report is not evidence |
@@ -120,11 +120,11 @@ The human must get an answer from you within seconds, at any time. You route; yo
 
 - `autonomous` (default): workers land with `orch land`.
 - `human-gate`: workers stop at READY. You `orch gate <slug> --pr N` (an Orca decision gate), and after the user resolves it, `orch land`.
-- Either way, stop and ask only before irreversible acts: destructive migrations, force-pushing shared branches, sending anything outside, changing repo or branch protection.
+- Either way, stop and ask only before irreversible acts and acts the human owns: destructive migrations, force-pushing shared branches, sending anything outside, changing repo or branch protection, production deploys, approvals the review ruleset requires from a person, other people's tickets, and acts the classifier refuses.
 
 ## What reaches the human
 
-The dashboard, plus the digest line in the program note, batched. A decision you wait on the human for is also registered with `orch decide add` and closed with `orch decide done` the moment the human answers or settles it in words; a dashboard button, or a prompt that starts with the id or a unique option label (the `UserPromptSubmit` hook), closes it itself (`references/top-level.md`, "Asking the human"). The digest holds open gates, a proposed predicate, irreversible acts, and any standing order that contradicts reality. Never retries, CI flakes, review-thread triage, rebases, or "should I continue".
+The dashboard, plus the digest line in the program note, batched. A decision you wait on the human for is also registered with `orch decide add` and closed with `orch decide done` the moment the human answers or settles it in words; a dashboard button, or a prompt that starts with the id or a unique option label (the `UserPromptSubmit` hook), closes it itself (`references/top-level.md`, "Asking the human"). The digest holds open gates, a proposed predicate, irreversible acts, and any standing order that contradicts reality. Never retries, CI flakes, review-thread triage, rebases, "should I continue", or routine design calls (design options, ticket splits, stack or parallel): research those with a subagent or skill, pick, and record why in `decisions.tsv`.
 
 ## Where this differs from Orca, and why
 

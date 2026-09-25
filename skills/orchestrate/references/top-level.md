@@ -22,7 +22,7 @@ Every request leaves your turn within one short tool call.
 | A quick lookup, a read across several repos, a review or verification of work already done, or delegation to an external tool (chat, tracker, notes) | A background subagent (`run_in_background`); you answer when it reports |
 | A change to one repo, or an investigation that must read one repo's code or config | A new Orca worker (`worker-start`) with a brief (`brief.md`, "Single worker"), or `dispatch-card` when it needs its own card |
 | More work for a session that already owns that topic | That session: `orca orchestration send --to dispatch:<id>` if it is a dispatch, otherwise the human's inbox ("send this to <session>") |
-| Three or more tickets that must land together | A program coordinator (`orchestrate` program mode) in its own session |
+| Three or more tickets that must land together | A program coordinator (`orchestrate` program mode) in its own session. Several tracks: one coordinator per track, each with its own QA lead; a track of a couple of tickets, or one that depends on another, joins that track |
 | Work inside a running program | Its coordinator. Never steer its workers past it |
 
 An investigation inside one repo is a worker, not a subagent: it reads a fresh checkout of that repo, shows on the roster while it runs, and can take the change that follows from what it finds.
@@ -44,7 +44,7 @@ Once adopted they are on the roster, and you only read them. Never answer their 
 
 - Check the exit status of every `orca orchestration send`. A completed dispatch refuses mail ("its worker will never read that mailbox"): send to `run:<id>`, or start a new dispatch for new work.
 - `terminal send --wait-submit` can warn "no turn start was observed" when the turn did start. Read `--screen` before sending again, or the instruction lands twice.
-- Put message bodies in a file and pass `--body "$(cat <file>)"`. A body that merely mentions kill, deploy or merge gets the whole command refused by the auto-mode classifier.
+- Put message bodies in a file and pass `--body "$(cat <file>)"`. A body that merely mentions kill, deploy or merge gets the whole command refused by the auto-mode classifier. A sensitive list (affected users' emails and the like) stays in its file: pass only the path, so the list never enters your context or the mail.
 - Typing into another session's composer is only for the one-line nudge in SKILL.md and the reload below. Both pass the idle check first.
 
 ## Asking the human
@@ -57,7 +57,7 @@ The inbox is the dashboard's: `orch-dash inbox add --type <approval|run_command|
 
 ## Acts only the human's session may take
 
-The permission classifier treats an instruction you relay as not the human's. So an act that reaches production (dispatching a release, merging a deploy PR, syncing a GitOps app) or that weakens a confirmation or a guard runs only in the session where the human gave that instruction in chat, usually this one; it is the one kind of task work you do yourself. A dashboard Decision answer reaches any other session as a relayed line too: for such a decision, act on it here, or ask the human to say it once more in the chat of the session that will act. When a worker is refused such an act, never send it or another worker to try again: that launders the refusal.
+The permission classifier treats an instruction you relay as not the human's. So an act that reaches production (dispatching a release, merging a deploy PR, syncing a GitOps app) or that weakens a confirmation or a guard runs only in the session where the human gave that instruction in chat, usually this one; it is the one kind of task work you do yourself. When the human names a version, compare it with what the target environment runs before dispatching (a deploy workflow without a version input promotes whatever the lower environment runs), and show who authored, requested and merged each PR in that release. Pass a GitOps sync its revision as the full 40-character SHA: a mistyped short one left the sync stuck in a comparison error. A dashboard Decision answer reaches any other session as a relayed line too: for such a decision, act on it here, or ask the human to say it once more in the chat of the session that will act. When a worker is refused such an act, never send it or another worker to try again: that launders the refusal.
 
 ## Messages to a chat
 
