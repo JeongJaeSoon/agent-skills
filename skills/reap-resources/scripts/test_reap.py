@@ -101,15 +101,23 @@ with tempfile.TemporaryDirectory() as tmp:
     (wt / "dirty").write_text("x")
     assert reap.judge_worktree(str(repo), w, 6, {}, old, projects)["why"] == "변경 있음"
     (wt / "dirty").unlink()
-    # Without a transcript, the worktree directory's mtime decides the idle time.
+    # Without a transcript nothing proves the session quiet, so it stays.
     transcript.rename(transcript.with_suffix(".bak"))
-    assert not reap.judge_worktree(str(repo), w, 6, {}, time.time(), projects)["target"]
-    assert reap.judge_worktree(str(repo), w, 6, {}, old, projects)["target"]
+    assert not reap.judge_worktree(str(repo), w, 6, {}, old, projects)["target"]
     transcript.with_suffix(".bak").rename(transcript)
     item = reap.judge_worktree(str(repo), w, 6, {}, old, projects)
     assert item["target"], item
     reap.act(item, [])
     assert not wt.exists() and len(reap.worktrees(str(repo))) == 1
+    # A vanished worktree goes alone; another vanished one that is not in the plan stays.
+    for name in ("gone1", "gone2"):
+        git("worktree", "add", "-q", "--detach", str(tmp / name), cwd=repo)
+        subprocess.run(["rm", "-rf", str(tmp / name)], check=True)
+    gone = [reap.judge_worktree(str(repo), w, 6, {}, old, projects) for w in reap.worktrees(str(repo))[1:]]
+    assert all(g["target"] for g in gone) and len(gone) == 2
+    reap.act(gone[0], [])
+    assert [w["path"] for w in reap.worktrees(str(repo))[1:]] == [gone[1]["name"]]
+    git("worktree", "remove", gone[1]["name"], cwd=repo)
     # A non-scratchpad worktree is not this skill's.
     git("worktree", "add", "-q", "--detach", str(tmp / "other"), cwd=repo)
     assert reap.judge_worktree(str(repo), reap.worktrees(str(repo))[1], 6, {}, old, projects) is None

@@ -40,12 +40,12 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
 | orphan | ppid 1, and the executable or the script it runs lies under a path in `reap.orphan_paths`, ≥ N hours | anything else | same |
 | docker | a dangling volume whose compose project has no container in any state, ≥ N hours; an untagged image no container uses, ≥ N hours | a project with any container, a volume whose name holds such a project's name, a volume with no compose label (reported only) | `docker volume rm <name>`, `docker image rm <id>` |
 | branch | every PR from that branch is merged or closed, no worktree has it checked out, and its tip is what a PR carried | an open PR, commits after the PR, the default branch, no PR | `git branch -D`; the output has the restore command |
-| worktree | a worktree whose directory is gone; a worktree under a Claude scratchpad whose session transcript is quiet for N hours, with no process in it, clean, not locked, its HEAD on a remote | any of those fails; any other worktree | `git worktree prune`, `git worktree remove` (never `--force`) |
+| worktree | a worktree whose directory is gone; a worktree under a Claude scratchpad whose session transcript is quiet for N hours, with no process in it, clean, not locked, its HEAD on a remote | any of those fails, no transcript to prove the session quiet; any other worktree | `git worktree remove <path>`, which for a vanished directory drops only that entry (never `--force`, never a repo-wide `prune`) |
 
 Finished compose stacks (every container stopped) are reported with their `docker compose -p
 <project> down` command, not removed: whether their data is still wanted is the owner's call.
 
-Never: `pkill`/`killall` by pattern, `docker system prune`, `docker volume prune`, `--force`,
+Never: `pkill`/`killall` by pattern, `docker system prune`, `docker volume prune`, `git worktree prune`, `--force`,
 or anything not in the plan. A kill the auto-mode classifier refuses is not worked around: hand
 the exact `reap --plan` command to the user.
 

@@ -31,7 +31,12 @@ def opt(name, default=None):
 
 
 def run(cmd, cwd=None, check=True):
-    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=ENV)
+    try:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=ENV)
+    except FileNotFoundError:
+        if check:
+            raise RuntimeError(f"{cmd[0]}: not installed")
+        return None
     if check and r.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd[:4])}: {r.stderr.strip()[:200]}")
     return r.stdout if r.returncode == 0 else None
@@ -292,15 +297,16 @@ def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, git=run):
     path = w["path"]
     base = {"kind": "worktree", "key": f"worktree:{repo}:{path}", "repo": repo, "name": path}
     if w.get("prunable"):
-        return {**base, "why": "디렉터리 없음(git worktree prune)", "target": True, "prune": True}
+        return {**base, "why": "디렉터리 없음", "target": True}
     m = SCRATCH.search(path + "/")
     if not m or w.get("bare"):
         return None
     transcript = projects_dir / m.group(1) / f"{m.group(2)}.jsonl"
-    # No transcript (another config dir): the worktree directory's own mtime stands in.
-    idle = now - (transcript if transcript.exists() else pathlib.Path(path)).stat().st_mtime
+    idle = now - transcript.stat().st_mtime if transcript.exists() else None
     users = [pid for pid, c in cwd_of.items() if under(real(c), real(path))]
-    if idle < hours * 3600:
+    if idle is None:
+        why = "세션 transcript 없음(조용한지 알 수 없음)"
+    elif idle < hours * 3600:
         why = f"세션이 {hours}시간 안에 활동"
     elif users:
         why = f"pid {users[0]} 이 cwd 로 사용 중"
@@ -445,8 +451,6 @@ def act(item, notes):
             return "tip 이 바뀜, 남김"
         run(["git", "branch", "-D", item["name"]], cwd=item["repo"])
         return f"삭제 (복구: git -C {item['repo']} branch {item['name']} {tip})"
-    elif item.get("prune"):
-        run(["git", "worktree", "prune"], cwd=item["repo"])
     else:
         run(["git", "worktree", "remove", item["name"]], cwd=item["repo"])
     return "삭제"

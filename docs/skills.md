@@ -144,7 +144,7 @@
   - **orphan:** ppid 1이고 실행 파일이 설정의 `reap.orphan_paths`(테스트 캐시 경로) 아래에 있는 프로세스.
   - **docker:** 컨테이너가 하나도 없는 compose project의 dangling volume과, 컨테이너가 쓰지 않는 태그 없는 이미지. 컨테이너가 있는 project, 그 이름을 품은 volume, compose 라벨 없는 volume은 남기고 보고만 한다.
   - **branch:** PR이 모두 머지·닫혔고, worktree가 없고, tip이 PR head와 같은 로컬 브랜치. 복구 명령을 함께 출력한다.
-  - **worktree:** 디렉터리가 사라진 worktree(`git worktree prune`), 세션 transcript가 N시간 조용한 Claude scratchpad의 깨끗하고 push된 worktree(`git worktree remove`). Orca worktree는 resource steward의 몫이다.
+  - **worktree:** 디렉터리가 사라진 worktree와, 세션 transcript가 N시간 조용한 Claude scratchpad의 깨끗하고 push된 worktree. 둘 다 `git worktree remove <경로>`로 그 항목만 지운다. Orca worktree는 resource steward의 몫이다.
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(Codex 프로세스·RSS, 고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, 테스트 파일.
 - **관계:** `orchestrate`의 resource steward가 라운드마다 부르고, 경보가 남으면 대시보드 인박스로 사람에게 알린다.
