@@ -45,6 +45,10 @@ const ICON = {
   link: '<path d="M6.8 9.2a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.7.7M9.2 6.8a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.7-.7"/>',
   sort: '<path d="M5 2.5v11M2.5 11 5 13.5 7.5 11M11 13.5v-11M8.5 5 11 2.5 13.5 5"/>',
   yield: '<path d="M13.5 8H3M6.5 4.5 3 8l3.5 3.5"/>',
+  inbox: '<path d="M1.8 9.2 3.6 3h8.8l1.8 6.2v3.8H1.8Z"/><path d="M1.8 9.2h3.4l.9 1.8h3.8l.9-1.8h3.4"/>',
+  chat: '<path d="M2.2 3h11.6v7.6H7.4L4.2 13.4v-2.8H2.2Z"/>',
+  copy: '<rect x="5.2" y="5.2" width="8.6" height="8.6" rx="1.4"/><path d="M10.8 5.2V3.6a1.4 1.4 0 0 0-1.4-1.4H3.6a1.4 1.4 0 0 0-1.4 1.4v5.8a1.4 1.4 0 0 0 1.4 1.4h1.6"/>',
+  send: '<path d="M14 2 7.2 8.8M14 2 9.6 14l-2.4-5.2L2 6.4Z"/>',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -58,6 +62,8 @@ const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage blocked: the choice just is not remembered */ } },
 };
+
+const isFleet = () => S.slug === "fleet";
 
 const S = {
   programs: [], slug: null, section: "overview", state: null, etag: null, lastOk: 0, down: false, sbOpen: false,
@@ -193,14 +199,17 @@ function mainTone(m) { return m === "red" ? "bad" : m === "pending" ? "warn" : m
 
 function renderSidebar() {
   const st = S.state;
-  $("#program-list").innerHTML = S.programs.length ? S.programs.map((p) => {
+  const fleetItem = `<li><a class="nav-item" href="#/fleet/overview" ${isFleet() ? 'aria-current="page"' : ""} title="Fleet">${icon("workers")}<span class="sb-text">Fleet</span></a></li>`;
+  $("#session-group").hidden = true;
+  $("#program-list").innerHTML = fleetItem + S.programs.map((p) => {
     const s = p.summary || {};
     const cur = p.slug === S.slug;
     const prog = s.predicate_total ? `${s.predicate_done ?? "–"}/${s.predicate_total}` : "";
     return `<li><a class="nav-item" href="#/${encodeURIComponent(p.slug)}/${S.section}" ${cur ? 'aria-current="page"' : ""} title="${esc(p.slug)}">
       <span class="avatar" aria-hidden="true">${esc(p.slug.slice(0, 2))}<span class="dot ${mainTone(s.main) ? "tone-" + mainTone(s.main) : ""}"></span></span>
       <span class="sb-text">${esc(p.slug)}</span><span class="count">${esc(prog)}</span></a></li>`;
-  }).join("") : `<li class="sb-text muted" style="padding:0 8px">No programs</li>`;
+  }).join("");
+  if (isFleet()) { fleetSidebar(); return; }
 
   const counts = st ? {
     issues: (st.issues || []).filter((i) => !["completed", "canceled"].includes(i.state_type)).length,
@@ -222,6 +231,7 @@ function setLive() {
 }
 
 function renderHeader() {
+  if (isFleet()) { fleetHeader(); return; }
   const st = S.state;
   if (!st) { $("#headline").innerHTML = `<h1>${esc(S.slug || "orchestrate")}</h1>`; $("#top-right").innerHTML = ""; return; }
   const s = st.summary || {};
@@ -248,8 +258,10 @@ const SOURCE_META = [
   ["stages", "Stages", (iv) => [3 * iv, 6 * iv]],
 ];
 
+const sourceMeta = () => (isFleet() ? FLEET_SOURCES : SOURCE_META);
+
 function sourceLevel(name) {
-  const st = S.state, src = st?.sources?.[name], meta = SOURCE_META.find((m) => m[0] === name);
+  const st = S.state, src = st?.sources?.[name], meta = sourceMeta().find((m) => m[0] === name);
   if (!src || !meta) return "none";
   if (src.configured === false) return "off";
   if (st.summary?.final_check && name !== "ledger") return "good";  // a closed program's sources are no longer polled
@@ -263,7 +275,7 @@ function renderFresh() {
   const st = S.state, el = $("#fresh");
   if (!st) { el.innerHTML = ""; return; }
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  el.innerHTML = SOURCE_META.map(([name, label]) => {
+  el.innerHTML = sourceMeta().map(([name, label]) => {
     const src = st.sources?.[name] || {}, at = src.updated_at;
     const time = at ? new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "—";
     const title = src.configured === false ? `${label}: not configured`
@@ -277,7 +289,7 @@ function renderFresh() {
 
 function applyFreshness() {
   if (!S.state) return;
-  const levels = Object.fromEntries(SOURCE_META.map(([n]) => [n, sourceLevel(n)]));
+  const levels = Object.fromEntries(sourceMeta().map(([n]) => [n, sourceLevel(n)]));
   $$("[data-fresh]").forEach((el) => { el.dataset.level = levels[el.dataset.fresh]; });
   $$("[data-src]").forEach((el) => el.classList.toggle("is-stale", el.dataset.src.split(" ").some((n) => levels[n] === "stale")));
 }
@@ -949,11 +961,11 @@ const VIEWS = { overview: viewOverview, issues: viewIssues, prs: viewPrs, tasks:
 function renderView() {
   const view = $("#view"), st = S.state;
   const focusId = document.activeElement?.id, sel = document.activeElement?.selectionStart;
-  if (!S.slug) view.innerHTML = `<div class="loading">${S.programs.length ? "Choose a program." : `No programs under the store yet. Start one with <span class="mono">orch init</span>.`}</div>`;
-  else if (!st) view.innerHTML = `<div class="loading">${S.down ? "Cannot reach the dashboard server." : "Loading…"}</div>`;
+  if (!st) view.innerHTML = `<div class="loading">${S.down ? (isFleet() ? "The fleet collector is not running (ORCH_FLEET=off?) or the server is down." : "Cannot reach the dashboard server.") : "Loading…"}</div>`;
+  else if (isFleet()) { view.innerHTML = FLEET_VIEWS[S.section](st); applyFreshness(); }
   else { view.innerHTML = VIEWS[S.section](st); redrawCharts(); applyFreshness(); }
   if (focusId && $("#" + focusId)) { const el = $("#" + focusId); el.focus(); if (sel != null && el.setSelectionRange) el.setSelectionRange(sel, sel); }
-  document.title = st ? `${st.slug} · ${SECTIONS.find((s) => s.id === S.section).label}` : "Program Dashboard";
+  document.title = isFleet() ? `Fleet · ${S.section}` : st ? `${st.slug} · ${SECTIONS.find((s) => s.id === S.section).label}` : "Program Dashboard";
 }
 
 function render() { renderSidebar(); renderHeader(); renderFresh(); renderView(); setLive(); }
@@ -965,7 +977,6 @@ async function pollPrograms() {
     const r = await fetch("/api/programs", { cache: "no-store" });
     if (!r.ok) throw new Error(r.status);
     S.programs = await r.json();
-    if (!S.slug && S.programs.length) { location.replace(`#/${encodeURIComponent(S.programs[0].slug)}/${S.section}`); return; }
     renderSidebar();
   } catch (e) { S.down = true; setLive(); }
 }
@@ -974,7 +985,7 @@ async function pollState() {
   const slug = S.slug;
   if (!slug || document.hidden) return;
   try {
-    const r = await fetch(`/api/${encodeURIComponent(slug)}/state`, { cache: "no-store", headers: S.etag ? { "If-None-Match": S.etag } : {} });
+    const r = await fetch(isFleet() ? "/api/fleet/state" : `/api/${encodeURIComponent(slug)}/state`, { cache: "no-store", headers: S.etag ? { "If-None-Match": S.etag } : {} });
     if (slug !== S.slug) return;
     S.down = false; S.lastOk = Date.now();
     if (r.status === 304) { setLive(); return; }
@@ -987,8 +998,9 @@ async function pollState() {
 
 function route() {
   const m = location.hash.match(/^#\/([^/]*)(?:\/([a-z]+))?/);
-  const slug = m && m[1] ? decodeURIComponent(m[1]) : null;
-  const section = m && VIEWS[m[2]] ? m[2] : "overview";
+  if (!m || !m[1]) { location.replace("#/fleet/overview"); return; }
+  const slug = decodeURIComponent(m[1]);
+  const section = slug === "fleet" ? fleetSection() : VIEWS[m[2]] ? m[2] : "overview";
   const changed = slug !== S.slug;
   S.slug = slug; S.section = section;
   if (changed) { S.state = null; S.etag = null; S.q = ""; }

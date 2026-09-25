@@ -317,6 +317,48 @@ th.num .th-sort { justify-content: flex-end; }
 @media (max-width: 600px) { .stagebar { flex-basis: 96px; } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
+/* fleet: session tree, unread badges, inbox rows, relationship graph */
+.nav-item.tree { padding-left: calc(var(--s2) + var(--d, 0) * 12px); }
+/* A grid track sized to the longest name would push every badge past the sidebar edge. */
+#session-list { grid-template-columns: minmax(0, 1fr); }
+.nav-item.tree .sb-text { flex: 1; min-width: 0; }
+td.when { white-space: nowrap; }
+.tree-cell { display: inline-flex; align-items: center; gap: var(--s2); padding-left: calc(var(--d, 0) * 16px); }
+.badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
+  font-size: var(--t-xs); font-weight: 600; color: #fff; background: var(--bad); flex: none; }
+.badge.missed { box-shadow: 0 0 0 2px var(--bad-wash); }
+[data-sb="icons"] .nav-item.tree { padding-left: 0; }
+[data-sb="icons"] .nav-item.tree .badge { position: absolute; top: 1px; right: 6px; min-width: 14px; height: 14px; font-size: 9px; padding: 0 3px; }
+.rows.items > li { align-items: flex-start; }
+.rows.items .ic { padding-top: 2px; }
+.rows.items .sub { font-size: var(--t-sm); }
+.rows.items li.is-missed { box-shadow: inset 2px 0 0 var(--bad); }
+.rows .end .icon-btn { width: 24px; height: 24px; }
+.icon-btn.done { color: var(--good); border-color: var(--good); }
+.rows.agents > li { display: grid; gap: var(--s2); }
+.agent .row { display: flex; align-items: center; gap: var(--s2); }
+.kv { display: grid; gap: 2px; }
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; font-size: var(--t-sm); color: var(--ink-2);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s2); }
+.view-head h2 { display: flex; align-items: center; gap: var(--s2); }
+.relgraph { overflow-x: auto; padding: var(--s2) var(--s4) var(--s3); }
+.relgraph svg { display: block; width: 100%; }
+.relgraph .box { fill: var(--panel); stroke: var(--line-2); }
+.relgraph a:hover .box { stroke: var(--accent); }
+.relgraph text { fill: var(--ink); font-size: var(--t-sm); }
+.relgraph .num { font-family: var(--mono); fill: var(--ink-2); }
+.relgraph .muted, .relgraph tspan.muted { fill: var(--ink-3); }
+.relgraph .pr.closed text { fill: var(--ink-3); }
+.relgraph .bar, .relgraph .ph { fill: var(--tone, var(--line-2)); }
+.relgraph .edge { fill: none; stroke: var(--tone, var(--line-2)); stroke-width: 1.5; }
+.edge.good { --tone: var(--good); } .edge.warn { --tone: var(--warn); stroke-dasharray: 5 3; } .edge.bad { --tone: var(--bad); stroke-width: 2; }
+.edge.accent { --tone: var(--accent); } .edge.req { --tone: var(--ink-3); stroke-dasharray: 2 3; }
+.relgraph .av-bg { fill: var(--panel-2); stroke: var(--line-2); }
+.relgraph .av-tx { fill: var(--ink-2); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.legend .edge-key { background: var(--tone, var(--line-2)); }
+.legend .edge-key.good { --tone: var(--good); } .legend .edge-key.warn { --tone: var(--warn); } .legend .edge-key.bad { --tone: var(--bad); }
+.legend .edge-key.accent { --tone: var(--accent); } .legend .edge-key.req { --tone: var(--ink-3); }
+
 .tip { position: fixed; z-index: 60; pointer-events: none; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-md); padding: 6px var(--s2); font-size: var(--t-sm); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); min-width: 120px; }
 .tip .tt { color: var(--ink-3); margin-bottom: 2px; }
 .tip .row { display: flex; align-items: center; gap: 6px; }

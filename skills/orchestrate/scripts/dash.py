@@ -15,14 +15,22 @@ Usage: orch-dash <command> [options]
                                      add a human-readable line to the dashboard
   demo [--port 4780] [--live] [--no-serve]
                                      a realistic fake program in a temp store, served offline
+  fleet                              one collect of the fleet view (every Orca session), prints a summary
+  inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
+  inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
+  adopt [--apply] [--undo all|<worktree>]
+                                     show (or write, when config adopt.write_orca_parent is on) each session's
+                                     Orca parent worktree; every write is logged and --undo restores it
 
 Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <slug>/dashboard/.
+Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it.
 """
 import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, json, os, pathlib, re, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or main state here
+import fleet  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1122,7 +1130,8 @@ def fast_loop(interval):
 
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
-          "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
+          "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/fleet.js": ("fleet.js", "text/javascript; charset=utf-8"),
+          "/style.css": ("style.css", "text/css; charset=utf-8")}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -1153,6 +1162,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200, (ASSETS / name).read_bytes(), ctype)
         if path == "/api/health":
             return self.send(200, json.dumps(HEALTH).encode())
+        if path.startswith("/api/fleet/"):
+            return self.fleet_get(path)
         if path == "/api/programs":
             rows = []
             for slug in programs():
@@ -1179,9 +1190,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200, body, etag=etag)
         self.send(404, b'{"error":"not found"}')
 
+    def local_only(self):
+        """Host and Origin must name this server: a page on another site (or a rebinding DNS name) is refused."""
+        port = HEALTH.get("port")
+        ok = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origin = self.headers.get("Origin")
+        return self.headers.get("Host") in ok and (origin is None or origin.split("//", 1)[-1] in ok)
+
+    def fleet_get(self, path):
+        if not self.local_only():
+            return self.send(403, b'{"error":"forbidden"}')
+        if path == "/api/fleet/state":
+            f = fleet.state_dir() / "state.json"
+            if not f.exists():
+                return self.send(503, b'{"error":"first fleet collect has not finished"}')
+            body = f.read_bytes()
+            etag = '"' + hashlib.sha1(body).hexdigest()[:20] + '"'
+            if self.headers.get("If-None-Match") == etag:
+                return self.send(304, etag=etag)
+            return self.send(200, body, etag=etag)
+        if path == "/api/fleet/token":
+            return self.send(200, json.dumps({"token": TOKEN}).encode())
+        m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
+        if m and (fleet.state_dir() / "avatars" / f"{m.group(1)}.png").exists():
+            return self.send(200, (fleet.state_dir() / "avatars" / f"{m.group(1)}.png").read_bytes(), "image/png")
+        self.send(404, b'{"error":"not found"}')
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if not self.local_only() or self.headers.get("X-Dash-Token") != TOKEN:
+            return self.send(403, b'{"error":"forbidden"}')
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
+        except ValueError:
+            return self.send(400, b'{"error":"bad json"}')
+        if path == "/api/fleet/seen" and isinstance(body.get("session"), str):
+            fleet.mark_seen(body["session"])
+        elif path == "/api/fleet/dismiss" and isinstance(body.get("key"), str) and FLEET:
+            fleet.dismiss(FLEET, body["key"])
+        else:
+            return self.send(404, b'{"error":"not found"}')
+        if FLEET:
+            threading.Thread(target=FLEET.tick, daemon=True).start()
+        self.send(200, b'{"ok":true}')
+
+
+TOKEN = hashlib.sha256(os.urandom(32)).hexdigest()
+FLEET = None
+
+
+def fleet_loop():
+    while True:
+        try:
+            st = FLEET.tick()
+            errs = [f"{k}: {v['error']}" for k, v in ((st or {}).get("sources") or {}).items() if v.get("error")]
+            if errs:
+                log("fleet: " + " | ".join(errs))
+        except Exception as e:  # keep serving; the next tick retries
+            log(f"fleet: tick failed: {e!r}")
+        time.sleep(fleet.ORCA_EVERY)
+
 
 def code_files():
-    return (HERE / "dash.py", HERE / "prog.py", *sorted(ASSETS.glob("*")))
+    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", *sorted(ASSETS.glob("*")))
 
 
 def code_version():
@@ -1206,6 +1278,8 @@ def beat():
 
 
 def serve(host, port, interval):
+    global FLEET
+    home().mkdir(parents=True, exist_ok=True)
     lock = (home() / ".dash.lock").open("a")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # held for the life of the process
@@ -1218,6 +1292,9 @@ def serve(host, port, interval):
     write_atomic(home() / ".dash.json", json.dumps(HEALTH))
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=fast_loop, args=(interval,), daemon=True).start()
+    if os.environ.get("ORCH_FLEET") != "off":
+        FLEET = fleet.Fleet()
+        threading.Thread(target=fleet_loop, daemon=True).start()
     log(f"serving {home()} on http://{host}:{port}/ (tracker+github every {interval}s, "
         f"orca every {ORCA_EVERY}s, ledger every {FAST_TICK}s)")
     try:
@@ -1268,6 +1345,7 @@ def ensure(port):
         with socket.socket() as sock:
             if sock.connect_ex(("127.0.0.1", port)) == 0:
                 return False, f"port {port} is taken by something that is not orch-dash; pass --port"
+    home().mkdir(parents=True, exist_ok=True)
     logf = (home() / ".dash.log").open("a")
     subprocess.Popen([sys.executable, str(HERE / "dash.py"), "serve", "--port", str(port)], stdout=logf,
                      stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True)
@@ -1315,7 +1393,38 @@ def cmd_demo(argv):
     serve("127.0.0.1", int(prog.opt(argv, "--port", "4780")), 20)
 
 
-COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "ensure": cmd_ensure, "note": cmd_note, "demo": cmd_demo}
+def cmd_fleet(argv):
+    st = fleet.Fleet().tick(force=True) or {}
+    kinds = {}
+    for s in st.get("sessions", []):
+        kinds[s["kind"]] = kinds.get(s["kind"], 0) + 1
+    print(f"fleet: {len(st.get('sessions', []))} sessions {kinds} · {len(st.get('prs', []))} PRs · "
+          f"inbox {st.get('counts', {})}")
+    for k, v in (st.get("sources") or {}).items():
+        if v.get("error"):
+            print(f"  error: {k}: {v['error']}")
+
+
+def cmd_inbox(argv):
+    if argv[:1] == ["add"]:
+        kind, title = prog.opt(argv, "--type"), prog.opt(argv, "--title")
+        if not kind or not title:
+            sys.exit("inbox add needs --type and --title")
+        row = fleet.inbox_add(kind, title, prog.opt(argv, "--session"), prog.opt(argv, "--url"),
+                              prog.opt(argv, "--command"), prog.opt(argv, "--key"))
+    elif argv[:1] == ["resolve"] and prog.opt(argv, "--key"):
+        row = fleet.inbox_resolve(prog.opt(argv, "--key"))
+    else:
+        sys.exit("usage: orch-dash inbox add --type T --title TEXT [...] | inbox resolve --key KEY")
+    print(json.dumps(row, ensure_ascii=False))
+
+
+def cmd_adopt(argv):
+    sys.exit(fleet.adopt("--apply" in argv, prog.opt(argv, "--undo")))
+
+
+COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "ensure": cmd_ensure, "note": cmd_note, "demo": cmd_demo,
+            "fleet": cmd_fleet, "inbox": cmd_inbox, "adopt": cmd_adopt}
 
 if __name__ == "__main__":
     args = sys.argv[1:]
