@@ -308,7 +308,18 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 
 대시보드 워커에 요청할 데이터 경계: 이벤트를 JSONL 한 줄씩 추가(`id`, `at`, `repo`, `pr`, `kind` = `review_comment|changes_requested|approved|checks_failed`, `url`, `owner` = 세션의 terminal handle 또는 dispatch id, 알 수 없으면 null). 경로와 이름은 그쪽이 정한다.
 
-### 6.7 대시보드 워커와 맞출 것
+### 6.7 알림 끼어듦 막기 (측정 필요)
+
+대시보드 워커가 Orca 번들 코드를 분석한 결과: Orca는 입력창이 빈 코디네이터에 알림 문구를 치고 Enter를 누른다. 다만 `--types` 필터 없는 `check --wait`가 살아 있으면 치지 않는다. `orch wait`는 `--types`를 붙이므로 이 조건에 해당하지 않는다. top-level.md에는 "필터 없는 백그라운드 대기를 항상 하나 둔다"를 적었다. `orch wait`에서 `--types`를 빼고 결과를 클라이언트에서 거르는 변경은 program 모드 동작을 바꾸므로, 실제로 알림이 사라지는지 잰 뒤 따로 제안한다.
+
+### 6.8 대시보드 워커와 맞춘 것 (회신 반영)
+
+- PR 이벤트: `~/.local/state/agent-skills/dashboard/pr-events.jsonl`, 한 줄 `{"v":1,"id","at","repo","pr","kind","url","owner","owner_kind","actor","checks","head"}`. 모르는 `kind`는 무시한다. `owner_kind == human_session`이면 인박스만.
+- 인박스: `orch-dash inbox add --type <approval|run_command|login|verify_failed|verify_ok|ready_to_merge> …`, `orch-dash inbox resolve --key`. 신뢰 창은 `login`.
+- `sync.json`에 `interval`(초)을 넣었다. 대시보드는 `at`이 주기의 2배보다 오래되면 멈춤으로 본다.
+- 대시보드 채팅 전송은 `sync.try_send(handle, text) -> (ok, reason)`와 `sync.classify(lines, title, draft)`를 가져다 쓴다. 두 시그니처는 바꾸지 않는다.
+
+### 6.9 대시보드 워커와 맞출 것 (처음 제안)
 
 - 인박스 항목 유형: 스킬은 "승인", "명령 실행", "로그인", "검증 결과"를 올린다고 쓴다. 이름과 저장 위치는 대시보드 설계를 따른다.
 - `~/.local/state/agent-skills/sync.json`과 `reload-pending.json`을 대시보드가 읽어 "스킬 동기화 멈춤"과 "reload 못 보낸 세션"을 인박스에 올릴 수 있다. 형식은 구현 때 그쪽에 send로 알린다.

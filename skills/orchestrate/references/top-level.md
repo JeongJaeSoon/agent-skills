@@ -54,7 +54,7 @@ The inbox is the dashboard's: `orch-dash inbox add --type <approval|run_command|
 
 ## Injected notices
 
-Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Keep one such background wait running at all times (in program mode, `orch wait`); it is what keeps the notice out of the human's typing. When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and hand the mailbox check to the background wait.
+Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Keep one such background wait running at all times; it is what keeps the notice out of the human's typing. `orch wait` passes `--types`, so it does not count. When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and hand the mailbox check to the background wait.
 
 ## PR events
 
