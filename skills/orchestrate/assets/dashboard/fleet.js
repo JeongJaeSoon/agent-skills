@@ -236,10 +236,21 @@ function timelineList(st, rows) {
   }).join("") || '<li class="muted">No events yet.</li>'}</ul>`;
 }
 
+// The graph redraws every poll: a team (the server serves no avatar for one) or an avatar that failed once is not
+// asked for again, or a page left open fetches the same 404s all day.
+const AVATAR_LOGIN = /^[A-Za-z0-9-]{1,39}(\[bot\])?$/, AVATAR_MISSED = new Set();
+
+function avatarMissed(img) {
+  AVATAR_MISSED.add(img.dataset.login);
+  img.remove();
+}
+
 function avatarNode(x, y, r, login) {
   const init = esc(login.replace(/\[bot\]$/, "").slice(0, 2));
+  const img = AVATAR_LOGIN.test(login) && !AVATAR_MISSED.has(login)
+    ? `<image href="/api/fleet/avatar/${encodeURIComponent(login)}" data-login="${esc(login)}" x="${x - r}" y="${y - r}" width="${2 * r}" height="${2 * r}" clip-path="circle(${r}px)" onerror="avatarMissed(this)"/>` : "";
   return `<g><circle cx="${x}" cy="${y}" r="${r}" class="av-bg"/><text x="${x}" y="${y + 3.5}" text-anchor="middle" class="av-tx">${init}</text>
-    <image href="/api/fleet/avatar/${encodeURIComponent(login)}" x="${x - r}" y="${y - r}" width="${2 * r}" height="${2 * r}" clip-path="circle(${r}px)" onerror="this.remove()"/></g>`;
+    ${img}</g>`;
 }
 
 // Session -> PR -> reviewer, three columns; each PR is as tall as its reviewer list.

@@ -451,6 +451,19 @@ process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     assert not any("data-go" in got[k] for k in ("gone", "none", "own")), got
     assert got["clicks"] == {"row": "#/fleet/session/wt-coord", "link": "", "button": "", "selecting": ""}, got["clicks"]
+
+    # Avatars: a team has none to ask for, and one that failed is not asked for again on the next redraw.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const out = {{team: avatarNode(0, 0, 10, "team:docs"), user: avatarNode(0, 0, 10, "rev-bob"), bot: avatarNode(0, 0, 10, "lint-bot[bot]")}};
+avatarMissed({{dataset: {{login: "rev-bob"}}, remove() {{}}}});
+out.again = avatarNode(0, 0, 10, "rev-bob");
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert "<image" not in got["team"] and ">te</text>" in got["team"], got["team"]
+    assert '/api/fleet/avatar/rev-bob"' in got["user"] and 'onerror="avatarMissed(this)"' in got["user"], got["user"]
+    assert "/api/fleet/avatar/lint-bot%5Bbot%5D" in got["bot"], got["bot"]
+    assert "<image" not in got["again"], got["again"]
 else:
     print("test_fleet: node not found, rendering check skipped")
 
