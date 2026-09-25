@@ -78,13 +78,45 @@ ss = {s["id"]: s for s in st["sessions"]}
 assert ss["wt-export"]["unread"] == 3 and not items(st, "ci_failed"), (ss["wt-export"], items(st, "ci_failed"))
 badges_agree(st)
 
-# A reload skills-sync could not send sits on its terminal's session (and counts there); an unknown terminal on none.
-fleet.write_atomic(state_dir.parent / "reload-pending.json", json.dumps({"since": "t1", "failed": {
-    "term_login": {"title": "✳ ACME-101", "reason": "composer holds a draft"}, "term_gone": {"reason": "x"}}}))
+# A reload skills-sync could not send sits on its terminal's session (and counts there), titled with the terminal;
+# one for a terminal Orca no longer lists is gone.
+pending_path = state_dir.parent / "reload-pending.json"
+fleet.write_atomic(pending_path, json.dumps({"since": "t1", "failed": {
+    "term_login": {"reason": "composer holds a draft"}, "term_export": {"reason": "title shows the agent is busy"},
+    "term_gone": {"reason": "x"}}}))
 st = f.tick(force=True)
-assert sorted((i["session"] or "") for i in items(st, "reload_pending")) == ["", "wt-login"], items(st, "reload_pending")
+assert sorted((i["session"], i["title"], i["detail"]) for i in items(st, "reload_pending")) == [
+    ("wt-export", "reload 못 보냄: ◑ ACME-102", "title shows the agent is busy"),
+    ("wt-login", "reload 못 보냄: ✳ ACME-101", "composer holds a draft")], items(st, "reload_pending")
 badges_agree(st)
-(state_dir.parent / "reload-pending.json").unlink()
+
+
+# Once its session is idle the collector sends the reload again through skills-sync; a working one is left alone.
+class FakeBroadcast:
+    def __init__(self):
+        self.calls = []
+
+    def broadcast(self, kind, dry_run, only=None):
+        self.calls.append((kind, dry_run, only))
+        p = json.loads(pending_path.read_text())
+        p["failed"].pop(only)
+        fleet.write_atomic(pending_path, json.dumps(p))
+        return 0
+
+
+fake = FakeBroadcast()
+assert fleet.retry_reloads(fake) == ["term_login"] and fake.calls == [(None, False, "term_login")], fake.calls
+assert fleet.retry_reloads(fake) == [] and len(fake.calls) == 1  # nothing idle is left pending
+fleet.write_atomic(pending_path, json.dumps({**json.loads(pending_path.read_text()), "failed": {
+    "term_login": {"reason": "composer holds a draft"}, "term_export": {"reason": "title shows the agent is busy"}}}))
+assert fleet.retry_reloads(fake) == [] and len(fake.calls) == 1  # refused again: not retried for RELOAD_RETRY_S
+fake.broadcast(None, False, only="term_login")
+fake.calls.pop()
+st = f.tick(force=True)
+assert [i["session"] for i in items(st, "reload_pending")] == ["wt-export"], items(st, "reload_pending")
+fleet.RELOAD_TRIED.clear()
+pending_path.unlink()
+assert fleet.retry_reloads(fake) == [] and len(fake.calls) == 1
 
 # A push after approval, and CI recovering, become PR events for the platform side and new inbox state.
 world.advance()

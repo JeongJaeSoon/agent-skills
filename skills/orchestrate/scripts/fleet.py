@@ -12,7 +12,7 @@ and the state lives outside the repository:
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
 """
-import collections, concurrent.futures, datetime as dt, fcntl, hashlib, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
+import collections, concurrent.futures, contextlib, datetime as dt, fcntl, hashlib, io, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
@@ -983,7 +983,8 @@ class Fleet:
             for it in pr_items(det, self.me, cfg):
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
         # Skill-side items and sync state.
-        items += external_items(sticky) + sync_items(now, by_handle)
+        terms = {t["handle"]: (s["id"], t["title"]) for s in sessions.values() for t in s["terminals"]}
+        items += external_items(sticky) + sync_items(now, terms)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -1078,8 +1079,9 @@ def external_items(sticky):
     return list(items.values())
 
 
-def sync_items(now, by_handle=None):
-    """Skill sync health, written by the platform side's skills-sync. A reload not sent sits on its terminal's session."""
+def sync_items(now, terms=None):
+    """Skill sync health, written by the platform side's skills-sync. A reload not sent sits on its terminal's
+    session; one for a terminal Orca no longer lists is dropped, as there is nothing left to reload."""
     base, out = state_dir().parent, []
     sync = read_json(base / "sync.json")
     if isinstance(sync, dict):
@@ -1090,10 +1092,37 @@ def sync_items(now, by_handle=None):
     pending = read_json(base / "reload-pending.json")
     if isinstance(pending, dict):
         for handle, why in (pending.get("failed") or {}).items():
-            out.append({"key": f"reload:{handle}:{pending.get('since')}", "type": "reload_pending", "session": (by_handle or {}).get(handle),
+            if terms is not None and handle not in terms:
+                continue
+            sid, title = (terms or {}).get(handle, (None, None))
+            out.append({"key": f"reload:{handle}:{pending.get('since')}", "type": "reload_pending", "session": sid,
                         "terminal": handle, "at": pending.get("since"), "source": "skills-sync",
-                        "title": f"reload 못 보냄: {mask((why or {}).get('title'), 80)}", "detail": mask((why or {}).get("reason"), 200)})
+                        "title": f"reload 못 보냄: {mask(title or handle, 80)}", "detail": mask((why or {}).get("reason"), 200)})
     return out
+
+
+RELOAD_RETRY_S = 120
+RELOAD_TRIED = {}  # handle -> monotonic time of the last retry
+
+
+def retry_reloads(sync=None):
+    """Send a reload skills-sync could not deliver again once its session is idle, through skills-sync's own
+    broadcast (idle check, lock, reload-pending.json). skills-sync retries only every 15 minutes, and a coordinator
+    is rarely idle at that moment. Called after each collect; returns the handles reloaded."""
+    pending = read_json(state_dir().parent / "reload-pending.json")
+    failed = pending.get("failed") if isinstance(pending, dict) else None
+    sync = failed and (sync or load_sync())
+    if not sync or not hasattr(sync, "broadcast"):
+        return []
+    state = read_json(state_dir() / "state.json", {}) or {}
+    idle = {t["handle"] for s in state.get("sessions", []) if s.get("phase") == "idle" for t in s.get("terminals", [])}
+    mono, done = time.monotonic(), []
+    for h in [h for h in failed if h in idle and mono - RELOAD_TRIED.get(h, -RELOAD_RETRY_S) >= RELOAD_RETRY_S]:
+        RELOAD_TRIED[h] = mono
+        with contextlib.redirect_stdout(io.StringIO()):
+            if sync.broadcast(None, False, only=h) == 0:
+                done.append(h)
+    return done
 
 
 # ---------------------------------------------------------------- actions from the page and the CLI

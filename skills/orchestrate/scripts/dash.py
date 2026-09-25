@@ -1265,6 +1265,8 @@ def fleet_loop():
                 log("fleet: " + " | ".join(errs))
             for did in fleet.relay_decisions():
                 log(f"fleet: relayed the answer to {did}")
+            for h in fleet.retry_reloads():
+                log(f"fleet: reloaded {h}")
         except Exception as e:  # keep serving; the next tick retries
             log(f"fleet: tick failed: {e!r}")
         viewed = time.monotonic() - FLEET_VIEWED[0] < FLEET_VIEW_S
