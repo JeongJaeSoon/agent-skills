@@ -78,7 +78,7 @@ Start-after edges in Orca:
 
 ## GitHub stacks: several PRs, one merge
 
-When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `orch land <slug> --pr <top>` merges every layer in one `merge-async` call.
+When PRs must land in order (a dependency chain, consecutive migrations, layers of one feature), make them a GitHub stack. The top layer's CI tests the whole chain, and `orch land <slug> --pr <top>` merges every layer in one `merge-async` call. That holds only where CI runs on pull requests into any base. Where the workflow runs only on PRs into the default branch (`on: pull_request: branches: [main]`), an upper layer never gets CI, so the stack would wait on its top forever and a READY on that layer means READY without CI. There, skip the stack: base each PR on the branch below and order them with `orch dep` only. Once the lower one lands, retarget the next to the default branch (GitHub does it when the merged branch is deleted) and `gh pr update-branch` it: a retarget alone starts no CI. It lands on that run.
 
 - Create it with `gh stack link <bottom> <top> --base main`, or `gh stack init` / `add` / `submit`. Confirm it with `gh api repos/<owner>/<repo>/pulls/<top> --jq .stack` (`gh pr view` does not show stacks, and `gh stack view` needs a locally tracked stack).
 - Bring a stack onto the latest base bottom-up: `gh pr update-branch` merges a PR's own base into it, so on the top it pulls only the layer below. `land` prints the sequence.

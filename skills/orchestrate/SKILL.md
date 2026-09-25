@@ -50,7 +50,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
    - Read every ticket in scope.
    - Write the predicate as countable ticket IDs plus a final check on the real artifact ("A-246, 247, 117 Done and `verify-<app>` drives the quickstart on main"). Derive it yourself. If the tickets have no countable end, write your best predicate, mark it proposed in the digest, and go on.
    - Copy the human's goal into the standing orders verbatim, one sentence per order. A sentence that would have a worker write outside its worktree stays verbatim in the coordinator's list, and the workers' list gets its worker form: "put it in the worker_done body; the coordinator writes it".
-   - Map the dependencies between tickets and split them by kind (`references/landing.md`): **start-after** (B needs A's result before it can begin) becomes an Orca task dep; **land-after** (B can be built on A's branch now) becomes a GitHub stack plus `orch dep`, never an Orca dep.
+   - Map the dependencies between tickets and split them by kind (`references/landing.md`): **start-after** (B needs A's result before it can begin) becomes an Orca task dep; **land-after** (B can be built on A's branch now) becomes a GitHub stack plus `orch dep` (only `orch dep` where CI runs only on PRs into the default branch), never an Orca dep.
    - Check that the repo can land in parallel: required checks on, "require branches to be up to date" off, squash merges. Add the program's shared contracts to `exclusive_paths`. If strict mode has to stay, put its cost in the digest.
    - Pick the merge policy.
    - Create the Run with the goal as `--objective`.
