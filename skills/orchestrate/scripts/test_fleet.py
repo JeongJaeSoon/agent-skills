@@ -348,18 +348,25 @@ if shutil.which("node"):
                "title": "<script>alert(1)</script>", "detail": "<b>x</b>", "at": ago(0.1), "url": "javascript:alert(1)",
                "body": "<img src=x onerror=alert(1)> see https://example.com/a?b=1&c=2. and javascript:alert(2)",
                "options": [{"label": "<i>CSV</i>", "description": "\"quoted\" 'x'"}, {"label": "JSON", "description": ""}], "recommend": 1}
+    turn = {"key": "msg:t1", "type": "approval", "session": "wt-coord", "title": "Merge?", "detail": "Done.\n<b>Shall I merge?</b>", "at": ago(0.1)}
+    flat = {"key": "msg:t2", "type": "approval", "session": "wt-coord", "title": "Merge?", "detail": "one line", "at": ago(0.1)}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
-F.open["decision:d1"] = true;
-process.stdout.write(itemRow({{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}}, {json.dumps(hostile)}));"""
-    html = subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
+F.open["decision:d1"] = true; F.open["msg:t1"] = true;
+const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}};
+process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(flat)}].map((it) => itemRow(st, it)).join("\\n-----\\n"));"""
+    html, turn_html, flat_html = subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
                                          "{document: {addEventListener() {}}, process});"],
-                          input=js, capture_output=True, text=True, check=True).stdout
+                          input=js, capture_output=True, text=True, check=True).stdout.split("\n-----\n")
     for raw in ("<script", "<img", "<i>", "<b>x", 'href="javascript', "\"quoted\""):
         assert raw not in html, (raw, html)
     assert "&lt;img src=x onerror=alert(1)&gt;" in html and "&lt;i&gt;CSV&lt;/i&gt;" in html
     assert 'href="https://example.com/a?b=1&amp;c=2"' in html, "a URL becomes a link, the trailing dot stays text"
     assert html.count('data-decide="opt:') == 2 and 'data-decide="text"' in html and 'id="decide-d1"' in html
+    # A click (or Enter/Space on the title) on a row with more to show opens the Details view; one line has none.
+    assert 'data-open="decision:d1"' in html and 'role="button" tabindex="0" aria-expanded="true" data-open-key="decision:d1"' in html
+    assert 'data-open-key="msg:t1"' in turn_html and '<div class="pre">Done.\n&lt;b&gt;Shall I merge?&lt;/b&gt;</div>' in turn_html, turn_html
+    assert "data-open" not in flat_html and 'class="pre"' not in flat_html
 else:
     print("test_fleet: node not found, rendering check skipped")
 

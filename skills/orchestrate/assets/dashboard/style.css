@@ -352,6 +352,9 @@ td.when { white-space: nowrap; }
 /* Each line is one 20px band; a mono run's taller metrics would otherwise stretch its line. */
 .rows.items .grow > .ellipsis { height: 20px; }
 .rows.items .sub { font-size: var(--t-sm); }
+.rows.items [data-open] { cursor: pointer; }
+.rows.items [data-open] .pre, .rows.items [data-open] .opts, .rows.items [data-open] input { cursor: auto; }
+.rows.items .grow > .pre { margin-top: var(--s2); }
 .rows.items li.is-missed { box-shadow: inset 2px 0 0 var(--bad); }
 /* Trailing columns have fixed widths and hang off the right edge, so time and buttons line up down a list
    whatever each row carries; a missing button leaves its slot empty. */

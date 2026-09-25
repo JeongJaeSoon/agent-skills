@@ -124,14 +124,17 @@ function fleetHeader() {
 
 // ------------------------------------------------------------ pieces
 
+// What a click on the row opens: a decision's body and options (the Details chip's view), else the full detail text.
+const hasDetails = (it) => it.type === "decision" ? !!(it.body || (it.options || []).length) : String(it.detail || "").trim().includes("\n");
+
 function itemRow(st, it, { showSession = true } = {}) {
   const [label, tone, ic] = itemMeta(it.type), s = byId(st)[it.session];
-  const copy = it.command || it.url || "";
+  const copy = it.command || it.url || "", more = hasDetails(it), open = more && F.open[it.key];
   return `<li class="item ${it.missed ? "is-missed" : ""}"><span class="ic tone-${tone}">${icon(ic)}</span>
-    <div class="grow"><div class="ellipsis"><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
+    <div class="grow" ${more ? `data-open="${esc(it.key)}"` : ""}><div class="ellipsis" ${more ? `role="button" tabindex="0" aria-expanded="${!!open}" data-open-key="${esc(it.key)}"` : ""}><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
       <div class="sub muted ellipsis">${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}
       ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
-      ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : ""}</div>
+      ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : open ? `<div class="pre">${decisionBody(it.detail)}</div>` : ""}</div>
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
       <span class="slot">${safeUrl(it.url) ? link(it.url, icon("link"), "icon-btn") : ""}</span>
       <span class="slot">${copy ? `<button class="icon-btn" data-copy="${esc(copy)}" title="Copy">${icon("copy")}</button>` : ""}</span>
@@ -406,7 +409,14 @@ document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
   if (key) F.draft[key] = e.target.value.replace(/[\r\n]+/g, " ");
 });
+function toggleOpen(key, refocus) {
+  F.open[key] = !F.open[key];
+  renderView();
+  if (refocus) document.querySelector(`[data-open-key="${CSS.escape(key)}"]`)?.focus();  // the row was redrawn
+}
+
 document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.dataset.openKey) { e.preventDefault(); toggleOpen(e.target.dataset.openKey, true); return; }
   if (e.key !== "Enter" || e.isComposing) return;
   if (e.target.id === "chat-input") { e.preventDefault(); chatAction("ask"); } else if (e.target.dataset.decideInput) { e.preventDefault(); decideAction(e.target.dataset.decideInput, "text"); }
 });
@@ -417,6 +427,9 @@ document.addEventListener("click", async (e) => {
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const decide = e.target.closest("[data-decide]");
   if (decide) { decideAction(decide.dataset.key, decide.dataset.decide); return; }
+  // A click on the row opens its details; its own controls, links, the open text and a text selection keep theirs.
+  const row = e.target.closest("[data-open]");
+  if (row && !e.target.closest("a,button,input,textarea,select,.pre,.opts") && !String(getSelection())) { toggleOpen(row.dataset.open); return; }
   const t = e.target.closest("[data-copy],[data-dismiss]");
   if (!t) return;
   if (t.dataset.copy != null) {
