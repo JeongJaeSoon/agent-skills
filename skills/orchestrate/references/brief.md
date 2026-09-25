@@ -25,7 +25,9 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
             or the same batch comes back. Blocked on a decision or an act you cannot take: `ask`,
             which waits for the answer (after a timeout, resume the same message ID). Never send
-            a status and end your turn: waking an idle agent on mail is best-effort.
+            a status and end your turn: waking an idle agent on mail is best-effort. After two
+            waits in a row end with no answer, register the question with `orch decide add` (it
+            shows in Needs you, and the answer is typed into your terminal), then end your turn.
 ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
@@ -58,12 +60,35 @@ STANDING    <the program note's standing orders for workers, pasted verbatim, nu
             coordinator-only ones stay in the note>
 ```
 
+## Single worker
+
+A worker outside a program gets a brief too, in this shape. It has no `PROGRAM:` line, which is what keeps `deliver-ticket` out of program mode, so there is no `orch verdict` or `orch land`.
+
+```
+<ticket ID, or a short title>
+
+GOAL        One sentence: the outcome, executable by someone with no access to this chat.
+SCOPE       Its worktree and branch; the paths it may write and the paths it may not.
+CONTEXT     Files, PRs and links to read. The facts you already have, pasted.
+ACCEPTANCE  Checkable criteria, one per line.
+VERIFY      Exact commands, and the output that proves each criterion.
+TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
+FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. <unit-specific bans>
+LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
+WAITING     `ask` what you cannot decide. After two waits in a row end with no answer,
+            `orch decide add` the question and end your turn; the answer is typed into your terminal.
+REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
+```
+
+A new task for a worker that already exists takes the same shape. Start the worker with `worker-start --display-name "<the first line>"` so its card carries that name.
+
 ## Rules for filling it
 
 - The spec starts with the ticket ID, never `/`. The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was ENG-278). Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
+- **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "Keep one background wait running" in `top-level.md` is the orchestrator's rule, not a worker's.
 - Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` before `worker-start`. Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.

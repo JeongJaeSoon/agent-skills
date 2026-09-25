@@ -19,11 +19,13 @@ Every request leaves your turn within one short tool call.
 | The request | Goes to |
 |---|---|
 | A question you can answer from what is already in context, or one `--json` read | You, now |
-| Investigation, a review, a verification, anything that reads more than a couple of files | A background subagent (`run_in_background`); you answer when it reports |
-| A change to one repo | A new Orca worker (`worker-start`), or `dispatch-card` when it needs its own card |
+| A quick lookup, a read across several repos, a review or verification of work already done, or delegation to an external tool (chat, tracker, notes) | A background subagent (`run_in_background`); you answer when it reports |
+| A change to one repo, or an investigation that must read one repo's code or config | A new Orca worker (`worker-start`) with a brief (`brief.md`, "Single worker"), or `dispatch-card` when it needs its own card |
 | More work for a session that already owns that topic | That session: `orca orchestration send --to dispatch:<id>` if it is a dispatch, otherwise the human's inbox ("send this to <session>") |
 | Three or more tickets that must land together | A program coordinator (`orchestrate` program mode) in its own session |
 | Work inside a running program | Its coordinator. Never steer its workers past it |
+
+An investigation inside one repo is a worker, not a subagent: it reads a fresh checkout of that repo, shows on the roster while it runs, and can take the change that follows from what it finds.
 
 ## Sessions you did not start
 
@@ -53,9 +55,17 @@ The inbox is the dashboard's: `orch-dash inbox add --type <approval|run_command|
 - AskUserQuestion blocks your turn until the human answers; one question held a coordinator for 44 minutes while 16 worker messages piled up. Write the decision into your reply and the inbox, end the turn, and act when the answer arrives.
 - Deploys, merges without review, killing processes, anything the classifier refuses: an inbox item of type "run a command", with the exact command. The human runs it with `!` or approves it in words; then you run it.
 
+## Acts only the human's session may take
+
+The permission classifier treats an instruction you relay as not the human's. So an act that reaches production (dispatching a release, merging a deploy PR, syncing a GitOps app) or that weakens a confirmation or a guard runs only in the session where the human gave that instruction in chat, usually this one; it is the one kind of task work you do yourself. A dashboard Decision answer reaches any other session as a relayed line too: for such a decision, act on it here, or ask the human to say it once more in the chat of the session that will act. When a worker is refused such an act, never send it or another worker to try again: that launders the refusal.
+
+## Messages to a chat
+
+Before sending anything to a chat channel or thread, read the destination and check that its topic matches what you are about to post. A destination written into an instruction file (a thread id in a brief or a note) can carry over an earlier misreading of the request. When the human corrects the request, derive the destination and every other value taken from it again, not only the text.
+
 ## Injected notices
 
-Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Keep one such background wait running at all times; it is what keeps the notice out of the human's typing. `orch wait` passes `--types`, so it does not count. When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and hand the mailbox check to the background wait.
+Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Keep one such background wait running at all times; it is what keeps the notice out of the human's typing. That rule is yours and a program coordinator's, never a worker's: a worker keeps no standing wait, and its brief bounds how long it waits for an answer (`brief.md`, WAITING). `orch wait` passes `--types`, so it does not count. When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and hand the mailbox check to the background wait.
 
 ## PR events
 
