@@ -214,6 +214,8 @@ python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py --write   # 적용
 
 새 PC에서 체크아웃 폴더로 처음 `claude`를 띄우면 신뢰 창이 한 번 뜬다(신뢰는 원본 clone 경로에 기록된다, §6.2). 부트스트랩은 이 창을 대신 누르지 않고 "체크아웃에서 claude를 한 번 띄워 신뢰를 수락하라"고 출력한다.
 
+**적용 전부터 떠 있던 세션은 재시작해야 한다(실측, 2026-09-25).** 적용 전에 띄운 세션(마켓플레이스 사본 로드, 15 plugins · 75 skills)에 적용 뒤 `/reload-plugins`를 보내자 `Reloaded: 14 plugins · 45 skills`가 됐다. `enabledPlugins`의 false는 반영되어 사본이 빠졌지만, `CLAUDE_CODE_PLUGIN_DIRS`는 기동할 때만 읽혀 체크아웃이 붙지 않았다. 그 세션은 재시작할 때까지 agent-skills가 통째로 없다(`!` 셸의 환경 변수에는 새 값이 보이는데도 그렇다). 그래서 부트스트랩 직후에는 브로드캐스트를 돌리지 않고, 떠 있는 세션을 모두 재시작한 뒤부터 돌린다. 적용 뒤 새로 띄운 세션은 `claude plugin list`에 `agent-skills@inline`(Path: 체크아웃)으로 보이고, `command -v orch`가 체크아웃의 `bin/orch`를 가리킨다.
+
 같은 PC에서 다시 돌려도 결과가 같다(이미 된 단계는 "ok"로 넘어간다). 체크아웃 경로는 PC마다 달라도 된다. 스크립트는 자기 위치를 체크아웃으로 쓴다.
 
 ## 6. 오케스트레이션 스킬 개선
@@ -339,7 +341,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 
 | 바꾼 것 | 되돌리는 법 |
 |---|---|
-| `settings.json` `env.CLAUDE_CODE_PLUGIN_DIRS` | 키를 지우거나 `settings.json.bak-<시각>`을 되돌린다. 떠 있는 세션은 재시작해야 빠진다 |
+| `settings.json` `env.CLAUDE_CODE_PLUGIN_DIRS` | 키를 지우거나 `settings.json.bak-<시각>`을 되돌린다. 떠 있는 세션은 재시작해야 빠진다. 되돌린 뒤에도 떠 있는 세션에 `/reload-plugins`를 치지 말고 재시작한다(§5) |
 | launchd 작업 | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` 뒤 plist 삭제 |
 | 상태 파일 | `~/.local/state/agent-skills/` 삭제 |
 | `enabledPlugins`의 `agent-skills@jeongjaesoon` | 부트스트랩이 출력한 원래 값으로 되돌린다 (이 PC는 원래 없었음) |

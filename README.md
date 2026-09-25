@@ -26,7 +26,7 @@ python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py --write   # 적용
 
 - `~/.claude/settings.json`을 백업하고, `env` 블록의 `CLAUDE_CODE_PLUGIN_DIRS`에 체크아웃 경로를 넣는다. 마켓플레이스로 설치한 `agent-skills@jeongjaesoon`이 켜져 있으면 끈다. 둘 다 켜면 hook이 두 번 돈다.
 - macOS면 launchd 작업(`io.github.jeongjaesoon.agent-skills-sync`)을 설치해 15분마다와 로그인 때 `skills-sync sync`를 돌린다. Linux면 crontab 한 줄을 출력한다.
-- 이미 된 단계는 건너뛰므로 다시 돌려도 된다. 새 설정은 새 세션부터 적용되고, 떠 있는 세션은 재시작해야 바뀐다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
+- 이미 된 단계는 건너뛰므로 다시 돌려도 된다. 새 설정은 새 세션부터 적용된다. 떠 있는 세션은 재시작한다. 거기서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
 고치지 않고 쓰기만 하는 PC는 마켓플레이스로 설치해도 된다. 설치본은 커밋 단위 복사본이라 갱신은 `claude plugin marketplace update jeongjaesoon` 뒤 `claude plugin update agent-skills@jeongjaesoon`이다.
 

@@ -3,8 +3,9 @@
 
 Usage:
   skills-sync sync [--no-broadcast]      fetch, fast-forward or push, then broadcast a needed reload
-  skills-sync broadcast [--skills|--plugins] [--dry-run]
-                                         send the pending (or the given) reload to idle Claude sessions
+  skills-sync broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]
+                                         send the pending (or the given) reload to idle Claude sessions,
+                                         or to one of them
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
   skills-sync status                     print the last sync result and the pending reload
@@ -317,17 +318,17 @@ def nudge(handle, text):
     return 0 if ok else 1
 
 
-def broadcast(kind, dry_run):
+def broadcast(kind, dry_run, only=None):
     if dry_run:
-        return broadcast_locked(kind, dry_run=True)
+        return broadcast_locked(kind, dry_run=True, only=only)
     with locked() as got:
         if not got:
             print("another sync or broadcast is running; the reload stays pending")
             return 1
-        return broadcast_locked(kind)
+        return broadcast_locked(kind, only=only)
 
 
-def broadcast_locked(kind, dry_run=False):
+def broadcast_locked(kind, dry_run=False, only=None):
     path = STATE / "reload-pending.json"
     pending = read_json(path, {})
     queued = pending.get("kind")
@@ -341,6 +342,11 @@ def broadcast_locked(kind, dry_run=False):
     except (Stop, KeyError, TypeError) as e:
         print(f"cannot list Orca terminals, reload stays pending: {e}")
         return 1
+    if only:
+        if only not in terms:
+            print(f"{only}  not a connected, writable Claude terminal")
+            return 1
+        terms = [only]
     done, failed = set(pending.get("done", [])), {}
     for h in terms:
         if h in done:
@@ -360,6 +366,11 @@ def broadcast_locked(kind, dry_run=False):
         print(f"{h}  {reason or 'sent ' + RELOAD[kind]}")
     if dry_run:
         return 0
+    if only:  # the other sessions were not tried: leave their entries as they are
+        if path.exists():
+            rest = {h: v for h, v in pending.get("failed", {}).items() if h != only}
+            write_json(path, dict(pending, done=sorted(done), failed={**rest, **failed}))
+        return 1 if failed else 0
     if failed:
         write_json(path, dict(pending, kind=kind, done=sorted(done & set(terms)), failed=failed))
         print(f"{len(failed)} session(s) left pending in {path}")
@@ -381,7 +392,8 @@ def main(argv):
     if cmd == "broadcast":
         STATE.mkdir(parents=True, exist_ok=True)
         kind = "plugins" if "--plugins" in argv else "skills" if "--skills" in argv else None
-        return broadcast(kind, dry_run="--dry-run" in argv)
+        only = argv[argv.index("--terminal") + 1] if "--terminal" in argv[:-1] else None
+        return broadcast(kind, dry_run="--dry-run" in argv, only=only)
     if cmd == "nudge" and len(argv) == 3:
         return nudge(argv[1], argv[2])
     if cmd == "status":

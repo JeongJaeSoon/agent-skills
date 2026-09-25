@@ -231,6 +231,10 @@ def test_broadcast():
         with sync.locked() as got:
             busy = sync.broadcast("skills", dry_run=False)
         check("a broadcast waits while the lock is held", got and busy == 1 and json.loads(st.read_text())["sent"] == [])
+        one = sync.broadcast("skills", dry_run=False, only="idle")
+        check("--terminal sends to that session only and keeps the rest pending",
+              one == 0 and json.loads(st.read_text())["sent"] == [["idle", "/reload-plugins"]]
+              and json.loads((state / "reload-pending.json").read_text())["done"] == ["idle"])
         code = sync.broadcast("skills", dry_run=False)
         pending = json.loads((state / "reload-pending.json").read_text())
         st.write_text(json.dumps(dict(json.loads(st.read_text()), terms=dict(

@@ -123,8 +123,10 @@ def main():
     if not write:
         print("(dry run; add --write to apply)")
         return 0
+    sys.stdout.flush()  # keep this output ahead of the child's
     subprocess.run([sys.executable, str(REPO / "scripts" / "sync.py"), "sync", "--no-broadcast"])
-    print(f"done. New sessions load {REPO}. Running ones pick it up only after a restart.\n"
+    print(f"done. New sessions load {REPO}. Restart the running ones: a /reload-plugins there drops the\n"
+          f"marketplace copy without adding the checkout, and leaves them with no agent-skills at all.\n"
           f"If `claude` has never run in {REPO}, start it there once and accept the folder trust prompt.")
     return 0
 
