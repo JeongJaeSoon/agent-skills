@@ -369,7 +369,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 - **What it does:** Keeps the main checkout that sessions load directly in step with origin/main, and sends a reload to running Claude sessions when something changed. The whole setup is in `docs/platform.md`.
 - **Commands:**
   - `sync`: fetch, then an ff-only pull or a push of signed commits. Off main, uncommitted changes, diverged, an unsigned commit, or no credential helper: it changes nothing, stops, and leaves a macOS notification and `~/.local/state/agent-skills/sync.json`. launchd runs it every 15 minutes and at login.
-  - `broadcast [--skills|--plugins] [--dry-run]`: `/reload-skills` when a `SKILL.md` changed, `/reload-plugins` when hooks or the plugin manifest changed. Sent only to sessions with an empty prompt, no spinner, no permission, trust or question dialog, and the same screen on two reads 1.5 s apart; the rest stay in `reload-pending.json` for the next try.
+  - `broadcast [--skills|--plugins] [--dry-run]`: `/reload-skills` when a `SKILL.md` changed, `/reload-plugins` when the hook wiring (`hooks/hooks.json`) or the plugin manifest changed. Sent only to sessions with an empty prompt, no spinner, no permission, trust or question dialog, no shell below the prompt box, and the same screen on two reads 1.5 s apart; the rest stay in `reload-pending.json` for the next try.
   - `nudge <terminal> <one line>`: sends one line under the same checks and confirms the turn started.
   - `status`: the last sync result and the pending reload.
 

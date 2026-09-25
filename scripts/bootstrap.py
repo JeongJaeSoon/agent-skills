@@ -57,6 +57,14 @@ def settings_change():
     return d if changed else None
 
 
+def launchd_path():
+    # launchd starts with a bare PATH. Put the python3, git and orca found now first, so the job runs the
+    # same tools (a pyenv or uv python, a Homebrew git) and never the Command Line Tools stub.
+    dirs = [os.path.dirname(w) for w in map(shutil.which, ("python3", "git", "orca")) if w]
+    dirs += ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    return ":".join(dict.fromkeys(dirs))
+
+
 def plist():
     log = str(STATE / "sync.log")
     return {
@@ -66,8 +74,7 @@ def plist():
         "RunAtLoad": True,
         "StandardOutPath": log,
         "StandardErrorPath": log,
-        # launchd starts with a bare PATH; orca and git from Homebrew live outside it.
-        "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
+        "EnvironmentVariables": {"PATH": launchd_path()},
     }
 
 
@@ -76,17 +83,24 @@ def scheduler(write):
         print(f"cron    add by hand: */15 * * * * python3 {REPO}/scripts/sync.py sync >> {STATE}/sync.log 2>&1")
         return
     want = plistlib.dumps(plist())
-    if PLIST.exists() and PLIST.read_bytes() == want:
+    domain = f"gui/{os.getuid()}"
+    loaded = subprocess.run(["launchctl", "print", f"{domain}/{LABEL}"], capture_output=True).returncode == 0
+    if PLIST.exists() and PLIST.read_bytes() == want and loaded:
         print(f"ok      launchd {LABEL}")
         return
     print(f"write   {PLIST} (every {INTERVAL_S // 60} min and at login)")
     if write:
         STATE.mkdir(parents=True, exist_ok=True)
         PLIST.parent.mkdir(parents=True, exist_ok=True)
-        domain = f"gui/{os.getuid()}"
         subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
         PLIST.write_bytes(want)
-        subprocess.run(["launchctl", "bootstrap", domain, str(PLIST)], check=True)
+        for attempt in range(5):  # bootstrap right after bootout can fail with error 5 until the old job is gone
+            p = subprocess.run(["launchctl", "bootstrap", domain, str(PLIST)], capture_output=True, text=True)
+            if p.returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            sys.exit(f"launchctl bootstrap failed: {p.stderr.strip()}; rerun this script")
 
 
 def main():
@@ -94,14 +108,17 @@ def main():
     preflight()
     new = settings_change()
     if write and new:
-        backup = SETTINGS.with_name(f"settings.json.bak-{time.strftime('%Y%m%d-%H%M%S')}")
-        if SETTINGS.exists():
-            shutil.copy2(SETTINGS, backup)
+        target = SETTINGS.resolve()  # a dotfiles symlink stays a symlink
+        backup = target.with_name(f"settings.json.bak-{time.strftime('%Y%m%d-%H%M%S')}")
+        if target.exists():
+            shutil.copy2(target, backup)
             print(f"backup  {backup}")
-        SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-        tmp = SETTINGS.with_suffix(".tmp")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
         tmp.write_text(json.dumps(new, indent=2, ensure_ascii=False) + "\n")
-        tmp.replace(SETTINGS)
+        if target.exists():
+            shutil.copymode(target, tmp)
+        tmp.replace(target)
     scheduler(write)
     if not write:
         print("(dry run; add --write to apply)")

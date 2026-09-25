@@ -369,7 +369,7 @@
 - **やること:** セッションが直接読むメインのチェックアウトを origin/main に合わせ、変わったものがあれば起動中の Claude セッションに reload を送ります。運用の全体は `docs/platform.md` にあります。
 - **コマンド:**
   - `sync`: fetch のあと ff-only の pull か、署名済みコミットの push。main でない、未コミットの変更がある、分岐している、署名のないコミットがある、credential helper がない場合は何も変えずに止まり、macOS 通知と `~/.local/state/agent-skills/sync.json` に残します。launchd が15分ごととログイン時に実行します。
-  - `broadcast [--skills|--plugins] [--dry-run]`: `SKILL.md` が変わったら `/reload-skills`、hooks やプラグインの manifest が変わったら `/reload-plugins` を送ります。入力欄が空、スピナーなし、権限・信頼・質問の画面なし、1.5秒おきに二回読んだ画面が同じ、をすべて確かめたセッションにだけ送り、残りは `reload-pending.json` に残して次に再試行します。
+  - `broadcast [--skills|--plugins] [--dry-run]`: `SKILL.md` が変わったら `/reload-skills`、hook の配線（`hooks/hooks.json`）やプラグインの manifest が変わったら `/reload-plugins` を送ります。入力欄が空、スピナーなし、権限・信頼・質問の画面なし、入力欄の下にシェルなし、1.5秒おきに二回読んだ画面が同じ、をすべて確かめたセッションにだけ送り、残りは `reload-pending.json` に残して次に再試行します。
   - `nudge <terminal> <一行>`: 同じ確認を通ったセッションにだけ一行を送り、ターンが始まったか確かめます。
   - `status`: 最後の同期結果と残っている reload。
 

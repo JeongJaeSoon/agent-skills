@@ -366,7 +366,7 @@
 - **하는 일:** 세션들이 직접 읽는 메인 체크아웃을 origin/main과 맞추고, 바뀐 것이 있으면 떠 있는 Claude 세션에 reload를 보낸다. 운영 방식 전체는 `docs/platform.md`.
 - **명령:**
   - `sync`: fetch → ff-only pull 또는 서명 커밋 push. main이 아님, 커밋 안 한 변경, 갈라짐, 서명 없는 커밋, credential helper 없음이면 아무것도 바꾸지 않고 멈춘 뒤 macOS 알림과 `~/.local/state/agent-skills/sync.json`에 남긴다. launchd가 15분마다와 로그인 때 돌린다.
-  - `broadcast [--skills|--plugins] [--dry-run]`: `SKILL.md`가 바뀌었으면 `/reload-skills`, hooks·플러그인 manifest가 바뀌었으면 `/reload-plugins`를 보낸다. 빈 입력칸, 스피너 없음, 권한·신뢰·질문 창 없음, 1.5초 간격 두 번 읽은 화면이 같음을 모두 확인한 세션에만 보내고, 나머지는 `reload-pending.json`에 남겨 다음에 다시 시도한다.
+  - `broadcast [--skills|--plugins] [--dry-run]`: `SKILL.md`가 바뀌었으면 `/reload-skills`, hook 연결(`hooks/hooks.json`)·플러그인 manifest가 바뀌었으면 `/reload-plugins`를 보낸다. 빈 입력칸, 스피너 없음, 권한·신뢰·질문 창 없음, 입력칸 아래에 셸 없음, 1.5초 간격 두 번 읽은 화면이 같음을 모두 확인한 세션에만 보내고, 나머지는 `reload-pending.json`에 남겨 다음에 다시 시도한다.
   - `nudge <terminal> <한 줄>`: 같은 확인을 통과한 세션에만 한 줄을 보내고 턴이 시작됐는지 본다.
   - `status`: 마지막 동기화 결과와 남은 reload.
 

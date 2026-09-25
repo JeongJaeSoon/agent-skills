@@ -101,9 +101,9 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 | 바뀐 경로 | 반영 방법 |
 |---|---|
-| `skills/**`, `legacy/**` | `/reload-skills` |
-| `hooks/**`, `.claude-plugin/**`, `agents/**` | `/reload-plugins` |
-| `bin/**`, `skills/*/scripts/**`, `docs/**`, 테스트 | 아무것도 안 보낸다. 스크립트는 실행할 때마다 디스크에서 읽힌다 |
+| `skills/*/SKILL.md`, `legacy/*/SKILL.md` | `/reload-skills` |
+| `hooks/hooks.json`, `.mcp.json`, `.claude-plugin/**`, `agents/**` | `/reload-plugins` |
+| `hooks/*.py`, `bin/**`, `skills/*/scripts/**`, `skills/*/references/**`, `docs/**`, 테스트 | 아무것도 안 보낸다. hook 스크립트와 스크립트는 실행할 때마다, 참고 문서는 읽을 때마다 디스크에서 읽힌다 |
 
 `/reload-plugins`는 다른 플러그인의 MCP 서버까지 다시 붙인다(출력의 "6 plugin MCP servers"). 그래서 스킬만 바뀐 경우에는 가벼운 `/reload-skills`를 쓴다.
 
@@ -138,10 +138,10 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 6. HEAD가 바뀌었으면 바뀐 경로로 reload 브로드캐스트를 정한다(§4).
 
 - **main 직접 push:** 이 저장소에는 branch protection과 ruleset이 없다(`gh api …/branches/main/protection` → 404 "Branch not protected", rulesets `[]`). 최근 main 커밋 15개는 모두 서명된 직접 커밋이고 PR은 2개뿐이다. 그래서 동기화는 main에 직접 push한다. 리뷰를 받고 싶은 큰 변경은 지금처럼 PR로 올리고, 동기화는 그 결과를 pull할 뿐이다.
-- **인증 대기로 멈추지 않기:** launchd에는 터미널이 없어서 인증을 물으면 영원히 기다린다. `GIT_TERMINAL_PROMPT=0`으로 돌리고, `git config credential.helper`가 비어 있으면 fetch 전에 멈춘다. git 명령마다 시간 제한(60초)을 건다.
+- **인증 대기로 멈추지 않기:** launchd에는 터미널이 없어서 인증을 물으면 영원히 기다린다. `GIT_TERMINAL_PROMPT=0`으로 돌리고, stdin을 닫고 새 세션으로 띄워 터미널에서 떼어 낸다. HTTPS origin이면 `git config --get-urlmatch credential.helper <url>`이 비어 있을 때 fetch 전에 멈춘다(`gh auth setup-git`이 쓰는 URL 한정 helper도 보인다). SSH origin이고 `core.sshCommand`가 없으면 `ssh -o BatchMode=yes`로 돌려 host key나 passphrase를 묻지 않게 한다. git 명령마다 시간 제한(60초)을 건다.
 - **서명과 1Password:** 동기화는 커밋을 만들지 않는다. 이 체크아웃은 `commit.gpgsign=true`, `gpg.format=ssh`라 1Password 에이전트가 꺼져 있으면 커밋 자체가 실패한다. 그래도 서명 없는 커밋이 끼어 있으면 5단계에서 멈추고 "서명 없는 커밋 <sha>: 1Password SSH 에이전트를 확인한 뒤 다시 서명"이라고 알린다.
 - **알림:** macOS 알림 센터(`osascript display notification`)와 상태 파일 `~/.local/state/agent-skills/sync.json`(마지막 결과, 멈춘 이유, 시각). 터미널에는 아무것도 쓰지 않는다. 입력 중인 세션에 알림이 끼어드는 문제를 만들지 않기 위해서다. 같은 이유로 멈춘 상태가 이어지면 다시 알리지 않고, 상태가 바뀔 때만 알린다. 대시보드는 이 파일을 읽어 인박스에 올릴 수 있다(`orchestrator-dashboard` 몫).
-- **동시 실행:** `~/.local/state/agent-skills/sync.lock`에 파일 잠금(`fcntl.flock`, macOS에는 `flock` 명령이 없다)을 건다. launchd와 수동 실행이 겹쳐도 하나만 돈다.
+- **동시 실행:** `~/.local/state/agent-skills/sync.lock`에 파일 잠금(`fcntl.flock`, macOS에는 `flock` 명령이 없다)을 건다. `sync`, `broadcast`, `nudge`가 같은 잠금을 쓰고 브로드캐스트가 끝날 때까지 쥐고 있다. 겹치면 두 브로드캐스트가 같은 세션에 두 번 치거나, 브로드캐스트 도중 `sync`가 새로 넣은 reload 대기 항목을 덮어쓴다.
 
 ## 4. reload 브로드캐스트
 
@@ -166,10 +166,10 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 |---|---|
 | Claude가 떠 있다 | `agentIdentity == "claude"`이고, `read --screen`에 Claude 입력창(위아래 `────` 가로줄 사이의 `❯` 줄)이 있다 |
 | 빈 프롬프트에서 대기 중 | **마지막** `────` 두 줄 사이의 입력칸이 `❯` 하나뿐이거나, 빈 입력칸의 안내 문구(`❯ Try "…"`)만 있다. 그 위 history에 찍힌 `❯ <이미 보낸 프롬프트>`는 입력칸이 아니다. `read` 결과에 `draft`가 있으면 비어 있어야 한다 |
-| 턴이 진행 중이 아니다 | 화면에 스피너 줄이 없다. 스피너 줄은 `✶ Contemplating… (32s · ↓ 912 tokens)`, `· Crunching… (running UserPromptSubmit hooks…)`처럼 글자 하나 + 단어 + `…`로 시작한다. 끝난 턴의 요약 줄(`✻ Worked for 2m 7s · done 5:48 AM`)에는 `…`가 없다. 턴 진행 중에도 빈 `❯` 입력칸은 보이므로 입력칸만으로는 판정하지 않는다. 탭 제목의 `✳`는 필요조건으로만 쓴다(`◑` 등 다른 글자면 작업 중). `✳`는 AskUserQuestion 대기 세션에도 붙기 때문에 충분조건이 아니다 |
-| 권한·신뢰·질문 창이 없다 | 화면에 이런 문구가 하나도 없다: `Do you want to proceed?`, `❯ 1.`처럼 번호 선택지에 커서가 있는 줄, `Esc to cancel`, `Tab to amend`, `Enter to confirm`, `trust this folder`, `Enter to select`, `↑/↓ to navigate`, `Chat about this` |
+| 턴이 진행 중이 아니다 | 화면에 스피너 줄도 `esc to interrupt`도 없다. 스피너 줄은 `✶ Contemplating… (32s · ↓ 912 tokens)`, `· Crunching… (running UserPromptSubmit hooks…)`, `✶ Compacting conversation… (12s)`처럼 스피너 글자 하나로 시작하고 `…`를 품는다. 끝난 턴의 요약 줄(`✻ Worked for 2m 7s · done 5:48 AM`)에는 `…`가 없다. 턴 진행 중에도 빈 `❯` 입력칸은 보이므로 입력칸만으로는 판정하지 않는다. 탭 제목의 `✳`는 필요조건으로만 쓴다(`◑` 등 다른 글자면 작업 중). `✳`는 AskUserQuestion 대기 세션에도 붙기 때문에 충분조건이 아니다. 제목은 목록에서 한 번 읽지 않고 화면을 읽을 때마다 `orca terminal show`로 다시 읽는다. 세션마다 4.5초 넘게 걸려서 목록의 제목은 금방 낡는다 |
+| 권한·신뢰·질문 창이 없다 | 화면에 이런 문구가 하나도 없다: `Do you want to proceed?`, `❯ 1.`처럼 번호 선택지에 커서가 있는 줄, `Esc to cancel`, `Tab to amend`, `Enter to confirm`, `trust this folder`, `Enter to select`, `↑/↓ to navigate`, `Chat about this`, `Press Enter`, `Esc to close`, `Esc to exit`, `(y/n)` |
 | 사용자가 입력 중이 아니다 | 1.5초 간격으로 두 번 읽은 화면이 같다 |
-| 셸이 아니라 Claude다 | 마지막 줄이 셸 프롬프트(`$`)가 아니고, bracketed paste 잔해(`^[[200~`)가 없다 |
+| 셸이 아니라 Claude다 | 입력칸 아래에는 Claude의 상태 줄(두 칸 들여 쓴 줄)만 있다. 들여 쓰지 않은 줄(Claude가 끝나고 돌아온 셸 프롬프트), `Resume this session with`, bracketed paste 잔해(`^[[200~`)가 있으면 보내지 않는다. 상태 줄은 `Weekly: 94.0%`처럼 `%`로 끝나기도 해서 끝 글자로는 셸 프롬프트를 가리지 않는다 |
 
 `orca terminal wait --for tui-idle`은 쓰지 않는다. 실측에서 UserPromptSubmit hook이 도는 중(`· Crunching… (running UserPromptSubmit hooks… 3/4 · 0s)`)에도 `satisfied: true`를 돌려줬다.
 
@@ -189,7 +189,7 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 ### 보낸 뒤
 
 - `orca terminal send --terminal <h> --text "/reload-skills" --enter`.
-- 3초 뒤 화면에서 `Reloaded skills:` 또는 `Reloaded:`를 찾는다. 없으면 실패로 적는다.
+- 3초 뒤 화면을 다시 읽는다. 보낸 명령(`❯ /reload-skills`)이 입력칸 위 마지막 메시지이고, 그 아래에 `⎿  Reloaded skills: …` 또는 `⎿  Reloaded: …`가 있고, 입력칸에 명령이 남아 있지 않아야 성공이다. 화면에 남은 예전 reload 출력은 마지막 메시지가 아니므로 성공으로 치지 않는다. 한 줄 nudge도 같은 방식으로, 보낸 줄이 마지막 메시지로 올라갔거나 스피너가 돌면 성공으로 본다.
 - 못 보낸 세션과 이유는 `~/.local/state/agent-skills/reload-pending.json`에 남긴다. 다음 `sync`, 또는 `skills-sync broadcast --retry`가 다시 시도한다. 세션이 사라졌으면 목록에서 뺀다.
 - 확인과 전송 사이의 짧은 틈에 사용자가 타이핑을 시작할 수 있다. 이 틈은 없앨 수 없어서, 두 번 읽기로 좁히는 데서 멈춘다.
 
@@ -206,10 +206,10 @@ python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py --write   # 적용
 `bootstrap.py`는 `migrate.py`처럼 기본이 dry run이다. `--write`일 때 하는 일:
 
 1. `git`, `python3`, `claude`가 있는지, 체크아웃이 main인지 본다.
-2. 옛 `install.py` 흔적(symlink, 옛 권한 규칙, 옛 hook)을 `migrate.py`와 같은 규칙으로 걷어 낸다.
+2. 옛 `install.py` 흔적은 건드리지 않는다. 그 설치를 쓰던 PC는 `migrate.py --write`가 흔적을 걷어 낸 뒤 이 스크립트를 부른다(README).
 3. `settings.json`을 백업하고 `env.CLAUDE_CODE_PLUGIN_DIRS`를 이 체크아웃으로 넣는다. 다른 값이 이미 있으면 덮어쓰지 않고 멈춘다.
 4. `agent-skills@jeongjaesoon`이 설치·활성화되어 있으면 `enabledPlugins`에서 false로 둔다(두 번 로드 방지). 바꾸기 전 값을 출력한다.
-5. macOS면 `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist`를 쓰고 `launchctl bootstrap`한다. Linux면 같은 명령을 넣을 crontab 한 줄을 출력만 한다.
+5. macOS면 `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist`를 쓰고 `launchctl bootstrap`한다. plist의 `PATH` 앞에는 지금 쓰는 `python3`·`git`·`orca`의 디렉터리를 넣는다. 파일이 같아도 `launchctl print`로 작업이 올라가 있지 않으면 다시 올린다. Linux면 같은 명령을 넣을 crontab 한 줄을 출력만 한다.
 6. `skills-sync sync`를 한 번 돌린다.
 
 새 PC에서 체크아웃 폴더로 처음 `claude`를 띄우면 신뢰 창이 한 번 뜬다(신뢰는 원본 clone 경로에 기록된다, §6.2). 부트스트랩은 이 창을 대신 누르지 않고 "체크아웃에서 claude를 한 번 띄워 신뢰를 수락하라"고 출력한다.
