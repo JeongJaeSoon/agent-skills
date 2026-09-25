@@ -421,3 +421,52 @@ prog.run = real_run
 assert [i["id"] for i in got] == ["A-1", "X-9"], got
 
 print("prog.py tracker ids: all pass")
+
+# --- stacks: main CI runs once, on the top's merge commit ------------------------------------
+row = lambda kind, **kw: {"ts": T, "ev": kind, **kw}
+events = [row("landed", pr=7, sha="a", stack_top=8), row("landed", pr=8, sha="b"),
+          row("landed", pr=7, sha="a", note="merged outside land"), row("main_green", pr=8, sha="b")]
+assert prog.main_state(events) == "green", "a lower layer, even recorded twice, waits on no run of its own"
+assert prog.cap_from(events + [row("main_green", pr=7, sha="a")], 6) == 2, "one push raises the cap once"
+with contextlib.redirect_stdout(io.StringIO()):
+    for e in events[:2]:
+        prog.Program("gt").append(e["ev"], **{k: v for k, v in e.items() if k not in ("ts", "ev")})
+try:
+    prog.cmd_record(["gt", "main_green", "--pr", "7", "--sha", "a"])
+    raise AssertionError("main_green accepted on a lower stack layer")
+except SystemExit as e:
+    assert "lower stack layer" in str(e) and "#8" in str(e), e
+
+print("prog.py stacks: all pass")
+
+# --- verdict sources are a closed set ------------------------------------------------------------
+real_view, real_pid = prog.pr_view, prog.patch_id
+prog.pr_view, prog.patch_id = (lambda repo, n: {"headRefOid": "h1"}), (lambda repo, n: "p1")
+for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:opus", "live:", "verifier"):
+    try:
+        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", bad])
+        raise AssertionError(f"verdict accepted --source {bad}")
+    except SystemExit as e:
+        assert "--source is" in str(e), e
+for good in ("codex-review", "subagent-review", "verifier:codex", "live:checkout"):
+    with contextlib.redirect_stdout(io.StringIO()):
+        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good])
+    assert prog.Program("gt").events()[-1]["source"] == good
+prog.pr_view, prog.patch_id = real_view, real_pid
+
+print("prog.py verdict source: all pass")
+
+# --- the skills commit reflect diffs against exists upstream --------------------------------
+g = pathlib.Path(tempfile.mkdtemp(prefix="test-skills-"))
+assert prog.skills_version(g) == g.name, "an installed plugin's cache dir is named by its commit"
+git = lambda *a: subprocess.run(["git", "-C", str(g), *a], capture_output=True, text=True, check=True).stdout.strip()
+git("init", "-q", "-b", "main"); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+git("update-ref", "refs/remotes/origin/main", "HEAD")
+base = git("rev-parse", "--short", "HEAD")
+assert prog.skills_version(g) == base
+(g / "skills").mkdir(); (g / "skills" / "x.md").write_text("edit")
+assert prog.skills_version(g) == base + "+local", "an uncommitted skill edit is not the pushed commit"
+git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "local")
+assert prog.skills_version(g) == base + "+local", "an unpushed commit records its pushed base"
+
+print("prog.py skills commit: all pass")

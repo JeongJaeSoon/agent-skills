@@ -244,8 +244,14 @@ def main():
     w("\n## 비용 (토큰, 금액 아님)\n")
     w(f"- 대상: `~/.claude/projects/*{match}*`, cwd에 `{match}`가 든 Codex 세션")
     w(f"- Claude: 호출 {u['claude_calls']:,} · output {u['claude_output']:,} · cache read {u['claude_cache_read']:,} · cache write {u['claude_cache_write']:,}")
-    w(f"- Codex: 세션 {u['codex_sessions']:,} · input {u['codex_input']:,} · output {u['codex_output']:,}")
-    w(f"- 머지 PR당: Claude output {u['claude_output'] // n:,} · Codex input {u['codex_input'] // n:,}")
+    # codex-companion threads are ephemeral and write no session file, so its reviews never show up here.
+    skipped = "codex-companion의 review·task는 ephemeral이라 세션 파일을 남기지 않아 빠진다"
+    if u["codex_sessions"]:
+        w(f"- Codex: 세션 {u['codex_sessions']:,} · input {u['codex_input']:,} · output {u['codex_output']:,} ({skipped})")
+    else:
+        w(f"- Codex: 미측정. 맞는 세션 파일이 없다 ({skipped})")
+    codex = f"{u['codex_input'] // n:,}" if u["codex_sessions"] else "미측정"
+    w(f"- 머지 PR당: Claude output {u['claude_output'] // n:,} · Codex input {codex}")
     w("- 이 머신의 로컬 기록만 센다. 다른 머신·클라우드 세션은 빠진다")
 
     print("\n".join(out))

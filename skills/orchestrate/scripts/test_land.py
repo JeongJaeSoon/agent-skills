@@ -191,6 +191,9 @@ code, out = prog(env, "land", "t", "--pr", "8")
 assert code == 0 and "#7 #8" in out, out
 landed = [e for e in ledger(d) if e["ev"] == "landed"]
 assert [e["pr"] for e in landed] == [7, 8] and landed[1]["sha"] == "m8"
+assert landed[0]["stack_top"] == 8 and "stack_top" not in landed[1], landed
+code, out = prog(env, "record", "t", "main_green", "--pr", "7", "--sha", "m7")
+assert code != 0 and "lower stack layer" in out, out
 assert any("merge-async" in " ".join(c) for c in json.loads((d / "state.json").read_text())["log"])
 # The bottom layer's own land loop then finds it merged and does not record it a second time.
 code, out = prog(env, "land", "t", "--pr", "7")

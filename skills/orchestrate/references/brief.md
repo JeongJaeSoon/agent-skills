@@ -33,7 +33,7 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <the reviewer: codex-review, subagent-review (trivial diff,
-            deliver-ticket §3), verifier:<model>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            deliver-ticket §3), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not

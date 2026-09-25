@@ -127,7 +127,7 @@
   - 머지된 PR 수를 센다.
   - 재작업(PR을 연 뒤의 커밋과 CI 재실행)을 본다.
   - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
-  - PR당 Claude·Codex 토큰을 계산한다.
+  - PR당 Claude·Codex 토큰을 계산한다. codex-companion의 review·task는 세션 파일을 남기지 않아 셀 수 없으므로, 맞는 Codex 세션이 없으면 0이 아니라 `미측정`으로 적는다.
   - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
 
 ## 어댑터
@@ -265,9 +265,10 @@
   - 종합자(opus)가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 모두 교훈 장부(노트 저장소의 `Project/agent-skills/learnings.md`)에 한 줄씩 남는다. 장부는 교훈마다 신호, 근거 포인터, 발생 횟수, 고친 대상, 변경(PR·커밋), 스크립트가 낸 검증 수치, 이후 재발 여부를 적는다.
   - 스킬을 바꾸는 건 서로 다른 사례가 두 번 이상일 때만이다(재현된 보안·데이터 결함은 예외). 한 번뿐이면 후보로 남겨 두고 다음 발생을 기다린다.
   - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다. description 변경은 `trigger-probe.sh`로 발동을, 본문·스크립트 변경은 바뀐 경로를 도는 테스트나 사례 재현으로 동작을 확인한다. 검증이 없으면 `none`으로 적는다.
+  - 리뷰어를 부르기 전에 신호마다 지금 HEAD가 이미 고쳤는지 확인해 표시한다(`program.json`의 `skills_commit`부터 바뀐 것). 다른 프로그램 원장의 `signal`도 발생 횟수에 센다. 명령·플래그를 바꾸는 수정은 `skills/` 전체의 사본을 같이 고친다.
   - 신호도 실패도 없는 프로그램에서도 Close마다 돌아, 적용된 교훈이 이번 프로그램에서 버텼는지(`held through`, 프로그램 slug로 중복 없이) 기록한다.
   - 권한 hook, `orch land` 게이트, 테스트와 채점기, reflect 자신은 고치자고 제안하지 않고 Backlog로 보낸다.
-  - Backlog는 `use-tracker`로 등록한다.
+  - Backlog는 두 모드 모두 `use-tracker`로 바로 등록하고, 장부 Status에 `backlog (<티켓>)`으로 적는다. Codex 리뷰어는 `status --wait`를 background로 걸어 기다린다. 턴을 끝내고 기다리면 무인 실행이 거기서 끝난다.
 
 ### show-me-your-work
 - **언제:** 오래 걸리거나 사람이 자리를 비운 작업.
@@ -331,11 +332,11 @@
 
 | 명령 | 하는 일 |
 |---|---|
-| `init` | 프로그램 등록(저장소, Run, 트래커, predicate, 머지 정책, ceiling, 기한, 노트). 대시보드를 띄운다 |
+| `init` | 프로그램 등록(저장소, Run, 트래커, predicate, 머지 정책, ceiling, 기한, 노트). 스킬 버전은 저장소에 있는 커밋으로 적는다(push 안 된 checkout이면 push된 기준 커밋 + `+local`). 대시보드를 띄운다 |
 | `set` | 노트가 바뀌면 정책·ceiling·기한·predicate·독점 경로를 맞춘다 |
 | `status` | predicate 진척, main 상태, in-flight/상한, 다음 행동. STALE, LANDED-BUT-OPEN, STALLED, SPARE, LEDGER GAP 줄 |
-| `record` | 원장 이벤트 기록(spawned, parked, admitted, main_green/red, predicate_verified 등) |
-| `verdict` | 리뷰한 head의 판정 기록 |
+| `record` | 원장 이벤트 기록(spawned, parked, admitted, main_green/red, predicate_verified 등). 스택 아래층 커밋의 main_green/red는 거부한다: main CI는 맨 위층 커밋에서 한 번만 돈다 |
+| `verdict` | 리뷰한 head의 판정 기록. 출처는 `codex-review`, `subagent-review`, `verifier:<다른 모델 계열>`, `live:<기능>` 중 하나만 받는다 |
 | `gate` | human-gate용 결정 gate를 연다 |
 | `dep` | 착지 순서 의존 기록 |
 | `queue` | 착지 순서와 PR마다 멈춘 이유 |

@@ -149,8 +149,14 @@ class Program:
         return row
 
 
+def stack_lower(events):
+    """A stack's lower layers land in their top's push, so main CI never runs on their commits."""
+    return {e["sha"]: e["stack_top"] for e in events if e["ev"] == "landed" and e.get("sha") and e.get("stack_top")}
+
+
 def landed_shas(events):
-    return {e["sha"] for e in events if e["ev"] == "landed" and e.get("sha")}
+    lower = stack_lower(events)
+    return {e["sha"] for e in events if e["ev"] == "landed" and e.get("sha") and e["sha"] not in lower}
 
 
 def cap_from(events, ceiling):
@@ -178,9 +184,9 @@ def main_state(events):
     A result without --sha (ledgers from before it was required) belongs to the last landing
     before it.
     """
-    order, result, last = [], {}, None
+    order, result, last, lower = [], {}, None, stack_lower(events)
     for e in events:
-        if e["ev"] == "landed" and e.get("sha"):
+        if e["ev"] == "landed" and e.get("sha") and e["sha"] not in lower:
             order.append(e["sha"]); last = e["sha"]
         elif e["ev"] in ("main_green", "main_red"):
             sha = e.get("sha") or last
@@ -601,6 +607,19 @@ def is_derived(issue):
     return "follow-up" in (issue.get("labels") or []) or (issue.get("description") or "").lstrip().startswith("파생:")
 
 
+def skills_version(root):
+    """A commit reflect can later diff against HEAD. An installed plugin sits in a cache dir named by its
+    commit; a local commit may never reach the repo, so a checkout ahead of origin records its pushed base."""
+    git = lambda *a: subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True).stdout.strip()
+    head = git("rev-parse", "--short", "HEAD")
+    if not head:
+        return root.name
+    if git("branch", "-r", "--contains", "HEAD") and not git("status", "--porcelain", "--", "skills"):
+        return head
+    base = git("merge-base", "HEAD", "origin/main")
+    return (git("rev-parse", "--short", base) if base else head) + "+local"
+
+
 def cmd_init(argv):
     slug = argv[0]
     d = HOME / slug
@@ -612,10 +631,9 @@ def cmd_init(argv):
     policy = opt(argv, "--merge-policy", "autonomous")
     if policy not in ("autonomous", "human-gate"):
         sys.exit("--merge-policy is autonomous or human-gate")
-    root = pathlib.Path(__file__).resolve().parents[3]
-    # A checkout answers with its commit; an installed plugin sits in a cache dir named by its version.
-    skills_commit = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
-                                   capture_output=True, text=True).stdout.strip() or root.name
+    skills_commit = skills_version(pathlib.Path(__file__).resolve().parents[3])
+    if skills_commit.endswith("+local"):
+        print(f"note: the skills checkout has unpushed or uncommitted changes; recorded their pushed base {skills_commit}")
     cfg = {
         "slug": slug, "repo": repo, "run": run_id,
         "tracker": {k: v for k, v in {"adapter": opt(argv, "--tracker"),
@@ -828,7 +846,9 @@ def cmd_record(argv):
     ev = argv[1]
     pr, sha = opt(argv, "--pr"), opt(argv, "--sha")
     if ev in ("main_green", "main_red") and sha not in landed_shas(p.events()):
-        sys.exit(f"{ev} needs --sha of a merge commit recorded by `landed` (the commit that CI run tested)")
+        top = stack_lower(p.events()).get(sha)
+        sys.exit(f"{sha[:8]} is a lower stack layer: main CI ran once, on the merge commit of its top #{top}; record it there" if top
+                 else f"{ev} needs --sha of a merge commit recorded by `landed` (the commit that CI run tested)")
     if ev == "verdict":
         sys.exit("use the verdict command; it pins the reviewed head and its patch-id")
     if ev in OWNED:
@@ -866,8 +886,12 @@ def cmd_verdict(argv):
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
-    if src.lower().startswith(("self", "author", "implementer")):
-        sys.exit("a verdict comes from a reviewer other than the implementer (codex-review; subagent-review for a trivial diff, deliver-ticket §3; verifier:<model>; live:<feature>)")
+    # Workers run on Claude, so a Claude verifier is the implementer's own family; a Claude subagent is subagent-review.
+    kind, _, what = src.partition(":")
+    if not (src in ("codex-review", "subagent-review") or (kind in ("verifier", "live") and what)) \
+            or (kind == "verifier" and what.lower().startswith(("claude", "opus", "sonnet", "haiku", "fable"))):
+        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), verifier:<model of another "
+                 "family than the Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
@@ -1014,7 +1038,8 @@ def merge_unit(p, pr, unit, klass, events):
     for n, x in merged.items():
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
-                     klass=klass if klass != "normal" else None, note=f"stack of {len(unit)}" if len(unit) > 1 else None)
+                     klass=klass if klass != "normal" else None, note=f"stack of {len(unit)}" if len(unit) > 1 else None,
+                     stack_top=pr if n != pr else None)
             close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
         why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
@@ -1054,6 +1079,7 @@ def attempt(p, pr, klass):
         v = pr_view(repo, pr)
         if v["state"] == "MERGED":
             sha = (v.get("mergeCommit") or {}).get("oid")
+            st = pr_state(p.events()).get(pr, {})  # the top's land call may have recorded this layer since we read
             if "landed" in st:  # a stack layer lands with its top, whose land call recorded it
                 return 0, (f"#{pr} already landed as {(st['landed'].get('sha') or '')[:8]} ({st['landed'].get('note') or 'recorded'});"
                            " main CI ran once on the stack top's commit, and the top's owner records it")
