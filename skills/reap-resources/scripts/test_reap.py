@@ -51,6 +51,7 @@ rows = {
     6: row(6, "/cache/uv/bin/litellm", age=H),
     7: row(7, "/usr/bin/python3 -u /cache/uv/server.py"),
     8: row(8, "/usr/bin/python3 /opt/app.py --data /cache/uv/x"),
+    9: row(9, "/usr/bin/node --test-reporter-destination /cache/uv/report.txt /opt/app.js"),
 }
 got = {i["pid"]: i["target"] for i in reap.judge_orphans(rows, ["/cache/uv/"], 6)}
 assert got == {1: True, 3: True, 6: False, 7: True}, got

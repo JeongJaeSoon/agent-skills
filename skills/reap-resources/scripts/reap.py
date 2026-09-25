@@ -155,14 +155,18 @@ def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
     return out
 
 
+def is_code(path):
+    return path.endswith((".py", ".js", ".mjs", ".cjs", ".ts", ".sh")) or (os.path.isfile(path) and os.access(path, os.X_OK))
+
+
 def judge_orphans(rows, prefixes, hours):
     pres = {x for p in prefixes for x in (p.rstrip("/"), real(p).rstrip("/"))}
     out = []
     for r in rows.values():
-        # Only the executable or the script it runs (its first non-option argument) counts, not a later
-        # argument or a prompt.
+        # Only the executable or the script it runs counts: its first non-option argument, and only when that
+        # is code, since an option's value (a report file, a data dir) can come first.
         argv = r["cmd"].split()
-        exe = argv[:1] + [a for a in argv[1:] if not a.startswith("-")][:1]
+        exe = argv[:1] + [a for a in [a for a in argv[1:] if not a.startswith("-")][:1] if is_code(a)]
         if r["ppid"] != 1 or not any(under(e, p) for e in exe for p in pres):
             continue
         young = r["age"] < hours * 3600
