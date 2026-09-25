@@ -1,0 +1,192 @@
+<title>agent-skills 카탈로그</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --ground: #f5f7f5;
+  --surface: #ffffff;
+  --ink: #1b2420;
+  --muted: #5a6761;
+  --rule: #dbe1dd;
+  --accent: #2c6b58;
+  --accent-soft: #e2eee9;
+  --code: #eaefec;
+  --warn: #8a5a12;
+  --warn-soft: #f6ecd9;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #111614; --surface: #171d1a; --ink: #e2e8e4; --muted: #98a59e; --rule: #2a332f;
+    --accent: #72c3a8; --accent-soft: #1d2e28; --code: #1f2723; --warn: #e2b36a; --warn-soft: #2e2618;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #111614; --surface: #171d1a; --ink: #e2e8e4; --muted: #98a59e; --rule: #2a332f;
+  --accent: #72c3a8; --accent-soft: #1d2e28; --code: #1f2723; --warn: #e2b36a; --warn-soft: #2e2618;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--ground); color: var(--ink); font: 15px/1.75 var(--sans);
+  padding-inline: 16px; word-break: keep-all; overflow-wrap: anywhere;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 40px 96px; display: grid; gap: 48px; grid-template-columns: 1fr; }
+@media (min-width: 1000px) { .wrap { grid-template-columns: 230px minmax(0, 1fr); } }
+/* Below this width the header could run under the corner switch, so start the page beneath it. */
+@media (max-width: 879px) { .wrap { padding-top: 76px; } }
+header.top { grid-column: 1 / -1; display: grid; gap: 14px; max-width: 76ch; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: .06em; color: var(--accent); text-transform: uppercase; }
+h1 { margin: 0; font-size: clamp(28px, 4vw, 38px); line-height: 1.2; font-weight: 700; text-wrap: balance; letter-spacing: -.01em; }
+header.top p { margin: 0; color: var(--muted); }
+:root:not([data-lang="en"]) [data-l="en"], :root:not([data-lang="ja"]) [data-l="ja"],
+:root[data-lang="en"] [data-l="ko"], :root[data-lang="ja"] [data-l="ko"] { display: none !important; }
+:root[data-lang="ja"] {
+  --sans: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, "IBM Plex Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+}
+/* keep-all suits Korean spacing but leaves unspaced Japanese nowhere to wrap. */
+:root[data-lang="ja"] body { word-break: normal; line-break: strict; }
+:root[data-lang="ja"] :is(h1, h2, nav.toc a.grp) { word-break: auto-phrase; }
+:root[data-lang="ja"] code { word-break: keep-all; }
+.eyebrow { line-height: 1.5; }
+.lang-switch {
+  position: absolute; z-index: 1;
+  top: calc(env(safe-area-inset-top, 0px) + 16px); right: calc(env(safe-area-inset-right, 0px) + 16px);
+  display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.lang-switch button { font: 500 12px/1 var(--mono); letter-spacing: .06em; min-width: 44px; padding: 9px 12px; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; }
+.lang-switch button:hover { color: var(--ink); }
+.lang-switch button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.lang-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 4px 0 0; padding: 0; list-style: none; font: 13px/1.5 var(--mono); color: var(--muted); }
+.facts b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+nav.toc { font-size: 13.5px; }
+@media (min-width: 1000px) { nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; } }
+nav.toc ul { list-style: none; margin: 0; padding: 0; }
+nav.toc > ul { display: grid; gap: 14px; }
+nav.toc ul ul { margin-top: 4px; border-left: 1px solid var(--rule); padding-left: 12px; display: grid; gap: 1px; }
+nav.toc a { color: var(--muted); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); }
+nav.toc a.grp { color: var(--ink); font-weight: 600; }
+nav.toc ul ul a { font-family: var(--mono); font-size: 12.5px; }
+@media (max-width: 999px) { nav.toc { border: 1px solid var(--rule); border-radius: 8px; padding: 16px; background: var(--surface); } nav.toc ul ul { display: flex; flex-wrap: wrap; gap: 2px 12px; border: 0; padding-left: 0; } }
+main { min-width: 0; max-width: 78ch; }
+h2 { font-size: 22px; line-height: 1.35; margin: 56px 0 12px; padding-top: 16px; border-top: 2px solid var(--ink); text-wrap: balance; scroll-margin-top: 16px; }
+main [data-l] > h2:first-child { margin-top: 0; }
+h3 { font: 600 17px/1.4 var(--mono); margin: 34px 0 8px; color: var(--accent); display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; scroll-margin-top: 16px; }
+h3 code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.badge { font: 500 11.5px/1 var(--sans); letter-spacing: .02em; padding: 4px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--muted); }
+.badge.user-only { background: var(--warn-soft); color: var(--warn); }
+.badge code { background: none; padding: 0; font-size: inherit; }
+p { margin: 0 0 12px; }
+ul, ol { margin: 0 0 12px; padding-left: 20px; }
+li { margin: 3px 0; }
+li > ul, li > ol { margin: 4px 0 6px; }
+li::marker { color: var(--muted); }
+strong { font-weight: 600; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+code { font: 0.86em var(--mono); background: var(--code); padding: 1px 5px; border-radius: 4px; }
+.scroll { overflow-x: auto; margin: 8px 0 16px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code); border-radius: 6px; font: 13px/1.6 var(--mono); }
+pre code { background: none; padding: 0; font-size: inherit; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+td { min-width: 9em; overflow-wrap: break-word; }
+th { font-weight: 600; font-size: 12.5px; color: var(--muted); border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+td:first-child { white-space: nowrap; }
+td:first-child code { white-space: nowrap; }
+footer { grid-column: 1 / -1; color: var(--muted); font: 12.5px/1.6 var(--mono); border-top: 1px solid var(--rule); padding-top: 16px; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+<script>
+(function () {
+  var L = ["ko", "en", "ja"], d = document.documentElement, h = location.hash.slice(1), q = null, s = null, lang = null;
+  function known(x) { return L.indexOf(x) >= 0; }
+  try { h = decodeURIComponent(h); } catch (e) {}
+  try { q = new URLSearchParams(location.search).get("lang"); } catch (e) {}
+  if (known(q)) lang = q;
+  else if (known(h)) lang = h;
+  else if (/^(en|ja)-/.test(h)) lang = h.slice(0, 2);
+  else if (/[\uac00-\ud7a3]/.test(h)) lang = "ko";
+  if (!lang) {
+    try { s = localStorage.getItem("skill-catalog-lang"); } catch (e) {}
+    if (known(s)) lang = s;
+  }
+  if (!lang) {
+    var n = (navigator.language || "").toLowerCase();
+    lang = n.indexOf("ko") === 0 ? "ko" : n.indexOf("ja") === 0 ? "ja" : "en";
+  }
+  d.setAttribute("data-lang", lang);
+  d.lang = lang;
+})();
+</script>
+
+<div class="lang-switch" role="group" aria-label="Language / 언어 / 言語">
+  <button type="button" id="lang-ko" data-set="ko" aria-pressed="true">KO</button>
+  <button type="button" id="lang-en" data-set="en" aria-pressed="false">EN</button>
+  <button type="button" id="lang-ja" data-set="ja" aria-pressed="false">JA</button>
+</div>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">JeongJaeSoon/agent-skills · docs/skills.md @ {{SHA}}{{EYEBROW}}</div>
+    <h1>{{H1}}</h1>
+    {{INTRO}}
+    {{FACTS}}
+  </header>
+  {{NAV}}
+  <main>
+{{BODY}}
+  </main>
+  <footer>
+{{FOOTER}}
+  </footer>
+</div>
+<script>
+(function () {
+  var d = document.documentElement, KEY = "skill-catalog-lang";
+  var TITLES = { ko: "agent-skills 카탈로그", en: "agent-skills Catalog", ja: "agent-skills カタログ" };
+  var buttons = document.querySelectorAll(".lang-switch button");
+
+  function apply(lang) {
+    d.setAttribute("data-lang", lang);
+    d.lang = lang;
+    document.title = TITLES[lang];
+    buttons.forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.set === lang)); });
+  }
+
+  // A heading anchor from the other language points at a hidden element; swap it for its twin.
+  function followHash(scroll) {
+    var id = location.hash.slice(1);
+    try { id = decodeURIComponent(id); } catch (e) {}
+    var el = id && document.getElementById(id);
+    if (!el || !el.dataset.k) return;
+    var lang = d.getAttribute("data-lang");
+    if (el.closest("[data-l]").dataset.l === lang) return;
+    var twin = document.querySelector('[data-l="' + lang + '"] [data-k="' + el.dataset.k + '"]');
+    if (!twin) return;
+    history.replaceState(null, "", "#" + twin.id);
+    if (scroll) twin.scrollIntoView();
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () {
+      apply(b.dataset.set);
+      try { localStorage.setItem(KEY, b.dataset.set); } catch (e) {}
+      followHash(false);
+    });
+  });
+  window.addEventListener("hashchange", function () { followHash(true); });
+  apply(TITLES[d.getAttribute("data-lang")] ? d.getAttribute("data-lang") : "ko");
+  followHash(true);
+  // Web fonts (the Japanese face especially) reflow the page after the initial jump to an anchor.
+  if (document.fonts && location.hash) document.fonts.ready.then(function () {
+    var id = location.hash.slice(1);
+    try { id = decodeURIComponent(id); } catch (e) {}
+    var el = document.getElementById(id);
+    if (el && el.getClientRects().length) el.scrollIntoView();
+  });
+})();
+</script>

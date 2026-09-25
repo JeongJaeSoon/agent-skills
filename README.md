@@ -4,6 +4,8 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 
 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d)(스킬별 언제·무엇, `docs/skills.md`에서 생성), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR)(흐름과 `orch` 착지 과정 그림).
 
+두 페이지는 한국어·English·日本語를 오른쪽 위에서 고른다. 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다. 카탈로그는 `python3 scripts/catalog/build.py <out.html>`이 `docs/skills.md`와 번역본 `docs/skills.{en,ja}.md`로 만든다. 번역본 첫 줄의 `translated-from` 커밋 뒤에 `docs/skills.md`가 바뀌었으면 경고하고, 그 언어 하단에 원문보다 오래됐다고 표시한다.
+
 전제는 Orca(멀티 에이전트 IDE, `orca` CLI), GitHub, 티켓 트래커(Linear, Jira 어댑터 준비)다. 노트는 Obsidian vault 또는 일반 Markdown 폴더를 쓴다.
 
 선택 도구: 교차 검토는 [Codex 플러그인](https://github.com/openai/codex-plugin-cc)의 companion 스크립트, 브라우저 검증은 Aside를 쓴다. 없으면 그 단계만 다른 도구로 바꾼다.
