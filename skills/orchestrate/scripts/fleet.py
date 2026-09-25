@@ -5,7 +5,8 @@ reviewers, and what the human has to act on. Deterministic and model-free, like 
 Sources are local CLIs only (`orca`, `gh`, `git`). Nothing is sent anywhere but GitHub's own API through `gh`,
 and the state lives outside the repository:
 
-  $ORCH_FLEET_STATE  (default ~/.local/state/agent-skills/dashboard)   state.json, prs.json, inbox.json, events
+  $ORCH_FLEET_STATE  (default ~/.local/state/agent-skills/dashboard)   state.json, prs.json, inbox.json, events,
+                                                                       prompts/<terminal>.json (hooks/permission.py)
   $ORCH_FLEET_CONFIG (default ~/.config/agent-skills/dashboard/config.json)
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
@@ -257,7 +258,8 @@ def build_sessions(fast, runs, cfg):
     terms_by_wt = {}
     for t in fast["terminals"]:
         terms_by_wt.setdefault(t.get("worktreeId"), []).append(
-            {"handle": t.get("handle"), "title": mask(t.get("title"), 120), "agent": t.get("agentIdentity"),
+            {"handle": t.get("handle"), "pane": f"{t.get('tabId')}:{t.get('leafId')}",  # an agent's paneKey
+             "title": mask(t.get("title"), 120), "agent": t.get("agentIdentity"),
              "writable": bool(t.get("writable")), "connected": bool(t.get("connected")),
              "last_output": ms_iso(t.get("lastOutputAt"))})
     wt_of_handle = {t.get("handle"): t.get("worktreeId") for t in fast["terminals"]}
@@ -349,6 +351,94 @@ def first_line(text, limit=160):
         if line:
             return mask(line, limit)
     return ""
+
+
+# ---------------------------------------------------------------- permission prompts (recorded by hooks/permission.py)
+
+QUESTION_RE = re.compile(r"Do you want to .+\?")
+OPTION_RE = re.compile(r"(?:❯\s*)?(\d)\.\s+(.+)")
+RULE_RE = re.compile(r"─{10,}")
+PROMPT_KEEP_S = 86400
+
+
+def parse_dialog(lines):
+    """The permission dialog at the bottom of a rendered Claude Code screen, or None. Only the shape measured on
+    2.1.282 counts: a rule, the request, "Do you want to …?", numbered options, and "Esc to cancel …" as the last
+    line. A question list (AskUserQuestion) or the folder trust dialog has no such question and does not match."""
+    body = [l.replace("\xa0", " ").strip() for l in lines]
+    while body and not body[-1]:
+        body.pop()
+    if not body or not body[-1].startswith("Esc to cancel"):
+        return None
+    q = next((i for i in range(len(body) - 2, -1, -1) if QUESTION_RE.fullmatch(body[i])), None)
+    if q is None:
+        return None
+    options = []
+    for line in filter(None, body[q + 1:-1]):
+        m = OPTION_RE.fullmatch(line)
+        if m:
+            options.append([m.group(1), m.group(2)])
+        elif options:  # a long label wraps onto the next line
+            options[-1][1] += " " + line
+        else:
+            return None
+    if not options:
+        return None
+    top = max((i for i in range(q) if RULE_RE.fullmatch(body[i])), default=-1)
+    return {"question": body[q], "request": [l for l in body[top + 1:q] if l], "lines": body[top + 1:],
+            # "Yes, and switch to auto mode · auto mode handles these prompts for you": the label is before " · "
+            "options": [(d, label.split(" · ")[0].strip()) for d, label in options]}
+
+
+def prompt_needles(rec):
+    """What the dialog must show of the recorded request: the command, the file name, the URL host, or else any
+    string argument (an MCP tool's dialog lists them)."""
+    inp = rec.get("input") or {}
+    if inp.get("command"):
+        return [inp["command"]]
+    if inp.get("file_path") or inp.get("notebook_path"):
+        return [pathlib.PurePath(inp.get("file_path") or inp["notebook_path"]).name]
+    if inp.get("url"):
+        return [re.sub(r"^\w+://([^/]+).*", r"\1", inp["url"])]
+    return [v for v in inp.values() if v]
+
+
+def prompt_verdict(lines, rec):
+    """(dialog, None) when the screen shows the permission dialog for the recorded request, else (None, reason)."""
+    d = parse_dialog(lines)
+    if not d:
+        return None, "no permission dialog on screen"
+    # Whitespace is dropped on both sides: the dialog wraps a long command wherever the terminal width falls.
+    shown = "".join("".join(d["request"] + [d["question"]]).split())
+    for n in prompt_needles(rec):
+        n = "".join(n.split())[:40]
+        if len(n) >= 3 and n in shown:
+            return d, None
+    return None, "the dialog on screen is not the recorded request"
+
+
+def option_for(dialog, action):
+    """The digit that answers this one request: the bare "Yes" to approve, "No" to deny. An option that saves a
+    rule or changes the mode ("don't ask again", "always allow", "switch to auto mode") is never chosen."""
+    want = (lambda l: l == "Yes") if action == "approve" else (lambda l: l == "No" or l.startswith("No,"))
+    return next((d for d, label in dialog["options"] if want(label)), None)
+
+
+def prompt_records():
+    """{terminal handle: record} from prompts/, dropping records older than a day."""
+    out, cutoff = {}, iso(utcnow() - dt.timedelta(seconds=PROMPT_KEEP_S))
+    for path in (state_dir() / "prompts").glob("*.json"):
+        rec = read_json(path)
+        if not isinstance(rec, dict) or (rec.get("at") or "") < cutoff:
+            path.unlink(missing_ok=True)
+        elif rec.get("handle") == path.stem:
+            out[path.stem] = rec
+    return out
+
+
+def read_screen(handle):
+    t = orca("terminal", "read", "--terminal", handle, "--screen", timeout=10).get("terminal") or {}
+    return (t.get("tail") or []) if t.get("source") in (None, "screen") else []
 
 
 # ---------------------------------------------------------------- PRs
@@ -536,8 +626,9 @@ def tier(p, session_phase, now):
 class Fleet:
     """Holds the caches between ticks and writes state.json. One instance per server process."""
 
-    def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow):
+    def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
+        self.read_screen = read_screen
         self.lock = threading.Lock()
         d = state_dir()
         self.fast, self.runs = None, {"runs": [], "workers": [], "tasks": [], "gates": []}
@@ -733,11 +824,28 @@ class Fleet:
 
     # -- composing the page's state
 
+    def pending_prompt(self, s, agent, records):
+        """Fields that make a waiting item a pending confirmation the page can answer: the agent's terminal has a
+        recorded permission request, and its screen shows that request's dialog now."""
+        terms = [t for t in s["terminals"] if t.get("agent") and t.get("connected") and t.get("writable")]
+        t = next((t for t in terms if t["pane"] == agent["pane"]), terms[0] if len(terms) == 1 else None)
+        rec = t and records.get(t["handle"])
+        if not rec:
+            return {}
+        try:
+            d, _ = prompt_verdict(self.read_screen(t["handle"]), rec)
+        except SourceError:
+            d = None
+        if not d:
+            return {}
+        return {"type": "prompt", "title": f"{rec['tool']} · {d['question']}", "detail": mask(prompt_needles(rec)[0], 300),
+                "handle": t["handle"], "prompt": rec["id"], "answers": [x for x in ("approve", "deny") if option_for(d, x)]}
+
     def compose(self, sessions, root, cfg):
         now, mem = self.now(), self.mem
         prompts, phases = mem.setdefault("prompts", {}), mem.setdefault("phases", {})
         sticky, seen = mem.setdefault("sticky", {}), read_json(state_dir() / "seen.json", {}) or {}
-        items = []
+        items, records = [], prompt_records()
         # Prompts and finished turns, per agent pane.
         for s in sessions.values():
             last_prompt = None
@@ -768,7 +876,7 @@ class Fleet:
                 if a["state"] == "waiting":
                     items.append({"key": f"wait:{pane}:{a['since']}", "type": "permission", "session": s["id"],
                                   "title": "입력·권한 창에서 대기 중", "detail": a["detail"], "at": a["since"] or iso(now),
-                                  "source": "orca"})
+                                  "source": "orca", **self.pending_prompt(s, a, records)})
             s["last_prompt_at"] = last_prompt
         # Orchestration mail to a coordinator that no one has read yet.
         coord_handles = {t["handle"] for s in sessions.values() if s["kind"] in ("orchestrator", "orchestration")
@@ -909,6 +1017,70 @@ def send(session_id, text, handle=None, sender=None):
             code, out = 200, {"ok": ok, "reason": reason, "typed": typed, "fallback": None if typed else "copy"}
     append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
     return code, out
+
+
+def answer_prompt(session_id, prompt_id, action, sender=None):
+    """Answer a pending permission dialog the way the human chose on the page: approve, deny, or open (switch Orca
+    to that terminal). Returns (status, body) for the HTTP reply; every attempt is logged."""
+    state = read_json(state_dir() / "state.json", {}) or {}
+    s = next((x for x in state.get("sessions") or [] if x["id"] == session_id), None)
+    handles = {t["handle"] for t in (s or {}).get("terminals") or [] if t.get("agent") and t.get("connected") and t.get("writable")}
+    rec = next((r for h, r in prompt_records().items() if h in handles and r.get("id") == prompt_id), None)
+    row = {"at": iso(utcnow()), "session": session_id, "handle": rec and rec["handle"], "text": f"prompt {action}"}
+    if action not in ("approve", "deny", "open"):
+        code, out = 400, {"ok": False, "reason": "action is approve, deny or open"}
+    elif not rec:
+        code, out = 409, {"ok": False, "reason": "no pending prompt with that id in this session's agent terminals"}
+    elif action == "open":
+        try:
+            orca("terminal", "switch", "--terminal", rec["handle"])
+            code, out = 200, {"ok": True, "reason": None}
+        except SourceError as e:
+            code, out = 200, {"ok": False, "reason": str(e)}
+    else:
+        sender = sender or load_sync()
+        reason, key = press_option(sender, rec, action) if sender else ("safety check unavailable (scripts/sync.py not found)", None)
+        code, out = 200, {"ok": reason is None, "reason": reason, "typed": key is not None, "key": key,
+                          "fallback": None if key else "open"}
+        if key:
+            (state_dir() / "prompts" / f"{rec['handle']}.json").unlink(missing_ok=True)
+    append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
+    return code, out
+
+
+def press_option(sync, rec, action):
+    """(reason, key). Under the lock the reload broadcast and the chat box share, the screen is read twice and both
+    reads must show the same dialog for the recorded request; only then is the one digit pressed.
+    reason is None once the dialog has left the screen; key is the digit pressed, or None when nothing was."""
+    handle, key = rec["handle"], None
+    with sync.locked(10) as got:
+        if not got:
+            return "a sync or broadcast is running; try again shortly", None
+        try:
+            first = sync.screen(handle)[0]
+            time.sleep(sync.SETTLE_S)
+            second = sync.screen(handle)[0]
+            if not second:
+                return "not a connected, writable Claude terminal", None
+            d, why = prompt_verdict(second, rec)
+            if not d:
+                return why, None
+            # Only the dialog is compared: above it the pending tool's ⏺ blinks between reads (measured).
+            if d != parse_dialog(first):
+                return "the dialog changed between two reads (someone may be answering it)", None
+            digit = option_for(d, action)
+            if not digit:
+                return ("no one-time Yes option: every Yes saves a rule or changes the mode, answer in the terminal"
+                        if action == "approve" else "no No option on the dialog, answer in the terminal"), None
+            sync.orca("terminal", "send", "--terminal", handle, "--text", digit)  # a digit picks the option, no Enter
+            key = digit
+            time.sleep(sync.CONFIRM_S)
+            after = sync.screen(handle)[0]
+        except sync.Stop as e:
+            return str(e), key
+    if prompt_verdict(after, rec)[0]:
+        return "sent, but the dialog is still on screen", key
+    return None, key
 
 
 def mark_seen(session_id):

@@ -1235,6 +1235,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             handle = body.get("handle") if isinstance(body.get("handle"), str) else None
             code, out = fleet.send(body["session"], body["text"], handle)
             return self.send(code, json.dumps(out).encode())
+        elif path == "/api/fleet/prompt" and all(isinstance(body.get(k), str) for k in ("session", "prompt", "action")):
+            code, out = fleet.answer_prompt(body["session"], body["prompt"], body["action"])
+            FLEET_WAKE.set()
+            return self.send(code, json.dumps(out).encode())
         else:
             return self.send(404, b'{"error":"not found"}')
         FLEET_WAKE.set()

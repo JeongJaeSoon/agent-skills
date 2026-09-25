@@ -202,6 +202,30 @@ except urllib.error.HTTPError as e:
 progs = json.loads(urllib.request.urlopen(f"{base}/api/programs").read())
 assert [p["slug"] for p in progs] == [B, A]
 assert b"<title>" in urllib.request.urlopen(f"{base}/").read()
+
+# Answering a permission prompt is a POST like the others: this server's Host and Origin, and the page's token.
+dash.HEALTH["port"] = srv.server_address[1]
+answered, dash.fleet.answer_prompt = [], lambda *a: answered.append(a) or (200, {"ok": True})
+body = json.dumps({"session": "wt-docs", "prompt": "p1", "action": "approve"}).encode()
+
+
+def post(headers):
+    req = urllib.request.Request(f"{base}/api/fleet/prompt", data=body, method="POST",
+                                 headers={"Content-Type": "application/json", **headers})
+    try:
+        return urllib.request.urlopen(req).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+host = f"127.0.0.1:{srv.server_address[1]}"
+assert post({"Host": host}) == 403, "no token"
+assert post({"Host": host, "X-Dash-Token": "wrong"}) == 403
+assert post({"Host": f"evil.example:{srv.server_address[1]}", "X-Dash-Token": dash.TOKEN}) == 403, "rebinding name"
+assert post({"Host": host, "Origin": "http://evil.example", "X-Dash-Token": dash.TOKEN}) == 403, "cross-site page"
+assert answered == []
+assert post({"Host": host, "Origin": f"http://{host}", "X-Dash-Token": dash.TOKEN}) == 200
+assert answered == [("wt-docs", "p1", "approve")], answered
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.

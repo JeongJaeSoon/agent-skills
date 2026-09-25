@@ -456,6 +456,14 @@ class FakeFleetWorld:
                                                             {"requestedReviewer": {"__typename": "Team", "slug": "docs"}}]})
         self.prs = {41: p41, 42: p42, 43: p43}
         self.branches = {"feat/login": 41, "feat/export": 42, "docs/setup": 43}
+        # wt-docs sits in a permission dialog that hooks/permission.py recorded.
+        self.screens = {"term_docs": ["⏺ Checking what the package would ship before the guide links to it.", "─" * 60,
+                                      " Bash command", "", "   npm publish --dry-run", "   Show what would be published", "",
+                                      " Do you want to proceed?", " ❯ 1. Yes",
+                                      "   2. Yes, and don't ask again for npm publish commands in /work/wt-docs", "   3. No", "",
+                                      " Esc to cancel · Tab to amend"]}
+        self.prompt = {"v": 1, "id": "prompt-docs-1", "at": _ago(now, 0.5), "handle": "term_docs", "session_id": "demo-docs",
+                       "cwd": "/work/wt-docs", "tool": "Bash", "input": {"command": "npm publish --dry-run"}}
 
     def advance(self):
         """One step: #41 gets a new commit (its approval goes stale), #42's CI goes green."""
@@ -474,6 +482,9 @@ class FakeFleetWorld:
     def fetch_runs(self):
         return self.runs
 
+    def read_screen(self, handle):
+        return self.screens.get(handle, ["─" * 60, "❯ ", "─" * 60])
+
     def graphql(self, query):
         data = {}
         for alias, branch in re.findall(r'(b\d+): repository\([^)]*\)\{ref\(qualifiedName:"refs/heads/([^"]+)"', query):
@@ -486,7 +497,9 @@ class FakeFleetWorld:
     def fleet(self, clock=None):
         """A fleet.Fleet wired to this world (ORCH_FLEET_STATE must already point at a scratch directory)."""
         import fleet
-        f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow)
+        fleet.write_atomic(fleet.state_dir() / "prompts" / "term_docs.json", json.dumps(self.prompt))
+        f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
+                        read_screen=self.read_screen)
         f.me = self.ME
         f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
         return f

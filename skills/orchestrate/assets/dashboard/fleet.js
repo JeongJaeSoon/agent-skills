@@ -20,6 +20,7 @@ const FLEET_SOURCES = [
 
 // type -> [label, tone, icon]
 const ITEM = {
+  prompt: ["Pending confirmation", "warn", "lock"],
   permission: ["Waiting on a prompt", "warn", "lock"],
   approval: ["Approval", "warn", "user"],
   question: ["Question", "accent", "chat"],
@@ -46,7 +47,7 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { seenSent: {}, token: null, draft: {}, confirm: null, chat: {} };
+const F = { seenSent: {}, token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {} };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 function fleetSection(section, arg) {
@@ -128,11 +129,40 @@ function itemRow(st, it, { showSession = true } = {}) {
   return `<li class="item ${it.missed ? "is-missed" : ""}"><span class="ic tone-${tone}">${icon(ic)}</span>
     <div class="grow"><div class="ellipsis"><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
       <div class="sub muted ellipsis">${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}
-      ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div></div>
+      ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
+      ${it.type === "prompt" ? promptActs(it) : ""}</div>
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
       <span class="slot">${safeUrl(it.url) ? link(it.url, icon("link"), "icon-btn") : ""}</span>
       <span class="slot">${copy ? `<button class="icon-btn" data-copy="${esc(copy)}" title="Copy">${icon("copy")}</button>` : ""}</span>
       <span class="slot"><button class="icon-btn" data-dismiss="${esc(it.key)}" title="Dismiss">${icon("x")}</button></span></span></li>`;
+}
+
+// Approve and Deny take a second click (the list re-renders under the pointer every tick); Open does not.
+function promptActs(it) {
+  const r = F.prompt[it.key], armed = F.arm && F.arm.key === it.key ? F.arm.action : "";
+  const btn = (a, label, ic) => a === "open" || (it.answers || []).includes(a)
+    ? `<button class="chip ${armed === a ? "armed tone-warn" : ""}" data-prompt="${a}" data-key="${esc(it.key)}" ${r && r.busy ? "disabled" : ""}>${icon(ic)}${armed === a ? `Confirm ${label.toLowerCase()}` : label}</button>` : "";
+  const msg = !r || r.busy ? "" : r.ok ? (r.action === "open" ? "Opened in Orca." : "Sent; the dialog closed.")
+    : r.typed ? `Pressed ${r.key}, but not confirmed (${r.reason}). Check the terminal.` : `Not sent: ${r.reason}.`;
+  return `<div class="prompt-acts">${btn("approve", "Approve", "check")}${btn("deny", "Deny", "x")}${btn("open", "Open terminal", "arrow")}
+    ${r && r.busy ? '<span class="muted">Checking the screen…</span>' : msg ? `<span class="toned tone-${r.ok ? "good" : r.typed ? "warn" : "bad"}">${esc(msg)}</span>` : ""}</div>`;
+}
+
+async function promptAction(key, action) {
+  const it = ((S.state || {}).items || []).find((i) => i.key === key);
+  if (!it) return;
+  if (action !== "open" && !(F.arm && F.arm.key === key && F.arm.action === action)) {
+    F.arm = { key, action };
+    clearTimeout(F.armTimer);
+    F.armTimer = setTimeout(() => { F.arm = null; renderView(); }, 5000);
+    renderView();
+    return;
+  }
+  F.arm = null; F.prompt[key] = { busy: true }; renderView();
+  let out;
+  try { out = await fleetPost("/api/fleet/prompt", { session: it.session, prompt: it.prompt, action }); } catch (err) { out = { ok: false, reason: String(err.message || err) }; }
+  F.prompt[key] = { action, ...out };
+  renderView();
 }
 
 function itemList(st, items, opts) {
@@ -332,6 +362,8 @@ document.addEventListener("keydown", (e) => { if (e.target.id === "chat-input" &
 document.addEventListener("click", async (e) => {
   const chat = e.target.closest("[data-chat]");
   if (chat) { chatAction(chat.dataset.chat); return; }
+  const answer = e.target.closest("[data-prompt]");
+  if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const t = e.target.closest("[data-copy],[data-dismiss]");
   if (!t) return;
   if (t.dataset.copy != null) {

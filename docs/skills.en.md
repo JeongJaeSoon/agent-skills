@@ -1,7 +1,7 @@
 <!-- translated-from: e1db825 -->
 # Skill catalog
 
-This page covers the 27 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 2 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
+This page covers the 27 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
 
 ## Flow
 
@@ -410,6 +410,9 @@ Allow is given only to a single command with no shell operators, redirections, s
 - Run `orch status` and act on every line it prints.
 - From then on, drain only with `orch wait`.
 
+### Recording permission prompts
+`hooks/permission.py` (PermissionRequest). When a permission dialog opens, it writes the tool name and its masked arguments to `prompts/` in the dashboard's state directory, keyed by `$ORCA_TERMINAL_HANDLE`. It makes no decision, so the permission flow is unchanged. The dashboard adds Approve, Deny and Open terminal buttons to the inbox item only while that terminal's screen shows the dialog for the same request. When a person clicks one, the server reads the screen again right before sending and presses a single digit: the one-time `Yes` or `No`. It never picks an option that saves a rule or changes the mode, such as "don't ask again", "always allow" or "switch to auto mode". Details are in `skills/orchestrate/references/dashboard.md`.
+
 ## Differences from pstack
 
 ### At a glance
@@ -457,7 +460,7 @@ Of pstack's 47 skills (23 principles and 24 others), we took all 23 principles a
 - **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
-- **Hooks:** permission decisions (`guard.py`) and re-orienting after compaction (`reorient.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting after compaction (`reorient.py`), and recording permission prompts for the dashboard to answer (`permission.py`).
 
 ### Upstream sync status
 - **Commits since the pin:** upstream `main` (0.15.5) is two commits ahead of the pin.

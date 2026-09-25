@@ -79,6 +79,7 @@ A session's dot has one colour per phase on every screen (sidebar, Moving now, S
 
 | Type | Raised when |
 |---|---|
+| `prompt` | A `permission` item whose terminal shows, right now, the permission dialog `hooks/permission.py` recorded: it carries Approve, Deny and Open terminal (below) |
 | `permission` | An agent sits on a permission or input prompt (Orca reports it as waiting) |
 | `question` | An unread `question`, `escalation` or `decision_gate` message to a coordinator |
 | `approval` | A pending Orca decision gate, or a finished turn that ends asking for a decision |
@@ -106,7 +107,22 @@ The session page has a send box for its agent terminal. It is off the network by
 - "Sent, but the screen does not show it was taken" means the line was typed and Enter pressed. The page says so and does not offer a retry, so nothing is sent twice.
 - Every attempt, refused or not, is appended to `sends.jsonl` with the text masked.
 
-The dashboard never answers a permission prompt for a session.
+The send box never answers a dialog: its idle check refuses while one is open.
+
+### Answering a permission prompt
+
+The human decides; nothing answers a prompt on its own. The plugin's `PermissionRequest` hook (`hooks/permission.py`) writes the tool name and its masked string arguments to `prompts/<terminal handle>.json`, keyed by `$ORCA_TERMINAL_HANDLE`. It prints no decision, so the permission flow is unchanged. `PermissionRequest` rather than the `Notification` hook's `permission_prompt`: the notification fires only after about six seconds without typing and carries only "Claude needs your permission", while `PermissionRequest` fires when the dialog opens and carries the tool input to show and to match.
+
+On each collect, a session Orca reports as waiting whose agent terminal has a record gets its screen read (`orca terminal read --screen`). When the screen ends in a permission dialog (a rule, the request, `Do you want to …?`, numbered options, `Esc to cancel` last) that shows the recorded request (its command, file name, URL host or a string argument, whitespace ignored), the item becomes `prompt` with the command and up to three buttons. A question list, the folder-trust dialog or an unmatched dialog stays a plain `permission` item. When the dialog closes, Orca stops reporting the wait and the item goes.
+
+Approve and Deny take a second click, then POST `/api/fleet/prompt` under the same Host, Origin and token guard as the send box. The server:
+
+- takes the terminal from the prompt record of that session's agent terminal, never from the page;
+- under the lock `scripts/sync.py` uses for reloads and the send box, reads the screen twice 1.5 s apart and refuses unless both show the same dialog for the recorded request (only the dialog is compared: the pending tool's bullet above it blinks);
+- presses one digit and no Enter: the option labelled exactly `Yes` to approve, `No` to deny. An option that saves a rule or changes the mode (`don't ask again`, `always allow`, `switch to auto mode`) is never chosen; when every Yes is one of those, Approve is not offered and the server refuses, so answer in the terminal (Open terminal switches Orca to it);
+- reads the screen again: the dialog gone is success. Still showing means the digit was pressed but not confirmed, and the page does not offer a retry.
+
+Every attempt, refused or not, is appended to `sends.jsonl` (`text: "prompt approve"` and the like, with the digit pressed). The hook needs `/reload-plugins` in sessions started before it landed. Dialog shapes were measured on Claude Code 2.1.282; a changed shape makes the item a plain `permission` again rather than a wrong answer.
 
 ### Adoption into Orca's parent field
 
@@ -125,7 +141,8 @@ State lives outside every repository, in `$ORCH_FLEET_STATE` or `~/.local/state/
 | `pr-events.jsonl` | PR events (above) |
 | `seen.json` | When each session page was last opened |
 | `inbox-external.jsonl` | Items added and resolved with `orch-dash inbox` |
-| `sends.jsonl`, `adoption.jsonl` | Send attempts; adoption writes and undos |
+| `sends.jsonl`, `adoption.jsonl` | Send and prompt-answer attempts; adoption writes and undos |
+| `prompts/` | The latest permission request per terminal, from `hooks/permission.py`; dropped after a day or once answered |
 | `avatars/` | Reviewer avatars |
 
 The optional config is `$ORCH_FLEET_CONFIG` or `~/.config/agent-skills/dashboard/config.json`:

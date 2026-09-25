@@ -360,6 +360,10 @@ td.when { white-space: nowrap; }
 .acts .when + .slot { margin-left: var(--s1); }
 .acts .slot { width: 28px; display: grid; place-items: center; flex: none; }
 .icon-btn.done { color: var(--good); border-color: var(--good); }
+/* A pending confirmation's answers: a third band, 8px under the two text lines, in the row's text column. */
+.prompt-acts { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); min-height: 28px; font-size: var(--t-sm); }
+.prompt-acts .chip:disabled { opacity: 0.5; cursor: default; }
+.prompt-acts .chip.armed { color: var(--ink); background: var(--tone-wash); border-color: var(--tone); }
 .rows.agents > li { display: grid; gap: var(--s2); }
 .agent .row { display: flex; align-items: center; gap: var(--s2); }
 .kv { display: grid; gap: var(--s1); }

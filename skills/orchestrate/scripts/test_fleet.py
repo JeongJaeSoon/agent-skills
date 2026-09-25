@@ -2,7 +2,7 @@
 
 Run: python3 test_fleet.py
 """
-import datetime as dt, json, os, pathlib, sys, tempfile
+import contextlib, datetime as dt, json, os, pathlib, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash_demo
@@ -46,7 +46,7 @@ assert {n: prs[n]["session"] for n in prs} == {41: "wt-login", 42: "wt-export", 
 assert {r["login"]: r["status"] for r in prs[43]["reviewers"]} == {"rev-carol": "requested", "team:docs": "requested"}
 assert {r["login"]: r["status"] for r in prs[42]["reviewers"]} == {"rev-bob": "changes_requested", "lint-bot[bot]": "commented"}
 got = sorted((i["type"], i["session"]) for i in items(st))
-assert got == sorted([("permission", "wt-docs"), ("question", "wt-export"), ("approval", "wt-coord"), ("login", "wt-scratch"),
+assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approval", "wt-coord"), ("login", "wt-scratch"),
                       ("ready_to_merge", "wt-login"), ("changes_requested", "wt-export"),
                       ("review_comment_received", "wt-export"), ("ci_failed", "wt-export")]), got
 
@@ -109,6 +109,119 @@ fleet.load_sync = real_load
 assert out == {"ok": False, "reason": "safety check unavailable (scripts/sync.py not found)", "fallback": "copy"}, out
 log = (state_dir / "sends.jsonl").read_text()
 assert len(log.splitlines()) == 8 and secret not in log, log
+
+# Permission prompts. Fake screens in the shape Claude Code 2.1.282 draws (measured); every name here is invented.
+docs = next(i for i in items(st) if i["session"] == "wt-docs")
+assert docs["type"] == "prompt" and docs["prompt"] == "prompt-docs-1" and docs["handle"] == "term_docs", docs
+assert docs["answers"] == ["approve", "deny"] and docs["detail"] == "npm publish --dry-run", docs
+RULE = "─" * 72
+IDLE = ["⏺ Done.", RULE, "❯ ", RULE, "  ~/work/app ⎇ main"]
+BASH = [RULE, " Bash command", " Tip: auto mode handles these prompts for you — choose \"switch to auto mode\" below",
+        "   touch /tmp/demo-app/out.txt", "   Create out.txt", " Do you want to proceed?", " ❯ 1. Yes",
+        "   2. Yes, and always allow access to /tmp/demo-app from this project",
+        "   3. Yes, and switch to auto mode · auto mode handles these prompts for you", "   4. No", " Esc to cancel · Tab to amend"]
+HOOK_ASK = [RULE, " Tool use", "   plugin:demo:chat — post a message (MCP)", "   channel: \"general\"", "   text: \"release notes are",
+            "   ready for review\"", " │ Hook PreToolUse:mcp__plugin_demo_chat__post requires confirmation for this tool:", " │ unconfirmed destination.",
+            " Do you want to proceed?", " ❯ 1. Yes", "   2. Yes, and don't ask again for plugin:demo:chat — post a message commands in",
+            "   /Users/someone/work/a-long-project-path", "   3. No", " Esc to cancel · Tab to amend"]
+QUESTION = [RULE, "←  ☐ Format  ✔ Submit  →", "Which export format?", "❯ 1. CSV (Recommended)", "     Finance opens it in a spreadsheet",
+            "  2. JSON", "  3. Type something.", RULE, "  4. Chat about this", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"]
+TRUST = [RULE, " Accessing workspace:", " /tmp/demo-app", " Quick safety check: Is this a project you created or one you trust?",
+         " ❯ No, exit", "   Yes, I trust this folder", " Enter to confirm · Esc to cancel"]
+STICKY = [RULE, " Bash command", "   make deploy", " Do you want to proceed?", " ❯ 1. Yes, and don't ask again for make commands",
+          "   2. No", " Esc to cancel · Tab to amend"]
+bash_rec = {"id": "p-bash", "handle": "term_docs", "tool": "Bash", "input": {"command": "touch /tmp/demo-app/out.txt"}}
+hook_rec = {"id": "p-hook", "handle": "term_docs", "tool": "mcp__plugin_demo_chat__post",
+            "input": {"channel": "general", "text": "release notes are ready for review"}}
+d = fleet.parse_dialog(BASH)
+assert [l for _, l in d["options"]] == ["Yes", "Yes, and always allow access to /tmp/demo-app from this project",
+                                        "Yes, and switch to auto mode", "No"], d
+assert (fleet.option_for(d, "approve"), fleet.option_for(d, "deny")) == ("1", "4")
+d = fleet.parse_dialog(HOOK_ASK)
+assert len(d["options"]) == 3 and d["options"][1][1].endswith("a-long-project-path"), d  # a wrapped label stays one option
+assert (fleet.option_for(d, "approve"), fleet.option_for(d, "deny")) == ("1", "3")
+assert fleet.prompt_verdict(HOOK_ASK, hook_rec)[0] and fleet.prompt_verdict(BASH, bash_rec)[0]
+assert fleet.prompt_verdict(BASH, hook_rec) == (None, "the dialog on screen is not the recorded request")
+assert fleet.prompt_verdict(BASH, {"input": {"command": "touch /tmp/demo-app/other.txt"}})[0] is None
+wrapped = BASH[:3] + ["   touch /tmp/demo-", "   app/out.txt"] + BASH[4:]
+assert fleet.prompt_verdict(wrapped, bash_rec)[0], "a command wrapped at the terminal edge still matches"
+for screen in (IDLE, QUESTION, TRUST, []):
+    assert fleet.parse_dialog(screen) is None and fleet.prompt_verdict(screen, bash_rec)[1] == "no permission dialog on screen"
+assert fleet.option_for(fleet.parse_dialog(STICKY), "approve") is None, "a Yes that saves a rule is never pressed"
+assert fleet.option_for(fleet.parse_dialog(STICKY), "deny") == "2"
+
+
+class FakeSync:
+    """sync.py's lock, screen reader and orca call. Reads return the screens in order, the last one repeating."""
+    Stop = type("Stop", (Exception,), {})
+    SETTLE_S = CONFIRM_S = 0
+
+    def __init__(self, *screens, busy=False):
+        self.screens, self.busy, self.sent = list(screens), busy, []
+
+    @contextlib.contextmanager
+    def locked(self, wait_s=0):
+        yield not self.busy
+
+    def screen(self, handle):
+        return (self.screens.pop(0) if len(self.screens) > 1 else self.screens[0]), None
+
+    def orca(self, *args):
+        self.sent.append(args)
+        return {}
+
+
+def arm(rec):
+    fleet.write_atomic(state_dir / "prompts" / "term_docs.json", json.dumps({"v": 1, "at": fleet.iso(fleet.utcnow()), **rec}))
+
+
+arm(bash_rec)
+fs = FakeSync(BASH, BASH, IDLE)
+assert fleet.answer_prompt("wt-docs", "p-bash", "approve", sender=fs) == (200, {"ok": True, "reason": None, "typed": True, "key": "1", "fallback": None})
+assert fs.sent == [("terminal", "send", "--terminal", "term_docs", "--text", "1")]
+assert not (state_dir / "prompts" / "term_docs.json").exists(), "an answered prompt is gone"
+arm(bash_rec)
+fs = FakeSync(BASH, BASH, IDLE)
+assert fleet.answer_prompt("wt-docs", "p-bash", "deny", sender=fs)[1]["key"] == "4" and fs.sent[0][-1] == "4"
+arm(bash_rec)
+fs = FakeSync(BASH, BASH, BASH)
+out = fleet.answer_prompt("wt-docs", "p-bash", "approve", sender=fs)[1]
+assert not out["ok"] and out["typed"] and out["fallback"] is None, out  # pressed: the page must not offer a blind retry
+MOVED = BASH[:6] + ["   1. Yes", " ❯ 2. " + BASH[7].strip()[3:]] + BASH[8:]  # the human moved the cursor
+# Above the dialog the pending tool's bullet blinks between reads; that alone is no reason to refuse.
+arm(bash_rec)
+fs = FakeSync(["  Creating out.txt"] + BASH, ["⏺ Creating out.txt"] + BASH, IDLE)
+assert fleet.answer_prompt("wt-docs", "p-bash", "approve", sender=fs)[1]["ok"] and fs.sent[0][-1] == "1"
+refusals = [  # (screens, action, reason): nothing is pressed
+    ((IDLE,), "approve", "no permission dialog on screen"),
+    ((QUESTION,), "approve", "no permission dialog on screen"),
+    ((HOOK_ASK,), "approve", "the dialog on screen is not the recorded request"),
+    ((BASH, MOVED), "approve", "the dialog changed between two reads (someone may be answering it)"),
+    (([],), "deny", "not a connected, writable Claude terminal"),
+]
+for screens, action, reason in refusals:
+    arm(bash_rec)
+    fs = FakeSync(*screens)
+    assert fleet.answer_prompt("wt-docs", "p-bash", action, sender=fs) == (200, {"ok": False, "reason": reason, "typed": False,
+                                                                                  "key": None, "fallback": "open"}), reason
+    assert fs.sent == [] and (state_dir / "prompts" / "term_docs.json").exists()
+arm({**bash_rec, "input": {"command": "make deploy"}})
+fs = FakeSync(STICKY)
+out = fleet.answer_prompt("wt-docs", "p-bash", "approve", sender=fs)[1]
+assert out["reason"].startswith("no one-time Yes option") and fs.sent == [], out
+fs = FakeSync(BASH, busy=True)
+assert fleet.answer_prompt("wt-docs", "p-bash", "approve", sender=fs)[1]["reason"].startswith("a sync or broadcast is running")
+assert fleet.answer_prompt("wt-docs", "p-other", "approve", sender=fs)[0] == 409  # a prompt id the page did not see
+assert fleet.answer_prompt("wt-export", "p-bash", "approve", sender=fs)[0] == 409  # another session's terminal
+assert fleet.answer_prompt("wt-docs", "p-bash", "always", sender=fs)[0] == 400
+assert fs.sent == []
+opened = []
+fleet.orca, real_orca = (lambda *a, **k: opened.append(a) or {}), fleet.orca
+assert fleet.answer_prompt("wt-docs", "p-bash", "open") == (200, {"ok": True, "reason": None})
+fleet.orca = real_orca
+assert opened == [("terminal", "switch", "--terminal", "term_docs")]
+rows = [json.loads(l) for l in (state_dir / "sends.jsonl").read_text().splitlines()[8:]]
+assert len(rows) == 15 and all(r["text"].startswith("prompt ") and "code" in r for r in rows), rows
 
 # Adoption: a dry run by default, a write only with the config flag, and undo restores the logged previous value.
 calls = []

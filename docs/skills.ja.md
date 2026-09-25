@@ -1,7 +1,7 @@
 <!-- translated-from: e1db825 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル27個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック2個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
+`agent-skills` プラグインに入っているスキル27個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
 
 ## 流れ
 
@@ -410,6 +410,9 @@
 - `orch status` を実行し、出力されたすべての行に対応する。
 - それ以降は `orch wait` だけで drain する。
 
+### 権限ダイアログの記録
+`hooks/permission.py`（PermissionRequest）。権限ダイアログが開くと、ツール名とマスクした引数を `$ORCA_TERMINAL_HANDLE` ごとにダッシュボードの状態ディレクトリの `prompts/` に書きます。判定はしないので、権限の流れは変わりません。ダッシュボードは、そのターミナルの画面に同じリクエストのダイアログが出ている間だけ、インボックスの項目に承認・拒否・ターミナルを開くボタンを付けます。人が押すと、送る直前に画面を読み直して確かめ、一回だけ許可する `Yes` か `No` の番号を一つだけ押します。「今後確認しない」「常に許可」「auto mode に切り替え」のようにルールを保存したりモードを変えたりする選択肢は選びません。詳しくは `skills/orchestrate/references/dashboard.md` にあります。
+
 ## pstack との違い
 
 ### ひと目で
@@ -457,7 +460,7 @@ pstack のスキル47個（原則23個と、その他24個）のうち、原則2
 - **チケットの流れ:** `write-ticket`、`deliver-ticket`、`handoff-ticket`、`dispatch-card`、`end-session`。Orca のカードとトラッカーを前提にした、チケット一つの最初から最後までです。
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
-- **フック:** 権限の判定（`guard.py`）と、圧縮後の再オリエンテーション（`reorient.py`）。
+- **フック:** 権限の判定（`guard.py`）、圧縮後の再オリエンテーション（`reorient.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）。
 
 ### upstream との同期状況
 - **pin 以降のコミット:** upstream の `main`（0.15.5）は、pin より2コミット先に進んでいます。

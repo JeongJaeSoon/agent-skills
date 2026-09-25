@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 27개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 27개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -407,6 +407,9 @@
 - `orch status`를 돌려 출력된 모든 줄에 대응한다.
 - 이후에는 `orch wait`로만 drain한다.
 
+### 권한 창 기록
+`hooks/permission.py`(PermissionRequest). 권한 창이 뜰 때 도구 이름과 가린 인자를 `$ORCA_TERMINAL_HANDLE`별로 대시보드 상태 디렉터리의 `prompts/`에 적는다. 결정은 내리지 않아서 권한 흐름은 그대로다. 대시보드는 그 터미널 화면에 같은 요청의 권한 창이 떠 있을 때만 인박스 항목에 승인·거부·터미널 열기 버튼을 붙인다. 사람이 누르면 보내기 직전에 화면을 다시 읽어 확인하고, 한 번만 허용하는 `Yes`나 `No`의 번호 하나만 누른다. "다시 묻지 않기", "항상 허용", "auto mode로 전환"처럼 규칙을 저장하거나 모드를 바꾸는 선택지는 고르지 않는다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`.
+
 ## pstack과의 차이
 
 ### 한눈에
@@ -454,7 +457,7 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
-- **hook:** 권한 결정(`guard.py`)과 압축 후 재정렬(`reorient.py`).
+- **hook:** 권한 결정(`guard.py`), 압축 후 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`).
 
 ### upstream 동기화 상태
 - **pin 이후 커밋:** upstream `main`(0.15.5)은 pin 뒤로 두 커밋이 더 있다.
