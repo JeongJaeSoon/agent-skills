@@ -1,6 +1,6 @@
 # Dashboard: live program progress without spending tokens
 
-`scripts/dash.py` is a local, stdlib-only page for every program under `$PROGRAMS_HOME`. It reads the same sources as `orch status` (the ledger, the tracker, GitHub and Orca) and spends no model tokens. Collecting data is deterministic Python. A model is involved only if you add the optional annotator described at the end.
+`scripts/dash.py` is a local, stdlib-only page for every program under `$PROGRAMS_HOME`, and for every Orca session on the machine (the fleet view, below). It reads the same sources as `orch status` (the ledger, the tracker, GitHub and Orca) and spends no model tokens. Collecting data is deterministic Python. A model is involved only if you add the optional annotator described at the end.
 
 ## Start it
 
@@ -10,7 +10,7 @@
 orch-dash ensure [--port 4780]
 orch-dash serve [--port 4780] [--interval 60] [--host 127.0.0.1]
 orch-dash collect <slug>   # one collect, prints a one-line summary
-orch-dash demo [--port 4780] [--live] [--no-serve]   # fixture programs, no network
+orch-dash demo [--port 4780] [--live] [--no-serve]   # fixture programs and an invented fleet, no network
 ```
 
 `serve` collects in the background at three rates:
@@ -44,6 +44,103 @@ A failing source never blanks the page:
 - Its error is shown.
 - The last good section stays on screen.
 - Its timestamp stays at the time of its last success.
+
+## Fleet: every session on this machine
+
+The first screen (`#/fleet/overview`) is not a program. It is every Orca worktree on this machine, arranged as the orchestrator above orchestrations above tasks, with the sessions you opened yourself under the orchestrator too. Program pages stay one click away in the sidebar. `fleet.py` collects it inside the same `serve` process, reads only local CLIs (`orca`, `gh`, `git`), and never calls a model.
+
+### Where it comes from
+
+| What | Source | How often |
+|---|---|---|
+| Sessions, agents, terminals, orchestration mail | `orca worktree ps`, `orca terminal list`, `orca orchestration inbox` (read without consuming) | Every 10 s |
+| Runs, workers, tasks, decision gates | `orca orchestration run-list`, `worker-list`, `task-list`, `gate-list` | Every 120 s |
+| Which PR a session's branch has | One GraphQL query per 40 branches (`associatedPullRequests`); a branch without a PR is asked again after 10 min | With the PR tick |
+| PR reviews, review threads, requested reviewers, CI | A cheap probe (state, head, updated time, CI rollup) for every PR that is due, then a full read only for the PRs whose probe changed | Every 90 s; a PR is due every 90 s while hot (CI running, its session working, or updated in the last 2 h), 5 min when warm, 15 min when cold, once a day after it is merged or closed |
+
+A PR that has not changed costs one alias in one probe query; only a changed PR is read in full. Avatars are downloaded once per reviewer, only from `avatars.githubusercontent.com`, into the state directory; the page never loads an image from outside this server.
+
+The hierarchy comes from Orca's own records. The root is `root_worktree` from the config or, without one, the worktree whose terminal coordinates the newest Run. A Run's coordinator worktree is an orchestration. A dispatched worker's worktree is a task under its coordinator. Anything else is standalone, under the root. Nothing is written to Orca to build it (see adoption below).
+
+### Screens
+
+- **Overview.** Session counts by phase (working, waiting on a prompt, idle, open, offline), what needs you, open PRs and runs. Below: the top of the inbox, the sessions moving now, the open-PR graph and the latest timeline.
+- **Inbox.** Everything a session is waiting on you for, filterable by type. Each row links to its session, opens the PR or copies the command, and can be dismissed.
+- **Graph.** Session → pull request → reviewer. The bar on a PR is its CI (green, red, amber). A reviewer edge is green for approved, dashed amber for an approval on an older commit, red for changes requested, blue for commented, grey dotted for requested and not yet answered.
+- **Sessions.** The whole tree as a table: kind, phase, repository and branch, PR, unread count, last activity.
+- **Session.** One session's inbox, agents (current prompt, the tool running now, the last reply, all masked), its PRs and its timeline, plus the send box.
+- **Timeline.** Prompts, finished turns, PR review and CI changes, and orchestration mail, newest first.
+
+Freshness works as for programs, with Orca warning after 30 s and stale after 90 s, runs after 5 and 15 min, GitHub after 10 and 30 min. The sidebar lists the live part of the tree (offline sessions without unread items are left to the Sessions table), each with a red badge for unread items.
+
+### Inbox types
+
+| Type | Raised when |
+|---|---|
+| `permission` | An agent sits on a permission or input prompt (Orca reports it as waiting) |
+| `question` | An unread `question`, `escalation` or `decision_gate` message to a coordinator |
+| `approval` | A pending Orca decision gate, or a finished turn that ends asking for a decision |
+| `login`, `run_command`, `verify_failed`, `verify_ok` | A finished turn that ends asking you to log in, to run something yourself, or reports a verification that failed or passed |
+| `changes_requested`, `review_comment_received`, `ci_failed`, `approval_stale`, `ready_to_merge` | A PR owned by a session has a change request, unresolved review threads from a person (bots are left out unless `bots_in_inbox`), failing CI, only approvals on an older commit, or a current approval with passing CI |
+| `sync_stalled`, `reload_pending` | Skill sync reported failure or went quiet for two intervals, or a reload could not be sent to a session |
+| anything else | Added by the orchestrator with `orch-dash inbox add` |
+
+The turn-based types read only the last lines of the agent's final message that Orca already reports, with fixed patterns, so they are a hint, not a verdict. Items backed by a live condition (a waiting prompt, unread mail, a pending gate, a PR's state) disappear when it clears; turn-based and added items stay until dismissed or resolved. An `approval`, `question`, `login`, `run_command` or `verify_failed` item raised before the session's latest prompt is **missed**: the inbox pins it to the top with a red edge, because typing the next prompt usually means the question above it went unanswered.
+
+**Unread** is per session: items raised after the later of the last time you opened the session page and the last prompt typed into it. A fresh install shows every open item as unread.
+
+### PR events for the rest of the platform
+
+Every change a full read finds is appended to `pr-events.jsonl` in the state directory, one JSON line (under 4 KiB, one write) per event: `{v, id, at, repo, pr, kind, url, owner, owner_kind, actor, checks, head}`. `kind` is one of `review_comment`, `changes_requested`, `approved`, `review_requested`, `head_pushed`, `approval_stale`, `checks_failed`, `checks_recovered`, `merged`, `closed`; readers ignore kinds they don't know. `owner` is the live dispatch that owns the PR's session (`owner_kind: dispatch`), or the session's agent terminal (`terminal`, or `human_session` for a standalone session). The file rotates to `pr-events.jsonl.1` past 5 MB. The dashboard itself only displays these; whether a session is told about them is up to the orchestrator.
+
+### Sending a line to a session
+
+The session page has a send box for its agent terminal. It is off the network by construction and guarded on every step:
+
+- The server answers only requests whose `Host` (and `Origin`, if any) is this server on 127.0.0.1 or localhost, and POSTs need a per-process token the page fetches from the same server.
+- The target must be a connected, writable agent terminal of a session in the current fleet state; a plain shell is never a target.
+- One line, at most 2000 characters. The page shows exactly what will be typed and where, and sends only after you confirm.
+- The line is typed only if the platform's idle check (`scripts/sync.py` `try_send` at the repository root) finds the session idle at an empty prompt: not busy, no dialog open, nothing typed in the composer. Without that script, or when the check refuses, nothing is typed and the page offers Copy instead.
+- "Sent, but the screen does not show it was taken" means the line was typed and Enter pressed. The page says so and does not offer a retry, so nothing is sent twice.
+- Every attempt, refused or not, is appended to `sends.jsonl` with the text masked.
+
+The dashboard never answers a permission prompt for a session.
+
+### Adoption into Orca's parent field
+
+The tree above is computed; Orca's `parentWorktreeId` is left alone by default. `orch-dash adopt` prints the parent each session would get. `orch-dash adopt --apply` writes it with `orca worktree set --parent-worktree`, only for sessions that have no parent yet, only when the config sets `adopt.write_orca_parent` to true, and logs each write with the previous value to `adoption.jsonl`. `orch-dash adopt --undo all` (or `--undo <worktree id>`) restores the logged values.
+
+### Files and configuration
+
+State lives outside every repository, in `$ORCH_FLEET_STATE` or `~/.local/state/agent-skills/dashboard/`:
+
+| File | Contents |
+|---|---|
+| `state.json` | The page's data, written atomically |
+| `prs.json` | Per-PR probe signature and last full read; branch → PR cache |
+| `memory.json` | Last prompt and phase per agent, open turn-based items, dismissed keys |
+| `events.jsonl` | The timeline |
+| `pr-events.jsonl` | PR events (above) |
+| `seen.json` | When each session page was last opened |
+| `inbox-external.jsonl` | Items added and resolved with `orch-dash inbox` |
+| `sends.jsonl`, `adoption.jsonl` | Send attempts; adoption writes and undos |
+| `avatars/` | Reviewer avatars |
+
+The optional config is `$ORCH_FLEET_CONFIG` or `~/.config/agent-skills/dashboard/config.json`:
+
+```json
+{"root_worktree": "<orca worktree id>", "adopt": {"write_orca_parent": false},
+ "include_main_worktrees": false, "bots_in_inbox": false}
+```
+
+Everything collected passes through one masking step before it is written or shown: GitHub, Slack, Anthropic, OpenAI and AWS token shapes, JWTs, `Authorization`/`Bearer` values, and `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_API_KEY`, `*_CUSTOM_HEADERS` assignments. No credential is read or stored: `gh` uses its own login. `ORCH_FLEET=off` turns the fleet collector off; `orch-dash demo` and the tests point `ORCH_FLEET_STATE` at a temporary directory and replay an invented machine.
+
+```sh
+orch-dash fleet                          # one collect, prints a summary
+orch-dash inbox add --type login --title "Log in to the registry" [--session <worktree id>] [--url URL] [--command CMD] [--key KEY]
+orch-dash inbox resolve --key KEY
+orch-dash adopt [--apply] [--undo all|<worktree id>]
+```
 
 ## Freshness
 
