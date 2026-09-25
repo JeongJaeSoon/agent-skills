@@ -279,7 +279,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 | 같은 파일 "Injected notices" 절 | 사용자 메시지 끝에 `You have N orchestration message(s)…`가 붙어 있으면 그 앞까지가 사용자 문장이다. 잘렸을 수 있으니 "문장이 … 에서 끊겼다"고 한 줄로 알리고, 알림 처리는 백그라운드로 넘긴다 | 알림 끼어듦 21회 |
 | 같은 파일 "Skills changed" 절 | 스킬을 고쳤으면 `skills-sync broadcast`(§4). 직접 `terminal send "/reload-plugins"`를 치지 않는다 | §4 |
 | `principles` | Delegation에 "Stay Answerable" 한 줄 (pstack 동기화가 깨지지 않을 때만) | §6.1 |
-| README, `docs/skills.md` | 설치 절을 로컬 체크아웃 + 부트스트랩으로, reload 문장을 §4 규칙으로 | §1, §4 |
+| README, `docs/skills.md`와 번역본 `docs/skills.{en,ja}.md` | README 설치 절을 로컬 체크아웃 + 부트스트랩으로, reload 문장을 §4 규칙으로 바꾼다. 카탈로그에 `orchestrate`의 top-level 모드와 `skills-sync` 명령을 더하고, 번역본도 같은 커밋에서 고쳐 첫 줄 `translated-from`을 올린다(안 올리면 `scripts/catalog/build.py`가 원문보다 오래됐다고 표시한다). 카탈로그 페이지 재생성은 README 링크의 artifact라 이 작업 범위 밖이고, 결과 보고에 남긴다 | §1, §4 |
 
 **두는 것**
 
