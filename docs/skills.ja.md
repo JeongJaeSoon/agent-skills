@@ -1,4 +1,4 @@
-<!-- translated-from: b49ffc0 -->
+<!-- translated-from: 3970052 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル27個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
