@@ -7,7 +7,7 @@ H = 3600
 
 
 def row(pid, cmd, ppid=1, age=10 * H, rss=1024):
-    return {"pid": pid, "ppid": ppid, "age": age, "start": time.time() - age, "rss": rss, "cpu": 1.0, "cmd": cmd}
+    return {"pid": pid, "ppid": ppid, "age": age, "start": "Sat Sep 26 00:00:00 2026", "rss": rss, "cpu": 1.0, "cmd": cmd}
 
 
 BROKER = "/usr/bin/node /x/scripts/app-server-broker.mjs serve --endpoint unix:/t/b.sock --cwd {} --pid-file /t/b.pid"
@@ -28,9 +28,12 @@ assert not got[10]["target"] and "claude" in got[10]["why"] and got[10]["procs"]
 assert got[20]["target"] and got[20]["why"] == "cwd에 claude 없음"
 assert got[30]["target"] and got[30]["why"] == "cwd 없음"
 assert not got[40]["target"]
-# Without cwd data nothing proves a broker idle; only a vanished cwd still counts.
+# Without cwd data nothing proves a broker idle, not even a vanished cwd.
 got = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, None, 6, exists=lambda p: p != "/wt/gone")}
-assert got == {10: False, 20: False, 30: True, 40: False}, got
+assert got == {10: False, 20: False, 30: False, 40: False}, got
+# A live claude still in a vanished cwd keeps its broker.
+got = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, {50: "/wt/gone"}, 6, exists=lambda p: p != "/wt/gone")}
+assert got[30] is False, got
 # A claude installed through npm runs as node; it still protects its cwd.
 assert reap.is_claude("node /n/lib/node_modules/@anthropic-ai/claude-code/cli.js -p")
 assert not reap.is_claude("node /x/app-server-broker.mjs serve") and not reap.is_claude("claudette")
@@ -165,6 +168,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # The broker also runs from the cache path, so it counts as an orphan too; the plain sleeper is the other one.
     assert len(orphan) == 2 and all(i["procs"] == 2 for i in orphan), orphan
     pids = [p for i in orphan for p in reap.tree(i["pid"], rows)]
+    # Same pid and command but another start time is another process.
+    assert reap.kill_tree({**broker[0], "start": "Thu Jan  1 00:00:00 1970"}, []) == "사라졌거나 다른 프로세스"
     assert all(reap.kill_tree(i, []) == "종료" for i in orphan)
     assert not set(pids) & set(reap.processes())
     assert reap.kill_tree(orphan[0], []) == "사라졌거나 다른 프로세스"

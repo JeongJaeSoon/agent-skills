@@ -36,7 +36,7 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
 
 | Kind | Target when | Kept when | How |
 |---|---|---|---|
-| codex | a broker (`node …/app-server-broker.mjs serve --cwd D`) whose `D` does not exist, or no `claude` process has its cwd in `D` and the broker is ≥ N hours old | a live `claude` in `D`, younger than N | SIGTERM the whole tree by pid, SIGKILL what is left after 5 s |
+| codex | a broker (`node …/app-server-broker.mjs serve --cwd D`) whose `D` does not exist, or no `claude` process has its cwd in `D` and the broker is ≥ N hours old | a live `claude` in `D` (even when `D` is gone), younger than N, or this user's process cwds could not all be read | SIGTERM the whole tree by pid, SIGKILL what is left after 5 s |
 | orphan | ppid 1, and the executable or the script it runs lies under a path in `reap.orphan_paths`, ≥ N hours | anything else | same |
 | docker | a dangling volume whose compose project has no container in any state, ≥ N hours; an untagged image no container uses, ≥ N hours | a project with any container, a volume whose name holds such a project's name, a volume with no compose label (reported only) | `docker volume rm <name>`, `docker image rm <id>` |
 | branch | every PR from that branch is merged or closed, no worktree has it checked out, and its tip is what a PR carried | an open PR, commits after the PR, the default branch, no PR | `git branch -D`; the output has the restore command |

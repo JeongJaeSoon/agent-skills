@@ -58,33 +58,31 @@ def etime_s(et):
 
 
 def processes():
-    now, rows = time.time(), {}
-    for line in run(["ps", "-axo", "pid=,ppid=,etime=,rss=,%cpu=,command="]).splitlines():
-        p = line.split(None, 5)
-        if len(p) == 6:
-            age = etime_s(p[2])
-            rows[int(p[0])] = {"pid": int(p[0]), "ppid": int(p[1]), "age": age, "start": now - age,
-                               "rss": int(p[3]) * 1024, "cpu": float(p[4]), "cmd": p[5]}
+    """pid → row. `start` is ps's lstart, exact to the second, so a reused pid does not pass as the same process."""
+    rows = {}
+    for line in run(["ps", "-axo", "pid=,ppid=,lstart=,etime=,rss=,%cpu=,command="]).splitlines():
+        p = line.split(None, 10)
+        if len(p) == 11:
+            rows[int(p[0])] = {"pid": int(p[0]), "ppid": int(p[1]), "start": " ".join(p[2:7]), "age": etime_s(p[7]),
+                               "rss": int(p[8]) * 1024, "cpu": float(p[9]), "cmd": p[10]}
     return rows
 
 
 def cwds():
-    """pid → cwd for every process this user can see; None when that cannot be read."""
+    """pid → cwd for this user's processes; None unless every one of them was read."""
     if os.path.isdir("/proc/self"):
         out = {}
         for d in os.listdir("/proc"):
-            if d.isdigit():
-                try:
+            try:
+                if d.isdigit() and os.stat(f"/proc/{d}").st_uid == os.getuid():
                     out[int(d)] = os.readlink(f"/proc/{d}/cwd")
-                except OSError:
-                    pass
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return None
         return out
     lsof = shutil.which("lsof") or "/usr/sbin/lsof"
-    try:
-        # lsof exits 1 when some processes are unreadable; the rest of its output still holds.
-        listing = subprocess.run([lsof, "-d", "cwd", "-Fpn"], capture_output=True, text=True, env=ENV).stdout
-    except FileNotFoundError:
-        listing = ""
+    listing = run([lsof, "-a", "-u", str(os.getuid()), "-d", "cwd", "-Fpn"], check=False)
     if not listing:
         return None
     out, pid = {}, None
@@ -139,12 +137,12 @@ def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
         m = BROKER_CWD.search(r["cmd"])
         cwd = m.group(1) if m else None
         live = [pid for pid, c in claude.items() if cwd and under(c, real(cwd))]
-        if not cwd or not exists(cwd):
-            why, target = "cwd 없음", True
-        elif live:
+        if live:
             why, target = f"cwd에 살아 있는 claude(pid {live[0]})", False
         elif cwd_of is None:
             why, target = "프로세스 cwd 를 읽지 못함", False
+        elif not cwd or not exists(cwd):
+            why, target = "cwd 없음", True
         elif r["age"] < hours * 3600:
             why, target = f"{hours}시간 미만", False
         else:
@@ -422,7 +420,7 @@ def report(data):
 def kill_tree(item, notes):
     rows = processes()
     r = rows.get(item["pid"])
-    if not r or r["cmd"] != item["cmd"] or abs(r["start"] - item["start"]) > 5:
+    if not r or r["cmd"] != item["cmd"] or r["start"] != item["start"]:
         return "사라졌거나 다른 프로세스"
     pids = tree(item["pid"], rows)
     cmds = {p: rows[p]["cmd"] for p in pids}
@@ -478,8 +476,7 @@ def main():
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
-            if not new or new.get("cmd") != old.get("cmd") or new.get("tip") != old.get("tip") \
-                    or abs(new.get("start", 0) - old.get("start", 0)) > 5:
+            if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip")):
                 print(f"- 건너뜀 {label(old)}: 더는 정리 대상이 아님")
                 continue
             try:
