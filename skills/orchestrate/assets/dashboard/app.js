@@ -27,7 +27,7 @@ const ICON = {
   sun: '<circle cx="8" cy="8" r="2.8"/><path d="M8 1.2v1.6M8 13.2v1.6M1.2 8h1.6M13.2 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1"/>',
   moon: '<path d="M13.4 9.6A5.6 5.6 0 0 1 6.4 2.6a5.6 5.6 0 1 0 7 7Z"/>',
   menu: '<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>',
-  x: '<path d="M4 4l8 8M12 4l-8 8"/>',
+  x: '<path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>',
   arrow: '<path d="M2.5 8h10.5M9 4l4 4-4 4"/>',
   alert: '<path d="M8 2.2 1.6 13.3h12.8Z"/><path d="M8 6.6v3.1M8 11.4v.1"/>',
   check: '<path d="M3.3 8.4 6.4 11.4 12.7 4.6"/>',
@@ -49,6 +49,7 @@ const ICON = {
   chat: '<path d="M2.2 3h11.6v7.6H7.4L4.2 13.4v-2.8H2.2Z"/>',
   copy: '<rect x="5.2" y="5.2" width="8.6" height="8.6" rx="1.4"/><path d="M10.8 5.2V3.6a1.4 1.4 0 0 0-1.4-1.4H3.6a1.4 1.4 0 0 0-1.4 1.4v5.8a1.4 1.4 0 0 0 1.4 1.4h1.6"/>',
   send: '<path d="M14 2 7.2 8.8M14 2 9.6 14l-2.4-5.2L2 6.4Z"/>',
+  fleet: '<circle cx="8" cy="3.5" r="1.8"/><circle cx="3.5" cy="12.5" r="1.8"/><circle cx="12.5" cy="12.5" r="1.8"/><path d="M8 5.3V8M3.5 10.7V8h9v2.7"/>',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -199,7 +200,7 @@ function mainTone(m) { return m === "red" ? "bad" : m === "pending" ? "warn" : m
 
 function renderSidebar() {
   const st = S.state;
-  const fleetItem = `<li><a class="nav-item" href="#/fleet/overview" ${isFleet() ? 'aria-current="page"' : ""} title="Fleet">${icon("workers")}<span class="sb-text">Fleet</span></a></li>`;
+  const fleetItem = `<li><a class="nav-item" href="#/fleet/overview" ${isFleet() ? 'aria-current="page"' : ""} title="Fleet">${icon("fleet")}<span class="sb-text">Fleet</span></a></li>`;
   $("#session-group").hidden = true;
   $("#program-list").innerHTML = fleetItem + S.programs.map((p) => {
     const s = p.summary || {};
@@ -600,7 +601,7 @@ function predWait(st, p) {
   const mo = motionOf(w);
   return { text: mo.text, since: mo.since, tone: mo.tone };
 }
-const moveDot = (mo) => mo.moving ? '<span class="pulse" aria-label="moving"></span>' : `<span class="dot-s ${mo.tone ? "tone-" + mo.tone : ""}"></span>`;
+const moveDot = (mo) => mo.moving ? `<span class="pulse ${mo.tone ? "tone-" + mo.tone : ""}" aria-label="moving"></span>` : `<span class="dot-s ${mo.tone ? "tone-" + mo.tone : ""}"></span>`;
 const agoSpan = (iso) => iso ? `<span class="muted" data-age-text="${esc(iso)}">${ageText(iso)}</span>` : "";
 
 const STALL_TEXT = {

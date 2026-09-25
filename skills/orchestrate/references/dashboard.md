@@ -73,6 +73,8 @@ The hierarchy comes from Orca's own records. The root is `root_worktree` from th
 
 Freshness works as for programs, with Orca warning after 30 s and stale after 90 s, runs after 5 and 15 min, GitHub after 10 and 30 min. The sidebar lists the live part of the tree (offline sessions without unread items are left to the Sessions table), each with a red badge for unread items.
 
+A session's dot has one colour per phase on every screen (sidebar, Moving now, Sessions table, graph): blue with a growing ring while working, amber while waiting on you, green when idle after a finished turn, grey when open with no agent, a hollow ring when offline. The Overview's session count, the Sessions page and the graph legend spell this out, and every dot names its phase on hover. The same blue ring marks a moving worker on program pages.
+
 ### Inbox types
 
 | Type | Raised when |
