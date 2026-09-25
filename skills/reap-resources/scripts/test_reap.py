@@ -113,6 +113,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert item["target"], item
     reap.act(item, [])
     assert not wt.exists() and len(reap.worktrees(str(repo))) == 1
+    # A merged branch is deleted with its restore command; a branch that moved after the scan stays.
+    git("branch", "feat", cwd=repo)
+    tip = subprocess.run(["git", "rev-parse", "feat"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    pr = [{"number": 9, "state": "MERGED", "headRefName": "feat", "headRefOid": tip}]
+    [item] = reap.judge_branches(str(repo), {"feat": tip}, set(), "main", pr, lambda a, b: False)
+    assert reap.act({**item, "tip": "0" * 40}, []) == "tip 이 바뀜, 남김"
+    assert reap.act(item, []).startswith("삭제 (복구: git -C")
+    assert subprocess.run(["git", "rev-parse", "--verify", "-q", "feat"], cwd=repo).returncode != 0
     # A vanished worktree goes alone; another vanished one that is not in the plan stays.
     for name in ("gone1", "gone2"):
         git("worktree", "add", "-q", "--detach", str(tmp / name), cwd=repo)
