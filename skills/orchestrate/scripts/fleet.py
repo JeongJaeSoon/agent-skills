@@ -25,6 +25,7 @@ RATE_FLOOR = 300         # GraphQL points left below which only a forced PR tick
 EVENTS_KEEP = 400
 ROTATE_BYTES = 5 * 1024 * 1024  # events.jsonl and pr-events.jsonl move to *.1 past this
 STICKY_TYPES = ("approval", "run_command", "login", "verify_failed", "question")
+SETTLED = ("completed", "failed", "abandoned")  # dispatch statuses whose worker has stopped
 BRANCH_SKIP = {"main", "master", "develop", "trunk"}
 LOGIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?")
 
@@ -303,7 +304,7 @@ def build_sessions(fast, runs, cfg):
         if not wt:
             continue
         prev = by_wt.get(wt)
-        live = w.get("dispatchStatus") not in ("completed", "failed", "abandoned")
+        live = w.get("dispatchStatus") not in SETTLED
         if not prev or (live and not prev[1]):
             by_wt[wt] = (w, live)
 
@@ -878,6 +879,10 @@ class Fleet:
         return {"type": "prompt", "title": f"{rec['tool']} · {d['question']}", "detail": mask(prompt_needles(rec)[0], 300),
                 "handle": t["handle"], "prompt": rec["id"], "answers": [x for x in ("approve", "deny") if option_for(d, x)]}
 
+    def resolve(self, item, rule, now):
+        item.update(open=False, resolved=rule)
+        self.event({"at": iso(now), "kind": "item_resolved", "session": item.get("session"), "text": f"{rule}: {item['title']}"})
+
     def compose(self, sessions, root, cfg):
         now, mem = self.now(), self.mem
         prompts, phases = mem.setdefault("prompts", {}), mem.setdefault("phases", {})
@@ -910,11 +915,20 @@ class Fleet:
                         sticky[k] = {"key": k, "type": kind, "session": s["id"], "title": first_line(a["last"]),
                                      "detail": a["last"][-600:], "at": iso(now), "source": "turn", "open": kind != "verify_ok"}
                         self.event({"at": iso(now), "kind": f"item_{kind}", "session": s["id"], "text": first_line(a["last"])})
+                    # The agent has finished a later turn, so what an earlier one asked for has been dealt with or
+                    # been asked again (and raised again) at the end of this one.
+                    for it in sticky.values():
+                        if it.get("open") and it["key"] != k and it["key"].startswith(f"msg:{pane}:"):
+                            self.resolve(it, "superseded", now)
                 if a["state"] == "waiting":
                     items.append({"key": f"wait:{pane}:{a['since']}", "type": "permission", "session": s["id"],
                                   "title": "입력·권한 창에서 대기 중", "detail": a["detail"], "at": a["since"] or iso(now),
                                   "source": "orca", **self.pending_prompt(s, a, records)})
             s["last_prompt_at"] = last_prompt
+        if sessions:  # an empty list is more likely a bad read than every worktree gone at once
+            for it in sticky.values():
+                if it.get("open") and it.get("source") == "turn" and it.get("session") not in sessions:
+                    self.resolve(it, "session_gone", now)
         # Orchestration mail asking a coordinator something: open until someone replies. Unread mail stays; mail the
         # coordinator acked (its inbox loop acks at once, before the human has answered) stays for a day.
         coord_handles = {t["handle"] for s in sessions.values() if s["kind"] in ("orchestrator", "orchestration")
@@ -922,11 +936,12 @@ class Fleet:
         coord_runs = {r["id"] for r in self.runs["runs"] if r.get("coordinator_handle") in coord_handles}  # the root's too
         by_handle = {t["handle"]: s["id"] for s in sessions.values() for t in s["terminals"]}
         answered, day_ago = answered_mail(self.fast["messages"]), iso(now - dt.timedelta(hours=24))
+        settled = {w.get("dispatchId") for w in self.runs["workers"] if w.get("dispatchStatus") in SETTLED} - {None}
         for m in self.fast["messages"]:
             to = m.get("to_handle") or ""
             to_coord = to in coord_handles or (to.startswith("run:") and to[4:] in coord_runs)
             if (to_coord and m.get("type") in ("question", "escalation", "decision_gate") and m["id"] not in answered
-                    and (not m.get("read") or (m.get("created_at") or "") >= day_ago)):
+                    and mail_dispatch(m) not in settled and (not m.get("read") or (m.get("created_at") or "") >= day_ago)):
                 items.append({"key": f"mail:{m['id']}", "type": "question", "session": by_handle.get(m.get("from_handle")),
                               "title": mask(m.get("subject"), 160), "detail": mask(m.get("body"), 600),
                               "at": m.get("created_at"), "source": "orca-mail"})
@@ -1008,6 +1023,17 @@ def answered_mail(messages):
     return {m["id"] for m in messages for t in {m["id"], m.get("thread_id")} - {None} for r in by_thread[t]
             if r["id"] != m["id"] and r.get("from_handle") != m.get("from_handle")
             and (r.get("created_at") or "") >= (m.get("created_at") or "")}
+
+
+def mail_dispatch(m):
+    """The dispatch a worker's mail came from: `ask` and `send` put it in the payload, and `ask` also sends as
+    dispatch:<id>. None for mail from a terminal outside any dispatch."""
+    try:
+        d = json.loads(m.get("payload") or "{}")
+    except ValueError:
+        d = None
+    h = m.get("from_handle") or ""
+    return (d.get("dispatchId") if isinstance(d, dict) else None) or (h[9:] if h.startswith("dispatch:") else None)
 
 
 def decision_items(by_handle, root):

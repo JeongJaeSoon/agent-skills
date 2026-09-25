@@ -474,6 +474,46 @@ f.rate = None
 world.prs[43]["state"], world.prs[43]["commits"], world.worktrees[3]["agents"][0]["state"] = "OPEN", ci43, "waiting"
 f.graphql = real_gql
 
+# Items settled in reality leave on their own. A turn item goes once the same agent finishes a later turn (not while
+# it is still working on it), or once its worktree is gone.
+def resolved(st):
+    return {e["text"].split(":")[0] for e in st["timeline"] if e["kind"] == "item_resolved"}
+
+
+scratch = world.worktrees[4]["agents"][0]
+st = f.tick(force=True)
+assert [i["session"] for i in items(st, "login")] == ["wt-scratch"] and not resolved(st), "the same last turn keeps it"
+scratch.update(state="working", lastAssistantMessage="Logged in; checking the release script again.")
+st = f.tick(force=True)
+assert items(st, "login"), "a turn still running has not superseded it"
+scratch.update(state="done", lastAssistantMessage="The release script works now.")
+st = f.tick(force=True)
+assert not items(st, "login") and resolved(st) == {"superseded"}, items(st, "login")
+login = world.worktrees[1]
+login["agents"][0]["lastAssistantMessage"] = "Shall I merge #41?"
+st = f.tick(force=True)
+assert [i["session"] for i in items(st, "approval") if i["source"] == "turn"] == ["wt-login"]
+login["isArchived"] = True
+st = f.tick(force=True)
+assert not [i for i in items(st, "approval") if i["source"] == "turn"] and "session_gone" in resolved(st)
+login["isArchived"] = False
+# Mail from a worker whose dispatch has settled is no longer waiting on anyone, whichever way it names the dispatch.
+kept = len(world.messages)
+world.messages += [{"id": "m20", "type": "escalation", "from_handle": "dispatch:ctx_docs", "to_handle": "term_coord", "read": True,
+                    "subject": "Blocked on publish rights", "created_at": fleet.iso(clock[0])},
+                   {"id": "m21", "type": "question", "from_handle": "term_login", "to_handle": "run:run_demo", "read": False,
+                    "payload": json.dumps({"dispatchId": "ctx_login"}), "subject": "Which base branch?", "created_at": fleet.iso(clock[0])}]
+st = f.tick(force=True)
+before = {i["key"] for i in items(st, "question")}
+assert {"mail:m20", "mail:m21"} <= before, before
+workers = {w["dispatchId"]: w for w in world.runs["workers"]}
+workers["ctx_docs"]["dispatchStatus"] = workers["ctx_login"]["dispatchStatus"] = "completed"
+st = f.tick(force=True)
+assert {i["key"] for i in items(st, "question")} == before - {"mail:m20", "mail:m21"}, items(st, "question")
+assert fleet.mail_dispatch({"payload": "not json", "from_handle": "term_x"}) is None
+workers["ctx_docs"]["dispatchStatus"] = workers["ctx_login"]["dispatchStatus"] = "pending"
+del world.messages[kept:]
+
 # Classification of a finished turn's last lines.
 assert fleet.classify("Build done. E2E test failed on the login page.") == "verify_failed"
 assert fleet.classify("Login required: run `gh auth login`, then tell me.") == "login"
