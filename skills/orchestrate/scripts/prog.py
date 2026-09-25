@@ -1390,6 +1390,19 @@ def batch(res):
     return res.get("deliveryId"), res.get("messages") or []
 
 
+def revoked_echo(m):
+    """Orca's refusal of a message a released worker sent again (usually a repeated worker_done). It arrives with
+    the original type, so it would wake the wait and print a CLOSE OUT for a card already handled. A refusal for a
+    missing capability is not one: that worker is live and needs its capability resent. Returns the dispatch id."""
+    try:
+        p = m.get("payload")
+        p = json.loads(p) if isinstance(p, str) else p or {}
+        rej = p.get("_orcaLifecycleRejection") or {}
+    except (ValueError, AttributeError):
+        return None
+    return (p.get("dispatchId") or "?") if "revoked" in (rej.get("reason") or "") else None
+
+
 def close_out(msgs, workers, worktrees):
     """What to do with each worker_done's card, printed beside the message: after a compaction a coordinator kept
     releasing workers but dropped `worktree rm`, and eight cards stayed open."""
@@ -1447,7 +1460,10 @@ def cmd_wait(argv):
         if not did:
             # A typed wait never wakes for heartbeats, so they pile up in the FIFO; pull that batch.
             did, msgs = batch(orca_json("orchestration", "check", "--run", run_id))
-        work = [m for m in msgs if m.get("type") != "heartbeat"]
+        work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
+        for m in msgs:
+            if revoked_echo(m):
+                print(f"ignored: Orca refused a {m.get('type')} from released dispatch {revoked_echo(m)}", flush=True)
         if work:
             for m in work:
                 body = (m.get("body") or "").replace("\n", " ")
@@ -1464,7 +1480,7 @@ def cmd_wait(argv):
             return
         if did:
             orca_json("orchestration", "check", "--run", run_id, "--ack", did)
-        print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) acked)", flush=True)
+        print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
     print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
           f" one that ended its turn without worker_done does not wake on send: send the instruction with"

@@ -192,6 +192,30 @@ spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktree
 assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"
 assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
                        {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
+# A released worker's repeated worker_done comes back as Orca's refusal; orch wait acks it without waking. A refusal
+# for a missing capability still wakes it: that worker is live.
+import contextlib, io, json
+def rej(reason):
+    return json.dumps({"dispatchId": "d1", "_orcaLifecycleRejection": {"code": "dispatch_capability_invalid", "reason": reason}})
+assert prog.revoked_echo({"type": "worker_done", "payload": rej("Dispatch d1 capability is revoked.")}) == "d1"
+assert prog.revoked_echo({"type": "heartbeat", "payload": rej("The Dispatch capability is missing.")}) is None
+assert prog.revoked_echo({"type": "worker_done", "payload": '{"dispatchId": "d1"}'}) is None
+assert prog.revoked_echo({"payload": "not json"}) is None and prog.revoked_echo({"payload": "[1]"}) is None
+calls = []
+def fake_orca(*a):
+    calls.append(a)
+    if "--wait" in a:
+        return {"deliveryId": "dv1", "messages": [{"type": "worker_done", "payload": rej("Dispatch d1 capability is revoked.")}]}
+    return {}
+saved = prog.orca_json, prog.Program, prog.run_workers
+prog.orca_json, prog.run_workers = fake_orca, lambda run: []
+prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}})()
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "refused a worker_done from released dispatch d1" in out.getvalue() and "ACTIONABLE" not in out.getvalue(), out.getvalue()
+assert any("--ack" in a and "dv1" in a for a in calls), calls
+prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},
          "c1": {"workers": [{"dispatchId": "old"}], "page": {"hasMore": False, "nextCursor": None}}}

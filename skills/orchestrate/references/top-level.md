@@ -19,7 +19,7 @@ Every request leaves your turn within one short tool call.
 | The request | Goes to |
 |---|---|
 | A question you can answer from what is already in context, or one `--json` read | You, now |
-| A quick lookup, a read across several repos, a review or verification of work already done, or delegation to an external tool (chat, tracker, notes) | A background subagent (`run_in_background`); you answer when it reports |
+| A quick lookup, a read across several repos, a review or verification of work already done, or delegation to an external tool (chat, tracker, notes) | A background subagent (`run_in_background`); you answer when it reports. For an external write, hand it the facts, not the finished text: a signature line or model name you prefill is wrong whenever the subagent runs on another model |
 | A change to one repo, or an investigation that must read one repo's code or config | A new Orca worker (`worker-start`) with a brief (`brief.md`, "Single worker"), or `dispatch-card` when it needs its own card |
 | More work for a session that already owns that topic | That session: `orca orchestration send --to dispatch:<id>` if it is a dispatch, otherwise the human's inbox ("send this to <session>") |
 | Three or more tickets that must land together | A program coordinator (`orchestrate` program mode) in its own session, started as a card (`dispatch-card`), not with `worker-start`: Orca's nesting limit refuses a dispatched worker's own `worker-start` (`nested_worker_depth_exceeded`). Several tracks: one coordinator per track, each with its own QA lead; a track of a couple of tickets, or one that depends on another, joins that track |
