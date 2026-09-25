@@ -32,7 +32,9 @@ elif a[:2] == ["terminal", "read"]:
 elif a[:2] == ["terminal", "send"]:
     t = st["terms"][arg("--terminal")]
     st["sent"].append([arg("--terminal"), arg("--text")])
-    t["screens"] = [t["screens"][0] + ["❯ " + arg("--text"), "  ⎿  Reloaded skills: 9 skills available"]]
+    text = arg("--text")
+    shown = ["  ⎿  Reloaded skills: 9 skills available"] if text.startswith("/") else ["✶ Pondering… (1s)"]
+    t["screens"] = [t["screens"][0] + ["❯ " + text] + shown]
     out = {}
 json.dump(st, open(path, "w"))
 print(json.dumps({"ok": True, "result": out}))
@@ -181,13 +183,19 @@ def test_broadcast():
     importlib.reload(sync)
     try:
         code = sync.broadcast(None, dry_run=False)
+        pending = json.loads((state / "reload-pending.json").read_text())
+        st.write_text(json.dumps(dict(json.loads(st.read_text()), terms=dict(
+            json.loads(st.read_text())["terms"], idle=dict(terms["idle"], screens=[IDLE])))))
+        sync.nudge("idle", "run your orchestration check")
+        nudged_perm = sync.nudge("perm", "run your orchestration check")
     finally:
         for k, v in old.items():
             os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
         importlib.reload(sync)
     sent = json.loads(st.read_text())["sent"]
-    check("only the idle session got the reload", sent == [["idle", "/reload-skills"]], sent)
-    pending = json.loads((state / "reload-pending.json").read_text())
+    check("only the idle session got the reload", sent[:1] == [["idle", "/reload-skills"]], sent)
+    check("a nudge goes to an idle session and not past a dialog",
+          sent[1:] == [["idle", "run your orchestration check"]] and nudged_perm == 1, sent)
     check("the others stay pending with a reason", code == 1 and set(pending["failed"]) == {"perm", "typing"}
           and pending["done"] == ["idle"], pending)
     check("a setup shell is never a target", "setup" not in pending["failed"])

@@ -5,6 +5,8 @@ Usage:
   skills-sync sync [--no-broadcast]      fetch, fast-forward or push, then broadcast a needed reload
   skills-sync broadcast [--skills|--plugins] [--dry-run]
                                          send the pending (or the given) reload to idle Claude sessions
+  skills-sync nudge <terminal> <one line>
+                                         type one line into a session, only if it is idle at an empty prompt
   skills-sync status                     print the last sync result and the pending reload
 
 The checkout is loaded live through CLAUDE_CODE_PLUGIN_DIRS (docs/platform.md), so a sync changes what
@@ -181,7 +183,15 @@ def screen(handle):
     return t.get("tail") or [], t.get("draft") or ""
 
 
-def try_send(term, command):
+def reloaded(after):
+    return any(l.strip().startswith("⎿") and "Reloaded" in l for l in after)
+
+
+def turn_started(after):
+    return classify(after, "✳") is not None  # no longer idle at an empty prompt: the text was taken
+
+
+def try_send(term, command, confirmed=reloaded):
     handle = term["handle"]
     first, draft = screen(handle)
     reason = classify(first, term.get("title") or "", draft)
@@ -194,9 +204,22 @@ def try_send(term, command):
     orca("terminal", "send", "--terminal", handle, "--text", command, "--enter")
     time.sleep(CONFIRM_S)
     after, _ = screen(handle)
-    if not any(l.strip().startswith("⎿") and "Reloaded" in l for l in after):
-        return "sent, but no 'Reloaded' line appeared"
+    if not confirmed(after):
+        return "sent, but the screen does not show it was taken"
     return None
+
+
+def nudge(handle, text):
+    """Type one line into another session, under the same idle checks as the reload broadcast."""
+    try:
+        term = next(t for t in orca("terminal", "list")["terminals"] if t["handle"] == handle)
+        if term.get("agentIdentity") != "claude" or not term.get("writable"):
+            raise Stop("not a writable Claude terminal")
+        reason = try_send(term, text, confirmed=turn_started)
+    except (Stop, StopIteration, subprocess.TimeoutExpired, ValueError, KeyError) as e:
+        reason = str(e) or "no such terminal"
+    print(reason or "sent")
+    return 1 if reason else 0
 
 
 def broadcast(kind, dry_run):
@@ -255,6 +278,8 @@ def main(argv):
         STATE.mkdir(parents=True, exist_ok=True)
         kind = "plugins" if "--plugins" in argv else "skills" if "--skills" in argv else None
         return broadcast(kind, dry_run="--dry-run" in argv)
+    if cmd == "nudge" and len(argv) == 3:
+        return nudge(argv[1], argv[2])
     if cmd == "status":
         return status()
     print(__doc__)
