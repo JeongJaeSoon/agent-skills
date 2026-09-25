@@ -15,6 +15,7 @@ Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts 
 import collections, concurrent.futures, datetime as dt, fcntl, hashlib, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
+INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
 RUNS_EVERY = 120         # runs, workers, tasks, gates
 PR_TICK = 90             # PR probe tick; each PR is due per its tier below
 DISCOVER_EVERY = 600     # re-ask GitHub which PR a branch has, for sessions that had none
@@ -175,7 +176,7 @@ def orca(*args, timeout=30):
 
 def fetch_fast():
     calls = {"worktrees": ("worktree", "ps", "--limit", "500"), "terminals": ("terminal", "list"),
-             "messages": ("orchestration", "inbox", "--limit", "100")}
+             "messages": ("orchestration", "inbox", "--limit", str(INBOX_LIMIT))}
     with concurrent.futures.ThreadPoolExecutor(len(calls)) as pool:
         futures = {k: pool.submit(orca, *args) for k, args in calls.items()}
         return {k: f.result().get(k, []) for k, f in futures.items()}
@@ -856,7 +857,7 @@ class Fleet:
     def compose(self, sessions, root, cfg):
         now, mem = self.now(), self.mem
         prompts, phases = mem.setdefault("prompts", {}), mem.setdefault("phases", {})
-        sticky, seen = mem.setdefault("sticky", {}), read_json(state_dir() / "seen.json", {}) or {}
+        sticky = mem.setdefault("sticky", {})
         items, records = [], prompt_records()
         # Prompts and finished turns, per agent pane.
         for s in sessions.values():
@@ -929,7 +930,7 @@ class Fleet:
             for it in pr_items(det, self.me, cfg):
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
         # Skill-side items and sync state.
-        items += external_items(sticky) + sync_items(now)
+        items += external_items(sticky) + sync_items(now, by_handle)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -937,15 +938,15 @@ class Fleet:
         items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
                  for it in items if it["key"] not in dismissed]
         items.sort(key=lambda i: i.get("at") or "", reverse=True)
-        # Unread and missed, per session.
+        # A session's badge counts exactly the Needs you items on it, so the badges and the inbox always agree:
+        # the badges plus the items that belong to no session are the inbox. No local "seen" mark hides any.
         for i in items:
             s = sessions.get(i.get("session"))
             i["missed"] = bool(s and i["type"] in STICKY_TYPES and s.get("last_prompt_at")
                                and (i.get("at") or "") < s["last_prompt_at"])
         for s in sessions.values():
-            mark = max(filter(None, [seen.get(s["id"]), s.get("last_prompt_at")]), default="")
             mine = [i for i in items if i.get("session") == s["id"]]
-            s["unread"] = sum(1 for i in mine if (i.get("at") or "") > mark)
+            s["unread"] = len(mine)
             s["missed"] = sum(i["missed"] for i in mine)
         # Keep the sticky store bounded: closed ones older than a week go.
         cutoff = iso(now - dt.timedelta(days=7))
@@ -1013,8 +1014,8 @@ def external_items(sticky):
     return list(items.values())
 
 
-def sync_items(now):
-    """Skill sync health, written by the platform side's skills-sync."""
+def sync_items(now, by_handle=None):
+    """Skill sync health, written by the platform side's skills-sync. A reload not sent sits on its terminal's session."""
     base, out = state_dir().parent, []
     sync = read_json(base / "sync.json")
     if isinstance(sync, dict):
@@ -1025,7 +1026,7 @@ def sync_items(now):
     pending = read_json(base / "reload-pending.json")
     if isinstance(pending, dict):
         for handle, why in (pending.get("failed") or {}).items():
-            out.append({"key": f"reload:{handle}:{pending.get('since')}", "type": "reload_pending", "session": None,
+            out.append({"key": f"reload:{handle}:{pending.get('since')}", "type": "reload_pending", "session": (by_handle or {}).get(handle),
                         "terminal": handle, "at": pending.get("since"), "source": "skills-sync",
                         "title": f"reload 못 보냄: {mask((why or {}).get('title'), 80)}", "detail": mask((why or {}).get("reason"), 200)})
     return out
@@ -1134,13 +1135,6 @@ def press_option(sync, rec, action):
     if prompt_verdict(after, rec)[0]:
         return "sent, but the dialog is still on screen", key
     return None, key
-
-
-def mark_seen(session_id):
-    path = state_dir() / "seen.json"
-    seen = read_json(path, {}) or {}
-    seen[str(session_id)] = iso(utcnow())
-    write_atomic(path, json.dumps(seen))
 
 
 def dismiss(fleet, key):

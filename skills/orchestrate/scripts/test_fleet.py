@@ -60,16 +60,31 @@ assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approv
                       ("decision", "wt-coord"), ("ready_to_merge", "wt-login"), ("changes_requested", "wt-export"),
                       ("review_comment_received", "wt-export"), ("ci_failed", "wt-export")]), got
 
-# Fresh install: nothing has been looked at, so every session with an open item carries a badge.
+# A session's badge is the number of Needs you items on it: the badges plus the sessionless items are the inbox.
+def badges_agree(st):
+    per = {s["id"]: sum(1 for i in st["items"] if i.get("session") == s["id"]) for s in st["sessions"]}
+    assert {s["id"]: s["unread"] for s in st["sessions"]} == per, per
+    assert sum(per.values()) + sum(1 for i in st["items"] if i.get("session") not in per) == len(st["items"])
+
+
+badges_agree(st)
 assert ss["wt-export"]["unread"] == 4 and ss["wt-docs"]["unread"] == 1 and ss["wt-scratch"]["unread"] == 1, ss
 assert not (state_dir / "pr-events.jsonl").exists()  # the first snapshot is a baseline, not a change
 
-# Opening a session clears its badge; dismissing an item removes it.
-fleet.mark_seen("wt-export")
+# Dismissing an item removes it from the inbox and from its session's badge alike.
 fleet.dismiss(f, next(i["key"] for i in items(st, "ci_failed")))
 st = f.tick(force=True)
 ss = {s["id"]: s for s in st["sessions"]}
-assert ss["wt-export"]["unread"] == 0 and not items(st, "ci_failed"), (ss["wt-export"], items(st, "ci_failed"))
+assert ss["wt-export"]["unread"] == 3 and not items(st, "ci_failed"), (ss["wt-export"], items(st, "ci_failed"))
+badges_agree(st)
+
+# A reload skills-sync could not send sits on its terminal's session (and counts there); an unknown terminal on none.
+fleet.write_atomic(state_dir.parent / "reload-pending.json", json.dumps({"since": "t1", "failed": {
+    "term_login": {"title": "✳ ACME-101", "reason": "composer holds a draft"}, "term_gone": {"reason": "x"}}}))
+st = f.tick(force=True)
+assert sorted((i["session"] or "") for i in items(st, "reload_pending")) == ["", "wt-login"], items(st, "reload_pending")
+badges_agree(st)
+(state_dir.parent / "reload-pending.json").unlink()
 
 # A push after approval, and CI recovering, become PR events for the platform side and new inbox state.
 world.advance()
@@ -83,12 +98,13 @@ assert all(len(json.dumps(r)) < 4096 for r in rows)
 assert [i["session"] for i in items(st, "approval_stale")] == ["wt-login"] and not items(st, "ready_to_merge"), items(st)
 assert {e["kind"] for e in st["timeline"]} >= {"pr_approval_stale", "pr_checks_recovered"}
 
-# A prompt typed into a session is an event, and marks earlier items as seen by the person who typed it.
+# A prompt typed into a session is an event; the items still open on it keep counting.
 world.worktrees[3]["agents"][0]["prompt"] = "Approved, go ahead."
 clock[0] = now + dt.timedelta(minutes=11)
 st = f.tick(force=True)
 ss = {s["id"]: s for s in st["sessions"]}
-assert ss["wt-docs"]["unread"] == 0 and any(e["kind"] == "prompt" and e["session"] == "wt-docs" for e in st["timeline"])
+assert any(e["kind"] == "prompt" and e["session"] == "wt-docs" for e in st["timeline"])
+badges_agree(st)
 
 # Chat: only a connected agent terminal of a listed session, one line, every attempt logged, secrets masked.
 class Sender:

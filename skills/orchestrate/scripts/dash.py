@@ -1227,9 +1227,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
         except ValueError:
             return self.send(400, b'{"error":"bad json"}')
-        if path == "/api/fleet/seen" and isinstance(body.get("session"), str):
-            fleet.mark_seen(body["session"])
-        elif path == "/api/fleet/dismiss" and isinstance(body.get("key"), str) and FLEET:
+        if path == "/api/fleet/dismiss" and isinstance(body.get("key"), str) and FLEET:
             fleet.dismiss(FLEET, body["key"])
         elif path == "/api/fleet/send" and isinstance(body.get("session"), str) and isinstance(body.get("text"), str):
             handle = body.get("handle") if isinstance(body.get("handle"), str) else None

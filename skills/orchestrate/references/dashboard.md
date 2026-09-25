@@ -53,7 +53,7 @@ The first screen (`#/fleet/overview`) is not a program. It is every Orca worktre
 
 | What | Source | How often |
 |---|---|---|
-| Sessions, agents, terminals, orchestration mail | `orca worktree ps`, `orca terminal list`, `orca orchestration inbox` (read without consuming) | Every 10 s while a page is open (it polled in the last 5 min), every 60 s otherwise; opening the page refreshes at once |
+| Sessions, agents, terminals, orchestration mail | `orca worktree ps`, `orca terminal list`, `orca orchestration inbox --limit 2000` (read without consuming; every message Orca keeps, heartbeats included, so no unanswered question falls out of the window) | Every 10 s while a page is open (it polled in the last 5 min), every 60 s otherwise; opening the page refreshes at once |
 | Runs, workers, tasks, decision gates | `orca orchestration run-list`, `worker-list`, `task-list`, `gate-list` | Every 120 s |
 | Which PR a session's branch has | One GraphQL query per 40 branches (`associatedPullRequests`); a branch without a PR is asked again after 10 min | With the PR tick |
 | PR reviews, review threads, requested reviewers, CI | A cheap probe (state, head, updated time, CI rollup) for every PR that is due, then a full read only for the PRs whose probe changed | Every 90 s; a PR is due every 90 s while hot (CI running, its session working, or updated in the last 2 h), 5 min when warm, 15 min when cold, once a day after it is merged or closed |
@@ -67,13 +67,13 @@ The hierarchy comes from Orca's own records. The root is `root_worktree` from th
 - **Overview.** Session counts by phase (working, waiting on a prompt, idle, open, offline), what needs you, open PRs and runs. Below: the top of the inbox, the sessions moving now, the open-PR graph and the latest timeline.
 - **Inbox.** Everything a session is waiting on you for, filterable by type. Each row links to its session, opens the PR or copies the command, and can be dismissed.
 - **Graph.** Session → pull request → reviewer. The bar on a PR is its CI (green, red, amber). A reviewer edge is green for approved, dashed amber for an approval on an older commit, red for changes requested, blue for commented, grey dotted for requested and not yet answered.
-- **Sessions.** The whole tree as a table: kind, phase, project and branch, PR, unread count, last activity.
+- **Sessions.** The whole tree as a table: kind, phase, project and branch, PR, Needs you count, last activity.
 - **Session.** One session's inbox, agents (current prompt, the tool running now, the last reply, all masked), its PRs and its timeline, plus the send box.
 - **Timeline.** Prompts, finished turns, PR review and CI changes, and orchestration mail, newest first.
 
 Every row that belongs to a session names its project in a small badge: Needs you items (a decision takes the terminal that registered it, a decision gate the worktree its task's dispatch runs in), Moving now, the Sessions table, the session page and the graph's session nodes. The project comes from live state on every collect: Orca's own project name for the worktree, else the workspace directory Orca put it under (`~/orca/workspaces/<project>/<worktree>`), else the origin repository's name, else the worktree directory's name. Only the origin lookup is cached, per path, so a session whose path changes is looked up again. Clicking a badge, or a chip in the project row of Overview, Inbox, Graph and Sessions, shows only that project; "All projects" clears it.
 
-Freshness works as for programs, with Orca warning after 30 s and stale after 90 s, runs after 5 and 15 min, GitHub after 10 and 30 min. The sidebar lists the live part of the tree (offline sessions without unread items are left to the Sessions table), each with a red badge for unread items.
+Freshness works as for programs, with Orca warning after 30 s and stale after 90 s, runs after 5 and 15 min, GitHub after 10 and 30 min. The sidebar lists the live part of the tree (offline sessions with nothing in Needs you are left to the Sessions table), each with a red badge counting its Needs you items.
 
 A session's dot has one colour per phase on every screen (sidebar, Moving now, Sessions table, graph): blue with a growing ring while working, amber while waiting on you, green when idle after a finished turn, grey when open with no agent, a hollow ring when offline. The Overview's session count, the Sessions page and the graph legend spell this out, and every dot names its phase on hover. The same blue ring marks a moving worker on program pages.
 
@@ -93,7 +93,7 @@ A session's dot has one colour per phase on every screen (sidebar, Moving now, S
 
 The turn-based types read only the last lines of the agent's final message that Orca already reports, with fixed patterns, so they are a hint, not a verdict. Items backed by a live condition (a waiting prompt, unanswered mail, an open decision, a pending gate, a PR's state) disappear when it clears; turn-based and added items stay until dismissed or resolved. An `approval`, `question`, `login`, `run_command` or `verify_failed` item raised before the session's latest prompt is **missed**: the inbox pins it to the top with a red edge, because typing the next prompt usually means the question above it went unanswered.
 
-**Unread** is per session: items raised after the later of the last time you opened the session page and the last prompt typed into it. A fresh install shows every open item as unread.
+A session's **badge** is the number of Needs you items on it, the same list its session page shows. The badges plus the items that belong to no session (sync health, items added without a session) are exactly the Inbox count, and every item is a live condition (or an open turn-based item), so the two never disagree. Nothing local such as a "last opened" mark hides an item from the count: an item leaves only when its condition clears, it is answered, or it is dismissed. A `reload_pending` item sits on the session of the terminal the reload could not reach. Orca's own per-worktree unread flag is a yes/no without a count, so it is not used.
 
 ### PR events for the rest of the platform
 
@@ -158,7 +158,6 @@ State lives outside every repository, in `$ORCH_FLEET_STATE` or `~/.local/state/
 | `memory.json` | Last prompt and phase per agent, open turn-based items, dismissed keys |
 | `events.jsonl` | The timeline |
 | `pr-events.jsonl` | PR events (above) |
-| `seen.json` | When each session page was last opened |
 | `inbox-external.jsonl` | Items added and resolved with `orch-dash inbox` |
 | `decisions.json` | Decisions from `orch decide`; closed ones are dropped after a week |
 | `sends.jsonl`, `adoption.jsonl` | Send and prompt-answer attempts; adoption writes and undos |

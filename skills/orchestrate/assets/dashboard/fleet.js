@@ -48,7 +48,7 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { seenSent: {}, token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, open: {} };
+const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, open: {} };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 function fleetSection(section, arg) {
@@ -63,7 +63,7 @@ const sessionHref = (id) => `#/fleet/session/${encodeURIComponent(id)}`;
 const phaseDot = (s) => `<span class="${s.phase === "working" ? "pulse" : "dot-s"} ph-${esc(s.phase)}" title="${esc(PHASE[s.phase] || s.phase)}"></span>`;
 const phaseKeys = (only = Object.keys(PHASE), n = null) => only.map((p) => `<span>${phaseDot({ phase: p })}${n ? `${n(p)} ` : ""}${PHASE[p]}</span>`).join("");
 const phaseLegend = (...a) => `<div class="legend">${phaseKeys(...a)}</div>`;
-const badge = (n, missed) => n ? `<span class="badge ${missed ? "missed" : ""}" title="${n} unread${missed ? `, ${missed} missed` : ""}">${n}</span>` : "";
+const badge = (n, missed) => n ? `<span class="badge ${missed ? "missed" : ""}" title="${n} waiting on you${missed ? `, ${missed} missed` : ""}">${n}</span>` : "";
 
 async function fleetPost(path, body, retry = true) {
   if (!F.token) F.token = (await (await fetch("/api/fleet/token", { cache: "no-store" })).json()).token;
@@ -346,16 +346,12 @@ function fleetSessions(st) {
       <td>${pr ? link(pr.url, `#${esc(pr.number)}`) : ""}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
   }).join("");
   return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator by run membership. Standalone sessions you opened yourself sit under the root.</p></div>${phaseLegend()}</div>
-    ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Unread</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function fleetSession(st) {
   const s = byId(st)[F.sessionId];
   if (!s) return `<div class="loading">This session is gone from Orca. <a class="link" href="#/fleet/sessions">All sessions</a></div>`;
-  if (s.unread && F.seenSent[s.id] !== s.unread) {
-    F.seenSent[s.id] = s.unread;
-    fleetPost("/api/fleet/seen", { session: s.id }).catch(() => { delete F.seenSent[s.id]; });
-  }
   const parent = byId(st)[s.parent];
   const agents = (s.agents || []).map((a) => `<li class="agent"><div class="row">${tag(a.state, a.state === "waiting" ? "warn" : a.state === "working" ? "accent" : "good")}
       <span class="mono dim">${esc(a.type || "")}${a.mode ? ` · ${esc(a.mode)}` : ""}</span><span class="grow"></span>${relSpan(a.updated || a.since)}</div>
