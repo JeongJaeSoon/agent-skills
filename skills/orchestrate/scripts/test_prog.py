@@ -427,6 +427,7 @@ row = lambda kind, **kw: {"ts": T, "ev": kind, **kw}
 events = [row("landed", pr=7, sha="a", stack_top=8), row("landed", pr=8, sha="b"),
           row("landed", pr=7, sha="a", note="merged outside land"), row("main_green", pr=8, sha="b")]
 assert prog.main_state(events) == "green", "a lower layer, even recorded twice, waits on no run of its own"
+assert prog.main_state(events[:1]) == "pending", "a stack merge cut off before its top was recorded is not green"
 assert prog.cap_from(events + [row("main_green", pr=7, sha="a")], 6) == 2, "one push raises the cap once"
 with contextlib.redirect_stdout(io.StringIO()):
     for e in events[:2]:

@@ -150,8 +150,11 @@ class Program:
 
 
 def stack_lower(events):
-    """A stack's lower layers land in their top's push, so main CI never runs on their commits."""
-    return {e["sha"]: e["stack_top"] for e in events if e["ev"] == "landed" and e.get("sha") and e.get("stack_top")}
+    """A stack's lower layers land in their top's push, so main CI never runs on their commits. A layer counts
+    only once its top's landing is recorded: a merge cut off in between leaves the layer's own CI to watch."""
+    tops = {e.get("pr") for e in events if e["ev"] == "landed"}
+    return {e["sha"]: e["stack_top"] for e in events
+            if e["ev"] == "landed" and e.get("sha") and e.get("stack_top") in tops}
 
 
 def landed_shas(events):
