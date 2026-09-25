@@ -1,7 +1,7 @@
-<!-- translated-from: f7829f3 -->
+<!-- translated-from: b001fc4 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル27個、エイリアス3個、コマンド2個（`orch`、`orch-dash`）、フック2個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
+`agent-skills` プラグインに入っているスキル27個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック2個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
 
 ## 流れ
 
@@ -91,8 +91,11 @@
 ## プロジェクト1件（Orca ワーカー複数）
 
 ### orchestrate
-- **使う場面:** 一つのセッションが複数の Orca ワーカー（たいてい3つ以上）でマイルストーンを最後までやり切るとき、「대시보드 갱신해줘」（ダッシュボードを更新して）、「전체 진행상황 몇 퍼센트」（全体の進捗は何パーセント?）、別のコーディネーターが回していたプログラムを引き継ぐとき、PR がなぜ動かないのかを尋ねられたとき。
+- **使う場面:** ユーザーが話しかける最上位 orchestrator セッションのとき（「오케스트레이터로」、「모든 세션 관리해줘」（全セッションを管理して）、「전체 태스크 현황」（全タスクの状況））、または一つのセッションが複数の Orca ワーカー（たいてい3つ以上）でマイルストーンを最後までやり切るとき、「대시보드 갱신해줘」（ダッシュボードを更新して）、「전체 진행상황 몇 퍼센트」（全体の進捗は何パーセント?）、別のコーディネーターが回していたプログラムを引き継ぐとき、PR がなぜ動かないのかを尋ねられたとき。
 - **内容:** コーディネーターが所有するのはコードではなくプログラムです。毎回のセッションは `orca skills get orchestration` を読むところから始めます。
+  - **即答の原則（Stay answerable）:** ターンの中では振り分け、数秒で終わる確認、ユーザーへの返答だけを行います。調査・実装・検証・長い待機・監視は受け取った時点でバックグラウンドのサブエージェントか Orca ワーカーに渡し、フォアグラウンドのループ、`sleep`、バックグラウンドでない `check --wait` は使いません。完了は通知で受け取ります。
+  - **top-level モード**（`references/top-level.md`）: 単独タスクのセッションとプロジェクトのコーディネーターの上に立つセッション。依頼の振り分け表、ユーザーが開いたセッションは読むだけ、ワーカー起動の確認は `--screen` でバックグラウンドから（信頼確認の画面は直前に起動したワーカーに限り ↓ を確認してから Enter、止められたらインボックスへ）、終わった dispatch には `run:` へ、本文はファイル経由、AskUserQuestion の代わりにダッシュボードのインボックス（`orch-dash inbox add`）、フィルターなしのバックグラウンド `check --wait` 一つで通知の割り込みを防ぐ、PR レビューイベント（`pr-events.jsonl`）への反応、スキルが変わったら `skills-sync broadcast`。
+  - 以下の 1〜8 は **program モード**です。
   1. **Frame:** 完了条件（predicate）は、数えられるチケット ID と実際の成果物の検査で決めます。人の指示は standing order としてそのまま書き写します。依存は開始の順序（Orca task deps）と着地の順序（GitHub stack、`orch dep`）に分けます。Run を作り、`orch init` で登録します。
   2. **検証の準備と Pilot:** verify スキルがなければ、最初の digest でユーザーに `/create-verification-skill` の実行を頼みます。それまでは手で検証し、ワーカー一つで最後まで一度回してみます。
   3. **Scale:** 常駐の役割（main ガーディアン、QA リード）を立ち上げます。チケットワーカーの同時実行の上限は1から始め、main に green で着地するたびに1ずつ増やし（既定の ceiling は6）、red になれば半分にします。
@@ -114,6 +117,7 @@
     - `roles.md`: ガーディアン、QA リード、flow improver。
     - `program-note.md`: プログラムノートのテンプレート。
     - `dashboard.md`: ダッシュボードの説明。
+    - `top-level.md`: 最上位 orchestrator モード。
   - `scripts/`
     - `prog.py`: `orch` の本体。
     - `dash.py`: `orch-dash` の本体。
@@ -248,7 +252,7 @@
 
 ### principles
 - **使う場面:** 設計、リファクタリング、検証、委任の判断に、名前の付いた原則が必要なとき。
-- **内容:** 原則23個の索引です（Core、Architecture、Verification、Delegation、Meta）。適用する原則は leaf ファイルを最後まで読みます。例: 根本原因を直す、振る舞いをテストする、足す前に削る、人を待たない。
+- **内容:** 原則23個の索引です（Core、Architecture、Verification、Delegation、Meta）。Delegation にはこのリポジトリが足した一行 Stay Answerable（`orchestrate` の即答の原則）があります。適用する原則は leaf ファイルを最後まで読みます。例: 根本原因を直す、振る舞いをテストする、足す前に削る、人を待たない。
 - **同梱:** `references/principle-*.md` 23個。
 
 ### recall
@@ -360,6 +364,14 @@
   - 表は列の見出しを押すと並べ替わります。2回目は逆順、3回目は元の順序に戻り、ブラウザが選択を覚えます。
 - **負荷:** ブラウザは5秒ごとに問い合わせますが、変化がなければ本文なしの 304 で終わり、タブが隠れているときは問い合わせません。サーバーは台帳を3秒、Orca を20秒、トラッカー・GitHub を60秒の周期で集め、終わったプログラム（最終確認の記録が有効なもの）は台帳だけを見ます。
 - **コマンド:** `collect`、`serve`、`ensure`、`note`（リスク・決定の一行）、`demo`。環境変数は `ORCH_DASH_PORT`、`ORCH_DASH=off` です。詳しくは `skills/orchestrate/references/dashboard.md` にあります。
+
+### `skills-sync`（同期と reload の一斉送信）
+- **やること:** セッションが直接読むメインのチェックアウトを origin/main に合わせ、変わったものがあれば起動中の Claude セッションに reload を送ります。運用の全体は `docs/platform.md` にあります。
+- **コマンド:**
+  - `sync`: fetch のあと ff-only の pull か、署名済みコミットの push。main でない、未コミットの変更がある、分岐している、署名のないコミットがある、credential helper がない場合は何も変えずに止まり、macOS 通知と `~/.local/state/agent-skills/sync.json` に残します。launchd が15分ごととログイン時に実行します。
+  - `broadcast [--skills|--plugins] [--dry-run]`: `SKILL.md` が変わったら `/reload-skills`、hooks やプラグインの manifest が変わったら `/reload-plugins` を送ります。入力欄が空、スピナーなし、権限・信頼・質問の画面なし、1.5秒おきに二回読んだ画面が同じ、をすべて確かめたセッションにだけ送り、残りは `reload-pending.json` に残して次に再試行します。
+  - `nudge <terminal> <一行>`: 同じ確認を通ったセッションにだけ一行を送り、ターンが始まったか確かめます。
+  - `status`: 最後の同期結果と残っている reload。
 
 ## 設定ファイル
 

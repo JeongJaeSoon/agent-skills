@@ -1,7 +1,7 @@
-<!-- translated-from: f7829f3 -->
+<!-- translated-from: b001fc4 -->
 # Skill catalog
 
-This page covers the 27 skills, 3 aliases, 2 commands (`orch`, `orch-dash`), and 2 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
+This page covers the 27 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 2 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
 
 ## Flow
 
@@ -91,8 +91,11 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 ## One project (several Orca workers)
 
 ### orchestrate
-- **When:** One session drives a milestone to done through several Orca workers (usually 3 or more); "대시보드 갱신해줘" (update the dashboard); "전체 진행상황 몇 퍼센트" (how many percent done overall); taking over a program another coordinator was running; asking why PRs aren't moving.
+- **When:** This is the top-level orchestrator session the human talks to ("오케스트레이터로", "모든 세션 관리해줘" (manage every session), "전체 태스크 현황" (status of all tasks)), or one session drives a milestone to done through several Orca workers (usually 3 or more); "대시보드 갱신해줘" (update the dashboard); "전체 진행상황 몇 퍼센트" (how many percent done overall); taking over a program another coordinator was running; asking why PRs aren't moving.
 - **What it does:** The coordinator owns the program, not the code. Every session starts by reading `orca skills get orchestration`.
+  - **Stay answerable:** inside its turn it only routes, runs checks that take seconds, and answers the human. Investigation, implementation, verification, long waits and monitoring go to a background subagent or an Orca worker the moment they arrive; no foreground loops, `sleep`, or `check --wait` outside the background. Completion arrives as a notification.
+  - **Top-level mode** (`references/top-level.md`): the session above single-task sessions and program coordinators. A routing table; sessions the human opened are read only; worker starts are confirmed with `--screen` in the background (a trust prompt on a worker it just started gets ↓, a check, then Enter; if blocked, the inbox); mail for a finished dispatch goes to `run:`; message bodies go through files; the dashboard inbox (`orch-dash inbox add`) instead of AskUserQuestion; one unfiltered background `check --wait` keeps notices out of the human's typing; reactions to PR review events (`pr-events.jsonl`); `skills-sync broadcast` when skills change.
+  - Steps 1–8 below are **program mode**.
   1. **Frame:** The done condition (predicate) is set as countable ticket IDs plus checks on the real deliverables. Human instructions are carried over verbatim as standing orders. Dependencies are split into start order (Orca task deps) and landing order (GitHub stack, `orch dep`). It creates a Run and registers it with `orch init`.
   2. **Verification setup and Pilot:** If there is no verify skill, the first digest asks the user to run `/create-verification-skill`. Until then it verifies by hand and runs one worker end to end as a trial.
   3. **Scale:** Starts the standing roles (main guardian, QA lead). The concurrency cap for ticket workers starts at 1, goes up by 1 with each green landing on main (default ceiling 6), and halves on red.
@@ -114,6 +117,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
     - `roles.md`: guardian, QA lead, flow improver.
     - `program-note.md`: program note template.
     - `dashboard.md`: guide to the dashboard.
+    - `top-level.md`: the top-level orchestrator mode.
   - `scripts/`
     - `prog.py`: the `orch` implementation.
     - `dash.py`: the `orch-dash` implementation.
@@ -248,7 +252,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 
 ### principles
 - **When:** A design, refactor, verification or delegation decision needs a named principle.
-- **What it does:** An index of 23 principles (Core, Architecture, Verification, Delegation, Meta). For a principle that applies, it reads the leaf file in full. Examples: fix the root cause, test behavior, subtract before adding, don't wait for humans.
+- **What it does:** An index of 23 principles (Core, Architecture, Verification, Delegation, Meta). Delegation also carries one line this repo added, Stay Answerable (the `orchestrate` rule). For a principle that applies, it reads the leaf file in full. Examples: fix the root cause, test behavior, subtract before adding, don't wait for humans.
 - **Bundled:** 23 files, `references/principle-*.md`.
 
 ### recall
@@ -360,6 +364,14 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
   - Click a column header to sort a table. A second click reverses the order, a third restores the original order, and the browser remembers your choice.
 - **Load:** The browser polls every 5 seconds, but when nothing changed the request ends with a 304 and no body, and it doesn't poll while the tab is hidden. The server collects the ledger every 3 seconds, Orca every 20 seconds, and the tracker and GitHub every 60 seconds; for a finished program (one with a valid final-check record) it reads only the ledger.
 - **Commands:** `collect`, `serve`, `ensure`, `note` (one line for a risk or decision), `demo`. The environment variables are `ORCH_DASH_PORT` and `ORCH_DASH=off`. Details are in `skills/orchestrate/references/dashboard.md`.
+
+### `skills-sync` (sync and reload broadcast)
+- **What it does:** Keeps the main checkout that sessions load directly in step with origin/main, and sends a reload to running Claude sessions when something changed. The whole setup is in `docs/platform.md`.
+- **Commands:**
+  - `sync`: fetch, then an ff-only pull or a push of signed commits. Off main, uncommitted changes, diverged, an unsigned commit, or no credential helper: it changes nothing, stops, and leaves a macOS notification and `~/.local/state/agent-skills/sync.json`. launchd runs it every 15 minutes and at login.
+  - `broadcast [--skills|--plugins] [--dry-run]`: `/reload-skills` when a `SKILL.md` changed, `/reload-plugins` when hooks or the plugin manifest changed. Sent only to sessions with an empty prompt, no spinner, no permission, trust or question dialog, and the same screen on two reads 1.5 s apart; the rest stay in `reload-pending.json` for the next try.
+  - `nudge <terminal> <one line>`: sends one line under the same checks and confirms the turn started.
+  - `status`: the last sync result and the pending reload.
 
 ## Config file
 
