@@ -69,7 +69,7 @@ def processes():
 
 
 def cwds():
-    """pid → cwd for every process this user can see."""
+    """pid → cwd for every process this user can see; None when that cannot be read."""
     if os.path.isdir("/proc/self"):
         out = {}
         for d in os.listdir("/proc"):
@@ -79,8 +79,16 @@ def cwds():
                 except OSError:
                     pass
         return out
+    lsof = shutil.which("lsof") or "/usr/sbin/lsof"
+    try:
+        # lsof exits 1 when some processes are unreadable; the rest of its output still holds.
+        listing = subprocess.run([lsof, "-d", "cwd", "-Fpn"], capture_output=True, text=True, env=ENV).stdout
+    except FileNotFoundError:
+        listing = ""
+    if not listing:
+        return None
     out, pid = {}, None
-    for line in (run(["lsof", "-d", "cwd", "-Fpn"], check=False) or "").splitlines():
+    for line in listing.splitlines():
         if line[:1] == "p":
             pid = int(line[1:])
         elif line[:1] == "n" and pid:
@@ -123,7 +131,7 @@ def is_claude(cmd):
 
 
 def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
-    claude = {pid: real(c) for pid, c in cwd_of.items() if pid in rows and is_claude(rows[pid]["cmd"])}
+    claude = {pid: real(c) for pid, c in (cwd_of or {}).items() if pid in rows and is_claude(rows[pid]["cmd"])}
     out = []
     for r in rows.values():
         if not BROKER.match(r["cmd"]):
@@ -135,6 +143,8 @@ def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
             why, target = "cwd 없음", True
         elif live:
             why, target = f"cwd에 살아 있는 claude(pid {live[0]})", False
+        elif cwd_of is None:
+            why, target = "프로세스 cwd 를 읽지 못함", False
         elif r["age"] < hours * 3600:
             why, target = f"{hours}시간 미만", False
         else:
@@ -303,13 +313,15 @@ def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, git=run):
         return None
     transcript = projects_dir / m.group(1) / f"{m.group(2)}.jsonl"
     idle = now - transcript.stat().st_mtime if transcript.exists() else None
-    users = [pid for pid, c in cwd_of.items() if under(real(c), real(path))]
+    users = [pid for pid, c in (cwd_of or {}).items() if under(real(c), real(path))]
     if idle is None:
         why = "세션 transcript 없음(조용한지 알 수 없음)"
     elif idle < hours * 3600:
         why = f"세션이 {hours}시간 안에 활동"
     elif users:
         why = f"pid {users[0]} 이 cwd 로 사용 중"
+    elif cwd_of is None:
+        why = "프로세스 cwd 를 읽지 못함"
     elif w.get("locked"):
         why = "locked"
     elif git(["git", "status", "--porcelain"], cwd=path, check=False) != "":
