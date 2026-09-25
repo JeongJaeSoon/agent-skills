@@ -10,7 +10,7 @@ and the state lives outside the repository:
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
 """
-import datetime as dt, hashlib, json, os, pathlib, re, subprocess, tempfile, threading, time
+import datetime as dt, hashlib, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 RUNS_EVERY = 120         # runs, workers, tasks, gates
@@ -697,7 +697,8 @@ class Fleet:
             pass
         append_line(path, row)
         self.event({"at": row["at"], "kind": f"pr_{e['kind']}", "session": session and session["id"],
-                    "pr": pr["key"], "actor": e.get("actor"), "url": e["url"]})
+                    "pr": pr["key"], "actor": e.get("actor"), "url": e["url"],
+                    "text": f"#{pr['number']} {pr['title'] or ''}" + (f" · {e['actor']}" if e.get("actor") else "")})
 
     def fetch_avatars(self, pr):
         d = state_dir() / "avatars"
@@ -731,10 +732,12 @@ class Fleet:
                 h = digest(a["prompt"]) if a["prompt"] else None
                 old = prompts.get(pane)
                 if h and (not old or old["h"] != h):
-                    prompts[pane] = {"h": h, "at": iso(now)}
+                    # A prompt first seen at collector start has no known time; stamping it "now" would mark
+                    # every open item as read on a fresh install.
+                    prompts[pane] = {"h": h, "at": iso(now) if old else None}
                     if old:
                         self.event({"at": iso(now), "kind": "prompt", "session": s["id"], "text": mask(a["prompt"], 160)})
-                if prompts.get(pane):
+                if (prompts.get(pane) or {}).get("at"):
                     last_prompt = max(filter(None, [last_prompt, prompts[pane]["at"]]))
                 prev_phase = phases.get(pane)
                 if prev_phase and prev_phase != a["state"]:
@@ -859,6 +862,45 @@ def sync_items(now):
 
 
 # ---------------------------------------------------------------- actions from the page and the CLI
+
+def load_sync():
+    """The platform's idle-checked sender (scripts/sync.py at the repository root), or None when absent."""
+    root = str(pathlib.Path(__file__).resolve().parents[3] / "scripts")
+    if root not in sys.path:
+        sys.path.append(root)
+    try:
+        import sync
+        return sync if hasattr(sync, "try_send") else None
+    except ImportError:
+        return None
+
+
+def send(session_id, text, handle=None, sender=None):
+    """Type one line into a fleet session's agent terminal. Returns (status, body) for the HTTP reply.
+    Only agent terminals of sessions in the current state are reachable; every attempt is logged."""
+    state = read_json(state_dir() / "state.json", {}) or {}
+    s = next((x for x in state.get("sessions") or [] if x["id"] == session_id), None)
+    terms = [t for t in (s or {}).get("terminals") or [] if t.get("agent") and t.get("connected") and t.get("writable")]
+    handles = [t["handle"] for t in terms]
+    if handle is None and len(handles) == 1:
+        handle = handles[0]
+    row = {"at": iso(utcnow()), "session": session_id, "handle": handle, "text": mask(text, 500)}
+    if not s or handle not in handles:
+        code, out = 403, {"ok": False, "reason": "not a connected agent terminal of a fleet session"}
+    elif not text.strip() or "\n" in text or "\r" in text or len(text) > 2000:
+        code, out = 400, {"ok": False, "reason": "one non-empty line, at most 2000 characters"}
+    else:
+        sender = sender or load_sync()
+        if sender is None:
+            code, out = 200, {"ok": False, "reason": "safety check unavailable (scripts/sync.py not found)", "fallback": "copy"}
+        else:
+            ok, reason = sender.try_send(handle, text)
+            # This one reason means the line was typed and Enter pressed: a retry would send it twice.
+            typed = ok or (reason or "").startswith("sent, but")
+            code, out = 200, {"ok": ok, "reason": reason, "typed": typed, "fallback": None if typed else "copy"}
+    append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
+    return code, out
+
 
 def mark_seen(session_id):
     path = state_dir() / "seen.json"

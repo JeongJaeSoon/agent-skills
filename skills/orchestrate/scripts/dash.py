@@ -1229,6 +1229,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             fleet.mark_seen(body["session"])
         elif path == "/api/fleet/dismiss" and isinstance(body.get("key"), str) and FLEET:
             fleet.dismiss(FLEET, body["key"])
+        elif path == "/api/fleet/send" and isinstance(body.get("session"), str) and isinstance(body.get("text"), str):
+            handle = body.get("handle") if isinstance(body.get("handle"), str) else None
+            code, out = fleet.send(body["session"], body["text"], handle)
+            return self.send(code, json.dumps(out).encode())
         else:
             return self.send(404, b'{"error":"not found"}')
         if FLEET:
@@ -1277,7 +1281,7 @@ def beat():
     HEALTH["heartbeat"] = iso(utcnow())
 
 
-def serve(host, port, interval):
+def serve(host, port, interval, make_fleet=None):
     global FLEET
     home().mkdir(parents=True, exist_ok=True)
     lock = (home() / ".dash.lock").open("a")
@@ -1293,7 +1297,7 @@ def serve(host, port, interval):
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()
     threading.Thread(target=fast_loop, args=(interval,), daemon=True).start()
     if os.environ.get("ORCH_FLEET") != "off":
-        FLEET = fleet.Fleet()
+        FLEET = (make_fleet or fleet.Fleet)()
         threading.Thread(target=fleet_loop, daemon=True).start()
     log(f"serving {home()} on http://{host}:{port}/ (tracker+github every {interval}s, "
         f"orca every {ORCA_EVERY}s, ledger every {FAST_TICK}s)")
@@ -1388,9 +1392,10 @@ def cmd_demo(argv):
     if "--no-serve" in argv:
         print(root)
         return
+    world = dash_demo.FakeFleetWorld(utcnow())
     if "--live" in argv:
-        threading.Thread(target=dash_demo.live, args=(root,), daemon=True).start()
-    serve("127.0.0.1", int(prog.opt(argv, "--port", "4780")), 20)
+        threading.Thread(target=dash_demo.live, args=(root, 20, world), daemon=True).start()
+    serve("127.0.0.1", int(prog.opt(argv, "--port", "4780")), 20, make_fleet=world.fleet)
 
 
 def cmd_fleet(argv):

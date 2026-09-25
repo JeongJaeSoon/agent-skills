@@ -323,6 +323,12 @@ th.num .th-sort { justify-content: flex-end; }
 #session-list { grid-template-columns: minmax(0, 1fr); }
 .nav-item.tree .sb-text { flex: 1; min-width: 0; }
 td.when { white-space: nowrap; }
+.chat-row { display: flex; gap: var(--s2); align-items: center; }
+.chat-row .grow { flex: 1; }
+.chat .card-body { display: grid; gap: var(--s2); }
+.chat .chip:disabled, .chat .search:disabled { opacity: 0.5; cursor: default; }
+.confirm { display: flex; align-items: center; gap: var(--s2); padding: 6px var(--s2); border-radius: var(--r-md); background: var(--tone-wash); color: var(--ink); }
+.confirm svg.i { color: var(--tone); }
 .tree-cell { display: inline-flex; align-items: center; gap: var(--s2); padding-left: calc(var(--d, 0) * 16px); }
 .badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
   font-size: var(--t-xs); font-weight: 600; color: #fff; background: var(--bad); flex: none; }

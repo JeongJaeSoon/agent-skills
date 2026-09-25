@@ -46,7 +46,7 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { type: "all", seenSent: {}, token: null, draft: {} };
+const F = { type: "all", seenSent: {}, token: null, draft: {}, confirm: null, chat: {} };
 
 const fleetSection = () => {
   const m = location.hash.match(/^#\/fleet\/([a-z]+)(?:\/(.+))?/);
@@ -59,11 +59,13 @@ const phaseDot = (s) => s.phase === "working" ? '<span class="pulse" aria-label=
   : `<span class="dot-s ${PHASE_TONE[s.phase] ? "tone-" + PHASE_TONE[s.phase] : ""}" title="${esc(s.phase)}"></span>`;
 const badge = (n, missed) => n ? `<span class="badge ${missed ? "missed" : ""}" title="${n} unread${missed ? `, ${missed} missed` : ""}">${n}</span>` : "";
 
-async function fleetPost(path, body) {
+async function fleetPost(path, body, retry = true) {
   if (!F.token) F.token = (await (await fetch("/api/fleet/token", { cache: "no-store" })).json()).token;
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Dash-Token": F.token }, body: JSON.stringify(body) });
+  // A server restart (ensure restarts on a code change) rotates the token: fetch it again once.
+  if (r.status === 403 && retry) { F.token = null; return fleetPost(path, body, false); }
   const out = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(out.error || String(r.status));
+  if (!r.ok && !("ok" in out)) throw new Error(out.error || String(r.status));
   return out;
 }
 
@@ -73,9 +75,12 @@ function sessionTree(st) {
   all.forEach((s) => (kids[s.parent || ""] ||= []).push(s));
   const rank = { orchestrator: 0, orchestration: 1, task: 2, standalone: 3 };
   const order = (a, b) => rank[a.kind] - rank[b.kind] || (b.last_activity || "").localeCompare(a.last_activity || "");
-  const out = [], walk = (id, depth) => (kids[id] || []).sort(order).forEach((s) => { out.push([s, depth]); if (s.id !== id) walk(s.id, depth + 1); });
+  const out = [], seen = new Set();
+  const walk = (id, depth) => (kids[id] || []).sort(order).forEach((s) => {
+    if (seen.has(s.id)) return;  // a parent cycle (Orca parents are user-editable) must not hang the page
+    seen.add(s.id); out.push([s, depth]); walk(s.id, depth + 1);
+  });
   walk("", 0);
-  const seen = new Set(out.map(([s]) => s.id));
   all.filter((s) => !seen.has(s.id)).forEach((s) => out.push([s, 0]));  // a parent that vanished from Orca
   return out;
 }
@@ -263,6 +268,7 @@ function fleetSession(st) {
   return `<div class="view-head"><div><h2>${phaseDot(s)} ${esc(s.name)}</h2>
       <p>${tag(KIND_LABEL[s.kind] || s.kind)} ${esc(s.phase)}${parent ? ` · under <a class="link" href="${sessionHref(parent.id)}">${esc(parent.name)}</a>` : ""}
       ${s.task_title ? ` · task: ${esc(s.task_title)}` : ""} · <span class="mono">${esc(s.repo_name || "")}${s.branch ? ` · ${esc(s.branch)}` : ""}</span></p></div></div>
+    ${chatCard(s)}
     <div class="grid">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside">${items.length}</span></div>${itemList(st, items, { showSession: false })}</div>
       <div class="card"><div class="card-head"><h3>Agents</h3><span class="aside">${(s.agents || []).length}</span></div><ul class="rows agents">${agents || '<li class="muted">No agent in this worktree.</li>'}</ul></div>
@@ -276,9 +282,53 @@ function fleetTimeline(st) {
     <div class="card">${timelineList(st, st.timeline || [])}</div>`;
 }
 
+const agentTerms = (s) => (s.terminals || []).filter((t) => t.agent && t.connected && t.writable);
+
+function chatCard(s) {
+  const terms = agentTerms(s);
+  if (!terms.length) return `<div class="card"><div class="card-head"><h3>Send</h3></div><div class="empty">No connected agent terminal in this session.</div></div>`;
+  const st = F.chat[s.id] || {}, handle = st.handle || terms[0].handle;
+  const pick = terms.length > 1 ? `<select id="chat-handle" class="search" style="min-width:0">${terms.map((t) =>
+    `<option value="${esc(t.handle)}" ${t.handle === handle ? "selected" : ""}>${esc(t.title || t.handle)}</option>`).join("")}</select>` : "";
+  const c = F.confirm && F.confirm.session === s.id ? F.confirm : null, off = c || st.busy ? "disabled" : "";
+  const tone = st.ok ? "good" : st.typed ? "warn" : "bad";
+  const result = st.ok ? "Sent; the session took it."
+    : st.typed ? `Typed and submitted, but not confirmed on screen (${st.reason}). Check the terminal before sending again.`
+    : `Not sent: ${st.reason}.${st.fallback === "copy" ? " Use Copy and paste it yourself." : ""}`;
+  return `<div class="card chat"><div class="card-head"><h3>Send</h3><span class="aside">one line · sent only when the session is idle at an empty prompt</span></div>
+    <div class="card-body"><div class="chat-row">${pick}<input id="chat-input" class="search grow" maxlength="2000" autocomplete="off"
+        placeholder="Message to ${esc(s.name)}" value="${esc(F.draft[s.id] || "")}" ${off}>
+      <button class="chip" data-chat="ask" ${off}>${icon("send")}Send</button>
+      <button class="chip" data-chat="copy" title="Copy, then paste into the terminal yourself">${icon("copy")}Copy</button></div>
+      ${c ? `<div class="confirm tone-warn">${icon("alert")}<span class="grow">Type <b>${esc(c.text)}</b> into <b>${esc(s.name)}</b> and press Enter?</span>
+        <button class="chip" data-chat="send">Confirm</button><button class="chip" data-chat="cancel">Cancel</button></div>` : ""}
+      ${st.busy ? '<div class="muted">Checking the screen and sending…</div>' : "reason" in st || st.ok ? `<div class="toned tone-${tone}">${esc(result)}</div>` : ""}</div></div>`;
+}
+
+async function chatAction(act) {
+  const s = byId(S.state || {})[F.sessionId];
+  if (!s) return;
+  const text = (F.draft[s.id] || "").trim(), handle = $("#chat-handle")?.value || agentTerms(s)[0]?.handle;
+  if (act === "copy") { try { await navigator.clipboard.writeText(text); } catch (err) { /* blocked: the text is in the box */ } return; }
+  if (act === "cancel") { F.confirm = null; renderView(); return; }
+  if (act === "ask") { if (text) { F.confirm = { session: s.id, text, handle }; F.chat[s.id] = { handle }; renderView(); } return; }
+  if (act !== "send" || !F.confirm) return;
+  const c = F.confirm;
+  F.confirm = null; F.chat[s.id] = { handle: c.handle, busy: true }; renderView();
+  let out;
+  try { out = await fleetPost("/api/fleet/send", { session: c.session, handle: c.handle, text: c.text }); } catch (err) { out = { ok: false, reason: String(err.message || err), fallback: "copy" }; }
+  F.chat[s.id] = { handle: c.handle, ...out };
+  if (out.typed) F.draft[s.id] = "";
+  renderView();
+}
+
 const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
+document.addEventListener("input", (e) => { if (e.target.id === "chat-input" && F.sessionId) F.draft[F.sessionId] = e.target.value.replace(/[\r\n]+/g, " "); });
+document.addEventListener("keydown", (e) => { if (e.target.id === "chat-input" && e.key === "Enter" && !e.isComposing) { e.preventDefault(); chatAction("ask"); } });
 document.addEventListener("click", async (e) => {
+  const chat = e.target.closest("[data-chat]");
+  if (chat) { chatAction(chat.dataset.chat); return; }
   const t = e.target.closest("[data-ftype],[data-copy],[data-dismiss]");
   if (!t) return;
   if (t.dataset.ftype) { F.type = t.dataset.ftype; renderView(); return; }

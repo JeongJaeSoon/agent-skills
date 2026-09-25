@@ -356,12 +356,14 @@ def build(root, now=None):
     write_program(root, *a)
     write_program(root, *b)
     projects = _transcripts(root, now, a[4]["workers"] + b[4]["workers"])
-    return {"PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "DASH_DEMO_FIXTURES": str(root / "fixtures"),
+    # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
+    return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
+            "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
 
 
-def live(root, period=20):
+def live(root, period=20, world=None):
     """Append a few plausible events so the page visibly updates without a reload."""
     ledger = pathlib.Path(root) / "programs" / "launchpad-ga" / "ledger.jsonl"
     notes = pathlib.Path(root) / "programs" / "launchpad-ga" / "dashboard" / "notes.jsonl"
@@ -380,3 +382,108 @@ def live(root, period=20):
         with path.open("a") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(f"[demo] appended {row.get('ev') or row.get('kind')}", file=sys.stderr, flush=True)
+    if world:
+        world.advance()
+
+
+# ---------------------------------------------------------------- fleet: a fake machine for the fleet views
+
+class FakeFleetWorld:
+    """Orca and GitHub answers for fleet.Fleet, all invented. advance() moves the world one step so tests and the
+    live demo see PR events: a push that makes an approval stale, and CI recovering."""
+
+    ME = "you-dev"
+
+    def __init__(self, now):
+        self.now, self.step = now, 0
+        ms = lambda h: int((now - dt.timedelta(hours=h)).timestamp() * 1000)
+        agent = lambda pane, state, h, **kw: {"paneKey": pane, "state": state, "agentType": "claude", "stateStartedAt": ms(h),
+                                              "updatedAt": ms(h / 2), **kw}
+        wt = lambda wid, name, repo, branch, h, agents=(), **kw: {
+            "worktreeId": wid, "displayName": name, "path": f"/work/{wid}", "repo": repo.split("/")[1], "branch": f"refs/heads/{branch}",
+            "status": "active", "unread": False, "lastActivityAt": ms(h), "parentWorktreeId": None, "agents": list(agents), **kw}
+        self.worktrees = [
+            wt("wt-coord", "coordinator", "acme/platform", "coordinator", 0.05,
+               [agent("p-coord", "working", 0.3, toolName="Bash", toolInput="orca orchestration check --wait", prompt="Run the launchpad program.")]),
+            wt("wt-login", "ACME-101 login flow", "acme/launchpad", "feat/login", 0.2,
+               [agent("p-login", "done", 0.2, prompt="Implement ACME-101.", lastAssistantMessage="Implemented the login flow and opened #41.")]),
+            wt("wt-export", "ACME-102 billing export", "acme/launchpad", "feat/export", 0.1,
+               [agent("p-export", "working", 0.1, toolName="Edit", toolInput="src/export.ts", prompt="Implement ACME-102.")]),
+            wt("wt-docs", "ACME-103 docs", "acme/launchpad", "docs/setup", 0.5,
+               [agent("p-docs", "waiting", 0.5, toolName="Bash", toolInput="npm publish --dry-run", prompt="Write the setup guide.")]),
+            wt("wt-scratch", "scratch", "acme/tools", "scratch", 1.5,
+               [agent("p-scratch", "done", 1.5, prompt="Check the release script.",
+                      lastAssistantMessage="The release script needs GitHub access.\nLogin required: run `gh auth login` in a terminal, then tell me.")]),
+            wt("wt-old", "old-spike", "acme/tools", "spike/cache", 30),
+        ]
+        term = lambda h, wid, title, agent=True: {"handle": h, "worktreeId": wid, "title": title, "agentIdentity": "claude" if agent else None,
+                                                  "writable": True, "connected": True, "lastOutputAt": ms(0.1)}
+        self.terminals = [term("term_coord", "wt-coord", "◐ coordinator"), term("term_login", "wt-login", "✳ ACME-101"),
+                          term("term_export", "wt-export", "◑ ACME-102"), term("term_docs", "wt-docs", "✳ ACME-103"),
+                          term("term_scratch", "wt-scratch", "✳ scratch"), term("term_shell", "wt-scratch", "zsh", agent=False)]
+        self.messages = [{"id": "m1", "type": "question", "from_handle": "term_export", "to_handle": "term_coord", "read": False,
+                          "subject": "CSV or JSON for the export?", "body": "The ticket does not say which format finance needs.",
+                          "created_at": _iso(now - dt.timedelta(minutes=12))}]
+        self.runs = {"runs": [{"id": "run_demo", "coordinator_handle": "term_coord", "updated_at": _iso(now)}],
+                     "workers": [{"resource": {"worktreeId": w}, "runId": "run_demo", "dispatchId": f"ctx_{w[3:]}", "taskId": f"task_{w[3:]}",
+                                  "dispatchStatus": "pending", "agentTerminalHandle": f"term_{w[3:]}"} for w in ("wt-login", "wt-export", "wt-docs")],
+                     "tasks": [{"id": f"task_{w}", "display_name": t, "status": "dispatched"} for w, t in
+                               (("login", "ACME-101 login flow"), ("export", "ACME-102 billing export"), ("docs", "ACME-103 docs"))],
+                     "gates": [{"id": "g1", "status": "pending", "question": "Land #41 before #42?", "options": ["yes", "no"],
+                                "created_at": _iso(now - dt.timedelta(minutes=30))}]}
+        user = lambda login: {"__typename": "User", "login": login, "avatarUrl": None}
+        review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _iso(now - dt.timedelta(hours=h)),
+                                                           "author": user(login), "commit": {"oid": oid}}
+        roll = lambda st: {"nodes": [{"commit": {"statusCheckRollup": {"state": st}}}]}
+        base = lambda n, title, head, h, ci: {"number": n, "state": "OPEN", "isDraft": False, "updatedAt": _iso(now - dt.timedelta(hours=h)),
+                                              "headRefOid": head, "url": f"https://github.com/acme/launchpad/pull/{n}", "title": title,
+                                              "commits": roll(ci), "author": user(self.ME), "reviewRequests": {"nodes": []},
+                                              "latestOpinionatedReviews": {"nodes": []}, "reviews": {"nodes": []},
+                                              "reviewThreads": {"totalCount": 0, "nodes": []}}
+        p41 = base(41, "feat: login flow", "h41a", 0.4, "SUCCESS")
+        p41.update(reviewDecision="APPROVED", latestOpinionatedReviews={"nodes": [review("r1", "rev-alice", "APPROVED", 0.4)]},
+                   reviews={"nodes": [review("r1", "rev-alice", "APPROVED", 0.4)]})
+        p42 = base(42, "feat: billing export", "h42a", 0.3, "FAILURE")
+        p42.update(reviewDecision="CHANGES_REQUESTED",
+                   latestOpinionatedReviews={"nodes": [review("r2", "rev-bob", "CHANGES_REQUESTED", 0.3, "h42a")]},
+                   reviews={"nodes": [review("r2", "rev-bob", "CHANGES_REQUESTED", 0.3, "h42a"),
+                                      review("r3", "lint-bot[bot]", "COMMENTED", 0.35, "h42a") | {"author": {"__typename": "Bot", "login": "lint-bot[bot]"}}]},
+                   reviewThreads={"totalCount": 1, "nodes": [{"id": "t1", "isResolved": False, "comments": {"nodes": [
+                       {"id": "c1", "createdAt": _iso(now - dt.timedelta(hours=0.3)), "url": "https://github.com/acme/launchpad/pull/42#c1",
+                        "author": user("rev-bob")}]}}]})
+        p43 = base(43, "docs: setup guide", "h43a", 3, "PENDING")
+        p43.update(isDraft=True, reviewRequests={"nodes": [{"requestedReviewer": user("rev-carol")},
+                                                            {"requestedReviewer": {"__typename": "Team", "slug": "docs"}}]})
+        self.prs = {41: p41, 42: p42, 43: p43}
+        self.branches = {"feat/login": 41, "feat/export": 42, "docs/setup": 43}
+
+    def advance(self):
+        """One step: #41 gets a new commit (its approval goes stale), #42's CI goes green."""
+        self.step += 1
+        later = _iso(self.now + dt.timedelta(minutes=5 * self.step))
+        self.prs[41].update(headRefOid=f"h41{self.step}", updatedAt=later)
+        self.prs[42].update(commits={"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}, updatedAt=later)
+
+    def fetch_fast(self):
+        return {"worktrees": self.worktrees, "terminals": self.terminals, "messages": self.messages}
+
+    def fetch_runs(self):
+        return self.runs
+
+    def graphql(self, query):
+        import re
+        data = {}
+        for alias, branch in re.findall(r'(b\d+): repository\([^)]*\)\{ref\(qualifiedName:"refs/heads/([^"]+)"', query):
+            n = self.branches.get(branch)
+            data[alias] = {"ref": {"associatedPullRequests": {"nodes": [{"number": n, "state": self.prs[n]["state"]}] if n else []}}}
+        for alias, n in re.findall(r"(p\d+): repository\([^)]*\)\{pullRequest\(number:(\d+)\)", query):
+            data[alias] = {"pullRequest": self.prs.get(int(n))}
+        return data, []
+
+    def fleet(self, clock=None):
+        """A fleet.Fleet wired to this world (ORCH_FLEET_STATE must already point at a scratch directory)."""
+        import fleet
+        f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow)
+        f.me = self.ME
+        f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
+        return f
