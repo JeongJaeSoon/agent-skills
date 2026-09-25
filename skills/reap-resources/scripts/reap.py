@@ -286,11 +286,14 @@ def judge_branches(repo, branches, checked_out, default, prs, is_ancestor):
 def branch_scan(repo, notes):
     wts = worktrees(repo)
     checked = {w["branch"].removeprefix("refs/heads/") for w in wts if isinstance(w.get("branch"), str)}
-    head = run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=repo, check=False)
-    default = head.strip().split("/", 1)[-1] if head else "main"
     branches = dict(l.split("\t") for l in run(["git", "for-each-ref", "--format=%(refname:short)\t%(objectname)", "refs/heads"], cwd=repo).splitlines())
     if len(branches) <= 1:
         return []
+    head = run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=repo, check=False)
+    if not head:
+        notes.append(f"branch: {repo} 의 기본 브랜치를 모름(origin/HEAD 없음), 건너뜀. `git remote set-head origin -a` 로 정한다")
+        return []
+    default = head.strip().split("/", 1)[-1]
     prs = run(["gh", "pr", "list", "--state", "all", "--limit", "1000", "--json",
                "number,state,headRefName,headRefOid,isCrossRepository"], cwd=repo, check=False)
     if prs is None:
@@ -306,19 +309,33 @@ def orca_paths():
     """Paths of Orca-managed worktrees (their lifecycle is `orca worktree rm`); None when Orca is there but unreadable."""
     if not shutil.which("orca"):
         return set()
-    out = run(["orca", "worktree", "list", "--json"], check=False)
+    out = run(["orca", "worktree", "list", "--limit", "10000", "--json"], check=False)
     try:
-        return {w["path"] for w in json.loads(out)["result"]["worktrees"]}
+        res = json.loads(out)["result"]
+        return None if res.get("truncated") else {w["path"] for w in res["worktrees"]}
     except (TypeError, ValueError, KeyError):
         return None
 
 
+TEMP_ROOTS = tuple({real(p) for p in ("/tmp", "/private/tmp", "/var/folders", os.environ.get("TMPDIR", "/tmp"))})
+
+
+def identity(w):
+    """HEAD plus the inode of the checkout's .git file, so a checkout recreated at the same path is another one."""
+    try:
+        return f"{w.get('HEAD')}:{os.stat(os.path.join(w['path'], '.git')).st_ino}"
+    except OSError:
+        return w.get("HEAD")
+
+
 def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, orca=frozenset(), git=run):
     path = w["path"]
-    # HEAD is the identity reap re-checks, so a new checkout at the same path is not the planned one.
-    base = {"kind": "worktree", "key": f"worktree:{repo}:{path}", "repo": repo, "name": path, "tip": w.get("HEAD")}
+    base = {"kind": "worktree", "key": f"worktree:{repo}:{path}", "repo": repo, "name": path, "tip": identity(w)}
     m = SCRATCH.search(path + "/")
     if w.get("prunable"):
+        # Only a checkout that lived in a temp dir: one elsewhere may be Orca's, and Orca removes its own.
+        if not any(under(real(os.path.dirname(path)), t) for t in TEMP_ROOTS):
+            return None
         if orca is None:
             return {**base, "why": "Orca 목록을 읽지 못함", "target": False}
         if path in orca:

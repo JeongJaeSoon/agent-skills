@@ -115,11 +115,14 @@ with tempfile.TemporaryDirectory() as tmp:
     # A checkout on a branch may back an open PR: reported only.
     assert reap.judge_worktree(str(repo), {**w, "branch": "refs/heads/x"}, 6, {}, old, projects)["why"].startswith("브랜치 x")
     item = reap.judge_worktree(str(repo), w, 6, {}, old, projects)
-    assert item["target"] and item["tip"] == w["HEAD"], item
+    assert item["target"] and item["tip"].startswith(w["HEAD"] + ":"), item
     reap.act(item, [])
     assert not wt.exists() and len(reap.worktrees(str(repo))) == 1
-    # A merged branch is deleted with its restore command; a branch that moved after the scan stays.
+    # Without origin/HEAD the default branch is unknown, so no branch is judged.
     git("branch", "feat", cwd=repo)
+    notes = []
+    assert reap.branch_scan(str(repo), notes) == [] and "기본 브랜치" in notes[0], notes
+    # A merged branch is deleted with its restore command; a branch that moved after the scan stays.
     tip = subprocess.run(["git", "rev-parse", "feat"], cwd=repo, capture_output=True, text=True).stdout.strip()
     pr = [{"number": 9, "state": "MERGED", "headRefName": "feat", "headRefOid": tip}]
     [item] = reap.judge_branches(str(repo), {"feat": tip}, set(), "main", pr, lambda a, b: False)
@@ -132,6 +135,8 @@ with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["rm", "-rf", str(tmp / name)], check=True)
     gone = [reap.judge_worktree(str(repo), w, 6, {}, old, projects) for w in reap.worktrees(str(repo))[1:]]
     assert all(g["target"] for g in gone) and len(gone) == 2
+    # A vanished checkout outside a temp dir may be Orca's; not this skill's.
+    assert reap.judge_worktree(str(repo), {"path": "/Users/nobody/wt", "prunable": "gone"}, 6, {}, old, projects) is None
     # An Orca worktree is the steward's (orca worktree rm); unreadable Orca state keeps them all.
     w1 = reap.worktrees(str(repo))[1]
     assert reap.judge_worktree(str(repo), w1, 6, {}, old, projects, orca={w1["path"]}) is None
