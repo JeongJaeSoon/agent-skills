@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 27개, 별칭 3개, 명령 2개(`orch`, `orch-dash`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 27개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 2개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -88,8 +88,11 @@
 ## 프로젝트 하나 (Orca 워커 여러 개)
 
 ### orchestrate
-- **언제:** 한 세션이 Orca 워커 여러 개(대개 3개 이상)로 마일스톤을 끝까지 끌고 갈 때, "대시보드 갱신해줘", "전체 진행상황 몇 퍼센트", 다른 코디네이터가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
+- **언제:** 사용자가 말을 거는 최상위 orchestrator 세션일 때("오케스트레이터로", "모든 세션 관리해줘", "전체 태스크 현황"), 또는 한 세션이 Orca 워커 여러 개(대개 3개 이상)로 마일스톤을 끝까지 끌고 갈 때, "대시보드 갱신해줘", "전체 진행상황 몇 퍼센트", 다른 코디네이터가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
 - **내용:** 코디네이터는 코드가 아니라 프로그램을 소유한다. 매 세션 `orca skills get orchestration`부터 읽는다.
+  - **즉답 원칙(Stay answerable):** 턴 안에서는 라우팅, 몇 초짜리 확인, 사용자 응답만 한다. 조사·구현·검증·긴 대기·모니터링은 받자마자 백그라운드 서브에이전트나 Orca 워커에 넘기고, 포그라운드 루프·`sleep`·백그라운드 아닌 `check --wait`는 쓰지 않는다. 완료는 알림으로 받는다.
+  - **top-level 모드** (`references/top-level.md`): 단독 태스크 세션과 프로젝트 코디네이터 위에 서는 세션. 요청 라우팅 표, 사용자가 연 세션은 읽기만, 워커 기동 확인은 `--screen`으로 백그라운드에서(신뢰 창은 방금 띄운 워커에 한해 ↓ 확인 후 Enter, 막히면 인박스), 끝난 dispatch에는 `run:`으로, 본문은 파일로, AskUserQuestion 대신 대시보드 인박스(`orch-dash inbox add`), 필터 없는 백그라운드 `check --wait` 하나로 알림 끼어듦 막기, PR 리뷰 이벤트(`pr-events.jsonl`)에 대한 반응, 스킬이 바뀌면 `skills-sync broadcast`.
+  - 아래 1~8은 **program 모드**다.
   1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. Run을 만들고 `orch init`으로 등록한다.
   2. **검증 준비와 Pilot:** verify 스킬이 없으면 첫 digest에서 사용자에게 `/create-verification-skill` 실행을 요청하고, 그동안은 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
   3. **Scale:** 상시 역할(main 가디언, QA 리드)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
@@ -111,6 +114,7 @@
     - `roles.md`: 가디언, QA 리드, flow improver.
     - `program-note.md`: 프로그램 노트 템플릿.
     - `dashboard.md`: 대시보드 설명.
+    - `top-level.md`: 최상위 orchestrator 모드.
   - `scripts/`
     - `prog.py`: `orch` 본체.
     - `dash.py`: `orch-dash` 본체.
@@ -245,7 +249,7 @@
 
 ### principles
 - **언제:** 설계, 리팩터, 검증, 위임 판단에 이름 붙은 원칙이 필요할 때.
-- **내용:** 원칙 23개의 인덱스다(Core, Architecture, Verification, Delegation, Meta). 적용할 원칙은 leaf 파일을 끝까지 읽는다. 예: 근본 원인 수정, 동작을 테스트, 빼고 나서 더하기, 사람을 기다리지 않기.
+- **내용:** 원칙 23개의 인덱스다(Core, Architecture, Verification, Delegation, Meta). Delegation에는 이 저장소가 더한 한 줄 Stay Answerable(`orchestrate`의 즉답 원칙)이 있다. 적용할 원칙은 leaf 파일을 끝까지 읽는다. 예: 근본 원인 수정, 동작을 테스트, 빼고 나서 더하기, 사람을 기다리지 않기.
 - **동봉:** `references/principle-*.md` 23개.
 
 ### recall
@@ -357,6 +361,14 @@
   - 표는 열 머리를 눌러 정렬한다. 두 번째는 역순, 세 번째는 원래 순서이고, 브라우저가 선택을 기억한다.
 - **부하:** 브라우저는 5초마다 묻지만 바뀐 게 없으면 304로 본문 없이 끝나고, 탭이 숨겨져 있으면 묻지 않는다. 서버는 원장 3초, Orca 20초, 트래커·GitHub 60초 주기로 모으며, 끝난 프로그램(최종 확인 기록이 유효)은 원장만 본다.
 - **명령:** `collect`, `serve`, `ensure`, `note`(위험·결정 한 줄), `demo`. 환경 변수는 `ORCH_DASH_PORT`, `ORCH_DASH=off`다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`에 있다.
+
+### `skills-sync` (동기화와 reload 브로드캐스트)
+- **하는 일:** 세션들이 직접 읽는 메인 체크아웃을 origin/main과 맞추고, 바뀐 것이 있으면 떠 있는 Claude 세션에 reload를 보낸다. 운영 방식 전체는 `docs/platform.md`.
+- **명령:**
+  - `sync`: fetch → ff-only pull 또는 서명 커밋 push. main이 아님, 커밋 안 한 변경, 갈라짐, 서명 없는 커밋, credential helper 없음이면 아무것도 바꾸지 않고 멈춘 뒤 macOS 알림과 `~/.local/state/agent-skills/sync.json`에 남긴다. launchd가 15분마다와 로그인 때 돌린다.
+  - `broadcast [--skills|--plugins] [--dry-run]`: `SKILL.md`가 바뀌었으면 `/reload-skills`, hooks·플러그인 manifest가 바뀌었으면 `/reload-plugins`를 보낸다. 빈 입력칸, 스피너 없음, 권한·신뢰·질문 창 없음, 1.5초 간격 두 번 읽은 화면이 같음을 모두 확인한 세션에만 보내고, 나머지는 `reload-pending.json`에 남겨 다음에 다시 시도한다.
+  - `nudge <terminal> <한 줄>`: 같은 확인을 통과한 세션에만 한 줄을 보내고 턴이 시작됐는지 본다.
+  - `status`: 마지막 동기화 결과와 남은 reload.
 
 ## 설정 파일
 

@@ -40,6 +40,7 @@ Each principle lives in its own file under `references/`. Read the leaf file in 
 
 - **Guard the Context Window** (`references/principle-guard-the-context-window.md`). Large outputs, long files, repeated reads, fan-out planning.
 - **Never Block on the Human** (`references/principle-never-block-on-the-human.md`). Tempted to ask "should I do X?" on reversible work; irreversible actions still need confirmation.
+- **Stay Answerable** (`../orchestrate/SKILL.md`, "Stay answerable"). You are the session the human talks to: route and answer; every piece of work runs in a background subagent or another session.
 
 **Meta**
 

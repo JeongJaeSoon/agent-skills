@@ -5,7 +5,7 @@ and the permission hook itself.
 
 Usage:
   python3 scripts/migrate.py            # dry run: print what would change
-  python3 scripts/migrate.py --write    # apply, then add the marketplace and install the plugin
+  python3 scripts/migrate.py --write    # apply, then run scripts/bootstrap.py --write
 
 Run it when no program started under the old install is still running: its workers call the
 ~/.claude/skills paths that this removes. Only what install.py added is touched; deny and ask
@@ -16,10 +16,8 @@ import json, os, pathlib, shutil, subprocess, sys, time
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SKILLS = pathlib.Path(os.environ.get("CLAUDE_SKILLS_DIR", "~/.claude/skills")).expanduser()
 SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS", "~/.claude/settings.json")).expanduser()
-# The marketplace is this checkout, not GitHub: `claude plugin update` then installs whatever it has committed,
-# with no push. Run this from the checkout that should be the installed version (the main one, not a worktree).
-PLUGIN_CMDS = [["claude", "plugin", "marketplace", "add", str(REPO)],
-               ["claude", "plugin", "install", "agent-skills@jeongjaesoon"]]
+# bootstrap.py then points Claude Code at this checkout and installs the sync job (docs/platform.md).
+PLUGIN_CMDS = [[sys.executable, str(REPO / "scripts" / "bootstrap.py"), "--write"]]
 
 
 def old_rule(rule):
@@ -64,10 +62,10 @@ def main():
         SETTINGS.write_text(json.dumps(new, indent=2, ensure_ascii=False) + "\n")
         print(f"settings written; backup at {backup}")
     failed = 0
-    for cmd in PLUGIN_CMDS:  # each runs even if the one before failed: the marketplace may already be added
+    for cmd in PLUGIN_CMDS:
         print("$ " + " ".join(cmd), flush=True)
         failed |= subprocess.run(cmd).returncode
-    print("failed: see the output above" if failed else "done: in each running session, /reload-skills (drops the unlinked skills) then /reload-plugins")
+    print("failed: see the output above" if failed else "done: restart running sessions to load the checkout")
     return 1 if failed else 0
 
 
