@@ -221,7 +221,7 @@ async function decideAction(key, action) {
 }
 
 function itemList(st, items, opts) {
-  const pinned = items.filter((i) => inProject(i.project)).sort((a, b) => b.missed - a.missed);
+  const pinned = items.filter((i) => inProject(i.project)).sort((a, b) => b.missed - a.missed).slice(0, opts?.limit);
   return `<ul class="rows items">${pinned.map((it) => itemRow(st, it, opts)).join("") || `<li class="empty">${icon("check")}Nothing waiting on you.</li>`}</ul>`;
 }
 
@@ -310,7 +310,7 @@ function fleetOverview(st) {
     </div>
     ${projectChips(st)}
     <div class="grid">
-      <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items.filter((i) => inProject(i.project)).slice(0, 8))}</div>
+      <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items, { limit: 8 })}</div>
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
       <div class="card wide" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside"><a class="go" href="#/fleet/graph">All ${icon("arrow")}</a></span></div>${relGraph(st, null, true)}</div>
       <div class="card wide"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>

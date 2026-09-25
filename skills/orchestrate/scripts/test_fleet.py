@@ -465,6 +465,15 @@ process.stdout.write(JSON.stringify(out));"""
     assert "/api/fleet/avatar/lint-bot%5Bbot%5D" in got["bot"], got["bot"]
     assert "<image" not in got["again"], got["again"]
 
+    # The overview card keeps 8 rows, and missed items are picked first even when they come last.
+    rows = [{"key": f"k{n}", "type": "reload_pending", "session": "wt-coord", "title": f"row{n}", "missed": n >= 15} for n in range(17)]
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+process.stdout.write(itemList({{sessions: []}}, {json.dumps(rows)}, {{limit: 8}}));"""
+    card = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
+    assert card.count("<li class=\"item") == 8 and __import__("re").findall(r">row(\d+)<", card)[:3] == ["15", "16", "0"], card
+
     # A page open across a restart onto new code reloads once: not on the version it first saw, not twice for one version.
     js = "\n".join(take(n) for n in ("LS", "store", "S", "versionChanged")) + """
 const out = [versionChanged(null), versionChanged("a"), versionChanged("a"), versionChanged("b"), versionChanged("b"), versionChanged("c")];
