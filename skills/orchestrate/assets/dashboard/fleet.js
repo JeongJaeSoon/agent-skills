@@ -48,7 +48,7 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, open: {} };
+const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {} };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 function fleetSection(section, arg) {
@@ -140,19 +140,16 @@ function projectChips(st) {
   return `<div class="chips proj-chips" role="group" aria-label="Project">${chip("all", "All projects")}${names.map((x) => chip(x, x, n[x])).join("")}</div>`;
 }
 
-// What a click on the row opens: a decision's body and options (the Details chip's view), else the full detail text.
-const hasDetails = (it) => it.type === "decision" ? !!(it.body || (it.options || []).length) : String(it.detail || "").trim().includes("\n");
-
 function itemRow(st, it, { showSession = true } = {}) {
   const [label, tone, ic] = itemMeta(it.type), s = byId(st)[it.session];
-  const copy = it.command || it.url || "", more = hasDetails(it), open = more && F.open[it.key];
+  const copy = it.command || it.url || "";
   // Outside its own session page a row opens that session; an item with no live session has nowhere to go.
   const go = showSession && s ? `data-go="${sessionHref(s.id)}"` : "";
   return `<li class="item ${it.missed ? "is-missed" : ""}" ${go}><span class="ic tone-${tone}">${icon(ic)}</span>
-    <div class="grow" ${more ? `data-open="${esc(it.key)}"` : ""}><div class="ellipsis" ${more ? `role="button" tabindex="0" aria-expanded="${!!open}" data-open-key="${esc(it.key)}"` : ""}><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
+    <div class="grow"><div class="ellipsis"><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
       <div class="sub muted ellipsis">${projBadge(it.project)}${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}
       ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
-      ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : open ? `<div class="pre">${decisionBody(it.detail)}</div>` : ""}</div>
+      ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : ""}</div>
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
       <span class="slot">${safeUrl(it.url) ? link(it.url, icon("link"), "icon-btn") : ""}</span>
       <span class="slot">${copy ? `<button class="icon-btn" data-copy="${esc(copy)}" title="Copy">${icon("copy")}</button>` : ""}</span>
@@ -190,26 +187,19 @@ async function promptAction(key, action) {
   renderView();
 }
 
-// A decision body is plain text: escaped, line breaks kept by .pre, and http(s) URLs made links.
-function decisionBody(text) {
-  return String(text || "").split(/(https?:\/\/[^\s<>"'`)\]]*[^\s<>"'`)\].,;:!?])/).map((part, i) => (i % 2 ? link(part, esc(part)) : esc(part))).join("");
-}
-
 // A decision registered with `orch decide`: each option, or a typed answer, answers it on a second click. The server
 // records the answer and closes the decision first, then types "decision <id>: <answer>" into the coordinator's terminal
 // now if it is idle, or on a later collect once it is: a busy coordinator never makes the answer fail.
 function decisionActs(st, it) {
   const r = F.decide[it.key], armed = F.arm && F.arm.key === it.key ? F.arm.action : "", off = r && r.busy ? "disabled" : "";
-  const opts = it.options || [], open = F.open[it.key];
+  const opts = it.options || [];
   const chip = (action, label, extra = "") => `<button class="chip ${armed === action ? "armed tone-warn" : ""}" data-decide="${action}" data-key="${esc(it.key)}" ${extra} ${off}>${label}</button>`;
   const buttons = opts.map((o, i) => chip(`opt:${i}`, `${it.recommend === i + 1 ? icon("check") : ""}${armed === `opt:${i}` ? "Confirm " : ""}${esc(o.label)}`,
     `title="${esc(o.description || o.label)}${it.recommend === i + 1 ? " (recommended)" : ""}"`)).join("");
-  const notes = opts.map((o, i) => `<li><b>${esc(o.label)}</b>${it.recommend === i + 1 ? ' <span class="muted">recommended</span>' : ""}${o.description ? ` · ${esc(o.description)}` : ""}</li>`).join("");
   const line = armed ? `decision ${it.decision}: ${armed === "text" ? (F.draft[it.key] || "").trim() : (opts[+armed.slice(4)] || {}).label}` : "";
   const msg = !r || r.busy ? "" : !r.ok ? `Not recorded: ${r.reason}.`
     : r.delivered ? "Recorded and sent to the coordinator." : "Recorded; will relay to the coordinator when it is idle.";
-  return `<div class="decision"><div class="prompt-acts">${buttons}${it.body || notes ? chip("toggle", open ? "Hide" : "Details") : ""}</div>
-    ${open ? `${it.body ? `<div class="pre">${decisionBody(it.body)}</div>` : ""}${notes ? `<ol class="opts">${notes}</ol>` : ""}` : ""}
+  return `<div class="decision">${buttons ? `<div class="prompt-acts">${buttons}</div>` : ""}
     <div class="prompt-acts"><input id="decide-${esc(it.decision)}" data-decide-input="${esc(it.key)}" class="search" maxlength="1900" autocomplete="off"
         placeholder="Or type an answer" value="${esc(F.draft[it.key] || "")}" ${off}>${chip("text", `${icon("send")}${armed === "text" ? "Confirm send" : "Send"}`)}
       ${r && r.busy ? '<span class="muted">Recording…</span>' : line ? `<span class="muted ellipsis">answers <span class="mono">${esc(line)}</span></span>`
@@ -219,7 +209,6 @@ function decisionActs(st, it) {
 async function decideAction(key, action) {
   const st = S.state || {}, it = (st.items || []).find((i) => i.key === key);
   if (!it) return;
-  if (action === "toggle") { F.open[key] = !F.open[key]; renderView(); return; }
   const answer = action === "text" ? (F.draft[key] || "").trim() : ((it.options || [])[+action.slice(4)] || {}).label;
   if (!answer || !confirmed(key, action)) return;
   const line = `decision ${it.decision}: ${answer}`;
@@ -427,14 +416,7 @@ document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
   if (key) F.draft[key] = e.target.value.replace(/[\r\n]+/g, " ");
 });
-function toggleOpen(key, refocus) {
-  F.open[key] = !F.open[key];
-  renderView();
-  if (refocus) document.querySelector(`[data-open-key="${CSS.escape(key)}"]`)?.focus();  // the row was redrawn
-}
-
 document.addEventListener("keydown", (e) => {
-  if ((e.key === "Enter" || e.key === " ") && e.target.dataset.openKey) { e.preventDefault(); toggleOpen(e.target.dataset.openKey, true); return; }
   if (e.key !== "Enter" || e.isComposing) return;
   if (e.target.id === "chat-input") { e.preventDefault(); chatAction("ask"); } else if (e.target.dataset.decideInput) { e.preventDefault(); decideAction(e.target.dataset.decideInput, "text"); }
 });
@@ -445,12 +427,9 @@ document.addEventListener("click", async (e) => {
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const decide = e.target.closest("[data-decide]");
   if (decide) { decideAction(decide.dataset.key, decide.dataset.decide); return; }
-  // A click on the row opens its session, else its details; its own controls, links, the open text and a text selection keep theirs.
-  const keep = e.target.closest("a,button,input,textarea,select,.pre,.opts") || String(getSelection());
+  // A click on the row opens its session; its own controls, links and a text selection keep theirs.
   const go = e.target.closest("[data-go]");
-  if (go && !keep) { location.hash = go.dataset.go; return; }
-  const row = e.target.closest("[data-open]");
-  if (row && !keep) { toggleOpen(row.dataset.open); return; }
+  if (go && !e.target.closest("a,button,input,textarea,select") && !String(getSelection())) { location.hash = go.dataset.go; return; }
   const t = e.target.closest("[data-copy],[data-dismiss]");
   if (!t) return;
   if (t.dataset.copy != null) {

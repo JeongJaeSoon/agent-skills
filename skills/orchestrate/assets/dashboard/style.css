@@ -354,9 +354,8 @@ td.when { white-space: nowrap; }
 /* Each line is one 20px band; a mono run's taller metrics would otherwise stretch its line. */
 .rows.items .grow > .ellipsis { height: 20px; }
 .rows.items .sub { font-size: var(--t-sm); }
-.rows.items [data-open], .rows.items li[data-go] { cursor: pointer; }
-.rows.items [data-open] .pre, .rows.items [data-open] .opts, .rows.items [data-open] input { cursor: auto; }
-.rows.items .grow > .pre { margin-top: var(--s2); }
+.rows.items li[data-go] { cursor: pointer; }
+.rows.items li[data-go] input { cursor: auto; }
 .rows.items li.is-missed { box-shadow: inset 2px 0 0 var(--bad); }
 /* Trailing columns have fixed widths and hang off the right edge, so time and buttons line up down a list
    whatever each row carries; a missing button leaves its slot empty. */
@@ -369,10 +368,8 @@ td.when { white-space: nowrap; }
 .prompt-acts { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s2); min-height: 28px; font-size: var(--t-sm); }
 .prompt-acts .chip:disabled { opacity: 0.5; cursor: default; }
 .prompt-acts .chip.armed { color: var(--ink); background: var(--tone-wash); border-color: var(--tone); }
-/* A decision: option chips, then its body and option notes when opened, then the answer box, each 8px apart. */
+/* A decision: option chips, then the answer box, 8px apart. */
 .decision .prompt-acts { flex-wrap: wrap; }
-.decision .pre, .decision .opts { margin-top: var(--s2); }
-.decision .opts { margin-bottom: 0; padding-left: var(--s5); display: grid; gap: var(--s1); font-size: var(--t-sm); color: var(--ink-2); }
 .decision .search { flex: 1; min-width: 160px; }
 .decision .search:disabled { opacity: 0.5; cursor: default; }
 .rows.agents > li { display: grid; gap: var(--s2); }

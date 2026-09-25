@@ -383,7 +383,6 @@ if shutil.which("node"):
     flat = {"key": "msg:t2", "type": "approval", "session": "wt-coord", "title": "Merge?", "detail": "one line", "at": ago(0.1)}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
-F.open["decision:d1"] = true; F.open["msg:t1"] = true;
 const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}};
 process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(flat)}].map((it) => itemRow(st, it)).join("\\n-----\\n"));"""
     html, turn_html, flat_html = subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
@@ -391,17 +390,15 @@ process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(fla
                           input=js, capture_output=True, text=True, check=True).stdout.split("\n-----\n")
     for raw in ("<script", "<img", "<i>", "<b>x", 'href="javascript', "\"quoted\"", "<u>", 'p"q'):
         assert raw not in html, (raw, html)
-    assert "&lt;img src=x onerror=alert(1)&gt;" in html and "&lt;i&gt;CSV&lt;/i&gt;" in html
-    assert 'href="https://example.com/a?b=1&amp;c=2"' in html, "a URL becomes a link, the trailing dot stays text"
+    assert "&lt;i&gt;CSV&lt;/i&gt;" in html
     assert html.count('data-decide="opt:') == 2 and 'data-decide="text"' in html and 'id="decide-d1"' in html
-    # A click (or Enter/Space on the title) on a row with more to show opens the Details view; one line has none.
     assert 'data-group="fleet_project" data-val="&lt;u&gt;p&quot;q&lt;/u&gt;"' in html, "the project badge filters, escaped"
-    assert 'data-open="decision:d1"' in html and 'role="button" tabindex="0" aria-expanded="true" data-open-key="decision:d1"' in html
-    assert 'data-open-key="msg:t1"' in turn_html and '<div class="pre">Done.\n&lt;b&gt;Shall I merge?&lt;/b&gt;</div>' in turn_html, turn_html
-    assert "data-open" not in flat_html and 'class="pre"' not in flat_html
+    # Nothing expands in place: no Details chip, no opened body, however many lines the detail has.
+    for row in (html, turn_html, flat_html):
+        assert "Details" not in row and "data-open" not in row and 'class="pre"' not in row and "aria-expanded" not in row, row
 
     # Outside its own session page a row opens that session: with no live session, or on that page, it stays put.
-    assert 'data-go="#/fleet/session/wt-coord"' in html and 'data-go="#/fleet/session/wt-coord"' in flat_html
+    assert all('data-go="#/fleet/session/wt-coord"' in row for row in (html, turn_html, flat_html))
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}};
@@ -411,9 +408,9 @@ const matches = (el, sel) => sel.split(",").some((one) => one[0] === "[" ? one.s
   : one[0] === "." ? el.cls.includes(one.slice(1)) : el.tag === one);
 const node = (tag, dataset = {{}}, parent = null, cls = []) => ({{tag, dataset, parent, cls,
   closest(sel) {{ for (let n = this; n; n = n.parent) if (matches(n, sel)) return n; return null; }}}});
-const li = node("li", {{go: "#/fleet/session/wt-coord"}}), grow = node("div", {{open: "msg:t1"}}, li);
-const click = (target) => {{ location.hash = ""; F.open = {{}}; handlers.click({{target}}); return [location.hash, !!F.open["msg:t1"]]; }};
-out.clicks = {{row: click(node("span", {{}}, grow)), text: click(node("div", {{}}, grow, ["pre"])), link: click(node("a", {{}}, grow))}};
+const li = node("li", {{go: "#/fleet/session/wt-coord"}}), grow = node("div", {{}}, li);
+const click = (target) => {{ location.hash = ""; handlers.click({{target}}); return location.hash; }};
+out.clicks = {{row: click(node("span", {{}}, grow)), link: click(node("a", {{}}, grow)), button: click(node("button", {{copy: "x"}}, li))}};
 selection = "picked"; out.clicks.selecting = click(grow);
 process.stdout.write(JSON.stringify(out));"""
     ctx = ("const vm = require('vm'), handlers = {}, sb = {process, handlers, location: {hash: ''}, selection: '', CSS: {escape: String},"
@@ -421,8 +418,7 @@ process.stdout.write(JSON.stringify(out));"""
            "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), sb);")
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     assert not any("data-go" in got[k] for k in ("gone", "none", "own")), got
-    assert got["clicks"] == {"row": ["#/fleet/session/wt-coord", False], "text": ["", False], "link": ["", False],
-                             "selecting": ["", False]}, got["clicks"]
+    assert got["clicks"] == {"row": "#/fleet/session/wt-coord", "link": "", "button": "", "selecting": ""}, got["clicks"]
 else:
     print("test_fleet: node not found, rendering check skipped")
 
