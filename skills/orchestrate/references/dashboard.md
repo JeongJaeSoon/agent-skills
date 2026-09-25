@@ -60,7 +60,7 @@ The first screen (`#/fleet/overview`) is not a program. It is every Orca worktre
 
 A PR that has not changed costs one alias in one probe query; only a changed PR is read in full. Avatars are downloaded once per reviewer, only from `avatars.githubusercontent.com`, into the state directory; the page never loads an image from outside this server.
 
-The hierarchy comes from Orca's own records. The root is `root_worktree` from the config or, without one, the worktree whose terminal coordinates the newest Run. A Run's coordinator worktree is an orchestration. A dispatched worker's worktree is a task under its coordinator. Anything else is standalone, under the root. Nothing is written to Orca to build it (see adoption below).
+The hierarchy comes from Orca's own records. The root is `root_worktree` from the config or, without one, the worktree whose terminal coordinates the newest Run among those whose coordinator no other on-screen coordinator dispatched (a program coordinator started with `worker-start` opens a newer Run of its own, so the newest Run alone is not the top level). A Run's coordinator worktree is an orchestration, under the coordinator whose Run dispatched it, else under the root. A dispatched worker's worktree is a task under its coordinator. Coordinators that dispatched each other are cut loose onto the root, so the tree never loops. Anything else is standalone, under the root. Nothing is written to Orca to build it (see adoption below).
 
 ### Screens
 

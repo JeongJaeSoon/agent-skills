@@ -308,13 +308,19 @@ def build_sessions(fast, runs, cfg):
         if not prev or (live and not prev[1]):
             by_wt[wt] = (w, live)
 
+    def dispatcher(sid):
+        """The on-screen coordinator whose Run dispatched this worktree, if another session is."""
+        w = by_wt.get(sid, (None, False))[0]
+        up = w and coord_of_run.get(w.get("runId"))
+        return up if up in sessions and up != sid else None
+
     root = cfg.get("root_worktree") if cfg.get("root_worktree") in sessions else None
-    if not root:  # newest Run whose coordinator is on screen
-        for r in sorted(runs["runs"], key=lambda r: r.get("updated_at") or "", reverse=True):
-            if coord_of_run.get(r["id"]) in sessions:
-                root = coord_of_run[r["id"]]
-                break
-    root_runs = {rid for rid, wt in coord_of_run.items() if wt and wt == root}
+    if not root:
+        # A program coordinator started with worker-start opens a newer Run of its own, so the newest Run is not
+        # necessarily the top level: take the newest coordinator no other coordinator dispatched.
+        coords = [coord_of_run[r["id"]] for r in sorted(runs["runs"], key=lambda r: r.get("updated_at") or "", reverse=True)
+                  if coord_of_run.get(r["id"]) in sessions]
+        root = next((c for c in coords if not dispatcher(c)), coords[0] if coords else None)
 
     for sid, s in sessions.items():
         w = by_wt.get(sid, (None, False))[0]
@@ -327,13 +333,21 @@ def build_sessions(fast, runs, cfg):
             s["kind"] = "orchestrator"
         elif sid in coord_of_run.values():
             s["kind"] = "orchestration"
-            s["parent"] = root
+            s["parent"] = dispatcher(sid) or root
             s["run"] = next(rid for rid, wt in coord_of_run.items() if wt == sid)
-        elif w and w.get("runId") not in root_runs and coord_of_run.get(w.get("runId")) in sessions:
+        elif w and coord_of_run.get(w.get("runId")) in sessions:
             s["parent"] = coord_of_run[w["runId"]]
         else:
             s["parent"] = root
             s["kind"] = "task" if w else "standalone"
+    # Coordinators that dispatched each other would make a loop the tree never leaves; hang such a one on the root.
+    for sid, s in sessions.items():
+        seen, p = {sid}, s["parent"]
+        while p and p not in seen:
+            seen.add(p)
+            p = sessions[p]["parent"]
+        if p == sid:
+            s["parent"] = root
     return sessions, root
 
 

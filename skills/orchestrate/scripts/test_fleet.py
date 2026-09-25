@@ -514,6 +514,35 @@ assert fleet.mail_dispatch({"payload": "not json", "from_handle": "term_x"}) is 
 workers["ctx_docs"]["dispatchStatus"] = workers["ctx_login"]["dispatchStatus"] = "pending"
 del world.messages[kept:]
 
+# The tree's root is the top-level coordinator even when a program coordinator it dispatched runs a newer Run.
+def tree(run_list, workers, wts):
+    fast = {"worktrees": [{"worktreeId": w, "path": f"/work/{w}", "agents": []} for w in wts],
+            "terminals": [{"handle": f"term_{w}", "worktreeId": w} for w in wts]}
+    sessions, root = fleet.build_sessions(fast, {"runs": run_list, "workers": workers, "tasks": []}, {})
+    return root, {sid: (s["kind"], s["parent"]) for sid, s in sessions.items()}
+
+
+run = lambda rid, coord, at: {"id": rid, "coordinator_handle": f"term_{coord}", "updated_at": at}
+worker = lambda rid, wt, status="dispatched": {"runId": rid, "dispatchId": f"ctx_{wt}", "dispatchStatus": status,
+                                               "resource": {"worktreeId": wt}}
+root_wt, got = tree([run("r-top", "top", "t1"), run("r-prog", "prog", "t2")],
+                    [worker("r-top", "prog"), worker("r-top", "w1"), worker("r-prog", "w2")], ["top", "prog", "w1", "w2", "solo"])
+assert root_wt == "top", root_wt
+assert got == {"top": ("orchestrator", None), "prog": ("orchestration", "top"), "w1": ("task", "top"),
+               "w2": ("task", "prog"), "solo": ("standalone", "top")}, got
+root_wt, got = tree([run("r-top", "top", "t1")], [worker("r-top", "w1", "completed")], ["top", "w1", "solo"])
+assert root_wt == "top" and got == {"top": ("orchestrator", None), "w1": ("task", "top"), "solo": ("standalone", "top")}, got
+# Two program coordinators that dispatched each other, under a top level: neither is left in a loop.
+root_wt, got = tree([run("r-top", "top", "t1"), run("r-a", "a", "t2"), run("r-b", "b", "t3")],
+                    [worker("r-b", "a"), worker("r-a", "b")], ["top", "a", "b"])
+assert root_wt == "top" and got["top"] == ("orchestrator", None), got
+for sid in got:
+    hops = 0
+    while got[sid][1]:
+        sid, hops = got[sid][1], hops + 1
+        assert hops < len(got), got
+    assert sid == "top", got
+
 # Classification of a finished turn's last lines.
 assert fleet.classify("Build done. E2E test failed on the login page.") == "verify_failed"
 assert fleet.classify("Login required: run `gh auth login`, then tell me.") == "login"
