@@ -354,9 +354,17 @@ td.when { white-space: nowrap; }
 /* Each line is one 20px band; a mono run's taller metrics would otherwise stretch its line. */
 .rows.items .grow > .ellipsis { height: 20px; }
 .rows.items .sub { font-size: var(--t-sm); }
-.rows.items [data-open] { cursor: pointer; }
-.rows.items [data-open] .pre, .rows.items [data-open] .opts, .rows.items [data-open] input { cursor: auto; }
-.rows.items .grow > .pre { margin-top: var(--s2); }
+/* Every row opens its item page, so only rows that carry one look clickable. */
+.rows.items > li { flex-wrap: wrap; }
+.rows.items > li[data-href] { cursor: pointer; }
+.rows.items > li:not([data-href]):hover { background: none; }
+.rows.items .more, .rows.items input { cursor: auto; }
+.icon-btn.toggle svg.i { transition: transform 0.15s; }
+.icon-btn.toggle[aria-expanded="true"] svg.i { transform: rotate(180deg); }
+/* Expanded text takes a full band under the row, lined up with the title, rather than the narrow title column. */
+.rows.items .more { flex: 1 1 100%; min-width: 0; margin-left: calc(20px + var(--s2)); display: grid; gap: var(--s2); }
+.rows.items .more .pre { max-height: 50vh; font-size: var(--t-md); line-height: 1.55; }
+.rows.items.page .more .pre { max-height: none; }
 .rows.items li.is-missed { box-shadow: inset 2px 0 0 var(--bad); }
 /* Trailing columns have fixed widths and hang off the right edge, so time and buttons line up down a list
    whatever each row carries; a missing button leaves its slot empty. */
@@ -371,8 +379,7 @@ td.when { white-space: nowrap; }
 .prompt-acts .chip.armed { color: var(--ink); background: var(--tone-wash); border-color: var(--tone); }
 /* A decision: option chips, then its body and option notes when opened, then the answer box, each 8px apart. */
 .decision .prompt-acts { flex-wrap: wrap; }
-.decision .pre, .decision .opts { margin-top: var(--s2); }
-.decision .opts { margin-bottom: 0; padding-left: var(--s5); display: grid; gap: var(--s1); font-size: var(--t-sm); color: var(--ink-2); }
+.opts { margin: 0; padding-left: var(--s5); display: grid; gap: var(--s1); font-size: var(--t-sm); color: var(--ink-2); }
 .decision .search { flex: 1; min-width: 160px; }
 .decision .search:disabled { opacity: 0.5; cursor: default; }
 .rows.agents > li { display: grid; gap: var(--s2); }

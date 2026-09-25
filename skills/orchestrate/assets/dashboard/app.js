@@ -29,6 +29,7 @@ const ICON = {
   menu: '<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>',
   x: '<path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>',
   arrow: '<path d="M2.5 8h10.5M9 4l4 4-4 4"/>',
+  chevron: '<path d="M4 6l4 4 4-4"/>',
   alert: '<path d="M8 2.2 1.6 13.3h12.8Z"/><path d="M8 6.6v3.1M8 11.4v.1"/>',
   check: '<path d="M3.3 8.4 6.4 11.4 12.7 4.6"/>',
   fail: '<circle cx="8" cy="8" r="6"/><path d="M6 6l4 4M10 6l-4 4"/>',
