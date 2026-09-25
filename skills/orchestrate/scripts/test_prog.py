@@ -443,7 +443,7 @@ print("prog.py stacks: all pass")
 # --- verdict sources are a closed set ------------------------------------------------------------
 real_view, real_pid = prog.pr_view, prog.patch_id
 prog.pr_view, prog.patch_id = (lambda repo, n: {"headRefOid": "h1"}), (lambda repo, n: "p1")
-for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:opus", "live:", "verifier"):
+for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:anthropic", "live:", "verifier"):
     try:
         prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", bad])
         raise AssertionError(f"verdict accepted --source {bad}")
@@ -469,5 +469,9 @@ assert prog.skills_version(g) == base
 assert prog.skills_version(g) == base + "+local", "an uncommitted skill edit is not the pushed commit"
 git("add", "."); git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "local")
 assert prog.skills_version(g) == base + "+local", "an unpushed commit records its pushed base"
+git("update-ref", "refs/remotes/origin/feature", "HEAD")
+head = git("rev-parse", "--short", "HEAD")
+(g / "skills" / "x.md").write_text("more")
+assert prog.skills_version(g) == head + "+local", "a pushed feature branch with edits records its own head"
 
 print("prog.py skills commit: all pass")

@@ -617,9 +617,10 @@ def skills_version(root):
     head = git("rev-parse", "--short", "HEAD")
     if not head:
         return root.name
-    if git("branch", "-r", "--contains", "HEAD") and not git("status", "--porcelain", "--", "skills"):
+    pushed = bool(git("branch", "-r", "--contains", "HEAD"))
+    if pushed and not git("status", "--porcelain", "--", "skills"):
         return head
-    base = git("merge-base", "HEAD", "origin/main")
+    base = head if pushed else git("merge-base", "HEAD", "origin/main")
     return (git("rev-parse", "--short", base) if base else head) + "+local"
 
 
@@ -884,15 +885,18 @@ def cmd_set(argv):
     print(json.dumps(p.append("config", note=f"{key}={value}"), ensure_ascii=False))
 
 
+VERIFIER_FAMILIES = ("codex", "gpt", "gemini", "grok")
+
+
 def cmd_verdict(argv):
     p = Program(argv[0])
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
-    # Workers run on Claude, so a Claude verifier is the implementer's own family; a Claude subagent is subagent-review.
+    # Workers run on Claude, so a verifier names another family; a Claude subagent's review is subagent-review.
     kind, _, what = src.partition(":")
-    if not (src in ("codex-review", "subagent-review") or (kind in ("verifier", "live") and what)) \
-            or (kind == "verifier" and what.lower().startswith(("claude", "opus", "sonnet", "haiku", "fable"))):
+    if not (src in ("codex-review", "subagent-review") or (kind == "live" and what)
+            or (kind == "verifier" and what.lower().startswith(VERIFIER_FAMILIES))):
         sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), verifier:<model of another "
                  "family than the Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
@@ -1038,11 +1042,12 @@ def merge_unit(p, pr, unit, klass, events):
         if all(x["state"] == "MERGED" for x in merged.values()) or r.returncode != 0:
             break
         time.sleep(10)
+    one_push = merged[pr]["state"] == "MERGED"  # a layer merged without its top got its own main CI run
     for n, x in merged.items():
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
                      klass=klass if klass != "normal" else None, note=f"stack of {len(unit)}" if len(unit) > 1 else None,
-                     stack_top=pr if n != pr else None)
+                     stack_top=pr if n != pr and one_push else None)
             close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
         why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
