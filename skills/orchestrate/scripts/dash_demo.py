@@ -464,6 +464,16 @@ class FakeFleetWorld:
                                       " Esc to cancel · Tab to amend"]}
         self.prompt = {"v": 1, "id": "prompt-docs-1", "at": _ago(now, 0.5), "handle": "term_docs", "session_id": "demo-docs",
                        "cwd": "/work/wt-docs", "tool": "Bash", "input": {"command": "npm publish --dry-run"}}
+        # The coordinator waits on the human for one call it registered with `orch decide add`.
+        self.decisions = {"next": 2, "decisions": {"d1": {
+            "id": "d1", "title": "Which export format should ACME-102 ship first?", "handle": "term_coord",
+            "body": "Finance reads the export in a spreadsheet; the API team wants JSON for the sync job.\n"
+                    "- CSV first: finance unblocked this week\n- JSON first: one format for both later\n"
+                    "Thread: https://example.com/acme/notes/export-format", "created_at": _ago(now, 0.25), "status": "open",
+            "options": [{"label": "CSV", "description": "ship CSV now, JSON in a follow-up"},
+                        {"label": "JSON", "description": "one format; finance converts"},
+                        {"label": "Both", "description": "one more day of work"}],
+            "recommend": 1, "link": "https://example.com/acme/tickets/ACME-102"}}}
 
     def advance(self):
         """One step: #41 gets a new commit (its approval goes stale), #42's CI goes green."""
@@ -498,6 +508,7 @@ class FakeFleetWorld:
         """A fleet.Fleet wired to this world (ORCH_FLEET_STATE must already point at a scratch directory)."""
         import fleet
         fleet.write_atomic(fleet.state_dir() / "prompts" / "term_docs.json", json.dumps(self.prompt))
+        fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
                         read_screen=self.read_screen)
         f.me = self.ME

@@ -6,12 +6,13 @@ Sources are local CLIs only (`orca`, `gh`, `git`). Nothing is sent anywhere but 
 and the state lives outside the repository:
 
   $ORCH_FLEET_STATE  (default ~/.local/state/agent-skills/dashboard)   state.json, prs.json, inbox.json, events,
-                                                                       prompts/<terminal>.json (hooks/permission.py)
+                                                                       prompts/<terminal>.json (hooks/permission.py),
+                                                                       decisions.json (`orch decide`)
   $ORCH_FLEET_CONFIG (default ~/.config/agent-skills/dashboard/config.json)
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
 """
-import collections, concurrent.futures, datetime as dt, hashlib, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
+import collections, concurrent.futures, datetime as dt, fcntl, hashlib, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 RUNS_EVERY = 120         # runs, workers, tasks, gates
@@ -878,18 +879,22 @@ class Fleet:
                                   "title": "입력·권한 창에서 대기 중", "detail": a["detail"], "at": a["since"] or iso(now),
                                   "source": "orca", **self.pending_prompt(s, a, records)})
             s["last_prompt_at"] = last_prompt
-        # Orchestration mail to a coordinator that no one has read yet.
+        # Orchestration mail asking a coordinator something: open until someone replies. Unread mail stays; mail the
+        # coordinator acked (its inbox loop acks at once, before the human has answered) stays for a day.
         coord_handles = {t["handle"] for s in sessions.values() if s["kind"] in ("orchestrator", "orchestration")
                          for t in s["terminals"]}
-        coord_runs = {s.get("run") for s in sessions.values() if s["kind"] in ("orchestrator", "orchestration")}
+        coord_runs = {r["id"] for r in self.runs["runs"] if r.get("coordinator_handle") in coord_handles}  # the root's too
         by_handle = {t["handle"]: s["id"] for s in sessions.values() for t in s["terminals"]}
+        answered, day_ago = answered_mail(self.fast["messages"]), iso(now - dt.timedelta(hours=24))
         for m in self.fast["messages"]:
             to = m.get("to_handle") or ""
             to_coord = to in coord_handles or (to.startswith("run:") and to[4:] in coord_runs)
-            if to_coord and not m.get("read") and m.get("type") in ("question", "escalation", "decision_gate"):
+            if (to_coord and m.get("type") in ("question", "escalation", "decision_gate") and m["id"] not in answered
+                    and (not m.get("read") or (m.get("created_at") or "") >= day_ago)):
                 items.append({"key": f"mail:{m['id']}", "type": "question", "session": by_handle.get(m.get("from_handle")),
                               "title": mask(m.get("subject"), 160), "detail": mask(m.get("body"), 600),
                               "at": m.get("created_at"), "source": "orca-mail"})
+        items += decision_items(by_handle, root)
         for g in self.runs["gates"]:
             if g.get("status") not in ("resolved", "cancelled"):
                 items.append({"key": f"gate:{g['id']}", "type": "approval", "session": root, "title": mask(g.get("question"), 160),
@@ -944,6 +949,33 @@ class Fleet:
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "sources": self.sources, "me": self.me,
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
+
+
+def answered_mail(messages):
+    """Ids of messages someone else replied to. `orca orchestration reply` gives the reply the thread_id of what it
+    answers: the message's own id, or the thread the message was already in (`ask` opens a thread on itself). A reply
+    is newer than its message and the inbox lists newest first, so a message on the page has its reply there too."""
+    by_thread = collections.defaultdict(list)
+    for r in messages:
+        if r.get("thread_id"):
+            by_thread[r["thread_id"]].append(r)
+    return {m["id"] for m in messages for t in {m["id"], m.get("thread_id")} - {None} for r in by_thread[t]
+            if r["id"] != m["id"] and r.get("from_handle") != m.get("from_handle")
+            and (r.get("created_at") or "") >= (m.get("created_at") or "")}
+
+
+def decision_items(by_handle, root):
+    """Open decisions from `orch decide`, on the session whose terminal registered them (else the root)."""
+    out = []
+    for d in (read_json(state_dir() / "decisions.json", {}) or {}).get("decisions", {}).values():
+        if d.get("status") != "open":
+            continue
+        sid = by_handle.get(d.get("handle"))
+        out.append({"key": f"decision:{d['id']}", "type": "decision", "session": sid or root, "handle": d.get("handle") if sid else None,
+                    "decision": d["id"], "title": mask(d.get("title"), 200), "detail": first_line(d.get("body")),
+                    "body": mask(d.get("body"), DECISION_BODY_MAX), "options": d.get("options") or [],
+                    "recommend": d.get("recommend"), "url": d.get("link"), "at": d.get("created_at"), "source": "orch decide"})
+    return out
 
 
 def external_items(sticky):
@@ -1110,6 +1142,67 @@ def inbox_resolve(key):
     row = {"v": 1, "op": "resolve", "key": key, "at": iso(utcnow())}
     append_line(state_dir() / "inbox-external.jsonl", row)
     return row
+
+
+# ---------------------------------------------------------------- decisions the coordinator waits on the human for
+
+DECISION_BODY_MAX = 4000
+DECISION_KEEP_S = 7 * 86400  # closed decisions are kept this long, then dropped from the file
+
+
+def change_decisions(change):
+    """Run change(store) on decisions.json under a lock and replace the file whole; returns what change returns."""
+    path = state_dir() / "decisions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with (state_dir() / "decisions.lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        store = read_json(path, {}) or {}
+        out = change(store)
+        write_atomic(path, json.dumps(store, ensure_ascii=False, indent=1) + "\n")
+        return out
+
+
+def decision_add(title, body="", options=(), recommend=None, link=None, handle=None):
+    """Register a decision; options are "label::description". The label is what the page sends back, so one line."""
+    one_line = lambda v, n: mask(" ".join(v.split()), n)
+    opts = []
+    for o in options:
+        label, _, desc = o.partition("::")
+        if not label.strip():
+            raise ValueError(f"--option {o!r} has no label before '::'")
+        opts.append({"label": one_line(label, 120), "description": one_line(desc, 300)})
+    if recommend is not None and not 1 <= recommend <= len(opts):
+        raise ValueError(f"--recommend is an option number from 1 to {len(opts)}" if opts else "--recommend needs --option")
+    if not title.strip():
+        raise ValueError("--title is empty")
+    now = utcnow()
+
+    def add(store):
+        n = store.get("next", 1)
+        d = {"id": f"d{n}", "title": one_line(title, 200), "body": mask(body.strip(), DECISION_BODY_MAX), "options": opts,
+             "recommend": recommend, "link": mask(link, 500), "handle": handle, "created_at": iso(now), "status": "open"}
+        cutoff = iso(now - dt.timedelta(seconds=DECISION_KEEP_S))
+        kept = {k: v for k, v in store.get("decisions", {}).items() if v.get("status") == "open" or (v.get("closed_at") or "") >= cutoff}
+        store.update(next=n + 1, decisions={**kept, d["id"]: d})
+        return d
+    return change_decisions(add)
+
+
+def decision_close(did, status, answer=None):
+    """Mark an open decision done (answered) or dropped (no longer needed)."""
+    def close(store):
+        d = store.get("decisions", {}).get(did)
+        if not d:
+            raise ValueError(f"no decision {did}")
+        if d.get("status") != "open":
+            raise ValueError(f"{did} is already {d.get('status')}")
+        d.update(status=status, answer=mask(answer, 500), closed_at=iso(utcnow()))
+        return d
+    return change_decisions(close)
+
+
+def open_decisions():
+    return [d for d in (read_json(state_dir() / "decisions.json", {}) or {}).get("decisions", {}).values() if d.get("status") == "open"]
 
 
 # ---------------------------------------------------------------- adoption into Orca's own lineage (opt-in)

@@ -52,6 +52,11 @@ Usage: orch <command> <slug> [options]
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      coordinator only: block until the Run inbox holds actionable
                                      mail; acks heartbeat-only batches; never acks actionable ones
+  decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
+  decide list | done <id> [--answer TEXT] | drop <id>
+                                     no slug: a decision you wait on the human for, shown on the fleet
+                                     dashboard until done or dropped; add prints its id. Each option is a
+                                     button that types "decision <id>: <label>" into this terminal
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -1511,9 +1516,37 @@ def cmd_heavy(argv):
         time.sleep(15)
 
 
+def cmd_decide(argv):
+    import fleet  # the store lives in the fleet state directory, beside the page that shows it
+    sub, rest = argv[0], argv[1:]
+    try:
+        if sub == "add" and opt(rest, "--title"):
+            rec, body = opt(rest, "--recommend"), opt(rest, "--body-file")
+            if rec is not None and not rec.isdigit():
+                sys.exit("--recommend is an option number")
+            d = fleet.decision_add(opt(rest, "--title"), pathlib.Path(body).read_text() if body else "",
+                                   [rest[i + 1] for i, a in enumerate(rest[:-1]) if a == "--option"],
+                                   int(rec) if rec else None, opt(rest, "--link"), os.environ.get("ORCA_TERMINAL_HANDLE"))
+            print(d["id"])
+        elif sub == "list":
+            for d in fleet.open_decisions():
+                print(f"{d['id']}  {d['created_at']}  {d['title']}")
+                for i, o in enumerate(d["options"], 1):
+                    mark = " (recommended)" if i == d.get("recommend") else ""
+                    print(f"    {i}. {o['label']}{mark}" + (f" — {o['description']}" if o["description"] else ""))
+        elif sub in ("done", "drop") and rest:
+            d = fleet.decision_close(rest[0], "done" if sub == "done" else "dropped", opt(rest, "--answer"))
+            print(f"{d['id']} {d['status']}")
+        else:
+            sys.exit("usage: orch decide add --title T [--body-file F] [--option 'label::description']... [--recommend N] "
+                     "[--link URL] | list | done <id> [--answer TEXT] | drop <id>")
+    except (ValueError, OSError) as e:
+        sys.exit(str(e))
+
+
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
-            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill}
+            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide}
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):

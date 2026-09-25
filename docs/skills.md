@@ -91,7 +91,7 @@
 - **언제:** 사용자가 말을 거는 최상위 orchestrator 세션일 때("오케스트레이터로", "모든 세션 관리해줘", "전체 태스크 현황"), 또는 한 세션이 Orca 워커 여러 개(대개 3개 이상)로 마일스톤을 끝까지 끌고 갈 때, "대시보드 갱신해줘", "전체 진행상황 몇 퍼센트", 다른 코디네이터가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
 - **내용:** 코디네이터는 코드가 아니라 프로그램을 소유한다. 매 세션 `orca skills get orchestration`부터 읽는다.
   - **즉답 원칙(Stay answerable):** 턴 안에서는 라우팅, 몇 초짜리 확인, 사용자 응답만 한다. 조사·구현·검증·긴 대기·모니터링은 받자마자 백그라운드 서브에이전트나 Orca 워커에 넘기고, 포그라운드 루프·`sleep`·백그라운드 아닌 `check --wait`는 쓰지 않는다. 완료는 알림으로 받는다.
-  - **top-level 모드** (`references/top-level.md`): 단독 태스크 세션과 프로젝트 코디네이터 위에 서는 세션. 요청 라우팅 표, 사용자가 연 세션은 읽기만, 워커 기동 확인은 `--screen`으로 백그라운드에서(신뢰 창은 방금 띄운 워커에 한해 ↓ 확인 후 Enter, 막히면 인박스), 끝난 dispatch에는 `run:`으로, 본문은 파일로, AskUserQuestion 대신 대시보드 인박스(`orch-dash inbox add`), 필터 없는 백그라운드 `check --wait` 하나로 알림 끼어듦 막기, PR 리뷰 이벤트(`pr-events.jsonl`)에 대한 반응, 스킬이 바뀌면 `skills-sync broadcast`.
+  - **top-level 모드** (`references/top-level.md`): 단독 태스크 세션과 프로젝트 코디네이터 위에 서는 세션. 요청 라우팅 표, 사용자가 연 세션은 읽기만, 워커 기동 확인은 `--screen`으로 백그라운드에서(신뢰 창은 방금 띄운 워커에 한해 ↓ 확인 후 Enter, 막히면 인박스), 끝난 dispatch에는 `run:`으로, 본문은 파일로, AskUserQuestion 대신 대시보드 인박스(`orch-dash inbox add`)와 결정 등록(`orch decide add`, 답을 받으면 `done`), 필터 없는 백그라운드 `check --wait` 하나로 알림 끼어듦 막기, PR 리뷰 이벤트(`pr-events.jsonl`)에 대한 반응, 스킬이 바뀌면 `skills-sync broadcast`.
   - 아래 1~8은 **program 모드**다.
   1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. Run을 만들고 `orch init`으로 등록한다.
   2. **검증 준비와 Pilot:** verify 스킬이 없으면 첫 digest에서 사용자에게 `/create-verification-skill` 실행을 요청하고, 그동안은 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
@@ -350,6 +350,7 @@
 | `backfill` | 등록 전에 머지된 PR과 main CI를 원장에 넣는다 |
 | `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 2슬롯으로 제한해 실행 |
 | `wait` | 코디네이터 전용. 처리할 메시지가 올 때까지 기다리고 `CLOSE OUT` 줄을 낸다 |
+| `decide` | 코디네이터가 사용자 결정을 기다리는 일을 등록(`add`)·조회(`list`)·닫기(`done`, `drop`). 대시보드 Needs you에 선택지 버튼과 함께 뜨고, 버튼은 `decision <id>: <답>` 한 줄을 코디네이터 터미널에 보낸다 |
 
 ### `orch-dash` (대시보드)
 - **실행 방식:** `orch init`과 `orch status`가 `orch-dash ensure`를 불러 알아서 띄운다. 서버는 저장소당 하나이고, 더 새 코드가 설치되면 교체된다.

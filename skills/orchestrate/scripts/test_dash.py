@@ -209,8 +209,8 @@ answered, dash.fleet.answer_prompt = [], lambda *a: answered.append(a) or (200, 
 body = json.dumps({"session": "wt-docs", "prompt": "p1", "action": "approve"}).encode()
 
 
-def post(headers):
-    req = urllib.request.Request(f"{base}/api/fleet/prompt", data=body, method="POST",
+def post(headers, path="/api/fleet/prompt"):
+    req = urllib.request.Request(f"{base}{path}", data=body, method="POST",
                                  headers={"Content-Type": "application/json", **headers})
     try:
         return urllib.request.urlopen(req).status
@@ -226,6 +226,12 @@ assert post({"Host": host, "Origin": "http://evil.example", "X-Dash-Token": dash
 assert answered == []
 assert post({"Host": host, "Origin": f"http://{host}", "X-Dash-Token": dash.TOKEN}) == 200
 assert answered == [("wt-docs", "p1", "approve")], answered
+# A decision answered on the page is a line for the coordinator's terminal, through the send box's endpoint and guard.
+sent, dash.fleet.send = [], lambda *a: sent.append(a) or (200, {"ok": True})
+body = json.dumps({"session": "wt-coord", "handle": "term_coord", "text": "decision d1: CSV"}).encode()
+assert post({"Host": host}, "/api/fleet/send") == 403 and sent == []
+assert post({"Host": host, "X-Dash-Token": dash.TOKEN}, "/api/fleet/send") == 200
+assert sent == [("wt-coord", "decision d1: CSV", "term_coord")], sent
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.

@@ -24,6 +24,7 @@ const ITEM = {
   permission: ["Waiting on a prompt", "warn", "lock"],
   approval: ["Approval", "warn", "user"],
   question: ["Question", "accent", "chat"],
+  decision: ["Decision", "warn", "flag"],
   run_command: ["Run a command", "accent", "spark"],
   login: ["Login", "warn", "user"],
   verify_failed: ["Verify failed", "bad", "fail"],
@@ -47,7 +48,7 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { seenSent: {}, token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {} };
+const F = { seenSent: {}, token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, open: {} };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 function fleetSection(section, arg) {
@@ -130,7 +131,7 @@ function itemRow(st, it, { showSession = true } = {}) {
     <div class="grow"><div class="ellipsis"><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
       <div class="sub muted ellipsis">${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}
       ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
-      ${it.type === "prompt" ? promptActs(it) : ""}</div>
+      ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : ""}</div>
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
       <span class="slot">${safeUrl(it.url) ? link(it.url, icon("link"), "icon-btn") : ""}</span>
       <span class="slot">${copy ? `<button class="icon-btn" data-copy="${esc(copy)}" title="Copy">${icon("copy")}</button>` : ""}</span>
@@ -148,20 +149,63 @@ function promptActs(it) {
     ${r && r.busy ? '<span class="muted">Checking the screen…</span>' : msg ? `<span class="toned tone-${r.ok ? "good" : r.typed ? "warn" : "bad"}">${esc(msg)}</span>` : ""}</div>`;
 }
 
+// True on the second click of the same button within 5 s; the first click only arms it.
+function confirmed(key, action) {
+  if (F.arm && F.arm.key === key && F.arm.action === action) { F.arm = null; return true; }
+  F.arm = { key, action };
+  clearTimeout(F.armTimer);
+  F.armTimer = setTimeout(() => { F.arm = null; renderView(); }, 5000);
+  renderView();
+  return false;
+}
+
 async function promptAction(key, action) {
   const it = ((S.state || {}).items || []).find((i) => i.key === key);
-  if (!it) return;
-  if (action !== "open" && !(F.arm && F.arm.key === key && F.arm.action === action)) {
-    F.arm = { key, action };
-    clearTimeout(F.armTimer);
-    F.armTimer = setTimeout(() => { F.arm = null; renderView(); }, 5000);
-    renderView();
-    return;
-  }
-  F.arm = null; F.prompt[key] = { busy: true }; renderView();
+  if (!it || (action !== "open" && !confirmed(key, action))) return;
+  F.prompt[key] = { busy: true }; renderView();
   let out;
   try { out = await fleetPost("/api/fleet/prompt", { session: it.session, prompt: it.prompt, action }); } catch (err) { out = { ok: false, reason: String(err.message || err) }; }
   F.prompt[key] = { action, ...out };
+  renderView();
+}
+
+// A decision body is plain text: escaped, line breaks kept by .pre, and http(s) URLs made links.
+function decisionBody(text) {
+  return String(text || "").split(/(https?:\/\/[^\s<>"'`)\]]*[^\s<>"'`)\].,;:!?])/).map((part, i) => (i % 2 ? link(part, esc(part)) : esc(part))).join("");
+}
+
+// A decision registered with `orch decide`: each option, or a typed answer, types "decision <id>: <answer>" into the
+// coordinator's terminal on a second click. Sending does not close it; the coordinator does, with `orch decide done`.
+function decisionActs(st, it) {
+  const r = F.decide[it.key], armed = F.arm && F.arm.key === it.key ? F.arm.action : "", off = r && r.busy ? "disabled" : "";
+  const opts = it.options || [], open = F.open[it.key];
+  const chip = (action, label, extra = "") => `<button class="chip ${armed === action ? "armed tone-warn" : ""}" data-decide="${action}" data-key="${esc(it.key)}" ${extra} ${off}>${label}</button>`;
+  const buttons = opts.map((o, i) => chip(`opt:${i}`, `${it.recommend === i + 1 ? icon("check") : ""}${armed === `opt:${i}` ? "Confirm " : ""}${esc(o.label)}`,
+    `title="${esc(o.description || o.label)}${it.recommend === i + 1 ? " (recommended)" : ""}"`)).join("");
+  const notes = opts.map((o, i) => `<li><b>${esc(o.label)}</b>${it.recommend === i + 1 ? ' <span class="muted">recommended</span>' : ""}${o.description ? ` · ${esc(o.description)}` : ""}</li>`).join("");
+  const line = armed ? `decision ${it.decision}: ${armed === "text" ? (F.draft[it.key] || "").trim() : (opts[+armed.slice(4)] || {}).label}` : "";
+  const msg = !r || r.busy ? "" : r.ok ? "Sent. It stays here until the coordinator closes it."
+    : r.typed ? `Typed and submitted, but not confirmed (${r.reason}). Check the terminal.` : `Not sent: ${r.reason}.`;
+  return `<div class="decision"><div class="prompt-acts">${buttons}${it.body || notes ? chip("toggle", open ? "Hide" : "Details") : ""}</div>
+    ${open ? `${it.body ? `<div class="pre">${decisionBody(it.body)}</div>` : ""}${notes ? `<ol class="opts">${notes}</ol>` : ""}` : ""}
+    <div class="prompt-acts"><input id="decide-${esc(it.decision)}" data-decide-input="${esc(it.key)}" class="search" maxlength="1900" autocomplete="off"
+        placeholder="Or type an answer" value="${esc(F.draft[it.key] || "")}" ${off}>${chip("text", `${icon("send")}${armed === "text" ? "Confirm send" : "Send"}`)}
+      ${r && r.busy ? '<span class="muted">Checking the screen and sending…</span>' : line ? `<span class="muted ellipsis">types <span class="mono">${esc(line)}</span></span>`
+        : msg ? `<span class="toned tone-${r.ok ? "good" : r.typed ? "warn" : "bad"}">${esc(msg)}</span>${r.typed ? "" : `<button class="chip" data-copy="${esc(r.line)}">${icon("copy")}Copy</button>`}` : ""}</div></div>`;
+}
+
+async function decideAction(key, action) {
+  const st = S.state || {}, it = (st.items || []).find((i) => i.key === key);
+  if (!it) return;
+  if (action === "toggle") { F.open[key] = !F.open[key]; renderView(); return; }
+  const answer = action === "text" ? (F.draft[key] || "").trim() : ((it.options || [])[+action.slice(4)] || {}).label;
+  if (!answer || !confirmed(key, action)) return;
+  const s = byId(st)[it.session], line = `decision ${it.decision}: ${answer}`;
+  F.decide[key] = { busy: true, line }; renderView();
+  let out;
+  try { out = await fleetPost("/api/fleet/send", { session: it.session, handle: it.handle || (s && agentTerms(s)[0]?.handle), text: line }); } catch (err) { out = { ok: false, reason: String(err.message || err) }; }
+  F.decide[key] = { line, ...out };
+  if (out.typed && action === "text") F.draft[key] = "";
   renderView();
 }
 
@@ -357,13 +401,21 @@ async function chatAction(act) {
 
 const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
-document.addEventListener("input", (e) => { if (e.target.id === "chat-input" && F.sessionId) F.draft[F.sessionId] = e.target.value.replace(/[\r\n]+/g, " "); });
-document.addEventListener("keydown", (e) => { if (e.target.id === "chat-input" && e.key === "Enter" && !e.isComposing) { e.preventDefault(); chatAction("ask"); } });
+document.addEventListener("input", (e) => {
+  const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
+  if (key) F.draft[key] = e.target.value.replace(/[\r\n]+/g, " ");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.isComposing) return;
+  if (e.target.id === "chat-input") { e.preventDefault(); chatAction("ask"); } else if (e.target.dataset.decideInput) { e.preventDefault(); decideAction(e.target.dataset.decideInput, "text"); }
+});
 document.addEventListener("click", async (e) => {
   const chat = e.target.closest("[data-chat]");
   if (chat) { chatAction(chat.dataset.chat); return; }
   const answer = e.target.closest("[data-prompt]");
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
+  const decide = e.target.closest("[data-decide]");
+  if (decide) { decideAction(decide.dataset.key, decide.dataset.decide); return; }
   const t = e.target.closest("[data-copy],[data-dismiss]");
   if (!t) return;
   if (t.dataset.copy != null) {

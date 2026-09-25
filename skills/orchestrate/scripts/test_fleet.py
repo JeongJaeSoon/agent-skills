@@ -2,7 +2,7 @@
 
 Run: python3 test_fleet.py
 """
-import contextlib, datetime as dt, json, os, pathlib, sys, tempfile
+import contextlib, datetime as dt, json, os, pathlib, shutil, subprocess, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash_demo
@@ -47,7 +47,7 @@ assert {r["login"]: r["status"] for r in prs[43]["reviewers"]} == {"rev-carol": 
 assert {r["login"]: r["status"] for r in prs[42]["reviewers"]} == {"rev-bob": "changes_requested", "lint-bot[bot]": "commented"}
 got = sorted((i["type"], i["session"]) for i in items(st))
 assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approval", "wt-coord"), ("login", "wt-scratch"),
-                      ("ready_to_merge", "wt-login"), ("changes_requested", "wt-export"),
+                      ("decision", "wt-coord"), ("ready_to_merge", "wt-login"), ("changes_requested", "wt-export"),
                       ("review_comment_received", "wt-export"), ("ci_failed", "wt-export")]), got
 
 # Fresh install: nothing has been looked at, so every session with an open item carries a badge.
@@ -241,6 +241,99 @@ assert sorted(calls) == sorted(("worktree", "set", "--worktree", f"id:{w}", "--n
 calls.clear()
 fleet.adopt(undo="all")
 assert calls == []  # the latest row per worktree is now an undo: nothing to restore twice
+
+# Mail asking a coordinator stays until someone replies, even after the coordinator's inbox loop acked it; a day at most.
+ago = lambda h: fleet.iso(now - dt.timedelta(hours=h))
+mail = lambda mid, typ, frm, to, h, **kw: {"id": mid, "type": typ, "from_handle": frm, "to_handle": to, "read": 1, "thread_id": None,
+                                             "subject": f"subject {mid}", "body": "invented", "created_at": ago(h), **kw}
+world.messages += [
+    mail("m2", "escalation", "term_docs", "run:run_demo", 1),                          # acked, no reply: stays
+    mail("m3", "question", "term_login", "term_coord", 0.6, thread_id="m3"),          # `ask` opens a thread on itself
+    mail("m4", "status", "term_coord", "term_login", 0.5, thread_id="m3"),            # ... and the reply names it
+    mail("m5", "question", "term_export", "term_coord", 0.4, thread_id="t-older"),    # asked inside an older thread
+    mail("m6", "status", "term_coord", "term_export", 0.3, thread_id="t-older"),      # ... answered in that thread
+    mail("m7", "question", "term_login", "term_coord", 0.2, thread_id="m7"),
+    mail("m8", "status", "term_login", "term_coord", 0.1, thread_id="m7"),            # the asker's own follow-up is no answer
+    mail("m9", "decision_gate", "term_docs", "term_coord", 25),                       # acked over a day ago: gone
+    mail("m10", "question", "term_docs", "term_coord", 30, read=0),                   # never read: stays, as before
+]
+st = f.tick(force=True)
+assert sorted(i["key"] for i in items(st, "question")) == ["mail:m1", "mail:m10", "mail:m2", "mail:m7"], items(st, "question")
+assert fleet.answered_mail(world.messages) == {"m3", "m5"}
+
+# Decisions: `orch decide` keeps them in decisions.json; the fleet shows the open ones on the terminal that added them.
+dec_state = pathlib.Path(tempfile.mkdtemp(prefix="test-decide-"))
+body_file = dec_state / "body.md"
+body_file.write_text(f"Pick one.\n<img src=x onerror=alert(1)>\nGH_TOKEN={secret}\n")
+env = {**os.environ, "ORCH_FLEET_STATE": str(dec_state), "ORCA_TERMINAL_HANDLE": "term_coord"}
+
+
+def orch(*args):
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "prog.py"), "decide", *args],
+                       capture_output=True, text=True, env=env)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+assert orch("add", "--title", "Export format", "--body-file", str(body_file), "--option", "CSV::finance uses sheets",
+            "--option", "JSON", "--recommend", "1", "--link", "https://example.com/t/1") == (0, "d1", "")
+assert orch("add", "--title", "Second", "--option", "A") == (0, "d2", "")
+code, out, _ = orch("list")
+assert code == 0 and out.splitlines()[1:3] == ["    1. CSV (recommended) — finance uses sheets", "    2. JSON"], out
+saved = json.loads((dec_state / "decisions.json").read_text())["decisions"]["d1"]
+assert saved["handle"] == "term_coord" and saved["status"] == "open" and secret not in saved["body"], saved
+assert orch("add", "--title", "x", "--option", "A", "--recommend", "2")[0] == 1
+assert orch("add", "--option", "A")[0] == 1  # no title
+assert orch("done", "d1", "--answer", "CSV") == (0, "d1 done", "")
+assert orch("done", "d1")[2] == "d1 is already done" and orch("drop", "d9")[2] == "no decision d9"
+assert orch("drop", "d2") == (0, "d2 dropped", "")
+assert orch("list")[1] == ""
+
+fleet.write_atomic(state_dir / "decisions.json", json.dumps({"next": 1}))
+d = fleet.decision_add("Ship the export?", "See https://example.com/x", ["Yes::now", "No"], 1, handle="term_coord")
+lost = fleet.decision_add("From a closed terminal", handle="term_gone")
+st = f.tick(force=True)
+got = {i["decision"]: i for i in items(st, "decision")}
+assert got[d["id"]]["session"] == "wt-coord" and got[d["id"]]["handle"] == "term_coord", got
+assert got[d["id"]]["options"] == [{"label": "Yes", "description": "now"}, {"label": "No", "description": ""}]
+assert got[lost["id"]]["session"] == st["root"] and got[lost["id"]]["handle"] is None, got  # the page picks the root's terminal
+assert st["counts"]["decision"] == 2
+fleet.decision_close(d["id"], "done", "Yes")
+assert [i["decision"] for i in items(f.tick(force=True), "decision")] == [lost["id"]]
+# Answering types one line through the send box's path; nothing closes the decision but the coordinator.
+ok = Sender((True, None))
+assert fleet.send("wt-coord", f"decision {lost['id']}: Yes", handle="term_coord", sender=ok)[0] == 200
+assert ok.calls == [("term_coord", f"decision {lost['id']}: Yes")] and items(f.tick(force=True), "decision")
+
+# The page renders a decision escaped: app.js's helpers and fleet.js itself, run in node on a hostile item.
+if shutil.which("node"):
+    assets = pathlib.Path(__file__).resolve().parents[1] / "assets" / "dashboard"
+    app = (assets / "app.js").read_text().splitlines()
+
+    def take(name):
+        """One top-level declaration of app.js: a one-line const, or a block that ends at the next line "}" / "};"."""
+        i = next(i for i, l in enumerate(app) if l.startswith((f"const {name} =", f"function {name}(")))
+        if app[i].rstrip().endswith("{"):
+            return "\n".join(app[i:next(j for j in range(i, len(app)) if app[j] in ("}", "};")) + 1])
+        return app[i]
+    helpers = "\n".join(take(n) for n in ("ICON", "ESC", "esc", "safeUrl", "icon", "ms", "rel", "relSpan", "tag", "link"))
+    hostile = {"key": "decision:d1", "type": "decision", "session": "wt-coord", "decision": "d1", "source": "orch decide",
+               "title": "<script>alert(1)</script>", "detail": "<b>x</b>", "at": ago(0.1), "url": "javascript:alert(1)",
+               "body": "<img src=x onerror=alert(1)> see https://example.com/a?b=1&c=2. and javascript:alert(2)",
+               "options": [{"label": "<i>CSV</i>", "description": "\"quoted\" 'x'"}, {"label": "JSON", "description": ""}], "recommend": 1}
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+F.open["decision:d1"] = true;
+process.stdout.write(itemRow({{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}}, {json.dumps(hostile)}));"""
+    html = subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
+                                         "{document: {addEventListener() {}}, process});"],
+                          input=js, capture_output=True, text=True, check=True).stdout
+    for raw in ("<script", "<img", "<i>", "<b>x", 'href="javascript', "\"quoted\""):
+        assert raw not in html, (raw, html)
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html and "&lt;i&gt;CSV&lt;/i&gt;" in html
+    assert 'href="https://example.com/a?b=1&amp;c=2"' in html, "a URL becomes a link, the trailing dot stays text"
+    assert html.count('data-decide="opt:') == 2 and 'data-decide="text"' in html and 'id="decide-d1"' in html
+else:
+    print("test_fleet: node not found, rendering check skipped")
 
 # Classification of a finished turn's last lines.
 assert fleet.classify("Build done. E2E test failed on the login page.") == "verify_failed"

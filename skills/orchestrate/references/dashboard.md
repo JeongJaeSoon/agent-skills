@@ -81,20 +81,35 @@ A session's dot has one colour per phase on every screen (sidebar, Moving now, S
 |---|---|
 | `prompt` | A `permission` item whose terminal shows, right now, the permission dialog `hooks/permission.py` recorded: it carries Approve, Deny and Open terminal (below) |
 | `permission` | An agent sits on a permission or input prompt (Orca reports it as waiting) |
-| `question` | An unread `question`, `escalation` or `decision_gate` message to a coordinator |
+| `question` | A `question`, `escalation` or `decision_gate` message to a coordinator that no one has replied to. It stays after the coordinator acks it (its inbox loop acks at once, before you have answered) until a message in its thread comes from someone else, or for a day; an unread one stays until it is answered |
+| `decision` | A decision the coordinator registered with `orch decide add` and has not closed (below) |
 | `approval` | A pending Orca decision gate, or a finished turn that ends asking for a decision |
 | `login`, `run_command`, `verify_failed`, `verify_ok` | A finished turn that ends asking you to log in, to run something yourself, or reports a verification that failed or passed |
 | `changes_requested`, `review_comment_received`, `ci_failed`, `approval_stale`, `ready_to_merge` | A PR owned by a session has a change request, unresolved review threads from a person (bots are left out unless `bots_in_inbox`), failing CI, only approvals on an older commit, or a current approval with passing CI |
 | `sync_stalled`, `reload_pending` | Skill sync reported failure or went quiet for two intervals, or a reload could not be sent to a session |
 | anything else | Added by the orchestrator with `orch-dash inbox add` |
 
-The turn-based types read only the last lines of the agent's final message that Orca already reports, with fixed patterns, so they are a hint, not a verdict. Items backed by a live condition (a waiting prompt, unread mail, a pending gate, a PR's state) disappear when it clears; turn-based and added items stay until dismissed or resolved. An `approval`, `question`, `login`, `run_command` or `verify_failed` item raised before the session's latest prompt is **missed**: the inbox pins it to the top with a red edge, because typing the next prompt usually means the question above it went unanswered.
+The turn-based types read only the last lines of the agent's final message that Orca already reports, with fixed patterns, so they are a hint, not a verdict. Items backed by a live condition (a waiting prompt, unanswered mail, an open decision, a pending gate, a PR's state) disappear when it clears; turn-based and added items stay until dismissed or resolved. An `approval`, `question`, `login`, `run_command` or `verify_failed` item raised before the session's latest prompt is **missed**: the inbox pins it to the top with a red edge, because typing the next prompt usually means the question above it went unanswered.
 
 **Unread** is per session: items raised after the later of the last time you opened the session page and the last prompt typed into it. A fresh install shows every open item as unread.
 
 ### PR events for the rest of the platform
 
 Every change a full read finds is appended to `pr-events.jsonl` in the state directory, one JSON line (under 4 KiB, one write) per event: `{v, id, at, repo, pr, kind, url, owner, owner_kind, actor, checks, head}`. `kind` is one of `review_comment`, `changes_requested`, `approved`, `review_requested`, `head_pushed`, `approval_stale`, `checks_failed`, `checks_recovered`, `merged`, `closed`; readers ignore kinds they don't know. `owner` is the live dispatch that owns the PR's session (`owner_kind: dispatch`), or the session's agent terminal (`terminal`, or `human_session` for a standalone session). The file rotates to `pr-events.jsonl.1` past 5 MB. The dashboard itself only displays these; whether a session is told about them is up to the orchestrator.
+
+### Decisions the coordinator waits on you for
+
+A decision the coordinator reaches in its own analysis, or hears from a subagent, never becomes Orca mail. The coordinator registers it with `orch decide` (`scripts/prog.py`, stored in `decisions.json` in the state directory, masked on write):
+
+```sh
+orch decide add --title "Export format for the first release" --body-file /tmp/why.md \
+  --option "CSV::finance opens it in a spreadsheet" --option "JSON::one format for both" --recommend 1 [--link URL]   # prints d7
+orch decide list
+orch decide done d7 --answer CSV     # answered
+orch decide drop d7                  # no longer needed
+```
+
+The item sits on the session whose terminal ran `add` (`$ORCA_TERMINAL_HANDLE`), or on the root. It shows the title, its age, the body's first line, and one button per option, the recommended one with a check. Details opens the body (plain text: escaped, line breaks kept, `http(s)` URLs linked) and each option's description. An option button, or the answer box, takes a second click and then types `decision <id>: <answer>` into that terminal through the send box's path below, with the same guards and log. Sending does not close the item: it stays until the coordinator runs `orch decide done` or `drop`. Dismiss only hides it on this page.
 
 ### Sending a line to a session
 
@@ -141,6 +156,7 @@ State lives outside every repository, in `$ORCH_FLEET_STATE` or `~/.local/state/
 | `pr-events.jsonl` | PR events (above) |
 | `seen.json` | When each session page was last opened |
 | `inbox-external.jsonl` | Items added and resolved with `orch-dash inbox` |
+| `decisions.json` | Decisions from `orch decide`; closed ones are dropped after a week |
 | `sends.jsonl`, `adoption.jsonl` | Send and prompt-answer attempts; adoption writes and undos |
 | `prompts/` | The latest permission request per terminal, from `hooks/permission.py`; dropped after a day or once answered |
 | `avatars/` | Reviewer avatars |
