@@ -75,7 +75,8 @@ def cwds():
         for d in os.listdir("/proc"):
             try:
                 if d.isdigit() and os.stat(f"/proc/{d}").st_uid == os.getuid():
-                    out[int(d)] = os.readlink(f"/proc/{d}/cwd")
+                    # A process left in a removed directory reads as "<path> (deleted)".
+                    out[int(d)] = os.readlink(f"/proc/{d}/cwd").removesuffix(" (deleted)")
             except FileNotFoundError:
                 pass
             except OSError:
@@ -301,12 +302,28 @@ def branch_scan(repo, notes):
     return judge_branches(repo, branches, checked, default, json.loads(prs), is_ancestor)
 
 
-def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, git=run):
+def orca_paths():
+    """Paths of Orca-managed worktrees (their lifecycle is `orca worktree rm`); None when Orca is there but unreadable."""
+    if not shutil.which("orca"):
+        return set()
+    out = run(["orca", "worktree", "list", "--json"], check=False)
+    try:
+        return {w["path"] for w in json.loads(out)["result"]["worktrees"]}
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, orca=frozenset(), git=run):
     path = w["path"]
-    base = {"kind": "worktree", "key": f"worktree:{repo}:{path}", "repo": repo, "name": path}
-    if w.get("prunable"):
-        return {**base, "why": "디렉터리 없음", "target": True}
+    # HEAD is the identity reap re-checks, so a new checkout at the same path is not the planned one.
+    base = {"kind": "worktree", "key": f"worktree:{repo}:{path}", "repo": repo, "name": path, "tip": w.get("HEAD")}
     m = SCRATCH.search(path + "/")
+    if w.get("prunable"):
+        if orca is None:
+            return {**base, "why": "Orca 목록을 읽지 못함", "target": False}
+        if path in orca:
+            return None
+        return {**base, "why": "디렉터리 없음", "target": True}
     if not m or w.get("bare"):
         return None
     transcript = projects_dir / m.group(1) / f"{m.group(2)}.jsonl"
@@ -322,6 +339,8 @@ def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, git=run):
         why = "프로세스 cwd 를 읽지 못함"
     elif w.get("locked"):
         why = "locked"
+    elif w.get("branch"):
+        why = f"브랜치 {w['branch'].removeprefix('refs/heads/')} 체크아웃(보고만)"
     elif git(["git", "status", "--porcelain"], cwd=path, check=False) != "":
         why = "변경 있음"
     elif not git(["git", "for-each-ref", "--count=1", "--contains", "HEAD", "refs/remotes"], cwd=path, check=False):
@@ -345,13 +364,14 @@ def scan(kinds, hours, cfg, repo_list):
         items += docker_scan(hours, notes)
     if {"branch", "worktree"} & kinds:
         projects_dir = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
+        orca = orca_paths() if "worktree" in kinds else set()
         for repo in repo_list:
             try:
                 if "branch" in kinds:
                     items += branch_scan(repo, notes)
                 if "worktree" in kinds:
                     items += [x for w in worktrees(repo)[1:]
-                              if (x := judge_worktree(repo, w, hours, cwd_of, time.time(), projects_dir))]
+                              if (x := judge_worktree(repo, w, hours, cwd_of, time.time(), projects_dir, orca))]
             except RuntimeError as e:
                 notes.append(f"{repo}: {e}")
     return items, notes

@@ -112,8 +112,10 @@ with tempfile.TemporaryDirectory() as tmp:
     transcript.rename(transcript.with_suffix(".bak"))
     assert not reap.judge_worktree(str(repo), w, 6, {}, old, projects)["target"]
     transcript.with_suffix(".bak").rename(transcript)
+    # A checkout on a branch may back an open PR: reported only.
+    assert reap.judge_worktree(str(repo), {**w, "branch": "refs/heads/x"}, 6, {}, old, projects)["why"].startswith("브랜치 x")
     item = reap.judge_worktree(str(repo), w, 6, {}, old, projects)
-    assert item["target"], item
+    assert item["target"] and item["tip"] == w["HEAD"], item
     reap.act(item, [])
     assert not wt.exists() and len(reap.worktrees(str(repo))) == 1
     # A merged branch is deleted with its restore command; a branch that moved after the scan stays.
@@ -130,6 +132,10 @@ with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(["rm", "-rf", str(tmp / name)], check=True)
     gone = [reap.judge_worktree(str(repo), w, 6, {}, old, projects) for w in reap.worktrees(str(repo))[1:]]
     assert all(g["target"] for g in gone) and len(gone) == 2
+    # An Orca worktree is the steward's (orca worktree rm); unreadable Orca state keeps them all.
+    w1 = reap.worktrees(str(repo))[1]
+    assert reap.judge_worktree(str(repo), w1, 6, {}, old, projects, orca={w1["path"]}) is None
+    assert not reap.judge_worktree(str(repo), w1, 6, {}, old, projects, orca=None)["target"]
     reap.act(gone[0], [])
     assert [w["path"] for w in reap.worktrees(str(repo))[1:]] == [gone[1]["name"]]
     git("worktree", "remove", gone[1]["name"], cwd=repo)
