@@ -257,7 +257,8 @@ def main():
     print("\n".join(out))
     if opt("--json"):
         json.dump({"prs": len(prs), "derived": len(derived), "baseline": len(base), "done": done,
-                   "late_commits": sum(late), "main_red": len(main_red), "bugs": len(bugs), "usage": u},
+                   "late_commits": sum(late), "main_red": len(main_red), "bugs": len(bugs),
+                   "usage": dict(u, codex_measured=bool(u["codex_sessions"]))},
                   open(opt("--json"), "w"), indent=2)
 
 
