@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: "Use when one session must drive a project or milestone to done through several Orca workers — \"PM 겸 오케스트레이터로 끝까지\", 3+ tickets in parallel with their PRs landed, follow-up tickets kept from swallowing the plan, a progress dashboard (\"대시보드 갱신해줘\", \"전체 진행상황 몇 퍼센트\") — or when taking over (\"resume\") a program another coordinator ran, or asked why a program's PRs are not moving."
+description: "Use when this session is the top-level orchestrator above every Claude Code and Orca session (\"오케스트레이터로\", \"모든 세션 관리해줘\", \"전체 태스크 현황\", \"이 세션도 편입해줘\"), or when one session must drive a project or milestone to done through several Orca workers — \"PM 겸 오케스트레이터로 끝까지\", 3+ tickets in parallel with their PRs landed, follow-up tickets kept from swallowing the plan, a progress dashboard (\"대시보드 갱신해줘\", \"전체 진행상황 몇 퍼센트\") — or when taking over (\"resume\") a program another coordinator ran, or asked why a program's PRs are not moving."
 ---
 
 # Orchestrate a program
@@ -8,6 +8,18 @@ description: "Use when one session must drive a project or milestone to done thr
 You own the program, not the code. You frame it, write briefs, drain the inbox, keep dependencies and the land order honest, and decide. Orca already owns the mechanics: Run, Task and its deps, Dispatch, `check --wait`/ack, `ask`/`reply`, gates, the worker contract, recovery and release. This skill adds only the program layer.
 
 **REQUIRED BACKGROUND:** at the start of every coordinator session, run `orca skills get orchestration` and read it. Every Orca command here comes from it; never compose one from memory.
+
+Two modes share these rules. **Top-level:** the one session above every task session and program coordinator the human runs; read `references/top-level.md`. **Program:** one project driven to done through workers; the Steps below.
+
+## Stay answerable
+
+The human must get an answer from you within seconds, at any time. You route; you do not do the work.
+
+- Inside your turn, only three things happen: routing a request to its owner, checks that finish in seconds (`orch status`, one `orca … --json` read, one `gh … --json` read), and answering the human.
+- Investigation, implementation, verification, reviews, long waits and monitoring go to a background subagent (`run_in_background`) or an Orca worker the moment the request arrives. Hand over the facts you already have; do not "take a quick look first".
+- Never block in the foreground: no `until` loops, no `sleep`, no `check --wait` or `orch wait` without `run_in_background`, no back-to-back polling reads.
+- Completion reaches you as a notification: the background task's completion, or the `orch wait` that wakes on worker_done, escalation or question. Between notifications, your turn is over.
+- A request that would take you more than one short tool call is a delegation, even when you know the answer's shape.
 
 ## When not to use
 
