@@ -1,0 +1,699 @@
+<title>agent-skills 안내서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f3f5f4;
+  --paper: #ffffff;
+  --ink: #16201d;
+  --muted: #56625d;
+  --line: #d6ddd9;
+  --accent: #1d5d86;
+  --accent-soft: #e2edf4;
+  --gate: #a8650c;
+  --gate-soft: #f7ecdb;
+  --stop: #b23a2e;
+  --stop-soft: #f8e4e1;
+  --ok: #2d7a4f;
+  --ok-soft: #e0f0e6;
+  --code-bg: #eaefec;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #0f1513;
+    --paper: #161e1b;
+    --ink: #e3ebe7;
+    --muted: #9aa8a2;
+    --line: #2c3834;
+    --accent: #72b3dd;
+    --accent-soft: #17303f;
+    --gate: #e0a24a;
+    --gate-soft: #35280f;
+    --stop: #ec7a6c;
+    --stop-soft: #3a1c18;
+    --ok: #6fc394;
+    --ok-soft: #173325;
+    --code-bg: #1f2925;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #0f1513;
+  --paper: #161e1b;
+  --ink: #e3ebe7;
+  --muted: #9aa8a2;
+  --line: #2c3834;
+  --accent: #72b3dd;
+  --accent-soft: #17303f;
+  --gate: #e0a24a;
+  --gate-soft: #35280f;
+  --stop: #ec7a6c;
+  --stop-soft: #3a1c18;
+  --ok: #6fc394;
+  --ok-soft: #173325;
+  --code-bg: #1f2925;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.65;
+  padding-inline: 16px;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding-block: 40px 80px; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.3; margin: 0; }
+h1 { font-size: clamp(28px, 5vw, 38px); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 24px; font-weight: 700; }
+h3 { font-size: 17px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+html:not([lang="en"]):not([lang="ja"]) [data-lang]:not([data-lang="ko"]),
+html[lang="en"] [data-lang]:not([data-lang="en"]),
+html[lang="ja"] [data-lang]:not([data-lang="ja"]) { display: none !important; }
+html[lang="ja"] { --sans: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", system-ui, sans-serif; }
+html[lang="ja"] body { word-break: normal; line-break: strict; }
+
+header.top { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
+.topline { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.lang-switch {
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+}
+.lang-switch button {
+  font: 600 12px var(--mono); letter-spacing: 0.06em; color: var(--muted); background: transparent;
+  border: 0; border-radius: 6px; min-width: 40px; min-height: 30px; padding: 4px 10px; cursor: pointer;
+}
+.lang-switch button:hover { color: var(--ink); }
+.lang-switch button[aria-pressed="true"] { color: var(--paper); background: var(--ink); }
+.eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.lede { color: var(--muted); font-size: 16px; }
+.install {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch;
+}
+.cmd {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 8px 8px 12px; max-width: 100%; min-width: 0;
+}
+.cmd code { background: none; padding: 0; white-space: nowrap; overflow-x: auto; }
+.cmd button {
+  font: 500 12px var(--sans); color: var(--accent); background: var(--accent-soft);
+  border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; flex: none;
+}
+
+nav.toc {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--ground); border-bottom: 1px solid var(--line);
+  display: flex; gap: 4px; overflow-x: auto; padding-block: 10px; margin-bottom: 8px;
+}
+nav.toc a {
+  flex: none; text-decoration: none; color: var(--muted); font-weight: 500; font-size: 14px;
+  padding: 6px 12px; border-radius: 999px;
+}
+nav.toc a:hover { color: var(--ink); background: var(--paper); }
+
+section { padding-top: 44px; display: grid; gap: 18px; scroll-margin-top: 56px; }
+.section-head { display: grid; gap: 6px; }
+
+/* Layer map */
+.layers { display: grid; gap: 10px; }
+.layer {
+  display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: start;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+}
+.layer .who { font-weight: 600; }
+.layer .who small { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+.layer p { font-size: 14px; }
+.layer .runs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 500; border-radius: 999px; padding: 2px 9px;
+  background: var(--accent-soft); color: var(--accent); white-space: nowrap;
+}
+.chip.gate { background: var(--gate-soft); color: var(--gate); }
+.chip.stop { background: var(--stop-soft); color: var(--stop); }
+.chip.ok { background: var(--ok-soft); color: var(--ok); }
+.chip.plain { background: var(--code-bg); color: var(--muted); }
+
+/* Loop tabs */
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabs button {
+  font: 500 14px var(--sans); color: var(--muted); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 14px; cursor: pointer;
+}
+.tabs button[aria-selected="true"] { color: var(--paper); background: var(--ink); border-color: var(--ink); }
+.panel { display: grid; gap: 18px; }
+.panel > p.intro { color: var(--muted); }
+
+/* A loop: stations on a rail, with back edges */
+.loop { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 20px; align-items: start; }
+.rail { list-style: none; margin: 0; padding: 0; position: relative; display: grid; gap: 0; }
+.rail::before {
+  content: ""; position: absolute; left: 13px; top: 14px; bottom: 14px; width: 2px; background: var(--line);
+}
+.rail li { position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 12px; padding-block: 8px; }
+.dot {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--paper); border: 2px solid var(--accent);
+  display: grid; place-items: center; font: 600 12px var(--mono); color: var(--accent); position: relative; z-index: 1;
+}
+.dot.wait { border-style: dashed; }
+.dot.gate { border-color: var(--gate); color: var(--gate); }
+.dot.stop { border-color: var(--stop); color: var(--stop); }
+.dot.ok { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+.rail .body { display: grid; gap: 3px; padding-top: 2px; }
+.rail .body b { font-weight: 600; }
+.rail .body > span { color: var(--muted); font-size: 14px; }
+.rail li.cycle { margin-left: 26px; padding-left: 14px; border-left: 2px dashed var(--accent); }
+.rail li.cycle .dot { border-color: var(--accent); }
+.rail li.cycle-label {
+  display: block; padding-block: 0;
+  margin: 6px 0 2px 40px; font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: 0.04em;
+}
+
+aside.edges {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  display: grid; gap: 10px; font-size: 14px;
+}
+aside.edges h3 { font-size: 13px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+aside.edges ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+aside.edges li { display: grid; gap: 2px; }
+aside.edges .arrow { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+
+/* next-move ladder */
+.ladder { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--paper); }
+.ladder div { display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: center; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 14px; }
+.ladder div:first-child { border-top: 0; }
+.ladder .n { font: 500 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.ladder code { font-size: 12px; }
+
+.exits { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.exit { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--paper); display: grid; gap: 4px; font-size: 14px; }
+.exit .code { font: 600 22px var(--mono); }
+.exit.e0 .code { color: var(--ok); }
+.exit.e2 .code { color: var(--accent); }
+.exit.e3 .code { color: var(--gate); }
+.exit.e1 .code { color: var(--stop); }
+.exit > span { color: var(--muted); }
+
+.note { border-left: 3px solid var(--gate); padding: 4px 0 4px 14px; color: var(--ink); font-size: 14px; max-width: 72ch; }
+
+/* Skills */
+.filter { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter button {
+  font: 500 13px var(--sans); color: var(--muted); background: transparent;
+  border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer;
+}
+.filter button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.skills { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.skill { display: grid; grid-template-columns: 210px 1fr; gap: 18px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.skill .name { display: grid; gap: 6px; align-content: start; }
+.skill .name code { font-size: 14px; font-weight: 500; background: none; padding: 0; color: var(--ink); }
+.skill .desc { display: grid; gap: 6px; font-size: 14px; }
+.skill .when { color: var(--muted); }
+.skill .files { display: flex; flex-wrap: wrap; gap: 6px; }
+.skill .files code { font-size: 12px; }
+
+table.perm { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+table.perm th, table.perm td { text-align: left; padding: 10px 14px; border-top: 1px solid var(--line); vertical-align: top; }
+table.perm th { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.05em; border-top: 0; background: var(--ground); }
+table.perm td, table.perm th { overflow-wrap: normal; }
+.table-scroll { overflow-x: auto; }
+
+footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+@media (max-width: 720px) {
+  .loop { grid-template-columns: 1fr; }
+  .layer { grid-template-columns: 1fr; gap: 6px; }
+  .skill { grid-template-columns: 1fr; gap: 8px; }
+  .ladder div { grid-template-columns: 26px 1fr; }
+  .ladder div > :last-child { grid-column: 2; justify-self: start; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+</style>
+
+<script>
+(function () {
+  var TITLE = { ko: "agent-skills 안내서", en: "agent-skills guide", ja: "agent-skills ガイド" };
+  var pick = function (v) { return TITLE[v] ? v : null; };
+  var lang = pick(location.hash.slice(1));
+  try { lang = pick(new URLSearchParams(location.search).get("lang")) || lang; } catch (e) {}
+  if (!lang) { try { lang = pick(localStorage.getItem("guide-lang")); } catch (e) {} }
+  if (!lang) {
+    var nav = String(navigator.language || "").toLowerCase();
+    lang = nav.indexOf("ko") === 0 ? "ko" : nav.indexOf("ja") === 0 ? "ja" : "en";
+  }
+  document.documentElement.lang = lang;
+  document.title = TITLE[lang];
+})();
+</script>
+
+<div class="wrap">
+  <header class="top">
+    <div class="topline">
+      <span class="eyebrow"><span data-lang="ko">Claude Code 플러그인</span><span data-lang="en">Claude Code plugin</span><span data-lang="ja">Claude Code プラグイン</span> · JeongJaeSoon/agent-skills</span>
+      <div class="lang-switch" role="group" aria-label="언어" data-label-ko="언어" data-label-en="Language" data-label-ja="言語">
+        <button type="button" data-set-lang="ko" lang="ko" aria-pressed="false">KO</button>
+        <button type="button" data-set-lang="en" lang="en" aria-pressed="false">EN</button>
+        <button type="button" data-set-lang="ja" lang="ja" aria-pressed="false">JA</button>
+      </div>
+    </div>
+    <h1>agent-skills <span data-lang="ko">안내서</span><span data-lang="en">guide</span><span data-lang="ja">ガイド</span></h1>
+    <p class="lede"><span data-lang="ko">티켓 하나를 끝까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 27개로 묶었다. 무엇이 어떤 순서로 돌고, 어디서 깨어나고, 어디서 멈추는지 정리한다.</span><span data-lang="en">Twenty-seven skills covering two flows: carrying one ticket all the way to done, and finishing a whole project with several Orca workers. This page lays out what runs in what order, where each loop wakes up, and where it stops.</span><span data-lang="ja">チケット 1 件を最後までやり切る流れと、複数の Orca ワーカーでプロジェクト 1 つを完了させる流れを、27 個のスキルにまとめました。何がどの順番で動き、どこで起き、どこで止まるのかを整理します。</span></p>
+    <div class="install">
+      <div class="cmd"><code id="c1">claude plugin marketplace add JeongJaeSoon/agent-skills</code><button type="button" data-copy="c1"><span data-lang="ko">복사</span><span data-lang="en">Copy</span><span data-lang="ja">コピー</span></button></div>
+      <div class="cmd"><code id="c2">claude plugin install agent-skills@jeongjaesoon</code><button type="button" data-copy="c2"><span data-lang="ko">복사</span><span data-lang="en">Copy</span><span data-lang="ja">コピー</span></button></div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="목차" data-label-ko="목차" data-label-en="Contents" data-label-ja="目次">
+    <a href="#layers"><span data-lang="ko">전체 구조</span><span data-lang="en">Overview</span><span data-lang="ja">全体構成</span></a>
+    <a href="#loops"><span data-lang="ko">루프</span><span data-lang="en">Loops</span><span data-lang="ja">ループ</span></a>
+    <a href="#skills"><span data-lang="ko">스킬 목록</span><span data-lang="en">Skills</span><span data-lang="ja">スキル一覧</span></a>
+    <a href="#permissions"><span data-lang="ko">권한</span><span data-lang="en">Permissions</span><span data-lang="ja">権限</span></a>
+  </nav>
+
+  <section id="layers">
+    <div class="section-head">
+      <span class="eyebrow"><span data-lang="ko">전체 구조</span><span data-lang="en">Overview</span><span data-lang="ja">全体構成</span></span>
+      <h2><span data-lang="ko">누가 어떤 루프를 도나</span><span data-lang="en">Who runs which loop</span><span data-lang="ja">誰がどのループを回すか</span></h2>
+      <p class="lede"><span data-lang="ko">세션 하나가 티켓 하나를 끝내는 경우와, 코디네이터 세션이 워커 여러 개를 거느리는 경우가 있다. 루프는 층마다 따로 돌고, 층 사이는 Orca 메시지와 원장(<code>ledger.jsonl</code>)으로 이어진다.</span><span data-lang="en">Either one session finishes one ticket, or a coordinator session runs several workers. Each layer runs its own loop, and the layers talk to each other through Orca messages and the ledger (<code>ledger.jsonl</code>).</span><span data-lang="ja">1 つのセッションが 1 件のチケットを終える場合と、コーディネーターのセッションが複数のワーカーを率いる場合があります。ループは層ごとに別々に回り、層どうしは Orca のメッセージと台帳（<code>ledger.jsonl</code>）でつながります。</span></p>
+    </div>
+    <div class="layers">
+      <div class="layer">
+        <div class="who"><span data-lang="ko">코디네이터</span><span data-lang="en">Coordinator</span><span data-lang="ja">コーディネーター</span><small><span data-lang="ko">orchestrate를 연 세션</span><span data-lang="en">the session that started orchestrate</span><span data-lang="ja">orchestrate を開始したセッション</span></small></div>
+        <div>
+          <p><span data-lang="ko">목표를 셀 수 있는 완료 조건으로 바꾸고, 워커를 띄우고, 깨어날 때마다 <code>orch status</code>의 다음 행동 한 줄을 따른다. 직접 코드를 고치거나 머지하지 않는다(human-gate 제외).</span><span data-lang="en">Turns the goal into a countable done condition, spawns workers, and on every wake-up follows the one-line next action from <code>orch status</code>. It never edits code or merges on its own (except at a human-gate).</span><span data-lang="ja">目標を数えられる完了条件に変え、ワーカーを起動し、起きるたびに <code>orch status</code> が示す次の行動 1 行に従います。自分でコードを直したりマージしたりはしません（human-gate を除く）。</span></p>
+          <div class="runs"><span class="chip"><span data-lang="ko">코디네이터 루프</span><span data-lang="en">Coordinator loop</span><span data-lang="ja">コーディネーターループ</span></span><span class="chip plain">orch wait · status · dash</span></div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="who"><span data-lang="ko">티켓 워커</span><span data-lang="en">Ticket worker</span><span data-lang="ja">チケットワーカー</span><small><span data-lang="ko">Orca 카드 하나 = 티켓 하나</span><span data-lang="en">one Orca card = one ticket</span><span data-lang="ja">Orca カード 1 枚 = チケット 1 件</span></small></div>
+        <div>
+          <p><span data-lang="ko">브리프를 받아 deliver-ticket 순서대로 구현·검토·PR을 만들고, 자기 PR을 <code>orch land</code>로 착지시킨 뒤 <code>worker_done</code>으로 보고한다.</span><span data-lang="en">Takes a brief, then implements, reviews and opens a PR in deliver-ticket order, lands its own PR with <code>orch land</code>, and reports with <code>worker_done</code>.</span><span data-lang="ja">ブリーフを受け取り、deliver-ticket の順に実装・レビュー・PR 作成を行い、自分の PR を <code>orch land</code> でランディングさせてから <code>worker_done</code> で報告します。</span></p>
+          <div class="runs"><span class="chip"><span data-lang="ko">티켓 루프</span><span data-lang="en">Ticket loop</span><span data-lang="ja">チケットループ</span></span><span class="chip"><span data-lang="ko">착지 루프</span><span data-lang="en">Landing loop</span><span data-lang="ja">ランディングループ</span></span></div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="who"><span data-lang="ko">상주 역할</span><span data-lang="en">Standing roles</span><span data-lang="ja">常駐ロール</span><small><span data-lang="ko">main 가디언 · QA 리드</span><span data-lang="en">main guardian · QA lead</span><span data-lang="ja">main ガーディアン · QA リード</span></small></div>
+        <div>
+          <p><span data-lang="ko">티켓을 잡지 않는다. 가디언은 main CI가 빨개지면 flake인지 결함인지 가려 hotfix나 revert로 되돌리고, QA 리드는 착지한 티켓 검증·주기 E2E·설계 정합성 감사를 계속 돌린다.</span><span data-lang="en">They don't take tickets. When main CI goes red, the guardian tells a flake from a real defect and restores main with a hotfix or a revert. The QA lead keeps three things running: verifying landed tickets, periodic E2E, and design-conformance audits.</span><span data-lang="ja">チケットは担当しません。ガーディアンは main の CI が赤くなると flake か本物の欠陥かを見分け、hotfix か revert で main を戻します。QA リードは、ランディング済みチケットの検証・定期 E2E・設計との整合性監査の 3 つを回し続けます。</span></p>
+          <div class="runs"><span class="chip"><span data-lang="ko">가디언 루프</span><span data-lang="en">Guardian loop</span><span data-lang="ja">ガーディアンループ</span></span><span class="chip"><span data-lang="ko">QA 루프</span><span data-lang="en">QA loop</span><span data-lang="ja">QA ループ</span></span></div>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="who"><span data-lang="ko">단독 세션</span><span data-lang="en">Solo session</span><span data-lang="ja">単独セッション</span><small><span data-lang="ko">프로그램 밖</span><span data-lang="en">outside a program</span><span data-lang="ja">プログラムの外</span></small></div>
+        <div>
+          <p><span data-lang="ko">write-ticket → deliver-ticket → handoff-ticket 또는 end-session. 곁가지는 dispatch-card로 다른 카드에 넘기고 자기 일을 계속한다.</span><span data-lang="en">write-ticket → deliver-ticket → handoff-ticket or end-session. Side work goes to another card through dispatch-card while the session keeps going.</span><span data-lang="ja">write-ticket → deliver-ticket → handoff-ticket または end-session。脇道の作業は dispatch-card で別のカードに渡し、自分の作業を続けます。</span></p>
+          <div class="runs"><span class="chip"><span data-lang="ko">티켓 루프</span><span data-lang="en">Ticket loop</span><span data-lang="ja">チケットループ</span></span><span class="chip plain"><span data-lang="ko">머지 감시(외부 maintainer)</span><span data-lang="en">Merge watch (external maintainer)</span><span data-lang="ja">マージ監視（外部 maintainer）</span></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="loops">
+    <div class="section-head">
+      <span class="eyebrow"><span data-lang="ko">루프</span><span data-lang="en">Loops</span><span data-lang="ja">ループ</span></span>
+      <h2><span data-lang="ko">어떻게 돌면서 동작하나</span><span data-lang="en">How the loops run</span><span data-lang="ja">ループはどう回るか</span></h2>
+      <p class="lede"><span data-lang="ko">점선 동그라미는 기다리는 자리다. 기다림은 언제나 백그라운드 명령 하나로 하고, 그 명령이 끝나면서 세션을 깨운다. 폴링 턴을 쓰지 않는 것이 비용의 대부분을 아낀다.</span><span data-lang="en">A dashed circle marks a wait. Waiting is always a single background command, and the session wakes when that command exits. Not spending turns on polling is where most of the savings come from.</span><span data-lang="ja">点線の丸は待機の位置です。待機は必ずバックグラウンドのコマンド 1 つで行い、そのコマンドが終了するとセッションが起きます。ポーリングにターンを使わないことが、コスト削減の大部分を占めます。</span></p>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="루프 선택" data-label-ko="루프 선택" data-label-en="Choose a loop" data-label-ja="ループの選択">
+      <button type="button" role="tab" id="t-coord" aria-controls="p-coord" aria-selected="true"><span data-lang="ko">코디네이터</span><span data-lang="en">Coordinator</span><span data-lang="ja">コーディネーター</span></button>
+      <button type="button" role="tab" id="t-ticket" aria-controls="p-ticket" aria-selected="false"><span data-lang="ko">티켓</span><span data-lang="en">Ticket</span><span data-lang="ja">チケット</span></button>
+      <button type="button" role="tab" id="t-land" aria-controls="p-land" aria-selected="false"><span data-lang="ko">착지</span><span data-lang="en">Landing</span><span data-lang="ja">ランディング</span></button>
+      <button type="button" role="tab" id="t-guard" aria-controls="p-guard" aria-selected="false"><span data-lang="ko">가디언 · QA</span><span data-lang="en">Guardian · QA</span><span data-lang="ja">ガーディアン · QA</span></button>
+    </div>
+
+    <div class="panel" id="p-coord" role="tabpanel" aria-labelledby="t-coord">
+      <p class="intro"><span data-lang="ko">orchestrate. 처음 네 단계는 한 번, Drain부터 Land까지가 완료 조건이 검증될 때까지 반복된다. 코디네이터는 <code>/goal</code> 아래에서 돈다.</span><span data-lang="en">orchestrate. The first four steps run once; Drain through Land repeats until the done condition is verified. The coordinator runs under <code>/goal</code>.</span><span data-lang="ja">orchestrate。最初の 4 ステップは 1 回だけ、Drain から Land までは完了条件が検証されるまで繰り返します。コーディネーターは <code>/goal</code> の下で動きます。</span></p>
+      <div class="loop">
+        <ol class="rail">
+          <li><span class="dot">1</span><div class="body"><b>Frame</b><span data-lang="ko">티켓 전수 독해, 완료 조건(티켓 ID + 실제 산출물 최종 검증) 도출, 사람의 목표를 상시 지시로 원문 그대로, 의존을 start-after(Orca dep)와 land-after(GitHub stack + <code>orch dep</code>)로 나눔, <code>orch init</code>, <code>orch-dash serve</code></span><span data-lang="en">Read every ticket; derive the done condition (ticket IDs + a final check against the real output); keep the human's goal word for word as a standing order; split dependencies into start-after (Orca dep) and land-after (GitHub stack + <code>orch dep</code>); <code>orch init</code>, <code>orch-dash serve</code></span><span data-lang="ja">チケットをすべて読む。完了条件（チケット ID + 実際の成果物での最終検証）を導く。人の目標を原文のまま常時指示にする。依存を start-after（Orca dep）と land-after（GitHub stack + <code>orch dep</code>）に分ける。<code>orch init</code>、<code>orch-dash serve</code></span></div></li>
+          <li><span class="dot">2</span><div class="body"><b><span data-lang="ko">검증 먼저</span><span data-lang="en">Verify first</span><span data-lang="ja">まず検証</span></b><span data-lang="ko">대상 저장소에 <code>verify-&lt;app&gt;</code> 스킬이 없으면 첫 과제가 create-verification-skill</span><span data-lang="en">If the target repo has no <code>verify-&lt;app&gt;</code> skill, the first task is create-verification-skill</span><span data-lang="ja">対象リポジトリに <code>verify-&lt;app&gt;</code> スキルがなければ、最初のタスクは create-verification-skill</span></div></li>
+          <li><span class="dot">3</span><div class="body"><b>Pilot</b><span data-lang="ko">워커 하나로 브리프 → PR → verdict → <code>orch land</code> → main green을 한 바퀴. 브리프와 단위 크기를 여기서 고친다</span><span data-lang="en">One worker makes one full lap: brief → PR → verdict → <code>orch land</code> → main green. This is where the brief and the unit size get fixed</span><span data-lang="ja">ワーカー 1 つでブリーフ → PR → verdict → <code>orch land</code> → main green を 1 周。ブリーフと作業単位の大きさはここで直す</span></div></li>
+          <li><span class="dot">4</span><div class="body"><b>Scale</b><span data-lang="ko">가디언·QA 리드를 띄우고, <code>orch status</code>가 알려 주는 상한까지 티켓 워커를 띄운다</span><span data-lang="en">Start the guardian and the QA lead, then spawn ticket workers up to the cap <code>orch status</code> reports</span><span data-lang="ja">ガーディアンと QA リードを起動し、<code>orch status</code> が示す上限までチケットワーカーを起動する</span></div></li>
+          <li class="cycle-label" aria-hidden="true">↻ <span data-lang="ko">반복</span><span data-lang="en">repeat</span><span data-lang="ja">繰り返し</span></li>
+          <li class="cycle"><span class="dot wait">⋯</span><div class="body"><b><span data-lang="ko">기다림:</span><span data-lang="en">Wait:</span><span data-lang="ja">待機:</span> <code>orch wait</code></b><span data-lang="ko">백그라운드 하나만. worker_done·질문·escalation이 오면 끝나며 깨운다. heartbeat만 온 묶음은 스스로 ack하고 계속 잔다</span><span data-lang="en">One background command, nothing else. It exits and wakes the session on a worker_done, a question or an escalation. A batch holding only heartbeats is acked on its own and it keeps sleeping</span><span data-lang="ja">バックグラウンドは 1 つだけ。worker_done・質問・escalation が届くと終了してセッションを起こす。heartbeat だけのまとまりは自分で ack して眠り続ける</span></div></li>
+          <li class="cycle"><span class="dot">5</span><div class="body"><b>Drain</b><span data-lang="ko">묶음의 메시지를 모두 처리하고 ack. 착지 후 끝난 워커는 같은 턴에 release · 터미널 닫기 · worktree 제거</span><span data-lang="en">Handle and ack every message in the batch. A worker that finished after landing is released, its terminal closed and its worktree removed, all in the same turn</span><span data-lang="ja">まとまったメッセージをすべて処理して ack。ランディング後に終わったワーカーは、同じターンで release・ターミナルを閉じる・worktree を削除</span></div></li>
+          <li class="cycle"><span class="dot">6</span><div class="body"><b>Triage</b><span data-lang="ko">새로 생긴 티켓은 기본 보류(<code>follow-up</code> 라벨, <code>record parked</code>). 완료 조건 항목을 막거나, 이 프로그램이 머지한 코드의 재현된 결함일 때만 편입</span><span data-lang="en">New tickets are parked by default (<code>follow-up</code> label, <code>record parked</code>). One is pulled in only if it blocks a done-condition item or is a reproduced defect in code this program merged</span><span data-lang="ja">新しく生まれたチケットは既定で保留（<code>follow-up</code> ラベル、<code>record parked</code>）。完了条件の項目を妨げるか、このプログラムがマージしたコードで再現した欠陥のときだけ取り込む</span></div></li>
+          <li class="cycle"><span class="dot">7</span><div class="body"><b><span data-lang="ko">Land 감독</span><span data-lang="en">Land oversight</span><span data-lang="ja">Land の監督</span></b><span data-lang="ko">착지는 워커가 한다. 코디네이터는 의존·stack·우선순위를 바로잡고 멈춘 PR을 푼다</span><span data-lang="en">Workers do the landing. The coordinator straightens out dependencies, stacks and priorities, and unsticks stalled PRs</span><span data-lang="ja">ランディングはワーカーが行う。コーディネーターは依存・stack・優先度を正し、止まった PR をほどく</span></div></li>
+          <li class="cycle"><span class="dot">▸</span><div class="body"><b><code>orch status</code> → <span data-lang="ko">next 한 줄</span><span data-lang="en">the next line</span><span data-lang="ja">次の 1 行</span></b><span data-lang="ko">모든 drain의 끝. 아래 규칙표 중 처음 맞는 한 줄이 다음 행동이고, 다시 <code>orch wait</code>로</span><span data-lang="en">The end of every drain. The first matching row in the table below is the next action; then back to <code>orch wait</code></span><span data-lang="ja">すべての drain の最後。下の規則表で最初に当てはまる 1 行が次の行動で、その後また <code>orch wait</code> へ</span></div></li>
+          <li><span class="dot ok">✓</span><div class="body"><b>Close</b><span data-lang="ko">완료 조건 충족 + 최종 검증 기록(<code>predicate_verified</code>) → 워커 정리, measure-delivery 보고, 교훈 반영</span><span data-lang="en">Done condition met + final check recorded (<code>predicate_verified</code>) → clean up workers, report with measure-delivery, fold in the lessons</span><span data-lang="ja">完了条件を満たし最終検証を記録（<code>predicate_verified</code>）→ ワーカーの片付け、measure-delivery で報告、教訓を反映</span></div></li>
+        </ol>
+        <aside class="edges">
+          <h3><span data-lang="ko">상한(cap)은 이렇게 움직인다</span><span data-lang="en">How the cap moves</span><span data-lang="ja">上限（cap）の動き方</span></h3>
+          <ul>
+            <li><span class="arrow"><span data-lang="ko">시작 1</span><span data-lang="en">start at 1</span><span data-lang="ja">開始 1</span></span><span data-lang="ko">파일럿 한 대부터</span><span data-lang="en">Begin with a single pilot</span><span data-lang="ja">パイロット 1 台から</span></li>
+            <li><span class="arrow">+1</span><span data-lang="ko">main에서 green으로 증명된 착지마다</span><span data-lang="en">For every landing proven green on main</span><span data-lang="ja">main で green と確認されたランディングごとに</span></li>
+            <li><span class="arrow">÷2</span><span data-lang="ko">main red마다</span><span data-lang="en">For every red on main</span><span data-lang="ja">main が red になるたびに</span></li>
+            <li><span class="arrow"><span data-lang="ko">천장 6</span><span data-lang="en">ceiling 6</span><span data-lang="ja">天井 6</span></span><span data-lang="ko">프로그램 설정값(<code>ceiling</code>)</span><span data-lang="en">A program setting (<code>ceiling</code>)</span><span data-lang="ja">プログラムの設定値（<code>ceiling</code>）</span></li>
+            <li><span class="arrow"><span data-lang="ko">1로 셈</span><span data-lang="en">counts as 1</span><span data-lang="ja">1 と数える</span></span><span data-lang="ko">한 land-after 체인(stack)은 한 번에 머지되므로 한 대로</span><span data-lang="en">A land-after chain (stack) merges in one go, so it counts as one</span><span data-lang="ja">land-after のチェーン（stack）は一度にマージされるので 1 台扱い</span></li>
+            <li><span class="arrow"><span data-lang="ko">0으로 셈</span><span data-lang="en">counts as 0</span><span data-lang="ja">0 と数える</span></span><span data-lang="ko">가디언·QA 리드 같은 상주 역할</span><span data-lang="en">Standing roles such as the guardian and the QA lead</span><span data-lang="ja">ガーディアンや QA リードなどの常駐ロール</span></li>
+          </ul>
+        </aside>
+      </div>
+
+      <h3><span data-lang="ko">next 줄 규칙 (위에서부터 처음 맞는 것)</span><span data-lang="en">Next-line rules (first match from the top wins)</span><span data-lang="ja">next 行の規則（上から最初に当てはまるもの）</span></h3>
+      <div class="ladder">
+        <div><span class="n">1</span><span><span data-lang="ko">STOP 줄이 켜져 있음</span><span data-lang="en">The STOP line is on</span><span data-lang="ja">STOP 行が点いている</span></span><span class="chip stop"><span data-lang="ko">새로 띄우지 않음</span><span data-lang="en">Spawn nothing new</span><span data-lang="ja">新たに起動しない</span></span></div>
+        <div><span class="n">2</span><span><span data-lang="ko">main이 red</span><span data-lang="en">main is red</span><span data-lang="ja">main が red</span></span><span class="chip stop"><span data-lang="ko">수리 PR만</span><span data-lang="en">Fix PRs only</span><span data-lang="ja">修正 PR のみ</span> <code>--class main-fix</code></span></div>
+        <div><span class="n">3</span><span><span data-lang="ko">완료 조건 충족 + 최종 검증 유효</span><span data-lang="en">Done condition met + final check still valid</span><span data-lang="ja">完了条件を満たし、最終検証も有効</span></span><span class="chip ok">Close</span></div>
+        <div><span class="n">4</span><span><span data-lang="ko">티켓은 다 끝남</span><span data-lang="en">Every ticket is finished</span><span data-lang="ja">チケットはすべて完了</span></span><span class="chip"><span data-lang="ko">실제 산출물로 최종 검증</span><span data-lang="en">Run the final check on the real output</span><span data-lang="ja">実際の成果物で最終検証</span></span></div>
+        <div><span class="n">5</span><span><span data-lang="ko">마감 시간 70% 이상 사용</span><span data-lang="en">70% or more of the deadline used</span><span data-lang="ja">締め切りの 70% 以上を消費</span></span><span class="chip gate"><span data-lang="ko">검증된 것만 착지</span><span data-lang="en">Land only what's verified</span><span data-lang="ja">検証済みのものだけランディング</span></span></div>
+        <div><span class="n">6</span><span><span data-lang="ko">오래 멈춘 PR이 있음</span><span data-lang="en">A PR has been stuck for a long time</span><span data-lang="ja">長く止まっている PR がある</span></span><span class="chip gate"><span data-lang="ko">먼저 풀기</span><span data-lang="en">Unstick it first</span><span data-lang="ja">先にほどく</span></span></div>
+        <div><span class="n">7</span><span><span data-lang="ko">착지 대기 시간이 한도 초과 또는 사람 대기 3건 이상</span><span data-lang="en">Landing wait is over the limit, or 3+ items are waiting on a human</span><span data-lang="ja">ランディング待ちが上限超え、または人の対応待ちが 3 件以上</span></span><span class="chip gate"><span data-lang="ko">구현 스폰 중단</span><span data-lang="en">Stop spawning implementers</span><span data-lang="ja">実装ワーカーの起動を止める</span></span></div>
+        <div><span class="n">8</span><span><span data-lang="ko">3시간 착지 0건에 실패 2건 이상</span><span data-lang="en">No landings in 3 hours and 2+ failures</span><span data-lang="ja">3 時間ランディング 0 件で失敗 2 件以上</span></span><span class="chip gate"><span data-lang="ko">원인부터</span><span data-lang="en">Find the cause first</span><span data-lang="ja">原因から</span></span></div>
+        <div><span class="n">9</span><span><span data-lang="ko">살아 있는 단위 &lt; 상한</span><span data-lang="en">Live units &lt; cap</span><span data-lang="ja">稼働中の単位 &lt; 上限</span></span><span class="chip"><span data-lang="ko">N대 더 띄워도 됨</span><span data-lang="en">OK to spawn N more</span><span data-lang="ja">あと N 台起動してよい</span></span></div>
+        <div><span class="n">10</span><span><span data-lang="ko">그 외</span><span data-lang="en">Anything else</span><span data-lang="ja">それ以外</span></span><span class="chip plain"><span data-lang="ko">상한 도달: drain과 착지</span><span data-lang="en">At the cap: drain and land</span><span data-lang="ja">上限到達: drain とランディング</span></span></div>
+      </div>
+      <p class="note"><span data-lang="ko"><code>/goal</code> 아래에서는 백그라운드 작업이 돌고 있으면 Stop hook의 목표 검사가 미뤄진다. 새 이벤트 없이 hook이 다시 부르면 도구 호출 없이 한 줄로 답하고, 연달아 부르면 포그라운드 <code>orch wait --rounds 1</code>로 바꾼다. 대시보드(<code>orch-dash</code>)는 같은 next 줄을 모델 호출 없이 보여 준다.</span><span data-lang="en">Under <code>/goal</code>, the Stop hook's goal check is deferred while a background task is running. If the hook calls again with no new event, answer in one line without a tool call; if it keeps calling back to back, switch to a foreground <code>orch wait --rounds 1</code>. The dashboard (<code>orch-dash</code>) shows the same next line without calling a model.</span><span data-lang="ja"><code>/goal</code> の下では、バックグラウンド作業が動いている間 Stop hook の目標チェックが先送りされます。新しいイベントなしに hook が再び呼んだらツールを呼ばずに 1 行で答え、続けて呼ばれたらフォアグラウンドの <code>orch wait --rounds 1</code> に切り替えます。ダッシュボード（<code>orch-dash</code>）は同じ next 行をモデルを呼ばずに表示します。</span></p>
+    </div>
+
+    <div class="panel" id="p-ticket" role="tabpanel" aria-labelledby="t-ticket" hidden>
+      <p class="intro"><span data-lang="ko">deliver-ticket. 단독 세션이든 프로그램 워커든 같은 여섯 단계를 돈다. 끝은 PR이 아니라 티켓의 수용 기준이다.</span><span data-lang="en">deliver-ticket. A solo session and a program worker go through the same six steps. The finish line is the ticket's acceptance criteria, not the PR.</span><span data-lang="ja">deliver-ticket。単独セッションでもプログラムのワーカーでも、同じ 6 ステップを回ります。ゴールは PR ではなく、チケットの受け入れ基準です。</span></p>
+      <div class="loop">
+        <ol class="rail">
+          <li><span class="dot">1</span><div class="body"><b>Plan</b><span data-lang="ko">티켓과 worklog를 읽고 계획. 티켓(또는 카드를 연 /goal)이 곧 승인이다</span><span data-lang="en">Read the ticket and the worklog, then plan. The ticket (or the /goal that opened the card) is the approval</span><span data-lang="ja">チケットと worklog を読んで計画。チケット（またはカードを開いた /goal）がそのまま承認になる</span></div></li>
+          <li><span class="dot">2</span><div class="body"><b>Implement</b><span data-lang="ko">worktree 브랜치에서. 싼 테스트 대상이 뻔하면 tdd</span><span data-lang="en">On a worktree branch. Use tdd when there's an obvious cheap test target</span><span data-lang="ja">worktree ブランチで。安いテスト対象が明らかなら tdd</span></div></li>
+          <li><span class="dot">3</span><div class="body"><b>Review</b><span data-lang="ko">구현하지 않은 쪽이 검토: Codex 교차 검토, 넓은 영향이면 blast-radius·interrogate. 라운드 상한 5 — 상한은 라운드만 막고 수정은 막지 않음</span><span data-lang="en">Reviewed by someone who didn't write it: a Codex cross-review, plus blast-radius or interrogate for wide-reaching changes. At most 5 rounds — the cap stops new rounds, not fixes</span><span data-lang="ja">実装していない側がレビュー: Codex のクロスレビュー、影響が広ければ blast-radius・interrogate。ラウンド上限は 5 — 上限が止めるのはラウンドで、修正は止めない</span></div></li>
+          <li><span class="dot">4</span><div class="body"><b>Commit</b><span data-lang="ko">작고 설명 가능한 커밋</span><span data-lang="en">Small commits you can explain</span><span data-lang="ja">小さく説明できるコミット</span></div></li>
+          <li><span class="dot">5</span><div class="body"><b>Ship</b><span data-lang="ko">PR, 필요하면 GitHub stack, E2E. 결과 댓글은 하나로 유지(<code>sticky-comment.sh</code>). CI는 체크 표시가 아니라 로그로 확인</span><span data-lang="en">PR, a GitHub stack if needed, E2E. Results stay in a single comment (<code>sticky-comment.sh</code>). Confirm CI from the logs, not the check mark</span><span data-lang="ja">PR、必要なら GitHub stack、E2E。結果のコメントは 1 つに保つ（<code>sticky-comment.sh</code>）。CI はチェックマークではなくログで確認</span></div></li>
+          <li class="cycle-label" aria-hidden="true">↻ <span data-lang="ko">초록이 될 때까지</span><span data-lang="en">until green</span><span data-lang="ja">green になるまで</span></li>
+          <li class="cycle"><span class="dot wait">⋯</span><div class="body"><b><span data-lang="ko">PR 따라가기</span><span data-lang="en">Follow the PR</span><span data-lang="ja">PR を追う</span></b><span data-lang="ko">모든 CI green, 모든 리뷰 스레드 해결까지 직접 책임</span><span data-lang="en">You own it until every CI check is green and every review thread is resolved</span><span data-lang="ja">すべての CI が green になり、すべてのレビュースレッドが解決するまで自分の責任</span></div></li>
+          <li class="cycle"><span class="dot gate">6</span><div class="body"><b><span data-lang="ko">착지</span><span data-lang="en">Land</span><span data-lang="ja">ランディング</span></b><span data-lang="ko">프로그램 안: <code>orch land</code>만. 단독: 준비되면 직접 머지(보류 지시가 없으면 묻지 않음). 남이 머지: 감시하다 깨어남</span><span data-lang="en">Inside a program: <code>orch land</code> only. Solo: merge it yourself once ready (no asking unless told to hold). Someone else merges: watch, and wake up when it moves</span><span data-lang="ja">プログラム内: <code>orch land</code> のみ。単独: 準備ができたら自分でマージ（保留の指示がなければ聞かない）。他人がマージ: 監視して、動いたら起きる</span></div></li>
+          <li><span class="dot ok">✓</span><div class="body"><b><span data-lang="ko">완료 = 수용 기준 전부</span><span data-lang="en">Done = every acceptance criterion</span><span data-lang="ja">完了 = 受け入れ基準すべて</span></b><span data-lang="ko">머지 커밋 확인 → 머지 뒤에만 가능한 일(release, deploy, main 검증) → 기준마다 증거를 달아 티켓 완료, worklog 갱신, 사용자가 직접 볼 것 명시</span><span data-lang="en">Confirm the merge commit → do what only works after the merge (release, deploy, checks on main) → close the ticket with evidence for each criterion, update the worklog, and name what the user should look at themselves</span><span data-lang="ja">マージコミットを確認 → マージ後にしかできないこと（release、deploy、main での検証）→ 基準ごとに証拠を添えてチケットを完了、worklog を更新、ユーザーが自分で見るべきものを明記</span></div></li>
+        </ol>
+        <aside class="edges">
+          <h3><span data-lang="ko">되돌아가는 길</span><span data-lang="en">Ways back</span><span data-lang="ja">戻る道</span></h3>
+          <ul>
+            <li><span class="arrow"><span data-lang="ko">리뷰 지적 → 2</span><span data-lang="en">review finding → 2</span><span data-lang="ja">レビュー指摘 → 2</span></span><span data-lang="ko">고치고, 그 수정만 다시 검토</span><span data-lang="en">Fix it, then re-review only that fix</span><span data-lang="ja">直して、その修正だけ再レビュー</span></li>
+            <li><span class="arrow"><span data-lang="ko">CI 실패 → 1–4</span><span data-lang="en">CI failure → 1–4</span><span data-lang="ja">CI 失敗 → 1–4</span></span><span data-lang="ko">원인부터 다시</span><span data-lang="en">Start over from the cause</span><span data-lang="ja">原因からやり直す</span></li>
+            <li><span class="arrow"><span data-lang="ko">상한 뒤 Consider → PR 본문</span><span data-lang="en">Consider after the cap → PR body</span><span data-lang="ja">上限後の Consider → PR 本文</span></span><span data-lang="ko">"남은 검토" 체크리스트로, 티켓으로 만들지 않음</span><span data-lang="en">Goes into a "remaining review" checklist, not a ticket</span><span data-lang="ja">「残りのレビュー」チェックリストに入れ、チケットにはしない</span></li>
+            <li><span class="arrow">CHANGES_REQUESTED → 3</span><span data-lang="ko">외부 maintainer 리뷰도 같다</span><span data-lang="en">Same for a review from an external maintainer</span><span data-lang="ja">外部 maintainer のレビューも同じ</span></li>
+            <li><span class="arrow"><span data-lang="ko">머지됐지만 기준 남음 → 계속</span><span data-lang="en">merged, criteria left → keep going</span><span data-lang="ja">マージ済みでも基準が残る → 続行</span></span><span data-lang="ko">세션을 닫지 않는다</span><span data-lang="en">Don't close the session</span><span data-lang="ja">セッションを閉じない</span></li>
+            <li><span class="arrow"><span data-lang="ko">끝 → handoff / end</span><span data-lang="en">done → handoff / end</span><span data-lang="ja">終了 → handoff / end</span></span><span data-lang="ko">다음 티켓은 새 카드로, 아니면 세션 정리</span><span data-lang="en">The next ticket goes to a new card; otherwise wrap up the session</span><span data-lang="ja">次のチケットは新しいカードへ。なければセッションを片付ける</span></li>
+          </ul>
+        </aside>
+      </div>
+      <h3><span data-lang="ko">남이 머지하는 PR (새로 추가)</span><span data-lang="en">PRs someone else merges (new)</span><span data-lang="ja">他人がマージする PR（新規）</span></h3>
+      <p><span data-lang="ko">fork에서 올린 PR처럼 머지 권한이 없으면, 준비된 뒤 턴을 끝내고 기다리지 않는다. <code>Monitor</code> until-loop로 <code>gh pr view &lt;n&gt; --json state,mergedAt,mergeCommit,reviewDecision,latestReviews</code>를 몇 분 간격으로 보거나, <code>/loop</code> 아래에서는 <code>ScheduleWakeup</code> 20–30분. 타임아웃을 두고 세션이 끝날 때 정리한다.</span><span data-lang="en">When you can't merge — a PR from a fork, for example — don't just end the turn and wait once it's ready. Check <code>gh pr view &lt;n&gt; --json state,mergedAt,mergeCommit,reviewDecision,latestReviews</code> every few minutes with a <code>Monitor</code> until-loop, or under <code>/loop</code> use <code>ScheduleWakeup</code> every 20–30 minutes. Set a timeout, and clean up when the session ends.</span><span data-lang="ja">fork から出した PR のようにマージ権限がない場合、準備ができてもターンを終えてただ待つことはしません。<code>Monitor</code> の until-loop で <code>gh pr view &lt;n&gt; --json state,mergedAt,mergeCommit,reviewDecision,latestReviews</code> を数分おきに確認するか、<code>/loop</code> の下では <code>ScheduleWakeup</code> を 20–30 分に設定します。タイムアウトを設け、セッション終了時に片付けます。</span></p>
+      <div class="exits">
+        <div class="exit e0"><span class="code">MERGED</span><span data-lang="ko">바로 완료 아님: 머지 커밋 → main CI 로그 → 연결 issue의 state·stateReason → 수용 기준 순서로 판단</span><span data-lang="en">Not done yet. Check, in order: the merge commit → main CI logs → the linked issue's state and stateReason → the acceptance criteria</span><span data-lang="ja">まだ完了ではない: マージコミット → main の CI ログ → 紐づく issue の state・stateReason → 受け入れ基準、の順で判断</span></div>
+        <div class="exit e3"><span class="code">REVIEW</span><span data-lang="ko">새 리뷰나 CHANGES_REQUESTED: 리뷰 루프로 돌아감</span><span data-lang="en">A new review or CHANGES_REQUESTED: back to the review loop</span><span data-lang="ja">新しいレビューか CHANGES_REQUESTED: レビューループに戻る</span></div>
+        <div class="exit e1"><span class="code"><span data-lang="ko">애매함</span><span data-lang="en">UNCLEAR</span><span data-lang="ja">曖昧</span></span><span data-lang="ko">maintainer가 패치를 바꿨거나 일부만 받았거나 머지 없이 닫음: 보고하고 사용자에게 묻기</span><span data-lang="en">The maintainer changed the patch, took only part of it, or closed it without merging: report and ask the user</span><span data-lang="ja">maintainer がパッチを変えた、一部だけ取り込んだ、マージせずに閉じた: 報告してユーザーに確認</span></div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-land" role="tabpanel" aria-labelledby="t-land" hidden>
+      <p class="intro"><span data-lang="ko">프로그램 안에서 PR이 base에 닿는 유일한 길은 <code>orch land</code>다. 워커가 백그라운드로 실행하고(<code>--wait-minutes 50</code>), 끝나면서 돌려준 종료 코드가 다음 행동을 정한다.</span><span data-lang="en">Inside a program, <code>orch land</code> is the only way a PR reaches its base. The worker runs it in the background (<code>--wait-minutes 50</code>), and the exit code it returns decides what happens next.</span><span data-lang="ja">プログラム内で PR が base に届く唯一の道は <code>orch land</code> です。ワーカーがバックグラウンドで実行し（<code>--wait-minutes 50</code>）、終了時に返す終了コードが次の行動を決めます。</span></p>
+      <div class="loop">
+        <ol class="rail">
+          <li><span class="dot">1</span><div class="body"><b><span data-lang="ko">verdict 기록</span><span data-lang="en">Record the verdict</span><span data-lang="ja">verdict の記録</span></b><span data-lang="ko"><code>orch verdict --pr N --sha &lt;검토한 head&gt; --source &lt;검토자&gt;</code>. 검토자는 <code>codex-review</code>, <code>subagent-review</code>, <code>verifier:&lt;다른 모델 계열&gt;</code>, <code>live:&lt;기능&gt;</code> 중 하나. 판정은 head와 patch-id에 묶여서, 패치가 바뀌면 무효</span><span data-lang="en"><code>orch verdict --pr N --sha &lt;reviewed head&gt; --source &lt;reviewer&gt;</code>. The reviewer is one of <code>codex-review</code>, <code>subagent-review</code>, <code>verifier:&lt;other model family&gt;</code>, <code>live:&lt;feature&gt;</code>. The verdict is tied to the head and its patch-id, so it's void once the patch changes</span><span data-lang="ja"><code>orch verdict --pr N --sha &lt;レビューした head&gt; --source &lt;レビュアー&gt;</code>。レビュアーは <code>codex-review</code>、<code>subagent-review</code>、<code>verifier:&lt;別のモデル系統&gt;</code>、<code>live:&lt;機能&gt;</code> のいずれか。判定は head と patch-id に結び付くので、パッチが変われば無効</span></div></li>
+          <li><span class="dot">2</span><div class="body"><b><span data-lang="ko">1분 자가 점검</span><span data-lang="en">One-minute self-check</span><span data-lang="ja">1 分の自己点検</span></b><span data-lang="ko"><code>git diff --name-only &lt;CI base&gt;..origin/main</code>이 이 PR이 기대는 계약·테스트 전제를 건드리면 main을 병합하고 CI 재실행</span><span data-lang="en">If <code>git diff --name-only &lt;CI base&gt;..origin/main</code> touches a contract or test assumption this PR relies on, merge main in and rerun CI</span><span data-lang="ja"><code>git diff --name-only &lt;CI base&gt;..origin/main</code> がこの PR の頼る契約やテストの前提に触れていれば、main をマージして CI を再実行</span></div></li>
+          <li class="cycle-label" aria-hidden="true">↻ <span data-lang="ko">착지할 때까지</span><span data-lang="en">until landed</span><span data-lang="ja">ランディングするまで</span></li>
+          <li class="cycle"><span class="dot wait">⋯</span><div class="body"><b><code>orch land</code></b><span data-lang="ko">현재 head에서 준비 상태 재확인: verdict patch-id, head의 CI green, 충돌 없음, 의존 착지, main이 red 아님</span><span data-lang="en">Rechecks readiness at the current head: verdict patch-id, green CI on the head, no conflicts, dependencies landed, main not red</span><span data-lang="ja">現在の head で準備状態を再確認: verdict の patch-id、head の CI が green、コンフリクトなし、依存がランディング済み、main が red でない</span></div></li>
+          <li class="cycle"><span class="dot gate">▸</span><div class="body"><b><span data-lang="ko">레인</span><span data-lang="en">Lanes</span><span data-lang="ja">レーン</span></b><span data-lang="ko">일반 레인: 준비되면 base보다 뒤처져 있어도 바로 병렬 머지(단, base가 같은 파일을 바꿨으면 기다림). 독점 레인(migration, CI, Dockerfile, compose, <code>exclusive_paths</code>): base당 한 번에 하나, 최신 base 위에서, 착지 순서대로</span><span data-lang="en">Normal lane: once ready, merge in parallel right away, even if behind the base (but wait if the base changed the same files). Exclusive lane (migration, CI, Dockerfile, compose, <code>exclusive_paths</code>): one at a time per base, on top of the latest base, in landing order</span><span data-lang="ja">通常レーン: 準備ができたら base より遅れていてもすぐ並行マージ（ただし base が同じファイルを変えていたら待つ）。専有レーン（migration、CI、Dockerfile、compose、<code>exclusive_paths</code>）: base ごとに一度に 1 つ、最新の base の上で、ランディング順に</span></div></li>
+          <li><span class="dot ok">✓</span><div class="body"><b><span data-lang="ko">착지 후</span><span data-lang="en">After landing</span><span data-lang="ja">ランディング後</span></b><span data-lang="ko">머지 커밋의 main CI를 로그로 확인 → <code>worker_done</code> 보고. 가디언이 결과를 <code>main_green</code>/<code>main_red</code>로 기록</span><span data-lang="en">Check main CI for the merge commit in the logs → report <code>worker_done</code>. The guardian records the result as <code>main_green</code>/<code>main_red</code></span><span data-lang="ja">マージコミットの main CI をログで確認 → <code>worker_done</code> を報告。ガーディアンが結果を <code>main_green</code>/<code>main_red</code> として記録</span></div></li>
+        </ol>
+        <aside class="edges">
+          <h3><span data-lang="ko">stack과 의존</span><span data-lang="en">Stacks and dependencies</span><span data-lang="ja">stack と依存</span></h3>
+          <ul>
+            <li><span class="arrow">land-after</span><span data-lang="ko">B를 A의 브랜치 위에 쌓고 <code>orch dep</code>. 체인 전체가 맨 위 PR 한 번의 머지로 들어간다</span><span data-lang="en">Stack B on A's branch and run <code>orch dep</code>. The whole chain goes in with a single merge of the top PR</span><span data-lang="ja">B を A のブランチの上に積んで <code>orch dep</code>。チェーン全体が一番上の PR の 1 回のマージで入る</span></li>
+            <li><span class="arrow">start-after</span><span data-lang="ko">A의 결과가 있어야 B를 시작할 수 있을 때만 Orca task dep</span><span data-lang="en">An Orca task dep, only when B can't start without A's result</span><span data-lang="ja">A の結果がないと B を始められないときだけ Orca の task dep</span></li>
+            <li><span class="arrow">human-gate</span><span data-lang="ko">워커는 READY에서 멈추고 보고. 사람이 Orca 게이트를 풀면 코디네이터가 착지</span><span data-lang="en">The worker stops at READY and reports. Once a human clears the Orca gate, the coordinator lands it</span><span data-lang="ja">ワーカーは READY で止まって報告。人が Orca のゲートを外すとコーディネーターがランディング</span></li>
+          </ul>
+        </aside>
+      </div>
+      <div class="exits">
+        <div class="exit e0"><span class="code">0</span><b><span data-lang="ko">착지함</span><span data-lang="en">Landed</span><span data-lang="ja">ランディング済み</span></b><span data-lang="ko">main CI 확인 후 보고</span><span data-lang="en">Check main CI, then report</span><span data-lang="ja">main の CI を確認してから報告</span></div>
+        <div class="exit e2"><span class="code">2</span><b><span data-lang="ko">양보</span><span data-lang="en">Yield</span><span data-lang="ja">譲る</span></b><span data-lang="ko">지금 할 일 없음(차례 대기, CI 진행 중). 다시 실행</span><span data-lang="en">Nothing to do yet (waiting its turn, CI still running). Run it again</span><span data-lang="ja">今はすることがない（順番待ち、CI 実行中）。もう一度実行</span></div>
+        <div class="exit e3"><span class="code">3</span><b><span data-lang="ko">행동</span><span data-lang="en">Act</span><span data-lang="ja">対応</span></b><span data-lang="ko">충돌 수정, base 갱신, 패치가 바뀌었으면 재검토 후 다시</span><span data-lang="en">Fix conflicts or update the base; if the patch changed, re-review; then try again</span><span data-lang="ja">コンフリクトを直し、base を更新し、パッチが変わったら再レビューしてもう一度</span></div>
+        <div class="exit e1"><span class="code">1</span><b><span data-lang="ko">거부</span><span data-lang="en">Refused</span><span data-lang="ja">拒否</span></b><span data-lang="ko">verdict 없음, human-gate 등. 보고하고 멈춤</span><span data-lang="en">No verdict, a human-gate, and so on. Report and stop</span><span data-lang="ja">verdict がない、human-gate など。報告して止まる</span></div>
+      </div>
+    </div>
+
+    <div class="panel" id="p-guard" role="tabpanel" aria-labelledby="t-guard" hidden>
+      <p class="intro"><span data-lang="ko">상주 역할은 티켓을 잡지 않고 자기 루프만 돈다. 코디네이터의 Run 수신함(<code>orch wait</code>)은 읽지 않고 자기 메일만 본다.</span><span data-lang="en">Standing roles take no tickets and run only their own loop. They don't read the coordinator's Run inbox (<code>orch wait</code>), only their own mail.</span><span data-lang="ja">常駐ロールはチケットを担当せず、自分のループだけを回します。コーディネーターの Run 受信箱（<code>orch wait</code>）は読まず、自分宛てのメールだけを見ます。</span></p>
+      <div class="loop">
+        <ol class="rail">
+          <li class="cycle-label" aria-hidden="true">↻ <span data-lang="ko">가디언: main run마다</span><span data-lang="en">Guardian: every run on main</span><span data-lang="ja">ガーディアン: main の run ごとに</span></li>
+          <li class="cycle"><span class="dot wait">⋯</span><div class="body"><b><span data-lang="ko">감시</span><span data-lang="en">Watch</span><span data-lang="ja">監視</span></b><span data-lang="ko">백그라운드 루프가 main의 새 run이 끝나거나 4.5분이 지나면 깨운다. 깰 때마다 heartbeat와 자기 메일 확인</span><span data-lang="en">A background loop wakes it when a new run on main finishes or 4.5 minutes pass. On each wake-up: send a heartbeat and check its own mail</span><span data-lang="ja">main の新しい run が終わるか 4.5 分経つと、バックグラウンドのループが起こす。起きるたびに heartbeat を送り、自分宛てのメールを確認</span></div></li>
+          <li class="cycle"><span class="dot">1</span><div class="body"><b><span data-lang="ko">flake 확인</span><span data-lang="en">Check for a flake</span><span data-lang="ja">flake の確認</span></b><span data-lang="ko">실패한 job만 한 번 재실행하고 로그를 읽는다. flake면 대시보드에 위험으로 기록만, 멈추지 않음</span><span data-lang="en">Rerun only the failed jobs once and read the logs. A flake only gets logged as a risk on the dashboard; nothing stops</span><span data-lang="ja">失敗した job だけを 1 回再実行してログを読む。flake ならダッシュボードにリスクとして記録するだけで、止めない</span></div></li>
+          <li class="cycle"><span class="dot stop">2</span><div class="body"><b><span data-lang="ko">결함이면 동결</span><span data-lang="en">Freeze on a real defect</span><span data-lang="ja">欠陥なら凍結</span></b><span data-lang="ko"><code>orch record main_red --sha</code> → main-fix를 뺀 모든 레인이 멈춘다</span><span data-lang="en"><code>orch record main_red --sha</code> → every lane except main-fix stops</span><span data-lang="ja"><code>orch record main_red --sha</code> → main-fix 以外のすべてのレーンが止まる</span></div></li>
+          <li class="cycle"><span class="dot gate">3</span><div class="body"><b><span data-lang="ko">hotfix 또는 revert</span><span data-lang="en">Hotfix or revert</span><span data-lang="ja">hotfix か revert</span></b><span data-lang="ko">원인이 분명하고 작으며 30분 안에 검증되면 hotfix, 아니면 revert. migration이나 뒤 PR이 기대는 커밋은 기계적으로 되돌리지 않음. 검토 후 <code>--class main-fix</code>로 착지</span><span data-lang="en">Hotfix if the cause is clear, small and verifiable within 30 minutes; otherwise revert. Never mechanically revert a migration or a commit that later PRs depend on. Land with <code>--class main-fix</code> after review</span><span data-lang="ja">原因が明確で小さく、30 分以内に検証できるなら hotfix、そうでなければ revert。migration や後続の PR が依存するコミットは機械的に戻さない。レビュー後に <code>--class main-fix</code> でランディング</span></div></li>
+          <li class="cycle"><span class="dot ok">4</span><div class="body"><b><span data-lang="ko">green 기록과 알림</span><span data-lang="en">Record green and notify</span><span data-lang="ja">green の記録と通知</span></b><span data-lang="ko"><code>main_green</code> 기록, 원인 카드·영향받는 카드·코디네이터에게 사건 한 줄</span><span data-lang="en">Record <code>main_green</code>, and send a one-line incident note to the culprit card, the affected cards and the coordinator</span><span data-lang="ja"><code>main_green</code> を記録し、原因のカード・影響を受けたカード・コーディネーターに事象を 1 行で伝える</span></div></li>
+          <li class="cycle-label" aria-hidden="true">↻ <span data-lang="ko">QA 리드: 세 레인을 계속</span><span data-lang="en">QA lead: three lanes, continuously</span><span data-lang="ja">QA リード: 3 つのレーンを継続</span></li>
+          <li class="cycle"><span class="dot">A</span><div class="body"><b><span data-lang="ko">티켓 검증</span><span data-lang="en">Ticket verification</span><span data-lang="ja">チケット検証</span></b><span data-lang="ko">착지한 티켓마다 검증자가 main에서 수용 기준을 <code>verify-&lt;app&gt;</code>로 구동. PASS / PASS+NOTES / FAIL</span><span data-lang="en">For each landed ticket, a verifier drives the acceptance criteria on main with <code>verify-&lt;app&gt;</code>. PASS / PASS+NOTES / FAIL</span><span data-lang="ja">ランディングしたチケットごとに、検証者が main 上で受け入れ基準を <code>verify-&lt;app&gt;</code> で動かす。PASS / PASS+NOTES / FAIL</span></div></li>
+          <li class="cycle"><span class="dot">B</span><div class="body"><b><span data-lang="ko">주기 E2E</span><span data-lang="en">Periodic E2E</span><span data-lang="ja">定期 E2E</span></b><span data-lang="ko">착지 5건마다, 2시간마다, 게이트 PR 직전. 무거운 실행은 <code>orch heavy</code>로 기계 전체 슬롯 2개 안에서</span><span data-lang="en">Every 5 landings, every 2 hours, and right before a gated PR. Heavy runs go through <code>orch heavy</code>, within 2 slots shared by the whole machine</span><span data-lang="ja">ランディング 5 件ごと、2 時間ごと、ゲート付き PR の直前。重い実行は <code>orch heavy</code> で、マシン全体で 2 枠の中で</span></div></li>
+          <li class="cycle"><span class="dot">C</span><div class="body"><b><span data-lang="ko">설계 감사</span><span data-lang="en">Design audit</span><span data-lang="ja">設計監査</span></b><span data-lang="ko">설계 문서와 main 코드를 비교해 문서 오류 / 코드 오류로 분류</span><span data-lang="en">Compare the design doc with the code on main and sort each gap as a doc error or a code error</span><span data-lang="ja">設計ドキュメントと main のコードを比べ、ドキュメントの誤り / コードの誤りに分類</span></div></li>
+        </ol>
+        <aside class="edges">
+          <h3><span data-lang="ko">하지 않는 것</span><span data-lang="en">What they don't do</span><span data-lang="ja">しないこと</span></h3>
+          <ul>
+            <li><span class="arrow"><span data-lang="ko">가디언</span><span data-lang="en">guardian</span><span data-lang="ja">ガーディアン</span></span><span data-lang="ko">기능 작업, force-push, 검사 끄기·건너뛰기</span><span data-lang="en">Feature work, force-pushes, disabling or skipping checks</span><span data-lang="ja">機能開発、force-push、チェックの無効化・スキップ</span></li>
+            <li><span class="arrow"><span data-lang="ko">QA 리드</span><span data-lang="en">QA lead</span><span data-lang="ja">QA リード</span></span><span data-lang="ko">찾은 것을 고치지 않는다(티켓으로 등록), 아무것도 착지시키지 않는다</span><span data-lang="en">Doesn't fix what it finds (files a ticket instead) and never lands anything</span><span data-lang="ja">見つけたものは直さず（チケットとして登録）、何もランディングさせない</span></li>
+            <li><span class="arrow"><span data-lang="ko">발견</span><span data-lang="en">findings</span><span data-lang="ja">発見</span></span><span data-lang="ko">main을 막는 실패는 가디언에게, 나머지는 <code>follow-up</code> 티켓으로</span><span data-lang="en">Failures that block main go to the guardian; everything else becomes a <code>follow-up</code> ticket</span><span data-lang="ja">main を止める失敗はガーディアンへ、それ以外は <code>follow-up</code> チケットへ</span></li>
+          </ul>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <section id="skills">
+    <div class="section-head">
+      <span class="eyebrow"><span data-lang="ko">스킬 목록</span><span data-lang="en">Skills</span><span data-lang="ja">スキル一覧</span></span>
+      <h2><span data-lang="ko">스킬 27개와 별칭 3개</span><span data-lang="en">27 skills and 3 aliases</span><span data-lang="ja">スキル 27 個とエイリアス 3 個</span></h2>
+      <p class="lede"><span data-lang="ko">설명에 적힌 상황이 오면 자동으로 불린다. 직접 부를 때는 <code>/agent-skills:&lt;이름&gt;</code>, 다른 스킬과 이름이 겹치지 않으면 <code>/&lt;이름&gt;</code>.</span><span data-lang="en">Each skill runs on its own when the situation in its description comes up. To call one directly, use <code>/agent-skills:&lt;name&gt;</code>, or just <code>/&lt;name&gt;</code> when no other skill has the same name.</span><span data-lang="ja">説明に書かれた状況になると自動で呼ばれます。直接呼ぶときは <code>/agent-skills:&lt;名前&gt;</code>、ほかのスキルと名前が重ならなければ <code>/&lt;名前&gt;</code> でも呼べます。</span></p>
+    </div>
+    <div class="filter" role="group" aria-label="분류" data-label-ko="분류" data-label-en="Category" data-label-ja="分類">
+      <button type="button" data-group="all" aria-pressed="true"><span data-lang="ko">전체</span><span data-lang="en">All</span><span data-lang="ja">すべて</span></button>
+      <button type="button" data-group="ticket" aria-pressed="false"><span data-lang="ko">티켓 하나</span><span data-lang="en">One ticket</span><span data-lang="ja">チケット 1 件</span></button>
+      <button type="button" data-group="program" aria-pressed="false"><span data-lang="ko">프로젝트</span><span data-lang="en">Project</span><span data-lang="ja">プロジェクト</span></button>
+      <button type="button" data-group="adapter" aria-pressed="false"><span data-lang="ko">어댑터</span><span data-lang="en">Adapter</span><span data-lang="ja">アダプター</span></button>
+      <button type="button" data-group="pstack" aria-pressed="false">pstack</button>
+    </div>
+    <div class="skills" id="skill-list"></div>
+  </section>
+
+  <section id="permissions">
+    <div class="section-head">
+      <span class="eyebrow"><span data-lang="ko">권한</span><span data-lang="en">Permissions</span><span data-lang="ja">権限</span></span>
+      <h2><span data-lang="ko">플러그인이 대신 내리는 권한 결정</span><span data-lang="en">Permission calls the plugin makes for you</span><span data-lang="ja">プラグインが代わりに行う権限の判断</span></h2>
+      <p class="lede"><span data-lang="ko">플러그인은 권한 규칙을 설정으로 실을 수 없어서 PreToolUse hook(<code>hooks/guard.py</code>)이 대신 결정한다. 워커가 스킬을 읽고 몇 시간 뒤 명령을 실행할 때 확인 창에서 멈추지 않게 하는 것이 목적이다.</span><span data-lang="en">A plugin can't ship permission rules as settings, so a PreToolUse hook (<code>hooks/guard.py</code>) decides instead. The goal is that a worker that read a skill hours ago doesn't stall on a confirmation prompt when it finally runs the command.</span><span data-lang="ja">プラグインは権限ルールを設定として同梱できないため、PreToolUse hook（<code>hooks/guard.py</code>）が代わりに判断します。ワーカーがスキルを読んでから数時間後にコマンドを実行するとき、確認ダイアログで止まらないようにするのが目的です。</span></p>
+    </div>
+    <div class="table-scroll">
+      <table class="perm">
+        <thead><tr><th><span data-lang="ko">결정</span><span data-lang="en">Decision</span><span data-lang="ja">判断</span></th><th><span data-lang="ko">대상</span><span data-lang="en">Applies to</span><span data-lang="ja">対象</span></th><th><span data-lang="ko">이유</span><span data-lang="en">Why</span><span data-lang="ja">理由</span></th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip ok"><span data-lang="ko">허용</span><span data-lang="en">Allow</span><span data-lang="ja">許可</span></span></td><td><span data-lang="ko">이 플러그인의 스킬 호출</span><span data-lang="en">Calls to this plugin's skills</span><span data-lang="ja">このプラグインのスキル呼び出し</span></td><td><span data-lang="ko">같은 이름의 사용자·프로젝트 스킬이 있으면 이름만으로 부른 호출은 제외</span><span data-lang="en">Except a call by bare name when a user or project skill has the same name</span><span data-lang="ja">同じ名前のユーザー・プロジェクトスキルがある場合、名前だけでの呼び出しは除く</span></td></tr>
+          <tr><td><span class="chip ok"><span data-lang="ko">허용</span><span data-lang="en">Allow</span><span data-lang="ja">許可</span></span></td><td><code>orca orchestration &lt;<span data-lang="ko">명령</span><span data-lang="en">command</span><span data-lang="ja">コマンド</span>&gt;</code></td><td><span data-lang="ko">워커의 메시지 명령마다 멈추지 않게. reset, worker-abandon, gate-resolve는 제외</span><span data-lang="en">So workers don't stop at every messaging command. Excludes reset, worker-abandon and gate-resolve</span><span data-lang="ja">ワーカーがメッセージのコマンドごとに止まらないように。reset、worker-abandon、gate-resolve は除く</span></td></tr>
+          <tr><td><span class="chip ok"><span data-lang="ko">허용</span><span data-lang="en">Allow</span><span data-lang="ja">許可</span></span></td><td><code>orch &lt;<span data-lang="ko">명령</span><span data-lang="en">command</span><span data-lang="ja">コマンド</span>&gt;</code></td><td><span data-lang="ko">원장과 착지 게이트. 임의 명령을 실행하는 heavy, 머지 정책을 바꿀 수 있는 set·init은 제외</span><span data-lang="en">The ledger and the landing gate. Excludes heavy, which runs arbitrary commands, and set and init, which can change the merge policy</span><span data-lang="ja">台帳とランディングゲート。任意のコマンドを実行する heavy と、マージ方針を変えられる set・init は除く</span></td></tr>
+          <tr><td><span class="chip stop"><span data-lang="ko">거부</span><span data-lang="en">Deny</span><span data-lang="ja">拒否</span></span></td><td><span data-lang="ko">다른 터미널의 Orca 메일함 읽기</span><span data-lang="en">Reading another terminal's Orca mailbox</span><span data-lang="ja">他のターミナルの Orca メールボックスを読む</span></td><td><span data-lang="ko">남의 메시지를 읽고 ack로 소비할 수 있다</span><span data-lang="en">It could read someone else's messages and consume them with an ack</span><span data-lang="ja">他人のメッセージを読んで ack で消費してしまう可能性がある</span></td></tr>
+          <tr><td><span class="chip plain"><span data-lang="ko">그 외</span><span data-lang="en">Other</span><span data-lang="ja">その他</span></span></td><td><span data-lang="ko">나머지 모든 명령</span><span data-lang="en">Every other command</span><span data-lang="ja">それ以外のすべてのコマンド</span></td><td><span data-lang="ko">평소 흐름: 사용자의 규칙, 그다음 auto mode 분류기</span><span data-lang="en">The usual path: the user's rules, then the auto mode classifier</span><span data-lang="ja">通常の流れ: ユーザーのルール、次に auto mode の分類器</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note"><span data-lang="ko">hook의 허용은 auto mode 분류기를 건너뛴다. 그래서 따옴표 밖에 평범한 문자만 있는 단일 명령에만 준다. 연산자, 리다이렉션, 치환, 중괄호·glob·틸드 확장, 단어 안의 변수가 있으면 결정하지 않는다. Codex 적대 검토 두 번에서 나온 우회는 모두 테스트로 막았다.</span><span data-lang="en">An allow from the hook skips the auto mode classifier, so the hook only grants it to a single command with nothing but plain characters outside quotes. With operators, redirection, substitution, brace/glob/tilde expansion, or a variable inside a word, it makes no decision. Every bypass found in two rounds of adversarial Codex review is now blocked by a test.</span><span data-lang="ja">hook の許可は auto mode の分類器を飛ばします。そのため、引用符の外に普通の文字しかない単一のコマンドにだけ与えます。演算子、リダイレクト、置換、波括弧・glob・チルダ展開、単語内の変数があれば判断しません。Codex による敵対的レビュー 2 回で見つかった回避策は、すべてテストで塞ぎました。</span></p>
+  </section>
+
+  <footer>
+    <span data-lang="ko">원본:</span><span data-lang="en">Source:</span><span data-lang="ja">元リポジトリ:</span> <a href="https://github.com/JeongJaeSoon/agent-skills">github.com/JeongJaeSoon/agent-skills</a> · <span data-lang="ko">스킬 카탈로그</span><span data-lang="en">Skill catalog</span><span data-lang="ja">スキルカタログ</span> <code>docs/skills.md</code> · <span data-lang="ko">pstack 스킬은 Lauren Tan의 </span><span data-lang="en">The pstack skills come from Lauren Tan's </span><span data-lang="ja">pstack スキルは Lauren Tan の</span><a href="https://github.com/cursor/plugins">cursor/plugins</a><span data-lang="ko">(MIT)에서 가져왔다.</span><span data-lang="en"> (MIT).</span><span data-lang="ja">（MIT）から取り込んだものです。</span>
+  </footer>
+</div>
+
+<script>
+const T = (ko, en, ja) => ({ ko, en, ja });
+const SKILLS = [
+  ["ticket", "write-ticket",
+    T("\"티켓 만들어줘\", \"이슈로 남겨줘\", 작업 중 나온 피드백을 별도 티켓으로", "\"티켓 만들어줘\" (\"make a ticket\"), \"이슈로 남겨줘\" (\"file it as an issue\"), or feedback during work that deserves its own ticket", "\"티켓 만들어줘\"（チケットを作って）、\"이슈로 남겨줘\"（issue として残して）、作業中に出たフィードバックを別チケットにするとき"),
+    T("요청 출처 확인 → 유형 분류 → 템플릿을 저장소 기준으로 채움 → 승인 후 등록", "Check where the request came from → classify the type → fill the template to the repo's conventions → file it after approval", "依頼元の確認 → 種類の分類 → リポジトリの基準でテンプレートを埋める → 承認後に登録"),
+    ["references/templates.md"]],
+  ["ticket", "deliver-ticket",
+    T("여러 파일을 고치기 전, PR 올리기·머지 전, \"이 티켓 끝내줘\"", "Before editing several files, before opening or merging a PR, \"이 티켓 끝내줘\" (\"finish this ticket\")", "複数ファイルを直す前、PR を出す・マージする前、\"이 티켓 끝내줘\"（このチケットを終わらせて）"),
+    T("계획 → 구현 → 교차 검토 → 커밋 → PR·stack·E2E → 착지 → 수용 기준 확인. 남이 머지하는 PR은 감시하다 판단. 옛 이름 ship-pr", "Plan → implement → cross-review → commit → PR, stack, E2E → land → check the acceptance criteria. A PR someone else merges gets watched, then judged. Formerly ship-pr", "計画 → 実装 → クロスレビュー → コミット → PR・stack・E2E → ランディング → 受け入れ基準の確認。他人がマージする PR は監視してから判断。旧名 ship-pr"),
+    ["scripts/sticky-comment.sh"]],
+  ["ticket", "handoff-ticket",
+    T("\"핸드오프\", \"다음 티켓 진행해줘\", 티켓이 끝난 순간", "\"핸드오프\" (\"handoff\"), \"다음 티켓 진행해줘\" (\"start the next ticket\"), or the moment a ticket is done", "\"핸드오프\"（ハンドオフ）、\"다음 티켓 진행해줘\"（次のチケットを進めて）、チケットが終わった瞬間"),
+    T("완료 확인 → 다음 티켓을 새 Orca worktree 카드로 → 시작 확인 → 이 세션 종료", "Confirm it's done → open the next ticket as a new Orca worktree card → confirm it started → end this session", "完了の確認 → 次のチケットを新しい Orca worktree カードに → 開始を確認 → このセッションを終了"),
+    []],
+  ["ticket", "dispatch-card",
+    T("\"~ repo에 지시해줘\", \"곁가지로 띄워줘\" — 이 세션은 계속 일할 때", "\"~ repo에 지시해줘\" (\"send this to the ~ repo\"), \"곁가지로 띄워줘\" (\"spin this off on the side\") — while this session keeps working", "\"~ repo에 지시해줘\"（〜 リポジトリに指示して）、\"곁가지로 띄워줘\"（脇で立ち上げて）— このセッションは作業を続けるとき"),
+    T("대상 저장소 확인 → 브리프 → 카드 생성 → 시작 확인 후 원래 일로 복귀. 옛 이름 dispatch-work", "Confirm the target repo → write the brief → create the card → confirm it started, then return to the original work. Formerly dispatch-work", "対象リポジトリの確認 → ブリーフ → カード作成 → 開始を確認して元の作業に戻る。旧名 dispatch-work"),
+    []],
+  ["ticket", "end-session",
+    T("\"세션 종료해줘\", \"worktree 정리해줘\"", "\"세션 종료해줘\" (\"end this session\"), \"worktree 정리해줘\" (\"clean up the worktree\")", "\"세션 종료해줘\"（セッションを終了して）、\"worktree 정리해줘\"（worktree を片付けて）"),
+    T("Orca에게 이 세션이 무엇인지 묻고, 기록을 남긴 뒤 카드·worktree·대화를 순서대로 닫음", "Asks Orca what this session is, leaves a record, then closes the card, the worktree and the conversation in that order", "このセッションが何かを Orca に尋ね、記録を残してから、カード・worktree・会話の順に閉じる"),
+    []],
+  ["program", "orchestrate",
+    T("한 세션이 여러 워커로 마일스톤을 끝낼 때, 남의 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때", "When one session drives a milestone to done with several workers, takes over someone else's program, or asks why PRs aren't moving", "1 つのセッションが複数のワーカーでマイルストーンを終えるとき、他人のプログラムを引き継ぐとき、PR がなぜ動かないのかを尋ねるとき"),
+    T("완료 조건·상시 지시·원장·브리프 관리, 동시 실행 상한, 착지 순서와 독점 레인, 가디언·QA 리드, 대시보드", "Manages the done condition, standing orders, ledger and briefs; the concurrency cap; landing order and exclusive lanes; the guardian and QA lead; the dashboard", "完了条件・常時指示・台帳・ブリーフの管理、同時実行の上限、ランディング順と専有レーン、ガーディアン・QA リード、ダッシュボード"),
+    ["orch", "orch-dash", "references/brief.md", "landing.md", "roles.md", "program-note.md", "dashboard.md"]],
+  ["program", "measure-delivery",
+    T("\"성과 측정\", 후속 티켓이 늘었는지, 재작업·토큰 비용, 프로그램 종료 시", "\"성과 측정\" (\"measure delivery\"), whether follow-up tickets are piling up, rework and token cost, or at the close of a program", "\"성과 측정\"（成果測定）、後続チケットが増えたか、手戻り・トークンコスト、プログラム終了時"),
+    T("트래커 이슈로 후속 티켓 증가·수렴·재작업·PR당 토큰을 계산해 보고", "Computes follow-up ticket growth, convergence, rework and tokens per PR from tracker issues, and reports them", "トラッカーの issue から後続チケットの増加・収束・手戻り・PR あたりのトークンを計算して報告"),
+    ["scripts/measure.py"]],
+  ["adapter", "use-tracker",
+    T("티켓 읽기·찾기·만들기·라벨·댓글·상태 변경, 스크립트가 티켓 데이터를 쓸 때", "Reading, finding, creating, labeling, commenting on or moving tickets, or when a script needs ticket data", "チケットの読み取り・検索・作成・ラベル・コメント・状態変更、スクリプトがチケットデータを使うとき"),
+    T("설정된 트래커(Linear, Jira)로 보내고 후속 티켓 형식·상태 어휘를 공유", "Routes to the configured tracker (Linear, Jira) and shares the follow-up ticket format and state vocabulary", "設定されたトラッカー（Linear、Jira）に振り分け、後続チケットの形式と状態の語彙を共有"),
+    ["scripts/tracker.py", "references/linear.md", "jira.md"]],
+  ["adapter", "use-notes",
+    T("설계 문서·worklog·프로그램 노트를 읽고 쓸 때", "Reading or writing design docs, worklogs or program notes", "設計ドキュメント・worklog・プログラムノートを読み書きするとき"),
+    T("설정된 노트 저장소(Obsidian vault, Markdown 폴더)로 보냄", "Routes to the configured notes store (an Obsidian vault or a Markdown folder)", "設定されたノートの保存先（Obsidian vault、Markdown フォルダー）に振り分け"),
+    ["references/obsidian.md", "markdown.md"]],
+  ["pstack", "architect",
+    T("\"설계해줘\", 바로 코드부터 쓰면 모양이 굳어버릴 작업", "\"설계해줘\" (\"design this\"), or work where jumping straight to code would lock in the wrong shape", "\"설계해줘\"（設計して）、いきなりコードから書くと形が固まってしまう作業"),
+    T("타입·시그니처·모듈 구조를 먼저 그리고 구현 중에도 스케치와 대조. 틀렸으면 버림", "Sketches types, signatures and module structure first, and keeps checking the implementation against the sketch. Throws it out if it was wrong", "型・シグネチャ・モジュール構成を先に描き、実装中もスケッチと照らし合わせる。間違っていたら捨てる"),
+    ["references/runner-prompt.md", "design-red-flags.md"]],
+  ["pstack", "blast-radius",
+    T("\"이거 바꾸면 뭐가 깨져?\", 믿기 어려운 작은 diff", "\"이거 바꾸면 뭐가 깨져?\" (\"what breaks if I change this?\"), or a small diff you don't trust", "\"이거 바꾸면 뭐가 깨져?\"（これを変えたら何が壊れる？）、信用しきれない小さな diff"),
+    T("diff 밖의 영향을 찾고, 안전하다는 근거 하나를 실제 실행으로 증명", "Finds effects outside the diff, and proves the one fact that makes it safe by actually running code", "diff の外への影響を探し、安全だと言える根拠を 1 つ、実際に動かして証明"),
+    []],
+  ["pstack", "how",
+    T("\"X는 어떻게 동작해?\", \"이건 어디에 둬야 해?\"", "\"X는 어떻게 동작해?\" (\"how does X work?\"), \"이건 어디에 둬야 해?\" (\"where should this live?\")", "\"X는 어떻게 동작해?\"（X はどう動く？）、\"이건 어디에 둬야 해?\"（これはどこに置くべき？）"),
+    T("구조·실행 흐름·계층 설명. 복잡하면 탐색 에이전트를 먼저 보냄", "Explains structure, runtime flow and layering. For complex cases, sends an explorer agent in first", "構造・実行の流れ・レイヤーを説明。複雑なら先に探索エージェントを送る"),
+    ["references/explorer-prompt.md", "explainer-prompt.md"]],
+  ["pstack", "interrogate",
+    T("\"적대적 리뷰\", \"다른 모델로 검토\", \"빈틈 찾아줘\"", "\"적대적 리뷰\" (\"adversarial review\"), \"다른 모델로 검토\" (\"review with another model\"), \"빈틈 찾아줘\" (\"find the gaps\")", "\"적대적 리뷰\"（敵対的レビュー）、\"다른 모델로 검토\"（別のモデルでレビュー）、\"빈틈 찾아줘\"（穴を探して）"),
+    T("서로 다른 관점의 리뷰어 여럿(Codex 포함)이 공격하고, 리드가 채택할 것만 고름", "Several reviewers from different angles (Codex included) attack it, and a lead keeps only what's worth adopting", "観点の異なる複数のレビュアー（Codex を含む）が攻め、リードが採用するものだけを選ぶ"),
+    ["references/rubric.md", "lead-judgment.md"]],
+  ["pstack", "principles",
+    T("설계·리팩터·검증·위임 판단에 근거가 필요할 때", "When a design, refactor, verification or delegation call needs grounding", "設計・リファクタ・検証・委任の判断に根拠が必要なとき"),
+    T("23개 원칙(근본 원인 수정, 동작을 테스트, 빼고 나서 더하기 등) 중 맞는 것을 인용", "Cites the right one of 23 principles (fix the root cause, test the behavior, subtract before you add, and more)", "23 の原則（根本原因を直す、振る舞いをテストする、足す前に引く など）から合うものを引用"),
+    ["references/principle-*.md (23)"]],
+  ["pstack", "reflect",
+    T("\"reflect\"", "\"reflect\"", "\"reflect\""),
+    T("세션 transcript나 프로그램 원장의 증거 묶음을 리뷰어 셋이 읽고 교훈 장부에 기록. 두 번 발생한 것만 스킬 수정으로(세션은 승인 뒤 적용, 프로그램은 draft PR). Backlog는 트래커로", "Three reviewers read a session transcript or an evidence bundle from a program ledger and record lessons in a lessons ledger. Only lessons seen twice become skill edits (applied after approval for a session, as a draft PR for a program). Backlog goes to the tracker", "セッションの transcript やプログラム台帳の証拠をレビュアー 3 人が読み、教訓台帳に記録。2 回起きたものだけをスキルの修正に（セッションは承認後に適用、プログラムは draft PR）。Backlog はトラッカーへ"),
+    ["references/*-reviewer.md", "synthesizer.md"]],
+  ["pstack", "show-me-your-work",
+    T("오래 걸리거나 사람이 자리를 비운 작업", "Long-running work, or work that runs while nobody is watching", "長くかかる作業、または人が席を外している間の作業"),
+    T("결정마다 무엇·왜·증거·결과를 TSV 한 줄로 남기고 끝에 감사", "Logs each decision as one TSV row — what, why, evidence, result — and audits the log at the end", "決定ごとに何を・なぜ・証拠・結果を TSV 1 行で残し、最後に監査"),
+    ["scripts/log.sh"]],
+  ["pstack", "swarm",
+    T("\"병렬로 훑어줘\", 경쟁 조건·탐색을 넓게", "\"병렬로 훑어줘\" (\"sweep this in parallel\"), or wide coverage of races and exploration", "\"병렬로 훑어줘\"（並列でざっと見て）、競合状態や探索を広く"),
+    T("워커 N개로 나눠 훑거나 경주(먼저 통과 또는 전체 순위)시켜 보고서 하나로. 결과물 하나로 합치는 경쟁은 arena", "Fans out N workers to split a sweep or run a race (first to pass, or rank all), and returns one report. Competing to merge into one deliverable is arena", "ワーカー N 個で分担して調べるか競争（先に通過、または全体順位）させ、レポート 1 つに。成果物一つにまとめる競争は arena"),
+    []],
+  ["pstack", "tdd",
+    T("TDD·실패 테스트를 명시적으로 요청했거나, 싼 로컬 테스트 대상이 뻔한 버그", "TDD or a failing test was asked for explicitly, or a bug with an obvious cheap local test target", "TDD や失敗するテストを明示的に頼まれたとき、または安いローカルのテスト対象が明らかなバグ"),
+    T("실패 테스트 → 수정 → 통과", "Failing test → fix → pass", "失敗するテスト → 修正 → 通過"),
+    []],
+  ["pstack", "arena",
+    T("\"경쟁시켜줘\", \"여러 안 뽑아서 제일 나은 걸로\", 한 번의 시도로는 모양이 굳어 버릴 결과물", "\"경쟁시켜줘\" (\"make them compete\"), \"여러 안 뽑아서 제일 나은 걸로\" (\"draft several and go with the best\"), or a deliverable a single attempt would lock into one shape", "\"경쟁시켜줘\"（競わせて）、\"여러 안 뽑아서 제일 나은 걸로\"（いくつか案を出して一番良いものに）、一度の試みでは形が固まってしまう成果物"),
+    T("채점 기준을 먼저 정하고 후보 N개(Claude opus·fable, Codex)에게 같은 일을 시킨 뒤, 다른 모델 계열 심판이 골라 합침. architect가 부름", "Sets scoring criteria first, gives the same task to N candidates (Claude opus and fable, Codex), then a judge from another model family picks and merges. Called by architect", "採点基準を先に決め、候補 N 個（Claude opus・fable、Codex）に同じ仕事をさせ、別のモデル系統の審判が選んでまとめる。architect が呼ぶ"),
+    []],
+  ["pstack", "figure-it-out",
+    T("\"알아서 설계해서 진행해줘\", \"큰 마이그레이션\", \"자리 비운 동안 끝내줘\"", "\"알아서 설계해서 진행해줘\" (\"design it yourself and get going\"), \"큰 마이그레이션\" (\"a big migration\"), \"자리 비운 동안 끝내줘\" (\"finish it while I'm away\")", "\"알아서 설계해서 진행해줘\"（自分で設計して進めて）、\"큰 마이그레이션\"（大きなマイグレーション）、\"자리 비운 동안 끝내줘\"（席を外している間に終わらせて）"),
+    T("코드보다 일하는 순서를 먼저 설계: 반증 가능한 완료 조건 → 단위 나누기 → 단위마다 구현·검증. 되돌릴 수 없는 단계만 승인. deliver-ticket의 계획 단계가 부름", "Designs the order of work before the code: a falsifiable done condition → split into units → build and verify each unit. Only irreversible steps wait for approval. Called by deliver-ticket's planning step", "コードより先に仕事の順序を設計: 反証可能な完了条件 → 単位に分ける → 単位ごとに実装・検証。元に戻せない段階だけ承認を取る。deliver-ticket の計画段階が呼ぶ"),
+    []],
+  ["pstack", "prune-comments",
+    T("\"주석 정리해줘\", \"불필요한 주석 지워줘\"", "\"주석 정리해줘\" (\"clean up the comments\"), \"불필요한 주석 지워줘\" (\"delete the unnecessary comments\")", "\"주석 정리해줘\"（コメントを整理して）、\"불필요한 주석 지워줘\"（不要なコメントを消して）"),
+    T("diff에서 코드가 이미 말하는 주석을 서브에이전트가 걸러 내고, 부모가 git diff로 확인. deliver-ticket이 리뷰 전에 부름", "A subagent strips comments in the diff that only repeat what the code says, and the parent checks the result with git diff. Called by deliver-ticket before review", "diff の中でコードがすでに語っているコメントをサブエージェントが取り除き、親が git diff で確認。deliver-ticket がレビュー前に呼ぶ"),
+    ["references/pruner.md"]],
+  ["pstack", "why",
+    T("\"왜 이렇게 됐어\", \"이 결정 배경이 뭐야\", 코드를 바꾸기 전 지금 모양의 이유", "\"왜 이렇게 됐어\" (\"how did it end up like this?\"), \"이 결정 배경이 뭐야\" (\"what's the background to this decision?\"), or the reason behind the current shape before changing code", "\"왜 이렇게 됐어\"（なぜこうなったの?）、\"이 결정 배경이 뭐야\"（この決定の背景は?）、コードを変える前に今の形の理由を探すとき"),
+    T("한 줄 질문은 git blame → 커밋 → PR로 짧게, 큰 질문은 git·트래커·노트·Slack 등을 조사자들이 나눠 찾고 확신도와 함께 답함", "A one-line question is answered briefly from git blame → commit → PR; a bigger one sends investigators across git, the tracker, notes, Slack and more, and answers with a confidence level", "1 行の質問は git blame → コミット → PR で短く、大きな質問は git・トラッカー・ノート・Slack などを調査役が分担して探し、確信度とともに答える"),
+    ["references/investigator-prompt.md", "source-playbook.md"]],
+  ["pstack", "recall",
+    T("\"어디까지 했지\", \"이번 주에 뭐 했지\", 앞선 세션의 일을 이어 가기 전", "\"어디까지 했지\" (\"where did I leave off?\"), \"이번 주에 뭐 했지\" (\"what did I do this week?\"), or before resuming work an earlier session touched", "\"어디까지 했지\"（どこまでやったっけ）、\"이번 주에 뭐 했지\"（今週は何をしたっけ）、前のセッションの仕事を続ける前"),
+    T("이 저장소의 지난 세션(지운 Orca 카드 포함)을 찾아 무엇을 했고 어디서 멈췄는지 정리. Orca 세션 검색 색인이 켜져 있으면 먼저 씀", "Finds this repo's past sessions (removed Orca cards included) and sums up what was done and where it stopped. Uses Orca's session search index first when it is on", "このリポジトリの過去のセッション（削除した Orca カードを含む）を探し、何をしてどこで止まったかをまとめる。Orca のセッション検索インデックスが有効なら先に使う"),
+    []],
+  ["pstack", "teach",
+    T("\"이거 제대로 이해하고 싶어\", \"이 변경 이해시켜줘\"", "\"이거 제대로 이해하고 싶어\" (\"I want to really understand this\"), \"이 변경 이해시켜줘\" (\"help me understand this change\")", "\"이거 제대로 이해하고 싶어\"（これをちゃんと理解したい）、\"이 변경 이해시켜줘\"（この変更を理解させて）"),
+    T("how와 why를 병렬로 불러 하나의 설명으로 엮고, 필요하면 mermaid·ASCII 그림을 붙임", "Calls how and why in parallel and weaves them into one explanation, with a mermaid or ASCII diagram when it helps", "how と why を並列に呼んで一つの説明に編み、必要なら mermaid・ASCII の図を付ける"),
+    []],
+  ["pstack", "write-plainly",
+    T("티켓·PR 본문·커밋 메시지·문서·노트를 쓰거나 고칠 때, \"읽기 쉽게 고쳐줘\", \"번역투 고쳐줘\"", "Writing or revising tickets, PR bodies, commit messages, docs or notes; \"읽기 쉽게 고쳐줘\" (\"make it easier to read\"), \"번역투 고쳐줘\" (\"fix the translationese\")", "チケット・PR 本文・コミットメッセージ・文書・ノートを書いたり直したりするとき、\"읽기 쉽게 고쳐줘\"（読みやすく直して）、\"번역투 고쳐줘\"（翻訳調を直して）"),
+    T("일하지 않는 단어 빼기, 한 대상에 한 이름, 조건 먼저, 한 문장에 지시 하나 등 8개 원칙으로 한국어·영어 글을 다듬음", "Tightens Korean and English prose with eight principles: cut words that do no work, one name per thing, conditions first, one instruction per sentence, and more", "働いていない語を削る、一つの対象に一つの名前、条件を先に、一文に指示一つ などの 8 つの原則で韓国語・英語の文章を整える"),
+    ["references/korean.md", "english.md"]],
+  ["pstack", "create-verification-skill",
+    T("저장소에 앱을 사용자처럼 돌려 보는 스크립트가 없을 때", "The repo has no script that runs the app the way a user would", "リポジトリに、ユーザーのようにアプリを動かしてみるスクリプトがないとき"),
+    T("저장소 전용 verify-<app> 스킬과 기능 지도를 만들고 실제로 돌려 확인", "Builds a repo-specific verify-<app> skill and a feature map, then runs them for real to confirm they work", "リポジトリ専用の verify-<app> スキルと機能マップを作り、実際に動かして確認"),
+    ["references/feature-map-example/"]],
+  ["pstack", "maintain-verification-skill",
+    T("\"verify 스킬 점검해줘\"", "\"verify 스킬 점검해줘\" (\"check the verify skill\")", "\"verify 스킬 점검해줘\"（verify スキルを点検して）"),
+    T("기능 지도를 소스와 실제 실행으로 대조해 증명된 수정만 PR 하나로", "Checks the feature map against the source and real runs, and ships only the proven fixes in a single PR", "機能マップをソースと実際の実行で照合し、証明できた修正だけを PR 1 つで"),
+    []],
+];
+const GROUP_LABEL = { ticket: T("티켓 하나", "One ticket", "チケット 1 件"), program: T("프로젝트", "Project", "プロジェクト"), adapter: T("어댑터", "Adapter", "アダプター"), pstack: T("pstack", "pstack", "pstack") };
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const langSpans = t => `<span data-lang="ko">${esc(t.ko)}</span><span data-lang="en">${esc(t.en)}</span><span data-lang="ja">${esc(t.ja)}</span>`;
+const list = document.getElementById("skill-list");
+list.innerHTML = SKILLS.map(([g, name, when, what, files]) => `
+  <div class="skill" data-group="${g}">
+    <div class="name"><code>${name}</code><span><span class="chip plain">${langSpans(GROUP_LABEL[g])}</span></span></div>
+    <div class="desc">
+      <div class="when">${langSpans(when)}</div>
+      <div>${langSpans(what)}</div>
+      ${files.length ? `<div class="files">${files.map(f => `<code>${esc(f)}</code>`).join("")}</div>` : ""}
+    </div>
+  </div>`).join("") + `
+  <div class="skill" data-group="alias">
+    <div class="name"><code>ship-pr · dispatch-work · use-obsidian</code><span><span class="chip plain">${langSpans(T("별칭", "Alias", "エイリアス"))}</span></span></div>
+    <div class="desc"><div>${langSpans(T("이름을 바꾸기 전에 시작한 세션이 옛 이름을 불러도 deliver-ticket, dispatch-card, use-notes로 안내한다.", "Sessions started before the rename can still call the old names; they point to deliver-ticket, dispatch-card and use-notes.", "名前を変える前に始めたセッションが旧名を呼んでも、deliver-ticket、dispatch-card、use-notes に案内します。"))}</div></div>
+  </div>`;
+
+document.querySelectorAll(".filter button").forEach(btn => btn.addEventListener("click", () => {
+  document.querySelectorAll(".filter button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  const g = btn.dataset.group;
+  list.querySelectorAll(".skill").forEach(el => { el.hidden = g !== "all" && el.dataset.group !== g; });
+}));
+
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+function select(tab) {
+  tabs.forEach(t => {
+    const on = t === tab;
+    t.setAttribute("aria-selected", String(on));
+    document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+  });
+  try { localStorage.setItem("loop-tab", tab.id); } catch (e) {}
+}
+tabs.forEach(t => t.addEventListener("click", () => select(t)));
+try { const saved = document.getElementById(localStorage.getItem("loop-tab")); if (saved) select(saved); } catch (e) {}
+
+document.querySelectorAll("[data-copy]").forEach(btn => btn.addEventListener("click", () => {
+  const el = document.getElementById(btn.dataset.copy);
+  const idle = btn.innerHTML;
+  const done = () => { btn.innerHTML = langSpans(T("복사됨", "Copied", "コピーしました")); setTimeout(() => { btn.innerHTML = idle; }, 1500); };
+  navigator.clipboard.writeText(el.textContent).then(done, () => {
+    const r = document.createRange(); r.selectNodeContents(el);
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  });
+}));
+
+const TITLE = T("agent-skills 안내서", "agent-skills guide", "agent-skills ガイド");
+const langButtons = [...document.querySelectorAll("[data-set-lang]")];
+const isLang = v => Object.hasOwn(TITLE, v);
+function applyLang(lang) {
+  document.documentElement.lang = lang;
+  document.title = TITLE[lang];
+  langButtons.forEach(b => b.setAttribute("aria-pressed", String(b.dataset.setLang === lang)));
+  const key = "label" + lang[0].toUpperCase() + lang.slice(1);
+  document.querySelectorAll("[data-label-ko]").forEach(el => el.setAttribute("aria-label", el.dataset[key]));
+}
+langButtons.forEach(b => b.addEventListener("click", () => {
+  applyLang(b.dataset.setLang);
+  try { localStorage.setItem("guide-lang", b.dataset.setLang); } catch (e) {}
+  // A #ko/#en/#ja link outranks the saved choice, so drop it once the reader picks a language.
+  if (isLang(location.hash.slice(1))) {
+    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+  }
+}));
+addEventListener("hashchange", () => { const h = location.hash.slice(1); if (isLang(h)) applyLang(h); });
+applyLang(isLang(document.documentElement.lang) ? document.documentElement.lang : "ko");
+</script>
