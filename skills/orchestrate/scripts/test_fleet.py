@@ -312,6 +312,10 @@ assert orch("add", "--option", "A")[0] == 1  # no title
 assert orch("done", "d1", "--answer", "CSV") == (0, "d1 done", "")
 assert orch("done", "d1")[2] == "d1 is already done" and orch("drop", "d9")[2] == "no decision d9"
 assert orch("drop", "d2") == (0, "d2 dropped", "")
+assert orch("drop", "d2")[2] == "d2 is already dropped"
+assert orch("drop", "d1") == (0, "d1 dropped", "")  # a done decision can be taken back (a misread answer)
+saved = json.loads((dec_state / "decisions.json").read_text())["decisions"]["d1"]
+assert saved["status"] == "dropped" and saved["answer"] == "CSV", saved
 assert orch("list")[1] == ""
 
 fleet.write_atomic(state_dir / "decisions.json", json.dumps({"next": 1}))

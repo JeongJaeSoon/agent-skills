@@ -1231,7 +1231,8 @@ def decision_add(title, body="", options=(), recommend=None, link=None, handle=N
 def decision_close(did, status, answer=None, relay=False):
     """Mark an open decision done (answered) or dropped (no longer needed). relay: answered on the page, so the answer
     still has to reach the coordinator's terminal (delivered stays False until relay_decision types it). Such a decision
-    is already done when the coordinator gets to it: its `done` then only stops the relay, and `drop` cancels it."""
+    is already done when the coordinator gets to it: its `done` then only stops the relay, and `drop` cancels it.
+    `drop` also takes back any done decision, e.g. one the prompt hook closed on a misread answer."""
     def close(store):
         d = store.get("decisions", {}).get(did)
         if not d:
@@ -1242,6 +1243,8 @@ def decision_close(did, status, answer=None, relay=False):
                 d["delivered"] = False
         elif d.get("status") == "done" and d.get("delivered") is False and not relay:
             d.update(delivered=True) if status == "done" else d.update(status=status)
+        elif d.get("status") == "done" and status == "dropped" and not relay:
+            d.update(status=status)
         else:
             raise ValueError(f"{did} is already {d.get('status')}")
         return d
