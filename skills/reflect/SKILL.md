@@ -25,8 +25,8 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 | ID | First seen | Source | Kind | Evidence | Occurrences | Learning | Target | Status | Change | Verification | Outcome |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
-- **ID** `L-<n>`, never reused. **Source** the program slug or session. **Kind** a signal kind (`human_correction`, `brief_gap`, `stall`, `tooling`) or `land_failed`, `main_red`, `verdict_fail`. **Evidence** pointers only (message ID, PR comment URL, transcript path and line), never copied text.
-- **Status** is `candidate`, then `proposed` (a draft PR exists), then `applied` (merged) or `rejected`; `retired` once its target is gone or it stopped being true.
+- **ID** `L-<n>`, never reused. **Source** the program slug or session. **Kind** a signal kind (`human_correction`, `brief_gap`, `stall`, `tooling`), `land_failed`, `main_red`, `verdict_fail`, or `review` for a finding the reviewers drew from the whole record rather than one signal. **Evidence** pointers only (message ID, PR comment URL, transcript path and line), never copied text.
+- **Status** is `candidate`, then `proposed` (a draft PR exists), then `applied` (merged) or `rejected (<reason>)`; `backlog (<ticket>)` for a finding filed to the tracker for the human; `retired` once its target is gone or it stopped being true.
 - **Verification** holds only what a script, CI or `measure-delivery` printed (trigger-probe counts before and after, test names). A reviewer's opinion is not verification.
 - **Outcome** is filled by later programs: `recurred (<source>)`, or `held through <n> programs (<slug>, ...)` listing each program counted, so no program counts twice.
 - A change to a row edits that row in place and appends one dated line to `## History` (`2026-09-25 L-4 candidate to proposed: <PR URL>`), so the history survives.
@@ -42,7 +42,9 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 - The transcripts behind the signals: the coordinator's own (reflect runs in the coordinator's session, so find it as in session mode below), and a worker's when a signal names it (its worktree path encoded the same way).
 - Every `applied` ledger row whose Outcome is not `recurred`. Update its Outcome now, judged against the lesson's own Learning, not its Kind: `recurred (<slug>)` when this program repeats the failure that lesson targets; add this slug to its `held through` list when the program ran the step the lesson changed and the failure did not return. A program that never ran that step leaves the row unchanged.
 
-With no signal and no failure in the pack, stop after the Outcome update. Otherwise pass the pack path to the reviewers in place of the transcript path.
+Check each signal against the skills at current HEAD of the `agent-skills` checkout and mark in the pack the ones HEAD already fixes (with the file and line that fixes it), so the reviewers and the synthesizer do not propose them again. `git log --oneline <skills_commit>..HEAD -- skills/`, with `skills_commit` from `program.json` minus any `+local` suffix, lists what changed since the program started.
+
+With no signal and no failure left open after that, stop after the Outcome update. Otherwise pass the pack path to the reviewers in place of the transcript path.
 
 **Session mode.** The parent finds its own transcript file before fanning out. Claude Code writes it under `~/.claude/projects/<cwd with every / and . replaced by ->/`, for this session's working directory. Use that path. Do not glob across `~/.claude/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.
 
@@ -61,7 +63,7 @@ One message, three reviewers launched together. Claude reviewers use the `Agent`
 | Lens | Runner | Prompt template |
 |---|---|---|
 | Judgment | `Agent`, `model: "opus"` | `references/judgment-reviewer.md` |
-| Tooling | Codex: `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"`, the configured default model. Read-only without `--write`. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. Codex sees only its own MCP servers, so inline any ticket or thread it will need. | `references/tooling-reviewer.md` |
+| Tooling | Codex: `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"`, the configured default model, then wait with `status <job id> --wait --timeout-ms 1800000` as a Bash call with `run_in_background`, which wakes you when the job ends, and read `result <job id>`. Ending the turn to wait instead ends an unattended run for good. Read-only without `--write`. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. Codex sees only its own MCP servers, so inline any ticket or thread it will need. | `references/tooling-reviewer.md` |
 | Divergent | `Agent`, `model: "opus"` | `references/divergent-reviewer.md` |
 
 Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in their final response (Codex: `result <job id>`).
@@ -74,14 +76,14 @@ One `Agent` call, `subagent_type: "general-purpose"`, `model: "opus"`. The synth
 
 Write every Accepted, Backlog and Rejected finding to the lessons ledger. A finding that matches an existing row adds its evidence and raises Occurrences instead of making a new row.
 
-- An Accepted finding stays Accepted only with two or more independent occurrences (different tickets, workers or sessions), or when it is a reproduced security or data defect. Otherwise it stays `candidate` in the ledger and waits for a second occurrence.
+- An Accepted finding stays Accepted only with two or more independent occurrences (different tickets, workers or sessions), or when it is a reproduced security or data defect. Count occurrences from the ledger's rows and from the `signal` rows in other programs' ledgers in the store, since a program that ran before the ledger existed left no rows. Otherwise it stays `candidate` in the ledger and waits for a second occurrence.
 - For any item that would be enforced more reliably by a lint rule, script, metadata flag, or runtime check, move it from Accepted to Backlog. See the **encode-lessons-in-structure** principle skill.
 - Never propose changes to `hooks/guard.py`, the `orch land` gate in `skills/orchestrate/scripts/prog.py`, tests or eval graders, or this skill. A finding about one of them goes to Backlog for the human.
 
 ### 5. Apply
 
 **Program mode** runs with nobody to approve, so it proposes instead of applying:
-1. Make the Accepted edits in one worktree branch of the `agent-skills` checkout (routing below).
+1. Make the Accepted edits in one worktree branch of the `agent-skills` checkout (routing below). An edit that changes a command, flag or term greps all of `skills/` and changes every copy in the same branch.
 2. Verify each against the change it makes, and record the printed result in Verification.
    - A description change: `bash scripts/trigger-probe.sh` on the old and the new checkout, at least 3 runs each, with one prompt that should fire the skill and one that should not.
    - A body or script change: `claude plugin validate <checkout>` and a check of the changed path itself: a test under the skill that fails without the change, or the incident replayed with the tools it needs in a scratch copy of the repo, with the asserted result. `trigger-probe.sh` denies writes and shell commands and reports only which skills fired, so it verifies triggering, never behavior.
@@ -93,7 +95,7 @@ With no Accepted finding, skip the PR and write one digest line saying why.
 
 **Session mode.** Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes reach every session that loads this plugin, so nothing is applied without that approval.
 
-Backlog items file to the user's ticket tracker (the **use-tracker** skill) automatically. Only the Accepted list waits for approval.
+In both modes, Backlog items file to the user's ticket tracker (the **use-tracker** skill) automatically, and the ticket goes in the row's Status. Only the Accepted list waits for approval.
 
 This plugin's skills (`agent-skills`) come from the `JeongJaeSoon/agent-skills` repo. Make every edit in a checkout of it, on a worktree branch, never in the installed copy under `~/.claude/plugins/cache/`, which an update replaces. `claude --plugin-dir <checkout>` loads the edited copy for a test. A skill from another plugin is not edited in place; record the finding as Backlog instead.
 

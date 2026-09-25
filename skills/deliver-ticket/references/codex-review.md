@@ -28,6 +28,8 @@ through `task`:
 node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs task --background --model gpt-6-astra --effort medium "<the hard question>"
 ```
 
+After a `--background` job, wait with `status <job id> --wait --timeout-ms 1800000` as a Bash call with `run_in_background`, which wakes you when the job ends, and read `result <job id>`. Ending the turn to wait instead ends an unattended run for good.
+
 A design you are unsure of is exactly that case: run `adversarial-review` for the sweep, and put
 the one question it cannot settle to astra as a `task`. Astra runs at `medium`, or `low` for a
 bounded question, never `high` or `xhigh` (the user's call).

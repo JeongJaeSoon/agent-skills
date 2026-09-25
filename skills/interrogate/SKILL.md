@@ -37,7 +37,7 @@ One reviewer per model family, launched in the same message so they run in paral
 | Reviewer | How to run it |
 |----------|---------------|
 | Reviewer A (Claude) | `Agent` tool, `subagent_type: "general-purpose"`, `model: "opus"`. Tell it in the prompt that it only reads and reports; it must not edit files. |
-| Reviewer B (Codex) | `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"` — the configured default model, as in `deliver-ticket` §3; add `--model gpt-6-astra --effort medium` (or `low` for a bounded question) only when the change is a hard design question, then `status` / `result` with the job id. `task` without `--write` is read-only. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. |
+| Reviewer B (Codex) | `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"` — the configured default model, as in `deliver-ticket` §3; add `--model gpt-6-astra --effort medium` (or `low` for a bounded question) only when the change is a hard design question, then wait with `status <job id> --wait --timeout-ms 1800000` as a Bash call with `run_in_background`, which wakes you when the job ends, and read `result <job id>`. Ending the turn to wait instead ends an unattended run for good. `task` without `--write` is read-only. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. |
 
 Run one Codex job at a time; two concurrent jobs kill each other. If a model name is rejected, use the closest available tier of the same family and say which one ran. Do not block the review on it.
 
