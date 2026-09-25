@@ -330,7 +330,8 @@ def broadcast(kind, dry_run):
 def broadcast_locked(kind, dry_run=False):
     path = STATE / "reload-pending.json"
     pending = read_json(path, {})
-    kind = max(kind, pending.get("kind"), key=ORDER.index)
+    queued = pending.get("kind")
+    kind = max(kind, queued if queued in ORDER else "plugins", key=ORDER.index)  # unreadable: the safe superset
     if not kind:
         print("nothing to reload")
         return 0
