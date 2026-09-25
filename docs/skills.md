@@ -252,7 +252,7 @@
 - **언제:** "어디까지 했지", "X 작업 어디까지 했더라", "최근 작업 정리해줘", "이번 주에 뭐 했지", 'catch me up'. 앞선 세션이 건드린 일을 시작하거나 이어 가기 전.
 - **내용:**
   - 범위(기간 기본 7일, 주제, 저장소)를 먼저 정해 말한다. 다른 저장소의 세션은 묻지 않고 읽지 않는다.
-  - 지난 세션은 `~/.claude/projects/<인코딩한 경로>/`에서 찾는다. Orca 카드는 worktree마다 경로가 달라서 main 체크아웃, `git worktree list`, 이미 지운 카드(같은 상위 폴더)를 모두 본다. `orca search` 색인이 켜져 있으면 그것을 먼저 쓴다.
+  - 지난 세션은 `~/.claude/projects/<인코딩한 경로>/`에서 찾는다. Orca 카드는 worktree마다 경로가 달라서 main 체크아웃, `git worktree list`, 이미 지운 카드(같은 상위 폴더)를 모두 본다. `orca search` 색인이 켜져 있으면 그것을 먼저 쓴다. 색인은 Orca 앱 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터 스위치로만 켠다(CLI 없음). 꺼져 있으면 grep으로 찾고 답 끝에 이 설정을 한 줄로 알린다.
   - 세션이 많으면 haiku 서브에이전트가 나눠 읽고 세션마다 목표, 결정, 남은 일, 막힌 곳, 산출물을 돌려준다. 원문은 서브에이전트 안에 둔다.
   - 주제가 기능·파일·버그를 가리키면 `why`의 출처 조사, worklog(`use-notes`), 티켓(`use-tracker`)도 함께 본다. 되돌린 수정과 계속 보고되는 증상이 여기서 나온다.
   - PR·브랜치·티켓·카드는 `git`, `gh`, 트래커, `orca worktree list`로 지금 상태를 확인한다.
