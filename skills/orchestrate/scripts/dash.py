@@ -1204,7 +1204,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(403, b'{"error":"forbidden"}')
         if path == "/api/fleet/state":
             if time.monotonic() - FLEET_VIEWED[0] > FLEET_VIEW_S:
-                FLEET_WAKE.set()  # the page just opened: refresh now, not at the end of an idle sleep
+                FLEET_FORCE[0] = True  # the page just opened: runs and every open PR now, not when their turn comes
+                FLEET_WAKE.set()
             FLEET_VIEWED[0] = time.monotonic()
             f = fleet.state_dir() / "state.json"
             if not f.exists():
@@ -1232,6 +1233,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/fleet/send" and isinstance(body.get("session"), str) and isinstance(body.get("text"), str):
             handle = body.get("handle") if isinstance(body.get("handle"), str) else None
             code, out = fleet.send(body["session"], body["text"], handle)
+            FLEET_WAKE.set()
             return self.send(code, json.dumps(out).encode())
         elif path == "/api/fleet/decide" and all(isinstance(body.get(k), str) for k in ("decision", "answer")):
             code, out = fleet.decision_answer(body["decision"], body["answer"])
@@ -1249,14 +1251,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 TOKEN = hashlib.sha256(os.urandom(32)).hexdigest()
 FLEET = None
-FLEET_VIEWED, FLEET_WAKE = [0.0], threading.Event()
+FLEET_VIEWED, FLEET_WAKE, FLEET_FORCE = [0.0], threading.Event(), [False]
 FLEET_VIEW_S, FLEET_IDLE_EVERY = 300, 60  # poll Orca every 10 s only while a page has polled in the last 5 min
 
 
 def fleet_loop():
     while True:
         try:
-            st = FLEET.tick()
+            force, FLEET_FORCE[0] = FLEET_FORCE[0], False
+            st = FLEET.tick(force=force, viewed=time.monotonic() - FLEET_VIEWED[0] < FLEET_VIEW_S)
             errs = [f"{k}: {v['error']}" for k, v in ((st or {}).get("sources") or {}).items() if v.get("error")]
             if errs:
                 log("fleet: " + " | ".join(errs))

@@ -398,6 +398,58 @@ process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(fla
 else:
     print("test_fleet: node not found, rendering check skipped")
 
+# PR freshness, counted per probed PR. A quiet PR (cold: no update for days, no CI running, not approved, its session
+# not working) waits for its tier with no page open, is probed every PR tick while a page is open, and at once when
+# its session's phase changes. A full read that fails is retried at the next probe instead of being forgotten.
+probed, real_gql, fail_detail = [], f.graphql, [False]
+
+
+def counting(q):
+    if "reviewThreads" in q and fail_detail[0]:
+        raise fleet.SourceError("detail read failed")
+    if "reviewThreads" not in q:
+        probed.extend(int(n) for n in __import__("re").findall(r"pullRequest\(number:(\d+)\)", q))
+    return real_gql(q)
+
+
+f.graphql = counting
+ci43 = world.prs[43]["commits"]
+world.prs[43]["commits"] = {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}
+clock[0] = now + dt.timedelta(days=3)
+f.tick(force=True)
+assert {41, 42, 43} <= set(probed), probed
+
+
+def pr_tick(**kw):
+    probed.clear()
+    clock[0] += dt.timedelta(seconds=100)
+    f.last["prs"] = 0.0  # the 90 s PR tick has come round
+    return f.tick(**kw)
+
+
+pr_tick()
+assert 43 not in probed and 42 in probed and 41 in probed, probed  # #42's session works, #41 is approved: both hot
+pr_tick(viewed=True)
+assert 43 in probed, probed
+world.worktrees[3]["agents"][0]["state"] = "done"  # wt-docs' turn ends: its PR is probed without waiting for the tick
+probed.clear()
+f.tick()
+assert probed == [43], probed
+world.prs[43]["state"], fail_detail[0] = "MERGED", True
+pr_tick(viewed=True)
+assert next(p for p in f.state["prs"] if p["number"] == 43)["state"] == "OPEN"  # the read failed
+fail_detail[0] = False
+st = pr_tick(viewed=True)
+assert next(p for p in st["prs"] if p["number"] == 43)["state"] == "MERGED", "retried, not forgotten"
+# Few GraphQL points left: the PR tick waits (up to 15 min) instead of spending them.
+f.rate, f.last["prs"] = 100, fleet.time.monotonic() - 100
+probed.clear()
+f.tick(viewed=True)
+assert probed == [], probed
+f.rate = None
+world.prs[43]["state"], world.prs[43]["commits"], world.worktrees[3]["agents"][0]["state"] = "OPEN", ci43, "waiting"
+f.graphql = real_gql
+
 # Classification of a finished turn's last lines.
 assert fleet.classify("Build done. E2E test failed on the login page.") == "verify_failed"
 assert fleet.classify("Login required: run `gh auth login`, then tell me.") == "login"

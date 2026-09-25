@@ -19,7 +19,9 @@ INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed u
 RUNS_EVERY = 120         # runs, workers, tasks, gates
 PR_TICK = 90             # PR probe tick; each PR is due per its tier below
 DISCOVER_EVERY = 600     # re-ask GitHub which PR a branch has, for sessions that had none
-TIER_EVERY = {"hot": 90, "warm": 300, "cold": 900, "done": 86400}
+TIER_EVERY = {"hot": 90, "warm": 300, "cold": 900, "done": 86400}  # while no page is open; an open page probes
+                                                                   # every OPEN PR each PR tick (one query per 50)
+RATE_FLOOR = 300         # GraphQL points left below which only a forced PR tick runs, until the hour resets
 EVENTS_KEEP = 400
 ROTATE_BYTES = 5 * 1024 * 1024  # events.jsonl and pr-events.jsonl move to *.1 past this
 STICKY_TYPES = ("approval", "run_command", "login", "verify_failed", "question")
@@ -628,7 +630,8 @@ def tier(p, session_phase, now):
     if p["state"] != "OPEN":
         return "done"
     upd = parse(p.get("updated"))
-    if p.get("ci") == "pending" or session_phase == "working" or (upd and now - upd < dt.timedelta(hours=2)):
+    if (p.get("ci") == "pending" or p.get("decision") == "APPROVED" or session_phase == "working"
+            or (upd and now - upd < dt.timedelta(hours=2))):
         return "hot"
     return "warm" if upd and now - upd < dt.timedelta(hours=24) else "cold"
 
@@ -652,6 +655,7 @@ class Fleet:
         self.me = saved.get("me")
         self.mem = read_json(d / "memory.json", {}) or {}  # prompt hashes, last states, sticky inbox
         self.last = {"runs": 0.0, "prs": 0.0}
+        self.rate = None  # GraphQL points left, from the last query's rateLimit
         self.state, self.owner_of, self.saved = None, {}, {}
         self.events = collections.deque(read_lines(d / "events.jsonl", EVENTS_KEEP), maxlen=EVENTS_KEEP)
 
@@ -678,8 +682,9 @@ class Fleet:
 
     # -- ticks
 
-    def tick(self, force=False):
-        """Refresh whatever is due and rewrite state.json. Returns the new state."""
+    def tick(self, force=False, viewed=False):
+        """Refresh whatever is due and rewrite state.json. Returns the new state. force: refresh runs and probe every
+        PR now (the page was just opened); viewed: a page is open, so every OPEN PR is probed each PR tick."""
         with self.lock:
             mono = time.monotonic()
             try:
@@ -701,9 +706,16 @@ class Fleet:
             for s in sessions.values():
                 s["gh_repo"] = repo_of(s["path"], self.repos) if s.get("path") else None
                 s["project"] = project_of(s.get("path"), s.get("repo_name"), s["gh_repo"])
-            if force or mono - self.last["prs"] >= PR_TICK:
+            # A session whose phase changed (a turn ended, a worker started) may just have merged, pushed or
+            # answered a review: its PRs are probed now rather than when their tier comes round.
+            phases = self.mem.setdefault("session_phase", {})
+            moved = {sid for sid, s in sessions.items() if phases.get(sid) not in (None, s["phase"])}
+            self.mem["session_phase"] = {sid: s["phase"] for sid, s in sessions.items()}
+            touched = {k for k, sid in self.owner_of.items() if sid in moved}
+            low = self.rate is not None and self.rate < RATE_FLOOR and mono - self.last["prs"] < 900  # one try per 15 min
+            if force or touched or (mono - self.last["prs"] >= PR_TICK and not low):
                 try:
-                    self.refresh_prs(sessions, cfg)
+                    self.refresh_prs(sessions, cfg, force=force, viewed=viewed, now_due=touched)
                     self.ok("github")
                 except SourceError as e:
                     self.ok("github", str(e))
@@ -714,7 +726,7 @@ class Fleet:
                          "memory.json": json.dumps(self.mem, ensure_ascii=False)})
             return self.state
 
-    def refresh_prs(self, sessions, cfg):
+    def refresh_prs(self, sessions, cfg, force=False, viewed=False, now_due=()):
         now = self.now()
         if not self.me:
             try:
@@ -734,7 +746,9 @@ class Fleet:
                 continue
             bk = f"{repo}@{s['branch']}"
             hit = self.branch_pr.get(bk)
-            if not hit or (hit.get("key") is None and now - (parse(hit.get("at")) or now) >= dt.timedelta(seconds=DISCOVER_EVERY)):
+            # A branch whose PR was merged or closed may get a new one: it is asked again like a branch without one.
+            known_open = hit and hit.get("key") and ((self.prs.get(hit["key"]) or {}).get("detail") or {"state": "OPEN"})["state"] == "OPEN"
+            if not hit or (not known_open and now - (parse(hit.get("at")) or now) >= dt.timedelta(seconds=DISCOVER_EVERY)):
                 ask.append((repo, s["branch"]))
             elif hit.get("key"):
                 owner_of.setdefault(hit["key"], s["id"])
@@ -743,6 +757,7 @@ class Fleet:
             chunk = ask[i:i + 40]
             data, errs = self.graphql(discover_query(chunk))
             errors += errs
+            self.note_rate(data)
             for j, (repo, branch) in enumerate(chunk):
                 nodes = ((((data.get(f"b{j}") or {}).get("ref") or {}).get("associatedPullRequests") or {})
                          .get("nodes") or [])
@@ -760,18 +775,19 @@ class Fleet:
         due = []
         for k, sid in owner_of.items():
             entry = self.prs.get(k)
-            if entry and entry.get("detail"):
+            if entry and entry.get("detail") and k not in now_due:
                 t = tier(entry["detail"], sessions.get(sid, {}).get("phase"), now)
                 last = parse(entry.get("probed_at"))
-                every = TIER_EVERY[t]
-                if last and (now - last).total_seconds() < every - 5:
+                every = TIER_EVERY["hot"] if (viewed or force) and t != "done" else TIER_EVERY[t]
+                if last and (now - last).total_seconds() < every - 5 and not (force and t != "done"):
                     continue
             due.append(k)
-        changed = []
+        changed, new_sig = [], {}
         for i in range(0, len(due), 50):
             chunk = due[i:i + 50]
             data, errs = self.graphql(pr_query(chunk, PROBE))
             errors += errs
+            self.note_rate(data)
             for j, k in enumerate(chunk):
                 pr = (data.get(f"p{j}") or {}).get("pullRequest")
                 if not pr:
@@ -780,11 +796,13 @@ class Fleet:
                 sig = probe_sig(pr)
                 if sig != entry.get("probe") or not entry.get("detail"):
                     changed.append(k)
-                entry["probe"], entry["probed_at"] = sig, iso(now)
+                    new_sig[k] = sig  # kept only once the full read lands: a failed read is retried next probe
+                entry["probed_at"] = iso(now)
         for i in range(0, len(changed), 25):
             chunk = changed[i:i + 25]
             data, errs = self.graphql(pr_query(chunk, DETAIL))
             errors += errs
+            self.note_rate(data)
             for j, k in enumerate(chunk):
                 pr = (data.get(f"p{j}") or {}).get("pullRequest")
                 if not pr:
@@ -793,10 +811,16 @@ class Fleet:
                 prev = self.prs[k].get("detail")
                 for e in pr_events(prev, cur, self.me):
                     self.emit_pr_event(cur, e, sessions.get(owner_of.get(k)), now)
-                self.prs[k]["detail"] = cur
+                self.prs[k]["detail"], self.prs[k]["probe"] = cur, new_sig[k]
                 self.fetch_avatars(cur)
         if errors:
             raise SourceError("; ".join(errors[:3]))
+
+    def note_rate(self, data):
+        rate = (data or {}).get("rateLimit") or {}
+        if isinstance(rate.get("remaining"), int):
+            self.rate = rate["remaining"]
+            self.sources["github"]["remaining"] = rate["remaining"]
 
     def emit_pr_event(self, pr, e, session, now):
         owner, kind = None, None

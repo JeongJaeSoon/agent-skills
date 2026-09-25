@@ -71,6 +71,8 @@ async function fleetPost(path, body, retry = true) {
   // A server restart (ensure restarts on a code change) rotates the token: fetch it again once.
   if (r.status === 403 && retry) { F.token = null; return fleetPost(path, body, false); }
   const out = await r.json().catch(() => ({}));
+  // Every POST is an action that wakes the collector: fetch its result once that tick is written, not at the next poll.
+  setTimeout(pollState, 1500);
   if (!r.ok && !("ok" in out)) throw new Error(out.error || String(r.status));
   return out;
 }
