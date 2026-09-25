@@ -704,7 +704,7 @@ def ledger_gaps(cfg, events, workers, prs, tnow):
     mapped = {d for e in events if e["ev"] == "spawned"
               for d in re.findall(r"ctx_[0-9a-f]+", " ".join(str(e.get(k) or "") for k in ("note", "dispatch")))}
     landed = {e.get("pr") for e in events if e["ev"] == "landed"}
-    decided = {e.get("sha") for e in events if e["ev"] in ("main_green", "main_red")}
+    decided = {e.get("sha") for e in events if e["ev"] in ("main_green", "main_red")} | set(prog.stack_lower(events))
     t0 = prog.parse_ts(cfg["created_at"])
     return {
         "spawns": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in mapped],

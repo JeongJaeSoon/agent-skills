@@ -299,6 +299,9 @@ prs_g = [{"number": n, "state": "merged", "merged_at": ago(t)} for n, t in ((1, 
 gaps = dash.ledger_gaps(cfg_g, ev_g, [{"dispatch": "ctx_aa", "outcome": "in_progress"},
                                      {"dispatch": "ctx_bb", "outcome": "in_progress"}], prs_g, now)
 assert gaps == {"spawns": ["ctx_bb"], "landings": [3], "ci": [2]}, gaps
+stacked = [{"ts": ago(300), "ev": "landed", "pr": 5, "sha": "s5", "stack_top": 6},
+           {"ts": ago(300), "ev": "landed", "pr": 6, "sha": "s6"}, {"ts": ago(290), "ev": "main_green", "sha": "s6"}]
+assert dash.ledger_gaps(cfg_g, stacked, [], [], now)["ci"] == [], "a lower stack layer has no main CI run to record"
 
 # ensure: starts this store's server once, then finds it; a second serve on the store refuses.
 import socket, subprocess, signal
