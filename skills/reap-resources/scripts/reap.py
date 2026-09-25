@@ -60,11 +60,11 @@ def etime_s(et):
 def processes():
     """pid → row. `start` is ps's lstart, exact to the second, so a reused pid does not pass as the same process."""
     rows = {}
-    for line in run(["ps", "-axo", "pid=,ppid=,lstart=,etime=,rss=,%cpu=,command="]).splitlines():
-        p = line.split(None, 10)
-        if len(p) == 11:
-            rows[int(p[0])] = {"pid": int(p[0]), "ppid": int(p[1]), "start": " ".join(p[2:7]), "age": etime_s(p[7]),
-                               "rss": int(p[8]) * 1024, "cpu": float(p[9]), "cmd": p[10]}
+    for line in run(["ps", "-axo", "pid=,ppid=,uid=,lstart=,etime=,rss=,%cpu=,command="]).splitlines():
+        p = line.split(None, 11)
+        if len(p) == 12:
+            rows[int(p[0])] = {"pid": int(p[0]), "ppid": int(p[1]), "uid": int(p[2]), "start": " ".join(p[3:8]),
+                               "age": etime_s(p[8]), "rss": int(p[9]) * 1024, "cpu": float(p[10]), "cmd": p[11]}
     return rows
 
 
@@ -131,6 +131,9 @@ def is_claude(cmd):
 
 def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
     claude = {pid: real(c) for pid, c in (cwd_of or {}).items() if pid in rows and is_claude(rows[pid]["cmd"])}
+    # An own claude with no cwd on record could be the one using any broker.
+    blind = cwd_of is None or any(is_claude(r["cmd"]) and r.get("uid", os.getuid()) == os.getuid() and pid not in cwd_of
+                                  for pid, r in rows.items())
     out = []
     for r in rows.values():
         if not BROKER.match(r["cmd"]):
@@ -140,8 +143,8 @@ def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
         live = [pid for pid, c in claude.items() if cwd and under(c, real(cwd))]
         if live:
             why, target = f"cwd에 살아 있는 claude(pid {live[0]})", False
-        elif cwd_of is None:
-            why, target = "프로세스 cwd 를 읽지 못함", False
+        elif blind:
+            why, target = "claude 의 cwd 를 모두 읽지 못함", False
         elif not cwd or not exists(cwd):
             why, target = "cwd 없음", True
         elif r["age"] < hours * 3600:
@@ -156,8 +159,10 @@ def judge_orphans(rows, prefixes, hours):
     pres = {x for p in prefixes for x in (p.rstrip("/"), real(p).rstrip("/"))}
     out = []
     for r in rows.values():
-        # Only the executable or the script it runs counts as "under" a path, not an argument or a prompt.
-        exe = r["cmd"].split()[:2]
+        # Only the executable or the script it runs (its first non-option argument) counts, not a later
+        # argument or a prompt.
+        argv = r["cmd"].split()
+        exe = argv[:1] + [a for a in argv[1:] if not a.startswith("-")][:1]
         if r["ppid"] != 1 or not any(under(e, p) for e in exe for p in pres):
             continue
         young = r["age"] < hours * 3600
@@ -460,7 +465,7 @@ def kill_tree(item, notes):
     if not r or r["cmd"] != item["cmd"] or r["start"] != item["start"]:
         return "사라졌거나 다른 프로세스"
     pids = tree(item["pid"], rows)
-    cmds = {p: rows[p]["cmd"] for p in pids}
+    ids = {p: (rows[p]["cmd"], rows[p]["start"]) for p in pids}
     for p in pids:
         try:
             os.kill(p, signal.SIGTERM)
@@ -471,7 +476,7 @@ def kill_tree(item, notes):
     deadline = time.time() + 5
     while time.time() < deadline:
         now = processes()
-        left = [p for p in pids if p in now and now[p]["cmd"] == cmds[p]]
+        left = [p for p in pids if p in now and (now[p]["cmd"], now[p]["start"]) == ids[p]]
         if not left:
             return "종료"
         time.sleep(0.5)

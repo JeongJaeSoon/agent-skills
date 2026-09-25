@@ -148,7 +148,7 @@
   - **orphan:** ppid が 1 で、実行ファイルが設定の `reap.orphan_paths`（テストのキャッシュパス）の下にあるプロセス。
   - **docker:** コンテナが1つもない compose project の dangling volume と、どのコンテナも使っていないタグなしイメージ。コンテナのある project、その名前を含む volume、compose ラベルのない volume は残して報告だけします。
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
-  - **worktree:** ディレクトリが消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
+  - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
   - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（Codex のプロセス数と RSS、孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
 - **同梱:** `scripts/reap.py`、テストファイル。
 - **関連:** `orchestrate` の resource steward がラウンドごとに呼び、警報が残ればダッシュボードの受信箱で人に知らせます。

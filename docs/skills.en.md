@@ -148,7 +148,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - **orphan:** processes with ppid 1 whose executable lies under a path in the config's `reap.orphan_paths` (test caches).
   - **docker:** dangling volumes of a compose project that has no container at all, and untagged images no container uses. A project with containers, volumes whose name holds such a project's name, and volumes with no compose label are kept and only reported.
   - **branch:** local branches whose PRs are all merged or closed, with no worktree, and whose tip matches a PR head. It prints the command to restore each one.
-  - **worktree:** worktrees whose directory is gone (except Orca's), and clean, pushed, detached worktrees in a Claude scratchpad whose session transcript has been quiet for N hours. Both go through `git worktree remove <path>`, which drops only that entry. Orca worktrees belong to the resource steward.
+  - **worktree:** worktrees whose directory in a temp dir is gone (except Orca's), and clean, pushed, detached worktrees in a Claude scratchpad whose session transcript has been quiet for N hours. Both go through `git worktree remove <path>`, which drops only that entry. Orca worktrees belong to the resource steward.
   - It never uses `pkill`, `docker system prune` or `--force`. When a running total (Codex processes and RSS, orphan processes, dangling volumes, branches and worktrees to remove) reaches its limit in the config, it prints an `경보` (alert).
 - **Bundled:** `scripts/reap.py`, a test file.
 - **Related:** The resource steward in `orchestrate` runs it every round, and tells the human through the dashboard inbox when an alert remains.

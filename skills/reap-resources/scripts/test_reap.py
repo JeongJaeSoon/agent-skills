@@ -23,6 +23,9 @@ rows = {
     60: row(60, "claude --permission-mode auto " + BROKER.format("/wt/gone")),
 }
 got = {i["pid"]: i for i in reap.judge_brokers(rows, {50: "/wt/live/sub", 60: "/home"}, 6, exists=lambda p: p != "/wt/gone")}
+# One own claude missing from the cwd listing blinds every idle verdict.
+blind = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, {50: "/wt/live/sub"}, 6, exists=lambda p: p != "/wt/gone")}
+assert blind == {10: False, 20: False, 30: False, 40: False}, blind
 assert set(got) == {10, 20, 30, 40}, got
 assert not got[10]["target"] and "claude" in got[10]["why"] and got[10]["procs"] == 3
 assert got[20]["target"] and got[20]["why"] == "cwd에 claude 없음"
@@ -46,9 +49,11 @@ rows = {
     4: row(4, "claude please look at /cache/uv/bin/litellm"),
     5: row(5, "/cache/uv-other/bin/litellm"),
     6: row(6, "/cache/uv/bin/litellm", age=H),
+    7: row(7, "/usr/bin/python3 -u /cache/uv/server.py"),
+    8: row(8, "/usr/bin/python3 /opt/app.py --data /cache/uv/x"),
 }
 got = {i["pid"]: i["target"] for i in reap.judge_orphans(rows, ["/cache/uv/"], 6)}
-assert got == {1: True, 3: True, 6: False}, got
+assert got == {1: True, 3: True, 6: False, 7: True}, got
 assert reap.judge_orphans(rows, [], 6) == []
 
 # Docker: only dangling volumes of a project with no container at all; a volume named after a live project stays.
@@ -174,7 +179,7 @@ with tempfile.TemporaryDirectory() as tmp:
     time.sleep(1)
     rows = reap.processes()
     orphan = [i for i in reap.judge_orphans(rows, [str(cache)], 0) if i["target"]]
-    broker = [i for i in reap.judge_brokers(rows, {}, 0) if i["name"] == f"{tmp}/gone-wt"]
+    broker = [i for i in reap.judge_brokers(rows, reap.cwds(), 0) if i["name"] == f"{tmp}/gone-wt"]
     assert len(broker) == 1 and broker[0]["target"] and broker[0]["procs"] == 2, broker
     # The broker also runs from the cache path, so it counts as an orphan too; the plain sleeper is the other one.
     assert len(orphan) == 2 and all(i["procs"] == 2 for i in orphan), orphan
