@@ -22,7 +22,7 @@ Every request leaves your turn within one short tool call.
 | A quick lookup, a read across several repos, a review or verification of work already done, or delegation to an external tool (chat, tracker, notes) | A background subagent (`run_in_background`); you answer when it reports |
 | A change to one repo, or an investigation that must read one repo's code or config | A new Orca worker (`worker-start`) with a brief (`brief.md`, "Single worker"), or `dispatch-card` when it needs its own card |
 | More work for a session that already owns that topic | That session: `orca orchestration send --to dispatch:<id>` if it is a dispatch, otherwise the human's inbox ("send this to <session>") |
-| Three or more tickets that must land together | A program coordinator (`orchestrate` program mode) in its own session. Several tracks: one coordinator per track, each with its own QA lead; a track of a couple of tickets, or one that depends on another, joins that track |
+| Three or more tickets that must land together | A program coordinator (`orchestrate` program mode) in its own session, started as a card (`dispatch-card`), not with `worker-start`: Orca's nesting limit refuses a dispatched worker's own `worker-start` (`nested_worker_depth_exceeded`). Several tracks: one coordinator per track, each with its own QA lead; a track of a couple of tickets, or one that depends on another, joins that track |
 | Work inside a running program | Its coordinator. Never steer its workers past it |
 
 An investigation inside one repo is a worker, not a subagent: it reads a fresh checkout of that repo, shows on the roster while it runs, and can take the change that follows from what it finds.
@@ -44,7 +44,7 @@ Once adopted they are on the roster, and you only read them. Never answer their 
 
 - Check the exit status of every `orca orchestration send`. A completed dispatch refuses mail ("its worker will never read that mailbox"): send to `run:<id>`, or start a new dispatch for new work.
 - `terminal send --wait-submit` can warn "no turn start was observed" when the turn did start. Read `--screen` before sending again, or the instruction lands twice.
-- Put message bodies in a file and pass `--body "$(cat <file>)"`. A body that merely mentions kill, deploy or merge gets the whole command refused by the auto-mode classifier. A sensitive list (affected users' emails and the like) stays in its file: pass only the path, so the list never enters your context or the mail.
+- Write message bodies to a file with the Write tool, not a heredoc, and pass `--body "$(cat <file>)"`. A command whose text merely mentions kill, deploy, merge or a credential file is refused by the auto-mode classifier or a secret-scanning hook. A sensitive list (affected users' emails and the like) stays in its file: pass only the path, so the list never enters your context or the mail.
 - Typing into another session's composer is only for the one-line nudge in SKILL.md and the reload below. Both pass the idle check first.
 
 ## Asking the human

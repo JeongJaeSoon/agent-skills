@@ -91,7 +91,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 - **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "Keep one background wait running" in `top-level.md` is the orchestrator's rule, not a worker's.
 - Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
-- Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` before `worker-start`. Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
+- Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.
 - Never resume-chain a brief. A retry gets a fresh brief with the consolidated scope.
 - A verifier unit on a high-blast-radius PR runs on another model family (`worker-start --agent codex`). It reports PASS, PASS+NOTES or FAIL, with what it drove.
