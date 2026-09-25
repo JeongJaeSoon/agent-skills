@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 27개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 28개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -9,6 +9,7 @@
               (이 세션은 계속 일하면서 다른 저장소·곁가지로 보낼 때는 dispatch-card)
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
               └ 끝나면 measure-delivery
+머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
 어디서나    use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
 
@@ -111,7 +112,7 @@
   - `references/`
     - `brief.md`: 워커 브리프 템플릿.
     - `landing.md`: 레인, 착지 순서, stack, `land` 종료 코드.
-    - `roles.md`: 가디언, QA 리드, flow improver(진행 중 스킬 개선), resource steward(끝난 worktree·프로세스 정리).
+    - `roles.md`: 가디언, QA 리드, flow improver(진행 중 스킬 개선), resource steward(끝난 worktree 정리, `reap-resources` 주기 실행과 경보).
     - `program-note.md`: 프로그램 노트 템플릿.
     - `dashboard.md`: 대시보드 설명.
     - `top-level.md`: 최상위 orchestrator 모드.
@@ -122,7 +123,7 @@
     - `mailbox_guard.py`: 옛 설치에서 hook으로 넘어가는 전환용 shim.
     - 테스트 파일.
   - `assets/dashboard/`: 대시보드 화면.
-- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reflect`, `end-session`을 가져다 쓴다.
+- **관계:** 워커는 `deliver-ticket`을 따른다. `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, `end-session`을 가져다 쓴다.
 
 ### measure-delivery
 - **언제:** "성과 측정", 후속 티켓이 늘었는지 줄었는지, 재작업, 토큰 비용을 물을 때. `orchestrate`의 Close 단계에서도 부른다.
@@ -133,6 +134,20 @@
   - 새어 나간 결함 후보(Bug 라벨, main CI 실패, revert)를 찾는다.
   - PR당 Claude·Codex 토큰을 계산한다. codex-companion의 review·task는 세션 파일을 남기지 않아 셀 수 없으므로, 맞는 Codex 세션이 없으면 0이 아니라 `미측정`으로 적는다.
   - Linear에서 정확한 종료 시각이 필요하면 MCP로 뽑은 파일을 쓴다. 요청받은 숫자를 먼저 보여 주고 보고서는 노트에 저장한다.
+
+## 머신 하나
+
+### reap-resources
+- **언제:** "방치 리소스 정리해줘", "codex 프로세스 너무 많아", 메모리·CPU를 누가 먹는지 볼 때, 그리고 resource steward의 주기 점검. 프로그램 없이도 쓴다.
+- **내용:** `scripts/reap.py scan`이 읽기만 해서 종류별 개수·프로세스·RSS·CPU·나이와 정리 대상 목록을 낸다. `reap --plan`은 다시 스캔해서 그 목록 가운데 여전히 대상이고 정체(pid와 시작 시각, 브랜치 tip)가 같은 것만 정리한다.
+  - **codex:** Codex 플러그인 broker 트리. `--cwd` 경로가 없거나, 그 경로에 살아 있는 `claude`가 없고 N시간(기본 6)이 지났을 때만 트리째 끝낸다.
+  - **orphan:** ppid 1이고 실행 파일이 설정의 `reap.orphan_paths`(테스트 캐시 경로) 아래에 있는 프로세스.
+  - **docker:** 컨테이너가 하나도 없는 compose project의 dangling volume과, 컨테이너가 쓰지 않는 태그 없는 이미지. 컨테이너가 있는 project, 그 이름을 품은 volume, compose 라벨 없는 volume은 남기고 보고만 한다.
+  - **branch:** PR이 모두 머지·닫혔고, worktree가 없고, tip이 PR head와 같은 로컬 브랜치. 복구 명령을 함께 출력한다.
+  - **worktree:** 디렉터리가 사라진 worktree(`git worktree prune`), 세션 transcript가 N시간 조용한 Claude scratchpad의 깨끗하고 push된 worktree(`git worktree remove`). Orca worktree는 resource steward의 몫이다.
+  - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(Codex 프로세스·RSS, 고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
+- **동봉:** `scripts/reap.py`, 테스트 파일.
+- **관계:** `orchestrate`의 resource steward가 라운드마다 부르고, 경보가 남으면 대시보드 인박스로 사람에게 알린다.
 
 ## 어댑터
 
@@ -373,7 +388,7 @@
 
 ## 설정 파일
 
-`~/.claude/agent-skills.json`에서 트래커와 노트 저장소를 고른다. 파일이 없으면 Linear와 Obsidian vault `Private`을 쓴다. 프로그램의 `program.json`에 적은 값이 이 파일보다 우선한다.
+`~/.claude/agent-skills.json`에서 트래커와 노트 저장소를 고른다. 파일이 없으면 Linear와 Obsidian vault `Private`을 쓴다. `reap-resources`의 기준 시간, 테스트 캐시 경로, 경보 임계도 이 파일의 `reap`에 둔다(형식은 그 스킬의 SKILL.md). 프로그램의 `program.json`에 적은 값이 이 파일보다 우선한다.
 
 ```json
 {
@@ -461,6 +476,7 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
+- **머신 관리:** `reap-resources`.
 - **hook:** 권한 결정(`guard.py`), 압축 후 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`).
 
 ### upstream 동기화 상태

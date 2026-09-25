@@ -275,7 +275,7 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
       </div>
     </div>
     <h1>agent-skills <span data-lang="ko">안내서</span><span data-lang="en">guide</span><span data-lang="ja">ガイド</span></h1>
-    <p class="lede"><span data-lang="ko">티켓 하나를 끝까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 27개로 묶었다. 무엇이 어떤 순서로 돌고, 어디서 깨어나고, 어디서 멈추는지 정리한다.</span><span data-lang="en">Twenty-seven skills covering two flows: carrying one ticket all the way to done, and finishing a whole project with several Orca workers. This page lays out what runs in what order, where each loop wakes up, and where it stops.</span><span data-lang="ja">チケット 1 件を最後までやり切る流れと、複数の Orca ワーカーでプロジェクト 1 つを完了させる流れを、27 個のスキルにまとめました。何がどの順番で動き、どこで起き、どこで止まるのかを整理します。</span></p>
+    <p class="lede"><span data-lang="ko">티켓 하나를 끝까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 28개로 묶었다. 무엇이 어떤 순서로 돌고, 어디서 깨어나고, 어디서 멈추는지 정리한다.</span><span data-lang="en">Twenty-eight skills covering two flows: carrying one ticket all the way to done, and finishing a whole project with several Orca workers. This page lays out what runs in what order, where each loop wakes up, and where it stops.</span><span data-lang="ja">チケット 1 件を最後までやり切る流れと、複数の Orca ワーカーでプロジェクト 1 つを完了させる流れを、28 個のスキルにまとめました。何がどの順番で動き、どこで起き、どこで止まるのかを整理します。</span></p>
     <div class="install">
       <div class="cmd"><code id="c1">claude plugin marketplace add JeongJaeSoon/agent-skills</code><button type="button" data-copy="c1"><span data-lang="ko">복사</span><span data-lang="en">Copy</span><span data-lang="ja">コピー</span></button></div>
       <div class="cmd"><code id="c2">claude plugin install agent-skills@jeongjaesoon</code><button type="button" data-copy="c2"><span data-lang="ko">복사</span><span data-lang="en">Copy</span><span data-lang="ja">コピー</span></button></div>
@@ -486,13 +486,14 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
   <section id="skills">
     <div class="section-head">
       <span class="eyebrow"><span data-lang="ko">스킬 목록</span><span data-lang="en">Skills</span><span data-lang="ja">スキル一覧</span></span>
-      <h2><span data-lang="ko">스킬 27개와 별칭 3개</span><span data-lang="en">27 skills and 3 aliases</span><span data-lang="ja">スキル 27 個とエイリアス 3 個</span></h2>
+      <h2><span data-lang="ko">스킬 28개와 별칭 3개</span><span data-lang="en">28 skills and 3 aliases</span><span data-lang="ja">スキル 28 個とエイリアス 3 個</span></h2>
       <p class="lede"><span data-lang="ko">설명에 적힌 상황이 오면 자동으로 불린다. 직접 부를 때는 <code>/agent-skills:&lt;이름&gt;</code>, 다른 스킬과 이름이 겹치지 않으면 <code>/&lt;이름&gt;</code>.</span><span data-lang="en">Each skill runs on its own when the situation in its description comes up. To call one directly, use <code>/agent-skills:&lt;name&gt;</code>, or just <code>/&lt;name&gt;</code> when no other skill has the same name.</span><span data-lang="ja">説明に書かれた状況になると自動で呼ばれます。直接呼ぶときは <code>/agent-skills:&lt;名前&gt;</code>、ほかのスキルと名前が重ならなければ <code>/&lt;名前&gt;</code> でも呼べます。</span></p>
     </div>
     <div class="filter" role="group" aria-label="분류" data-label-ko="분류" data-label-en="Category" data-label-ja="分類">
       <button type="button" data-group="all" aria-pressed="true"><span data-lang="ko">전체</span><span data-lang="en">All</span><span data-lang="ja">すべて</span></button>
       <button type="button" data-group="ticket" aria-pressed="false"><span data-lang="ko">티켓 하나</span><span data-lang="en">One ticket</span><span data-lang="ja">チケット 1 件</span></button>
       <button type="button" data-group="program" aria-pressed="false"><span data-lang="ko">프로젝트</span><span data-lang="en">Project</span><span data-lang="ja">プロジェクト</span></button>
+      <button type="button" data-group="machine" aria-pressed="false"><span data-lang="ko">머신</span><span data-lang="en">Machine</span><span data-lang="ja">マシン</span></button>
       <button type="button" data-group="adapter" aria-pressed="false"><span data-lang="ko">어댑터</span><span data-lang="en">Adapter</span><span data-lang="ja">アダプター</span></button>
       <button type="button" data-group="pstack" aria-pressed="false">pstack</button>
     </div>
@@ -556,6 +557,10 @@ const SKILLS = [
     T("\"성과 측정\", 후속 티켓이 늘었는지, 재작업·토큰 비용, 프로그램 종료 시", "\"성과 측정\" (\"measure delivery\"), whether follow-up tickets are piling up, rework and token cost, or at the close of a program", "\"성과 측정\"（成果測定）、後続チケットが増えたか、手戻り・トークンコスト、プログラム終了時"),
     T("트래커 이슈로 후속 티켓 증가·수렴·재작업·PR당 토큰을 계산해 보고", "Computes follow-up ticket growth, convergence, rework and tokens per PR from tracker issues, and reports them", "トラッカーの issue から後続チケットの増加・収束・手戻り・PR あたりのトークンを計算して報告"),
     ["scripts/measure.py"]],
+  ["machine", "reap-resources",
+    T("\"방치 리소스 정리해줘\", codex 프로세스가 쌓였을 때, resource steward의 주기 점검", "\"방치 리소스 정리해줘\" (\"clean up leftover resources\"), when codex processes pile up, or the resource steward's periodic round", "\"방치 리소스 정리해줘\"（放置リソースを片付けて）、codex のプロセスがたまったとき、resource steward の定期点検"),
+    T("죽은 세션이 남긴 Codex broker 트리·고아 테스트 프로세스·Docker 잔여물·머지된 브랜치·scratchpad worktree를 점검하고, 목록에 올린 것만 정리. 누적치가 임계를 넘으면 경보", "Inventories the Codex broker trees, orphaned test processes, Docker leftovers, merged branches and scratchpad worktrees that dead sessions left, and removes only what it listed. Raises an alert when a running total crosses its limit", "終わったセッションが残した Codex broker ツリー・孤児のテストプロセス・Docker の残り・マージ済みブランチ・scratchpad の worktree を点検し、一覧に載せたものだけを片付ける。累積が閾値を超えると警報"),
+    ["scripts/reap.py"]],
   ["adapter", "use-tracker",
     T("티켓 읽기·찾기·만들기·라벨·댓글·상태 변경, 스크립트가 티켓 데이터를 쓸 때", "Reading, finding, creating, labeling, commenting on or moving tickets, or when a script needs ticket data", "チケットの読み取り・検索・作成・ラベル・コメント・状態変更、スクリプトがチケットデータを使うとき"),
     T("설정된 트래커(Linear, Jira)로 보내고 후속 티켓 형식·상태 어휘를 공유", "Routes to the configured tracker (Linear, Jira) and shares the follow-up ticket format and state vocabulary", "設定されたトラッカー（Linear、Jira）に振り分け、後続チケットの形式と状態の語彙を共有"),
@@ -637,7 +642,7 @@ const SKILLS = [
     T("기능 지도를 소스와 실제 실행으로 대조해 증명된 수정만 PR 하나로", "Checks the feature map against the source and real runs, and ships only the proven fixes in a single PR", "機能マップをソースと実際の実行で照合し、証明できた修正だけを PR 1 つで"),
     []],
 ];
-const GROUP_LABEL = { ticket: T("티켓 하나", "One ticket", "チケット 1 件"), program: T("프로젝트", "Project", "プロジェクト"), adapter: T("어댑터", "Adapter", "アダプター"), pstack: T("pstack", "pstack", "pstack") };
+const GROUP_LABEL = { ticket: T("티켓 하나", "One ticket", "チケット 1 件"), program: T("프로젝트", "Project", "プロジェクト"), machine: T("머신", "Machine", "マシン"), adapter: T("어댑터", "Adapter", "アダプター"), pstack: T("pstack", "pstack", "pstack") };
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const langSpans = t => `<span data-lang="ko">${esc(t.ko)}</span><span data-lang="en">${esc(t.en)}</span><span data-lang="ja">${esc(t.ja)}</span>`;
 const list = document.getElementById("skill-list");

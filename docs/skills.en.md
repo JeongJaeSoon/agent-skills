@@ -1,7 +1,7 @@
 <!-- translated-from: f6320d7 -->
 # Skill catalog
 
-This page covers the 27 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
+This page covers the 28 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
 
 ## Flow
 
@@ -11,6 +11,8 @@ One ticket  write-ticket → deliver-ticket → handoff-ticket → end-session
 Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               ─ main guardian · QA lead ─ dashboard
               └ measure-delivery when it's done
+Machine     reap-resources (clears processes, Docker leftovers and branches that dead sessions
+              left; the resource steward runs it on a schedule)
 Anywhere    use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
 ```
@@ -114,7 +116,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - `references/`
     - `brief.md`: worker brief template.
     - `landing.md`: lanes, landing order, stacks, `land` exit codes.
-    - `roles.md`: guardian, QA lead, flow improver (improves the skills while programs run), resource steward (cleans up finished worktrees and processes).
+    - `roles.md`: guardian, QA lead, flow improver (improves the skills while programs run), resource steward (cleans up finished worktrees, runs `reap-resources` on a schedule and raises its alerts).
     - `program-note.md`: program note template.
     - `dashboard.md`: guide to the dashboard.
     - `top-level.md`: the top-level orchestrator mode.
@@ -125,7 +127,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
     - `mailbox_guard.py`: a transition shim that moves old installs over to the hook.
     - Test files.
   - `assets/dashboard/`: the dashboard UI.
-- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reflect`, and `end-session`.
+- **Related:** Workers follow `deliver-ticket`. It draws on `use-tracker`, `use-notes`, `create-verification-skill`, `show-me-your-work`, `swarm`, `measure-delivery`, `reap-resources`, `reflect`, and `end-session`.
 
 ### measure-delivery
 - **When:** "성과 측정" (measure the results), or questions about whether follow-up tickets are growing or shrinking, rework, or token cost. `orchestrate` also calls it in its Close step.
@@ -136,6 +138,20 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - Finds escaped-defect candidates (Bug labels, main CI failures, reverts).
   - Computes Claude and Codex tokens per PR. codex-companion's review and task jobs leave no session files and can't be counted, so when no Codex session matches it records `미측정` (not measured) instead of 0.
   - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
+
+## One machine
+
+### reap-resources
+- **When:** "방치 리소스 정리해줘" ("clean up leftover resources"), "codex 프로세스 너무 많아" ("too many codex processes"), when you want to see what is eating memory or CPU, and on the resource steward's periodic round. It works without a program.
+- **What it does:** `scripts/reap.py scan` only reads, and prints per kind the count, processes, RSS, CPU and age, plus the list of targets. `reap --plan` scans again and removes only the targets on that list that are still targets with the same identity (pid and start time, branch tip).
+  - **codex:** Codex plugin broker trees. A tree ends only when its `--cwd` path is gone, or when no live `claude` runs in that path and the broker is N hours old (default 6).
+  - **orphan:** processes with ppid 1 whose executable lies under a path in the config's `reap.orphan_paths` (test caches).
+  - **docker:** dangling volumes of a compose project that has no container at all, and untagged images no container uses. A project with containers, volumes whose name holds such a project's name, and volumes with no compose label are kept and only reported.
+  - **branch:** local branches whose PRs are all merged or closed, with no worktree, and whose tip matches a PR head. It prints the command to restore each one.
+  - **worktree:** worktrees whose directory is gone (`git worktree prune`), and clean, pushed worktrees in a Claude scratchpad whose session transcript has been quiet for N hours (`git worktree remove`). Orca worktrees belong to the resource steward.
+  - It never uses `pkill`, `docker system prune` or `--force`. When a running total (Codex processes and RSS, orphan processes, dangling volumes, branches and worktrees to remove) reaches its limit in the config, it prints an `경보` (alert).
+- **Bundled:** `scripts/reap.py`, a test file.
+- **Related:** The resource steward in `orchestrate` runs it every round, and tells the human through the dashboard inbox when an alert remains.
 
 ## Adapters
 
@@ -376,7 +392,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 
 ## Config file
 
-`~/.claude/agent-skills.json` chooses the tracker and the notes store. Without the file, it uses Linear and the Obsidian vault `Private`. Values set in a program's `program.json` override this file.
+`~/.claude/agent-skills.json` chooses the tracker and the notes store. Without the file, it uses Linear and the Obsidian vault `Private`. The age threshold, test cache paths and alert limits of `reap-resources` also go in this file, under `reap` (format in that skill's SKILL.md). Values set in a program's `program.json` override this file.
 
 ```json
 {
@@ -464,6 +480,7 @@ Of pstack's 47 skills (23 principles and 24 others), we took all 23 principles a
 - **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
+- **Machine upkeep:** `reap-resources`.
 - **Hooks:** permission decisions (`guard.py`), re-orienting after compaction (`reorient.py`), and recording permission prompts for the dashboard to answer (`permission.py`), and closing decisions answered in the terminal (`decision.py`).
 
 ### Upstream sync status

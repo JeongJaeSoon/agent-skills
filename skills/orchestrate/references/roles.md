@@ -10,7 +10,7 @@ The flow improver and the resource steward serve every program on the machine, s
 | Main guardian | Red main: flake or defect, freeze, hotfix or revert, notify | Pick up tickets |
 | QA lead | Ticket verification, periodic E2E on main, design-vs-code audit | Fix what it finds (it files tickets) |
 | Flow improver | Folding lesson signals and the human's process feedback into the skills while programs run: batched, audited, pushed, then reloaded | Touch a running program's work, or change its contract (merge policy, predicate, the brief's required fields, landing rules) before that program's coordinator confirms |
-| Resource steward | Reaping settled worktrees the coordinators missed, stopping orphaned heavy processes, watching machine load | Touch a live turn, a dirty tree, an open PR, a coordinator's or standing role's worktree, or the dashboard; `--force` |
+| Resource steward | Reaping settled worktrees the coordinators missed, running `reap-resources` for leftover processes, Docker leftovers and stale branches, watching machine load | Touch a live turn, a dirty tree, an open PR, a coordinator's or standing role's worktree, or the dashboard; `--force` |
 
 They came from the user's own calls on a real program (2026-09-24):
 
@@ -143,17 +143,26 @@ WORKTREES   orca worktree rm (checks and --run-hooks per end-session §4) only w
             unpushed commits, and its PR merged or closed, or never opened. Never --force.
             Never touch: a coordinator's worktree, the checkout that loads the skills
             (docs/platform.md), a standing role's worktree, a live turn, an open PR, local changes.
-PROCESSES   Compose stacks, dev servers, headless browsers and test runners whose worktree is
-            gone or settled: stop them the normal way (docker compose down in that directory, the
-            tool's own stop). Kill a pid directly only when its cwd is a worktree that no longer
-            exists. A refused kill is not worked around: report it as "needs the owner to run"
-            with the exact command. Never touch the dashboard server, the Orca app, or a Claude
-            process whose turn is live.
+LEFTOVERS   Every round, run the reap-resources skill's scripts/reap.py (its SKILL.md holds the
+            rules): scan --plan <scratchpad>/reap-plan.json, reap --plan on that file, then scan
+            again. That covers Codex broker trees, orphaned test processes, Docker leftovers,
+            merged branches and scratchpad worktrees; never kill or remove those by hand. Other
+            processes (compose stacks, dev servers, headless browsers, test runners) whose
+            worktree is gone or settled: stop them the normal way (docker compose down in that
+            directory, the tool's own stop). Kill a pid directly only when its cwd is a worktree
+            that no longer exists. A refused kill is not worked around: report it as "needs the
+            owner to run" with the exact command. Never touch the dashboard server, the Orca app,
+            or a Claude process whose turn is live.
+ALERT       When the scan after the reap still prints 경보 (a total at or above its limit,
+            ~/.claude/agent-skills.json reap.alert), tell the human: orch-dash inbox add --type
+            run_command --title "방치 리소스 경보: <the alert lines>" --command "python3 <reap.py>
+            scan" --key reap-alert, and send the same to the coordinator (--type status). Resolve
+            the key once a round's scan is back under every limit.
 LOAD        Watch load average, memory pressure and free disk. When heavy local runs pile up,
             tell the coordinator and suggest a heavy_slots value.
 FORBIDDEN   Any repo's code, PRs, tickets or chat.
 REPORT      The first round: the full inventory to the coordinator (--type status): removed,
-            kept with its reason (dirty, unpushed, open PR, live turn), needs owner action. Later
-            rounds only when something changed. --type escalation only when a resource is about
-            to run out. On "release", worker_done with a summary and stop.
+            kept with its reason (dirty, unpushed, open PR, live turn), needs owner action, and
+            the scan's summary table. Later rounds only when something changed. --type escalation
+            only when a resource is about to run out. On "release", worker_done with a summary and stop.
 ```
