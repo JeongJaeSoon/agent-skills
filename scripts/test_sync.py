@@ -38,6 +38,8 @@ if a[:2] == ["terminal", "list"]:
     out = {"terminals": [dict(t, handle=h) for h, t in st["terms"].items()]}
 elif a[:2] == ["terminal", "show"]:
     out = {"terminal": dict(st["terms"][arg("--terminal")], handle=arg("--terminal"))}
+elif a[:2] == ["worktree", "ps"]:
+    out = {"worktrees": st.get("worktrees", [])}
 elif a[:2] == ["terminal", "read"]:
     t = st["terms"][arg("--terminal")]
     tail = t["screens"].pop(0) if len(t["screens"]) > 1 else t["screens"][0]
@@ -217,10 +219,17 @@ def test_broadcast():
         "typing": {"agentIdentity": "claude", "connected": True, "writable": True, "title": "✳ c",
                    "screens": [IDLE, IDLE[:2] + ["❯ 아"] + IDLE[3:]]},
         "setup": {"agentIdentity": None, "connected": True, "writable": True, "title": "~/w", "screens": [SHELL]},
+        "new": {"agentIdentity": "claude", "connected": True, "writable": True, "title": "✳ e", "screens": [BUSY],
+                "worktreeId": "wt-new"},
     }
-    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    for h in ("idle", "stale", "perm", "typing"):
+        terms[h]["worktreeId"] = "wt-old"
+    # 2026-09-25T23:39:02+0900 is 1790347142000 ms
+    worktrees = [{"worktreeId": "wt-old", "createdAt": 1790347142000 - 1}, {"worktreeId": "wt-new", "createdAt": 1790347142000 + 1}]
+    st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
     state = tmp / "state"; state.mkdir()
-    (state / "reload-pending.json").write_text(json.dumps({"kind": "plugins", "done": []}))
+    (state / "reload-pending.json").write_text(json.dumps({"kind": "plugins", "since": "2026-09-25T23:39:02+0900",
+                                                            "done": []}))
     env = dict(AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
                SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
     old = {k: os.environ.get(k) for k in env}
@@ -257,6 +266,12 @@ def test_broadcast():
     check("the others stay pending with a reason", code == 1 and set(pending["failed"]) == {"perm", "typing", "stale"}
           and pending["done"] == ["idle"], pending)
     check("a setup shell is never a target", "setup" not in pending["failed"])
+    check("a session opened after the change is neither sent to nor left pending",
+          "new" not in pending["failed"] and not any(h == "new" for h, _ in sent), pending)
+    check("a session that already reloaded is not sent the reload again",
+          [h for h, t in sent if t.startswith("/reload")] == ["idle"], sent)
+    check("an unreadable `since` or worktree list leaves every terminal a target",
+          sync.opened_after(None, [{"handle": "new", "worktreeId": "wt-new"}]) == set())
     check("no orca means a refusal, not a crash", no_orca == (1, 1, 1), no_orca)
     shutil.rmtree(tmp)
 

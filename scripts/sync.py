@@ -14,7 +14,7 @@ The checkout is loaded live through CLAUDE_CODE_PLUGIN_DIRS (docs/platform.md), 
 every session reads. It never rebases, merges, forces or commits: anything but a fast-forward or a push of
 signed commits stops it, and the reason goes to the state file and a desktop notification.
 """
-import contextlib, fcntl, json, os, pathlib, platform, re, subprocess, sys, time
+import contextlib, datetime, fcntl, json, os, pathlib, platform, re, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -328,6 +328,19 @@ def broadcast(kind, dry_run, only=None):
         return broadcast_locked(kind, only=only)
 
 
+def opened_after(since, terms):
+    """Handles of `terms` whose Orca worktree was created after `since`: their agent started after the change and
+    already loaded it. Orca keeps no terminal creation time, and a worktree predates its terminals, so this never
+    skips a session that is older than the change. Anything unreadable leaves the terminal a target."""
+    try:
+        cutoff = datetime.datetime.strptime(since, "%Y-%m-%dT%H:%M:%S%z").timestamp() * 1000
+        created = {w.get("worktreeId"): w.get("createdAt") for w in orca("worktree", "ps", "--limit", "500")["worktrees"]}
+    except (Stop, KeyError, TypeError, ValueError):
+        return set()
+    return {t["handle"] for t in terms if isinstance(created.get(t.get("worktreeId")), (int, float))
+            and created[t.get("worktreeId")] > cutoff}
+
+
 def broadcast_locked(kind, dry_run=False, only=None):
     path = STATE / "reload-pending.json"
     pending = read_json(path, {})
@@ -337,11 +350,13 @@ def broadcast_locked(kind, dry_run=False, only=None):
         print("nothing to reload")
         return 0
     try:
-        terms = [t["handle"] for t in orca("terminal", "list")["terminals"]
-                 if t.get("agentIdentity") == "claude" and t.get("connected") and t.get("writable")]
+        listed = [t for t in orca("terminal", "list")["terminals"]
+                  if t.get("agentIdentity") == "claude" and t.get("connected") and t.get("writable")]
+        terms = [t["handle"] for t in listed]
     except (Stop, KeyError, TypeError) as e:
         print(f"cannot list Orca terminals, reload stays pending: {e}")
         return 1
+    newer = opened_after(pending.get("since"), listed)
     if only:
         if only not in terms:
             print(f"{only}  not a connected, writable Claude terminal")
@@ -350,6 +365,9 @@ def broadcast_locked(kind, dry_run=False, only=None):
     done, failed = set(pending.get("done", [])), {}
     for h in terms:
         if h in done:
+            continue
+        if h in newer:
+            print(f"{h}  opened after the change, already has it")
             continue
         try:
             if dry_run:

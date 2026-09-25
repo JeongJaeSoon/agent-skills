@@ -150,6 +150,7 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 - `sync`가 HEAD를 옮겼고, 바뀐 경로가 §2 표에서 reload가 필요한 쪽일 때만 보낸다. 문서나 스크립트만 바뀌었으면 보내지 않는다.
 - 수동: `skills-sync broadcast [--skills|--plugins]`. 스킬을 고친 세션이 fast-forward 뒤 직접 부를 때 쓴다.
 - 이전에 못 보낸 세션이 남아 있으면 다음 `sync` 때마다 다시 시도한다.
+- 대기 항목의 `since`(바뀐 시각)보다 나중에 만들어진 Orca worktree의 터미널에는 보내지 않는다. 그 세션은 바뀐 뒤에 떠서 이미 새 내용을 읽었다. Orca 터미널 목록에는 만든 시각이 없어서 worktree의 `createdAt`을 쓴다. worktree는 그 안의 터미널보다 먼저 생기므로, 바뀌기 전부터 떠 있던 세션을 빼는 일은 없다. 반대로 오래된 worktree에서 새로 띄운 세션은 여전히 대상으로 남는다.
 
 ### 누가 보내는가
 
