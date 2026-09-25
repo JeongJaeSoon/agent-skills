@@ -174,8 +174,9 @@ function decisionBody(text) {
   return String(text || "").split(/(https?:\/\/[^\s<>"'`)\]]*[^\s<>"'`)\].,;:!?])/).map((part, i) => (i % 2 ? link(part, esc(part)) : esc(part))).join("");
 }
 
-// A decision registered with `orch decide`: each option, or a typed answer, types "decision <id>: <answer>" into the
-// coordinator's terminal on a second click. Sending does not close it; the coordinator does, with `orch decide done`.
+// A decision registered with `orch decide`: each option, or a typed answer, answers it on a second click. The server
+// records the answer and closes the decision first, then types "decision <id>: <answer>" into the coordinator's terminal
+// now if it is idle, or on a later collect once it is: a busy coordinator never makes the answer fail.
 function decisionActs(st, it) {
   const r = F.decide[it.key], armed = F.arm && F.arm.key === it.key ? F.arm.action : "", off = r && r.busy ? "disabled" : "";
   const opts = it.options || [], open = F.open[it.key];
@@ -184,14 +185,14 @@ function decisionActs(st, it) {
     `title="${esc(o.description || o.label)}${it.recommend === i + 1 ? " (recommended)" : ""}"`)).join("");
   const notes = opts.map((o, i) => `<li><b>${esc(o.label)}</b>${it.recommend === i + 1 ? ' <span class="muted">recommended</span>' : ""}${o.description ? ` · ${esc(o.description)}` : ""}</li>`).join("");
   const line = armed ? `decision ${it.decision}: ${armed === "text" ? (F.draft[it.key] || "").trim() : (opts[+armed.slice(4)] || {}).label}` : "";
-  const msg = !r || r.busy ? "" : r.ok ? "Sent. It stays here until the coordinator closes it."
-    : r.typed ? `Typed and submitted, but not confirmed (${r.reason}). Check the terminal.` : `Not sent: ${r.reason}.`;
+  const msg = !r || r.busy ? "" : !r.ok ? `Not recorded: ${r.reason}.`
+    : r.delivered ? "Recorded and sent to the coordinator." : "Recorded; will relay to the coordinator when it is idle.";
   return `<div class="decision"><div class="prompt-acts">${buttons}${it.body || notes ? chip("toggle", open ? "Hide" : "Details") : ""}</div>
     ${open ? `${it.body ? `<div class="pre">${decisionBody(it.body)}</div>` : ""}${notes ? `<ol class="opts">${notes}</ol>` : ""}` : ""}
     <div class="prompt-acts"><input id="decide-${esc(it.decision)}" data-decide-input="${esc(it.key)}" class="search" maxlength="1900" autocomplete="off"
         placeholder="Or type an answer" value="${esc(F.draft[it.key] || "")}" ${off}>${chip("text", `${icon("send")}${armed === "text" ? "Confirm send" : "Send"}`)}
-      ${r && r.busy ? '<span class="muted">Checking the screen and sending…</span>' : line ? `<span class="muted ellipsis">types <span class="mono">${esc(line)}</span></span>`
-        : msg ? `<span class="toned tone-${r.ok ? "good" : r.typed ? "warn" : "bad"}">${esc(msg)}</span>${r.typed ? "" : `<button class="chip" data-copy="${esc(r.line)}">${icon("copy")}Copy</button>`}` : ""}</div></div>`;
+      ${r && r.busy ? '<span class="muted">Recording…</span>' : line ? `<span class="muted ellipsis">answers <span class="mono">${esc(line)}</span></span>`
+        : msg ? `<span class="toned tone-${r.ok ? "good" : "bad"}">${esc(msg)}</span>${r.ok ? "" : `<button class="chip" data-copy="${esc(r.line)}">${icon("copy")}Copy</button>`}` : ""}</div></div>`;
 }
 
 async function decideAction(key, action) {
@@ -200,12 +201,12 @@ async function decideAction(key, action) {
   if (action === "toggle") { F.open[key] = !F.open[key]; renderView(); return; }
   const answer = action === "text" ? (F.draft[key] || "").trim() : ((it.options || [])[+action.slice(4)] || {}).label;
   if (!answer || !confirmed(key, action)) return;
-  const s = byId(st)[it.session], line = `decision ${it.decision}: ${answer}`;
+  const line = `decision ${it.decision}: ${answer}`;
   F.decide[key] = { busy: true, line }; renderView();
   let out;
-  try { out = await fleetPost("/api/fleet/send", { session: it.session, handle: it.handle || (s && agentTerms(s)[0]?.handle), text: line }); } catch (err) { out = { ok: false, reason: String(err.message || err) }; }
+  try { out = await fleetPost("/api/fleet/decide", { decision: it.decision, answer }); } catch (err) { out = { ok: false, reason: String(err.message || err) }; }
   F.decide[key] = { line, ...out };
-  if (out.typed && action === "text") F.draft[key] = "";
+  if (out.ok && action === "text") F.draft[key] = "";
   renderView();
 }
 

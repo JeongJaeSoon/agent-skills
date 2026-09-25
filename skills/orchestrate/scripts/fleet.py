@@ -1147,6 +1147,7 @@ def inbox_resolve(key):
 # ---------------------------------------------------------------- decisions the coordinator waits on the human for
 
 DECISION_BODY_MAX = 4000
+DECISION_ANSWER_MAX = 1900  # the page's answer box; "decision <id>: " plus this stays inside send()'s 2000
 DECISION_KEEP_S = 7 * 86400  # closed decisions are kept this long, then dropped from the file
 
 
@@ -1188,21 +1189,99 @@ def decision_add(title, body="", options=(), recommend=None, link=None, handle=N
     return change_decisions(add)
 
 
-def decision_close(did, status, answer=None):
-    """Mark an open decision done (answered) or dropped (no longer needed)."""
+def decision_close(did, status, answer=None, relay=False):
+    """Mark an open decision done (answered) or dropped (no longer needed). relay: answered on the page, so the answer
+    still has to reach the coordinator's terminal (delivered stays False until relay_decision types it). Such a decision
+    is already done when the coordinator gets to it: its `done` then only stops the relay, and `drop` cancels it."""
     def close(store):
         d = store.get("decisions", {}).get(did)
         if not d:
             raise ValueError(f"no decision {did}")
-        if d.get("status") != "open":
+        if d.get("status") == "open":
+            d.update(status=status, answer=mask(answer, DECISION_ANSWER_MAX), closed_at=iso(utcnow()))
+            if relay:
+                d["delivered"] = False
+        elif d.get("status") == "done" and d.get("delivered") is False and not relay:
+            d.update(delivered=True) if status == "done" else d.update(status=status)
+        else:
             raise ValueError(f"{did} is already {d.get('status')}")
-        d.update(status=status, answer=mask(answer, 500), closed_at=iso(utcnow()))
         return d
     return change_decisions(close)
 
 
 def open_decisions():
     return [d for d in (read_json(state_dir() / "decisions.json", {}) or {}).get("decisions", {}).values() if d.get("status") == "open"]
+
+
+def pending_relays():
+    """Decisions answered on the page whose answer has not reached the coordinator's terminal yet."""
+    return [d for d in (read_json(state_dir() / "decisions.json", {}) or {}).get("decisions", {}).values()
+            if d.get("status") == "done" and d.get("delivered") is False]
+
+
+def decision_target(d, state):
+    """(session, handle) the answer goes to: the terminal that registered it while its session is in the fleet, else
+    the root's first agent terminal (the same place the page shows the item)."""
+    sessions = state.get("sessions") or []
+    owner = next((s for s in sessions if any(t.get("handle") == d.get("handle") for t in s.get("terminals") or [])), None)
+    if owner:
+        return owner, d["handle"]
+    root = next((s for s in sessions if s["id"] == state.get("root")), None)
+    handle = next((t["handle"] for t in (root or {}).get("terminals") or []
+                   if t.get("agent") and t.get("connected") and t.get("writable")), None)
+    return root, handle
+
+
+RELAY_LOCK = threading.Lock()  # the page's answer and the collector's retry must not both type the same line
+
+
+def relay_decision(did, sender=None, skip_working=False):
+    """Type `decision <id>: <answer>` into the coordinator's terminal through send()'s idle check, once.
+    Returns send()'s body, or None when there was nothing to relay. delivered turns True once the line was typed,
+    even unconfirmed: a retry could send it twice."""
+    d = next((x for x in pending_relays() if x["id"] == did), None)
+    if not d:
+        return None
+    state = read_json(state_dir() / "state.json", {}) or {}
+    session, handle = decision_target(d, state)
+    if not session:
+        return {"ok": False, "reason": "no coordinator session in the fleet state", "typed": False}
+    if skip_working and session.get("phase") == "working":
+        return {"ok": False, "reason": "the coordinator is working", "typed": False}
+    _, out = send(session["id"], f"decision {did}: {d.get('answer')}", handle, sender)
+    if out.get("typed"):
+        def mark(store):
+            (store.get("decisions", {}).get(did) or {}).update(delivered=True, delivered_at=iso(utcnow()))
+        change_decisions(mark)
+    return out
+
+
+def decision_answer(did, answer, sender=None):
+    """The page's answer: recorded and closed first, as `orch decide done` would, then relayed to the coordinator's
+    terminal if it is idle. A busy coordinator is not a failure: relay_decisions retries on a later collect."""
+    answer = " ".join((answer or "").split())
+    if not answer or len(answer) > DECISION_ANSWER_MAX:
+        return 400, {"ok": False, "reason": f"an answer of 1 to {DECISION_ANSWER_MAX} characters"}
+    try:
+        decision_close(did, "done", answer, relay=True)
+    except ValueError as e:
+        return 409, {"ok": False, "reason": str(e)}
+    with RELAY_LOCK:
+        out = relay_decision(did, sender) or {}
+    return 200, {"ok": True, "recorded": True, "delivered": bool(out.get("typed")), "reason": out.get("reason"),
+                 "line": f"decision {did}: {mask(answer, DECISION_ANSWER_MAX)}"}
+
+
+def relay_decisions(sender=None):
+    """Retry every answer the coordinator has not received, skipping a coordinator whose session is working (its
+    title would refuse anyway). Called after each collect; returns the ids delivered."""
+    if not pending_relays() or not RELAY_LOCK.acquire(blocking=False):
+        return []
+    try:
+        sender = sender or load_sync()
+        return [d["id"] for d in pending_relays() if sender and (relay_decision(d["id"], sender, skip_working=True) or {}).get("typed")]
+    finally:
+        RELAY_LOCK.release()
 
 
 # ---------------------------------------------------------------- adoption into Orca's own lineage (opt-in)

@@ -226,12 +226,13 @@ assert post({"Host": host, "Origin": "http://evil.example", "X-Dash-Token": dash
 assert answered == []
 assert post({"Host": host, "Origin": f"http://{host}", "X-Dash-Token": dash.TOKEN}) == 200
 assert answered == [("wt-docs", "p1", "approve")], answered
-# A decision answered on the page is a line for the coordinator's terminal, through the send box's endpoint and guard.
-sent, dash.fleet.send = [], lambda *a: sent.append(a) or (200, {"ok": True})
-body = json.dumps({"session": "wt-coord", "handle": "term_coord", "text": "decision d1: CSV"}).encode()
-assert post({"Host": host}, "/api/fleet/send") == 403 and sent == []
-assert post({"Host": host, "X-Dash-Token": dash.TOKEN}, "/api/fleet/send") == 200
-assert sent == [("wt-coord", "decision d1: CSV", "term_coord")], sent
+# A decision answered on the page is recorded through its own endpoint, behind the same Host and token guard; the send
+# box's endpoint (and its idle check) is not in its path.
+answers, dash.fleet.decision_answer = [], lambda *a: answers.append(a) or (200, {"ok": True, "delivered": False})
+body = json.dumps({"decision": "d1", "answer": "CSV"}).encode()
+assert post({"Host": host}, "/api/fleet/decide") == 403 and answers == []
+assert post({"Host": host, "X-Dash-Token": dash.TOKEN}, "/api/fleet/decide") == 200
+assert answers == [("d1", "CSV")], answers
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.

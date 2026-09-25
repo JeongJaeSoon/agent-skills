@@ -56,7 +56,8 @@ Usage: orch <command> <slug> [options]
   decide list | done <id> [--answer TEXT] | drop <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
                                      dashboard until done or dropped; add prints its id. Each option is a
-                                     button that types "decision <id>: <label>" into this terminal
+                                     button that closes it with that answer, then types
+                                     "decision <id>: <label>" into this terminal once it is idle
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -1534,6 +1535,8 @@ def cmd_decide(argv):
                 for i, o in enumerate(d["options"], 1):
                     mark = " (recommended)" if i == d.get("recommend") else ""
                     print(f"    {i}. {o['label']}{mark}" + (f" — {o['description']}" if o["description"] else ""))
+            for d in fleet.pending_relays():
+                print(f"{d['id']}  answered on the dashboard, not relayed yet: {d.get('answer')}  ({d['title']})")
         elif sub in ("done", "drop") and rest:
             d = fleet.decision_close(rest[0], "done" if sub == "done" else "dropped", opt(rest, "--answer"))
             print(f"{d['id']} {d['status']}")

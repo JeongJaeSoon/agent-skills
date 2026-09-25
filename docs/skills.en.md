@@ -353,7 +353,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | `backfill` | Adds PRs merged before registration, and their main CI, to the ledger |
 | `heavy` | Runs heavy commands (compose, image builds) limited to 2 slots across the machine |
 | `wait` | Coordinator only. Waits until there's a message to handle and prints `CLOSE OUT` lines |
-| `decide` | Registers (`add`), lists (`list`) and closes (`done`, `drop`) a decision the coordinator is waiting on the user for. It shows in the dashboard's Needs you with a button per option; a button sends one line, `decision <id>: <answer>`, to the coordinator's terminal |
+| `decide` | Registers (`add`), lists (`list`) and closes (`done`, `drop`) a decision the coordinator is waiting on the user for. It shows in the dashboard's Needs you with a button per option; a button records the answer and closes the decision, then sends one line, `decision <id>: <answer>`, to the coordinator's terminal, once it is idle if it is busy |
 
 ### `orch-dash` (dashboard)
 - **How it runs:** `orch init` and `orch status` call `orch-dash ensure`, which starts it automatically. There's one server per repo, and it's replaced when newer code is installed.

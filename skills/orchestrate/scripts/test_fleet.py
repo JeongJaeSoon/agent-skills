@@ -299,10 +299,38 @@ assert got[lost["id"]]["session"] == st["root"] and got[lost["id"]]["handle"] is
 assert st["counts"]["decision"] == 2
 fleet.decision_close(d["id"], "done", "Yes")
 assert [i["decision"] for i in items(f.tick(force=True), "decision")] == [lost["id"]]
-# Answering types one line through the send box's path; nothing closes the decision but the coordinator.
-ok = Sender((True, None))
-assert fleet.send("wt-coord", f"decision {lost['id']}: Yes", handle="term_coord", sender=ok)[0] == 200
-assert ok.calls == [("term_coord", f"decision {lost['id']}: Yes")] and items(f.tick(force=True), "decision")
+# Answering on the page records the answer and closes the decision first; typing it into the coordinator's terminal is
+# best effort. A busy coordinator (the usual case) leaves it undelivered, and a later collect relays it once it is idle.
+busy = Sender((False, "title shows the agent is busy"))
+code, out = fleet.decision_answer(lost["id"], "  Yes,\n  ship it ", sender=busy)
+assert code == 200 and out["ok"] and not out["delivered"] and out["reason"] == "title shows the agent is busy", out
+assert busy.calls == [("term_coord", f"decision {lost['id']}: Yes, ship it")], busy.calls  # the root's terminal
+saved = json.loads((state_dir / "decisions.json").read_text())["decisions"][lost["id"]]
+assert saved["status"] == "done" and saved["answer"] == "Yes, ship it" and saved["delivered"] is False, saved
+assert not items(f.tick(force=True), "decision")
+assert fleet.decision_answer(lost["id"], "No", sender=busy)[0] == 409  # a second tab, or a double click
+assert fleet.decision_answer(d["id"], "   ", sender=busy)[0] == 400
+assert fleet.relay_decisions(busy) == [] and len(busy.calls) == 1  # its session is working: no screen read at all
+world.worktrees[0]["agents"][0]["state"] = "done"  # the coordinator's turn ends
+f.tick(force=True)
+assert fleet.relay_decisions(busy) == [] and len(busy.calls) == 2  # idle session, but the title still says busy
+assert fleet.pending_relays()[0]["id"] == lost["id"]
+unconfirmed = Sender((False, "sent, but the screen does not show it was taken"))
+assert fleet.relay_decisions(unconfirmed) == [lost["id"]]  # typed: a retry could send it twice
+assert fleet.pending_relays() == [] and fleet.relay_decisions(ok := Sender((True, None))) == [] and ok.calls == []
+# An idle coordinator gets the line at once; the send box itself still refuses a busy terminal.
+now_d = fleet.decision_add("Now?", options=["Yes"], handle="term_coord")
+code, out = fleet.decision_answer(now_d["id"], "Yes", sender=ok)
+assert out["delivered"] and ok.calls == [("term_coord", f"decision {now_d['id']}: Yes")], (out, ok.calls)
+assert fleet.send("wt-coord", "x", sender=busy)[1]["ok"] is False
+# The coordinator's own `done` stops a pending relay; `drop` cancels it; an answer typed elsewhere is never relayed.
+for did, verb in ((fleet.decision_add("A", handle="term_coord")["id"], "done"), (fleet.decision_add("B", handle="term_coord")["id"], "drop")):
+    fleet.decision_answer(did, "x", sender=busy)
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "prog.py"), "decide", verb, did],
+                       capture_output=True, text=True, env={**env, "ORCH_FLEET_STATE": str(state_dir)})
+    assert r.returncode == 0, r.stderr
+assert fleet.pending_relays() == [], fleet.pending_relays()
+world.worktrees[0]["agents"][0]["state"] = "working"
 
 # The page renders a decision escaped: app.js's helpers and fleet.js itself, run in node on a hostile item.
 if shutil.which("node"):

@@ -1235,6 +1235,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             handle = body.get("handle") if isinstance(body.get("handle"), str) else None
             code, out = fleet.send(body["session"], body["text"], handle)
             return self.send(code, json.dumps(out).encode())
+        elif path == "/api/fleet/decide" and all(isinstance(body.get(k), str) for k in ("decision", "answer")):
+            code, out = fleet.decision_answer(body["decision"], body["answer"])
+            FLEET_WAKE.set()
+            return self.send(code, json.dumps(out).encode())
         elif path == "/api/fleet/prompt" and all(isinstance(body.get(k), str) for k in ("session", "prompt", "action")):
             code, out = fleet.answer_prompt(body["session"], body["prompt"], body["action"])
             FLEET_WAKE.set()
@@ -1258,6 +1262,8 @@ def fleet_loop():
             errs = [f"{k}: {v['error']}" for k, v in ((st or {}).get("sources") or {}).items() if v.get("error")]
             if errs:
                 log("fleet: " + " | ".join(errs))
+            for did in fleet.relay_decisions():
+                log(f"fleet: relayed the answer to {did}")
         except Exception as e:  # keep serving; the next tick retries
             log(f"fleet: tick failed: {e!r}")
         viewed = time.monotonic() - FLEET_VIEWED[0] < FLEET_VIEW_S
