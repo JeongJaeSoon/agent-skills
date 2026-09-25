@@ -47,24 +47,26 @@ Once adopted they are on the roster, and you only read them. Never answer their 
 
 ## Asking the human
 
+The inbox is the dashboard's: `orch-dash inbox add --type <approval|run_command|login|verify_failed|verify_ok|ready_to_merge> --title "<one line>" [--session <id>] [--url <link>] [--command "<exact command>"] --key <dedupe key>`, and `orch-dash inbox resolve --key <key>` once it is settled. A trust prompt is `login`. The dashboard shows `--command` with a copy button and never runs it.
+
 - AskUserQuestion blocks your turn until the human answers; one question held a coordinator for 44 minutes while 16 worker messages piled up. Write the decision into your reply and the inbox, end the turn, and act when the answer arrives.
 - Deploys, merges without review, killing processes, anything the classifier refuses: an inbox item of type "run a command", with the exact command. The human runs it with `!` or approves it in words; then you run it.
 
 ## Injected notices
 
-Orca may type `You have N orchestration message(s). Run orca orchestration check …` into your composer and press Enter, even mid-sentence. When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and hand the mailbox check to the background wait.
+Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Keep one such background wait running at all times (in program mode, `orch wait`); it is what keeps the notice out of the human's typing. When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and hand the mailbox check to the background wait.
 
 ## PR events
 
-The dashboard's collector watches the PRs of every session on the roster and records review events. You react to them; you do not poll GitHub yourself. Wake on them the way you wake on worker mail: one background wait that exits when a new event lands, then its completion notification.
+The dashboard's collector watches the PRs of every session on the roster and appends one line per event to `~/.local/state/agent-skills/dashboard/pr-events.jsonl`: `{"v":1,"id","at","repo","pr","kind","url","owner","owner_kind","actor","checks","head"}`, links and ids only. You react to them; you do not poll GitHub yourself. Wake on them the way you wake on worker mail: one background wait that exits when the file grows, then its completion notification. Skip kinds not in the table below (the collector may add more), and skip ids you already handled.
 
 | Event | Owner of the PR | You do |
 |---|---|---|
 | Review comment or changes requested | A live Orca worker | `orca orchestration send --to dispatch:<id>` with the PR and thread links, "handle the review per `deliver-ticket` review loop". If its turn has ended, `skills-sync nudge <terminal> "run your orchestration check"`. A nudge that is refused (not idle, a dialog open) waits for the next event or the worker's own check; never retry in a loop |
 | 〃 | A worker that already finished (completed dispatch) | Start a new dispatch on its card for the review round; a completed dispatch never reads its mail |
-| 〃 | A session the human opened | Inbox only ("review comments on <PR>, in session <name>"). Never type into it |
-| Approved, checks green | Any | Program with `autonomous` policy: nothing, the worker's `orch land` takes it. Otherwise an inbox item "ready to merge" with the PR link. You never merge |
-| Check failed on a PR | A live worker | Same as a review comment: the worker classifies flake or defect (`deliver-ticket` review loop) |
+| 〃 | `owner_kind` is `human_session`: a session the human opened | Inbox only ("review comments on <PR>, in session <name>"). Never type into it |
+| `approved` with `checks: success` (the collector sends it only for the current head) | Any | Program with `autonomous` policy: nothing, the worker's `orch land` takes it. Otherwise an inbox item "ready to merge" with the PR link. You never merge |
+| `checks_failed` on a PR | A live worker | Same as a review comment: the worker classifies flake or defect (`deliver-ticket` review loop) |
 | Check failed on main | A program's main | That program's main guardian, through its coordinator |
 | Anything, owner unknown | — | Inbox, with the PR link and the event |
 

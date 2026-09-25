@@ -22,6 +22,7 @@ BRANCH = "main"
 RELOAD = {"skills": "/reload-skills", "plugins": "/reload-plugins"}
 SETTLE_S = float(os.environ.get("SKILLS_SYNC_SETTLE_S", "1.5"))
 CONFIRM_S = float(os.environ.get("SKILLS_SYNC_CONFIRM_S", "3"))
+INTERVAL_S = 900  # launchd StartInterval written by bootstrap.py; readers use it to tell a stalled sync
 
 
 class Stop(Exception):
@@ -119,7 +120,7 @@ def sync(broadcast_after=True):
         except (Stop, subprocess.TimeoutExpired) as e:
             msg, paths, ok = str(e), [], False
         write_json(STATE / "sync.json", {"ok": ok, "message": msg, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                                         "head": git("rev-parse", "--short", "HEAD")})
+                                         "head": git("rev-parse", "--short", "HEAD"), "interval": INTERVAL_S})
         print(("ok: " if ok else "stopped: ") + msg)
         if not ok and (prev.get("ok", True) or prev.get("message") != msg):
             notify(f"stopped: {msg}")  # only on a change of state, so a lasting stop does not repeat
@@ -191,7 +192,8 @@ def turn_started(after):
     return classify(after, "✳") is not None  # no longer idle at an empty prompt: the text was taken
 
 
-def try_send(term, command, confirmed=reloaded):
+def send_to(term, command, confirmed):
+    """Return None once `command` was typed into an idle session and the screen shows it was taken."""
     handle = term["handle"]
     first, draft = screen(handle)
     reason = classify(first, term.get("title") or "", draft)
@@ -209,17 +211,23 @@ def try_send(term, command, confirmed=reloaded):
     return None
 
 
-def nudge(handle, text):
-    """Type one line into another session, under the same idle checks as the reload broadcast."""
+def try_send(handle, text, confirmed=turn_started):
+    """Type one line into another session under the reload broadcast's idle checks. Returns (ok, reason).
+    Also used by the orchestrator dashboard's chat box."""
     try:
         term = next(t for t in orca("terminal", "list")["terminals"] if t["handle"] == handle)
         if term.get("agentIdentity") != "claude" or not term.get("writable"):
             raise Stop("not a writable Claude terminal")
-        reason = try_send(term, text, confirmed=turn_started)
+        reason = send_to(term, " ".join(text.splitlines()), confirmed)
     except (Stop, StopIteration, subprocess.TimeoutExpired, ValueError, KeyError) as e:
         reason = str(e) or "no such terminal"
-    print(reason or "sent")
-    return 1 if reason else 0
+    return reason is None, reason
+
+
+def nudge(handle, text):
+    ok, reason = try_send(handle, text)
+    print("sent" if ok else reason)
+    return 0 if ok else 1
 
 
 def broadcast(kind, dry_run):
@@ -245,7 +253,7 @@ def broadcast(kind, dry_run):
             print(f"{h}  {classify(first, term.get('title') or '', draft) or 'would send ' + RELOAD[kind]}")
             continue
         try:
-            reason = try_send(term, RELOAD[kind])
+            reason = send_to(term, RELOAD[kind], reloaded)
         except (Stop, subprocess.TimeoutExpired, ValueError, KeyError) as e:
             reason = str(e)
         if reason:

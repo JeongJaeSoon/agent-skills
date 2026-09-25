@@ -10,6 +10,9 @@ again changes nothing that is already in place.
 """
 import json, os, pathlib, platform, plistlib, shutil, subprocess, sys, time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from sync import INTERVAL_S  # noqa: E402
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS", "~/.claude/settings.json")).expanduser()
 LABEL = "io.github.jeongjaesoon.agent-skills-sync"
@@ -17,7 +20,6 @@ PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
 STATE = pathlib.Path("~/.local/state/agent-skills").expanduser()
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
 MARKET_ID = "agent-skills@jeongjaesoon"
-INTERVAL_S = 900
 
 
 def preflight():
