@@ -674,6 +674,7 @@ class Fleet:
         self.last = {"runs": 0.0, "prs": 0.0}
         self.rate = None  # GraphQL points left, from the last query's rateLimit
         self.state, self.owner_of, self.saved = None, {}, {}
+        self.checks = []  # selfcheck.SelfCheck's items: where this state disagreed with a fresh read
         self.events = collections.deque(read_lines(d / "events.jsonl", EVENTS_KEEP), maxlen=EVENTS_KEEP)
 
     # -- persistence
@@ -993,7 +994,7 @@ class Fleet:
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
         # Skill-side items and sync state.
         terms = {t["handle"]: (s["id"], t["title"]) for s in sessions.values() for t in s["terminals"]}
-        items += external_items(sticky) + sync_items(now, terms)
+        items += external_items(sticky) + sync_items(now, terms) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)

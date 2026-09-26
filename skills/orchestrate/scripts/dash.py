@@ -31,6 +31,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or main state here
 import fleet  # noqa: E402
+import selfcheck  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1255,6 +1256,7 @@ TOKEN = hashlib.sha256(os.urandom(32)).hexdigest()
 FLEET = None
 FLEET_VIEWED, FLEET_WAKE, FLEET_FORCE = [0.0], threading.Event(), [False]
 FLEET_VIEW_S, FLEET_IDLE_EVERY = 300, 60  # poll Orca every 10 s only while a page has polled in the last 5 min
+CHECK = selfcheck.SelfCheck()
 
 
 def fleet_loop():
@@ -1271,13 +1273,19 @@ def fleet_loop():
                 log(f"fleet: reloaded {h}")
         except Exception as e:  # keep serving; the next tick retries
             log(f"fleet: tick failed: {e!r}")
+        try:
+            if CHECK.due() and CHECK.run(FLEET):
+                FLEET.checks = CHECK.items
+                FLEET_WAKE.set()  # tick again now, so the page shows the items without waiting a full interval
+        except Exception as e:
+            log(f"fleet: self-check failed: {e!r}")
         viewed = time.monotonic() - FLEET_VIEWED[0] < FLEET_VIEW_S
         FLEET_WAKE.wait(fleet.ORCA_EVERY if viewed else FLEET_IDLE_EVERY)
         FLEET_WAKE.clear()
 
 
 def code_files():
-    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", *sorted(ASSETS.glob("*")))
+    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", HERE / "selfcheck.py", *sorted(ASSETS.glob("*")))
 
 
 def code_version():

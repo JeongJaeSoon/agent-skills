@@ -89,11 +89,30 @@ A session's dot has one colour per phase on every screen (sidebar, Moving now, S
 | `login`, `run_command`, `verify_failed`, `verify_ok` | A finished turn that ends asking you to log in, to run something yourself, or reports a verification that failed or passed |
 | `changes_requested`, `review_comment_received`, `ci_failed`, `approval_stale`, `ready_to_merge` | A PR owned by a session has a change request, unresolved review threads from a person (bots are left out unless `bots_in_inbox`), failing CI, only approvals on an older commit, or a current approval with passing CI |
 | `sync_stalled`, `reload_pending` | Skill sync reported failure or went quiet for two intervals, or a reload could not be sent to a session |
+| `selfcheck` | The dashboard's own state disagrees with a fresh read of Orca and GitHub (below) |
 | anything else | Added by the orchestrator with `orch-dash inbox add` |
 
 The turn-based types read only the last lines of the agent's final message that Orca already reports, with fixed patterns, so they are a hint, not a verdict. Items backed by a live condition (a waiting prompt, unanswered mail, an open decision, a pending gate, a PR's state) disappear when it clears; added items stay until dismissed or resolved. A turn-based item goes when its agent's pane gets a later prompt or starts a later turn (someone already replied there), when the same agent finishes a later turn (what it asked for was dealt with, or the new turn raises it again), or when Orca no longer lists its worktree; each such close is an `item_resolved` event on the timeline naming the rule (`answered`, `superseded`, `session_gone`). A prompt in another pane of the same session does not close it. An `approval`, `question`, `login`, `run_command` or `verify_failed` item raised before the session's latest prompt is **missed**: the inbox pins it to the top with a red edge, because typing the next prompt usually means the question above it went unanswered.
 
 A session's **badge** is the number of Needs you items on it, the same list its session page shows. The badges plus the items that belong to no session (sync health, items added without a session) are exactly the Inbox count, and every item is a live condition (or an open turn-based item), so the two never disagree. Nothing local such as a "last opened" mark hides an item from the count: an item leaves only when what it points at settles, it is answered, or it is dismissed; the human never has to clear what reality already settled. A `reload_pending` item sits on the session of the terminal the reload could not reach, titled with that terminal; one for a terminal Orca no longer lists is dropped. skills-sync retries only every 15 minutes, so after each collect the dashboard sends the reload again itself, through skills-sync's own `broadcast --only` (same lock and idle checks), to each pending terminal whose session is idle, at most once every 2 minutes per terminal; once it lands, skills-sync takes it out of `reload-pending.json` and the item goes. Orca's own per-worktree unread flag is a yes/no without a count, so it is not used.
+
+### Self-check
+
+The server checks its own output on the fleet loop: every 5 minutes `scripts/selfcheck.py` reads Orca's worktrees, terminals and inbox and GitHub's state of every PR the page shows open, and compares them with the state it serves. A difference counts only when a second read 90 s later still shows it, because the collector trails Orca by up to one tick. What counts becomes one `selfcheck` item per class, with no session, listing up to ten subjects; the item's key comes from the subjects it names, so a lasting mismatch stays one item and a new set of subjects is a new one. It goes once a read no longer finds it. The check raises items and nothing else: it never changes the state it checks.
+
+| Class | Counted when |
+|---|---|
+| `session_missing`, `session_ghost` | A worktree Orca lists (by the collector's own rule for main worktrees) is not a session, or a session's worktree is archived or gone. An empty worktree list is taken for a bad read |
+| `tree_parent` | A session's parent is not in the list, the root has a parent, or following parents never reaches the root |
+| `pr_state` | A PR shown open (a row or a PR item) is merged or closed on GitHub, and the collector probed it after the change or the change is older than the slowest probe tier plus 90 s |
+| `item_answered` | A turn item's pane has started a later turn, or finished one with a different last message |
+| `mail_answered` | A question mail item has a reply in its thread |
+| `prompt_gone` | A `permission` item's agent is no longer waiting |
+| `item_session_gone` | An item names a session that is not in the list |
+| `activity_stale` | A session's shown last activity is more than 5 minutes behind its worktree's or agents' own times up to when the state was made |
+| `item_text` | An item's title is empty or prints `None`, `null`, `undefined` or `NaN` |
+
+What only the browser shows (the order of the Needs you card, a page still running old code, a failed avatar) is not in this check.
 
 ### PR events for the rest of the platform
 

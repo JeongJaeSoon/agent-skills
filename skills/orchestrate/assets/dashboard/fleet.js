@@ -36,6 +36,7 @@ const ITEM = {
   ready_to_merge: ["Ready to merge", "good", "merge"],
   sync_stalled: ["Skill sync stalled", "bad", "alert"],
   reload_pending: ["Reload not sent", "warn", "alert"],
+  selfcheck: ["Dashboard self-check", "bad", "alert"],
 };
 const itemMeta = (t) => ITEM[t] || [t, "", "dot"];
 
