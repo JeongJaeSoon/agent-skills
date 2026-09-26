@@ -18,7 +18,9 @@ Every tracker operation here ("file a ticket", "read a template", "search the tr
 - **Improvement feedback on in-flight work** ("이거 더 낫게", "이 부분도 고쳐줘" about a
   running card or PR). It becomes its own ticket. Never append it to the running task's scope,
   brief or PR.
-- **A finding made while working** (review, E2E, `handoff-ticket` §0). A follow-up (§4).
+- **A finding made while working** (review, E2E, `handoff-ticket` §0). Classify it against
+  the exit condition first (`use-tracker`, "Exit condition"). Only NOW becomes a follow-up
+  ticket (§4); LATER goes on the deferred list, DROP gets a reason, neither gets a ticket.
 
 ## 1. Classify
 
@@ -90,7 +92,9 @@ The tracker's native fields carry structure; the body does not repeat it.
   relation) now; splitting the PR later instead of the ticket is not an option.
 - **A parent issue's body has no acceptance criteria and no implementation hints** — those
   belong to the children, and duplicating them guarantees they diverge. Keep
-  `🎯 배경 & 목표` + `🚫 범위 밖`.
+  `🎯 배경 & 목표`, `✅ 완료 조건` (numbered exit items, each checkable), `🚫 범위 밖` and an
+  empty `⏸ 보류` (`use-tracker`, "Exit condition"). Write the exit items before the first
+  child is filed; the children serve them.
 - Clear outcome and a foreseeable end date → suggest a project. Until then a parent issue is
   enough. Only offer a project or milestone that already exists; don't create structure ahead
   of need.
@@ -104,17 +108,18 @@ relationships — and take **one** approval for the batch.
 **Exceptions — file first, then name the ticket and its URL:**
 
 - A ticket request split out of another question (§0). The user already asked for it.
-- A follow-up a session files on its own — from a finding made while working a ticket, at
-  `handoff-ticket` §0, or from a review or E2E run. The user is not necessarily there, and
-  losing the finding is worse than filing it unreviewed. Whether to file, and whether two
-  findings share one ticket, is the session's call (`deliver-ticket` §2 "Findings outside the
-  ticket"); "shall I file this?" is not a question to put to the user.
+- A NOW follow-up a session files on its own — from a finding made while working a ticket, at
+  `handoff-ticket` §0, or from a review or E2E run. The user is not necessarily there, and an
+  exit item it blocks would otherwise stall. The class, and whether two findings share one
+  ticket, is the session's call (`deliver-ticket` §2 "Findings outside the ticket"); "shall I
+  file this?" is not a question to put to the user. A LATER finding is kept by the deferred
+  list, not by a ticket.
 
 A follow-up is marked as one so growth after the initial design can be counted
 (`measure-delivery`, `orchestrate`). Use `use-tracker`'s follow-up format: the `follow-up`
 label next to its type, first body line
 `파생: <originating ticket> · 원인: <리뷰 지적 | 계약 불일치 | QA | 스펙 공백 | 구현 한계 | 기타>`,
-and a related relation to the originating ticket (blocked-by when it truly blocks).
+then `완료 조건: <the exit item it serves>`, and a related relation to the originating ticket (blocked-by when it truly blocks).
 
 Then file each ticket through `use-tracker`: assignee me, the type label, the filled body. The
 team and project come from the program or the originating ticket, else from

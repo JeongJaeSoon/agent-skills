@@ -1,6 +1,6 @@
 # Ticket body skeletons
 
-The user's two ticket shapes. Use this file only when the active tracker has no templates
+The user's ticket shapes. Use this file only when the active tracker has no templates
 configured (`tracker.<adapter>.templates` in `~/.claude/agent-skills.json`, see `use-tracker`).
 When templates are configured, the tracker's copy is the source and this file is not read.
 
@@ -73,4 +73,32 @@ Italic lines are hints for the writer: strip them from the filed body.
 *링크만.*
 
 * 
+```
+
+## 상위 티켓 (epic, parent)
+
+인수 조건과 구현 힌트는 자식 티켓에만 둔다.
+
+```markdown
+## 🎯 배경 & 목표
+
+*왜 이 묶음이 필요한지. 2~4줄.*
+
+## ✅ 완료 조건
+
+*끝났다고 말할 수 있는 조건. 번호를 매기고, 각 항목에 확인 방법을 같이 적는다. 자식 티켓은 이 항목 중 하나를 채운다.*
+
+- [ ] 1. 조건 — *확인:* 어떻게 확인하는지
+
+## 🚫 범위 밖
+
+*이번 묶음에서 하지 않는 것. 없으면 "없음".*
+
+* 
+
+## ⏸ 보류
+
+*LATER로 분류한 발견. 티켓을 만들지 않고 여기에 한 줄씩 적는다. 처음에는 비워 둔다.*
+
+- <무엇> — 재검토: <다시 볼 계기> (<발견한 티켓>)
 ```

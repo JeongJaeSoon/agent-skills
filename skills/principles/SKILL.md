@@ -1,6 +1,6 @@
 ---
 name: principles
-description: Use when a design, refactor, verification, or delegation decision needs a named engineering principle — sizing a diff, choosing where validation goes, deciding whether work is proven, splitting work across agents, or noticing the same instruction being written a second time.
+description: Use when a design, refactor, verification, or delegation decision needs a named engineering principle — sizing a diff, choosing where validation goes, deciding whether work is proven, deciding whether a follow-up becomes a ticket, splitting work across agents, or noticing the same instruction being written a second time.
 ---
 
 # Engineering principles
@@ -16,6 +16,7 @@ Each principle lives in its own file under `references/`. Read the leaf file in 
 - **Subtract Before You Add** (`references/principle-subtract-before-you-add.md`). Sequencing an addition, refactor, or rewrite.
 - **Minimize Reader Load** (`references/principle-minimize-reader-load.md`). Code that's hard to trace: count layers and hidden state, collapse one-caller wrappers.
 - **Outcome-Oriented Execution** (`references/principle-outcome-oriented-execution.md`). Planned rewrites and migrations with explicit phase boundaries.
+- **Work to an Exit Condition** (`references/principle-work-to-an-exit-condition.md`). Starting or growing an epic, program or batch; a follow-up turns up; a status report or wrap-up. Only what done needs becomes a ticket.
 - **Experience First** (`references/principle-experience-first.md`). Product, UX, or feature-scope tradeoffs.
 - **Exhaust the Design Space** (`references/principle-exhaust-the-design-space.md`). A novel interaction or architectural decision with no precedent.
 - **Build the Lever** (`references/principle-build-the-lever.md`). Any non-trivial work: build the tool that does or proves it, not the result by hand.

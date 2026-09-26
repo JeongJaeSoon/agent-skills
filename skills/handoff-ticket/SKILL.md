@@ -31,9 +31,11 @@ last criterion, not the merge commit, is the decision point.
 `worker_done` it idles, and the coordinator decides what runs next. Nothing else makes a
 session a program worker. The rest of this skill is for sessions without that line.
 
-**Loose ends.** A review comment, or a fix that lands right here, is just work: do it. File a
-ticket (`write-ticket`) when the thing needs its own investigation, its own decision, or its
-own diff. Then it is the next ticket, not this one.
+**Loose ends.** A review comment, or a fix that lands right here, is just work: do it. A thing
+that needs its own investigation, decision or diff is classified against the exit condition
+first (`deliver-ticket` §2 "Findings outside the ticket"): only NOW becomes a ticket
+(`write-ticket`), and then it is the next ticket, not this one. LATER goes on the deferred
+list, DROP gets its reason.
 
 **Feedback on in-flight work is a new ticket.** When the user says "이거 더 낫게" about a card
 or PR that is already running, file it as its own ticket and hand it off (or queue it). Never
@@ -50,8 +52,10 @@ no count ends a session; compaction is the brake. Anything that stands on its ow
 off. If this session has already compacted, hand off the small ones too — a fresh card with a
 well-written `--prompt` beats a session that lost its own first half.
 
-**What is next.** Rank the unstarted tickets in the same tracker project or parent by priority,
-dependency (blocked tickets wait), and file collision with cards already running. Spawn it
+**What is next.** Rank the unstarted tickets in the same tracker project or parent that serve
+an open exit item (the parent's `✅ 완료 조건`) by priority, dependency (blocked tickets wait),
+and file collision with cards already running. When every exit item is met, close the parent
+and report it instead of starting more, even with lines left on `⏸ 보류`. Spawn it
 yourself when the user said to keep going, or when one candidate is clearly next. Ask when the
 ranking is genuinely contested — then give the ranking, a recommendation, and any
 parallel-safe combination.
@@ -62,7 +66,7 @@ A standing instruction is that permission, already given: "작업 끝나면 다�
 **What may be asked.** The one question this section allows is *which* ticket comes next, and
 only when the ranking is genuinely contested. Whether to file a loose-end ticket, whether to
 spawn a card, and whether to close this session are already decided above — never ask them.
-File the loose-end tickets before asking about the ranking, so the findings survive a stalled
+File the NOW loose-end tickets before asking about the ranking, so the findings survive a stalled
 answer; `write-ticket` skips its approval gate for exactly this case.
 
 ## 1. Confirm this work is actually done

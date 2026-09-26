@@ -59,16 +59,22 @@ bug, a missing validation, a contract inconsistency. Decide yourself, at the mom
 it, and never end a turn on "말씀 주시면 티켓으로 만들겠습니다":
 
 - Fixable in this diff and inside the ticket's scope → fix it here.
-- Needs its own investigation, decision, or diff → file it now with `write-ticket` as a
-  follow-up (its approval gate does not apply, its follow-up format does); search the tracker
-  first (`use-tracker`) so you do not duplicate one. One ticket per independent diff; findings
-  that must land together share one. Inside a program (the brief has a `PROGRAM:` line),
-  filing is where it stops: do not start the follow-up; the coordinator decides whether it
-  enters the program.
-- Speculative, or not reproduced in the repo → write it in the worklog only, no ticket.
+- Otherwise classify it against the exit condition: the parent epic's `✅ 완료 조건`, or this
+  ticket's acceptance criteria when it has no parent (`use-tracker`, "Exit condition";
+  principle **Work to an Exit Condition**).
+  - NOW (an exit item needs it, or a reproduced correctness, security or data defect in what
+    this work shipped) → file it with `write-ticket` as a follow-up (its approval gate does
+    not apply, its follow-up format does); search the tracker first so you do not duplicate
+    one. One ticket per independent diff; findings that must land together share one.
+  - LATER → one line on the deferred list with its revisit trigger. No ticket.
+  - DROP (speculative, not reproduced, already covered, out of scope) → one line with the
+    reason in the worklog. No ticket.
+- Inside a program (the brief has a `PROGRAM:` line), file nothing: put each finding with
+  your proposed class in the `worker_done` body, and the coordinator classifies and files.
 
-Name every ticket you filed in the report. The user's review happens on the ticket, not
-before it exists.
+Report "N/M 완료 조건 충족" for the parent when there is one, name every ticket you filed with
+the exit item it serves, and list the LATER and DROP lines. The user's review happens on the
+ticket and the deferred list, not in chat.
 
 ## 3. Review
 

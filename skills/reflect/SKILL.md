@@ -106,7 +106,7 @@ For each approved Accepted item, follow the Routing field exactly:
 - `tune description: <skill path>` (the skill exists but didn't trigger when it should have): hand to **skill-creator** and run its description-optimization loop.
 - `new skill via skill-creator: <kebab-name>`: hand creation to **skill-creator**. Do not invent the shape ad hoc.
 
-Before declaring done, run `claude plugin validate <checkout>` and fix what it reports. Put the lesson IDs in the commit message (`L-4`), and mark the rows `applied` once the change reaches main.
+Before declaring done, run the `write-skill` steps on the change (prompt audit, internal-name grep, tests, `claude plugin validate`) and fix what they report. Put the lesson IDs in the commit message (`L-4`), and mark the rows `applied` once the change reaches main.
 
 ### 6. Summarize for the user
 

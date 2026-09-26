@@ -85,7 +85,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
-**글쓰기**: `write-plainly`(한국어·영어 문체), `prune-comments`(diff의 주석 정리).
+**글쓰기**: `write-plainly`(한국어·영어 문체), `prune-comments`(diff의 주석 정리), `write-skill`(스킬을 쓰거나 고친 뒤의 점검: 겹침 확인, prompt audit, 사내 이름 grep, 테스트, reload).
 
 **pstack**: `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why`. 원본 이름을 유지해 upstream을 따라간다.
 

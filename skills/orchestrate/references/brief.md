@@ -42,19 +42,16 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             `&` or a redirect: the completion notice carries its output and exit code). Act on
             exit 3, report on exit 1.
             Never merge any other way. (human-gate: stop at READY and report instead.)
-FORBIDDEN   Do not start other tickets. File follow-ups with the label `follow-up`, the first
-            body line `파생: <this ticket> · 원인: <분류>`, and a `related` relation to this ticket,
-            not a parent (use-tracker: create --label follow-up --related <this ticket>; not
-            orca-linear's --parent-current), and do not work on them. measure-delivery and the
-            dashboard count follow-ups by the label and the 파생 line, and the dashboard's stage
-            bars count the leaves under each parent, so a parented follow-up would show up as
-            planned work of this ticket's stage. No force-push
+FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each finding in the
+            worker_done body with a proposed class (NOW: a predicate item or a reproduced
+            defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
+            with the reason). The coordinator classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
             merge commit, review rounds and who reviewed, the VERIFY output you actually saw,
-            the main-CI run you read, and any follow-up tickets filed. --outcome succeeded only
+            the main-CI run you read, and the findings with their proposed class. --outcome succeeded only
             when the ticket's acceptance criteria hold.
 STANDING    <the program note's standing orders for workers, pasted verbatim, numbered; the
             coordinator-only ones stay in the note>

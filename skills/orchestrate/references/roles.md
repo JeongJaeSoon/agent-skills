@@ -114,11 +114,9 @@ USAGE       Periodically count Skill tool calls per skill name in the local tran
             skill, or it is no longer needed. Fix the first two with the smallest description change;
             only propose deleting the third. The count goes in the report, never in a commit.
 EVERY COMMIT
-            - Run the claude-api skill's prompt audit on the changed skill files and apply what it finds.
-            - Keep the repo's translation markers current (the catalog's translated-from lines).
-            - The repo's tests pass. The commit is signed.
-            - Grep the diff for internal names (the local list, never committed); 0 hits.
-            - Fast-forward the loaded checkout and push; then tell the coordinator "reload needed".
+            Follow the write-skill skill end to end: overlap check, prompt audit, internal-name
+            grep with 0 hits, tests, signed commit, fast-forward and push. Then tell the
+            coordinator "reload needed" instead of asking the human for the reload.
 CONTRACTS   A change to a running program's contract (merge policy, predicate, the brief's required
             fields, landing rules) waits for that coordinator's confirmation: ask, then commit.
 FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is editing.
