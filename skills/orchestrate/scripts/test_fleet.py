@@ -50,9 +50,16 @@ assert fleet.project_of(None) is None
 for name in ("state.json", "memory.json"):
     assert secret not in (state_dir / name).read_text(), name
 
-# PRs by branch, and what each one asks of you.
+# PRs by branch, plus mine that no worktree has checked out (found by the search, open or merged within a day), and
+# what each one asks of you: only an owned PR raises items.
 prs = {p["number"]: p for p in st["prs"]}
-assert {n: prs[n]["session"] for n in prs} == {41: "wt-login", 42: "wt-export", 43: "wt-docs"}, prs
+assert {n: prs[n]["session"] for n in prs} == {41: "wt-login", 42: "wt-export", 43: "wt-docs", 7: None, 6: None}, prs
+assert (prs[7]["repo"], prs[7]["merge_state"], prs[7]["coderabbit"], prs[6]["state"]) == ("acme/tools", "BEHIND", "rate_limited", "MERGED")
+assert (prs[42]["unresolved"], prs[43]["draft"], prs[43]["author"]) == (1, True, "dev-erin"), prs[42]
+assert [fleet.coderabbit({"commits": world.roll("SUCCESS", cr)}) for cr in (("PENDING", "Review in progress"), ("SUCCESS", "Review completed"),
+        ("SUCCESS", "Review skipped: automatic reviews are disabled"), ("FAILURE", "Review failed"))] == [
+        "in_progress", "reviewed", "skipped", "failed"]
+assert fleet.coderabbit({"commits": {"nodes": [{"commit": {"status": None}}]}}) is None
 assert {r["login"]: r["status"] for r in prs[43]["reviewers"]} == {"rev-carol": "requested", "team:docs": "requested"}
 assert {r["login"]: r["status"] for r in prs[42]["reviewers"]} == {"rev-bob": "changes_requested", "lint-bot[bot]": "commented"}
 got = sorted((i["type"], i["session"]) for i in items(st))
@@ -465,6 +472,38 @@ process.stdout.write(JSON.stringify(out));"""
     assert "/api/fleet/avatar/lint-bot%5Bbot%5D" in got["bot"], got["bot"]
     assert "<image" not in got["again"], got["again"]
 
+    # The PR page: grouped by repository, escaped, filtered, and the merged group apart from the open ones.
+    pr = lambda n, repo, **kw: {"key": f"{repo}#{n}", "repo": repo, "number": n, "url": f"https://github.com/{repo}/pull/{n}",
+                                "title": f"t{n}", "state": "OPEN", "ci": "success", "merge_state": "CLEAN", "decision": "APPROVED",
+                                "created": ago(5), "updated": ago(1), "reviewers": [], "unresolved": 0, "session": None, **kw}
+    rows = [pr(1, "acme/app", title="<script>x</script>", url="javascript:alert(1)", author="<b>me</b>", coderabbit="rate_limited",
+               unresolved=2, session="wt-coord"),
+            pr(2, "acme/app", ci="failure", decision="REVIEW_REQUIRED", merge_state="BLOCKED"),
+            pr(3, "acme/tools", draft=True, decision=None),
+            pr(4, "acme/tools", state="MERGED", merged_at=ago(2)), pr(5, "acme/tools", state="MERGED", merged_at=ago(30))]
+    js = f"""{helpers}
+{chr(10).join(take(n) for n in ("chips", "sorted", "th", "ago"))}
+{(assets / "fleet.js").read_text()}
+const st = {{prs: {json.dumps(rows)}, sessions: [{{id: "wt-coord", name: "coordinator", phase: "idle"}}], sources: {{github: {{updated_at: "{ago(0)}"}}}}}};
+var S = {{filters: {{}}, sort: {{}}, state: st}};
+const out = {{all: fleetPrs(st), routed: FLEET_SECTIONS.filter((s) => !FLEET_VIEWS[s.id]).map((s) => s.id)}};
+S.filters.fleet_prs = "ci"; out.ci = fleetPrs(st);
+S.filters.fleet_prs = "review"; out.review = fleetPrs(st);
+S.filters.fleet_prs = "mergeable"; S.filters.fleet_prs_repo = "acme/tools"; out.mergeable = fleetPrs(st);
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    page = got["all"]
+    assert got["routed"] == [], f"sidebar sections without a view: {got['routed']}"
+    for raw in ("<script", "<b>me", 'href="javascript'):
+        assert raw not in page, (raw, page)
+    assert page.index("<h3 class=\"mono\">acme/app</h3>") < page.index("<h3 class=\"mono\">acme/tools</h3>"), page
+    open_part, merged_part = page.split('id="prs-merged"')
+    assert ">#4<" in merged_part and ">#4<" not in open_part and ">#5<" not in page, "merged within 24 h only, apart"
+    assert "rate-limited" in open_part and "2 unresolved review thread" in open_part and "#/fleet/session/wt-coord" in open_part
+    num = lambda html: sorted(set(__import__("re").findall(r">#(\d+)<", html.split('id="prs-merged"')[0])))
+    assert (num(got["ci"]), num(got["review"]), num(got["mergeable"])) == (["2"], ["2"], []), got
+    assert "Updated" in page and "data-rel" in page
+
     # The overview card keeps 8 rows, and missed items are picked first even when they come last.
     rows = [{"key": f"k{n}", "type": "reload_pending", "session": "wt-coord", "title": f"row{n}", "missed": n >= 15} for n in range(17)]
     js = f"""{helpers}
@@ -528,6 +567,21 @@ assert next(p for p in f.state["prs"] if p["number"] == 43)["state"] == "OPEN"  
 fail_detail[0] = False
 st = pr_tick(viewed=True)
 assert next(p for p in st["prs"] if p["number"] == 43)["state"] == "MERGED", "retried, not forgotten"
+# A PR opened where no worktree has its branch is on the page after one PR tick; a failed search keeps the list.
+world.prs[8] = dict(world.prs[7], number=8, headRefOid="h8a", title="feat: opened from a released worktree",
+                    url="https://github.com/acme/tools/pull/8")
+assert 8 in {p["number"] for p in pr_tick(viewed=True)["prs"]}
+# A PR of mine that no session owns keeps its tier, but one the search sees updated is read on that tick.
+world.prs[7].update(updatedAt=fleet.iso(clock[0]), title="chore: pin node 22")
+st = pr_tick()
+assert 7 in probed and next(p for p in st["prs"] if p["number"] == 7)["title"] == "chore: pin node 22", probed
+fail_search = lambda q: ({}, ["search failed"]) if "search(" in q else real_gql(q)
+f.graphql = fail_search
+assert {6, 7, 8} <= {p["number"] for p in pr_tick(viewed=True)["prs"]}
+assert f.sources["github"]["ok"] is False
+del world.prs[8]
+f.graphql = counting
+assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "closed or gone from the search: off the page"
 # Few GraphQL points left: the PR tick waits (up to 15 min) instead of spending them.
 f.rate, f.last["prs"] = 100, fleet.time.monotonic() - 100
 probed.clear()

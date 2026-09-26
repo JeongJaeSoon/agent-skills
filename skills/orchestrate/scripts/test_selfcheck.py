@@ -26,7 +26,9 @@ def check(state=None, mutate_world=None):
     if mutate_world:
         mutate_world(w)
     st = copy.deepcopy(state or base)
-    live = {**w.fetch_fast(), "prs": {k: w.prs[int(k.split("#")[1])] for k in (p["key"] for p in st["prs"])}}
+    live = {**w.fetch_fast(), "prs": {k: w.prs[int(k.split("#")[1])] for k in (p["key"] for p in st["prs"])},
+            "mine": {fleet.pr_key(p["repository"]["nameWithOwner"], p["number"]): p for p in w.prs.values()
+                     if p["state"] == "OPEN" and p["author"]["login"] == w.ME}}
     probed = {k: fleet.parse(v.get("probed_at")) for k, v in f.prs.items()}
     return {c: [s for s, _ in rows] for c, rows in selfcheck.findings(st, live, probed, {}, clock[0]).items() if rows}
 
@@ -68,6 +70,16 @@ assert check(mutate_world=merged(now - dt.timedelta(seconds=30))) == {}
 f.prs["acme/launchpad#42"]["probed_at"] = fleet.iso(now)
 assert check(mutate_world=merged(now - dt.timedelta(seconds=30))) == {}  # GitHub may still have said OPEN then
 assert check(mutate_world=merged(now - dt.timedelta(seconds=120))) == {"pr_state": ["acme/launchpad#42"]}
+
+# An open PR of mine the page lacks, or shows older than GitHub's last update, once the sweep has had its turn.
+drop7 = with_state(lambda st: st["prs"].remove(next(p for p in st["prs"] if p["number"] == 7)))
+assert check(drop7) == {"pr_missing": ["acme/tools#7"]}, check(drop7)
+opened = lambda age: lambda w: w.prs.update({9: {**w.prs[7], "number": 9, "createdAt": fleet.iso(now - dt.timedelta(seconds=age))}})
+assert check(mutate_world=opened(60)) == {}  # just opened: the next sweep has not run yet
+assert check(mutate_world=opened(600)) == {"pr_missing": ["acme/tools#9"]}
+moved = lambda age: lambda w: w.prs[41].update(updatedAt=fleet.iso(now - dt.timedelta(seconds=age)))
+assert check(mutate_world=moved(60)) == {}
+assert check(mutate_world=moved(300)) == {"pr_stale": ["acme/launchpad#41"]}
 
 # Needs you items already dealt with: a turn answered in its own pane (a new turn began, or a later one finished),
 # a question with a reply in its thread, a permission dialog that closed, an item on a session that is gone.

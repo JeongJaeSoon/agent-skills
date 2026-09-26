@@ -435,9 +435,11 @@ class FakeFleetWorld:
         review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _ago(now, h),
                                                            "author": user(login), "commit": {"oid": oid}}
         roll = self.roll
-        base = lambda n, title, head, h, ci: {"number": n, "state": "OPEN", "isDraft": False, "updatedAt": _ago(now, h),
-                                              "headRefOid": head, "url": f"https://github.com/acme/launchpad/pull/{n}", "title": title,
-                                              "commits": roll(ci), "author": user(self.ME), "reviewRequests": {"nodes": []},
+        base = lambda n, title, head, h, ci, repo="acme/launchpad", cr=("SUCCESS", "Review completed"): {
+            "number": n, "state": "OPEN", "isDraft": False, "updatedAt": _ago(now, h), "createdAt": _ago(now, h + 20),
+            "mergedAt": None, "mergeStateStatus": "CLEAN", "reviewDecision": None, "repository": {"nameWithOwner": repo},
+            "headRefOid": head, "url": f"https://github.com/{repo}/pull/{n}", "title": title,
+            "commits": roll(ci, cr), "author": user(self.ME), "reviewRequests": {"nodes": []},
                                               "latestOpinionatedReviews": {"nodes": []}, "reviews": {"nodes": []},
                                               "reviewThreads": {"totalCount": 0, "nodes": []}}
         p41 = base(41, "feat: login flow", "h41a", 0.4, "SUCCESS")
@@ -452,9 +454,14 @@ class FakeFleetWorld:
                        {"id": "c1", "createdAt": _ago(now, 0.3), "url": "https://github.com/acme/launchpad/pull/42#c1",
                         "author": user("rev-bob")}]}}]})
         p43 = base(43, "docs: setup guide", "h43a", 3, "PENDING")
-        p43.update(isDraft=True, reviewRequests={"nodes": [{"requestedReviewer": user("rev-carol")},
+        p43.update(isDraft=True, author=user("dev-erin"), reviewRequests={"nodes": [{"requestedReviewer": user("rev-carol")},
                                                             {"requestedReviewer": {"__typename": "Team", "slug": "docs"}}]})
-        self.prs = {41: p41, 42: p42, 43: p43}
+        # PRs no live worktree has checked out: the search finds them (#7 open, #6 merged an hour ago).
+        p7 = base(7, "chore: pin the release script's node version", "h7a", 5, "SUCCESS", "acme/tools", ("SUCCESS", "Review rate limited"))
+        p7.update(mergeStateStatus="BEHIND")
+        p6 = base(6, "fix: cache key collision", "h6a", 1, "SUCCESS", "acme/tools")
+        p6.update(state="MERGED", mergedAt=_ago(now, 1), mergeStateStatus="UNKNOWN")
+        self.prs = {41: p41, 42: p42, 43: p43, 7: p7, 6: p6}
         self.branches = {"feat/login": 41, "feat/export": 42, "docs/setup": 43}
         # wt-docs sits in a permission dialog that hooks/permission.py recorded.
         self.screens = {"term_docs": ["⏺ Checking what the package would ship before the guide links to it.", "─" * 60,
@@ -483,8 +490,9 @@ class FakeFleetWorld:
         self.prs[42].update(commits=self.roll("SUCCESS"), updatedAt=later)
 
     @staticmethod
-    def roll(state):
-        return {"nodes": [{"commit": {"statusCheckRollup": {"state": state}}}]}
+    def roll(state, cr=("SUCCESS", "Review completed")):
+        return {"nodes": [{"commit": {"statusCheckRollup": {"state": state},
+                                      "status": {"context": {"state": cr[0], "description": cr[1]}}}}]}
 
     def fetch_fast(self):
         return {"worktrees": self.worktrees, "terminals": self.terminals, "messages": self.messages}
@@ -502,6 +510,10 @@ class FakeFleetWorld:
             data[alias] = {"ref": {"associatedPullRequests": {"nodes": [{"number": n, "state": self.prs[n]["state"]}] if n else []}}}
         for alias, n in re.findall(r"(p\d+): repository\([^)]*\)\{pullRequest\(number:(\d+)\)", query):
             data[alias] = {"pullRequest": self.prs.get(int(n))}
+        for alias, q in re.findall(r'(\w+): search\(query:"([^"]*)"', query):
+            me, state = re.search(r"author:(\S+)", q).group(1), "OPEN" if "is:open" in q else "MERGED"
+            data[alias] = {"pageInfo": {"hasNextPage": False},
+                           "nodes": [p for p in self.prs.values() if p["state"] == state and p["author"]["login"] == me]}
         return data, []
 
     def fleet(self, clock=None):

@@ -6,6 +6,7 @@
 const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
+  { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
   { id: "timeline", label: "Timeline", icon: "activity" },
@@ -98,7 +99,8 @@ function sessionTree(st) {
 
 function fleetSidebar() {
   const st = S.state;
-  const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length, graph: (st.prs || []).length || null } : {};
+  const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -255,9 +257,9 @@ function avatarNode(x, y, r, login) {
 }
 
 // Session -> PR -> reviewer, three columns; each PR is as tall as its reviewer list.
-function relGraph(st, sessionId, openOnly = false) {
+function relGraph(st, sessionId) {
   const ss = byId(st);
-  const prs = (st.prs || []).filter((p) => (!sessionId || p.session === sessionId) && (!openOnly || p.state === "OPEN")
+  const prs = (st.prs || []).filter((p) => p.session && (!sessionId || p.session === sessionId)
     && (sessionId || inProject((ss[p.session] || {}).project)));
   if (!prs.length) return `<div class="empty-chart">No pull request linked to ${sessionId ? "this session" : "any session"} yet.</div>`;
   const groups = {};
@@ -313,7 +315,7 @@ function fleetOverview(st) {
     <div class="grid">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items, { limit: 8 })}</div>
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
-      <div class="card wide" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside"><a class="go" href="#/fleet/graph">All ${icon("arrow")}</a></span></div>${relGraph(st, null, true)}</div>
+      <div class="card wide" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside">${prUpdated(st)}<a class="go" href="#/fleet/prs">All ${open.length} ${icon("arrow")}</a></span></div>${prRows(st, open.slice(0, 8))}</div>
       <div class="card wide"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>
     </div>`;
 }
@@ -336,6 +338,79 @@ function fleetInbox(st) {
     ${projectChips(st)}
     <div class="card">${itemList(st, shown)}</div>`;
 }
+
+// ------------------------------------------------------------ pull requests
+
+// mergeStateStatus -> [label, tone]
+const MERGE = { CLEAN: ["mergeable", "good"], HAS_HOOKS: ["mergeable", "good"], UNSTABLE: ["mergeable, checks red", "warn"],
+  BEHIND: ["behind base", "warn"], BLOCKED: ["blocked", "warn"], DIRTY: ["conflicts", "bad"], DRAFT: ["draft", ""], UNKNOWN: ["computing", ""] };
+const CI_CELL = { failure: ["failure", "bad"], pending: ["pending", "warn"], success: ["success", "good"] };
+const DECISION = { APPROVED: ["approved", "good"], CHANGES_REQUESTED: ["changes requested", "bad"], REVIEW_REQUIRED: ["review required", "warn"] };
+const RABBIT = { reviewed: ["reviewed", "good"], in_progress: ["reviewing", "accent"], rate_limited: ["rate-limited", "warn"],
+  skipped: ["skipped", ""], failed: ["failed", "bad"] };
+const approvedNow = (p) => (p.reviewers || []).some((r) => r.state === "APPROVED" && !r.stale);
+const PR_FILTERS = {
+  all: [() => true, "All open"],
+  review: [(p) => !p.draft && p.decision !== "APPROVED" && !approvedNow(p), "Needs review"],
+  ci: [(p) => p.ci === "failure", "CI failing"],
+  mergeable: [(p) => !p.draft && ["CLEAN", "HAS_HOOKS", "UNSTABLE"].includes(p.merge_state), "Mergeable"],
+};
+const orderOf = (map) => Object.fromEntries(Object.keys(map).map((k, i) => [k, i]));
+const PR_SORT = {
+  pr: (p) => p.number, title: (p) => p.title, author: (p) => p.author, review: (p) => orderOf(DECISION)[p.decision],
+  ci: (p) => orderOf(CI_CELL)[p.ci], merge: (p) => orderOf(MERGE)[p.merge_state],
+  rabbit: (p) => orderOf(RABBIT)[p.coderabbit], session: (p) => (byId(S.state)[p.session] || {}).name,
+  age: (p) => ago(p.merged_at || p.created), updated: (p) => ago(p.updated),
+};
+const cellTag = (map, v, blank = "—") => { const [t, tone] = map[v] || [v, ""]; return v ? tag(t, tone) : `<span class="muted">${blank}</span>`; };
+// When GitHub was last read for PRs; the freshness bar colours it like the GitHub source.
+const prUpdated = (st) => `<span data-src="github" title="GitHub checked">${icon("clock")} ${relSpan((st.sources?.github || {}).updated_at)}</span>`;
+const merged24h = (st) => (st.prs || []).filter((p) => p.state === "MERGED" && Date.now() - ms(p.merged_at) < 24 * 3600e3);
+
+function prRows(st, list) {
+  return `<ul class="rows">${list.map((p) => `<li>${tag(p.ci || "no CI", CI_TONE[p.ci] || "")}
+    <a class="grow ellipsis" href="${esc(safeUrl(p.url) || "#")}" target="_blank" rel="noopener noreferrer"><b>#${esc(p.number)}</b> ${esc(p.title)} <span class="muted">${esc(p.repo)}</span></a>
+    <span class="acts">${p.decision ? cellTag(DECISION, p.decision) : ""}<span class="when">${relSpan(p.updated)}</span></span></li>`).join("")
+    || '<li class="muted">No open pull request.</li>'}</ul>`;
+}
+
+function prTable(st, list) {
+  const ss = byId(st);
+  const head = [["pr", "PR"], ["title", "Title"], ["author", "Author", "hide-md"], ["review", "Review"], ["ci", "CI"], ["merge", "Merge", "hide-md"],
+    ["rabbit", "CodeRabbit", "hide-md"], ["session", "Session", "hide-sm"], ["age", "Age", "hide-sm"], ["updated", "Updated"]];
+  const rows = sorted("fleet_prs", list, PR_SORT).map((p) => {
+    const s = ss[p.session];
+    const threads = p.unresolved ? ` <span class="tag tone-accent" title="${esc(p.unresolved)} unresolved review thread(s)">${icon("note")}${esc(p.unresolved)}</span>` : "";
+    return `<tr><td class="mono">${link(p.url, "#" + esc(p.number))}</td>
+      <td class="title"><span class="ellipsis" style="display:block" title="${esc(p.title)}">${p.draft ? tag("draft") + " " : ""}${esc(p.title)}</span></td>
+      <td class="hide-md dim">${esc(p.author || "—")}</td><td>${cellTag(DECISION, p.decision)}</td><td>${cellTag(CI_CELL, p.ci, "no CI")}</td>
+      <td class="hide-md">${p.state === "OPEN" ? cellTag(MERGE, p.merge_state) : tag("merged", "accent", "merge")}</td>
+      <td class="hide-md">${cellTag(RABBIT, p.coderabbit, "none")}${threads}</td>
+      <td class="hide-sm">${s ? `<a href="${sessionHref(s.id)}">${phaseDot(s)} ${esc(s.name)}</a>` : '<span class="muted">—</span>'}</td>
+      <td class="hide-sm muted">${relSpan(p.merged_at || p.created)}</td><td class="muted">${relSpan(p.updated)}</td></tr>`;
+  }).join("");
+  return `<table><thead><tr>${head.map(([c, l, cls]) => th("fleet_prs", c, l, cls)).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function fleetPrs(st) {
+  const open = (st.prs || []).filter((p) => p.state === "OPEN"), merged = merged24h(st);
+  const f = PR_FILTERS[S.filters.fleet_prs] ? S.filters.fleet_prs : "all";
+  const repos = [...new Set(open.map((p) => p.repo))].sort(), repo = repos.includes(S.filters.fleet_prs_repo) ? S.filters.fleet_prs_repo : "all";
+  const shown = open.filter((p) => PR_FILTERS[f][0](p) && (repo === "all" || p.repo === repo));
+  const groups = {};
+  shown.forEach((p) => (groups[p.repo] ||= []).push(p));
+  const repoChip = (v, label, n) => `<button class="chip" type="button" data-group="fleet_prs_repo" data-val="${esc(v)}" aria-pressed="${v === repo}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
+  return `<div class="view-head"><div><h2>Pull requests</h2><p>Every open PR you authored, in any repository, and every PR a session's branch has. GitHub is read every 30 s while this page is open; a column head sorts.</p></div>
+    <div class="aside muted">Updated ${prUpdated(st)}</div></div>
+    <div class="toolbar">${chips("fleet_prs", Object.entries(PR_FILTERS).map(([id, [fn, label]]) => [id, label, open.filter(fn).length]), f)}</div>
+    ${repos.length > 1 ? `<div class="chips proj-chips" role="group" aria-label="Repository">${repoChip("all", "All repositories")}${repos.map((r) => repoChip(r, r, open.filter((p) => p.repo === r).length)).join("")}</div>` : ""}
+    ${Object.keys(groups).sort().map((r) => `<div class="card table-wrap" data-src="github"><div class="card-head"><h3 class="mono">${esc(r)}</h3><span class="aside">${groups[r].length} open</span></div>${prTable(st, groups[r])}</div>`).join("")
+      || '<div class="card"><div class="empty-chart">No open pull request matches.</div></div>'}
+    <details class="card table-wrap" id="prs-merged" ${F.mergedOpen ? "open" : ""}><summary class="card-head"><h3>Merged in the last 24 h</h3><span class="aside">${merged.length}</span></summary>
+      ${merged.length ? prTable(st, merged) : '<div class="empty-chart">Nothing merged in the last 24 h.</div>'}</details>`;
+}
+// Every poll re-renders the view: the merged group stays as the reader left it.
+document.addEventListener("toggle", (e) => { if (e.target.id === "prs-merged") F.mergedOpen = e.target.open; }, true);
 
 function fleetGraph(st) {
   return `<div class="view-head"><div><h2>Graph</h2><p>Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn.</p></div></div>
@@ -422,7 +497,7 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

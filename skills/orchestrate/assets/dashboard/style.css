@@ -185,6 +185,9 @@ svg.i > * { vector-effect: non-scaling-stroke; }
 .card-head { display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s4); height: 44px; }
 .card-head h3 { font-size: var(--t-md); }
 .card-head .aside { margin-left: auto; color: var(--ink-3); font-size: var(--t-sm); display: flex; gap: var(--s3); align-items: center; white-space: nowrap; }
+summary.card-head { cursor: pointer; list-style: none; }
+summary.card-head::before { content: "▸"; color: var(--ink-3); }
+details[open] > summary.card-head::before { content: "▾"; }
 .card-body { padding: var(--s3) var(--s4) var(--s4); }
 .card-head + .card-body { padding-top: 0; }
 .empty { padding: var(--s4); color: var(--ink-3); display: flex; align-items: center; gap: var(--s2); }

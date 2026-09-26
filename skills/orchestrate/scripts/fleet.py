@@ -18,6 +18,8 @@ ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls,
 INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
 RUNS_EVERY = 120         # runs, workers, tasks, gates
 PR_TICK = 90             # PR probe tick; each PR is due per its tier below
+SEARCH_PAGES = 3         # 100 PRs a page
+PR_TICK_VIEWED = 30      # the same while a page is open: the search finds a new or merged PR within this
 DISCOVER_EVERY = 600     # re-ask GitHub which PR a branch has, for sessions that had none
 TIER_EVERY = {"hot": 90, "warm": 300, "cold": 900, "done": 86400}  # while no page is open; an open page probes
                                                                    # every OPEN PR each PR tick (one query per 50)
@@ -474,9 +476,12 @@ def read_screen(handle):
 
 # ---------------------------------------------------------------- PRs
 
-PROBE = "number state isDraft updatedAt headRefOid url title commits(last:1){nodes{commit{statusCheckRollup{state}}}}"
+# The probe carries everything the PR page shows except reviewers and threads, and its signature covers the fields
+# that change without moving updatedAt (merge state after a base push, CodeRabbit's status).
+PROBE = ("number state isDraft updatedAt createdAt mergedAt headRefOid url title mergeStateStatus reviewDecision"
+         " author{login} commits(last:1){nodes{commit{statusCheckRollup{state}"
+         ' status{context(name:"CodeRabbit"){state description}}}}}')
 DETAIL = PROBE + (
-    " author{login} reviewDecision"
     " reviewRequests(first:20){nodes{requestedReviewer{__typename ... on User{login avatarUrl} ... on Team{slug}"
     " ... on Bot{login avatarUrl}}}}"
     " latestOpinionatedReviews(first:20){nodes{state submittedAt author{__typename login avatarUrl} commit{oid}}}"
@@ -509,15 +514,43 @@ def discover_query(pairs):
     return "query{" + " ".join(parts) + " rateLimit{cost remaining}}"
 
 
-def rollup(pr):
+def search_query(q, after=None):
+    """One page of a PR search: each PR's key and updated time. Probe fields on a hundred search nodes made GitHub
+    time out (HTTP 502), so the PRs are probed like any other, when due or when their updated time moved."""
+    cursor = f",after:{gql_str(after)}" if after else ""
+    return (f"query{{s: search(query:{gql_str(q)},type:ISSUE,first:100{cursor}){{pageInfo{{hasNextPage endCursor}}"
+            "nodes{... on PullRequest{repository{nameWithOwner} number updatedAt}}} rateLimit{cost remaining}}")
+
+
+def head_commit(pr):
     nodes = (pr.get("commits") or {}).get("nodes") or []
-    st = (((nodes[0] if nodes else {}).get("commit") or {}).get("statusCheckRollup") or {}).get("state")
+    return (nodes[0] if nodes else {}).get("commit") or {}
+
+
+def rollup(pr):
+    st = (head_commit(pr).get("statusCheckRollup") or {}).get("state")
     return {"SUCCESS": "success", "FAILURE": "failure", "ERROR": "failure", "PENDING": "pending",
             "EXPECTED": "pending"}.get(st)
 
 
+def coderabbit(pr):
+    """CodeRabbit's commit status: "in_progress", "reviewed", "rate_limited", "skipped", "failed" or None (no status)."""
+    c = (head_commit(pr).get("status") or {}).get("context") or {}
+    d = (c.get("description") or "").lower()
+    if not c:
+        return None
+    if "rate limit" in d:
+        return "rate_limited"
+    if "skip" in d:
+        return "skipped"
+    if c.get("state") in ("PENDING", "EXPECTED"):
+        return "in_progress"
+    return "reviewed" if c.get("state") == "SUCCESS" else "failed"
+
+
 def probe_sig(pr):
-    return [pr.get("state"), pr.get("updatedAt"), pr.get("headRefOid"), rollup(pr)]
+    return [pr.get("state"), pr.get("updatedAt"), pr.get("headRefOid"), rollup(pr), pr.get("mergeStateStatus"),
+            coderabbit(pr), pr.get("isDraft"), pr.get("reviewDecision")]
 
 
 def is_bot(author):
@@ -561,6 +594,8 @@ def shape_pr(repo, pr, me):
     return {"key": pr_key(repo, pr["number"]), "repo": repo, "number": pr["number"], "url": pr.get("url"),
             "title": mask(pr.get("title"), 200), "state": pr.get("state"), "draft": bool(pr.get("isDraft")),
             "updated": pr.get("updatedAt"), "head": head, "ci": rollup(pr), "decision": pr.get("reviewDecision"),
+            "created": pr.get("createdAt"), "merged_at": pr.get("mergedAt"), "merge_state": pr.get("mergeStateStatus"),
+            "coderabbit": coderabbit(pr),
             "author": (pr.get("author") or {}).get("login"), "reviewers": sorted(reviewers.values(), key=lambda r: r["login"]),
             "threads": threads, "reviews": [{"id": n.get("id"), "state": n.get("state"), "at": n.get("submittedAt"),
                                              "by": (n.get("author") or {}).get("login"),
@@ -731,7 +766,7 @@ class Fleet:
             self.mem["session_phase"] = {sid: s["phase"] for sid, s in sessions.items()}
             touched = {k for k, sid in self.owner_of.items() if sid in moved}
             low = self.rate is not None and self.rate < RATE_FLOOR and mono - self.last["prs"] < 900  # one try per 15 min
-            if force or touched or (mono - self.last["prs"] >= PR_TICK and not low):
+            if force or touched or (mono - self.last["prs"] >= (PR_TICK_VIEWED if viewed else PR_TICK) and not low):
                 try:
                     self.refresh_prs(sessions, cfg, force=force, viewed=viewed, now_due=touched)
                     self.ok("github")
@@ -786,24 +821,53 @@ class Fleet:
                     owner_of.setdefault(key, next(s["id"] for s in sessions.values()
                                                   if s.get("gh_repo") == repo and s["branch"] == branch))
         self.owner_of = owner_of
+        # 2. The search: every PR of mine open, or merged in the last day, whether or not a live worktree still has
+        # its branch. A failed search keeps what the last one found rather than emptying the page.
+        swept, searched = {}, False
+        if self.me:
+            try:
+                for q in (f"is:pr is:open archived:false author:{self.me}",
+                          f"is:pr is:merged author:{self.me} merged:>={iso(now - dt.timedelta(hours=24))}"):
+                    after = None
+                    for _ in range(SEARCH_PAGES):
+                        data, errs = self.graphql(search_query(q, after))
+                        if errs or not (data or {}).get("s"):
+                            raise SourceError("; ".join(errs) or "search returned no data")
+                        self.note_rate(data)
+                        swept |= {pr_key(n["repository"]["nameWithOwner"], n["number"]): n.get("updatedAt")
+                                  for n in data["s"].get("nodes") or [] if n.get("number") and n.get("repository")}
+                        page = data["s"].get("pageInfo") or {}
+                        if not page.get("hasNextPage"):
+                            break
+                        after = page.get("endCursor")
+                searched = True
+            except SourceError as e:
+                errors.append(f"search: {e}")
         live = {f"{s['gh_repo']}@{s['branch']}" for s in sessions.values()}
-        self.prs = {k: v for k, v in self.prs.items() if k in owner_of}
+        self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or not searched}
         self.branch_pr = {k: v for k, v in self.branch_pr.items() if k in live}
-        # 2. Probe every PR whose tier says it is due; 3. detail for the ones that changed.
+        # 3. Probe every PR whose tier says it is due, or that the search saw updated; 4. detail for the ones that
+        # changed. An open page puts a session's PRs on the hot tier and opening it probes them at once; the rest of
+        # mine (a hundred or more, 5 s per 25) keep their tier, which is there for CI moves that leave updatedAt alone.
         due = []
-        for k, sid in owner_of.items():
-            entry = self.prs.get(k)
-            if entry and entry.get("detail") and k not in now_due:
-                t = tier(entry["detail"], sessions.get(sid, {}).get("phase"), now)
+        for k in list(owner_of) + [k for k in swept if k not in owner_of]:
+            sid, entry = owner_of.get(k), self.prs.get(k)
+            det = (entry or {}).get("detail")
+            if det and k not in now_due and swept.get(k, det["updated"]) == det["updated"]:
+                t = tier(det, sessions.get(sid, {}).get("phase"), now)
                 last = parse(entry.get("probed_at"))
-                every = TIER_EVERY["hot"] if (viewed or force) and t != "done" else TIER_EVERY[t]
-                if last and (now - last).total_seconds() < every - 5 and not (force and t != "done"):
+                every = TIER_EVERY["hot"] if (viewed or force) and sid and t != "done" else TIER_EVERY[t]
+                if last and (now - last).total_seconds() < every - 5 and not (force and sid and t != "done"):
                     continue
             due.append(k)
         changed, new_sig = [], {}
-        for i in range(0, len(due), 50):
-            chunk = due[i:i + 50]
-            data, errs = self.graphql(pr_query(chunk, PROBE))
+        for i in range(0, len(due), 25):  # 50 probes to a query took over 10 s and at times timed out
+            chunk = due[i:i + 25]
+            try:
+                data, errs = self.graphql(pr_query(chunk, PROBE))
+            except SourceError as e:  # one slow chunk must not cost the others their read
+                errors.append(str(e))
+                continue
             errors += errs
             self.note_rate(data)
             for j, k in enumerate(chunk):
@@ -818,7 +882,11 @@ class Fleet:
                 entry["probed_at"] = iso(now)
         for i in range(0, len(changed), 25):
             chunk = changed[i:i + 25]
-            data, errs = self.graphql(pr_query(chunk, DETAIL))
+            try:
+                data, errs = self.graphql(pr_query(chunk, DETAIL))
+            except SourceError as e:
+                errors.append(str(e))
+                continue
             errors += errs
             self.note_rate(data)
             for j, k in enumerate(chunk):
@@ -827,7 +895,8 @@ class Fleet:
                     continue
                 cur = shape_pr(k.split("#")[0], pr, self.me)
                 prev = self.prs[k].get("detail")
-                for e in pr_events(prev, cur, self.me):
+                # Events (the timeline, pr-events.jsonl) stay with the PRs a session owns.
+                for e in pr_events(prev, cur, self.me) if k in owner_of else ():
                     self.emit_pr_event(cur, e, sessions.get(owner_of.get(k)), now)
                 self.prs[k]["detail"], self.prs[k]["probe"] = cur, new_sig[k]
                 self.fetch_avatars(cur)
@@ -982,14 +1051,19 @@ class Fleet:
                 items.append({"key": f"gate:{g['id']}", "type": "approval", "session": root, "title": mask(g.get("question"), 160),
                               "project": task_project.get(g.get("task_id")),
                               "detail": ", ".join(map(str, g.get("options") or [])), "at": g.get("created_at"), "source": "orca-gate"})
-        # PRs: live items attached to the session that owns the PR.
+        # PRs: every one found, with the session that owns it when one does. Only an owned PR raises items: the
+        # search finds every PR of mine, and a PR no session works on is the PR page's to show, not the inbox's.
         prs = []
-        for k, sid in self.owner_of.items():
-            det = (self.prs.get(k) or {}).get("detail")
+        for k, entry in self.prs.items():
+            det, sid = entry.get("detail"), self.owner_of.get(k)
             if not det:
                 continue
-            prs.append({f: det[f] for f in ("key", "number", "url", "title", "state", "ci", "decision", "reviewers", "updated")}
-                       | {"session": sid})
+            prs.append({f: det.get(f) for f in ("key", "repo", "number", "url", "title", "state", "draft", "author", "ci",
+                                                "decision", "merge_state", "coderabbit", "reviewers", "created", "updated",
+                                                "merged_at")}
+                       | {"session": sid, "unresolved": sum(not t["resolved"] for t in det["threads"])})
+            if not sid:
+                continue
             for it in pr_items(det, self.me, cfg):
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
         # Skill-side items and sync state.

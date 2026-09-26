@@ -13,6 +13,7 @@ EVERY = 300           # seconds between checks while nothing is off
 GRACE_S = 90          # re-read after this before a difference counts; longer than the fleet's idle tick (60 s)
 ACTIVITY_LAG_S = 300  # a session's shown last activity may trail its agents' own times by this much
 PR_OVERDUE_S = fleet.TIER_EVERY["cold"] + GRACE_S  # an open PR is probed at least this often, page open or not
+MINE_OVERDUE_S = fleet.PR_TICK + GRACE_S  # a PR of mine is swept by the search every PR tick
 PR_BATCH = 50
 BAD_TEXT_RE = re.compile(r"\b(None|null|undefined|NaN)\b")
 
@@ -21,6 +22,8 @@ TITLES = {
     "session_ghost": "Orca 에서 사라진 세션이 대시보드에 남음",
     "tree_parent": "세션 트리의 부모가 어긋남",
     "pr_state": "GitHub 에서 닫힌 PR 이 열린 채로 보임",
+    "pr_missing": "GitHub 에서 열린 내 PR 이 대시보드에 없음",
+    "pr_stale": "PR 이 GitHub 의 마지막 갱신보다 오래된 상태로 보임",
     "item_answered": "이미 답한 턴 항목이 남음",
     "mail_answered": "답장이 간 질문 메일이 남음",
     "prompt_gone": "끝난 입력·권한 대기가 남음",
@@ -32,25 +35,36 @@ CHECKS = tuple(TITLES)
 
 
 def read_live(f, state):
-    """A fresh read of what the state claims to show: Orca's worktrees, terminals and inbox, and GitHub's state of
-    every PR the page shows open (a table row or an item). Raises fleet.SourceError when Orca cannot be read."""
+    """A fresh read of what the state claims to show: Orca's worktrees, terminals and inbox, GitHub's state of
+    every PR the page shows open (a table row or an item), and every open PR of mine ("mine", None when unread).
+    Raises fleet.SourceError when Orca cannot be read."""
     fast = f.fetch_fast()
     keys = {p["key"] for p in state.get("prs") or [] if p.get("state") == "OPEN"}
     keys |= {pr_of(i) for i in state.get("items") or [] if i.get("source") == "github"} - {None}
-    prs = {}
+    prs, mine = {}, None
     if f.rate is None or f.rate >= fleet.RATE_FLOOR:
         keys = sorted(keys)
         for n in range(0, len(keys), PR_BATCH):
             chunk = keys[n:n + PR_BATCH]
             try:
-                data, _ = f.graphql(fleet.pr_query(chunk, "state mergedAt closedAt"))
+                data, _ = f.graphql(fleet.pr_query(chunk, "state mergedAt closedAt updatedAt"))
             except fleet.SourceError:
                 break
             for j, k in enumerate(chunk):
                 pr = (data.get(f"p{j}") or {}).get("pullRequest")
                 if pr:
                     prs[k] = pr
-    return {**fast, "prs": prs}
+        if state.get("me"):
+            q = fleet.gql_str(f"is:pr is:open archived:false author:{state['me']}")
+            try:
+                data, errs = f.graphql(f"query{{open: search(query:{q},type:ISSUE,first:100){{nodes{{... on PullRequest"
+                                       "{repository{nameWithOwner} number createdAt updatedAt}}}}")
+            except fleet.SourceError:
+                data, errs = {}, ["search failed"]
+            if not errs and "open" in data:
+                mine = {fleet.pr_key(n["repository"]["nameWithOwner"], n["number"]): n
+                        for n in data["open"].get("nodes") or [] if n.get("number")}
+    return {**fast, "prs": prs, "mine": mine}
 
 
 def pr_of(item):
@@ -113,6 +127,20 @@ def findings(state, live, probed, cfg, now):
         seen_after = probed.get(k) and changed and probed[k] > changed + dt.timedelta(seconds=GRACE_S)
         if seen_after or (changed and (gen - changed).total_seconds() > PR_OVERDUE_S):
             out["pr_state"].append((k, f"{label}: 대시보드 OPEN, GitHub {pr['state']} ({fleet.iso(changed)})"))
+
+    # PRs the page lacks or shows behind GitHub, past the time the collector's sweep had to catch them.
+    mine = live.get("mine")
+    rows = {p["key"]: p for p in state.get("prs") or []}
+    for k, pr in sorted((mine or {}).items()):
+        created = fleet.parse(pr.get("createdAt"))
+        if k not in rows and created and (gen - created).total_seconds() > MINE_OVERDUE_S:
+            out["pr_missing"].append((k, f"{k}: GitHub OPEN ({fleet.iso(created)} 생성), 대시보드에 없음"))
+    for k, label in sorted(shown.items()):
+        live_at = fleet.parse(((mine or {}).get(k) or (live.get("prs") or {}).get(k) or {}).get("updatedAt"))
+        shown_at = fleet.parse((rows.get(k) or {}).get("updated"))
+        overdue = MINE_OVERDUE_S if k in (mine or {}) else PR_OVERDUE_S
+        if live_at and shown_at and live_at > shown_at and (gen - live_at).total_seconds() > overdue:
+            out["pr_stale"].append((k, f"{label}: 보이는 갱신 {fleet.iso(shown_at)}, GitHub {fleet.iso(live_at)}"))
 
     # Needs you items that are already dealt with.
     answered = fleet.answered_mail(live.get("messages") or [])
