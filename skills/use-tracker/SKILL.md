@@ -111,7 +111,7 @@ it:
 
 ```bash
 printf '파생: ENG-12 · 원인: 리뷰 지적\n완료 조건: 2. <exit item>\n\n<what, why, acceptance>\n' > /tmp/body.md
-python3 $T create --project P --title "..." --body-file /tmp/body.md --label follow-up --related ENG-12
+python3 $T create --project P --title "..." --body-file /tmp/body.md --label follow-up --related ENG-12 --parent ENG-1   # ENG-1: the epic; no --parent inside a program
 ```
 
 The `follow-up` label must already exist in the tracker (Linear labels are per team/workspace).
