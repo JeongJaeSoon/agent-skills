@@ -182,14 +182,16 @@ assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/
 # orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
-assert co({"dispatchId": "d1", "outcome": "succeeded"})[-1] == "  orca worktree rm --worktree path:/w/1"
+done = co({"dispatchId": "d1", "outcome": "succeeded"})
+assert done[-2] == "  orca worktree rm --worktree path:/w/1", done
+assert "scan --kinds codex --plan /tmp/reap-d1.json && " in done[-1] and done[-1].endswith("reap --plan /tmp/reap-d1.json"), done
 assert co('{"dispatchId": "d1", "outcome": "succeeded"}') == co({"dispatchId": "d1", "outcome": "succeeded"})
 assert not any("worktree rm" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
 failed = co({"dispatchId": "d1", "outcome": "failed"})
 assert "--retry-of d1 --task t1 " in failed[0] and not any(l.strip().startswith("orca worktree rm") for l in failed), failed
 assert "not in `orca worktree list`" in co({"dispatchId": "d9", "outcome": "succeeded"})[0]
 spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktreeId": "wx"}}]
-assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"
+assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-2] == "  orca worktree rm --worktree path:'/w/a b'"
 assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
                        {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
 # A released worker's repeated worker_done comes back as Orca's refusal; orch wait acks it without waking. A refusal

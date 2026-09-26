@@ -68,6 +68,7 @@ Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never fr
 import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, shlex, subprocess, sys, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
+REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 PASSING = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 ACTIONABLE = {"worker_done", "escalation", "question"}
@@ -1439,6 +1440,9 @@ def close_out(msgs, workers, worktrees):
         else:
             out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks and --run-hooks in end-session §4),"
                     " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]
+            # A Codex plugin broker outlives its worker; once the card is gone, reap.py targets it (cwd missing).
+            plan, reap = f"/tmp/reap-{d}.json", f"python3 {shlex.quote(str(REAP))}"
+            out.append(f"  {reap} scan --kinds codex --plan {plan} && {reap} reap --plan {plan}")
     return out
 
 
