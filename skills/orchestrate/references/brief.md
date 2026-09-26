@@ -82,7 +82,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 ## Rules for filling it
 
 - The spec starts with the ticket ID, never `/`. The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
-- The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program.
+- The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was ENG-278). Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
 - **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "Keep one background wait running" in `top-level.md` is the orchestrator's rule, not a worker's.

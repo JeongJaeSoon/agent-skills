@@ -65,7 +65,7 @@ GOAL        Catch what per-PR CI cannot: tickets that do not do what they claim,
             works end to end, and code that drifted from the design.
 LANES       Run all three continuously. Give a unit its own subagent (swarm) when it is sizeable and independent
             (driving one ticket on main, one E2E round), in parallel; do small checks yourself. Before each
-            round, check that what each lane drives through (a browser connection, a monitoring login, a
+            round, check that what each lane drives through (the host's own browser rather than an extension, a monitoring login, a
             local harness) is up; a lane that cannot run is reported at once with the fallback you switched
             to, never dropped silently.
   1 Ticket verification  For every landed ticket (orch status, `landed` events), one verifier
