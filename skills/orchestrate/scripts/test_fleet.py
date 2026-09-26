@@ -537,8 +537,8 @@ f.rate = None
 world.prs[43]["state"], world.prs[43]["commits"], world.worktrees[3]["agents"][0]["state"] = "OPEN", ci43, "waiting"
 f.graphql = real_gql
 
-# Items settled in reality leave on their own. A turn item goes once the same agent finishes a later turn (not while
-# it is still working on it), or once its worktree is gone.
+# Items settled in reality leave on their own. A turn item goes once its pane gets a later prompt or starts a later
+# turn, once the same agent finishes a later turn, or once its worktree is gone.
 def resolved(st):
     return {e["text"].split(":")[0] for e in st["timeline"] if e["kind"] == "item_resolved"}
 
@@ -546,12 +546,26 @@ def resolved(st):
 scratch = world.worktrees[4]["agents"][0]
 st = f.tick(force=True)
 assert [i["session"] for i in items(st, "login")] == ["wt-scratch"] and not resolved(st), "the same last turn keeps it"
+clock[0] += dt.timedelta(hours=1)
+world.worktrees[0]["agents"][0]["prompt"] = "Check on the scratch session."  # another session's prompt is no reply
+st = f.tick(force=True)
+assert items(st, "login") and not resolved(st), "with no reply and no new turn it stays"
 scratch.update(state="working", lastAssistantMessage="Logged in; checking the release script again.")
 st = f.tick(force=True)
-assert items(st, "login"), "a turn still running has not superseded it"
-scratch.update(state="done", lastAssistantMessage="The release script works now.")
+assert not items(st, "login") and resolved(st) == {"answered"}, "a turn under way means it was answered"
+ask = "Login required: run `gh auth login` in a terminal, then tell me."
+scratch.update(state="done", lastAssistantMessage=f"Still no GitHub access.\n{ask}")
 st = f.tick(force=True)
-assert not items(st, "login") and resolved(st) == {"superseded"}, items(st, "login")
+assert len(items(st, "login")) == 1, items(st, "login")
+clock[0] += dt.timedelta(minutes=5)
+scratch["prompt"] = "Logged in, go on."  # answered before Orca shows the new turn
+st = f.tick(force=True)
+assert not items(st, "login"), items(st, "login")
+scratch.update(lastAssistantMessage=f"Access expired again.\n{ask}")
+f.tick(force=True)
+scratch.update(lastAssistantMessage="The release script works now.")
+st = f.tick(force=True)
+assert not items(st, "login") and resolved(st) == {"answered", "superseded"}, (items(st, "login"), resolved(st))
 login = world.worktrees[1]
 login["agents"][0]["lastAssistantMessage"] = "Shall I merge #41?"
 st = f.tick(force=True)
@@ -605,6 +619,20 @@ for sid in got:
         sid, hops = got[sid][1], hops + 1
         assert hops < len(got), got
     assert sid == "top", got
+
+# A session's last activity is the later of Orca's worktree time and its agents' own: the worktree time stands still
+# while an agent in it works.
+def last_activity(wt_at, *agent_at):
+    fast = {"worktrees": [{"worktreeId": "w", "path": "/work/w", "lastActivityAt": wt_at,
+                           "agents": [{"paneKey": f"p{n}", "state": "working", "updatedAt": at} for n, at in enumerate(agent_at)]}],
+            "terminals": []}
+    return fleet.build_sessions(fast, {"runs": [], "workers": [], "tasks": []}, {})[0]["w"]["last_activity"]
+
+
+hour = 3600 * 1000
+assert last_activity(10 * hour, 20 * hour, 15 * hour) == fleet.ms_iso(20 * hour)
+assert last_activity(10 * hour, 5 * hour) == fleet.ms_iso(10 * hour)
+assert last_activity(10 * hour) == fleet.ms_iso(10 * hour) and last_activity(None) is None
 
 # Classification of a finished turn's last lines.
 assert fleet.classify("Build done. E2E test failed on the login page.") == "verify_failed"

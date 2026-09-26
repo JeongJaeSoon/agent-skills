@@ -290,7 +290,9 @@ def build_sessions(fast, runs, cfg):
             "id": w["worktreeId"], "name": mask(w.get("displayName") or pathlib.Path(w.get("path", "")).name, 120),
             "repo_name": w.get("repo"), "branch": short_branch(w.get("branch")), "path": w.get("path"),
             "status": w.get("status"), "orca_unread": bool(w.get("unread")), "comment": mask(w.get("comment"), 200),
-            "last_activity": ms_iso(w.get("lastActivityAt")), "orca_parent": w.get("parentWorktreeId"),
+            # Orca's worktree time does not move while an agent in it works, so the agents' own times count too.
+            "last_activity": max(filter(None, [ms_iso(w.get("lastActivityAt"))] + [a["updated"] for a in agents]), default=None),
+            "orca_parent": w.get("parentWorktreeId"),
             "linked_pr": w.get("linkedPR"), "agents": agents, "terminals": terms,
             "phase": phase_of(agents, terms), "kind": "task", "parent": None, "run": None, "dispatch": None,
             "dispatch_status": None, "task_title": None}
@@ -934,6 +936,13 @@ class Fleet:
                     for it in sticky.values():
                         if it.get("open") and it["key"] != k and it["key"].startswith(f"msg:{pane}:"):
                             self.resolve(it, "superseded", now)
+                # Someone has already replied in this pane: a prompt after the item, or a turn under way (items are
+                # raised only on a finished turn, so any other state means a later one has begun).
+                replied = (prompts.get(pane) or {}).get("at") or ""
+                for it in sticky.values():
+                    if (it.get("open") and it["key"].startswith(f"msg:{pane}:")
+                            and (a["state"] in ("working", "waiting") or replied > (it.get("at") or ""))):
+                        self.resolve(it, "answered", now)
                 if a["state"] == "waiting":
                     items.append({"key": f"wait:{pane}:{a['since']}", "type": "permission", "session": s["id"],
                                   "title": "입력·권한 창에서 대기 중", "detail": a["detail"], "at": a["since"] or iso(now),
