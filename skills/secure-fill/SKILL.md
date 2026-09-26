@@ -1,11 +1,11 @@
 ---
 name: secure-fill
-description: Use when a browser auth screen needs a secret (dev API token, test account password) and the agent must not see the value — "토큰 입력해줘", "비밀번호 칸 채워줘", "로그인 화면에 키 넣어줘", "secure-fill". The agent focuses the field and runs secure-fill; the owner approves each fill with Touch ID; the tool reads the value from the Keychain and puts it into the page itself. Never read, echo, or paste the secret yourself, and never edit the allowlist.
+description: Use when a browser auth screen needs a secret (dev API token, test account password) and the agent must not see the value — "토큰 입력해줘", "비밀번호 칸 채워줘", "로그인 화면에 키 넣어줘", "secure-fill". The agent focuses the field and runs secure-fill; the owner approves each fill with Touch ID unless the allowlist marks the item "approval": "none"; the tool reads the value from the Keychain and puts it into the page itself. Never read, echo, or paste the secret yourself, and never edit the allowlist.
 ---
 
 # Secure fill
 
-비밀번호 관리자와 같은 방식이다. 에이전트는 채우기를 요청만 하고, 사람은 에이전트가 조작할 수 없는 창(Touch ID / 기기 소유자 인증)에서 매번 승인하고, 값은 도구가 브라우저에 직접 넣는다. 값은 argv, 표준 출력, 로그 어디에도 나오지 않는다.
+비밀번호 관리자와 같은 방식이다. 에이전트는 채우기를 요청만 하고, 사람은 에이전트가 조작할 수 없는 창(Touch ID / 기기 소유자 인증)에서 매번 승인하고, 값은 도구가 브라우저에 직접 넣는다. 소유자가 허용 목록에서 `"approval": "none"`으로 둔 항목은 승인 창 없이 채운다. 값은 argv, 표준 출력, 로그 어디에도 나오지 않는다.
 
 ## 에이전트가 할 일
 
@@ -19,7 +19,7 @@ description: Use when a browser auth screen needs a secret (dev API token, test 
 
    `bin/secure-fill`은 같은 일을 하는 래퍼다. 소유자가 `chmod 755 bin/secure-fill`을 해 두면 PATH에서 `secure-fill`로 부를 수 있다.
 
-4. 사람에게 "Touch ID 승인 대기 중"이라고 알린다. 승인할 때까지 명령이 끝나지 않는다.
+4. 사람에게 "Touch ID 승인 대기 중"이라고 알린다. 승인할 때까지 명령이 끝나지 않는다. `"approval": "none"` 항목은 기다리지 않고 바로 끝난다.
 
 결과는 한 줄로 나오고 종료 코드로도 구분된다. 값은 나오지 않는다.
 
@@ -40,12 +40,12 @@ description: Use when a browser auth screen needs a secret (dev API token, test 
 
 1. `--origin`이 `scheme://host[:port]` 꼴인지 보고, 허용 목록에서 item의 origins에 있는지 본다.
 2. 대상 브라우저의 활성 탭 URL을 읽어 origin이 정확히 같은지 본다. Chrome은 AppleScript `URL of active tab of front window`, Orca는 `orca get --what url`.
-3. Touch ID 창을 띄운다. 이유 문구에 item 이름과 origin이 나온다. 승인이 없으면 값을 읽지 않는다.
+3. Touch ID 창을 띄운다. 이유 문구에 item 이름과 origin이 나온다. 승인이 없으면 값을 읽지 않는다. item이 `"approval": "none"`이면 이 단계를 건너뛴다.
 4. 값을 읽는다. Keychain generic password(service `secure-fill`, account = item 이름)가 먼저, 없으면 item의 `env` 변수.
 5. 채운다.
    - Chrome, "Allow JavaScript from Apple Events"가 켜져 있으면: 페이지 안에서 `location.origin`을 다시 확인하고 같은 스크립트에서 값을 넣는다(확인과 입력 사이에 탭이 바뀔 틈이 없다). 스크립트는 `osascript`의 stdin으로 간다.
    - 그 밖에는 클립보드: Swift 헬퍼가 stdin으로 값을 받아 `org.nspasteboard.ConcealedType`·`TransientType` 표시를 붙여 클립보드에 쓰고, 브라우저를 앞으로 가져와 Cmd+V를 보내고, 3초 뒤 그동안 아무도 클립보드를 바꾸지 않았으면 원래 문자열로 되돌린다. 붙여넣기 직전에 origin을 다시 읽는다. Orca는 페이지에 포커스와 입력칸 포커스가 있는지도 확인한다. 그렇지 않으면 Cmd+V가 에이전트 자신의 터미널에 들어갈 수 있다.
-6. `~/.local/state/secure-fill/log.jsonl`(디렉터리 0700, 파일 0600)에 시각·item·origin·대상·결과·방법을 남긴다.
+6. `~/.local/state/secure-fill/log.jsonl`(디렉터리 0700, 파일 0600)에 시각·item·origin·대상·승인 방식(`touch-id`·`none`)·결과·방법을 남긴다.
 
 ## 소유자 설정
 
@@ -55,7 +55,7 @@ description: Use when a browser auth screen needs a secret (dev API token, test 
    security add-generic-password -s secure-fill -a dev-token -T "" -w
    ```
 
-   `-T ""`는 신뢰 앱 목록을 비운다. macOS 문서대로라면 이후 어떤 프로세스든 값을 읽을 때 Keychain이 확인 창을 띄운다. 에이전트가 이 도구를 거치지 않고 `security`로 직접 읽으려 해도 걸린다. 대신 채울 때마다 Touch ID와 Keychain 확인을 둘 다 거친다. 데모에서는 이 동작을 확인하지 못했다(에이전트 세션의 셸 가드가 `find-generic-password -w` 실행을 막았다). 첫 사용 때 확인 창이 뜨는지 직접 본다. `-T ""`를 빼면 `security`가 신뢰 앱으로 들어가 같은 사용자의 어떤 프로세스든 묻지 않고 읽을 수 있다.
+   `-T ""`는 신뢰 앱 목록을 비운다. macOS 문서대로라면 이후 어떤 프로세스든 값을 읽을 때 Keychain이 확인 창을 띄운다. 에이전트가 이 도구를 거치지 않고 `security`로 직접 읽으려 해도 걸린다. 대신 채울 때마다 Touch ID와 Keychain 확인을 둘 다 거친다(`"approval": "none"` 항목은 Keychain 확인만). 데모에서는 이 동작을 확인하지 못했다(에이전트 세션의 셸 가드가 `find-generic-password -w` 실행을 막았다). 첫 사용 때 확인 창이 뜨는지 직접 본다. `-T ""`를 빼면 `security`가 신뢰 앱으로 들어가 같은 사용자의 어떤 프로세스든 묻지 않고 읽을 수 있다.
 
    확인 창에서는 **허용(Allow)**만 누른다. **항상 허용(Always Allow)**을 한 번 누르면 `/usr/bin/security`가 그 항목의 신뢰 목록에 영구히 들어가 이 층이 사라진다. 되돌리려면 항목을 지우고 다시 만든다.
 
@@ -68,6 +68,8 @@ description: Use when a browser auth screen needs a secret (dev API token, test 
                        "keychain": {"service": "secure-fill", "account": "staging-token"}}
    }}
    ```
+
+   Touch ID 없이 채울 항목에는 `"approval": "none"`을 적는다(기본값 `"touch-id"`). 예: `"dev-token": {"origins": ["https://dev.example.test"], "approval": "none"}`. 이 설정은 편의 기능이지 보안 경계가 아니다(아래 "한계").
 
    origin은 경로 없이 `scheme://host[:port]`만 적는다. 기본 포트(443, 80)는 적어도 빠진 것과 같다. `http`와 `https`, 하위 도메인은 서로 다르다.
 
@@ -87,7 +89,8 @@ description: Use when a browser auth screen needs a secret (dev API token, test 
 ## 한계
 
 - 이 도구는 값이 에이전트의 argv·출력·로그를 거치지 않게 한다. 페이지에 들어간 값은 페이지를 조작할 수 있는 에이전트(`orca eval`, DevTools, Apple Events JavaScript)가 `input.value`로 읽을 수 있다. 막는 것은 규칙과 Keychain ACL이다.
-- 도구, 헬퍼, 허용 목록은 모두 에이전트와 같은 사용자 권한 아래에 있다. Touch ID 창은 사람이 무엇을 승인하는지 보여 주지만, 조작된 도구에 맞서는 층은 Keychain의 `-T ""` ACL과 root 소유 허용 목록이다.
+- 도구, 헬퍼, 허용 목록은 모두 에이전트와 같은 사용자 권한 아래에 있다. Touch ID 창은 사람이 무엇을 승인하는지 보여 주지만, 에이전트가 도구를 우회하려 들면 막지 못한다(모듈을 직접 불러 게이트를 빼거나, 캐시의 헬퍼를 바꿔치기할 수 있다). 조작된 도구에 맞서는 층은 Keychain의 `-T ""` ACL과 root 소유 허용 목록이다.
+- `"approval": "none"`은 이 한계 안에서 사람의 클릭을 줄이는 설정이다. 이 설정을 써도 값은 argv·출력·로그에 나오지 않고 origin도 확인한다. Keychain 확인 창까지 없애려고 항목을 `-T ""` 없이 만들면, 같은 사용자의 어떤 프로세스든 `security`로 값을 읽을 수 있어 규칙과 셸 가드만 남는다. 승인 없이 채울 항목은 그 정도 보호로 충분한 개발·테스트용 값으로 둔다.
 - Chrome에서 JavaScript 경로가 꺼져 있으면 도구는 입력칸 포커스를 확인하지 못한다. 주소창에 포커스가 있으면 값이 주소창에 들어간다(제출은 하지 않지만 검색 제안 요청이 나갈 수 있다). 입력칸을 먼저 클릭한다.
 - 클립보드는 문자열만 되돌린다. 이미지 등 다른 형식은 복원하지 않고 비운다.
 

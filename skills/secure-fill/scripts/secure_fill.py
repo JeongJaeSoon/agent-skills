@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fill a secret into a browser field after the owner approves it with Touch ID.
+"""Fill a secret into a browser field after the owner approves it with Touch ID (unless the item says "approval": "none").
 
 The value is read only after approval, reaches the browser through stdin of a child
 process (never argv), and is never printed or logged. See ../SKILL.md.
@@ -41,6 +41,7 @@ HINT = {
     "fill-failed": "could not deliver the value to the browser; see the reason and SKILL.md owner setup",
     "config-error": "the owner's allowlist is malformed; ask the owner to fix it",
 }
+APPROVALS = ("touch-id", "none")
 ITEM_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 DEFAULT_PORT = {"http": 80, "https": 443}
 
@@ -77,7 +78,7 @@ def parse_origin_arg(text):
 
 
 def load_allowlist(text):
-    """{"items": {name: {"origins": [...], "keychain": {...}?, "env": NAME?}}} -> {name: entry}."""
+    """{"items": {name: {"origins": [...], "keychain": {...}?, "env": NAME?, "approval": ...?}}} -> {name: entry}."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
@@ -101,11 +102,15 @@ def load_allowlist(text):
             raise Outcome("config-error", f"{name}: keychain must be an object of strings")
         if env is not None and not isinstance(env, str):
             raise Outcome("config-error", f"{name}: env must be a string")
+        approval = entry.get("approval", "touch-id")
+        if approval not in APPROVALS:
+            raise Outcome("config-error", f"{name}: approval must be one of {', '.join(APPROVALS)}")
         out[name] = {
             "origins": set(parsed),
             "keychain": {"service": kc.get("service", "secure-fill"), "account": kc.get("account", name),
                          "path": kc.get("path")},
             "env": env,
+            "approval": approval,
         }
     return out
 
@@ -272,7 +277,7 @@ def fill_secret(item, origin, browser, allowlist, approve, sources, selector=Non
     current = browser.current_origin()
     if current != origin:
         raise Outcome("origin-mismatch", f"active tab is {current or 'unknown'}")
-    if not approve(f'fill "{item}" into {origin} ({browser.name})'):
+    if entry["approval"] != "none" and not approve(f'fill "{item}" into {origin} ({browser.name})'):
         raise Outcome("denied")
     secret = next((s for s in (src(entry) for src in sources) if s), None)
     if secret is None:
@@ -310,9 +315,12 @@ def main(argv=None, run=_run, approve=None, sources=None, config=CONFIG, log=LOG
             raise Outcome("not-allowed", f"no allowlist at {config}")
         if os.access(config, os.W_OK):
             warnings.append("allowlist-writable-by-this-user")
+        allowlist = load_allowlist(text)
+        if a.item in allowlist:
+            record["approval"] = allowlist[a.item]["approval"]
         browser = Chrome(run) if a.target == "chrome" else Orca(run, a.orca_page)
         record["method"] = fill_secret(
-            a.item, origin, browser, load_allowlist(text),
+            a.item, origin, browser, allowlist,
             approve or touch_id_gate(run), sources or [keychain_source(run), env_source],
             a.selector, a.submit)
         result, reason = "filled", ""

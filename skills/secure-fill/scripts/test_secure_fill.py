@@ -88,12 +88,14 @@ class Allowlist(unittest.TestCase):
         self.assertEqual(entry["origins"], {ORIGIN, "http://127.0.0.1:8765"})
         self.assertEqual(entry["keychain"], {"service": "secure-fill", "account": "dev-token", "path": None})
         self.assertEqual(entry["env"], "SF_TEST_TOKEN")
+        self.assertEqual(entry["approval"], "touch-id")
 
     def test_errors(self):
         bad = ["not json", "[]", '{"items": []}', '{"items": {"a b": {"origins": ["https://x.test"]}}}',
                '{"items": {"a": {"origins": []}}}', '{"items": {"a": {"origins": ["https://x.test/path"]}}}',
                '{"items": {"a": {"origins": ["https://x.test"], "env": 1}}}',
-               '{"items": {"a": {"origins": ["https://x.test"], "keychain": {"service": 2}}}}']
+               '{"items": {"a": {"origins": ["https://x.test"], "keychain": {"service": 2}}}}',
+               '{"items": {"a": {"origins": ["https://x.test"], "approval": "never"}}}']
         for text in bad:
             with self.assertRaises(sf.Outcome, msg=text) as cm:
                 sf.load_allowlist(text)
@@ -162,6 +164,26 @@ class Flow(unittest.TestCase):
         self.assertEqual(rc, sf.EXIT["denied"])
         self.assertEqual(self.source_calls, [])
         self.assertEqual(json.loads(log)["result"], "denied")
+
+    def unattended(self):
+        allow = json.loads(json.dumps(ALLOW))
+        allow["items"]["dev-token"]["approval"] = "none"
+        self.config.write_text(json.dumps(allow))
+
+    def test_unattended_item_skips_gate(self):
+        self.unattended()
+        run = FakeRun()
+        rc, out, log = self.go(run, approve=False)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.gate_calls, [])
+        self.assertEqual(json.loads(log)["approval"], "none")
+        self.assert_no_secret(run, out, log)
+
+    def test_unattended_item_still_checks_origin(self):
+        self.unattended()
+        rc, _, _ = self.go(FakeRun(url="https://dev.example.test.evil.example/login"))
+        self.assertEqual(rc, sf.EXIT["origin-mismatch"])
+        self.assertEqual(self.source_calls, [])
 
     def test_origin_mismatch_skips_gate(self):
         run = FakeRun(url="https://dev.example.test.evil.example/login")
