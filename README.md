@@ -77,6 +77,12 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `orchestrate` | 코디네이터가 여러 티켓을 병렬로 착지시킬 때. 착지 순서, 독점 레인, main 가디언, QA 리드, 대시보드 |
 | `measure-delivery` | 프로젝트가 실제로 어땠는지: 후속 티켓 증가, 재작업, 토큰 |
 
+**머신 하나**
+
+| 스킬 | 언제 |
+|---|---|
+| `reap-resources` | 죽은 세션이 남긴 Codex broker 트리, 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. resource steward가 주기로 부른다 |
+
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
 **글쓰기**: `write-plainly`(한국어·영어 문체), `prune-comments`(diff의 주석 정리).
@@ -100,7 +106,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

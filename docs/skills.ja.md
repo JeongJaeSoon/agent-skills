@@ -1,7 +1,7 @@
-<!-- translated-from: f6320d7 -->
+<!-- translated-from: c8ef931 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル27個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
+`agent-skills` プラグインに入っているスキル28個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
 
 ## 流れ
 
@@ -11,6 +11,8 @@
 プロジェクト  orchestrate ─ 各ワーカーで deliver-ticket ─ orch land
               ─ main ガーディアン・QA リード ─ ダッシュボード
               └ 終わったら measure-delivery
+マシン1台     reap-resources（終わったセッションが残したプロセス・Docker・ブランチの片付け、
+              resource steward が定期的に）
 どこでも      use-tracker（チケット）· use-notes（ノート）
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
@@ -114,7 +116,7 @@
   - `references/`
     - `brief.md`: ワーカーのブリーフのテンプレート。
     - `landing.md`: レーン、着地の順序、stack、`land` の終了コード。
-    - `roles.md`: ガーディアン、QA リード、flow improver（進行中のスキル改善）、resource steward（終わった worktree・プロセスの片付け）。
+    - `roles.md`: ガーディアン、QA リード、flow improver（進行中のスキル改善）、resource steward（終わった worktree の片付け、`reap-resources` の定期実行と警報）。
     - `program-note.md`: プログラムノートのテンプレート。
     - `dashboard.md`: ダッシュボードの説明。
     - `top-level.md`: 最上位 orchestrator モード。
@@ -125,7 +127,7 @@
     - `mailbox_guard.py`: 古いインストールから hook へ移行するための shim。
     - テストファイル。
   - `assets/dashboard/`: ダッシュボードの画面。
-- **関連:** ワーカーは `deliver-ticket` に従います。`use-tracker`、`use-notes`、`create-verification-skill`、`show-me-your-work`、`swarm`、`measure-delivery`、`reflect`、`end-session` を利用します。
+- **関連:** ワーカーは `deliver-ticket` に従います。`use-tracker`、`use-notes`、`create-verification-skill`、`show-me-your-work`、`swarm`、`measure-delivery`、`reap-resources`、`reflect`、`end-session` を利用します。
 
 ### measure-delivery
 - **使う場面:** 「성과 측정」（成果の測定）、フォローアップチケットが増えたか減ったか、手戻り、トークンのコストを尋ねられたとき。`orchestrate` の Close の段階でも呼ばれます。
@@ -136,6 +138,20 @@
   - 漏れ出た欠陥の候補（Bug ラベル、main CI の失敗、revert）を探します。
   - PR あたりの Claude・Codex のトークンを計算します。codex-companion の review・task はセッションファイルを残さず数えられないので、合う Codex セッションがなければ 0 ではなく `미측정`（未測定）と記録します。
   - Linear で正確な終了時刻が必要なら、MCP で書き出したファイルを使います。求められた数字を先に見せ、レポートはノートに保存します。
+
+## マシン1台
+
+### reap-resources
+- **使う場面:** 「방치 리소스 정리해줘」（放置リソースを片付けて）、「codex 프로세스 너무 많아」（codex のプロセスが多すぎる）、メモリや CPU を何が使っているか見たいとき、そして resource steward の定期点検。プログラムがなくても使えます。
+- **内容:** `scripts/reap.py scan` は読むだけで、種類ごとの個数・プロセス・RSS・CPU・経過時間と、片付け対象の一覧を出します。`reap --plan` はもう一度スキャンし、その一覧のうち今も対象で、同一性（pid と開始時刻、ブランチの tip）が変わっていないものだけを片付けます。
+  - **codex:** Codex プラグインの broker ツリー。`--cwd` のパスがないか、そのパスで動く `claude` がなく N 時間（既定 6）が過ぎたときだけ、ツリーごと終了します。
+  - **orphan:** ppid が 1 で、実行ファイルが設定の `reap.orphan_paths`（テストのキャッシュパス）の下にあるプロセス。
+  - **docker:** コンテナが1つもない compose project の dangling volume と、どのコンテナも使っていないタグなしイメージ。コンテナのある project、その名前を含む volume、compose ラベルのない volume は残して報告だけします。
+  - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
+  - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
+  - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（Codex のプロセス数と RSS、孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
+- **同梱:** `scripts/reap.py`、テストファイル。
+- **関連:** `orchestrate` の resource steward がラウンドごとに呼び、警報が残ればダッシュボードの受信箱で人に知らせます。
 
 ## アダプター
 
@@ -376,7 +392,7 @@
 
 ## 設定ファイル
 
-`~/.claude/agent-skills.json` で、トラッカーとノートストアを選びます。ファイルがなければ Linear と Obsidian の vault `Private` を使います。プログラムの `program.json` に書いた値が、このファイルより優先されます。
+`~/.claude/agent-skills.json` で、トラッカーとノートストアを選びます。ファイルがなければ Linear と Obsidian の vault `Private` を使います。`reap-resources` の基準時間、テストのキャッシュパス、警報の閾値もこのファイルの `reap` に置きます（形式はそのスキルの SKILL.md）。プログラムの `program.json` に書いた値が、このファイルより優先されます。
 
 ```json
 {
@@ -464,6 +480,7 @@ pstack のスキル47個（原則23個と、その他24個）のうち、原則2
 - **チケットの流れ:** `write-ticket`、`deliver-ticket`、`handoff-ticket`、`dispatch-card`、`end-session`。Orca のカードとトラッカーを前提にした、チケット一つの最初から最後までです。
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
+- **マシンの手入れ:** `reap-resources`。
 - **フック:** 権限の判定（`guard.py`）、圧縮後の再オリエンテーション（`reorient.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）。
 
 ### upstream との同期状況
