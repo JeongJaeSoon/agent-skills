@@ -1114,11 +1114,14 @@ def slow_loop(interval):
 
 def fast_loop(interval):
     """Ledger and notes on change (and every LEDGER_EVERY s), Orca every ORCA_EVERY s."""
-    seen, last_orca, last_write = {}, {}, {}
+    seen, last_orca, last_write, last_code = {}, {}, {}, time.monotonic()
     while True:
         time.sleep(FAST_TICK)
         beat()
         now = time.monotonic()
+        if now - last_code >= CODE_CHECK_S:
+            check_code()
+            last_code = now
         for slug in programs():
             sig = signature(slug)
             orca_due = now - last_orca.get(slug, now) >= ORCA_EVERY and not closed(slug)
@@ -1332,6 +1335,27 @@ def code_mtime():
     return max(f.stat().st_mtime for f in code_files())
 
 
+def git_sha():
+    try:
+        out = subprocess.run(["git", "-C", str(HERE), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (out.stdout.strip() or None) if out.returncode == 0 else None  # None outside a checkout (the plugin cache)
+
+
+CODE_CHECK_S = 30
+
+
+def check_code():
+    """Marks the server stale once the code on disk is not the code it runs (a merge landed after it started), so the
+    page can say so instead of serving old routes as 404s."""
+    try:
+        disk = code_version()
+    except OSError:  # a file mid-replace: the next check reads it whole
+        return
+    HEALTH.update(disk_version=disk, stale=disk != HEALTH.get("version"))
+
+
 HEALTH = {"heartbeat": None}
 
 
@@ -1349,7 +1373,8 @@ def serve(host, port, interval, make_fleet=None):
         sys.exit(f"another orch-dash already serves {home()} (see {home() / '.dash.json'})")
     httpd = http.server.ThreadingHTTPServer((host, port), Handler)  # bind before the loops start
     HEALTH.update(pid=os.getpid(), store=str(home()), version=code_version(), mtime=code_mtime(), port=port,
-                  started_at=iso(utcnow()))
+                  started_at=iso(utcnow()), git=git_sha(), script=str(HERE / "dash.py"))
+    check_code()
     beat()
     write_atomic(home() / ".dash.json", json.dumps(HEALTH))
     threading.Thread(target=slow_loop, args=(interval,), daemon=True).start()

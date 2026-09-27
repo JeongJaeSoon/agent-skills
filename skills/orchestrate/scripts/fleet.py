@@ -28,6 +28,7 @@ EVENTS_KEEP = 400
 ROTATE_BYTES = 5 * 1024 * 1024  # events.jsonl and pr-events.jsonl move to *.1 past this
 STICKY_TYPES = ("approval", "run_command", "login", "verify_failed", "question")
 SETTLED = ("completed", "failed", "abandoned")  # dispatch statuses whose worker has stopped
+AGENT_GONE_S = 600       # a session without an agent this long closes its turn items
 BRANCH_SKIP = {"main", "master", "develop", "trunk"}
 LOGIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?")
 
@@ -188,15 +189,20 @@ def fetch_fast():
 
 
 def fetch_runs():
-    runs = [r for r in orca("orchestration", "run-list").get("runs", []) if not r.get("legacy")
-            and r.get("id") != "run_legacy_local"]
-    workers, cursor = [], None
-    while True:
-        res = orca("orchestration", "worker-list", "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            break
+    listed = orca("orchestration", "run-list").get("runs", [])
+    runs = [r for r in listed if not r.get("legacy") and r.get("id") != "run_legacy_local"]
+    # Without --run, worker-list is scoped to the Run bound to the calling terminal: a server started from a
+    # coordinator's terminal saw only that Run's workers, and mail from every other Run's settled worker stayed open.
+    workers = []
+    for r in listed:
+        cursor = None
+        while True:
+            res = orca("orchestration", "worker-list", "--run", r["id"], "--limit", "100",
+                       *(["--cursor", cursor] if cursor else []))
+            workers += res.get("workers", [])
+            cursor = (res.get("page") or {}).get("nextCursor")
+            if not (res.get("page") or {}).get("hasMore") or not cursor:
+                break
     tasks, gates = [], []
     for r in runs:
         tasks += orca("orchestration", "task-list", "--run", r["id"]).get("tasks", [])
@@ -492,6 +498,14 @@ DETAIL = PROBE + (
 
 def pr_key(repo, number):
     return f"{repo}#{number}"
+
+
+# A bare #n is left out: "step #2" or a PR in another repository would read as a PR of the session's own.
+PR_REF_RE = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)|\b([\w.-]+/[\w.-]+)#(\d+)")
+
+
+def pr_refs(text):
+    return sorted({pr_key(m[1], m[2]) if m[1] else pr_key(m[3], m[4]) for m in PR_REF_RE.finditer(text or "")})
 
 
 def pr_query(keys, body):
@@ -999,7 +1013,8 @@ class Fleet:
                     kind = None if k in sticky else classify(a["last"])
                     if kind and kind != "fyi":
                         sticky[k] = {"key": k, "type": kind, "session": s["id"], "title": first_line(a["last"]),
-                                     "detail": a["last"][-600:], "at": iso(now), "source": "turn", "open": kind != "verify_ok"}
+                                     "detail": a["last"][-600:], "at": iso(now), "source": "turn", "open": kind != "verify_ok",
+                                     "prs": pr_refs(a["last"])}
                         self.event({"at": iso(now), "kind": f"item_{kind}", "session": s["id"], "text": first_line(a["last"])})
                     # The agent has finished a later turn, so what an earlier one asked for has been dealt with or
                     # been asked again (and raised again) at the end of this one.
@@ -1022,13 +1037,34 @@ class Fleet:
             for it in sticky.values():
                 if it.get("open") and it.get("source") == "turn" and it.get("session") not in sessions:
                     self.resolve(it, "session_gone", now)
+        # A session with no agent left has no one to answer its items. Only a read that found some agent can say so,
+        # and only once it has held for AGENT_GONE_S: a single read can miss one worktree's agent.
+        agentless = mem.setdefault("agentless", {})
+        if any(s["agents"] for s in sessions.values()):
+            for sid, s in sessions.items():
+                if s["agents"]:
+                    agentless.pop(sid, None)
+                else:
+                    agentless.setdefault(sid, iso(now))
+            for sid in [sid for sid in agentless if sid not in sessions]:
+                del agentless[sid]
+        gone_before = iso(now - dt.timedelta(seconds=AGENT_GONE_S))
+        for it in sticky.values():
+            s = sessions.get(it.get("session"))
+            if not (it.get("open") and it.get("source") == "turn" and s):
+                continue
+            refs = it["prs"] if "prs" in it else pr_refs(f"{it['title']}\n{it.get('detail') or ''}")
+            if agentless.get(s["id"], gone_before) < gone_before:
+                self.resolve(it, "agent_gone", now)
+            elif refs and all(((self.prs.get(r) or {}).get("detail") or {}).get("state") in ("MERGED", "CLOSED") for r in refs):
+                self.resolve(it, "prs_closed", now)
         # Orchestration mail asking a coordinator something: open until someone replies. Unread mail stays; mail the
         # coordinator acked (its inbox loop acks at once, before the human has answered) stays for a day.
         coord_handles = {t["handle"] for s in sessions.values() if s["kind"] in ("orchestrator", "orchestration")
                          for t in s["terminals"]}
         coord_runs = {r["id"] for r in self.runs["runs"] if r.get("coordinator_handle") in coord_handles}  # the root's too
         by_handle = {t["handle"]: s["id"] for s in sessions.values() for t in s["terminals"]}
-        answered, day_ago = answered_mail(self.fast["messages"]), iso(now - dt.timedelta(hours=24))
+        answered, day_ago = answered_mail(self.fast["messages"]) | superseded_mail(self.fast["messages"]), iso(now - dt.timedelta(hours=24))
         settled = {w.get("dispatchId") for w in self.runs["workers"] if w.get("dispatchStatus") in SETTLED} - {None}
         for m in self.fast["messages"]:
             to = m.get("to_handle") or ""
@@ -1122,6 +1158,19 @@ def answered_mail(messages):
     return {m["id"] for m in messages for t in {m["id"], m.get("thread_id")} - {None} for r in by_thread[t]
             if r["id"] != m["id"] and r.get("from_handle") != m.get("from_handle")
             and (r.get("created_at") or "") >= (m.get("created_at") or "")}
+
+
+def superseded_mail(messages):
+    """Ids of messages whose sender later reported to the same recipient outside their thread: it has moved past what
+    it asked. A report inside the thread adds to the question, a heartbeat comes from a worker still blocked, and a
+    newer question may sit beside the older one, so none of those count."""
+    reports = collections.defaultdict(list)
+    for r in messages:
+        if r.get("type") in ("status", "worker_done"):
+            reports[(r.get("from_handle"), r.get("to_handle"))].append(r)
+    return {m["id"] for m in messages for r in reports[(m.get("from_handle"), m.get("to_handle"))]
+            if (r.get("created_at") or "") > (m.get("created_at") or "")
+            and (not r.get("thread_id") or r["thread_id"] not in (m["id"], m.get("thread_id")))}
 
 
 def mail_dispatch(m):

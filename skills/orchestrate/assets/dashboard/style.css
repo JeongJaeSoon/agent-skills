@@ -105,6 +105,11 @@ svg.i > * { vector-effect: non-scaling-stroke; }
 .logo { width: 24px; height: 24px; border-radius: var(--r-md); display: grid; place-items: center; background: var(--accent-wash); flex: none; }
 .logo svg { width: 14px; height: 14px; fill: var(--accent); }
 .wordmark { font-weight: 600; }
+.brand { display: flex; align-items: center; gap: var(--s2); border-radius: var(--r-md); }
+.brand:hover .wordmark { color: var(--accent); }
+.code-version { padding: 0 var(--s2); font-size: var(--t-xs); color: var(--ink-3); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stale-code { padding: var(--s2) var(--s5); border-bottom: 1px solid var(--line); background: var(--warn-wash); color: var(--ink); font-size: var(--t-sm); }
+.stale-code code { font-family: var(--mono); user-select: all; }
 .sb-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: var(--s3) var(--s2); }
 .sb-group + .sb-group { margin-top: var(--s4); }
 .sb-title { padding: 0 var(--s2) var(--s1); }
