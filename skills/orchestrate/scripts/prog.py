@@ -775,7 +775,7 @@ def cmd_status(argv):
 
     # 3. growth
     admitted = {e.get("ticket") for e in events if e["ev"] == "admitted"}
-    parked = {e.get("ticket") for e in events if e["ev"] == "parked"}
+    parked = {e["ticket"] for e in events if e["ev"] == "parked" and e.get("ticket")}
     if issues is not None:
         new = [i for i in issues if parse_ts(i["created_at"]) > t0 and i["id"] not in pred]
         derived = [i for i in new if is_derived(i)]
@@ -1076,6 +1076,8 @@ def attempt(p, pr, klass):
         return 0, f"#{pr} already landed as {st['landed'].get('sha', '')[:8]}"
     if stopped(events):
         return 1, "STOP line active: nothing lands"
+    if on_hold(events, pr):
+        return 1, f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it"
     if cfg["merge_policy"] == "human-gate" and "approved" not in st and "gate_opened" in st:
         resolution = gate_resolution(cfg, events, pr)
         if resolution == "land":
@@ -1190,6 +1192,8 @@ def cmd_land_check(argv):
         problems.append("safety stop: main is red (only the repairing PR lands, with land --class main-fix)")
     if stopped(events):
         problems.append("STOP line active")
+    if on_hold(events, pr):
+        problems.append(f"on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it")
     if main == "pending":
         print("note: main CI for the last landing has not reported yet")
     if v["state"] != "OPEN" or v["isDraft"]:
@@ -1626,7 +1630,13 @@ def print_stuck(p, run_id, only_new=False):
 HOLD = re.compile(r"\bhold\b|do.?not.?merge|\bwip\b", re.I)
 
 
-def review_sweep(events, view, active, unresolved, slug):
+def on_hold(events, pr):
+    """`record parked --pr N` holds a PR until `record admitted --pr N`; the later of the two wins."""
+    marks = [e["ev"] for e in events if e.get("pr") == pr and e["ev"] in ("parked", "admitted")]
+    return bool(marks) and marks[-1] == "parked"
+
+
+def review_sweep(events, view, active, unresolved, slug, gate=False):
     """A review that outlasts its worker's session leaves a ready PR nobody lands."""
     ticket = pr_ticket(events)
     out, waiting = [], []
@@ -1635,20 +1645,27 @@ def review_sweep(events, view, active, unresolved, slug):
         t = ticket.get(n)
         if t in active:
             continue
+        name = f"#{n}" + (f" ({t})" if t else "")
         r = view(n)
+        if r.get("state") == "MERGED":
+            out += [f"MERGED OUTSIDE LAND {name}: record it and finish its ticket as for a LAND", f"  orch land {slug} --pr {n}"]
+            continue
         if r.get("state") != "OPEN":
+            waiting.append(f"{name}: {(r.get('state') or 'unknown').lower()} without merging; ask its owner or drop its ticket")
             continue
         failed, pending, _ = ci_summary(r.get("statusCheckRollup"))
+        mss = r.get("mergeStateStatus")
         why = [w for w, bad in (
+            ("no ticket, so no worker is ruled out", not t),
             ("draft", r.get("isDraft")),
-            ("on hold", any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
+            ("on hold", on_hold(events, n) or any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
             ((r.get("reviewDecision") or "no review").lower().replace("_", " "), r.get("reviewDecision") != "APPROVED"),
-            (f"merge state {r.get('mergeStateStatus')}", r.get("mergeStateStatus") != "CLEAN"),
-            ("CI failed", failed), ("CI pending", pending)) if bad]
+            (f"human gate not approved (orch gate {slug} --pr {n})", gate and "approved" not in st),
+            (f"merge state {mss}" + (", dispatch a fix" if mss in ("DIRTY", "BEHIND") else ""), mss != "CLEAN"),
+            ("CI failed, dispatch a fix", failed), ("CI pending", pending)) if bad]
         threads = 0 if why else unresolved(n)
         if threads:
             why.append(f"{threads} unresolved thread(s)")
-        name = f"#{n}" + (f" ({t})" if t else "")
         if why:
             waiting.append(f"{name}: {', '.join(why)}")
         else:
@@ -1660,9 +1677,10 @@ def review_sweep(events, view, active, unresolved, slug):
 def unresolved_threads(repo, n):
     owner, name = repo.split("/")
     q = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n)"
-         "{reviewThreads(first:100){nodes{isResolved}}}}}")
+         "{reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}")
     res = gh_json("api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"r={name}", "-F", f"n={n}")
-    return sum(not t["isResolved"] for t in res["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"])
+    threads = res["data"]["repository"]["pullRequest"]["reviewThreads"]
+    return sum(not t["isResolved"] for t in threads["nodes"]) or int(threads["pageInfo"]["hasNextPage"])
 
 
 def print_reviews(p):
@@ -1676,7 +1694,8 @@ def print_reviews(p):
         repo = p.cfg["repo"]
         fields = "state,reviewDecision,mergeStateStatus,isDraft,labels,statusCheckRollup,headRefOid"
         lines = review_sweep(events, lambda n: gh_json("pr", "view", str(n), "--repo", repo, "--json", fields),
-                             active - {None}, lambda n: unresolved_threads(repo, n), p.slug)
+                             active - {None}, lambda n: unresolved_threads(repo, n), p.slug,
+                             p.cfg.get("merge_policy") == "human-gate")
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
         lines = [f"REVIEWS: sweep failed ({type(e).__name__}: {e}); orch status lists the ready PRs"]
     if lines:

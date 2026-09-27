@@ -236,7 +236,21 @@ assert lines == ["LAND #11 (R-11): approved, clean and green at abcdef12, and no
                  "  orch land s --pr 11",
                  "WAITING ON REVIEW #12 (R-12): review required, merge state BLOCKED; #13 (R-13): on hold;"
                  " #16 (R-16): 2 unresolved thread(s)"], lines
-assert prog.review_sweep(rev, lambda n: dict(ok, state="MERGED"), set(), {}.get, "s") == []
+assert prog.review_sweep(rev[:1], lambda n: dict(ok, state="MERGED"), set(), {}.get, "s") == [
+    "MERGED OUTSIDE LAND #11 (R-11): record it and finish its ticket as for a LAND", "  orch land s --pr 11"]
+assert prog.review_sweep(rev[:1], lambda n: dict(ok, state="CLOSED"), set(), {}.get, "s") == [
+    "WAITING ON REVIEW #11 (R-11): closed without merging; ask its owner or drop its ticket"]
+hold = rev[:2] + [{"ev": "parked", "pr": 11, "note": "hold"}, {"ev": "parked", "pr": 12}, {"ev": "admitted", "pr": 12}]
+assert prog.review_sweep(hold, lambda n: ok, set(), {}.get, "s") == [
+    "LAND #12 (R-12): approved, clean and green at abcdef12, and no worker holds it", "  orch land s --pr 12",
+    "WAITING ON REVIEW #11 (R-11): on hold"]
+assert prog.review_sweep(rev[:1], lambda n: ok, set(), {}.get, "s", gate=True) == [
+    "WAITING ON REVIEW #11 (R-11): human gate not approved (orch gate s --pr 11)"]
+assert prog.review_sweep(rev[:1] + [{"ev": "approved", "pr": 11}], lambda n: ok, set(), {}.get, "s", gate=True)[0].startswith("LAND #11")
+assert prog.review_sweep([{"ev": "verdict", "pr": 20, "result": "pass"}], lambda n: ok, set(), {}.get, "s") == [
+    "WAITING ON REVIEW #20: no ticket, so no worker is ruled out"]
+assert prog.review_sweep(rev[:1], lambda n: dict(ok, mergeStateStatus="DIRTY"), set(), {}.get, "s") == [
+    "WAITING ON REVIEW #11 (R-11): merge state DIRTY, dispatch a fix"]
 import subprocess, tempfile
 repo = tempfile.mkdtemp(prefix="test-holds-")
 git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, check=True)

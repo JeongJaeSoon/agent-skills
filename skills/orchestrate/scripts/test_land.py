@@ -218,6 +218,16 @@ assert code == 1 and "main is red" in out, out
 code, out = prog(env, "land", "t", "--pr", "9", "--class", "main-fix")
 assert code == 0, out
 
+# A held PR does not land until the hold is released.
+d, env = setup({"9": pr(9)})
+verdict(d, 9, "T-9")
+code, out = prog(env, "record", "t", "parked", "--pr", "9", "--note", "hold")
+code, out = prog(env, "land", "t", "--pr", "9")
+assert code == 1 and "on hold" in out, out
+code, out = prog(env, "record", "t", "admitted", "--pr", "9")
+code, out = prog(env, "land", "t", "--pr", "9")
+assert code == 0, out
+
 # 7. heavy: slots are shared machine-wide; a full set makes the next caller wait, a dead holder frees its slot.
 d, env = setup({})
 env["PROGRAMS_HOME"] = str(d / "programs")
