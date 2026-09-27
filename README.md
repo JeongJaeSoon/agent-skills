@@ -83,7 +83,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 |---|---|
 | `reap-resources` | 죽은 세션이 남긴 Codex broker 트리, 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. resource steward가 주기로 부른다 |
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
-| `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3`로 한다 |
+| `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
 
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 

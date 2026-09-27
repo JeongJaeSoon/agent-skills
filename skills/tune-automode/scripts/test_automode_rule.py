@@ -7,6 +7,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import automode_rule  # noqa: E402
+
 HERE = pathlib.Path(__file__).parent
 SCRIPT = HERE / "automode_rule.py"
 FIXTURE = HERE.parent / "references" / "example-settings.json"
@@ -37,7 +40,9 @@ class Base(unittest.TestCase):
     def apply(self, spec=None):
         if spec is not None:
             self.spec.write_text(json.dumps(spec))
-        return run(SCRIPT, "--spec", self.spec, "--settings", self.settings, "--apply")
+        spec = json.loads(self.spec.read_text())
+        digest = automode_rule.spec_hash(spec) if isinstance(spec, dict) else "x"
+        return run(SCRIPT, "--spec", self.spec, "--settings", self.settings, "--apply", digest)
 
 
 class ApplyTest(Base):
@@ -115,6 +120,25 @@ class ApplyTest(Base):
         self.assertTrue(self.settings.is_symlink())
         self.assertEqual(json.loads(real.read_text())["autoMode"]["allow"][-1], RULE)
 
+    def test_wrong_hash_refused(self):
+        before = self.settings.read_bytes()
+        r = run(SCRIPT, "--spec", self.spec, "--settings", self.settings, "--apply", "000000000000")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("does not match", r.stderr)
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_config_dir_env_picks_default_settings(self):
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.dir))
+        r = run(SCRIPT, "--spec", self.spec, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(str(self.dir), r.stdout)
+
+    def test_unencodable_rule_refused(self):
+        self.spec.write_text('{"add": {"allow": ["bad \\ud800 rule"]}}')
+        r = self.apply()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("refused", r.stderr)
+
     def test_diff_shows_only_automode(self):
         r = run(SCRIPT, "--spec", self.spec, "--settings", self.settings)
         self.assertNotIn("EXAMPLE_TOKEN", r.stdout)
@@ -134,6 +158,15 @@ class ReplaceTest(Base):
         r = self.apply(spec)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.settings.read_bytes(), after)
+
+    def test_replace_when_both_present_leaves_one(self):
+        data = json.loads(self.settings.read_text())
+        data["autoMode"]["allow"].append(self.NEW)
+        self.settings.write_text(json.dumps(data))
+        self.assertEqual(self.apply({"replace": [{"section": "allow", "old": self.OLD, "new": self.NEW}]}).returncode, 0)
+        allow = self.automode()["allow"]
+        self.assertEqual(allow.count(self.NEW), 1)
+        self.assertNotIn(self.OLD, allow)
 
     def test_replace_without_match_refused(self):
         before = self.settings.read_bytes()
@@ -173,19 +206,23 @@ class SpecValidationTest(Base):
 
 
 class EmitTest(Base):
+    def emit(self, out):
+        return run(SCRIPT, "emit", "--spec", self.spec, "--out", out, "--settings", self.settings)
+
     def test_emitted_script_runs_standalone(self):
         out = self.dir / "elsewhere" / "rule.py"
-        r = run(SCRIPT, "emit", "--spec", self.spec, "--out", out, "--settings", self.settings)
+        r = self.emit(out)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("dev-restart", r.stdout)
-        self.assertIn(f"! python3 {out} --settings {self.settings} --apply", r.stdout)
+        digest = automode_rule.spec_hash(SPEC)
+        self.assertIn(f"! python3 {out} --settings {self.settings} --apply {digest}", r.stdout)
         self.assertFalse(self.backups())
 
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "CLAUDE_SKILL_DIR")}
         dry = run(out, "--settings", self.settings, env=env)
         self.assertEqual(dry.returncode, 0, dry.stderr)
         self.assertIn("dry run", dry.stdout)
-        applied = run(out, "--settings", self.settings, "--apply", env=env)
+        applied = run(out, "--settings", self.settings, "--apply", digest, env=env)
         self.assertEqual(applied.returncode, 0, applied.stderr)
         self.assertEqual(self.automode()["allow"][-1], RULE)
         self.assertEqual(len(self.backups()), 1)
@@ -194,6 +231,35 @@ class EmitTest(Base):
         out = self.dir / "rule.py"
         run(SCRIPT, "emit", "--spec", self.spec, "--out", out, "--settings", self.settings)
         self.assertIn("make dev-restart", out.read_text())
+
+    def test_edited_emitted_script_refused(self):
+        out = self.dir / "rule.py"
+        self.emit(out)
+        out.write_text(out.read_text().replace("shared or remote servers", "anything"))
+        before = self.settings.read_bytes()
+        r = run(out, "--settings", self.settings, "--apply", automode_rule.spec_hash(SPEC))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_emit_refuses_out_onto_settings(self):
+        before = self.settings.read_bytes()
+        r = self.emit(self.settings)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_emit_refuses_out_inside_config_dir(self):
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.dir))
+        out = self.dir / "rule.py"
+        r = run(SCRIPT, "emit", "--spec", self.spec, "--out", out, env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse(out.exists())
+
+    def test_emit_writes_nothing_when_merge_refused(self):
+        out = self.dir / "rule.py"
+        self.spec.write_text(json.dumps({"replace": [{"section": "allow", "old": "no such rule", "new": "x"}]}))
+        r = self.emit(out)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse(out.exists())
 
     def test_emit_refuses_bad_spec_and_writes_nothing(self):
         out = self.dir / "rule.py"

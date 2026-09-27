@@ -2,17 +2,21 @@
 """Merge autoMode rules into Claude Code user settings. The user runs --apply, never the agent.
 
   automode_rule.py emit --spec SPEC --out FILE   write a standalone copy with SPEC embedded, print the diff
-  automode_rule.py --spec SPEC [--apply]         dry run (default) or apply
-  FILE [--apply]                                 the emitted copy: same, with its embedded spec
+  automode_rule.py --spec SPEC [--apply HASH]    dry run (default) or apply
+  FILE [--apply HASH]                            the emitted copy: same, with its embedded spec
+
+HASH is the spec hash printed with the diff; a spec edited after review no longer matches it.
 
 SPEC: {"add": {"allow": [...], "soft_deny": [...], "environment": [...]},
        "replace": [{"section": "allow", "old": "...", "new": "..."}]}
 """
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import pathlib
+import shlex
 import shutil
 import sys
 import tempfile
@@ -22,7 +26,8 @@ SPEC = None  # emit replaces this line
 
 SECTIONS = ("allow", "soft_deny", "environment")
 DEFAULTS = "$defaults"
-DEFAULT_SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
+CONFIG_DIR = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or pathlib.Path.home() / ".claude").expanduser()
+DEFAULT_SETTINGS = CONFIG_DIR / "settings.json"
 
 
 class Refused(Exception):
@@ -56,8 +61,16 @@ def check_spec(spec):
 def check_rule(rule):
     if not isinstance(rule, str) or not rule.strip():
         raise Refused(f"a rule must be a non-empty string, got {rule!r}")
+    try:
+        rule.encode("utf-8")
+    except UnicodeEncodeError:
+        raise Refused(f"a rule is not valid UTF-8 text: {rule!r}")
     if rule == DEFAULTS:
         raise Refused(f"{DEFAULTS} is kept as is; a spec may not add, remove or replace it")
+
+
+def spec_hash(spec):
+    return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:12]
 
 
 def merge(automode, spec):
@@ -65,7 +78,9 @@ def merge(automode, spec):
     notes = []
     for item in spec.get("replace", []):
         rules = section(result, item["section"])
-        if item["old"] in rules:
+        if item["old"] in rules and item["new"] in rules:
+            rules.remove(item["old"])
+        elif item["old"] in rules:
             rules[rules.index(item["old"])] = item["new"]
         elif item["new"] in rules:
             notes.append(f"already replaced in {item['section']}: {item['new'][:60]}")
@@ -108,7 +123,7 @@ def load(path):
 
 def diff(before, after):
     def text(d):
-        return json.dumps(d, ensure_ascii=False, indent=2).splitlines(True)
+        return (json.dumps(d, ensure_ascii=False, indent=2) + "\n").splitlines(True)
     return "".join(difflib.unified_diff(text(before), text(after), "autoMode (current)", "autoMode (new)"))
 
 
@@ -123,18 +138,23 @@ def backup(path):
 
 def write(path, data):
     text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-    json.loads(text)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".settings-")
     with os.fdopen(fd, "w") as f:
         f.write(text)
     shutil.copymode(path, tmp)
     os.replace(tmp, path)
+    if json.loads(path.read_text()) != data:
+        raise Refused(f"{path} did not read back as written; restore it from the backup")
 
 
 def run(spec, settings, apply):
     check_spec(spec)
+    digest = spec_hash(spec)
+    if apply and apply != digest:
+        raise Refused(f"--apply {apply} does not match this spec ({digest}); review the diff again")
     data, before = load(settings)
     after, notes = merge(before, spec)
+    print(f"settings: {settings.resolve()}")
     for note in notes:
         print(note)
     changes = diff(before, after)
@@ -143,14 +163,14 @@ def run(spec, settings, apply):
         return
     print(changes, end="")
     if not apply:
-        print("\n(dry run; nothing written)")
+        print(f"\n(dry run; nothing written; spec hash {digest})")
         return
     real = settings.resolve()
     saved = backup(real)
     data["autoMode"] = after
     write(real, data)
-    print(f"\nwritten: {settings}\nbackup:  {saved}")
-    print(f"rollback: cp '{saved}' '{settings}'")
+    print(f"\nwritten: {real}\nbackup:  {saved}")
+    print(f"rollback: cp {shlex.quote(str(saved))} {shlex.quote(str(real))}")
     print("check:   claude auto-mode config   (restart the session if the same denial comes back)")
 
 
@@ -160,14 +180,17 @@ def emit(spec, out, settings):
     marker = "SPEC = None  # emit replaces this line\n"
     if marker not in source:
         raise Refused("this copy is already an emitted script; emit from the skill's automode_rule.py")
+    out = out.expanduser().absolute()
+    if out.resolve() == settings.resolve() or out.resolve().is_relative_to(CONFIG_DIR.resolve()):
+        raise Refused(f"--out must be outside {CONFIG_DIR}; the agent does not write there")
     body = source.replace(marker, f"SPEC = {json.dumps(spec, ensure_ascii=False, indent=2)}\n", 1)
-    load(settings)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(body)
-    out.chmod(0o600)
     run(spec, settings, apply=False)
-    target = "" if settings == DEFAULT_SETTINGS else f" --settings {settings}"
-    print(f"\nwrote {out}\nThe user reviews it and runs:\n  ! python3 {out}{target} --apply")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+    target = "" if settings == DEFAULT_SETTINGS else f" --settings {shlex.quote(str(settings.absolute()))}"
+    print(f"\nwrote {out}\nThe user reviews it and runs:\n  ! python3 {shlex.quote(str(out))}{target} --apply {spec_hash(spec)}")
 
 
 def main(argv):
@@ -176,13 +199,13 @@ def main(argv):
     p.add_argument("--spec", type=pathlib.Path)
     p.add_argument("--out", type=pathlib.Path)
     p.add_argument("--settings", type=pathlib.Path, default=DEFAULT_SETTINGS)
-    p.add_argument("--apply", action="store_true")
+    p.add_argument("--apply", metavar="HASH")
     a = p.parse_args(argv)
     try:
         if a.spec:
             try:
-                spec = json.loads(a.spec.read_text())
-            except (OSError, json.JSONDecodeError) as e:
+                spec = json.loads(a.spec.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
                 raise Refused(f"cannot read spec {a.spec}: {e}")
         elif SPEC is not None:
             spec = SPEC
@@ -191,7 +214,7 @@ def main(argv):
         if a.command == "emit":
             if not a.out or a.apply:
                 p.error("emit needs --out and never takes --apply")
-            emit(spec, a.out.expanduser(), a.settings)
+            emit(spec, a.out, a.settings)
         else:
             run(spec, a.settings, a.apply)
     except Refused as e:

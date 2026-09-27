@@ -152,7 +152,7 @@
 
 ### tune-automode
 - **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
-- **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 <경로> --apply`로 적용한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
+- **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
 - **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
 - **관계:** 도구 패턴 권한(`permissions.allow`, hooks)은 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다.
 
