@@ -323,6 +323,12 @@ screens["h1"] = menu + ["  Session: 23hr 4m"]
 assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == [], "a ticking status bar is the same prompt"
 screens["h1"] = menu
 assert prog.prompt_block(["out", "", "> ", "  Session: 1m"]) == [] == prog.prompt_block(["out", "", "> ", "  Session: 2m"]), "an idle prompt keys on nothing that ticks"
+ask = ["Done.", "Should I also bump the version?", "", "> ", "  Session: 1m"]
+assert prog.prompt_block(ask) == prog.prompt_block(ask[:-1] + ["  Session: 2m"]) == ask[:2], "a question with no options keys on the question"
+stale = ["Enter to select", "later output", "Should I retry?", "> ", "  Session: 1m"]
+assert prog.prompt_block(stale) == stale[:3], "a menu above a newer question is not its end"
+heredoc = lambda f: ["Bash command", "  cat <<EOF > " + f, "  line 1", "  line 2", "  line 3", "  line 4", "  EOF", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No (esc)"]
+assert prog.prompt_block(heredoc("a.txt")) != prog.prompt_block(heredoc("b.txt")), "prompts that differ far above the question differ"
 assert prog.stuck_sweep(live, "s", seen, read=read) == first
 perm2 = ["Bash command", "  git push -f", "Do you want to proceed?", "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"]
 screens["h1"] = perm

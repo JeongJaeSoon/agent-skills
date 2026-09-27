@@ -1560,12 +1560,12 @@ def screen_prompt(lines, activity=None):
 
 
 def prompt_block(tail):
-    """The question and its options, without the status bar below them, whose clock would change the key every round."""
+    """The screen down to the prompt's last option, or its question: the status bar below would change the key every round."""
     q = max((i for i, l in enumerate(tail) if l.strip().endswith("?")), default=None)
     ends = [i for i, l in enumerate(tail) if re.search(r"Enter to select|\(esc\)|Esc to cancel", l) and (q is None or i >= q)]
-    if q is None:
-        return tail[:ends[-1] + 1] if ends else []
-    return tail[max(0, q - 4):(ends[0] if ends else len(tail) - 1) + 1]
+    if ends:
+        return tail[:ends[0] + 1]
+    return tail[:q + 1] if q is not None else []
 
 
 def read_screen(handle):
