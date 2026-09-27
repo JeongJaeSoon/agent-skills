@@ -11,9 +11,9 @@ Non-trivial work — multi-file changes, architectural decisions, ambiguous scop
 before the first edit. **Planning is not a checkpoint: do not enter plan mode and do not wait
 for approval.** Write the plan where it stays readable — a comment on the ticket, the PR body,
 the worklog — and start. The ticket, or the `/goal` that opened the card, is the approval for
-exactly what it says. On the ticket that is one plan comment, edited if the plan changes;
-progress goes to the worklog, not a stream of ticket comments, and the result goes in the
-completion comment (§6).
+exactly what it says. On the ticket that is one plan comment, edited if the plan changes, and
+the move to `started`. Past that the ticket gets only the milestone lines (`use-tracker`,
+"Milestones") and the completion comment (§6); progress goes to the worklog.
 
 Reading the repo can change the picture. If the scope turns out to be materially different from
 the ticket, do not stop: either it still fits one reviewable PR, or you split the ticket (§5) and
@@ -130,7 +130,8 @@ Before pushing, run **both**:
 After the test suite and E2E check, push and open a ready PR with `gh pr create`, not a draft.
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
 with `orca linear attach --current --url <pr> --title "PR"` (outside an Orca card,
-`orca linear attach <ID> --url <pr>`).
+`orca linear attach <ID> --url <pr>`). Move the ticket at each milestone as `use-tracker`
+"Milestones" says: its `PR:` line now, `review` when you request a review.
 
 **The PR body is a briefing, not the lab notebook**: `## 왜`, `## 범위`, `## 트레이드오프`,
 `## 영향 범위`, and the required `## 검증`, within about 40 lines, titled

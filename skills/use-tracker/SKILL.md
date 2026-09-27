@@ -77,6 +77,50 @@ ticket alone (`"unchanged": true`) when it is already there or further along, so
 ticket In Review does nothing. `--to review` picks "In Review", or else the one `started` state whose
 name contains "review"; with none or several it changes nothing and exits 1.
 
+## Milestones
+
+A ticket's state follows the work as it moves. Each move posts the comment line the table
+names, with its evidence, so the ticket shows why it moved:
+
+| Moment | `transition --to` | Comment line |
+|---|---|---|
+| The first edit | `started` | the plan comment, if the work has one (`deliver-ticket` §1) |
+| A PR opened | `started` | `PR: <url>`, or the PR attached to the ticket |
+| A review requested | `review` | `리뷰 요청: <url> · <reviewers>` |
+| The ticket's own definition of done verified | `completed` | the completion comment: PR link, merge commit, each criterion with its evidence (`deliver-ticket` §6) |
+
+`completed` waits for what the ticket calls done, which is often "deployed and verified", not
+"merged". A merge by itself moves nothing. A late milestone (a review re-requested after changes)
+still posts its line; `transition` leaves the state where it is. Where `--to review` exits 1 (no
+single review state), the ticket stays `started` and the line is still posted.
+
+## Reconcile
+
+A skipped step leaves a ticket behind the work: a session ends before its completion comment, a
+PR merges after the worker's turn, a deploy finishes after the session is gone. Reconcile
+compares each open ticket in scope with GitHub and the deploy, and makes the ticket match.
+`end-session` runs it over the tickets its session touched; `orchestrate` runs it at each
+`worker_done` over that worker's tickets.
+
+1. Find the PRs that deliver the ticket: the ones attached to it, and those that
+   `gh pr list --repo <repo> --state all --search "<ID>" --json number,url,title,headRefName,body,state,mergeCommit,reviewRequests,latestReviews`
+   returns with the ID in its title, its branch (any case) or the tickets its body says it
+   closes. A PR that names the ID only in passing (a follow-up) does not count. The search does
+   not match branch names, so when the ticket's branch is known, list `--head <branch>` too.
+   Leave out PRs closed without merging.
+2. Set the state the first matching row supports, through the milestone it skipped (its line included):
+
+| What GitHub and the deploy show | Target |
+|---|---|
+| An open PR, no review requested or submitted | `started` |
+| An open PR with a review requested or submitted | `review` |
+| Every PR merged, and each criterion holds when checked now the way it says (a deployed version, a check on main) | `completed` |
+| Every PR merged, a criterion still open | unchanged; one comment naming the open criterion and how it will be checked, unless the latest comment already says it |
+| No PR, on a ticket that is `started` | unchanged; report it |
+
+A closed ticket whose PR is still open is reported, never reopened. Report one line per ticket
+changed: `<ID>: <old state_type> → <new> (<evidence>)`.
+
 ## Exit condition
 
 Every body of work has one, written before it starts or grows (principle **Work to an Exit

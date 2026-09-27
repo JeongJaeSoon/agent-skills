@@ -59,7 +59,8 @@ they actually asked for.
 Orca metadata and this transcript die with the session. Before the command runs, the record must
 already exist where it survives:
 
-- The ticket linked to this card (`use-tracker`) → final state (moved to completed, or left
+- Every ticket this session touched → `use-tracker` "Reconcile", so none is left behind its PR
+  or deploy. The ticket linked to this card → final state (moved to completed, or left
   `started` in review with the PR link) and a completion comment with "남은 확인 사항". If the
   latest comment already says this, do not repeat it.
 - The project's worklog (`use-notes`) → one line on what this session did, if not already
