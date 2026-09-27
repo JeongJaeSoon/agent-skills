@@ -228,6 +228,13 @@ code, out = prog(env, "record", "t", "admitted", "--pr", "9")
 code, out = prog(env, "land", "t", "--pr", "9")
 assert code == 0, out
 
+# A held exclusive PR never takes the lane from the next one.
+d, env = setup({"1": pr(1, files=["migrations/1.sql"]), "2": pr(2, files=["migrations/2.sql"])})
+verdict(d, 1, "T-1"); verdict(d, 2, "T-2")
+prog(env, "record", "t", "parked", "--pr", "1", "--note", "hold")
+code, out = prog(env, "land", "t", "--pr", "2")
+assert code == 0, out
+
 # 7. heavy: slots are shared machine-wide; a full set makes the next caller wait, a dead holder frees its slot.
 d, env = setup({})
 env["PROGRAMS_HOME"] = str(d / "programs")

@@ -213,7 +213,7 @@ def main_state(events):
 def final_check_current(events):
     """A predicate_verified counts only if nothing it covered changed after it: no landing, no predicate edit,
     no newly admitted follow-up."""
-    since = max((i for i, e in enumerate(events) if e["ev"] in ("landed", "admitted")
+    since = max((i for i, e in enumerate(events) if e["ev"] == "landed" or (e["ev"] == "admitted" and e.get("ticket"))
                  or (e["ev"] == "config" and (e.get("note") or "").startswith("predicate="))), default=-1)
     return any(e["ev"] == "predicate_verified" for e in events[since + 1:])
 
@@ -437,6 +437,8 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
             rank = min(rank, KLASS["urgent"])
         ticket = tickets.get(pr)
         state, reasons = row_state(rows.get(pr), s.get("verdict"))
+        if on_hold(events, pr) and state != "gone":
+            state, reasons = "blocked", ["on hold"] + reasons
         live = stack_of.get(pr, [])
         below_t = {tickets.get(b) for b in live[:live.index(pr)]} if live else set()
         waits = sorted(b for b in after.get(ticket, ()) if b not in landed_t | below_t)
@@ -774,7 +776,7 @@ def cmd_status(argv):
                         else f"released, but its card is still there: {rm}"))
 
     # 3. growth
-    admitted = {e.get("ticket") for e in events if e["ev"] == "admitted"}
+    admitted = {e["ticket"] for e in events if e["ev"] == "admitted" and e.get("ticket")}
     parked = {e["ticket"] for e in events if e["ev"] == "parked" and e.get("ticket")}
     if issues is not None:
         new = [i for i in issues if parse_ts(i["created_at"]) > t0 and i["id"] not in pred]
@@ -1076,8 +1078,6 @@ def attempt(p, pr, klass):
         return 0, f"#{pr} already landed as {st['landed'].get('sha', '')[:8]}"
     if stopped(events):
         return 1, "STOP line active: nothing lands"
-    if on_hold(events, pr):
-        return 1, f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it"
     if cfg["merge_policy"] == "human-gate" and "approved" not in st and "gate_opened" in st:
         resolution = gate_resolution(cfg, events, pr)
         if resolution == "land":
@@ -1106,6 +1106,8 @@ def attempt(p, pr, klass):
         if v["state"] == "CLOSED":
             close_gate_task(p, pr, "failed")
         return 1, f"#{pr} is {v['state']}"
+    if on_hold(events, pr):
+        return 1, f"#{pr} is on hold (record parked); `orch record {p.slug} admitted --pr {pr}` releases it"
     if me["state"] == "waiting":
         if st.get("yield", {}).get("note") != me["reasons"][0]:
             p.append("yield", pr=pr, note=me["reasons"][0])
@@ -1259,6 +1261,8 @@ def cmd_gate(argv):
     pr = int(opt(argv, "--pr"))
     if p.cfg["merge_policy"] != "human-gate":
         sys.exit("gates are for merge_policy human-gate; autonomous programs land with orch land")
+    if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
+        sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca")
     v = pr_view(p.cfg["repo"], pr)
     spec = (f"Land PR #{pr} ({v['url']}) with orch land once the user resolves the gate. "
             "Coordinator-owned; no worker is dispatched for this Task.")
@@ -1636,7 +1640,7 @@ def on_hold(events, pr):
     return bool(marks) and marks[-1] == "parked"
 
 
-def review_sweep(events, view, active, unresolved, slug, gate=False):
+def review_sweep(events, view, active, unresolved, slug, gate=None):
     """A review that outlasts its worker's session leaves a ready PR nobody lands."""
     ticket = pr_ticket(events)
     out, waiting = [], []
@@ -1648,20 +1652,23 @@ def review_sweep(events, view, active, unresolved, slug, gate=False):
         name = f"#{n}" + (f" ({t})" if t else "")
         r = view(n)
         if r.get("state") == "MERGED":
-            out += [f"MERGED OUTSIDE LAND {name}: record it and finish its ticket as for a LAND", f"  orch land {slug} --pr {n}"]
+            out += [f"MERGED OUTSIDE LAND {name}: record it and finish its ticket as for a LAND", f"  orch landed {slug} --pr {n}"]
             continue
         if r.get("state") != "OPEN":
             waiting.append(f"{name}: {(r.get('state') or 'unknown').lower()} without merging; ask its owner or drop its ticket")
             continue
         failed, pending, _ = ci_summary(r.get("statusCheckRollup"))
         mss = r.get("mergeStateStatus")
+        verdict = (st.get("verdict") or {}).get("result")
+        gw = gate_wait(st, gate, slug, n) if gate and "approved" not in st else None
         why = [w for w, bad in (
             ("no ticket, so no worker is ruled out", not t),
+            ("no passing verdict", verdict != "pass"),
             ("draft", r.get("isDraft")),
             ("on hold", on_hold(events, n) or any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
             ((r.get("reviewDecision") or "no review").lower().replace("_", " "), r.get("reviewDecision") != "APPROVED"),
-            (f"human gate not approved (orch gate {slug} --pr {n})", gate and "approved" not in st),
-            (f"merge state {mss}" + (", dispatch a fix" if mss in ("DIRTY", "BEHIND") else ""), mss != "CLEAN"),
+            (gw, gw),
+            (f"merge state {mss}" + {"DIRTY": ", dispatch a fix", "BEHIND": f", gh pr update-branch {n}"}.get(mss, ""), mss != "CLEAN"),
             ("CI failed, dispatch a fix", failed), ("CI pending", pending)) if bad]
         threads = 0 if why else unresolved(n)
         if threads:
@@ -1672,6 +1679,14 @@ def review_sweep(events, view, active, unresolved, slug, gate=False):
             out += [f"LAND {name}: approved, clean and green at {(r.get('headRefOid') or '')[:8]}, and no worker holds it",
                     f"  orch land {slug} --pr {n}"]
     return out + (["WAITING ON REVIEW " + "; ".join(waiting)] if waiting else [])
+
+
+def gate_wait(st, gate, slug, n):
+    """Why the human gate still holds this PR, or None once the user resolved it as land."""
+    if "gate_opened" not in st:
+        return f"human gate not opened (orch gate {slug} --pr {n})"
+    res = gate(n)
+    return None if res == "land" else f"human gate resolved as '{res}'" if res else "human gate open, waiting for the user"
 
 
 def unresolved_threads(repo, n):
@@ -1695,7 +1710,7 @@ def print_reviews(p):
         fields = "state,reviewDecision,mergeStateStatus,isDraft,labels,statusCheckRollup,headRefOid"
         lines = review_sweep(events, lambda n: gh_json("pr", "view", str(n), "--repo", repo, "--json", fields),
                              active - {None}, lambda n: unresolved_threads(repo, n), p.slug,
-                             p.cfg.get("merge_policy") == "human-gate")
+                             (lambda n: gate_resolution(p.cfg, events, n)) if p.cfg.get("merge_policy") == "human-gate" else None)
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
         lines = [f"REVIEWS: sweep failed ({type(e).__name__}: {e}); orch status lists the ready PRs"]
     if lines:
