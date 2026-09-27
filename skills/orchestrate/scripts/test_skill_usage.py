@@ -84,6 +84,21 @@ write(projects / "-work-alpha" / "s1.jsonl", [
     skill_call(ts(1, 32), "simplify"),
     human(ts(1, 33), "<task-notification>ship it</task-notification>"),
 ])
+# A compaction summary quotes old prompts and an interruption marker is not a prompt: neither opens a turn or
+# counts a miss, so tidy's chained call after them still belongs to the turn that loaded ship.
+summary = human(ts(3, 1), "Summary: the user asked to ship it and said 정리해줘", session="s4")
+summary["isCompactSummary"] = True
+write(projects / "-work-alpha" / "s4.jsonl", [
+    human(ts(3), "please ship it", session="s4"),
+    skill_call(ts(3, 1), "agent-skills:ship", session="s4"),
+    summary,
+    human(ts(3, 2), "[Request interrupted by user]", session="s4"),
+    skill_call(ts(3, 3), "agent-skills:tidy", attribution="agent-skills:ship", session="s4"),
+    # A phrase inside a longer word ("relationship it") is not the phrase; a pasted prompt is a human prompt.
+    human(ts(3, 10), "the relationship it has", session="s4"),
+    human(ts(3, 20), "<pasted_content id=x>notes</pasted_content> 배포해줘", session="s4"),
+    human(ts(3, 30), "done", session="s4"),
+])
 write(projects / "-work-beta" / "s2.jsonl", [
     human(ts(20), "<command-name>/agent-skills:ship</command-name>", session="s2", cwd="/work/beta"),
     human(ts(20, 5), "정리해줘", session="s2", cwd="/work/beta"),
@@ -101,10 +116,10 @@ rep = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, miss
 rows = {r["name"]: r for r in rep["skills"]}
 ship, tidy, lint = rows["agent-skills:ship"], rows["agent-skills:tidy"], rows["acme-tools:lint"]
 
-assert (ship["uses_7d"], ship["uses_30d"], ship["uses_total"]) == (1, 2, 2), ship
-assert (ship["auto_30d"], ship["slash_30d"], ship["chained_30d"]) == (1, 1, 0), ship
-assert ship["misses_30d"] == 1 and ship["sessions_30d"] == 2 and ship["repos_30d"] == 2, ship
-assert (tidy["auto_30d"], tidy["slash_30d"], tidy["chained_30d"]) == (1, 1, 1), tidy
+assert (ship["uses_7d"], ship["uses_30d"], ship["uses_total"]) == (2, 3, 3), ship
+assert (ship["auto_30d"], ship["slash_30d"], ship["chained_30d"]) == (2, 1, 0), ship
+assert ship["misses_30d"] == 2 and ship["sessions_30d"] == 3 and ship["repos_30d"] == 2, ship
+assert (tidy["auto_30d"], tidy["slash_30d"], tidy["chained_30d"]) == (1, 1, 2), tidy
 assert tidy["misses_30d"] == 2, tidy
 assert (lint["auto_30d"], lint["uses_30d"]) == (1, 1) and lint["misses_30d"] == 0, lint
 assert rows["simplify"]["source"] == "other" and rows["simplify"]["uses_30d"] == 1, rows["simplify"]
@@ -114,7 +129,8 @@ assert ship["last_used"] == ts(1, 1), ship
 
 assert rows["agent-skills:quiet"]["flags"] == ["unused_30d"], rows["agent-skills:quiet"]
 assert rows["notes"]["flags"] == ["unused_30d"], rows["notes"]
-assert "misses" in tidy["flags"] and "misses" not in ship["flags"], (tidy, ship)
+assert "misses" in tidy["flags"] and "misses" in ship["flags"], (tidy, ship)
+assert su.flags({**ship, "misses_30d": 1}, 1) == [], "a miss count equal to the threshold is not flagged"
 assert "slash_only" not in ship["flags"], ship
 assert rows["simplify"]["flags"] == [], rows["simplify"]
 assert [s["source"] for s in rep["sources"]] == ["agent-skills", "acme-tools", "user", "other"], rep["sources"]
@@ -124,7 +140,7 @@ for secret in ("ship it now", "배포해줘\"", "lint this please", "/work/alpha
     assert secret not in blob, secret
 
 rep2 = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, miss_threshold=1)
-assert rep2["files_parsed"] == 0 and rep2["files"] == rep["files"] == 4, (rep["files"], rep2["files_parsed"])
+assert rep2["files_parsed"] == 0 and rep2["files"] == rep["files"] == 5, (rep["files"], rep2["files_parsed"])
 assert {r["name"]: r for r in rep2["skills"]} == rows
 with (projects / "-work-alpha" / "old.jsonl").open("a") as f:
     f.write(json.dumps(skill_call(ts(3), "agent-skills:quiet", session="s0"), separators=(",", ":")) + "\n")
@@ -140,15 +156,15 @@ assert n["slash_30d"] == 1 and n["flags"] == ["slash_only"], n
 ledger = root / "store" / "_skill-usage" / "ledger.jsonl"
 added = su.write_signals(ledger, rep4, NOW)
 got = {(r["skill"], r["flag"]) for r in added}
-assert got == {("notes", "slash_only"), ("agent-skills:tidy", "misses")}, got
+assert got == {("notes", "slash_only"), ("agent-skills:tidy", "misses"), ("agent-skills:ship", "misses")}, got
 r0 = next(r for r in added if r["skill"] == "notes")
 assert r0["ev"] == "signal" and r0["kind"] == "skill_usage" and r0["evidence"] == "skill-usage:notes:slash_only@2026-W39", r0
 assert r0["source"] == "user" and r0["suggest"] == ["rewrite-description"], r0
 assert r0["note"].startswith("slash_only; suggest: rewrite-description; "), r0
 assert su.write_signals(ledger, rep4, NOW) == [], "same week: nothing new"
-assert len(ledger.read_text().splitlines()) == 2
+assert len(ledger.read_text().splitlines()) == 3
 later = su.write_signals(ledger, rep4, NOW + dt.timedelta(days=7))
-assert len(later) == 2 and all(r["evidence"].endswith("@2026-W40") for r in later), later
+assert len(later) == 3 and all(r["evidence"].endswith("@2026-W40") for r in later), later
 unused = su.signal_rows({"skills": [{**rows["agent-skills:quiet"]}]}, NOW)
 assert unused[0]["suggest"] == ["rewrite-description", "merge", "retire"], unused
 

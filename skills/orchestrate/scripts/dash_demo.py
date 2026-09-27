@@ -373,7 +373,7 @@ def skills_report(now):
             "sources": [{"source": s, "skills": sum(r["source"] == s for r in skills),
                          "uses_30d": sum(r["uses_30d"] for r in skills if r["source"] == s),
                          "flagged": sum(bool(r["flags"]) for r in skills if r["source"] == s)} for s in order],
-            "skills": skills, "signals": {"path": "<store>/_skill-usage/ledger.jsonl", "added": 0}}
+            "skills": skills, "signals": {"added": 0}}
 
 
 def build(root, now=None):

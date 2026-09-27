@@ -14,6 +14,7 @@ REPO_PLUGIN = "agent-skills"
 EDITABLE = (REPO_PLUGIN, "user")
 SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
+SCAN_VERSION = 2  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 SUGGEST = {"unused_30d": ["rewrite-description", "merge", "retire"], "slash_only": ["rewrite-description"],
@@ -72,6 +73,10 @@ def is_specific_phrase(p):
     return len(p.split()) >= 2 or (not p.isascii() and len(p) >= 4)
 
 
+def phrase_in(p, text):
+    return re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", text) is not None if p.isascii() else p in text
+
+
 def phrases(desc):
     found = set()
     desc = " ".join(s for s in re.split(r"(?<=[.;])\s+", desc or "") if not RULED_OUT_SENTENCE_RE.match(s))
@@ -126,7 +131,7 @@ def resolver(inv):
 
 
 def _prompt(d):
-    if d.get("type") != "user" or d.get("isMeta"):
+    if d.get("type") != "user" or d.get("isMeta") or d.get("isCompactSummary"):
         return None, None
     c = (d.get("message") or {}).get("content")
     if isinstance(c, list):
@@ -138,7 +143,9 @@ def _prompt(d):
     m = re.search(r"<command-name>([^<]*)</command-name>", c)
     if m:
         return "command", m.group(1)
-    if c.lstrip().startswith("<"):  # task notifications, reminders, local command output
+    head = c.lstrip()
+    # Task notifications, reminders and local command output are user rows the harness writes.
+    if (head.startswith("<") and not head.startswith("<pasted_content")) or head.startswith("[Request interrupted"):
         return None, None
     return "human", c
 
@@ -178,7 +185,7 @@ def scan_file(path, inv, resolve):
                     events.append([ts, name, "slash", session, cwd])
                 elif not prompted_by_model:
                     low = val.lower()
-                    turn["hits"] = {n for n, s in inv.items() if any(p in low for p in s["phrases"])}
+                    turn["hits"] = {n for n, s in inv.items() if any(phrase_in(p, low) for p in s["phrases"])}
                 continue
             if d.get("type") != "assistant":
                 continue
@@ -210,7 +217,7 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
     cache_path = pathlib.Path(cache_path or state_dir() / "skill-usage-cache.json")
     now = now or dt.datetime.now(dt.timezone.utc)
     resolve = resolver(inv)
-    inv_hash = _hash(json.dumps(inv, sort_keys=True))
+    inv_hash = _hash(json.dumps([SCAN_VERSION, inv], sort_keys=True))
     try:
         cache = json.loads(cache_path.read_text())
     except (OSError, ValueError):
@@ -227,7 +234,10 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
         if hit and hit["sig"] == sig:
             files[key] = hit
             continue
-        files[key] = {"sig": sig, **scan_file(p, inv, resolve)}
+        try:
+            files[key] = {"sig": sig, **scan_file(p, inv, resolve)}
+        except OSError:
+            continue
         parsed += 1
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(cache_path, json.dumps({"inv": inv_hash, "files": files}))
@@ -313,9 +323,11 @@ def write_signals(path, report, now, editable=EDITABLE):
     if path.exists():
         for line in path.read_text().splitlines():
             try:
-                seen.add(json.loads(line).get("evidence"))
+                row = json.loads(line)
             except ValueError:
-                pass
+                continue
+            if isinstance(row, dict):
+                seen.add(row.get("evidence"))
     new = [r for r in signal_rows(report, now, editable) if r["evidence"] not in seen]
     if new:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -336,7 +348,7 @@ def refresh(out=None, signals=True, miss_threshold=MISS_THRESHOLD):
     out.parent.mkdir(parents=True, exist_ok=True)
     if signals:
         path = signals_path() if signals is True else pathlib.Path(signals)
-        rep["signals"] = {"path": str(path), "added": len(write_signals(path, rep, parse_ts(rep["generated_at"])))}
+        rep["signals"] = {"added": len(write_signals(path, rep, parse_ts(rep["generated_at"])))}
     write_atomic(out, json.dumps(rep, ensure_ascii=False))
     return rep
 

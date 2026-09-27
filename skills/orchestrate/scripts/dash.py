@@ -1303,7 +1303,7 @@ def skills_loop():
                 rep = skill_usage.refresh()
                 added = (rep.get("signals") or {}).get("added")
                 if added:
-                    log(f"skills: {added} new usage signal(s) in {rep['signals']['path']}")
+                    log(f"skills: {added} new usage signal(s) in {skill_usage.signals_path()}")
         except Exception as e:
             log(f"skills: collect failed: {e!r}")
         time.sleep(60)
