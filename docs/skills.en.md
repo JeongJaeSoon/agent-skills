@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 28 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
+This page covers the 29 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
 
 ## Flow
 
@@ -13,6 +13,7 @@ Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               └ measure-delivery when it's done
 Machine     reap-resources (clears processes, Docker leftovers and branches that dead sessions
               left; the resource steward runs it on a schedule)
+            tune-automode (a classifier denial into the smallest autoMode rule; the user applies it)
 Anywhere    use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
 ```
@@ -152,6 +153,12 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - It never uses `pkill`, `docker system prune` or `--force`. When a running total (Codex processes and RSS, orphan processes, dangling volumes, branches and worktrees to remove) reaches its limit in the config, it prints an `경보` (alert).
 - **Bundled:** `scripts/reap.py`, a test file.
 - **Related:** The resource steward in `orchestrate` runs it every round, and tells the human through the dashboard inbox when an alert remains.
+
+### tune-automode
+- **When:** the auto-mode classifier denied an action and the user wants that kind of action allowed from now on, or the user wants to change what auto mode lets the agent do. "auto mode 가 막았어" ("auto mode blocked it"), "이거 허용되게 규칙 추가해줘" ("add a rule so this is allowed").
+- **What it does:** From the denial category and the denied action, it drafts the smallest allow, soft_deny or environment rule that covers that action class. A rule carries the action class, the conditions that make it safe, and `Not covered:`. After a review checklist (no blanket allows, no production-destructive verbs the user did not name, only the user's own chat counts as authorization), `scripts/automode_rule.py emit` shows the diff and writes a standalone script with the spec embedded under the home directory. The user applies it with `! python3 <path> --apply <spec hash>`; the hash must match the spec whose diff the user saw. The script takes a timestamped backup, merges idempotently, validates the JSON and prints the rollback command. The agent never edits settings.json, never runs that script, and never works around the denial while waiting.
+- **Ships with:** `scripts/automode_rule.py`, its tests, `references/example-settings.json`.
+- **Related:** Tool-pattern permissions (`permissions.allow`, hooks) belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`.
 
 ## Adapters
 
@@ -480,7 +487,7 @@ Of pstack's 47 skills (23 principles and 24 others), we took all 23 principles a
 - **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
-- **Machine upkeep:** `reap-resources`.
+- **Machine upkeep:** `reap-resources`, `tune-automode`.
 - **Hooks:** permission decisions (`guard.py`), re-orienting after compaction (`reorient.py`), and recording permission prompts for the dashboard to answer (`permission.py`), and closing decisions answered in the terminal (`decision.py`).
 
 ### Upstream sync status

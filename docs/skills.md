@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 28개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 29개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -10,6 +10,7 @@
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
               └ 끝나면 measure-delivery
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
+              tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
 어디서나    use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
 
@@ -148,6 +149,12 @@
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(Codex 프로세스·RSS, 고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, 테스트 파일.
 - **관계:** `orchestrate`의 resource steward가 라운드마다 부르고, 경보가 남으면 대시보드 인박스로 사람에게 알린다.
+
+### tune-automode
+- **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
+- **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
+- **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
+- **관계:** 도구 패턴 권한(`permissions.allow`, hooks)은 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다.
 
 ## 어댑터
 
@@ -487,7 +494,7 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
-- **머신 관리:** `reap-resources`.
+- **머신 관리:** `reap-resources`, `tune-automode`.
 - **hook:** 권한 결정(`guard.py`), 압축 후 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`).
 
 ### upstream 동기화 상태
