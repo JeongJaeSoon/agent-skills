@@ -43,7 +43,7 @@ Fix Root Causes in `principles`).
 
 - Every shipped line traces to runtime evidence. A change that "might help" is a hypothesis;
   when the evidence refutes it, revert what it motivated.
-- Reproduce a bug on the surface the user saw it on (Aside for anything in a browser) and
+- Reproduce a bug on the surface the user saw it on (browser automation for anything in a browser) and
   confirm the fix there. A unit test shows branch behavior, not that the bug is gone.
 - A refactor pins behavior before any structure moves. Type check and lint are not a pin. If the
   diff does not lower reader load somewhere, revert it.
@@ -121,8 +121,8 @@ Before pushing, run **both**:
 - the test suite
 - an E2E check against a running system (a local compose stack, image build or E2E run goes
   through `orch heavy - -- <command>`, which
-  caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, **Aside** for UI
-  and web flows (it is the browser for everything, logged-in sites included), IDE diagnostics
+  caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, browser automation for UI
+  and web flows (logged-in sites included), IDE diagnostics
   for type and lint
 - a change with no runtime behavior (docs, comments): run every command and example it
   documents, exactly as written; that is its E2E
