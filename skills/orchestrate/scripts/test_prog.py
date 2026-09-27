@@ -194,6 +194,55 @@ spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktree
 assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-2] == "  orca worktree rm --worktree path:'/w/a b'"
 assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
                        {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
+settled = [
+    {"dispatchId": "s1", "terminalState": "reclaimable", "workerState": "succeeded", "resource": {"worktreeId": "w1"}},
+    {"dispatchId": "s2", "terminalState": "reclaimable", "workerState": "failed", "resource": {"worktreeId": "w2"}},
+    {"dispatchId": "s3", "terminalState": "release_unknown", "workerState": "succeeded", "resource": {"worktreeId": "gone"}},
+    {"dispatchId": "s4", "terminalState": "retained", "workerState": "succeeded", "resource": {"worktreeId": "w3"}},
+    {"dispatchId": "t1", "terminalState": "retained", "workerState": "succeeded", "agentTerminalHandle": "term_t1",
+     "resource": {"worktreeId": "w1", "retainedReason": "user_takeover"}},
+    {"dispatchId": "t2", "terminalState": "retained", "workerState": "failed", "agentTerminalHandle": "term_t2",
+     "resource": {"worktreeId": "w2", "retainedReason": "user_takeover"}},
+    {"dispatchId": "t3", "terminalState": "retained", "workerState": "ready", "agentTerminalHandle": "term_t3",
+     "resource": {"worktreeId": "w1", "retainedReason": "user_takeover"}},
+    {"dispatchId": "s5", "terminalState": "active", "workerState": "ready", "resource": {"worktreeId": "wq"}},
+    {"dispatchId": "s6", "terminalState": "reclaimable", "workerState": "succeeded", "resource": {"worktreeId": "wq"}},
+]
+held = {"/w/2": "open PR #7"}
+asked = {}
+sweep = prog.settle_sweep(settled, wts, skip={"s6", "t1"}, holds=held.get, asked=asked, now="T0")
+assert sweep == ["SETTLED s1 (succeeded): release it; no open PR, nothing unpushed",
+                 "  orca orchestration worker-release --dispatch s1",
+                 "SETTLED s3 (succeeded): release it; its card is gone",
+                 "  orca orchestration worker-release --dispatch s3",
+                 "TAKEN OVER t1 (succeeded): worker-release refuses it; ask it to check for work left and close itself",
+                 f"  orca terminal send --terminal term_t1 --text {prog.shlex.quote(prog.SELF_CHECK)} --enter",
+                 "KEEP s2 (failed): open PR #7",
+                 "KEEP t2 (failed): open PR #7"], sweep
+assert asked == {"t1": "T0"}, asked
+again = prog.settle_sweep(settled, wts, holds=held.get, asked=asked, now="T1")
+assert "TAKEN OVER t1 (succeeded): self-check asked at T0; wait for its answer" in again and not any("term_t1" in l for l in again), again
+assert prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "t1"}}], settled, wts) == []
+assert prog.settle_sweep([], wts) == []
+import subprocess, tempfile
+repo = tempfile.mkdtemp(prefix="test-holds-")
+git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, check=True)
+git("init", "-q"); git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x")
+assert prog.card_holds(repo) == "1 unpushed commit(s)", prog.card_holds(repo)
+head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED", "headRefOid": head}) is None
+git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "y")
+assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED", "headRefOid": head}) \
+    == "1 commit(s) after its merged PR"
+for oid in (None, "", "0" * 40):
+    assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED", "headRefOid": oid}) \
+        == "2 unpushed commit(s)", oid
+assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "OPEN"}) == "open PR #5"
+git("checkout", "-q", "--detach")
+assert prog.card_holds(repo, pr=lambda path, branch: 1 / 0) == "2 unpushed commit(s)"
+pathlib.Path(repo, "f").write_text("x")
+assert prog.card_holds(repo) == "uncommitted changes"
+assert prog.card_holds("/nonexistent/card") is None
 # A released worker's repeated worker_done comes back as Orca's refusal; orch wait acks it without waking. A refusal
 # for a missing capability still wakes it: that worker is live.
 import contextlib, io, json
@@ -211,12 +260,99 @@ def fake_orca(*a):
     return {}
 saved = prog.orca_json, prog.Program, prog.run_workers
 prog.orca_json, prog.run_workers = fake_orca, lambda run: []
-prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}})()
+_pdir = pathlib.Path(tempfile.mkdtemp())
+prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}, "slug": slug, "dir": _pdir})()
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "refused a worker_done from released dispatch d1" in out.getvalue() and "ACTIONABLE" not in out.getvalue(), out.getvalue()
 assert any("--ack" in a and "dv1" in a for a in calls), calls
+prog.run_workers = lambda run: [dict(settled[2], dispatchId="s7"), dict(settled[2], dispatchId="d1")]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "SETTLED s7 (succeeded): release it" in out.getvalue(), out.getvalue()
+prog.orca_json = lambda *a: {"deliveryId": "dv2", "messages": [{"type": "worker_done", "payload": {"dispatchId": "d1"}}]} \
+    if "--wait" in a else {}
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "SETTLED s7" in out.getvalue() and "SETTLED d1" not in out.getvalue() and "CLOSE OUT d1" in out.getvalue(), out.getvalue()
+def broken(run):
+    raise RuntimeError("boom")
+prog.run_workers = broken
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.print_sweep("run_x", pathlib.Path(tempfile.mkdtemp()) / "self-check.json")
+assert "sweep failed (RuntimeError: boom)" in out.getvalue(), out.getvalue()
+prog.run_workers = lambda run: [settled[4]]
+prog.orca_json = lambda *a: {"worktrees": wts}
+for bad in ("{trunc", "null"):
+    state = pathlib.Path(tempfile.mkdtemp()) / "self-check.json"
+    state.write_text(bad)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        prog.print_sweep("run_x", state)
+        prog.print_sweep("run_x", state)
+    assert out.getvalue().count("orca terminal send") == 1 and "self-check asked at" in out.getvalue(), out.getvalue()
+    assert list(json.loads(state.read_text())) == ["t1"]
+menu = ["Which base branch should the PR target?", "❯ 1. main", "  2. develop", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+perm = ["Bash command", "  rm -rf build", "Do you want to proceed?", "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"]
+idle = ["done.", "❯ ", "  ⏵⏵ auto mode on"]
+assert prog.screen_prompt(menu) == ("a select menu", "Which base branch should the PR target?")
+assert prog.screen_prompt(perm) == ("a permission prompt", "Do you want to proceed?")
+assert prog.screen_prompt(idle) is None and prog.screen_prompt(idle, "waiting") == ("waiting for input", "")
+assert prog.screen_prompt(["Do you want to keep the old flag? I left it as is.", "", "❯ "]) is None
+live = [{"dispatchId": "a1", "terminalState": "active", "agentTerminalHandle": "h1"},
+        {"dispatchId": "a2", "terminalState": "active", "agentTerminalHandle": "h2"},
+        {"dispatchId": "a3", "terminalState": "reclaimable", "agentTerminalHandle": "h3"},
+        {"dispatchId": "a4", "terminalState": "active", "agentTerminalHandle": "h4"}]
+screens = {"h1": menu, "h2": idle, "h3": menu}
+def read(h):
+    if h == "h4":
+        raise SystemExit("terminal gone")
+    return screens[h]
+seen = {}
+first = prog.stuck_sweep(live, "s", seen, read=read)
+assert first[0].startswith('STUCK a1 (a select menu): "Which base branch should the PR target?"'), first
+assert "  orca terminal read --terminal h1 --screen" in first
+assert any("orch record s signal --kind stall --evidence a1" in l for l in first), first
+assert list(seen) == ["a1"] and not any("a2" in l or "a3" in l or "a4" in l for l in first), first
+assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == []
+screens["h1"] = menu + ["  Session: 23hr 4m"]
+assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == [], "a ticking status bar is the same prompt"
+screens["h1"] = menu
+assert prog.prompt_block(["out", "", "> ", "  Session: 1m"]) == [] == prog.prompt_block(["out", "", "> ", "  Session: 2m"]), "an idle prompt keys on nothing that ticks"
+ask = ["Done.", "Should I also bump the version?", "", "> ", "  Session: 1m"]
+assert prog.prompt_block(ask) == prog.prompt_block(ask[:-1] + ["  Session: 2m"]) == ask[:2], "a question with no options keys on the question"
+stale = ["Enter to select", "later output", "Should I retry?", "> ", "  Session: 1m"]
+assert prog.prompt_block(stale) == stale[:3], "a menu above a newer question is not its end"
+heredoc = lambda f: ["Bash command", "  cat <<EOF > " + f, "  line 1", "  line 2", "  line 3", "  line 4", "  EOF", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No (esc)"]
+assert prog.prompt_block(heredoc("a.txt")) != prog.prompt_block(heredoc("b.txt")), "prompts that differ far above the question differ"
+assert prog.prompt_block(["x"] * 20 + heredoc("a.txt") + ["  Session: 1m"])[-11:] == heredoc("a.txt") == prog.prompt_block(["x"] * 19 + heredoc("a.txt") + ["  Session: 1m", "  Context low"])[-11:]
+assert prog.prompt_block((["x"] * 20 + heredoc("a.txt") + ["  Session: 1m"])[-25:]) == prog.prompt_block((["x"] * 20 + heredoc("a.txt") + ["  Session: 1m", "  Context low"])[-25:]), "a second status line does not move the key"
+assert prog.stuck_sweep(live, "s", seen, read=read) == first
+perm2 = ["Bash command", "  git push -f", "Do you want to proceed?", "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"]
+screens["h1"] = perm
+prog.stuck_sweep(live, "s", seen, read=read)
+screens["h1"] = perm2
+assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True)[0].startswith("STUCK a1 (a permission prompt)"), seen
+screens["h1"] = idle
+assert prog.stuck_sweep(live, "s", seen, read=read) == [] and seen == {}
+# A new prompt ends the wait early: nobody watches a worker's terminal.
+prog.orca_json = lambda *a: {"deliveryId": None, "messages": []}
+prog.run_workers = lambda run: live
+screens["h1"] = menu
+saved_read, prog.read_screen = prog.read_screen, read
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "3"])
+assert "STUCK a1" in out.getvalue() and "wait 2/3" not in out.getvalue() and "EMPTY" not in out.getvalue(), out.getvalue()
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "STUCK a1" in out.getvalue() and "EMPTY" in out.getvalue(), out.getvalue()
+prog.read_screen = saved_read
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},

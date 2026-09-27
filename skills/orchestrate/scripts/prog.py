@@ -65,7 +65,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, shlex, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py"
@@ -1404,6 +1404,16 @@ def revoked_echo(m):
     return (p.get("dispatchId") or "?") if "revoked" in (rej.get("reason") or "") else None
 
 
+def payload_of(m):
+    payload = m.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def close_out(msgs, workers, worktrees):
     """What to do with each worker_done's card, printed beside the message: after a compaction a coordinator kept
     releasing workers but dropped `worktree rm`, and eight cards stayed open."""
@@ -1414,15 +1424,9 @@ def close_out(msgs, workers, worktrees):
     for m in msgs:
         if m.get("type") != "worker_done":
             continue
-        payload = m.get("payload")
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except ValueError:
-                payload = {}
-        payload = payload if isinstance(payload, dict) else {}
+        payload = payload_of(m)
         d = payload.get("dispatchId")
-        if not d:
+        if not d or any(taken_over(w) for w in workers if w["dispatchId"] == d):
             continue
         release = f"  orca orchestration worker-release --dispatch {d}"
         wt = card.get(d)
@@ -1444,6 +1448,179 @@ def close_out(msgs, workers, worktrees):
             plan, reap = f"/tmp/reap-{d}.json", f"python3 {shlex.quote(str(REAP))}"
             out.append(f"  {reap} scan --kinds codex --plan {plan} && {reap} reap --plan {plan}")
     return out
+
+
+def taken_over(w):
+    """Orca's worker-release never closes a terminal someone typed into, a coordinator's `terminal send` included."""
+    return (w.get("terminalState") == "retained" and (w.get("resource") or {}).get("retainedReason") == "user_takeover"
+            and w.get("workerState") in ("succeeded", "failed"))
+
+
+def gh_pr(path, branch):
+    try:
+        r = subprocess.run(["gh", "pr", "view", branch, "--json", "number,state,headRefOid"], capture_output=True,
+                           text=True, cwd=path, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"state": f"unknown ({type(e).__name__})"}
+    if r.returncode:
+        if re.search(r"no (pull requests found|git remotes)", r.stderr):
+            return None
+        return {"state": f"unknown ({r.stderr.strip()[:80]})"}
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return {"state": "unknown (unreadable gh output)"}
+
+
+def card_holds(path, pr=gh_pr):
+    if not os.path.isdir(path):
+        return None
+    if run(["git", "-C", path, "status", "--porcelain"], check=False).stdout.strip():
+        return "uncommitted changes"
+    branch = run(["git", "-C", path, "symbolic-ref", "-q", "--short", "HEAD"], check=False).stdout.strip()
+    state = (pr(path, branch) or {}) if branch else {}
+    if state.get("state") == "OPEN":
+        return f"open PR #{state['number']}"
+    if state.get("state", "").startswith("unknown"):
+        return f"PR state {state['state']}"
+    if state.get("state") == "MERGED":
+        r = run(["git", "-C", path, "rev-list", "--count", "HEAD", "--not", str(state.get("headRefOid")), "--remotes"], check=False)
+        if r.returncode == 0:
+            after = r.stdout.strip()
+            return f"{after} commit(s) after its merged PR" if after not in ("", "0") else None
+    ahead = run(["git", "-C", path, "rev-list", "--count", "HEAD", "--not", "--remotes"], check=False).stdout.strip()
+    return f"{ahead} unpushed commit(s)" if ahead not in ("", "0") else None
+
+
+SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-session and close yourself. "
+              "If some, say what it is and keep it.")
+
+
+def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=None):
+    path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
+    asked = {} if asked is None else asked
+    seen, out, kept = {}, [], []
+    for w in workers:
+        d, res, taken = w.get("dispatchId"), w.get("resource") or {}, taken_over(w)
+        if not d or (not taken and (w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip)):
+            continue
+        p = path.get(res.get("worktreeId"))
+        if p and p not in seen:
+            seen[p] = holds(p)
+        why = seen.get(p)
+        if why:
+            kept.append(f"KEEP {d} ({w.get('workerState')}): {why}")
+        elif taken and d in asked:
+            out.append(f"TAKEN OVER {d} ({w.get('workerState')}): self-check asked at {asked[d]}; wait for its answer")
+        elif taken:
+            asked[d] = now or dt.datetime.now().isoformat(timespec="minutes")
+            out += [f"TAKEN OVER {d} ({w.get('workerState')}): worker-release refuses it; ask it to check for work left and close itself",
+                    f"  orca terminal send --terminal {w.get('agentTerminalHandle')} --text {shlex.quote(SELF_CHECK)} --enter"]
+        else:
+            out += [f"SETTLED {d} ({w.get('workerState')}): release it; "
+                    + ("no open PR, nothing unpushed" if p else "its card is gone"),
+                    f"  orca orchestration worker-release --dispatch {d}"]
+    return out + kept
+
+
+def print_sweep(run_id, state, skip=()):
+    try:
+        asked = json.loads(state.read_text())
+    except (OSError, ValueError):
+        asked = {}
+    asked = asked if isinstance(asked, dict) else {}
+    try:
+        workers = run_workers(run_id)
+        lines = settle_sweep(workers, orca_json("worktree", "list").get("worktrees", []), skip, asked=asked)
+    except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
+        lines, workers = [f"SETTLED: sweep failed ({type(e).__name__}: {e}); worker-list --run {run_id} --terminal-state reclaimable lists them"], None
+    if workers is not None:
+        live = {w.get("dispatchId") for w in workers if taken_over(w)}
+        try:
+            fd, tmp = tempfile.mkstemp(dir=state.parent, prefix=".self-check-")
+            with os.fdopen(fd, "w") as f:
+                json.dump({d: t for d, t in asked.items() if d in live}, f)
+            os.replace(tmp, state)
+        except OSError as e:
+            lines.append(f"SETTLED: could not record the self-checks ({e}); the next wake prints them again")
+    if lines:
+        print("\n".join(lines), flush=True)
+
+
+PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
+           (re.compile(r"^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt")]
+
+
+def screen_prompt(lines, activity=None):
+    tail = lines[-25:]
+    for rx, kind in PROMPTS:
+        if rx.search("\n".join(tail)):
+            return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
+    return ("waiting for input", "") if activity == "waiting" else None
+
+
+def prompt_block(tail):
+    """Twelve lines up to the prompt's last option, or its question: anything below it (the status bar) would change the key every round."""
+    q = max((i for i, l in enumerate(tail) if l.strip().endswith("?")), default=None)
+    ends = [i for i, l in enumerate(tail) if re.search(r"Enter to select|\(esc\)|Esc to cancel", l) and (q is None or i >= q)]
+    end = ends[0] if ends else q
+    return [] if end is None else tail[max(0, end - 11):end + 1]
+
+
+def read_screen(handle):
+    return orca_json("terminal", "read", "--terminal", handle, "--screen").get("terminal", {}).get("tail", [])
+
+
+def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False):
+    """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours."""
+    out, now = [], {}
+    for w in workers:
+        d, h = w.get("dispatchId"), w.get("agentTerminalHandle")
+        if w.get("terminalState") != "active" or not d or not h:
+            continue
+        try:
+            lines = read(h)
+        except (SystemExit, Exception):
+            continue
+        hit = screen_prompt(lines, ((w.get("projection") or {}).get("stage") or {}).get("activity"))
+        if not hit:
+            continue
+        kind, question = hit
+        key = hashlib.sha1("\n".join(prompt_block(lines[-25:])).encode()).hexdigest()[:12]
+        now[d] = key
+        if only_new and seen.get(d) == key:
+            continue
+        out += [f"STUCK {d} ({kind}): " + (f'"{question}"' if question else "read its screen")
+                + "; answer it from the program's decisions, or put it to the human now if none covers it, and record it",
+                f"  orca terminal read --terminal {h} --screen",
+                f"  orch record {slug} signal --kind stall --evidence {d} --note \"{kind}: answered <what> | escalated\""]
+    seen.clear()
+    seen.update(now)
+    return out
+
+
+def print_stuck(p, run_id, only_new=False):
+    state = p.dir / "stuck.json"
+    try:
+        seen = json.loads(state.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    seen = seen if isinstance(seen, dict) else {}
+    try:
+        lines = stuck_sweep(run_workers(run_id), p.slug, seen, read=read_screen, only_new=only_new)
+    except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
+        lines, seen = ([] if only_new else [f"STUCK: screen sweep failed ({type(e).__name__}: {e})"]), None
+    if seen is not None:
+        try:
+            fd, tmp = tempfile.mkstemp(dir=state.parent, prefix=".stuck-")
+            with os.fdopen(fd, "w") as f:
+                json.dump(seen, f)
+            os.replace(tmp, state)
+        except OSError:
+            pass
+    if lines:
+        print("\n".join(lines), flush=True)
+    return lines
 
 
 def cmd_wait(argv):
@@ -1473,24 +1650,33 @@ def cmd_wait(argv):
                 body = (m.get("body") or "").replace("\n", " ")
                 print(f"INBOX id={m.get('id')} type={m.get('type')} from={m.get('from_handle')} "
                       f"subject={m.get('subject')} payload={str(m.get('payload'))[:200]} body={body[:800]}")
-            if any(m.get("type") == "worker_done" for m in work):
+            closed = {payload_of(m).get("dispatchId") for m in work if m.get("type") == "worker_done"}
+            if closed:
                 try:
                     lines = close_out(work, run_workers(run_id), orca_json("worktree", "list").get("worktrees", []))
                 except SystemExit as e:  # the batch and its ack line matter more than the hint
                     lines = [f"CLOSE OUT: could not read the cards ({e}); `orch status` lists them"]
                 print("\n".join(lines))
+            print_sweep(run_id, p.dir / "self-check.json", closed)
+            print_stuck(p, run_id)
             print(f"ACTIONABLE delivery={did} ({len(work)} of {len(msgs)}): process every message, then "
                   f"orca orchestration check --run {run_id} --ack {did} --json")
             return
         if did:
             orca_json("orchestration", "check", "--run", run_id, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
+        if print_stuck(p, run_id, only_new=True):
+            print_sweep(run_id, p.dir / "self-check.json")
+            print("STUCK: a worker waits on a prompt nobody sees; answer or escalate it now", flush=True)
+            return
+    print_sweep(run_id, p.dir / "self-check.json")
+    print_stuck(p, run_id)
     print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
           f" one that ended its turn without worker_done does not wake on send: send the instruction with"
           f" orca orchestration send --to dispatch:<id>, then nudge it in one line, orca terminal send --terminal"
           f" <agentTerminalHandle> --text 'run your orchestration check' --enter, and read the terminal to see the turn"
-          f" start; a worker with no terminal gets Orca's recovery (worker-stop or worker-abandon:"
+          f" start (a nudged terminal later closes through its TAKEN OVER self-check); a worker with no terminal gets Orca's recovery (worker-stop or worker-abandon:"
           f" orca skills get orchestration --reference references/recovery-and-cleanup.md)")
 
 
