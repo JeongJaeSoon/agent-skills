@@ -214,7 +214,7 @@ orch-dash adopt [--apply] [--undo all|<worktree id>]
 | chained | a `Skill` tool call whose `attributionSkill` is another skill loaded earlier in the same turn |
 | slash | a human message carrying `<command-name>/<skill></command-name>`; a built-in command that is not a skill is dropped |
 
-A **miss** is a human prompt (not a subagent's, a slash command, a notification, a compaction summary or an interruption marker) that contains, as whole words, a quoted trigger phrase from a skill's description, with no invocation of that skill before the next human prompt. A phrase counts when it has two or more words, or four or more non-ASCII characters; phrases in a sentence starting with "Not", "Never" or "Don't" are skipped. It is a heuristic: read the number as "look here", not as proof.
+A **miss** is a human prompt (not a subagent's, a slash command, a notification, a compaction summary or an interruption marker; text inside a `<pasted_content>` block is ignored) that contains, as whole words, a quoted trigger phrase from a skill's description, with no invocation of that skill before the next human prompt. A phrase counts when it has two or more words, or four or more non-ASCII characters; phrases in a sentence starting with "Not", "Never" or "Don't" are skipped. It is a heuristic: read the number as "look here", not as proof.
 
 | Flag | When |
 |---|---|
