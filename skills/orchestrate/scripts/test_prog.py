@@ -302,6 +302,7 @@ idle = ["done.", "❯ ", "  ⏵⏵ auto mode on"]
 assert prog.screen_prompt(menu) == ("a select menu", "Which base branch should the PR target?")
 assert prog.screen_prompt(perm) == ("a permission prompt", "Do you want to proceed?")
 assert prog.screen_prompt(idle) is None and prog.screen_prompt(idle, "waiting") == ("waiting for input", "")
+assert prog.screen_prompt(["Do you want to keep the old flag? I left it as is.", "", "❯ "]) is None
 live = [{"dispatchId": "a1", "terminalState": "active", "agentTerminalHandle": "h1"},
         {"dispatchId": "a2", "terminalState": "active", "agentTerminalHandle": "h2"},
         {"dispatchId": "a3", "terminalState": "reclaimable", "agentTerminalHandle": "h3"},
@@ -318,14 +319,23 @@ assert "  orca terminal read --terminal h1 --screen" in first
 assert any("orch record s signal --kind stall --evidence a1" in l for l in first), first
 assert list(seen) == ["a1"] and not any("a2" in l or "a3" in l or "a4" in l for l in first), first
 assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == []
+screens["h1"] = menu + ["  Session: 23hr 4m"]
+assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == [], "a ticking status bar is the same prompt"
+screens["h1"] = menu
+assert prog.prompt_block(["out", "", "> ", "  Session: 1m"]) == [] == prog.prompt_block(["out", "", "> ", "  Session: 2m"]), "an idle prompt keys on nothing that ticks"
 assert prog.stuck_sweep(live, "s", seen, read=read) == first
+perm2 = ["Bash command", "  git push -f", "Do you want to proceed?", "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"]
+screens["h1"] = perm
+prog.stuck_sweep(live, "s", seen, read=read)
+screens["h1"] = perm2
+assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True)[0].startswith("STUCK a1 (a permission prompt)"), seen
 screens["h1"] = idle
 assert prog.stuck_sweep(live, "s", seen, read=read) == [] and seen == {}
 # A new prompt ends the wait early: nobody watches a worker's terminal.
 prog.orca_json = lambda *a: {"deliveryId": None, "messages": []}
 prog.run_workers = lambda run: live
 screens["h1"] = menu
-prog.read_screen = read
+saved_read, prog.read_screen = prog.read_screen, read
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "3"])
@@ -334,6 +344,7 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "STUCK a1" in out.getvalue() and "EMPTY" in out.getvalue(), out.getvalue()
+prog.read_screen = saved_read
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},

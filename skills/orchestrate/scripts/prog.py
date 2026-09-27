@@ -65,7 +65,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
+import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py"
@@ -1548,7 +1548,7 @@ def print_sweep(run_id, state, skip=()):
 
 
 PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
-           (re.compile(r"Do you want to |^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt")]
+           (re.compile(r"^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt")]
 
 
 def screen_prompt(lines, activity=None):
@@ -1557,6 +1557,15 @@ def screen_prompt(lines, activity=None):
         if rx.search("\n".join(tail)):
             return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
     return ("waiting for input", "") if activity == "waiting" else None
+
+
+def prompt_block(tail):
+    """The question and its options, without the status bar below them, whose clock would change the key every round."""
+    q = max((i for i, l in enumerate(tail) if l.strip().endswith("?")), default=None)
+    ends = [i for i, l in enumerate(tail) if re.search(r"Enter to select|\(esc\)|Esc to cancel", l) and (q is None or i >= q)]
+    if q is None:
+        return tail[:ends[-1] + 1] if ends else []
+    return tail[max(0, q - 4):(ends[0] if ends else len(tail) - 1) + 1]
 
 
 def read_screen(handle):
@@ -1578,7 +1587,7 @@ def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False):
         if not hit:
             continue
         kind, question = hit
-        key = f"{kind}: {question}"
+        key = hashlib.sha1("\n".join(prompt_block(lines[-25:])).encode()).hexdigest()[:12]
         now[d] = key
         if only_new and seen.get(d) == key:
             continue
@@ -1600,12 +1609,16 @@ def print_stuck(p, run_id, only_new=False):
     seen = seen if isinstance(seen, dict) else {}
     try:
         lines = stuck_sweep(run_workers(run_id), p.slug, seen, read=read_screen, only_new=only_new)
-        fd, tmp = tempfile.mkstemp(dir=state.parent, prefix=".stuck-")
-        with os.fdopen(fd, "w") as f:
-            json.dump(seen, f)
-        os.replace(tmp, state)
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
-        lines = [] if only_new else [f"STUCK: screen sweep failed ({type(e).__name__}: {e})"]
+        lines, seen = ([] if only_new else [f"STUCK: screen sweep failed ({type(e).__name__}: {e})"]), None
+    if seen is not None:
+        try:
+            fd, tmp = tempfile.mkstemp(dir=state.parent, prefix=".stuck-")
+            with os.fdopen(fd, "w") as f:
+                json.dump(seen, f)
+            os.replace(tmp, state)
+        except OSError:
+            pass
     if lines:
         print("\n".join(lines), flush=True)
     return lines
