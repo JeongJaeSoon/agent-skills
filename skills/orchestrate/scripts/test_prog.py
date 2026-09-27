@@ -234,6 +234,9 @@ assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MER
 git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "y")
 assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED", "headRefOid": head}) \
     == "1 commit(s) after its merged PR"
+for oid in (None, "", "0" * 40):
+    assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED", "headRefOid": oid}) \
+        == "2 unpushed commit(s)", oid
 assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "OPEN"}) == "open PR #5"
 git("checkout", "-q", "--detach")
 assert prog.card_holds(repo, pr=lambda path, branch: 1 / 0) == "2 unpushed commit(s)"

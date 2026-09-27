@@ -65,7 +65,7 @@ admitted, parked, approved, gate_opened, stop, resume, predicate_verified, confi
 land_check, yield, lane, lock_acquired, lock_released, reprioritized, signal.
 Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never from a tracker directly.
 """
-import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, shlex, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, fnmatch, heapq, json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py"
@@ -1466,7 +1466,10 @@ def gh_pr(path, branch):
         if re.search(r"no (pull requests found|git remotes)", r.stderr):
             return None
         return {"state": f"unknown ({r.stderr.strip()[:80]})"}
-    return json.loads(r.stdout)
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return {"state": "unknown (unreadable gh output)"}
 
 
 def card_holds(path, pr=gh_pr):
@@ -1481,8 +1484,10 @@ def card_holds(path, pr=gh_pr):
     if state.get("state", "").startswith("unknown"):
         return f"PR state {state['state']}"
     if state.get("state") == "MERGED":
-        after = run(["git", "-C", path, "rev-list", "--count", "HEAD", f"^{state.get('headRefOid')}"], check=False).stdout.strip()
-        return f"{after} commit(s) after its merged PR" if after not in ("", "0") else None
+        r = run(["git", "-C", path, "rev-list", "--count", "HEAD", "--not", str(state.get("headRefOid")), "--remotes"], check=False)
+        if r.returncode == 0:
+            after = r.stdout.strip()
+            return f"{after} commit(s) after its merged PR" if after not in ("", "0") else None
     ahead = run(["git", "-C", path, "rev-list", "--count", "HEAD", "--not", "--remotes"], check=False).stdout.strip()
     return f"{ahead} unpushed commit(s)" if ahead not in ("", "0") else None
 
@@ -1527,12 +1532,17 @@ def print_sweep(run_id, state, skip=()):
     try:
         workers = run_workers(run_id)
         lines = settle_sweep(workers, orca_json("worktree", "list").get("worktrees", []), skip, asked=asked)
-        live = {w.get("dispatchId") for w in workers if taken_over(w)}
-        tmp = state.with_suffix(".tmp")
-        tmp.write_text(json.dumps({d: t for d, t in asked.items() if d in live}))
-        os.replace(tmp, state)
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
-        lines = [f"SETTLED: sweep failed ({type(e).__name__}: {e}); worker-list --run {run_id} --terminal-state reclaimable lists them"]
+        lines, workers = [f"SETTLED: sweep failed ({type(e).__name__}: {e}); worker-list --run {run_id} --terminal-state reclaimable lists them"], None
+    if workers is not None:
+        live = {w.get("dispatchId") for w in workers if taken_over(w)}
+        try:
+            fd, tmp = tempfile.mkstemp(dir=state.parent, prefix=".self-check-")
+            with os.fdopen(fd, "w") as f:
+                json.dump({d: t for d, t in asked.items() if d in live}, f)
+            os.replace(tmp, state)
+        except OSError as e:
+            lines.append(f"SETTLED: could not record the self-checks ({e}); the next wake prints them again")
     if lines:
         print("\n".join(lines), flush=True)
 
