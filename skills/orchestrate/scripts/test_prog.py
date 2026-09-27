@@ -224,6 +224,54 @@ again = prog.settle_sweep(settled, wts, holds=held.get, asked=asked, now="T1")
 assert "TAKEN OVER t1 (succeeded): self-check asked at T0; wait for its answer" in again and not any("term_t1" in l for l in again), again
 assert prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "t1"}}], settled, wts) == []
 assert prog.settle_sweep([], wts) == []
+rev = ([{"ev": "ready", "pr": n, "ticket": f"R-{n}"} for n in (11, 12, 13, 14, 15, 16)]
+       + [{"ev": "verdict", "pr": n, "result": "pass"} for n in (11, 12, 13, 14, 15, 16)] + [{"ev": "landed", "pr": 15}])
+green = [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+ok = {"state": "OPEN", "reviewDecision": "APPROVED", "mergeStateStatus": "CLEAN", "isDraft": False, "labels": [], "statusCheckRollup": green,
+      "headRefOid": "abcdef1234"}
+rows = [dict(ok, number=11), dict(ok, number=12, reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED"),
+        dict(ok, number=13, labels=[{"name": "do-not-merge"}]), dict(ok, number=14), dict(ok, number=15), dict(ok, number=16)]
+view = {r["number"]: r for r in rows}.get
+lines = prog.review_sweep(rev, view, {"R-14"}, {16: 2}.get, "s")
+assert lines == ["LAND #11 (R-11): approved, clean and green at abcdef12, and no worker holds it",
+                 "  orch land s --pr 11",
+                 "WAITING ON REVIEW #12 (R-12): review required, merge state BLOCKED; #13 (R-13): on hold;"
+                 " #16 (R-16): 2 unresolved thread(s)"], lines
+assert prog.review_sweep(rev[:1], lambda n: dict(ok, state="MERGED"), set(), {}.get, "s") == [
+    "MERGED OUTSIDE LAND #11 (R-11): record it and finish its ticket as for a LAND", "  orch landed s --pr 11"]
+assert prog.review_sweep(rev[:1], lambda n: dict(ok, state="CLOSED"), set(), {}.get, "s") == [
+    "WAITING ON REVIEW #11 (R-11): closed without merging; ask its owner or drop its ticket"]
+hold = rev[:2] + rev[6:8] + [{"ev": "parked", "pr": 11, "note": "hold"}, {"ev": "parked", "pr": 12}, {"ev": "admitted", "pr": 12}]
+assert prog.review_sweep(hold, lambda n: ok, set(), {}.get, "s") == [
+    "LAND #12 (R-12): approved, clean and green at abcdef12, and no worker holds it", "  orch land s --pr 12",
+    "WAITING ON REVIEW #11 (R-11): on hold"]
+one = [rev[0], rev[6]]
+gated = lambda res: (lambda n: res)
+assert prog.review_sweep(one, lambda n: ok, set(), {}.get, "s", gate=gated(None)) == [
+    "WAITING ON REVIEW #11 (R-11): human gate not opened (orch gate s --pr 11)"]
+opened = one + [{"ev": "gate_opened", "pr": 11}]
+assert prog.review_sweep(opened, lambda n: ok, set(), {}.get, "s", gate=gated(None)) == [
+    "WAITING ON REVIEW #11 (R-11): human gate open, waiting for the user"]
+assert prog.review_sweep(opened, lambda n: ok, set(), {}.get, "s", gate=gated("hold")) == [
+    "WAITING ON REVIEW #11 (R-11): human gate resolved as 'hold'"]
+assert prog.review_sweep(opened, lambda n: ok, set(), {}.get, "s", gate=gated("land"))[0].startswith("LAND #11"), "a gate the user resolved as land lands"
+assert prog.review_sweep(one + [{"ev": "approved", "pr": 11}], lambda n: ok, set(), {}.get, "s", gate=gated(None))[0].startswith("LAND #11")
+def broken(n):
+    raise SystemExit("orca down")
+two = opened + [{"ev": "ready", "pr": 12, "ticket": "R-12"}, {"ev": "verdict", "pr": 12, "result": "pass"}, {"ev": "approved", "pr": 12}]
+assert prog.review_sweep(two, lambda n: ok, set(), {}.get, "s", gate=broken) == [
+    "LAND #12 (R-12): approved, clean and green at abcdef12, and no worker holds it", "  orch land s --pr 12",
+    "WAITING ON REVIEW #11 (R-11): human gate unreadable (SystemExit: orca down)"], "one unreadable gate keeps the other lines"
+assert prog.review_sweep(opened, lambda n: dict(ok, isDraft=True), set(), {}.get, "s", gate=broken) == [
+    "WAITING ON REVIEW #11 (R-11): draft"], "the gate is read only when nothing else holds the PR"
+assert prog.review_sweep([{"ev": "verdict", "pr": 20, "result": "pass"}], lambda n: ok, set(), {}.get, "s") == [
+    "WAITING ON REVIEW #20: no ticket, so no worker is ruled out"]
+assert prog.review_sweep(rev[:1], lambda n: ok, set(), {}.get, "s") == ["WAITING ON REVIEW #11 (R-11): no passing verdict"]
+assert prog.final_check_current([{"ev": "predicate_verified"}, {"ev": "admitted", "pr": 11}]), "a hold release is not a new follow-up"
+assert prog.review_sweep(one, lambda n: dict(ok, mergeStateStatus="BEHIND"), set(), {}.get, "s") == [
+    "WAITING ON REVIEW #11 (R-11): merge state BEHIND, gh pr update-branch 11"]
+assert prog.review_sweep(one, lambda n: dict(ok, mergeStateStatus="DIRTY"), set(), {}.get, "s") == [
+    "WAITING ON REVIEW #11 (R-11): merge state DIRTY, dispatch a fix"]
 import subprocess, tempfile
 repo = tempfile.mkdtemp(prefix="test-holds-")
 git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, check=True)
@@ -261,7 +309,8 @@ def fake_orca(*a):
 saved = prog.orca_json, prog.Program, prog.run_workers
 prog.orca_json, prog.run_workers = fake_orca, lambda run: []
 _pdir = pathlib.Path(tempfile.mkdtemp())
-prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}, "slug": slug, "dir": _pdir})()
+prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x", "repo": "o/r"}, "slug": slug, "events": lambda self: [],
+                                           "dir": _pdir})()
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
