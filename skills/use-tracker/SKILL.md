@@ -79,8 +79,8 @@ name contains "review"; with none or several it changes nothing and exits 1.
 
 ## Milestones
 
-A ticket's state follows the work as it moves, not only at its end. Each move posts one
-comment line with its evidence, so the ticket shows why it moved:
+A ticket's state follows the work as it moves. Each move posts the comment line the table
+names, with its evidence, so the ticket shows why it moved:
 
 | Moment | `transition --to` | Comment line |
 |---|---|---|
