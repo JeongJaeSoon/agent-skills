@@ -28,6 +28,7 @@ EVENTS_KEEP = 400
 ROTATE_BYTES = 5 * 1024 * 1024  # events.jsonl and pr-events.jsonl move to *.1 past this
 STICKY_TYPES = ("approval", "run_command", "login", "verify_failed", "question")
 SETTLED = ("completed", "failed", "abandoned")  # dispatch statuses whose worker has stopped
+AGENT_GONE_S = 600       # a session without an agent this long closes its turn items
 BRANCH_SKIP = {"main", "master", "develop", "trunk"}
 LOGIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?")
 
@@ -499,16 +500,12 @@ def pr_key(repo, number):
     return f"{repo}#{number}"
 
 
-PR_REF_RE = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)|\b([\w.-]+/[\w.-]+)#(\d+)|(?<![\w/#])#(\d+)\b")
+# A bare #n is left out: "step #2" or a PR in another repository would read as a PR of the session's own.
+PR_REF_RE = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)|\b([\w.-]+/[\w.-]+)#(\d+)")
 
 
-def pr_refs(text, repo=None):
-    """PR keys a message names. A bare #n is the session's repository; with none it stays unknown, so it never counts
-    as closed."""
-    out = set()
-    for m in PR_REF_RE.finditer(text or ""):
-        out.add(pr_key(m[1], m[2]) if m[1] else pr_key(m[3], m[4]) if m[3] else pr_key(repo or "?", m[5]))
-    return sorted(out)
+def pr_refs(text):
+    return sorted({pr_key(m[1], m[2]) if m[1] else pr_key(m[3], m[4]) for m in PR_REF_RE.finditer(text or "")})
 
 
 def pr_query(keys, body):
@@ -1017,7 +1014,7 @@ class Fleet:
                     if kind and kind != "fyi":
                         sticky[k] = {"key": k, "type": kind, "session": s["id"], "title": first_line(a["last"]),
                                      "detail": a["last"][-600:], "at": iso(now), "source": "turn", "open": kind != "verify_ok",
-                                     "prs": pr_refs(a["last"], s.get("gh_repo"))}
+                                     "prs": pr_refs(a["last"])}
                         self.event({"at": iso(now), "kind": f"item_{kind}", "session": s["id"], "text": first_line(a["last"])})
                     # The agent has finished a later turn, so what an earlier one asked for has been dealt with or
                     # been asked again (and raised again) at the end of this one.
@@ -1040,14 +1037,24 @@ class Fleet:
             for it in sticky.values():
                 if it.get("open") and it.get("source") == "turn" and it.get("session") not in sessions:
                     self.resolve(it, "session_gone", now)
-        # Only a read that found some agent can say a session has none left to answer its items.
-        agents_seen = any(s["agents"] for s in sessions.values())
+        # A session with no agent left has no one to answer its items. Only a read that found some agent can say so,
+        # and only once it has held for AGENT_GONE_S: a single read can miss one worktree's agent.
+        agentless = mem.setdefault("agentless", {})
+        if any(s["agents"] for s in sessions.values()):
+            for sid, s in sessions.items():
+                if s["agents"]:
+                    agentless.pop(sid, None)
+                else:
+                    agentless.setdefault(sid, iso(now))
+            for sid in [sid for sid in agentless if sid not in sessions]:
+                del agentless[sid]
+        gone_before = iso(now - dt.timedelta(seconds=AGENT_GONE_S))
         for it in sticky.values():
             s = sessions.get(it.get("session"))
             if not (it.get("open") and it.get("source") == "turn" and s):
                 continue
-            refs = it["prs"] if "prs" in it else pr_refs(f"{it['title']}\n{it.get('detail') or ''}", s.get("gh_repo"))
-            if agents_seen and not s["agents"]:
+            refs = it["prs"] if "prs" in it else pr_refs(f"{it['title']}\n{it.get('detail') or ''}")
+            if agentless.get(s["id"], gone_before) < gone_before:
                 self.resolve(it, "agent_gone", now)
             elif refs and all(((self.prs.get(r) or {}).get("detail") or {}).get("state") in ("MERGED", "CLOSED") for r in refs):
                 self.resolve(it, "prs_closed", now)

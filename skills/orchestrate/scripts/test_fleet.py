@@ -662,28 +662,33 @@ assert "mail:m30" not in {i["key"] for i in items(st, "question")}, items(st, "q
 del world.messages[kept:]
 
 # A turn item whose PRs have all merged or closed is done; one naming a PR still open, or one the PR cache does not
-# know, stays. A bare #n is the session's own repository.
+# know, stays. A bare #n names no PR: it may be a step number or another repository's PR.
 turn_items = lambda st: [i for i in items(st, "approval") if i["source"] == "turn"]
-for text, stays in (("Shall I merge https://github.com/acme/tools/pull/6?", False), ("Shall I merge #6 and acme/tools#99?", True),
-                    ("Shall I merge #7?", True), ("Shall I merge acme/tools#6?", False)):
+for text, stays in (("Shall I merge https://github.com/acme/tools/pull/6?", False), ("Shall I merge acme/tools#6 and acme/tools#99?", True),
+                    ("Shall I merge acme/tools#7?", True), ("Step #6 is done. Shall I start the next one?", True),
+                    ("Shall I merge acme/tools#6?", False)):
     scratch.update(state="done", lastAssistantMessage=text)
     st = f.tick(force=True)
     assert bool(turn_items(st)) == stays, (text, turn_items(st))
 assert "prs_closed" in resolved(st), resolved(st)
 
-# A turn item on a session with no agent left has no one to answer it. An empty read of every agent is more likely a
-# bad read than all of them gone at once, so it closes nothing.
+# A turn item on a session with no agent left for 10 minutes has no one to answer it. One read without the agent is
+# not enough, and an empty read of every agent is more likely a bad read than all of them gone at once.
 login["agents"][0]["lastAssistantMessage"] = "Shall I merge #41 now?"
 st = f.tick(force=True)
 assert [i["session"] for i in turn_items(st)] == ["wt-login"], turn_items(st)
 saved_agents = {w["worktreeId"]: w["agents"] for w in world.worktrees}
 for w in world.worktrees:
     w["agents"] = []
+clock[0] += dt.timedelta(minutes=11)
 st = f.tick(force=True)
 assert [i["session"] for i in turn_items(st)] == ["wt-login"] and "agent_gone" not in resolved(st), turn_items(st)
 for w in world.worktrees:
     w["agents"] = saved_agents[w["worktreeId"]]
 login["agents"] = []
+st = f.tick(force=True)
+assert [i["session"] for i in turn_items(st)] == ["wt-login"], "a single read without the agent is not enough"
+clock[0] += dt.timedelta(minutes=11)
 st = f.tick(force=True)
 assert not turn_items(st) and "agent_gone" in resolved(st), (turn_items(st), resolved(st))
 login["agents"] = saved_agents["wt-login"]
