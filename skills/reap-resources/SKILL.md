@@ -47,10 +47,10 @@ class when the load is at or above the limit:
 
 | Class | What | Action |
 |---|---|---|
-| ours-idle | a Claude session whose transcript has been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it. Closing 8 idle sessions once took a load of 19.5 down to 11 |
+| ours-idle | a Claude session whose transcripts (its subagents' included) have been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it. Closing 8 idle sessions once took a load of 19.5 down to 11 |
 | leftover | a `codex` or `orphan` target of `scan` | `scan --plan`, then `reap --plan` |
-| ours-working | anything else of this user's: a live session, a benchmark, a test run | leave it; stop new dispatches and queue heavy runs behind `orch heavy` |
-| system | another user's process, or one run from a system path | report it as not ours; never touch it |
+| ours-working | anything else of this user's, from any path: a live session, a benchmark, a test run, a container VM | leave it; stop new dispatches and queue heavy runs behind `orch heavy` |
+| system | another user's process | report it as not ours; never touch it |
 
 A session with no transcript on record counts as working. A benchmark or performance number
 taken while the load is at or above the limit is not evidence: measure again once it is under.
