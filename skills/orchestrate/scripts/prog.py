@@ -1623,6 +1623,66 @@ def print_stuck(p, run_id, only_new=False):
     return lines
 
 
+HOLD = re.compile(r"\bhold\b|do.?not.?merge|\bwip\b", re.I)
+
+
+def review_sweep(events, view, active, unresolved, slug):
+    """A review that outlasts its worker's session leaves a ready PR nobody lands."""
+    ticket = pr_ticket(events)
+    out, waiting = [], []
+    for st in ready_prs(events):
+        n = st["pr"]
+        t = ticket.get(n)
+        if t in active:
+            continue
+        r = view(n)
+        if r.get("state") != "OPEN":
+            continue
+        failed, pending, _ = ci_summary(r.get("statusCheckRollup"))
+        why = [w for w, bad in (
+            ("draft", r.get("isDraft")),
+            ("on hold", any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
+            ((r.get("reviewDecision") or "no review").lower().replace("_", " "), r.get("reviewDecision") != "APPROVED"),
+            (f"merge state {r.get('mergeStateStatus')}", r.get("mergeStateStatus") != "CLEAN"),
+            ("CI failed", failed), ("CI pending", pending)) if bad]
+        threads = 0 if why else unresolved(n)
+        if threads:
+            why.append(f"{threads} unresolved thread(s)")
+        name = f"#{n}" + (f" ({t})" if t else "")
+        if why:
+            waiting.append(f"{name}: {', '.join(why)}")
+        else:
+            out += [f"LAND {name}: approved, clean and green at {(r.get('headRefOid') or '')[:8]}, and no worker holds it",
+                    f"  orch land {slug} --pr {n}"]
+    return out + (["WAITING ON REVIEW " + "; ".join(waiting)] if waiting else [])
+
+
+def unresolved_threads(repo, n):
+    owner, name = repo.split("/")
+    q = ("query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n)"
+         "{reviewThreads(first:100){nodes{isResolved}}}}}")
+    res = gh_json("api", "graphql", "-f", f"query={q}", "-f", f"o={owner}", "-f", f"r={name}", "-F", f"n={n}")
+    return sum(not t["isResolved"] for t in res["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"])
+
+
+def print_reviews(p):
+    try:
+        events = p.events()
+        if not ready_prs(events):
+            return
+        spawned = {d: e["ticket"] for e in events if e["ev"] == "spawned" and e.get("ticket")
+                   for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or ""))}
+        active = {spawned.get(w.get("dispatchId")) for w in run_workers(p.cfg["run"]) if w.get("terminalState") == "active"}
+        repo = p.cfg["repo"]
+        fields = "state,reviewDecision,mergeStateStatus,isDraft,labels,statusCheckRollup,headRefOid"
+        lines = review_sweep(events, lambda n: gh_json("pr", "view", str(n), "--repo", repo, "--json", fields),
+                             active - {None}, lambda n: unresolved_threads(repo, n), p.slug)
+    except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
+        lines = [f"REVIEWS: sweep failed ({type(e).__name__}: {e}); orch status lists the ready PRs"]
+    if lines:
+        print("\n".join(lines), flush=True)
+
+
 def cmd_wait(argv):
     p = Program(argv[0])
     timeout = opt(argv, "--timeout-ms", "540000")
@@ -1659,6 +1719,7 @@ def cmd_wait(argv):
                 print("\n".join(lines))
             print_sweep(run_id, p.dir / "self-check.json", closed)
             print_stuck(p, run_id)
+            print_reviews(p)
             print(f"ACTIONABLE delivery={did} ({len(work)} of {len(msgs)}): process every message, then "
                   f"orca orchestration check --run {run_id} --ack {did} --json")
             return
@@ -1671,6 +1732,7 @@ def cmd_wait(argv):
             return
     print_sweep(run_id, p.dir / "self-check.json")
     print_stuck(p, run_id)
+    print_reviews(p)
     print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
           f" one that ended its turn without worker_done does not wake on send: send the instruction with"

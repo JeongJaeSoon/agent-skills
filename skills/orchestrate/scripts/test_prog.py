@@ -224,6 +224,19 @@ again = prog.settle_sweep(settled, wts, holds=held.get, asked=asked, now="T1")
 assert "TAKEN OVER t1 (succeeded): self-check asked at T0; wait for its answer" in again and not any("term_t1" in l for l in again), again
 assert prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "t1"}}], settled, wts) == []
 assert prog.settle_sweep([], wts) == []
+rev = [{"ev": "ready", "pr": n, "ticket": f"R-{n}"} for n in (11, 12, 13, 14, 15, 16)] + [{"ev": "landed", "pr": 15}]
+green = [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}]
+ok = {"state": "OPEN", "reviewDecision": "APPROVED", "mergeStateStatus": "CLEAN", "isDraft": False, "labels": [], "statusCheckRollup": green,
+      "headRefOid": "abcdef1234"}
+rows = [dict(ok, number=11), dict(ok, number=12, reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED"),
+        dict(ok, number=13, labels=[{"name": "do-not-merge"}]), dict(ok, number=14), dict(ok, number=15), dict(ok, number=16)]
+view = {r["number"]: r for r in rows}.get
+lines = prog.review_sweep(rev, view, {"R-14"}, {16: 2}.get, "s")
+assert lines == ["LAND #11 (R-11): approved, clean and green at abcdef12, and no worker holds it",
+                 "  orch land s --pr 11",
+                 "WAITING ON REVIEW #12 (R-12): review required, merge state BLOCKED; #13 (R-13): on hold;"
+                 " #16 (R-16): 2 unresolved thread(s)"], lines
+assert prog.review_sweep(rev, lambda n: dict(ok, state="MERGED"), set(), {}.get, "s") == []
 import subprocess, tempfile
 repo = tempfile.mkdtemp(prefix="test-holds-")
 git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, check=True)
@@ -261,7 +274,8 @@ def fake_orca(*a):
 saved = prog.orca_json, prog.Program, prog.run_workers
 prog.orca_json, prog.run_workers = fake_orca, lambda run: []
 _pdir = pathlib.Path(tempfile.mkdtemp())
-prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}, "slug": slug, "dir": _pdir})()
+prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x", "repo": "o/r"}, "slug": slug, "events": lambda self: [],
+                                           "dir": _pdir})()
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])

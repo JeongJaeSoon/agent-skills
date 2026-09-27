@@ -208,6 +208,9 @@ gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the co
 Merging is yours to do; no need to ask. Ask first only when the user said to hold, when they
 said they wanted to look at this one themselves, or when the state is off-script — a check that
 keeps flaking, a thread you resolved on the author's behalf, a migration you cannot roll back.
+A human review that will outlast this session does not hold it open: say in the report that the
+PR waits on a review. Inside a program the coordinator's wake lands it once it is ready; outside
+one, the top-level orchestrator's PR events start a dispatch on this card to finish from here.
 
 - **Someone else merges** — a fork PR, or a maintainer who lands it themselves. Do not end the
   turn waiting: watch it as [references/review-loop.md](references/review-loop.md) describes,
