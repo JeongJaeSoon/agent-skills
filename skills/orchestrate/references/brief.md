@@ -47,6 +47,14 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
             with the reason). The coordinator classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
+            An act refused by a permission prompt, the auto-mode classifier, a Claude Code hook or
+            the human is not tried again in any form: not re-run, not moved into a script or
+            another tool, not aimed at a renamed target, not handed to a subagent. Report it with
+            what the act was for, and put this rule in every subagent prompt you write. Taking
+            the path this brief already names for that act (`orch land` for a merge) is not a
+            retry. A hook that blocked only the text of a command reading no protected file, and
+            says to reword it: reword that text and say so in the report. A failing check (a git
+            hook, linter, test or CI) is not a refusal: fix the cause and run it again.
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
