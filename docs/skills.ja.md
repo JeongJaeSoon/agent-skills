@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル29個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。例外は `create-verification-skill` と `maintain-verification-skill` で、`disable-model-invocation` のためユーザーが直接呼び出す必要があります。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
+`agent-skills` プラグインに入っているスキル29個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
 
 ## 流れ
 
@@ -100,7 +100,7 @@
   - **top-level モード**（`references/top-level.md`）: 単独タスクのセッションとプロジェクトのコーディネーターの上に立つセッション。依頼の振り分け表、ユーザーが開いたセッションは読むだけ、ワーカー起動の確認は `--screen` でバックグラウンドから（信頼確認の画面は直前に起動したワーカーに限り ↓ を確認してから Enter、止められたらインボックスへ）、終わった dispatch には `run:` へ、本文はファイル経由、AskUserQuestion の代わりにダッシュボードのインボックス（`orch-dash inbox add`）と決定の登録（`orch decide add`、チャットで答えが出たらすぐ `done`）、フィルターなしのバックグラウンド `check --wait` 一つで通知の割り込みを防ぐ、PR レビューイベント（`pr-events.jsonl`）への反応、スキルが変わったら `skills-sync broadcast`。
   - 以下の 1〜8 は **program モード**です。
   1. **Frame:** 完了条件（predicate）は、数えられるチケット ID と実際の成果物の検査で決めます。人の指示は standing order としてそのまま書き写します。依存は開始の順序（Orca task deps）と着地の順序（GitHub stack、`orch dep`）に分けます。Run を作り、`orch init` で登録します。
-  2. **検証の準備と Pilot:** verify スキルがなければ、最初の digest でユーザーに `/create-verification-skill` の実行を頼みます。それまでは手で検証し、ワーカー一つで最後まで一度回してみます。
+  2. **検証の準備と Pilot:** verify スキルがなければ、Pilot の前に `create-verification-skill` を回すか、ワーカー一つに任せます。そのスキルが入るまでは手で検証し、ワーカー一つで最後まで一度回してみます。
   3. **Scale:** 常駐の役割（プログラムごとに main ガーディアンと QA リード、マシンに1つずつ flow improver と resource steward）を立ち上げます。チケットワーカーの同時実行の上限は1から始め、main に green で着地するたびに1ずつ増やし（既定の ceiling は6）、red になれば半分にします。
   4. **Drain:** `orch wait` をバックグラウンドで一つだけ回します。worker_done が来たら、同じターンで `CLOSE OUT` を処理します。毎回 `orch status` で締めくくり、STALLED、SPARE、LEDGER GAP、LANDED-BUT-OPEN の行に対応します。製品ではなく作業の進め方がずれたとき（人による修正、ブリーフが答えておくべきだった質問、プロセスが原因の停滞、スキルやスクリプトの欠陥）は、`orch record <slug> signal` で一行だけ残し、分析は Close に回します。
   5. **Triage:** follow-up は基本的に先送り（park）します。predicate を妨げるものと、再現した欠陥だけを受け入れます。ブリーフでは follow-up を parent ではなく related で結ばせます。Orca の既定は parent ですが、そうすると集計や段階のバーが元のチケットの計画済みの作業として数えてしまいます。
@@ -331,20 +331,20 @@
   - まず失敗するテストを回して失敗の理由を確かめ、最小限に直してから通ることを確かめます。
   - テストが非現実的なら理由を明らかにし、いちばん近い実行可能なチェックを使います。既存の assertion は弱めません。
 
-### create-verification-skill (ユーザー呼び出し専用)
+### create-verification-skill
 - **内容:**
   - リポジトリを調べ、アプリをユーザーのように起動し、操作し、観察するリポジトリ専用のスキル `.claude/skills/verify-<app>/` を作ります。Launch、Doctor、Drive、Evidence、Cleanup の段階を置きます。
   - 主な機能3〜5個の機能マップも一緒に作ります。
   - 自分で最後まで一度回して証明します。
-  - モデルからは呼び出せないので、必要なときは `deliver-ticket`（残りの確認事項）と `orchestrate`（最初の digest）がユーザーに実行を勧めます。
+  - ユーザーが触れる表面を変えた作業で verify スキルがなければ、`deliver-ticket`（E2E の前）と `orchestrate`（Pilot の前）が呼び出します。upstream はユーザー呼び出し専用で、この fork だけがモデルからの呼び出しを許しています。
 - **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）。
 
-### maintain-verification-skill (ユーザー呼び出し専用)
+### maintain-verification-skill
 - **内容:**
   - 機能ごとにソースを読み、すべての機能を実際に動かして機能マップと照らし合わせます。
   - 問題を、文書のずれ、ハーネスの欠陥、製品の欠陥に分けます。製品の欠陥は報告するだけです。
   - 結果は clean、changed（証明された修正だけの PR 一つ）、blocked のいずれかです。
-  - verify スキルが機能を扱えなかったり、誤って説明していたりするときは、`deliver-ticket` と QA lead の報告を経てユーザーに実行を勧めます。
+  - flow improver が週に一度回します。verify スキルが機能を扱えなかった、または誤って説明していたと `deliver-ticket` や QA lead が報告すると、コーディネーターがワーカーに任せます。
 
 ## エイリアス
 
@@ -449,7 +449,7 @@
 |---|---|---|
 | 対象 | Cursor のプラグイン | Claude Code のプラグイン |
 | 入口 | `/poteto-mode` 一つが常にオンで、作業を23個のプレイブックのどれかに当てはめて段階をたどる | モードのルーターはない。スキルごとの description がトリガー |
-| スキルの呼び出し | ほぼすべて、ユーザーか poteto-mode だけが呼ぶ（`disable-model-invocation`） | 二つの verify スキルを除き、モデルが自分で呼ぶ |
+| スキルの呼び出し | ほぼすべて、ユーザーか poteto-mode だけが呼ぶ（`disable-model-invocation`） | モデルが自分で呼ぶ（この fork では二つの verify スキルも） |
 | ワーカー | Cursor Task のサブエージェント、クラウドワーカー | Claude Code の `Agent`（worktree で隔離）、Orca のワーカー |
 | モデル | 役割別のモデルルール（`pstack-models.mdc`）。コードは grok、判断は opus | Claude（opus、fable）と Codex（既定は gpt-6-sol、難しい設計だけ astra） |
 | 相互レビュー | 複数モデルのパネル | Claude + Codex companion。Codex は一度に一つの作業だけ |
