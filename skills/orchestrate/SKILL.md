@@ -99,7 +99,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
    - The lander watches its merge's main CI and records `main_green`.
    - Red main belongs to the main guardian: flake check, freeze, hotfix or revert, notify (`references/roles.md`). While main is red, only `--class main-fix` lands.
    - The QA lead verifies each landed ticket and audits design against code. It also runs the E2E suite on main every 5 landings, every 2 h, and before each gate PR.
-   - When the QA lead reports that `verify-<app>` could not drive a landed feature, or described it wrongly, dispatch a worker to run `maintain-verification-skill` on that repo.
+   - When the QA lead or a worker reports that `verify-<app>` could not drive a feature, or described it wrongly (`verify skill stale`), dispatch a worker to run `maintain-verification-skill` on that repo.
 9. **Close.**
    - When `status` says the tickets are done, run the predicate's final check on the real artifact: the QA lead drives `verify-<app>` on main, or, without a QA lead, you run the program's `final_check` on a fresh `origin/main` checkout (`git archive` into a scratch directory), never on a worker's tree.
    - `orch record <slug> predicate_verified --note <evidence>`.

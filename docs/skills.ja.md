@@ -449,7 +449,7 @@
 |---|---|---|
 | 対象 | Cursor のプラグイン | Claude Code のプラグイン |
 | 入口 | `/poteto-mode` 一つが常にオンで、作業を23個のプレイブックのどれかに当てはめて段階をたどる | モードのルーターはない。スキルごとの description がトリガー |
-| スキルの呼び出し | ほぼすべて、ユーザーか poteto-mode だけが呼ぶ（`disable-model-invocation`） | 二つの verify スキルを除き、モデルが自分で呼ぶ |
+| スキルの呼び出し | ほぼすべて、ユーザーか poteto-mode だけが呼ぶ（`disable-model-invocation`） | モデルが自分で呼ぶ（この fork では二つの verify スキルも） |
 | ワーカー | Cursor Task のサブエージェント、クラウドワーカー | Claude Code の `Agent`（worktree で隔離）、Orca のワーカー |
 | モデル | 役割別のモデルルール（`pstack-models.mdc`）。コードは grok、判断は opus | Claude（opus、fable）と Codex（既定は gpt-6-sol、難しい設計だけ astra） |
 | 相互レビュー | 複数モデルのパネル | Claude + Codex companion。Codex は一度に一つの作業だけ |

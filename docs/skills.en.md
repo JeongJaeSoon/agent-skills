@@ -449,7 +449,7 @@ Allow is given only to a single command with no shell operators, redirections, s
 |---|---|---|
 | Target | Cursor plugin | Claude Code plugin |
 | Entry point | A single `/poteto-mode` is always on, matches each task to one of 23 playbooks, and follows its steps | No mode router. Each skill's description is its trigger |
-| Skill invocation | Almost all are invoked only by the user or by poteto-mode (`disable-model-invocation`) | The model invokes them on its own, except the two verify skills |
+| Skill invocation | Almost all are invoked only by the user or by poteto-mode (`disable-model-invocation`) | The model invokes them on its own (in this fork the two verify skills too) |
 | Workers | Cursor Task subagents, cloud workers | Claude Code `Agent` (worktree isolation), Orca workers |
 | Models | Per-role model rules (`pstack-models.mdc`): grok for code, opus for judgment | Claude (opus, fable) and Codex (gpt-6-sol by default, astra only for hard design questions) |
 | Cross-review | A multi-model panel | Claude + the Codex companion. Codex runs one job at a time |

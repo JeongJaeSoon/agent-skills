@@ -1,6 +1,6 @@
 ---
 name: create-verification-skill
-description: "Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. Use for /create-verification-skill, \"make a control skill for this repo\", \"verify 스킬 만들어줘\", or when a change touches a user-facing surface (UI, CLI, an API users call) in a repo with no `.claude/skills/verify-*`."
+description: "Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. Use for /create-verification-skill, \"make a control skill for this repo\", \"verify 스킬 만들어줘\", or when deliver-ticket's E2E finds a changed user-facing surface (UI, CLI, an API users call) in a repo with no `.claude/skills/verify-*`. Checking one change in a running app is not this skill."
 ---
 
 # Create a verification skill

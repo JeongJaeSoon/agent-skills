@@ -130,9 +130,11 @@ Before pushing, run **both**:
 The E2E drives the app through the repo's `.claude/skills/verify-<app>` when it has one. A change
 to a user-facing surface (a UI, a CLI, an API users call) in a repo with none: run
 `create-verification-skill` first, drive the E2E through the skill it writes, and ship that skill
-as its own commit in this PR. Inside a program the coordinator does this before Pilot, not a
-worker. A `verify-*` skill that could not drive the feature you touched, or described it wrongly,
-goes in the report as `verify skill stale: <feature>`, for `maintain-verification-skill`.
+as its own commit in this PR (a repo that ignores `.claude/`: say so in the report instead). Inside
+a program that is the coordinator's call before Pilot; only the card it dispatched for it does
+this. A `verify-*` skill that could not drive the feature you touched, or described it wrongly:
+inside a program, report `verify skill stale: <feature>`; outside one, run
+`maintain-verification-skill` once this ticket lands.
 
 After the test suite and E2E check, push and open a ready PR with `gh pr create`, not a draft.
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket

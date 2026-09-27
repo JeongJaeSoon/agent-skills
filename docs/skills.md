@@ -456,7 +456,7 @@
 |---|---|---|
 | 대상 | Cursor 플러그인 | Claude Code 플러그인 |
 | 진입점 | `/poteto-mode` 하나가 항상 켜져 있고, 작업을 플레이북 23개 중 하나에 맞춰 단계를 따른다 | 모드 라우터가 없다. 스킬마다 description이 트리거다 |
-| 스킬 호출 | 거의 모두 사용자나 poteto-mode만 부른다(`disable-model-invocation`) | 두 verify 스킬을 빼고 모델이 스스로 부른다 |
+| 스킬 호출 | 거의 모두 사용자나 poteto-mode만 부른다(`disable-model-invocation`) | 모델이 스스로 부른다(두 verify 스킬도 이 fork에서는 허용) |
 | 워커 | Cursor Task 서브에이전트, 클라우드 워커 | Claude Code `Agent`(worktree 격리), Orca 워커 |
 | 모델 | 역할별 모델 규칙(`pstack-models.mdc`). 코드는 grok, 판단은 opus | Claude(opus, fable)와 Codex(gpt-6-sol 기본, 어려운 설계만 astra) |
 | 교차 검토 | 여러 모델 패널 | Claude + Codex companion. Codex는 한 번에 한 작업 |
