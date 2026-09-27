@@ -58,6 +58,31 @@ got = {i["pid"]: i["target"] for i in reap.judge_orphans(rows, ["/cache/uv/"], 6
 assert got == {1: True, 3: True, 6: False}, got
 assert reap.judge_orphans(rows, [], 6) == []
 
+# Load: every top consumer gets one class, and its CPU counts its whole tree.
+ME = 501
+rows = {
+    10: {**row(10, "/Library/Agent/agentd --daemon"), "uid": 0, "cpu": 220.0},
+    20: {**row(20, "claude --permission-mode auto", ppid=99), "uid": ME, "cpu": 8.0},
+    21: {**row(21, "node mcp-server.js", ppid=20), "uid": ME, "cpu": 2.0},
+    30: {**row(30, "claude --permission-mode auto", ppid=99), "uid": ME, "cpu": 5.0},
+    31: {**row(31, "lockf /tmp/bench.lock python3 bench.py", ppid=30), "uid": ME, "cpu": 95.0},
+    40: {**row(40, BROKER.format("/wt/gone")), "uid": ME, "cpu": 30.0},
+    41: {**row(41, "codex app-server", ppid=40), "uid": ME, "cpu": 10.0},
+    50: {**row(50, "/usr/local/bin/node server.js", ppid=99), "uid": ME, "cpu": 12.0},
+    60: {**row(60, "/System/Library/CoreServices/indexer", ppid=1), "uid": ME, "cpu": 15.0},
+    70: {**row(70, "claude -p", ppid=99), "uid": ME, "cpu": 3.0},
+}
+quiet = {"/w/idle": 3 * H, "/w/busy": 60}.get
+got = reap.judge_load(rows, {20: "/w/idle", 30: "/w/busy", 70: "/w/new"}, {40}, quiet, idle_s=H, me=ME, top=6)
+assert [(i["pid"], i["cls"]) for i in got] == [(10, "system"), (30, "ours-working"), (40, "leftover"), (60, "system"),
+                                               (50, "ours-working"), (20, "ours-idle")], got
+assert got[1]["cpu"] == 100.0 and got[1]["procs"] == 2 and got[2]["procs"] == 2, got
+assert "조용" in got[5]["why"]
+# A session with no transcript on record is not called idle.
+got = {i["pid"]: i["cls"] for i in reap.judge_load(rows, {20: "/w/idle", 30: "/w/busy", 70: "/w/new"}, {40}, quiet, idle_s=H, me=ME)}
+assert got[70] == "ours-working", got
+assert set(reap.LOAD_ACTIONS) == {"ours-idle", "ours-working", "leftover", "system"}
+
 # Docker: only dangling volumes of a project with no container at all; a volume named after a live project stays.
 now = time.time()
 vols = [

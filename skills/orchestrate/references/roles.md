@@ -156,8 +156,11 @@ ALERT       When the scan after the reap still prints 경보 (a total at or abov
             run_command --title "방치 리소스 경보: <the alert lines>" --command "python3 <reap.py>
             scan" --key reap-alert, and send the same to the coordinator (--type status). Resolve
             the key once a round's scan is back under every limit.
-LOAD        Watch load average, memory pressure and free disk. When heavy local runs pile up,
-            tell the coordinator and suggest a heavy_slots value.
+LOAD        Every round, reap-resources' `reap.py load`, and watch memory pressure and free disk.
+            At or above its limit, act per class: send the ours-idle sessions to the coordinator,
+            which asks each whether work is left and to close itself if none; reap leftovers as
+            LEFTOVERS does; for ours-working, tell the coordinator to hold new dispatches and
+            suggest a heavy_slots value; report system load as not ours.
 FORBIDDEN   Any repo's code, PRs, tickets or chat.
 REPORT      The first round: the full inventory to the coordinator (--type status): removed,
             kept with its reason (dirty, unpushed, open PR, live turn), needs owner action, and

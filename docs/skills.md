@@ -138,13 +138,14 @@
 ## 머신 하나
 
 ### reap-resources
-- **언제:** "방치 리소스 정리해줘", "codex 프로세스 너무 많아", 메모리·CPU를 누가 먹는지 볼 때, 그리고 resource steward의 주기 점검. 프로그램 없이도 쓴다.
+- **언제:** "방치 리소스 정리해줘", "codex 프로세스 너무 많아", 메모리·CPU를 누가 먹는지 볼 때, 머신 부하가 높을 때, 그리고 resource steward의 주기 점검. 프로그램 없이도 쓴다.
 - **내용:** `scripts/reap.py scan`이 읽기만 해서 종류별 개수·프로세스·RSS·CPU·나이와 정리 대상 목록을 낸다. `reap --plan`은 다시 스캔해서 그 목록 가운데 여전히 대상이고 정체(pid와 시작 시각, 브랜치 tip)가 같은 것만 정리한다.
   - **codex:** Codex 플러그인 broker 트리. `--cwd` 경로가 없거나, 그 경로에 살아 있는 `claude`가 없고 N시간(기본 6)이 지났을 때만 트리째 끝낸다.
   - **orphan:** ppid 1이고 실행 파일이 설정의 `reap.orphan_paths`(테스트 캐시 경로) 아래에 있는 프로세스.
   - **docker:** 컨테이너가 하나도 없는 compose project의 dangling volume과, 컨테이너가 쓰지 않는 태그 없는 이미지. 컨테이너가 있는 project, 그 이름을 품은 volume, compose 라벨 없는 volume은 남기고 보고만 한다.
   - **branch:** PR이 모두 머지·닫혔고, worktree가 없고, tip이 PR head와 같은 로컬 브랜치. 복구 명령을 함께 출력한다.
   - **worktree:** 임시 디렉터리에 있다가 사라진 worktree(Orca 것은 제외)와, 세션 transcript가 N시간 조용한 Claude scratchpad의 깨끗하고 push된 detached worktree. 둘 다 `git worktree remove <경로>`로 그 항목만 지운다. Orca worktree는 resource steward의 몫이다.
+  - **load:** `reap.py load`는 읽기만 한다. CPU 상위 소비자(Claude 세션과 그 자식, 잔재 트리, 그 밖의 프로세스)를 ours-idle·ours-working·leftover·system으로 나누고, 5분 부하가 한도(기본 CPU 수) 이상이면 분류별 조치를 낸다: 조용한 세션에는 남은 일을 묻고 없으면 스스로 닫게 하고, 잔재는 `reap`으로, 일하는 것은 두고 새 dispatch를 멈추며, system은 우리 것이 아니라고 보고만 한다. 한도 위에서 잰 벤치마크는 증거가 아니다.
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(Codex 프로세스·RSS, 고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, 테스트 파일.
 - **관계:** `orchestrate`의 resource steward가 라운드마다 부르고, 경보가 남으면 대시보드 인박스로 사람에게 알린다.

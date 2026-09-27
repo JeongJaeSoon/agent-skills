@@ -142,13 +142,14 @@
 ## マシン1台
 
 ### reap-resources
-- **使う場面:** 「방치 리소스 정리해줘」（放置リソースを片付けて）、「codex 프로세스 너무 많아」（codex のプロセスが多すぎる）、メモリや CPU を何が使っているか見たいとき、そして resource steward の定期点検。プログラムがなくても使えます。
+- **使う場面:** 「방치 리소스 정리해줘」（放置リソースを片付けて）、「codex 프로세스 너무 많아」（codex のプロセスが多すぎる）、メモリや CPU を何が使っているか見たいとき、マシンの負荷が高いとき、そして resource steward の定期点検。プログラムがなくても使えます。
 - **内容:** `scripts/reap.py scan` は読むだけで、種類ごとの個数・プロセス・RSS・CPU・経過時間と、片付け対象の一覧を出します。`reap --plan` はもう一度スキャンし、その一覧のうち今も対象で、同一性（pid と開始時刻、ブランチの tip）が変わっていないものだけを片付けます。
   - **codex:** Codex プラグインの broker ツリー。`--cwd` のパスがないか、そのパスで動く `claude` がなく N 時間（既定 6）が過ぎたときだけ、ツリーごと終了します。
   - **orphan:** ppid が 1 で、実行ファイルが設定の `reap.orphan_paths`（テストのキャッシュパス）の下にあるプロセス。
   - **docker:** コンテナが1つもない compose project の dangling volume と、どのコンテナも使っていないタグなしイメージ。コンテナのある project、その名前を含む volume、compose ラベルのない volume は残して報告だけします。
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
+  - **load:** `reap.py load` は読むだけです。CPU の上位消費者（Claude セッションとその子、残骸のツリー、その他のプロセス）を ours-idle・ours-working・leftover・system に分け、5 分の負荷が上限（既定は CPU 数）以上なら分類ごとの対処を出します。静かなセッションには残りの作業を尋ね、なければ自分で閉じてもらいます。残骸は `reap` で片付け、動いているものは残して新しい dispatch を止め、system は自分たちのものではないと報告だけします。上限を超えて測ったベンチマークは証拠になりません。
   - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（Codex のプロセス数と RSS、孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
 - **同梱:** `scripts/reap.py`、テストファイル。
 - **関連:** `orchestrate` の resource steward がラウンドごとに呼び、警報が残ればダッシュボードの受信箱で人に知らせます。

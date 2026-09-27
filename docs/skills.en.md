@@ -142,13 +142,14 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 ## One machine
 
 ### reap-resources
-- **When:** "방치 리소스 정리해줘" ("clean up leftover resources"), "codex 프로세스 너무 많아" ("too many codex processes"), when you want to see what is eating memory or CPU, and on the resource steward's periodic round. It works without a program.
+- **When:** "방치 리소스 정리해줘" ("clean up leftover resources"), "codex 프로세스 너무 많아" ("too many codex processes"), when you want to see what is eating memory or CPU, when the machine's load is high, and on the resource steward's periodic round. It works without a program.
 - **What it does:** `scripts/reap.py scan` only reads, and prints per kind the count, processes, RSS, CPU and age, plus the list of targets. `reap --plan` scans again and removes only the targets on that list that are still targets with the same identity (pid and start time, branch tip).
   - **codex:** Codex plugin broker trees. A tree ends only when its `--cwd` path is gone, or when no live `claude` runs in that path and the broker is N hours old (default 6).
   - **orphan:** processes with ppid 1 whose executable lies under a path in the config's `reap.orphan_paths` (test caches).
   - **docker:** dangling volumes of a compose project that has no container at all, and untagged images no container uses. A project with containers, volumes whose name holds such a project's name, and volumes with no compose label are kept and only reported.
   - **branch:** local branches whose PRs are all merged or closed, with no worktree, and whose tip matches a PR head. It prints the command to restore each one.
   - **worktree:** worktrees whose directory in a temp dir is gone (except Orca's), and clean, pushed, detached worktrees in a Claude scratchpad whose session transcript has been quiet for N hours. Both go through `git worktree remove <path>`, which drops only that entry. Orca worktrees belong to the resource steward.
+  - **load:** `reap.py load` only reads. It sorts the top CPU consumers (a Claude session with its children, a leftover tree, any other process) into ours-idle, ours-working, leftover and system, and when the 5-minute load is at or above its limit (default: the CPU count) it prints the action for each class: a quiet session is asked whether work is left and to close itself if none, leftovers go through `reap`, working processes are left alone while new dispatches stop, and system load is reported as not ours. A benchmark taken above the limit is not evidence.
   - It never uses `pkill`, `docker system prune` or `--force`. When a running total (Codex processes and RSS, orphan processes, dangling volumes, branches and worktrees to remove) reaches its limit in the config, it prints an `경보` (alert).
 - **Bundled:** `scripts/reap.py`, a test file.
 - **Related:** The resource steward in `orchestrate` runs it every round, and tells the human through the dashboard inbox when an alert remains.
