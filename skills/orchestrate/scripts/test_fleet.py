@@ -11,6 +11,8 @@ root = pathlib.Path(tempfile.mkdtemp(prefix="test-fleet-"))
 os.environ.update(dash_demo.build(root))
 import fleet  # noqa: E402  after the env points the state directory at root
 
+fetch_runs = fleet.fetch_runs  # later swapped for the fake world's
+
 state_dir = pathlib.Path(os.environ["ORCH_FLEET_STATE"])
 now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
 clock = [now]
@@ -644,6 +646,68 @@ assert {i["key"] for i in items(st, "question")} == before - {"mail:m20", "mail:
 assert fleet.mail_dispatch({"payload": "not json", "from_handle": "term_x"}) is None
 workers["ctx_docs"]["dispatchStatus"] = workers["ctx_login"]["dispatchStatus"] = "pending"
 del world.messages[kept:]
+
+# A sender that mailed the same coordinator again after an escalation has moved past it; a heartbeat is not that.
+at = lambda minutes: fleet.iso(clock[0] + dt.timedelta(minutes=minutes))
+world.messages.append({"id": "m30", "type": "escalation", "from_handle": "term_scratch", "to_handle": "term_coord",
+                       "read": True, "subject": "Blocked on the npm token", "created_at": at(0)})
+world.messages.append({"id": "m31", "type": "heartbeat", "from_handle": "term_scratch", "to_handle": "term_coord",
+                       "subject": "alive", "created_at": at(1)})
+st = f.tick(force=True)
+assert "mail:m30" in {i["key"] for i in items(st, "question")}, items(st, "question")
+world.messages.append({"id": "m32", "type": "status", "from_handle": "term_scratch", "to_handle": "term_coord",
+                       "subject": "Token found, publishing", "created_at": at(2)})
+st = f.tick(force=True)
+assert "mail:m30" not in {i["key"] for i in items(st, "question")}, items(st, "question")
+del world.messages[kept:]
+
+# A turn item whose PRs have all merged or closed is done; one naming a PR still open, or one the PR cache does not
+# know, stays. A bare #n is the session's own repository.
+turn_items = lambda st: [i for i in items(st, "approval") if i["source"] == "turn"]
+for text, stays in (("Shall I merge https://github.com/acme/tools/pull/6?", False), ("Shall I merge #6 and acme/tools#99?", True),
+                    ("Shall I merge #7?", True), ("Shall I merge acme/tools#6?", False)):
+    scratch.update(state="done", lastAssistantMessage=text)
+    st = f.tick(force=True)
+    assert bool(turn_items(st)) == stays, (text, turn_items(st))
+assert "prs_closed" in resolved(st), resolved(st)
+
+# A turn item on a session with no agent left has no one to answer it. An empty read of every agent is more likely a
+# bad read than all of them gone at once, so it closes nothing.
+login["agents"][0]["lastAssistantMessage"] = "Shall I merge #41 now?"
+st = f.tick(force=True)
+assert [i["session"] for i in turn_items(st)] == ["wt-login"], turn_items(st)
+saved_agents = {w["worktreeId"]: w["agents"] for w in world.worktrees}
+for w in world.worktrees:
+    w["agents"] = []
+st = f.tick(force=True)
+assert [i["session"] for i in turn_items(st)] == ["wt-login"] and "agent_gone" not in resolved(st), turn_items(st)
+for w in world.worktrees:
+    w["agents"] = saved_agents[w["worktreeId"]]
+login["agents"] = []
+st = f.tick(force=True)
+assert not turn_items(st) and "agent_gone" in resolved(st), (turn_items(st), resolved(st))
+login["agents"] = saved_agents["wt-login"]
+
+# worker-list without --run is scoped to the Run bound to the calling terminal, so a server started from a
+# coordinator's terminal saw only that Run's workers: every Run is listed by name, each page followed.
+def fake_orca(*args, timeout=30):
+    if args[1] == "run-list":
+        return {"runs": [{"id": "run_a"}, {"id": "run_b"}, {"id": "run_legacy_local", "legacy": True}]}
+    if args[1] == "worker-list":
+        run = args[args.index("--run") + 1] if "--run" in args else "run_a"
+        if run == "run_b" and "--cursor" not in args:
+            return {"workers": [{"dispatchId": "ctx_b1"}], "page": {"hasMore": True, "nextCursor": "c2"}}
+        return {"workers": [{"dispatchId": f"ctx_{run}"}]}
+    return {}
+
+
+real_orca, fleet.orca = fleet.orca, fake_orca
+try:
+    got = fetch_runs()
+finally:
+    fleet.orca = real_orca
+assert [r["id"] for r in got["runs"]] == ["run_a", "run_b"], got["runs"]
+assert sorted(w["dispatchId"] for w in got["workers"]) == ["ctx_b1", "ctx_run_a", "ctx_run_b", "ctx_run_legacy_local"], got
 
 # The tree's root is the top-level coordinator even when a program coordinator it dispatched runs a newer Run.
 def tree(run_list, workers, wts):
