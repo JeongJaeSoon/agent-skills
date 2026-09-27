@@ -260,7 +260,8 @@ def fake_orca(*a):
     return {}
 saved = prog.orca_json, prog.Program, prog.run_workers
 prog.orca_json, prog.run_workers = fake_orca, lambda run: []
-prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}, "dir": pathlib.Path(tempfile.mkdtemp())})()
+_pdir = pathlib.Path(tempfile.mkdtemp())
+prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}, "slug": slug, "dir": _pdir})()
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
@@ -295,6 +296,44 @@ for bad in ("{trunc", "null"):
         prog.print_sweep("run_x", state)
     assert out.getvalue().count("orca terminal send") == 1 and "self-check asked at" in out.getvalue(), out.getvalue()
     assert list(json.loads(state.read_text())) == ["t1"]
+menu = ["Which base branch should the PR target?", "❯ 1. main", "  2. develop", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+perm = ["Bash command", "  rm -rf build", "Do you want to proceed?", "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"]
+idle = ["done.", "❯ ", "  ⏵⏵ auto mode on"]
+assert prog.screen_prompt(menu) == ("a select menu", "Which base branch should the PR target?")
+assert prog.screen_prompt(perm) == ("a permission prompt", "Do you want to proceed?")
+assert prog.screen_prompt(idle) is None and prog.screen_prompt(idle, "waiting") == ("waiting for input", "")
+live = [{"dispatchId": "a1", "terminalState": "active", "agentTerminalHandle": "h1"},
+        {"dispatchId": "a2", "terminalState": "active", "agentTerminalHandle": "h2"},
+        {"dispatchId": "a3", "terminalState": "reclaimable", "agentTerminalHandle": "h3"},
+        {"dispatchId": "a4", "terminalState": "active", "agentTerminalHandle": "h4"}]
+screens = {"h1": menu, "h2": idle, "h3": menu}
+def read(h):
+    if h == "h4":
+        raise SystemExit("terminal gone")
+    return screens[h]
+seen = {}
+first = prog.stuck_sweep(live, "s", seen, read=read)
+assert first[0].startswith('STUCK a1 (a select menu): "Which base branch should the PR target?"'), first
+assert "  orca terminal read --terminal h1 --screen" in first
+assert any("orch record s signal --kind stall --evidence a1" in l for l in first), first
+assert list(seen) == ["a1"] and not any("a2" in l or "a3" in l or "a4" in l for l in first), first
+assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == []
+assert prog.stuck_sweep(live, "s", seen, read=read) == first
+screens["h1"] = idle
+assert prog.stuck_sweep(live, "s", seen, read=read) == [] and seen == {}
+# A new prompt ends the wait early: nobody watches a worker's terminal.
+prog.orca_json = lambda *a: {"deliveryId": None, "messages": []}
+prog.run_workers = lambda run: live
+screens["h1"] = menu
+prog.read_screen = read
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "3"])
+assert "STUCK a1" in out.getvalue() and "wait 2/3" not in out.getvalue() and "EMPTY" not in out.getvalue(), out.getvalue()
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "STUCK a1" in out.getvalue() and "EMPTY" in out.getvalue(), out.getvalue()
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},

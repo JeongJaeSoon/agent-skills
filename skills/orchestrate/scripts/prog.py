@@ -1547,6 +1547,70 @@ def print_sweep(run_id, state, skip=()):
         print("\n".join(lines), flush=True)
 
 
+PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
+           (re.compile(r"Do you want to |^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt")]
+
+
+def screen_prompt(lines, activity=None):
+    tail = lines[-25:]
+    for rx, kind in PROMPTS:
+        if rx.search("\n".join(tail)):
+            return kind, next((l.strip() for l in reversed(tail) if l.strip().endswith("?")), "")
+    return ("waiting for input", "") if activity == "waiting" else None
+
+
+def read_screen(handle):
+    return orca_json("terminal", "read", "--terminal", handle, "--screen").get("terminal", {}).get("tail", [])
+
+
+def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False):
+    """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours."""
+    out, now = [], {}
+    for w in workers:
+        d, h = w.get("dispatchId"), w.get("agentTerminalHandle")
+        if w.get("terminalState") != "active" or not d or not h:
+            continue
+        try:
+            lines = read(h)
+        except (SystemExit, Exception):
+            continue
+        hit = screen_prompt(lines, ((w.get("projection") or {}).get("stage") or {}).get("activity"))
+        if not hit:
+            continue
+        kind, question = hit
+        key = f"{kind}: {question}"
+        now[d] = key
+        if only_new and seen.get(d) == key:
+            continue
+        out += [f"STUCK {d} ({kind}): " + (f'"{question}"' if question else "read its screen")
+                + "; answer it from the program's decisions, or put it to the human now if none covers it, and record it",
+                f"  orca terminal read --terminal {h} --screen",
+                f"  orch record {slug} signal --kind stall --evidence {d} --note \"{kind}: answered <what> | escalated\""]
+    seen.clear()
+    seen.update(now)
+    return out
+
+
+def print_stuck(p, run_id, only_new=False):
+    state = p.dir / "stuck.json"
+    try:
+        seen = json.loads(state.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    seen = seen if isinstance(seen, dict) else {}
+    try:
+        lines = stuck_sweep(run_workers(run_id), p.slug, seen, read=read_screen, only_new=only_new)
+        fd, tmp = tempfile.mkstemp(dir=state.parent, prefix=".stuck-")
+        with os.fdopen(fd, "w") as f:
+            json.dump(seen, f)
+        os.replace(tmp, state)
+    except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
+        lines = [] if only_new else [f"STUCK: screen sweep failed ({type(e).__name__}: {e})"]
+    if lines:
+        print("\n".join(lines), flush=True)
+    return lines
+
+
 def cmd_wait(argv):
     p = Program(argv[0])
     timeout = opt(argv, "--timeout-ms", "540000")
@@ -1582,13 +1646,19 @@ def cmd_wait(argv):
                     lines = [f"CLOSE OUT: could not read the cards ({e}); `orch status` lists them"]
                 print("\n".join(lines))
             print_sweep(run_id, p.dir / "self-check.json", closed)
+            print_stuck(p, run_id)
             print(f"ACTIONABLE delivery={did} ({len(work)} of {len(msgs)}): process every message, then "
                   f"orca orchestration check --run {run_id} --ack {did} --json")
             return
         if did:
             orca_json("orchestration", "check", "--run", run_id, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
+        if print_stuck(p, run_id, only_new=True):
+            print_sweep(run_id, p.dir / "self-check.json")
+            print("STUCK: a worker waits on a prompt nobody sees; answer or escalate it now", flush=True)
+            return
     print_sweep(run_id, p.dir / "self-check.json")
+    print_stuck(p, run_id)
     print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
           f" one that ended its turn without worker_done does not wake on send: send the instruction with"
