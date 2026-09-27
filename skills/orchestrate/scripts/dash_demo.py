@@ -346,7 +346,7 @@ def _transcripts(root, now, workers):
 
 def skills_report(now):
     """An invented skill usage report in skill_usage.py's shape, so the demo never reads real transcripts."""
-    rows = [  # name, source, 7d, 30d, auto, slash, chained, misses, last used (hours ago)
+    rows = [
         ("agent-skills:deliver-ticket", "agent-skills", 9, 31, 22, 3, 6, 2, 1),
         ("agent-skills:use-tracker", "agent-skills", 6, 19, 4, 0, 15, 0, 2),
         ("agent-skills:orchestrate", "agent-skills", 2, 7, 5, 2, 0, 0, 20),

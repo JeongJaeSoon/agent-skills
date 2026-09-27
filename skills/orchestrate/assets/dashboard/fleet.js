@@ -413,7 +413,6 @@ function fleetPrs(st) {
 // Every poll re-renders the view: the merged group stays as the reader left it.
 document.addEventListener("toggle", (e) => { if (e.target.id === "prs-merged") F.mergedOpen = e.target.open; }, true);
 
-// Skill usage comes from /api/fleet/skills (skills.json by skill_usage.py), fetched only while this page is open.
 const SKILL_FLAG = {
   unused_30d: ["unused 30 d", "warn", "Not invoked in 30 days: rewrite the description, merge it into another skill, or retire it (by PR)"],
   slash_only: ["slash only", "accent", "Only ever typed as /name: the description does not make it fire on its own"],

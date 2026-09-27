@@ -10,12 +10,12 @@ Aggregates only: no prompt or message text leaves the transcripts, and working d
 import datetime as dt, hashlib, json, os, pathlib, re, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
-REPO_PLUGIN = "agent-skills"  # the plugin this checkout is; its skills are read from the checkout, not the cache
-EDITABLE = (REPO_PLUGIN, "user")  # sources whose skills the improvement loop can change
+REPO_PLUGIN = "agent-skills"
+EDITABLE = (REPO_PLUGIN, "user")
 SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
-NEGATIVE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)  # a sentence naming phrases that must not fire
+RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 SUGGEST = {"unused_30d": ["rewrite-description", "merge", "retire"], "slash_only": ["rewrite-description"],
            "misses": ["rewrite-description"]}
 
@@ -40,7 +40,6 @@ def signals_path():
 
 
 def frontmatter(path):
-    """name and description from a SKILL.md header; enough YAML for the shapes skills use."""
     try:
         lines = path.read_text(errors="replace").splitlines()
     except OSError:
@@ -69,14 +68,16 @@ def frontmatter(path):
     return out
 
 
+def is_specific_phrase(p):
+    return len(p.split()) >= 2 or (not p.isascii() and len(p) >= 4)
+
+
 def phrases(desc):
-    """Quoted trigger phrases. A lone word ("reflect", "정본") matches too much ordinary text to count; a lone
-    word of four or more non-ASCII characters ("종료해줘") is specific enough."""
     found = set()
-    desc = " ".join(s for s in re.split(r"(?<=[.;])\s+", desc or "") if not NEGATIVE_RE.match(s))
+    desc = " ".join(s for s in re.split(r"(?<=[.;])\s+", desc or "") if not RULED_OUT_SENTENCE_RE.match(s))
     for m in PHRASE_RE.finditer(desc):
         p = next(g for g in m.groups() if g).strip().lower()
-        if len(p.split()) >= 2 or (not p.isascii() and len(p) >= 4):
+        if is_specific_phrase(p):
             found.add(p)
     return sorted(found)
 
@@ -90,7 +91,6 @@ def _skills_under(d, plugin, source, inv):
 
 
 def inventory(plugins_json=None, user_dir=None, repo_dir=None):
-    """Every installed skill: name -> {name, source, phrases}."""
     plugins_json = pathlib.Path(plugins_json or "~/.claude/plugins/installed_plugins.json").expanduser()
     user_dir = pathlib.Path(user_dir or "~/.claude/skills").expanduser()
     repo_dir = pathlib.Path(repo_dir or os.environ.get("SKILL_USAGE_REPO") or HERE.parents[1])
@@ -126,7 +126,6 @@ def resolver(inv):
 
 
 def _prompt(d):
-    """("human", text), ("command", name) or (None, None) for a transcript row."""
     if d.get("type") != "user" or d.get("isMeta"):
         return None, None
     c = (d.get("message") or {}).get("content")
@@ -149,9 +148,7 @@ def _hash(s):
 
 
 def scan_file(path, inv, resolve):
-    """Events [ts, skill, trigger, session, cwd hash] and misses [ts, skill] from one transcript. Subagent
-    transcripts are prompted by a model, so their prompts never count as misses."""
-    sub = "subagents" in pathlib.Path(path).parts
+    prompted_by_model = "subagents" in pathlib.Path(path).parts
     events, misses = [], []
     turn = {"ts": None, "hits": set(), "loaded": set()}
 
@@ -179,7 +176,7 @@ def scan_file(path, inv, resolve):
                     name = resolve(val)
                     turn["loaded"].add(name)
                     events.append([ts, name, "slash", session, cwd])
-                elif not sub:
+                elif not prompted_by_model:
                     low = val.lower()
                     turn["hits"] = {n for n, s in inv.items() if any(p in low for p in s["phrases"])}
                 continue
@@ -241,8 +238,9 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
     rows = {n: _row(n, s["source"]) for n, s in inv.items()}
     for ts, name, trig, session, cwd in events:
         if name not in rows:
-            if trig == "slash" and name not in called:
-                continue  # a built-in command (/mcp), not a skill
+            builtin_command = trig == "slash" and name not in called
+            if builtin_command:
+                continue
             rows[name] = _row(name, "other")
         t = parse_ts(ts)
         if not t:
@@ -295,8 +293,7 @@ def flags(r, miss_threshold=MISS_THRESHOLD):
 
 
 def signal_rows(report, now, editable=EDITABLE):
-    """One ledger `signal` row per flag on a skill the loop can edit, keyed by skill, flag and ISO week (the window).
-    Only rows: the lessons ledger in the notes store is reflect's to write, never a script's."""
+    """The lessons ledger in the notes store is reflect's to write, never a script's."""
     y, w, _ = now.isocalendar()
     rows = []
     for r in report["skills"]:
@@ -334,7 +331,6 @@ def write_atomic(path, text):
 
 
 def refresh(out=None, signals=True, miss_threshold=MISS_THRESHOLD):
-    """Collect, write the report, and record this week's signals. Returns the report."""
     rep = collect(miss_threshold=miss_threshold)
     out = pathlib.Path(out or state_dir() / "skills.json")
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -1292,7 +1292,7 @@ def fleet_loop():
         FLEET_WAKE.clear()
 
 
-SKILLS_EVERY = 900  # a full first scan of a large transcript store takes seconds; later ones re-read changed files only
+SKILLS_EVERY = 900
 
 
 def skills_loop():
@@ -1304,7 +1304,7 @@ def skills_loop():
                 added = (rep.get("signals") or {}).get("added")
                 if added:
                     log(f"skills: {added} new usage signal(s) in {rep['signals']['path']}")
-        except Exception as e:  # keep serving; the next round retries
+        except Exception as e:
             log(f"skills: collect failed: {e!r}")
         time.sleep(60)
 

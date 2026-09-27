@@ -11,6 +11,7 @@ root = pathlib.Path(tempfile.mkdtemp(prefix="test-dash-"))
 os.environ.update(dash_demo.build(root), ORCH_FLEET="off")  # the shims do not answer the fleet's calls
 store, fx = root / "programs", root / "fixtures"
 A, B = "launchpad-ga", "billing-q4"
+assert os.environ["ORCH_SKILLS"] == "off", "the demo must not scan real transcripts"
 
 
 def state(slug):
@@ -233,7 +234,6 @@ body = json.dumps({"decision": "d1", "answer": "CSV"}).encode()
 assert post({"Host": host}, "/api/fleet/decide") == 403 and answers == []
 assert post({"Host": host, "X-Dash-Token": dash.TOKEN}, "/api/fleet/decide") == 200
 assert answers == [("d1", "CSV")], answers
-# Skill usage is served from the fleet state (the demo writes an invented report), behind the same Host guard.
 sk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/skills").read())
 assert {"agent-skills", "user", "other"} <= {x["source"] for x in sk["sources"]}, sk["sources"]
 assert next(r for r in sk["skills"] if r["name"] == "agent-skills:teach")["flags"] == ["unused_30d"]
