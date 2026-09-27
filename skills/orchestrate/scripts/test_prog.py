@@ -199,6 +199,12 @@ settled = [
     {"dispatchId": "s2", "terminalState": "reclaimable", "workerState": "failed", "resource": {"worktreeId": "w2"}},
     {"dispatchId": "s3", "terminalState": "release_unknown", "workerState": "succeeded", "resource": {"worktreeId": "gone"}},
     {"dispatchId": "s4", "terminalState": "retained", "workerState": "succeeded", "resource": {"worktreeId": "w3"}},
+    {"dispatchId": "t1", "terminalState": "retained", "workerState": "succeeded", "agentTerminalHandle": "term_t1",
+     "resource": {"worktreeId": "w1", "retainedReason": "user_takeover"}},
+    {"dispatchId": "t2", "terminalState": "retained", "workerState": "failed", "agentTerminalHandle": "term_t2",
+     "resource": {"worktreeId": "w2", "retainedReason": "user_takeover"}},
+    {"dispatchId": "t3", "terminalState": "retained", "workerState": "ready", "agentTerminalHandle": "term_t3",
+     "resource": {"worktreeId": "w1", "retainedReason": "user_takeover"}},
     {"dispatchId": "s5", "terminalState": "active", "workerState": "ready", "resource": {"worktreeId": "wq"}},
     {"dispatchId": "s6", "terminalState": "reclaimable", "workerState": "succeeded", "resource": {"worktreeId": "wq"}},
 ]
@@ -208,7 +214,10 @@ assert sweep == ["SETTLED s1 (succeeded): release it; no open PR, nothing unpush
                  "  orca orchestration worker-release --dispatch s1",
                  "SETTLED s3 (succeeded): release it; its card is gone",
                  "  orca orchestration worker-release --dispatch s3",
-                 "KEEP s2 (failed): open PR #7"], sweep
+                 "TAKEN OVER t1 (succeeded): worker-release refuses it; ask it to check for work left and close itself",
+                 f"  orca terminal send --terminal term_t1 --text {prog.shlex.quote(prog.SELF_CHECK)} --enter",
+                 "KEEP s2 (failed): open PR #7",
+                 "KEEP t2 (failed): open PR #7"], sweep
 assert prog.settle_sweep([], wts) == []
 import subprocess, tempfile
 repo = tempfile.mkdtemp(prefix="test-holds-")

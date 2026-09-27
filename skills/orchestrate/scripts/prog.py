@@ -1465,21 +1465,30 @@ def card_holds(path):
     return f"open PR #{pr['number']}" if pr.get("state") == "OPEN" else None
 
 
+SELF_CHECK = ("Self-check: is any work left on this card? If none, run end-session and close yourself. "
+              "If some, say what it is and keep it.")
+
+
 def settle_sweep(workers, worktrees, skip=(), holds=card_holds):
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     out, kept = [], []
     for w in workers:
-        d = w["dispatchId"]
-        if w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip:
+        d, res = w["dispatchId"], w.get("resource") or {}
+        taken = (w.get("terminalState") == "retained" and res.get("retainedReason") == "user_takeover"
+                 and w.get("workerState") in ("succeeded", "failed"))
+        if not taken and w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip:
             continue
-        p = path.get((w.get("resource") or {}).get("worktreeId"))
+        p = path.get(res.get("worktreeId"))
         why = holds(p) if p else None
         if why:
             kept.append(f"KEEP {d} ({w.get('workerState')}): {why}")
-            continue
-        out += [f"SETTLED {d} ({w.get('workerState')}): release it; "
-                + ("no open PR, nothing unpushed" if p else "its card is gone"),
-                f"  orca orchestration worker-release --dispatch {d}"]
+        elif taken:
+            out += [f"TAKEN OVER {d} ({w.get('workerState')}): worker-release refuses it; ask it to check for work left and close itself",
+                    f"  orca terminal send --terminal {w.get('agentTerminalHandle')} --text {shlex.quote(SELF_CHECK)} --enter"]
+        else:
+            out += [f"SETTLED {d} ({w.get('workerState')}): release it; "
+                    + ("no open PR, nothing unpushed" if p else "its card is gone"),
+                    f"  orca orchestration worker-release --dispatch {d}"]
     return out + kept
 
 
