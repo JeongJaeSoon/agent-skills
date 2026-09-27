@@ -329,6 +329,8 @@ stale = ["Enter to select", "later output", "Should I retry?", "> ", "  Session:
 assert prog.prompt_block(stale) == stale[:3], "a menu above a newer question is not its end"
 heredoc = lambda f: ["Bash command", "  cat <<EOF > " + f, "  line 1", "  line 2", "  line 3", "  line 4", "  EOF", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No (esc)"]
 assert prog.prompt_block(heredoc("a.txt")) != prog.prompt_block(heredoc("b.txt")), "prompts that differ far above the question differ"
+assert prog.prompt_block(["x"] * 20 + heredoc("a.txt") + ["  Session: 1m"])[-11:] == heredoc("a.txt") == prog.prompt_block(["x"] * 19 + heredoc("a.txt") + ["  Session: 1m", "  Context low"])[-11:]
+assert prog.prompt_block((["x"] * 20 + heredoc("a.txt") + ["  Session: 1m"])[-25:]) == prog.prompt_block((["x"] * 20 + heredoc("a.txt") + ["  Session: 1m", "  Context low"])[-25:]), "a second status line does not move the key"
 assert prog.stuck_sweep(live, "s", seen, read=read) == first
 perm2 = ["Bash command", "  git push -f", "Do you want to proceed?", "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"]
 screens["h1"] = perm
