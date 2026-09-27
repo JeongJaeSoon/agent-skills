@@ -128,6 +128,14 @@ EVERY COMMIT
 CONTRACTS   A change to a running program's contract (merge policy, predicate, the brief's required
             fields, landing rules) waits for that coordinator's confirmation: ask, then commit.
 FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is editing.
+            An act refused by a permission prompt, the auto-mode classifier, a Claude Code hook or
+            the human is not tried again in any form: not re-run, not moved into a script or
+            another tool, not aimed at a renamed target, not handed to a subagent. Report it with
+            what the act was for, and put this rule in every subagent prompt you write. Taking
+            the path this brief already names for that act (`orch land` for a merge) is not a
+            retry. A hook that blocked only the text of a command reading no protected file, and
+            says to reword it: reword that text and say so in the report. A failing check (a git
+            hook, linter, test or CI) is not a refusal: fix the cause and run it again.
 REPORT      One status per commit, draft PR or ticket: the sha or PR URL, the diff
             summary, the audit's findings and what was applied, the grep and its result, each
             candidate dropped as "not applied: <candidate> — <reason>", and whether a reload is

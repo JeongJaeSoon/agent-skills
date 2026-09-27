@@ -44,7 +44,7 @@ Once adopted they are on the roster, and you only read them. Never answer their 
 ## Talking to sessions
 
 - Check the exit status of every `orca orchestration send`. A completed dispatch refuses mail ("its worker will never read that mailbox"): send to `run:<id>`, or start a new dispatch for new work.
-- `terminal send --wait-submit` can warn "no turn start was observed" when the turn did start. Read `--screen` before sending again, or the instruction lands twice.
+- `terminal send --text … --enter`, with or without `--wait-submit`, can warn "no turn start was observed": some such sends did start a turn, and some left the text unsubmitted in the input box. Read `--screen` after every such warning. A started turn needs nothing. Text still in the input box needs Enter alone (`orca terminal send --terminal <handle> --text '' --enter`), never the text again, or it lands twice. No turn and an empty input box: send it once more.
 - Write message bodies to a file with the Write tool, not a heredoc, and pass `--body "$(cat <file>)"`. A command whose text merely mentions kill, deploy, merge or a credential file is refused by the auto-mode classifier or a secret-scanning hook. A sensitive list (affected users' emails and the like) stays in its file: pass only the path, so the list never enters your context or the mail.
 - Typing into another session's composer is only for the one-line nudge in SKILL.md and the reload below. Both pass the idle check first.
 
