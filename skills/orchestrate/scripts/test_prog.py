@@ -229,10 +229,14 @@ repo = tempfile.mkdtemp(prefix="test-holds-")
 git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, check=True)
 git("init", "-q"); git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x")
 assert prog.card_holds(repo) == "1 unpushed commit(s)", prog.card_holds(repo)
-assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED"}) is None
+head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED", "headRefOid": head}) is None
+git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "y")
+assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED", "headRefOid": head}) \
+    == "1 commit(s) after its merged PR"
 assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "OPEN"}) == "open PR #5"
 git("checkout", "-q", "--detach")
-assert prog.card_holds(repo, pr=lambda path, branch: 1 / 0) == "1 unpushed commit(s)"
+assert prog.card_holds(repo, pr=lambda path, branch: 1 / 0) == "2 unpushed commit(s)"
 pathlib.Path(repo, "f").write_text("x")
 assert prog.card_holds(repo) == "uncommitted changes"
 assert prog.card_holds("/nonexistent/card") is None
@@ -276,7 +280,18 @@ prog.run_workers = broken
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.print_sweep("run_x", pathlib.Path(tempfile.mkdtemp()) / "self-check.json")
-assert "could not read the workers (boom)" in out.getvalue(), out.getvalue()
+assert "sweep failed (RuntimeError: boom)" in out.getvalue(), out.getvalue()
+prog.run_workers = lambda run: [settled[4]]
+prog.orca_json = lambda *a: {"worktrees": wts}
+for bad in ("{trunc", "null"):
+    state = pathlib.Path(tempfile.mkdtemp()) / "self-check.json"
+    state.write_text(bad)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        prog.print_sweep("run_x", state)
+        prog.print_sweep("run_x", state)
+    assert out.getvalue().count("orca terminal send") == 1 and "self-check asked at" in out.getvalue(), out.getvalue()
+    assert list(json.loads(state.read_text())) == ["t1"]
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},

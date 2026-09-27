@@ -1457,8 +1457,11 @@ def taken_over(w):
 
 
 def gh_pr(path, branch):
-    r = subprocess.run(["gh", "pr", "view", branch, "--json", "number,state"], capture_output=True, text=True, cwd=path,
-                       timeout=30)
+    try:
+        r = subprocess.run(["gh", "pr", "view", branch, "--json", "number,state,headRefOid"], capture_output=True,
+                           text=True, cwd=path, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"state": f"unknown ({type(e).__name__})"}
     if r.returncode:
         if re.search(r"no (pull requests found|git remotes)", r.stderr):
             return None
@@ -1478,7 +1481,8 @@ def card_holds(path, pr=gh_pr):
     if state.get("state", "").startswith("unknown"):
         return f"PR state {state['state']}"
     if state.get("state") == "MERGED":
-        return None
+        after = run(["git", "-C", path, "rev-list", "--count", "HEAD", f"^{state.get('headRefOid')}"], check=False).stdout.strip()
+        return f"{after} commit(s) after its merged PR" if after not in ("", "0") else None
     ahead = run(["git", "-C", path, "rev-list", "--count", "HEAD", "--not", "--remotes"], check=False).stdout.strip()
     return f"{ahead} unpushed commit(s)" if ahead not in ("", "0") else None
 
@@ -1516,11 +1520,19 @@ def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=
 
 def print_sweep(run_id, state, skip=()):
     try:
-        asked = json.loads(state.read_text()) if state.exists() else {}
-        lines = settle_sweep(run_workers(run_id), orca_json("worktree", "list").get("worktrees", []), skip, asked=asked)
-        state.write_text(json.dumps(asked))
+        asked = json.loads(state.read_text())
+    except (OSError, ValueError):
+        asked = {}
+    asked = asked if isinstance(asked, dict) else {}
+    try:
+        workers = run_workers(run_id)
+        lines = settle_sweep(workers, orca_json("worktree", "list").get("worktrees", []), skip, asked=asked)
+        live = {w.get("dispatchId") for w in workers if taken_over(w)}
+        tmp = state.with_suffix(".tmp")
+        tmp.write_text(json.dumps({d: t for d, t in asked.items() if d in live}))
+        os.replace(tmp, state)
     except (SystemExit, Exception) as e:  # the batch and its ack line matter more than the sweep
-        lines = [f"SETTLED: could not read the workers ({e}); worker-list --run {run_id} --terminal-state reclaimable lists them"]
+        lines = [f"SETTLED: sweep failed ({type(e).__name__}: {e}); worker-list --run {run_id} --terminal-state reclaimable lists them"]
     if lines:
         print("\n".join(lines), flush=True)
 
