@@ -81,6 +81,11 @@ assert "조용" in got[5]["why"]
 # A session with no transcript on record is not called idle.
 got = {i["pid"]: i["cls"] for i in reap.judge_load(rows, {20: "/w/idle", 30: "/w/busy", 70: "/w/new"}, {40}, quiet, idle_s=H, me=ME)}
 assert got[70] == "ours-working", got
+# A quiet session whose children still burn CPU (a background benchmark) is working.
+rows[80] = {**row(80, "claude --permission-mode auto", ppid=99), "uid": ME, "cpu": 1.0}
+rows[81] = {**row(81, "python3 bench.py", ppid=80), "uid": ME, "cpu": 60.0}
+got = {i["pid"]: i["cls"] for i in reap.judge_load(rows, {20: "/w/idle", 80: "/w/idle"}, set(), quiet, idle_s=H, me=ME)}
+assert got[80] == "ours-working" and got[20] == "ours-idle", got
 assert set(reap.LOAD_ACTIONS) == {"ours-idle", "ours-working", "leftover", "system"}
 
 # Docker: only dangling volumes of a project with no container at all; a volume named after a live project stays.

@@ -402,6 +402,7 @@ def scan(kinds, hours, cfg, repo_list):
     return items, notes
 
 
+BUSY_CHILD_CPU = 25
 SYSTEM_PATHS = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/")
 LOAD_ACTIONS = {
     "ours-idle": "먼저 남은 일이 있는지 묻고, 없으면 스스로 닫게 한다(자기 점검). 죽이지 않는다",
@@ -431,8 +432,11 @@ def judge_load(rows, cwd_of, leftovers, quiet, idle_s, me=None, top=None):
             continue
         cwd = (cwd_of or {}).get(pid)
         q = quiet(cwd) if cwd else None
+        busy = sum(rows[p]["cpu"] for p in tree(pid, rows) if p != pid and p not in claimed)
         if q is None:
             take(pid, "ours-working", "세션 transcript 없음(조용한지 알 수 없음)", cwd=cwd)
+        elif busy >= BUSY_CHILD_CPU:
+            take(pid, "ours-working", f"transcript 는 조용하지만 자식이 CPU {busy:.0f}% 사용", cwd=cwd)
         elif q >= idle_s:
             take(pid, "ours-idle", f"세션이 {age(q)} 조용", cwd=cwd)
         else:
@@ -483,7 +487,7 @@ def print_load(data):
         for cls, action in LOAD_ACTIONS.items():
             if data["totals"][cls]["count"]:
                 print(f"- {cls} {data['totals'][cls]['count']}개: {action}")
-            if cls == "ours-idle":
+            if cls == "ours-idle" and data["idle"]:
                 print("\n".join(f"  - pid {i['pid']}: {i['cwd']}" for i in data["idle"]))
         print("- 부하가 한도 이상인 동안 잰 벤치마크와 성능 수치는 증거가 아니다. 한도 아래로 내려간 뒤 다시 잰다")
 
