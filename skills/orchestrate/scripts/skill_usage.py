@@ -16,8 +16,8 @@ SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 NEGATIVE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)  # a sentence naming phrases that must not fire
-SUGGEST = {"unused_30d": ["rewrite_description", "merge", "retire"], "slash_only": ["rewrite_description"],
-           "misses": ["rewrite_description"]}
+SUGGEST = {"unused_30d": ["rewrite-description", "merge", "retire"], "slash_only": ["rewrite-description"],
+           "misses": ["rewrite-description"]}
 
 
 def iso(t):
@@ -208,7 +208,7 @@ def transcripts(projects_dir):
 
 def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_threshold=MISS_THRESHOLD):
     t0 = time.monotonic()
-    projects_dir = pathlib.Path(projects_dir or "~/.claude/projects").expanduser()
+    projects_dir = pathlib.Path(projects_dir or os.environ.get("CLAUDE_PROJECTS_DIR") or "~/.claude/projects").expanduser()
     inv = inventory() if inv is None else inv
     cache_path = pathlib.Path(cache_path or state_dir() / "skill-usage-cache.json")
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -295,7 +295,8 @@ def flags(r, miss_threshold=MISS_THRESHOLD):
 
 
 def signal_rows(report, now, editable=EDITABLE):
-    """One ledger `signal` row per flag on a skill the loop can edit, keyed by skill, flag and ISO week."""
+    """One ledger `signal` row per flag on a skill the loop can edit, keyed by skill, flag and ISO week (the window).
+    Only rows: the lessons ledger in the notes store is reflect's to write, never a script's."""
     y, w, _ = now.isocalendar()
     rows = []
     for r in report["skills"]:
@@ -303,8 +304,8 @@ def signal_rows(report, now, editable=EDITABLE):
             continue
         for fl in r["flags"]:
             rows.append({"ts": iso(now), "ev": "signal", "kind": "skill_usage", "skill": r["name"], "source": r["source"],
-                         "flag": fl, "suggest": SUGGEST[fl], "evidence": f"skill-usage:{r['name']}:{fl}:{y}-W{w:02d}",
-                         "note": f"{fl}: {r['uses_30d']} uses in 30 days ({r['auto_30d']} auto, {r['slash_30d']} slash, "
+                         "flag": fl, "suggest": SUGGEST[fl], "evidence": f"skill-usage:{r['name']}:{fl}@{y}-W{w:02d}",
+                         "note": f"{fl}; suggest: {'|'.join(SUGGEST[fl])}; {r['uses_30d']} uses in 30 days ({r['auto_30d']} auto, {r['slash_30d']} slash, "
                                  f"{r['chained_30d']} chained), {r['misses_30d']} misses, last used {r['last_used'] or 'never'}"})
     return rows
 

@@ -16,6 +16,7 @@ Usage: orch-dash <command> [options]
   demo [--port 4780] [--live] [--no-serve]
                                      a realistic fake program in a temp store, served offline
   fleet                              one collect of the fleet view (every Orca session), prints a summary
+  skills [--no-signals]              one collect of skill usage from local transcripts (skill_usage.py), prints a summary
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
   adopt [--apply] [--undo all|<worktree>]
@@ -23,7 +24,8 @@ Usage: orch-dash <command> [options]
                                      Orca parent worktree; every write is logged and --undo restores it
 
 Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <slug>/dashboard/.
-Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it.
+Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
+and ORCH_SKILLS=off disables only the skill usage collect.
 """
 import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, json, os, pathlib, re, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
 
@@ -32,6 +34,7 @@ sys.path.insert(0, str(HERE))
 import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or main state here
 import fleet  # noqa: E402
 import selfcheck  # noqa: E402
+import skill_usage  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1214,6 +1217,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not f.exists():
                 return self.send(503, b'{"error":"first fleet collect has not finished"}')
             return self.send_cached(f.read_bytes())
+        if path == "/api/fleet/skills":
+            f = fleet.state_dir() / "skills.json"
+            if not f.exists():
+                return self.send(503, b'{"error":"first skill usage collect has not finished"}')
+            return self.send_cached(f.read_bytes())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
@@ -1284,8 +1292,26 @@ def fleet_loop():
         FLEET_WAKE.clear()
 
 
+SKILLS_EVERY = 900  # a full first scan of a large transcript store takes seconds; later ones re-read changed files only
+
+
+def skills_loop():
+    while True:
+        f = fleet.state_dir() / "skills.json"
+        try:
+            if not f.exists() or time.time() - f.stat().st_mtime >= SKILLS_EVERY:
+                rep = skill_usage.refresh()
+                added = (rep.get("signals") or {}).get("added")
+                if added:
+                    log(f"skills: {added} new usage signal(s) in {rep['signals']['path']}")
+        except Exception as e:  # keep serving; the next round retries
+            log(f"skills: collect failed: {e!r}")
+        time.sleep(60)
+
+
 def code_files():
-    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", HERE / "selfcheck.py", *sorted(ASSETS.glob("*")))
+    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", HERE / "selfcheck.py", HERE / "skill_usage.py",
+            *sorted(ASSETS.glob("*")))
 
 
 def code_version():
@@ -1327,6 +1353,8 @@ def serve(host, port, interval, make_fleet=None):
     if os.environ.get("ORCH_FLEET") != "off":
         FLEET = (make_fleet or fleet.Fleet)()
         threading.Thread(target=fleet_loop, daemon=True).start()
+        if os.environ.get("ORCH_SKILLS") != "off":
+            threading.Thread(target=skills_loop, daemon=True).start()
     log(f"serving {home()} on http://{host}:{port}/ (tracker+github every {interval}s, "
         f"orca every {ORCA_EVERY}s, ledger every {FAST_TICK}s)")
     try:
@@ -1438,6 +1466,10 @@ def cmd_fleet(argv):
             print(f"  error: {k}: {v['error']}")
 
 
+def cmd_skills(argv):
+    skill_usage.main(argv)
+
+
 def cmd_inbox(argv):
     if argv[:1] == ["add"]:
         kind, title = prog.opt(argv, "--type"), prog.opt(argv, "--title")
@@ -1457,7 +1489,7 @@ def cmd_adopt(argv):
 
 
 COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "ensure": cmd_ensure, "note": cmd_note, "demo": cmd_demo,
-            "fleet": cmd_fleet, "inbox": cmd_inbox, "adopt": cmd_adopt}
+            "fleet": cmd_fleet, "skills": cmd_skills, "inbox": cmd_inbox, "adopt": cmd_adopt}
 
 if __name__ == "__main__":
     args = sys.argv[1:]

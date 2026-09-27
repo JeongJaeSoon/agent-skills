@@ -162,13 +162,14 @@ added = su.write_signals(ledger, rep4, NOW)
 got = {(r["skill"], r["flag"]) for r in added}
 assert got == {("notes", "slash_only"), ("agent-skills:tidy", "misses")}, got
 r0 = next(r for r in added if r["skill"] == "notes")
-assert r0["ev"] == "signal" and r0["kind"] == "skill_usage" and r0["evidence"] == "skill-usage:notes:slash_only:2026-W39", r0
-assert r0["source"] == "user" and r0["suggest"] == ["rewrite_description"], r0
+assert r0["ev"] == "signal" and r0["kind"] == "skill_usage" and r0["evidence"] == "skill-usage:notes:slash_only@2026-W39", r0
+assert r0["source"] == "user" and r0["suggest"] == ["rewrite-description"], r0
+assert r0["note"].startswith("slash_only; suggest: rewrite-description; "), r0
 assert su.write_signals(ledger, rep4, NOW) == [], "same week: nothing new"
 assert len(ledger.read_text().splitlines()) == 2
 later = su.write_signals(ledger, rep4, NOW + dt.timedelta(days=7))
-assert len(later) == 2 and all(r["evidence"].endswith("2026-W40") for r in later), later
+assert len(later) == 2 and all(r["evidence"].endswith("@2026-W40") for r in later), later
 unused = su.signal_rows({"skills": [{**rows["agent-skills:quiet"]}]}, NOW)
-assert unused[0]["suggest"] == ["rewrite_description", "merge", "retire"], unused
+assert unused[0]["suggest"] == ["rewrite-description", "merge", "retire"], unused
 
 print("test_skill_usage: ok")

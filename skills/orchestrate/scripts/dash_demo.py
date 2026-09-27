@@ -344,6 +344,38 @@ def _transcripts(root, now, workers):
     return base
 
 
+def skills_report(now):
+    """An invented skill usage report in skill_usage.py's shape, so the demo never reads real transcripts."""
+    rows = [  # name, source, 7d, 30d, auto, slash, chained, misses, last used (hours ago)
+        ("agent-skills:deliver-ticket", "agent-skills", 9, 31, 22, 3, 6, 2, 1),
+        ("agent-skills:use-tracker", "agent-skills", 6, 19, 4, 0, 15, 0, 2),
+        ("agent-skills:orchestrate", "agent-skills", 2, 7, 5, 2, 0, 0, 20),
+        ("agent-skills:reflect", "agent-skills", 0, 3, 0, 3, 0, 1, 200),
+        ("agent-skills:end-session", "agent-skills", 1, 4, 1, 0, 3, 6, 30),
+        ("agent-skills:teach", "agent-skills", 0, 0, 0, 0, 0, 0, None),
+        ("agent-skills:swarm", "agent-skills", 0, 0, 0, 0, 0, 1, 900),
+        ("lint-kit:lint", "lint-kit", 3, 12, 12, 0, 0, 0, 5),
+        ("lint-kit:format", "lint-kit", 0, 0, 0, 0, 0, 0, None),
+        ("notes", "user", 1, 2, 0, 2, 0, 0, 48),
+        ("simplify", "other", 4, 9, 9, 0, 0, 0, 3),
+    ]
+    import skill_usage
+    skills = []
+    for name, src, d7, d30, auto, slash, chained, misses, h in rows:
+        r = {"name": name, "source": src, "uses_7d": d7, "uses_30d": d30, "uses_total": d30 + (2 if h else 0),
+             "auto_30d": auto, "slash_30d": slash, "chained_30d": chained, "misses_30d": misses,
+             "last_used": _ago(now, h) if h else None, "sessions_30d": min(d30, 5), "repos_30d": min(d30, 2)}
+        r["flags"] = skill_usage.flags(r)
+        skills.append(r)
+    order = ["agent-skills", "lint-kit", "user", "other"]
+    return {"generated_at": _iso(now), "windows": {"short": 7, "long": 30}, "miss_threshold": skill_usage.MISS_THRESHOLD,
+            "editable": list(skill_usage.EDITABLE), "files": 412, "files_parsed": 3, "scan_seconds": 0.4,
+            "sources": [{"source": s, "skills": sum(r["source"] == s for r in skills),
+                         "uses_30d": sum(r["uses_30d"] for r in skills if r["source"] == s),
+                         "flagged": sum(bool(r["flags"]) for r in skills if r["source"] == s)} for s in order],
+            "skills": skills, "signals": {"path": "<store>/_skill-usage/ledger.jsonl", "added": 0}}
+
+
 def build(root, now=None):
     root = pathlib.Path(root)
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -356,9 +388,11 @@ def build(root, now=None):
     write_program(root, *a)
     write_program(root, *b)
     projects = _transcripts(root, now, a[4]["workers"] + b[4]["workers"])
+    (root / "fleet-state").mkdir(parents=True, exist_ok=True)
+    (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
-            "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "DASH_DEMO_FIXTURES": str(root / "fixtures"),
+            "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
 

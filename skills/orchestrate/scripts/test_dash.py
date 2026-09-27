@@ -233,6 +233,15 @@ body = json.dumps({"decision": "d1", "answer": "CSV"}).encode()
 assert post({"Host": host}, "/api/fleet/decide") == 403 and answers == []
 assert post({"Host": host, "X-Dash-Token": dash.TOKEN}, "/api/fleet/decide") == 200
 assert answers == [("d1", "CSV")], answers
+# Skill usage is served from the fleet state (the demo writes an invented report), behind the same Host guard.
+sk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/skills").read())
+assert {"agent-skills", "user", "other"} <= {x["source"] for x in sk["sources"]}, sk["sources"]
+assert next(r for r in sk["skills"] if r["name"] == "agent-skills:teach")["flags"] == ["unused_30d"]
+try:
+    urllib.request.urlopen(urllib.request.Request(f"{base}/api/fleet/skills", headers={"Host": f"evil.example:{srv.server_address[1]}"}))
+    raise AssertionError("a rebinding name read skill usage")
+except urllib.error.HTTPError as e:
+    assert e.code == 403, e.code
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.

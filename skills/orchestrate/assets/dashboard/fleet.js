@@ -7,6 +7,7 @@ const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
   { id: "prs", label: "Pull requests", icon: "prs" },
+  { id: "skills", label: "Skills", icon: "spark" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
   { id: "timeline", label: "Timeline", icon: "activity" },
@@ -412,6 +413,77 @@ function fleetPrs(st) {
 // Every poll re-renders the view: the merged group stays as the reader left it.
 document.addEventListener("toggle", (e) => { if (e.target.id === "prs-merged") F.mergedOpen = e.target.open; }, true);
 
+// Skill usage comes from /api/fleet/skills (skills.json by skill_usage.py), fetched only while this page is open.
+const SKILL_FLAG = {
+  unused_30d: ["unused 30 d", "warn", "Not invoked in 30 days: rewrite the description, merge it into another skill, or retire it (by PR)"],
+  slash_only: ["slash only", "accent", "Only ever typed as /name: the description does not make it fire on its own"],
+  misses: ["misses", "bad", "Prompts carried one of its quoted trigger phrases and it did not fire (heuristic)"],
+};
+const SKILL_FILTERS = {
+  all: [() => true, "All"],
+  flagged: [(r) => r.flags.length, "Flagged"],
+  unused_30d: [(r) => r.flags.includes("unused_30d"), "Unused 30 d"],
+  slash_only: [(r) => r.flags.includes("slash_only"), "Slash only"],
+  misses: [(r) => r.flags.includes("misses"), "Misses"],
+};
+const SKILL_SORT = {
+  name: (r) => r.name, d7: (r) => r.uses_7d, d30: (r) => r.uses_30d, mix: (r) => r.auto_30d + r.chained_30d,
+  last: (r) => ago(r.last_used), reach: (r) => r.sessions_30d, misses: (r) => r.misses_30d, flags: (r) => r.flags.length,
+};
+async function pollSkills() {
+  if (F.skillsBusy || (F.skills && Date.now() - F.skillsAt < 60e3)) return;
+  F.skillsBusy = true;
+  try {
+    const r = await fetch("/api/fleet/skills", { cache: "no-store" });
+    F.skills = r.ok ? await r.json() : { error: r.status === 503 ? "The first skill usage collect has not finished." : `HTTP ${r.status}` };
+  } catch (e) { F.skills = { error: String(e.message || e) }; }
+  F.skillsAt = Date.now(); F.skillsBusy = false;
+  if (S.section === "skills") renderView();
+}
+const skillMix = (r) => {
+  const n = r.uses_30d || 1, seg = (v, cls, label) => v ? `<span class="${cls}" style="flex:${v / n}" title="${v} ${label}"></span>` : "";
+  return `<span class="mix" aria-label="${r.auto_30d} auto, ${r.chained_30d} chained, ${r.slash_30d} slash">${seg(r.auto_30d, "m-auto", "auto")}${seg(r.chained_30d, "m-chained", "loaded by another skill")}${seg(r.slash_30d, "m-slash", "slash")}</span>
+    <span class="mono dim">${r.auto_30d}·${r.chained_30d}·${r.slash_30d}</span>`;
+};
+function skillTable(list) {
+  const head = [["name", "Skill"], ["d7", "7 d", "num"], ["d30", "30 d", "num"], ["mix", "auto · chained · slash", "hide-sm"], ["last", "Last used"],
+    ["reach", "Sessions · repos", "num hide-md"], ["misses", "Misses", "num"], ["flags", "Flags"]];
+  const rows = sorted("fleet_skills", list, SKILL_SORT).map((r) => `<tr>
+      <td class="mono">${esc(r.name)}</td><td class="num">${r.uses_7d || '<span class="muted">0</span>'}</td><td class="num">${r.uses_30d || '<span class="muted">0</span>'}</td>
+      <td class="hide-sm">${r.uses_30d ? skillMix(r) : '<span class="muted">—</span>'}</td>
+      <td class="muted">${r.last_used ? relSpan(r.last_used) : "never"}</td>
+      <td class="num hide-md dim">${r.sessions_30d} · ${r.repos_30d}</td>
+      <td class="num">${r.misses_30d ? `<span class="${r.flags.includes("misses") ? "tone-bad" : ""}">${r.misses_30d}</span>` : '<span class="muted">0</span>'}</td>
+      <td>${r.flags.map((f) => `<span title="${esc((SKILL_FLAG[f] || [])[2] || f)}">${tag((SKILL_FLAG[f] || [f])[0], (SKILL_FLAG[f] || [])[1] || "")}</span>`).join(" ")}</td></tr>`).join("");
+  return `<table><thead><tr>${head.map(([c, l, cls]) => th("fleet_skills", c, l, cls)).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+function fleetSkills() {
+  pollSkills();
+  const rep = F.skills;
+  const headHtml = `<div class="view-head"><div><h2>Skills</h2><p>How often each installed skill ran in local Claude Code transcripts, and how it was triggered: on its own (auto), loaded by another skill (chained), or typed as /name (slash). Misses are prompts that carried a quoted trigger phrase from the skill's description while it did not fire: a heuristic. Counts only; no transcript text leaves the machine.</p></div>
+    ${rep && !rep.error ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)} · ${rep.files} transcripts</div>` : ""}</div>`;
+  if (!rep) return headHtml + '<div class="loading">Loading…</div>';
+  if (rep.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(rep.error)}</div></div>`;
+  const all = rep.skills || [];
+  const f = SKILL_FILTERS[S.filters.fleet_skills] ? S.filters.fleet_skills : "all";
+  const srcs = (rep.sources || []).map((x) => x.source), src = srcs.includes(S.filters.fleet_skills_src) ? S.filters.fleet_skills_src : "all";
+  const shown = all.filter((r) => SKILL_FILTERS[f][0](r) && (src === "all" || r.source === src));
+  const srcChip = (v, label, n) => `<button class="chip" type="button" data-group="fleet_skills_src" data-val="${esc(v)}" aria-pressed="${v === src}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
+  const editable = new Set(rep.editable || []);
+  const mine = all.filter((r) => editable.has(r.source));
+  const kpis = `<div class="kpis" style="--n:4">
+    ${kpi("Skills used in 30 d", `${all.filter((r) => r.uses_30d).length}<small>/${all.length}</small>`, `${all.reduce((a, r) => a + r.uses_30d, 0)} invocations`)}
+    ${kpi("Fire on their own", `${all.filter((r) => r.auto_30d + r.chained_30d).length}`, `${all.filter((r) => r.flags.includes("slash_only")).length} slash only`)}
+    ${kpi("Flagged, editable", `${mine.filter((r) => r.flags.length).length}<small>/${mine.length}</small>`, `sources ${[...editable].join(", ")}`)}
+    ${kpi("Improvement signals", `${rep.signals ? rep.signals.added : "—"}`, rep.signals ? "new this collect, one per skill and flag per week" : "signals off")}</div>`;
+  const groups = {};
+  shown.forEach((r) => (groups[r.source] ||= []).push(r));
+  return headHtml + kpis + `<div class="toolbar">${chips("fleet_skills", Object.entries(SKILL_FILTERS).map(([id, [fn, label]]) => [id, label, all.filter(fn).length]), f)}</div>
+    ${srcs.length > 1 ? `<div class="chips proj-chips" role="group" aria-label="Source">${srcChip("all", "All sources")}${(rep.sources || []).map((x) => srcChip(x.source, x.source, x.skills)).join("")}</div>` : ""}
+    ${srcs.filter((x) => groups[x]).map((x) => `<div class="card table-wrap"><div class="card-head"><h3 class="mono">${esc(x)}</h3><span class="aside">${editable.has(x) ? tag("editable", "accent", "") + " " : ""}${groups[x].length} skills</span></div>${skillTable(groups[x])}</div>`).join("")
+      || '<div class="card"><div class="empty-chart">No skill matches.</div></div>'}`;
+}
+
 function fleetGraph(st) {
   return `<div class="view-head"><div><h2>Graph</h2><p>Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn.</p></div></div>
     ${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
@@ -497,7 +569,7 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

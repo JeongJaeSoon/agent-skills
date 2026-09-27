@@ -108,8 +108,8 @@ LOOP        About every 60 minutes, take everything that arrived and fold it in 
             Change as little as the round needs, and prefer rewriting an existing sentence to adding
             one; a change that lengthens a skill gives its reason in the report. Write every rule
             generically.
-USAGE       Periodically count Skill tool calls per skill name in the local transcripts (name, count,
-            last use; never read or copy their content). For a skill outside the development flow
+USAGE       Read the skill_usage signals (references/dashboard.md, "Skill usage") and the dashboard's
+            Skills page for counts, triggers and misses per skill. For a skill outside the development flow
             that goes unused, judge why: its description misses the trigger, it overlaps another
             skill, or it is no longer needed. Fix the first two with the smallest description change;
             only propose deleting the third. The count goes in the report, never in a commit.

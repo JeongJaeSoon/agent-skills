@@ -433,3 +433,9 @@ td.when { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Skill usage mix: auto, chained, slash as one small bar */
+.mix { display: inline-flex; width: 72px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line, rgba(127,127,127,.2)); vertical-align: middle; margin-right: 6px; }
+.mix .m-auto { background: var(--good, #2e9e6b); }
+.mix .m-chained { background: var(--accent, #3987e5); }
+.mix .m-slash { background: var(--warn, #d9922e); }
