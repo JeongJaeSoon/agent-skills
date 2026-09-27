@@ -198,6 +198,10 @@ class SpecValidationTest(Base):
     def test_hard_deny_not_editable_here(self):
         self.refused({"add": {"hard_deny": ["x"]}})
 
+    def test_replace_with_itself_refused(self):
+        rule = "Running the test suite in local checkouts."
+        self.refused({"replace": [{"section": "allow", "old": rule, "new": rule}]})
+
     def test_empty_spec_refused(self):
         self.refused({})
 

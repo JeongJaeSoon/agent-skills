@@ -54,6 +54,8 @@ def check_spec(spec):
             raise Refused(f"unknown section {item['section']!r}; allowed: {', '.join(SECTIONS)}")
         check_rule(item["old"])
         check_rule(item["new"])
+        if item["old"] == item["new"]:
+            raise Refused("a replace item has the same old and new text")
     if not any(add.values()) and not replace:
         raise Refused("spec changes nothing")
 
@@ -143,8 +145,7 @@ def write(path, data):
         f.write(text)
     shutil.copymode(path, tmp)
     os.replace(tmp, path)
-    if json.loads(path.read_text()) != data:
-        raise Refused(f"{path} did not read back as written; restore it from the backup")
+    return json.loads(path.read_text()) == data
 
 
 def run(spec, settings, apply):
@@ -168,7 +169,8 @@ def run(spec, settings, apply):
     real = settings.resolve()
     saved = backup(real)
     data["autoMode"] = after
-    write(real, data)
+    if not write(real, data):
+        raise Refused(f"{real} did not read back as written; restore it: cp {shlex.quote(str(saved))} {shlex.quote(str(real))}")
     print(f"\nwritten: {real}\nbackup:  {saved}")
     print(f"rollback: cp {shlex.quote(str(saved))} {shlex.quote(str(real))}")
     print("check:   claude auto-mode config   (restart the session if the same denial comes back)")
@@ -189,6 +191,7 @@ def emit(spec, out, settings):
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(body)
+    out.chmod(0o600)
     target = "" if settings == DEFAULT_SETTINGS else f" --settings {shlex.quote(str(settings.absolute()))}"
     print(f"\nwrote {out}\nThe user reviews it and runs:\n  ! python3 {shlex.quote(str(out))}{target} --apply {spec_hash(spec)}")
 
