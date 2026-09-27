@@ -1404,6 +1404,16 @@ def revoked_echo(m):
     return (p.get("dispatchId") or "?") if "revoked" in (rej.get("reason") or "") else None
 
 
+def payload_of(m):
+    payload = m.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def close_out(msgs, workers, worktrees):
     """What to do with each worker_done's card, printed beside the message: after a compaction a coordinator kept
     releasing workers but dropped `worktree rm`, and eight cards stayed open."""
@@ -1414,13 +1424,7 @@ def close_out(msgs, workers, worktrees):
     for m in msgs:
         if m.get("type") != "worker_done":
             continue
-        payload = m.get("payload")
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except ValueError:
-                payload = {}
-        payload = payload if isinstance(payload, dict) else {}
+        payload = payload_of(m)
         d = payload.get("dispatchId")
         if not d:
             continue
@@ -1444,6 +1448,48 @@ def close_out(msgs, workers, worktrees):
             plan, reap = f"/tmp/reap-{d}.json", f"python3 {shlex.quote(str(REAP))}"
             out.append(f"  {reap} scan --kinds codex --plan {plan} && {reap} reap --plan {plan}")
     return out
+
+
+def card_holds(path):
+    if not os.path.isdir(path):
+        return None
+    if run(["git", "-C", path, "status", "--porcelain"], check=False).stdout.strip():
+        return "uncommitted changes"
+    ahead = run(["git", "-C", path, "rev-list", "--count", "HEAD", "--not", "--remotes"], check=False).stdout.strip()
+    if ahead not in ("", "0"):
+        return f"{ahead} unpushed commit(s)"
+    r = subprocess.run(["gh", "pr", "view", "--json", "number,state"], capture_output=True, text=True, cwd=path)
+    if r.returncode:
+        return None if re.search(r"no (pull requests found|git remotes)", r.stderr) else f"PR state unknown ({r.stderr.strip()[:80]})"
+    pr = json.loads(r.stdout)
+    return f"open PR #{pr['number']}" if pr.get("state") == "OPEN" else None
+
+
+def settle_sweep(workers, worktrees, skip=(), holds=card_holds):
+    path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
+    out, kept = [], []
+    for w in workers:
+        d = w["dispatchId"]
+        if w.get("terminalState") not in ("reclaimable", "release_unknown") or d in skip:
+            continue
+        p = path.get((w.get("resource") or {}).get("worktreeId"))
+        why = holds(p) if p else None
+        if why:
+            kept.append(f"KEEP {d} ({w.get('workerState')}): {why}")
+            continue
+        out += [f"SETTLED {d} ({w.get('workerState')}): release it; "
+                + ("no open PR, nothing unpushed" if p else "its card is gone"),
+                f"  orca orchestration worker-release --dispatch {d}"]
+    return out + kept
+
+
+def print_sweep(run_id, skip=()):
+    try:
+        lines = settle_sweep(run_workers(run_id), orca_json("worktree", "list").get("worktrees", []), skip)
+    except SystemExit as e:
+        lines = [f"SETTLED: could not read the workers ({e}); worker-list --run {run_id} --terminal-state reclaimable lists them"]
+    if lines:
+        print("\n".join(lines), flush=True)
 
 
 def cmd_wait(argv):
@@ -1473,18 +1519,21 @@ def cmd_wait(argv):
                 body = (m.get("body") or "").replace("\n", " ")
                 print(f"INBOX id={m.get('id')} type={m.get('type')} from={m.get('from_handle')} "
                       f"subject={m.get('subject')} payload={str(m.get('payload'))[:200]} body={body[:800]}")
-            if any(m.get("type") == "worker_done" for m in work):
+            closed = {payload_of(m).get("dispatchId") for m in work if m.get("type") == "worker_done"}
+            if closed:
                 try:
                     lines = close_out(work, run_workers(run_id), orca_json("worktree", "list").get("worktrees", []))
                 except SystemExit as e:  # the batch and its ack line matter more than the hint
                     lines = [f"CLOSE OUT: could not read the cards ({e}); `orch status` lists them"]
                 print("\n".join(lines))
+            print_sweep(run_id, closed)
             print(f"ACTIONABLE delivery={did} ({len(work)} of {len(msgs)}): process every message, then "
                   f"orca orchestration check --run {run_id} --ack {did} --json")
             return
         if did:
             orca_json("orchestration", "check", "--run", run_id, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
+    print_sweep(run_id)
     print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
           f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
           f" one that ended its turn without worker_done does not wake on send: send the instruction with"

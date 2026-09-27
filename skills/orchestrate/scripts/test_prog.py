@@ -194,6 +194,30 @@ spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktree
 assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-2] == "  orca worktree rm --worktree path:'/w/a b'"
 assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
                        {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
+settled = [
+    {"dispatchId": "s1", "terminalState": "reclaimable", "workerState": "succeeded", "resource": {"worktreeId": "w1"}},
+    {"dispatchId": "s2", "terminalState": "reclaimable", "workerState": "failed", "resource": {"worktreeId": "w2"}},
+    {"dispatchId": "s3", "terminalState": "release_unknown", "workerState": "succeeded", "resource": {"worktreeId": "gone"}},
+    {"dispatchId": "s4", "terminalState": "retained", "workerState": "succeeded", "resource": {"worktreeId": "w3"}},
+    {"dispatchId": "s5", "terminalState": "active", "workerState": "ready", "resource": {"worktreeId": "wq"}},
+    {"dispatchId": "s6", "terminalState": "reclaimable", "workerState": "succeeded", "resource": {"worktreeId": "wq"}},
+]
+held = {"/w/2": "open PR #7"}
+sweep = prog.settle_sweep(settled, wts, skip={"s6"}, holds=held.get)
+assert sweep == ["SETTLED s1 (succeeded): release it; no open PR, nothing unpushed",
+                 "  orca orchestration worker-release --dispatch s1",
+                 "SETTLED s3 (succeeded): release it; its card is gone",
+                 "  orca orchestration worker-release --dispatch s3",
+                 "KEEP s2 (failed): open PR #7"], sweep
+assert prog.settle_sweep([], wts) == []
+import subprocess, tempfile
+repo = tempfile.mkdtemp(prefix="test-holds-")
+git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, check=True)
+git("init", "-q"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
+assert prog.card_holds(repo) == "1 unpushed commit(s)", prog.card_holds(repo)
+pathlib.Path(repo, "f").write_text("x")
+assert prog.card_holds(repo) == "uncommitted changes"
+assert prog.card_holds("/nonexistent/card") is None
 # A released worker's repeated worker_done comes back as Orca's refusal; orch wait acks it without waking. A refusal
 # for a missing capability still wakes it: that worker is live.
 import contextlib, io, json
@@ -217,6 +241,17 @@ with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "refused a worker_done from released dispatch d1" in out.getvalue() and "ACTIONABLE" not in out.getvalue(), out.getvalue()
 assert any("--ack" in a and "dv1" in a for a in calls), calls
+prog.run_workers = lambda run: [dict(settled[2], dispatchId="s7"), dict(settled[2], dispatchId="d1")]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "SETTLED s7 (succeeded): release it" in out.getvalue(), out.getvalue()
+prog.orca_json = lambda *a: {"deliveryId": "dv2", "messages": [{"type": "worker_done", "payload": {"dispatchId": "d1"}}]} \
+    if "--wait" in a else {}
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "SETTLED s7" in out.getvalue() and "SETTLED d1" not in out.getvalue() and "CLOSE OUT d1" in out.getvalue(), out.getvalue()
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},
