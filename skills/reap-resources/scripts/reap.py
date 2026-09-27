@@ -16,7 +16,7 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30}.
 """
-import datetime as dt, json, os, pathlib, re, shutil, signal, subprocess, sys, time
+import contextlib, datetime as dt, json, os, pathlib, re, shutil, signal, subprocess, sys, time
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ("codex", "orphan", "docker", "branch", "worktree")
@@ -403,7 +403,6 @@ def scan(kinds, hours, cfg, repo_list):
 
 
 BUSY_CHILD_CPU = 25
-SYSTEM_PATHS = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/")
 LOAD_ACTIONS = {
     "ours-idle": "먼저 남은 일이 있는지 묻고, 없으면 스스로 닫게 한다(자기 점검). 죽이지 않는다",
     "leftover": "reap-resources 로 정리한다: scan --plan 뒤 reap --plan",
@@ -444,17 +443,19 @@ def judge_load(rows, cwd_of, leftovers, quiet, idle_s, me=None, top=None):
     for pid, r in sorted(rows.items()):
         if pid in claimed:
             continue
-        system = not ours(r) or any(r["cmd"].startswith(x) for x in SYSTEM_PATHS)
         claimed.add(pid)
-        out.append({"cls": "system" if system else "ours-working", "pid": pid, "procs": 1, "cpu": r["cpu"], "rss": r["rss"],
-                    "cmd": r["cmd"][:80], "why": "다른 사용자 또는 시스템 경로" if system else "이 사용자의 프로세스"})
+        out.append({"cls": "ours-working" if ours(r) else "system", "pid": pid, "procs": 1, "cpu": r["cpu"], "rss": r["rss"],
+                    "cmd": r["cmd"][:80], "why": "이 사용자의 프로세스" if ours(r) else "다른 사용자의 프로세스"})
     return sorted(out, key=lambda i: -i["cpu"])[:top]
 
 
 def transcript_quiet(projects_dir, now):
     def quiet(cwd):
-        d = projects_dir / re.sub(r"[/.]", "-", cwd)
-        times = [f.stat().st_mtime for f in d.glob("*.jsonl")] if d.is_dir() else []
+        d = projects_dir / re.sub(r"[^A-Za-z0-9]", "-", cwd)
+        times = []
+        for f in (f for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)) if d.is_dir() else ():
+            with contextlib.suppress(OSError):  # a transcript removed mid-scan, or a dangling link
+                times.append(f.stat().st_mtime)
         return now - max(times) if times else None
     return quiet
 

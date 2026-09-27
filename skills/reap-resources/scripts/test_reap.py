@@ -69,24 +69,43 @@ rows = {
     40: {**row(40, BROKER.format("/wt/gone")), "uid": ME, "cpu": 30.0},
     41: {**row(41, "codex app-server", ppid=40), "uid": ME, "cpu": 10.0},
     50: {**row(50, "/usr/local/bin/node server.js", ppid=99), "uid": ME, "cpu": 12.0},
-    60: {**row(60, "/System/Library/CoreServices/indexer", ppid=1), "uid": ME, "cpu": 15.0},
+    # Ours even from a system path: the Virtualization framework runs a container VM as this user.
+    60: {**row(60, "/System/Library/Frameworks/Virtualization.framework/XPCServices/VirtualMachine", ppid=1),
+         "uid": ME, "cpu": 15.0},
+    65: {**row(65, "/opt/tools/bin/scanner", ppid=1), "uid": 0, "cpu": 13.0},
     70: {**row(70, "claude -p", ppid=99), "uid": ME, "cpu": 3.0},
 }
 quiet = {"/w/idle": 3 * H, "/w/busy": 60}.get
 got = reap.judge_load(rows, {20: "/w/idle", 30: "/w/busy", 70: "/w/new"}, {40}, quiet, idle_s=H, me=ME, top=6)
-assert [(i["pid"], i["cls"]) for i in got] == [(10, "system"), (30, "ours-working"), (40, "leftover"), (60, "system"),
-                                               (50, "ours-working"), (20, "ours-idle")], got
+assert [(i["pid"], i["cls"]) for i in got] == [(10, "system"), (30, "ours-working"), (40, "leftover"), (60, "ours-working"),
+                                               (65, "system"), (50, "ours-working")], got
 assert got[1]["cpu"] == 100.0 and got[1]["procs"] == 2 and got[2]["procs"] == 2, got
-assert "조용" in got[5]["why"]
+got = {i["pid"]: i for i in reap.judge_load(rows, {20: "/w/idle", 30: "/w/busy", 70: "/w/new"}, {40}, quiet, idle_s=H, me=ME)}
+assert got[20]["cls"] == "ours-idle" and "조용" in got[20]["why"], got[20]
 # A session with no transcript on record is not called idle.
-got = {i["pid"]: i["cls"] for i in reap.judge_load(rows, {20: "/w/idle", 30: "/w/busy", 70: "/w/new"}, {40}, quiet, idle_s=H, me=ME)}
-assert got[70] == "ours-working", got
+assert got[70]["cls"] == "ours-working", got[70]
 # A quiet session whose children still burn CPU (a background benchmark) is working.
 rows[80] = {**row(80, "claude --permission-mode auto", ppid=99), "uid": ME, "cpu": 1.0}
 rows[81] = {**row(81, "python3 bench.py", ppid=80), "uid": ME, "cpu": 60.0}
 got = {i["pid"]: i["cls"] for i in reap.judge_load(rows, {20: "/w/idle", 80: "/w/idle"}, set(), quiet, idle_s=H, me=ME)}
 assert got[80] == "ours-working" and got[20] == "ours-idle", got
 assert set(reap.LOAD_ACTIONS) == {"ours-idle", "ours-working", "leftover", "system"}
+
+# A session is as fresh as its newest transcript, subagents' included; the project dir replaces
+# every non-alphanumeric character of the cwd with "-".
+with tempfile.TemporaryDirectory() as tmp:
+    proj = pathlib.Path(tmp) / "-w-my-repo-x"
+    (proj / "sid" / "subagents").mkdir(parents=True)
+    main, sub = proj / "sid.jsonl", proj / "sid" / "subagents" / "agent-1.jsonl"
+    main.write_text("{}\n")
+    sub.write_text("{}\n")
+    now = time.time()
+    os.utime(main, (now - 3 * H, now - 3 * H))
+    os.utime(sub, (now - 60, now - 60))
+    q = reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x")
+    assert q is not None and q < 120, q
+    (proj / "gone.jsonl").symlink_to(proj / "missing")
+    assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") == q, "a dangling transcript link is skipped"
 
 # Docker: only dangling volumes of a project with no container at all; a volume named after a live project stays.
 now = time.time()
