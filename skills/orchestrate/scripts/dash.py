@@ -561,6 +561,10 @@ def projects_dir():
     return pathlib.Path(os.environ.get("CLAUDE_PROJECTS_DIR", "~/.claude/projects")).expanduser()
 
 
+def transcript_dir(path):
+    return projects_dir() / re.sub(r"[^A-Za-z0-9]", "-", path)
+
+
 def _add(a, b):
     return {k: a.get(k, 0) + b.get(k, 0) for k in USAGE_KEYS}
 
@@ -652,7 +656,7 @@ def collect_usage(dash, workers, cfg):
     for w in workers:
         if (w.get("model") or "").startswith(("gpt", "o3", "o4", "codex")) or not w.get("worktree_path"):
             continue  # Codex rollouts are not mapped to worktrees; shown as n/a
-        d = root / re.sub(r"[/.]", "-", w["worktree_path"])
+        d = transcript_dir(w["worktree_path"])
         if not d.is_dir():
             continue
         sums, motion = {}, None

@@ -104,6 +104,8 @@ with tempfile.TemporaryDirectory() as tmp:
     os.utime(sub, (now - 60, now - 60))
     q = reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x")
     assert q is not None and q < 120, q
+    (proj / "gone.jsonl").symlink_to(proj / "missing")
+    assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") == q, "a dangling transcript link is skipped"
 
 # Docker: only dangling volumes of a project with no container at all; a volume named after a live project stays.
 now = time.time()

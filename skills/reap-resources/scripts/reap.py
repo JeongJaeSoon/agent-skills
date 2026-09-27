@@ -16,7 +16,7 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30}.
 """
-import datetime as dt, json, os, pathlib, re, shutil, signal, subprocess, sys, time
+import contextlib, datetime as dt, json, os, pathlib, re, shutil, signal, subprocess, sys, time
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ("codex", "orphan", "docker", "branch", "worktree")
@@ -452,7 +452,10 @@ def judge_load(rows, cwd_of, leftovers, quiet, idle_s, me=None, top=None):
 def transcript_quiet(projects_dir, now):
     def quiet(cwd):
         d = projects_dir / re.sub(r"[^A-Za-z0-9]", "-", cwd)
-        times = [f.stat().st_mtime for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)] if d.is_dir() else []
+        times = []
+        for f in (f for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)) if d.is_dir() else ():
+            with contextlib.suppress(OSError):  # a transcript removed mid-scan, or a dangling link
+                times.append(f.stat().st_mtime)
         return now - max(times) if times else None
     return quiet
 

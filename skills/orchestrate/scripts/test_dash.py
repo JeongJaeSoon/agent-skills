@@ -90,6 +90,7 @@ w107 = next(w for w in st["workers"] if w["dispatch"] == "ctx_a1000009")
 assert tok > 0 and w107["tokens"]["total"] > 0 and st["series"][-1]["tokens"] == tok
 assert next(w for w in st["workers"] if w["model"] == "gpt-6-sol")["tokens"] is None, "codex workers are n/a"
 assert dash.collect(A, sources=("orca",))["usage"]["total"]["total"] == tok, "rescan must not double count"
+assert dash.transcript_dir("/w/my_repo.x").name == "-w-my-repo-x"
 tr = pathlib.Path(os.environ["CLAUDE_PROJECTS_DIR"]) / "-workspaces-acme-107" / "session.jsonl"
 extra = {"input_tokens": 10, "output_tokens": 20, "cache_creation_input_tokens": 30, "cache_read_input_tokens": 40}
 with tr.open("a") as f:
