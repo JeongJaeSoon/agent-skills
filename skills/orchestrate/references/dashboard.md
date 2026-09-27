@@ -67,6 +67,7 @@ The hierarchy comes from Orca's own records. The root is `root_worktree` from th
 
 - **Overview.** Session counts by phase (working, waiting on a prompt, idle, open, offline), what needs you, open PRs and runs. Below: the top of the inbox, the sessions moving now, the eight most recently updated open PRs (linking to Pull requests) and the latest timeline.
 - **Pull requests.** Every open PR from the search and every PR a session's branch has, grouped by repository: number, title, author, draft, review decision, CI, merge state (`mergeStateStatus`), CodeRabbit (reviewed, reviewing, rate-limited, skipped or failed, from its commit status) with the unresolved thread count, the owning session when one has the branch, age and last update. Filters: needs review, CI failing, mergeable (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`, not draft), and one repository. The head shows when GitHub was last read, and PRs merged in the last 24 h sit in a collapsed group. Only a PR a session owns raises Needs you items and timeline events; the rest are this page's to show.
+- **Skills.** Every installed skill with its uses in 7 and 30 days, how it was triggered, last use, sessions and repositories reached, heuristic misses and flags, grouped by source (see Skill usage below). Filters: flagged, each flag, and one source.
 - **Inbox.** Everything a session is waiting on you for, filterable by type. A click on a row (outside its buttons, links and answer box) opens its session's page; an item whose session Orca no longer lists, or that has none, and a row on its own session's page stay put. Each row links to its session, opens the PR or copies the command, and can be dismissed.
 - **Graph.** Session → pull request → reviewer. The bar on a PR is its CI (green, red, amber). A reviewer edge is green for approved, dashed amber for an approval on an older commit, red for changes requested, blue for commented, grey dotted for requested and not yet answered.
 - **Sessions.** The whole tree as a table: kind, phase, project and branch, PR, Needs you count, last activity (the later of Orca's worktree time and its agents' own, since the worktree time stands still while an agent works).
@@ -202,6 +203,39 @@ orch-dash inbox add --type login --title "Log in to the registry" [--session <wo
 orch-dash inbox resolve --key KEY
 orch-dash adopt [--apply] [--undo all|<worktree id>]
 ```
+
+## Skill usage
+
+`scripts/skill_usage.py` (`orch-dash skills`) reads the local Claude Code transcripts (`$CLAUDE_PROJECTS_DIR` or `~/.claude/projects`, subagent transcripts included) and the installed skills: this checkout's `skills/`, each plugin in `~/.claude/plugins/installed_plugins.json`, and `~/.claude/skills`. `serve` runs it when `<fleet state>/skills.json` is missing or 15 minutes old; the page reads `/api/fleet/skills`. `ORCH_SKILLS=off` turns it off.
+
+| Trigger | Counted from |
+|---|---|
+| auto | a `Skill` tool call |
+| chained | a `Skill` tool call whose `attributionSkill` is another skill loaded earlier in the same turn |
+| slash | a human message carrying `<command-name>/<skill></command-name>`; a built-in command that is not a skill is dropped |
+
+A **miss** is a human prompt (not a subagent's, a slash command, a notification, a compaction summary or an interruption marker; text inside a `<pasted_content>` block is ignored) that contains, as whole words, a quoted trigger phrase from a skill's description, with no invocation of that skill before the next human prompt. A phrase counts when it has two or more words, or four or more non-ASCII characters; phrases in a sentence starting with "Not", "Never" or "Don't" are skipped. It is a heuristic: read the number as "look here", not as proof.
+
+| Flag | When |
+|---|---|
+| `unused_30d` | An installed skill with no use in 30 days |
+| `slash_only` | Used in 30 days, but only ever typed as `/name`: the description does not make it fire |
+| `misses` | More than 3 misses in 30 days (`--misses N`) |
+
+The report holds counts only. No prompt or message text is copied, sessions and repositories are counted, not named, and the incremental cache (`skill-usage-cache.json`, keyed by a hash of each transcript's path, checked by size and mtime) stores working directories as hashes. The first scan reads every transcript; later ones re-read only changed files.
+
+### Signals for the improvement loop
+
+Each collect appends one row per flag, per skill, per ISO week to `$PROGRAMS_HOME/_skill-usage/ledger.jsonl`, only for sources the loop can edit (`agent-skills` and `user`). The row has the shape of a program ledger's `signal` row, with `kind` `skill_usage`:
+
+```json
+{"ts": "2026-09-27T14:51:28Z", "ev": "signal", "kind": "skill_usage", "skill": "agent-skills:swarm",
+ "source": "agent-skills", "flag": "unused_30d", "suggest": ["rewrite-description", "merge", "retire"],
+ "evidence": "skill-usage:agent-skills:swarm:unused_30d@2026-W39",
+ "note": "unused_30d; suggest: rewrite-description|merge|retire; 0 uses in 30 days (0 auto, 0 slash, 0 chained), 0 misses, last used never"}
+```
+
+`evidence` (skill, flag and the ISO-week window) is the idempotency key, so a flag that persists shows up once a week. The collector writes only this file. The flow improver reads it as one input, and `reflect` promotes a signal into the lessons ledger (Source `skill-usage`, Kind `usage`, Evidence a pointer to the row and its window, one row per skill and flag whose Occurrences rise per window); no script writes the lessons ledger. `suggest` lists what may be proposed; retiring a skill is only ever proposed in a PR, never applied by the loop.
 
 ## Freshness
 
