@@ -9,7 +9,7 @@ The flow improver and the resource steward serve every program on the machine, s
 | Coordinator (this session) | Order, deps, briefs, triage, gates, the digest | Diagnose red main, run QA, rework the process, reap worktrees |
 | Main guardian | Red main: flake or defect, freeze, hotfix or revert, notify | Pick up tickets |
 | QA lead | Ticket verification, periodic E2E on main, design-vs-code audit | Fix what it finds (it files tickets) |
-| Flow improver | Folding lesson signals and the human's process feedback into the skills while programs run: batched, audited, pushed, then reloaded | Touch a running program's work, or change its contract (merge policy, predicate, the brief's required fields, landing rules) before that program's coordinator confirms |
+| Flow improver | Folding lesson signals, the human's process feedback and the ledgers' unclaimed signals into the skills while programs run: batched, audited, pushed or proposed as a draft PR, then reloaded | Touch a running program's work, or change its contract (merge policy, predicate, the brief's required fields, landing rules) before that program's coordinator confirms |
 | Resource steward | Reaping settled worktrees the coordinators missed, running `reap-resources` for leftover processes, Docker leftovers and stale branches, watching machine load | Touch a live turn, a dirty tree, an open PR, a coordinator's or standing role's worktree, or the dashboard; `--force` |
 
 They came from the user's own calls on a real program (2026-09-24):
@@ -98,8 +98,13 @@ FLOW: flow improver for the skills repo <repo>
 GOAL        Fold what the coordinators learn while running work into the skills, so each round
             runs better than the last.
 INPUT       Lesson signals the coordinators send you (send --to dispatch:<you>), and the human's
-            process feedback they forward. Read your mail at each checkpoint.
-LOOP        About every 60 minutes, take everything that arrived and fold it in as one commit.
+            process feedback they forward. Read your mail at each checkpoint. Also what nobody
+            sends: new signal and failure rows in the program ledgers and in the usage collector's
+            ledger (`reflect`, standing mode).
+LOOP        About every 60 minutes, one round. Fold everything that arrived by mail into one
+            commit (EVERY COMMIT). Then run `reflect` in standing mode over what nobody sent: it
+            opens or updates at most one draft PR and never merges it. A round where both are
+            empty sends nothing; your heartbeats say you are alive.
             Before writing a candidate, judge whether it is needed. Drop it when any of these holds:
               a. another part of the skill already says it
               b. it was a one-off circumstance, not a mistake that would recur without the rule
@@ -108,11 +113,11 @@ LOOP        About every 60 minutes, take everything that arrived and fold it in 
             Change as little as the round needs, and prefer rewriting an existing sentence to adding
             one; a change that lengthens a skill gives its reason in the report. Write every rule
             generically.
-USAGE       Read the skill_usage signals and `<fleet state>/skills.json` (`orch-dash skills` refreshes it;
-            references/dashboard.md, "Skill usage") for counts, triggers and misses per skill. For a skill outside the development flow
-            that goes unused, judge why: its description misses the trigger, it overlaps another
-            skill, or it is no longer needed. Fix the first two with the smallest description change;
-            only propose deleting the third. The count goes in the report, never in a commit.
+USAGE       The usage collector flags skills (`unused_30d`, `slash_only`, `misses`) as `skill_usage`
+            signals; `<fleet state>/skills.json` (`orch-dash skills` refreshes it; references/dashboard.md,
+            "Skill usage") has the counts behind them. Standing mode turns a flag into a description
+            rewrite, a merge, or a retirement proposal in its draft PR. Do not count transcripts
+            yourself. A usage count goes in a report, never in a commit.
 EVERY COMMIT
             Follow the write-skill skill end to end: overlap check, prompt audit, internal-name
             grep with 0 hits, tests, signed commit, fast-forward and push. Then tell the
@@ -120,9 +125,10 @@ EVERY COMMIT
 CONTRACTS   A change to a running program's contract (merge policy, predicate, the brief's required
             fields, landing rules) waits for that coordinator's confirmation: ask, then commit.
 FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is editing.
-REPORT      One status per commit: the sha, the diff summary, the audit's findings and what was
-            applied, the grep and its result, each candidate dropped as
-            "not applied: <candidate> — <reason>", and whether a reload is needed. On "release",
+REPORT      One status per commit or per draft PR opened or updated: the sha or PR URL, the diff
+            summary, the audit's findings and what was applied, the grep and its result, each
+            candidate dropped as "not applied: <candidate> — <reason>", and whether a reload is
+            needed. On "release",
             worker_done and stop.
 ```
 
