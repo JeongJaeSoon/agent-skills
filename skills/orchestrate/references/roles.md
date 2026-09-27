@@ -103,8 +103,8 @@ INPUT       Lesson signals the coordinators send you (send --to dispatch:<you>),
             ledger (`reflect`, standing mode).
 LOOP        About every 60 minutes, one round. Fold everything that arrived by mail into one
             commit (EVERY COMMIT). Then run `reflect` in standing mode over what nobody sent: it
-            opens or updates at most one draft PR and never merges it. A round where both are
-            empty sends nothing; your heartbeats say you are alive.
+            proposes through at most one draft PR. A round where both are empty sends nothing;
+            your heartbeats say you are alive.
             Before writing a candidate, judge whether it is needed. Drop it when any of these holds:
               a. another part of the skill already says it
               b. it was a one-off circumstance, not a mistake that would recur without the rule
@@ -116,8 +116,8 @@ LOOP        About every 60 minutes, one round. Fold everything that arrived by m
 USAGE       The usage collector flags skills (`unused_30d`, `slash_only`, `misses`) as `skill_usage`
             signals; `<fleet state>/skills.json` (`orch-dash skills` refreshes it; references/dashboard.md,
             "Skill usage") has the counts behind them. Standing mode turns a flag into a description
-            rewrite, a merge, or a retirement proposal in its draft PR. Do not count transcripts
-            yourself. A usage count goes in a report, never in a commit.
+            rewrite, a merge, or a retirement ticket. The collector owns the count, so do not count
+            transcripts. A usage count goes in a report, never in a commit.
 EVERY COMMIT
             Follow the write-skill skill end to end: overlap check, prompt audit, internal-name
             grep with 0 hits, tests, signed commit, fast-forward and push. Then tell the
@@ -128,8 +128,7 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
 REPORT      One status per commit or per draft PR opened or updated: the sha or PR URL, the diff
             summary, the audit's findings and what was applied, the grep and its result, each
             candidate dropped as "not applied: <candidate> — <reason>", and whether a reload is
-            needed. On "release",
-            worker_done and stop.
+            needed. On "release", worker_done and stop.
 ```
 
 ## Resource steward brief
