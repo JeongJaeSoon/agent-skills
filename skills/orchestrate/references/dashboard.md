@@ -235,7 +235,7 @@ Each collect appends one row per flag, per skill, per ISO week to `$PROGRAMS_HOM
  "note": "unused_30d; suggest: rewrite-description|merge|retire; 0 uses in 30 days (0 auto, 0 slash, 0 chained), 0 misses, last used never"}
 ```
 
-`evidence` (skill, flag and the ISO-week window) is the idempotency key, so a flag that persists shows up once a week. The collector writes only this file. The flow improver reads it as one input, and `reflect` promotes a signal into the lessons ledger (Source `skill-usage`, Kind `usage`, Evidence a pointer to the row and its window, one row per skill and flag whose Occurrences rise per window); no script writes the lessons ledger. `suggest` lists what may be proposed; retiring a skill is only ever proposed in a PR, never applied by the loop.
+`evidence` (skill, flag and the ISO-week window) is the idempotency key, so a flag that persists shows up once a week. The collector writes only this file. The flow improver reads it as one input, and `reflect` promotes a signal into the lessons ledger (Source `skill-usage`, Kind `usage`, Evidence a pointer to the row and its window, one row per skill and flag whose Occurrences rise per window); no script writes the lessons ledger. `suggest` lists what may be proposed; retiring a skill is only ever proposed, never applied by the loop.
 
 ## Freshness
 
