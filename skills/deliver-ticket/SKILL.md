@@ -185,7 +185,7 @@ way and keep the output.
 Getting there starts with the PR. Opening a PR does not start a separate babysit: you, the
 owner, follow it through until **all CI checks are green and all review threads are resolved**
 (`gh pr checks` / `gh pr view`). In a program the coordinator schedules any babysitting of the
-frontier; you still own your PR to landing.
+frontier; you still own your PR to landing, or to the REPORT that hands it to the coordinator.
 
 **The review loop** — conflicts, then review threads, then CI, one push per batch, the lowest
 PR of a stack first — is in [references/review-loop.md](references/review-loop.md), with how to
@@ -199,7 +199,9 @@ Then land it. How depends on where you run:
   dependencies, and puts migrations, CI and other shared files in the exclusive lane; other PRs
   land in parallel, behind or not.
   Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
-  Under human-gate it refuses; report READY and stop. After landing, the brief's REPORT is the
+  Under human-gate it refuses; report READY and stop. A human review that will outlast this
+  session does not hold the session open either: say in the brief's REPORT that the PR waits on a
+  review, and the coordinator's wake lands it once it is ready. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence.
 - **A standalone card** merges its own verified PR unless the user set a hold. When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
@@ -214,12 +216,9 @@ gh pr merge <n> --squash --delete-branch      # a stack lands from its top, see 
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 
-Merging is yours to do; no need to ask. Ask first only when the user said to hold, when they
+On a standalone card, merging is yours to do; no need to ask. Ask first only when the user said to hold, when they
 said they wanted to look at this one themselves, or when the state is off-script — a check that
 keeps flaking, a thread you resolved on the author's behalf, a migration you cannot roll back.
-Inside a program, a human review that will outlast this session does not hold it open: say in the
-report that the PR waits on a review, and the coordinator's wake lands it once it is ready. Outside
-one, the rule above stands and the session stays on the PR until it merges.
 
 - **Someone else merges** — a fork PR, or a maintainer who lands it themselves. Do not end the
   turn waiting: watch it as [references/review-loop.md](references/review-loop.md) describes,
