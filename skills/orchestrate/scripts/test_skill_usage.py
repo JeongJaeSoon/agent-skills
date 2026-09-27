@@ -188,6 +188,10 @@ su.SCAN_VERSION += 1
 rep6 = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, miss_threshold=1)
 su.scan_file = real_scan
 assert rep6["files"] == rep5["files"] - 1, (rep6["files"], rep5["files"])
+# Rows whose message is not an object are skipped, not fatal.
+odd = root / "odd.jsonl"
+write(odd, [{"type": "user", "message": "x"}, {"type": "assistant", "message": "Skill"}, {"type": "assistant", "message": {"content": "Skill"}}])
+assert su.scan_file(odd, inv, su.resolver(inv)) == {"events": [], "misses": []}
 # A ledger line that is JSON but not an object does not stop the idempotency check.
 with ledger.open("a") as f:
     f.write("[]\n")

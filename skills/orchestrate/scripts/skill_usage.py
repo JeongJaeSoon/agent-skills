@@ -131,10 +131,15 @@ def resolver(inv):
     return resolve
 
 
+def _content(d):
+    m = d.get("message")
+    return m.get("content") if isinstance(m, dict) else None
+
+
 def _prompt(d):
     if d.get("type") != "user" or d.get("isMeta") or d.get("isCompactSummary"):
         return None, None
-    c = (d.get("message") or {}).get("content")
+    c = _content(d)
     if isinstance(c, list):
         if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
             return None, None
@@ -190,7 +195,8 @@ def scan_file(path, inv, resolve):
                 continue
             if d.get("type") != "assistant":
                 continue
-            for b in (d.get("message") or {}).get("content") or []:
+            content = _content(d)
+            for b in content if isinstance(content, list) else []:
                 if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill"):
                     continue
                 name = resolve((b.get("input") or {}).get("skill"))
