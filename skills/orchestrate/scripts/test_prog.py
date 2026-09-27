@@ -256,6 +256,14 @@ assert prog.review_sweep(opened, lambda n: ok, set(), {}.get, "s", gate=gated("h
     "WAITING ON REVIEW #11 (R-11): human gate resolved as 'hold'"]
 assert prog.review_sweep(opened, lambda n: ok, set(), {}.get, "s", gate=gated("land"))[0].startswith("LAND #11"), "a gate the user resolved as land lands"
 assert prog.review_sweep(one + [{"ev": "approved", "pr": 11}], lambda n: ok, set(), {}.get, "s", gate=gated(None))[0].startswith("LAND #11")
+def broken(n):
+    raise SystemExit("orca down")
+two = opened + [{"ev": "ready", "pr": 12, "ticket": "R-12"}, {"ev": "verdict", "pr": 12, "result": "pass"}, {"ev": "approved", "pr": 12}]
+assert prog.review_sweep(two, lambda n: ok, set(), {}.get, "s", gate=broken) == [
+    "LAND #12 (R-12): approved, clean and green at abcdef12, and no worker holds it", "  orch land s --pr 12",
+    "WAITING ON REVIEW #11 (R-11): human gate unreadable (SystemExit: orca down)"], "one unreadable gate keeps the other lines"
+assert prog.review_sweep(opened, lambda n: dict(ok, isDraft=True), set(), {}.get, "s", gate=broken) == [
+    "WAITING ON REVIEW #11 (R-11): draft"], "the gate is read only when nothing else holds the PR"
 assert prog.review_sweep([{"ev": "verdict", "pr": 20, "result": "pass"}], lambda n: ok, set(), {}.get, "s") == [
     "WAITING ON REVIEW #20: no ticket, so no worker is ruled out"]
 assert prog.review_sweep(rev[:1], lambda n: ok, set(), {}.get, "s") == ["WAITING ON REVIEW #11 (R-11): no passing verdict"]

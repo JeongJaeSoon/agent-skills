@@ -1262,7 +1262,9 @@ def cmd_gate(argv):
     if p.cfg["merge_policy"] != "human-gate":
         sys.exit("gates are for merge_policy human-gate; autonomous programs land with orch land")
     if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
-        sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca")
+        gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
+        sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
+                 f" (or: orca orchestration gate-resolve --id {gid} --resolution land|hold)")
     v = pr_view(p.cfg["repo"], pr)
     spec = (f"Land PR #{pr} ({v['url']}) with orch land once the user resolves the gate. "
             "Coordinator-owned; no worker is dispatched for this Task.")
@@ -1660,19 +1662,23 @@ def review_sweep(events, view, active, unresolved, slug, gate=None):
         failed, pending, _ = ci_summary(r.get("statusCheckRollup"))
         mss = r.get("mergeStateStatus")
         verdict = (st.get("verdict") or {}).get("result")
-        gw = gate_wait(st, gate, slug, n) if gate and "approved" not in st else None
         why = [w for w, bad in (
             ("no ticket, so no worker is ruled out", not t),
             ("no passing verdict", verdict != "pass"),
             ("draft", r.get("isDraft")),
             ("on hold", on_hold(events, n) or any(HOLD.search(l.get("name") or "") for l in r.get("labels") or [])),
             ((r.get("reviewDecision") or "no review").lower().replace("_", " "), r.get("reviewDecision") != "APPROVED"),
-            (gw, gw),
             (f"merge state {mss}" + {"DIRTY": ", dispatch a fix", "BEHIND": f", gh pr update-branch {n}"}.get(mss, ""), mss != "CLEAN"),
             ("CI failed, dispatch a fix", failed), ("CI pending", pending)) if bad]
         threads = 0 if why else unresolved(n)
         if threads:
             why.append(f"{threads} unresolved thread(s)")
+        if not why and gate and "approved" not in st:
+            try:  # one unreadable gate must not cost the other PRs their lines
+                gw = gate_wait(st, gate, slug, n)
+            except (SystemExit, Exception) as e:
+                gw = f"human gate unreadable ({type(e).__name__}: {e})"
+            why += [gw] if gw else []
         if why:
             waiting.append(f"{name}: {', '.join(why)}")
         else:
