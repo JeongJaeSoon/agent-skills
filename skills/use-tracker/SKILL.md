@@ -77,6 +77,45 @@ ticket alone (`"unchanged": true`) when it is already there or further along, so
 ticket In Review does nothing. `--to review` picks "In Review", or else the one `started` state whose
 name contains "review"; with none or several it changes nothing and exits 1.
 
+## Milestones
+
+A ticket's state follows the work as it moves, not only at its end. Each move posts one
+comment line with its evidence, so the ticket shows why it moved:
+
+| Moment | `transition --to` | Comment line |
+|---|---|---|
+| The first edit | `started` | the plan comment (`deliver-ticket` §1) |
+| A PR opened | `started` | `PR: <url>` |
+| A review requested | `review` | `리뷰 요청: <url> · <reviewers>` |
+| The ticket's own definition of done verified | `completed` | the completion comment: PR link, merge commit, each criterion with its evidence (`deliver-ticket` §6) |
+
+`completed` waits for what the ticket calls done, which is often "deployed and verified", not
+"merged". A merge by itself moves nothing. A late milestone (a second PR on a ticket already in
+review) still posts its line; `transition` leaves the state where it is.
+
+## Reconcile
+
+A skipped step leaves a ticket behind the work: a session ends before its completion comment, a
+PR merges after the worker's turn, a deploy finishes after the session is gone. Reconcile
+compares each open ticket in scope with GitHub and the deploy, and makes the ticket match.
+`end-session` runs it over the tickets its session touched; `orchestrate` runs it at each
+`worker_done` over that worker's tickets.
+
+1. Find the ticket's PRs: its attached links, and
+   `gh pr list --repo <repo> --state all --search "<ID>" --json number,url,state,mergeCommit,reviewRequests`.
+2. Set the state the evidence supports, through the milestone it skipped (its line included):
+
+| What GitHub and the deploy show | Target |
+|---|---|
+| An open PR, no review requested | `started` |
+| An open PR with a review requested | `review` |
+| Every PR merged, and each criterion holds when checked now the way it says (a deployed version, a check on main) | `completed` |
+| Every PR merged, a criterion still open | unchanged; one comment naming the open criterion and how it will be checked |
+| No PR, or only PRs closed without merging | unchanged; report it |
+
+A closed ticket whose PR is still open is reported, never reopened. Report one line per ticket
+changed: `<ID>: <old state_type> → <new> (<evidence>)`.
+
 ## Exit condition
 
 Every body of work has one, written before it starts or grows (principle **Work to an Exit
