@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 29 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
+This page covers the 29 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
 
 ## Flow
 
@@ -100,7 +100,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - **Top-level mode** (`references/top-level.md`): the session above single-task sessions and program coordinators. A routing table; sessions the human opened are read only; worker starts are confirmed with `--screen` in the background (a trust prompt on a worker it just started gets ↓, a check, then Enter; if blocked, the inbox); mail for a finished dispatch goes to `run:`; message bodies go through files; the dashboard inbox (`orch-dash inbox add`) and registered decisions (`orch decide add`, then `done` as soon as an answer arrives in chat) instead of AskUserQuestion; one unfiltered background `check --wait` keeps notices out of the human's typing; reactions to PR review events (`pr-events.jsonl`); `skills-sync broadcast` when skills change.
   - Steps 1–8 below are **program mode**.
   1. **Frame:** The done condition (predicate) is set as countable ticket IDs plus checks on the real deliverables. Human instructions are carried over verbatim as standing orders. Dependencies are split into start order (Orca task deps) and landing order (GitHub stack, `orch dep`). It creates a Run and registers it with `orch init`.
-  2. **Verification setup and Pilot:** If there is no verify skill, the first digest asks the user to run `/create-verification-skill`. Until then it verifies by hand and runs one worker end to end as a trial.
+  2. **Verification setup and Pilot:** If there is no verify skill, it runs `create-verification-skill` before Pilot or hands it to one worker. Until that skill lands it verifies by hand and runs one worker end to end as a trial.
   3. **Scale:** Starts the standing roles (a main guardian and a QA lead per program, one flow improver and one resource steward per machine). The concurrency cap for ticket workers starts at 1, goes up by 1 with each green landing on main (default ceiling 6), and halves on red.
   4. **Drain:** Runs exactly one `orch wait` in the background. When worker_done arrives, it handles `CLOSE OUT` in the same turn. Every pass ends with `orch status`, acting on the STALLED, SPARE, LEDGER GAP and LANDED-BUT-OPEN lines. When the way of working went wrong rather than the product (a human correction, a question the brief should have answered, a stall caused by process, a flaw in a skill or script), it leaves a single line with `orch record <slug> signal` and saves the analysis for Close.
   5. **Triage:** Follow-ups are parked by default. Only those that block the predicate or are reproduced defects are admitted. Briefs tell workers to link follow-ups as related, not as children of a parent. Orca defaults to parent, but then the counts and stage bars treat them as planned work of the original ticket.
@@ -331,20 +331,20 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Runs the failing test first to confirm why it fails, makes the smallest fix, and confirms it passes.
   - If a test would be unrealistic, it says why and uses the closest runnable check. It never weakens existing assertions.
 
-### create-verification-skill (user-invoked only)
+### create-verification-skill
 - **What it does:**
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
-  - The model can't invoke it, so `deliver-ticket` (remaining checks) and `orchestrate` (first digest) suggest that the user run it when needed.
+  - When a change touches a user-facing surface and there is no verify skill, `deliver-ticket` (before E2E) and `orchestrate` (before Pilot) run it. Upstream keeps it user-invoked; only this fork lets the model invoke it.
 - **Bundled:** `references/feature-map-example/` (the feature map of an example app).
 
-### maintain-verification-skill (user-invoked only)
+### maintain-verification-skill
 - **What it does:**
   - Reads the source for each feature, actually drives every feature, and compares the results with the feature map.
   - Sorts problems into doc drift, harness defects and product defects. Product defects are only reported.
   - The result is one of clean, changed (a single PR with only proven fixes), or blocked.
-  - When the verify skill can't handle a feature or describes it wrongly, `deliver-ticket` and the QA lead's report lead to suggesting that the user run it.
+  - The flow improver runs it once a week, and the coordinator hands it to a worker when `deliver-ticket` or the QA lead reports that the verify skill couldn't drive a feature or described it wrongly.
 
 ## Aliases
 

@@ -1,7 +1,6 @@
 ---
 name: create-verification-skill
-description: "Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. Use for /create-verification-skill, \"make a control skill for this repo\", or when a project has no scripted way to prove UI/CLI/service behavior."
-disable-model-invocation: true
+description: "Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. Use for /create-verification-skill, \"make a control skill for this repo\", \"verify 스킬 만들어줘\", or when a change touches a user-facing surface (UI, CLI, an API users call) in a repo with no `.claude/skills/verify-*`."
 ---
 
 # Create a verification skill
@@ -42,4 +41,4 @@ Run its own instructions end to end once: launch, doctor, drive ONE mapped featu
 
 ## 5. Offer the maintenance loop
 
-Point the user at `/maintain-verification-skill` for keeping the map honest as the app changes. Suggest a cadence only if they ask.
+Point the user at `maintain-verification-skill` for keeping the map honest as the app changes. Suggest a cadence only if they ask. If the repo ignores `.claude/`, say so: the skill then stays on this machine unless the ignore rule lets `.claude/skills/` through.

@@ -1,7 +1,6 @@
 ---
 name: maintain-verification-skill
-description: "Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. Use for /maintain-verification-skill or \"audit the verify skill\"."
-disable-model-invocation: true
+description: "Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. Use for /maintain-verification-skill, \"audit the verify skill\", a scheduled upkeep round, or when a verify-* skill could not drive a feature or described it wrongly."
 ---
 
 # Maintain a verification skill

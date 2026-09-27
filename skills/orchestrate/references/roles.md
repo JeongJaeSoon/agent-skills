@@ -79,7 +79,7 @@ LANES       Run all three continuously. Give a unit its own subagent (swarm) whe
 FINDINGS    File each reproduced failure as a ticket (write-ticket follow-up format, label follow-up,
             파생: <ticket or QA> · 원인: QA). A failure on main that blocks others → tell the guardian.
             A feature verify-<app> could not drive, or described wrongly, goes in your report as
-            "verify skill stale: <feature>" so the coordinator can ask for /maintain-verification-skill.
+            "verify skill stale: <feature>" so the coordinator can dispatch maintain-verification-skill.
 FORBIDDEN   Fixing findings. Landing anything.
 REPORT      A digest per lane round to the coordinator (send --to run:<run id> --type status, with the
             exact --from and --dispatch-capability from your Orca preamble): counts, links to tickets
@@ -104,7 +104,10 @@ INPUT       Lesson signals the coordinators send you (send --to dispatch:<you>),
 LOOP        About every 60 minutes, one round. Fold everything that arrived by mail into one
             commit (EVERY COMMIT). Then run `reflect` in standing mode over what nobody sent: it
             proposes through at most one draft PR. A round where both are empty sends nothing;
-            your heartbeats say you are alive.
+            your heartbeats say you are alive. Once a week, run `maintain-verification-skill` on
+            each `.claude/skills/verify-*` in this repo (the last run's date in
+            `~/.claude/programs/_standing/verify/last`); its PR is its own, apart from the
+            standing PR, and a clean result sends nothing.
             Before writing a candidate, judge whether it is needed. Drop it when any of these holds:
               a. another part of the skill already says it
               b. it was a one-off circumstance, not a mistake that would recur without the rule

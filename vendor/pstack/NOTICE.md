@@ -11,9 +11,9 @@
 
 | 로컬 경로 | upstream | 방식 | 수정 |
 |---|---|---|---|
-| `skills/create-verification-skill/SKILL.md` | `pstack/skills/create-verification-skill/SKILL.md` | adapted | 생성 위치 `.cursor/skills/` → `.claude/skills/`. Claude Code는 Bash 호출마다 새 셸이라 Launch가 PID·포트·실행 폴더를 상태 파일에 남기도록 한 줄 추가 |
+| `skills/create-verification-skill/SKILL.md` | `pstack/skills/create-verification-skill/SKILL.md` | adapted | 생성 위치 `.cursor/skills/` → `.claude/skills/`. Claude Code는 Bash 호출마다 새 셸이라 Launch가 PID·포트·실행 폴더를 상태 파일에 남기도록 한 줄 추가. 모델 호출 허용(`disable-model-invocation` 삭제): `deliver-ticket`·`orchestrate`가 verify 스킬이 없을 때 부른다. description에 그 조건과 한국어 트리거를 더함. 5절에 `.claude/`를 무시하는 저장소 안내 한 문장 |
 | `skills/create-verification-skill/references/feature-map-example/*.md` | 같은 경로 | verbatim | — |
-| `skills/maintain-verification-skill/SKILL.md` | 같은 경로 | adapted | 대상 위치 `.cursor/skills/` → `.claude/skills/`. changed 결과 전 "모든 변경 파일 다시 읽기" 지시 삭제 |
+| `skills/maintain-verification-skill/SKILL.md` | 같은 경로 | adapted | 대상 위치 `.cursor/skills/` → `.claude/skills/`. changed 결과 전 "모든 변경 파일 다시 읽기" 지시 삭제. 모델 호출 허용(`disable-model-invocation` 삭제): flow improver가 주 1회, 코디네이터가 stale 보고 때 부른다. description에 그 두 경우를 더함 |
 | `skills/interrogate/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. 리뷰어를 Claude(Agent) + Codex(codex-companion, 설정 기본 모델, 어려운 설계 문제만 astra)로. 의도가 모호하면 묻지 않고 가정으로 표시. Step 4의 번호 매긴 종합 단계를 한 문단으로. Codex job은 `status --wait`를 background로 걸어 기다린다 |
 | `skills/interrogate/references/*.md` | 같은 경로 | verbatim | — |
 | `skills/show-me-your-work/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용. transcript 경로를 Claude Code 형식으로. 교차 모델 리뷰를 Codex로. 설치하지 않은 `unslop` 언급 제거. 감사 단계를 append-only와 맞춰 틀린 줄은 정정 줄로 바로잡게 함 |

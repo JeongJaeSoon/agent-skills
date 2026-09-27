@@ -127,6 +127,13 @@ Before pushing, run **both**:
 - a change with no runtime behavior (docs, comments): run every command and example it
   documents, exactly as written; that is its E2E
 
+The E2E drives the app through the repo's `.claude/skills/verify-<app>` when it has one. A change
+to a user-facing surface (a UI, a CLI, an API users call) in a repo with none: run
+`create-verification-skill` first, drive the E2E through the skill it writes, and ship that skill
+as its own commit in this PR. Inside a program the coordinator does this before Pilot, not a
+worker. A `verify-*` skill that could not drive the feature you touched, or described it wrongly,
+goes in the report as `verify skill stale: <feature>`, for `maintain-verification-skill`.
+
 After the test suite and E2E check, push and open a ready PR with `gh pr create`, not a draft.
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
 with `orca linear attach --current --url <pr> --title "PR"` (outside an Orca card,
@@ -230,9 +237,7 @@ that can be verified, the merely tedious checks included. What is
 left for the user is what genuinely needs them — a judgment call you made on their behalf, how
 something feels to use, data or an account only they have, a decision the ticket left open.
 Name each one with the exact command or URL, and say why it is theirs. If nothing is left, say
-that too. Two user-invoked skills belong on this list when they apply: `/create-verification-skill`
-when the repo has no `.claude/skills/verify-*` and you had to drive the app by hand, and
-`/maintain-verification-skill` when a `verify-*` skill missed or misdescribed a feature you touched. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
+that too. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
 survives this session.
 
 **The completion comment does not end the turn** (outside a program; inside one, `worker_done`
