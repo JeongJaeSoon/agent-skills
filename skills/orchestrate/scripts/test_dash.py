@@ -2,7 +2,7 @@
 
 Run: python3 test_dash.py
 """
-import http.server, json, os, pathlib, sys, tempfile, threading, urllib.request, urllib.error
+import http.server, json, os, pathlib, re, sys, tempfile, threading, urllib.request, urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash, dash_demo
@@ -362,6 +362,21 @@ again = subprocess.run([sys.executable, str(pathlib.Path(dash.__file__)), "serve
                        text=True, timeout=20)
 assert again.returncode and "already serves" in again.stderr, again.stderr
 os.kill(h["pid"], signal.SIGTERM)
+# The running code is named in the health answer, and once the code on disk changes under a running server the
+# server says it is stale (a merge landed after it started) rather than serving the old routes silently.
+assert h["stale"] is False and h["disk_version"] == h["version"] and h["script"] == str(pathlib.Path(dash.__file__).resolve()), h
+assert "git" in h, h
+dash.HEALTH.update(version="started-as")
+dash.check_code()
+assert dash.HEALTH["stale"] is True and dash.HEALTH["disk_version"] == dash.code_version(), dash.HEALTH
+dash.HEALTH.update(version=dash.code_version())
+dash.check_code()
+assert dash.HEALTH["stale"] is False
+
+# The wordmark in the sidebar is a link home; the page shows the served version and a banner when it is stale.
+html = (dash.ASSETS / "index.html").read_text()
+assert re.search(r'<a class="brand" href="#/fleet/overview"[^>]*>\s*<span class="logo"', html), "logo is not a home link"
+assert 'id="code-version"' in html and 'id="stale-code"' in html
 
 # The real tracker adapter, when present, satisfies the same interface through TRACKER_FIXTURES.
 real = pathlib.Path(__file__).resolve().parents[2] / "use-tracker/scripts/tracker.py"

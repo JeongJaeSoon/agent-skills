@@ -982,6 +982,23 @@ async function pollPrograms() {
   } catch (e) { S.down = true; setLive(); }
 }
 
+// A server started before a merge keeps serving the old code (a new route answers 404) until it is restarted.
+async function pollHealth() {
+  try {
+    const r = await fetch("/api/health", { cache: "no-store" });
+    if (!r.ok) return;
+    const h = await r.json();
+    $("#code-version").textContent = `code ${h.version || "?"}${h.git ? ` · git ${h.git}` : ""}`;
+    $("#code-version").title = `started ${h.started_at || "?"}`;
+    const bar = $("#stale-code");
+    bar.hidden = !h.stale;
+    if (h.stale) {
+      bar.innerHTML = `이 서버는 시작한 뒤 바뀐 코드를 아직 싣지 않았습니다(실행 중 <code>${esc(h.version)}</code>, 디스크 <code>${esc(h.disk_version)}</code>).
+        다시 띄우기: <code>python3 ${esc(h.script)} ensure --port ${esc(String(h.port))}</code>`;
+    }
+  } catch (e) {}
+}
+
 // True once the server answers with code other than what this page first saw: a page left open across a restart
 // reloads itself onto the new assets. sessionStorage remembers the version it reloaded for, so a reload lands once
 // per new version and a page that cannot record that never reloads on its own.
@@ -1063,6 +1080,8 @@ addEventListener("hashchange", route);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollState(); });
 setInterval(pollState, POLL_MS);
 setInterval(pollPrograms, PROGRAMS_MS);
+setInterval(pollHealth, PROGRAMS_MS);
 setInterval(tick, 1000);
 route();
 pollPrograms();
+pollHealth();
