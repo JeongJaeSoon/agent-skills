@@ -1,0 +1,22 @@
+{
+  "env": {
+    "EXAMPLE_TOKEN": "not-a-real-token"
+  },
+  "permissions": {
+    "allow": ["Bash(npm test:*)"]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Running the test suite in local checkouts."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "git push --force to the default branch of any repository."
+    ],
+    "environment": [
+      "$defaults",
+      "**Local checkouts**: ~/src/<repo>. Editing there is routine local development."
+    ]
+  }
+}
