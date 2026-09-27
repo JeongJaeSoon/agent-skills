@@ -125,7 +125,7 @@ EVERY COMMIT
 CONTRACTS   A change to a running program's contract (merge policy, predicate, the brief's required
             fields, landing rules) waits for that coordinator's confirmation: ask, then commit.
 FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is editing.
-REPORT      One status per commit or per draft PR opened or updated: the sha or PR URL, the diff
+REPORT      One status per commit, draft PR or ticket: the sha or PR URL, the diff
             summary, the audit's findings and what was applied, the grep and its result, each
             candidate dropped as "not applied: <candidate> — <reason>", and whether a reload is
             needed. On "release", worker_done and stop.

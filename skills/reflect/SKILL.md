@@ -26,8 +26,8 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 | ID | First seen | Source | Kind | Evidence | Occurrences | Learning | Target | Status | Change | Verification | Outcome |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
-- **ID** `L-<n>`, never reused. **Source** the program slug or session. **Kind** a signal kind (`human_correction`, `brief_gap`, `stall`, `tooling`), `land_failed`, `main_red`, `verdict_fail`, `review` for a finding the reviewers drew from the whole record rather than one signal, or `usage` for a skill the usage collector flagged (Source `skill-usage`, Learning `<skill>: <flag>`). **Evidence** pointers only (message ID, PR comment URL, transcript path and line), never copied text.
-- **Status** is `candidate`, then `proposed` (a draft PR exists), then `applied` (merged) or `rejected (<reason>)`; `backlog (<ticket>)` for a finding filed to the tracker for the human; `retired` once its target is gone or it stopped being true.
+- **ID** `L-<n>`, never reused. **Source** the program slug or session. **Kind** a signal kind (`human_correction`, `brief_gap`, `stall`, `tooling`), `land_failed`, `main_red`, `verdict_fail`, `review` for a finding the reviewers drew from the whole record rather than one signal, or `usage` for a skill the usage collector flagged (Source `skill-usage`, Learning `<skill>: <flag>`). **Evidence** pointers only (message ID, PR comment URL, transcript path and line), never copied text; a program-ledger row with no `evidence` field is pointed to as `<slug>:<ev>:<ts>`, in every mode, so the same row is never counted twice.
+- **Status** is `candidate`, then `proposed` (a draft PR exists), or in standing mode `waiting (standing PR)` for an Accepted row while another standing PR is open, then `applied` (merged) or `rejected (<reason>)`; `backlog (<ticket>)` for a finding filed to the tracker for the human; `retired` once its target is gone or it stopped being true.
 - **Verification** holds only what a script, CI or `measure-delivery` printed (trigger-probe counts before and after, test names). A reviewer's opinion is not verification.
 - **Outcome** is filled by later programs: `recurred (<source>)`, or `held through <n> programs (<slug>, ...)` listing each program counted, so no program counts twice.
 - A change to a row edits that row in place and appends one dated line to `## History` (`2026-09-25 L-4 candidate to proposed: <PR URL>`), so the history survives.
@@ -47,13 +47,15 @@ Check each signal against the skills at current HEAD of the `agent-skills` check
 
 With no signal and no failure left open after that, stop after the Outcome update. Otherwise pass the pack path to the reviewers in place of the transcript path.
 
-**Standing mode.** Rounds do not overlap: take `mkdir ~/.claude/programs/_standing/reflect/lock` first, skip the round while it exists (a lock older than 2 hours is stale; remove it), and remove it when the round ends. Then settle the last standing PR (`gh pr list --search "in:title [reflect-standing]" --state all --limit 1 --json number,state`): merged, its rows go `applied`; closed unmerged, `rejected (PR closed)`.
+**Standing mode.** Rounds do not overlap: `mkdir -p ~/.claude/programs/_standing/reflect`, then take `mkdir ~/.claude/programs/_standing/reflect/lock` and write the start time into it. Skip the round while the lock exists, unless it started more than 4 hours ago (stale: remove it). Remove it when the round ends.
+
+Then settle the last standing PR, the newest in the `agent-skills` repo whose branch starts `reflect/standing-` (`gh pr list -R <repo> --state all --json number,state,headRefName,createdAt`): merged, its rows go `applied`; closed unmerged, `rejected (PR closed)`; still open, this round stops after step 4 and marks its Accepted rows `waiting (standing PR)`.
 
 New means:
-- a `signal`, `land_failed`, `main_red` or failed `verdict` row past the cursor in any `~/.claude/programs/*/ledger.jsonl`, the usage collector's `_skill-usage/ledger.jsonl` included (its `skill_usage` signals carry evidence `skill-usage:<skill>:<flag>@<window>`). The cursor, `~/.claude/programs/_standing/reflect/cursor.json`, holds the last line each ledger gave a round.
-- a `candidate` row whose Change reads `waits for the standing PR`, once no standing PR is open.
+- a `signal`, `land_failed`, `main_red` or failed `verdict` row newer than the cursor in any `~/.claude/programs/*/ledger.jsonl`, the usage collector's `_skill-usage/ledger.jsonl` included (its `skill_usage` signals carry evidence `skill-usage:<skill>:<flag>@<window>`). The cursor, `~/.claude/programs/_standing/reflect/cursor.json`, holds the last `ts` each ledger gave a finished round; a ledger it does not list yet starts at its newest row.
+- a lessons-ledger row at `waiting (standing PR)`, once no standing PR is open.
 
-With nothing new, stop and send nothing. Otherwise build the pack at `~/.claude/programs/_standing/reflect/pack-<UTC timestamp>.md` from the new rows only: program mode's ledger bullet, its transcripts bullet and the HEAD check, which also catches a lesson the mail path already committed. The decision trail, `measure-delivery` and the Outcome update belong to Close. Move the cursor past every row read, and continue from step 2. A row's evidence pointer is its `evidence` field, or `<ledger path>:<line>` when it has none.
+With nothing new, stop and send nothing. Otherwise build the pack at `~/.claude/programs/_standing/reflect/pack-<UTC timestamp>.md` over the new rows only: program mode's ledger and backfill bullets, the transcripts each row's evidence points to, and the HEAD check, which also catches a lesson the mail path already committed. The decision trail, `measure-delivery` and the Outcome update belong to Close. Continue from step 2, and move the cursor once step 4 has written the lessons ledger, so a round that dies early is read again.
 
 **Session mode.** The parent finds its own transcript file before fanning out. Claude Code writes it under `~/.claude/projects/<cwd with every / and . replaced by ->/`, for this session's working directory. Use that path. Do not glob across `~/.claude/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.
 
@@ -97,12 +99,12 @@ Write every Accepted, Backlog and Rejected finding to the lessons ledger. A find
    - A description change: `bash scripts/trigger-probe.sh` on the old and the new checkout, at least 3 runs each, with one prompt that should fire the skill and one that should not.
    - A body or script change: `claude plugin validate <checkout>` and a check of the changed path itself: a test under the skill that fails without the change, or the incident replayed with the tools it needs in a scratch copy of the repo, with the asserted result. `trigger-probe.sh` denies writes and shell commands and reports only which skills fired, so it verifies triggering, never behavior.
    - With no such check, write `Verification: none` in the row and the PR body.
-3. Open at most one draft PR (`gh pr create --draft`) titled with the lesson IDs, body per `write-plainly`. Never merge it. Standing mode opens it from a branch `reflect/standing-<UTC date>` with `[reflect-standing]` in the title, and only when no standing PR is open; until then an Accepted row stays `candidate` with Change `waits for the standing PR`.
+3. Open at most one draft PR (`gh pr create --draft`) titled with the lesson IDs, body per `write-plainly`. Never merge it. Standing mode opens it from a branch `reflect/standing-<UTC timestamp>`.
 4. Mark the rows `proposed`, and put one line per lesson plus the PR link in the program digest for approval (standing mode: in the round's report).
 
 A `usage` row about a skill that other skills invoke (the development flow) or that runs only at a rare moment (Close, a legacy alias) is rejected with that reason. For the rest, judge why the skill goes unused; the flag picks the route and the collector's `suggest` is only a hint. `misses` and `slash_only` go to `tune description`; `unused_30d` to a merge into the skill it overlaps (a substantive edit), or with no overlap to Backlog, a retirement ticket for the human.
 
-With no Accepted finding, skip the PR and write one digest line saying why (standing mode: nothing; a round reports only a commit or a PR).
+With no Accepted finding, skip the PR and write one digest line saying why (standing mode: nothing; a round reports only a PR or a ticket it filed).
 
 **Session mode.** Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes reach every session that loads this plugin, so nothing is applied without that approval.
 
