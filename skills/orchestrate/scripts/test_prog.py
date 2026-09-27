@@ -209,7 +209,8 @@ settled = [
     {"dispatchId": "s6", "terminalState": "reclaimable", "workerState": "succeeded", "resource": {"worktreeId": "wq"}},
 ]
 held = {"/w/2": "open PR #7"}
-sweep = prog.settle_sweep(settled, wts, skip={"s6"}, holds=held.get)
+asked = {}
+sweep = prog.settle_sweep(settled, wts, skip={"s6", "t1"}, holds=held.get, asked=asked, now="T0")
 assert sweep == ["SETTLED s1 (succeeded): release it; no open PR, nothing unpushed",
                  "  orca orchestration worker-release --dispatch s1",
                  "SETTLED s3 (succeeded): release it; its card is gone",
@@ -218,12 +219,20 @@ assert sweep == ["SETTLED s1 (succeeded): release it; no open PR, nothing unpush
                  f"  orca terminal send --terminal term_t1 --text {prog.shlex.quote(prog.SELF_CHECK)} --enter",
                  "KEEP s2 (failed): open PR #7",
                  "KEEP t2 (failed): open PR #7"], sweep
+assert asked == {"t1": "T0"}, asked
+again = prog.settle_sweep(settled, wts, holds=held.get, asked=asked, now="T1")
+assert "TAKEN OVER t1 (succeeded): self-check asked at T0; wait for its answer" in again and not any("term_t1" in l for l in again), again
+assert prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "t1"}}], settled, wts) == []
 assert prog.settle_sweep([], wts) == []
 import subprocess, tempfile
 repo = tempfile.mkdtemp(prefix="test-holds-")
 git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, check=True)
-git("init", "-q"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
+git("init", "-q"); git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "x")
 assert prog.card_holds(repo) == "1 unpushed commit(s)", prog.card_holds(repo)
+assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "MERGED"}) is None
+assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "OPEN"}) == "open PR #5"
+git("checkout", "-q", "--detach")
+assert prog.card_holds(repo, pr=lambda path, branch: 1 / 0) == "1 unpushed commit(s)"
 pathlib.Path(repo, "f").write_text("x")
 assert prog.card_holds(repo) == "uncommitted changes"
 assert prog.card_holds("/nonexistent/card") is None
@@ -244,7 +253,7 @@ def fake_orca(*a):
     return {}
 saved = prog.orca_json, prog.Program, prog.run_workers
 prog.orca_json, prog.run_workers = fake_orca, lambda run: []
-prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}})()
+prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x"}, "dir": pathlib.Path(tempfile.mkdtemp())})()
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
@@ -261,6 +270,13 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "SETTLED s7" in out.getvalue() and "SETTLED d1" not in out.getvalue() and "CLOSE OUT d1" in out.getvalue(), out.getvalue()
+def broken(run):
+    raise RuntimeError("boom")
+prog.run_workers = broken
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.print_sweep("run_x", pathlib.Path(tempfile.mkdtemp()) / "self-check.json")
+assert "could not read the workers (boom)" in out.getvalue(), out.getvalue()
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},
