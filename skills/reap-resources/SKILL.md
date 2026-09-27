@@ -1,6 +1,6 @@
 ---
 name: reap-resources
-description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets.
+description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets.
 ---
 
 # Reap resources
@@ -31,6 +31,29 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
   threshold (default 6), `--repo PATH` (repeatable) picks the repos for `branch` and
   `worktree` (default: every repo in `orca repo list`).
 - Show the user the scan before the first `reap` in a session unless they asked to reap.
+
+## Load
+
+When the machine is slow, or its 5-minute load reaches the limit (`reap.load_limit`, default the
+CPU count):
+
+```bash
+python3 "$R" load [--top N] [--json]    # read only
+```
+
+It groups processes into consumers (a Claude session with its children, a leftover tree, any
+other process), lists the top ones by CPU with a total per class, and prints the action for each
+class when the load is at or above the limit:
+
+| Class | What | Action |
+|---|---|---|
+| ours-idle | a Claude session whose transcript has been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it. Closing 8 idle sessions once took a load of 19.5 down to 11 |
+| leftover | a `codex` or `orphan` target of `scan` | `scan --plan`, then `reap --plan` |
+| ours-working | anything else of this user's: a live session, a benchmark, a test run | leave it; stop new dispatches and queue heavy runs behind `orch heavy` |
+| system | another user's process, or one run from a system path | report it as not ours; never touch it |
+
+A session with no transcript on record counts as working. A benchmark or performance number
+taken while the load is at or above the limit is not evidence: measure again once it is under.
 
 ## What goes
 

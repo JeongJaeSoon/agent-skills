@@ -11,7 +11,8 @@ proved it works. Use these sections in order and drop any with nothing to say, e
 - `## 트레이드오프`: only rejected alternatives a reviewer would otherwise ask about.
 - `## 영향 범위`: in one to three sentences, who or what it touches and why that is safe.
 - `## 검증`: required. Each real run path, the exact test method, and its verdict. For a
-  performance change, one primary number in `before → after` form with its unit.
+  performance change, one primary number in `before → after` form with its unit, both measured
+  under the machine's load limit (`reap-resources` "Load"); a number taken above it is not evidence.
 
 Attach a screenshot or video when it proves a claim. No `## Summary` / `## Test plan` template,
 SHAs, file-by-file checklists, or review-round recitals; those belong in the sticky comment or

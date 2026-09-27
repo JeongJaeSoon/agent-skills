@@ -5,12 +5,16 @@ Usage:
   python3 reap.py scan [--hours N] [--kinds codex,orphan,docker,branch,worktree] [--repo PATH]...
                        [--plan OUT.json] [--json]
   python3 reap.py reap --plan PLAN.json
+  python3 reap.py load [--top N] [--json]
 
 scan only reads. reap re-scans and acts only on the plan's targets that are still targets with the
 same identity (pid and start time, branch tip), so nothing outside the list is touched.
+load only reads: the top CPU consumers, each classed ours-idle, ours-working, leftover or system, with the
+action for its class.
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
 the repo of the current directory.
-Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...}}.
+Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
+"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30}.
 """
 import datetime as dt, json, os, pathlib, re, shutil, signal, subprocess, sys, time
 
@@ -398,6 +402,96 @@ def scan(kinds, hours, cfg, repo_list):
     return items, notes
 
 
+BUSY_CHILD_CPU = 25
+SYSTEM_PATHS = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/")
+LOAD_ACTIONS = {
+    "ours-idle": "먼저 남은 일이 있는지 묻고, 없으면 스스로 닫게 한다(자기 점검). 죽이지 않는다",
+    "leftover": "reap-resources 로 정리한다: scan --plan 뒤 reap --plan",
+    "ours-working": "건드리지 않는다. 새 dispatch 를 멈추고, 무거운 실행은 `orch heavy` 잠금 뒤에 줄 세운다",
+    "system": "우리 것 아님으로 보고만 한다. 절대 건드리지 않는다",
+}
+
+
+def judge_load(rows, cwd_of, leftovers, quiet, idle_s, me=None, top=None):
+    me = os.getuid() if me is None else me
+    claimed, out = set(), []
+
+    def take(root, cls, why, **kw):
+        pids = [p for p in tree(root, rows) if p not in claimed]
+        claimed.update(pids)
+        out.append({"cls": cls, "pid": root, "procs": len(pids), "cpu": sum(rows[p]["cpu"] for p in pids),
+                    "rss": sum(rows[p]["rss"] for p in pids), "cmd": rows[root]["cmd"][:80], "why": why, **kw})
+
+    for pid in sorted(leftovers):
+        if pid in rows:
+            take(pid, "leftover", "reap-resources 정리 대상")
+    ours = lambda r: r.get("uid", me) == me
+    for pid, r in sorted(rows.items()):
+        parent = rows.get(r["ppid"])
+        if pid in claimed or not ours(r) or not is_claude(r["cmd"]) or (parent and ours(parent) and is_claude(parent["cmd"])):
+            continue
+        cwd = (cwd_of or {}).get(pid)
+        q = quiet(cwd) if cwd else None
+        busy = sum(rows[p]["cpu"] for p in tree(pid, rows) if p != pid and p not in claimed)
+        if q is None:
+            take(pid, "ours-working", "세션 transcript 없음(조용한지 알 수 없음)", cwd=cwd)
+        elif busy >= BUSY_CHILD_CPU:
+            take(pid, "ours-working", f"transcript 는 조용하지만 자식이 CPU {busy:.0f}% 사용", cwd=cwd)
+        elif q >= idle_s:
+            take(pid, "ours-idle", f"세션이 {age(q)} 조용", cwd=cwd)
+        else:
+            take(pid, "ours-working", "세션 활동 중", cwd=cwd)
+    for pid, r in sorted(rows.items()):
+        if pid in claimed:
+            continue
+        system = not ours(r) or any(r["cmd"].startswith(x) for x in SYSTEM_PATHS)
+        claimed.add(pid)
+        out.append({"cls": "system" if system else "ours-working", "pid": pid, "procs": 1, "cpu": r["cpu"], "rss": r["rss"],
+                    "cmd": r["cmd"][:80], "why": "다른 사용자 또는 시스템 경로" if system else "이 사용자의 프로세스"})
+    return sorted(out, key=lambda i: -i["cpu"])[:top]
+
+
+def transcript_quiet(projects_dir, now):
+    def quiet(cwd):
+        d = projects_dir / re.sub(r"[/.]", "-", cwd)
+        times = [f.stat().st_mtime for f in d.glob("*.jsonl")] if d.is_dir() else []
+        return now - max(times) if times else None
+    return quiet
+
+
+def load_report(cfg, top):
+    rows, cwd_of = processes(), cwds()
+    hours = float(cfg.get("hours") or 6)
+    leftovers = {i["pid"] for i in judge_brokers(rows, cwd_of, hours) + judge_orphans(rows, cfg.get("orphan_paths") or [], hours)
+                 if i["target"]}
+    projects_dir = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
+    items = judge_load(rows, cwd_of or {}, leftovers, transcript_quiet(projects_dir, time.time()),
+                       float(cfg.get("idle_minutes") or 30) * 60)
+    totals = {c: {"count": sum(i["cls"] == c for i in items), "cpu": round(sum(i["cpu"] for i in items if i["cls"] == c))}
+              for c in LOAD_ACTIONS}
+    load5, limit = os.getloadavg()[1], float(cfg.get("load_limit") or os.cpu_count() or 1)
+    return {"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "load5": round(load5, 1),
+            "limit": limit, "high": load5 >= limit, "totals": totals, "items": items[:top],
+            "idle": [{"pid": i["pid"], "cwd": i["cwd"]} for i in items if i["cls"] == "ours-idle"]}
+
+
+def print_load(data):
+    print(f"# 머신 부하 ({data['at']}): 5분 부하 {data['load5']}, 한도 {data['limit']:g}"
+          + (" — 높음" if data["high"] else " — 정상") + "\n")
+    print("| 분류 | pid | 프로세스 | CPU | RSS | 명령 | 근거 |\n|---|---|---|---|---|---|---|")
+    for i in data["items"]:
+        print(f"| {i['cls']} | {i['pid']} | {i['procs']} | {i['cpu']:.0f}% | {human(i['rss'])} | `{i['cmd']}` | {i['why']} |")
+    print("\n분류별 합계: " + ", ".join(f"{c} {t['count']}개 {t['cpu']}%" for c, t in data["totals"].items()))
+    if data["high"]:
+        print("\n## 조치\n")
+        for cls, action in LOAD_ACTIONS.items():
+            if data["totals"][cls]["count"]:
+                print(f"- {cls} {data['totals'][cls]['count']}개: {action}")
+            if cls == "ours-idle" and data["idle"]:
+                print("\n".join(f"  - pid {i['pid']}: {i['cwd']}" for i in data["idle"]))
+        print("- 부하가 한도 이상인 동안 잰 벤치마크와 성능 수치는 증거가 아니다. 한도 아래로 내려간 뒤 다시 잰다")
+
+
 def alerts(items, limits):
     codex = [i for i in items if i["kind"] == "codex"]
     got = {"codex_procs": sum(i["procs"] for i in codex),
@@ -526,6 +620,13 @@ def main():
                 print(f"- 실패 {label(new)}: {e}")
         for n in notes:
             print(f"- 메모: {n}")
+        return
+    if cmd == "load":
+        data = load_report(cfg, int(opt("--top") or 10))
+        if "--json" in sys.argv:
+            print(json.dumps(data, ensure_ascii=False, indent=1))
+        else:
+            print_load(data)
         return
     if cmd != "scan":
         sys.exit(__doc__)
