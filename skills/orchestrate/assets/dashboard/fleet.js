@@ -430,13 +430,15 @@ const SKILL_SORT = {
   last: (r) => ago(r.last_used), reach: (r) => r.sessions_30d, misses: (r) => r.misses_30d, flags: (r) => r.flags.length,
 };
 async function pollSkills() {
-  if (F.skillsBusy || (F.skills && Date.now() - F.skillsAt < 60e3)) return;
+  // A report is kept for a minute; an error (a 503 before the first collect) is retried after 5 s.
+  if (F.skillsBusy || (F.skills && Date.now() - F.skillsAt < (F.skills.error ? 5e3 : 60e3))) return;
   F.skillsBusy = true;
   try {
     const r = await fetch("/api/fleet/skills", { cache: "no-store" });
     F.skills = r.ok ? await r.json() : { error: r.status === 503 ? "The first skill usage collect has not finished." : `HTTP ${r.status}` };
   } catch (e) { F.skills = { error: String(e.message || e) }; }
   F.skillsAt = Date.now(); F.skillsBusy = false;
+  if (F.skills.error) setTimeout(() => { if (S.section === "skills") renderView(); }, 5e3);
   if (S.section === "skills") renderView();
 }
 const skillMix = (r) => {

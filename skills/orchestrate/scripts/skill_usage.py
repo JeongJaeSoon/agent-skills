@@ -74,7 +74,8 @@ def is_specific_phrase(p):
 
 
 def phrase_in(p, text):
-    return re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", text) is not None if p.isascii() else p in text
+    # Only ASCII letters bound an ASCII phrase, so a Korean particle right after it ("ship it을") still matches.
+    return re.search(r"(?<![a-z0-9_])" + re.escape(p) + r"(?![a-z0-9_])", text) is not None if p.isascii() else p in text
 
 
 def phrases(desc):
@@ -184,7 +185,7 @@ def scan_file(path, inv, resolve):
                     turn["loaded"].add(name)
                     events.append([ts, name, "slash", session, cwd])
                 elif not prompted_by_model:
-                    low = val.lower()
+                    low = re.sub(r"<pasted_content[^>]*>.*?</pasted_content>", " ", val, flags=re.S).lower()
                     turn["hits"] = {n for n, s in inv.items() if any(phrase_in(p, low) for p in s["phrases"])}
                 continue
             if d.get("type") != "assistant":

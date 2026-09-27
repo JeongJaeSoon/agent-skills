@@ -2,7 +2,7 @@
 
 Run: python3 test_skill_usage.py
 """
-import datetime as dt, json, pathlib, sys, tempfile
+import datetime as dt, json, os, pathlib, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import skill_usage as su
@@ -96,7 +96,8 @@ write(projects / "-work-alpha" / "s4.jsonl", [
     skill_call(ts(3, 3), "agent-skills:tidy", attribution="agent-skills:ship", session="s4"),
     # A phrase inside a longer word ("relationship it") is not the phrase; a pasted prompt is a human prompt.
     human(ts(3, 10), "the relationship it has", session="s4"),
-    human(ts(3, 20), "<pasted_content id=x>notes</pasted_content> 배포해줘", session="s4"),
+    human(ts(3, 20), "<pasted_content id=x>quoted: ship it, 정리해줘</pasted_content> 배포해줘", session="s4"),
+    human(ts(3, 25), "lint this를 해줘", session="s4"),
     human(ts(3, 30), "done", session="s4"),
 ])
 write(projects / "-work-beta" / "s2.jsonl", [
@@ -121,7 +122,7 @@ assert (ship["auto_30d"], ship["slash_30d"], ship["chained_30d"]) == (2, 1, 0), 
 assert ship["misses_30d"] == 2 and ship["sessions_30d"] == 3 and ship["repos_30d"] == 2, ship
 assert (tidy["auto_30d"], tidy["slash_30d"], tidy["chained_30d"]) == (1, 1, 2), tidy
 assert tidy["misses_30d"] == 2, tidy
-assert (lint["auto_30d"], lint["uses_30d"]) == (1, 1) and lint["misses_30d"] == 0, lint
+assert (lint["auto_30d"], lint["uses_30d"]) == (1, 1) and lint["misses_30d"] == 1, lint
 assert rows["simplify"]["source"] == "other" and rows["simplify"]["uses_30d"] == 1, rows["simplify"]
 assert "mcp" not in rows and "agent-skills:mcp" not in rows, rows.keys()
 assert rows["notes"]["uses_30d"] == 0 and rows["notes"]["uses_total"] == 1 and rows["notes"]["last_used"] == ts(40, 1), rows["notes"]
@@ -167,5 +168,35 @@ later = su.write_signals(ledger, rep4, NOW + dt.timedelta(days=7))
 assert len(later) == 3 and all(r["evidence"].endswith("@2026-W40") for r in later), later
 unused = su.signal_rows({"skills": [{**rows["agent-skills:quiet"]}]}, NOW)
 assert unused[0]["suggest"] == ["rewrite-description", "merge", "retire"], unused
+
+# A scan logic change (SCAN_VERSION) re-reads every cached transcript.
+su.SCAN_VERSION += 1
+rep5 = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, miss_threshold=1)
+assert rep5["files_parsed"] == rep5["files"], (rep5["files_parsed"], rep5["files"])
+# An unreadable transcript is skipped, not fatal.
+real_scan = su.scan_file
+
+
+def failing_scan(path, *a):
+    if path.name == "s3.jsonl":
+        raise OSError("gone")
+    return real_scan(path, *a)
+
+
+su.scan_file = failing_scan
+su.SCAN_VERSION += 1
+rep6 = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, miss_threshold=1)
+su.scan_file = real_scan
+assert rep6["files"] == rep5["files"] - 1, (rep6["files"], rep5["files"])
+# A ledger line that is JSON but not an object does not stop the idempotency check.
+with ledger.open("a") as f:
+    f.write("[]\n")
+assert su.write_signals(ledger, rep4, NOW) == []
+# refresh() keeps the signals path and the store location out of skills.json.
+os.environ["CLAUDE_PROJECTS_DIR"], os.environ["ORCH_FLEET_STATE"] = str(projects), str(root / "state2")
+real_inventory, su.inventory = su.inventory, lambda: inv
+rep7 = su.refresh(out=root / "state2" / "skills.json", signals=ledger)
+su.inventory = real_inventory
+assert str(root) not in (root / "state2" / "skills.json").read_text() and set(rep7["signals"]) == {"added"}, rep7["signals"]
 
 print("test_skill_usage: ok")
