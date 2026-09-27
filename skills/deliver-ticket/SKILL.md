@@ -43,7 +43,7 @@ Fix Root Causes in `principles`).
 
 - Every shipped line traces to runtime evidence. A change that "might help" is a hypothesis;
   when the evidence refutes it, revert what it motivated.
-- Reproduce a bug on the surface the user saw it on (Aside for anything in a browser) and
+- Reproduce a bug on the surface the user saw it on (browser automation for anything in a browser) and
   confirm the fix there. A unit test shows branch behavior, not that the bug is gone.
 - A refactor pins behavior before any structure moves. Type check and lint are not a pin. If the
   diff does not lower reader load somewhere, revert it.
@@ -121,11 +121,20 @@ Before pushing, run **both**:
 - the test suite
 - an E2E check against a running system (a local compose stack, image build or E2E run goes
   through `orch heavy - -- <command>`, which
-  caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, **Aside** for UI
-  and web flows (it is the browser for everything, logged-in sites included), IDE diagnostics
+  caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, browser automation for UI
+  and web flows (logged-in sites included), IDE diagnostics
   for type and lint
 - a change with no runtime behavior (docs, comments): run every command and example it
   documents, exactly as written; that is its E2E
+
+The E2E drives the app through the repo's `.claude/skills/verify-<app>` when it has one. A change
+to a user-facing surface (a UI, a CLI, an API users call) in a repo with none: run
+`create-verification-skill` first, drive the E2E through the skill it writes, and ship that skill
+as its own commit in this PR (a repo that ignores `.claude/`: say so in the report instead). Inside
+a program that is the coordinator's call before Pilot; only the card it dispatched for it does
+this. A `verify-*` skill that could not drive the feature you touched, or described it wrongly:
+inside a program, report `verify skill stale: <feature>`; outside one, run
+`maintain-verification-skill` once this ticket lands.
 
 After the test suite and E2E check, push and open a ready PR with `gh pr create`, not a draft.
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
@@ -176,7 +185,7 @@ way and keep the output.
 Getting there starts with the PR. Opening a PR does not start a separate babysit: you, the
 owner, follow it through until **all CI checks are green and all review threads are resolved**
 (`gh pr checks` / `gh pr view`). In a program the coordinator schedules any babysitting of the
-frontier; you still own your PR to landing.
+frontier; you still own your PR to landing, or to the REPORT that hands it to the coordinator.
 
 **The review loop** — conflicts, then review threads, then CI, one push per batch, the lowest
 PR of a stack first — is in [references/review-loop.md](references/review-loop.md), with how to
@@ -190,7 +199,9 @@ Then land it. How depends on where you run:
   dependencies, and puts migrations, CI and other shared files in the exclusive lane; other PRs
   land in parallel, behind or not.
   Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
-  Under human-gate it refuses; report READY and stop. After landing, the brief's REPORT is the
+  Under human-gate it refuses; report READY and stop. A human review that will outlast this
+  session does not hold the session open either: say in the brief's REPORT that the PR waits on a
+  review, and the coordinator's wake lands it once it is ready. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence.
 - **A standalone card** merges its own verified PR unless the user set a hold. When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
@@ -205,12 +216,9 @@ gh pr merge <n> --squash --delete-branch      # a stack lands from its top, see 
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 
-Merging is yours to do; no need to ask. Ask first only when the user said to hold, when they
+On a standalone card, merging is yours to do; no need to ask. Ask first only when the user said to hold, when they
 said they wanted to look at this one themselves, or when the state is off-script — a check that
 keeps flaking, a thread you resolved on the author's behalf, a migration you cannot roll back.
-Inside a program, a human review that will outlast this session does not hold it open: say in the
-report that the PR waits on a review, and the coordinator's wake lands it once it is ready. Outside
-one, the rule above stands and the session stays on the PR until it merges.
 
 - **Someone else merges** — a fork PR, or a maintainer who lands it themselves. Do not end the
   turn waiting: watch it as [references/review-loop.md](references/review-loop.md) describes,
@@ -230,9 +238,7 @@ that can be verified, the merely tedious checks included. What is
 left for the user is what genuinely needs them — a judgment call you made on their behalf, how
 something feels to use, data or an account only they have, a decision the ticket left open.
 Name each one with the exact command or URL, and say why it is theirs. If nothing is left, say
-that too. Two user-invoked skills belong on this list when they apply: `/create-verification-skill`
-when the repo has no `.claude/skills/verify-*` and you had to drive the app by hand, and
-`/maintain-verification-skill` when a `verify-*` skill missed or misdescribed a feature you touched. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
+that too. The same list goes into the ticket's completion comment as "남은 확인 사항", so it
 survives this session.
 
 **The completion comment does not end the turn** (outside a program; inside one, `worker_done`

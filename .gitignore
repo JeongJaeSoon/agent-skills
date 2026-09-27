@@ -3,8 +3,9 @@ __pycache__/
 # Skill evaluation workspaces (iteration artifacts, grading, benchmarks)
 *-workspace/
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings; project skills (verify-*) are shared
+.claude/*
+!.claude/skills/
 
 # Plan mode scratch files
 plans/

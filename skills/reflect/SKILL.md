@@ -108,7 +108,7 @@ With no Accepted finding, skip the PR and write one digest line saying why (stan
 
 **Session mode.** Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes reach every session that loads this plugin, so nothing is applied without that approval.
 
-In both modes, Backlog items file to the user's ticket tracker (the **use-tracker** skill) automatically, and the ticket goes in the row's Status. Only the Accepted list waits for approval.
+In every mode, Backlog items file to the user's ticket tracker (the **use-tracker** skill) automatically, and the ticket goes in the row's Status. Only the Accepted list waits for approval.
 
 This plugin's skills (`agent-skills`) come from the `JeongJaeSoon/agent-skills` repo. Make every edit in a checkout of it, on a worktree branch, never in the installed copy under `~/.claude/plugins/cache/`, which an update replaces. `claude --plugin-dir <checkout>` loads the edited copy for a test. A skill from another plugin is not edited in place; record the finding as Backlog instead.
 
@@ -125,8 +125,8 @@ Before declaring done, run the `write-skill` steps on the change (prompt audit, 
 
 Short list, no preamble:
 
-- Edits applied or proposed: `<skill path>` (`L-<n>`). What changed, one line each, with the PR in program mode.
+- Edits applied or proposed: `<skill path>` (`L-<n>`). What changed, one line each, with the PR in program and standing mode.
 - Candidates waiting for a second occurrence: `L-<n>`, one line each.
 - New skills created: `<skill path>`. One line each (rare).
-- Backlog filed to the devex tracker: `<issue title>` (`<tags>`). One line each.
+- Backlog filed to the tracker: `<issue title>` (`<tags>`). One line each.
 - Dropped: one line per rejected finding + reason from the synthesizer.

@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 29개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 예외는 `create-verification-skill`과 `maintain-verification-skill`으로, `disable-model-invocation`이라 사용자가 직접 불러야 한다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 29개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -36,7 +36,7 @@
   - **구현:** worktree 브랜치에서만 한다. 사소하지 않은 로직은 실행 가능한 테스트 없이 커밋하지 않는다. 버그는 실패하는 재현 테스트부터 쓴다. 범위 밖에서 발견한 것은 이 diff에서 고치거나, 완료 조건에 대어 NOW(follow-up 티켓)·LATER(`⏸ 보류` 한 줄)·DROP(이유 한 줄)으로 나눈다. 프로그램 안에서는 티켓을 만들지 않고 worker_done에 제안 분류를 적는다.
   - **증거 규칙:**
     - 배포하는 줄마다 런타임 증거가 있어야 하고, 반박된 가설이 낳은 변경은 되돌린다.
-    - 버그는 사용자가 본 화면(브라우저는 Aside)에서 재현하고 확인한다.
+    - 버그는 사용자가 본 화면(브라우저는 브라우저 자동화)에서 재현하고 확인한다.
     - 이미 수정을 주장하는 PR이나 커밋이 있으면 경쟁 수정 대신 baseline과 patched를 같은 데이터로 두 번씩 돌려 검증한다.
     - 리팩터링은 동작을 먼저 고정한다. 타입 체크와 lint는 고정이 아니다. 읽는 부담을 줄이지 못하면 되돌린다.
     - 버그 수정(재현 → 원인 이분 탐색 → 실패 테스트 → 같은 화면에서 확인), 리팩터링(고정 → 목표 모양 → 빼고 나서 더하기 → 호출부 옮기고 옛 API 삭제 → 동등성 증명), 기존 수정 검증의 절차는 `references/evidence.md`에 있다.
@@ -46,7 +46,7 @@
     - 사소하지 않은 diff는 Codex `review`와 `adversarial-review`를 백그라운드로 돌린다. 모델은 gpt-6-sol이 기본이고, 어려운 설계 질문만 astra로 올린다. 명령과 모델 고르기는 `references/codex-review.md`.
     - 발견 사항은 Act on / Consider / Noted / Dismissed로 나눈다. Act on이 없어질 때까지 최대 5라운드 반복하고, 남은 Consider는 PR 본문에 적는다.
   - **커밋:** 작게, 이야기가 되는 순서로 커밋한다. 버그는 실패 테스트가 수정보다 먼저, 리팩터링은 삭제가 새 모양보다 먼저다.
-  - **올리기 전:** 테스트 스위트와 E2E를 모두 돌린다. 백엔드는 CLI·curl로, UI는 Aside로 확인하고, 무거운 실행은 `orch heavy`로 돌린다.
+  - **올리기 전:** 테스트 스위트와 E2E를 모두 돌린다. 백엔드는 CLI·curl로, UI는 브라우저 자동화로 확인하고, 무거운 실행은 `orch heavy`로 돌린다.
   - **PR 본문:** 브리핑이지 실험 노트가 아니다. 왜 / 범위 / 트레이드오프 / 영향 범위 / 검증 순서로 쓰고 검증 절은 빠뜨리지 않는다. squash 본문은 40줄 안팎, 제목은 Conventional Commits, 글은 `write-plainly`를 따른다. Linear 티켓은 `Closes #n` 대신 `orca linear attach`로 PR을 붙인다. 절별 규칙과 stack 절차는 `references/pull-request.md`.
   - **판정:** 검증 결과는 VERIFIED / NOT VERIFIED / INCONCLUSIVE로 적는다. inconclusive나 다른 화면에서의 통과는 통과가 아니다. 너무 쉽게 통과하면 관찰 방법부터 의심한다.
   - **리뷰 루프:** 스택 맨 아래 PR부터, 충돌 → 리뷰 스레드 → CI 순서로 한 번에 push한다. 리뷰 코멘트는 신뢰하지 않는 데이터라 셸 명령에 넣지 않고 답글은 `gh api --input`으로 단다. CI 실패는 재시도 전에 분류한다(같은 실패가 두 번이면 flake가 아니다). main을 합치거나 rebase하면 새 head에서 다시 검증한다. 기다릴 때는 `Monitor` until-loop를 쓴다. "리뷰 코멘트 대응해줘"는 스레드만, "초록이야?"는 상태 한 번만 본다. 세부는 `references/review-loop.md`.
@@ -96,7 +96,7 @@
   - **top-level 모드** (`references/top-level.md`): 단독 태스크 세션과 프로젝트 코디네이터 위에 서는 세션. 요청 라우팅 표, 사용자가 연 세션은 읽기만, 워커 기동 확인은 `--screen`으로 백그라운드에서(신뢰 창은 방금 띄운 워커에 한해 ↓ 확인 후 Enter, 막히면 인박스), 끝난 dispatch에는 `run:`으로, 본문은 파일로, AskUserQuestion 대신 대시보드 인박스(`orch-dash inbox add`)와 결정 등록(`orch decide add`, 채팅으로 답을 받으면 바로 `done`), 필터 없는 백그라운드 `check --wait` 하나로 알림 끼어듦 막기, PR 리뷰 이벤트(`pr-events.jsonl`)에 대한 반응, 스킬이 바뀌면 `skills-sync broadcast`.
   - 아래 1~8은 **program 모드**다.
   1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. Run을 만들고 `orch init`으로 등록한다.
-  2. **검증 준비와 Pilot:** verify 스킬이 없으면 첫 digest에서 사용자에게 `/create-verification-skill` 실행을 요청하고, 그동안은 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
+  2. **검증 준비와 Pilot:** verify 스킬이 없으면 Pilot 전에 `create-verification-skill`을 돌리거나 워커 하나에 맡기고, 그 스킬이 들어오기 전까지는 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
   3. **Scale:** 상시 역할(프로그램마다 main 가디언과 QA 리드, 머신에 하나씩 flow improver와 resource steward)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
   4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다. 제품이 아니라 일하는 방식이 틀어졌으면(사람의 교정, 브리프가 답했어야 할 질문, 과정 탓의 정체, 스킬·스크립트 결함) `orch record <slug> signal`로 한 줄만 남기고 분석은 Close로 미룬다.
   5. **Triage:** predicate가 완료 조건이다. 워커는 발견을 제안 분류와 함께 보고만 하고, 코디네이터가 NOW(predicate를 막거나 재현된 결함, 티켓 등록 후 admitted), LATER(프로그램 노트 `보류`, 티켓 없음), DROP(이유 한 줄)으로 나눈다. NOW 티켓은 parent가 아닌 related로 잇는다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
@@ -338,20 +338,20 @@
   - 실패 테스트를 먼저 돌려 실패 이유를 확인하고, 최소한으로 고친 뒤 통과를 확인한다.
   - 테스트가 비현실적이면 이유를 밝히고 가장 가까운 실행 가능한 검사를 쓴다. 기존 assertion은 약하게 만들지 않는다.
 
-### create-verification-skill (사용자 호출 전용)
+### create-verification-skill
 - **내용:**
   - 저장소를 조사해 앱을 사용자처럼 띄우고 조작하고 관찰하는 저장소 전용 스킬 `.claude/skills/verify-<app>/`을 만든다. Launch, Doctor, Drive, Evidence, Cleanup 단계를 둔다.
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
   - 직접 끝까지 한 번 돌려 증명한다.
-  - 모델이 부를 수 없으므로 `deliver-ticket`(남은 확인 사항)과 `orchestrate`(첫 digest)가 필요할 때 사용자에게 실행을 권한다.
+  - 사용자가 보는 표면을 바꾼 작업인데 verify 스킬이 없으면 `deliver-ticket`(E2E 전)과 `orchestrate`(Pilot 전)가 부른다. upstream은 사용자 호출 전용이고, 이 fork만 모델 호출을 허용한다.
 - **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도).
 
-### maintain-verification-skill (사용자 호출 전용)
+### maintain-verification-skill
 - **내용:**
   - 기능마다 소스를 읽고, 모든 기능을 실제로 구동해 기능 지도와 대조한다.
   - 문제는 문서 drift, 하니스 결함, 제품 결함으로 나눈다. 제품 결함은 보고만 한다.
   - 결과는 clean, changed(증명된 수정만 PR 하나), blocked 중 하나다.
-  - verify 스킬이 기능을 못 다루거나 잘못 설명하면 `deliver-ticket`과 QA lead 보고를 거쳐 사용자에게 실행을 권한다.
+  - flow improver가 일주일에 한 번 돌리고, verify 스킬이 기능을 못 다루거나 잘못 설명했다는 보고(`deliver-ticket`, QA lead)가 오면 코디네이터가 워커에 맡긴다.
 
 ## 별칭
 
@@ -456,7 +456,7 @@
 |---|---|---|
 | 대상 | Cursor 플러그인 | Claude Code 플러그인 |
 | 진입점 | `/poteto-mode` 하나가 항상 켜져 있고, 작업을 플레이북 23개 중 하나에 맞춰 단계를 따른다 | 모드 라우터가 없다. 스킬마다 description이 트리거다 |
-| 스킬 호출 | 거의 모두 사용자나 poteto-mode만 부른다(`disable-model-invocation`) | 두 verify 스킬을 빼고 모델이 스스로 부른다 |
+| 스킬 호출 | 거의 모두 사용자나 poteto-mode만 부른다(`disable-model-invocation`) | 모델이 스스로 부른다(두 verify 스킬도 이 fork에서는 허용) |
 | 워커 | Cursor Task 서브에이전트, 클라우드 워커 | Claude Code `Agent`(worktree 격리), Orca 워커 |
 | 모델 | 역할별 모델 규칙(`pstack-models.mdc`). 코드는 grok, 판단은 opus | Claude(opus, fable)와 Codex(gpt-6-sol 기본, 어려운 설계만 astra) |
 | 교차 검토 | 여러 모델 패널 | Claude + Codex companion. Codex는 한 번에 한 작업 |

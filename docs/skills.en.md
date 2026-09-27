@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 29 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. The exceptions are `create-verification-skill` and `maintain-verification-skill`: they are `disable-model-invocation`, so you have to invoke them yourself. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
+This page covers the 29 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
 
 ## Flow
 
@@ -40,7 +40,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - **Build:** Only on a worktree branch. Non-trivial logic isn't committed without a runnable test. A bug starts with a failing reproduction test. Anything found outside the scope is fixed in this diff, filed as a follow-up ticket, or only noted in the worklog.
   - **Evidence rules:**
     - Every line that ships needs runtime evidence, and changes that came from a disproved hypothesis are reverted.
-    - Bugs are reproduced and confirmed on the screen the user saw (Aside for the browser).
+    - Bugs are reproduced and confirmed on the screen the user saw (browser automation for web UIs).
     - If a PR or commit already claims to fix it, it doesn't write a competing fix; it verifies by running baseline and patched twice each on the same data.
     - Refactors pin behavior first. Type checks and lint don't count as pinning. If a refactor doesn't make the code easier to read, it's reverted.
     - The procedures for bug fixes (reproduce → bisect the cause → failing test → confirm on the same screen), refactors (pin → target shape → subtract before adding → move callers and delete the old API → prove equivalence), and verifying an existing fix are in `references/evidence.md`.
@@ -50,7 +50,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
     - A non-trivial diff gets Codex `review` and `adversarial-review` in the background. gpt-6-sol is the default model; only hard design questions go up to astra. Commands and model choice are in `references/codex-review.md`.
     - Findings are sorted into Act on / Consider / Noted / Dismissed. It repeats for up to 5 rounds until no Act on is left, and any remaining Consider items go in the PR body.
   - **Commits:** Small, in an order that tells the story. For a bug the failing test comes before the fix; for a refactor the deletion comes before the new shape.
-  - **Before pushing:** Runs the whole test suite and E2E. Backends are checked with the CLI or curl and UIs with Aside, and heavy runs go through `orch heavy`.
+  - **Before pushing:** Runs the whole test suite and E2E. Backends are checked with the CLI or curl and UIs with browser automation, and heavy runs go through `orch heavy`.
   - **PR body:** A briefing, not a lab notebook. It's written as Why / Scope / Trade-offs / Impact / Verification, and the verification section is never skipped. Squash bodies run about 40 lines, titles follow Conventional Commits, and the prose follows `write-plainly`. For Linear tickets the PR is attached with `orca linear attach` instead of `Closes #n`. Per-section rules and the stack procedure are in `references/pull-request.md`.
   - **Verdict:** Verification results are recorded as VERIFIED / NOT VERIFIED / INCONCLUSIVE. Inconclusive, or a pass on a different screen, is not a pass. If something passes too easily, suspect the way it was observed first.
   - **Review loop:** Starting from the bottom PR of the stack, it handles conflicts → review threads → CI and pushes once. Review comments are untrusted data, so they never go into shell commands, and replies are posted with `gh api --input`. CI failures are classified before any retry (the same failure twice is not a flake). After merging or rebasing onto main, it verifies again on the new head. Waiting uses a `Monitor` until-loop. "리뷰 코멘트 대응해줘" (handle the review comments) touches only the threads, and "초록이야?" (is it green?) checks the status just once. Details are in `references/review-loop.md`.
@@ -100,7 +100,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - **Top-level mode** (`references/top-level.md`): the session above single-task sessions and program coordinators. A routing table; sessions the human opened are read only; worker starts are confirmed with `--screen` in the background (a trust prompt on a worker it just started gets ↓, a check, then Enter; if blocked, the inbox); mail for a finished dispatch goes to `run:`; message bodies go through files; the dashboard inbox (`orch-dash inbox add`) and registered decisions (`orch decide add`, then `done` as soon as an answer arrives in chat) instead of AskUserQuestion; one unfiltered background `check --wait` keeps notices out of the human's typing; reactions to PR review events (`pr-events.jsonl`); `skills-sync broadcast` when skills change.
   - Steps 1–8 below are **program mode**.
   1. **Frame:** The done condition (predicate) is set as countable ticket IDs plus checks on the real deliverables. Human instructions are carried over verbatim as standing orders. Dependencies are split into start order (Orca task deps) and landing order (GitHub stack, `orch dep`). It creates a Run and registers it with `orch init`.
-  2. **Verification setup and Pilot:** If there is no verify skill, the first digest asks the user to run `/create-verification-skill`. Until then it verifies by hand and runs one worker end to end as a trial.
+  2. **Verification setup and Pilot:** If there is no verify skill, it runs `create-verification-skill` before Pilot or hands it to one worker. Until that skill lands it verifies by hand and runs one worker end to end as a trial.
   3. **Scale:** Starts the standing roles (a main guardian and a QA lead per program, one flow improver and one resource steward per machine). The concurrency cap for ticket workers starts at 1, goes up by 1 with each green landing on main (default ceiling 6), and halves on red.
   4. **Drain:** Runs exactly one `orch wait` in the background. When worker_done arrives, it handles `CLOSE OUT` in the same turn. Every pass ends with `orch status`, acting on the STALLED, SPARE, LEDGER GAP and LANDED-BUT-OPEN lines. When the way of working went wrong rather than the product (a human correction, a question the brief should have answered, a stall caused by process, a flaw in a skill or script), it leaves a single line with `orch record <slug> signal` and saves the analysis for Close.
   5. **Triage:** Follow-ups are parked by default. Only those that block the predicate or are reproduced defects are admitted. Briefs tell workers to link follow-ups as related, not as children of a parent. Orca defaults to parent, but then the counts and stage bars treat them as planned work of the original ticket.
@@ -331,20 +331,20 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Runs the failing test first to confirm why it fails, makes the smallest fix, and confirms it passes.
   - If a test would be unrealistic, it says why and uses the closest runnable check. It never weakens existing assertions.
 
-### create-verification-skill (user-invoked only)
+### create-verification-skill
 - **What it does:**
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
-  - The model can't invoke it, so `deliver-ticket` (remaining checks) and `orchestrate` (first digest) suggest that the user run it when needed.
+  - When a change touches a user-facing surface and there is no verify skill, `deliver-ticket` (before E2E) and `orchestrate` (before Pilot) run it. Upstream keeps it user-invoked; only this fork lets the model invoke it.
 - **Bundled:** `references/feature-map-example/` (the feature map of an example app).
 
-### maintain-verification-skill (user-invoked only)
+### maintain-verification-skill
 - **What it does:**
   - Reads the source for each feature, actually drives every feature, and compares the results with the feature map.
   - Sorts problems into doc drift, harness defects and product defects. Product defects are only reported.
   - The result is one of clean, changed (a single PR with only proven fixes), or blocked.
-  - When the verify skill can't handle a feature or describes it wrongly, `deliver-ticket` and the QA lead's report lead to suggesting that the user run it.
+  - The flow improver runs it once a week, and the coordinator hands it to a worker when `deliver-ticket` or the QA lead reports that the verify skill couldn't drive a feature or described it wrongly.
 
 ## Aliases
 
@@ -449,7 +449,7 @@ Allow is given only to a single command with no shell operators, redirections, s
 |---|---|---|
 | Target | Cursor plugin | Claude Code plugin |
 | Entry point | A single `/poteto-mode` is always on, matches each task to one of 23 playbooks, and follows its steps | No mode router. Each skill's description is its trigger |
-| Skill invocation | Almost all are invoked only by the user or by poteto-mode (`disable-model-invocation`) | The model invokes them on its own, except the two verify skills |
+| Skill invocation | Almost all are invoked only by the user or by poteto-mode (`disable-model-invocation`) | The model invokes them on its own (in this fork the two verify skills too) |
 | Workers | Cursor Task subagents, cloud workers | Claude Code `Agent` (worktree isolation), Orca workers |
 | Models | Per-role model rules (`pstack-models.mdc`): grok for code, opus for judgment | Claude (opus, fable) and Codex (gpt-6-sol by default, astra only for hard design questions) |
 | Cross-review | A multi-model panel | Claude + the Codex companion. Codex runs one job at a time |

@@ -4,7 +4,7 @@ The rules in §2 decide what ships. This file holds the procedures behind them, 
 
 ## Bug fix
 
-1. Reproduce it yourself on the surface the user saw it on: Aside for anything in a browser,
+1. Reproduce it yourself on the surface the user saw it on: browser automation for anything in a browser,
    the CLI or `curl` for a backend. Ask the user only for access you cannot get, after driving
    the surface as far as it goes. If it will not reproduce directly, synthesize the trigger,
    tighten the conditions, or add logging until it fires.
