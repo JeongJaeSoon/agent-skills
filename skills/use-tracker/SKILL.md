@@ -103,9 +103,11 @@ compares each open ticket in scope with GitHub and the deploy, and makes the tic
 `worker_done` over that worker's tickets.
 
 1. Find the PRs that deliver the ticket: the ones attached to it, and those that
-   `gh pr list --repo <repo> --state all --search "<ID>" --json number,url,title,headRefName,state,mergeCommit,reviewRequests,latestReviews`
-   returns with the ID in the title or branch. A PR that only mentions the ID in its body (a
-   follow-up named there) does not count. Leave out PRs closed without merging.
+   `gh pr list --repo <repo> --state all --search "<ID>" --json number,url,title,headRefName,body,state,mergeCommit,reviewRequests,latestReviews`
+   returns with the ID in its title, its branch (any case) or the tickets its body says it
+   closes. A PR that names the ID only in passing (a follow-up) does not count. The search does
+   not match branch names, so when the ticket's branch is known, list `--head <branch>` too.
+   Leave out PRs closed without merging.
 2. Set the state the first matching row supports, through the milestone it skipped (its line included):
 
 | What GitHub and the deploy show | Target |
