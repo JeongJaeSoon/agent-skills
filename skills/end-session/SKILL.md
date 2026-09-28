@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"세션을 마무리짓자\", \"머지하고 종료하자\", \"티켓 정리하고 종료해줘\", \"종료해도 될까?\", \"끝낸 orca 세션·worktree 정리해줘\", \"end this session\" — or when handoff-ticket reaches the point where this session should disappear. Not bare \"정리해줘\"/\"마무리해줘\" with no object: that means wrap up the record and keep talking."
+description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"세션을 마무리짓자\", \"머지하고 종료하자\", \"티켓 정리하고 종료해줘\", \"종료해도 될까?\", \"끝낸 orca 세션·worktree 정리해줘\", \"end this session\" — when handoff-ticket reaches the point where this session should disappear, or when this session is an Orca worker about to send worker_done (no user phrase needed). Not bare \"정리해줘\"/\"마무리해줘\" with no object: that means wrap up the record and keep talking."
 ---
 
 # Ending the session
@@ -15,7 +15,8 @@ Claude Code on this machine runs inside an Orca terminal, so ending a session is
 command. `EndConversation` is the fallback for what Orca cannot reach, not the default.
 
 Ending is yours to do. The user asked; do not ask back unless the state is off-script (§4) or
-the ending is `EndConversation`, which has its own rule (§5).
+the ending is `EndConversation`, which has its own rule (§5). An Orca worker is not asked at
+all: settling its task is the request (§7).
 
 ## 1. Is this even a request to end
 
@@ -81,11 +82,7 @@ If the record is already written, say so in one line and move on. Do not rewrite
 
 ## 4. Removing a worktree card
 
-A program worker — its brief or prompt has a `PROGRAM: <slug>` line (`orchestrate`
-`references/brief.md`) — does not remove its own worktree: the coordinator releases it and
-removes the worktree after landing. It ends with `worker_done` and idles.
-
-Only for `isMainWorktree: false`. Read the state with real output, not memory:
+An Orca worker reads this table too, through §7. Only for `isMainWorktree: false`. Read the state with real output, not memory:
 
 ```bash
 git fetch -q origin main
@@ -139,6 +136,43 @@ never an invented item — and which command is about to run. Write it per `writ
 Ending the session is not closing the terminal app. If they want the CLI window gone too, that
 is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
 
+## 7. An Orca worker closes itself when it settles
+
+A worker is a session Orca dispatched: its prompt carries an Orca preamble with a `worker_done`
+command. Nobody says "종료해줘" to it, and a coordinator that is not running `orch wait` never
+closes it, so the worker closes itself as the last step of its task. The preamble's "take no
+further actions after worker_done" still holds: only the closing calls follow `worker_done`, in
+the same turn, and nothing runs after them.
+
+Before sending `worker_done`, read the state with §4's commands,
+`orca terminal list --worktree current --json`, and the `runId` in
+`orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json` (the fallback below needs
+it), then pick the row:
+
+| State | The turn's last calls |
+|---|---|
+| Outcome `succeeded`; `isMainWorktree: false` and §4's Remove row holds (clean tree, the work on `origin/main`, no open PR); no other agent terminal on the card; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done`, then `orca worktree rm --worktree current --json` (`--run-hooks` per §4). The card's terminals, the setup one included, go with it. |
+| The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done`, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
+| Anything else: outcome `failed` (the coordinator retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | Close the card's setup terminal if it has exited (the row without `agentIdentity`), then `worker_done` naming what holds the card, and idle. Never `AskUserQuestion`: nobody sees it. |
+
+- **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
+  not Orca, often refuses `orca worktree rm` as irreversible. Do not run it again in any form:
+  not in smaller pieces, not through another tool or a script, not through a subagent. Fall back
+  to the second row and leave the card: `orca orchestration send --to run:<runId> --type status
+  --subject "card left: worktree rm refused by permission layer" --body "<card path>"` (after
+  `worker_done` a send without `--to` finds no Run), then
+  `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The coordinator's `CLOSE OUT`
+  line removes the card, or puts it to the human.
+- **`KEEP`** is the brief's opt-out: the coordinator plans to reuse this terminal or card.
+- **An open PR** keeps the worker only until it lands. A later wake (a review fix, a message)
+  runs this table again and closes if the PR has merged or closed since. Nothing else wakes an
+  idle worker; the coordinator's `SETTLED` sweep is the backstop.
+- **`Rejected worker_done`** after someone typed into the terminal (Orca marks it taken over)
+  still settles the task: write the report as text on screen and close by the table. A refusal
+  for a missing capability does not: the coordinator never got the report, so keep the card.
+- Inside a program the coordinator reconciles the tickets on `worker_done`, so §3's tracker
+  and worklog steps are its, not the worker's. §6's order holds.
+
 ## Common mistakes
 
 - **"제가 세션을 종료할 수는 없습니다" and pointing at `/exit`.** Orca can end it, and
@@ -147,7 +181,9 @@ is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
   Orca-managed workspace. Checking cwd is how you conclude "no card" and reach for the wrong tool.
 - **`orca worktree rm` on `isMainWorktree: true`.** That selector is the repo checkout or the
   scratch workspace, not a disposable card.
-- Offering "원하시면 지우겠습니다" on a clean tree. The request was the permission; run it.
+- Offering "원하시면 지우겠습니다" on a clean tree after the user asked to end. Their request
+  was the permission; run it. This covers user-initiated endings only: a worker ends by §7, and
+  a refusal there ends in §7's fallback.
 - Checking `origin/main..HEAD` without `git fetch` first — a stale ref hides unpushed commits.
 - Running the git and `gh` lines in a folder context that is not a repo. There `branch` is
   empty and `isMainWorktree` alone decides.
@@ -155,4 +191,7 @@ is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
 - Calling `orca terminal close --all` "sleeping the card". It is the opposite: Sleep resumes,
   this drops the resume records for good.
 - Calling `EndConversation` on the first "종료해줘", with no confirmation turn.
-- Ending because a task finished, stalled, or went badly. Only the user's request ends a session.
+- Ending because a task finished, stalled, or went badly. Only the user's request ends a
+  session, or, for an Orca worker, settling its task by §7.
+- An Orca worker sending `worker_done` and idling on a clean, landed card. Nothing closes it
+  after that; §7 closes it in the same turn.

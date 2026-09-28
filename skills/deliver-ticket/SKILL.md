@@ -202,7 +202,8 @@ Then land it. How depends on where you run:
   Under human-gate it refuses; report READY and stop. A human review that will outlast this
   session does not hold the session open either: say in the brief's REPORT that the PR waits on a
   review, and the coordinator's wake lands it once it is ready. After landing, the brief's REPORT is the
-  end: `worker_done` with the evidence.
+  end: `worker_done` with the evidence, and the session closes itself in that turn
+  (`end-session` §7).
 - **A standalone card** merges its own verified PR unless the user set a hold. When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
   a landing order, an exclusive lane), follow that procedure instead of merging at will.
@@ -242,6 +243,6 @@ that too. The same list goes into the ticket's completion comment as "남은 확
 survives this session.
 
 **The completion comment does not end the turn** (outside a program; inside one, `worker_done`
-does). In the same turn, without waiting for a new prompt, go to `handoff-ticket` §0 — what stays here, what becomes its own ticket, and which
+and `end-session` §7 do, and so they do for any Orca worker). In the same turn, without waiting for a new prompt, go to `handoff-ticket` §0 — what stays here, what becomes its own ticket, and which
 card starts next. Closing with "say the word and I'll hand off" or "want me to file that?" is
 stopping short: those are actions §0 already authorises, not questions to put to the user.

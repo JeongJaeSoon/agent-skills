@@ -60,7 +60,9 @@ REPORT      worker_done once, after landing and main CI (or at READY under human
             Body: what changed, what was verified and how, what remains. Include the PR URL,
             merge commit, review rounds and who reviewed, the VERIFY output you actually saw,
             the main-CI run you read, and the findings with their proposed class. --outcome succeeded only
-            when the ticket's acceptance criteria hold.
+            when the ticket's acceptance criteria hold. Then close yourself in the same turn:
+            end-session §7.
+KEEP        <optional: the next task this worker's terminal or card is kept for>
 STANDING    <the program note's standing orders for workers, pasted verbatim, numbered; the
             coordinator-only ones stay in the note>
 ```
@@ -83,6 +85,8 @@ LAND        A change: its normal flow (deliver-ticket), or the push the owner al
 WAITING     `ask` what you cannot decide. After two waits in a row end with no answer,
             `orch decide add` the question and end your turn; the answer is typed into your terminal.
 REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
+            Then close yourself in the same turn: end-session §7.
+KEEP        <optional, as above>
 ```
 
 A new task for a worker that already exists takes the same shape. Start the worker with `worker-start --display-name "<the first line>"` so its card carries that name.
@@ -99,6 +103,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.
+- **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal or card you mean to give the next task needs a `KEEP` line naming that task; without one, a landed, clean card is gone by the time you read its `worker_done`.
 - Never resume-chain a brief. A retry gets a fresh brief with the consolidated scope.
 - A verifier unit on a high-blast-radius PR runs on another model family (`worker-start --agent codex`). It reports PASS, PASS+NOTES or FAIL, with what it drove.
 - Feedback the user gives on in-flight work ("improve this", "do it better") becomes a new ticket and a new brief. It is never appended to the running one.

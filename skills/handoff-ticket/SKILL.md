@@ -28,8 +28,8 @@ last criterion, not the merge commit, is the decision point.
 
 **Inside a program.** If this session's brief or prompt has a `PROGRAM: <slug>` line
 (`orchestrate` `references/brief.md`), it does not pick or spawn the next ticket: after
-`worker_done` it idles, and the coordinator decides what runs next. Nothing else makes a
-session a program worker. The rest of this skill is for sessions without that line.
+`worker_done` it closes itself or idles per `end-session` §7, and the coordinator decides what
+runs next. Nothing else makes a session a program worker. The rest of this skill is for sessions without that line.
 
 **Loose ends.** A review comment, or a fix that lands right here, is just work: do it. A thing
 that needs its own investigation, decision or diff is classified against the exit condition
