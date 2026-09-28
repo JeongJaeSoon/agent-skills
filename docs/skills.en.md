@@ -89,7 +89,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
     - Main checkout: closes only the terminal. It never uses `worktree rm`.
     - Outside Orca: uses `EndConversation`. That is permanent, so it asks for confirmation once.
   - Asks the user about uncommitted changes and never uses `--force`. An Orca worker, in a program or not, asks no one.
-  - An Orca worker closes itself when it finishes: `succeeded`, a clean tree, the work on `origin/main`, and no open PR, pending question or `KEEP` line in its brief means it removes its card in the same turn, right after `worker_done`. Otherwise it closes only the setup terminal and reports what holds the card.
+  - An Orca worker closes itself when it finishes: `succeeded`, a clean tree, the work on `origin/main`, and no open PR, pending question or `KEEP` line in its brief means it removes its card in the same turn, right after `worker_done`. Otherwise it closes only the setup terminal and reports what holds the card. When the host's permission layer refuses `worktree rm`, it does not retry: it reports the card as left and closes only its own terminal.
   - Writes the report first and runs the close command as its last tool call.
 
 ## One project (several Orca workers)

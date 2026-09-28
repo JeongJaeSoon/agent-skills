@@ -140,11 +140,14 @@ is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
 
 A worker is a session Orca dispatched: its prompt carries an Orca preamble with a `worker_done`
 command. Nobody says "종료해줘" to it, and a coordinator that is not running `orch wait` never
-closes it, so the worker closes itself as the last step of its task. The preamble's "take no further actions after worker_done" still holds: the closing
-command is the same turn's last call, and nothing runs after it.
+closes it, so the worker closes itself as the last step of its task. The preamble's "take no
+further actions after worker_done" still holds: only the closing calls follow `worker_done`, in
+the same turn, and nothing runs after them.
 
-Before sending `worker_done`, read the state with §4's commands and
-`orca terminal list --worktree current --json`, then pick the row:
+Before sending `worker_done`, read the state with §4's commands,
+`orca terminal list --worktree current --json`, and the `runId` in
+`orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json` (the fallback below needs
+it), then pick the row:
 
 | State | The turn's last calls |
 |---|---|
@@ -152,6 +155,14 @@ Before sending `worker_done`, read the state with §4's commands and
 | The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done`, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
 | Anything else: outcome `failed` (the coordinator retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | Close the card's setup terminal if it has exited (the row without `agentIdentity`), then `worker_done` naming what holds the card, and idle. Never `AskUserQuestion`: nobody sees it. |
 
+- **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
+  not Orca, often refuses `orca worktree rm` as irreversible. Do not run it again in any form:
+  not in smaller pieces, not through another tool or a script, not through a subagent. Fall back
+  to the second row and leave the card: `orca orchestration send --to run:<runId> --type status
+  --subject "card left: worktree rm refused by permission layer" --body "<card path>"` (after
+  `worker_done` a send without `--to` finds no Run), then
+  `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The coordinator's `CLOSE OUT`
+  line removes the card, or puts it to the human.
 - **`KEEP`** is the brief's opt-out: the coordinator plans to reuse this terminal or card.
 - **An open PR** keeps the worker only until it lands. A later wake (a review fix, a message)
   runs this table again and closes if the PR has merged or closed since. Nothing else wakes an
@@ -170,7 +181,9 @@ Before sending `worker_done`, read the state with §4's commands and
   Orca-managed workspace. Checking cwd is how you conclude "no card" and reach for the wrong tool.
 - **`orca worktree rm` on `isMainWorktree: true`.** That selector is the repo checkout or the
   scratch workspace, not a disposable card.
-- Offering "원하시면 지우겠습니다" on a clean tree. The request was the permission; run it.
+- Offering "원하시면 지우겠습니다" on a clean tree after the user asked to end. Their request
+  was the permission; run it. This covers user-initiated endings only: a worker ends by §7, and
+  a refusal there ends in §7's fallback.
 - Checking `origin/main..HEAD` without `git fetch` first — a stale ref hides unpushed commits.
 - Running the git and `gh` lines in a folder context that is not a repo. There `branch` is
   empty and `isMainWorktree` alone decides.
