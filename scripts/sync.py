@@ -8,6 +8,8 @@ Usage:
                                          or to one of them
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
+  skills-sync close-setup <worktree path>
+                                         close a new card's setup terminal once Orca's setup script finished
   skills-sync status                     print the last sync result and the pending reload
 
 The checkout is loaded live through CLAUDE_CODE_PLUGIN_DIRS (docs/platform.md), so a sync changes what
@@ -198,7 +200,8 @@ def classify(lines, title, draft=""):
     if not title.startswith("✳"):
         return "title shows the agent is busy"
     if draft:
-        return "composer holds a draft"
+        # Orca's own composer, not the terminal: the screen's prompt box can be empty while it holds text.
+        return f"Orca composer holds a draft (not on screen): {draft[:40]!r}"
     if any("\x1b[200~" in l or "^[[200~" in l for l in lines):
         return "shell, not Claude"
     for l in body:
@@ -318,6 +321,64 @@ def nudge(handle, text):
     return 0 if ok else 1
 
 
+# --- setup terminals -------------------------------------------------------------------------------
+
+SETUP_RUNNER = re.compile(r"(/\S+/orca/setup-runner\.sh)")
+SETUP_POLL_S = float(os.environ.get("SKILLS_SYNC_SETUP_POLL_S", "10"))
+
+
+def setup_runner(lines):
+    """The path of Orca's setup script when these lines show it was started, else None."""
+    for l in norm(lines):
+        m = SETUP_RUNNER.search(l)
+        if m:
+            return m.group(1)
+    return None
+
+
+def running(path):
+    p = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True, timeout=10)
+    return any(path in l for l in p.stdout.splitlines()[1:])
+
+
+def close_setup(worktree, timeout_s=1800, grace_s=120):
+    """Close each of the card's terminals without an agent once the setup script it ran has finished.
+    The setup terminal is a shell that outlives its script, so `orca terminal wait --for exit` never fires.
+    A shell that never showed the script is someone's own and stays."""
+    start = time.monotonic()
+    try:
+        handles = [t["handle"] for t in orca("terminal", "list", "--worktree", f"path:{worktree}")["terminals"]
+                   if not t.get("agentIdentity")]
+    except (Stop, KeyError, TypeError) as e:
+        print(f"cannot list the card's terminals: {e}")
+        return 1
+    rc = 0
+    for h in handles:
+        path, idle = None, 0
+        while True:
+            try:
+                if not path:
+                    for flag in (("--screen",), ("--limit", "5000")):  # the script's line may have scrolled off
+                        path = path or setup_runner(orca("terminal", "read", "--terminal", h, *flag)["terminal"].get("tail") or [])
+                # Twice in a row: the command line is echoed a moment before the script starts.
+                idle = idle + 1 if path and not running(path) else 0
+                if idle >= 2:
+                    orca("terminal", "close", "--terminal", h)
+                    print(f"{h}  closed")
+                    break
+            except (Stop, KeyError, TypeError, OSError, subprocess.TimeoutExpired) as e:
+                print(f"{h}  left open: {e}")
+                rc = 1
+                break
+            waited = time.monotonic() - start
+            if (not path and waited >= grace_s) or waited >= timeout_s:
+                print(f"{h}  left open: {'setup still running' if path else 'no setup script seen'}")
+                rc = rc if not path else 1
+                break
+            time.sleep(SETUP_POLL_S)
+    return rc
+
+
 def broadcast(kind, dry_run, only=None):
     if dry_run:
         return broadcast_locked(kind, dry_run=True, only=only)
@@ -414,6 +475,8 @@ def main(argv):
         return broadcast(kind, dry_run="--dry-run" in argv, only=only)
     if cmd == "nudge" and len(argv) == 3:
         return nudge(argv[1], argv[2])
+    if cmd == "close-setup" and len(argv) == 2:
+        return close_setup(argv[1])
     if cmd == "status":
         return status()
     print(__doc__)

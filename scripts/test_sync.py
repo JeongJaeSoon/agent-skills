@@ -44,6 +44,9 @@ elif a[:2] == ["terminal", "read"]:
     t = st["terms"][arg("--terminal")]
     tail = t["screens"].pop(0) if len(t["screens"]) > 1 else t["screens"][0]
     out = {"terminal": {"tail": tail, "source": "screen"}}
+elif a[:2] == ["terminal", "close"]:
+    st.setdefault("closed", []).append(arg("--terminal"))
+    out = {}
 elif a[:2] == ["terminal", "send"]:
     t = st["terms"][arg("--terminal")]
     st["sent"].append([arg("--terminal"), arg("--text")])
@@ -92,6 +95,7 @@ def setup(tmp):
     git(other, "config", "user.email", "t@example.com"); git(other, "config", "user.name", "t")
     (live / "scripts").mkdir(exist_ok=True)
     shutil.copy(HERE / "sync.py", live / "scripts" / "sync.py")
+    (live / ".git" / "info").mkdir(exist_ok=True)  # a custom init.templateDir may leave it out
     (live / ".git" / "info" / "exclude").write_text("scripts/\n")
     return live, other
 
@@ -186,7 +190,8 @@ def test_classify():
                         ("a press-enter screen", PRESS_ENTER)]:
         check(f"{name} is not sendable", sync.classify(lines, idle) is not None)
     check("busy title is not sendable", sync.classify(IDLE, "◑ some task") is not None)
-    check("a composer draft is not sendable", sync.classify(IDLE, idle, draft="hi") is not None)
+    check("a composer draft is not sendable and the reason shows it",
+          "'hi'" in (sync.classify(IDLE, idle, draft="hi") or ""))
     check("the real screen after a reload is sendable", sync.classify(RELOAD_DONE, idle) is None)
 
 
@@ -276,11 +281,44 @@ def test_broadcast():
     shutil.rmtree(tmp)
 
 
+def test_close_setup():
+    runner = "/r/.git/worktrees/card/orca/setup-runner.sh"
+    done = ["$ bash " + runner, " ERR_PNPM_NO_PKG_MANIFEST  No package.json found", "  ~/w/card on  main", "$"]
+    check("the setup script is found on its screen", sync.setup_runner(done) == runner)
+    check("a hand-opened shell has no setup script", sync.setup_runner(["$ ls", "$"]) is None)
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+    terms = {"agent": {"agentIdentity": "claude", "screens": [IDLE]}, "setup": {"agentIdentity": None, "screens": [done]},
+             "busy": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/other/orca/setup-runner.sh"]]},
+             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]}}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+    try:
+        sync.running = lambda path: "other" in path
+        code = sync.close_setup("/w/card", timeout_s=0.2, grace_s=0.1)
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    closed = json.loads(st.read_text()).get("closed", [])
+    check("a finished setup terminal is closed; a running one, a hand-opened shell and the agent stay",
+          closed == ["setup"], closed)
+    check("a setup still running at the timeout is reported", code == 1)
+    shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     test_reload_kind()
     test_classify()
     test_confirm()
     test_sync()
     test_broadcast()
+    test_close_setup()
     print(f"\n{len(failures)} failure(s)" if failures else "\nall passed")
     sys.exit(1 if failures else 0)

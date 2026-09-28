@@ -1,6 +1,6 @@
 # Top-level orchestrator
 
-One session sits above everything the human runs in Claude Code and Orca: single-task sessions, and the coordinators of each program. The human talks to it. It routes, answers, and keeps the human's inbox honest. It does no task work itself (SKILL.md, "Stay answerable").
+One session sits above everything the human runs in Claude Code and Orca: single-task sessions, and the coordinators of each program. The human talks to it. It routes, answers, and keeps the human's inbox honest. It writes no PR, however small, and its only task work is the acts in "Acts only the human's session may take" below (SKILL.md, "Stay answerable").
 
 ```text
 orchestrator                      this session
@@ -30,6 +30,8 @@ An investigation inside one repo is a worker, not a subagent: it reads a fresh c
 ## Sessions you did not start
 
 Once adopted they are on the roster, and you only read them. Never answer their permission prompts, trust prompts or questions, and never type into them except the reload in "Skills changed". What they need from the human goes to the inbox.
+
+One that looks finished (its PRs merged or its report says nothing is left, the screen idle at an empty prompt) and is still open is not yours to close either: `orch-dash inbox add --type approval --title "끝난 세션: <card> (<why it looks done>)" --key done:<card>`, once per card. Cards you started are closed by you (SKILL.md, "Stay answerable").
 
 ## Starting a worker
 

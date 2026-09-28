@@ -77,6 +77,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - Confirms the target repo with `orca repo list`.
   - Writes the brief (background, source, deliverables and done criteria, what not to do, "follow that repo's CLAUDE.md") to a note, and puts only the note path and a summary in the card prompt.
   - Checks for duplicate cards, then creates the card.
+  - Puts a `CLOSE` line in the brief, so the card closes itself through `end-session` §8 once its done criteria are met.
   - Confirms the start just once and goes back to its own work. It doesn't wait for the result and doesn't call `end-session`.
 - **Related:** `use-notes`, `write-ticket`. Closing this session and handing over is `handoff-ticket`'s job.
 
@@ -90,6 +91,8 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
     - Outside Orca: uses `EndConversation`. That is permanent, so it asks for confirmation once.
   - Asks the user about uncommitted changes and never uses `--force`. An Orca worker, in a program or not, asks no one.
   - An Orca worker closes itself when it finishes: `succeeded`, a clean tree, the work on `origin/main`, and no open PR, pending question or `KEEP` line in its brief means it removes its card in the same turn, right after `worker_done`. Otherwise it closes only the setup terminal and reports what holds the card. When the host's permission layer refuses `worktree rm`, it does not retry: it reports the card as left and closes only its own terminal.
+  - A card whose brief has a `CLOSE` line (`dispatch-card`, or a card a coordinator made with `worktree create`) also closes itself in the same turn once its done criteria are met. It does not leave the cleanup to the parent session.
+  - Before ending, it checks the background subagents this session started, the git worktrees it made and the child cards it dispatched.
   - Writes the report first and runs the close command as its last tool call.
 
 ## One project (several Orca workers)
@@ -97,7 +100,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 ### orchestrate
 - **When:** This is the top-level orchestrator session the human talks to ("오케스트레이터로", "모든 세션 관리해줘" (manage every session), "전체 태스크 현황" (status of all tasks)), or one session drives a milestone to done through several Orca workers (usually 3 or more); "대시보드 갱신해줘" (update the dashboard); "전체 진행상황 몇 퍼센트" (how many percent done overall); taking over a program another coordinator was running; asking why PRs aren't moving.
 - **What it does:** The coordinator owns the program, not the code. Every session starts by reading `orca skills get orchestration`.
-  - **Stay answerable:** inside its turn it only routes, runs checks that take seconds, and answers the human. Investigation, implementation, verification, long waits and monitoring go to a background subagent or an Orca worker the moment they arrive; no foreground loops, `sleep`, or `check --wait` outside the background. Completion arrives as a notification.
+  - **Stay answerable:** inside its turn it only routes, runs checks that take seconds, and answers the human. Investigation, implementation, verification, long waits and monitoring go to a background subagent or an Orca worker the moment they arrive; no foreground loops, `sleep`, or `check --wait` outside the background. Completion arrives as a notification. The coordinator writes no PR, however small, and hands it to a worker card or Codex; the cards, subagents and worktrees it started, it closes.
   - **Top-level mode** (`references/top-level.md`): the session above single-task sessions and program coordinators. A routing table; sessions the human opened are read only; worker starts are confirmed with `--screen` in the background (a trust prompt on a worker it just started gets ↓, a check, then Enter; if blocked, the inbox); mail for a finished dispatch goes to `run:`; message bodies go through files; the dashboard inbox (`orch-dash inbox add`) and registered decisions (`orch decide add`, then `done` as soon as an answer arrives in chat) instead of AskUserQuestion; one unfiltered background `check --wait` keeps notices out of the human's typing; reactions to PR review events (`pr-events.jsonl`); `skills-sync broadcast` when skills change.
   - Steps 1–8 below are **program mode**.
   1. **Frame:** The done condition (predicate) is set as countable ticket IDs plus checks on the real deliverables. Human instructions are carried over verbatim as standing orders. Dependencies are split into start order (Orca task deps) and landing order (GitHub stack, `orch dep`). It creates a Run and registers it with `orch init`.

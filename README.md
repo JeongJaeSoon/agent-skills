@@ -68,7 +68,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `deliver-ticket` | 첫 수정부터 완료까지: 계획, 테스트, Codex 교차 검토, GitHub stack, E2E, 머지, 완료 기준 |
 | `handoff-ticket` | 끝난 뒤 다음 티켓을 새 Orca 카드로 |
 | `dispatch-card` | 이 세션은 계속하면서 다른 저장소나 곁가지를 카드로 |
-| `end-session` | 세션·카드·worktree 정리. Orca 워커는 일을 마치면 스스로 닫는다 |
+| `end-session` | 세션·카드·worktree 정리. Orca 워커와 브리프로 띄운 카드는 일을 마치면 스스로 닫는다 |
 
 **프로젝트 하나 (Orca 여러 워커)**
 

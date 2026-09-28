@@ -99,10 +99,9 @@ orca worktree create \
   --json
 # name the card after the ticket, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<TICKET-ID> <short title>" --json
-# the setup terminal is the card's row without agentIdentity; close it once setup exits
-# (run the wait in the background: 30 min outlives the 10-min foreground Bash limit)
-orca terminal list --worktree "path:<result.worktree.path>" --json
-orca terminal wait --terminal <setup handle> --for exit --timeout-ms 1800000 && orca terminal close --terminal <setup handle>
+# close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
+# (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit)
+skills-sync close-setup "<result.worktree.path>"
 ```
 
 - Link the card to the ticket the way the active tracker allows (`use-tracker` → "Link an Orca

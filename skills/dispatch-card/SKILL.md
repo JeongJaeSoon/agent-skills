@@ -72,8 +72,12 @@ plus a three-line summary. The brief has:
 - **Do not** — repo A is off limits; anything else the target must leave alone.
 - **Target repo rules** — one line: "그 repo의 CLAUDE.md와 스킬을 확인하고 적용하라". Never paste
   its CLAUDE.md or skills into the brief; that session reads them itself.
+- **Close** — one line: "`CLOSE`: 완료 기준을 채우고 결과를 적으면 `end-session` §8대로 같은 턴에
+  스스로 닫는다". Without it the card idles after its last report and nobody closes it: a card
+  whose PR merged stayed open 38 hours. `KEEP` instead only when this session will reuse the card.
 
-Exceptions. A task that fits in three or four lines goes inline in `--prompt`, no note. Product
+Exceptions. A task that fits in three or four lines goes inline in `--prompt`, no note; the
+`CLOSE` line still goes in. Product
 backlog goes through `write-ticket` first and the prompt becomes `/goal <TICKET>`.
 Feedback the user gives on work a card is already doing is a new ticket and a new card, never
 an addition to the running card's brief.
@@ -94,10 +98,9 @@ orca worktree create \
   --json
 # name the card by what it does, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID or target> <short title>" --json
-# the setup terminal is the card's row without agentIdentity; close it once setup exits
-# (run the wait in the background: 30 min outlives the 10-min foreground Bash limit)
-orca terminal list --worktree "path:<result.worktree.path>" --json
-orca terminal wait --terminal <setup handle> --for exit --timeout-ms 1800000 && orca terminal close --terminal <setup handle>
+# close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
+# (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit)
+skills-sync close-setup "<result.worktree.path>"
 ```
 
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
@@ -116,7 +119,8 @@ orca terminal read --terminal <handle> --screen
 ```
 
 Once. Read that the agent picked up the brief, report the worktree path, branch and handle, and
-return to what this session was doing. Results are fire-and-forget by default: do not loop on
+return to what this session was doing. `--parent-worktree active` is how this session finds the
+card again when it ends (`end-session` §3); a `--no-parent` card goes in the worklog instead. Results are fire-and-forget by default: do not loop on
 `tui-idle`, do not block repo A on repo B.
 
 Only when the user says "결과 받아와": tell the target session in the brief to append its result

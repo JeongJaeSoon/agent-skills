@@ -166,7 +166,7 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 | 조건 | 확인 방법 (실측한 화면 기준) |
 |---|---|
 | Claude가 떠 있다 | `agentIdentity == "claude"`이고, `read --screen`에 Claude 입력창(위아래 `────` 가로줄 사이의 `❯` 줄)이 있다 |
-| 빈 프롬프트에서 대기 중 | **마지막** `────` 두 줄 사이의 입력칸이 `❯` 하나뿐이거나, 빈 입력칸의 안내 문구(`❯ Try "…"`)만 있다. 그 위 history에 찍힌 `❯ <이미 보낸 프롬프트>`는 입력칸이 아니다. `read` 결과에 `draft`가 있으면 비어 있어야 한다 |
+| 빈 프롬프트에서 대기 중 | **마지막** `────` 두 줄 사이의 입력칸이 `❯` 하나뿐이거나, 빈 입력칸의 안내 문구(`❯ Try "…"`)만 있다. 그 위 history에 찍힌 `❯ <이미 보낸 프롬프트>`는 입력칸이 아니다. `read` 결과에 `draft`가 있으면 비어 있어야 한다. `draft`는 Orca 앱 자체 입력창의 글이라 화면(`tail`)에는 없다. 화면의 입력칸이 빈 `❯`여도 `draft`가 있으면 사람이 앱에 쓰다 둔 글이 있는 것이고, 건너뛴 이유에 그 앞부분을 적는다 |
 | 턴이 진행 중이 아니다 | 화면에 스피너 줄도 `esc to interrupt`도 없다. 스피너 줄은 `✶ Contemplating… (32s · ↓ 912 tokens)`, `· Crunching… (running UserPromptSubmit hooks…)`, `✶ Compacting conversation… (12s)`처럼 스피너 글자 하나로 시작하고 `…`를 품는다. 끝난 턴의 요약 줄(`✻ Worked for 2m 7s · done 5:48 AM`)에는 `…`가 없다. 턴 진행 중에도 빈 `❯` 입력칸은 보이므로 입력칸만으로는 판정하지 않는다. 탭 제목의 `✳`는 필요조건으로만 쓴다(`◑` 등 다른 글자면 작업 중). `✳`는 AskUserQuestion 대기 세션에도 붙기 때문에 충분조건이 아니다. 제목은 목록에서 한 번 읽지 않고 화면을 읽을 때마다 `orca terminal show`로 다시 읽는다. 세션마다 4.5초 넘게 걸려서 목록의 제목은 금방 낡는다 |
 | 권한·신뢰·질문 창이 없다 | 화면에 이런 문구가 하나도 없다: `Do you want to proceed?`, `❯ 1.`처럼 번호 선택지에 커서가 있는 줄, `Esc to cancel`, `Tab to amend`, `Enter to confirm`, `trust this folder`, `Enter to select`, `↑/↓ to navigate`, `Chat about this`, `Press Enter`, `Esc to close`, `Esc to exit`, `(y/n)` |
 | 사용자가 입력 중이 아니다 | 1.5초 간격으로 두 번 읽은 화면이 같다 |
@@ -195,6 +195,12 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 - 확인과 전송 사이의 짧은 틈에 사용자가 타이핑을 시작할 수 있다. 이 틈은 없앨 수 없어서, 두 번 읽기로 좁히는 데서 멈춘다.
 
 README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 … idle을 기다릴 필요가 없다")은 이 규칙으로 바꾼다. 턴 진행 중에는 대기열에 들어가더라도, 권한 창에서는 Enter가 답이 되기 때문이다.
+
+### 셋업 터미널 닫기 (`skills-sync close-setup <카드 경로>`, 2026-09-29)
+
+카드를 만들면 Orca가 셋업 터미널(`agentIdentity` 없는 행)에서 `bash <git dir>/orca/setup-runner.sh`를 돌린다. 스크립트가 끝나도(실패해도) 셸은 `$` 프롬프트로 남는다. 그래서 스킬이 쓰던 `orca terminal wait --for exit … && orca terminal close`는 30분 뒤 시간 초과로 끝나고 `&&` 뒤가 돌지 않았다. 실측한 날 셋업 터미널 세 개가 이렇게 남아 있었다.
+
+`close-setup`은 그 카드의 에이전트 없는 터미널마다 화면과 누적 출력에서 `…/orca/setup-runner.sh` 경로를 찾고, 그 경로를 품은 프로세스가 두 번 연달아 없을 때 닫는다. 명령 줄이 찍힌 직후 스크립트가 시작되기 전을 끝난 것으로 보지 않으려고 두 번 본다. 2분 안에 스크립트가 보이지 않는 셸은 사람이 연 것으로 보고 두고, 30분이 지나도 도는 스크립트는 두고 종료 코드 1로 알린다.
 
 ## 5. 다른 PC 부트스트랩
 
