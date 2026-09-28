@@ -191,7 +191,7 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 - `orca terminal send --terminal <h> --text "/reload-skills" --enter`.
 - 3초 뒤 화면을 다시 읽는다. 보낸 명령(`❯ /reload-skills`)이 입력칸 위 마지막 메시지이고, 그 아래에 `⎿  Reloaded skills: …` 또는 `⎿  Reloaded: …`가 있고, 입력칸에 명령이 남아 있지 않아야 성공이다. 화면에 남은 예전 reload 출력은 마지막 메시지가 아니므로 성공으로 치지 않는다. 한 줄 nudge도 같은 방식으로, 보낸 줄이 마지막 메시지로 올라갔거나 스피너가 돌면 성공으로 본다.
-- 못 보낸 세션과 이유는 `~/.local/state/agent-skills/reload-pending.json`에 남긴다. 다음 `sync`, 또는 `skills-sync broadcast --retry`가 다시 시도한다. 세션이 사라졌으면 목록에서 뺀다.
+- 못 보낸 세션과 이유는 `~/.local/state/agent-skills/reload-pending.json`에 남긴다. 다음 `sync`, 또는 `skills-sync broadcast --retry`가 다시 시도한다. 세션이 사라졌으면 목록에서 뺀다. 대기 항목에는 그때의 체크아웃 HEAD도 적는다. 메인 체크아웃을 손으로 fast-forward하면 `sync`가 대기를 새로 넣지 않으므로, broadcast는 HEAD가 달라졌으면 done 목록을 비우고 모두에게 다시 보낸다.
 - 확인과 전송 사이의 짧은 틈에 사용자가 타이핑을 시작할 수 있다. 이 틈은 없앨 수 없어서, 두 번 읽기로 좁히는 데서 멈춘다.
 
 README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 … idle을 기다릴 필요가 없다")은 이 규칙으로 바꾼다. 턴 진행 중에는 대기열에 들어가더라도, 권한 창에서는 Enter가 답이 되기 때문이다.

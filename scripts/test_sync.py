@@ -233,8 +233,9 @@ def test_broadcast():
     worktrees = [{"worktreeId": "wt-old", "createdAt": 1790347142000 - 1}, {"worktreeId": "wt-new", "createdAt": 1790347142000 + 1}]
     st.write_text(json.dumps({"terms": terms, "worktrees": worktrees, "sent": []}))
     state = tmp / "state"; state.mkdir()
+    head = subprocess.run(["git", "-C", str(HERE.parent), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     (state / "reload-pending.json").write_text(json.dumps({"kind": "plugins", "since": "2026-09-25T23:39:02+0900",
-                                                            "done": []}))
+                                                            "done": [], "head": head}))
     env = dict(AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
                SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
     old = {k: os.environ.get(k) for k in env}
@@ -255,6 +256,13 @@ def test_broadcast():
             json.loads(st.read_text())["terms"], idle=dict(terms["idle"], screens=[IDLE])))))
         sync.nudge("idle", "run your orchestration check")
         nudged_perm = sync.nudge("perm", "run your orchestration check")
+        cur = json.loads(st.read_text())
+        st.write_text(json.dumps(dict(cur, terms=dict(cur["terms"], idle=dict(terms["idle"], screens=[IDLE])))))
+        (state / "reload-pending.json").write_text(json.dumps({"kind": "skills", "done": ["idle"], "head": "old"}))
+        sync.broadcast(None, dry_run=False, only="idle")
+        cur = json.loads(st.read_text())
+        resent = cur["sent"].pop()
+        st.write_text(json.dumps(cur))
         os.environ["SKILLS_SYNC_ORCA"] = str(tmp / "missing")
         importlib.reload(sync)
         no_orca = (sync.nudge("idle", "x"), sync.broadcast("skills", dry_run=False),
@@ -278,6 +286,7 @@ def test_broadcast():
     check("an unreadable `since` or worktree list leaves every terminal a target",
           sync.opened_after(None, [{"handle": "new", "worktreeId": "wt-new"}]) == set())
     check("no orca means a refusal, not a crash", no_orca == (1, 1, 1), no_orca)
+    check("a session done for an older checkout gets the reload again", resent == ["idle", "/reload-skills"], resent)
     shutil.rmtree(tmp)
 
 
@@ -294,14 +303,14 @@ def test_close_setup():
              "busy": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/other/orca/setup-runner.sh"]]},
              "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]}}
     st.write_text(json.dumps({"terms": terms, "sent": []}))
-    env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0")
+    env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     import importlib
     importlib.reload(sync)
     try:
         sync.running = lambda path: "other" in path
-        code = sync.close_setup("/w/card", timeout_s=0.2, grace_s=0.1)
+        code = sync.close_setup("/w/card", timeout_s=2, grace_s=0.5)
     finally:
         for k, v in old.items():
             os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)

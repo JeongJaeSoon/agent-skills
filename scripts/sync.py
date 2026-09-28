@@ -116,8 +116,15 @@ def queue_reload(kind):
     pending = read_json(path, {})
     if pending.get("kind") != "plugins":  # a plugin reload also reloads skills
         pending["kind"] = kind
-    pending.update(since=time.strftime("%Y-%m-%dT%H:%M:%S%z"), done=[], failed={})
+    pending.update(since=time.strftime("%Y-%m-%dT%H:%M:%S%z"), done=[], failed={}, head=head_or_none())
     write_json(path, pending)
+
+
+def head_or_none():
+    try:
+        return git("rev-parse", "HEAD")
+    except (Stop, subprocess.TimeoutExpired):
+        return None
 
 
 @contextlib.contextmanager
@@ -405,6 +412,11 @@ def opened_after(since, terms):
 def broadcast_locked(kind, dry_run=False, only=None):
     path = STATE / "reload-pending.json"
     pending = read_json(path, {})
+    head = head_or_none()
+    if head and pending.get("head") != head:
+        # Sessions marked done reloaded an older checkout, as after a fast-forward pushed by hand, which sync
+        # never sees as a pull.
+        pending = dict(pending, done=[], failed={}, head=head, since=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     queued = pending.get("kind")
     kind = max(kind, queued if queued in ORDER else "plugins", key=ORDER.index)  # unreadable: the safe superset
     if not kind:
