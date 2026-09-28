@@ -81,14 +81,15 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **Related:** `use-notes`, `write-ticket`. Closing this session and handing over is `handoff-ticket`'s job.
 
 ### end-session
-- **When:** "세션 종료해줘" (end the session), "현재 세션 정리해줘" (wrap up this session), "아카이브해줘" (archive it), "머지하고 종료하자" (merge and let's finish), and the last step of `handoff-ticket`. A bare "정리해줘" (tidy up) with no object only records the state and keeps the conversation going.
+- **When:** "세션 종료해줘" (end the session), "현재 세션 정리해줘" (wrap up this session), "아카이브해줘" (archive it), "머지하고 종료하자" (merge and let's finish), the last step of `handoff-ticket`, and an Orca worker about to send `worker_done` (no user phrase needed). A bare "정리해줘" (tidy up) with no object only records the state and keeps the conversation going.
 - **What it does:**
   - First records the ticket's final state, the completion comment, the worklog and memory.
   - Picks how to close based on the output of `orca worktree current --json`.
     - Card: if the worktree check passes, it removes the card with `orca worktree rm`. If the repo's orca.yaml has an archive hook it adds `--run-hooks`, and if the hook fails it asks instead of forcing.
     - Main checkout: closes only the terminal. It never uses `worktree rm`.
     - Outside Orca: uses `EndConversation`. That is permanent, so it asks for confirmation once.
-  - Asks the user about uncommitted changes and never uses `--force`. Program workers don't remove their own worktree.
+  - Asks the user about uncommitted changes and never uses `--force`. An Orca worker, in a program or not, asks no one.
+  - An Orca worker closes itself when it finishes: `succeeded`, a clean tree, the work on `origin/main`, and no open PR, pending question or `KEEP` line in its brief means it removes its card in the same turn, right after `worker_done`. Otherwise it closes only the setup terminal and reports what holds the card.
   - Writes the report first and runs the close command as its last tool call.
 
 ## One project (several Orca workers)
