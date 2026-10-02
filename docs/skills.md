@@ -96,10 +96,11 @@
 ### orchestrate
 - **언제:** 사용자가 말을 거는 최상위 orchestrator 세션일 때("오케스트레이터로", "모든 세션 관리해줘", "전체 태스크 현황"), 또는 한 세션이 Orca 워커 여러 개(대개 3개 이상)로 마일스톤을 끝까지 끌고 갈 때, "대시보드 갱신해줘", "전체 진행상황 몇 퍼센트", 다른 코디네이터가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
 - **내용:** 코디네이터는 코드가 아니라 프로그램을 소유한다. 매 세션 `orca skills get orchestration`부터 읽는다.
-  - **즉답 원칙(Stay answerable):** 턴 안에서는 라우팅, 몇 초짜리 확인, 사용자 응답만 한다. 조사·구현·검증·긴 대기·모니터링은 받자마자 백그라운드 서브에이전트나 Orca 워커에 넘기고, 포그라운드 루프·`sleep`·백그라운드 아닌 `check --wait`는 쓰지 않는다. 완료는 알림으로 받는다. 코디네이터는 작아도 PR을 직접 쓰지 않고 워커 카드나 Codex에 맡기며, 자기가 띄운 카드·서브에이전트·worktree는 자기가 닫는다.
+  - **즉답 원칙(Stay answerable):** 턴 안에서는 라우팅, 몇 초짜리 확인, 사용자 응답만 한다. 조사·구현·검증·긴 대기·모니터링은 받자마자 백그라운드 서브에이전트나 Orca 워커에 넘기고, 포그라운드 루프·`sleep`·백그라운드 아닌 `check --wait`는 쓰지 않는다. 완료는 알림으로 받는다. 코디네이터는 작아도 PR을 직접 쓰지 않고 워커 카드나 Codex에 맡기며, 자기가 띄운 카드·서브에이전트·worktree는 자기가 닫는다. 이 원칙은 top-level, 프로그램 코디네이터, 다른 세션이 띄운 리드 카드 모두에 적용된다. 리드가 있는 프로젝트의 일은 그 리드에게 보내고, 리드에게는 `references/brief.md`의 Lead 브리프(DELEGATE, PERMISSIONS 줄)를 준다.
   - **top-level 모드** (`references/top-level.md`): 단독 태스크 세션과 프로젝트 코디네이터 위에 서는 세션. 요청 라우팅 표, 사용자가 연 세션은 읽기만, 워커 기동 확인은 `--screen`으로 백그라운드에서(신뢰 창은 방금 띄운 워커에 한해 ↓ 확인 후 Enter, 막히면 인박스), 끝난 dispatch에는 `run:`으로, 본문은 파일로, AskUserQuestion 대신 대시보드 인박스(`orch-dash inbox add`)와 결정 등록(`orch decide add`, 채팅으로 답을 받으면 바로 `done`), 필터 없는 백그라운드 `check --wait` 하나로 알림 끼어듦 막기, PR 리뷰 이벤트(`pr-events.jsonl`)에 대한 반응, 스킬이 바뀌면 `skills-sync broadcast`.
+  - **거부된 행동(Refused acts):** 권한 계층이 거부한 행동은 다른 세션이 대신 하지 않는다. 거부된 세션이 보고하고, 코디네이터가 `tune-automode`로 규칙 초안을 만들어 표준 문구와 함께 사용자에게 올린다. 규칙이 들어가면 거부됐던 세션이 한 번 다시 한다. 자기 worktree를 읽기만 하는 명령의 오탐은 Read·Grep 도구로 한 번 읽는다.
   - 아래 1~8은 **program 모드**다.
-  1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. Run을 만들고 `orch init`으로 등록한다.
+  1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. 이 저장소의 머지·배포에 대한 사용자 지속 승인이 `autoMode.allow` 규칙으로 있는지 확인하고, 없으면 `tune-automode`로 초안을 만들어 사용자에게 실행 줄을 건넨다. Run을 만들고 `orch init`으로 등록한다.
   2. **검증 준비와 Pilot:** verify 스킬이 없으면 Pilot 전에 `create-verification-skill`을 돌리거나 워커 하나에 맡기고, 그 스킬이 들어오기 전까지는 손으로 검증하며 워커 하나로 끝까지 한 번 돌려 본다.
   3. **Scale:** 상시 역할(프로그램마다 main 가디언과 QA 리드, 머신에 하나씩 flow improver와 resource steward)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
   4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다. 제품이 아니라 일하는 방식이 틀어졌으면(사람의 교정, 브리프가 답했어야 할 질문, 과정 탓의 정체, 스킬·스크립트 결함) `orch record <slug> signal`로 한 줄만 남기고 분석은 Close로 미룬다.
@@ -159,7 +160,7 @@
 - **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
 - **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
 - **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
-- **관계:** 도구 패턴 권한(`permissions.allow`, hooks)은 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다.
+- **관계:** 도구 패턴 권한(`permissions.allow`, hooks)은 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
 
 ## 어댑터
 

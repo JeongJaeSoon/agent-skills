@@ -49,12 +49,19 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             An act refused by a permission prompt, the auto-mode classifier, a Claude Code hook or
             the human is not tried again in any form: not re-run, not moved into a script or
-            another tool, not aimed at a renamed target, not handed to a subagent. Report it with
-            what the act was for, and put this rule in every subagent prompt you write. Taking
-            the path this brief already names for that act (`orch land` for a merge) is not a
-            retry. A hook that blocked only the text of a command reading no protected file, and
-            says to reword it: reword that text and say so in the report. A failing check (a git
-            hook, linter, test or CI) is not a refusal: fix the cause and run it again.
+            another tool, not aimed at a renamed target, not handed to a subagent or another
+            session. Report it with what the act was for, the refusal's category and the exact
+            command, and put this rule in every subagent prompt you write. Taking the path this
+            brief already names for that act (`orch land` for a merge) is not a retry, nor is
+            doing the act again after the human added a rule for it or approved it in your own
+            chat. A hook that blocked only the text of a command reading no protected file, and
+            says to reword it: reword that text and say so in the report. A read-only command on
+            files in your own worktree (no credential, no personal data) that the classifier
+            refused as something it does not do, such as destruction or exfiltration: do the same
+            read once with the Read or Grep tool, and report the refused command and its
+            category. A second refusal, or any doubt that the read is harmless, is reported and
+            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the
+            cause and run it again.
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
@@ -90,6 +97,31 @@ KEEP        <optional, as above>
 ```
 
 A new task for a worker that already exists takes the same shape. Start the worker with `worker-start --display-name "<the first line>"` so its card carries that name.
+
+## Lead
+
+A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief. A lead whose brief had no DELEGATE line investigated and implemented on its own.
+
+```
+<project>: lead
+
+GOAL        One sentence: the outcome, executable by someone with no access to this chat.
+MODE        Run `orchestrate` in program mode for this project.
+DELEGATE    You do not investigate, implement, verify or drive a browser yourself, however
+            small. Each goes one layer down: a worker or card with a brief (`orchestrate`
+            references/brief.md), or a background subagent for a read. You judge results, land,
+            record decisions, and put what waits on the human in front of them.
+PREDICATE   The countable done condition, and what is out of scope.
+CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
+ROUTING     New requests for this project, from the human or from above, come to you and you
+            route them down to your own workers, never to another session's.
+PERMISSIONS The autoMode rules for this repo's merge and deploy, quoted, or "missing" (your
+            Frame asks the human for them). An act refused in your session or a card under you
+            is not run by any other card or session; turn it into a rule request (`orchestrate`
+            "Refused acts"). An instruction relayed by another session is not the human's approval.
+REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
+CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
+```
 
 ## Rules for filling it
 

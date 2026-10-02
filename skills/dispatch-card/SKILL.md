@@ -76,6 +76,9 @@ plus a three-line summary. The brief has:
   스스로 닫는다". Without it the card idles after its last report and nobody closes it: a card
   whose PR merged stayed open 38 hours. `KEEP` instead only when this session will reuse the card.
 
+A card that will run a project for this session through cards of its own (a lead) gets
+`orchestrate` `references/brief.md` "Lead" instead of the list above.
+
 Exceptions. A task that fits in three or four lines goes inline in `--prompt`, no note; the
 `CLOSE` line still goes in. Product
 backlog goes through `write-ticket` first and the prompt becomes `/goal <TICKET>`.
