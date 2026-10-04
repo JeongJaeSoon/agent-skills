@@ -63,13 +63,28 @@ the list before assuming it is.
 
 This is the whole point of the skill. The new session knows nothing about repo A — not what
 you did there, not why this task exists, not where the outputs are. Default: one note in the
-notes store (`use-notes`; its rules file says where it goes), and a `--prompt` of the note path
-plus a three-line summary. The brief has:
+notes store (`use-notes`; its rules file says where it goes), and a `--prompt` of
+`/goal <the goal and its done, one sentence>. 브리프: <note path>` plus a three-line summary.
+The `/goal` keeps the card working until the goal holds, and the first prompt is the only place
+an approval reaches it: the card's auto-mode classifier treats a later message from another
+session as not the human's, so a "사용자 승인" sent afterwards was refused for a rename, a
+workflow dispatch and a merge, while cards that started with `/goal` and these lines ran to the
+end. The brief has:
 
 - **Background** — what happened in repo A and why this work follows from it.
 - **Sources** — links, not summaries: repo, PR, commit, note paths the target session reads itself.
 - **Deliverable and done** — the exact output and what makes it complete.
 - **Do not** — repo A is off limits; anything else the target must leave alone.
+- **Approved** — the acts the human already approved for this work, each with their words and
+  the date (merge, deploy, restarting an app, a settings or language change, an upgrade). The
+  card decides inside them with the recommended default and reports what it chose; it does not
+  ask.
+- **Human only** — what stays the human's: permission dialogs, logins, payments, document
+  submissions, and any irreversible or outward act not under Approved. The card puts these to
+  the human in one batched message and keeps doing the rest.
+- **Model calls** — one line: "다른 모델 호출(서브에이전트, Codex, API)은 필요할 때만, 호출 전에
+  무엇을 왜 부르는지 보고하고, 모델은 그때 고른다". Never name a model in the brief: a brief that
+  said to use a small model for cheap checks had the card calling it over and over for nothing.
 - **Target repo rules** — one line: "그 repo의 CLAUDE.md와 스킬을 확인하고 적용하라". Never paste
   its CLAUDE.md or skills into the brief; that session reads them itself.
 - **Close** — one line: "`CLOSE`: 완료 기준을 채우고 결과를 적으면 `end-session` §8대로 같은 턴에
@@ -79,11 +94,13 @@ plus a three-line summary. The brief has:
 A card that will run a project for this session through cards of its own (a lead) gets
 `orchestrate` `references/brief.md` "Lead" instead of the list above.
 
-Exceptions. A task that fits in three or four lines goes inline in `--prompt`, no note; the
-`CLOSE` line still goes in. Product
-backlog goes through `write-ticket` first and the prompt becomes `/goal <TICKET>`.
+Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no
+note; the Approved and `CLOSE` lines still go in. Product backlog goes through `write-ticket`
+first and the prompt becomes `/goal <TICKET>`, with the Approved line after the ticket ID.
 Feedback the user gives on work a card is already doing is a new ticket and a new card, never
-an addition to the running card's brief.
+an addition to the running card's brief. So is a wider approval: when a card stops on an act
+its first prompt did not approve, start a new `/goal` card whose Approved line carries it; do
+not send the approval by message, and do not do the act yourself.
 
 ## 3. Create the card
 
@@ -96,7 +113,7 @@ orca worktree create \
   --name "<target>-<topic>" \
   --parent-worktree active \
   --agent claude \
-  --prompt "<note path> + 3-line summary, or the inline brief>" \
+  --prompt "/goal <goal>. 브리프: <note path> + 3-line summary, or /goal + the inline brief" \
   --comment "<note path>" \
   --json
 # name the card by what it does, not Orca's automatic title (the tab title is the agent's; a rename does not stick)

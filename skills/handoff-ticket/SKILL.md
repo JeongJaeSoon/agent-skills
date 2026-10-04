@@ -113,6 +113,10 @@ skills-sync close-setup "<result.worktree.path>"
 - Do not use `orca terminal create`: that adds a tab to this worktree instead of a new card.
 - `--prompt` is the whole context the new session gets. It knows nothing from here, so put
   anything non-derivable from the ticket (decisions, base branch, gotchas) after the ticket id.
+  When the user approved acts beyond the ticket's normal flow (a deploy, a restart, a settings
+  change), put them there too, with the Human only and Model calls lines (`dispatch-card` §2).
+  The first prompt is the only place an approval reaches the card; one sent later by message is
+  refused as not the human's.
 
 ## 4. Verify it started
 

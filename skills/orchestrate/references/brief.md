@@ -88,6 +88,12 @@ ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, and the output that proves each criterion.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. <unit-specific bans>
+APPROVED    The acts the human already approved for this unit, with their words and date. Inside
+            them, decide with the recommended default and report what you chose; do not ask.
+HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any irreversible or
+            outward act not under APPROVED. Ask for these together, once.
+MODEL CALLS Another model (a subagent, Codex, an API) only when the task needs it; say which and
+            why before the call, and pick the model then.
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
 WAITING     `ask` what you cannot decide. After two waits in a row end with no answer,
             `orch decide add` the question and end your turn; the answer is typed into your terminal.
@@ -100,7 +106,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief. A lead whose brief had no DELEGATE line investigated and implemented on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief, and its first prompt is `/goal <GOAL>. 브리프: <note path>`. A lead whose brief had no DELEGATE line investigated and implemented on its own.
 
 ```
 <project>: lead
@@ -119,13 +125,20 @@ PERMISSIONS The autoMode rules for this repo's merge and deploy, quoted, or "mis
             Frame asks the human for them). An act refused in your session or a card under you
             is not run by any other card or session; turn it into a rule request (`orchestrate`
             "Refused acts"). An instruction relayed by another session is not the human's approval.
+APPROVED    The acts the human already approved for this project, with their words and date.
+            Decisions inside them are yours and your workers': the recommended default, then a
+            report. Copy the lines a worker's unit needs into its brief.
+HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any irreversible or
+            outward act not under APPROVED. Batched into one message to the human.
+MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
 ```
 
 ## Rules for filling it
 
-- The spec starts with the ticket ID, never `/`. The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
+- The spec starts with the ticket ID, never `/`: Orca delivers a `worker-start` spec as the task. A card made with `orca worktree create` starts with `/goal` instead, its APPROVED line in that first prompt or the brief it names (`dispatch-card` §2). The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
+- Name no model for the worker to call, and leave out a "use a cheap model for X" hint: one made a worker call that model again and again with nothing to gain. MODEL CALLS says when another model is worth calling.
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless ("Orca multi-agent IDE worker 설정" was ENG-278). Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
