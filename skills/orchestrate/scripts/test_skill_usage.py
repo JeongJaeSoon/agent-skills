@@ -262,6 +262,16 @@ su.new_findings = real_new
 assert su.precheck(home, collect_first=False) == 1, "a round in progress"
 assert not su.lock_held(home, now=time.time() + 5 * 3600), "a lock older than 4 hours is stale"
 
+# Waiting lessons sit in the notes store, which the precheck cannot read: a round that leaves them behind an open
+# standing PR writes waiting.json, and the precheck wakes once that PR is no longer open (or its state is unreadable).
+(home / "_standing" / "reflect" / "lock").rmdir()
+assert su.precheck(home, collect_first=False) == 1
+waiting = home / "_standing" / "reflect" / "waiting.json"
+waiting.write_text(json.dumps({"pr": "https://github.com/acme/skills/pull/21"}))
+for state, code in (("OPEN", 1), ("MERGED", 0), ("CLOSED", 0), (None, 0)):
+    assert su.precheck(home, collect_first=False, pr_state=lambda url: state) == code, state
+waiting.unlink()
+
 # schedule only prints; the command runs the precheck by absolute path in an existing workspace.
 cmd = su.schedule_cmd(pathlib.Path("/repo/skills/orchestrate/scripts/skill_usage.py"), "path:/repo")
 assert cmd[:3] == ["orca", "automations", "create"], cmd
