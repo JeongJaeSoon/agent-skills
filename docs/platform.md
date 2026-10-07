@@ -20,11 +20,11 @@
 | `~/.claude/settings.json` `enabledPlugins` | `agent-skills@*` 없음 |
 | `~/.claude/settings.json` `env.CLAUDE_CODE_PLUGIN_DIRS` | 없음 |
 | `~/.claude/skills/` | `slack-post`, `wrap-up`, `synced/`, `.trash/`만 있음. 옛 `install.py` symlink 없음 |
-| 로컬 체크아웃 | `~/conductor/repos/agent-skills` (main @ fe3b173, origin = GitHub HTTPS) |
+| 로컬 체크아웃 | 예시 경로 `~/src/agent-skills` (main @ fe3b173, origin = GitHub HTTPS) |
 
 즉 이 PC에는 원격이든 로컬이든 agent-skills가 등록되어 있지 않았다. 되돌리기는 §7에 적는다.
 
-같은 날 사용자 요청으로 코디네이터가 먼저 로컬 마켓플레이스를 등록했다: `claude plugin marketplace add ~/conductor/repos/agent-skills`, `claude plugin install agent-skills@jeongjaesoon`(scope user). `installPath`는 `~/.claude/plugins/cache/jeongjaesoon/agent-skills/11a51e63a89c`로, §1의 실측과 같이 커밋 단위 복사본이다. 되돌리기: `claude plugin uninstall agent-skills@jeongjaesoon && claude plugin marketplace remove jeongjaesoon`.
+같은 날 사용자 요청으로 코디네이터가 먼저 로컬 마켓플레이스를 등록했다: `claude plugin marketplace add <체크아웃>`, `claude plugin install agent-skills@jeongjaesoon`(scope user). `installPath`는 `~/.claude/plugins/cache/jeongjaesoon/agent-skills/11a51e63a89c`로, §1의 실측과 같이 커밋 단위 복사본이다. 되돌리기: `claude plugin uninstall agent-skills@jeongjaesoon && claude plugin marketplace remove jeongjaesoon`.
 
 ## 1. 로컬 등록: 마켓플레이스가 아니라 `CLAUDE_CODE_PLUGIN_DIRS`
 
@@ -71,7 +71,7 @@ $ CLAUDE_CONFIG_DIR=/tmp/cc-sbx claude plugin list      # settings.json 에 env 
 
 ### 결정
 
-- `~/.claude/settings.json`의 `env`에 `CLAUDE_CODE_PLUGIN_DIRS=<체크아웃 절대 경로>`를 넣는다. 이 PC의 체크아웃은 `~/conductor/repos/agent-skills`다.
+- `~/.claude/settings.json`의 `env`에 `CLAUDE_CODE_PLUGIN_DIRS=<체크아웃 절대 경로>`를 넣는다. 체크아웃 위치는 PC마다 달라도 된다.
 - 마켓플레이스 설치는 끈다. 이 PC에는 코디네이터가 설치해 두었으므로, 부트스트랩이 `enabledPlugins`의 `agent-skills@jeongjaesoon`을 false로 둔다(두 번 로드 방지). 마켓플레이스 등록 자체는 남겨 두어도 해가 없다. `marketplace.json`은 남긴다. 이 저장소를 고치지 않고 쓰기만 하는 사람의 설치 경로이기 때문이다.
 - 이것은 settings 변경이다. 권한 설정(`permissions`)은 건드리지 않는다. 바꾸기 전 파일은 `settings.json.bak-<시각>`으로 백업한다.
 - 플러그인 이름은 `agent-skills@inline`이 된다. 스킬 이름(`agent-skills:<이름>`)과 `${CLAUDE_PLUGIN_ROOT}`는 같다. 저장소 안에 `@jeongjaesoon`을 전제한 코드는 없다(`grep`으로 확인, README와 `migrate.py`의 설치 안내만 있음).
@@ -205,10 +205,12 @@ README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 �
 ## 5. 다른 PC 부트스트랩
 
 ```bash
-git clone https://github.com/JeongJaeSoon/agent-skills ~/conductor/repos/agent-skills
-python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py           # 바뀔 내용만 보여 준다
-python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py --write   # 적용
+git clone https://github.com/JeongJaeSoon/agent-skills <체크아웃>   # 경로는 어디든 된다(예시: ~/src/agent-skills)
+python3 <체크아웃>/scripts/bootstrap.py           # 바뀔 내용만 보여 준다
+python3 <체크아웃>/scripts/bootstrap.py --write   # 적용
 ```
+
+`bootstrap.py`는 자기 파일 위치(`scripts/`의 부모)를 체크아웃으로 쓰므로 경로를 인자로 받지 않는다.
 
 `bootstrap.py`는 `migrate.py`처럼 기본이 dry run이다. `--write`일 때 하는 일:
 

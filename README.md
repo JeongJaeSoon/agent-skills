@@ -10,16 +10,16 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 
 선택 도구: 교차 검토는 [Codex 플러그인](https://github.com/openai/codex-plugin-cc)의 companion 스크립트, 브라우저 검증은 브라우저 자동화 도구를 쓴다. 없으면 그 단계만 다른 도구로 바꾼다.
 
-작업 방식은 pstack이 기준이다. superpowers 플러그인과 함께 쓰면 두 흐름이 겹치므로 끄고 쓴다(`enabledPlugins`에서 `superpowers@claude-plugins-official: false`).
-
 ## 설치
 
 이 저장소를 고쳐 가며 쓰는 PC는 체크아웃을 Claude Code가 직접 읽게 한다. 스킬을 고치면 떠 있는 세션에도 reload 한 번으로 반영되고, 원격 변경은 15분마다 자동으로 받는다. 설계와 실측 근거는 [docs/platform.md](docs/platform.md).
 
+체크아웃은 어느 경로에 두어도 된다. `bootstrap.py`는 자기 파일 위치로 체크아웃 경로를 정한다. 아래 `<체크아웃>`은 clone한 경로로 바꾼다(예시: `~/src/agent-skills`).
+
 ```bash
-git clone https://github.com/JeongJaeSoon/agent-skills ~/conductor/repos/agent-skills
-python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py           # 바뀔 내용 보기
-python3 ~/conductor/repos/agent-skills/scripts/bootstrap.py --write   # 적용
+git clone https://github.com/JeongJaeSoon/agent-skills <체크아웃>
+python3 <체크아웃>/scripts/bootstrap.py           # 바뀔 내용 보기
+python3 <체크아웃>/scripts/bootstrap.py --write   # 적용
 ```
 
 `bootstrap.py --write`가 하는 일:
@@ -52,7 +52,7 @@ claude plugin install agent-skills@jeongjaesoon
 bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행해줘" 3 [복사할 저장소]
 ```
 
-설정 파일(`~/.claude/agent-skills.json`)로 트래커와 노트 저장소를 고른다. 형식은 `use-tracker`, `use-notes` 스킬에 있다.
+트래커와 노트 저장소는 설정 없이도 동작한다. 설정 파일이 없으면 트래커는 Linear, 노트는 Obsidian vault `Private`이고, 둘 다 연결된 MCP 도구로 읽고 쓴다. Jira나 일반 Markdown 폴더, 다른 vault를 쓸 때만 `~/.claude/agent-skills.json`을 둔다(선택). 형식은 `use-tracker`, `use-notes` 스킬에 있다.
 
 `recall`이 지난 세션을 빨리 찾게 하려면 Orca 앱에서 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터(Local Mac) 스위치를 켠다. CLI로는 켤 수 없고, 켜기 전에는 `recall`이 `~/.claude/projects`의 transcript를 grep한다. 켜졌는지는 `orca search --index-status`의 `enabled`로 확인한다.
 
