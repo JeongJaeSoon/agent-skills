@@ -470,7 +470,10 @@ def lock_held(home, now=None):
 
 
 def gh_pr_state(url):
-    out = subprocess.run(["gh", "pr", "view", url, "--json", "state", "--jq", ".state"], capture_output=True, text=True)
+    try:
+        out = subprocess.run(["gh", "pr", "view", url, "--json", "state", "--jq", ".state"], capture_output=True, text=True)
+    except OSError:
+        return None
     return out.stdout.strip() if out.returncode == 0 else None
 
 

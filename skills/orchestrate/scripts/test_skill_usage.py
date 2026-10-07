@@ -270,6 +270,13 @@ waiting = home / "_standing" / "reflect" / "waiting.json"
 waiting.write_text(json.dumps({"pr": "https://github.com/acme/skills/pull/21"}))
 for state, code in (("OPEN", 1), ("MERGED", 0), ("CLOSED", 0), (None, 0)):
     assert su.precheck(home, collect_first=False, pr_state=lambda url: state) == code, state
+path = os.environ["PATH"]
+os.environ["PATH"] = ""  # gh missing from the automation's PATH reads as unreadable, not a crash
+try:
+    assert su.gh_pr_state("https://github.com/acme/skills/pull/21") is None
+    assert su.precheck(home, collect_first=False) == 0
+finally:
+    os.environ["PATH"] = path
 waiting.unlink()
 
 # schedule only prints; the command runs the precheck by absolute path in an existing workspace.
