@@ -52,7 +52,7 @@ claude plugin install agent-skills@jeongjaesoon
 bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행해줘" 3 [복사할 저장소]
 ```
 
-트래커와 노트 저장소는 설정 없이도 동작한다. 설정 파일이 없으면 트래커는 Linear, 노트는 Obsidian vault `Private`이고, 둘 다 연결된 MCP 도구로 읽고 쓴다. Jira나 일반 Markdown 폴더, 다른 vault를 쓸 때만 `~/.claude/agent-skills.json`을 둔다(선택). 형식은 `use-tracker`, `use-notes` 스킬에 있다.
+트래커와 노트 저장소는 설정 없이도 동작한다. 설정 파일이 없으면 트래커는 Linear, 노트는 Obsidian vault `Private`이고, 노트는 연결된 Obsidian MCP 도구로, 트래커는 연결된 Linear MCP 도구(없으면 `orca linear` CLI)로 읽고 쓴다. Jira나 일반 Markdown 폴더, 다른 vault를 쓸 때만 `~/.claude/agent-skills.json`을 둔다(선택). 형식은 `use-tracker`, `use-notes` 스킬에 있다.
 
 `recall`이 지난 세션을 빨리 찾게 하려면 Orca 앱에서 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터(Local Mac) 스위치를 켠다. CLI로는 켤 수 없고, 켜기 전에는 `recall`이 `~/.claude/projects`의 transcript를 grep한다. 켜졌는지는 `orca search --index-status`의 `enabled`로 확인한다.
 
