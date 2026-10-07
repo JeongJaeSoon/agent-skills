@@ -41,6 +41,15 @@ const ITEM = {
   selfcheck: ["Dashboard self-check", "bad", "alert"],
 };
 const itemMeta = (t) => ITEM[t] || [t, "", "dot"];
+// What a session's kind reads as on screen -> [label, tone, icon]. kind itself stays as fleet.py wrote it (sort, adopt).
+// A lead is a coordinator with a Run of its own under the root; a standalone it made with `orca worktree create` is its worker.
+function kindLabel(st, s) {
+  if (s.kind === "orchestrator") return ["orchestrator", "accent", ""];
+  if (s.kind === "orchestration") return ["lead", "accent", "workers"];
+  if (s.kind === "task" || (byId(st)[s.parent] || {}).kind === "orchestration") return ["worker", "", ""];
+  return [s.kind, "", ""];
+}
+const kindTag = (st, s) => tag(...kindLabel(st, s));
 
 // phase -> what its dot means; the colour is .ph-<phase> in style.css, the same on every screen.
 const PHASE = { working: "working", waiting: "waiting on you", idle: "idle, turn ended", open: "open, no agent", offline: "offline" };
@@ -109,10 +118,10 @@ function fleetSidebar() {
   group.hidden = !st;
   if (!st) return;
   const live = sessionTree(st).filter(([s]) => s.phase !== "offline" || s.unread || s.kind === "orchestrator");
-  const kids = (s) => s.kind === "orchestration" ? (st.sessions || []).filter((x) => x.parent === s.id).length : 0;
-  $("#session-list").innerHTML = live.map(([s, d]) => `<li><a class="nav-item tree" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
-      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(s.kind)} · ${esc(s.phase)}">${phaseDot(s)}
-      <span class="sb-text">${esc(s.name)}</span>${kids(s) ? `<span class="count" title="sessions under this orchestration">${kids(s)}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
+  const kids = (s) => (st.sessions || []).filter((x) => x.parent === s.id).length;
+  $("#session-list").innerHTML = live.map(([s, d]) => `<li><a class="nav-item tree ${s.kind === "orchestration" ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
+      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(kindLabel(st, s)[0])} · ${esc(s.phase)}">${phaseDot(s)}
+      <span class="sb-text">${esc(s.name)}</span>${s.kind === "orchestration" ? `<span class="tag tone-accent" title="lead · ${kids(s)} session${kids(s) === 1 ? "" : "s"} under it">lead${kids(s) ? ` ${kids(s)}` : ""}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
 }
 
 function fleetHeader() {
@@ -317,9 +326,24 @@ function fleetOverview(st) {
     <div class="grid">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items, { limit: 8 })}</div>
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
+      ${leadCard(st)}
       <div class="card wide" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside">${prUpdated(st)}<a class="go" href="#/fleet/prs">All ${open.length} ${icon("arrow")}</a></span></div>${prRows(st, open.slice(0, 8))}</div>
       <div class="card wide"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>
     </div>`;
+}
+
+// One row per lead: its sessions, how many of them work, and the open PRs of the lead and those sessions.
+function leadCard(st) {
+  const ss = st.sessions || [], leads = ss.filter((s) => s.kind === "orchestration" && inProject(s.project));
+  if (!leads.length) return "";
+  const rows = leads.map((l) => {
+    const kids = ss.filter((x) => x.parent === l.id), mine = new Set([l.id, ...kids.map((x) => x.id)]);
+    const prs = (st.prs || []).filter((p) => p.state === "OPEN" && mine.has(p.session)).length;
+    const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
+    return `<li>${phaseDot(l)}${projBadge(l.project)}<a class="grow ellipsis" href="${sessionHref(l.id)}"><b>${esc(l.name)}</b></a>
+      <span class="acts muted">${n(kids.length, "session")} · ${kids.filter((x) => x.phase === "working").length} working · ${n(prs, "open PR")}</span></li>`;
+  }).join("");
+  return `<div class="card wide" data-src="orca"><div class="card-head"><h3>Leads</h3><span class="aside">${leads.length}</span></div><ul class="rows">${rows}</ul></div>`;
 }
 
 function sessionRows(st, list) {
@@ -495,11 +519,11 @@ function fleetSessions(st) {
   const rows = sessionTree(st).filter(([s]) => inProject(s.project)).map(([s, d]) => {
     const pr = (st.prs || []).find((p) => p.session === s.id);
     return `<tr><td><a class="tree-cell" style="--d:${Math.min(d, 4)}" href="${sessionHref(s.id)}">${phaseDot(s)}<b>${esc(s.name)}</b></a></td>
-      <td>${tag(s.kind, s.kind === "orchestrator" ? "accent" : "", "")}</td><td>${esc(s.phase)}</td>
+      <td>${kindTag(st, s)}</td><td>${esc(s.phase)}</td>
       <td class="hide-md">${projBadge(s.project)}<span class="mono dim">${s.branch ? esc(s.branch) : ""}</span></td>
       <td>${pr ? link(pr.url, `#${esc(pr.number)}`) : ""}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
   }).join("");
-  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the coordinator whose run dispatched it, else under its Orca parent, else under the root.</p></div>${phaseLegend()}</div>
+  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the coordinator whose run dispatched it, else under its Orca parent, else under the root. A lead is a coordinator with its own run; the sessions under it are its workers.</p></div>${phaseLegend()}</div>
     ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
@@ -515,7 +539,7 @@ function fleetSession(st) {
   const items = (st.items || []).filter((i) => i.session === s.id);
   const tl = (st.timeline || []).filter((e) => e.session === s.id).slice(0, 30);
   return `<div class="view-head"><div><h2>${phaseDot(s)} ${esc(s.name)}</h2>
-      <p>${tag(s.kind, "", "")} ${esc(s.phase)}${parent ? ` · under <a class="link" href="${sessionHref(parent.id)}">${esc(parent.name)}</a>` : ""}
+      <p>${kindTag(st, s)} ${esc(s.phase)}${parent ? ` · under <a class="link" href="${sessionHref(parent.id)}">${esc(parent.name)}</a>` : ""}
       ${s.task_title ? ` · task: ${esc(s.task_title)}` : ""} · ${projBadge(s.project)}<span class="mono">${s.branch ? esc(s.branch) : ""}</span></p></div></div>
     ${chatCard(s)}
     <div class="grid">

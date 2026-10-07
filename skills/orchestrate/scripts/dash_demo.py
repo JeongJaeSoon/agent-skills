@@ -448,21 +448,35 @@ class FakeFleetWorld:
             wt("wt-scratch", "scratch", "acme/tools", "scratch", 1.5,
                [agent("p-scratch", "done", 1.5, prompt="Check the release script.",
                       lastAssistantMessage="The release script needs GitHub access.\nLogin required: run `gh auth login` in a terminal, then tell me.")]),
+            # A lead: a coordinator the root dispatched, with a Run of its own. One worker came through that Run,
+            # one the lead made with `orca worktree create` (only Orca's parent ties it to the lead).
+            wt("wt-lead", "billing lead", "acme/platform", "lead/billing", 0.15,
+               [agent("p-lead", "working", 0.2, toolName="Bash", toolInput="orca orchestration check --wait", prompt="Drive the billing tickets.")]),
+            wt("wt-invoice", "ACME-104 invoice PDF", "acme/launchpad", "feat/invoice", 0.1,
+               [agent("p-invoice", "working", 0.1, toolName="Edit", toolInput="src/invoice.ts", prompt="Implement ACME-104.")]),
+            wt("wt-tax", "ACME-105 tax rates", "acme/launchpad", "feat/tax", 0.8,
+               [agent("p-tax", "done", 0.8, prompt="Implement ACME-105.", lastAssistantMessage="Tax table updated.")], parentWorktreeId="wt-lead"),
             wt("wt-old", "old-spike", "acme/tools", "spike/cache", 30),
         ]
         term = lambda h, wid, title, agent=True: {"handle": h, "worktreeId": wid, "title": title, "agentIdentity": "claude" if agent else None,
                                                   "writable": True, "connected": True, "lastOutputAt": ms(0.1)}
         self.terminals = [term("term_coord", "wt-coord", "◐ coordinator"), term("term_login", "wt-login", "✳ ACME-101"),
                           term("term_export", "wt-export", "◑ ACME-102"), term("term_docs", "wt-docs", "✳ ACME-103"),
-                          term("term_scratch", "wt-scratch", "✳ scratch"), term("term_shell", "wt-scratch", "zsh", agent=False)]
+                          term("term_scratch", "wt-scratch", "✳ scratch"), term("term_shell", "wt-scratch", "zsh", agent=False),
+                          term("term_lead", "wt-lead", "◐ billing lead"), term("term_invoice", "wt-invoice", "◑ ACME-104"),
+                          term("term_tax", "wt-tax", "✳ ACME-105")]
         self.messages = [{"id": "m1", "type": "question", "from_handle": "term_export", "to_handle": "term_coord", "read": False,
                           "subject": "CSV or JSON for the export?", "body": "The ticket does not say which format finance needs.",
                           "created_at": _ago(now, 0.2)}]
-        self.runs = {"runs": [{"id": "run_demo", "coordinator_handle": "term_coord", "updated_at": _iso(now)}],
-                     "workers": [{"resource": {"worktreeId": w}, "runId": "run_demo", "dispatchId": f"ctx_{w[3:]}", "taskId": f"task_{w[3:]}",
-                                  "dispatchStatus": "pending", "agentTerminalHandle": f"term_{w[3:]}"} for w in ("wt-login", "wt-export", "wt-docs")],
+        self.runs = {"runs": [{"id": "run_demo", "coordinator_handle": "term_coord", "updated_at": _iso(now)},
+                              {"id": "run_lead", "coordinator_handle": "term_lead", "updated_at": _ago(now, 0.2)}],
+                     "workers": [{"resource": {"worktreeId": w}, "runId": run, "dispatchId": f"ctx_{w[3:]}", "taskId": f"task_{w[3:]}",
+                                  "dispatchStatus": "pending", "agentTerminalHandle": f"term_{w[3:]}"}
+                                 for w, run in (("wt-login", "run_demo"), ("wt-export", "run_demo"), ("wt-docs", "run_demo"),
+                                                ("wt-lead", "run_demo"), ("wt-invoice", "run_lead"))],
                      "tasks": [{"id": f"task_{w}", "display_name": t, "status": "dispatched"} for w, t in
-                               (("login", "ACME-101 login flow"), ("export", "ACME-102 billing export"), ("docs", "ACME-103 docs"))],
+                               (("login", "ACME-101 login flow"), ("export", "ACME-102 billing export"), ("docs", "ACME-103 docs"),
+                                ("lead", "Billing tickets"), ("invoice", "ACME-104 invoice PDF"))],
                      "gates": [{"id": "g1", "status": "pending", "question": "Land #41 before #42?", "options": ["yes", "no"], "task_id": "task_export",
                                 "created_at": _ago(now, 0.5)}]}
         user = lambda login: {"__typename": "User", "login": login, "avatarUrl": None}
