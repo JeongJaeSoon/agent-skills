@@ -121,7 +121,7 @@ function fleetSidebar() {
   const kids = (s) => (st.sessions || []).filter((x) => x.parent === s.id).length;
   $("#session-list").innerHTML = live.map(([s, d]) => `<li><a class="nav-item tree ${s.kind === "orchestration" ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
       ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(kindLabel(st, s)[0])} · ${esc(s.phase)}">${phaseDot(s)}
-      <span class="sb-text">${esc(s.name)}</span>${s.kind === "orchestration" ? `<span class="tag tone-accent" title="lead · ${kids(s)} sessions under it">lead${kids(s) ? ` ${kids(s)}` : ""}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
+      <span class="sb-text">${esc(s.name)}</span>${s.kind === "orchestration" ? `<span class="tag tone-accent" title="lead · ${kids(s)} session${kids(s) === 1 ? "" : "s"} under it">lead${kids(s) ? ` ${kids(s)}` : ""}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
 }
 
 function fleetHeader() {
