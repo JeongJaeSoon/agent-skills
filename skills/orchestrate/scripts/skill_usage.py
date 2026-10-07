@@ -469,7 +469,27 @@ def lock_held(home, now=None):
     return (now or time.time()) - started < LOCK_STALE_HOURS * 3600
 
 
-def precheck(home=None, collect_first=True):
+def gh_pr_state(url):
+    try:
+        out = subprocess.run(["gh", "pr", "view", url, "--json", "state", "--jq", ".state"], capture_output=True, text=True)
+    except OSError:
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def waiting_pr(home, pr_state=gh_pr_state):
+    """The standing PR a round left waiting lessons behind, once it is no longer open; None while it is or none waits."""
+    try:
+        url = json.loads((home / "_standing" / "reflect" / "waiting.json").read_text()).get("pr")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not url:
+        return None
+    state = pr_state(url)
+    return None if state == "OPEN" else (url, state or "unreadable")
+
+
+def precheck(home=None, collect_first=True, pr_state=gh_pr_state):
     """0 to wake the agent, 1 to skip this run. No model is called."""
     home = home or programs_home()
     if collect_first:
@@ -489,9 +509,12 @@ def precheck(home=None, collect_first=True):
         return 0
     for name, rows in new.items():
         print(f"new: {name} {len(rows)} ({', '.join(sorted({r['ev'] for r in rows}))})")
-    if not new:
+    waiting = waiting_pr(home, pr_state)
+    if waiting:
+        print(f"wake: waiting lessons, standing PR {waiting[0]} is {waiting[1].lower()}")
+    if not (new or waiting):
         print("skip: nothing new since the reflect cursor")
-    return 0 if new else 1
+    return 0 if new or waiting else 1
 
 
 def schedule_cmd(script, workspace, provider="claude"):
