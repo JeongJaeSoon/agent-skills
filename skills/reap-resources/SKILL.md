@@ -36,13 +36,15 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
 ## Janitor: what agents created (report-only)
 
 These kinds look only at what an agent registered in the ledger or an Orca orchestration worker
-made. A user's own worktree, the main checkout, and anything not registered never show up. `reap`
+made. A user's own worktree and the main checkout never show up; anything not registered shows up
+only as the unregistered-media lines of `evidence`, never as a target. `reap`
 never acts on them: it prints `보고만` and the plan's commands are for a later, approved step.
 
 ```bash
 python3 "$R" ledger add --kind tmpdir --path /tmp/build-x --pr acme/app#12     # right after creating it
 python3 "$R" ledger add --kind gui-app --pid 4242 --worktree <worktree path>   # pid + start time are recorded
 python3 "$R" ledger add --kind chrome-window --id <window or tab id> --pr acme/app#12
+python3 "$R" ledger add --kind evidence --path /tmp/task/shots --pr acme/app#12   # a screenshot or recording, once it is on the PR
 python3 "$R" ledger list
 python3 "$R" scan --kinds janitor          # report-only; a plain scan leaves the janitor kinds out
 ```
@@ -59,7 +61,13 @@ PR (`owner/repo#N`, read with `gh`) is merged or closed, or its worktree is gone
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then `rm -rf` |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
 | chrome-window | its link is done | an open PR, no link | the agent closes it with its browser tools; no script can |
+| evidence | a file or directory of screenshots and recordings whose PR has been merged or closed for N hours (`--hours`) | an open PR, no PR link (a worktree link does not prove it was uploaded), a PR state or close time that could not be read, a directory holding anything but images and videos | `rm -rf` |
 | remote-branch | interface only, never a target | always | - |
+
+`evidence` also reports images and videos (png, jpg, jpeg, gif, webp, mp4, mov, webm) older than N
+hours that nobody registered, one line per directory. It looks only directly in `/tmp` and
+`$TMPDIR` and one directory below them (`reap.evidence_roots` replaces that list), never deeper and
+never through a symlink. These lines are never targets, so they do not wake the precheck.
 
 ### Scheduled run
 
@@ -126,7 +134,7 @@ the exact `reap --plan` command to the user.
 not in this repo:
 
 ```json
-{"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"],
+{"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"],
           "alert": {"codex_procs": 300, "codex_rss_mb": 4096, "orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10}}}
 ```

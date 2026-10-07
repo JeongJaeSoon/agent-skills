@@ -295,6 +295,44 @@ with tempfile.TemporaryDirectory() as tmp:
     (pathlib.Path(tmp) / "b").mkdir()
     assert reap.apps_under(tmp) == [os.path.join(tmp, "a", "Foo.app")]
 
+# evidence: a local copy of a PR's screenshots or recordings goes once that PR has been merged or closed for N hours.
+NOW = reap.parse_ts("2026-10-08T12:00:00Z")
+EPRS = {"acme/app#1": {"state": "OPEN", "closedAt": None}, "acme/app#2": {"state": "MERGED", "closedAt": "2026-10-07T12:00:00Z"},
+        "acme/app#3": {"state": "CLOSED", "closedAt": "2026-10-08T10:00:00Z"}, "acme/app#4": {"state": "MERGED"}}
+entries = [e("evidence", "/t/old.gif", pr="acme/app#2"), e("evidence", "/t/open.png", pr="acme/app#1"),
+           e("evidence", "/t/recent.mov", pr="acme/app#3"), e("evidence", "/t/nopr.png", worktree="/wt/gone"),
+           e("evidence", "/t/unread.png", pr="acme/app#9"), e("evidence", "/t/noclose.png", pr="acme/app#4"),
+           e("evidence", "/t/mixed", pr="acme/app#2"), e("evidence", "/t/gone.png", pr="acme/app#2")]
+files = lambda p: ([p + "/a.png"], [p + "/notes.txt"]) if p == "/t/mixed" else ([p], [])
+got = {i["name"]: i for i in reap.judge_evidence(entries, EPRS.get, 6, NOW, lambda p: p != "/t/gone.png", files)}
+assert "/t/gone.png" not in got
+assert {k: v["target"] for k, v in got.items()} == {"/t/old.gif": True, "/t/open.png": False, "/t/recent.mov": False,
+                                                       "/t/nopr.png": False, "/t/unread.png": False,
+                                                       "/t/noclose.png": False, "/t/mixed": False}, got
+assert got["/t/old.gif"]["how"] == ["rm -rf /t/old.gif"] and "6시간 미만" in got["/t/recent.mov"]["why"]
+assert "읽지 못함" in got["/t/unread.png"]["why"] and "읽지 못함" in got["/t/noclose.png"]["why"]
+assert "PR 없음" in got["/t/nopr.png"]["why"], "a worktree link does not prove the evidence was uploaded"
+with tempfile.TemporaryDirectory() as tmp:
+    tmp, NOW = os.path.realpath(tmp), time.time()
+    for rel in ("a.png", "shots/b.gif", "shots/c.MP4", "shots/notes.txt", "shots/deep/d.png", "fresh/e.png", "led/f.webm"):
+        f = pathlib.Path(tmp, rel)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x" * 10)
+        if not rel.startswith("fresh/"):
+            os.utime(f, (NOW - 7 * H, NOW - 7 * H))
+    os.symlink(tmp + "/shots", tmp + "/link")
+    media, other = reap.media_files(tmp + "/shots")
+    assert sorted(map(os.path.basename, media)) == ["b.gif", "c.MP4", "d.png"] and len(other) == 1
+    got = {i["name"]: i for i in reap.stray_evidence([tmp], {tmp + "/led"}, 6, NOW)}
+    # Directly in a root or one level below, old enough, not registered, never through a symlink; deeper is left alone.
+    assert set(got) == {tmp, tmp + "/shots"}, got
+    assert "2개" in got[tmp + "/shots"]["why"] and not any(i["target"] or i["how"] for i in got.values())
+    assert all(pathlib.Path(tmp, r).exists() for r in ("a.png", "shots/b.gif", "led/f.webm"))
+    got = reap.janitor_scan({"evidence"}, [], [e("evidence", tmp + "/shots", pr="acme/app#1"), e("tmpdir", tmp + "/led")], [], EPRS.get,
+                            hours=6, now=NOW, evidence_roots=[tmp])
+    assert [(i["name"], i["target"]) for i in got] == [(tmp + "/shots", False), (tmp, False)], got
+    assert got[1]["key"] == f"evidence-stray:{tmp}"
+
 # gui-app: the registered pid with the same start time only.
 rows = {40: row(40, "/Applications/Sim.app/Contents/MacOS/Sim"), 41: row(41, "/x/other")}
 entries = [e("gui-app", "40@" + rows[40]["start"], pr="acme/app#2"), e("gui-app", "41@Thu Jan  1 00:00:00 1970", pr="acme/app#2"),
@@ -390,6 +428,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert (first.returncode, second.returncode) == (0, 1), (first.stdout, second.stdout)
     out = cli("reap", "--plan", str(tmp / "state" / "janitor-plan.json")).stdout
     assert "보고만 tmpdir" in out and d.exists(), out
+    shot = tmp / "shot.png"
+    shot.write_bytes(b"x")
+    assert cli("ledger", "add", "--kind", "evidence", "--path", str(shot), "--pr", "acme/app#1").returncode == 0
+    plan = json.loads((tmp / "state" / "janitor-plan.json").read_text())
+    plan["items"] = [{"kind": "evidence", "key": f"evidence:{shot}", "name": str(shot), "target": True, "how": []}]
+    (tmp / "plan.json").write_text(json.dumps(plan))
+    out = cli("reap", "--plan", str(tmp / "plan.json")).stdout
+    assert "보고만 evidence" in out and shot.exists(), out
     out = cli("schedule", "--workspace", "path:/repo")
     assert out.returncode == 0 and out.stdout.startswith("orca automations create") and "--write" in out.stdout, out
 
