@@ -2,12 +2,19 @@
 """Skill usage from local Claude Code transcripts: counts, how each skill was triggered, and heuristic misses.
 
 Usage: skill_usage.py [--out PATH] [--signals PATH | --no-signals] [--misses N]
+       skill_usage.py precheck
+       skill_usage.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 Writes an aggregate report (default <fleet state>/skills.json) and appends one `signal` row per flagged skill
 per ISO week to the signals ledger (default $PROGRAMS_HOME/_skill-usage/ledger.jsonl) for the improvement loop.
 Aggregates only: no prompt or message text leaves the transcripts, and working directories are kept as hashes.
+
+precheck collects, then exits 0 only when a ledger under $PROGRAMS_HOME has a row reflect's standing mode would read
+as new (after its cursor) and no standing round holds the lock; otherwise 1. It is the Orca automation's precheck, so
+the agent wakes only when there is something to reflect on. schedule prints the `orca automations create` command;
+only --write runs it.
 """
-import datetime as dt, hashlib, json, os, pathlib, re, sys, time
+import datetime as dt, hashlib, json, os, pathlib, re, shlex, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO_PLUGIN = "agent-skills"
@@ -17,8 +24,16 @@ MISS_THRESHOLD = 3
 SCAN_VERSION = 3  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
-SUGGEST = {"unused_30d": ["rewrite-description", "merge", "retire"], "slash_only": ["rewrite-description"],
-           "misses": ["rewrite-description"]}
+# Only these flags become signals. unused_30d alone stays on the dashboard: zero uses in one window is not a reason
+# to touch a skill (retire_candidate is).
+SUGGEST = {"slash_only": ["rewrite-description"], "misses": ["rewrite-description"],
+           "retire_candidate": ["merge", "retire"]}
+RETIRE_WINDOWS = 3  # long windows a skill must stay unused, counted from its last use or from when it was first seen
+# Skills whose normal rate is a few uses a quarter: program Close, setup and onboarding, incident response.
+RARE = {"agent-skills:measure-delivery", "agent-skills:create-verification-skill", "agent-skills:tune-automode"}
+RARE_CONFIG = "~/.config/agent-skills/skill-usage.json"  # {"rare": ["<skill>", ...]} for the user's own skills
+FINDINGS = ("signal", "land_failed", "main_red")  # plus a verdict whose result is not pass
+LOCK_STALE_HOURS = 4
 
 
 def iso(t):
@@ -27,17 +42,22 @@ def iso(t):
 
 def parse_ts(s):
     try:
-        return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        t = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (AttributeError, ValueError):
         return None
+    return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)  # a hand-written cursor may carry no offset
 
 
 def state_dir():
     return pathlib.Path(os.environ.get("ORCH_FLEET_STATE", "~/.local/state/agent-skills/dashboard")).expanduser()
 
 
+def programs_home():
+    return pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
+
+
 def signals_path():
-    return pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser() / "_skill-usage" / "ledger.jsonl"
+    return programs_home() / "_skill-usage" / "ledger.jsonl"
 
 
 def frontmatter(path):
@@ -230,6 +250,8 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
     except (OSError, ValueError):
         cache = {}
     old = cache.get("files", {}) if cache.get("inv") == inv_hash else {}
+    # Claude Code deletes old transcripts, so the last use ever seen and when each skill first appeared outlive them here.
+    seen = cache.get("seen", {})
     files, parsed = {}, 0
     for p in transcripts(projects_dir):
         try:
@@ -246,9 +268,6 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
         except OSError:
             continue
         parsed += 1
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(cache_path, json.dumps({"inv": inv_hash, "files": files}))
-
     events = [e for f in files.values() for e in f["events"]]
     misses = [m for f in files.values() for m in f["misses"]]
     called = {e[1] for e in events if e[2] != "slash"}
@@ -277,9 +296,23 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
         t = parse_ts(ts)
         if t and name in rows and (now - t).days < LONG:
             rows[name]["misses_30d"] += 1
-    for r in rows.values():
+    owners = {}
+    for n, s in inv.items():
+        for ph in s["phrases"]:
+            owners.setdefault(ph, set()).add(n)
+    rare = RARE | rare_config()
+    for name, r in rows.items():
         r["sessions_30d"], r["repos_30d"] = len(r.pop("_sessions")), len(r.pop("_repos"))
-        r["flags"] = flags(r, miss_threshold)
+        h = seen.setdefault(name, {"first_seen": iso(now), "last_used": None})
+        h["last_used"] = max(h["last_used"] or "", r["last_used"] or "") or None
+        r["first_seen"], r["last_used_ever"] = h["first_seen"], h["last_used"]
+        # A user copy that shadows a plugin skill of the same name is the same skill, not an overlap.
+        r["overlaps"] = sorted({o for ph in inv.get(name, {}).get("phrases", []) for o in owners[ph]
+                                if o.rsplit(":", 1)[-1] != name.rsplit(":", 1)[-1]})
+        r["rare"] = name in rare
+        r["flags"] = flags(r, miss_threshold, now)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(cache_path, json.dumps({"inv": inv_hash, "files": files, "seen": seen}))
 
     order = [REPO_PLUGIN] + sorted({r["source"] for r in rows.values()} - {REPO_PLUGIN, "user", "other"}) + ["user", "other"]
     rank = {s: i for i, s in enumerate(order)}
@@ -298,10 +331,24 @@ def _row(name, source):
             "slash_30d": 0, "chained_30d": 0, "last_used": None, "misses_30d": 0, "_sessions": set(), "_repos": set()}
 
 
-def flags(r, miss_threshold=MISS_THRESHOLD):
+def rare_config(path=None):
+    try:
+        return set(json.loads(pathlib.Path(path or RARE_CONFIG).expanduser().read_text()).get("rare", []))
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+
+def flags(r, miss_threshold=MISS_THRESHOLD, now=None):
     out = []
     if r["source"] != "other" and r["uses_30d"] == 0:
         out.append("unused_30d")
+        # A retirement candidate needs all three: unused across several windows, evidence beyond the zero (a scene
+        # where its trigger matched and it did not fire, or another skill claiming the same trigger), and not a skill
+        # that is rare by design.
+        since = parse_ts(max(r.get("last_used_ever") or "", r.get("first_seen") or ""))
+        lasted = bool(now and since and (now - since).days >= RETIRE_WINDOWS * LONG)
+        if lasted and (r.get("misses_30d") or r.get("overlaps")) and not r.get("rare"):
+            out.append("retire_candidate")
     if r["uses_30d"] and r["auto_30d"] + r["chained_30d"] == 0:
         out.append("slash_only")
     if r["misses_30d"] > miss_threshold:
@@ -316,11 +363,16 @@ def signal_rows(report, now, editable=EDITABLE):
     for r in report["skills"]:
         if r["source"] not in editable:
             continue
-        for fl in r["flags"]:
+        for fl in (f for f in r["flags"] if f in SUGGEST):
+            basis = ""
+            if fl == "retire_candidate":
+                basis = "; basis: " + ", ".join(
+                    ([f"{r['misses_30d']} misses"] if r["misses_30d"] else []) + [f"overlaps {o}" for o in r["overlaps"]])
+                basis += f"; unused since {r['last_used_ever'] or 'first seen ' + r['first_seen']}"
             rows.append({"ts": iso(now), "ev": "signal", "kind": "skill_usage", "skill": r["name"], "source": r["source"],
                          "flag": fl, "suggest": SUGGEST[fl], "evidence": f"skill-usage:{r['name']}:{fl}@{y}-W{w:02d}",
                          "note": f"{fl}; suggest: {'|'.join(SUGGEST[fl])}; {r['uses_30d']} uses in 30 days ({r['auto_30d']} auto, {r['slash_30d']} slash, "
-                                 f"{r['chained_30d']} chained), {r['misses_30d']} misses, last used {r['last_used'] or 'never'}"})
+                                 f"{r['chained_30d']} chained), {r['misses_30d']} misses, last used {r['last_used'] or 'never'}{basis}"})
     return rows
 
 
@@ -360,9 +412,123 @@ def refresh(out=None, signals=True, miss_threshold=MISS_THRESHOLD):
     return rep
 
 
+def _jsonl(path):
+    out = []
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and parse_ts(row.get("ts")):
+            out.append(row)
+    return out
+
+
+def is_finding(row):
+    return row.get("ev") in FINDINGS or (row.get("ev") == "verdict" and row.get("result", "pass") != "pass")
+
+
+def new_findings(home):
+    """Rows reflect's standing mode reads as new, before its lessons-ledger check, which only the agent can make.
+
+    The cursor (<home>/_standing/reflect/cursor.json) maps each ledger's directory name to the last ts a finished
+    round read. A row at the cursor's ts was read by that round, so only rows after it wake the agent; a ledger the
+    cursor does not list yet starts at its newest row, so a new ledger's history is not swept in.
+    """
+    try:
+        cursor = json.loads((home / "_standing" / "reflect" / "cursor.json").read_text())
+    except (OSError, ValueError):
+        cursor = {}
+    out = {}
+    for led in sorted(home.glob("*/ledger.jsonl")):
+        rows = _jsonl(led)
+        if not rows:
+            continue
+        name = led.parent.name
+        if isinstance(cursor, dict) and parse_ts(cursor.get(name)):
+            start, new = parse_ts(cursor[name]), [r for r in rows if parse_ts(r["ts"]) > parse_ts(cursor[name])]
+        else:
+            start = max(parse_ts(r["ts"]) for r in rows)
+            new = [r for r in rows if parse_ts(r["ts"]) >= start]
+        new = [r for r in new if is_finding(r)]
+        if new:
+            out[name] = new
+    return out
+
+
+def lock_held(home, now=None):
+    lock = home / "_standing" / "reflect" / "lock"
+    try:
+        started = lock.stat().st_mtime
+    except OSError:
+        return False
+    return (now or time.time()) - started < LOCK_STALE_HOURS * 3600
+
+
+def precheck(home=None, collect_first=True):
+    """0 to wake the agent, 1 to skip this run. No model is called."""
+    home = home or programs_home()
+    if collect_first:
+        try:
+            rep = refresh()
+            print(f"collect: {len(rep['skills'])} skills, {rep['signals']['added']} new usage signals")
+        except Exception as e:  # the program ledgers still deserve a round
+            print(f"collect failed: {e!r}")
+    if lock_held(home):
+        print("skip: a standing reflect round holds the lock")
+        return 1
+    try:
+        new = new_findings(home)
+    except Exception as e:
+        # Orca records a failing precheck as a skipped run, so a crash here would silence the loop for good: wake instead.
+        print(f"wake: the ledger check failed ({e!r}); the round reads the ledgers itself")
+        return 0
+    for name, rows in new.items():
+        print(f"new: {name} {len(rows)} ({', '.join(sorted({r['ev'] for r in rows}))})")
+    if not new:
+        print("skip: nothing new since the reflect cursor")
+    return 0 if new else 1
+
+
+def schedule_cmd(script, workspace, provider="claude"):
+    reflect = script.parents[2] / "reflect" / "SKILL.md"
+    prompt = (f"{reflect} 의 standing 모드로 reflect 한 라운드를 돌린다. precheck({script} precheck)가 새 신호를 봤다. "
+              "lock·cursor·열린 standing PR 확인부터 그 문서대로 한다. 제안은 draft PR(브랜치 reflect/standing-*) 하나까지만 열고, "
+              "어떤 PR도 머지하지 않으며, 스킬을 지우지 않는다(은퇴는 사람에게 넘기는 티켓으로만). "
+              "편집은 이 체크아웃이 아니라 새 worktree 브랜치에서 한다. 끝나면 cursor 를 옮기고, PR 이나 티켓을 만든 때만 보고한다.")
+    return ["orca", "automations", "create", "--name", "agent-skills reflect standing", "--trigger", "40 6 * * *",
+            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
+            "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json"]
+
+
+def main_checkout(path):
+    # The precheck runs from the repo's main checkout, so the command names that copy, not a worktree's.
+    out = subprocess.run(["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                         capture_output=True, text=True)
+    return pathlib.Path(out.stdout.strip()).parent if out.returncode == 0 else None
+
+
 def main(argv):
     def opt(flag, default=None):
         return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else default
+    if argv[:1] == ["precheck"]:
+        sys.exit(precheck())
+    if argv[:1] == ["schedule"]:
+        top = main_checkout(HERE)
+        if not top and not opt("--workspace"):
+            sys.exit("schedule needs --workspace <selector>: the checkout the automation runs in")
+        script = pathlib.Path(__file__).resolve()
+        script = top / script.relative_to(HERE.parents[1].parent) if top else script
+        cmd = schedule_cmd(script, opt("--workspace") or f"path:{top}", opt("--provider", "claude"))
+        print(" ".join(shlex.quote(a) for a in cmd))
+        if "--write" in argv:
+            sys.exit(subprocess.run(cmd).returncode)
+        print("\n(출력만 했다. 실제로 만들려면 --write)")
+        return
     signals = False if "--no-signals" in argv else (opt("--signals") or True)
     rep = refresh(opt("--out"), signals, int(opt("--misses", MISS_THRESHOLD)))
     flagged = [r for r in rep["skills"] if r["flags"]]

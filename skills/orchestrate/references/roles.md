@@ -116,9 +116,9 @@ LOOP        About every 60 minutes, one round. Fold everything that arrived by m
             Change as little as the round needs, and prefer rewriting an existing sentence to adding
             one; a change that lengthens a skill gives its reason in the report. Write every rule
             generically.
-USAGE       The usage collector flags skills (`unused_30d`, `slash_only`, `misses`) as `skill_usage`
-            signals; `<fleet state>/skills.json` (`orch-dash skills` refreshes it; references/dashboard.md,
-            "Skill usage") has the counts behind them. Standing mode turns a flag into a description
+USAGE       The usage collector flags skills (`slash_only`, `misses`, `retire_candidate`) as
+            `skill_usage` signals; `<fleet state>/skills.json` (`orch-dash skills` refreshes it;
+            references/dashboard.md, "Skill usage") has the counts behind them. Standing mode turns a flag into a description
             rewrite, a merge, or a retirement ticket. The collector owns the count, so do not count
             transcripts. A usage count goes in a report, never in a commit.
 EVERY COMMIT
