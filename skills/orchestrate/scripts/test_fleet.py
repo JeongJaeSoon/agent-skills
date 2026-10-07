@@ -2,7 +2,7 @@
 
 Run: python3 test_fleet.py
 """
-import contextlib, datetime as dt, json, os, pathlib, shutil, subprocess, sys, tempfile
+import contextlib, datetime as dt, json, os, pathlib, re, shutil, subprocess, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash_demo
@@ -33,17 +33,23 @@ assert st["root"] == "wt-coord", st["root"]
 assert ss["wt-coord"]["kind"] == "orchestrator" and ss["wt-coord"]["parent"] is None
 assert all(ss[w]["kind"] == "task" and ss[w]["parent"] == "wt-coord" for w in ("wt-login", "wt-export", "wt-docs"))
 assert ss["wt-scratch"]["kind"] == "standalone" and ss["wt-scratch"]["parent"] == "wt-coord"
+# A lead: the root dispatched it and it runs its own Run; its workers hang under it whether its Run or Orca's parent says so.
+assert (ss["wt-lead"]["kind"], ss["wt-lead"]["parent"]) == ("orchestration", "wt-coord")
+assert [(ss[w]["kind"], ss[w]["parent"]) for w in ("wt-invoice", "wt-tax")] == [("task", "wt-lead"), ("standalone", "wt-lead")]
 assert {w: ss[w]["phase"] for w in ss} == {"wt-coord": "working", "wt-login": "idle", "wt-export": "working",
-                                            "wt-docs": "waiting", "wt-scratch": "idle", "wt-old": "offline"}, ss
+                                            "wt-docs": "waiting", "wt-scratch": "idle", "wt-old": "offline",
+                                            "wt-lead": "working", "wt-invoice": "working", "wt-tax": "idle"}, ss
 assert ss["wt-login"]["task_title"] == "ACME-101 login flow" and ss["wt-login"]["terminal"] == "term_login"
 assert all(v["ok"] for v in st["sources"].values()), st["sources"]
 
 # Every row names its project: Orca's project for a session, the task's worktree for a gate, the terminal for a decision.
 assert {s["id"]: s["project"] for s in st["sessions"]} == {"wt-coord": "platform", "wt-login": "launchpad", "wt-export": "launchpad",
-                                                         "wt-docs": "launchpad", "wt-scratch": "tools", "wt-old": "tools"}
+                                                         "wt-docs": "launchpad", "wt-scratch": "tools", "wt-old": "tools",
+                                                         "wt-lead": "platform", "wt-invoice": "launchpad", "wt-tax": "launchpad"}
 assert [(i["project"], i["session"]) for i in items(st, "approval") if i["source"] == "orca-gate"] == [("launchpad", "wt-coord")]
 assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["project"] for i in items(st))
-assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad", "task_export": "launchpad", "task_docs": "launchpad"}
+assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad", "task_export": "launchpad", "task_docs": "launchpad",
+                                                       "task_lead": "platform", "task_invoice": "launchpad"}
 assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", None, "o/other") == "acme-api"
 assert fleet.project_of("/src/app-wt", None, "o/app") == "app" and fleet.project_of("/src/app-wt") == "app-wt"
 assert fleet.project_of(None) is None
@@ -299,12 +305,13 @@ assert fleet.adopt() == 0 and calls == []
 assert fleet.adopt(apply=True) == 1 and calls == []
 pathlib.Path(os.environ["ORCH_FLEET_CONFIG"]).write_text(json.dumps({"adopt": {"write_orca_parent": True}}))
 assert fleet.adopt(apply=True) == 0
-assert sorted(c[3] for c in calls) == ["id:wt-docs", "id:wt-login", "id:wt-old", "id:wt-scratch"], calls
-assert all(c[4:] == ("--parent-worktree", "id:wt-coord") for c in calls)
+assert sorted(c[3:] for c in calls) == [(f"id:{w}", "--parent-worktree", f"id:{p}") for w, p in (
+    ("wt-docs", "wt-coord"), ("wt-invoice", "wt-lead"), ("wt-lead", "wt-coord"), ("wt-login", "wt-coord"),
+    ("wt-old", "wt-coord"), ("wt-scratch", "wt-coord"))], calls
 calls.clear()
 assert fleet.adopt(undo="all") == 0
 assert sorted(calls) == sorted(("worktree", "set", "--worktree", f"id:{w}", "--no-parent")
-                               for w in ("wt-docs", "wt-login", "wt-old", "wt-scratch")), calls
+                               for w in ("wt-docs", "wt-invoice", "wt-lead", "wt-login", "wt-old", "wt-scratch")), calls
 calls.clear()
 fleet.adopt(undo="all")
 assert calls == []  # the latest row per worktree is now an undo: nothing to restore twice
@@ -514,6 +521,33 @@ const S = {{filters: {{}}}};
 process.stdout.write(itemList({{sessions: []}}, {json.dumps(rows)}, {{limit: 8}}));"""
     card = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
     assert card.count("<li class=\"item") == 8 and __import__("re").findall(r">row(\d+)<", card)[:3] == ["15", "16", "0"], card
+
+    # Kind reads as a role: the lead says "lead", a session under it says "worker" whether its Run or Orca's parent put it
+    # there, a standalone under the root stays "standalone". The overview's lead card counts the lead's sessions and PRs.
+    sess = [{"id": "wt-root", "name": "root", "kind": "orchestrator", "parent": None, "phase": "working"},
+            {"id": "wt-lead", "name": "billing lead", "kind": "orchestration", "parent": "wt-root", "phase": "working", "project": "p"},
+            {"id": "wt-a", "name": "a", "kind": "task", "parent": "wt-lead", "phase": "working"},
+            {"id": "wt-b", "name": "b", "kind": "standalone", "parent": "wt-lead", "phase": "idle"},
+            {"id": "wt-c", "name": "c", "kind": "standalone", "parent": "wt-root", "phase": "idle"},
+            {"id": "wt-d", "name": "d", "kind": "task", "parent": "wt-root", "phase": "idle"}]
+    prs = [{"session": "wt-b", "state": "OPEN"}, {"session": "wt-lead", "state": "OPEN"}, {"session": "wt-a", "state": "MERGED"},
+           {"session": "wt-c", "state": "OPEN"}]
+    js = f"""{helpers}
+{chr(10).join(take(n) for n in ("chips",))}
+{(assets / "fleet.js").read_text()}
+const st = {{sessions: {json.dumps(sess)}, prs: {json.dumps(prs)}}};
+var S = {{filters: {{}}, sort: {{}}, state: st}};
+const out = {{labels: Object.fromEntries(st.sessions.map((s) => [s.id, kindLabel(st, s)[0]])), table: fleetSessions(st), card: leadCard(st)}};
+S.filters.fleet_project = "other"; out.hidden = leadCard(st);
+out.none = leadCard({{sessions: st.sessions.filter((s) => s.kind !== "orchestration")}});
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert got["labels"] == {"wt-root": "orchestrator", "wt-lead": "lead", "wt-a": "worker", "wt-b": "worker",
+                             "wt-c": "standalone", "wt-d": "worker"}, got["labels"]
+    assert re.findall(r'class="tag[^"]*">(?:<[^>]*>)*([a-z]+)</span>', got["table"]) == \
+        ["orchestrator", "lead", "worker", "worker", "worker", "standalone"], got["table"]
+    assert "billing lead" in got["card"] and "2 sessions · 1 working · 2 open PRs" in got["card"], got["card"]
+    assert got["hidden"] == got["none"] == "", "no card without a lead in view"
 
     # A page open across a restart onto new code reloads once: not on the version it first saw, not twice for one version.
     js = "\n".join(take(n) for n in ("LS", "store", "S", "versionChanged")) + """
