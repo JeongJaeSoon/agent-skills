@@ -6,6 +6,10 @@ Usage:
                        [--plan OUT.json] [--json]
   python3 reap.py reap --plan PLAN.json
   python3 reap.py load [--top N] [--json]
+  python3 reap.py ledger add --kind KIND (--path P | --id ID | --pid N) [--pr owner/repo#N] [--worktree W] [--run R] [--by B]
+  python3 reap.py ledger list [--json]
+  python3 reap.py precheck [--kinds ...]
+  python3 reap.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 scan only reads. reap re-scans and acts only on the plan's targets that are still targets with the
 same identity (pid and start time, branch tip), so nothing outside the list is touched.
@@ -15,8 +19,14 @@ action for its class.
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30}.
+Janitor kinds (orca-worktree, orca-worker, tmpdir, gui-app, chrome-window, remote-branch; `--kinds janitor`) cover only
+what the ledger lists or an Orca orchestration worker made, and are report-only: reap never acts on them.
+The ledger is $AGENT_SKILLS_LEDGER or --ledger, default $AGENT_SKILLS_STATE/ledger.jsonl (state default
+~/.local/state/agent-skills). precheck scans the janitor kinds, writes janitor-plan.json to the state dir and exits 0 only
+when the target set is non-empty and changed since the last report. schedule prints the `orca automations create`
+command; only --write runs it.
 """
-import contextlib, datetime as dt, json, os, pathlib, re, shutil, signal, subprocess, sys, time
+import contextlib, datetime as dt, json, os, pathlib, re, shlex, shutil, signal, subprocess, sys, time
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ("codex", "orphan", "docker", "branch", "worktree")
@@ -399,7 +409,300 @@ def scan(kinds, hours, cfg, repo_list):
                               if (x := judge_worktree(repo, w, hours, cwd_of, time.time(), projects_dir, orca))]
             except RuntimeError as e:
                 notes.append(f"{repo}: {e}")
+    if set(JANITOR) & kinds:
+        items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes)
     return items, notes
+
+
+# Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker). Report-only: `reap` never acts on them.
+JANITOR = ("orca-worktree", "orca-worker", "tmpdir", "gui-app", "chrome-window", "remote-branch")
+STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+
+
+def ledger_path():
+    return pathlib.Path(opt("--ledger") or os.environ.get("AGENT_SKILLS_LEDGER") or STATE / "ledger.jsonl").expanduser()
+
+
+def ledger_read(path):
+    out = []
+    with contextlib.suppress(OSError):
+        for line in path.read_text(errors="replace").splitlines():
+            with contextlib.suppress(ValueError):
+                e = json.loads(line) if line.strip() else None
+                # A hand-edited or torn line must not stop every later precheck.
+                if isinstance(e, dict) and isinstance(e.get("id"), str) and isinstance(e.get("links") or {}, dict):
+                    out.append(e)
+    return out
+
+
+def ledger_add(path, kind, rid, pr=None, worktree=None, run_id=None, by=None):
+    if kind not in JANITOR:
+        raise SystemExit(f"--kind must be one of {', '.join(JANITOR)}")
+    entry = {"ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "run": run_id, "kind": kind, "id": rid,
+             "links": {"pr": pr, "worktree": worktree}, "by": by}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return entry
+
+
+def parse_pr(ref):
+    """owner/repo#N → (owner/repo, N)."""
+    m = re.fullmatch(r"([\w.-]+/[\w.-]+)#(\d+)", ref or "")
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def pr_reader(gh=run):
+    cache = {}
+
+    def state(ref):
+        """owner/repo#N → {"state", "headRefOid"}, or None when gh cannot read it."""
+        if ref not in cache:
+            p = parse_pr(ref)
+            out = p and gh(["gh", "pr", "view", str(p[1]), "-R", p[0], "--json", "state,headRefOid"], check=False)
+            cache[ref] = json.loads(out) if out else None
+        return cache[ref]
+    return state
+
+
+def link_verdict(links, pr_state, exists=os.path.exists):
+    """(done, why): done when the linked PR is merged or closed, or the linked worktree is gone; None when nothing links it."""
+    ref, wt = links.get("pr"), links.get("worktree")
+    if ref:
+        s = pr_state(ref)
+        if s is None:
+            return False, f"PR {ref} 상태를 읽지 못함"
+        if s["state"] == "OPEN":
+            return False, f"열린 PR {ref}"
+        return True, f"PR {ref} {s['state'].lower()}"
+    if wt:
+        return (False, f"worktree {wt} 있음") if exists(wt) else (True, f"worktree {wt} 없어짐")
+    return None, "연결된 PR·worktree 없음(보고만)"
+
+
+def latest(entries, kind):
+    """The last ledger line per id of one kind (the ledger only appends)."""
+    return list({e["id"]: e for e in entries if e.get("kind") == kind}.values())
+
+
+def apps_under(path):
+    out = []
+    for root, dirs, _ in os.walk(path):
+        for d in [d for d in dirs if d.endswith(".app")]:
+            out.append(os.path.join(root, d))
+            dirs.remove(d)
+    return sorted(out)
+
+
+def judge_tmpdirs(entries, pr_state, cwd_of, rows=None, exists=os.path.exists, apps=apps_under, roots=None):
+    out = []
+    for e in latest(entries, "tmpdir"):
+        path = e["id"]
+        if not exists(path):
+            continue
+        base = {"kind": "tmpdir", "key": f"tmpdir:{path}", "name": path, "links": e.get("links") or {}}
+        done, why = link_verdict(base["links"], pr_state, exists)
+        # A GUI app runs with cwd /, so an app launched from a bundle in here counts by its executable.
+        spellings = {path, real(path), re.sub(r"^/private(?=/(tmp|var)/)", "", real(path))}
+        users = [pid for pid, c in (cwd_of or {}).items() if under(real(c), real(path))] + \
+                [pid for pid, r in (rows or {}).items() if any(r["cmd"].startswith(p + "/") for p in spellings)]
+        # Strictly below a temp root: the root itself (/tmp, $TMPDIR) is never one build's directory.
+        if done and not any(under(real(path), t) and real(path) != t for t in (TEMP_ROOTS if roots is None else roots)):
+            done, why = False, "임시 디렉터리 밖(보고만)"
+        elif done and users:
+            done, why = False, f"pid {users[0]} 이 cwd 로 사용 중"
+        elif done and cwd_of is None:
+            done, why = False, "프로세스 cwd 를 읽지 못함"
+        how = [f"{LSREGISTER} -u {shlex.quote(a)}" for a in apps(path)] + [f"rm -rf {shlex.quote(path)}"]
+        out.append({**base, "why": why, "target": bool(done), "how": how})
+    return out
+
+
+def judge_gui_apps(entries, pr_state, rows, exists=os.path.exists):
+    """id is "<pid>@<ps lstart>", so a reused pid is not the registered app."""
+    out = []
+    for e in latest(entries, "gui-app"):
+        pid, _, start = e["id"].partition("@")
+        r = rows.get(int(pid)) if pid.isdigit() else None
+        if not r or r["start"] != start:
+            continue
+        done, why = link_verdict(e.get("links") or {}, pr_state, exists)
+        out.append({"kind": "gui-app", "key": f"gui-app:{e['id']}", "name": f"pid {pid} {r['cmd'][:60]}", "why": why,
+                    "target": bool(done), "how": [f"kill -TERM {pid}"]})
+    return out
+
+
+def judge_chrome(entries, pr_state, exists=os.path.exists):
+    # No script can tell whether a tab is still open or close it: the agent does that with its browser tools.
+    out = []
+    for e in latest(entries, "chrome-window"):
+        done, why = link_verdict(e.get("links") or {}, pr_state, exists)
+        out.append({"kind": "chrome-window", "key": f"chrome-window:{e['id']}", "name": e["id"], "why": why,
+                    "target": bool(done), "how": ["에이전트가 처리: 브라우저 도구로 이 창·탭을 닫는다"]})
+    return out
+
+
+def judge_remote_branches(entries):
+    return [{"kind": "remote-branch", "key": f"remote-branch:{e['id']}", "name": e["id"],
+             "why": "판정 미구현(인터페이스만, 보고만)", "target": False, "how": []} for e in latest(entries, "remote-branch")]
+
+
+def judge_orca_worker(rows):
+    """rows: `orca orchestration worker-list --terminal-state reclaimable` workers."""
+    rows = [w for w in rows if w.get("dispatchId")]
+    return [{"kind": "orca-worker", "key": f"orca-worker:{w['dispatchId']}", "name": f"{w['dispatchId']} ({w.get('taskId')})",
+             "why": "끝난 워커의 터미널(reclaimable)", "target": True,
+             "how": [f"orca orchestration worker-release --dispatch {w['dispatchId']} --json"]} for w in rows]
+
+
+def judge_orca_worktree(path, source, facts, pr_state):
+    """facts: the git and process state of one checkout, read by worktree_facts."""
+    base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
+            "how": [f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
+    ref = facts.get("pr")
+    s = pr_state(ref) if ref else None
+    if facts.get("live"):
+        why = facts["live"]
+    elif not ref:
+        why = "연결된 PR 없음"
+    elif s is None:
+        why = f"PR {ref} 상태를 읽지 못함"
+    elif s["state"] == "OPEN":
+        why = f"열린 PR {ref}"
+    elif facts.get("dirty"):
+        why = "변경 있음(추적 안 되는 파일 포함)"
+    elif facts.get("unpushed") and facts.get("head") != s.get("headRefOid"):
+        why = "원격에 없는 커밋"
+    else:
+        return {**base, "why": f"PR {ref} {s['state'].lower()} ({source})", "target": True}
+    return {**base, "why": why, "target": False}
+
+
+def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
+    common = git(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=False)
+    if common is None:
+        return None
+    main = os.path.dirname(common.strip().rstrip("/"))
+    if real(main) == real(path):
+        return {"main": True}
+    users = [pid for pid, c in users_cwd.items() if under(real(c), real(path))]
+    ref = ledger_pr
+    if not ref:
+        branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
+        prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,isCrossRepository"],
+                              cwd=path, check=False)
+        # A fork's PR with the same head name is not this branch's.
+        own = [p for p in json.loads(prs) if not p.get("isCrossRepository")] if prs else []
+        if own:
+            url = own[0]["url"]
+            m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
+            ref = m and f"{m.group(1)}#{m.group(2)}"
+    return {"main": False, "repo": main, "pr": ref,
+            "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
+            # Untracked files count: `orca worktree rm` would take new, never-added work with it.
+            "dirty": bool(git(["git", "-C", path, "status", "--porcelain"], check=False)),
+            "unpushed": bool(git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)),
+            "head": (git(["git", "-C", path, "rev-parse", "HEAD"], check=False) or "").strip()}
+
+
+def orca_json(*args):
+    out = run(["orca", *args, "--json"], check=False) if shutil.which("orca") else None
+    try:
+        return json.loads(out)["result"] if out else None
+    except (ValueError, KeyError):
+        return None
+
+
+def orca_workers(state=None):
+    rows, cursor = [], None
+    for _ in range(50):
+        res = orca_json("orchestration", "worker-list", "--limit", "100",
+                        *(["--terminal-state", state] if state else []), *(["--cursor", cursor] if cursor else []))
+        if not res:
+            return None  # a partial list could miss a retained row and count a user's worktree as made
+        rows += res.get("workers") or []
+        cursor = (res.get("page") or {}).get("nextCursor")
+        if not cursor:
+            break
+    return rows
+
+
+def worker_worktrees(workers):
+    """(live, made, users) by real path. A retained row (a context-only dispatch into an existing worktree, or a card
+    the user took over) marks the worktree as the user's: it never counts as made by a worker."""
+    live, made, users = {}, set(), set()
+    for w in workers:
+        p = ((w.get("resource") or {}).get("worktreeId") or "").partition("::")[2]
+        if not p:
+            continue
+        p = real(p)
+        if w.get("terminalState") == "retained" or (w.get("resource") or {}).get("retainedReason"):
+            users.add(p)
+        else:
+            made.add(p)
+        if (w.get("projection") or {}).get("outcome") == "in_progress":
+            live[p] = f"살아 있는 워커 턴({w.get('dispatchId')})"
+    return live, made, users
+
+
+def janitor_scan(kinds, repo_list, entries, notes, pr_state=None):
+    pr_state = pr_state or pr_reader()
+    items = []
+    rows = processes() if {"gui-app", "tmpdir"} & kinds else {}
+    cwd_of = cwds() if {"tmpdir", "orca-worktree"} & kinds else {}
+    if "tmpdir" in kinds:
+        items += judge_tmpdirs(entries, pr_state, cwd_of, rows)
+    if "gui-app" in kinds:
+        items += judge_gui_apps(entries, pr_state, rows)
+    if "chrome-window" in kinds:
+        items += judge_chrome(entries, pr_state)
+    if "remote-branch" in kinds:
+        items += judge_remote_branches(entries)
+    if "orca-worker" in kinds:
+        reclaim = orca_workers("reclaimable")
+        if reclaim is None:
+            notes.append("orca-worker: worker-list 를 읽지 못함, 건너뜀")
+        items += judge_orca_worker(reclaim or [])
+    if "orca-worktree" in kinds:
+        workers = orca_workers() or []
+        if not workers and shutil.which("orca"):
+            notes.append("orca-worktree: 오케스트레이션 워커 목록이 비었거나 읽지 못함, ledger 만 본다")
+        live, made, users = worker_worktrees(workers)
+        ledger = {real(e["id"]): e for e in latest(entries, "orca-worktree")}
+        repos_real = {real(r) for r in repo_list}
+        for path in sorted((set(ledger) | made) - users):
+            if not os.path.isdir(path):
+                continue
+            e = ledger.get(path)
+            facts = worktree_facts(path, e and (e.get("links") or {}).get("pr"), live.get(path), cwd_of or {})
+            if not facts or facts["main"] or (repos_real and real(facts["repo"]) not in repos_real):
+                continue
+            if cwd_of is None and not facts["live"]:
+                facts["live"] = "프로세스 cwd 를 읽지 못함"
+            items.append(judge_orca_worktree(path, "ledger" if e else "오케스트레이션 워커", facts, pr_state))
+    return items
+
+
+def precheck(items, state_dir):
+    """Exit code for an Orca automation precheck: 0 only when the target set changed since the last report and is not empty."""
+    targets = sorted(i["key"] for i in items if i["target"])
+    last = state_dir / "janitor-last.json"
+    with contextlib.suppress(OSError, ValueError):
+        if json.loads(last.read_text()).get("targets") == targets:
+            return 1, targets
+    state_dir.mkdir(parents=True, exist_ok=True)
+    last.write_text(json.dumps({"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "targets": targets}))
+    return (0 if targets else 1), targets
+
+
+def schedule_cmd(script, state_dir, workspace, provider="claude"):
+    plan = state_dir / "janitor-plan.json"
+    prompt = (f"reap-resources janitor 회차다. 정리 계획 {plan} 을 읽고(없으면 python3 {script} scan --kinds janitor 를 돌린다) "
+              "정리 대상과 남긴 것의 이유를 한국어로 보고한다. report-only: 아무것도 지우거나 닫지 않는다.")
+    return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", "17 */3 * * *",
+            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
+            "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json"]
 
 
 BUSY_CHILD_CPU = 25
@@ -539,6 +842,8 @@ def report(data):
     print(f"\n## 정리 대상 {len(targets)}개\n")
     for i in targets:
         print(f"- {label(i)}: {i['why']}")
+        for how in i.get("how") or ():
+            print(f"  - 처리(계획만, 실행 안 함): `{how}`")
     kept = [i for i in data["items"] if not i["target"]]
     if kept:
         print(f"\n## 남김 {len(kept)}개\n")
@@ -607,7 +912,12 @@ def main():
     cfg = config()
     if cmd == "reap":
         plan = json.loads(pathlib.Path(opt("--plan") or sys.exit("reap needs --plan PLAN.json")).read_text())
-        wanted = {i["key"]: i for i in plan["items"] if i["target"]}
+        wanted = {}
+        for i in plan["items"]:
+            if i["target"] and i["kind"] in JANITOR:
+                print(f"- 보고만 {label(i)}: report-only 종류라 reap 이 처리하지 않음")
+            elif i["target"]:
+                wanted[i["key"]] = i
         fresh, notes = scan({i["kind"] for i in wanted.values()}, plan["hours"], cfg, plan["repos"])
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
@@ -629,16 +939,64 @@ def main():
         else:
             print_load(data)
         return
-    if cmd != "scan":
+    if cmd == "ledger":
+        path = ledger_path()
+        if sys.argv[2:3] == ["add"]:
+            rid = opt("--path") or opt("--id")
+            if opt("--kind") == "gui-app" and opt("--pid"):
+                r = processes().get(int(opt("--pid"))) if opt("--pid").isdigit() else None
+                rid = r and f"{r['pid']}@{r['start']}"
+            if not rid:
+                sys.exit("ledger add needs --path, --id, or --pid (gui-app) of a live process")
+            rid = os.path.realpath(rid) if opt("--path") else rid
+            wt = opt("--worktree") and os.path.realpath(opt("--worktree"))
+            print(json.dumps(ledger_add(path, opt("--kind"), rid, opt("--pr"), wt, opt("--run"), opt("--by")),
+                             ensure_ascii=False))
+        elif sys.argv[2:3] == ["list"]:
+            entries = ledger_read(path)
+            if "--json" in sys.argv:
+                print(json.dumps(entries, ensure_ascii=False, indent=1))
+            else:
+                for e in entries:
+                    links = " ".join(f"{k}={v}" for k, v in (e.get("links") or {}).items() if v)
+                    print(f"{e.get('ts')}\t{e.get('kind')}\t{e.get('id')}\t{links}")
+        else:
+            sys.exit(__doc__)
+        return
+    if cmd == "schedule":
+        script = pathlib.Path(__file__).resolve()
+        top = run(["git", "-C", str(script.parent), "rev-parse", "--show-toplevel"], check=False)
+        workspace = opt("--workspace") or (top and f"path:{top.strip()}")
+        if not workspace:
+            sys.exit("schedule needs --workspace <selector>: the checkout the automation runs in")
+        argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude")
+        print(" ".join(shlex.quote(a) for a in argv))
+        if "--write" in sys.argv:
+            out = run(argv)
+            print(out)
+        else:
+            print("\n(출력만 했다. 실제로 만들려면 --write)")
+        return
+    if cmd not in ("scan", "precheck"):
         sys.exit(__doc__)
-    kinds = set((opt("--kinds") or ",".join(KINDS)).split(",")) & set(KINDS)
+    names = (opt("--kinds") or ",".join(JANITOR if cmd == "precheck" else KINDS)).split(",")
+    names = [k for n in names for k in (JANITOR if n == "janitor" else (n,))]
+    kinds = set(names) & set(KINDS + JANITOR)
     hours = float(opt("--hours") or cfg.get("hours") or 6)
     repo_list = repos([a for i, a in enumerate(sys.argv) if i and sys.argv[i - 1] == "--repo"]) \
-        if {"branch", "worktree"} & kinds else []
+        if {"branch", "worktree", "orca-worktree"} & kinds else []
     items, notes = scan(kinds, hours, cfg, repo_list)
     msgs, totals = alerts(items, {**ALERT, **(cfg.get("alert") or {})})
     data = {"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "hours": hours,
-            "kinds": [k for k in KINDS if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
+            "kinds": [k for k in KINDS + JANITOR if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
+    if cmd == "precheck":
+        STATE.mkdir(parents=True, exist_ok=True)
+        (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
+        code, targets = precheck(items, STATE)
+        for n in notes + [f"{i['key']}: {i['why']}" for i in items if "읽지 못함" in i["why"]]:
+            print(f"메모: {n}", file=sys.stderr)
+        print(f"정리 대상 {len(targets)}개, " + ("지난 보고 이후 바뀜: 실행" if code == 0 else "바뀐 것 없음 또는 대상 없음: 건너뜀"))
+        sys.exit(code)
     if opt("--plan"):
         pathlib.Path(opt("--plan")).write_text(json.dumps(data, ensure_ascii=False, indent=1))
     if "--json" in sys.argv:
