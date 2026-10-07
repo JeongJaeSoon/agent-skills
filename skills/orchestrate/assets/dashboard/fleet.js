@@ -118,10 +118,10 @@ function fleetSidebar() {
   group.hidden = !st;
   if (!st) return;
   const live = sessionTree(st).filter(([s]) => s.phase !== "offline" || s.unread || s.kind === "orchestrator");
-  const kids = (s) => s.kind === "orchestration" ? (st.sessions || []).filter((x) => x.parent === s.id).length : 0;
+  const kids = (s) => (st.sessions || []).filter((x) => x.parent === s.id).length;
   $("#session-list").innerHTML = live.map(([s, d]) => `<li><a class="nav-item tree ${s.kind === "orchestration" ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
       ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(kindLabel(st, s)[0])} · ${esc(s.phase)}">${phaseDot(s)}
-      <span class="sb-text">${esc(s.name)}</span>${s.kind === "orchestration" ? tag("lead", "accent", "") : ""}${kids(s) ? `<span class="count" title="sessions under this lead">${kids(s)}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
+      <span class="sb-text">${esc(s.name)}</span>${s.kind === "orchestration" ? `<span class="tag tone-accent" title="lead · ${kids(s)} sessions under it">lead${kids(s) ? ` ${kids(s)}` : ""}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
 }
 
 function fleetHeader() {
@@ -339,8 +339,9 @@ function leadCard(st) {
   const rows = leads.map((l) => {
     const kids = ss.filter((x) => x.parent === l.id), mine = new Set([l.id, ...kids.map((x) => x.id)]);
     const prs = (st.prs || []).filter((p) => p.state === "OPEN" && mine.has(p.session)).length;
+    const n = (k, word) => `${k} ${word}${k === 1 ? "" : "s"}`;
     return `<li>${phaseDot(l)}${projBadge(l.project)}<a class="grow ellipsis" href="${sessionHref(l.id)}"><b>${esc(l.name)}</b></a>
-      <span class="acts muted">${kids.length} sessions · ${kids.filter((x) => x.phase === "working").length} working · ${prs} open PR${prs === 1 ? "" : "s"}</span></li>`;
+      <span class="acts muted">${n(kids.length, "session")} · ${kids.filter((x) => x.phase === "working").length} working · ${n(prs, "open PR")}</span></li>`;
   }).join("");
   return `<div class="card wide" data-src="orca"><div class="card-head"><h3>Leads</h3><span class="aside">${leads.length}</span></div><ul class="rows">${rows}</ul></div>`;
 }

@@ -538,6 +538,7 @@ process.stdout.write(itemList({{sessions: []}}, {json.dumps(rows)}, {{limit: 8}}
 const st = {{sessions: {json.dumps(sess)}, prs: {json.dumps(prs)}}};
 var S = {{filters: {{}}, sort: {{}}, state: st}};
 const out = {{labels: Object.fromEntries(st.sessions.map((s) => [s.id, kindLabel(st, s)[0]])), table: fleetSessions(st), card: leadCard(st)}};
+out.one = leadCard({{sessions: st.sessions.filter((s) => s.id !== "wt-a"), prs: st.prs.filter((p) => p.session !== "wt-lead")}});
 S.filters.fleet_project = "other"; out.hidden = leadCard(st);
 out.none = leadCard({{sessions: st.sessions.filter((s) => s.kind !== "orchestration")}});
 process.stdout.write(JSON.stringify(out));"""
@@ -547,6 +548,7 @@ process.stdout.write(JSON.stringify(out));"""
     assert re.findall(r'class="tag[^"]*">(?:<[^>]*>)*([a-z]+)</span>', got["table"]) == \
         ["orchestrator", "lead", "worker", "worker", "worker", "standalone"], got["table"]
     assert "billing lead" in got["card"] and "2 sessions · 1 working · 2 open PRs" in got["card"], got["card"]
+    assert "1 session · 0 working · 1 open PR<" in got["one"], got["one"]
     assert got["hidden"] == got["none"] == "", "no card without a lead in view"
 
     # A page open across a restart onto new code reloads once: not on the version it first saw, not twice for one version.
