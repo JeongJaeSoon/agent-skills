@@ -499,7 +499,7 @@ function fleetSessions(st) {
       <td class="hide-md">${projBadge(s.project)}<span class="mono dim">${s.branch ? esc(s.branch) : ""}</span></td>
       <td>${pr ? link(pr.url, `#${esc(pr.number)}`) : ""}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
   }).join("");
-  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator by run membership. Standalone sessions you opened yourself sit under the root.</p></div>${phaseLegend()}</div>
+  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the coordinator whose run dispatched it, else under its Orca parent, else under the root.</p></div>${phaseLegend()}</div>
     ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
