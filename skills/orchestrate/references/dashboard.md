@@ -218,7 +218,8 @@ A **miss** is a human prompt (not a subagent's, a slash command, a notification,
 
 | Flag | When |
 |---|---|
-| `unused_30d` | An installed skill with no use in 30 days |
+| `unused_30d` | An installed skill with no use in 30 days. Shown here only: zero uses alone is not a signal |
+| `retire_candidate` | No use for three 30-day windows, counted from its last use or from when the collector first saw it (both kept in the cache, so a deleted transcript does not age a skill), with misses or another skill quoting the same trigger phrase (`overlaps`) as evidence, and not rare by design: `RARE` in `skill_usage.py`, plus `rare` in `~/.config/agent-skills/skill-usage.json` for the user's own skills |
 | `slash_only` | Used in 30 days, but only ever typed as `/name`: the description does not make it fire |
 | `misses` | More than 3 misses in 30 days (`--misses N`) |
 
@@ -226,13 +227,13 @@ The report holds counts only. No prompt or message text is copied, sessions and 
 
 ### Signals for the improvement loop
 
-Each collect appends one row per flag, per skill, per ISO week to `$PROGRAMS_HOME/_skill-usage/ledger.jsonl`, only for sources the loop can edit (`agent-skills` and `user`). The row has the shape of a program ledger's `signal` row, with `kind` `skill_usage`:
+Each collect appends one row per flag other than `unused_30d`, per skill, per ISO week to `$PROGRAMS_HOME/_skill-usage/ledger.jsonl`, only for sources the loop can edit (`agent-skills` and `user`). The row has the shape of a program ledger's `signal` row, with `kind` `skill_usage`:
 
 ```json
 {"ts": "2026-09-27T14:51:28Z", "ev": "signal", "kind": "skill_usage", "skill": "agent-skills:swarm",
- "source": "agent-skills", "flag": "unused_30d", "suggest": ["rewrite-description", "merge", "retire"],
- "evidence": "skill-usage:agent-skills:swarm:unused_30d@2026-W39",
- "note": "unused_30d; suggest: rewrite-description|merge|retire; 0 uses in 30 days (0 auto, 0 slash, 0 chained), 0 misses, last used never"}
+ "source": "agent-skills", "flag": "retire_candidate", "suggest": ["merge", "retire"],
+ "evidence": "skill-usage:agent-skills:swarm:retire_candidate@2026-W39",
+ "note": "retire_candidate; suggest: merge|retire; 0 uses in 30 days (0 auto, 0 slash, 0 chained), 0 misses, last used never; basis: overlaps agent-skills:arena; unused since first seen 2026-06-20T09:00:00Z"}
 ```
 
 `evidence` (skill, flag and the ISO-week window) is the idempotency key, so a flag that persists shows up once a week. The collector writes only this file. The flow improver reads it as one input, and `reflect` promotes a signal into the lessons ledger (Source `skill-usage`, Kind `usage`, Evidence a pointer to the row and its window, one row per skill and flag whose Occurrences rise per window); no script writes the lessons ledger. `suggest` lists what may be proposed; retiring a skill is only ever proposed, never applied by the loop.

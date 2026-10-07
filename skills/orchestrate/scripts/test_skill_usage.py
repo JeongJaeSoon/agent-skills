@@ -2,7 +2,7 @@
 
 Run: python3 test_skill_usage.py
 """
-import datetime as dt, json, os, pathlib, sys, tempfile
+import datetime as dt, json, os, pathlib, sys, tempfile, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import skill_usage as su
@@ -166,8 +166,20 @@ assert su.write_signals(ledger, rep4, NOW) == [], "same week: nothing new"
 assert len(ledger.read_text().splitlines()) == 3
 later = su.write_signals(ledger, rep4, NOW + dt.timedelta(days=7))
 assert len(later) == 3 and all(r["evidence"].endswith("@2026-W40") for r in later), later
-unused = su.signal_rows({"skills": [{**rows["agent-skills:quiet"]}]}, NOW)
-assert unused[0]["suggest"] == ["rewrite-description", "merge", "retire"], unused
+assert su.signal_rows({"skills": [{**rows["agent-skills:quiet"]}]}, NOW) == [], "unused_30d alone is no signal"
+
+# A retirement candidate needs every criterion; zero uses alone, or any criterion missing, is not one.
+base = {"name": "agent-skills:old", "source": "agent-skills", "uses_7d": 0, "uses_30d": 0, "uses_total": 0, "auto_30d": 0,
+        "slash_30d": 0, "chained_30d": 0, "last_used": None, "misses_30d": 0, "first_seen": ts(120),
+        "last_used_ever": ts(100), "overlaps": ["agent-skills:new"], "rare": False}
+assert su.flags(base, now=NOW) == ["unused_30d", "retire_candidate"], su.flags(base, now=NOW)
+for why, change in [("one window only", {"last_used_ever": ts(40)}), ("recently installed", {"first_seen": ts(20), "last_used_ever": None}),
+                    ("no miss and no overlap", {"overlaps": []}), ("rare by design", {"rare": True})]:
+    assert su.flags({**base, **change}, now=NOW) == ["unused_30d"], why
+assert su.flags({**base, "overlaps": [], "misses_30d": 1}, now=NOW) == ["unused_30d", "retire_candidate"]
+cand = su.signal_rows({"skills": [{**base, "flags": su.flags(base, now=NOW)}]}, NOW)
+assert [(r["flag"], r["suggest"]) for r in cand] == [("retire_candidate", ["merge", "retire"])], cand
+assert "overlaps agent-skills:new" in cand[0]["note"] and f"unused since {ts(100)}" in cand[0]["note"], cand[0]["note"]
 
 # A scan logic change (SCAN_VERSION) re-reads every cached transcript.
 su.SCAN_VERSION += 1
@@ -202,5 +214,60 @@ real_inventory, su.inventory = su.inventory, lambda: inv
 rep7 = su.refresh(out=root / "state2" / "skills.json", signals=ledger)
 su.inventory = real_inventory
 assert str(root) not in (root / "state2" / "skills.json").read_text() and set(rep7["signals"]) == {"added"}, rep7["signals"]
+
+# The collector remembers first sight and the last use across collects, so a transcript Claude Code deleted
+# does not make a skill look unused for longer than it is.
+h = json.loads(cache.read_text())["seen"]
+assert h["notes"]["last_used"] == ts(0) and h["agent-skills:quiet"]["first_seen"] == su.iso(NOW), h
+(projects / "-work-alpha" / "s3.jsonl").unlink()
+later_rows = {r["name"]: r for r in su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW + dt.timedelta(days=95))["skills"]}
+assert later_rows["notes"]["last_used_ever"] == ts(0) and later_rows["notes"]["last_used"] == ts(40, 1), later_rows["notes"]
+# quiet: unused for 98 days, but it has no quoted trigger and no overlap: zero uses alone keeps it off the list.
+assert later_rows["agent-skills:quiet"]["flags"] == ["unused_30d"], later_rows["agent-skills:quiet"]
+assert later_rows["notes"]["flags"] == ["unused_30d"], later_rows["notes"]
+# A user skill that shadows a plugin skill of the same name does not count as its overlap.
+twin_inv = {**inv, "ship": {"name": "ship", "source": "user", "phrases": ["ship it"]},
+            "agent-skills:ship2": {"name": "agent-skills:ship2", "source": "agent-skills", "phrases": ["ship it"]}}
+twins = {r["name"]: r for r in su.collect(projects_dir=projects, inv=twin_inv, cache_path=root / "twin.json", now=NOW)["skills"]}
+assert twins["agent-skills:ship"]["overlaps"] == ["agent-skills:ship2"], twins["agent-skills:ship"]["overlaps"]
+cfg = root / "rare.json"
+cfg.write_text(json.dumps({"rare": ["notes"]}))
+assert su.rare_config(cfg) == {"notes"} and su.rare_config(root / "missing.json") == set()
+
+# precheck: wake on a row after the cursor, skip once the cursor has moved past it or while a round holds the lock.
+home = root / "programs"
+write(home / "acme" / "ledger.jsonl", [{"ts": "2026-09-20T00:00:00+00:00", "ev": "signal", "kind": "stall"},
+                                       {"ts": "2026-09-21T00:00:00+00:00", "ev": "verdict", "result": "pass"}])
+assert su.new_findings(home) == {}, "a ledger the cursor does not list starts at its newest row"
+with (home / "acme" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-22T00:00:00+00:00", "ev": "verdict", "result": "fail"}) + "\n")
+assert [r["ev"] for r in su.new_findings(home)["acme"]] == ["verdict"]
+assert su.precheck(home, collect_first=False) == 0
+assert su.precheck(home, collect_first=False) == 0, "the precheck keeps no state: only the round moves the cursor"
+(home / "_standing" / "reflect").mkdir(parents=True)
+(home / "_standing" / "reflect" / "cursor.json").write_text(json.dumps({"acme": "2026-09-22T00:00:00+00:00"}))
+assert su.precheck(home, collect_first=False) == 1
+with (home / "acme" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-23T00:00:00Z", "ev": "land_failed", "pr": 7}) + "\n")
+    f.write(json.dumps({"ts": "2026-09-23T01:00:00Z", "ev": "landed", "pr": 8}) + "\n")
+assert [r["ev"] for r in su.new_findings(home)["acme"]] == ["land_failed"]
+# A cursor written without an offset reads as UTC; a ledger check that still fails wakes the agent rather than
+# skipping every run for good.
+(home / "_standing" / "reflect" / "cursor.json").write_text(json.dumps({"acme": "2026-09-23T00:30:00"}))
+assert su.new_findings(home) == {}, su.new_findings(home)
+real_new, su.new_findings = su.new_findings, lambda home: 1 / 0
+assert su.precheck(home, collect_first=False) == 0
+su.new_findings = real_new
+(home / "_standing" / "reflect" / "lock").mkdir()
+assert su.precheck(home, collect_first=False) == 1, "a round in progress"
+assert not su.lock_held(home, now=time.time() + 5 * 3600), "a lock older than 4 hours is stale"
+
+# schedule only prints; the command runs the precheck by absolute path in an existing workspace.
+cmd = su.schedule_cmd(pathlib.Path("/repo/skills/orchestrate/scripts/skill_usage.py"), "path:/repo")
+assert cmd[:3] == ["orca", "automations", "create"], cmd
+assert cmd[cmd.index("--workspace-mode") + 1] == "existing" and cmd[cmd.index("--workspace") + 1] == "path:/repo", cmd
+assert cmd[cmd.index("--precheck") + 1] == "python3 /repo/skills/orchestrate/scripts/skill_usage.py precheck", cmd
+prompt = cmd[cmd.index("--prompt") + 1]
+assert "standing" in prompt and "draft PR" in prompt and "머지하지 않" in prompt, prompt
 
 print("test_skill_usage: ok")
