@@ -324,6 +324,12 @@ def build_sessions(fast, runs, cfg):
         up = w and coord_of_run.get(w.get("runId"))
         return up if up in sessions and up != sid else None
 
+    def orca_parent(s):
+        """The parent set in Orca (`orca worktree set --parent-worktree`), e.g. by a lead that made its workers with
+        `orca worktree create` rather than through a Run."""
+        p = s["orca_parent"]
+        return p if p in sessions else None
+
     root = cfg.get("root_worktree") if cfg.get("root_worktree") in sessions else None
     if not root:
         # A program coordinator started with worker-start opens a newer Run of its own, so the newest Run is not
@@ -343,12 +349,12 @@ def build_sessions(fast, runs, cfg):
             s["kind"] = "orchestrator"
         elif sid in coord_of_run.values():
             s["kind"] = "orchestration"
-            s["parent"] = dispatcher(sid) or root
+            s["parent"] = dispatcher(sid) or orca_parent(s) or root
             s["run"] = next(rid for rid, wt in coord_of_run.items() if wt == sid)
         elif w and coord_of_run.get(w.get("runId")) in sessions:
             s["parent"] = coord_of_run[w["runId"]]
         else:
-            s["parent"] = root
+            s["parent"] = orca_parent(s) or root
             s["kind"] = "task" if w else "standalone"
     # Coordinators that dispatched each other would make a loop the tree never leaves; hang such a one on the root.
     for sid, s in sessions.items():

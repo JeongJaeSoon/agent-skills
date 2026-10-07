@@ -109,9 +109,10 @@ function fleetSidebar() {
   group.hidden = !st;
   if (!st) return;
   const live = sessionTree(st).filter(([s]) => s.phase !== "offline" || s.unread || s.kind === "orchestrator");
+  const kids = (s) => s.kind === "orchestration" ? (st.sessions || []).filter((x) => x.parent === s.id).length : 0;
   $("#session-list").innerHTML = live.map(([s, d]) => `<li><a class="nav-item tree" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
-      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(s.phase)}">${phaseDot(s)}
-      <span class="sb-text">${esc(s.name)}</span><span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
+      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(s.kind)} · ${esc(s.phase)}">${phaseDot(s)}
+      <span class="sb-text">${esc(s.name)}</span>${kids(s) ? `<span class="count" title="sessions under this orchestration">${kids(s)}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
 }
 
 function fleetHeader() {
