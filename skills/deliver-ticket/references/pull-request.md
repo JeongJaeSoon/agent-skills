@@ -14,7 +14,9 @@ proved it works. Use these sections in order and drop any with nothing to say, e
   performance change, one primary number in `before → after` form with its unit, both measured
   under the machine's load limit (`reap-resources` "Load"); a number taken above it is not evidence.
 
-Attach a screenshot or video when it proves a claim. No `## Summary` / `## Test plan` template,
+Attach a screenshot or video when it proves a claim, and register the local copy once it is on the
+PR: `reap.py ledger add --kind evidence --path <file or dir> --pr owner/repo#N` (`reap-resources`
+"Janitor"). No `## Summary` / `## Test plan` template,
 SHAs, file-by-file checklists, or review-round recitals; those belong in the sticky comment or
 the worklog. The body becomes the squash commit body, so keep it within about 40 lines. The
 title is Conventional Commits, `type(scope): subject`, imperative, no trailing period, naming a

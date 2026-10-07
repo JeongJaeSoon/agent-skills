@@ -18,8 +18,8 @@ action for its class.
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
-"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30}.
-Janitor kinds (orca-worktree, orca-worker, tmpdir, gui-app, chrome-window, remote-branch; `--kinds janitor`) cover only
+"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...]}.
+Janitor kinds (orca-worktree, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists or an Orca orchestration worker made, and are report-only: reap never acts on them.
 The ledger is $AGENT_SKILLS_LEDGER or --ledger, default $AGENT_SKILLS_STATE/ledger.jsonl (state default
 ~/.local/state/agent-skills). precheck scans the janitor kinds, writes janitor-plan.json to the state dir and exits 0 only
@@ -410,12 +410,14 @@ def scan(kinds, hours, cfg, repo_list):
             except RuntimeError as e:
                 notes.append(f"{repo}: {e}")
     if set(JANITOR) & kinds:
-        items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes)
+        items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
+                              evidence_roots=cfg.get("evidence_roots"))
     return items, notes
 
 
 # Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker). Report-only: `reap` never acts on them.
-JANITOR = ("orca-worktree", "orca-worker", "tmpdir", "gui-app", "chrome-window", "remote-branch")
+JANITOR = ("orca-worktree", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch")
+MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 
@@ -457,10 +459,10 @@ def pr_reader(gh=run):
     cache = {}
 
     def state(ref):
-        """owner/repo#N → {"state", "headRefOid"}, or None when gh cannot read it."""
+        """owner/repo#N → {"state", "headRefOid", "closedAt"}, or None when gh cannot read it."""
         if ref not in cache:
             p = parse_pr(ref)
-            out = p and gh(["gh", "pr", "view", str(p[1]), "-R", p[0], "--json", "state,headRefOid"], check=False)
+            out = p and gh(["gh", "pr", "view", str(p[1]), "-R", p[0], "--json", "state,headRefOid,closedAt"], check=False)
             cache[ref] = json.loads(out) if out else None
         return cache[ref]
     return state
@@ -540,6 +542,70 @@ def judge_chrome(entries, pr_state, exists=os.path.exists):
         done, why = link_verdict(e.get("links") or {}, pr_state, exists)
         out.append({"kind": "chrome-window", "key": f"chrome-window:{e['id']}", "name": e["id"], "why": why,
                     "target": bool(done), "how": ["에이전트가 처리: 브라우저 도구로 이 창·탭을 닫는다"]})
+    return out
+
+
+def media_files(path):
+    """(media, other) file paths under path; a file path is its own list."""
+    if not os.path.isdir(path):
+        return ([path], []) if path.lower().endswith(MEDIA) else ([], [path])
+    media, other = [], []
+    for root, _, files in os.walk(path):
+        for f in files:
+            (media if f.lower().endswith(MEDIA) else other).append(os.path.join(root, f))
+    return media, other
+
+
+def judge_evidence(entries, pr_state, hours, now, exists=os.path.exists, files=media_files):
+    """A local copy of PR evidence goes once its PR has been merged or closed for `hours`: by then it is on the PR."""
+    out = []
+    for e in latest(entries, "evidence"):
+        path, ref = e["id"], (e.get("links") or {}).get("pr")
+        if not exists(path):
+            continue
+        base = {"kind": "evidence", "key": f"evidence:{path}", "name": path, "links": e.get("links") or {}}
+        s = ref and pr_state(ref)
+        closed = s and s["state"] != "OPEN" and s.get("closedAt")
+        if not ref:
+            why = "연결된 PR 없음(보고만)"
+        elif not s:
+            why = f"PR {ref} 상태를 읽지 못함"
+        elif s["state"] == "OPEN":
+            why = f"열린 PR {ref}"
+        elif not closed:
+            why = f"PR {ref} 닫힌 시각을 읽지 못함"
+        elif now - parse_ts(closed) < hours * 3600:
+            why = f"PR {ref} {s['state'].lower()} 후 {hours:g}시간 미만"
+        elif files(path)[1]:
+            why = "이미지·영상이 아닌 파일이 섞임(보고만)"
+        else:
+            out.append({**base, "why": f"PR {ref} {s['state'].lower()} 후 {hours:g}시간 지남", "target": True,
+                        "how": [f"rm -rf {shlex.quote(path)}"]})
+            continue
+        out.append({**base, "why": why, "target": False, "how": []})
+    return out
+
+
+def stray_evidence(roots, registered, hours, now):
+    """Unregistered images and videos directly in a root or one directory below it: one report-only item per directory."""
+    out = []
+    for root in roots:
+        dirs = []
+        with contextlib.suppress(OSError):
+            dirs = [root] + sorted(d.path for d in os.scandir(root) if d.is_dir(follow_symlinks=False))
+        for d in dirs:
+            if any(under(d, r) for r in registered):
+                continue
+            n = size = 0
+            with contextlib.suppress(OSError):
+                for f in os.scandir(d):
+                    if f.name.lower().endswith(MEDIA) and f.is_file(follow_symlinks=False) and f.path not in registered:
+                        st = f.stat(follow_symlinks=False)
+                        if now - st.st_mtime >= hours * 3600:
+                            n, size = n + 1, size + st.st_size
+            if n:
+                out.append({"kind": "evidence", "key": f"evidence-stray:{d}", "name": d, "target": False, "how": [],
+                            "why": f"ledger 에 없는 이미지·영상 {n}개, {human(size)}(보고만)"})
     return out
 
 
@@ -651,7 +717,7 @@ def worker_worktrees(workers):
     return live, made, users
 
 
-def janitor_scan(kinds, repo_list, entries, notes, pr_state=None):
+def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now=None, evidence_roots=None):
     pr_state = pr_state or pr_reader()
     items = []
     rows = processes() if {"gui-app", "tmpdir"} & kinds else {}
@@ -662,6 +728,13 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None):
         items += judge_gui_apps(entries, pr_state, rows)
     if "chrome-window" in kinds:
         items += judge_chrome(entries, pr_state)
+    if "evidence" in kinds:
+        now = now or time.time()
+        items += judge_evidence(entries, pr_state, hours, now)
+        # /var/folders as a whole holds every app's caches; only the session's own temp dirs are searched.
+        roots = evidence_roots or sorted({real("/tmp"), real(os.environ.get("TMPDIR", "/tmp"))})
+        registered = {real(e["id"]) for e in entries if e.get("kind") in ("evidence", "tmpdir")}
+        items += stray_evidence([real(os.path.expanduser(r)) for r in roots], registered, hours, now)
     if "remote-branch" in kinds:
         items += judge_remote_branches(entries)
     if "orca-worker" in kinds:
