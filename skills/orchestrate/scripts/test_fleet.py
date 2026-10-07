@@ -715,8 +715,9 @@ assert [r["id"] for r in got["runs"]] == ["run_a", "run_b"], got["runs"]
 assert sorted(w["dispatchId"] for w in got["workers"]) == ["ctx_b1", "ctx_run_a", "ctx_run_b", "ctx_run_legacy_local"], got
 
 # The tree's root is the top-level coordinator even when a program coordinator it dispatched runs a newer Run.
-def tree(run_list, workers, wts):
-    fast = {"worktrees": [{"worktreeId": w, "path": f"/work/{w}", "agents": []} for w in wts],
+def tree(run_list, workers, wts, orca_parent=None):
+    fast = {"worktrees": [{"worktreeId": w, "path": f"/work/{w}", "agents": [],
+                           "parentWorktreeId": (orca_parent or {}).get(w)} for w in wts],
             "terminals": [{"handle": f"term_{w}", "worktreeId": w} for w in wts]}
     sessions, root = fleet.build_sessions(fast, {"runs": run_list, "workers": workers, "tasks": []}, {})
     return root, {sid: (s["kind"], s["parent"]) for sid, s in sessions.items()}
@@ -742,6 +743,23 @@ for sid in got:
         sid, hops = got[sid][1], hops + 1
         assert hops < len(got), got
     assert sid == "top", got
+
+# Orca's own parent field places a session no Run dispatched, e.g. a worker a lead made with `orca worktree create`;
+# a dispatching Run's coordinator still wins, and a parent that is gone, the session itself, or a loop falls to the root.
+root_wt, got = tree([run("r-top", "top", "t1"), run("r-lead", "lead", "t2")], [worker("r-top", "lead"), worker("r-top", "w1")],
+                    ["top", "lead", "w1", "w2", "gone", "self", "x", "y"],
+                    {"top": "lead", "w1": "lead", "w2": "lead", "gone": "archived", "self": "self", "x": "y", "y": "x"})
+assert root_wt == "top" and got["top"] == ("orchestrator", None), got
+assert got["lead"] == ("orchestration", "top") and got["w1"] == ("task", "top") and got["w2"] == ("standalone", "lead"), got
+assert got["gone"] == ("standalone", "top") and got["self"] == ("standalone", "top"), got
+for sid in ("x", "y"):
+    hops = 0
+    while got[sid][1]:
+        sid, hops = got[sid][1], hops + 1
+        assert hops < len(got), got
+    assert sid == "top", got
+root_wt, got = tree([run("r-top", "top", "t9"), run("r-a", "a", "t2"), run("r-b", "b", "t3")], [], ["top", "a", "b"], {"b": "a"})
+assert root_wt == "top" and got["a"] == ("orchestration", "top") and got["b"] == ("orchestration", "a"), got
 
 # A session's last activity is the later of Orca's worktree time and its agents' own: the worktree time stands still
 # while an agent in it works.
