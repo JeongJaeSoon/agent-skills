@@ -242,4 +242,134 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reap.kill_tree(orphan[0], []) == "사라졌거나 다른 프로세스"
     assert len(pids) == 4
 
+# Janitor kinds: the ledger appends, the last line per id wins, and a PR link decides.
+PRS = {"acme/app#1": {"state": "OPEN", "headRefOid": "h1"}, "acme/app#2": {"state": "MERGED", "headRefOid": "h2"},
+       "acme/app#3": {"state": "CLOSED", "headRefOid": "h3"}}
+with tempfile.TemporaryDirectory() as tmp:
+    led = pathlib.Path(tmp) / "state" / "ledger.jsonl"
+    reap.ledger_add(led, "tmpdir", "/t/a", pr="acme/app#1", by="w1")
+    reap.ledger_add(led, "tmpdir", "/t/a", pr="acme/app#2", by="w1")
+    with led.open("a") as f:
+        f.write('[]\n"x"\n{"kind": "tmpdir"}\n{torn\n\xff\n')
+    entries = reap.ledger_read(led)
+    assert len(entries) == 2 and set(entries[0]) == {"ts", "run", "kind", "id", "links", "by"}, entries
+    assert [e["links"]["pr"] for e in reap.latest(entries, "tmpdir")] == ["acme/app#2"]
+    try:
+        reap.ledger_add(led, "docker", "x")
+        raise AssertionError("an unknown kind is refused")
+    except SystemExit:
+        pass
+assert reap.parse_pr("acme/app#12") == ("acme/app", 12) and reap.parse_pr("12") is None
+assert reap.link_verdict({"pr": "acme/app#1"}, PRS.get) == (False, "열린 PR acme/app#1")
+assert reap.link_verdict({"pr": "acme/app#3"}, PRS.get)[0] is True
+assert reap.link_verdict({"pr": "acme/app#9"}, PRS.get)[0] is False, "an unreadable PR keeps it"
+assert reap.link_verdict({"worktree": "/wt/x"}, PRS.get, exists=lambda p: False) == (True, "worktree /wt/x 없어짐")
+assert reap.link_verdict({}, PRS.get)[0] is None
+
+e = lambda kind, rid, **links: {"kind": kind, "id": rid, "links": links}
+entries = [e("tmpdir", "/t/open", pr="acme/app#1"), e("tmpdir", "/t/merged", pr="acme/app#2"),
+           e("tmpdir", "/t/busy", pr="acme/app#2"), e("tmpdir", "/t/gone", pr="acme/app#2"),
+           e("tmpdir", "/t/wtgone", worktree="/wt/gone"), e("tmpdir", "/t/nolink")]
+exists = lambda p: p not in ("/t/gone", "/wt/gone")
+got = {i["name"]: i for i in reap.judge_tmpdirs(entries, PRS.get, {7: "/t/busy/sub"}, {}, exists, lambda p: [p + "/X.app"], ("/t",))}
+assert "/t/gone" not in got, "a path already gone is not reported"
+assert {k: v["target"] for k, v in got.items()} == {"/t/open": False, "/t/merged": True, "/t/busy": False,
+                                                       "/t/wtgone": True, "/t/nolink": False}, got
+assert got["/t/open"]["why"] == "열린 PR acme/app#1" and "pid 7" in got["/t/busy"]["why"]
+# LaunchServices registrations under the path go before the directory.
+assert got["/t/merged"]["how"][0].endswith("lsregister -u /t/merged/X.app") and got["/t/merged"]["how"][-1] == "rm -rf /t/merged"
+assert not any(i["target"] for i in reap.judge_tmpdirs(entries, PRS.get, None, {}, exists, lambda p: [], ("/t",)))
+# An app started from a bundle inside runs with cwd /; its executable still keeps the directory.
+got = reap.judge_tmpdirs(entries[1:2], PRS.get, {}, {8: row(8, "/t/merged/X.app/Contents/MacOS/X")}, exists, lambda p: [], ("/t",))
+assert not got[0]["target"] and "pid 8" in got[0]["why"], got
+# Outside a temp dir (a worktree registered by mistake) it is never a target.
+got = reap.judge_tmpdirs(entries[1:2], PRS.get, {}, {}, exists, lambda p: [], ("/elsewhere",))
+assert not got[0]["target"] and "임시 디렉터리 밖" in got[0]["why"], got
+got = reap.judge_tmpdirs([e("tmpdir", "/t", pr="acme/app#2")], PRS.get, {}, {}, exists, lambda p: [], ("/t",))
+assert not got[0]["target"], "a temp root itself is never a target"
+got = reap.judge_tmpdirs([e("tmpdir", "/private/tmp/b x", pr="acme/app#2")], PRS.get, {},
+                         {9: row(9, "/tmp/b x/My App.app/Contents/MacOS/My App")}, lambda p: True, lambda p: [], ("/private/tmp",))
+assert not got[0]["target"] and "pid 9" in got[0]["why"], got
+with tempfile.TemporaryDirectory() as tmp:
+    (pathlib.Path(tmp) / "a" / "Foo.app" / "Contents").mkdir(parents=True)
+    (pathlib.Path(tmp) / "b").mkdir()
+    assert reap.apps_under(tmp) == [os.path.join(tmp, "a", "Foo.app")]
+
+# gui-app: the registered pid with the same start time only.
+rows = {40: row(40, "/Applications/Sim.app/Contents/MacOS/Sim"), 41: row(41, "/x/other")}
+entries = [e("gui-app", "40@" + rows[40]["start"], pr="acme/app#2"), e("gui-app", "41@Thu Jan  1 00:00:00 1970", pr="acme/app#2"),
+           e("gui-app", "42@" + rows[40]["start"], pr="acme/app#2")]
+got = reap.judge_gui_apps(entries, PRS.get, rows)
+assert [(i["key"], i["target"]) for i in got] == [("gui-app:40@" + rows[40]["start"], True)], got
+# chrome-window: no script closes it; the plan says the agent does.
+got = reap.judge_chrome([e("chrome-window", "tab:5", pr="acme/app#3"), e("chrome-window", "tab:6", pr="acme/app#1")], PRS.get)
+assert [i["target"] for i in got] == [True, False] and "에이전트가 처리" in got[0]["how"][0]
+assert [i["target"] for i in reap.judge_remote_branches([e("remote-branch", "acme/app:feat")])] == [False]
+got = reap.judge_orca_worker([{"dispatchId": "ctx_1", "taskId": "task_1"}])
+assert got[0]["target"] and got[0]["how"] == ["orca orchestration worker-release --dispatch ctx_1 --json"]
+
+# orca-worktree: a merged or closed PR, clean, nothing unpushed (unless the PR carried HEAD), no live turn.
+ok = {"pr": "acme/app#2", "live": None, "dirty": False, "unpushed": False, "head": "h2"}
+judge = lambda **kw: reap.judge_orca_worktree("/wt/a", "ledger", {**ok, **kw}, PRS.get)
+assert judge()["target"] and judge()["how"] == ["orca worktree rm --worktree path:/wt/a --run-hooks --json"]
+assert judge(unpushed=True)["target"], "a squash-merged PR carried HEAD"
+assert judge(unpushed=True, head="h9")["why"] == "원격에 없는 커밋"
+assert judge(pr="acme/app#1")["why"] == "열린 PR acme/app#1"
+assert judge(dirty=True)["why"].startswith("변경 있음")
+assert judge(live="살아 있는 워커 턴(ctx_1)")["why"].startswith("살아 있는")
+assert judge(pr=None)["why"] == "연결된 PR 없음" and judge(pr="acme/app#3")["target"]
+
+# Only worktrees a worker made count; a retained row (context-only dispatch, user takeover) marks the user's.
+ws = [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::/w/made"}},
+      {"dispatchId": "d2", "terminalState": "active", "resource": {"worktreeId": "r::/w/live"},
+       "projection": {"outcome": "in_progress"}},
+      {"dispatchId": "d3", "terminalState": "retained", "resource": {"worktreeId": "r::/w/mine"}},
+      {"dispatchId": "d4", "terminalState": "released", "resource": {"worktreeId": "r::/w/took", "retainedReason": "user_takeover"}},
+      {"terminalState": "released", "resource": {}}]
+live, made, users = reap.worker_worktrees(ws)
+assert made == {"/w/made", "/w/live"} and users == {"/w/mine", "/w/took"} and list(live) == ["/w/live"], (made, users, live)
+
+# The branch's PR is looked up without a ledger link; a fork's PR with the same head name does not count.
+def fake_git(prs):
+    def git(cmd, cwd=None, check=True):
+        if cmd[0] == "gh":
+            return json.dumps(prs)
+        return {"--git-common-dir": "/r/.git\n", "--show-current": "fix\n", "HEAD": "h2\n"}.get(cmd[-1], "")
+    return git
+fork = {"number": 7, "url": "https://github.com/other/app/pull/7", "isCrossRepository": True}
+mine = {"number": 2, "url": "https://github.com/acme/app/pull/2", "isCrossRepository": False}
+assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([fork]))["pr"] is None
+assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([fork, mine]))["pr"] == "acme/app#2"
+assert reap.worktree_facts("/r", None, None, {}, git=fake_git([mine])) == {"main": True}, "the main checkout is skipped"
+
+# precheck: exit 0 once per new non-empty target set, 1 otherwise.
+with tempfile.TemporaryDirectory() as tmp:
+    st = pathlib.Path(tmp)
+    items = [{"key": "tmpdir:/a", "target": True}, {"key": "tmpdir:/b", "target": False}]
+    assert reap.precheck(items, st) == (0, ["tmpdir:/a"])
+    assert reap.precheck(items, st)[0] == 1
+    assert reap.precheck(items + [{"key": "tmpdir:/c", "target": True}], st)[0] == 0
+    assert reap.precheck([], st)[0] == 1 and reap.precheck([], st)[0] == 1
+argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo")
+assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
+assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "17 */3 * * *"
+assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck"
+
+# CLI: ledger add, precheck twice, reap leaves report-only kinds alone, schedule only prints.
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = pathlib.Path(os.path.realpath(tmp))
+    d = tmp / "build"
+    d.mkdir()
+    env = {**os.environ, "AGENT_SKILLS_STATE": str(tmp / "state")}
+    script = str(pathlib.Path(__file__).parent / "reap.py")
+    cli = lambda *a: subprocess.run([sys.executable, script, *a], env=env, capture_output=True, text=True)
+    assert cli("ledger", "add", "--kind", "tmpdir", "--path", str(d), "--worktree", str(tmp / "gone-wt")).returncode == 0
+    assert str(d) in cli("ledger", "list").stdout
+    first, second = cli("precheck", "--kinds", "tmpdir"), cli("precheck", "--kinds", "tmpdir")
+    assert (first.returncode, second.returncode) == (0, 1), (first.stdout, second.stdout)
+    out = cli("reap", "--plan", str(tmp / "state" / "janitor-plan.json")).stdout
+    assert "보고만 tmpdir" in out and d.exists(), out
+    out = cli("schedule", "--workspace", "path:/repo")
+    assert out.returncode == 0 and out.stdout.startswith("orca automations create") and "--write" in out.stdout, out
+
 print("ok")

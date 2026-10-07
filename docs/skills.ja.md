@@ -155,6 +155,7 @@
   - **docker:** コンテナが1つもない compose project の dangling volume と、どのコンテナも使っていないタグなしイメージ。コンテナのある project、その名前を含む volume、compose ラベルのない volume は残して報告だけします。
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
+  - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。report-only で、`reap` は処理しません。`precheck` は対象が変わったときだけ exit 0 なので 3 時間ごとの Orca automation の precheck に使い、`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
   - **load:** `reap.py load` は読むだけです。CPU の上位消費者（Claude セッションとその子、残骸のツリー、その他のプロセス）を ours-idle・ours-working・leftover・system に分け、5 分の負荷が上限（既定は CPU 数）以上なら分類ごとの対処を出します。静かなセッションには残りの作業を尋ね、なければ自分で閉じてもらいます。残骸は `reap` で片付け、動いているものは残して新しい dispatch を止め、system は自分たちのものではないと報告だけします。上限を超えて測ったベンチマークは証拠になりません。
   - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（Codex のプロセス数と RSS、孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
 - **同梱:** `scripts/reap.py`、テストファイル。

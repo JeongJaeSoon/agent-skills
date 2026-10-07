@@ -1,6 +1,6 @@
 ---
 name: reap-resources
-description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets.
+description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Also the janitor ("janitor", "자동 정리", "정기 정리", "에이전트가 만든 리소스 정리"): a ledger of what agents created (temp dirs, GUI apps, browser windows) plus settled Orca worker worktrees and terminals, reported on a 3-hour Orca automation with a model-free precheck. Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets; janitor kinds are report-only.
 ---
 
 # Reap resources
@@ -11,8 +11,9 @@ servers reparented to pid 1, the volumes and images of finished compose stacks, 
 of merged PRs, git worktrees in the scratchpad of a finished session. One machine once held 884
 such helpers (7.6 GB, 84% CPU), 21 orphaned test servers and 108 dangling volumes.
 
-This skill needs no program. Orca worktrees of settled workers are not its job: the resource
-steward removes those with `orca worktree rm` (`orchestrate` `references/roles.md`).
+This skill needs no program. It does not remove Orca worktrees of settled workers: the resource
+steward does that with `orca worktree rm` (`orchestrate` `references/roles.md`); the janitor kinds
+below only report them.
 
 ## Run
 
@@ -31,6 +32,53 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
   threshold (default 6), `--repo PATH` (repeatable) picks the repos for `branch` and
   `worktree` (default: every repo in `orca repo list`).
 - Show the user the scan before the first `reap` in a session unless they asked to reap.
+
+## Janitor: what agents created (report-only)
+
+These kinds look only at what an agent registered in the ledger or an Orca orchestration worker
+made. A user's own worktree, the main checkout, and anything not registered never show up. `reap`
+never acts on them: it prints `보고만` and the plan's commands are for a later, approved step.
+
+```bash
+python3 "$R" ledger add --kind tmpdir --path /tmp/build-x --pr acme/app#12     # right after creating it
+python3 "$R" ledger add --kind gui-app --pid 4242 --worktree <worktree path>   # pid + start time are recorded
+python3 "$R" ledger add --kind chrome-window --id <window or tab id> --pr acme/app#12
+python3 "$R" ledger list
+python3 "$R" scan --kinds janitor          # report-only; a plain scan leaves the janitor kinds out
+```
+
+The ledger is append-only JSON lines `{ts, run, kind, id, links: {pr, worktree}, by}` at
+`~/.local/state/agent-skills/ledger.jsonl` (`$AGENT_SKILLS_STATE` moves the folder,
+`$AGENT_SKILLS_LEDGER` or `--ledger` the file). The last line per id wins. A link is "done" when its
+PR (`owner/repo#N`, read with `gh`) is merged or closed, or its worktree is gone.
+
+| Kind | Target when | Kept when | Planned action |
+|---|---|---|---|
+| orca-worktree | in the ledger or made by an orchestration worker; its PR (ledger link, else the branch's own PR, never a fork's) merged or closed; no changes, untracked files included; nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it | an open PR, no PR, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4) |
+| orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
+| tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then `rm -rf` |
+| gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
+| chrome-window | its link is done | an open PR, no link | the agent closes it with its browser tools; no script can |
+| remote-branch | interface only, never a target | always | - |
+
+### Scheduled run
+
+```bash
+python3 "$R" precheck    # writes <state>/janitor-plan.json; exit 0 only when the target set is non-empty and changed since the last report
+python3 "$R" schedule    # prints the `orca automations create` command; nothing is created without --write
+```
+
+`schedule` builds an existing-workspace automation on `17 */3 * * *` whose precheck is
+`python3 <absolute reap.py> precheck` (its cwd is the repo's main checkout, so paths are absolute).
+Run `schedule` from the checkout that loads the skills, never a card's worktree: the command keeps
+that path. `orca automations run` skips the precheck, so test it by running it directly, with
+`AGENT_SKILLS_STATE` pointing at a scratch folder: a run records the target set, and the next
+scheduled precheck would skip an unchanged set. A precheck prints what it could not read (`gh`,
+`orca`) to stderr. `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
+so a scan there can see fewer workers than the automation does. Any process in a worktree keeps
+it, Orca's idle shell in an open card included: an orca-worktree becomes a target once its card's
+terminals are closed, and until then `orca-worker` reports the reclaimable terminal. Which device fits which job:
+[docs/automation.md](../../docs/automation.md).
 
 ## Load
 
