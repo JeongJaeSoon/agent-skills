@@ -35,3 +35,15 @@ the one question it cannot settle to astra as a `task`. Astra runs at `medium`, 
 bounded question, never `high` or `xhigh` (the user's call).
 
 For an investigation or a fix you want Codex to drive end to end, use the `codex:rescue` skill.
+
+## When Codex returns no review
+
+A run can exit 0, and even fill the verdict its output schema requires, without having reviewed
+anything. Read the body: when it says Codex could not read the repository or the diff (tool or
+repository-access timeouts, "unable to review"), the run is no review, whatever the exit code
+and verdict say.
+
+Retry once, unless the same failure already happened in this program or session. If it fails
+again, a Claude subagent that did not write the code runs `/code-review` on the diff saved to a
+file (`git add -N` new files first so they are in it). Record that verdict as `subagent-review`
+with the Codex failure in `--note`, so the ledger can tell it from a trivial diff's review.

@@ -93,8 +93,8 @@ a reviewer other than its author: one subagent running `/code-review` on it (ver
 
 **Codex is the second pair of eyes on anything non-trivial**, not an optional extra: its
 `review` for defects, and `adversarial-review` when the design, not the defect count, is what you
-are unsure about. The commands and the model to pick are in
-[references/codex-review.md](references/codex-review.md).
+are unsure about. The commands, the model to pick, and what to do when Codex returns no review
+are in [references/codex-review.md](references/codex-review.md).
 
 Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
 Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
