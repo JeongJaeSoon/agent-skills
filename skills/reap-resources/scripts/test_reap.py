@@ -341,6 +341,25 @@ mine = {"number": 2, "url": "https://github.com/acme/app/pull/2", "isCrossReposi
 assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([fork]))["pr"] is None
 assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([fork, mine]))["pr"] == "acme/app#2"
 assert reap.worktree_facts("/r", None, None, {}, git=fake_git([mine])) == {"main": True}, "the main checkout is skipped"
+# A git read that fails is not a clean checkout: the worktree is kept with the reason.
+def failing_git(cmd, cwd=None, check=True):
+    return None if cmd[-2:] in (["status", "--porcelain"], ["--not", "--remotes"]) else fake_git([mine])(cmd, cwd, check)
+facts = reap.worktree_facts("/r-wt", None, None, {}, git=failing_git)
+assert reap.judge_orca_worktree("/r-wt", "ledger", facts, PRS.get) == {
+    **judge(), "why": "git 상태를 읽지 못함", "target": False, "key": "orca-worktree:/r-wt", "name": "/r-wt",
+    "how": ["orca worktree rm --worktree path:/r-wt --run-hooks --json"]}, facts
+
+# An unreadable worker list is not an empty one: a ledger worktree may be a user's takeover, so it is kept.
+saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which
+with tempfile.TemporaryDirectory() as tmp:
+    wt = os.path.realpath(tmp)
+    reap.cwds, reap.shutil.which = (lambda: {}), (lambda name: "/bin/" + name)
+    reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "live": live}
+    for workers, target, why in ((None, False, "워커 목록을 읽지 못함"), ([], True, "PR acme/app#2 merged (ledger)")):
+        reap.orca_workers = lambda state=None: workers
+        got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get)
+        assert [(i["target"], i["why"]) for i in got] == [(target, why)], (workers, got)
+reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which = saved
 
 # precheck: exit 0 once per new non-empty target set, 1 otherwise.
 with tempfile.TemporaryDirectory() as tmp:
@@ -350,10 +369,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reap.precheck(items, st)[0] == 1
     assert reap.precheck(items + [{"key": "tmpdir:/c", "target": True}], st)[0] == 0
     assert reap.precheck([], st)[0] == 1 and reap.precheck([], st)[0] == 1
-argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo")
+argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo", ledger=pathlib.Path("/l/ledger.jsonl"))
 assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
 assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "17 */3 * * *"
-assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck"
+# The automation does not inherit the shell that ran schedule, so the precheck names the state and ledger itself.
+assert argv[argv.index("--precheck") + 1] == \
+    "env AGENT_SKILLS_STATE=/s AGENT_SKILLS_LEDGER=/l/ledger.jsonl python3 /abs/reap.py precheck"
 
 # CLI: ledger add, precheck twice, reap leaves report-only kinds alone, schedule only prints.
 with tempfile.TemporaryDirectory() as tmp:

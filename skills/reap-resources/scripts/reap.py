@@ -570,6 +570,8 @@ def judge_orca_worktree(path, source, facts, pr_state):
         why = f"PR {ref} 상태를 읽지 못함"
     elif s["state"] == "OPEN":
         why = f"열린 PR {ref}"
+    elif facts.get("unreadable"):
+        why = "git 상태를 읽지 못함"
     elif facts.get("dirty"):
         why = "변경 있음(추적 안 되는 파일 포함)"
     elif facts.get("unpushed") and facts.get("head") != s.get("headRefOid"):
@@ -598,11 +600,14 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
             url = own[0]["url"]
             m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
             ref = m and f"{m.group(1)}#{m.group(2)}"
+    # Untracked files count: `orca worktree rm` would take new, never-added work with it.
+    status = git(["git", "-C", path, "status", "--porcelain"], check=False)
+    ahead = git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)
     return {"main": False, "repo": main, "pr": ref,
             "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
-            # Untracked files count: `orca worktree rm` would take new, never-added work with it.
-            "dirty": bool(git(["git", "-C", path, "status", "--porcelain"], check=False)),
-            "unpushed": bool(git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)),
+            # None is a failed read, not an empty answer.
+            "unreadable": status is None or ahead is None,
+            "dirty": bool(status), "unpushed": bool(ahead),
             "head": (git(["git", "-C", path, "rev-parse", "HEAD"], check=False) or "").strip()}
 
 
@@ -665,10 +670,10 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None):
             notes.append("orca-worker: worker-list 를 읽지 못함, 건너뜀")
         items += judge_orca_worker(reclaim or [])
     if "orca-worktree" in kinds:
-        workers = orca_workers() or []
-        if not workers and shutil.which("orca"):
-            notes.append("orca-worktree: 오케스트레이션 워커 목록이 비었거나 읽지 못함, ledger 만 본다")
-        live, made, users = worker_worktrees(workers)
+        workers = orca_workers() if shutil.which("orca") else []
+        if workers is None:
+            notes.append("orca-worktree: 오케스트레이션 워커 목록을 읽지 못함, ledger worktree 는 보존한다")
+        live, made, users = worker_worktrees(workers or [])
         ledger = {real(e["id"]): e for e in latest(entries, "orca-worktree")}
         repos_real = {real(r) for r in repo_list}
         for path in sorted((set(ledger) | made) - users):
@@ -680,6 +685,9 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None):
                 continue
             if cwd_of is None and not facts["live"]:
                 facts["live"] = "프로세스 cwd 를 읽지 못함"
+            if workers is None and not facts["live"]:
+                # Without the list, a user's takeover and a live turn look the same as a finished worker.
+                facts["live"] = "워커 목록을 읽지 못함"
             items.append(judge_orca_worktree(path, "ledger" if e else "오케스트레이션 워커", facts, pr_state))
     return items
 
@@ -696,13 +704,16 @@ def precheck(items, state_dir):
     return (0 if targets else 1), targets
 
 
-def schedule_cmd(script, state_dir, workspace, provider="claude"):
+def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None):
     plan = state_dir / "janitor-plan.json"
     prompt = (f"reap-resources janitor 회차다. 정리 계획 {plan} 을 읽고(없으면 python3 {script} scan --kinds janitor 를 돌린다) "
               "정리 대상과 남긴 것의 이유를 한국어로 보고한다. report-only: 아무것도 지우거나 닫지 않는다.")
     return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", "17 */3 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-            "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json"]
+            "--precheck", " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(state_dir))}",
+                                    f"AGENT_SKILLS_LEDGER={shlex.quote(str(ledger or state_dir / 'ledger.jsonl'))}",
+                                    "python3", shlex.quote(str(script)), "precheck"]),
+            "--prompt", prompt, "--json"]
 
 
 BUSY_CHILD_CPU = 25
@@ -969,7 +980,7 @@ def main():
         workspace = opt("--workspace") or (top and f"path:{top.strip()}")
         if not workspace:
             sys.exit("schedule needs --workspace <selector>: the checkout the automation runs in")
-        argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude")
+        argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude", ledger_path())
         print(" ".join(shlex.quote(a) for a in argv))
         if "--write" in sys.argv:
             out = run(argv)

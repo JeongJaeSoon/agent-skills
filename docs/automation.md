@@ -28,6 +28,8 @@
 
 - precheck의 cwd는 `--workspace`로 준 worktree가 아니라 저장소의 메인 체크아웃이다. precheck 스크립트는 절대
   경로와 `git -C`를 쓴다.
+- precheck가 `schedule`을 실행한 셸의 환경 변수를 물려받는다고 가정하지 않는다. 상태 폴더 같은 경로는 precheck 명령에
+  `env NAME=value`로 넣는다(reap.py `schedule`은 `AGENT_SKILLS_STATE`와 `AGENT_SKILLS_LEDGER`를 넣는다).
 - `orca automations run`(수동 실행)은 precheck를 건너뛴다. precheck가 맞게 거르는지는 스크립트를 직접 돌려서
   exit code로 확인한다. 지난 결과를 기억하는 precheck라면 직접 돌린 회차도 기억되므로, 검증할 때는 상태
   폴더를 따로 둔다(reap.py는 `AGENT_SKILLS_STATE`).
