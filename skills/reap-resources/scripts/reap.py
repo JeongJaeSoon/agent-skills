@@ -18,15 +18,17 @@ action for its class.
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
-"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...]}.
+"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7}.
 Janitor kinds (orca-worktree, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
-what the ledger lists or an Orca orchestration worker made, and are report-only: reap never acts on them.
+what the ledger lists or an Orca orchestration worker made. user-folder covers top-level entries of ~/Downloads and ~/Desktop
+untouched for reap.user_folder_days (default 7). reap moves files to the trash, never deletes them for good, and leaves a
+chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
 The ledger is $AGENT_SKILLS_LEDGER or --ledger, default $AGENT_SKILLS_STATE/ledger.jsonl (state default
-~/.local/state/agent-skills). precheck scans the janitor kinds, writes janitor-plan.json to the state dir and exits 0 only
-when the target set is non-empty and changed since the last report. schedule prints the `orca automations create`
-command; only --write runs it.
+~/.local/state/agent-skills). precheck scans the janitor kinds and user-folder (at most once a day), writes janitor-plan.json
+to the state dir and exits 0 only when the target set is non-empty and changed since the last report. schedule prints the
+`orca automations create` command; only --write runs it.
 """
-import contextlib, datetime as dt, json, os, pathlib, re, shlex, shutil, signal, subprocess, sys, time
+import contextlib, datetime as dt, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ("codex", "orphan", "docker", "branch", "worktree")
@@ -412,14 +414,34 @@ def scan(kinds, hours, cfg, repo_list):
     if set(JANITOR) & kinds:
         items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
                               evidence_roots=cfg.get("evidence_roots"))
+    if "user-folder" in kinds:
+        items += user_folder_scan(float(cfg.get("user_folder_days") or 7), notes)
     return items, notes
 
 
-# Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker). Report-only: `reap` never acts on them.
+# Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker).
 JANITOR = ("orca-worktree", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch")
+# What the scheduled run covers: the janitor kinds plus the user's download and desktop folders.
+SCHEDULED = JANITOR + ("user-folder",)
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+
+
+def trash(path):
+    """Move path to the trash; nothing here deletes for good. `trash` (macOS 15+) keeps Finder's Put Back."""
+    folder = os.environ.get("AGENT_SKILLS_TRASH")
+    if not folder and shutil.which("trash"):
+        run(["trash", "-s", path])
+        return "휴지통으로 옮김"
+    dest = pathlib.Path(folder or "~/.Trash").expanduser()
+    dest.mkdir(parents=True, exist_ok=True)
+    name = os.path.basename(path.rstrip("/"))
+    target = dest / name
+    if os.path.lexists(target):
+        target = dest / f"{name} {dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+    shutil.move(path, target)
+    return f"휴지통으로 옮김({target})"
 
 
 def ledger_path():
@@ -516,7 +538,7 @@ def judge_tmpdirs(entries, pr_state, cwd_of, rows=None, exists=os.path.exists, a
             done, why = False, f"pid {users[0]} 이 cwd 로 사용 중"
         elif done and cwd_of is None:
             done, why = False, "프로세스 cwd 를 읽지 못함"
-        how = [f"{LSREGISTER} -u {shlex.quote(a)}" for a in apps(path)] + [f"rm -rf {shlex.quote(path)}"]
+        how = [f"{LSREGISTER} -u {shlex.quote(a)}" for a in apps(path)] + [f"trash {shlex.quote(path)}"]
         out.append({**base, "why": why, "target": bool(done), "how": how})
     return out
 
@@ -531,7 +553,7 @@ def judge_gui_apps(entries, pr_state, rows, exists=os.path.exists):
             continue
         done, why = link_verdict(e.get("links") or {}, pr_state, exists)
         out.append({"kind": "gui-app", "key": f"gui-app:{e['id']}", "name": f"pid {pid} {r['cmd'][:60]}", "why": why,
-                    "target": bool(done), "how": [f"kill -TERM {pid}"]})
+                    "target": bool(done), "how": [f"kill -TERM {pid}"], "gpid": int(pid), "start": start})
     return out
 
 
@@ -580,7 +602,7 @@ def judge_evidence(entries, pr_state, hours, now, exists=os.path.exists, files=m
             why = "이미지·영상이 아닌 파일이 섞임(보고만)"
         else:
             out.append({**base, "why": f"PR {ref} {s['state'].lower()} 후 {hours:g}시간 지남", "target": True,
-                        "how": [f"rm -rf {shlex.quote(path)}"]})
+                        "how": [f"trash {shlex.quote(path)}"]})
             continue
         out.append({**base, "why": why, "target": False, "how": []})
     return out
@@ -765,6 +787,81 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
     return items
 
 
+USER_FOLDERS = ("~/Downloads", "~/Desktop")
+PARTIAL = (".download", ".crdownload", ".part")
+# The automation runs every 3 hours; 21 keeps a daily sweep from slipping a slot each day.
+USER_FOLDER_EVERY = 21 * 3600
+
+
+def last_touch(path, newer):
+    """Newest mtime or ctime of path and everything under it; stops at the first one past `newer`.
+    ctime counts because an unpacked archive keeps old mtimes but arrives with a fresh ctime."""
+    st = os.lstat(path)
+    t = max(st.st_mtime, st.st_ctime)
+    if t >= newer or not stat.S_ISDIR(st.st_mode):
+        return t
+    for root, dirs, files in os.walk(path):
+        for n in dirs + files:
+            with contextlib.suppress(OSError):
+                s = os.lstat(os.path.join(root, n))
+                t = max(t, s.st_mtime, s.st_ctime)
+                if t >= newer:
+                    return t
+    return t
+
+
+def open_paths():
+    """Every path this user's processes hold open (cwd included), or None when lsof cannot list them."""
+    lsof = shutil.which("lsof") or "/usr/sbin/lsof"
+    out = run([lsof, "-n", "-P", "-u", str(os.getuid()), "-Fn"], check=False)
+    return None if out is None else {line[1:] for line in out.splitlines() if line[:1] == "n"}
+
+
+def judge_user_folder(folder, days, now, opened, touched=last_touch):
+    """Top-level entries of one folder; a target is untouched for `days`, not open, and not a download in progress."""
+    out = []
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        if name.startswith("."):
+            continue  # .DS_Store, .localized: Finder's own
+        base = {"kind": "user-folder", "key": f"user-folder:{path}", "name": path, "how": [f"trash {shlex.quote(path)}"]}
+        try:
+            t = touched(path, now - days * 86400)
+            tip = f"{os.lstat(path).st_ino}:{t:.0f}"
+        except OSError:
+            continue
+        if name.lower().endswith(PARTIAL):
+            why = "다운로드 중"
+        elif now - t < days * 86400:
+            why = f"{days:g}일 안에 바뀜"
+        elif opened is None:
+            why = "열린 파일 목록을 읽지 못함"
+        elif any(under(o, path) or under(o, real(path)) for o in opened):
+            why = "열려 있음"
+        else:
+            out.append({**base, "why": f"{days:g}일 넘게 안 바뀜", "target": True, "age": now - t, "tip": tip})
+            continue
+        out.append({**base, "why": why, "target": False, "age": now - t})
+    return out
+
+
+def user_folder_scan(days, notes, folders=USER_FOLDERS):
+    opened, now, items = open_paths(), time.time(), []
+    for f in folders:
+        folder = os.path.expanduser(f)
+        try:
+            items += judge_user_folder(folder, days, now, opened)
+        except OSError as e:
+            notes.append(f"user-folder: {f} 을 읽지 못함({e.strerror}; 권한이면 사람이 허용한다)")
+    return items
+
+
+def user_folder_due(state_dir, now=None):
+    with contextlib.suppress(OSError, ValueError):
+        return (now or time.time()) - json.loads((state_dir / "user-folder-last.json").read_text())["at"] >= USER_FOLDER_EVERY
+    return True
+
+
 def precheck(items, state_dir):
     """Exit code for an Orca automation precheck: 0 only when the target set changed since the last report and is not empty."""
     targets = sorted(i["key"] for i in items if i["target"])
@@ -777,16 +874,23 @@ def precheck(items, state_dir):
     return (0 if targets else 1), targets
 
 
-def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None):
+def schedule_prompt(script, state_dir, ledger=None):
     plan = state_dir / "janitor-plan.json"
-    prompt = (f"reap-resources janitor 회차다. 정리 계획 {plan} 을 읽고(없으면 python3 {script} scan --kinds janitor 를 돌린다) "
-              "정리 대상과 남긴 것의 이유를 한국어로 보고한다. report-only: 아무것도 지우거나 닫지 않는다.")
+    env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(state_dir))}",
+                    f"AGENT_SKILLS_LEDGER={shlex.quote(str(ledger or state_dir / 'ledger.jsonl'))}", "python3", shlex.quote(str(script))])
+    prompt = (f"reap-resources janitor 회차다. 정리 계획 {plan} 의 대상을 `{env} reap --plan {plan}` 로 한 번 정리한다. "
+              "reap 은 계획의 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮기고, 바뀐 것은 건너뛴다. "
+              "출력에 '에이전트가 처리'로 남은 chrome-window 는 브라우저 도구가 있으면 그 창·탭을 닫고, 없으면 남긴다. "
+              "그 뒤 정리한 것, 건너뛴 것, 남긴 것과 이유를 한국어로 보고한다. "
+              "계획에 없는 것은 건드리지 않고, rm 으로 지우거나 휴지통을 비우지 않는다.")
+    return env, prompt
+
+
+def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None):
+    env, prompt = schedule_prompt(script, state_dir, ledger)
     return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", "17 */3 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-            "--precheck", " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(state_dir))}",
-                                    f"AGENT_SKILLS_LEDGER={shlex.quote(str(ledger or state_dir / 'ledger.jsonl'))}",
-                                    "python3", shlex.quote(str(script)), "precheck"]),
-            "--prompt", prompt, "--json"]
+            "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
 
 
 BUSY_CHILD_CPU = 25
@@ -927,7 +1031,7 @@ def report(data):
     for i in targets:
         print(f"- {label(i)}: {i['why']}")
         for how in i.get("how") or ():
-            print(f"  - 처리(계획만, 실행 안 함): `{how}`")
+            print(f"  - 처리(reap 이 실행): `{how}`")
     kept = [i for i in data["items"] if not i["target"]]
     if kept:
         print(f"\n## 남김 {len(kept)}개\n")
@@ -973,7 +1077,26 @@ def kill_tree(item, notes):
 
 
 def act(item, notes):
-    k = item["key"]
+    k, kind = item["key"], item["kind"]
+    if kind in ("tmpdir", "evidence", "user-folder"):
+        for how in item.get("how") or ():
+            if how.startswith(LSREGISTER):
+                run([LSREGISTER, "-u", shlex.split(how)[-1]], check=False)
+        return trash(item["name"])
+    if kind == "gui-app":
+        r = processes().get(item["gpid"])
+        if not r or r["start"] != item["start"]:
+            return "사라졌거나 다른 프로세스"
+        os.kill(item["gpid"], signal.SIGTERM)
+        return "SIGTERM 보냄"
+    if kind == "chrome-window":
+        return "에이전트가 처리: 브라우저 도구로 이 창·탭을 닫는다(스크립트는 못 닫음)"
+    if kind == "orca-worker":
+        run(["orca", "orchestration", "worker-release", "--dispatch", k.split(":", 1)[1], "--json"])
+        return "터미널 회수"
+    if kind == "orca-worktree":
+        run(["orca", "worktree", "rm", "--worktree", f"path:{item['name']}", "--run-hooks", "--json"])
+        return "worktree 제거(orca worktree rm)"
     if k.startswith("proc:"):
         return kill_tree(item, notes)
     if k.startswith("volume:"):
@@ -996,13 +1119,9 @@ def main():
     cfg = config()
     if cmd == "reap":
         plan = json.loads(pathlib.Path(opt("--plan") or sys.exit("reap needs --plan PLAN.json")).read_text())
-        wanted = {}
-        for i in plan["items"]:
-            if i["target"] and i["kind"] in JANITOR:
-                print(f"- 보고만 {label(i)}: report-only 종류라 reap 이 처리하지 않음")
-            elif i["target"]:
-                wanted[i["key"]] = i
-        fresh, notes = scan({i["kind"] for i in wanted.values()}, plan["hours"], cfg, plan["repos"])
+        wanted = {i["key"]: i for i in plan["items"] if i["target"]}
+        kinds = {i["kind"] for i in wanted.values()}
+        fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
@@ -1011,8 +1130,11 @@ def main():
                 continue
             try:
                 print(f"- {label(new)}: {act(new, notes)}")
-            except RuntimeError as e:
+            except (RuntimeError, OSError) as e:
                 print(f"- 실패 {label(new)}: {e}")
+        if "user-folder" in kinds:
+            STATE.mkdir(parents=True, exist_ok=True)
+            (STATE / "user-folder-last.json").write_text(json.dumps({"at": time.time()}))
         for n in notes:
             print(f"- 메모: {n}")
         return
@@ -1063,16 +1185,21 @@ def main():
         return
     if cmd not in ("scan", "precheck"):
         sys.exit(__doc__)
-    names = (opt("--kinds") or ",".join(JANITOR if cmd == "precheck" else KINDS)).split(",")
+    names = (opt("--kinds") or ",".join(SCHEDULED if cmd == "precheck" else KINDS)).split(",")
     names = [k for n in names for k in (JANITOR if n == "janitor" else (n,))]
-    kinds = set(names) & set(KINDS + JANITOR)
+    kinds = set(names) & set(KINDS + SCHEDULED)
+    pre_notes = []
+    if cmd == "precheck" and "user-folder" in kinds and not user_folder_due(STATE):
+        kinds.discard("user-folder")
+        pre_notes.append("user-folder: 하루 한 번만 정리한다, 이번 회차는 건너뜀")
     hours = float(opt("--hours") or cfg.get("hours") or 6)
     repo_list = repos([a for i, a in enumerate(sys.argv) if i and sys.argv[i - 1] == "--repo"]) \
         if {"branch", "worktree", "orca-worktree"} & kinds else []
     items, notes = scan(kinds, hours, cfg, repo_list)
+    notes = pre_notes + notes
     msgs, totals = alerts(items, {**ALERT, **(cfg.get("alert") or {})})
     data = {"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "hours": hours,
-            "kinds": [k for k in KINDS + JANITOR if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
+            "kinds": [k for k in KINDS + SCHEDULED if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
     if cmd == "precheck":
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
