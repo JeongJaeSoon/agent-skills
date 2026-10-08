@@ -1,6 +1,6 @@
 ---
 name: brief-status
-description: "Use when the human asks where the work stands — \"현황 보고해줘\", \"상황 정리해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"status update\" — and when a turn for the human ends with a report spanning several items (finished work, open work, decisions to take). Not for reports whose shape is fixed by a contract: a subagent's result, an Orca worker_done body, JSON or a script's output. Picks the layout by channel: plain short lines with no markdown when the human writes from Telegram, markdown tables in the terminal. \"어디까지 했지\" (reconstructing past sessions) is recall; \"남은 작업 있어?\" (what runs next) is handoff-ticket; a program's numbers come from orchestrate's `orch status`."
+description: "Use when the human asks where the work stands — \"현황 보고해줘\", \"상황 정리해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"status update\", or a message that is just `/brief` (a channel bot command) — and when a turn for the human ends with a report spanning several items (finished work, open work, decisions to take). Not for reports whose shape is fixed by a contract: a subagent's result, an Orca worker_done body, JSON or a script's output. Picks the layout by channel: plain short lines with no markdown when the human writes from Telegram, markdown tables in the terminal. \"어디까지 했지\" (reconstructing past sessions) is recall; \"남은 작업 있어?\" (what runs next) is handoff-ticket; a program's numbers come from orchestrate's `orch status`."
 ---
 
 # Brief status
@@ -21,6 +21,8 @@ In this order, each left out when empty:
 No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
 ## 2. Channel
+
+A message that is only `/brief` is a request for this report. A Telegram bot command the plugin does not handle reaches the session as plain text, so the bot's `/` menu can offer it: register it once with `setMyCommands` scoped to the human's chat (`{"type": "chat", "chat_id": …}`), because the plugin resets the all-private-chats list on every start and the narrower scope wins. Registering changes the bot, so the human approves it first.
 
 The human's last message decides it. It came in as a Telegram `<channel source="plugin:telegram:...">` tag → Telegram layout, sent with the Telegram reply tool. Anything else → terminal layout.
 
