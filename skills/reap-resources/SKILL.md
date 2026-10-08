@@ -1,6 +1,6 @@
 ---
 name: reap-resources
-description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Also the janitor ("janitor", "자동 정리", "정기 정리", "에이전트가 만든 리소스 정리"): a ledger of what agents created (temp dirs, GUI apps, browser windows) plus settled Orca worker worktrees and terminals, reported on a 3-hour Orca automation with a model-free precheck. Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets; janitor kinds are report-only.
+description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Also the janitor ("janitor", "자동 정리", "정기 정리", "에이전트가 만든 리소스 정리"): a ledger of what agents created (temp dirs, GUI apps, browser windows) plus settled Orca worker worktrees and terminals, cleaned up on a 3-hour Orca automation with a model-free precheck. Also files in ~/Downloads and ~/Desktop untouched for 7 days, screenshots for 1 ("다운로드 폴더 정리", "바탕화면 정리"). Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets; files go to the trash, never deleted for good.
 ---
 
 # Reap resources
@@ -11,9 +11,9 @@ servers reparented to pid 1, the volumes and images of finished compose stacks, 
 of merged PRs, git worktrees in the scratchpad of a finished session. One machine once held 884
 such helpers (7.6 GB, 84% CPU), 21 orphaned test servers and 108 dangling volumes.
 
-This skill needs no program. It does not remove Orca worktrees of settled workers: the resource
-steward does that with `orca worktree rm` (`orchestrate` `references/roles.md`); the janitor kinds
-below only report them.
+This skill needs no program. The janitor kinds below remove Orca worktrees of settled workers with
+`orca worktree rm`, the same command the resource steward uses (`orchestrate` `references/roles.md`),
+after moving the worktree's ignored files to the trash.
 
 ## Run
 
@@ -33,20 +33,23 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
   `worktree` (default: every repo in `orca repo list`).
 - Show the user the scan before the first `reap` in a session unless they asked to reap.
 
-## Janitor: what agents created (report-only)
+## Janitor: what agents created
 
 These kinds look only at what an agent registered in the ledger or an Orca orchestration worker
 made. A user's own worktree and the main checkout never show up; anything not registered shows up
-only as the unregistered-media lines of `evidence`, never as a target. `reap`
-never acts on them: it prints `보고만` and the plan's commands are for a later, approved step.
+only as the unregistered-media lines of `evidence`, never as a target. `reap --plan` re-checks each
+target and runs its action. A file or directory goes to the trash (`/usr/bin/trash`, macOS 15+, so Finder's
+Put Back works; never another `trash` on PATH, which may read `-s` as "empty the trash"; else `~/.Trash`;
+`$AGENT_SKILLS_TRASH` replaces it with a plain folder). Nothing is
+deleted for good and the trash is never emptied: emptying it is the user's call.
 
 ```bash
 python3 "$R" ledger add --kind tmpdir --path /tmp/build-x --pr acme/app#12     # right after creating it
 python3 "$R" ledger add --kind gui-app --pid 4242 --worktree <worktree path>   # pid + start time are recorded
-python3 "$R" ledger add --kind chrome-window --id <window or tab id> --pr acme/app#12
+python3 "$R" ledger add --kind chrome-window --id <window or tab id> --url <its URL> --pr acme/app#12
 python3 "$R" ledger add --kind evidence --path /tmp/task/shots --pr acme/app#12   # a screenshot or recording, once it is on the PR
 python3 "$R" ledger list
-python3 "$R" scan --kinds janitor          # report-only; a plain scan leaves the janitor kinds out
+python3 "$R" scan --kinds janitor          # a plain scan leaves the janitor kinds out
 ```
 
 The ledger is append-only JSON lines `{ts, run, kind, id, links: {pr, worktree}, by}` at
@@ -54,14 +57,14 @@ The ledger is append-only JSON lines `{ts, run, kind, id, links: {pr, worktree},
 `$AGENT_SKILLS_LEDGER` or `--ledger` the file). The last line per id wins. A link is "done" when its
 PR (`owner/repo#N`, read with `gh`) is merged or closed, or its worktree is gone.
 
-| Kind | Target when | Kept when | Planned action |
+| Kind | Target when | Kept when | Action |
 |---|---|---|---|
-| orca-worktree | in the ledger or made by an orchestration worker; its PR (ledger link, else the branch's own PR, never a fork's) merged or closed; no changes, untracked files included; nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it | an open PR, no PR, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4) |
+| orca-worktree | in the ledger or made by an orchestration worker; its PR (ledger link, else the branch's own PR, never a fork's) merged or closed; no changes, untracked files included; nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it | an open PR, no PR, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | its ignored files (`git ls-files --others --ignored --exclude-standard --directory`: `.env.local`, caches) to the trash, which `orca worktree rm` would delete for good; then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
 | orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
-| tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then `rm -rf` |
+| tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
-| chrome-window | its link is done | an open PR, no link | the agent closes it with its browser tools; no script can |
-| evidence | a file or directory of screenshots and recordings whose PR has been merged or closed for N hours (`--hours`) | an open PR, no PR link (a worktree link does not prove it was uploaded), a PR state or close time that could not be read, a directory holding anything but images and videos | `rm -rf` |
+| chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |
+| evidence | a file or directory of screenshots and recordings whose PR has been merged or closed for N hours (`--hours`) | an open PR, no PR link (a worktree link does not prove it was uploaded), a PR state or close time that could not be read, a directory holding anything but images and videos | the trash |
 | remote-branch | interface only, never a target | always | - |
 
 `evidence` also reports images and videos (png, jpg, jpeg, gif, webp, mp4, mov, webm) older than N
@@ -69,19 +72,43 @@ hours that nobody registered, one line per directory. It looks only directly in 
 `$TMPDIR` and one directory below them (`reap.evidence_roots` replaces that list), never deeper and
 never through a symlink. These lines are never targets, so they do not wake the precheck.
 
-### Scheduled run
+## User folders: ~/Downloads and ~/Desktop
+
+The `user-folder` kind looks at the top-level entries of `~/Downloads` and `~/Desktop` (screenshots
+included), and nowhere else. An entry is a target when nothing in it has been modified or changed
+(mtime or ctime, so a freshly unpacked archive with old dates stays) for `reap.user_folder_days`
+(default 7; 0 or less turns the kind off). A top-level screenshot or screen recording file (a name
+macOS gives: `Screenshot `, `Screen Recording `, `스크린샷 `, `화면 기록 ` followed by an image or video
+extension) waits `reap.user_folder_screenshot_days` instead (default 1; an invalid value falls back to
+the general count). Kept: a download in progress (`.download`, `.crdownload`,
+`.part`), an entry any of this user's processes holds open or uses as cwd (`lsof`; an unreadable list
+keeps everything), a directory it cannot read all of or with more than 20,000 entries, and hidden
+entries (`.DS_Store`). Targets go to the trash. The precheck sweeps them at most once a day.
 
 ```bash
-python3 "$R" precheck    # writes <state>/janitor-plan.json; exit 0 only when the target set is non-empty and changed since the last report
+python3 "$R" scan --kinds user-folder
+```
+
+A folder the process may not read (macOS privacy) is a note, not an error: granting access is the
+user's call.
+
+## Scheduled run
+
+```bash
+python3 "$R" precheck    # janitor kinds + user-folder; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago
 python3 "$R" schedule    # prints the `orca automations create` command; nothing is created without --write
 ```
 
 `schedule` builds an existing-workspace automation on `17 */3 * * *` whose precheck is
 `python3 <absolute reap.py> precheck` (its cwd is the repo's main checkout, so paths are absolute).
+Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close the chrome-window
+targets it can, and report what went, what was skipped and what stayed. To change the prompt of an
+automation that exists, `orca automations edit <id> --prompt "<text>"`.
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the command keeps
 that path. `orca automations run` skips the precheck, so test it by running it directly, with
-`AGENT_SKILLS_STATE` pointing at a scratch folder: a run records the target set, and the next
-scheduled precheck would skip an unchanged set. A precheck prints what it could not read (`gh`,
+`AGENT_SKILLS_STATE` pointing at a scratch folder: a `reap` records what it failed on, and the next
+scheduled precheck would skip that set for a day. A precheck that never led to a `reap` records
+nothing, so the next one runs again. A precheck prints what it could not read (`gh`,
 `orca`) to stderr. `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
 so a scan there can see fewer workers than the automation does. Any process in a worktree keeps
 it, Orca's idle shell in an open card included: an orca-worktree becomes a target once its card's
@@ -134,7 +161,7 @@ the exact `reap --plan` command to the user.
 not in this repo:
 
 ```json
-{"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"],
+{"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
           "alert": {"codex_procs": 300, "codex_rss_mb": 4096, "orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10}}}
 ```

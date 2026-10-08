@@ -277,7 +277,7 @@ assert {k: v["target"] for k, v in got.items()} == {"/t/open": False, "/t/merged
                                                        "/t/wtgone": True, "/t/nolink": False}, got
 assert got["/t/open"]["why"] == "열린 PR acme/app#1" and "pid 7" in got["/t/busy"]["why"]
 # LaunchServices registrations under the path go before the directory.
-assert got["/t/merged"]["how"][0].endswith("lsregister -u /t/merged/X.app") and got["/t/merged"]["how"][-1] == "rm -rf /t/merged"
+assert got["/t/merged"]["how"][0].endswith("lsregister -u /t/merged/X.app") and got["/t/merged"]["how"][-1] == "trash /t/merged"
 assert not any(i["target"] for i in reap.judge_tmpdirs(entries, PRS.get, None, {}, exists, lambda p: [], ("/t",)))
 # An app started from a bundle inside runs with cwd /; its executable still keeps the directory.
 got = reap.judge_tmpdirs(entries[1:2], PRS.get, {}, {8: row(8, "/t/merged/X.app/Contents/MacOS/X")}, exists, lambda p: [], ("/t",))
@@ -309,7 +309,7 @@ assert "/t/gone.png" not in got
 assert {k: v["target"] for k, v in got.items()} == {"/t/old.gif": True, "/t/open.png": False, "/t/recent.mov": False,
                                                        "/t/nopr.png": False, "/t/unread.png": False,
                                                        "/t/noclose.png": False, "/t/mixed": False}, got
-assert got["/t/old.gif"]["how"] == ["rm -rf /t/old.gif"] and "6시간 미만" in got["/t/recent.mov"]["why"]
+assert got["/t/old.gif"]["how"] == ["trash /t/old.gif"] and "6시간 미만" in got["/t/recent.mov"]["why"]
 assert "읽지 못함" in got["/t/unread.png"]["why"] and "읽지 못함" in got["/t/noclose.png"]["why"]
 assert "PR 없음" in got["/t/nopr.png"]["why"], "a worktree link does not prove the evidence was uploaded"
 with tempfile.TemporaryDirectory() as tmp:
@@ -339,9 +339,15 @@ entries = [e("gui-app", "40@" + rows[40]["start"], pr="acme/app#2"), e("gui-app"
            e("gui-app", "42@" + rows[40]["start"], pr="acme/app#2")]
 got = reap.judge_gui_apps(entries, PRS.get, rows)
 assert [(i["key"], i["target"]) for i in got] == [("gui-app:40@" + rows[40]["start"], True)], got
-# chrome-window: no script closes it; the plan says the agent does.
-got = reap.judge_chrome([e("chrome-window", "tab:5", pr="acme/app#3"), e("chrome-window", "tab:6", pr="acme/app#1")], PRS.get)
-assert [i["target"] for i in got] == [True, False] and "에이전트가 처리" in got[0]["how"][0]
+# chrome-window: no script closes it; the plan says the agent does, and only for the recorded URL (Chrome reuses ids).
+tab = lambda rid, pr, **kw: {**e("chrome-window", rid, pr=pr), **kw}
+got = reap.judge_chrome([tab("tab:5", "acme/app#3", url="http://localhost:3000/x"), tab("tab:6", "acme/app#1", url="http://a"),
+                         tab("tab:7", "acme/app#3")], PRS.get)
+assert [i["target"] for i in got] == [True, False, False], got
+assert "에이전트가 처리" in got[0]["how"][0] and "http://localhost:3000/x" in got[0]["how"][0] and "URL 기록 없음" in got[2]["why"]
+# A retired line drops the id from every later scan.
+assert reap.judge_chrome([tab("tab:5", "acme/app#3", url="http://a"), tab("tab:5", "acme/app#3", url="http://a", retired=True)],
+                         PRS.get) == []
 assert [i["target"] for i in reap.judge_remote_branches([e("remote-branch", "acme/app:feat")])] == [False]
 got = reap.judge_orca_worker([{"dispatchId": "ctx_1", "taskId": "task_1"}])
 assert got[0]["target"] and got[0]["how"] == ["orca orchestration worker-release --dispatch ctx_1 --json"]
@@ -349,7 +355,7 @@ assert got[0]["target"] and got[0]["how"] == ["orca orchestration worker-release
 # orca-worktree: a merged or closed PR, clean, nothing unpushed (unless the PR carried HEAD), no live turn.
 ok = {"pr": "acme/app#2", "live": None, "dirty": False, "unpushed": False, "head": "h2"}
 judge = lambda **kw: reap.judge_orca_worktree("/wt/a", "ledger", {**ok, **kw}, PRS.get)
-assert judge()["target"] and judge()["how"] == ["orca worktree rm --worktree path:/wt/a --run-hooks --json"]
+assert judge()["target"] and judge()["how"][-1] == "orca worktree rm --worktree path:/wt/a --run-hooks --json" and "휴지통" in judge()["how"][0]
 assert judge(unpushed=True)["target"], "a squash-merged PR carried HEAD"
 assert judge(unpushed=True, head="h9")["why"] == "원격에 없는 커밋"
 assert judge(pr="acme/app#1")["why"] == "열린 PR acme/app#1"
@@ -385,7 +391,8 @@ def failing_git(cmd, cwd=None, check=True):
 facts = reap.worktree_facts("/r-wt", None, None, {}, git=failing_git)
 assert reap.judge_orca_worktree("/r-wt", "ledger", facts, PRS.get) == {
     **judge(), "why": "git 상태를 읽지 못함", "target": False, "key": "orca-worktree:/r-wt", "name": "/r-wt",
-    "how": ["orca worktree rm --worktree path:/r-wt --run-hooks --json"]}, facts
+    "how": ["git -C /r-wt ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
+            "orca worktree rm --worktree path:/r-wt --run-hooks --json"]}, facts
 
 # An unreadable worker list is not an empty one: a ledger worktree may be a user's takeover, so it is kept.
 saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which
@@ -399,14 +406,73 @@ with tempfile.TemporaryDirectory() as tmp:
         assert [(i["target"], i["why"]) for i in got] == [(target, why)], (workers, got)
 reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which = saved
 
-# precheck: exit 0 once per new non-empty target set, 1 otherwise.
+# precheck: 0 while targets wait; a run that never reaped leaves nothing recorded, so the next precheck runs again.
+# Only what reap failed on is held back, and only for RETRY_AFTER.
 with tempfile.TemporaryDirectory() as tmp:
     st = pathlib.Path(tmp)
     items = [{"key": "tmpdir:/a", "target": True}, {"key": "tmpdir:/b", "target": False}]
-    assert reap.precheck(items, st) == (0, ["tmpdir:/a"])
-    assert reap.precheck(items, st)[0] == 1
-    assert reap.precheck(items + [{"key": "tmpdir:/c", "target": True}], st)[0] == 0
-    assert reap.precheck([], st)[0] == 1 and reap.precheck([], st)[0] == 1
+    assert reap.precheck(items, st) == (0, ["tmpdir:/a"]) and reap.precheck(items, st)[0] == 0
+    reap.record_reap(st, ["tmpdir:/a"], now=1000)
+    assert reap.precheck(items, st, now=1000 + 3600)[0] == 1
+    assert reap.precheck(items, st, now=1000 + reap.RETRY_AFTER)[0] == 0
+    assert reap.precheck(items + [{"key": "tmpdir:/c", "target": True}], st, now=1000)[0] == 0
+    reap.record_reap(st, [], now=1000)
+    assert reap.precheck(items, st, now=1000)[0] == 0
+    assert reap.precheck([], st)[0] == 1
+
+# trash: only /usr/bin/trash, never another `trash` on PATH (one reads -s as "empty the trash"), and a hung call fails.
+with tempfile.TemporaryDirectory() as tmp:
+    t = pathlib.Path(tmp)
+    (t / "bin").mkdir()
+    (t / "bin" / "trash").write_text(f"#!/bin/sh\ntouch {t}/WRONG\n")
+    (t / "sys-trash").write_text(f"#!/bin/sh\necho \"$@\" > {t}/args\n")
+    (t / "slow-trash").write_text("#!/bin/sh\nsleep 5\n")
+    for f in ("bin/trash", "sys-trash", "slow-trash"):
+        os.chmod(t / f, 0o755)
+    saved = (reap.SYSTEM_TRASH, reap.TRASH_TIMEOUT, os.environ.get("PATH"), os.environ.pop("AGENT_SKILLS_TRASH", None))
+    os.environ["PATH"] = f"{t}/bin:{saved[2]}"
+    try:
+        reap.SYSTEM_TRASH = str(t / "sys-trash")
+        assert reap.trash("/x/a", "/x/b") == "휴지통으로 옮김"
+        assert (t / "args").read_text().split() == ["-s", "/x/a", "/x/b"] and not (t / "WRONG").exists()
+        reap.SYSTEM_TRASH, reap.TRASH_TIMEOUT = str(t / "slow-trash"), 1
+        try:
+            reap.trash("/x/a")
+            raise AssertionError("a hung trash must fail")
+        except RuntimeError as err:
+            assert "1초" in str(err), err
+    finally:
+        reap.SYSTEM_TRASH, reap.TRASH_TIMEOUT = saved[0], saved[1]
+        os.environ["PATH"] = saved[2]
+        if saved[3] is not None:
+            os.environ["AGENT_SKILLS_TRASH"] = saved[3]
+
+# orca-worktree: ignored files (.env.local, caches) go to the trash before `orca worktree rm`, which would delete them.
+with tempfile.TemporaryDirectory() as tmp:
+    t = pathlib.Path(os.path.realpath(tmp))
+    repo, wt = t / "repo", t / "wt"
+    repo.mkdir()
+    git("init", "-q", "-b", "main", cwd=repo)
+    (repo / ".gitignore").write_text(".env.local\ncache/\n")
+    git("add", ".", cwd=repo)
+    git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "i", cwd=repo)
+    git("worktree", "add", "-q", "-b", "feat", str(wt), cwd=repo)
+    (wt / ".env.local").write_text("TOKEN=x")
+    (wt / "cache").mkdir()
+    (wt / "cache" / "big.bin").write_text("x")
+    calls, real_run = [], reap.run
+    reap.run = lambda cmd, cwd=None, check=True: calls.append(cmd) or "" if cmd[0] == "orca" else real_run(cmd, cwd, check)
+    os.environ["AGENT_SKILLS_TRASH"] = str(t / "trash")
+    try:
+        item = reap.judge_orca_worktree(str(wt), "ledger", {"pr": "acme/app#2", "head": "x"}, PRS.get)
+        assert item["target"], item
+        out = reap.act(item, [])
+    finally:
+        reap.run = real_run
+        del os.environ["AGENT_SKILLS_TRASH"]
+    assert sorted(os.listdir(t / "trash")) == [".env.local", "cache"] and (t / "trash" / "cache" / "big.bin").exists(), out
+    assert calls == [["orca", "worktree", "rm", "--worktree", f"path:{wt}", "--run-hooks", "--json"]], calls
+    assert "ignored 항목 2개" in out, out
 argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo", ledger=pathlib.Path("/l/ledger.jsonl"))
 assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
 assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "17 */3 * * *"
@@ -414,20 +480,22 @@ assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.inde
 assert argv[argv.index("--precheck") + 1] == \
     "env AGENT_SKILLS_STATE=/s AGENT_SKILLS_LEDGER=/l/ledger.jsonl python3 /abs/reap.py precheck"
 
-# CLI: ledger add, precheck twice, reap leaves report-only kinds alone, schedule only prints.
+# CLI: ledger add, precheck twice, reap moves a settled tmpdir to the trash and skips what no longer holds, schedule only prints.
 with tempfile.TemporaryDirectory() as tmp:
     tmp = pathlib.Path(os.path.realpath(tmp))
     d = tmp / "build"
     d.mkdir()
-    env = {**os.environ, "AGENT_SKILLS_STATE": str(tmp / "state")}
+    env = {**os.environ, "AGENT_SKILLS_STATE": str(tmp / "state"), "AGENT_SKILLS_TRASH": str(tmp / "trash")}
     script = str(pathlib.Path(__file__).parent / "reap.py")
     cli = lambda *a: subprocess.run([sys.executable, script, *a], env=env, capture_output=True, text=True)
     assert cli("ledger", "add", "--kind", "tmpdir", "--path", str(d), "--worktree", str(tmp / "gone-wt")).returncode == 0
     assert str(d) in cli("ledger", "list").stdout
     first, second = cli("precheck", "--kinds", "tmpdir"), cli("precheck", "--kinds", "tmpdir")
-    assert (first.returncode, second.returncode) == (0, 1), (first.stdout, second.stdout)
+    # Nothing reaped yet, so the target is still due.
+    assert (first.returncode, second.returncode) == (0, 0), (first.stdout, second.stdout)
     out = cli("reap", "--plan", str(tmp / "state" / "janitor-plan.json")).stdout
-    assert "보고만 tmpdir" in out and d.exists(), out
+    assert "tmpdir" in out and "휴지통으로 옮김" in out and not d.exists() and (tmp / "trash" / "build").is_dir(), out
+    assert cli("precheck", "--kinds", "tmpdir").returncode == 1
     shot = tmp / "shot.png"
     shot.write_bytes(b"x")
     assert cli("ledger", "add", "--kind", "evidence", "--path", str(shot), "--pr", "acme/app#1").returncode == 0
@@ -435,8 +503,126 @@ with tempfile.TemporaryDirectory() as tmp:
     plan["items"] = [{"kind": "evidence", "key": f"evidence:{shot}", "name": str(shot), "target": True, "how": []}]
     (tmp / "plan.json").write_text(json.dumps(plan))
     out = cli("reap", "--plan", str(tmp / "plan.json")).stdout
-    assert "보고만 evidence" in out and shot.exists(), out
+    # gh cannot read acme/app#1, so the re-scan no longer finds a target.
+    assert "건너뜀 evidence" in out and shot.exists(), out
     out = cli("schedule", "--workspace", "path:/repo")
     assert out.returncode == 0 and out.stdout.startswith("orca automations create") and "--write" in out.stdout, out
+
+# user-folder: top-level entries untouched for `days`, not open, not a download in progress.
+D = 86400
+with tempfile.TemporaryDirectory() as tmp:
+    f = pathlib.Path(os.path.realpath(tmp))
+    now = time.time() + 8 * D  # every file made here counts as 8 days old: ctime cannot be set back
+    for n in ("old.pdf", "recent.png", "dl.crdownload", "a.part", "Safari.download", "open.txt", ".DS_Store"):
+        (f / n).write_text("x")
+    os.utime(f / "recent.png", (now - D, now - D))
+    (f / "olddir").mkdir()
+    (f / "olddir" / "fresh.txt").write_text("x")
+    os.utime(f / "olddir" / "fresh.txt", (now - D, now - D))  # a recent file deep inside keeps the folder
+    (f / "held").mkdir()
+    (f / "held" / "in.txt").write_text("x")
+    got = {os.path.basename(i["name"]): i for i in reap.judge_user_folder(str(f), 7, now, {str(f / "open.txt"), str(f / "held" / "in.txt")})}
+    assert ".DS_Store" not in got, got
+    assert {n for n, i in got.items() if i["target"]} == {"old.pdf"}, got
+    assert got["old.pdf"]["how"] == [f"trash {f / 'old.pdf'}"] and got["old.pdf"]["tip"]
+    assert got["recent.png"]["why"] == "7일 안에 바뀜" and got["olddir"]["why"] == "7일 안에 바뀜"
+    assert all(got[n]["why"] == "다운로드 중" for n in ("dl.crdownload", "a.part", "Safari.download"))
+    assert got["open.txt"]["why"] == "열려 있음" and got["held"]["why"] == "열려 있음"
+    # Without the open-file list nothing old goes.
+    assert not any(i["target"] for i in reap.judge_user_folder(str(f), 7, now, None))
+    # The boundary: exactly 7 days goes, a second less stays.
+    for t, target in ((now - 7 * D, True), (now - 7 * D + 1, False)):
+        got = {os.path.basename(i["name"]): i["target"] for i in reap.judge_user_folder(str(f), 7, now, set(), touched=lambda p, n: t)}
+        assert got["old.pdf"] is target, (t, got)
+    # A directory it cannot read all of, or one too big to walk, stays: an unseen file may be a recent one.
+    (f / "locked").mkdir()
+    (f / "locked" / "inner").mkdir()
+    os.chmod(f / "locked" / "inner", 0)
+    try:
+        got = {os.path.basename(i["name"]): i for i in reap.judge_user_folder(str(f), 7, now, set())}
+    finally:
+        os.chmod(f / "locked" / "inner", 0o755)
+    assert not got["locked"]["target"] and got["locked"]["why"] == "안을 다 읽지 못함(남김)", got["locked"]
+    try:
+        reap.last_touch(str(f / "olddir"), now + D, cap=0)  # one entry inside, cap 0
+        raise AssertionError("past the cap must raise")
+    except reap.TooBig:
+        pass
+    # The day count: a number above 0; anything else turns the kind off with a note.
+    for v, want in ((None, None), ("x", None), (0, None), (-1, None), (float("nan"), None), (3, 3.0)):
+        notes = []
+        cfg = {} if v is None else {"user_folder_days": v}
+        assert reap.user_folder_days(cfg, notes) == (7.0 if v is None else want), (v, notes)
+    # Screenshots and screen recordings at the top level use their own count (1 day); everything else keeps 7.
+    sh = f / "shots"
+    sh.mkdir()
+    import unicodedata
+    names = (unicodedata.normalize("NFD", "스크린샷 2026-10-05 01.41.55.png"), "Screenshot 2026-10-05 at 1.png", "화면 기록 2026-10-05 01.mov",
+             "Screen Recording 2026-10-05.mov", "스크린샷 메모.txt", "screenshot-tool.png", "report.png")
+    for n in names:
+        (sh / n).write_text("x")
+    (sh / "스크린샷 폴더.png").mkdir()  # a directory is never a screenshot
+    for t_, shots in ((now - D, True), (now - D + 1, False)):
+        got = {i["name"].rsplit("/", 1)[1]: i for i in
+               reap.judge_user_folder(str(sh), 7, now, set(), touched=lambda p, n: t_, shot_days=1)}
+        assert {n for n, i in got.items() if i["target"]} == (set(names[:4]) if shots else set()), (t_, got)
+        assert got["report.png"]["why"] == got["스크린샷 메모.txt"]["why"] == got["스크린샷 폴더.png"]["why"] == "7일 안에 바뀜"
+    # Without shot_days a screenshot waits the general count.
+    got = {i["name"].rsplit("/", 1)[1]: i["target"] for i in
+           reap.judge_user_folder(str(sh), 7, now, set(), touched=lambda p, n: now - 2 * D)}
+    assert not any(got.values()), got
+    for v, want in ((None, 1.0), ("x", None), (0, None), (float("nan"), None), (0.5, 0.5)):
+        notes = []
+        cfg = {} if v is None else {"user_folder_screenshot_days": v}
+        assert reap.user_folder_days(cfg, notes, "user_folder_screenshot_days", 1, "스크린샷도 7일 기준") == want, (v, notes)
+        assert (want is None) == bool(notes) and all("스크린샷도 7일 기준" in n for n in notes), notes
+    # Once a day: a sweep 20 hours ago is not due, one 22 hours ago is.
+    st = f / "state"
+    st.mkdir()
+    assert reap.user_folder_due(st)
+    (st / "user-folder-last.json").write_text(json.dumps({"at": now - 20 * H}))
+    assert not reap.user_folder_due(st, now) and reap.user_folder_due(st, now + 2 * H)
+
+# CLI with a temp HOME: precheck plans the old entries of ~/Downloads and ~/Desktop, reap moves them to the trash,
+# keeps a download in progress and an open file, and the next precheck skips user-folder for the day.
+with tempfile.TemporaryDirectory() as tmp:
+    home = pathlib.Path(os.path.realpath(tmp))
+    (home / ".claude").mkdir()
+    (home / ".claude" / "agent-skills.json").write_text(json.dumps({"reap": {"user_folder_days": 1e-6}}))
+    for sub_dir in ("Downloads", "Desktop"):
+        (home / sub_dir).mkdir()
+    (home / "Downloads" / "a.pdf").write_text("x")
+    (home / "Downloads" / "b.crdownload").write_text("x")
+    (home / "Desktop" / "shot.png").write_text("x")
+    (home / "Desktop" / "busy.txt").write_text("x")
+    (home / "Documents").mkdir()
+    (home / "Documents" / "keep.txt").write_text("x")
+    holder = subprocess.Popen([sys.executable, "-c", "import sys,time; f=open(sys.argv[1]); time.sleep(60)", str(home / "Desktop" / "busy.txt")])
+    try:
+        time.sleep(0.5)
+        env = {**os.environ, "HOME": str(home), "AGENT_SKILLS_STATE": str(home / "state"), "AGENT_SKILLS_TRASH": str(home / "trash")}
+        script = str(pathlib.Path(__file__).parent / "reap.py")
+        cli = lambda *a: subprocess.run([sys.executable, script, *a], env=env, capture_output=True, text=True)
+        first = cli("precheck", "--kinds", "user-folder")
+        assert first.returncode == 0 and "정리 대상 2개" in first.stdout, (first.stdout, first.stderr)
+        out = cli("reap", "--plan", str(home / "state" / "janitor-plan.json")).stdout
+        assert out.count("휴지통으로 옮김") == 2, out
+        assert sorted(os.listdir(home / "trash")) == ["a.pdf", "shot.png"], os.listdir(home / "trash")
+        assert (home / "Downloads" / "b.crdownload").exists() and (home / "Desktop" / "busy.txt").exists()
+        assert (home / "Documents" / "keep.txt").exists()
+        again = cli("precheck", "--kinds", "user-folder")
+        assert again.returncode == 1 and "하루 한 번" in again.stderr, (again.stdout, again.stderr)
+        # A check that finds nothing is that day's sweep too.
+        (home / "state" / "user-folder-last.json").unlink()
+        holder.kill()
+        (home / "Desktop" / "busy.txt").unlink()
+        (home / "Downloads" / "b.crdownload").unlink()
+        empty = cli("precheck", "--kinds", "user-folder")
+        assert empty.returncode == 1 and (home / "state" / "user-folder-last.json").exists(), (empty.stdout, empty.stderr)
+    finally:
+        holder.kill()
+
+prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))[1]
+assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
 
 print("ok")
