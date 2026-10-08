@@ -85,6 +85,8 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
 
+**채팅**: `watch-mentions`(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 분류해 코디네이터에게 한 통으로 보내고, 작업 의뢰는 기표 초안으로).
+
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
 **글쓰기**: `write-plainly`(한국어·영어 문체), `brief-status`(현황 보고: 완료·진행·결정·사람만, Telegram이면 markdown 없는 짧은 줄), `prune-comments`(diff의 주석 정리), `write-skill`(스킬을 쓰거나 고친 뒤의 점검: 겹침 확인, prompt audit, 사내 이름 grep, 테스트, reload).
@@ -108,7 +110,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

@@ -22,6 +22,7 @@
 | 정기 정리 | Orca automation(`--workspace-mode existing`) + precheck |
 | skill_usage 수집·reflect 깨우기 | Orca automation precheck(새 신호도, 닫힌 standing PR 뒤에 기다리는 교훈도 없으면 exit 1) + 에이전트 |
 | PR 머지 후 확인 | Orca automation + precheck(gh 상태 diff). 로컬 작업이 필요 없으면 클라우드 routine |
+| 채팅 멘션 감시 | Orca automation + precheck(설정·잠금만. Slack은 MCP로만 닿아 새 메시지 유무는 회차 안에서 판단) |
 | 세션 안 사건 반응 | `Monitor` 또는 `run_in_background`. 결정적인 반응은 hooks |
 
 ## Orca automation을 걸 때 지킬 것

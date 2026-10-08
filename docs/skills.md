@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 30개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
+`agent-skills` 플러그인이 싣는 스킬 31개, 별칭 3개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다.
 
 ## 흐름
 
@@ -11,6 +11,7 @@
               └ 끝나면 measure-delivery
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
+채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 코디네이터에게 한 통으로)
 어디서나    use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
 
@@ -162,6 +163,16 @@
 - **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
 - **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
 - **관계:** 도구 패턴 권한(`permissions.allow`, hooks)은 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
+
+## 채팅
+
+### watch-mentions
+- **언제:** "멘션 감시", "나한테 온 슬랙 정리해줘", "내가 말한 스레드에 새 답글 있어?", 그리고 watch-mentions Orca automation의 회차마다.
+- **내용:** 공개 채널에서 사용자 멘션, 멘션 없는 이름 언급, 사용자가 말한 스레드의 새 답글을 찾는다. `scripts/mentions.py`가 실행 잠금, 커서, 이미 보고한 항목의 원장(채널·ts·permalink·분류만, 본문 없음)을 맡고, 본인 발언·비공개 채널·제외 채널·이미 보고한 것을 거른다. 에이전트가 새 항목을 리뷰 의뢰·작업 의뢰·질문·결정 공유·잡담으로 나누고 한 줄 요약과 permalink를 붙여 코디네이터에게 한 통으로 보낸다. 작업 의뢰는 중복 티켓을 먼저 찾고 기표 초안을 만든다. 실제 기표는 설정의 `file_tickets`가 켜져 있고 중복이 없을 때만 한다. Slack에는 아무것도 쓰지 않는다.
+  - **비공개 경계:** `slack_search_public`만 쓴다. 비공개 채널과 DM은 사용자가 설정에서 `read_private`를 켜야만 읽는다.
+  - **정기 실행:** `schedule`이 평일 09:00–20:40, 20분 간격 Orca automation 등록 명령을 출력한다. precheck는 모델 없이 설정 누락과 실행 중 잠금만 거른다. Slack은 MCP로만 닿아 precheck가 새 메시지 수를 셀 수 없으므로, 새 항목이 없는 회차는 ingest 뒤 아무것도 보내지 않고 끝난다([automation.md](automation.md)).
+- **동봉:** `scripts/mentions.py`, 테스트 파일.
+- **관계:** 기표와 중복 검색은 `use-tracker`, 받는 쪽은 `orchestrate`의 코디네이터 인박스. Slack에 쓰는 일은 하지 않는다.
 
 ## 어댑터
 
