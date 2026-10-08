@@ -140,8 +140,10 @@ up "next turn", and never write anything after `EndConversation`.
 
 The report says, in Korean: what this session delivered, where the record lives (worklog,
 ticket, PR), what the user should still check themselves — or plainly that nothing is left,
-never an invented item — and which command is about to run. Write it per `write-plainly`, laid
-out for the channel per `brief-status`.
+never an invented item — and which command is about to run. Write it per `write-plainly`. Its
+layout follows `brief-status`, which leaves these items and the Korean in place. When the user
+writes from Telegram, send the report with the Telegram reply tool before the ending command: text
+left only on the terminal never reaches them.
 
 Ending the session is not closing the terminal app. If they want the CLI window gone too, that
 is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
