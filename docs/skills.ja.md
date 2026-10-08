@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル29個、エイリアス3個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
+`agent-skills` プラグインに入っているスキル29個、エイリアス4個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。
 
 ## 流れ
 
@@ -363,6 +363,14 @@
 | `ship-pr` | `deliver-ticket` |
 | `dispatch-work` | `dispatch-card` |
 | `use-obsidian` | `use-notes` |
+
+短いスラッシュコマンドは、ユーザーが打つ名前を短くするだけです。モデルはこのエイリアスを呼びません（`disable-model-invocation`）。
+
+| コマンド | スキル |
+|---|---|
+| `/agent-skills:brief` | `brief-status` |
+
+`/brief` だけを打つと、プラグインのスキルより先に Claude Code の組み込みコマンド（brief-only モードの切り替え）が受け取ります。短い名前で使うには、同じ本文のユーザースキルを `~/.claude/skills/brief/SKILL.md` に置きます。ユーザースキルは組み込みコマンドより優先されます。
 
 ## コマンド
 
