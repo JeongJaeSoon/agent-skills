@@ -24,6 +24,8 @@ repo = root / "repo" / "skills"
 skill_md(repo / "ship", "ship", 'Ship a change. Use for "ship it", "배포해줘", or "go".')
 skill_md(repo / "tidy", "tidy", 'Tidy things. Use for "정리해줘" or "clean up the mess".')
 skill_md(repo / "quiet", "quiet", 'Never asked for. Not bare "그냥 둬" or "leave it alone": those mean something else.')
+skill_md(repo / "alias", "alias", "Short slash command for ship.")
+(repo / "alias" / "SKILL.md").write_text((repo / "alias" / "SKILL.md").read_text().replace("---\n\n", "disable-model-invocation: true\n---\n\n"))
 cached = root / "cache" / "acme-tools" / "1.0.0"
 skill_md(cached / "skills" / "lint", "lint", 'Lint. Use for "lint this".')
 skill_md(root / "cache" / "stale-copy" / "skills" / "ship", "ship", "An older copy of this plugin.")
@@ -33,7 +35,8 @@ skill_md(root / "cache" / "stale-copy" / "skills" / "ship", "ship", "An older co
 skill_md(root / "user-skills" / "notes", "notes", 'Notes. Use for "노트에 적어" or "정본".')
 
 inv = su.inventory(plugins_json=root / "installed_plugins.json", user_dir=root / "user-skills", repo_dir=repo)
-assert set(inv) == {"agent-skills:ship", "agent-skills:tidy", "agent-skills:quiet", "acme-tools:lint", "notes"}, inv
+assert set(inv) == {"agent-skills:ship", "agent-skills:tidy", "agent-skills:quiet", "agent-skills:alias", "acme-tools:lint", "notes"}, inv
+assert inv["agent-skills:alias"]["slash_by_design"] and not inv["agent-skills:ship"]["slash_by_design"], inv
 assert inv["agent-skills:ship"]["source"] == "agent-skills" and inv["acme-tools:lint"]["source"] == "acme-tools", inv
 assert inv["notes"]["source"] == "user", inv
 assert "배포해줘" in inv["agent-skills:ship"]["phrases"], inv["agent-skills:ship"]
@@ -149,10 +152,14 @@ rep3 = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, mis
 assert rep3["files_parsed"] == 1, rep3["files_parsed"]
 q = {r["name"]: r for r in rep3["skills"]}["agent-skills:quiet"]
 assert q["uses_30d"] == 1 and q["flags"] == [], q
-write(projects / "-work-alpha" / "s3.jsonl", [human(ts(0), "<command-name>/notes</command-name>", session="s3")])
+write(projects / "-work-alpha" / "s3.jsonl", [human(ts(0), "<command-name>/notes</command-name>", session="s3"),
+                                             human(ts(0, 1), "<command-name>/agent-skills:alias</command-name>", session="s3")])
 rep4 = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, miss_threshold=1)
 n = {r["name"]: r for r in rep4["skills"]}["notes"]
 assert n["slash_30d"] == 1 and n["flags"] == ["slash_only"], n
+# A skill the model cannot invoke is slash-only by design: no flag, so no weekly rewrite-description signal.
+a = {r["name"]: r for r in rep4["skills"]}["agent-skills:alias"]
+assert a["slash_30d"] == 1 and a["flags"] == [], a
 
 ledger = root / "store" / "_skill-usage" / "ledger.jsonl"
 added = su.write_signals(ledger, rep4, NOW)
