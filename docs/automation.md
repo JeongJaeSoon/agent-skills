@@ -48,7 +48,7 @@
 `reap --plan`을 한 번 돌려 대상을 닫거나 휴지통으로 옮기고, 무엇을 했는지 보고한다. 영구 삭제와 휴지통 비우기는 하지 않는다.
 
 ```bash
-python3 <reap.py 절대 경로> precheck     # 대상 집합이 지난 보고 이후 바뀌었고 비어 있지 않을 때만 exit 0
+python3 <reap.py 절대 경로> precheck     # 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안 exit 1
 python3 <reap.py 절대 경로> schedule     # 만들 `orca automations create …` 명령을 출력만 한다. 스킬을 로드하는 체크아웃에서 돌린다
 python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다

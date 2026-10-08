@@ -157,7 +157,7 @@
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
   - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。完全には削除せず、ゴミ箱も空にしません。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
   - **user-folder:** `~/Downloads` と `~/Desktop` の最上位の項目のうち、7 日（`reap.user_folder_days`）以上変わっていないものをゴミ箱に移します。ダウンロード中のファイル（`.download`、`.crdownload`、`.part`）、開いているファイル、隠しファイルは残します。定期実行では 1 日 1 回だけ片付けます。
-  - **定期実行:** `precheck` は対象が変わったときだけ exit 0 なので 3 時間ごとの Orca automation の precheck に使い、`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
+  - **定期実行:** `precheck` は対象があれば exit 0 で、前回の `reap` が失敗した対象とまったく同じなら 1 日のあいだ飛ばします。3 時間ごとの Orca automation の precheck に使い、`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
   - **load:** `reap.py load` は読むだけです。CPU の上位消費者（Claude セッションとその子、残骸のツリー、その他のプロセス）を ours-idle・ours-working・leftover・system に分け、5 分の負荷が上限（既定は CPU 数）以上なら分類ごとの対処を出します。静かなセッションには残りの作業を尋ね、なければ自分で閉じてもらいます。残骸は `reap` で片付け、動いているものは残して新しい dispatch を止め、system は自分たちのものではないと報告だけします。上限を超えて測ったベンチマークは証拠になりません。
   - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（Codex のプロセス数と RSS、孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
 - **同梱:** `scripts/reap.py`、テストファイル。

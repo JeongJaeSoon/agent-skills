@@ -6,7 +6,7 @@ Usage:
                        [--plan OUT.json] [--json]
   python3 reap.py reap --plan PLAN.json
   python3 reap.py load [--top N] [--json]
-  python3 reap.py ledger add --kind KIND (--path P | --id ID | --pid N) [--pr owner/repo#N] [--worktree W] [--run R] [--by B]
+  python3 reap.py ledger add --kind KIND (--path P | --id ID | --pid N) [--url U] [--pr owner/repo#N] [--worktree W] [--run R] [--by B]
   python3 reap.py ledger list [--json]
   python3 reap.py precheck [--kinds ...]
   python3 reap.py schedule [--workspace SELECTOR] [--provider claude] [--write]
@@ -415,7 +415,8 @@ def scan(kinds, hours, cfg, repo_list):
         items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
                               evidence_roots=cfg.get("evidence_roots"))
     if "user-folder" in kinds:
-        items += user_folder_scan(float(cfg.get("user_folder_days") or 7), notes)
+        days = user_folder_days(cfg, notes)
+        items += user_folder_scan(days, notes) if days else []
     return items, notes
 
 
@@ -428,20 +429,31 @@ STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/age
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 
 
-def trash(path):
-    """Move path to the trash; nothing here deletes for good. `trash` (macOS 15+) keeps Finder's Put Back."""
+# macOS 15+, keeps Finder's Put Back. Never a `trash` found on PATH: another one reads -s as "empty the trash".
+SYSTEM_TRASH, TRASH_TIMEOUT = "/usr/bin/trash", 300
+
+
+def trash(*paths):
+    """Move paths to the trash; nothing here deletes for good."""
     folder = os.environ.get("AGENT_SKILLS_TRASH")
-    if not folder and shutil.which("trash"):
-        run(["trash", "-s", path])
+    if not folder and os.access(SYSTEM_TRASH, os.X_OK):
+        try:
+            r = subprocess.run([SYSTEM_TRASH, "-s", *paths], capture_output=True, text=True, timeout=TRASH_TIMEOUT,
+                               stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"trash: {TRASH_TIMEOUT}초 안에 끝나지 않음")
+        if r.returncode:
+            raise RuntimeError(f"trash: {r.stderr.strip()[:200]}")
         return "휴지통으로 옮김"
     dest = pathlib.Path(folder or "~/.Trash").expanduser()
     dest.mkdir(parents=True, exist_ok=True)
-    name = os.path.basename(path.rstrip("/"))
-    target = dest / name
-    if os.path.lexists(target):
-        target = dest / f"{name} {dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
-    shutil.move(path, target)
-    return f"휴지통으로 옮김({target})"
+    for path in paths:
+        name = os.path.basename(path.rstrip("/"))
+        target = dest / name
+        if os.path.lexists(target):
+            target = dest / f"{name} {dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+        shutil.move(path, target)
+    return f"휴지통으로 옮김({dest})"
 
 
 def ledger_path():
@@ -460,11 +472,12 @@ def ledger_read(path):
     return out
 
 
-def ledger_add(path, kind, rid, pr=None, worktree=None, run_id=None, by=None):
+def ledger_add(path, kind, rid, pr=None, worktree=None, run_id=None, by=None, **extra):
+    """extra: url (chrome-window), or retired=True, which drops the id from every later scan."""
     if kind not in JANITOR:
         raise SystemExit(f"--kind must be one of {', '.join(JANITOR)}")
     entry = {"ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "run": run_id, "kind": kind, "id": rid,
-             "links": {"pr": pr, "worktree": worktree}, "by": by}
+             "links": {"pr": pr, "worktree": worktree}, "by": by, **{k: v for k, v in extra.items() if v is not None}}
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -506,8 +519,9 @@ def link_verdict(links, pr_state, exists=os.path.exists):
 
 
 def latest(entries, kind):
-    """The last ledger line per id of one kind (the ledger only appends)."""
-    return list({e["id"]: e for e in entries if e.get("kind") == kind}.values())
+    """The last ledger line per id of one kind (the ledger only appends), unless that line retires the id."""
+    last = {e["id"]: e for e in entries if e.get("kind") == kind}
+    return [e for e in last.values() if not e.get("retired")]
 
 
 def apps_under(path):
@@ -559,11 +573,16 @@ def judge_gui_apps(entries, pr_state, rows, exists=os.path.exists):
 
 def judge_chrome(entries, pr_state, exists=os.path.exists):
     # No script can tell whether a tab is still open or close it: the agent does that with its browser tools.
+    # Chrome reuses ids after a restart, so the recorded URL is what tells the agent it is the same tab.
     out = []
     for e in latest(entries, "chrome-window"):
         done, why = link_verdict(e.get("links") or {}, pr_state, exists)
-        out.append({"kind": "chrome-window", "key": f"chrome-window:{e['id']}", "name": e["id"], "why": why,
-                    "target": bool(done), "how": ["에이전트가 처리: 브라우저 도구로 이 창·탭을 닫는다"]})
+        url = e.get("url")
+        if done and not url:
+            done, why = False, "URL 기록 없음, 같은 창·탭인지 확인 못 함(보고만)"
+        out.append({"kind": "chrome-window", "key": f"chrome-window:{e['id']}", "name": e["id"], "why": why, "url": url,
+                    "target": bool(done),
+                    "how": [f"에이전트가 처리: 창·탭 {e['id']} 의 URL 이 {url} 일 때만 브라우저 도구로 닫는다. 다르면 닫지 않는다"]})
     return out
 
 
@@ -647,7 +666,8 @@ def judge_orca_worker(rows):
 def judge_orca_worktree(path, source, facts, pr_state):
     """facts: the git and process state of one checkout, read by worktree_facts."""
     base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
-            "how": [f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
+            "how": [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
+                    f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
     ref = facts.get("pr")
     s = pr_state(ref) if ref else None
     if facts.get("live"):
@@ -793,20 +813,34 @@ PARTIAL = (".download", ".crdownload", ".part")
 USER_FOLDER_EVERY = 21 * 3600
 
 
-def last_touch(path, newer):
+WALK_CAP = 20000
+
+
+class TooBig(Exception):
+    pass
+
+
+def last_touch(path, newer, cap=WALK_CAP):
     """Newest mtime or ctime of path and everything under it; stops at the first one past `newer`.
-    ctime counts because an unpacked archive keeps old mtimes but arrives with a fresh ctime."""
+    ctime counts because an unpacked archive keeps old mtimes but arrives with a fresh ctime.
+    Raises OSError for anything it cannot read and TooBig past `cap` entries: an unseen file may be a recent one."""
     st = os.lstat(path)
     t = max(st.st_mtime, st.st_ctime)
     if t >= newer or not stat.S_ISDIR(st.st_mode):
         return t
-    for root, dirs, files in os.walk(path):
+    seen = 0
+
+    def fail(e):
+        raise e
+    for root, dirs, files in os.walk(path, onerror=fail):
         for n in dirs + files:
-            with contextlib.suppress(OSError):
-                s = os.lstat(os.path.join(root, n))
-                t = max(t, s.st_mtime, s.st_ctime)
-                if t >= newer:
-                    return t
+            seen += 1
+            if seen > cap:
+                raise TooBig
+            s = os.lstat(os.path.join(root, n))
+            t = max(t, s.st_mtime, s.st_ctime)
+            if t >= newer:
+                return t
     return t
 
 
@@ -826,9 +860,17 @@ def judge_user_folder(folder, days, now, opened, touched=last_touch):
             continue  # .DS_Store, .localized: Finder's own
         base = {"kind": "user-folder", "key": f"user-folder:{path}", "name": path, "how": [f"trash {shlex.quote(path)}"]}
         try:
-            t = touched(path, now - days * 86400)
-            tip = f"{os.lstat(path).st_ino}:{t:.0f}"
+            ino = os.lstat(path).st_ino
         except OSError:
+            continue  # gone since listdir
+        try:
+            t = touched(path, now - days * 86400)
+            tip = f"{ino}:{t:.0f}"
+        except TooBig:
+            out.append({**base, "why": f"항목이 {WALK_CAP}개를 넘어 다 보지 않음(남김)", "target": False})
+            continue
+        except OSError:
+            out.append({**base, "why": "안을 다 읽지 못함(남김)", "target": False})
             continue
         if name.lower().endswith(PARTIAL):
             why = "다운로드 중"
@@ -845,6 +887,20 @@ def judge_user_folder(folder, days, now, opened, touched=last_touch):
     return out
 
 
+def user_folder_days(cfg, notes):
+    """reap.user_folder_days as a positive number; 0 or less turns the kind off."""
+    v = cfg.get("user_folder_days", 7)
+    try:
+        days = float(v)
+    except (TypeError, ValueError):
+        notes.append(f"user-folder: reap.user_folder_days {v!r} 가 숫자가 아님, 건너뜀")
+        return None
+    if not days > 0:  # also catches NaN, which would make every entry old
+        notes.append(f"user-folder: reap.user_folder_days {v!r} 라 꺼짐")
+        return None
+    return days
+
+
 def user_folder_scan(days, notes, folders=USER_FOLDERS):
     opened, now, items = open_paths(), time.time(), []
     for f in folders:
@@ -856,22 +912,38 @@ def user_folder_scan(days, notes, folders=USER_FOLDERS):
     return items
 
 
+def stamp_user_folder(state_dir, now=None):
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "user-folder-last.json").write_text(json.dumps({"at": now or time.time()}))
+
+
 def user_folder_due(state_dir, now=None):
     with contextlib.suppress(OSError, ValueError):
         return (now or time.time()) - json.loads((state_dir / "user-folder-last.json").read_text())["at"] >= USER_FOLDER_EVERY
     return True
 
 
-def precheck(items, state_dir):
-    """Exit code for an Orca automation precheck: 0 only when the target set changed since the last report and is not empty."""
+# A target reap could not handle is tried again once this has passed, even if nothing changed.
+RETRY_AFTER = 86400
+
+
+def precheck(items, state_dir, now=None):
+    """Exit code for an Orca automation precheck: 0 when there are targets, unless they are exactly what the last reap
+    left behind (it failed on them) less than RETRY_AFTER ago. Only reap records that set, so a run that never
+    happened leaves nothing recorded and the next precheck runs again."""
     targets = sorted(i["key"] for i in items if i["target"])
-    last = state_dir / "janitor-last.json"
-    with contextlib.suppress(OSError, ValueError):
-        if json.loads(last.read_text()).get("targets") == targets:
+    if not targets:
+        return 1, targets
+    with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+        last = json.loads((state_dir / "janitor-last.json").read_text())
+        if last["targets"] == targets and (now or time.time()) - last["t"] < RETRY_AFTER:
             return 1, targets
+    return 0, targets
+
+
+def record_reap(state_dir, left, now=None):
     state_dir.mkdir(parents=True, exist_ok=True)
-    last.write_text(json.dumps({"at": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "targets": targets}))
-    return (0 if targets else 1), targets
+    (state_dir / "janitor-last.json").write_text(json.dumps({"t": now or time.time(), "targets": sorted(left)}))
 
 
 def schedule_prompt(script, state_dir, ledger=None):
@@ -880,7 +952,8 @@ def schedule_prompt(script, state_dir, ledger=None):
                     f"AGENT_SKILLS_LEDGER={shlex.quote(str(ledger or state_dir / 'ledger.jsonl'))}", "python3", shlex.quote(str(script))])
     prompt = (f"reap-resources janitor 회차다. 정리 계획 {plan} 의 대상을 `{env} reap --plan {plan}` 로 한 번 정리한다. "
               "reap 은 계획의 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮기고, 바뀐 것은 건너뛴다. "
-              "출력에 '에이전트가 처리'로 남은 chrome-window 는 브라우저 도구가 있으면 그 창·탭을 닫고, 없으면 남긴다. "
+              "출력에 '에이전트가 처리'로 남은 chrome-window 는 브라우저 도구가 있고 그 창·탭의 URL 이 출력에 적힌 URL 과 같을 때만 닫는다. "
+              "다르거나 브라우저 도구가 없으면 남긴다. "
               "그 뒤 정리한 것, 건너뛴 것, 남긴 것과 이유를 한국어로 보고한다. "
               "계획에 없는 것은 건드리지 않고, rm 으로 지우거나 휴지통을 비우지 않는다.")
     return env, prompt
@@ -1031,7 +1104,7 @@ def report(data):
     for i in targets:
         print(f"- {label(i)}: {i['why']}")
         for how in i.get("how") or ():
-            print(f"  - 처리(reap 이 실행): `{how}`")
+            print(f"  - 처리: `{how}`")
     kept = [i for i in data["items"] if not i["target"]]
     if kept:
         print(f"\n## 남김 {len(kept)}개\n")
@@ -1090,13 +1163,22 @@ def act(item, notes):
         os.kill(item["gpid"], signal.SIGTERM)
         return "SIGTERM 보냄"
     if kind == "chrome-window":
-        return "에이전트가 처리: 브라우저 도구로 이 창·탭을 닫는다(스크립트는 못 닫음)"
+        # Handed to the agent once: retired here so the next run does not ask about the same id again.
+        ledger_add(ledger_path(), "chrome-window", item["name"], url=item.get("url"), by="reap", retired=True)
+        return item["how"][0] + " (ledger 에서 내림)"
     if kind == "orca-worker":
         run(["orca", "orchestration", "worker-release", "--dispatch", k.split(":", 1)[1], "--json"])
         return "터미널 회수"
     if kind == "orca-worktree":
-        run(["orca", "worktree", "rm", "--worktree", f"path:{item['name']}", "--run-hooks", "--json"])
-        return "worktree 제거(orca worktree rm)"
+        # `orca worktree rm` deletes ignored files (.env.local, notes, caches) for good; they go to the trash first.
+        # Tracked files are in git, and anything untracked left makes the rm refuse.
+        p = item["name"]
+        out = run(["git", "-C", p, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])
+        ignored = [os.path.join(p, x.rstrip("/")) for x in out.split("\0") if x]
+        if ignored:
+            trash(*ignored)
+        run(["orca", "worktree", "rm", "--worktree", f"path:{p}", "--run-hooks", "--json"])
+        return f"ignored 항목 {len(ignored)}개는 휴지통으로, worktree 는 orca worktree rm 으로 제거"
     if k.startswith("proc:"):
         return kill_tree(item, notes)
     if k.startswith("volume:"):
@@ -1122,6 +1204,7 @@ def main():
         wanted = {i["key"]: i for i in plan["items"] if i["target"]}
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
+        failed = []
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
@@ -1131,10 +1214,12 @@ def main():
             try:
                 print(f"- {label(new)}: {act(new, notes)}")
             except (RuntimeError, OSError) as e:
+                failed.append(key)
                 print(f"- 실패 {label(new)}: {e}")
-        if "user-folder" in kinds:
-            STATE.mkdir(parents=True, exist_ok=True)
-            (STATE / "user-folder-last.json").write_text(json.dumps({"at": time.time()}))
+        if set(plan.get("kinds") or ()) & set(SCHEDULED):
+            record_reap(STATE, failed)
+        if "user-folder" in (plan.get("kinds") or ()):
+            stamp_user_folder(STATE)
         for n in notes:
             print(f"- 메모: {n}")
         return
@@ -1156,7 +1241,7 @@ def main():
                 sys.exit("ledger add needs --path, --id, or --pid (gui-app) of a live process")
             rid = os.path.realpath(rid) if opt("--path") else rid
             wt = opt("--worktree") and os.path.realpath(opt("--worktree"))
-            print(json.dumps(ledger_add(path, opt("--kind"), rid, opt("--pr"), wt, opt("--run"), opt("--by")),
+            print(json.dumps(ledger_add(path, opt("--kind"), rid, opt("--pr"), wt, opt("--run"), opt("--by"), url=opt("--url")),
                              ensure_ascii=False))
         elif sys.argv[2:3] == ["list"]:
             entries = ledger_read(path)
@@ -1204,9 +1289,12 @@ def main():
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
         code, targets = precheck(items, STATE)
+        # With targets the stamp waits for reap; with none, the day's sweep is this check.
+        if "user-folder" in kinds and not any(i["target"] for i in items if i["kind"] == "user-folder"):
+            stamp_user_folder(STATE)
         for n in notes + [f"{i['key']}: {i['why']}" for i in items if "읽지 못함" in i["why"]]:
             print(f"메모: {n}", file=sys.stderr)
-        print(f"정리 대상 {len(targets)}개, " + ("지난 보고 이후 바뀜: 실행" if code == 0 else "바뀐 것 없음 또는 대상 없음: 건너뜀"))
+        print(f"정리 대상 {len(targets)}개, " + ("실행" if code == 0 else "대상 없음, 또는 지난 reap 이 실패한 대상과 같음: 건너뜀"))
         sys.exit(code)
     if opt("--plan"):
         pathlib.Path(opt("--plan")).write_text(json.dumps(data, ensure_ascii=False, indent=1))
