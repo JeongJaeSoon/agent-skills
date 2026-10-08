@@ -24,6 +24,14 @@ When the report covers several work items (tickets, tracks, a program's predicat
 - **Done so far** — only what was verified, with the evidence Done asks for.
 - **Left** — the next stage, who moves it (an agent or a person), and when it is expected; "미정" when no time is fixed. A step that is the human's also goes under Only you.
 
+When those items ship through PRs and deploys, the three fields take the form of a stage table, one row per item:
+
+- Columns: 작업 / feature·대표 PR / PR 머지 / dev 확인 / prod 확인. The last three are checkpoints of the stage list above, so the row's cells are its Progress and the ✅ cells are its Done so far. Left becomes a `다음 순서` list under the table: next stage, owner, expected time.
+- Every item gets a row, finished ones too: the human wants the whole set in one view. The table goes first, above Done; Done and In progress then hold only items without a row.
+- A child item (a sub-ticket, a follow-up PR) goes on its own row under its parent, its name prefixed `ㄴ`. A PR in another repo than the parent's carries the repo name (`acme/ops#88`).
+- Each cell is one mark and its evidence in a few words (a version, a time, a count): ✅ done and verified · ❌ not done or failed · ⚠️ partial, or inferred without a direct check · 🔄 being checked now, by whom · `해당 없음` when the item has no such stage. A cell with no evidence is not ✅.
+- Above the table, two or three lines of the facts it reads against: the version on prod and on dev, and the legend. These are part of the report, not a preamble.
+
 No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
 ## 2. Channel
@@ -37,14 +45,20 @@ The human's last message decides it. It came in as a Telegram `<channel source="
 The reply tool sends plain text by default, so every markdown mark shows as typed: `**`, backticks, `#`, `|` tables, `[text](url)`. Its `markdownv2` format fails the whole send on one unescaped character. So:
 
 - No markdown syntax at all. Emphasis comes only from the emoji leads.
-- One emoji lead per section: ✅ Done, 🔄 In progress, ❓ Decision needed, 🙋 Only you.
-- One line per item, two at most; per-item progress as `<item> — 4/8 단계(추정 50%) · 완료: … · 남음: … (담당, 시각)`. A chat post elsewhere that renders no tables takes this form too. Links as bare URLs. PRs as `owner/repo#123` plus the URL when the human will open it.
+- One emoji lead per section: 📋 the stage table, ✅ Done, 🔄 In progress, ❓ Decision needed, 🙋 Only you. Inside a stage line, 🔄 is the cell mark (being checked now).
+- One line per item, two at most; per-item progress as `<item> — 4/8 단계(추정 50%) · 완료: … · 남음: … (담당, 시각)`. A stage-table row becomes one line with the same four fields: `<item> (owner/repo#123) — 머지 ✅ … · dev ✅ … · prod 🔄 …`, a child line prefixed `ㄴ`, the versions on the 📋 lead line, `다음 순서` below. A chat post elsewhere that renders no tables takes this form too. Links as bare URLs. PRs as `owner/repo#123` plus the URL when the human will open it.
 - Decision items numbered `1.` `2.` … so the human can answer "1, 3 진행" or "2번은 B". Read such a reply against the numbers in this report.
 - The reply tool splits text over 4096 characters by itself, by default at the character count, mid-line. Keep sections short enough that one report stays in one message; a report that cannot goes out as one reply per section. (A `chunkMode` of `newline` in the Telegram access settings makes it split at paragraph breaks instead; that setting is the human's.) A table the human truly needs (a long comparison) goes as an attached image or file, with its one-line conclusion in the text.
 
 An illustrative shape (the items are made up):
 
 ```text
+📋 작업별 (prod v1.7.2 · dev v1.8.0)
+- 로그인 개선 (acme/web#40) — 머지 ✅ 9/28 · dev ✅ v1.7.2 · prod ✅ 10/1
+- 검색 개선 (acme/web#42) — 머지 ✅ 10/2 · dev ✅ v1.8.0 · prod 🔄 QA 리드 확인 중
+ㄴ 인덱스 재구축 (acme/ops#88) — 머지 ✅ · dev ✅ 1,204건 · prod 해당 없음
+다음 순서: v1.8.0 prod 배포 (사람, 미정)
+
 ✅ 완료
 - acme/web#42 머지 (a1b2c3d, CI 통과 38/38)
 
@@ -60,7 +74,24 @@ An illustrative shape (the items are made up):
 
 ### Terminal
 
-- Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left.
+- Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left; or the stage table (§1) when the items ship through PRs and deploys. An illustrative stage table (the items are made up):
+
+```markdown
+prod: v1.7.2 (10/1 배포) · dev: v1.8.0 (10/3 배포)
+✅ 완료·확인 · ❌ 미완료·실패 · ⚠️ 일부·추정 · 🔄 확인 중 · 해당 없음
+
+| 작업 | feature·대표 PR | PR 머지 | dev 확인 | prod 확인 |
+|---|---|---|---|---|
+| 로그인 개선 | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ 10/1 로그인 성공률 99.8% |
+| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 QA 리드 확인 중 |
+| ㄴ 인덱스 재구축 | acme/ops#88 | ✅ 10/2 | ✅ 1,204건 재색인 | 해당 없음 |
+| ㄴ 정렬 버그 | acme/web#45 | ❌ 리뷰 대기 | ❌ | ❌ |
+| 알림 정리 | acme/web#47 | ✅ 10/3 | ⚠️ 로그로만 확인 | ❌ 다음 배포 대기 |
+
+다음 순서
+1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)
+2. v1.8.0 prod 배포 (사람, 미정)
+```
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same four sections and the same numbering of decisions.
 
