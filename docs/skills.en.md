@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 29 skills, 3 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
+This page covers the 29 skills, 4 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name.
 
 ## Flow
 
@@ -363,6 +363,14 @@ A session that started before a rename can still call the old name and gets rout
 | `ship-pr` | `deliver-ticket` |
 | `dispatch-work` | `dispatch-card` |
 | `use-obsidian` | `use-notes` |
+
+A short slash command only shortens the name the user types. The model never calls the alias (`disable-model-invocation`).
+
+| Command | Skill |
+|---|---|
+| `/agent-skills:brief` | `brief-status` |
+
+A bare `/brief` is taken by a built-in Claude Code command (toggling brief-only mode) before any plugin skill. To type the bare name, put a user skill with the same body at `~/.claude/skills/brief/SKILL.md`; user skills come before built-in commands.
 
 ## Commands
 
