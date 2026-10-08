@@ -87,8 +87,7 @@ python3 "$R" scan --kinds user-folder
 ```
 
 A folder the process may not read (macOS privacy) is a note, not an error: granting access is the
-user's call. With iCloud Desktop and Documents on, a Desktop entry goes to iCloud's trash: it syncs to
-the user's other devices and iCloud deletes it after 30 days.
+user's call.
 
 ## Scheduled run
 
