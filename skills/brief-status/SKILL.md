@@ -22,7 +22,7 @@ No preamble and no closing offer. If nothing is left for the human, say so in on
 
 ## 2. Channel
 
-A message that is only `/brief` is a request for this report. A Telegram bot command the plugin does not handle reaches the session as plain text, so the bot's `/` menu can offer it: register it once with `setMyCommands` scoped to the human's chat (`{"type": "chat", "chat_id": …}`), because the plugin resets the all-private-chats list on every start and the narrower scope wins. Registering changes the bot, so the human approves it first.
+A message that is only `/brief` is a request for this report (a bot command the Telegram plugin does not handle reaches the session as plain text; registering it in the bot's menu is in §3).
 
 The human's last message decides it. It came in as a Telegram `<channel source="plugin:telegram:...">` tag → Telegram layout, sent with the Telegram reply tool. Anything else → terminal layout.
 
@@ -59,3 +59,7 @@ An illustrative shape (the items are made up):
 - The same four sections and the same numbering of decisions.
 
 Write the text per `write-plainly`, in the language the human writes in. A skill that delegates its report here keeps its own required items and language (`end-session` §6); this skill adds only the sections' order and the layout.
+
+## 3. The `/brief` menu entry (once per bot)
+
+Only the session that holds the bot token registers it, after the human approves: it changes the bot, and a card never gets the token. Check first with `getMyCommands` for the human's chat; if `brief` is there, stop. Otherwise call `setMyCommands` scoped to that chat (`{"type": "chat", "chat_id": …}`): the plugin resets the all-private-chats list on every start, and the narrower scope wins. A chat-scoped list replaces that chat's whole menu, so register `brief` together with the plugin's `start`, `help` and `status`. Read the token from the channel's `.env` into the environment of the one command that calls the API; never print it or put it in a file.
