@@ -31,11 +31,11 @@ old = f"{NOW - 25 * 3600:.6f}"
 fresh = f"{NOW - 3600:.6f}"
 cands = [c("C1", fresh), c("C1", fresh, kind="name"), c("C1", f"{NOW - 7200:.6f}", author=ME),
          c("G1", fresh), c("D1", fresh), c("C2", fresh, is_private=True), c("C0NOISE", fresh), c("C1", old),
-         c("C3", fresh, kind="thread", thread_ts="1.0")]
+         c("C3", fresh, kind="thread", thread_ts="1.0"), c("C4", fresh, kind="thread", is_bot=True)]
 new, dropped = m.ingest(cands, cfg, state)
 assert [(i["channel_id"], i["kinds"]) for i in new] == [("C1", ["mention", "name"]), ("C3", ["thread"])], new
 reasons = sorted(d["why"] for d in dropped)
-assert reasons == sorted(["본인 발언", "공개 채널 아님", "공개 채널 아님", "공개 채널 아님", "대상 채널 아님", "창 이전"]), reasons
+assert reasons == sorted(["봇", "본인 발언", "공개 채널 아님", "공개 채널 아님", "공개 채널 아님", "대상 채널 아님", "창 이전"]), reasons
 assert all("text" not in i for i in new), "message text never travels through the script"
 
 # A channel allowlist keeps only those channels.

@@ -11,7 +11,7 @@ Usage:
 
 Slack is read by the agent through its Slack MCP tools; this script never talks to Slack.
 plan takes the run lock and prints the searches to run. ingest drops what must not be reported
-(the owner's own messages, non-public channels, excluded channels, anything seen before or older
+(the owner's own messages, bots, non-public channels, excluded channels, anything seen before or older
 than the window). bundle renders the one coordinator message. commit marks the items seen,
 moves the cursor to the run's start and releases the lock; with no file it only does the last two.
 Config: ~/.claude/agent-skills.json → "mentions" (see SKILL.md). State: $AGENT_SKILLS_STATE/mentions
@@ -108,6 +108,8 @@ def ingest(candidates, cfg, state):
         k, why = key(c), None
         if c.get("author_id") == cfg["user_id"]:
             why = "본인 발언"
+        elif c.get("is_bot"):
+            why = "봇"
         elif not c["channel_id"].startswith("C") or c.get("is_private"):
             why = "공개 채널 아님"
         elif c["channel_id"] in deny or (allow and c["channel_id"] not in allow):

@@ -51,10 +51,11 @@ python3 "$M" plan > <scratchpad>/plan.json     # takes the run lock; prints olde
 1. **Search.** Run each `searches` entry with `slack_search_public` (`keywords`, `filters`,
    `sort: timestamp`, `include_context: false`), following `cursor` while results are newer than
    `oldest`. For the `thread` entry, collect the distinct `(channel id, thread_ts)` pairs from the
-   permalinks (newest first, at most `max_threads`) and read each with `slack_read_thread` and
-   `oldest` from the plan.
+   permalinks, following `cursor` until there are `max_threads` (newest first), and read each with
+   `slack_read_thread`, `oldest` from the plan and the `detailed` format (the concise one has no
+   per-reply ts). A busy user fills a page of 20 hits with a handful of threads.
 2. **Ingest.** Write every hit to `<scratchpad>/candidates.json` as
-   `{"channel_id", "ts", "thread_ts", "permalink", "author_id", "kind": "mention|name|thread"}`
+   `{"channel_id", "ts", "thread_ts", "permalink", "author_id", "is_bot", "kind": "mention|name|thread"}`
    and run `python3 "$M" ingest <scratchpad>/candidates.json`. It returns `new` (deduplicated, kinds
    merged) and `dropped` with reasons. If `new` is empty, run `python3 "$M" commit` and stop: send
    nothing.
