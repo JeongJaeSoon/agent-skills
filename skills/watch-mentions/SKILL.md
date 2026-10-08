@@ -72,8 +72,8 @@ python3 "$M" plan > <scratchpad>/plan.json     # takes the run lock; prints olde
 
    A message that only quotes an older request, or one the user already answered in the thread,
    is `decision` or `chat`, not `work`.
-4. **Draft tickets** for each `work` item. Look for a duplicate first: `use-tracker` list of the
-   project's recent tickets (or its MCP search), matched by title and by the permalink in the body.
+4. **Draft tickets** for each `work` item. Look for a duplicate first: `use-tracker` list of
+   `tracker_project`'s recent tickets (the adapter is `use-tracker`'s own `tracker.adapter`) (or its MCP search), matched by title and by the permalink in the body.
    Put `{"title", "requester", "duplicates": [ids]}` in the item's `draft`; a filed ticket's body is
    the summary, the requester and the permalink. File only when `file_tickets` is
    `true` and no duplicate was found; otherwise the draft goes in the message and the coordinator
