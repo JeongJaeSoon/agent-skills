@@ -18,17 +18,19 @@ action for its class.
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
-"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7}.
+"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7,
+"user_folder_screenshot_days": 1}.
 Janitor kinds (orca-worktree, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists or an Orca orchestration worker made. user-folder covers top-level entries of ~/Downloads and ~/Desktop
-untouched for reap.user_folder_days (default 7). reap moves files to the trash, never deletes them for good, and leaves a
+untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
+default 1). reap moves files to the trash, never deletes them for good, and leaves a
 chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
 The ledger is $AGENT_SKILLS_LEDGER or --ledger, default $AGENT_SKILLS_STATE/ledger.jsonl (state default
 ~/.local/state/agent-skills). precheck scans the janitor kinds and user-folder (at most once a day), writes janitor-plan.json
 to the state dir and exits 0 only when the target set is non-empty and changed since the last report. schedule prints the
 `orca automations create` command; only --write runs it.
 """
-import contextlib, datetime as dt, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time
+import contextlib, datetime as dt, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ("codex", "orphan", "docker", "branch", "worktree")
@@ -416,7 +418,9 @@ def scan(kinds, hours, cfg, repo_list):
                               evidence_roots=cfg.get("evidence_roots"))
     if "user-folder" in kinds:
         days = user_folder_days(cfg, notes)
-        items += user_folder_scan(days, notes) if days else []
+        shot_days = days and user_folder_days(cfg, notes, "user_folder_screenshot_days", 1,
+                                              f"스크린샷도 {days:g}일 기준")
+        items += user_folder_scan(days, notes, shot_days) if days else []
     return items, notes
 
 
@@ -851,13 +855,26 @@ def open_paths():
     return None if out is None else {line[1:] for line in out.splitlines() if line[:1] == "n"}
 
 
-def judge_user_folder(folder, days, now, opened, touched=last_touch):
-    """Top-level entries of one folder; a target is untouched for `days`, not open, and not a download in progress."""
-    out = []
+# macOS names screenshots and screen recordings this way (English and Korean system language).
+SHOT_PREFIXES = ("screenshot ", "screen recording ", "스크린샷 ", "화면 기록 ")
+SHOT_EXT = MEDIA + (".heic", ".tiff")
+
+
+def is_screenshot(name):
+    # macOS writes Korean file names decomposed (NFD); the prefixes here are composed.
+    n = unicodedata.normalize("NFC", name).lower()
+    return n.startswith(SHOT_PREFIXES) and n.endswith(SHOT_EXT)
+
+
+def judge_user_folder(folder, days, now, opened, touched=last_touch, shot_days=None):
+    """Top-level entries of one folder; a target is untouched for `days` (`shot_days` for a screenshot or screen
+    recording file), not open, and not a download in progress."""
+    out, general = [], days
     for name in sorted(os.listdir(folder)):
         path = os.path.join(folder, name)
         if name.startswith("."):
             continue  # .DS_Store, .localized: Finder's own
+        days = shot_days if shot_days and is_screenshot(name) and not os.path.isdir(path) else general
         base = {"kind": "user-folder", "key": f"user-folder:{path}", "name": path, "how": [f"trash {shlex.quote(path)}"]}
         try:
             ino = os.lstat(path).st_ino
@@ -887,26 +904,26 @@ def judge_user_folder(folder, days, now, opened, touched=last_touch):
     return out
 
 
-def user_folder_days(cfg, notes):
-    """reap.user_folder_days as a positive number; 0 or less turns the kind off."""
-    v = cfg.get("user_folder_days", 7)
+def user_folder_days(cfg, notes, key="user_folder_days", default=7, off="꺼짐"):
+    """A positive day count from reap.<key>; anything else is None with a note saying what happens instead."""
+    v = cfg.get(key, default)
     try:
         days = float(v)
     except (TypeError, ValueError):
-        notes.append(f"user-folder: reap.user_folder_days {v!r} 가 숫자가 아님, 건너뜀")
+        notes.append(f"user-folder: reap.{key} {v!r} 가 숫자가 아님, {off}")
         return None
     if not days > 0:  # also catches NaN, which would make every entry old
-        notes.append(f"user-folder: reap.user_folder_days {v!r} 라 꺼짐")
+        notes.append(f"user-folder: reap.{key} {v!r} 라 {off}")
         return None
     return days
 
 
-def user_folder_scan(days, notes, folders=USER_FOLDERS):
+def user_folder_scan(days, notes, shot_days=None, folders=USER_FOLDERS):
     opened, now, items = open_paths(), time.time(), []
     for f in folders:
         folder = os.path.expanduser(f)
         try:
-            items += judge_user_folder(folder, days, now, opened)
+            items += judge_user_folder(folder, days, now, opened, shot_days=shot_days)
         except OSError as e:
             notes.append(f"user-folder: {f} 을 읽지 못함({e.strerror}; 권한이면 사람이 허용한다)")
     return items

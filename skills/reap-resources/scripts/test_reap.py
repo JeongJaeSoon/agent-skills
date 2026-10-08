@@ -553,6 +553,29 @@ with tempfile.TemporaryDirectory() as tmp:
         notes = []
         cfg = {} if v is None else {"user_folder_days": v}
         assert reap.user_folder_days(cfg, notes) == (7.0 if v is None else want), (v, notes)
+    # Screenshots and screen recordings at the top level use their own count (1 day); everything else keeps 7.
+    sh = f / "shots"
+    sh.mkdir()
+    import unicodedata
+    names = (unicodedata.normalize("NFD", "스크린샷 2026-10-05 01.41.55.png"), "Screenshot 2026-10-05 at 1.png", "화면 기록 2026-10-05 01.mov",
+             "Screen Recording 2026-10-05.mov", "스크린샷 메모.txt", "screenshot-tool.png", "report.png")
+    for n in names:
+        (sh / n).write_text("x")
+    (sh / "스크린샷 폴더.png").mkdir()  # a directory is never a screenshot
+    for t_, shots in ((now - D, True), (now - D + 1, False)):
+        got = {i["name"].rsplit("/", 1)[1]: i for i in
+               reap.judge_user_folder(str(sh), 7, now, set(), touched=lambda p, n: t_, shot_days=1)}
+        assert {n for n, i in got.items() if i["target"]} == (set(names[:4]) if shots else set()), (t_, got)
+        assert got["report.png"]["why"] == got["스크린샷 메모.txt"]["why"] == got["스크린샷 폴더.png"]["why"] == "7일 안에 바뀜"
+    # Without shot_days a screenshot waits the general count.
+    got = {i["name"].rsplit("/", 1)[1]: i["target"] for i in
+           reap.judge_user_folder(str(sh), 7, now, set(), touched=lambda p, n: now - 2 * D)}
+    assert not any(got.values()), got
+    for v, want in ((None, 1.0), ("x", None), (0, None), (float("nan"), None), (0.5, 0.5)):
+        notes = []
+        cfg = {} if v is None else {"user_folder_screenshot_days": v}
+        assert reap.user_folder_days(cfg, notes, "user_folder_screenshot_days", 1, "스크린샷도 7일 기준") == want, (v, notes)
+        assert (want is None) == bool(notes) and all("스크린샷도 7일 기준" in n for n in notes), notes
     # Once a day: a sweep 20 hours ago is not due, one 22 hours ago is.
     st = f / "state"
     st.mkdir()

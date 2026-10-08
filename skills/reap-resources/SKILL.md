@@ -1,6 +1,6 @@
 ---
 name: reap-resources
-description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Also the janitor ("janitor", "자동 정리", "정기 정리", "에이전트가 만든 리소스 정리"): a ledger of what agents created (temp dirs, GUI apps, browser windows) plus settled Orca worker worktrees and terminals, cleaned up on a 3-hour Orca automation with a model-free precheck. Also files in ~/Downloads and ~/Desktop untouched for 7 days ("다운로드 폴더 정리", "바탕화면 정리"). Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets; files go to the trash, never deleted for good.
+description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Also the janitor ("janitor", "자동 정리", "정기 정리", "에이전트가 만든 리소스 정리"): a ledger of what agents created (temp dirs, GUI apps, browser windows) plus settled Orca worker worktrees and terminals, cleaned up on a 3-hour Orca automation with a model-free precheck. Also files in ~/Downloads and ~/Desktop untouched for 7 days, screenshots for 1 ("다운로드 폴더 정리", "바탕화면 정리"). Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets; files go to the trash, never deleted for good.
 ---
 
 # Reap resources
@@ -77,7 +77,10 @@ never through a symlink. These lines are never targets, so they do not wake the 
 The `user-folder` kind looks at the top-level entries of `~/Downloads` and `~/Desktop` (screenshots
 included), and nowhere else. An entry is a target when nothing in it has been modified or changed
 (mtime or ctime, so a freshly unpacked archive with old dates stays) for `reap.user_folder_days`
-(default 7; 0 or less turns the kind off). Kept: a download in progress (`.download`, `.crdownload`,
+(default 7; 0 or less turns the kind off). A top-level screenshot or screen recording file (a name
+macOS gives: `Screenshot `, `Screen Recording `, `스크린샷 `, `화면 기록 ` followed by an image or video
+extension) waits `reap.user_folder_screenshot_days` instead (default 1; an invalid value falls back to
+the general count). Kept: a download in progress (`.download`, `.crdownload`,
 `.part`), an entry any of this user's processes holds open or uses as cwd (`lsof`; an unreadable list
 keeps everything), a directory it cannot read all of or with more than 20,000 entries, and hidden
 entries (`.DS_Store`). Targets go to the trash. The precheck sweeps them at most once a day.
@@ -158,7 +161,7 @@ the exact `reap --plan` command to the user.
 not in this repo:
 
 ```json
-{"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7,
+{"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
           "alert": {"codex_procs": 300, "codex_rss_mb": 4096, "orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10}}}
 ```
