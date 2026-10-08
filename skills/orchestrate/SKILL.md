@@ -143,6 +143,7 @@ A permission prompt, the auto-mode classifier, a hook or the human refused an ac
 - The coordinator of that session turns it into a rule request. Draft the smallest rule for that act class on this repo with `tune-automode`, put its run line to the human with `orch-dash inbox add --type run_command --title "권한 규칙 필요: <repo> <act> (--apply 없이 돌리면 diff 만 보인다)" --command "<emit's run line without the leading !>" --key denied:<repo>:<act>`, and say in your reply: "<card>에서 <act>가 분류기에 거부됐습니다(<category>). 다른 세션이 대신 실행하면 거부를 우회하는 것이라 하지 않습니다. 계속 허용하려면 규칙을 추가해 주세요: <rule>. 실행: `! <run line>` (설정을 백업한 뒤 적용하고, 되돌리는 명령을 출력합니다). 적용되면 <card>가 같은 행동을 한 번 다시 합니다."
 - Once the human has run it, or approved the act in the refused session's own chat (for a production sync only the rule counts: `references/top-level.md`), that session does the act once more. A running session may need a restart before a new rule reaches it. This is not a retry of the refusal: its cause is gone.
 - A harmless read refused as something it does not do is the false-positive case in FORBIDDEN. When the same kind comes back, request an `environment` or `allow` rule for it as above.
+- Do not tell the refused session a form that would pass (the value on stdin instead of an argument, a wrapper script, a sibling session): coaching the workaround is the workaround. A refused check is recorded as unverified (refused), and the work goes on without it.
 - A card that stops because the act was never in its first prompt's approval is a scope gap, not a rule gap. Do not send it "사용자 승인" by message (refused as relayed: a rename, a workflow dispatch, a merge), do not press its keys, do not do the act yourself, and do not ask the human to type it into the card. If the human already approved it, start a new `/goal` card whose APPROVED line carries it (`dispatch-card` §2); if not, ask once, and on yes start that card.
 
 ## What reaches the human
@@ -191,6 +192,8 @@ Orca's `orchestration` skill is the default; these are the places a program over
 | A worker that finished but had no capability token to send `worker_done` stays `active`, and no sweep line names it | Ask it the `TAKEN OVER` self-check; its answer is its REPORT, and you close it out |
 | A shared state file overwritten in place and left empty | Append-only ledger; anything else is written to a temp file and renamed |
 | Typing `/model` into a worker terminal | Pass `--model` to `worker-start`; `/model` changes the global setting |
+| A check needs a secret the worker's session did not inherit from the environment | The worker writes a script that reads the value from the environment and prints only the result, never the value; the coordinator reads it, runs it in its own terminal and sends the output back. Only for a value that is missing: a check a guard refused follows "Refused acts" |
+| A worker that has run for hours keeps hitting inference gateway 5xx errors or timeouts; its context is too large, and `/compact` is as heavy | Replace it, do not retry it in place: the layer above reads its worktree (branch, commits, what is unpushed), writes a fresh brief with what is done and what is left, starts a new worker on that card, and releases the old one |
 
 ## Resume (handoff)
 

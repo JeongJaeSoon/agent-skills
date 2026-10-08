@@ -18,6 +18,12 @@ In this order, each left out when empty:
 3. **Decision needed** — numbered across the whole report. Each item: the question in one line, the options, and one recommendation with its reason. Only decisions outside the approved scope reach the human (`orchestrate` "What reaches the human"); decide the rest and report them under Done. Inside a program, a decision registered with `orch decide add` keeps its id beside the number (`1. (d3) …`), so an answer by either closes it.
 4. **Only you** — what the human alone can do: a permission dialog, a login, a payment, an approval a ruleset requires from a person. Say where and what to press or run.
 
+When the report covers several work items (tickets, tracks, a program's predicate items), each In progress item carries three fields:
+
+- **Progress** — an estimate that says so and names its basis: stages passed out of the item's stages (implement → PR → review → merge → dev deploy → dev check → prod deploy → prod check, trimmed to the stages the item has), or the epic's exit items N/M (`use-tracker`). Written as `4/8 단계 (추정 50%)`. No basis, no number.
+- **Done so far** — only what was verified, with the evidence Done asks for.
+- **Left** — the next stage, who moves it (an agent or a person), and when it is expected; "미정" when no time is fixed. A step that is the human's also goes under Only you.
+
 No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
 ## 2. Channel
@@ -32,7 +38,7 @@ The reply tool sends plain text by default, so every markdown mark shows as type
 
 - No markdown syntax at all. Emphasis comes only from the emoji leads.
 - One emoji lead per section: ✅ Done, 🔄 In progress, ❓ Decision needed, 🙋 Only you.
-- One line per item, two at most. Links as bare URLs. PRs as `owner/repo#123` plus the URL when the human will open it.
+- One line per item, two at most; per-item progress as `<item> — 4/8 단계(추정 50%) · 완료: … · 남음: … (담당, 시각)`. A chat post elsewhere that renders no tables takes this form too. Links as bare URLs. PRs as `owner/repo#123` plus the URL when the human will open it.
 - Decision items numbered `1.` `2.` … so the human can answer "1, 3 진행" or "2번은 B". Read such a reply against the numbers in this report.
 - The reply tool splits text over 4096 characters by itself, by default at the character count, mid-line. Keep sections short enough that one report stays in one message; a report that cannot goes out as one reply per section. (A `chunkMode` of `newline` in the Telegram access settings makes it split at paragraph breaks instead; that setting is the human's.) A table the human truly needs (a long comparison) goes as an attached image or file, with its one-line conclusion in the text.
 
@@ -54,7 +60,7 @@ An illustrative shape (the items are made up):
 
 ### Terminal
 
-- Markdown tables where items share columns (item, state, evidence).
+- Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left.
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same four sections and the same numbering of decisions.
 

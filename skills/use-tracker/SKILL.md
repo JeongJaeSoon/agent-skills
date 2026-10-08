@@ -107,15 +107,16 @@ compares each open ticket in scope with GitHub and the deploy, and makes the tic
    returns with the ID in its title, its branch (any case) or the tickets its body says it
    closes. A PR that names the ID only in passing (a follow-up) does not count. The search does
    not match branch names, so when the ticket's branch is known, list `--head <branch>` too.
-   Leave out PRs closed without merging.
+   Leave out PRs closed without merging. A ticket whose work spans several repos is searched in
+   each of them; a reconcile run from one repo does not see the others.
 2. Set the state the first matching row supports, through the milestone it skipped (its line included):
 
 | What GitHub and the deploy show | Target |
 |---|---|
 | An open PR, no review requested or submitted | `started` |
 | An open PR with a review requested or submitted | `review` |
-| Every PR merged, and each criterion holds when checked now the way it says (a deployed version, a check on main) | `completed` |
-| Every PR merged, a criterion still open | unchanged; one comment naming the open criterion and how it will be checked, unless the latest comment already says it |
+| Every PR merged in every repo, and each criterion holds when checked now the way it says (a deployed version, a check on main) | `completed` |
+| Every PR merged, a criterion still open (one repo's change merged but not yet released counts) | unchanged; one comment naming the open criterion and how it will be checked, unless the latest comment already says it |
 | No PR, on a ticket that is `started` | unchanged; report it |
 
 A closed ticket whose PR is still open is reported, never reopened. Report one line per ticket
