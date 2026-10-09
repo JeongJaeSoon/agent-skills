@@ -111,10 +111,11 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 
 `mods/orch-panel/`은 Claude Code 터미널 안에서 오케스트레이션 현황을 보는 mod(function hook 플러그인)다. 대시보드가 이력과 숫자를 보여 준다면, 이 mod는 지금 이 세션에서 볼 것만 보여 준다.
 
-- 상태줄: `결정 2 · 사람만 1`. 0인 항목은 빼고, 모두 0이면 지운다.
+- 상태줄: `결정 2 · 사람만 1 · 자동화 ▲1`. 0인 항목은 빼고, 모두 0이면 지운다.
 - `/orch-panel`: 결정 대기와 사람만 할 수 있는 일(권한·로그인·명령 실행)을 접고 펴는 패널. 결정은 답하는 법(`d7: CSV`)을 같이 보여 준다. 코디네이터 세션에서는 새 항목이 생길 때 토스트를 띄우고 패널을 연다.
 - 작업 진행: `orch stage`로 기록한 작업별 단계 표(`stages.json`)를 `▰▰▰▱▱ 3/5` 진행 바와 머지·dev·prod 칸의 `✓ ✗ △ ◐ –`(기호마다 색)로 그린다. 머지 칸과 PR 옆 `✗CI`·`◐CI`·`✎`·`✓`는 `state.json`의 PR 목록에서 읽는다. 행을 누르면 각 칸의 근거가 펼쳐지고, 아래에 `다음` 줄과 표에 없는 열린 PR 수가 붙는다.
 - 관계(접힌 채 시작): 세션 트리를 대시보드와 같은 phase 색과 점(`◉` 작업 중 · `◍` 대기 · `○` idle · `·` open)으로 그리고, offline은 `+ offline N`으로 접는다. 아래 공유 자원에 착지 lane과 `orch hold`로 잡은 자원(브라우저 등)의 보유자와 시간을 보인다.
+- 자동화(접힌 채 시작): Orca automation마다 주기·다음 실행·마지막 실행과 최근 6회를 색 블록(`■` 완료 초록 · `■` 실패 빨강 · `◧` 실행 중 · `□` 건너뜀)으로 보인다. 마지막 실행이 실패했거나 예정 시각을 10분 넘기면 `▲`로 표시한다. Orca automation만 보이며, 세션 안의 CronCreate와 launchd 작업은 수집하지 않는다.
 - 읽는 것은 orch-dash가 모은 `state.json`과 `stages.json`, 같은 디렉터리의 두 파일이다(`$ORCH_FLEET_STATE`, 기본 `~/.local/state/agent-skills/dashboard`). 5초마다 stat하고 둘 중 하나가 바뀌었을 때만 읽는다. `gh`·`orca`나 모델은 부르지 않는다. 네트워크는 패널의 `↻`이 대시보드에 즉시 수집을 한 번 요청할 때뿐이다.
 
 체크아웃에서 쓰려면 `CLAUDE_CODE_PLUGIN_DIRS`에 `<체크아웃>/mods/orch-panel`을 더한다. 마켓플레이스로는 `claude plugin install orch-panel@jeongjaesoon`. 실제 fleet 없이 보려면:

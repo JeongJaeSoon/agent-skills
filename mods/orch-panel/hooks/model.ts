@@ -1,4 +1,5 @@
 import type {
+  OrchPanelAutomation,
   OrchPanelCell,
   OrchPanelItem,
   OrchPanelItemKind,
@@ -72,17 +73,36 @@ export function snapshotOf(text: string, checkedAt: number, cwd: string, stagesT
   }
   // Oldest first: the one waiting longest is the one most likely to be costing something.
   items.sort((a, b) => parseAt(a.at) - parseAt(b.at))
-  const orca = (state.sources as Raw | undefined)?.orca as Raw | undefined
+  const sources = (state.sources ?? {}) as Record<string, Raw | undefined>
+  const sourceOf = (raw: Raw | undefined) => (raw ? { updatedAt: str(raw.updated_at), isOk: raw.ok !== false } : null)
   return {
     status: 'ok',
     checkedAt,
     generatedAt: str(state.generated_at),
     // The root id is `<id>::<worktree path>`: only the coordinator's own session gets toasts and an unasked pane.
     isCoordinator: str(state.root)?.endsWith(`::${cwd}`) ?? false,
-    orca: orca ? { updatedAt: str(orca.updated_at), isOk: orca.ok !== false } : null,
+    orca: sourceOf(sources.orca),
     items,
     work: workOf(stagesText, state),
     sessions: sessionsOf(state, cwd),
+    automations: ((state.automations as Raw[] | undefined) ?? []).flatMap(a =>
+      str(a.id)
+        ? [{
+            id: a.id as string,
+            name: str(a.name) ?? (a.id as string),
+            rrule: str(a.rrule),
+            isEnabled: a.enabled !== false,
+            nextAt: str(a.next_run_at),
+            lastAt: str(a.last_run_at),
+            recent: ((a.recent as Raw[] | undefined) ?? []).map(r => ({
+              status: str(r.status) ?? 'unknown',
+              at: str(r.at),
+              summary: str(r.summary),
+            })),
+          }]
+        : [],
+    ),
+    automationSource: sourceOf(sources.automations),
     holds: ((state.holds as Raw[] | undefined) ?? []).flatMap(raw =>
       str(raw.resource)
         ? [{
@@ -242,7 +262,8 @@ export function counts(snapshot: OrchPanelSnapshot | null): { decide: number; hu
 export function statusText(snapshot: OrchPanelSnapshot | null): string | undefined {
   if (snapshot?.status !== 'ok') return undefined
   const { decide, human } = counts(snapshot)
-  const parts = [decide && `결정 ${decide}`, human && `사람만 ${human}`].filter(Boolean)
+  const troubled = snapshot.automations.filter(a => automationIssue(a, snapshot.checkedAt)).length
+  const parts = [decide && `결정 ${decide}`, human && `사람만 ${human}`, troubled && `자동화 ▲${troubled}`].filter(Boolean)
   return parts.length ? parts.join(' · ') : undefined
 }
 
@@ -273,4 +294,36 @@ export function toastText(item: OrchPanelItem): string {
 
 export function sessionUrl(session: string): string {
   return `${DASH_URL}/#/fleet/session/${encodeURIComponent(session)}`
+}
+
+const STALL_MS = 10 * 60_000
+
+// What is wrong with an automation, if anything: its last run failed, or its next run is overdue (the scheduler
+// stopped, or the app was closed). A switched-off automation is not a problem.
+export function automationIssue(a: OrchPanelAutomation, now: number): string | null {
+  if (!a.isEnabled) return null
+  if (a.recent[0] && /fail|error/.test(a.recent[0].status)) return '마지막 실행 실패'
+  if (a.nextAt && now - parseAt(a.nextAt) > STALL_MS) return `예정 ${age(a.nextAt, now)} 지남`
+  return null
+}
+
+// The few cron shapes automations use, in words; anything else stays as written.
+export function cadence(rrule: string | null): string {
+  if (!rrule) return '?'
+  const m = (re: RegExp) => rrule.trim().match(re)
+  let g = m(/^(\d+) \*\/(\d+) \* \* \*$/)
+  if (g) return `${g[2]}시간마다 :${g[1]?.padStart(2, '0')}`
+  g = m(/^\*\/(\d+) (\d+)-(\d+) \* \* 1-5$/)
+  if (g) return `평일 ${g[2]}–${g[3]}시 ${g[1]}분마다`
+  g = m(/^\*\/(\d+) \* \* \* \*$/)
+  if (g) return `${g[1]}분마다`
+  g = m(/^(\d+) (\d+) \* \* \*$/)
+  if (g) return `매일 ${g[2]}:${g[1]?.padStart(2, '0')}`
+  return rrule
+}
+
+export function until(iso: string | null, now: number): string {
+  const t = parseAt(iso)
+  if (!t) return '–'
+  return t >= now ? `${age(new Date(now).toISOString(), t)} 후` : `${age(iso, now)} 지남`
 }

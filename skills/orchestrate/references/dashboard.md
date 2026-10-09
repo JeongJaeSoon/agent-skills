@@ -161,6 +161,10 @@ Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄).
 
 `orch hold <resource>` records who uses something lanes take turns on (`browser`, `grafana-login`), and `orch release <resource>` gives it back. It has the exclusive lane's shape (`scripts/holds.py`): one file per resource under `$PROGRAMS_HOME/_locks/`, beside the lane locks, and `lock_acquired` / `lock_released` rows in `_locks/holds.jsonl`. `hold` refuses while someone else holds it and names them; holding again refreshes your own. A hold not refreshed within its `--ttl` (120 minutes) belonged to a session that died holding it, and the next reader breaks it and logs `broken after`. `release --force` frees another's hold and logs who did. `orch hold --list` shows every hold and lane lock; the fleet collector lists the same into `state.json` `holds`, each on the session whose terminal handle holds it, and the orch-panel mod shows them under its relations section.
 
+### Automations
+
+Every runs cycle the fleet collector also lists Orca automations (`orca automations list`, then `orca automations runs --id` for each) into `state.json` `automations`: name, schedule, enabled, next and last run, and the six newest runs with their status and a masked one-line summary. `sources.automations` says whether the last listing worked. The orch-panel mod draws them as its automations section. Only Orca automations are listed: a session's own `CronCreate` jobs live in that session, and launchd jobs are outside the fleet.
+
 ### Sending a line to a session
 
 The session page has a send box for its agent terminal. It is off the network by construction and guarded on every step:

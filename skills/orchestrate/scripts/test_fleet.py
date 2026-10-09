@@ -817,6 +817,28 @@ assert fleet.classify("Login required: run `gh auth login`, then tell me.") == "
 assert fleet.classify("Shall I merge it?") == "approval"
 assert fleet.classify("Refactored the parser.") == "fyi"
 
+# Automations: Orca's list, each with its last six runs newest first, output masked to its first line.
+assert [a["name"] for a in st["automations"]] == ["janitor"] and st["sources"]["automations"]["ok"], st["automations"]
+secret_out = "## posted with xoxb-" + "1" * 12 + "-" + "a" * 24 + "\nsecond line"
+
+
+def fake_orca(*args, timeout=30):
+    if args[1] == "list":
+        return {"automations": [{"id": "a1", "name": "watch-mentions", "rrule": "*/20 9-20 * * 1-5", "enabled": True,
+                                 "nextRunAt": 1791546000000, "lastRunAt": 1791544909459}]}
+    return {"runs": [{"runNumber": n, "status": "failed" if n == 9 else "completed", "startedAt": 1791544800000 + n,
+                      "outputSnapshot": {"content": secret_out}} for n in range(1, 10)]}
+
+
+real_orca, fleet.orca = fleet.orca, fake_orca
+try:
+    autos = fleet.fetch_automations()
+finally:
+    fleet.orca = real_orca
+assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
+assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
+assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
+
 # Shared resources: a hold by a terminal handle sits on that terminal's session.
 import holds  # noqa: E402
 holds.hold("browser", "term_docs", "staging login")

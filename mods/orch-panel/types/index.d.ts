@@ -69,6 +69,19 @@ export type OrchPanelHold = {
   at: string | null
 }
 
+export type OrchPanelRun = { status: string; at: string | null; summary: string | null }
+
+// An Orca automation as the collector listed it, its runs newest first.
+export type OrchPanelAutomation = {
+  id: string
+  name: string
+  rrule: string | null
+  isEnabled: boolean
+  nextAt: string | null
+  lastAt: string | null
+  recent: OrchPanelRun[]
+}
+
 export type OrchPanelSnapshot =
   | { status: 'missing'; checkedAt: number }
   | { status: 'unreadable'; checkedAt: number; error: string }
@@ -82,6 +95,8 @@ export type OrchPanelSnapshot =
       work: OrchPanelWork
       sessions: OrchPanelSession[]
       holds: OrchPanelHold[]
+      automations: OrchPanelAutomation[]
+      automationSource: OrchPanelSource | null
     }
 
 declare module 'claude-code' {

@@ -1,14 +1,25 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { OrchPanelCell, OrchPanelItem, OrchPanelSession, OrchPanelSnapshot, OrchPanelStageRow } from '../types'
+import type {
+  OrchPanelAutomation,
+  OrchPanelCell,
+  OrchPanelItem,
+  OrchPanelRun,
+  OrchPanelSession,
+  OrchPanelSnapshot,
+  OrchPanelStageRow,
+} from '../types'
 import {
   DASH_URL,
   STALE_COLLECTOR_MS,
   STALE_ORCA_MS,
   age,
   ageMs,
+  automationIssue,
   bar,
+  cadence,
+  parseAt,
   progress,
   sessionUrl,
   snapshotOf,
@@ -16,6 +27,7 @@ import {
   statusText,
   toastText,
   tree,
+  until,
 } from './model'
 
 const PANE = 'orch'
@@ -52,6 +64,21 @@ const PHASE: Record<OrchPanelSession['phase'], { glyph: string; color?: string; 
   open: { glyph: '·', word: 'open' },
   offline: { glyph: '◌', word: 'offline' },
 }
+
+// One block per automation run: filled for a run that ran, hollow for one its precheck skipped.
+const RUN: Record<string, { glyph: string; color?: string }> = {
+  completed: { glyph: '■', color: 'success' },
+  failed: { glyph: '■', color: 'error' },
+  error: { glyph: '■', color: 'error' },
+  running: { glyph: '◧', color: 'warning' },
+  dispatched: { glyph: '◧', color: 'warning' },
+  skipped: { glyph: '□' },
+  other: { glyph: '▪' },
+}
+
+// The name column is fixed so the columns after it line up; a truncating flex box drifted past its width live.
+const NAME_WIDTH = 24
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 
 // Module state: a hot reload starts it over, and session.start fires again to refill it.
 const live = {
@@ -278,6 +305,96 @@ export const register: Register = on => {
       </Box>
     )
 
+    const isAutoOpen = opened.includes('section:automations')
+    const autos = snap.automations
+    const troubled = autos.filter(a => automationIssue(a, now))
+    const upcoming = autos
+      .filter(a => a.isEnabled && a.nextAt)
+      .sort((a, b) => parseAt(a.nextAt) - parseAt(b.nextAt))[0]
+    const isAutoSourceBad = !!snap.automationSource && !snap.automationSource.isOk
+    const runBlock = (r: OrchPanelRun, i: number) => {
+      const b = RUN[r.status] ?? (r.status.startsWith('skipped') ? RUN.skipped : RUN.other)
+      return (
+        <Text key={`run-${i}`} color={b?.color} dimColor={!b?.color}>
+          {b?.glyph}
+        </Text>
+      )
+    }
+    const autoRow = (a: OrchPanelAutomation) => {
+      const issue = automationIssue(a, now)
+      const last = a.recent[0]
+      return (
+        <Box key={a.id} flexDirection="column">
+          <Box>
+            <Box width={2} justifyContent="flex-end">
+              <Button
+                key={`auto-${a.id}`}
+                plain
+                dimColor
+                label={opened.includes(`auto:${a.id}`) ? '▾' : '▸'}
+                onPress={expand(`auto:${a.id}`)}
+              />
+            </Box>
+            <Box width={NAME_WIDTH}>
+              <Text dimColor={!a.isEnabled}>
+                {issue ? <Text color="error"> ▲</Text> : ''} {clip(a.isEnabled ? a.name : `${a.name} (꺼짐)`, NAME_WIDTH - (issue ? 4 : 2))}
+              </Text>
+            </Box>
+            <Box width={17}>
+              <Text dimColor wrap="truncate-end">
+                {cadence(a.rrule)}
+              </Text>
+            </Box>
+            <Box width={9}>
+              <Text dimColor={!issue} color={issue ? 'warning' : undefined}>
+                {a.isEnabled ? until(a.nextAt, now) : '–'}
+              </Text>
+            </Box>
+            <Box width={8}>
+              <Text dimColor>{a.lastAt ? `${age(a.lastAt, now)} 전` : '–'}</Text>
+            </Box>
+            <Box width={7}>{[...a.recent].reverse().map(runBlock)}</Box>
+          </Box>
+          {opened.includes(`auto:${a.id}`) ? (
+            <Text dimColor wrap="truncate-end">
+              {'      '}
+              {issue ? `${issue} · ` : ''}마지막: {last ? `${last.status} ${age(last.at, now)} 전${last.summary ? ` — ${last.summary}` : ''}` : '없음'}
+            </Text>
+          ) : null}
+        </Box>
+      )
+    }
+    const autoSection = !isAutoOpen ? null : (
+      <Box flexDirection="column">
+        {isAutoSourceBad ? (
+          <Text color="warning">  ▲ Orca automation 목록을 못 읽음 ({age(snap.automationSource?.updatedAt ?? null, now)} 전 값)</Text>
+        ) : null}
+        {autos.length ? (
+          <Box>
+            <Box width={NAME_WIDTH + 2}>
+              <Text dimColor>  이름</Text>
+            </Box>
+            <Box width={17}>
+              <Text dimColor>주기</Text>
+            </Box>
+            <Box width={9}>
+              <Text dimColor>다음</Text>
+            </Box>
+            <Box width={8}>
+              <Text dimColor>마지막</Text>
+            </Box>
+            <Box width={7}>
+              <Text dimColor>최근</Text>
+            </Box>
+          </Box>
+        ) : (
+          <Text dimColor>  등록된 automation 없음</Text>
+        )}
+        {autos.map(autoRow)}
+        <Text dimColor>  Orca automation 만 표시 (세션 CronCreate·launchd 는 수집 밖)</Text>
+      </Box>
+    )
+
     // Collapsed until asked for: the tree is the coordinator's long view, not what changes minute to minute.
     const isRelOpen = opened.includes('section:relations')
     const rel = tree(snap.sessions, new Set(snap.items.map(i => i.session ?? '')))
@@ -373,6 +490,16 @@ export const register: Register = on => {
         {isWorkOpen && work.untrackedPrs ? (
           <Link href={`${DASH_URL}/#/fleet/prs`} label={`  + 표에 없는 열린 PR ${work.untrackedPrs} ↗`} />
         ) : null}
+        <Button key="toggle-automations" plain onPress={expand('section:automations')}>
+          {isAutoOpen ? '▾' : '▸'} 자동화 {autos.length}
+          {troubled.length || isAutoSourceBad ? (
+            <Text color="warning"> · ▲ {troubled.length || '수집 실패'}</Text>
+          ) : (
+            <Text dimColor> · 문제 없음</Text>
+          )}
+          {upcoming ? <Text dimColor> · 다음 {upcoming.name} {until(upcoming.nextAt, now)}</Text> : ''}
+        </Button>
+        {autoSection}
         <Button key="toggle-relations" plain onPress={expand('section:relations')}>
           {isRelOpen ? '▾' : '▸'} 관계 세션 {rel.lines.length}
           {working ? <Text color="permission"> · ◉ 작업 중 {working}</Text> : ''}
