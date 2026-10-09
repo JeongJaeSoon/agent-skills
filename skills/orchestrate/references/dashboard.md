@@ -139,6 +139,24 @@ The item sits on the session whose terminal ran `add` (`$ORCA_TERMINAL_HANDLE`),
 
 An answer typed into the coordinator's terminal closes the decision too. The plugin's `UserPromptSubmit` hook (`hooks/decision.py`) reads each prompt of the terminal whose handle registered the decision, and of no other: a worker's prompt never closes the coordinator's decision. It closes one as `done` only when the prompt is unambiguous: its first line starts with the id (`decision d3: yes`, `d3: yes`, `d3 yes`; the rest of the line is the answer), or starts with an option label of two or more characters, not followed by a letter or digit, that exactly one of the terminal's open decisions has (the longest matching label wins). The hook then tells the coordinator the answer was recorded. Any other prompt closes nothing and only adds a reminder listing that terminal's open decisions (at most five) to the prompt's context. Decisions registered outside Orca have no handle and are never closed this way. The hook is loaded when a session starts: a session that was already running needs `/reload-plugins` or a restart first. Any error exits 0, so a prompt is never blocked.
 
+### The stage table
+
+The per-item stage table that `brief-status` reports (merge / dev check / prod check) is a record, not something rebuilt for each report. The coordinator writes a cell at the moment it verifies it, with the evidence, and `stages.json` in the state directory keeps it (`scripts/stages.py`, masked on write):
+
+```sh
+orch stage add search --title "Search revamp" --pr acme/web#42
+orch stage add reindex --parent search --title "Reindex" --pr acme/ops#88
+orch stage set search --col dev --mark ok --evidence v1.8.0         # ok needs --evidence
+orch stage set search --col prod --mark checking --evidence "QA in progress" --by qa
+orch stage set reindex --col prod --mark na
+orch stage env --prod v1.7.2 --dev v1.8.0
+orch stage next "acme/web#45 review → merge (agent, today)"
+orch stage show [--md | --telegram | --json]
+orch stage done search    # stays marked finished for 7 days; `drop` removes a row and its children
+```
+
+Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄). The merge cell of a row with `--pr` is not written: `show` fills it from `state.json`'s PR list (merged with its date, else CI failure, changes requested, draft or waiting for review). It lives in the fleet state directory rather than a program's ledger because work outside a program needs rows too.
+
 ### Sending a line to a session
 
 The session page has a send box for its agent terminal. It is off the network by construction and guarded on every step:

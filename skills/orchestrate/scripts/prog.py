@@ -58,6 +58,14 @@ Usage: orch <command> <slug> [options]
                                      dashboard until done or dropped; add prints its id. Each option is a
                                      button that closes it with that answer, then types
                                      "decision <id>: <label>" into this terminal once it is idle
+  stage add <id> --title T [--pr owner/repo#N] [--parent ID]
+  stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
+  stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]
+                                     no slug: the stage table brief-status reports, one row per work item.
+                                     Write a cell where you verified it; ok needs --evidence. The merge
+                                     cell of a row with --pr comes from the fleet PR list. `next` replaces
+                                     the next-steps list (no lines clears it); done rows leave after 7
+                                     days; drop removes a row and its children
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -1855,9 +1863,39 @@ def cmd_decide(argv):
         sys.exit(str(e))
 
 
+def cmd_stage(argv):
+    import stages
+    sub, rest = argv[0], argv[1:]
+    rid = rest[0] if rest and not rest[0].startswith("--") else None
+    try:
+        if sub == "add" and rid:
+            stages.add(rid, opt(rest, "--title", ""), opt(rest, "--pr"), opt(rest, "--parent"))
+        elif sub == "set" and rid and opt(rest, "--col") and opt(rest, "--mark"):
+            stages.set_cell(rid, opt(rest, "--col"), opt(rest, "--mark"), opt(rest, "--evidence"), opt(rest, "--by"))
+        elif sub == "env" and (opt(rest, "--prod") or opt(rest, "--dev")):
+            stages.set_env(opt(rest, "--prod"), opt(rest, "--dev"))
+        elif sub == "next":
+            stages.set_next(rest)
+        elif sub in ("done", "drop") and rid:
+            stages.finish(rid, drop=sub == "drop")
+        elif sub == "show":
+            t = stages.table()
+            if "--json" in rest:
+                print(json.dumps(t, ensure_ascii=False, indent=1))
+            else:
+                print((stages.render_telegram if "--telegram" in rest else stages.render_md)(t) or "기록된 단계 없음")
+        else:
+            sys.exit("usage: orch stage add <id> --title T [--pr owner/repo#N] [--parent ID] | set <id> --col merge|dev|prod "
+                     "--mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO] | env [--prod V] [--dev V] | "
+                     "next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]")
+    except (ValueError, OSError) as e:
+        sys.exit(str(e))
+
+
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
-            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide}
+            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
+            "stage": cmd_stage}
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
