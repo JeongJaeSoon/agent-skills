@@ -44,6 +44,31 @@ export type OrchPanelWork = {
   error: string | null
 }
 
+export type OrchPanelPhase = 'working' | 'waiting' | 'idle' | 'open' | 'offline'
+
+// One Orca session of the fleet tree: what the relations section draws, nothing more.
+export type OrchPanelSession = {
+  id: string
+  name: string
+  kind: string
+  phase: OrchPanelPhase
+  parent: string | null
+  task: string | null
+  pr: number | null
+  isPrMerged: boolean
+  isMe: boolean
+}
+
+// A landing lane's lock or a resource taken with `orch hold`, as the collector listed it.
+export type OrchPanelHold = {
+  kind: 'lane' | 'resource'
+  resource: string
+  by: string | null
+  byName: string | null
+  note: string | null
+  at: string | null
+}
+
 export type OrchPanelSnapshot =
   | { status: 'missing'; checkedAt: number }
   | { status: 'unreadable'; checkedAt: number; error: string }
@@ -55,6 +80,8 @@ export type OrchPanelSnapshot =
       orca: OrchPanelSource | null
       items: OrchPanelItem[]
       work: OrchPanelWork
+      sessions: OrchPanelSession[]
+      holds: OrchPanelHold[]
     }
 
 declare module 'claude-code' {

@@ -66,6 +66,13 @@ Usage: orch <command> <slug> [options]
                                      cell of a row with --pr comes from the fleet PR list. `next` replaces
                                      the next-steps list (no lines clears it); done rows leave after 7
                                      days; drop removes a row and its children
+  hold <resource> [--note TEXT] [--ttl MIN] [--by WHO] | hold --list [--json]
+  release <resource> [--by WHO] [--force]
+                                     no slug: take a resource lanes share (browser, a monitoring login)
+                                     before using it, release it after. hold refuses while someone else
+                                     holds it and refreshes your own; a hold idle past --ttl (120) is
+                                     broken. WHO defaults to $ORCA_TERMINAL_HANDLE. --list shows these
+                                     and the exclusive landing lanes
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -1892,10 +1899,36 @@ def cmd_stage(argv):
         sys.exit(str(e))
 
 
+def cmd_hold(argv, release=False):
+    import holds
+    target = argv[0] if not argv[0].startswith("--") else None
+    by = opt(argv, "--by") or os.environ.get("ORCA_TERMINAL_HANDLE") or os.environ.get("USER") or "unknown"
+    try:
+        if not release and "--list" in argv:
+            rows = holds.current()
+            if "--json" in argv:
+                print(json.dumps(rows, ensure_ascii=False, indent=1))
+            for r in [] if "--json" in argv else rows:
+                print(f"{r['kind']:8} {r['resource']:24} {r['by'] or '?'}  since {r['at']}" + (f"  {r['note']}" if r["note"] else ""))
+            if not rows and "--json" not in argv:
+                print("nothing held")
+        elif not target:
+            sys.exit("usage: orch hold <resource> [--note TEXT] [--ttl MIN] [--by WHO] | hold --list [--json] | "
+                     "release <resource> [--by WHO] [--force]")
+        elif release:
+            held = holds.release(target, by, force="--force" in argv)
+            print(f"released {target}" if held else f"{target} was not held")
+        else:
+            row = holds.hold(target, by, opt(argv, "--note"), int(opt(argv, "--ttl", holds.TTL_MIN)))
+            print(f"{target} held by {row['by']} (ttl {row['ttl_min']}m)")
+    except (ValueError, OSError) as e:
+        sys.exit(str(e))
+
+
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage}
+            "stage": cmd_stage, "hold": cmd_hold, "release": lambda argv: cmd_hold(argv, release=True)}
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):

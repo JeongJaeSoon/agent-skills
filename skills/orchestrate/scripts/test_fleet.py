@@ -817,4 +817,11 @@ assert fleet.classify("Login required: run `gh auth login`, then tell me.") == "
 assert fleet.classify("Shall I merge it?") == "approval"
 assert fleet.classify("Refactored the parser.") == "fyi"
 
+# Shared resources: a hold by a terminal handle sits on that terminal's session.
+import holds  # noqa: E402
+holds.hold("browser", "term_docs", "staging login")
+st = f.tick(force=True)
+assert [(h["kind"], h["resource"], h["by"], h["session"]) for h in st["holds"]] == [
+    ("resource", "browser", "term_docs", "wt-docs")], st["holds"]
+
 print("test_fleet: ok")

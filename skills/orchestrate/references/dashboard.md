@@ -157,6 +157,10 @@ orch stage done search    # stays marked finished for 7 days; `drop` removes a r
 
 Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄). The merge cell of a row with `--pr` is not written: `show` fills it from `state.json`'s PR list (merged with its date, else CI failure, changes requested, draft or waiting for review). The orch-panel mod draws the same file as its work-progress pane. It lives in the fleet state directory rather than a program's ledger because work outside a program needs rows too.
 
+### Shared resources
+
+`orch hold <resource>` records who uses something lanes take turns on (`browser`, `grafana-login`), and `orch release <resource>` gives it back. It has the exclusive lane's shape (`scripts/holds.py`): one file per resource under `$PROGRAMS_HOME/_locks/`, beside the lane locks, and `lock_acquired` / `lock_released` rows in `_locks/holds.jsonl`. `hold` refuses while someone else holds it and names them; holding again refreshes your own. A hold not refreshed within its `--ttl` (120 minutes) belonged to a session that died holding it, and the next reader breaks it and logs `broken after`. `release --force` frees another's hold and logs who did. `orch hold --list` shows every hold and lane lock; the fleet collector lists the same into `state.json` `holds`, each on the session whose terminal handle holds it, and the orch-panel mod shows them under its relations section.
+
 ### Sending a line to a session
 
 The session page has a send box for its agent terminal. It is off the network by construction and guarded on every step:

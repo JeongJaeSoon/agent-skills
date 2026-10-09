@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { age, bar, progress, snapshotOf, stateDir, statusText, workOf } from './model'
+import { age, bar, progress, snapshotOf, stateDir, statusText, tree, workOf } from './model'
 
 const CWD = '/work/acme/coordinator'
 const NOW = Date.parse('2026-10-09T12:00:00Z')
@@ -203,4 +203,61 @@ test('with no stage rows the work section says how to start one', async ($, on) 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Button', key: 'toggle-work' }))?.text).toContain('기록 없음')
   expect(await ui.find({ text: /기록된 단계 없음 — orch stage add/ })).toBeDefined()
+})
+
+const COORD = `repo-1::${CWD}`
+const FLEET = {
+  ...STATE,
+  sessions: [
+    { id: COORD, name: 'coordinator', kind: 'orchestrator', phase: 'working', parent: null },
+    { id: 'lead-web', name: 'acme-web-search', kind: 'orchestration', phase: 'waiting', parent: COORD, linked_pr: { number: 42, state: 'open' } },
+    { id: 'w-sort', name: 'sort-fix', kind: 'task', phase: 'working', parent: 'lead-web', task_title: '정렬 버그', terminals: [{ handle: 'term_sort' }] },
+    { id: 'w-idx', name: 'reindex', kind: 'task', phase: 'idle', parent: 'lead-web', linked_pr: { number: 88, state: 'merged' } },
+    { id: 'lead-ops', name: 'acme-ops-alerts', kind: 'orchestration', phase: 'open', parent: COORD },
+    { id: 'gone', name: 'old-spike', kind: 'standalone', phase: 'offline', parent: COORD },
+    { id: 'gone-2', name: 'old-try', kind: 'standalone', phase: 'offline', parent: COORD },
+  ],
+  holds: [
+    { kind: 'lane', resource: 'acme/web@main', by: '#45', note: 'search', at: '2026-10-09T11:48:00Z', session: null },
+    { kind: 'resource', resource: 'browser', by: 'term_sort', note: 'staging 로그인', at: '2026-10-09T11:57:00Z', session: 'w-sort' },
+  ],
+}
+
+test('the relations tree nests by parent and folds offline sessions into a count', () => {
+  const snap = snapshotOf(JSON.stringify(FLEET), NOW, CWD)
+  if (snap.status !== 'ok') throw new Error(snap.status)
+  // An item waiting on an offline session keeps it in the tree.
+  const rel = tree(snap.sessions, new Set(['gone-2']))
+  expect(rel.lines.map(l => l.prefix + l.session.name)).toEqual([
+    'coordinator',
+    '├─ acme-web-search',
+    '│  ├─ sort-fix',
+    '│  └─ reindex',
+    '├─ acme-ops-alerts',
+    '└─ old-try',
+  ])
+  expect(rel.offline).toBe(1)
+  expect(snap.sessions[0]?.isMe).toBe(true)
+  expect(snap.sessions[3]).toMatchObject({ pr: 88, isPrMerged: true })
+  expect(snap.holds.map(h => [h.kind, h.resource, h.byName ?? h.by])).toEqual([
+    ['lane', 'acme/web@main', '#45'],
+    ['resource', 'browser', 'sort-fix'],
+  ])
+})
+
+test('the relations section opens on press and names who holds each shared resource', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  world(on, { [`${STATE_DIR}/state.json`]: { text: JSON.stringify(FLEET), mtimeMs: 1 } })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const head = await ui.find({ type: 'Button', key: 'toggle-relations' })
+  expect(head?.text).toContain('▸ 관계 세션 5 · ◉ 작업 중 2 · ◍ 대기 1 · 자원 2')
+  expect(await ui.find({ text: /공유 자원/ })).toBeUndefined()
+  await ui.press({ key: 'toggle-relations' })
+  expect(await ui.find({ text: /coordinator \(나\)/ })).toBeDefined()
+  expect(await ui.find({ text: /└─ ○ reindex #88 머지됨/ })).toBeDefined()
+  expect(await ui.find({ text: /\+ offline 2/ })).toBeDefined()
+  expect(await ui.find({ text: /acme\/web@main 착지 lane/ })).toBeDefined()
+  expect(await ui.find({ text: /sort-fix staging 로그인/ })).toBeDefined()
+  await ui.unmount()
 })
