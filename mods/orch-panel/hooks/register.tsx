@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { OrchPanelCell, OrchPanelItem, OrchPanelSnapshot, OrchPanelStageRow } from '../types'
+import type { OrchPanelCell, OrchPanelItem, OrchPanelSession, OrchPanelSnapshot, OrchPanelStageRow } from '../types'
 import {
   DASH_URL,
   STALE_COLLECTOR_MS,
@@ -15,6 +15,7 @@ import {
   stateDir,
   statusText,
   toastText,
+  tree,
 } from './model'
 
 const PANE = 'orch'
@@ -41,6 +42,15 @@ const MARK: Record<OrchPanelCell['mark'], { glyph: string; color?: string; dim?:
   partial: { glyph: '△', color: 'warning' },
   checking: { glyph: '◐', color: 'warning' },
   na: { glyph: '–', dim: true },
+}
+
+// The dashboard's phase colors, each with its own dot so the tree reads without color too.
+const PHASE: Record<OrchPanelSession['phase'], { glyph: string; color?: string; word: string }> = {
+  working: { glyph: '◉', color: 'permission', word: '작업 중' },
+  waiting: { glyph: '◍', color: 'warning', word: '대기' },
+  idle: { glyph: '○', color: 'success', word: 'idle' },
+  open: { glyph: '·', word: 'open' },
+  offline: { glyph: '◌', word: 'offline' },
 }
 
 // Module state: a hot reload starts it over, and session.start fires again to refill it.
@@ -268,6 +278,68 @@ export const register: Register = on => {
       </Box>
     )
 
+    // Collapsed until asked for: the tree is the coordinator's long view, not what changes minute to minute.
+    const isRelOpen = opened.includes('section:relations')
+    const rel = tree(snap.sessions, new Set(snap.items.map(i => i.session ?? '')))
+    const working = rel.lines.filter(l => l.session.phase === 'working').length
+    const waiting = rel.lines.filter(l => l.session.phase === 'waiting').length
+    const sessionLine = ({ session: s, prefix }: { session: OrchPanelSession; prefix: string }) => {
+      const p = PHASE[s.phase]
+      return (
+        <Box key={`s-${s.id}`}>
+          <Box flexGrow={1} flexShrink={1}>
+            <Text wrap="truncate-end">
+              <Text dimColor>{'  ' + prefix}</Text>
+              <Text color={p.color} dimColor={!p.color}>
+                {p.glyph}{' '}
+              </Text>
+              {s.name}
+              {s.isMe ? <Text dimColor> (나)</Text> : ''}
+              {s.task ? <Text dimColor> {s.task}</Text> : ''}
+              {s.pr ? <Text dimColor={s.isPrMerged}> #{s.pr}{s.isPrMerged ? ' 머지됨' : ''}</Text> : ''}
+            </Text>
+          </Box>
+          <Text color={p.color} dimColor={!p.color}>
+            {' '}
+            {p.word}
+          </Text>
+          <Link href={sessionUrl(s.id)} label=" ↗" />
+        </Box>
+      )
+    }
+    const relSection = !isRelOpen ? null : (
+      <Box flexDirection="column">
+        {rel.lines.map(sessionLine)}
+        {rel.offline ? <Text dimColor>  + offline {rel.offline}</Text> : null}
+        <Text dimColor>  공유 자원</Text>
+        {snap.holds.length === 0 ? (
+          <Text dimColor>    기록 없음 — 브라우저 같은 공유 자원은 orch hold &lt;자원&gt; 으로 잡는다</Text>
+        ) : (
+          snap.holds.map(hold => (
+            <Box key={`h-${hold.kind}-${hold.resource}`}>
+              <Box width={28}>
+                <Text wrap="truncate-end">
+                  {'    '}
+                  {hold.kind === 'lane' ? `${hold.resource} 착지 lane` : hold.resource}
+                </Text>
+              </Box>
+              <Box flexGrow={1} flexShrink={1}>
+                <Text wrap="truncate-end">
+                  <Text color="warning">■ </Text>
+                  {hold.byName ?? hold.by ?? '?'}
+                  {hold.note ? <Text dimColor> {hold.note}</Text> : ''}
+                </Text>
+              </Box>
+              <Text color={ageMs(hold.at, now) > 3_600_000 ? 'warning' : undefined} dimColor={ageMs(hold.at, now) <= 3_600_000}>
+                {' '}
+                {age(hold.at, now)}
+              </Text>
+            </Box>
+          ))
+        )}
+      </Box>
+    )
+
     return (
       <Box flexDirection="column">
         <Box>
@@ -301,6 +373,13 @@ export const register: Register = on => {
         {isWorkOpen && work.untrackedPrs ? (
           <Link href={`${DASH_URL}/#/fleet/prs`} label={`  + 표에 없는 열린 PR ${work.untrackedPrs} ↗`} />
         ) : null}
+        <Button key="toggle-relations" plain onPress={expand('section:relations')}>
+          {isRelOpen ? '▾' : '▸'} 관계 세션 {rel.lines.length}
+          {working ? <Text color="permission"> · ◉ 작업 중 {working}</Text> : ''}
+          {waiting ? <Text color="warning"> · ◍ 대기 {waiting}</Text> : ''}
+          {snap.holds.length ? <Text dimColor> · 자원 {snap.holds.length}</Text> : ''}
+        </Button>
+        {relSection}
       </Box>
     )
   })

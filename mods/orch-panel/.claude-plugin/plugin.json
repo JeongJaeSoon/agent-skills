@@ -1,7 +1,7 @@
 {
   "name": "orch-panel",
-  "version": "0.2.0",
-  "description": "오케스트레이션 현황 패널: orch-dash 가 모은 state.json 과 orch stage 기록만 읽어 결정 대기·사람만 항목과 작업 진행 표를 상태줄과 접는 패널로 보여 준다",
+  "version": "0.3.0",
+  "description": "오케스트레이션 현황 패널: orch-dash 가 모은 state.json 과 orch stage 기록만 읽어 결정 대기·사람만 항목, 작업 진행 표, 세션 관계와 공유 자원 보유자를 상태줄과 접는 패널로 보여 준다",
   "author": { "name": "JeongJaeSoon", "url": "https://github.com/JeongJaeSoon" },
   "license": "MIT",
   "types": "./types/index.d.ts"

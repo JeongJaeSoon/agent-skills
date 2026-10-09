@@ -3,7 +3,9 @@ import type {
   OrchPanelItem,
   OrchPanelItemKind,
   OrchPanelMark,
+  OrchPanelPhase,
   OrchPanelPrChip,
+  OrchPanelSession,
   OrchPanelSnapshot,
   OrchPanelStageRow,
   OrchPanelWork,
@@ -80,7 +82,62 @@ export function snapshotOf(text: string, checkedAt: number, cwd: string, stagesT
     orca: orca ? { updatedAt: str(orca.updated_at), isOk: orca.ok !== false } : null,
     items,
     work: workOf(stagesText, state),
+    sessions: sessionsOf(state, cwd),
+    holds: ((state.holds as Raw[] | undefined) ?? []).flatMap(raw =>
+      str(raw.resource)
+        ? [{
+            kind: raw.kind === 'lane' ? ('lane' as const) : ('resource' as const),
+            resource: raw.resource as string,
+            by: str(raw.by),
+            byName: sessions.get(str(raw.session) ?? '') ?? null,
+            note: str(raw.note),
+            at: str(raw.at),
+          }]
+        : [],
+    ),
   }
+}
+
+const PHASES: readonly OrchPanelPhase[] = ['working', 'waiting', 'idle', 'open', 'offline']
+
+function sessionsOf(state: Raw, cwd: string): OrchPanelSession[] {
+  return ((state.sessions as Raw[] | undefined) ?? []).flatMap(s => {
+    if (!str(s.id)) return []
+    const pr = s.linked_pr as Raw | null | undefined
+    return [{
+      id: s.id as string,
+      name: str(s.name) ?? (s.id as string),
+      kind: str(s.kind) ?? 'task',
+      phase: PHASES.find(p => p === s.phase) ?? 'offline',
+      parent: str(s.parent),
+      task: str(s.task_title),
+      pr: typeof pr?.number === 'number' ? pr.number : null,
+      isPrMerged: pr?.state === 'merged',
+      isMe: (s.id as string).endsWith(`::${cwd}`),
+    }]
+  })
+}
+
+// The relations tree as drawn: offline sessions leave it (counted apart) unless something waits on them;
+// each line carries the prefix (`├─ `, `│  └─ `) its depth and place give it.
+export function tree(
+  sessions: OrchPanelSession[],
+  busy: Set<string>,
+): { lines: { session: OrchPanelSession; prefix: string }[]; offline: number } {
+  const shown = sessions.filter(s => s.phase !== 'offline' || busy.has(s.id))
+  const ids = new Set(shown.map(s => s.id))
+  const lines: { session: OrchPanelSession; prefix: string }[] = []
+  const walk = (parent: string | null, indent: string, seen: Set<string>) => {
+    const kids = shown.filter(s => (parent === null ? !s.parent || !ids.has(s.parent) : s.parent === parent))
+    kids.forEach((s, i) => {
+      if (seen.has(s.id)) return
+      const isLast = i === kids.length - 1
+      lines.push({ session: s, prefix: parent === null ? '' : indent + (isLast ? '└─ ' : '├─ ') })
+      walk(s.id, parent === null ? '' : indent + (isLast ? '   ' : '│  '), new Set([...seen, s.id]))
+    })
+  }
+  walk(null, '', new Set())
+  return { lines, offline: sessions.length - shown.length }
 }
 
 const MARKS: readonly OrchPanelMark[] = ['ok', 'fail', 'partial', 'checking', 'na']

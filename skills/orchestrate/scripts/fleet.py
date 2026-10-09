@@ -8,6 +8,8 @@ and the state lives outside the repository:
   $ORCH_FLEET_STATE  (default ~/.local/state/agent-skills/dashboard)   state.json, prs.json, inbox.json, events,
                                                                        prompts/<terminal>.json (hooks/permission.py),
                                                                        decisions.json (`orch decide`)
+  $PROGRAMS_HOME/_locks (default ~/.claude/programs/_locks)            who holds a landing lane or a shared resource
+                                                                       (`orch hold`), listed into state.json
   $ORCH_FLEET_CONFIG (default ~/.config/agent-skills/dashboard/config.json)
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
@@ -1143,13 +1145,18 @@ class Fleet:
                       "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]
                      if m.get("type") != "heartbeat"]  # one every 5 min per worker: it would bury everything else
         timeline.sort(key=lambda e: e.get("at") or "", reverse=True)
+        import holds  # beside this file; it imports this module, so not at the top
+        try:
+            held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
+        except (OSError, ValueError):
+            held = []
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),
                            "project": task_project.get(t["id"]),
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
-                "timeline": timeline[:300], "sources": self.sources, "me": self.me,
+                "timeline": timeline[:300], "holds": held, "sources": self.sources, "me": self.me,
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 
