@@ -60,7 +60,7 @@ export function snapshotOf(text: string, checkedAt: number, cwd: string): OrchPa
     })
   }
   // Oldest first: the one waiting longest is the one most likely to be costing something.
-  items.sort((a, b) => (Date.parse(a.at ?? '') || 0) - (Date.parse(b.at ?? '') || 0))
+  items.sort((a, b) => parseAt(a.at) - parseAt(b.at))
   const orca = (state.sources as Raw | undefined)?.orca as Raw | undefined
   return {
     status: 'ok',
@@ -89,8 +89,13 @@ export function statusText(snapshot: OrchPanelSnapshot | null): string | undefin
   return parts.length ? parts.join(' · ') : undefined
 }
 
+// The collector writes most times as `...Z`, but some sources as `+0900`, which Date.parse need not accept.
+export function parseAt(at: string | null): number {
+  return Date.parse((at ?? '').replace(/([+-]\d\d)(\d\d)$/, '$1:$2')) || 0
+}
+
 export function age(fromIso: string | null, now: number): string {
-  const t = Date.parse(fromIso ?? '')
+  const t = parseAt(fromIso)
   if (!t) return '?'
   const s = Math.max(0, Math.round((now - t) / 1000))
   if (s < 60) return `${s}s`
@@ -100,7 +105,7 @@ export function age(fromIso: string | null, now: number): string {
 }
 
 export function ageMs(fromIso: string | null, now: number): number {
-  const t = Date.parse(fromIso ?? '')
+  const t = parseAt(fromIso)
   return t ? now - t : Infinity
 }
 

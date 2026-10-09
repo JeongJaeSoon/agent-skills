@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { snapshotOf, stateDir, statusText } from './model'
+import { age, snapshotOf, stateDir, statusText } from './model'
 
 const CWD = '/work/acme/coordinator'
 const NOW = Date.parse('2026-10-09T12:00:00Z')
@@ -71,6 +71,12 @@ test('status line clears when nothing waits or the file is unreadable', () => {
   expect(statusText(snapshotOf(JSON.stringify({ ...STATE, items: [] }), NOW, CWD))).toBeUndefined()
   expect(snapshotOf('{not json', NOW, CWD).status).toBe('unreadable')
   expect(statusText(snapshotOf('{not json', NOW, CWD))).toBeUndefined()
+})
+
+test('ages read both Z and +0900 offsets', () => {
+  expect(age('2026-10-09T11:00:00Z', NOW)).toBe('1h')
+  expect(age('2026-10-09T20:00:00+0900', NOW)).toBe('1h')
+  expect(age(null, NOW)).toBe('?')
 })
 
 test('state dir follows ORCH_FLEET_STATE, else the collector default under HOME', () => {
