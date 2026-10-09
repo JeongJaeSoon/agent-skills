@@ -20,12 +20,14 @@ assert orch("add", "login", "--title", "로그인 개선", "--pr", "acme/web#40"
 assert orch("add", "reindex", "--parent", "search", "--title", "인덱스 재구축", "--pr", "acme/ops#88")[0] == 0
 assert orch("add", "sort", "--parent", "search", "--title", "정렬 버그", "--pr", "acme/web#45")[0] == 0
 assert orch("add", "x", "--parent", "nope", "--title", "고아")[2] == "no row nope to be the parent"
+assert orch("add", "x", "--parent", "sort", "--title", "손자")[2] == "sort is a child row; a child hangs off a top-level row"
 
 # A cell is written where it was verified; ok without evidence is refused, emoji marks are accepted.
 assert orch("set", "search", "--col", "dev", "--mark", "ok")[2].startswith("✅ needs --evidence")
 assert orch("set", "search", "--col", "dev", "--mark", "✅", "--evidence", "v1.8.0")[0] == 0
 assert orch("set", "search", "--col", "prod", "--mark", "checking", "--evidence", "확인 중", "--by", "QA 리드")[0] == 0
 assert orch("set", "reindex", "--col", "prod", "--mark", "na")[0] == 0
+assert orch("set", "sort", "--col", "dev", "--mark", "partial", "--evidence", "a|b")[0] == 0
 assert orch("set", "login", "--col", "dev", "--mark", "ok", "--evidence", "v1.7.2")[0] == 0
 assert orch("set", "login", "--col", "qa", "--mark", "ok", "--evidence", "x")[2].startswith("--col is one of")
 assert orch("set", "login", "--col", "dev", "--mark", "maybe")[2].startswith("--mark is one of")
@@ -50,15 +52,15 @@ rows = [l for l in lines if l.startswith("| ") and not l.startswith("| 작업")]
 assert rows == [
     "| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 확인 중 (QA 리드) |",
     "| ㄴ 인덱스 재구축 | acme/ops#88 | ✅ 10/2 | – | 해당 없음 |",
-    "| ㄴ 정렬 버그 | acme/web#45 | ❌ CI 실패 | – | – |",
+    "| ㄴ 정렬 버그 | acme/web#45 | ❌ CI 실패 | ⚠️ a\\|b | – |",
     "| 로그인 개선 | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token=[masked] |",
 ], rows
 assert lines[-2:] == ["1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "2. v1.8.0 prod 배포 (사람, 미정)"], lines[-2:]
 
 code, tg, _ = orch("show", "--telegram")
 assert tg.splitlines()[0] == "📋 작업별 (prod: v1.7.2 · dev: v1.8.0)", tg
-assert "ㄴ 정렬 버그 (acme/web#45) — 머지 ❌ CI 실패 · dev – · prod –" in tg.splitlines(), tg
-assert "|" not in tg and "**" not in tg
+assert "ㄴ 정렬 버그 (acme/web#45) — 머지 ❌ CI 실패 · dev ⚠️ a|b · prod –" in tg.splitlines(), tg
+assert "| " not in tg and "**" not in tg
 
 code, js, _ = orch("show", "--json")
 t = json.loads(js)

@@ -58,6 +58,8 @@ def add(rid, title, pr=None, parent=None):
     def go(store):
         if parent and parent not in store["rows"]:
             raise ValueError(f"no row {parent} to be the parent")
+        if parent and store["rows"][parent].get("parent"):
+            raise ValueError(f"{parent} is a child row; a child hangs off a top-level row")
         row = store["rows"].get(rid) or {"id": rid, "cells": {}, "created_at": fleet.iso(fleet.utcnow())}
         row.update(title=fleet.mask(" ".join(title.split()), 120), pr=pr or row.get("pr"), parent=parent or row.get("parent"))
         store["rows"][rid] = row
@@ -163,7 +165,8 @@ def render_md(t):
         name = f"ㄴ {r['title']}" if r.get("parent") else r["title"]
         if r.get("done_at"):
             name += " (끝남)"
-        lines.append(f"| {name} | {r.get('pr') or '–'} | " + " | ".join(cell_text(r["cells"].get(c)) for c in COLUMNS) + " |")
+        cols = [name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS]
+        lines.append("| " + " | ".join(x.replace("|", "\\|") for x in cols) + " |")
     if t["next"]:
         lines += ["", "다음 순서"] + [f"{i}. {n}" for i, n in enumerate(t["next"], 1)]
     return "\n".join(lines)
