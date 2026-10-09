@@ -4,4 +4,4 @@ description: Short slash command for the status report, typed by the user as /ag
 disable-model-invocation: true
 ---
 
-Give the status report now with the `brief-status` skill.
+Give the status report now with the `agent-skills:brief-status` skill.

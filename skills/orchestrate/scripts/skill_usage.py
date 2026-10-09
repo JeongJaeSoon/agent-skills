@@ -113,7 +113,8 @@ def _skills_under(d, plugin, source, inv):
         fm = frontmatter(f)
         short = fm.get("name") or f.parent.name
         name = f"{plugin}:{short}" if plugin else short
-        inv.setdefault(name, {"name": name, "source": source, "phrases": phrases(fm.get("description", ""))})
+        inv.setdefault(name, {"name": name, "source": source, "phrases": phrases(fm.get("description", "")),
+                              "slash_by_design": fm.get("disable-model-invocation", "").lower() == "true"})
 
 
 def inventory(plugins_json=None, user_dir=None, repo_dir=None):
@@ -310,6 +311,7 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
         r["overlaps"] = sorted({o for ph in inv.get(name, {}).get("phrases", []) for o in owners[ph]
                                 if o.rsplit(":", 1)[-1] != name.rsplit(":", 1)[-1]})
         r["rare"] = name in rare
+        r["slash_by_design"] = bool(inv.get(name, {}).get("slash_by_design"))
         r["flags"] = flags(r, miss_threshold, now)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     write_atomic(cache_path, json.dumps({"inv": inv_hash, "files": files, "seen": seen}))
@@ -349,7 +351,8 @@ def flags(r, miss_threshold=MISS_THRESHOLD, now=None):
         lasted = bool(now and since and (now - since).days >= RETIRE_WINDOWS * LONG)
         if lasted and (r.get("misses_30d") or r.get("overlaps")) and not r.get("rare"):
             out.append("retire_candidate")
-    if r["uses_30d"] and r["auto_30d"] + r["chained_30d"] == 0:
+    # A skill with disable-model-invocation: true can only be typed, so slash-only use is its design, not a weak description.
+    if r["uses_30d"] and r["auto_30d"] + r["chained_30d"] == 0 and not r.get("slash_by_design"):
         out.append("slash_only")
     if r["misses_30d"] > miss_threshold:
         out.append("misses")
