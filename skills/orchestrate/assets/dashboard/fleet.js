@@ -7,6 +7,7 @@ const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
   { id: "prs", label: "Pull requests", icon: "prs" },
+  { id: "work", label: "작업 진행", icon: "flag" },
   { id: "skills", label: "Skills", icon: "spark" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
@@ -110,7 +111,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, work: workOpen() || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -510,6 +511,66 @@ function fleetSkills() {
       || '<div class="card"><div class="empty-chart">No skill matches.</div></div>'}`;
 }
 
+// The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
+// written by the coordinator shows within one poll. The merge cell arrives already filled from the fleet PR list.
+const WORK_MARK = { ok: ["✅", "good", "완료·확인"], fail: ["❌", "bad", "미완료·실패"], partial: ["⚠️", "warn", "일부·추정"],
+  checking: ["🔄", "accent", "확인 중"], na: ["–", "", "해당 없음"] };
+const WORK_DONE_KEEP = 7 * 86400e3;  // stages.py DONE_KEEP_S: a file nobody wrote to since can still hold older rows
+const workShown = (w) => (w.rows || []).filter((r) => !r.done_at || Date.now() - ms(r.done_at) < WORK_DONE_KEEP);
+const workOpen = () => F.work && !F.work.error ? workShown(F.work).filter((r) => !r.group && !r.done_at).length : 0;
+async function pollWork() {
+  if (F.workBusy) return;
+  F.workBusy = true;
+  try {
+    const r = await fetch("/api/fleet/work", { cache: "no-store", headers: F.workEtag ? { "If-None-Match": F.workEtag } : {} });
+    if (r.status !== 304) {
+      F.work = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
+      F.workEtag = r.ok ? r.headers.get("ETag") : null;
+      if (isFleet() && S.section === "work") renderView();
+      if (isFleet()) fleetSidebar();
+    }
+  } catch (e) { F.work = { error: String(e.message || e) }; F.workEtag = null; }
+  F.workBusy = false;
+}
+// owner/repo#N becomes a link; esc() runs first and the pattern holds no markup characters.
+const linkRefs = (text) => esc(text).replace(/\b([\w.-]+\/[\w.-]+)#(\d+)\b/g, (m, repo, n) => link(`https://github.com/${repo}/pull/${n}`, m));
+function workCell(c) {
+  if (!c) return "";
+  const [mark, tone, label] = WORK_MARK[c.mark] || [c.mark, "", c.mark];
+  const text = [c.evidence && linkRefs(c.evidence), c.by && `<span class="muted">(${esc(c.by)})</span>`].filter(Boolean).join(" ");
+  return `<div class="wcell ${tone ? "tone-" + tone : ""}" title="${esc(label)}"><span class="wmark">${mark}</span>${text ? `<span class="wtext">${text}</span>` : ""}</div>`;
+}
+function fleetWork() {
+  if (!F.work) pollWork();
+  const w = F.work;
+  const headHtml = `<div class="view-head"><div><h2>작업 진행</h2><p><span class="mono">orch stage</span> 로 기록한 작업별 단계 표. 머지 칸은 PR 목록에서 채우고, dev·prod 칸은 코디네이터가 확인한 때 근거와 함께 쓴다. 끝난 행은 7일 동안 흐리게 남는다.</p></div>
+    <div class="legend">${Object.values(WORK_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</div></div>`;
+  if (!w) return headHtml + '<div class="loading">Loading…</div>';
+  if (w.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(w.error)}</div></div>`;
+  const all = workShown(w), done = all.filter((r) => r.done_at && !r.group).length;
+  const rows = F.workHideDone ? all.filter((r) => !r.done_at) : all;
+  const byId = Object.fromEntries(all.map((r) => [r.id, r]));
+  // A group's own rows sit flush under it; each level below them gets one ㄴ step.
+  const level = {};
+  rows.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
+  const body = rows.map((r) => {
+    if (r.group) return `<tr class="wgroup ${r.done_at ? "is-done" : ""}"><td colspan="6"><b>${esc(r.title)}</b></td></tr>`;
+    const lv = level[r.id];
+    return `<tr class="${r.done_at ? "is-done" : ""}"><td class="wfeat">${r.parent ? "" : '<span class="muted">–</span>'}</td>
+      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">ㄴ </span>' : ""}${esc(r.title)}${r.done_at ? ` <span class="muted">· 끝남 ${relSpan(r.done_at)}</span>` : ""}</td>
+      <td class="mono nowrap">${r.pr ? linkRefs(r.pr) : '<span class="muted">–</span>'}</td>
+      ${["merge", "dev", "prod"].map((c) => `<td>${workCell((r.cells || {})[c])}</td>`).join("")}</tr>`;
+  }).join("");
+  const { env = {} } = w;
+  const envLine = ["prod", "dev"].filter((k) => env[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(env[k])}</span></span>`).join("");
+  const toggle = done ? `<button class="chip" type="button" data-work-done aria-pressed="${!!F.workHideDone}">끝난 행 ${done}개 접기</button>` : "";
+  const table = all.length ? `<div class="card table-wrap"><table class="work"><thead><tr><th>기능/epic</th><th>작업</th><th>PR</th><th>PR 머지</th><th>dev 확인</th><th>prod 확인</th></tr></thead><tbody>${body}</tbody></table></div>`
+    : '<div class="card"><div class="empty-chart">기록된 작업이 없다. <span class="mono">orch stage add</span> 로 행을 만든다.</div></div>';
+  const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>다음 순서</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n)}</li>`).join("")}</ol></div>` : "";
+  return headHtml + `<div class="toolbar wenv">${envLine ? `<div class="meta">${envLine}${env.at ? `<span class="muted">${relSpan(env.at)}</span>` : ""}</div>` : ""}${toggle}</div>` + table + next;
+}
+document.addEventListener("click", (e) => { if (e.target.closest("[data-work-done]")) { F.workHideDone = !F.workHideDone; renderView(); } });
+
 function fleetGraph(st) {
   return `<div class="view-head"><div><h2>Graph</h2><p>Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn.</p></div></div>
     ${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
@@ -595,7 +656,7 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

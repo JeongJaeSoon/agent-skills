@@ -20,7 +20,7 @@ assert orch("add", "login", "--title", "로그인 개선", "--pr", "acme/web#40"
 assert orch("add", "reindex", "--parent", "search", "--title", "인덱스 재구축", "--pr", "acme/ops#88")[0] == 0
 assert orch("add", "sort", "--parent", "search", "--title", "정렬 버그", "--pr", "acme/web#45")[0] == 0
 assert orch("add", "x", "--parent", "nope", "--title", "고아")[2] == "no row nope to be the parent"
-assert orch("add", "x", "--parent", "sort", "--title", "손자")[2] == "sort is a child row; a child hangs off a top-level row"
+assert orch("add", "x", "--parent", "sort", "--title", "손자")[2] == "sort is a child row; a child hangs off a top-level row or a group's row"
 
 # A cell is written where it was verified; ok without evidence is refused, emoji marks are accepted.
 assert orch("set", "search", "--col", "dev", "--mark", "ok")[2].startswith("✅ needs --evidence")
@@ -77,5 +77,31 @@ store["rows"]["login"]["done_at"] = "2020-01-01T00:00:00Z"
 assert orch("next")[0] == 0  # any write prunes finished rows past the week
 assert orch("show") == (0, "기록된 단계 없음", "")
 assert orch("bogus")[0] == 1
+
+# A group is a heading with no PR and no cells; under it a work row may still hold children, as at the top.
+assert orch("add", "chat", "--group", "--title", "채팅")[0] == 0
+assert orch("add", "body", "--parent", "chat", "--title", "본체", "--pr", "acme/web#60")[0] == 0
+assert orch("add", "icon", "--parent", "body", "--title", "사이드바 접기 아이콘")[0] == 0
+assert orch("add", "ticket", "--parent", "chat", "--title", "티켓 하나")[0] == 0
+assert orch("add", "solo", "--title", "단독 작업")[0] == 0
+assert orch("add", "x", "--parent", "icon", "--title", "손자")[2].startswith("icon is a child row")
+assert orch("add", "g2", "--group", "--title", "그룹", "--pr", "acme/web#1")[2].startswith("a group row (g2)")
+assert orch("add", "chat", "--title", "채팅", "--parent", "solo")[2].startswith("a group row (chat)")
+assert orch("set", "chat", "--col", "dev", "--mark", "na")[2].startswith("chat is a group row")
+assert orch("set", "icon", "--col", "dev", "--mark", "partial", "--evidence", "스텁으로만 확인")[0] == 0
+rows = [l for l in orch("show", "--md")[1].splitlines() if l.startswith("| ") and not l.startswith("| 작업")]
+assert rows == [
+    "| **채팅** |  |  |  |  |",
+    "| 본체 | acme/web#60 | – | – | – |",
+    "| ㄴ 사이드바 접기 아이콘 | – | – | ⚠️ 스텁으로만 확인 | – |",
+    "| 티켓 하나 | – | – | – | – |",
+    "| 단독 작업 | – | – | – | – |",
+], rows
+tg = orch("show", "--telegram")[1].splitlines()
+assert tg[1:4] == ["[채팅]", "- 본체 (acme/web#60) — 머지 – · dev – · prod –",
+                   "ㄴ 사이드바 접기 아이콘 — 머지 – · dev ⚠️ 스텁으로만 확인 · prod –"], tg
+# Dropping or pruning a group takes its rows' children too, not only its direct rows.
+assert orch("drop", "chat")[0] == 0
+assert [r["id"] for r in json.loads(orch("show", "--json")[1])["rows"]] == ["solo"]
 
 print("test_stages: ok")

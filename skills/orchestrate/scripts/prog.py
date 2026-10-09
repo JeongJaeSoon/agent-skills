@@ -58,14 +58,15 @@ Usage: orch <command> <slug> [options]
                                      dashboard until done or dropped; add prints its id. Each option is a
                                      button that closes it with that answer, then types
                                      "decision <id>: <label>" into this terminal once it is idle
-  stage add <id> --title T [--pr owner/repo#N] [--parent ID]
+  stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]
                                      no slug: the stage table brief-status reports, one row per work item.
                                      Write a cell where you verified it; ok needs --evidence. The merge
                                      cell of a row with --pr comes from the fleet PR list. `next` replaces
                                      the next-steps list (no lines clears it); done rows leave after 7
-                                     days; drop removes a row and its children
+                                     days; drop removes a row and its children. --group makes a heading
+                                     row (a feature or an epic) with no PR and no cells; --parent rows to it
   hold <resource> [--note TEXT] [--ttl MIN] [--by WHO] | hold --list [--json]
   release <resource> [--by WHO] [--force]
                                      no slug: take a resource lanes share (browser, a monitoring login)
@@ -1876,7 +1877,7 @@ def cmd_stage(argv):
     rid = rest[0] if rest and not rest[0].startswith("--") else None
     try:
         if sub == "add" and rid:
-            stages.add(rid, opt(rest, "--title", ""), opt(rest, "--pr"), opt(rest, "--parent"))
+            stages.add(rid, opt(rest, "--title", ""), opt(rest, "--pr"), opt(rest, "--parent"), "--group" in rest)
         elif sub == "set" and rid and opt(rest, "--col") and opt(rest, "--mark"):
             stages.set_cell(rid, opt(rest, "--col"), opt(rest, "--mark"), opt(rest, "--evidence"), opt(rest, "--by"))
         elif sub == "env" and (opt(rest, "--prod") or opt(rest, "--dev")):
@@ -1892,7 +1893,7 @@ def cmd_stage(argv):
             else:
                 print((stages.render_telegram if "--telegram" in rest else stages.render_md)(t) or "기록된 단계 없음")
         else:
-            sys.exit("usage: orch stage add <id> --title T [--pr owner/repo#N] [--parent ID] | set <id> --col merge|dev|prod "
+            sys.exit("usage: orch stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group] | set <id> --col merge|dev|prod "
                      "--mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO] | env [--prod V] [--dev V] | "
                      "next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]")
     except (ValueError, OSError) as e:

@@ -243,6 +243,21 @@ try:
     raise AssertionError("a rebinding name read skill usage")
 except urllib.error.HTTPError as e:
     assert e.code == 403, e.code
+# The work page reads stages.json on each poll: rows nest under their group with a depth, and a write shows at once.
+r = urllib.request.urlopen(f"{base}/api/fleet/work")
+wk, etag = json.loads(r.read()), r.headers["ETag"]
+assert [(x["id"], x["depth"], bool(x.get("group"))) for x in wk["rows"][:4]] == [
+    ("login-revamp", 0, True), ("login", 1, False), ("redirect", 2, False), ("export", 1, False)], wk["rows"]
+assert wk["env"]["prod"] and wk["next"], wk
+try:
+    urllib.request.urlopen(urllib.request.Request(f"{base}/api/fleet/work", headers={"If-None-Match": etag}))
+    raise AssertionError("an unchanged table was sent again")
+except urllib.error.HTTPError as e:
+    assert e.code == 304, e.code
+import stages
+stages.set_cell("docs", "dev", "ok", "v2.4.0-rc1")
+wk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/work").read())
+assert next(x for x in wk["rows"] if x["id"] == "docs")["cells"]["dev"]["mark"] == "ok", wk["rows"]
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.

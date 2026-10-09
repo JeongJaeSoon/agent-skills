@@ -35,6 +35,7 @@ import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or
 import fleet  # noqa: E402
 import selfcheck  # noqa: E402
 import skill_usage  # noqa: E402
+import stages  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1229,6 +1230,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not f.exists():
                 return self.send(503, b'{"error":"first skill usage collect has not finished"}')
             return self.send_cached(f.read_bytes())
+        if path == "/api/fleet/work":
+            # Read on every poll, not folded into state.json: an `orch stage` write shows on the next poll, not the next collect.
+            return self.send_cached(json.dumps(stages.table(), ensure_ascii=False).encode())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
