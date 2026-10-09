@@ -966,7 +966,8 @@ function renderView() {
   else if (isFleet()) { view.innerHTML = FLEET_VIEWS[S.section](st); applyFreshness(); }
   else { view.innerHTML = VIEWS[S.section](st); redrawCharts(); applyFreshness(); }
   if (focusId && $("#" + focusId)) { const el = $("#" + focusId); el.focus(); if (sel != null && el.setSelectionRange) el.setSelectionRange(sel, sel); }
-  document.title = isFleet() ? `Fleet · ${S.section}` : st ? `${st.slug} · ${SECTIONS.find((s) => s.id === S.section).label}` : "Program Dashboard";
+  const waiting = isFleet() && st ? (st.items || []).length : 0;
+  document.title = isFleet() ? `${waiting ? `(${waiting}) ` : ""}Fleet · ${S.section}` : st ? `${st.slug} · ${SECTIONS.find((s) => s.id === S.section).label}` : "Program Dashboard";
 }
 
 function render() { renderSidebar(); renderHeader(); renderFresh(); renderView(); setLive(); }

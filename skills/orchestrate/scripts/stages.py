@@ -1,7 +1,7 @@
-"""The stage table brief-status reports and the orch-panel mod draws: one row per work item, its PR merge, dev check
+"""The stage table brief-status reports and the dashboard's 작업 진행 page draws: one row per work item, its PR merge, dev check
 and prod check, each cell a mark and the evidence behind it.
 
-The coordinator writes a cell where it verified it (`orch stage set`), so the next report and the mod read the same
+The coordinator writes a cell where it verified it (`orch stage set`), so the next report and the dashboard read the same
 record instead of each rebuilding it. It lives in the fleet state directory (stages.json, beside state.json), not a
 program's ledger: work outside any program needs a row too. The merge cell of a row with a PR is never written: it is
 read from the fleet collector's PR list each time the table is shown. A group row (`--group`) is only a heading for

@@ -1,6 +1,6 @@
 """Who holds a shared resource: a base branch's exclusive landing lane, or anything else lanes take turns on (a
-browser profile, a monitoring login). The fleet collector lists them into state.json for the dashboard and the
-orch-panel mod.
+browser profile, a monitoring login). The fleet collector lists them into state.json for the dashboard's Sessions
+page.
 
 A lane lock is `ExclusiveLock` in prog.py. A resource hold uses the same shape: one file per resource under
 $PROGRAMS_HOME/_locks holding the current holder, and lock_acquired / lock_released rows in a ledger

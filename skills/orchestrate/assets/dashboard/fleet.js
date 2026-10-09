@@ -8,6 +8,7 @@ const FLEET_SECTIONS = [
   { id: "inbox", label: "Inbox", icon: "inbox" },
   { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "work", label: "작업 진행", icon: "flag" },
+  { id: "automations", label: "자동화", icon: "clock" },
   { id: "skills", label: "Skills", icon: "spark" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
@@ -19,6 +20,7 @@ const FLEET_SOURCES = [
   ["orca", "Orca", () => [30, 90]],
   ["runs", "Runs", () => [300, 900]],
   ["github", "GitHub", () => [600, 1800]],
+  ["automations", "Automations", () => [300, 900]],
 ];
 
 // type -> [label, tone, icon]
@@ -111,7 +113,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, work: workOpen() || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, work: workOpen() || null, automations: autoTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -134,8 +136,9 @@ function fleetHeader() {
     <div class="meta"><span>${(st.sessions || []).length} sessions</span><span>${n("working")} working</span><span>${n("waiting")} waiting</span>
       <span>${(st.runs || []).length} runs</span>${st.me ? `<span class="mono">@${esc(st.me)}</span>` : ""}</div>`;
   const missed = (st.items || []).filter((i) => i.missed).length;
-  const errs = Object.entries(st.sources || {}).filter(([, v]) => v.ok === false).length;
+  const errs = Object.entries(st.sources || {}).filter(([, v]) => v.ok === false).length, troubled = autoTroubled(st).length;
   $("#top-right").innerHTML = [missed ? `<a href="#/fleet/inbox">${tag(`${missed} missed`, "bad", "alert")}</a>` : "",
+    troubled ? `<a href="#/fleet/automations">${tag(`자동화 ▲${troubled}`, "bad", "alert")}</a>` : "",
     errs ? tag(`${errs} source error${errs > 1 ? "s" : ""}`, "warn", "alert") : ""].join("");
 }
 
@@ -214,7 +217,8 @@ function decisionActs(st, it) {
   const line = armed ? `decision ${it.decision}: ${armed === "text" ? (F.draft[it.key] || "").trim() : (opts[+armed.slice(4)] || {}).label}` : "";
   const msg = !r || r.busy ? "" : !r.ok ? `Not recorded: ${r.reason}.`
     : r.delivered ? "Recorded and sent to the coordinator." : "Recorded; will relay to the coordinator when it is idle.";
-  return `<div class="decision">${buttons ? `<div class="prompt-acts">${buttons}</div>` : ""}
+  const hint = `<div class="sub muted">Or answer in the coordinator's terminal: <span class="mono">${esc(it.decision)}: ${esc((opts[it.recommend - 1] || {}).label || "<answer>")}</span></div>`;
+  return `<div class="decision">${buttons ? `<div class="prompt-acts">${buttons}</div>` : ""}${hint}
     <div class="prompt-acts"><input id="decide-${esc(it.decision)}" data-decide-input="${esc(it.key)}" class="search" maxlength="1900" autocomplete="off"
         placeholder="Or type an answer" value="${esc(F.draft[it.key] || "")}" ${off}>${chip("text", `${icon("send")}${armed === "text" ? "Confirm send" : "Send"}`)}
       ${r && r.busy ? '<span class="muted">Recording…</span>' : line ? `<span class="muted ellipsis">answers <span class="mono">${esc(line)}</span></span>`
@@ -571,6 +575,65 @@ function fleetWork() {
 }
 document.addEventListener("click", (e) => { if (e.target.closest("[data-work-done]")) { F.workHideDone = !F.workHideDone; renderView(); } });
 
+// Orca automations (state.json automations). An enabled one is ▲ when its last run failed or its next run is 10 min
+// overdue: the scheduler stopped or the app was closed. A switched-off one is never a problem.
+const AUTO_RUN = { completed: ["■", "good", "완료"], failed: ["■", "bad", "실패"], error: ["■", "bad", "실패"], running: ["◧", "warn", "실행 중"],
+  dispatched: ["◧", "warn", "실행 중"], skipped: ["□", "", "건너뜀"] };
+const AUTO_STALL = 10 * 60e3;
+function autoIssue(a) {
+  if (!a.enabled) return "";
+  if (/fail|error/.test(((a.recent || [])[0] || {}).status || "")) return "마지막 실행 실패";
+  return a.next_run_at && Date.now() - ms(a.next_run_at) > AUTO_STALL ? "예정 시각 지남" : "";
+}
+const autoTroubled = (st) => (st.automations || []).filter(autoIssue);
+// The few cron shapes automations use, in words; anything else stays as written.
+function cadence(rrule) {
+  const r = (rrule || "").trim(), m = (re) => r.match(re), pad = (x) => x.padStart(2, "0");
+  let g;
+  if ((g = m(/^(\d+) \*\/(\d+) \* \* \*$/))) return `${g[2]}시간마다 :${pad(g[1])}`;
+  if ((g = m(/^\*\/(\d+) (\d+)-(\d+) \* \* 1-5$/))) return `평일 ${g[2]}–${g[3]}시 ${g[1]}분마다`;
+  if ((g = m(/^\*\/(\d+) \* \* \* \*$/))) return `${g[1]}분마다`;
+  if ((g = m(/^(\d+) (\d+) \* \* \*$/))) return `매일 ${g[2]}:${pad(g[1])}`;
+  return r || "?";
+}
+function runBlock(r) {
+  const [glyph, tone, label] = AUTO_RUN[r.status] || (/^skipped/.test(r.status || "") ? AUTO_RUN.skipped : ["▪", "", r.status || "?"]);
+  const title = [label, r.status, r.at && new Date(r.at).toLocaleString(), r.summary].filter(Boolean).join(" · ");
+  return `<span class="run ${tone ? "tone-" + tone : ""}" title="${esc(title)}">${glyph}</span>`;
+}
+function fleetAutomations(st) {
+  const autos = st.automations || [], src = (st.sources || {}).automations || {};
+  const legend = [AUTO_RUN.completed, AUTO_RUN.failed, AUTO_RUN.running, AUTO_RUN.skipped]
+    .map(([g, tone, l]) => `<span><span class="run ${tone ? "tone-" + tone : ""}">${g}</span>${l}</span>`).join("");
+  const headHtml = `<div class="view-head"><div><h2>자동화</h2><p>Orca automation 마다 주기, 다음·마지막 실행, 최근 6회 결과(왼쪽이 오래된 것). 마지막 실행이 실패했거나 예정 시각을 10분 넘기면 ▲ 로 표시한다. 세션 안의 CronCreate 와 launchd 작업은 수집하지 않는다.</p></div>
+    <div class="legend">${legend}</div></div>`;
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} Orca automation 목록을 읽지 못했다: ${esc(src.error || "")}. 아래는 ${rel(src.updated_at)} 값이다.</div></div>` : "";
+  const rows = autos.map((a) => {
+    const issue = autoIssue(a), last = (a.recent || [])[0];
+    return `<tr class="${a.enabled ? "" : "is-done"}"><td><b>${esc(a.name)}</b>${a.enabled ? "" : ` ${tag("꺼짐")}`}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}</td>
+      <td class="nowrap">${esc(cadence(a.rrule))}</td><td class="nowrap ${issue === "예정 시각 지남" ? "toned tone-bad" : ""}">${a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
+      <td class="nowrap muted">${a.last_run_at ? relSpan(a.last_run_at) : "–"}</td><td class="runs nowrap">${[...(a.recent || [])].reverse().map(runBlock).join("")}</td>
+      <td class="dim"><span class="ellipsis" style="display:block">${last ? esc(last.summary || last.status || "") : '<span class="muted">실행 기록 없음</span>'}</span></td></tr>`;
+  }).join("");
+  const table = autos.length ? `<div class="card table-wrap" data-src="automations"><table class="autos"><thead><tr><th>이름</th><th>주기</th><th>다음</th><th>마지막</th><th>최근 6회</th><th>마지막 결과</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : '<div class="card"><div class="empty-chart">등록된 Orca automation 이 없다.</div></div>';
+  return headHtml + failed + table;
+}
+
+// Who holds a landing lane or an `orch hold` resource (state.json holds), longest held first.
+function holdsCard(st) {
+  const hs = [...(st.holds || [])].sort((a, b) => (a.at || "").localeCompare(b.at || ""));
+  const rows = hs.map((h) => {
+    const s = byId(st)[h.session], long = Date.now() - ms(h.at) > 3600e3;
+    return `<tr><td class="mono">${esc(h.resource)}</td><td>${h.kind === "lane" ? tag("landing lane", "accent", "merge") : tag("resource")}</td>
+      <td>${s ? `<a href="${sessionHref(s.id)}">${phaseDot(s)} ${esc(s.name)}</a>` : `<span class="mono">${esc(h.by || "?")}</span>`}</td>
+      <td class="dim">${esc(h.note || "")}</td><td class="nowrap ${long ? "toned tone-warn" : "muted"}" title="held since">${relSpan(h.at)}</td></tr>`;
+  }).join("");
+  return `<div class="card table-wrap"><div class="card-head"><h3>Shared resources</h3><span class="aside">${hs.length} held</span></div>
+    ${hs.length ? `<table><thead><tr><th>Resource</th><th>Kind</th><th>Held by</th><th>Note</th><th>Since</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<div class="empty-chart">Nothing held. Take a shared resource (a browser profile, a login) with <span class="mono">orch hold &lt;resource&gt;</span>.</div>'}</div>`;
+}
+
 function fleetGraph(st) {
   return `<div class="view-head"><div><h2>Graph</h2><p>Edge colour is the reviewer's latest state; the bar on each PR is its CI. Only sessions with a linked pull request are drawn.</p></div></div>
     ${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
@@ -585,7 +648,8 @@ function fleetSessions(st) {
       <td>${pr ? link(pr.url, `#${esc(pr.number)}`) : ""}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
   }).join("");
   return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the coordinator whose run dispatched it, else under its Orca parent, else under the root. A lead is a coordinator with its own run; the sessions under it are its workers.</p></div>${phaseLegend()}</div>
-    ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${holdsCard(st)}`;
 }
 
 function fleetSession(st) {
@@ -656,7 +720,7 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, automations: fleetAutomations, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
