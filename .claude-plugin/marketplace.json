@@ -9,6 +9,11 @@
       "name": "agent-skills",
       "source": "./",
       "description": "pstack 기반 개인 스킬 모음: 티켓 작성·전달, Orca 오케스트레이션, 교차 검토, 회고"
+    },
+    {
+      "name": "orch-panel",
+      "source": "./mods/orch-panel",
+      "description": "오케스트레이션 현황 mod: orch-dash 가 모은 state.json 만 읽어 결정 대기·사람만 항목을 상태줄과 패널로 보여 준다"
     }
   ]
 }
