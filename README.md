@@ -118,7 +118,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 - 자동화(접힌 채 시작): Orca automation마다 주기·다음 실행·마지막 실행과 최근 6회를 색 블록(`■` 완료 초록 · `■` 실패 빨강 · `◧` 실행 중 · `□` 건너뜀)으로 보인다. 마지막 실행이 실패했거나 예정 시각을 10분 넘기면 `▲`로 표시한다. Orca automation만 보이며, 세션 안의 CronCreate와 launchd 작업은 수집하지 않는다.
 - 읽는 것은 orch-dash가 모은 `state.json`과 `stages.json`, 같은 디렉터리의 두 파일이다(`$ORCH_FLEET_STATE`, 기본 `~/.local/state/agent-skills/dashboard`). 5초마다 stat하고 둘 중 하나가 바뀌었을 때만 읽는다. `gh`·`orca`나 모델은 부르지 않는다. 네트워크는 패널의 `↻`이 대시보드에 즉시 수집을 한 번 요청할 때뿐이다.
 
-체크아웃에서 쓰려면 `CLAUDE_CODE_PLUGIN_DIRS`에 `<체크아웃>/mods/orch-panel`을 더한다. 마켓플레이스로는 `claude plugin install orch-panel@jeongjaesoon`. 실제 fleet 없이 보려면:
+체크아웃에서 쓰려면 `CLAUDE_CODE_PLUGIN_DIRS`에 `<체크아웃>/mods/orch-panel`을 더한다. 마켓플레이스로는 `claude plugin install orch-panel@jeongjaesoon`. orch를 쓰는 머신(위 디렉터리에 `state.json`이 있음)에서 orch-panel이 없거나 꺼져 있으면, agent-skills 플러그인이 세션을 새로 시작할 때 한 번 이 명령을 알려 준다(`hooks/install_hint.py`). 실제 fleet 없이 보려면:
 
 ```bash
 python3 mods/orch-panel/scripts/demo_state.py /tmp/orch-demo

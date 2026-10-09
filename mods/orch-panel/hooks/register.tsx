@@ -154,6 +154,8 @@ export const register: Register = on => {
     return { text: 'orch 패널을 열었다.' }
   })
 
+  // Every Button carries a label string and no children: builds before 2.1.295 refuse a Button with Text children,
+  // and one refused Button leaves the whole pane blank. Styled parts sit beside it.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Link } = $.ui.resolve(e)
     const snap = await read($, snapshot)
@@ -252,11 +254,13 @@ export const register: Register = on => {
         <Box key={r.id} flexDirection="column">
           <Box>
             <Box flexGrow={1} flexShrink={1}>
-              <Button key={`row-${r.id}`} plain dimColor={r.isDone} onPress={expand(r.id)}>
-                {r.isChild ? '  ㄴ ' : '  '}
-                {r.title}
-                {r.isDone ? <Text dimColor> (끝남)</Text> : ''}
-              </Button>
+              <Button
+                key={`row-${r.id}`}
+                plain
+                dimColor={r.isDone}
+                label={`${r.isChild ? '  ㄴ ' : '  '}${r.title}${r.isDone ? ' (끝남)' : ''}`}
+                onPress={expand(r.id)}
+              />
             </Box>
             <Box width={20}>
               <Text dimColor wrap="truncate-end">
@@ -468,21 +472,24 @@ export const register: Register = on => {
           </Box>
           <Button key="refresh" label="↻" plain onPress={() => refresh($)} />
         </Box>
-        <Button key="toggle-needs" plain onPress={toggle('needs')}>
-          {isOpen ? '▾' : '▸'} 결정·사람만 <Text bold>{total}</Text>
-          {isOpen ? '' : <Text dimColor> {summary}</Text>}
-        </Button>
+        <Box key="head-needs">
+          <Button key="toggle-needs" plain label={`${isOpen ? '▾' : '▸'} 결정·사람만 ${total}`} onPress={toggle('needs')} />
+          {isOpen ? null : <Box flexShrink={1}><Text dimColor wrap="truncate-end"> {summary}</Text></Box>}
+        </Box>
         {isOpen && decideItems.length > 0 ? <Text dimColor>  결정 대기</Text> : null}
         {isOpen ? decideItems.map((item, i) => row(item, i + 1)) : null}
         {isOpen && humanItems.length > 0 ? <Text dimColor>  사람만</Text> : null}
         {isOpen ? humanItems.map((item, i) => row(item, decideItems.length + i + 1)) : null}
         <Box>
-          <Box flexGrow={1}>
-            <Button key="toggle-work" plain onPress={toggle('work')}>
-              {isWorkOpen ? '▾' : '▸'} 작업 진행 <Text color="success">{filled}</Text>
-              <Text dimColor>{empty}</Text>
-              {rowCount ? ` ${done}/${rowCount}` : <Text dimColor>— 기록 없음</Text>}
-            </Button>
+          <Box key="head-work" flexGrow={1}>
+            <Button key="toggle-work" plain label={`${isWorkOpen ? '▾' : '▸'} 작업 진행`} onPress={toggle('work')} />
+            <Box flexShrink={1}>
+              <Text wrap="truncate-end">
+                <Text color="success"> {filled}</Text>
+                <Text dimColor>{empty}</Text>
+                {rowCount ? ` ${done}/${rowCount}` : <Text dimColor>— 기록 없음</Text>}
+              </Text>
+            </Box>
           </Box>
           {versions ? <Text dimColor>{versions}</Text> : null}
         </Box>
@@ -490,22 +497,40 @@ export const register: Register = on => {
         {isWorkOpen && work.untrackedPrs ? (
           <Link href={`${DASH_URL}/#/fleet/prs`} label={`  + 표에 없는 열린 PR ${work.untrackedPrs} ↗`} />
         ) : null}
-        <Button key="toggle-automations" plain onPress={expand('section:automations')}>
-          {isAutoOpen ? '▾' : '▸'} 자동화 {autos.length}
-          {troubled.length || isAutoSourceBad ? (
-            <Text color="warning"> · ▲ {troubled.length || '수집 실패'}</Text>
-          ) : (
-            <Text dimColor> · 문제 없음</Text>
-          )}
-          {upcoming ? <Text dimColor> · 다음 {upcoming.name} {until(upcoming.nextAt, now)}</Text> : ''}
-        </Button>
+        <Box key="head-automations">
+          <Button
+            key="toggle-automations"
+            plain
+            label={`${isAutoOpen ? '▾' : '▸'} 자동화 ${autos.length}`}
+            onPress={expand('section:automations')}
+          />
+          <Box flexShrink={1}>
+            <Text wrap="truncate-end">
+              {troubled.length || isAutoSourceBad ? (
+                <Text color="warning"> · ▲ {troubled.length || '수집 실패'}</Text>
+              ) : (
+                <Text dimColor> · 문제 없음</Text>
+              )}
+              {upcoming ? <Text dimColor> · 다음 {upcoming.name} {until(upcoming.nextAt, now)}</Text> : ''}
+            </Text>
+          </Box>
+        </Box>
         {autoSection}
-        <Button key="toggle-relations" plain onPress={expand('section:relations')}>
-          {isRelOpen ? '▾' : '▸'} 관계 세션 {rel.lines.length}
-          {working ? <Text color="permission"> · ◉ 작업 중 {working}</Text> : ''}
-          {waiting ? <Text color="warning"> · ◍ 대기 {waiting}</Text> : ''}
-          {snap.holds.length ? <Text dimColor> · 자원 {snap.holds.length}</Text> : ''}
-        </Button>
+        <Box key="head-relations">
+          <Button
+            key="toggle-relations"
+            plain
+            label={`${isRelOpen ? '▾' : '▸'} 관계 세션 ${rel.lines.length}`}
+            onPress={expand('section:relations')}
+          />
+          <Box flexShrink={1}>
+            <Text wrap="truncate-end">
+              {working ? <Text color="permission"> · ◉ 작업 중 {working}</Text> : ''}
+              {waiting ? <Text color="warning"> · ◍ 대기 {waiting}</Text> : ''}
+              {snap.holds.length ? <Text dimColor> · 자원 {snap.holds.length}</Text> : ''}
+            </Text>
+          </Box>
+        </Box>
         {relSection}
       </Box>
     )
