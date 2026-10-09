@@ -105,7 +105,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 - 워커가 자기 PR을 `orch land`로 착지시킨다. 준비된 PR은 base보다 뒤처져 있어도 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 최신 base 위에서 머지된다.
 - 의존 관계는 Orca task deps가 정본이다. 순서대로 들어가야 하는 체인은 GitHub stack으로 한 번에 머지한다.
 - main이 red가 되면 main 가디언이 flake 여부부터 보고 hotfix나 revert를 고른다. QA 리드가 티켓 검증, 주기 E2E, 설계·코드 정합성 감사를 맡는다.
-- `orch-dash serve`: 목표, 완료 조건, 착지 순서, 의존 그래프, 워커, 토큰을 보여주는 대시보드(라이트·다크, 창 크기에 맞춤). 모델 호출 없이 JSON으로 갱신한다.
+- `orch-dash serve`: 목표, 완료 조건, 착지 순서, 의존 그래프, 워커, 토큰을 보여주는 대시보드(라이트·다크, 창 크기에 맞춤). 모델 호출 없이 JSON으로 갱신한다. fleet의 「작업 진행」 페이지는 `orch stage` 기록(`stages.json`)을 기능/epic·작업·PR·머지·dev·prod 표로 보이고, 기록이 바뀌면 다음 5초 poll에 반영한다.
 
 ## mod: orch-panel
 

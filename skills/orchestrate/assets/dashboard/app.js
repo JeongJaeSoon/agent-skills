@@ -1079,6 +1079,7 @@ document.addEventListener("input", (e) => { if (e.target.id === "issue-search") 
 addEventListener("hashchange", route);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollState(); });
 setInterval(pollState, POLL_MS);
+setInterval(() => { if (isFleet() && S.section === "work" && !document.hidden) pollWork(); }, POLL_MS);
 setInterval(pollPrograms, PROGRAMS_MS);
 setInterval(pollHealth, PROGRAMS_MS);
 setInterval(tick, 1000);

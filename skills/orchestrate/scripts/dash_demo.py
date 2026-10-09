@@ -376,6 +376,31 @@ def skills_report(now):
             "skills": skills, "signals": {"added": 0}}
 
 
+def stage_table(now):
+    """An invented `orch stage` table in stages.json's shape. Its PR keys are FakeFleetWorld's, so merge cells fill."""
+    def row(rid, title, pr=None, parent=None, group=False, done_h=None, **cells):
+        out = {"id": rid, "title": title, "pr": pr, "parent": parent, "created_at": _ago(now, 30),
+               "cells": {c: {"mark": m, "evidence": e, "by": by, "at": _ago(now, 2)} for c, (m, e, by) in cells.items()}}
+        return out | ({"group": True} if group else {}) | ({"done_at": _ago(now, done_h)} if done_h else {})
+    rows = [
+        row("login-revamp", "로그인 개편", group=True),
+        row("login", "로그인 흐름", "acme/launchpad#41", "login-revamp",
+            dev=("ok", "v2.4.0-rc1, 스테이징에서 SSO 로그인 3회 성공 (acme/launchpad#40 수정 포함)", None),
+            prod=("checking", "릴리스 대기, 배포 창 10/12", "QA")),
+        row("redirect", "리다이렉트 루프 수정", None, "login",
+            dev=("partial", "스텁 IdP 로만 재현·확인했다. 실제 IdP 는 prod 배포 뒤 확인", None), prod=("na", None, None)),
+        row("export", "청구 내보내기", "acme/launchpad#42", "login-revamp",
+            dev=("fail", "CSV 헤더 순서가 바뀌어 회계 시트 import 실패, acme/launchpad#42 리뷰 지적 반영 중", None)),
+        row("docs", "설치 가이드", "acme/launchpad#43", dev=("na", None, None), prod=("na", None, None)),
+        row("pin", "릴리스 스크립트 node 버전 고정", "acme/tools#7"),
+        row("cache", "캐시 키 충돌 수정", "acme/tools#6", done_h=1,
+            dev=("ok", "v0.9.3", None), prod=("ok", "v0.9.3, 배포 뒤 1시간 오류 0건", None)),
+    ]
+    return {"rows": {r["id"]: r for r in rows}, "order": [r["id"] for r in rows],
+            "env": {"prod": "v2.3.1", "dev": "v2.4.0-rc1", "at": _ago(now, 1)},
+            "next": ["acme/launchpad#42 CSV 헤더 수정 → 재리뷰 (에이전트, 오늘)", "v2.4.0 prod 배포 (사람, 10/12)"]}
+
+
 def build(root, now=None):
     root = pathlib.Path(root)
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -390,6 +415,7 @@ def build(root, now=None):
     projects = _transcripts(root, now, a[4]["workers"] + b[4]["workers"])
     (root / "fleet-state").mkdir(parents=True, exist_ok=True)
     (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
+    (root / "fleet-state" / "stages.json").write_text(json.dumps(stage_table(now), ensure_ascii=False))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),

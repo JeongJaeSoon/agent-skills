@@ -67,6 +67,7 @@ The hierarchy comes from Orca's own records. The root is `root_worktree` from th
 
 - **Overview.** Session counts by phase (working, waiting on a prompt, idle, open, offline), what needs you, open PRs and runs. Below: the top of the inbox, the sessions moving now, one row per lead (its sessions, how many work, and the open PRs of the lead and those sessions; shown only while a lead exists), the eight most recently updated open PRs (linking to Pull requests) and the latest timeline.
 - **Pull requests.** Every open PR from the search and every PR a session's branch has, grouped by repository: number, title, author, draft, review decision, CI, merge state (`mergeStateStatus`), CodeRabbit (reviewed, reviewing, rate-limited, skipped or failed, from its commit status) with the unresolved thread count, the owning session when one has the branch, age and last update. Filters: needs review, CI failing, mergeable (`CLEAN`, `HAS_HOOKS` or `UNSTABLE`, not draft), and one repository. The head shows when GitHub was last read, and PRs merged in the last 24 h sit in a collapsed group. Only a PR a session owns raises Needs you items and timeline events; the rest are this page's to show.
+- **작업 진행 (work).** The `orch stage` table (see "The stage table" below) as one table: feature/epic, task, PR, PR merge, dev check, prod check. A group row spans the table as a heading; the rows under it sit flush and each level below them gets a `ㄴ`. A cell shows its mark (✅ ❌ ⚠️ 🔄, `–` for na) and its whole evidence, wrapped in the cell, with `owner/repo#N` as a link. The env line sits above the table and the next steps below it. A finished row stays dimmed for 7 days; a toggle hides them. The page reads `GET /api/fleet/work` every 5 s while open, which reads `stages.json` and the PR list on each call, so a written cell shows on the next poll rather than the next collect.
 - **Skills.** Every installed skill with its uses in 7 and 30 days, how it was triggered, last use, sessions and repositories reached, heuristic misses and flags, grouped by source (see Skill usage below). Filters: flagged, each flag, and one source.
 - **Inbox.** Everything a session is waiting on you for, filterable by type. A click on a row (outside its buttons, links and answer box) opens its session's page; an item whose session Orca no longer lists, or that has none, and a row on its own session's page stay put. Each row links to its session, opens the PR or copies the command, and can be dismissed.
 - **Graph.** Session → pull request → reviewer. The bar on a PR is its CI (green, red, amber). A reviewer edge is green for approved, dashed amber for an approval on an older commit, red for changes requested, blue for commented, grey dotted for requested and not yet answered.
@@ -144,6 +145,8 @@ An answer typed into the coordinator's terminal closes the decision too. The plu
 The per-item stage table that `brief-status` reports (merge / dev check / prod check) is a record, not something rebuilt for each report. The coordinator writes a cell at the moment it verifies it, with the evidence, and `stages.json` in the state directory keeps it (`scripts/stages.py`, masked on write):
 
 ```sh
+orch stage add chat --group --title "Chat revamp"                  # a heading: no PR, no cells
+orch stage add body --parent chat --title "Main view" --pr acme/web#51
 orch stage add search --title "Search revamp" --pr acme/web#42
 orch stage add reindex --parent search --title "Reindex" --pr acme/ops#88
 orch stage set search --col dev --mark ok --evidence v1.8.0         # ok needs --evidence
@@ -155,7 +158,7 @@ orch stage show [--md | --telegram | --json]
 orch stage done search    # stays marked finished for 7 days; `drop` removes a row and its children
 ```
 
-Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄). The merge cell of a row with `--pr` is not written: `show` fills it from `state.json`'s PR list (merged with its date, else CI failure, changes requested, draft or waiting for review). The orch-panel mod draws the same file as its work-progress pane. It lives in the fleet state directory rather than a program's ledger because work outside a program needs rows too.
+A `--group` row is the feature or epic a few rows belong to. It takes no `--pr`, no `--parent` and no cells; `--parent` the rows to it. A row under a group may hold children of its own, as a top-level row does. A row without `--pr` is a full row whose PR and merge cells stay empty. Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄). The merge cell of a row with `--pr` is not written: `show` fills it from `state.json`'s PR list (merged with its date, else CI failure, changes requested, draft or waiting for review). The fleet dashboard's 작업 진행 page shows the table in full; the orch-panel mod draws the same file as its work-progress pane, a group as a plain row and without a child's children. It lives in the fleet state directory rather than a program's ledger because work outside a program needs rows too.
 
 ### Shared resources
 

@@ -4,7 +4,8 @@ and prod check, each cell a mark and the evidence behind it.
 The coordinator writes a cell where it verified it (`orch stage set`), so the next report and the mod read the same
 record instead of each rebuilding it. It lives in the fleet state directory (stages.json, beside state.json), not a
 program's ledger: work outside any program needs a row too. The merge cell of a row with a PR is never written: it is
-read from the fleet collector's PR list each time the table is shown.
+read from the fleet collector's PR list each time the table is shown. A group row (`--group`) is only a heading for
+the rows under it, a feature or an epic: it has no PR and no cells.
 """
 import datetime as dt, fcntl, json
 
@@ -37,11 +38,19 @@ def change(fn):
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
         gone = {k for k, r in store["rows"].items() if (r.get("done_at") or "9") < cutoff}
-        gone |= {k for k, r in store["rows"].items() if r.get("parent") in gone}
-        store["rows"] = {k: r for k, r in store["rows"].items() if k not in gone}
+        store["rows"] = {k: r for k, r in store["rows"].items() if k not in with_descendants(store["rows"], gone)}
         store["order"] = [k for k in store["order"] if k in store["rows"]]
         fleet.write_atomic(path(), json.dumps(store, ensure_ascii=False, indent=1) + "\n")
         return out
+
+
+def with_descendants(rows, ids):
+    ids = set(ids)
+    while True:
+        more = {k for k, r in rows.items() if r.get("parent") in ids} - ids
+        if not more:
+            return ids
+        ids |= more
 
 
 def mark_of(text):
@@ -51,17 +60,24 @@ def mark_of(text):
     return m
 
 
-def add(rid, title, pr=None, parent=None):
+def add(rid, title, pr=None, parent=None, group=False):
     if not rid or not title.strip():
         raise ValueError("stage add needs an id and --title")
 
     def go(store):
-        if parent and parent not in store["rows"]:
+        rows = store["rows"]
+        if parent and parent not in rows:
             raise ValueError(f"no row {parent} to be the parent")
-        if parent and store["rows"][parent].get("parent"):
-            raise ValueError(f"{parent} is a child row; a child hangs off a top-level row")
-        row = store["rows"].get(rid) or {"id": rid, "cells": {}, "created_at": fleet.iso(fleet.utcnow())}
+        # Under a group, one level of work rows and their children; a work row holds children, a child holds none.
+        above = rows[parent].get("parent") if parent else None
+        if above and not rows.get(above, {}).get("group"):
+            raise ValueError(f"{parent} is a child row; a child hangs off a top-level row or a group's row")
+        row = rows.get(rid) or {"id": rid, "cells": {}, "created_at": fleet.iso(fleet.utcnow())}
         row.update(title=fleet.mask(" ".join(title.split()), 120), pr=pr or row.get("pr"), parent=parent or row.get("parent"))
+        if group or row.get("group"):
+            if row["pr"] or row["parent"] or row["cells"]:
+                raise ValueError(f"a group row ({rid}) is a top-level heading: no --pr, no --parent, no cells")
+            row["group"] = True
         store["rows"][rid] = row
         if rid not in store["order"]:
             store["order"].append(rid)
@@ -82,6 +98,8 @@ def set_cell(rid, col, mark, evidence=None, by=None):
         row = store["rows"].get(rid)
         if not row:
             raise ValueError(f"no row {rid}; add it first with `orch stage add {rid} --title …`")
+        if row.get("group"):
+            raise ValueError(f"{rid} is a group row; it has no cells, set them on the rows under it")
         row["cells"][col] = {"mark": mark, "evidence": evidence, "by": fleet.mask(by, 40), "at": fleet.iso(fleet.utcnow())}
         return row
     return change(go)
@@ -104,7 +122,8 @@ def finish(rid, drop=False):
         if rid not in store["rows"]:
             raise ValueError(f"no row {rid}")
         if drop:
-            store["rows"] = {k: r for k, r in store["rows"].items() if k != rid and r.get("parent") != rid}
+            gone = with_descendants(store["rows"], {rid})
+            store["rows"] = {k: r for k, r in store["rows"].items() if k not in gone}
         else:
             store["rows"][rid]["done_at"] = fleet.iso(fleet.utcnow())
     return change(go)
@@ -126,14 +145,19 @@ def merge_cell(pr, prs):
 
 
 def table(state=None):
-    """Rows in display order (each parent followed by its children), merge cells filled from the PR list."""
+    """Rows in display order (each row followed by the rows under it, `depth` levels down), merge cells filled from
+    the PR list."""
     store = read()
     state = fleet.read_json(fleet.state_dir() / "state.json", {}) if state is None else state
     prs = {p.get("key"): p for p in (state or {}).get("prs") or []}
     rows = []
-    for rid in [k for k in store["order"] if not store["rows"][k].get("parent")]:
-        rows.append(store["rows"][rid])
-        rows += [store["rows"][k] for k in store["order"] if store["rows"][k].get("parent") == rid]
+
+    def walk(parent, depth):
+        for k in store["order"]:
+            if k in store["rows"] and store["rows"][k].get("parent") == parent:
+                rows.append({**store["rows"][k], "depth": depth})
+                walk(k, depth + 1)
+    walk(None, 0)
     out = []
     for r in rows:
         cells = dict(r.get("cells") or {})
@@ -161,8 +185,12 @@ def render_md(t):
         return ""
     lines = [l for l in (env_line(t["env"]), LEGEND) if l] + [
         "", "| 작업 | feature·대표 PR | PR 머지 | dev 확인 | prod 확인 |", "|---|---|---|---|---|"]
+    groups = {r["id"] for r in t["rows"] if r.get("group")}
     for r in t["rows"]:
-        name = f"ㄴ {r['title']}" if r.get("parent") else r["title"]
+        if r.get("group"):
+            lines.append("| **" + r["title"].replace("|", "\\|") + "** |  |  |  |  |")
+            continue
+        name = f"ㄴ {r['title']}" if r.get("parent") not in (None, *groups) else r["title"]
         if r.get("done_at"):
             name += " (끝남)"
         cols = [name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS]
@@ -177,8 +205,12 @@ def render_telegram(t):
         return ""
     env = env_line(t["env"])
     lines = [f"📋 작업별 ({env})" if env else "📋 작업별"]
+    groups = {r["id"] for r in t["rows"] if r.get("group")}
     for r in t["rows"]:
-        head = f"ㄴ {r['title']}" if r.get("parent") else f"- {r['title']}"
+        if r.get("group"):
+            lines.append(f"[{r['title']}]")
+            continue
+        head = f"ㄴ {r['title']}" if r.get("parent") not in (None, *groups) else f"- {r['title']}"
         pr = f" ({r['pr']})" if r.get("pr") else ""
         cells = " · ".join(f"{label} {cell_text(r['cells'].get(c))}" for c, label in zip(COLUMNS, ("머지", "dev", "prod")))
         lines.append(f"{head}{pr} — {cells}")
