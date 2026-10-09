@@ -13,3 +13,7 @@ plans/
 # OS files
 .DS_Store
 skill-catalog.html
+
+# Laid by Claude Code when it loads a mod from disk
+mods/*/.claude-plugin/types/
+mods/*/tsconfig.json
