@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 31개, 별칭 4개, 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 Claude Code 내장 명령이 먼저 받으므로, 사용자 스킬 `~/.claude/skills/brief`가 있어야 이 이름으로 쓸 수 있다([별칭](#별칭)).
+`agent-skills` 플러그인이 싣는 스킬 33개(`skills/*/SKILL.md` 34개에서 별칭 `brief`를 뺀 수), 별칭 4개(`legacy/`의 옛 이름 3개와 `brief`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([별칭](#별칭)).
 
 ## 흐름
 
@@ -10,6 +10,7 @@
 프로젝트    orchestrate ─ 워커마다 deliver-ticket ─ orch land ─ main 가디언·QA 리드 ─ 대시보드
               └ 끝나면 measure-delivery
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
+              secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
 채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 코디네이터에게 한 통으로)
 어디서나    use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
@@ -159,6 +160,14 @@
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(Codex 프로세스·RSS, 고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, 테스트 파일.
 - **관계:** `orchestrate`의 resource steward가 라운드마다 부르고, 경보가 남으면 대시보드 인박스로 사람에게 알린다.
+
+### secure-fill
+- **언제:** 브라우저 인증 화면에 개발용 API 토큰이나 테스트 계정 비밀번호를 넣어야 하는데 에이전트가 그 값을 보면 안 될 때. "토큰 입력해줘", "비밀번호 칸 채워줘", "로그인 화면에 키 넣어줘".
+- **내용:**
+  - 에이전트는 입력칸에 포커스를 주고 `scripts/secure_fill.py --item <이름> --origin <origin> --target chrome|orca`를 실행하기만 한다. 결과는 값 없이 한 줄과 종료 코드(0 `filled`, 10 `denied`, 11 `origin-mismatch` 등)로 나온다.
+  - 도구는 허용 목록(`~/.config/secure-fill/allow.json`)의 item·origin 쌍과 활성 탭의 origin을 확인하고, 소유자의 Touch ID 승인을 받은 뒤 Keychain(없으면 item의 env 변수)에서 값을 읽어 페이지에 직접 넣는다. 허용 목록에서 `"approval": "none"`으로 둔 항목은 승인 없이 채운다.
+  - 값은 argv, 표준 출력, 로그 어디에도 나오지 않는다. 에이전트는 값을 읽거나 옮기지 않고 허용 목록을 고치지 않는다.
+- **동봉:** `scripts/secure_fill.py`, `scripts/sfhelper.swift`(클립보드로 붙여 넣는 헬퍼), 테스트 파일, `references/demo.md`. 래퍼 `bin/secure-fill`.
 
 ### tune-automode
 - **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
@@ -400,7 +409,7 @@
 |---|---|
 | `/agent-skills:brief` | `brief-status` |
 
-맨 `/brief`는 Claude Code 내장 명령(brief-only 모드 전환)이 플러그인 스킬보다 먼저 가져간다. 맨 이름으로 쓰려면 같은 본문의 사용자 스킬을 `~/.claude/skills/brief/SKILL.md`에 둔다. 사용자 스킬은 내장 명령보다 앞선다.
+`brief` 별칭은 이 플러그인 스킬 하나뿐이고, `/agent-skills:brief`로 부른다. 맨 `/brief`는 이 스킬로 가지 않는다. Claude Code 2.1.295에서 대화형 세션은 `Unknown command: /brief`를 내고, `claude -p`에서는 내장 명령(brief-only 모드 전환)이 받아 `/brief isn't available in this environment.`를 낸다.
 
 ## 명령
 

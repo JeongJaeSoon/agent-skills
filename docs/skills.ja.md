@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル31個、エイリアス4個、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打つと Claude Code の組み込みコマンドが先に受け取るため、この短い名前はユーザースキル `~/.claude/skills/brief` があるときだけ使えます（[エイリアス](#エイリアス)）。
+`agent-skills` プラグインに入っているスキル33個（`skills/*/SKILL.md` 34個からエイリアス `brief` を除いた数）、エイリアス4個（`legacy/` の旧名3個と `brief`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[エイリアス](#エイリアス)）。
 
 ## 流れ
 
@@ -13,6 +13,7 @@
               └ 終わったら measure-delivery
 マシン1台     reap-resources（終わったセッションが残したプロセス・Docker・ブランチの片付け、
               resource steward が定期的に）
+              secure-fill（ブラウザの認証欄に秘密の値を。エージェントは値を見ない）
               tune-automode（分類器の拒否を最小の autoMode ルールに。適用はユーザー）
 どこでも      use-tracker（チケット）· use-notes（ノート）
               · pstack スキル（設計・レビュー・検証・振り返り）
@@ -162,6 +163,14 @@
   - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（Codex のプロセス数と RSS、孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
 - **同梱:** `scripts/reap.py`、テストファイル。
 - **関連:** `orchestrate` の resource steward がラウンドごとに呼び、警報が残ればダッシュボードの受信箱で人に知らせます。
+
+### secure-fill
+- **使う場面:** ブラウザの認証画面に開発用の API トークンやテストアカウントのパスワードを入れる必要があり、エージェントがその値を見てはいけないとき。「토큰 입력해줘」（トークンを入力して）、「비밀번호 칸 채워줘」（パスワード欄を埋めて）、「로그인 화면에 키 넣어줘」（ログイン画面にキーを入れて）。
+- **内容:**
+  - エージェントは入力欄にフォーカスを当て、`scripts/secure_fill.py --item <名前> --origin <origin> --target chrome|orca` を実行するだけです。結果は値を含まない一行と終了コード（0 `filled`、10 `denied`、11 `origin-mismatch` など）で返ります。
+  - ツールは許可リスト（`~/.config/secure-fill/allow.json`）の item と origin の組とアクティブなタブの origin を確かめ、所有者の Touch ID 承認を得てから、Keychain（なければ item の env 変数）から値を読んでページに直接入れます。許可リストで `"approval": "none"` にした項目は承認なしで入れます。
+  - 値は argv、標準出力、ログのどこにも出ません。エージェントは値を読んだり写したりせず、許可リストも直しません。
+- **同梱:** `scripts/secure_fill.py`、`scripts/sfhelper.swift`（クリップボード経由で貼り付けるヘルパー）、テストファイル、`references/demo.md`。ラッパー `bin/secure-fill`。
 
 ### tune-automode
 - **いつ:** auto mode の分類器が行動を拒否し、ユーザーがその種の行動を今後許可したいとき。または auto mode がエージェントに許す範囲を変えたいとき。「auto mode 가 막았어」（auto mode に止められた）、「이거 허용되게 규칙 추가해줘」（これを許可するルールを足して）。
@@ -370,7 +379,7 @@
 |---|---|
 | `/agent-skills:brief` | `brief-status` |
 
-`/brief` だけを打つと、プラグインのスキルより先に Claude Code の組み込みコマンド（brief-only モードの切り替え）が受け取ります。短い名前で使うには、同じ本文のユーザースキルを `~/.claude/skills/brief/SKILL.md` に置きます。ユーザースキルは組み込みコマンドより優先されます。
+`brief` エイリアスはこのプラグインのスキル一つだけで、`/agent-skills:brief` で呼びます。`/brief` だけを打ってもこのスキルには届きません。Claude Code 2.1.295 では、対話セッションは `Unknown command: /brief` を返し、`claude -p` では組み込みコマンド（brief-only モードの切り替え）が受け取って `/brief isn't available in this environment.` を返します。
 
 ## コマンド
 

@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 31 skills, 4 aliases, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a built-in Claude Code command takes a bare `/brief` first, so the bare name works only with a user skill at `~/.claude/skills/brief` ([Aliases](#aliases)).
+This page covers the 33 skills (the 34 `skills/*/SKILL.md` minus the `brief` alias), 4 aliases (3 old names in `legacy/` plus `brief`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([Aliases](#aliases)).
 
 ## Flow
 
@@ -13,6 +13,7 @@ Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               └ measure-delivery when it's done
 Machine     reap-resources (clears processes, Docker leftovers and branches that dead sessions
               left; the resource steward runs it on a schedule)
+            secure-fill (a secret into a browser auth field without the agent seeing the value)
             tune-automode (a classifier denial into the smallest autoMode rule; the user applies it)
 Anywhere    use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
@@ -162,6 +163,14 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - It never uses `pkill`, `docker system prune` or `--force`. When a running total (Codex processes and RSS, orphan processes, dangling volumes, branches and worktrees to remove) reaches its limit in the config, it prints an `경보` (alert).
 - **Bundled:** `scripts/reap.py`, a test file.
 - **Related:** The resource steward in `orchestrate` runs it every round, and tells the human through the dashboard inbox when an alert remains.
+
+### secure-fill
+- **When:** a browser auth screen needs a dev API token or a test account password, and the agent must not see the value. "토큰 입력해줘" (enter the token), "비밀번호 칸 채워줘" (fill the password field), "로그인 화면에 키 넣어줘" (put the key into the login screen).
+- **What it does:**
+  - The agent focuses the field and only runs `scripts/secure_fill.py --item <name> --origin <origin> --target chrome|orca`. The result is one line without the value, plus an exit code (0 `filled`, 10 `denied`, 11 `origin-mismatch`, and so on).
+  - The tool checks the item and origin pair against the allowlist (`~/.config/secure-fill/allow.json`) and the active tab's origin, gets the owner's Touch ID approval, then reads the value from the Keychain (or the item's env variable) and puts it into the page itself. Items the allowlist marks `"approval": "none"` are filled without approval.
+  - The value never shows up in argv, stdout or a log. The agent never reads or copies it and never edits the allowlist.
+- **Bundled:** `scripts/secure_fill.py`, `scripts/sfhelper.swift` (the helper that pastes through the clipboard), a test file, `references/demo.md`. Wrapper `bin/secure-fill`.
 
 ### tune-automode
 - **When:** the auto-mode classifier denied an action and the user wants that kind of action allowed from now on, or the user wants to change what auto mode lets the agent do. "auto mode 가 막았어" ("auto mode blocked it"), "이거 허용되게 규칙 추가해줘" ("add a rule so this is allowed").
@@ -370,7 +379,7 @@ A short slash command only shortens the name the user types. The model never cal
 |---|---|
 | `/agent-skills:brief` | `brief-status` |
 
-A bare `/brief` is taken by a built-in Claude Code command (toggling brief-only mode) before any plugin skill. To type the bare name, put a user skill with the same body at `~/.claude/skills/brief/SKILL.md`; user skills come before built-in commands.
+The `brief` alias is this one plugin skill, called as `/agent-skills:brief`. A bare `/brief` does not reach it. On Claude Code 2.1.295 an interactive session answers `Unknown command: /brief`, and under `claude -p` the built-in command (toggling brief-only mode) takes it and answers `/brief isn't available in this environment.`
 
 ## Commands
 
