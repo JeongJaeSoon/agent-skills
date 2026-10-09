@@ -96,7 +96,7 @@ test('the pane draws both groups with the answer hint, on every surface that has
     expect(await ui.find({ text: /CI 실패/ })).toBeUndefined()
     await ui.press({ key: 'toggle-needs' })
     expect(await ui.find({ text: /답: 프롬프트/ })).toBeUndefined()
-    expect((await ui.find({ type: 'Button', key: 'toggle-needs' }))?.text).toContain('가장 오래된 것 d7 2h')
+    expect((await ui.find({ key: 'head-needs' }))?.text).toContain('가장 오래된 것 d7 2h')
     await ui.press({ key: 'toggle-needs' })
     await ui.unmount()
   }
@@ -183,7 +183,7 @@ test('the pane draws the work table, folds it, and opens a row onto its evidence
   })
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Button', key: 'toggle-work' }))?.text).toContain('작업 진행 ▰▰▱▱ 2/4')
+  expect((await ui.find({ key: 'head-work' }))?.text).toContain('작업 진행 ▰▰▱▱ 2/4')
   expect(await ui.find({ text: /prod v1\.7\.2 · dev v1\.8\.0/ })).toBeDefined()
   expect(await ui.find({ text: /✗CI/ })).toBeDefined()
   expect(await ui.find({ text: /다음: acme\/web#45 리뷰/ })).toBeDefined()
@@ -201,7 +201,7 @@ test('with no stage rows the work section says how to start one', async ($, on) 
   world(on, { [`${STATE_DIR}/state.json`]: { text: JSON.stringify(STATE), mtimeMs: 1 } })
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Button', key: 'toggle-work' }))?.text).toContain('기록 없음')
+  expect((await ui.find({ key: 'head-work' }))?.text).toContain('기록 없음')
   expect(await ui.find({ text: /기록된 단계 없음 — orch stage add/ })).toBeDefined()
 })
 
@@ -250,7 +250,7 @@ test('the relations section opens on press and names who holds each shared resou
   world(on, { [`${STATE_DIR}/state.json`]: { text: JSON.stringify(FLEET), mtimeMs: 1 } })
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  const head = await ui.find({ type: 'Button', key: 'toggle-relations' })
+  const head = await ui.find({ key: 'head-relations' })
   expect(head?.text).toContain('▸ 관계 세션 5 · ◉ 작업 중 2 · ◍ 대기 1 · 자원 2')
   expect(await ui.find({ text: /공유 자원/ })).toBeUndefined()
   await ui.press({ key: 'toggle-relations' })
@@ -301,7 +301,7 @@ test('the automations section states its scope and draws recent runs as blocks',
   world(on, { [`${STATE_DIR}/state.json`]: { text: JSON.stringify(AUTOMATED), mtimeMs: 1 } })
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Button', key: 'toggle-automations' }))?.text).toContain('▸ 자동화 3 · ▲ 1 · 다음 janitor 17m 후')
+  expect((await ui.find({ key: 'head-automations' }))?.text).toContain('▸ 자동화 3 · ▲ 1 · 다음 janitor 17m 후')
   await ui.press({ key: 'toggle-automations' })
   expect(await ui.find({ text: /Orca automation 만 표시/ })).toBeDefined()
   expect(await ui.find({ text: /3시간마다 :17/ })).toBeDefined()
@@ -309,5 +309,31 @@ test('the automations section states its scope and draws recent runs as blocks',
   expect(await ui.find({ text: /▲ watch-mentions/ })).toBeDefined()
   await ui.press({ key: 'auto-a-mentions' })
   expect(await ui.find({ text: /마지막 실행 실패 · 마지막: failed 20m 전 — channel read failed/ })).toBeDefined()
+  await ui.unmount()
+})
+
+// Builds before 2.1.295 refuse a Button with children (the pane went blank there); this kit's build accepts them.
+test('every Button is a label string with no children, every section open', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  world(on, {
+    [`${STATE_DIR}/state.json`]: { text: JSON.stringify({ ...FLEET, ...AUTOMATED, sessions: FLEET.sessions, prs: PRS }), mtimeMs: 1 },
+    [`${STATE_DIR}/stages.json`]: { text: JSON.stringify(STAGES), mtimeMs: 1 },
+  })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  for (const key of ['toggle-automations', 'toggle-relations', 'row-search']) await ui.press({ key })
+  const buttons: unknown[] = []
+  const walk = (el: unknown) => {
+    if (!el || typeof el !== 'object') return
+    const node = el as { type?: string; children?: unknown[] }
+    if (node.type === 'Button') buttons.push(node)
+    for (const child of node.children ?? []) walk(child)
+  }
+  walk(await ui.drawn())
+  expect(buttons.length).toBeGreaterThan(5)
+  for (const b of buttons as { props: { label?: unknown }; children?: unknown[] }[]) {
+    expect(typeof b.props.label).toBe('string')
+    expect(b.children ?? []).toEqual([])
+  }
   await ui.unmount()
 })
