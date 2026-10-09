@@ -440,7 +440,7 @@ document.addEventListener("toggle", (e) => { if (e.target.id === "prs-merged") F
 
 const SKILL_FLAG = {
   unused_30d: ["unused 30 d", "warn", "Not invoked in 30 days: rewrite the description, merge it into another skill, or retire it (by PR)"],
-  slash_only: ["slash only", "accent", "Only ever typed as /name: the description does not make it fire on its own"],
+  slash_only: ["slash only", "accent", "Only ever typed as /name: the description does not make it fire on its own. Skills with disable-model-invocation: true are never flagged"],
   misses: ["misses", "bad", "Prompts carried one of its quoted trigger phrases and it did not fire (heuristic)"],
 };
 const SKILL_FILTERS = {

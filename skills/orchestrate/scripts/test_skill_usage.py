@@ -37,6 +37,14 @@ skill_md(root / "user-skills" / "notes", "notes", 'Notes. Use for "노트에 적
 inv = su.inventory(plugins_json=root / "installed_plugins.json", user_dir=root / "user-skills", repo_dir=repo)
 assert set(inv) == {"agent-skills:ship", "agent-skills:tidy", "agent-skills:quiet", "agent-skills:alias", "acme-tools:lint", "notes"}, inv
 assert inv["agent-skills:alias"]["slash_by_design"] and not inv["agent-skills:ship"]["slash_by_design"], inv
+# Claude Code 2.1.295 reads the first five as true and the last two as false.
+dmi = root / "dmi-skills"
+for name, val in [("comment", "true  # slash only"), ("yes", "yes"), ("quoted", '"true"'), ("upper", "TRUE"), ("one", "1"),
+                  ("glued", "true#x"), ("off", "false  # on purpose")]:
+    skill_md(dmi / name, name, "Probe.")
+    (dmi / name / "SKILL.md").write_text((dmi / name / "SKILL.md").read_text().replace("---\n\n", f"disable-model-invocation: {val}\n---\n\n"))
+dmi_inv = su.inventory(plugins_json=root / "none.json", user_dir=root / "none", repo_dir=dmi)
+assert {k.split(":")[1] for k, v in dmi_inv.items() if v["slash_by_design"]} == {"comment", "yes", "quoted", "upper", "one"}, dmi_inv
 assert inv["agent-skills:ship"]["source"] == "agent-skills" and inv["acme-tools:lint"]["source"] == "acme-tools", inv
 assert inv["notes"]["source"] == "user", inv
 assert "배포해줘" in inv["agent-skills:ship"]["phrases"], inv["agent-skills:ship"]

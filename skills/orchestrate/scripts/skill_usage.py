@@ -108,13 +108,18 @@ def phrases(desc):
     return sorted(found)
 
 
+def yaml_true(val):
+    # Claude Code coerces this key the same way: YAML drops a " # comment", then 1/true/yes/on in any case is true.
+    return re.sub(r"\s+#.*$", "", val).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _skills_under(d, plugin, source, inv):
     for f in sorted(pathlib.Path(d).glob("*/SKILL.md")):
         fm = frontmatter(f)
         short = fm.get("name") or f.parent.name
         name = f"{plugin}:{short}" if plugin else short
         inv.setdefault(name, {"name": name, "source": source, "phrases": phrases(fm.get("description", "")),
-                              "slash_by_design": fm.get("disable-model-invocation", "").lower() == "true"})
+                              "slash_by_design": yaml_true(fm.get("disable-model-invocation", ""))})
 
 
 def inventory(plugins_json=None, user_dir=None, repo_dir=None):
