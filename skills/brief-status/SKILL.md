@@ -31,6 +31,7 @@ When those items ship through PRs and deploys, the three fields take the form of
 - A child item (a sub-ticket, a follow-up PR) goes on its own row under its parent, its name prefixed `ㄴ`. A PR in another repo than the parent's carries the repo name (`acme/ops#88`).
 - Each cell is one mark and its evidence in a few words (a version, a time, a count): ✅ done and verified · ❌ not done or failed · ⚠️ partial, or inferred without a direct check · 🔄 being checked now, by whom · `해당 없음` when the item has no such stage. A cell with no evidence is not ✅.
 - Above the table, two or three lines of the facts it reads against: the version on prod and on dev, and the legend. These are part of the report, not a preamble.
+- Where `orch` is installed (orchestrate), the table is a record: write each cell when you verify it (`orch stage set <row> --col dev --mark ok --evidence v1.8.0`), then report the output of `orch stage show --md`, or `--telegram` for Telegram, instead of rebuilding the table. The merge cell comes from the PR list. Build the table by hand only when no rows are recorded.
 
 No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
