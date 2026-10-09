@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { age, bar, progress, snapshotOf, stateDir, statusText, tree, workOf } from './model'
+import { age, automationIssue, bar, cadence, progress, snapshotOf, stateDir, statusText, tree, until, workOf } from './model'
 
 const CWD = '/work/acme/coordinator'
 const NOW = Date.parse('2026-10-09T12:00:00Z')
@@ -259,5 +259,55 @@ test('the relations section opens on press and names who holds each shared resou
   expect(await ui.find({ text: /\+ offline 2/ })).toBeDefined()
   expect(await ui.find({ text: /acme\/web@main 착지 lane/ })).toBeDefined()
   expect(await ui.find({ text: /sort-fix staging 로그인/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const run = (status: string, at: string, summary = 'cleaned 3, kept 1') => ({ status, at, summary })
+const AUTOMATED = {
+  ...STATE,
+  sources: { ...STATE.sources, automations: { ok: true, updated_at: '2026-10-09T11:59:00Z' } },
+  automations: [
+    {
+      id: 'a-janitor', name: 'janitor', rrule: '17 */3 * * *', enabled: true,
+      next_run_at: '2026-10-09T12:17:00Z', last_run_at: '2026-10-09T09:17:00Z',
+      recent: [run('completed', '2026-10-09T09:17:00Z'), run('skipped_precheck', '2026-10-09T06:17:00Z'), run('completed', '2026-10-09T03:17:00Z')],
+    },
+    {
+      id: 'a-mentions', name: 'watch-mentions', rrule: '*/20 9-20 * * 1-5', enabled: true,
+      next_run_at: '2026-10-09T12:20:00Z', last_run_at: '2026-10-09T11:40:00Z',
+      recent: [run('failed', '2026-10-09T11:40:00Z', 'channel read failed'), run('completed', '2026-10-09T11:20:00Z')],
+    },
+    { id: 'a-off', name: 'weekly-report', rrule: '0 9 * * 1', enabled: false, next_run_at: '2026-10-01T00:00:00Z', recent: [] },
+  ],
+}
+
+test('automations: cadence in words, an issue only for a failed last run or an overdue next run', () => {
+  expect(cadence('17 */3 * * *')).toBe('3시간마다 :17')
+  expect(cadence('*/20 9-20 * * 1-5')).toBe('평일 9–20시 20분마다')
+  expect(cadence('0 9 * * 1')).toBe('0 9 * * 1')
+  const snap = snapshotOf(JSON.stringify(AUTOMATED), NOW, CWD)
+  if (snap.status !== 'ok') throw new Error(snap.status)
+  const [janitor, mentions, off] = snap.automations
+  expect(janitor && automationIssue(janitor, NOW)).toBeNull()
+  expect(mentions && automationIssue(mentions, NOW)).toBe('마지막 실행 실패')
+  expect(off && automationIssue(off, NOW)).toBeNull()
+  expect(janitor && automationIssue({ ...janitor, nextAt: '2026-10-09T11:30:00Z' }, NOW)).toBe('예정 30m 지남')
+  expect(until('2026-10-09T12:17:00Z', NOW)).toBe('17m 후')
+  expect(statusText(snap)).toBe('결정 1 · 사람만 1 · 자동화 ▲1')
+})
+
+test('the automations section states its scope and draws recent runs as blocks', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  world(on, { [`${STATE_DIR}/state.json`]: { text: JSON.stringify(AUTOMATED), mtimeMs: 1 } })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', key: 'toggle-automations' }))?.text).toContain('▸ 자동화 3 · ▲ 1 · 다음 janitor 17m 후')
+  await ui.press({ key: 'toggle-automations' })
+  expect(await ui.find({ text: /Orca automation 만 표시/ })).toBeDefined()
+  expect(await ui.find({ text: /3시간마다 :17/ })).toBeDefined()
+  expect(await ui.find({ text: /■□■|■■/ })).toBeDefined()
+  expect(await ui.find({ text: /▲ watch-mentions/ })).toBeDefined()
+  await ui.press({ key: 'auto-a-mentions' })
+  expect(await ui.find({ text: /마지막 실행 실패 · 마지막: failed 20m 전 — channel read failed/ })).toBeDefined()
   await ui.unmount()
 })

@@ -517,6 +517,12 @@ class FakeFleetWorld:
                                       " Do you want to proceed?", " ❯ 1. Yes",
                                       "   2. Yes, and don't ask again for npm publish commands in /work/wt-docs", "   3. No", "",
                                       " Esc to cancel · Tab to amend"]}
+        self.automations = [
+            {"id": "auto-janitor", "name": "janitor", "rrule": "17 */3 * * *", "timezone": "UTC", "enabled": True,
+             "next_run_at": _ago(now, -19 / 60), "last_run_at": _ago(now, 41 / 60),
+             "recent": [{"status": s, "trigger": "scheduled", "at": _ago(now, (41 + 180 * i) / 60), "summary": "cleaned 3, kept 1"}
+                        for i, s in enumerate(["completed", "completed", "skipped_precheck", "completed", "completed", "completed"])]},
+        ]
         self.prompt = {"v": 1, "id": "prompt-docs-1", "at": _ago(now, 0.5), "handle": "term_docs", "session_id": "demo-docs",
                        "cwd": "/work/wt-docs", "tool": "Bash", "input": {"command": "npm publish --dry-run"}}
         # The coordinator waits on the human for one call it registered with `orch decide add`.
@@ -551,6 +557,9 @@ class FakeFleetWorld:
     def read_screen(self, handle):
         return self.screens.get(handle, ["─" * 60, "❯ ", "─" * 60])
 
+    def fetch_automations(self):
+        return self.automations
+
     def graphql(self, query):
         data = {}
         for alias, branch in re.findall(r'(b\d+): repository\([^)]*\)\{ref\(qualifiedName:"refs/heads/([^"]+)"', query):
@@ -570,7 +579,7 @@ class FakeFleetWorld:
         fleet.write_atomic(fleet.state_dir() / "prompts" / "term_docs.json", json.dumps(self.prompt))
         fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
-                        read_screen=self.read_screen)
+                        read_screen=self.read_screen, fetch_automations=self.fetch_automations)
         f.me = self.ME
         f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
         return f

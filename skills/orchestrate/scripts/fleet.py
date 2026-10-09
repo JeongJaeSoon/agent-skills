@@ -212,6 +212,27 @@ def fetch_runs():
     return {"runs": runs, "workers": workers, "tasks": tasks, "gates": gates}
 
 
+AUTOMATION_RECENT = 6  # runs kept per automation: what the orch-panel mod draws as a bar
+
+
+def fetch_automations():
+    """Orca's scheduled automations, each with its last runs newest first. Only Orca's scheduler is visible here: a
+    session's own loop (CronCreate) or a launchd job leaves nothing to collect."""
+    out = []
+    for a in orca("automations", "list").get("automations", []):
+        runs = sorted(orca("automations", "runs", "--id", a["id"]).get("runs", []),
+                      key=lambda r: r.get("runNumber") or 0, reverse=True)[:AUTOMATION_RECENT]
+        out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
+                    "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
+                    "last_run_at": ms_iso(a.get("lastRunAt")),
+                    # The output can name people and channels: masked, first line only.
+                    "recent": [{"status": r.get("status"), "trigger": r.get("trigger"),
+                                "at": ms_iso(r.get("startedAt") or r.get("scheduledFor")),
+                                "summary": first_line((r.get("outputSnapshot") or {}).get("content") or r.get("error"), 120)}
+                               for r in runs]})
+    return out
+
+
 def graphql(query):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
     inaccessible PR must not blank the others."""
@@ -715,13 +736,15 @@ def tier(p, session_phase, now):
 class Fleet:
     """Holds the caches between ticks and writes state.json. One instance per server process."""
 
-    def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen):
+    def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen,
+                 fetch_automations=fetch_automations):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
+        self.fetch_automations, self.automations = fetch_automations, []
         self.read_screen = read_screen
         self.lock = threading.Lock()
         d = state_dir()
         self.fast, self.runs = None, {"runs": [], "workers": [], "tasks": [], "gates": []}
-        self.sources = {k: {"ok": None, "updated_at": None, "error": None} for k in ("orca", "runs", "github")}
+        self.sources = {k: {"ok": None, "updated_at": None, "error": None} for k in ("orca", "runs", "github", "automations")}
         self.repos = {}
         saved = read_json(d / "prs.json", {}) or {}
         self.prs = saved.get("prs", {})           # key -> {"probe": sig, "detail": shaped, "probed_at": iso}
@@ -773,6 +796,11 @@ class Fleet:
                     self.ok("runs")
                 except SourceError as e:
                     self.ok("runs", str(e))
+                try:
+                    self.automations = self.fetch_automations()
+                    self.ok("automations")
+                except SourceError as e:
+                    self.ok("automations", str(e))
                 self.last["runs"] = mono
             if self.fast is None:
                 return self.state
@@ -1156,7 +1184,7 @@ class Fleet:
                            "project": task_project.get(t["id"]),
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
-                "timeline": timeline[:300], "holds": held, "sources": self.sources, "me": self.me,
+                "timeline": timeline[:300], "holds": held, "automations": self.automations, "sources": self.sources, "me": self.me,
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 

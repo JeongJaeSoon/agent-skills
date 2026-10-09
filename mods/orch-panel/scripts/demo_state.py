@@ -55,10 +55,21 @@ def main(out, coord):
             {"key": "acme/web#47", "state": "MERGED", "merged_at": ago(days=6)},
             {"key": "acme/web#51", "state": "OPEN", "ci": "success", "merge_state": "CLEAN"},
         ],
+        "automations": [
+            {"id": "demo-janitor", "name": "janitor", "rrule": "17 */3 * * *", "enabled": True,
+             "next_run_at": ago(minutes=-42), "last_run_at": ago(minutes=138),
+             "recent": [{"status": s, "at": ago(minutes=138 + 180 * i), "summary": "정리 3, 남김 1"}
+                        for i, s in enumerate(["completed", "completed", "skipped_precheck", "completed", "completed", "completed"])]},
+            {"id": "demo-mentions", "name": "watch-mentions", "rrule": "*/20 9-20 * * 1-5", "enabled": True,
+             "next_run_at": ago(minutes=-7), "last_run_at": ago(minutes=13),
+             "recent": [{"status": s, "at": ago(minutes=13 + 20 * i), "summary": "새 멘션 0"}
+                        for i, s in enumerate(["completed", "failed", "completed", "skipped_precheck", "completed", "completed"])]},
+        ],
         "runs": [], "tasks": [], "timeline": [],
         "sources": {"orca": {"ok": True, "updated_at": ago(seconds=12), "error": None},
                     "runs": {"ok": True, "updated_at": ago(seconds=40), "error": None},
-                    "github": {"ok": True, "updated_at": ago(minutes=1), "error": None}},
+                    "github": {"ok": True, "updated_at": ago(minutes=1), "error": None},
+                    "automations": {"ok": True, "updated_at": ago(seconds=40), "error": None}},
     }
     cell = lambda mark, evidence=None, by=None: {"mark": mark, "evidence": evidence, "by": by}
     stages = {
