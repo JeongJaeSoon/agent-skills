@@ -467,6 +467,29 @@ process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     assert not any("data-go" in got[k] for k in ("gone", "none", "own")), got
     assert got["clicks"] == {"row": "#/fleet/session/wt-coord", "link": "", "button": "", "selecting": ""}, got["clicks"]
+    # A decision says how to answer it in the coordinator's terminal too, with the recommended option filled in.
+    assert "<span class=\"mono\">d1: &lt;i&gt;CSV&lt;/i&gt;</span>" in html, html
+
+    # Automations and shared resources render escaped; an overdue or failed automation is flagged and counted.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const old = new Date(Date.now() - 3 * 3600e3).toISOString(), soon = new Date(Date.now() + 600e3).toISOString();
+const st = {{sessions: [{{id: "wt-coord", name: "<b>coord</b>", phase: "idle"}}], sources: {{automations: {{ok: true}}}},
+  automations: [{{id: "a1", name: "<script>x</script>", rrule: "17 */3 * * *", enabled: true, next_run_at: soon, last_run_at: old,
+                  recent: [{{status: "completed", at: old, summary: "<img src=x>"}}, {{status: "skipped_precheck", at: old}}]}},
+                {{id: "a2", name: "late", rrule: "0 9 * * *", enabled: true, next_run_at: old, recent: []}},
+                {{id: "a3", name: "broken", rrule: "*/20 * * * *", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}},
+                {{id: "a4", name: "off", rrule: "x", enabled: false, next_run_at: old, recent: [{{status: "failed", at: old}}]}}],
+  holds: [{{kind: "resource", resource: "browser", by: "term_coord", session: "wt-coord", note: "<i>login</i>", at: old}},
+          {{kind: "lane", resource: "acme/app@main", by: "#7", note: null, at: soon}}]}};
+process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name)}}));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    for raw in ("<script", "<img", "<i>", "<b>coord"):
+        assert raw not in got["autos"] + got["holds"], raw
+    assert got["troubled"] == ["late", "broken"], got["troubled"]
+    assert "3시간마다 :17" in got["autos"] and "매일 9:00" in got["autos"] and "20분마다" in got["autos"], got["autos"]
+    assert got["autos"].count('class="run tone-good"') == 2 and 'class="run "' in got["autos"], "a completed and a skipped block"
+    assert got["holds"].index("browser") < got["holds"].index("acme/app@main") and "landing lane" in got["holds"], got["holds"]
 
     # Avatars: a team has none to ask for, and one that failed is not asked for again on the next redraw.
     js = f"""{helpers}
@@ -818,7 +841,7 @@ assert fleet.classify("Shall I merge it?") == "approval"
 assert fleet.classify("Refactored the parser.") == "fyi"
 
 # Automations: Orca's list, each with its last six runs newest first, output masked to its first line.
-assert [a["name"] for a in st["automations"]] == ["janitor"] and st["sources"]["automations"]["ok"], st["automations"]
+assert [a["name"] for a in st["automations"]] == ["janitor", "pr-sweeper", "weekly-digest"] and st["sources"]["automations"]["ok"], st["automations"]
 secret_out = "## posted with xoxb-" + "1" * 12 + "-" + "a" * 24 + "\nsecond line"
 
 

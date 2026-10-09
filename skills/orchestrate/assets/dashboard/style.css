@@ -461,3 +461,7 @@ tr.is-done td { opacity: 0.5; }
 .wenv { margin-bottom: var(--s3); }
 .wenv .meta { display: flex; gap: var(--s3); align-items: center; font-size: var(--t-sm); }
 .wnext { margin: 0; padding-left: calc(var(--s4) + 1.2em); display: grid; gap: var(--s1); }
+
+/* automations: one block per run, coloured by its result */
+.run { color: var(--tone, var(--ink-3)); font-size: 15px; line-height: 1; letter-spacing: 1px; }
+table.autos td:last-child { max-width: 340px; }

@@ -1475,6 +1475,7 @@ def cmd_demo(argv):
     root = pathlib.Path(tempfile.mkdtemp(prefix="orchestrate-dash-demo-"))
     env = dash_demo.build(root)
     os.environ.update(env)
+    dash_demo.seed_holds(root)
     for slug in programs():
         collect(slug, interval=20)
     log(f"demo store at {root}")

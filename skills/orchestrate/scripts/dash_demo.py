@@ -423,6 +423,16 @@ def build(root, now=None):
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
 
 
+def seed_holds(root, now=None):
+    """Who holds what in the demo: a browser profile a worker took an hour and a half ago, and a landing lane."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    locks = pathlib.Path(root) / "programs" / "_locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    (locks / "res__browser.lock").write_text(json.dumps(
+        {"resource": "browser", "by": "term_login", "note": "staging login check", "ttl_min": 120, "ts": _ago(now, 1.5)}))
+    (locks / "acme__launchpad@main.lock").write_text(json.dumps({"pr": 41, "program": "launchpad-ga", "ts": _ago(now, 0.1)}))
+
+
 def live(root, period=20, world=None):
     """Append a few plausible events so the page visibly updates without a reload."""
     ledger = pathlib.Path(root) / "programs" / "launchpad-ga" / "ledger.jsonl"
@@ -548,6 +558,14 @@ class FakeFleetWorld:
              "next_run_at": _ago(now, -19 / 60), "last_run_at": _ago(now, 41 / 60),
              "recent": [{"status": s, "trigger": "scheduled", "at": _ago(now, (41 + 180 * i) / 60), "summary": "cleaned 3, kept 1"}
                         for i, s in enumerate(["completed", "completed", "skipped_precheck", "completed", "completed", "completed"])]},
+            {"id": "auto-sweep", "name": "pr-sweeper", "rrule": "*/30 9-18 * * 1-5", "timezone": "UTC", "enabled": True,
+             "next_run_at": _ago(now, -12 / 60), "last_run_at": _ago(now, 18 / 60),
+             "recent": [{"status": s, "trigger": "scheduled", "at": _ago(now, (18 + 30 * i) / 60),
+                         "summary": "gh: rate limit exceeded" if s == "failed" else "2 PRs nudged"}
+                        for i, s in enumerate(["failed", "completed", "completed", "skipped_precheck", "completed", "completed"])]},
+            {"id": "auto-digest", "name": "weekly-digest", "rrule": "0 9 * * 1", "timezone": "UTC", "enabled": False,
+             "next_run_at": None, "last_run_at": _ago(now, 72), "recent": [{"status": "completed", "trigger": "scheduled",
+                                                                             "at": _ago(now, 72), "summary": "digest posted"}]},
         ]
         self.prompt = {"v": 1, "id": "prompt-docs-1", "at": _ago(now, 0.5), "handle": "term_docs", "session_id": "demo-docs",
                        "cwd": "/work/wt-docs", "tool": "Bash", "input": {"command": "npm publish --dry-run"}}

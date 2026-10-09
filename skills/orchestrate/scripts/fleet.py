@@ -212,7 +212,7 @@ def fetch_runs():
     return {"runs": runs, "workers": workers, "tasks": tasks, "gates": gates}
 
 
-AUTOMATION_RECENT = 6  # runs kept per automation: what the orch-panel mod draws as a bar
+AUTOMATION_RECENT = 6  # runs kept per automation: the dashboard's 자동화 page draws them as a row of blocks
 
 
 def fetch_automations():
