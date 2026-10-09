@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { age, snapshotOf, stateDir, statusText } from './model'
+import { age, bar, progress, snapshotOf, stateDir, statusText, workOf } from './model'
 
 const CWD = '/work/acme/coordinator'
 const NOW = Date.parse('2026-10-09T12:00:00Z')
@@ -129,4 +129,78 @@ test('a new item toasts in the coordinator session, never for the backlog found 
   await clock.advance(5000)
   expect(toasts).toEqual(['결정 대기: 캐시 TTL 5분 vs 1시간?'])
   expect(statuses.at(-1)).toBe('결정 2 · 사람만 1')
+})
+
+const STAGES = {
+  rows: {
+    search: { id: 'search', title: '검색 개선', pr: 'acme/web#42', cells: { dev: { mark: 'ok', evidence: 'v1.8.0' }, prod: { mark: 'checking', evidence: '확인 중', by: 'QA 리드' } } },
+    sort: { id: 'sort', title: '정렬 버그', pr: 'acme/web#45', parent: 'search', cells: {} },
+    login: { id: 'login', title: '로그인 개선', pr: 'acme/web#40', done_at: '2026-10-08T00:00:00Z', cells: { dev: { mark: 'ok', evidence: 'v1.7.2' }, prod: { mark: 'ok', evidence: '10/1' } } },
+    reindex: { id: 'reindex', title: '인덱스 재구축', parent: 'search', cells: { merge: { mark: 'ok', evidence: '10/2' }, dev: { mark: 'ok', evidence: '1,204건' }, prod: { mark: 'na' } } },
+  },
+  order: ['search', 'sort', 'login', 'reindex'],
+  ['env']: { prod: 'v1.7.2', dev: 'v1.8.0' },
+  next: ['acme/web#45 리뷰 → 머지 (에이전트, 오늘)'],
+}
+
+const PRS = [
+  { key: 'acme/web#42', state: 'MERGED', merged_at: '2026-10-02T03:00:00Z' },
+  { key: 'acme/web#40', state: 'MERGED', merged_at: '2026-09-28T03:00:00Z' },
+  { key: 'acme/web#45', state: 'OPEN', ci: 'failure' },
+  { key: 'acme/web#47', state: 'OPEN', ci: 'success', merge_state: 'CLEAN' },
+  { key: 'acme/web#48', state: 'OPEN', ci: 'pending' },
+]
+
+test('the stage record reads as orch stage show: parents then children, merge from the PR list', () => {
+  const work = workOf(JSON.stringify(STAGES), { prs: PRS })
+  expect(work.rows.map(r => [r.id, r.isChild])).toEqual([
+    ['search', false],
+    ['sort', true],
+    ['reindex', true],
+    ['login', false],
+  ])
+  const [search, sort, reindex, login] = work.rows
+  expect(search?.merge).toEqual({ mark: 'ok', evidence: '10/2', by: null })
+  expect(sort?.merge).toEqual({ mark: 'fail', evidence: 'CI 실패', by: null })
+  expect(sort?.chip).toEqual({ text: '✗CI', tone: 'error' })
+  expect(reindex?.merge?.evidence).toBe('10/2')
+  expect(login?.isDone).toBe(true)
+  expect(work.versions).toEqual({ prod: 'v1.7.2', dev: 'v1.8.0' })
+  expect(work.untrackedPrs).toBe(2)
+  // reindex (merge ✓, dev ✓, prod –) and the finished login row are through; search waits on prod, sort on all.
+  expect(progress(work)).toEqual({ done: 2, total: 4 })
+  expect(bar(2, 4)).toEqual({ filled: '▰▰', empty: '▱▱' })
+  expect(bar(3, 20)).toEqual({ filled: '▰▰', empty: '▱▱▱▱▱▱▱▱' })
+  expect(workOf('{', {}).error).toBeTruthy()
+  expect(workOf(null, {}).rows).toEqual([])
+})
+
+test('the pane draws the work table, folds it, and opens a row onto its evidence', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  world(on, {
+    [`${STATE_DIR}/state.json`]: { text: JSON.stringify({ ...STATE, prs: PRS }), mtimeMs: 1 },
+    [`${STATE_DIR}/stages.json`]: { text: JSON.stringify(STAGES), mtimeMs: 1 },
+  })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', key: 'toggle-work' }))?.text).toContain('작업 진행 ▰▰▱▱ 2/4')
+  expect(await ui.find({ text: /prod v1\.7\.2 · dev v1\.8\.0/ })).toBeDefined()
+  expect(await ui.find({ text: /✗CI/ })).toBeDefined()
+  expect(await ui.find({ text: /다음: acme\/web#45 리뷰/ })).toBeDefined()
+  expect(await ui.find({ text: /표에 없는 열린 PR 2/ })).toBeDefined()
+  expect(await ui.find({ text: /prod ◐ 확인 중 \(QA 리드\)/ })).toBeUndefined()
+  await ui.press({ key: 'row-search' })
+  expect(await ui.find({ text: /머지 ✓ 10\/2 · dev ✓ v1\.8\.0 · prod ◐ 확인 중 \(QA 리드\)/ })).toBeDefined()
+  await ui.press({ key: 'toggle-work' })
+  expect(await ui.find({ text: /다음:/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('with no stage rows the work section says how to start one', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  world(on, { [`${STATE_DIR}/state.json`]: { text: JSON.stringify(STATE), mtimeMs: 1 } })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', key: 'toggle-work' }))?.text).toContain('기록 없음')
+  expect(await ui.find({ text: /기록된 단계 없음 — orch stage add/ })).toBeDefined()
 })

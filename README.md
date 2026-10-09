@@ -113,7 +113,8 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 
 - 상태줄: `결정 2 · 사람만 1`. 0인 항목은 빼고, 모두 0이면 지운다.
 - `/orch-panel`: 결정 대기와 사람만 할 수 있는 일(권한·로그인·명령 실행)을 접고 펴는 패널. 결정은 답하는 법(`d7: CSV`)을 같이 보여 준다. 코디네이터 세션에서는 새 항목이 생길 때 토스트를 띄우고 패널을 연다.
-- 읽는 것은 orch-dash가 모은 `state.json` 하나다(`$ORCH_FLEET_STATE`, 기본 `~/.local/state/agent-skills/dashboard`). 5초마다 stat하고 바뀌었을 때만 읽는다. `gh`·`orca`나 모델은 부르지 않는다. 네트워크는 패널의 `↻`이 대시보드에 즉시 수집을 한 번 요청할 때뿐이다.
+- 작업 진행: `orch stage`로 기록한 작업별 단계 표(`stages.json`)를 `▰▰▰▱▱ 3/5` 진행 바와 머지·dev·prod 칸의 `✓ ✗ △ ◐ –`(기호마다 색)로 그린다. 머지 칸과 PR 옆 `✗CI`·`◐CI`·`✎`·`✓`는 `state.json`의 PR 목록에서 읽는다. 행을 누르면 각 칸의 근거가 펼쳐지고, 아래에 `다음` 줄과 표에 없는 열린 PR 수가 붙는다.
+- 읽는 것은 orch-dash가 모은 `state.json`과 `stages.json`, 같은 디렉터리의 두 파일이다(`$ORCH_FLEET_STATE`, 기본 `~/.local/state/agent-skills/dashboard`). 5초마다 stat하고 둘 중 하나가 바뀌었을 때만 읽는다. `gh`·`orca`나 모델은 부르지 않는다. 네트워크는 패널의 `↻`이 대시보드에 즉시 수집을 한 번 요청할 때뿐이다.
 
 체크아웃에서 쓰려면 `CLAUDE_CODE_PLUGIN_DIRS`에 `<체크아웃>/mods/orch-panel`을 더한다. 마켓플레이스로는 `claude plugin install orch-panel@jeongjaesoon`. 실제 fleet 없이 보려면:
 

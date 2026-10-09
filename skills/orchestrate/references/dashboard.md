@@ -155,7 +155,7 @@ orch stage show [--md | --telegram | --json]
 orch stage done search    # stays marked finished for 7 days; `drop` removes a row and its children
 ```
 
-Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄). The merge cell of a row with `--pr` is not written: `show` fills it from `state.json`'s PR list (merged with its date, else CI failure, changes requested, draft or waiting for review). It lives in the fleet state directory rather than a program's ledger because work outside a program needs rows too.
+Marks are `ok`, `fail`, `partial`, `checking` and `na` (or ✅ ❌ ⚠️ 🔄). The merge cell of a row with `--pr` is not written: `show` fills it from `state.json`'s PR list (merged with its date, else CI failure, changes requested, draft or waiting for review). The orch-panel mod draws the same file as its work-progress pane. It lives in the fleet state directory rather than a program's ledger because work outside a program needs rows too.
 
 ### Sending a line to a session
 

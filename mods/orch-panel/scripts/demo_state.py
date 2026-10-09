@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write an invented fleet state.json for trying the mod without a real fleet (and for screenshots of a public repo).
+"""Write an invented fleet state.json and stages.json for trying the mod without a real fleet (and for screenshots of a public repo).
 
     python3 demo_state.py <state dir> [<coordinator cwd>]
     ORCH_FLEET_STATE=<state dir> claude --plugin-dir mods/orch-panel
@@ -33,16 +33,42 @@ def main(out, coord):
             {"key": "pr:acme/web#45:ci_failed", "type": "ci_failed", "title": "acme/web#45 CI 실패", "session": search,
              "at": ago(minutes=30)},
         ],
-        "prs": [], "runs": [], "tasks": [], "timeline": [],
+        "prs": [
+            {"key": "acme/web#40", "state": "MERGED", "merged_at": ago(days=11)},
+            {"key": "acme/web#42", "state": "MERGED", "merged_at": ago(days=7)},
+            {"key": "acme/ops#88", "state": "MERGED", "merged_at": ago(days=7)},
+            {"key": "acme/web#45", "state": "OPEN", "ci": "failure", "decision": None},
+            {"key": "acme/web#47", "state": "MERGED", "merged_at": ago(days=6)},
+            {"key": "acme/web#51", "state": "OPEN", "ci": "success", "merge_state": "CLEAN"},
+        ],
+        "runs": [], "tasks": [], "timeline": [],
         "sources": {"orca": {"ok": True, "updated_at": ago(seconds=12), "error": None},
                     "runs": {"ok": True, "updated_at": ago(seconds=40), "error": None},
                     "github": {"ok": True, "updated_at": ago(minutes=1), "error": None}},
     }
+    cell = lambda mark, evidence=None, by=None: {"mark": mark, "evidence": evidence, "by": by}
+    stages = {
+        "rows": {
+            "login": {"id": "login", "title": "로그인 개선", "pr": "acme/web#40",
+                      "cells": {"dev": cell("ok", "v1.7.2"), "prod": cell("ok", "로그인 성공률 99.8%")}},
+            "search": {"id": "search", "title": "검색 개선", "pr": "acme/web#42",
+                       "cells": {"dev": cell("ok", "v1.8.0"), "prod": cell("checking", "확인 중", "QA 리드")}},
+            "reindex": {"id": "reindex", "title": "인덱스 재구축", "pr": "acme/ops#88", "parent": "search",
+                        "cells": {"dev": cell("ok", "1,204건 재색인"), "prod": cell("na")}},
+            "sort": {"id": "sort", "title": "정렬 버그", "pr": "acme/web#45", "parent": "search", "cells": {}},
+            "alerts": {"id": "alerts", "title": "알림 정리", "pr": "acme/web#47",
+                       "cells": {"dev": cell("partial", "로그로만 확인"), "prod": cell("fail", "다음 배포 대기")}},
+        },
+        "order": ["login", "search", "reindex", "sort", "alerts"],
+        "env": {"prod": "v1.7.2", "dev": "v1.8.0"},
+        "next": ["acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "v1.8.0 prod 배포 (사람, 미정)"],
+    }
     path = pathlib.Path(out).expanduser()
     path.mkdir(parents=True, exist_ok=True)
-    tmp = path / "state.json.tmp"
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1))
-    os.replace(tmp, path / "state.json")
+    for name, data in (("stages.json", stages), ("state.json", state)):
+        tmp = path / f"{name}.tmp"
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+        os.replace(tmp, path / name)
     print(path / "state.json")
 
 
