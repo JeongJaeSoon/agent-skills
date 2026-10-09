@@ -246,7 +246,7 @@ A **miss** is a human prompt (not a subagent's, a slash command, a notification,
 |---|---|
 | `unused_30d` | An installed skill with no use in 30 days. Shown here only: zero uses alone is not a signal |
 | `retire_candidate` | No use for three 30-day windows, counted from its last use or from when the collector first saw it (both kept in the cache, so a deleted transcript does not age a skill), with misses or another skill quoting the same trigger phrase (`overlaps`) as evidence, and not rare by design: `RARE` in `skill_usage.py`, plus `rare` in `~/.config/agent-skills/skill-usage.json` for the user's own skills |
-| `slash_only` | Used in 30 days, but only ever typed as `/name`: the description does not make it fire |
+| `slash_only` | Used in 30 days, but only ever typed as `/name`: the description does not make it fire. A skill with `disable-model-invocation` set to true (`slash_by_design`) is never flagged: only a human can call it |
 | `misses` | More than 3 misses in 30 days (`--misses N`) |
 
 The report holds counts only. No prompt or message text is copied, sessions and repositories are counted, not named, and the incremental cache (`skill-usage-cache.json`, keyed by a hash of each transcript's path, checked by size and mtime) stores working directories as hashes. The first scan reads every transcript; later ones re-read only changed files.
