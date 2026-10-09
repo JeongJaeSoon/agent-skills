@@ -1,4 +1,13 @@
-import type { OrchPanelItem, OrchPanelItemKind, OrchPanelSnapshot } from '../types'
+import type {
+  OrchPanelCell,
+  OrchPanelItem,
+  OrchPanelItemKind,
+  OrchPanelMark,
+  OrchPanelPrChip,
+  OrchPanelSnapshot,
+  OrchPanelStageRow,
+  OrchPanelWork,
+} from '../types'
 
 // The same split as brief-status: what needs the owner's call, and what only a person at the keyboard can do.
 // PR items (changes_requested, ci_failed, ...) belong to the progress table, sync items to the dashboard.
@@ -31,7 +40,7 @@ function recommendLabel(raw: Raw): string | null {
   return str(options[n - 1]?.label)
 }
 
-export function snapshotOf(text: string, checkedAt: number, cwd: string): OrchPanelSnapshot {
+export function snapshotOf(text: string, checkedAt: number, cwd: string, stagesText: string | null = null): OrchPanelSnapshot {
   let state: Raw
   try {
     state = JSON.parse(text)
@@ -70,7 +79,98 @@ export function snapshotOf(text: string, checkedAt: number, cwd: string): OrchPa
     isCoordinator: str(state.root)?.endsWith(`::${cwd}`) ?? false,
     orca: orca ? { updatedAt: str(orca.updated_at), isOk: orca.ok !== false } : null,
     items,
+    work: workOf(stagesText, state),
   }
+}
+
+const MARKS: readonly OrchPanelMark[] = ['ok', 'fail', 'partial', 'checking', 'na']
+
+function cellOf(raw: unknown): OrchPanelCell | null {
+  const c = raw as Raw | undefined
+  const mark = MARKS.find(m => m === c?.mark)
+  return mark ? { mark, evidence: str(c?.evidence), by: str(c?.by) } : null
+}
+
+// The same reading as stages.py merge_cell: the merge column is never written, only read off the PR list.
+function mergeOf(pr: Raw): OrchPanelCell {
+  if (str(pr.merged_at) || pr.state === 'MERGED') {
+    const at = new Date(parseAt(str(pr.merged_at)))
+    return { mark: 'ok', evidence: at.getTime() ? `${at.getUTCMonth() + 1}/${at.getUTCDate()}` : '머지됨', by: null }
+  }
+  if (pr.state === 'CLOSED') return { mark: 'fail', evidence: '닫힘', by: null }
+  const why =
+    pr.ci === 'failure' ? 'CI 실패'
+    : pr.decision === 'CHANGES_REQUESTED' ? '변경 요청'
+    : pr.draft ? 'draft'
+    : '리뷰 대기'
+  return { mark: 'fail', evidence: why, by: null }
+}
+
+function chipOf(pr: Raw): OrchPanelPrChip | null {
+  if (pr.state !== 'OPEN') return null
+  if (pr.ci === 'failure') return { text: '✗CI', tone: 'error' }
+  if (pr.decision === 'CHANGES_REQUESTED') return { text: '✎', tone: 'warning' }
+  if (pr.ci === 'pending') return { text: '◐CI', tone: 'warning' }
+  if (pr.merge_state === 'CLEAN') return { text: '✓', tone: 'success' }
+  return null
+}
+
+export function workOf(stagesText: string | null, state: Raw): OrchPanelWork {
+  const prs = new Map<string, Raw>()
+  for (const p of (state.prs as Raw[] | undefined) ?? []) if (str(p.key)) prs.set(p.key as string, p)
+  let store: Raw = {}
+  let error: string | null = null
+  try {
+    store = stagesText ? JSON.parse(stagesText) : {}
+  } catch (err) {
+    error = String(err).slice(0, 200)
+  }
+  const byId = (store.rows ?? {}) as Record<string, Raw>
+  const order = ((store.order as string[] | undefined) ?? []).filter(id => byId[id])
+  const toRow = (id: string): OrchPanelStageRow => {
+    const r = byId[id] as Raw
+    const cells = (r.cells ?? {}) as Raw
+    const pr = str(r.pr)
+    const live = pr ? prs.get(pr) : undefined
+    return {
+      id,
+      title: str(r.title) ?? id,
+      pr,
+      isChild: !!str(r.parent),
+      isDone: !!str(r.done_at),
+      merge: live ? mergeOf(live) : cellOf(cells.merge),
+      dev: cellOf(cells.dev),
+      prod: cellOf(cells.prod),
+      chip: live ? chipOf(live) : null,
+    }
+  }
+  // Each parent followed by its children, in the order they were added: `orch stage show`'s order.
+  const rows = order
+    .filter(id => !str(byId[id]?.parent))
+    .flatMap(id => [toRow(id), ...order.filter(k => byId[k]?.parent === id).map(toRow)])
+  const tracked = new Set(rows.map(r => r.pr))
+  const versions = (store['env'] ?? {}) as Raw
+  return {
+    rows,
+    versions: { prod: str(versions.prod), dev: str(versions.dev) },
+    next: ((store.next as unknown[] | undefined) ?? []).filter((n): n is string => !!str(n)),
+    untrackedPrs: [...prs.values()].filter(p => p.state === 'OPEN' && !tracked.has(p.key as string)).length,
+    error,
+  }
+}
+
+// A row is through when it is marked done or every stage it has is verified.
+export function progress(work: OrchPanelWork): { done: number; total: number } {
+  const through = (r: OrchPanelStageRow) =>
+    r.isDone || [r.merge, r.dev, r.prod].every(c => c?.mark === 'ok' || c?.mark === 'na')
+  return { done: work.rows.filter(through).length, total: work.rows.length }
+}
+
+// `▰▰▰▱▱`: one cell per row up to ten, scaled past that.
+export function bar(done: number, total: number): { filled: string; empty: string } {
+  const width = Math.min(total, 10)
+  const filled = total ? Math.round((done / total) * width) : 0
+  return { filled: '▰'.repeat(filled), empty: '▱'.repeat(width - filled) }
 }
 
 export function counts(snapshot: OrchPanelSnapshot | null): { decide: number; human: number } {
