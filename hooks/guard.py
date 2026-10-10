@@ -32,7 +32,8 @@ PLAIN = set(string.ascii_letters + string.digits + " \t_./:=,@%+-")
 # anywhere, nested shells and quotes included. A guardrail against mistakes, not a sandbox.
 REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_HANDLE:?=|"
                      r"\b(?:read|printf\s+-v)\b[^;&|\n]*\bORCA_TERMINAL_HANDLE")
-CARD = re.compile(r"\borca\s+worktree\s+create\b")
+# In command position only: a grep or echo that quotes the words is not a card being made.
+CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
 LEAD = re.compile(r"(?m)^\s*MODE\b")
 PREDICATE = re.compile(r"\bPREDICATE\b")

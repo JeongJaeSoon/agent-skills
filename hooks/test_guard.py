@@ -87,4 +87,7 @@ assert bash(f'{NEW} --prompt "/goal run app\nMODE orchestrate\nPREDICATE ENG-1, 
 assert bash(f'{NEW} --prompt "/goal take the lead on X. CLOSE: §8"') == "none"  # the word alone is not a lead brief
 assert bash("orca worktree create --repo name:app --name app-x --json") == "none"  # no agent task
 assert bash("orca worktree create --help") == "none"
+assert bash(f'cd /r && {NEW} --prompt "/goal fix X"') == "deny"
+assert bash('grep -rn "orca worktree create\\|--prompt" skills') == "none"
+assert bash("echo 'run orca worktree create --prompt x'") == "none"
 print("guard: all pass")
