@@ -68,7 +68,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **What it does:**
   - Picks what to do next on its own. Loose ends are handled here, and independent work becomes a ticket. Next tickets are ranked by priority, dependencies and file conflicts. The only thing it may ask is "which ticket is next".
   - A program worker (one whose brief has a `PROGRAM:` line) sends worker_done and then waits for the coordinator's decision.
-  - After confirming the ticket is done, it opens a new card with `orca worktree create --prompt "/goal <ID>"`. Even for a parallel request, it's one card per ticket.
+  - After confirming the ticket is done, it opens a new card with `orca worktree create --prompt "/goal <ID>. CLOSE: …"`. Even for a parallel request, it's one card per ticket.
   - It confirms the new card started with `orca terminal wait` and `read`, then closes this session with `end-session`.
 - **Related:** The step after `deliver-ticket`. It always ends with `end-session`.
 

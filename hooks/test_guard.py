@@ -75,4 +75,16 @@ assert skill("") == "none"
 (pathlib.Path(HOME) / ".claude/skills/tdd").mkdir(parents=True)  # a user skill that a bare name reaches first
 assert skill("tdd") == "none"
 assert skill("agent-skills:tdd") == "allow"
+
+# A card's first prompt carries its CLOSE (or KEEP) line, and a lead's its PREDICATE, literally.
+NEW = "orca worktree create --repo name:app --name app-x --agent claude"
+assert bash(f'{NEW} --prompt "/goal fix X. 브리프: /tmp/b.md\nCLOSE: end-session §8" --json') == "none"
+assert bash(f"{NEW} --prompt '/goal ENG-1. KEEP: I reuse this card'") == "none"
+assert bash(f'{NEW} --prompt "/goal fix X. 브리프: /tmp/b.md" --json') == "deny"
+assert bash(f'{NEW} --prompt "$(cat /tmp/brief.md)"') == "deny"  # unreadable as written
+assert bash(f'{NEW} --prompt "/goal run app as lead\nMODE orchestrate\nCLOSE: §8"') == "deny"
+assert bash(f'{NEW} --prompt "/goal run app\nMODE orchestrate\nPREDICATE ENG-1, ENG-2 Done\nCLOSE: §8"') == "none"
+assert bash(f'{NEW} --prompt "/goal take the lead on X. CLOSE: §8"') == "none"  # the word alone is not a lead brief
+assert bash("orca worktree create --repo name:app --name app-x --json") == "none"  # no agent task
+assert bash("orca worktree create --help") == "none"
 print("guard: all pass")

@@ -5,6 +5,10 @@ Deny: `orca orchestration check|inbox --terminal <handle>` for a handle that is 
 ($ORCA_TERMINAL_HANDLE, set in every Orca terminal). It would read, and with --ack consume, another
 agent's messages.
 
+Deny: `orca worktree create --prompt` whose command text has no `CLOSE` or `KEEP` line, or has a lead's
+`MODE` line without `PREDICATE`. A card whose first prompt lacks them reports done and idles for days
+(dispatch-card §2). The text is read as written: a prompt built from a file or variable is denied too.
+
 Allow, so workers never stall on a prompt hours after they loaded a skill:
 - this plugin's skills
 - `orca orchestration <verb>`, except reset, worker-abandon and gate-resolve
@@ -28,6 +32,10 @@ PLAIN = set(string.ascii_letters + string.digits + " \t_./:=,@%+-")
 # anywhere, nested shells and quotes included. A guardrail against mistakes, not a sandbox.
 REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_HANDLE:?=|"
                      r"\b(?:read|printf\s+-v)\b[^;&|\n]*\bORCA_TERMINAL_HANDLE")
+CARD = re.compile(r"\borca\s+worktree\s+create\b")
+CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
+LEAD = re.compile(r"(?m)^\s*MODE\b")
+PREDICATE = re.compile(r"\bPREDICATE\b")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
 
@@ -70,6 +78,17 @@ def bash(cmd):
         if handle != own and (REBINDS.search(cmd) or handle not in OWN_VAR):
             return decide("deny", f"check/inbox --terminal {handle} reads another terminal's Orca mailbox and can "
                                   f"consume its messages. Your own handle is {own or 'unknown'}.")
+    if CARD.search(cmd) and "--prompt" in cmd and "--help" not in cmd:
+        missing = []
+        if not CLOSE_OR_KEEP.search(cmd):
+            missing.append("CLOSE or KEEP")
+        if LEAD.search(cmd) and not PREDICATE.search(cmd):
+            missing.append("PREDICATE")
+        if missing:
+            return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Write it literally in "
+                                  "--prompt (not from a file or variable): `CLOSE: 완료 기준을 채우고 결과를 적으면 "
+                                  "end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP when this session will reuse the card; "
+                                  "a lead also gets its PREDICATE line (dispatch-card §2, orchestrate brief.md \"Lead\").")
     words = simple_words(cmd)
     if not words or REBINDS.search(cmd):
         return

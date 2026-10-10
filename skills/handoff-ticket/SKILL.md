@@ -94,7 +94,7 @@ orca worktree create \
   --base-branch "<branch this ticket must stack on, else omit>" \
   --no-parent \
   --agent claude \
-  --prompt "/goal <TICKET-ID>" \
+  --prompt "/goal <TICKET-ID>. CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다" \
   --comment "<ticket URL>" \
   --json
 # name the card after the ticket, not Orca's automatic title (the tab title is the agent's; a rename does not stick)

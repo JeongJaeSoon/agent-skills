@@ -90,9 +90,14 @@ end. The brief has:
 - **Close** — one line: "`CLOSE`: 완료 기준을 채우고 결과를 적으면 `end-session` §8대로 같은 턴에
   스스로 닫는다". Without it the card idles after its last report and nobody closes it: a card
   whose PR merged stayed open 38 hours. `KEEP` instead only when this session will reuse the card.
+  The line goes in `--prompt` itself, written out, wherever the rest of the brief lives: the
+  plugin's guard hook refuses an `orca worktree create --prompt` without `CLOSE` or `KEEP`.
 
 A card that will run a project for this session through cards of its own (a lead) gets
-`orchestrate` `references/brief.md` "Lead" instead of the list above.
+`orchestrate` `references/brief.md` "Lead" instead of the list above, and its `--prompt` also
+carries the `MODE` and `PREDICATE` lines; the hook refuses a prompt with a `MODE` line and no `PREDICATE`. A
+lead once briefed in a format of the coordinator's own, with neither line, reported done and
+waited for its next order for two days.
 
 Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no
 note; the Approved and `CLOSE` lines still go in. Product backlog goes through `write-ticket`
@@ -113,11 +118,13 @@ orca worktree create \
   --name "<target>-<topic>" \
   --parent-worktree active \
   --agent claude \
-  --prompt "/goal <goal>. 브리프: <note path> + 3-line summary, or /goal + the inline brief" \
+  --prompt "/goal <goal>. 브리프: <note path> + 3-line summary + the CLOSE line, or /goal + the inline brief" \
   --comment "<note path>" \
   --json
 # name the card by what it does, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID or target> <short title>" --json
+# register it, so the janitor asks it to close if it idles once its PRs land (`reap-resources` done-card)
+python3 "<reap-resources dir>/scripts/reap.py" ledger add --kind orca-worktree --path "<result.worktree.path>"
 # close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
 # (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit)
 skills-sync close-setup "<result.worktree.path>"

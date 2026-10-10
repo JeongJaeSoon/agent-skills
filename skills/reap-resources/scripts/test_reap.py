@@ -406,6 +406,66 @@ with tempfile.TemporaryDirectory() as tmp:
         assert [(i["target"], i["why"]) for i in got] == [(target, why)], (workers, got)
 reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which = saved
 
+# done-card: a settled card that only its idle Claude session keeps is asked once to close itself.
+H = 3600
+done = lambda quiet=3 * H, asked=None, **kw: reap.judge_done_card(
+    "/wt/a", "ledger", {**ok, "turn": None, "users": [77], **kw}, PRS.get, lambda p: quiet, 2 * H, asked)
+assert done()["target"] and done()["kind"] == "done-card" and "end-session §8" in done()["line"], done()
+assert "PR acme/app#2 merged" in done()["line"] and "\n" not in done()["line"]
+assert done(quiet=H)["target"] is False and "만 조용" in done(quiet=H)["why"]
+assert done(quiet=None)["target"] is False
+assert done(asked="2026-10-10T12:00")["target"] is False and "이미 요청함" in done(asked="2026-10-10T12:00")["why"]
+for kw in ({"pr": "acme/app#1"}, {"dirty": True}, {"unpushed": True, "head": "h9"}, {"pr": None}, {"turn": "살아 있는 워커 턴(d1)"},
+           {"users": []}, {"unreadable": True}):
+    assert done(**kw) is None, kw
+
+saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which
+with tempfile.TemporaryDirectory() as tmp:
+    wt = os.path.realpath(tmp)
+    reap.cwds, reap.shutil.which = (lambda: {77: wt}), (lambda name: "/bin/" + name)
+    reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "turn": live, "users": [77],
+                                                          "live": live or "pid 77 이 이 worktree 를 cwd 로 사용 중"}
+    entries = [e("orca-worktree", wt, pr="acme/app#2")]
+    scan_dc = lambda workers, entries=entries: (setattr(reap, "orca_workers", lambda state=None: workers) or
+                                                reap.janitor_scan({"orca-worktree", "done-card"}, [], entries, [], PRS.get,
+                                                                  quiet=lambda p: 5 * H))
+    got = scan_dc([])
+    assert [(i["kind"], i["target"]) for i in got] == [("orca-worktree", False), ("done-card", True)], got
+    assert [i["kind"] for i in scan_dc(None)] == ["orca-worktree"], "an unreadable worker list asks nobody"
+    asked = scan_dc([], entries + [{"ts": "t", "kind": "done-card", "id": wt}])
+    assert [(i["kind"], i["target"]) for i in asked] == [("orca-worktree", False), ("done-card", False)], asked
+    assert reap.precheck(got, pathlib.Path(tmp) / "state")[0] == 0
+reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which = saved
+
+# The nudge goes to the card's one Claude terminal; a refusal fails the item so precheck holds it back a day.
+saved = reap.orca_json, reap.subprocess.run, reap.ledger_path
+with tempfile.TemporaryDirectory() as tmp:
+    reap.ledger_path = lambda: pathlib.Path(tmp) / "ledger.jsonl"
+    sent = []
+    reap.orca_json = lambda *a: {"terminals": [{"handle": "term_sh", "agentIdentity": None},
+                                               {"handle": "term_c", "agentIdentity": "claude"}]}
+    for code, out in ((0, "sent"), (1, "not idle")):
+        reap.subprocess.run = lambda argv, **kw: (sent.append(argv) or
+                                                  subprocess.CompletedProcess(argv, code, stdout=out, stderr=""))
+        item = done()
+        if code:
+            try:
+                reap.act({**item, "name": "/wt/b"}, [])
+                raise AssertionError("a refused nudge must fail")
+            except RuntimeError as err:
+                assert "not idle" in str(err)
+        else:
+            assert "term_c" in reap.act(item, [])
+    assert sent[0][1:3] == ["nudge", "term_c"] and sent[0][3] == done()["line"], sent
+    assert [x["id"] for x in reap.ledger_read(reap.ledger_path())] == ["/wt/a"], "only a sent nudge is recorded"
+    reap.orca_json = lambda *a: {"terminals": []}
+    try:
+        reap.act(done(), [])
+        raise AssertionError("no claude terminal must fail")
+    except RuntimeError:
+        pass
+reap.orca_json, reap.subprocess.run, reap.ledger_path = saved
+
 # precheck: 0 while targets wait; a run that never reaped leaves nothing recorded, so the next precheck runs again.
 # Only what reap failed on is held back, and only for RETRY_AFTER.
 with tempfile.TemporaryDirectory() as tmp:
