@@ -45,6 +45,7 @@ deleted for good and the trash is never emptied: emptying it is the user's call.
 
 ```bash
 python3 "$R" ledger add --kind tmpdir --path /tmp/build-x --pr acme/app#12     # right after creating it
+python3 "$R" ledger add --kind orca-worktree --path <card path>              # a card you started (dispatch-card §3)
 python3 "$R" ledger add --kind gui-app --pid 4242 --worktree <worktree path>   # pid + start time are recorded
 python3 "$R" ledger add --kind chrome-window --id <window or tab id> --url <its URL> --pr acme/app#12
 python3 "$R" ledger add --kind evidence --path /tmp/task/shots --pr acme/app#12   # a screenshot or recording, once it is on the PR
@@ -60,6 +61,7 @@ PR (`owner/repo#N`, read with `gh`) is merged or closed, or its worktree is gone
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
 | orca-worktree | in the ledger or made by an orchestration worker; its PR (ledger link, else the branch's own PR, never a fork's) merged or closed; no changes, untracked files included; nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it | an open PR, no PR, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | its ignored files (`git ls-files --others --ignored --exclude-standard --directory`: `.env.local`, caches) to the trash, which `orca worktree rm` would delete for good; then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
+| done-card | an orca-worktree that would be a target but for the processes in it: no live worker turn, and its Claude session's transcripts quiet for `reap.done_card_hours` (default 2) | anything else that keeps an orca-worktree; the worker list unreadable; the session already asked once (a `done-card` ledger line), which is reported, not asked again | `skills-sync nudge` into the card's one Claude terminal: close by `end-session` §8 if nothing is left, else say what is. Never killed. A refused nudge (screen not idle) fails the item, so the next precheck holds it back a day |
 | orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
@@ -111,8 +113,10 @@ scheduled precheck would skip that set for a day. A precheck that never led to a
 nothing, so the next one runs again. A precheck prints what it could not read (`gh`,
 `orca`) to stderr. `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
 so a scan there can see fewer workers than the automation does. Any process in a worktree keeps
-it, Orca's idle shell in an open card included: an orca-worktree becomes a target once its card's
-terminals are closed, and until then `orca-worker` reports the reclaimable terminal. Which device fits which job:
+it from removal, Orca's idle shell in an open card included: an orca-worktree becomes a target once its card's
+terminals are closed, and until then `orca-worker` reports the reclaimable terminal. A finished card
+whose Claude session sits at an empty prompt would stay forever that way, so `done-card` asks that
+session to close itself; a lead card whose PRs had merged once stayed open two days. Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
 
 ## Load

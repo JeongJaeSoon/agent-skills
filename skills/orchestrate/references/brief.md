@@ -107,7 +107,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief, and its first prompt is `/goal <GOAL>. 브리프: <note path>`. A lead whose brief had no DELEGATE line investigated and implemented on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without them). A lead whose brief had no DELEGATE line investigated and implemented on its own.
 
 ```
 <project>: lead

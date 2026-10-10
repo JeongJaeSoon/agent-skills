@@ -65,7 +65,7 @@
 - **내용:**
   - 다음 할 일을 스스로 고른다. 자투리는 여기서 처리하고 독립된 일은 티켓으로 만든다. 다음 티켓은 우선순위, 의존, 파일 충돌로 순위를 매긴다. 물어도 되는 것은 "어느 티켓이 다음인가"뿐이다.
   - 프로그램 워커(브리프에 `PROGRAM:` 줄이 있는 경우)는 worker_done을 보낸 뒤 코디네이터의 결정을 기다린다.
-  - 완료를 확인한 뒤 `orca worktree create --prompt "/goal <ID>"`로 새 카드를 띄운다. 병렬 요청이어도 카드는 티켓당 하나다.
+  - 완료를 확인한 뒤 `orca worktree create --prompt "/goal <ID>. CLOSE: …"`로 새 카드를 띄운다. 병렬 요청이어도 카드는 티켓당 하나다.
   - `orca terminal wait`와 `read`로 시작을 확인하고 `end-session`으로 이 세션을 닫는다.
 - **관계:** `deliver-ticket` 다음 단계다. 끝은 반드시 `end-session`으로 맺는다.
 
