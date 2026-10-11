@@ -282,7 +282,8 @@ def dep_map(events, extra=None):
     after = {t: set(b) for t, b in (extra or {}).items()}
     for e in events:
         if e["ev"] == "dep":
-            after.setdefault(e["ticket"], set()).update(e.get("after") or [])
+            # A self edge (layers of one ticket recorded as a dep) would hold the ticket forever.
+            after.setdefault(e["ticket"], set()).update(t for t in e.get("after") or [] if t != e["ticket"])
     return after
 
 
@@ -539,7 +540,7 @@ def base_overlap(repo, base, c):
 
 def open_rows(repo):
     return gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json",
-                   "number,title,headRefOid,mergeStateStatus,isDraft,statusCheckRollup,baseRefName")
+                   "number,title,headRefOid,headRefName,mergeStateStatus,isDraft,statusCheckRollup,baseRefName")
 
 
 def repo_stacks(repo):
@@ -947,6 +948,9 @@ def cmd_dep(argv):
     ticket, after = opt(argv, "--ticket"), [t for t in (opt(argv, "--after") or "").split(",") if t]
     if not ticket or not after:
         sys.exit("dep needs --ticket A --after B[,C]")
+    if ticket in after:
+        sys.exit(f"dep is per ticket, so {ticket} after {ticket} would wait on itself forever. Layers of one"
+                 " ticket's stack land bottom-up with orch land, one layer at a time; record nothing for them")
     print(json.dumps(p.append("dep", ticket=ticket, after=after), ensure_ascii=False))
 
 
@@ -1015,6 +1019,17 @@ class ExclusiveLock:
         os.close(fd)
         self.p.append("lock_acquired", pr=pr, note=self.path.name)
         return True
+
+    def break_if_closed(self, held):
+        """A holder whose PR was closed or merged elsewhere never releases; free the lane now, not after the stale window."""
+        r = run(["gh", "pr", "view", str(held.get("pr")), "--repo", self.p.cfg["repo"], "--json", "state", "--jq", ".state"],
+                check=False)
+        state = r.stdout.strip()
+        if r.returncode == 0 and state in ("CLOSED", "MERGED"):
+            self.path.unlink(missing_ok=True)
+            self.p.append("lock_released", pr=held.get("pr"), note=f"holder is {state}")
+            return None
+        return held
 
     def release(self, pr):
         held = self.holder()
@@ -1126,9 +1141,18 @@ def attempt(p, pr, klass):
     main = main_state(events)
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"
-    order = land_order(events, open_rows(repo), cfg, dt.datetime.now(dt.timezone.utc), repo_stacks(repo),
+    rows = open_rows(repo)
+    order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), repo_stacks(repo),
                        orca_deps(cfg["run"]))
     me = next((e for e in order if e["pr"] == pr), None)
+    tracked = pr_state(events)  # an integration branch's own PR (feature → main) is never landed through orch
+    lower = next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
+                  and r["number"] in tracked), None)
+    if lower:
+        # Based on another open PR's branch without being a GitHub stack: a squash would land in that branch.
+        return 3, (f"act: #{pr} is based on #{lower['number']}'s branch {me['base']}, not a GitHub stack, so a merge would"
+                   f" land in that branch. Land #{lower['number']} first, then gh pr edit {pr} --repo {repo} --base"
+                   f" {lower.get('baseRefName')} and gh pr update-branch {pr} --repo {repo}, and land again")
     if me is None or me["state"] == "gone":
         v = pr_view(repo, pr)
         if v["state"] == "MERGED":
@@ -1169,6 +1193,8 @@ def attempt(p, pr, klass):
         lane = ExclusiveLock(p, me["base"] or "main")
         ahead = exclusive_turn(order, pr)
         held = lane.holder()
+        if held and (held.get("pr"), held.get("program")) != (pr, p.slug):
+            held = lane.break_if_closed(held)
         if held and (held.get("pr"), held.get("program")) != (pr, p.slug):
             return 2, f"yield: the exclusive lane of {me['base']} is held by #{held.get('pr')} ({held.get('program')})"
         if not held and ahead:

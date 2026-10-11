@@ -22,6 +22,8 @@ if a[:2] == ["pr", "list"]:
     print(json.dumps([dict(p, number=int(n)) for n, p in st["prs"].items() if p["state"] == "OPEN"]))
 elif a[:2] == ["pr", "view"] and a[-1] == "files":
     print(json.dumps({"files": [{"path": f} for f in pr(a[2])["files"]]}))
+elif a[:2] == ["pr", "view"] and "--jq" in a and a[a.index("--jq") + 1] == ".state":
+    print(pr(a[2])["state"])
 elif a[:2] == ["pr", "view"]:
     p = pr(a[2]); print(json.dumps(dict(p, mergeCommit={"oid": p.get("merge_sha")} if p.get("merge_sha") else None,
                                         url=f"https://x/pull/{a[2]}", title="t", headRefName=f"b{a[2]}")))
@@ -122,6 +124,16 @@ verdict(d, 1, "T-1")
 (d / "programs" / "_locks" / "o__r@main.lock").write_text(json.dumps({"pr": 50, "ts": "2999-01-01T00:00:00+00:00"}))
 code, out = prog(env, "land", "t", "--pr", "1")
 assert code == 2 and "held by #50" in out, out
+
+# 1b'. A holder whose PR was closed never releases; the next lander frees the lane instead of waiting 90 min.
+closed = pr(51); closed["state"] = "CLOSED"
+d, env = setup({"1": pr(1, files=[".github/workflows/ci.yml"]), "51": closed})
+verdict(d, 1, "T-1")
+(d / "programs" / "_locks").mkdir()
+(d / "programs" / "_locks" / "o__r@main.lock").write_text(json.dumps({"pr": 51, "program": "other", "ts": "2999-01-01T00:00:00+00:00"}))
+code, out = prog(env, "land", "t", "--pr", "1")
+assert code == 0 and "landed #1" in out, out
+assert any(e["ev"] == "lock_released" and e.get("pr") == 51 and "CLOSED" in e.get("note", "") for e in ledger(d))
 
 # 1c. A head with no checks reported yet is not green.
 p0 = pr(10); p0["statusCheckRollup"] = []
@@ -304,6 +316,30 @@ d, env = setup({"24": pr(24)})
 verdict(d, 24, "T-24")
 code, out = prog(env, "land", "t", "--pr", "24")
 assert code == 0 and "workflow run" not in out, out
+
+# A PR based on another tracked PR's branch, outside a GitHub stack, is told to land the lower one first.
+low = pr(26); low["headRefName"] = "b26"
+up = pr(27, base="b26")
+d, env = setup({"26": low, "27": up})
+verdict(d, 26, "T-26"); verdict(d, 27, "T-27")
+code, out = prog(env, "land", "t", "--pr", "27")
+assert code == 3 and "based on #26's branch b26" in out and "--base main" in out, out
+# An untracked PR whose head is the base (the integration branch's own PR to main) does not block.
+feat = pr(28); feat["headRefName"] = "feature/x"
+d, env = setup({"28": feat, "29": pr(29, base="feature/x")})
+verdict(d, 29, "T-29")
+code, out = prog(env, "land", "t", "--pr", "29")
+assert code == 0, out
+
+# dep is per ticket: a self edge is refused, and one already in the ledger does not hold the ticket.
+d, env = setup({"25": pr(25)})
+verdict(d, 25, "T-25")
+code, out = prog(env, "dep", "t", "--ticket", "T-25", "--after", "T-25")
+assert code == 1 and "wait on itself" in out, out
+with (d / "programs" / "t" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-09-24T00:00:00+00:00", "ev": "dep", "ticket": "T-25", "after": ["T-25"]}) + "\n")
+code, out = prog(env, "land", "t", "--pr", "25")
+assert code == 0 and "landed #25" in out, out
 
 # A flag whose value an empty shell variable swallowed fails with its name, not a traceback, and records nothing.
 d, env = setup({})
