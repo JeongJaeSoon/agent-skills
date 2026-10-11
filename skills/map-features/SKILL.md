@@ -11,7 +11,7 @@ This is not the verification map that `create-verification-skill` writes under `
 
 ## 1. Pin the baseline
 
-Name the repo, the ref, its short sha and its commit date in the first line of the map ("기준: `owner/repo` origin/main `abc1234`(2026-10-10)"). Fetch first and read `origin/<default>`, not a stale local branch. Every statement in the map is true as of that line. A product spread over several repos gets one baseline line per repo.
+Name the repo, the ref, its short sha and its commit date in the first line of the map ("기준: `owner/repo` origin/main `abc1234`(2026-10-10)"). The ref is the commit, release or branch the user names; when they name none, fetch first and read `origin/<default>`, not a stale local branch. Every statement in the map is true as of that line, except the rows a refresh could not re-check (§6). A product spread over several repos gets one baseline line per repo.
 
 ## 2. Find the apps
 
@@ -53,8 +53,8 @@ Save it where the user's working docs live (`use-notes`), or the path they named
 
 ## 6. Refresh
 
-To update a map, pin a new baseline, re-check every row against it, and list the rows whose status changed under the baseline line. A row nobody re-checked keeps its old baseline next to it.
+To update a map, pin a new baseline, re-check every row against it, and list the rows whose status changed under the baseline line. A row you could not re-check keeps its old status, is marked with its old baseline in the evidence cell ("옛 기준 `abc1234`"), and is counted apart from the current rows wherever the map or the report counts rows by status.
 
 ## Report
 
-The map's location, the baseline, the row count per status, and the unknown rows with what would settle each.
+The map's location, the baseline, the row count per status with old-baseline rows counted apart (§6), and the unknown rows with what would settle each.
