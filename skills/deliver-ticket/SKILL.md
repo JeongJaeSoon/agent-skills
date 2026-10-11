@@ -85,6 +85,12 @@ Then review by scope, not by vendor:
 - `/code-review` — the working diff, before a PR exists
 - `/review` — once a PR exists
 - `/security-review` — the diff touches auth, crypto, or untrusted input
+- `blast-radius` (or `interrogate` for a multi-model pass) — the diff touches auth, migrations,
+  concurrency or a public contract; run it before the first Codex round, not after more rounds
+
+Write in the PR body which of these the diff triggered and what ran; a triggered one you skipped
+gets its reason there; an Orca worker copies the line into its worker_done. A Codex review alone
+does not stand in for a triggered row.
 
 **Trivial** means all of these: about 20 changed lines or fewer, no auth, crypto, migration,
 concurrency, CI or public-contract change, and a test that covers it. A trivial diff still gets
@@ -104,9 +110,7 @@ unless the ticket or the program's standing orders set another. The cap bounds r
 fixes: an Act-on finding from the last round is still fixed, and one more pass reviews only
 those fixes. What the cap ends is the stream of Consider items: past the cap they go into a
 "남은 검토" checklist in the PR body, each with its one-line reason, and become tickets only
-when they are reproduced defects (§2). A change with a wide blast radius — auth, migrations,
-concurrency, a public contract — gets `blast-radius`, or `interrogate` for a multi-model pass,
-before the first round rather than more rounds after it.
+when they are reproduced defects (§2).
 
 ## 4. Commit
 

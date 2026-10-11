@@ -72,7 +72,7 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
-            merge commit, review rounds and who reviewed, the VERIFY output you actually saw,
+            merge commit, review rounds and who reviewed, the PR body's review-scope line (deliver-ticket §3), the VERIFY output you actually saw,
             the main-CI run you read, and the findings with their proposed class. --outcome succeeded only
             when the ticket's acceptance criteria hold. Then close yourself in the same turn:
             end-session §7.
