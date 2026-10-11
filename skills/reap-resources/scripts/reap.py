@@ -687,32 +687,34 @@ def judge_orca_worker(rows):
 
 def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
     """facts: the git and process state of one checkout, read by worktree_facts. A checkout with no PR goes only when
-    its HEAD is on the remote default branch (end-session §4) and it is min_age old: a new card is there too."""
+    its HEAD is on the remote default branch (end-session §4) and its sessions' transcripts have been quiet for
+    min_age: a new card, and a lead or a read-only card still at work, sit there too."""
     base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
             "how": [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
                     f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
     ref = facts.get("pr")
     s = pr_state(ref) if ref else None
+    idle = facts.get("idle")
     if facts.get("live"):
         why = facts["live"]
-    elif not ref and not facts.get("landed"):
+    elif not ref and facts.get("pr_unread"):
+        why = "브랜치의 PR 을 읽지 못함(gh)"
+    elif not ref and facts.get("landed") is None:
+        why = "연결된 PR 없음, 기본 브랜치(origin/HEAD)를 모름"
+    elif not ref and not facts["landed"]:
         why = "연결된 PR 없음"
-    elif not ref and facts.get("unreadable"):
-        why = "git 상태를 읽지 못함"
-    elif not ref and facts.get("dirty"):
-        why = "변경 있음(추적 안 되는 파일 포함)"
-    elif not ref and (facts.get("age") is None or facts["age"] < min_age):
-        why = "연결된 PR 없음, 만든 지 " + ("알 수 없음" if facts.get("age") is None else age(facts["age"]))
-    elif not ref:
-        return {**base, "why": f"PR 없음, HEAD 가 기본 브랜치에 있음 ({source})", "target": True}
-    elif s is None:
+    elif ref and s is None:
         why = f"PR {ref} 상태를 읽지 못함"
-    elif s["state"] == "OPEN":
+    elif ref and s["state"] == "OPEN":
         why = f"열린 PR {ref}"
     elif facts.get("unreadable"):
         why = "git 상태를 읽지 못함"
     elif facts.get("dirty"):
         why = "변경 있음(추적 안 되는 파일 포함)"
+    elif not ref and (idle is None or idle < min_age):
+        why = "연결된 PR 없음, 세션이 " + ("조용한지 알 수 없음" if idle is None else f"{age(idle)} 만 조용")
+    elif not ref:
+        return {**base, "why": f"PR 없음, HEAD 가 기본 브랜치에 있고 세션이 {age(idle)} 조용 ({source})", "target": True}
     elif facts.get("unpushed") and facts.get("head") != s.get("headRefOid"):
         why = "원격에 없는 커밋"
     else:
@@ -754,11 +756,13 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
     if real(main) == real(path):
         return {"main": True}
     users = [pid for pid, c in users_cwd.items() if under(real(c), real(path))]
-    ref = ledger_pr
+    ref, pr_unread = ledger_pr, False
     if not ref:
         branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
         prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,isCrossRepository"],
                               cwd=path, check=False)
+        # A failed lookup is not an empty answer: a card with an open PR would pass as one without.
+        pr_unread = bool(branch) and prs is None
         # A fork's PR with the same head name is not this branch's.
         own = [p for p in json.loads(prs) if not p.get("isCrossRepository")] if prs else []
         if own:
@@ -768,17 +772,13 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
     landed = None
     if not ref:
         default = git(["git", "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False)
-        landed = bool(default) and git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
-                                       check=False) is not None
-    try:
-        # A worktree's .git file is written once, when the checkout is made.
-        made_s = time.time() - os.stat(os.path.join(path, ".git")).st_mtime
-    except OSError:
-        made_s = None
+        # Not an ancestor and a failed check both answer None: either way the checkout stays.
+        landed = None if not default else git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
+                                              check=False) is not None
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
     status = git(["git", "-C", path, "status", "--porcelain"], check=False)
     ahead = git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)
-    return {"main": False, "repo": main, "pr": ref, "landed": landed, "age": made_s, "turn": live_turn, "users": users,
+    return {"main": False, "repo": main, "pr": ref, "pr_unread": pr_unread, "landed": landed, "turn": live_turn, "users": users,
             "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
             # None is a failed read, not an empty answer.
             "unreadable": status is None or ahead is None,
@@ -786,14 +786,18 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
             "head": (git(["git", "-C", path, "rev-parse", "HEAD"], check=False) or "").strip()}
 
 
+NO_PR_MIN_HOURS = 2
+
+
 def cli_cards(res):
     """Real paths of worktrees an agent made with `orca worktree create --parent-worktree` (Orca records origin "cli";
     the app's own New Worktree records "manual"). None when the list is unreadable or truncated."""
-    if not res or res.get("truncated"):
+    if not isinstance(res, dict) or res.get("truncated"):
         return None
     return {real(w["path"]) for w in res.get("worktrees") or []
-            if not w.get("isMainWorktree") and (w.get("lineage") or {}).get("origin") == "cli"
-            and (w.get("lineage") or {}).get("parentWorktreeId")}
+            if w.get("path") and not w.get("isMainWorktree") and not w.get("isPinned")
+            and w.get("hostId", "local") == "local"
+            and (w.get("lineage") or {}).get("origin") == "cli" and (w.get("lineage") or {}).get("parentWorktreeId")}
 
 
 def orca_json(*args):
@@ -870,7 +874,7 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         cards = cli_cards(orca_json("worktree", "list", "--limit", "10000")) if shutil.which("orca") else set()
         if cards is None:
             notes.append("orca-worktree: orca worktree list 를 읽지 못함, CLI 로 만든 카드는 ledger 에 있는 것만 본다")
-        cards = (cards or set()) - made
+        cards = cards or set()
         ledger = {real(e["id"]): e for e in latest(entries, "orca-worktree")}
         # A done-card line in the ledger only records that the card was asked once.
         asked = {real(e["id"]): e.get("ts") for e in latest(entries, "done-card")}
@@ -890,8 +894,11 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
                 # Without the list, a user's takeover and a live turn look the same as a finished worker.
                 facts["live"] = "워커 목록을 읽지 못함"
             source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
+            if not facts.get("pr"):
+                facts["idle"] = quiet(path)
             if "orca-worktree" in kinds:
-                items.append(judge_orca_worktree(path, source, facts, pr_state, hours * 3600))
+                # `--hours 0` must not let a card that just went quiet go.
+                items.append(judge_orca_worktree(path, source, facts, pr_state, max(hours, NO_PR_MIN_HOURS) * 3600))
             if "done-card" in kinds and workers is not None and (d := judge_done_card(path, source, facts, pr_state, quiet, done_idle_s,
                                                               asked.get(path))):
                 items.append(d)

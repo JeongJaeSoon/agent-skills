@@ -364,14 +364,15 @@ assert judge(unpushed=True, head="h9")["why"] == "원격에 없는 커밋"
 assert judge(pr="acme/app#1")["why"] == "열린 PR acme/app#1"
 assert judge(dirty=True)["why"].startswith("변경 있음")
 assert judge(live="살아 있는 워커 턴(ctx_1)")["why"].startswith("살아 있는")
-assert judge(pr=None)["why"] == "연결된 PR 없음" and judge(pr="acme/app#3")["target"]
-# No PR: it goes only when HEAD is on the remote default branch (end-session §4) and the checkout is old enough.
-nopr = lambda **kw: reap.judge_orca_worktree("/wt/a", "오케스트레이션 워커", {**ok, "pr": None, "landed": True, "age": 7 * 3600, **kw},
+assert judge(pr=None, landed=False)["why"] == "연결된 PR 없음" and judge(pr="acme/app#3")["target"]
+# No PR: it goes only when HEAD is on the remote default branch (end-session §4) and its sessions are quiet long enough.
+nopr = lambda **kw: reap.judge_orca_worktree("/wt/a", "오케스트레이션 워커", {**ok, "pr": None, "landed": True, "idle": 7 * 3600, **kw},
                                              PRS.get, 6 * 3600)
-assert nopr()["target"] and nopr()["why"] == "PR 없음, HEAD 가 기본 브랜치에 있음 (오케스트레이션 워커)", nopr()
-assert nopr(landed=False)["why"] == "연결된 PR 없음" and nopr(landed=None)["why"] == "연결된 PR 없음"
-assert nopr(age=3600)["target"] is False and "만든 지" in nopr(age=3600)["why"], "a new card is on the default branch too"
-assert nopr(age=None)["target"] is False
+assert nopr()["target"] and nopr()["why"] == "PR 없음, HEAD 가 기본 브랜치에 있고 세션이 7h0m 조용 (오케스트레이션 워커)", nopr()
+assert nopr(landed=False)["why"] == "연결된 PR 없음" and "origin/HEAD" in nopr(landed=None)["why"]
+assert nopr(idle=3600)["target"] is False and "만 조용" in nopr(idle=3600)["why"], "a lead or a new card sits on the default branch too"
+assert nopr(idle=None)["target"] is False
+assert nopr(pr_unread=True)["target"] is False and "읽지 못함" in nopr(pr_unread=True)["why"], "a failed gh lookup is not no PR"
 assert nopr(dirty=True)["why"].startswith("변경 있음") and nopr(unreadable=True)["why"] == "git 상태를 읽지 못함"
 assert nopr(live="살아 있는 워커 턴(ctx_1)")["target"] is False
 
@@ -382,6 +383,9 @@ assert reap.cli_cards({"worktrees": [card("/w/cli", "cli"), card("/w/ui", "manua
                                      card("/r", "cli", isMainWorktree=True),
                                      {"path": "/w/orphan", "lineage": {"origin": "cli", "parentWorktreeId": None}}]}) == {"/w/cli"}
 assert reap.cli_cards({"worktrees": [card("/w/cli", "cli")], "truncated": True}) is None and reap.cli_cards(None) is None
+assert reap.cli_cards({"worktrees": [card("/w/pin", "cli", isPinned=True), card("/w/far", "cli", hostId="ssh-1"),
+                                     {"lineage": {"origin": "cli", "parentWorktreeId": "r::/r"}}]}) == set()
+assert reap.cli_cards(["not", "a", "dict"]) is None
 
 # Only worktrees a worker made count; a retained row (context-only dispatch, user takeover) marks the user's.
 ws = [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::/w/made"}},
@@ -416,8 +420,11 @@ def landed_git(default, ancestor):
     return git
 assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git("origin/main\n", True))["landed"] is True
 assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git("origin/main\n", False))["landed"] is False
-assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git(None, True))["landed"] is False
-assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git("origin/main\n", True))["age"] is None, "no .git file"
+assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git(None, True))["landed"] is None
+def gh_down(cmd, cwd=None, check=True):
+    return None if cmd[0] == "gh" else fake_git([])(cmd, cwd, check)
+assert reap.worktree_facts("/r-wt", None, None, {}, git=gh_down)["pr_unread"] is True
+assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([]))["pr_unread"] is False
 # A git read that fails is not a clean checkout: the worktree is kept with the reason.
 def failing_git(cmd, cwd=None, check=True):
     return None if cmd[-2:] in (["status", "--porcelain"], ["--not", "--remotes"]) else fake_git([mine])(cmd, cwd, check)
@@ -445,6 +452,13 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [(i["target"], i["why"]) for i in got] == [(True, "PR acme/app#2 merged (CLI 로 만든 카드)")], got
     reap.orca_workers = lambda state=None: [{"terminalState": "retained", "resource": {"worktreeId": "r::" + wt}}]
     assert reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get) == []
+    # A no-PR card is judged by how long its sessions have been quiet, floored at NO_PR_MIN_HOURS even under --hours 0.
+    reap.orca_workers = lambda state=None: []
+    reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
+    reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "pr": None, "landed": True, "live": live}
+    for idle, hours, target in ((3 * 3600, 0, True), (3600, 0, False), (3 * 3600, 6, False), (7 * 3600, 6, True)):
+        got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, hours=hours, quiet=lambda p, i=idle: i)
+        assert [i["target"] for i in got] == [target], (idle, hours, got)
     reap.orca_json = lambda *a: None
     notes = []
     assert reap.janitor_scan({"orca-worktree"}, [], [], notes, PRS.get) == [] and "orca worktree list" in notes[0], notes
