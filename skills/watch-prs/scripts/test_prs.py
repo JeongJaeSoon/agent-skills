@@ -23,14 +23,18 @@ def team(slug):
 
 
 def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False, age=5, idle=1, size=10,
-       decision="REVIEW_REQUIRED", head=None, reviewed=None, state="OPEN", title=None, files=()):
+       decision="REVIEW_REQUIRED", head=None, reviewed=None, state="OPEN", title=None, files=(), asker=("User", "carol")):
+    """asker: who made each User review request (the timeline's ReviewRequestedEvent actor)."""
     return {"id": f"PR_{repo}_{n}", "number": n, "title": title or f"Change {n}", "url": f"https://github.com/{repo}/pull/{n}",
             "isDraft": draft, "createdAt": iso(NOW - age * DAY), "updatedAt": iso(NOW - idle * DAY),
             "headRefOid": head or f"h{n}", "additions": size, "deletions": 0, "reviewDecision": decision, "state": state,
             "repository": {"nameWithOwner": repo}, "author": {"__typename": kind, "login": author},
             "reviewRequests": {"nodes": list(reqs)}, "changedFiles": len(files),
             "files": {"nodes": [{"path": x} for x in files]},
-            "reviews": {"nodes": [{"commit": {"oid": reviewed}}] if reviewed else []}}
+            "reviews": {"nodes": [{"commit": {"oid": reviewed}}] if reviewed else []},
+            "timelineItems": {"nodes": [{"actor": {"__typename": asker[0], "login": asker[1]},
+                                         "requestedReviewer": r["requestedReviewer"]}
+                                        for r in reqs if r["requestedReviewer"]["__typename"] == "User"]}}
 
 
 class Fake:
@@ -170,11 +174,11 @@ except RuntimeError as e:
 # ownergate: app PRs a gate names that still need an approval; never a person's PR.
 gate = {"name": "access", "authors": ["grant-bot[bot]"], "repos": ["acme/access"], "title": r"^\[Auto\] ", "prod_paths": ["deploy/"]}
 gcfg = {**cfg, "kinds": ["review_request", "ownergate"], "ownergate": [gate], "ignore_bots": ["grant-bot"]}
-A = dict(repo="acme/access", author="grant-bot", kind="Bot", reqs=[team("sec")])
+A = dict(repo="acme/access", author="grant-bot", kind="Bot", reqs=[user(ME), team("sec")])
 gated = [
     pr(1, **{**A, "reqs": [user(ME)]}, title="[Auto] Add access for 1 user", files=["members/a.json"], age=2),
     pr(2, **A, title="[Auto] Add access for 2 users", decision="APPROVED"),
-    pr(3, repo="acme/access", author="grant-bot", kind="User", title="[Auto] Add access by hand"),
+    pr(3, repo="acme/access", author="grant-bot", kind="User", reqs=[user(ME)], title="[Auto] Add access by hand"),
     pr(4, **A, title="Bump version"),
     pr(5, **A, title="[Auto] Rotate role", files=["deploy/prod.yml", "members/b.json"], age=9),
     pr(6, **{**A, "repo": "acme/other"}, title="[Auto] Add access elsewhere"),
@@ -317,6 +321,16 @@ p.write_json(lost / "plan.json", rplan)
 assert p.round_steps(lost) == []
 p.commit(rstate, gcfg, NOW)
 assert p.compute(Fake([], gated=gated), gcfg, p.read_json(rstate / "ledger.json", {}), NOW)["new"] == []
+
+# Only a person asking the owner personally makes an item, in the gate too: a team or CODEOWNERS request, or a
+# request the app made itself (even naming the owner as a User), is never one. So a gate cannot fire for an app
+# that requests its own reviewers.
+by_app = pr(7, **A, title="[Auto] Add access for 7 users", files=["members/e.json"], asker=("Bot", "grant-bot"))
+via_team = pr(8, **{**A, "reqs": [team("sec"), user(ME, code_owner=True)]}, title="[Auto] Add access for 8 users")
+held = p.compute(Fake([], gated=[gated[0], by_app, via_team]), gcfg, {}, NOW)
+assert [i["number"] for i in held["new"]] == [1], held["new"]
+assert {e["pr"]: e["why"] for e in held["excluded"] if e["pr"] != "acme/access#1"} == {
+    "acme/access#7": "사람이 아닌 계정의 요청", "acme/access#8": "팀·CODEOWNERS 요청뿐"}, held["excluded"]
 # Slack review requests from watch-mentions' seen ledger: one entry per PR, permalinks attached.
 seen_file = state.parent / "mentions-seen.json"
 link = lambda n: f"https://example.test/archives/C0FAKE/p{n}"
@@ -856,5 +870,30 @@ for bad, msg in ((["^ok", "["], "invalid regex '['"), ("^Remove", "must be a lis
     for sub in ("precheck", "plan"):
         r = subprocess.run([sys.executable, script, sub, "--config", str(tconf)], env=env, capture_output=True, text=True)
         assert r.returncode == p.EXIT_ERROR and "exclude_title_patterns" in r.stderr and "Traceback" not in r.stderr, r
+
+# A review request counts only when a person made it: an app naming the owner as a User reviewer is not a person
+# asking. The latest request of the owner decides; no record of who asked counts as not a person.
+asked = lambda n, *actors: {**pr(n, reqs=[user(ME)]), "timelineItems": {"nodes": [
+    {"actor": {"__typename": k, "login": "x"}, "requestedReviewer": {"__typename": "User", "login": ME}} for k in actors]}}
+askers = [pr(80, reqs=[user(ME)]), pr(81, reqs=[user(ME)], asker=("Bot", "assign-bot")), asked(82, "Bot", "User"),
+          asked(83, "User", "Bot"), asked(84), {**asked(85, "User"), "timelineItems": {"nodes": [{
+              "actor": None, "requestedReviewer": {"__typename": "User", "login": ME}}]}}]
+got = p.compute(Fake(askers), cfg, {}, NOW)
+assert sorted(i["number"] for i in got["new"]) == [80, 82], got["new"]
+assert {e["pr"]: e["why"] for e in got["excluded"]} == {f"acme/widgets#{n}": "사람이 아닌 계정의 요청" for n in (81, 83, 84, 85)}
+
+# The new-commits path never brings back a PR whose current request of the owner is a team, CODEOWNERS or app one:
+# the search still returns that PR, so it is excluded there and skipped by the ledger path.
+reviewed = {f"acme/widgets#{n}@h{n}": {"at": NOW, "kind": "review_request", "id": f"PR_acme/widgets_{n}"} for n in (86, 87, 88)}
+now_req = [pr(86, reqs=[team("core")], head="h86b", reviewed="h86"),
+           pr(87, reqs=[user(ME, code_owner=True)], head="h87b", reviewed="h87"),
+           pr(88, reqs=[user(ME)], head="h88b", reviewed="h88", asker=("Bot", "assign-bot"))]
+back = p.compute(Fake(now_req, now_req), cfg, reviewed, NOW)
+assert back["new"] == [], back["new"]
+assert {e["pr"]: e["why"] for e in back["excluded"]} == {"acme/widgets#86": "팀·CODEOWNERS 요청뿐",
+    "acme/widgets#87": "팀·CODEOWNERS 요청뿐", "acme/widgets#88": "사람이 아닌 계정의 요청"}, back["excluded"]
+# With no request left at all, new commits after the owner's review still come back once, as before.
+gone = [pr(86, reqs=[], head="h86b", reviewed="h86")]
+assert [i["reason"] for i in p.compute(Fake([], gone), cfg, reviewed, NOW)["new"]] == ["new_commits"]
 
 print("test_prs: ok")

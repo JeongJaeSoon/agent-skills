@@ -80,7 +80,9 @@ SOURCES = ("sent", "scheduled", "found", "refused", "no_thread", "skipped")
 PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCommit{oid} headRefOid additions deletions reviewDecision state
  changedFiles files(first:100){nodes{path}} repository{nameWithOwner} author{__typename login}
  reviewRequests(first:50){nodes{asCodeOwner requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
- reviews(author:$me,last:1,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{commit{oid}}}"""
+ reviews(author:$me,last:1,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{commit{oid}}}
+ timelineItems(last:50,itemTypes:[REVIEW_REQUESTED_EVENT]){nodes{... on ReviewRequestedEvent{actor{__typename login}
+  requestedReviewer{__typename ... on User{login}}}}}"""
 SEARCH_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
             "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + PR_FIELDS + "}}}}")
 NODES_Q = "query($ids:[ID!]!,$me:String!){nodes(ids:$ids){... on PullRequest{" + PR_FIELDS + "}}}"
@@ -260,6 +262,18 @@ def personal_request(pr, me):
                for n in pr["reviewRequests"]["nodes"])
 
 
+def request_why(pr, me):
+    """None when a person asked the owner personally; else why not. An app that requests its own reviewers (the PR's
+    author, an auto-assign bot) is not a person asking, even when it names the owner as a User."""
+    if not personal_request(pr, me):
+        return "팀·CODEOWNERS 요청뿐"
+    asks = [e for e in pr["timelineItems"]["nodes"]
+            if e and (e.get("requestedReviewer") or {}).get("login") == me]
+    if not asks or (asks[-1].get("actor") or {}).get("__typename") != "User":
+        return "사람이 아닌 계정의 요청"
+    return None
+
+
 def only_blocker(pr, me):
     reqs = [n["requestedReviewer"] for n in pr["reviewRequests"]["nodes"] if n["requestedReviewer"]]
     return pr.get("reviewDecision") == "REVIEW_REQUIRED" and reqs == [{"__typename": "User", "login": me}]
@@ -323,7 +337,7 @@ def collect_review_requests(gh, me, cfg, ledger, now):
         seen.add(pr["id"])
         name = f"{pr['repository']['nameWithOwner']}#{pr['number']}"
         found[name.lower()] = pr
-        why = (out_of_scope(pr, cfg) or (None if personal_request(pr, me) else "팀·CODEOWNERS 요청뿐")
+        why = (out_of_scope(pr, cfg) or request_why(pr, me)
                or ("draft" if pr["isDraft"] else None))
         if why:
             excluded.append({"pr": name, "why": why})
@@ -428,7 +442,7 @@ def collect_ownergate(gh, me, cfg, ledger, now):
     scope = {**cfg, "self_bots": [], "ignore_bots": []}  # a bot ignored for reviews can still need the owner's approval
     for pr in found.values():
         matched = [g for g in gates if gate_match(g, pr)]
-        why = (out_of_scope(pr, scope)
+        why = (out_of_scope(pr, scope) or request_why(pr, me)
                or (None if (pr.get("author") or {}).get("__typename") == "Bot" else "사람 작성")
                or (None if matched else "게이트 조건 밖")
                or (None if pr.get("reviewDecision") == "REVIEW_REQUIRED" else "승인 대기 아님"))
