@@ -54,16 +54,16 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
             with the reason). The coordinator classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
-            An act refused by a permission prompt, the auto-mode classifier, a Claude Code hook or
-            the human is not tried again in any form: not re-run, not moved into a script or
-            another tool, not aimed at a renamed target, not handed to a subagent or another
-            session. Report it to the coordinator in the same turn, as an orchestration message
-            of type escalation (your terminal is not read), with what the act was for, the
-            refusal's category and the exact command, and put this rule in every subagent
-            prompt you write. Taking the path this
-            brief already names for that act (`orch land` for a merge) is not a retry, nor is
-            doing the act again after the human added a rule for it or approved it in your own
-            chat. A hook that blocked only the text of a command reading no protected file, and
+            An act refused by a permission prompt, the auto-mode classifier (an error with no
+            verdict included), a Claude Code hook or the human is not tried again in any form:
+            not re-run, not moved into a script or another tool, not aimed at a renamed target,
+            not handed to a subagent or another session. Report it to the coordinator in the
+            same turn, as an orchestration message of type escalation (your terminal is not
+            read), with what the act was for, the refusal's category and the exact command, and
+            paste this paragraph verbatim into every subagent prompt you write: a summary drops
+            the forms it lists. Taking the path this brief already names for that act
+            (`orch land` for a merge) is not a retry, nor is doing the act again after the human
+            added a rule for it or approved it in your own chat. A hook that blocked only the text of a command reading no protected file, and
             says to reword it: reword that text and say so in the report. A read-only command on
             files in your own worktree (no credential, no personal data) that the classifier
             refused as something it does not do, such as destruction or exfiltration: do the same
