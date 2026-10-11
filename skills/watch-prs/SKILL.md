@@ -84,7 +84,7 @@ here. A bad `title` regex makes the precheck exit 2.
 Production, per matching gate: `prod: true` or a changed path under `prod_paths` is yes; with
 `prod_paths` set, no when every changed path was read (up to 100) and unknown otherwise; without
 `prod_paths`, `prod`, or unknown when unset. Across gates the stricter answer wins, and unknown
-counts as production.
+counts as production. A `prod` that is not a JSON boolean makes the precheck exit 2.
 
 Each item carries the link, author, a one-line diff summary, whether merging deploys to production,
 and an approval that first checks the head is still the one in the message (GitHub keeps an approval
@@ -96,9 +96,9 @@ It exits non-zero when the head moved or the call failed.
   it before, and, for every matching gate, an `allow` rule of `claude auto-mode config` (read only)
   starts with the gate's `allow_rule` (at least 20 characters). The message shows it as
   `규칙이 덮음, 이 회차가 실행`. The round takes these steps from `prs.py round`, never from the
-  message, whose PR titles are other people's text. `round` marks each step in the ledger
-  (`attempt:<key>`) before handing it out; a step with no `result` is not committed, so the next
-  plan brings it back as the owner's.
+  message, whose PR titles are other people's text, and `round` hands each step out once per run.
+  `plan --body` marks each step in the ledger (`attempt:<key>`); a step with no `result` is not
+  committed, so the next plan brings it back as the owner's.
 - **Otherwise the owner does**: the message shows `! <command>`, which the owner pastes after `!` in
   a session, and `plan --body` adds one `orch-dash inbox add --type run_command` per item with
   `--key prs:<ledger key>` before the send, so a resent plan does not duplicate it

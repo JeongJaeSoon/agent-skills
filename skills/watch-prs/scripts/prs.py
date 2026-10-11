@@ -233,7 +233,9 @@ def automode_allow():
 
 def deploys_prod(pr, gate):
     """True, False, or None when unknown. Unknown is treated as production."""
-    paths = [n["path"] for n in (pr.get("files") or {}).get("nodes", [])]
+    if gate.get("prod") is not None and not isinstance(gate["prod"], bool):
+        raise ValueError(f"ownergate {gate.get('name')}: prod must be true, false or absent")
+    paths =[n["path"] for n in (pr.get("files") or {}).get("nodes", [])]
     prefixes = gate.get("prod_paths") or []
     if gate.get("prod") is True or any(p.startswith(x) for p in paths for x in prefixes):
         return True
@@ -442,7 +444,14 @@ def inbox_add(i):
 
 
 def deliver(state, plan):
-    """The run's message and the owner's inbox items. Before the send: a resent plan reuses each --key, so nothing doubles."""
+    """The run's message and the owner's inbox items. Before the send: a resent plan reuses each --key, so nothing doubles.
+    Each round step gets its attempt mark here, so a later plan hands it to the owner even if this run never
+    reaches `round` or `result`."""
+    steps = [i for i in plan["new"] if i.get("run_by") == "round"]
+    if steps:
+        ledger = read_json(state / "ledger.json", {})
+        ledger.update({f"attempt:{i['key']}": {"at": plan["run"], "kind": "attempt"} for i in steps})
+        write_json(state / "ledger.json", ledger)
     failed = [inbox_add(i) for i in plan["new"] if i["kind"] == "ownergate" and i["run_by"] == "owner"]
     text = "\n".join([body(plan)] + [f for f in failed if f]) if plan["new"] else ""
     state.mkdir(parents=True, exist_ok=True)
@@ -470,13 +479,14 @@ def result(state, key, ok, note=""):
     return line
 
 
-def round_steps(state, now):
-    """The steps an allow rule lets this round run, each marked in the ledger before it is handed out."""
-    steps = [i for i in (read_json(state / "plan.json", None) or {}).get("new", []) if i.get("run_by") == "round"]
+def round_steps(state):
+    """The steps an allow rule lets this round run, each handed out once per run."""
+    plan = read_json(state / "plan.json", None) or {"new": []}
+    steps = [i for i in plan["new"] if i.get("run_by") == "round" and not i.get("handed")]
+    for i in steps:
+        i["handed"] = True
     if steps:
-        ledger = read_json(state / "ledger.json", {})
-        ledger.update({f"attempt:{i['key']}": {"at": now, "kind": "attempt"} for i in steps})
-        write_json(state / "ledger.json", ledger)
+        write_json(state / "plan.json", plan)
     return [f"{i['key']}\t{i['command']}" for i in steps]
 
 
@@ -567,7 +577,7 @@ def main():
             write_json(STATE / "plan.json", plan)
         print(deliver(STATE, plan))
     elif cmd == "round":
-        print("\n".join(round_steps(STATE, now)))
+        print("\n".join(round_steps(STATE)))
     elif cmd == "result" and len(sys.argv) > 3 and sys.argv[3] in ("ok", "failed"):
         print(result(STATE, sys.argv[2], sys.argv[3] == "ok", " ".join(sys.argv[4:])))
     elif cmd == "dispatch":

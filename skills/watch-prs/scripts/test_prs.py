@@ -206,7 +206,6 @@ assert p.compute(Fake([], gated=gated[:1]), gcfg, {"acme/access#1@h1": {"at": NO
 # Production: more changed files than were read is unknown, which stays with the owner.
 assert p.deploys_prod({**gated[0], "changedFiles": 250}, gate) is None
 assert p.deploys_prod(gated[0], {"prod": False}) is False and p.deploys_prod(gated[0], {}) is None
-assert p.deploys_prod(gated[0], {"prod": "false"}) is None, "only the JSON boolean false means not production"
 # Two gates on one author: a title only the second matches is still an item; the stricter production answer wins.
 prd = pr(7, **A, title="[prd] Rotate", files=["members/c.json"])
 two = {**gcfg, "ownergate": [gate, {"name": "prd", "authors": ["grant-bot"], "title": r"^\[(prd|Auto)\]", "prod": True}]}
@@ -265,20 +264,30 @@ except SystemExit:
 assert p.commit(gstate, gcfg, NOW) == 2
 assert p.read_json(gstate / "ledger.json", {})["acme/access#5@h5"]["kind"] == "ownergate"
 
-# round marks each step before handing it out. A step with no result (crash, refused `result`) is not committed,
-# and the next plan gives it to the owner instead of running it again.
-rstate = pathlib.Path(tempfile.mkdtemp())
-p.write_json(rstate / "plan.json", p.compute(Fake([], gated=gated), gcfg, {}, NOW))
-assert p.round_steps(rstate, NOW) == ["acme/access#1@h1\t" + g1["command"]]
-p.commit(rstate, gcfg, NOW)
-rledger = p.read_json(rstate / "ledger.json", {})
-assert "acme/access#1@h1" not in rledger and "attempt:acme/access#1@h1" in rledger
-again = p.compute(Fake([], gated=gated), gcfg, rledger, NOW)
-assert [(i["key"], i["run_by"]) for i in again["new"]] == [("acme/access#1@h1", "owner")], again["new"]
+# deliver marks each round step before the run can reach it. A step with no result (round never called, a crash,
+# a refused `result`) is not committed, and the next plan gives it to the owner instead of running it again.
+for reach_round in (False, True):
+    rstate = pathlib.Path(tempfile.mkdtemp())
+    rplan = p.compute(Fake([], gated=gated), gcfg, {}, NOW)
+    p.write_json(rstate / "plan.json", rplan)
+    p.deliver(rstate, rplan)
+    if reach_round:
+        assert p.round_steps(rstate) == ["acme/access#1@h1\t" + g1["command"]]
+        assert p.round_steps(rstate) == [], "a step is handed out once per run"
+    p.commit(rstate, gcfg, NOW)
+    rledger = p.read_json(rstate / "ledger.json", {})
+    assert "acme/access#1@h1" not in rledger and "attempt:acme/access#1@h1" in rledger
+    again = p.compute(Fake([], gated=gated), gcfg, rledger, NOW)
+    assert [(i["key"], i["run_by"]) for i in again["new"]] == [("acme/access#1@h1", "owner")], again["new"]
 # A step that went through is committed and not sent again.
-p.write_json(rstate / "plan.json", p.compute(Fake([], gated=gated), gcfg, {}, NOW))
-p.round_steps(rstate, NOW)
+rstate = pathlib.Path(tempfile.mkdtemp())
+rplan = p.compute(Fake([], gated=gated), gcfg, {}, NOW)
+p.write_json(rstate / "plan.json", rplan)
+p.deliver(rstate, rplan)
+p.round_steps(rstate)
 assert p.result(rstate, "acme/access#1@h1", True) == "회차가 실행함: acme/access#1"
+# A non-boolean prod is a config error (precheck exit 2), never "not production".
+assert p.precheck(Fake([], gated=gated), {**gcfg, "ownergate": [{**gate, "prod": "true"}]}, pathlib.Path(tempfile.mkdtemp()), NOW)[0] == p.EXIT_ERROR
 p.commit(rstate, gcfg, NOW)
 assert p.compute(Fake([], gated=gated), gcfg, p.read_json(rstate / "ledger.json", {}), NOW)["new"] == []
 
