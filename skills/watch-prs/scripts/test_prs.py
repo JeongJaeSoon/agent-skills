@@ -308,9 +308,13 @@ recorded = p.read_json(tmp / "state" / "prs" / "ledger.json", {})
 assert c.returncode == 0 and "commit: 1 items recorded" in c.stdout and "acme/widgets#20" in c.stderr, c
 assert "acme/widgets#9@h9" in recorded and not any(k.startswith(("acme/widgets#20", "acme/widgets#21", "acme/gadgets")) for k in recorded), recorded
 # Kinds outside --kinds never reach new: they take no max_items slot and do not wake a round to be re-sent each time.
-fake = lambda: Fake([], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+# The bot-authored request ranks below both human merges, so a cap taken before the kind filter would starve it.
+bot_rr = pr(7, author="deps[bot]", kind="Bot", reqs=[user(ME)], decision=None)
+fake = lambda: Fake([bot_rr], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+assert [i["kind"] for i in p.compute(fake(), rcfg, {}, NOW)["new"]] == ["unreleased", "unreleased", "review_request"]
 only = p.compute(fake(), {**rcfg, "max_items": 1}, {}, NOW, ["review_request"])
-assert only["new"] == [] and len(only["uncovered"]) == 2, only
+assert [i["number"] for i in only["new"]] == [7] and only["more"] == 0 and len(only["uncovered"]) == 2, only
+fake = lambda: Fake([], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
 assert p.precheck(fake(), rcfg, tmp / "fresh", NOW, ["review_request"])[0] == p.EXIT_NOTHING
 assert p.precheck(fake(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NEW
 assert "보내지 않았다" in p.body({**plan2, "uncovered": ["acme/x#1@a"]}) and "보내지 않았다" not in p.body(plan2)
