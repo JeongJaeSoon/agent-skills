@@ -7,7 +7,8 @@ description: Use when the user wants the pull requests that are waiting on them,
 
 GitHub's `review-requested:@me` mixes three things: a request to the user by name, a request to a
 team they belong to, and a CODEOWNERS auto-assignment. On a busy account the last two drown the
-first. This skill keeps only the personal ones, ranks them, and hands them on once per head commit.
+first. Apps and bots also request reviewers themselves. This skill keeps only the personal requests
+a person made, ranks them, and hands them on once per head commit.
 
 It never writes a review of its own judgement, re-requests or labels. Its GitHub writes are a review bot's
 re-review trigger comment on the user's own PR (`review_wait`, below); when `kinds` includes
@@ -62,19 +63,22 @@ the `[bot]` suffix. `mentions_seen` overrides where the Slack side is read (defa
 
 A PR is an item when all hold:
 
-- one of its pending review requests is the user as a User reviewer with `asCodeOwner` false. The
-  search qualifier is only the starting set; this check decides;
+- one of its pending review requests is the user as a User reviewer with `asCodeOwner` false, and a
+  person (a User account, not an app or bot) made the latest request of the user. The search
+  qualifier is only the starting set; this check decides;
 - it is not a draft;
 - its author is not in `self_bots` or `ignore_bots`, and its repository is in scope.
 
 A PR in the ledger that left the search comes back once when the user's latest review is on an
-older commit than the head: new commits after a review, with no re-request. The ledger key is
-`owner/repo#N@headRefOid`, so each head is sent at most once.
+older commit than the head: new commits after a review, with no re-request. A PR still requested
+of the user only through a team, CODEOWNERS or an app stays in the search and is excluded there, so
+it does not come back this way. The ledger key is `owner/repo#N@headRefOid`, so each head is sent
+at most once.
 
 A Slack review request counts too. `watch-mentions` records the PR (`owner/repo#N`) of each
 `review` item in its seen ledger; each such PR is one entry, with the Slack permalinks attached
 (`slack`) and `source` set to `github`, `slack` or `github+slack`. A PR GitHub already lists gets
-the permalinks; one GitHub does not list (no request, or a team or CODEOWNERS one only) is listed
+the permalinks; one GitHub does not list (no request, or only a team, CODEOWNERS or app-made one) is listed
 as `source: slack` when it is open, not a draft, not the user's own, in scope and not already
 reviewed by the user at its head. No ledger means GitHub only.
 
@@ -100,11 +104,12 @@ opens. Each gate in `ownergate` names them:
  "prod": false, "prod_paths": ["<path prefix whose change deploys>"], "allow_rule": "<phrase>"}
 ```
 
-A PR is an item when it is open, not a draft, asks for the user's review (a team request counts),
-its author is a GitHub App, its repository is in scope (`exclude_*`), `reviewDecision` is
-`REVIEW_REQUIRED`, and at least one gate matches it: author in `authors`, repository in `repos`
+A PR is an item when it is open, not a draft, asks for the user's review the way a review request
+must ([What counts](#what-counts): personal, made by a person), its author is a GitHub App, its
+repository is in scope (`exclude_*`), `reviewDecision` is `REVIEW_REQUIRED`, and at least one gate matches it: author in `authors`, repository in `repos`
 (empty: any), title matches `title`. A person's PR is never an item. `ignore_bots` does not apply
-here. A bad `title` regex makes the precheck exit 2, whether or not a PR matches.
+here. A bad `title` regex makes the precheck exit 2, whether or not a PR matches. An app that
+requests its own reviewers, or reaches the user only through CODEOWNERS, never makes a gate item.
 
 Production, per matching gate: `prod: true` or a changed path under `prod_paths` is yes; with
 `prod_paths` set, no when every changed path was read (up to 100) and unknown otherwise; without
