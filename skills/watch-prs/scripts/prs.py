@@ -284,8 +284,8 @@ def collect_review_requests(gh, me, cfg, ledger, now):
 MERGE_FIELDS = """id number title url isDraft createdAt headRefOid headRefName baseRefName additions deletions
  reviewDecision mergeStateStatus state author{__typename login} labels(first:100){nodes{name}}
  repository{nameWithOwner defaultBranchRef{name} squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed}
- reviewThreads(first:100){totalCount nodes{isResolved}} reviews(last:100){totalCount nodes{author{__typename login} authorAssociation state body createdAt commit{oid}}}
- comments(last:100){nodes{author{__typename login} body createdAt}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}"""
+ reviewThreads(first:100){totalCount nodes{isResolved}} reviews(last:100){totalCount nodes{author{__typename login} authorAssociation state body commit{oid}}}
+ comments(last:100){totalCount nodes{author{__typename login} body}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}"""
 MERGE_SEARCH_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
                   "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MERGE_FIELDS + "}}}}")
 MERGED_Q = """query($ids:[ID!]!){nodes(ids:$ids){... on PullRequest{id state mergeCommit{oid statusCheckRollup{state
@@ -335,23 +335,25 @@ TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 
 def review_record(pr, me, cfg):
-    """A passing review of this head when none is required: an approval on this commit from a collaborator other than
-    the owner, or, when the latest review result naming the full head sha (an independent review's sticky comment,
-    from the owner or one of review_bots) ends on a pass verdict. A later fail overrides an earlier pass."""
+    """A passing review of this head when none is required. A review result is a comment or review body from the
+    owner or a review_bots bot that names the full head sha and has a verdict line (an independent review's sticky
+    comment); its last verdict line counts. Any fail result at this head holds the PR, whatever else passed. Without
+    one, a pass result or an approval on this commit from a collaborator other than the owner is the record."""
     head = pr["headRefOid"]
     verdict = re.compile(cfg["review_verdict_pattern"], re.I | re.M)
     bots = {bot_name(b) for b in cfg["review_bots"]}
 
-    def login(n):
-        return (n.get("author") or {}).get("login")
-    if any(r["state"] == "APPROVED" and login(r) != me and r.get("authorAssociation") in TRUSTED
-           and (r.get("commit") or {}).get("oid") == head for r in pr["reviews"]["nodes"]):
-        return True
-    results = sorted((n.get("createdAt") or "", found[-1].lower())
-                     for n in pr["reviews"]["nodes"] + pr["comments"]["nodes"]
-                     if (login(n) == me or bot_name(login(n)) in bots) and head in (n.get("body") or "")
-                     and (found := verdict.findall(n.get("body") or "")))
-    return bool(results) and results[-1][1] == "pass"
+    def reviewer(n):
+        author = n.get("author") or {}
+        return author.get("login") == me or (author.get("__typename") == "Bot" and bot_name(author.get("login")) in bots)
+    results = {found[-1].lower() for n in pr["reviews"]["nodes"] + pr["comments"]["nodes"]
+               if reviewer(n) and head in (n.get("body") or "") and (found := verdict.findall(n.get("body") or ""))}
+    if "fail" in results:
+        return False
+    return "pass" in results or any(
+        r["state"] == "APPROVED" and (r.get("author") or {}).get("login") != me
+        and r.get("authorAssociation") in TRUSTED and (r.get("commit") or {}).get("oid") == head
+        for r in pr["reviews"]["nodes"])
 
 
 def merge_readiness(pr, cfg, owned, me):
@@ -374,8 +376,8 @@ def merge_readiness(pr, cfg, owned, me):
         return None, "다른 worktree·프로그램이 진행 중"
     if pr["baseRefName"] != (repo.get("defaultBranchRef") or {}).get("name"):
         return None, f"stack 하위 PR (base {pr['baseRefName']})"
-    if pr["reviews"]["totalCount"] > len(pr["reviews"]["nodes"]):
-        return None, "리뷰가 100건을 넘어 확인 불가"
+    if any(pr[c]["totalCount"] > len(pr[c]["nodes"]) for c in ("reviews", "comments")):
+        return None, "리뷰·코멘트가 100건을 넘어 확인 불가"
     latest = {}
     for r in pr["reviews"]["nodes"]:
         if r["state"] != "COMMENTED":
@@ -449,7 +451,7 @@ def collect_unreleased(gh, me, cfg, ledger, now):
     for repo, decl in sorted(cfg["deploy"].items()):
         since = dt.datetime.fromtimestamp(now - decl.get("lookback_days", 2) * 86400, dt.timezone.utc)
         due = [pr for pr in gh.search(f"is:pr is:merged author:{me} repo:{repo} merged:>={since:%Y-%m-%dT%H:%M:%SZ}", me)
-               if key(pr) not in ledger and pr.get("mergeCommit")]
+               if not delivered(ledger, key(pr), "unreleased") and pr.get("mergeCommit")]
         if not due:
             continue
         try:
@@ -478,6 +480,11 @@ COLLECTORS = {"review_request": collect_review_requests, "ready_to_merge": colle
               "unreleased": collect_unreleased}
 
 
+def delivered(ledger, k, kind):
+    """Kinds share the key shape owner/repo#N@head: a PR merged by ready_to_merge is still due as unreleased."""
+    return k in ledger and ledger[k].get("kind", kind) == kind
+
+
 def compute(gh, cfg, ledger, now):
     me = gh.viewer()
     items, excluded = [], []
@@ -487,9 +494,9 @@ def compute(gh, cfg, ledger, now):
         got, out = COLLECTORS[kind](gh, me, cfg, ledger, now)
         items += got
         excluded += out
-    new = [i for i in rank(items) if i["key"] not in ledger]
+    new = [i for i in rank(items) if not delivered(ledger, i["key"], i["kind"])]
     return {"run": now, "viewer": me, "new": new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
-            "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded}
+            "known": [i["key"] for i in items if delivered(ledger, i["key"], i["kind"])], "excluded": excluded}
 
 
 def body(plan):
@@ -640,7 +647,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
     merging = "ready_to_merge" in cfg["kinds"]
     merge_step = (f"`{env} merges` 가 출력하는 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
                   f"그 아래 `gh pr merge` 명령을 단독 명령으로 한 번씩 실행한다(--admin·--auto 를 붙이지 않는다). 거부되거나 실패한 "
-                  f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않는다. 그다음 `{env} verify` 로 MERGED 와 기본 브랜치 CI 를 확인해 "
+                  f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않으며, 그 PR 과 거부·실패 내용, 정확한 명령을 본문 끝에 덧붙여 보고한다. 그다음 `{env} verify` 로 MERGED 와 기본 브랜치 CI 를 확인해 "
                   f"본문을 다시 쓴다. verify 가 실패하면 보내지도 commit 하지도 않고 그 오류를 남긴 채 끝낸다. 성공하면 ") if merging else ""
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 {merge_step}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
@@ -683,8 +690,9 @@ def main():
     elif cmd == "merges":
         # Recorded before the round runs them: a refused or failed merge is never retried at that head, even
         # when verify or commit never happens.
-        acts = [i for i in read_json(STATE / "plan.json", {}).get("new", []) if i.get("cmd")]
         ledger = read_json(STATE / "ledger.json", {})
+        acts = [i for i in read_json(STATE / "plan.json", {}).get("new", [])
+                if i.get("cmd") and not delivered(ledger, i["key"], i["kind"])]
         ledger.update({i["key"]: {"at": now, "kind": i["kind"], "id": i["id"]} for i in acts})
         write_json(STATE / "ledger.json", ledger)
         for i in acts:

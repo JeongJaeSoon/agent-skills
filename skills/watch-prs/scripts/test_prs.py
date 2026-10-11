@@ -353,8 +353,8 @@ def mpr(n, repo="acme/widgets", draft=False, labels=(), branch=None, base="main"
                 {"author": {"__typename": r[1], "login": r[0]}, "state": r[2], "body": "", "commit": {"oid": r[3]},
                  "authorAssociation": r[4] if len(r) > 4 else "COLLABORATOR", "createdAt": iso(NOW - 100 + k)}
                 for k, r in enumerate(reviews)][-100:]},
-            "comments": {"nodes": [{"author": {"__typename": t, "login": a}, "body": b, "createdAt": iso(NOW - 50 + k)}
-                                   for k, (a, t, b) in enumerate(comments)]},
+            "comments": {"totalCount": len(comments),
+                         "nodes": [{"author": {"__typename": t, "login": a}, "body": b} for a, t, b in comments]},
             "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks} if checks else None}}]}}
 
 
@@ -410,7 +410,11 @@ cases = {
     30: (mpr(30, comments=[(ME, "User", f"second review — head {H(30)}\n결론: fail")]), "head 리뷰 기록 없음: review_wait 로"),
     31: (mpr(31, reviews=[], comments=[(ME, "User", f"head {H(31)}\n> 결론: pass\n- `결론: pass`\n결론: pass / fail\n결론: fail")]),
          "head 리뷰 기록 없음: review_wait 로"),                                              # quoted passes, real fail
-    32: (mpr(32, reviews=[("bob", "User", "APPROVED", "old")] * 101), "리뷰가 100건을 넘어 확인 불가"),
+    32: (mpr(32, reviews=[("bob", "User", "APPROVED", "old")] * 101), "리뷰·코멘트가 100건을 넘어 확인 불가"),
+    33: (mpr(33, reviews=[("bob", "User", "APPROVED", H(33))], comments=[(ME, "User", f"head {H(33)}\n결론: fail")]),
+         "head 리뷰 기록 없음: review_wait 로"),                                              # a fail outweighs an approval
+    34: (mpr(34, reviews=[], comments=[("reviewbot", "User", f"head {H(34)}\n결론: pass")]),
+         "head 리뷰 기록 없음: review_wait 로"),                                              # a User named like the bot
     21: (mpr(21), "다른 worktree·프로그램이 진행 중"),                                    # in an active program's ledger
     22: (mpr(22, reviews=[], comments=[(ME, "User", "review of an older head m0ld000")]), "head 리뷰 기록 없음: review_wait 로"),
 }
@@ -525,5 +529,10 @@ out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)],
                      env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
 assert out.returncode == 0 and out.stdout.splitlines()[1] == mplan["new"][0]["cmd"], out
 assert list(p.read_json(mtmp / "prs" / "ledger.json", {})) == [mplan["new"][0]["key"]]
+
+# Kinds share the ledger key shape: the head ready_to_merge recorded is still due as unreleased once merged.
+shared = {"acme/widgets#20@m20": {"at": NOW, "kind": "ready_to_merge", "id": "x"}}
+assert p.delivered(shared, "acme/widgets#20@m20", "ready_to_merge")
+assert not p.delivered(shared, "acme/widgets#20@m20", "unreleased") and not p.delivered({}, "k", "unreleased")
 
 print("test_prs: ok")

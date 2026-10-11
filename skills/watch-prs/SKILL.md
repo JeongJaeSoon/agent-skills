@@ -94,14 +94,15 @@ nothing is merged.
 5. no reviewer's latest non-comment review is CHANGES_REQUESTED or DISMISSED (an approval a retarget
    or push dismissed belongs to review_wait);
 6. `mergeStateStatus` is CLEAN and `reviewDecision` is APPROVED or empty (no review required);
-7. where no review is required, the head still passed a review: an approval on that commit from a
-   collaborator (author association OWNER, MEMBER or COLLABORATOR) other than the user, or a passing
-   latest review result. A review result is a comment or review body from the user or one of
-   `review_bots` that names the full head sha and has a verdict line matching
-   `review_verdict_pattern` (default: a whole line `결론: pass|fail` or `Verdict: pass|fail`, an
-   independent review's sticky result); its last verdict line counts, and the latest result wins, so
-   a later fail overrides an earlier pass. A self-reply, a quoted verdict, or any other account does
-   not count. Without one the PR belongs to review_wait. More than 100 reviews hold the PR back;
+7. where no review is required, the head still passed a review. A review result is a comment or
+   review body from the user or a `review_bots` bot that names the full head sha and has a verdict
+   line matching `review_verdict_pattern` (default: a whole line `결론: pass|fail` or
+   `Verdict: pass|fail`, an independent review's sticky result); its last verdict line counts. Any
+   fail result at this head holds the PR, whatever else passed (a sticky comment is edited in place,
+   so order is not trusted). Otherwise a pass result, or an approval on that commit from a
+   collaborator (author association OWNER, MEMBER or COLLABORATOR) other than the user, is the
+   record. A self-reply, a quoted verdict, or any other account does not count. Without one the PR
+   belongs to review_wait. More than 100 reviews or comments hold the PR back;
 8. the head's check rollup is SUCCESS (no checks is not green), and no review thread is unresolved;
 9. each of `required_bots` left an APPROVED or COMMENTED review on this head. A bot that was
    rate-limited or skipped left a comment, not a review;
@@ -111,7 +112,9 @@ nothing is merged.
 A ready item carries `gh pr merge <N> -R <owner/name> --<method> --match-head-commit <head>`. The
 round never adds `--admin` or `--auto` and never approves. `merges` records each head in the ledger
 before printing its command, so a refused or failed merge is never retried at that head, even when
-the round stops before `verify` or `commit`.
+the round stops before `verify` or `commit`; a second `merges` prints nothing for it. Kinds share the
+ledger key shape, and an entry counts only for its own kind, so a PR this round merged is still
+picked up as `unreleased`.
 
 ## Unreleased merges
 
