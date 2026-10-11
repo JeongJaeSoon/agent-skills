@@ -588,6 +588,19 @@ def ci_summary(rollup):
     return failed, pending, sorted(runs)
 
 
+def runs_unfinished(repo, sha):
+    """Workflow runs at `sha` that have not finished. The check rollup alone is not enough: a bot's status
+    (a review app) can be its only entry before Actions starts, and a job behind `needs` has no check until
+    the jobs before it end, so an early all-green rollup once landed a PR before its CI ran."""
+    try:
+        rs = gh_json("run", "list", "--repo", repo, "--commit", sha, "--json", "status,name", "--limit", "100")
+    except (SystemExit, Exception) as e:
+        return [f"workflow runs unreadable ({type(e).__name__})"]
+    if not rs:
+        return ["no workflow run at the head yet"]
+    return [f"{r.get('name')} {r.get('status')}" for r in rs if r.get("status") != "completed"]
+
+
 def tracker_issues(cfg, ids=()):
     """Normalized issues (use-tracker schema) for the program's tracker project, or None if unset.
     `ids` that the project list lacks (tickets filed elsewhere) are fetched one by one."""
@@ -1130,6 +1143,8 @@ def merge_unit(p, pr, unit, klass, events):
         runs += r_
         if failed or pending or v["mergeStateStatus"] in ("BEHIND", "DIRTY"):
             return 2, f"#{n} moved since the order was read; land again"
+        if unfinished := runs_unfinished(repo, v["headRefOid"]):
+            return 2, f"yield: CI has not finished at #{n}'s head ({', '.join(unfinished[:3])}); land again"
     head = v["headRefOid"]
     if len(unit) == 1:
         r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash", "--match-head-commit", head], check=False)
@@ -1346,6 +1361,8 @@ def cmd_land_check(argv):
     elif mss == "BEHIND":
         problems.append(f"behind base: gh pr update-branch {pr} --repo {repo}, then wait for CI")
     failed, pending, runs = ci_summary(v["statusCheckRollup"])
+    if not failed and not pending:
+        pending = runs_unfinished(repo, v["headRefOid"])
     if failed:
         problems.append("CI failed: " + ", ".join(failed))
     if pending:
