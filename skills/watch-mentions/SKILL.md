@@ -21,15 +21,18 @@ never in this repo.
 ```json
 {"mentions": {"user_id": "U0…", "names": ["<name as people write it>", "<another spelling>"],
               "channels": [], "exclude_channels": [], "read_private": false,
-              "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
+              "inbox_to": "run:<id>",
               "file_tickets": false, "tracker_project": "<project>",
               "cron": "*/20 9-20 * * 1-5", "timezone": "<IANA tz>"}}
 ```
 
-`channels` empty means every public channel; otherwise only those. Other keys and defaults are in
-`scripts/mentions.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/mentions/`
-(`$AGENT_SKILLS_STATE` moves it): `cursor.json`, `lock.json`, and `seen.json`, which holds channel,
-ts, permalink and category per item and never message text.
+`inbox_to` is where each round's message goes. Use a Run address, `run:<id>`: a terminal handle
+also works but goes stale when that terminal restarts or the machine reboots, and a round that sent
+to it would lose its items silently. `channels` empty means every public channel; otherwise only
+those. Other keys and defaults are in `scripts/mentions.py` (`DEFAULTS`). State lives in
+`~/.local/state/agent-skills/mentions/` (`$AGENT_SKILLS_STATE` moves it): `cursor.json`,
+`lock.json`, and `seen.json`, which holds channel, ts, permalink and category per item and never
+message text.
 
 ## Privacy boundary
 
@@ -86,8 +89,11 @@ python3 "$M" plan > <scratchpad>/plan.json     # takes the run lock; prints olde
    orca orchestration send --to "<inbox_to>" --type status --subject "watch-mentions: <N>건" --body "<bundle output>" --json
    ```
 
-   From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes to
-   its Run's coordinator. Keep the message id from the JSON.
+   Run `python3 "$M" inbox` right before the send: it checks that `inbox_to` still answers (the Run
+   exists, or the terminal is alive). On a non-zero exit, send nothing and do not commit; print its
+   alarm line as the round's result. The items stay unseen and come back once the address is fixed.
+   From an Orca worker, omit `--to` and the inbox check, and add the worker's `--from` and capability:
+   the message goes to its Run's coordinator. Keep the message id from the JSON.
 6. **Commit.** `python3 "$M" commit <scratchpad>/items.json` marks the items seen, moves the cursor
    to this run's start and releases the lock. Commit only after the send succeeded: an
    uncommitted run is retried, a committed one is never reported again. A run that dies leaves the
@@ -106,9 +112,11 @@ python3 "$M" schedule --write    # creates it
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps
 that path. The default trigger is every 20 minutes, 09:00–20:40 on weekdays, in `timezone` when
 set. The precheck (`mentions.py precheck`) uses no model: it skips the run when `user_id` is not
-set or a previous run still holds the lock. It cannot tell whether anything new arrived, because
-Slack is reachable only through the agent's MCP tools; a run with nothing new ends at step 2
-having sent nothing. `orca automations run` skips the precheck, so test the precheck by running it
+set or a previous run still holds the lock, and exits 2 with an alarm line when `inbox_to` is
+unset or dead (the same check as `inbox`). A `skipped_precheck` round carrying that alarm is the
+signal: nothing can be sent, so the fix is the config value. It cannot tell whether anything new
+arrived, because Slack is reachable only through the agent's MCP tools; a run with nothing new
+ends at step 2 having sent nothing. `orca automations run` skips the precheck, so test the precheck by running it
 directly with `AGENT_SKILLS_STATE` pointing at a scratch folder. Devices and their trade-offs:
 [docs/automation.md](../../docs/automation.md).
 

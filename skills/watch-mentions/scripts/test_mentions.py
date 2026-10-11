@@ -1,16 +1,34 @@
-"""Rules of mentions.py: precheck, plan window, ingest filters, bundle, commit. Run: python3 test_mentions.py"""
+"""Rules of mentions.py: precheck, inbox check, plan window, ingest filters, bundle, commit. Run: python3 test_mentions.py"""
 import json, os, pathlib, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import mentions as m
 
 ME, OTHER = "U0FAKEOWNER", "U0FAKEOTHER"
 NOW = 1_800_000_000.0
-cfg = {**m.DEFAULTS, "user_id": ME, "names": ["Owner", "オーナー"], "exclude_channels": ["C0NOISE"]}
+cfg = {**m.DEFAULTS, "user_id": ME, "names": ["Owner", "オーナー"], "exclude_channels": ["C0NOISE"], "inbox_to": "run:run_0FAKE"}
 state = pathlib.Path(tempfile.mkdtemp()) / "mentions"
+live = lambda args: {"ok": True}
+dead = lambda args: {"ok": False, "error": {"code": "terminal_handle_stale"}}
 
-# precheck: config first, then the lock.
-assert m.precheck({**m.DEFAULTS}, state, NOW)[0] == 1
-assert m.precheck(cfg, state, NOW)[0] == 0
+# inbox_to: a run that exists passes quietly; a live terminal handle passes with a warning; anything dead or unset is exit 2.
+calls = []
+assert m.inbox_check(cfg, lambda a: calls.append(a) or {"ok": True}) == (0, "inbox_to run:run_0FAKE 확인")
+assert calls == [["orchestration", "run-show", "--id", "run_0FAKE"]], calls
+code, why = m.inbox_check(cfg, dead)
+assert code == 2 and "Run 이 없다" in why and "inbox_to" in why, why
+term = {**cfg, "inbox_to": "term_0FAKE"}
+code, why = m.inbox_check(term, live)
+assert code == 0 and "run:<id> 를 권장" in why, why
+code, why = m.inbox_check(term, dead)
+assert code == 2 and "터미널이 죽었다" in why and "run:<id>" in why, why
+code, why = m.inbox_check({**cfg, "inbox_to": None}, live)
+assert code == 2 and "설정되지 않음" in why, why
+assert m.inbox_check(term, lambda a: {})[0] == 2, "orca unreachable means the address cannot be trusted"
+
+# precheck: config first, then the lock, then inbox_to.
+assert m.precheck({**m.DEFAULTS}, state, NOW, live)[0] == 1
+assert m.precheck(cfg, state, NOW, live)[0] == 0
+assert m.precheck(cfg, state, NOW, dead)[0] == 2
 
 # First plan looks back lookback_hours and takes the lock.
 p = m.plan(cfg, state, NOW)
@@ -20,8 +38,8 @@ assert kinds == ["mention", "name", "name", "thread"], kinds
 assert p["searches"][0]["keywords"] == [f"<@{ME}>"]
 assert all(f"-from:<@{ME}>" in s["filters"] for s in p["searches"] if s["kind"] == "name")
 assert p["searches"][-1]["filters"].startswith(f"from:<@{ME}> is:thread after:")
-assert m.precheck(cfg, state, NOW + 60)[0] == 1, "a held lock skips the run"
-assert m.precheck(cfg, state, NOW + 61 * 60)[0] == 0, "a stale lock does not block forever"
+assert m.precheck(cfg, state, NOW + 60, live)[0] == 1, "a held lock skips the run"
+assert m.precheck(cfg, state, NOW + 61 * 60, live)[0] == 0, "a stale lock does not block forever"
 
 def c(ch, ts, kind="mention", author=OTHER, **kw):
     return {"channel_id": ch, "ts": ts, "kind": kind, "author_id": author,
@@ -85,14 +103,23 @@ pre = line[line.index("--precheck") + 1]
 assert pre.startswith("env AGENT_SKILLS_STATE=") and pre.endswith("/abs/skills/watch-mentions/scripts/mentions.py precheck")
 assert line[line.index("--timezone") + 1] == "Asia/Seoul" and line[line.index("--trigger") + 1] == "*/20 9-20 * * 1-5"
 
-# CLI: precheck exit codes and plan refusing a second run.
-env = {**os.environ, "AGENT_SKILLS_STATE": str(state.parent)}
+# CLI: precheck exit codes and plan refusing a second run. A stub orca on PATH answers for inbox_to.
+fakebin = state.parent / "bin"
+fakebin.mkdir()
+(fakebin / "orca").write_text('#!/bin/sh\necho \'{"ok": true}\'\n')
+(fakebin / "orca").chmod(0o755)
+env = {**os.environ, "AGENT_SKILLS_STATE": str(state.parent), "PATH": f"{fakebin}:{os.environ['PATH']}"}
 conf = state.parent / "conf.json"
-conf.write_text(json.dumps({"mentions": {"user_id": ME}}))
+conf.write_text(json.dumps({"mentions": {"user_id": ME, "inbox_to": "run:run_0FAKE"}}))
 S = str(pathlib.Path(__file__).parent / "mentions.py")
 run = lambda *a: subprocess.run([sys.executable, S, *a, "--config", str(conf)], env=env, capture_output=True, text=True)
 assert run("precheck").returncode == 0
 assert run("plan").returncode == 0 and run("plan").returncode != 0
 assert run("precheck").returncode == 1
 assert run("commit").returncode == 0 and run("precheck").returncode == 0
+assert run("inbox").returncode == 0
+conf.write_text(json.dumps({"mentions": {"user_id": ME}}))
+r = run("inbox")
+assert r.returncode == 2 and "inbox_to" in r.stderr, r
+assert run("precheck").returncode == 2
 print("ok")
