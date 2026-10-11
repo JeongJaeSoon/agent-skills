@@ -1,6 +1,6 @@
 ---
 name: watch-prs
-description: Use when the user wants the pull requests that are waiting on them picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request. Reads GitHub only. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
+description: Use when the user wants the pull requests that are waiting on them picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request. In a repo that declares a dev path, the user's merged PRs not yet checked on dev start one release worker per repo. Writes nothing to GitHub itself. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
 ---
 
 # Watch PRs
@@ -9,7 +9,8 @@ GitHub's `review-requested:@me` mixes three things: a request to the user by nam
 team they belong to, and a CODEOWNERS auto-assignment. On a busy account the last two drown the
 first. This skill keeps only the personal ones, ranks them, and hands them on once per head commit.
 
-It reads; it never writes to GitHub: no review, comment, re-request or label.
+It reads; it never writes to GitHub: no review, comment, re-request or label. The release workers it
+starts for merged PRs do their own writing.
 
 ## Config
 
@@ -21,7 +22,15 @@ never in this repo.
 {"prs": {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
          "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
-         "max_items": 10, "stale_days": 30, "cron": "*/15 * * * *", "timezone": "<IANA tz>"}}
+         "max_items": 10, "stale_days": 30, "cron": "*/15 * * * *", "timezone": "<IANA tz>",
+         "kinds": ["review_request", "unreleased"],
+         "deploy": {"<owner/repo>": {"dev_release": "auto-sync | <how main reaches dev>",
+                                     "revision_cmd": "<prints the commit or ref dev runs>",
+                                     "logs": "<where dev logs are read>", "verify": "<verify-* skill or smoke check>",
+                                     "ticket": "<optional>", "orca_repo": "<optional Orca repo selector>",
+                                     "lookback_days": 2}},
+         "dispatch_run": "<optional Orca run id the release workers join>", "worker_agent": "claude",
+         "release_approval": "<the owner's dev-deploy approval, quoted with its date>"}}
 ```
 
 `orgs` and `repos` empty mean every repository; otherwise an `owner` in `orgs` or an `owner/name` in
@@ -49,9 +58,28 @@ Stale means no update for more than `stale_days`; such an item says "요청 해�
 coordinator can propose asking the author to withdraw the request. Each item carries repo#N,
 title, author, age in days, diff size and the reasons it ranked where it did.
 
-Every item has a `kind`. Only `review_request` is collected now; `review_wait`, `ready_to_merge`,
-`unreleased` and `ownergate` are reserved in `KINDS`, and a later flow adds a collector to
+Every item has a `kind`. `review_request` and `unreleased` are collected; `review_wait`,
+`ready_to_merge` and `ownergate` are reserved in `KINDS`, and a later flow adds a collector to
 `COLLECTORS` without changing the CLI. Listing an uncollected kind in `kinds` is an error.
+
+## Unreleased merges
+
+For each repo in `deploy`, an `unreleased` item is a PR the user authored, merged within
+`lookback_days`, not yet in the ledger. The dev revision does not decide membership: a repo whose
+dev syncs on its own is usually synced before a round looks, and the change still needs its
+behaviour and logs checked on dev. The revision decides the action instead. `revision_cmd` (run by the precheck,
+60 s) prints what dev runs; GitHub's compare says whether that contains the merge commit, and the
+item carries `deployed` true (check only) or false (release, or wait for the sync, first). When the
+probe or compare fails, the merges still become items, with `deployed` null and the reason in `why`,
+so a broken probe shows up in the message and the worker checks dev itself instead of the merge
+aging out of `lookback_days` unseen. `deploy` alone collects nothing: `kinds` must list `unreleased`.
+
+`dispatch` turns them into one release worker per repo: an `orca orchestration worker-start` line
+whose brief (in `<state>/brief-<n>.txt`) holds the PRs and merge commits, the declaration, the
+`release_approval` (without it the worker asks before any release), production and anything outside
+dev as human only, and the rule that a refused act is reported, never retried. The worker follows
+deliver-ticket's [post-merge-release.md](../deliver-ticket/references/post-merge-release.md). The
+round itself releases nothing.
 
 ## Run
 
@@ -69,8 +97,12 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 
    From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
    to its Run's coordinator.
-3. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
-   succeeded: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
+3. Only after the send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
+   Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
+   hook) is not tried again in any form (re-run, script, other tool, another session): send the
+   coordinator the repo, the refusal and the exact command instead.
+4. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
+   succeeded and each step-3 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
    and then commit.
 
