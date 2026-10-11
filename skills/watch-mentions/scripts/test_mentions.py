@@ -87,12 +87,19 @@ assert seen[f"C3/{fresh}"]["pr"] == "acme/widgets#7" and "pr" not in seen[f"C1/{
 
 # annotate: backfills pr on rows already seen, ignores unseen rows and bad refs, leaves cursor and lock alone.
 assert m.annotate([{**items[0], "pr": "acme/widgets#8"}, {"channel_id": "C9", "ts": "1.0", "pr": "acme/x#1"},
-                   {**items[1], "pr": "no"}], state) == 1
+                   {**items[1], "pr": "no"}], cfg, state, NOW) == 1
 seen = json.loads((state / "seen.json").read_text())
 assert seen[f"C3/{fresh}"]["pr"] == "acme/widgets#8" and "C9/1.0" not in seen and "pr" not in seen[f"C1/{fresh}"]
 assert not (state / "lock.json").exists()
 assert json.loads((state / "cursor.json").read_text()) == {"until": NOW}
 assert not (state / "lock.json").exists()
+m.write_json(state / "lock.json", {"run": NOW, "oldest": NOW})
+try:
+    m.annotate([{**items[0], "pr": "acme/widgets#9"}], cfg, state, NOW + 60)
+    raise AssertionError("annotate must not race a running round's commit")
+except SystemExit:
+    pass
+(state / "lock.json").unlink()
 
 # Next run starts at the cursor minus the overlap, and the overlap does not re-report.
 p2 = m.plan(cfg, state, NOW + 1200)

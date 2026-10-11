@@ -175,21 +175,19 @@ def rank(items):
 
 
 def slack_reviews(cfg):
-    """owner/repo#N → permalinks of the Slack review requests watch-mentions recorded."""
+    """owner/repo#N (lowercased: GitHub names are case-insensitive) → permalinks of the Slack review requests."""
     rows = read_json(cfg.get("mentions_seen") or STATE.parent / "mentions" / "seen.json", {})
     refs = {}
     for row in rows.values() if isinstance(rows, dict) else []:
         if isinstance(row, dict) and row.get("category") == "review" and PR_REF.match(str(row.get("pr") or "")):
-            links = refs.setdefault(row["pr"], [])
-            if row.get("permalink") and row["permalink"] not in links:
+            links = refs.setdefault(row["pr"].lower(), [])
+            if isinstance(row.get("permalink"), str) and row["permalink"] not in links:
                 links.append(row["permalink"])
     return refs
 
 
 def slack_skip(pr, me, cfg):
     """A Slack request names the owner directly, so only the PR's own state can rule it out."""
-    if not pr:
-        return "PR 을 읽지 못함"
     if pr["state"] != "OPEN":
         return "닫힘"
     if pr["isDraft"]:
@@ -209,7 +207,7 @@ def collect_review_requests(gh, me, cfg, ledger, now):
     for pr in gh.search("is:pr is:open archived:false review-requested:@me", me):
         seen.add(pr["id"])
         name = f"{pr['repository']['nameWithOwner']}#{pr['number']}"
-        found[name] = pr
+        found[name.lower()] = pr
         why = (out_of_scope(pr, cfg) or (None if personal_request(pr, me) else "팀·CODEOWNERS 요청뿐")
                or ("draft" if pr["isDraft"] else None))
         if why:
@@ -218,21 +216,29 @@ def collect_review_requests(gh, me, cfg, ledger, now):
             items.append(item(pr, me, cfg, now, "requested"))
     watch = sorted({v["id"] for v in ledger.values() if v.get("kind") == "review_request" and v.get("id")} - seen)
     for pr in gh.nodes(watch, me) if watch else []:
+        found.setdefault(f"{pr['repository']['nameWithOwner']}#{pr['number']}".lower(), pr)
         mine = pr["reviews"]["nodes"]
         if (pr["state"] == "OPEN" and not pr["isDraft"] and not out_of_scope(pr, cfg)
                 and mine and (mine[0].get("commit") or {}).get("oid") != pr["headRefOid"]):
             items.append(item(pr, me, cfg, now, "new_commits"))
-    listed = {f"{i['repo']}#{i['number']}": i for i in items}
-    for name, links in sorted(slack_reviews(cfg).items()):
-        if name in listed:
-            listed[name].update(source="github+slack", slack=links)
+    # Merge on the PR node id: a Slack ref in another case, or naming a renamed repo, is still the same PR.
+    listed = {i["id"]: i for i in items}
+    for ref, links in sorted(slack_reviews(cfg).items()):
+        pr = found.get(ref) or gh.pr(ref, me)
+        if not pr:
+            excluded.append({"pr": ref, "why": "Slack 요청, PR 을 읽지 못함"})
             continue
-        pr = found.get(name) or gh.pr(name, me)
-        why = slack_skip(pr, me, cfg)
-        if why:
+        name = f"{pr['repository']['nameWithOwner']}#{pr['number']}"
+        excluded = [e for e in excluded if e["pr"] != name]
+        if pr["id"] in listed:
+            hit = listed[pr["id"]]
+            hit["slack"] += [u for u in links if u not in hit["slack"]]
+            hit["source"] = "slack" if hit["source"] == "slack" else "github+slack"
+        elif why := slack_skip(pr, me, cfg):
             excluded.append({"pr": name, "why": f"Slack 요청, {why}"})
         else:
-            items.append({**item(pr, me, cfg, now, "slack"), "slack": links})
+            listed[pr["id"]] = {**item(pr, me, cfg, now, "slack"), "slack": list(links)}
+            items.append(listed[pr["id"]])
     return items, excluded
 
 

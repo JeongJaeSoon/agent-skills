@@ -17,7 +17,8 @@ plan takes the run lock and prints the searches to run. ingest drops what must n
 (the owner's own messages, bots, non-public channels, excluded channels, anything seen before or older
 than the window). bundle renders the one coordinator message. commit marks the items seen,
 moves the cursor to the run's start and releases the lock; with no file it only does the last two.
-annotate sets `pr` on rows already in the ledger (a backfill); it takes no lock and moves no cursor.
+annotate sets `pr` on rows already in the ledger (a backfill); it refuses while a run holds the lock
+and moves no cursor.
 Config: ~/.claude/agent-skills.json → "mentions" (see SKILL.md). State: $AGENT_SKILLS_STATE/mentions
 (default ~/.local/state/agent-skills/mentions). The ledger holds ids, categories and PR refs, never message text.
 """
@@ -200,7 +201,9 @@ def commit(items, cfg, state, now):
     return len(items)
 
 
-def annotate(items, state):
+def annotate(items, cfg, state, now):
+    if lock_held(state, cfg, now):
+        raise SystemExit("annotate: a run holds the lock; its commit would race this write")
     seen, n = read_json(state / "seen.json", {}), 0
     for i in items:
         ref = pr_ref(i.get("pr"))
@@ -250,7 +253,7 @@ def main():
         items = read_json(sys.argv[2], []) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else []
         print(f"commit: {commit(items, cfg, STATE, now)} items marked seen")
     elif cmd == "annotate":
-        print(f"annotate: {annotate(read_json(sys.argv[2], None) or [], STATE)} rows given a PR")
+        print(f"annotate: {annotate(read_json(sys.argv[2], None) or [], cfg, STATE, now)} rows given a PR")
     elif cmd == "schedule":
         script = pathlib.Path(__file__).resolve()
         line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"))

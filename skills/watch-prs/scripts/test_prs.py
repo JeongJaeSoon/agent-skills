@@ -47,8 +47,8 @@ class Fake:
         return [self.by_id[i] for i in ids if i in self.by_id]
 
     def pr(self, ref, me):
-        repo, n = ref.split("#")
-        return self.by_id.get(f"PR_{repo}_{n}")
+        repo, n = ref.lower().replace("acme/old-widgets", "acme/widgets").split("#")  # a renamed repo resolves
+        return {x["id"]: x for x in self.found}.get(f"PR_{repo}_{n}") or self.by_id.get(f"PR_{repo}_{n}")
 
 
 state = pathlib.Path(tempfile.mkdtemp()) / "prs"
@@ -148,12 +148,14 @@ seen_file = state.parent / "mentions-seen.json"
 link = lambda n: f"https://example.test/archives/C0FAKE/p{n}"
 row = lambda ref, n, category="review": {"at": NOW, "category": category, "permalink": link(n), "pr": ref}
 p.write_json(seen_file, {
-    "C0FAKE/1": row("acme/widgets#1", 1), "C0FAKE/2": row("acme/widgets#1", 2),   # GitHub lists #1 too: merged
+    "C0FAKE/1": row("acme/widgets#1", 1), "C0FAKE/2": row("Acme/Widgets#1", 2),   # GitHub lists #1 too: merged
+    "C0FAKE/11": row("acme/old-widgets#1", 11),                                    # #1 under its old repo name
     "C0FAKE/3": row("acme/widgets#5", 3),                                          # team-only on GitHub: Slack lists it
     "C0FAKE/4": row("acme/widgets#20", 4),                                         # not in the search: fetched
     "C0FAKE/5": row("acme/widgets#21", 5), "C0FAKE/6": row("acme/widgets#22", 6),  # merged PR, reviewed at head
     "C0FAKE/7": row("acme/widgets#23", 7), "C0FAKE/8": row("acme/gone#1", 8),      # my own PR, unreadable
     "C0FAKE/9": row("acme/widgets#24", 9, "work"), "C0FAKE/10": {"at": NOW, "category": "review", "permalink": link(10)},
+    "C0FAKE/12": {**row("acme/widgets#20", 12), "permalink": ["not", "a", "link"]},  # hand-edited row
 })
 extra = [pr(20, reqs=[], age=2), pr(21, reqs=[], state="MERGED"), pr(22, reqs=[], head="h22", reviewed="h22"),
          pr(23, author=ME, reqs=[]), pr(24, reqs=[])]
@@ -161,16 +163,22 @@ scfg = {**cfg, "mentions_seen": str(seen_file)}
 mixed = p.compute(Fake(found, extra), scfg, {}, NOW)
 by = {i["number"]: i for i in mixed["new"]}
 assert sorted(by) == [1, 2, 3, 4, 5, 11, 20], sorted(by)
-assert by[1]["source"] == "github+slack" and by[1]["slack"] == [link(1), link(2)] and by[1]["reason"] == "requested"
+assert len(mixed["new"]) == len(by), "one entry per PR, whatever case or old name Slack used"
+assert by[1]["source"] == "github+slack" and sorted(by[1]["slack"]) == sorted([link(1), link(2), link(11)])
+assert by[1]["reason"] == "requested"
 assert by[5]["source"] == by[20]["source"] == "slack" and by[20]["slack"] == [link(4)] and by[20]["key"] == "acme/widgets#20@h20"
 assert by[2]["source"] == "github" and by[2]["slack"] == []
 why = {e["pr"]: e["why"] for e in mixed["excluded"]}
 assert why["acme/widgets#21"] == "Slack 요청, 닫힘" and why["acme/widgets#22"] == "Slack 요청, head 를 이미 리뷰함"
 assert why["acme/widgets#23"] == "Slack 요청, 본인 PR" and why["acme/gone#1"] == "Slack 요청, PR 을 읽지 못함"
-assert why["acme/widgets#5"] == "팀·CODEOWNERS 요청뿐" and "acme/widgets#24" not in why
+assert "acme/widgets#5" not in why and "acme/widgets#24" not in why and len(why) == len(mixed["excluded"])
+p.write_json(seen_file, {"C0FAKE/1": row("acme/widgets#7", 1)})  # a draft GitHub already excluded: one reason, Slack's
+assert [e for e in p.compute(Fake(found), scfg, {}, NOW)["excluded"] if e["pr"] == "acme/widgets#7"] == \
+    [{"pr": "acme/widgets#7", "why": "Slack 요청, draft"}]
 lines = {l.split("] ")[1].split(" ")[0]: l for l in p.body(mixed).splitlines()[1:]}
-assert lines["acme/widgets#1"].endswith(f"— https://github.com/acme/widgets/pull/1 · Slack {link(1)} {link(2)}")
+assert lines["acme/widgets#1"].endswith(f"— https://github.com/acme/widgets/pull/1 · Slack {link(11)} {link(1)} {link(2)}")
 assert "[Slack 리뷰 요청] acme/widgets#20" in lines["acme/widgets#20"]
+p.write_json(seen_file, {"C0FAKE/4": row("acme/widgets#20", 4)})
 # A Slack-only item is new for precheck, and once sent its head is known like any other.
 assert p.precheck(Fake([], extra), scfg, state.parent / "slack-state", NOW) == (p.EXIT_NEW, "새 항목 1건: acme/widgets#20@h20")
 sent = {i["key"]: {"at": NOW, "kind": i["kind"], "id": i["id"]} for i in mixed["new"]}
