@@ -117,8 +117,8 @@ FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. The refused-ac
             program brief's FORBIDDEN above, pasted verbatim. <unit-specific bans>
 APPROVED    The acts the human already approved for this unit, with their words and date. Inside
             them, decide with the recommended default and report what you chose; do not ask.
-HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any irreversible or
-            outward act not under APPROVED. Ask for these together, once.
+HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
+            any irreversible or outward act not under APPROVED. Ask for these together, once.
 MODEL CALLS Another model (a subagent, Codex, an API) only when the task needs it; say which and
             why before the call, and pick the model then.
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
@@ -135,13 +135,16 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without them). A lead whose brief had no DELEGATE line investigated and implemented on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `DELEGATE` and `PREDICATE`). A lead whose brief had no DELEGATE line investigated and implemented on its own.
 
 ```
 <project>: lead
 
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 MODE        Run `orchestrate` in program mode for this project.
+INBOX       Keep exactly one background inbox wait running (`orch wait <slug>`) and start it again
+            on every wake; after a compaction, `claude --continue` or a restart, first check that it
+            is alive and start it if not (`orchestrate` Drain, "One inbox wait, always").
 DELEGATE    You do not investigate, implement, verify or drive a browser yourself, however
             small. Each goes one layer down: a worker or card with a brief (`orchestrate`
             references/brief.md), or a background subagent for a read. You judge results, land,
@@ -161,8 +164,8 @@ PERMISSIONS The autoMode rules for this repo's merge and deploy, quoted, or "mis
 APPROVED    The acts the human already approved for this project, with their words and date.
             Decisions inside them are yours and your workers': the recommended default, then a
             report. Copy the lines a worker's unit needs into its brief.
-HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any irreversible or
-            outward act not under APPROVED. Batched into one message to the human.
+HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
+            any irreversible or outward act not under APPROVED. Batched into one message to the human.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
@@ -175,7 +178,8 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker. Lanes share that browser and its logins, so a worker takes it with `orch hold browser --note "<what it checks>"` before driving it and `orch release browser` when done. `hold` refuses while another lane has it and names the holder: wait for it or ask that lane, never drive over its session.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless, unrelated to the ticket. Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
-- **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "Keep one background wait running" in `top-level.md` is the orchestrator's rule, not a worker's.
+- **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
+- An agent that will use a write tool guarded by a first-write confirmation hook gets, in its brief or prompt, an instruction to invoke that policy skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
 - Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
