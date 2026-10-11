@@ -183,6 +183,9 @@ workers = [
 ]
 assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/w/1"), ("A-2", "d2", True, "/w/2")], \
     prog.landed_but_open(ev, workers, tasks, wts)
+# A fold into a lower PR's branch does not finish its ticket.
+fold = [{"ev": "landed", "pr": 3, "ticket": "A-3", "onto": 9, "ts": "2026-09-24T00:00:00+00:00"}]
+assert prog.landed_but_open(ev + fold, workers, tasks, wts) == prog.landed_but_open(ev, workers, tasks, wts)
 # orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])

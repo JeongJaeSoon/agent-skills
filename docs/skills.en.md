@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 34 skills (the 35 `skills/*/SKILL.md` minus the `brief` alias), 4 aliases (3 old names in `legacy/` plus `brief`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([Aliases](#aliases)).
+This page covers the skills in `skills/*/SKILL.md`, 3 aliases (old names in `legacy/`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief`.
 
 ## Flow
 
@@ -382,14 +382,6 @@ A session that started before a rename can still call the old name and gets rout
 | `ship-pr` | `deliver-ticket` |
 | `dispatch-work` | `dispatch-card` |
 | `use-obsidian` | `use-notes` |
-
-A short slash command only shortens the name the user types. The model never calls the alias (`disable-model-invocation`).
-
-| Command | Skill |
-|---|---|
-| `/agent-skills:brief` | `brief-status` |
-
-The `brief` alias is this one plugin skill, called as `/agent-skills:brief`. A bare `/brief` does not reach it. On Claude Code 2.1.295 an interactive session answers `Unknown command: /brief`, and under `claude -p` the built-in command (toggling brief-only mode) takes it and answers `/brief isn't available in this environment.`
 
 ## Commands
 

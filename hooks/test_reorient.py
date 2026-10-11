@@ -48,7 +48,7 @@ assert hook(reply="not json") is None
 # A Run with no registered program, or no programs at all: its coordinator is the top-level coordinator.
 top = hook(reply=json.dumps({"ok": True, "result": {"run": {"id": "run_b", "coordinator_handle": "term_me"}}}))
 assert "top-level coordinator of Orca Run run_b" in top and "agent-skills:orchestrate" in top \
-    and "agent-skills:brief-status" in top, top
+    and "agent-skills:brief." in top, top
 assert "top-level coordinator of Orca Run run_a" in hook(programs="none")
 assert hook(reply=json.dumps({"ok": False, "error": {"code": "no_run"}})) is None
 assert hook(reply=NO_RUN) is None
