@@ -74,10 +74,23 @@ try:
 except SystemExit:
     pass
 
-# commit: seen ledger without text, cursor moves to run start, lock released.
+# pr_ref: owner/repo#N or a PR URL, nothing else.
+assert m.pr_ref("acme/widgets#12") == m.pr_ref("https://github.com/acme/widgets/pull/12/files") == "acme/widgets#12"
+assert m.pr_ref("see #12") is None and m.pr_ref(None) is None and m.pr_ref("https://example.test/doc") is None
+
+# commit: seen ledger without text, the PR ref normalized, cursor moves to run start, lock released.
+items[0]["pr"] = "https://github.com/acme/widgets/pull/7"
 assert m.commit(items, cfg, state, NOW) == 2
 seen = json.loads((state / "seen.json").read_text())
 assert set(seen) == {f"C1/{fresh}", f"C3/{fresh}"} and all("summary" not in v for v in seen.values())
+assert seen[f"C3/{fresh}"]["pr"] == "acme/widgets#7" and "pr" not in seen[f"C1/{fresh}"]
+
+# annotate: backfills pr on rows already seen, ignores unseen rows and bad refs, leaves cursor and lock alone.
+assert m.annotate([{**items[0], "pr": "acme/widgets#8"}, {"channel_id": "C9", "ts": "1.0", "pr": "acme/x#1"},
+                   {**items[1], "pr": "no"}], state) == 1
+seen = json.loads((state / "seen.json").read_text())
+assert seen[f"C3/{fresh}"]["pr"] == "acme/widgets#8" and "C9/1.0" not in seen and "pr" not in seen[f"C1/{fresh}"]
+assert not (state / "lock.json").exists()
 assert json.loads((state / "cursor.json").read_text()) == {"until": NOW}
 assert not (state / "lock.json").exists()
 
