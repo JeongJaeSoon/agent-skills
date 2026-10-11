@@ -324,6 +324,8 @@ d, env = setup({"26": low, "27": up})
 verdict(d, 26, "T-26"); verdict(d, 27, "T-27")
 code, out = prog(env, "land", "t", "--pr", "27")
 assert code == 3 and "based on #26's branch b26" in out and "--base main" in out, out
+code, out = prog(env, "land", "t", "--pr", "27", "--onto-lower")
+assert code == 0 and "landed #27" in out, out
 # An untracked PR whose head is the base (the integration branch's own PR to main) does not block.
 feat = pr(28); feat["headRefName"] = "feature/x"
 d, env = setup({"28": feat, "29": pr(29, base="feature/x")})

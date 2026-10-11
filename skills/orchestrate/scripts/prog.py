@@ -28,7 +28,7 @@ Usage: orch <command> <slug> [options]
                                      B's branch), or one found after dispatch. Start-after edges are
                                      Orca task deps (task-create --deps), read from the Run
   queue <slug> [--json]              the land order and why each PR is not moving
-  land <slug> --pr N [--class main-fix|gate|urgent|normal] [--wait-minutes M]
+  land <slug> --pr N [--class main-fix|gate|urgent|normal] [--wait-minutes M] [--onto-lower]
                                      the one way a program PR reaches its base. Normal lane: lands
                                      as soon as it is ready (verdict patch-id, CI green at head, no
                                      conflict, deps landed, main not red), behind or not, unless the
@@ -1122,7 +1122,7 @@ def base_ci_hint(repo, base):
             f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
-def attempt(p, pr, klass):
+def attempt(p, pr, klass, onto_lower=False):
     """One pass: returns (exit_code, message)."""
     events, cfg, repo = p.events(), p.cfg, p.cfg["repo"]
     st = pr_state(events).get(pr, {})
@@ -1146,13 +1146,14 @@ def attempt(p, pr, klass):
                        orca_deps(cfg["run"]))
     me = next((e for e in order if e["pr"] == pr), None)
     tracked = pr_state(events)  # an integration branch's own PR (feature → main) is never landed through orch
-    lower = next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
-                  and r["number"] in tracked), None)
+    lower = None if onto_lower else next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
+                                          and r["number"] in tracked), None)
     if lower:
         # Based on another open PR's branch without being a GitHub stack: a squash would land in that branch.
         return 3, (f"act: #{pr} is based on #{lower['number']}'s branch {me['base']}, not a GitHub stack, so a merge would"
                    f" land in that branch. Land #{lower['number']} first, then gh pr edit {pr} --repo {repo} --base"
-                   f" {lower.get('baseRefName')} and gh pr update-branch {pr} --repo {repo}, and land again")
+                   f" {lower.get('baseRefName')} and gh pr update-branch {pr} --repo {repo}, and land again."
+                   f" To fold it into #{lower['number']} on purpose (top-down), land again with --onto-lower")
     if me is None or me["state"] == "gone":
         v = pr_view(repo, pr)
         if v["state"] == "MERGED":
@@ -1239,7 +1240,7 @@ def cmd_land(argv):
     deadline = time.monotonic() + 60 * float(opt(argv, "--wait-minutes", "0"))
     while True:
         try:
-            code, msg = attempt(p, pr, klass)
+            code, msg = attempt(p, pr, klass, "--onto-lower" in argv)
         except SystemExit as e:
             if not TRANSIENT.search(str(e.code)):
                 raise
