@@ -63,18 +63,19 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             same turn to whoever gave you this work, with what the act was for, the refusal's
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             reports to its coordinator as an orchestration message of type escalation (its terminal
-            is not read), a subagent to the session that started it, in its result. Paste this
-            paragraph, from "An act refused" through "run it again.", verbatim into every subagent
-            prompt you write: a summary drops the forms it lists. Taking the path this brief already
-            names for that act (`orch land` for a merge, in a worker's brief) is not a retry, nor is
-            doing the act again after the human added a rule for it or approved it in the refused
-            session's own chat. Nor is the restart of a unit whose subagent's Edit or Write got no
-            verdict: the session that started that unit, never the refused one, takes the whole unit
-            back once (a coordinator restarts it as a new card, a worker does it in its own
-            session), and a second `no verdict` there goes to the human, reported the same way. If
-            you are the refused one, stop that edit and report it; do not finish it another way. A
-            hook that blocked only the text of a command reading no protected file, and says to
-            reword it: reword that text and say so in the report. A read-only command on files in
+            is not read), a subagent to the session that started it, in its result; a card with no
+            orchestration channel to the human in its own chat, with its Human only batch. Paste
+            this paragraph, from "An act refused" through "run it again.", verbatim into every
+            subagent prompt you write: a summary drops the forms it lists. Taking the path this
+            brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
+            retry, nor is doing the act again after the human added a rule for it or approved it in
+            the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
+            Write got no verdict: the session that started that unit, never the refused one, takes
+            the whole unit back once (a coordinator restarts it as a new card, a worker does it in
+            its own session), and a second `no verdict` there goes to the human, reported the same
+            way. If you are the refused one, stop that edit and report it; do not finish it another
+            way. A hook that blocked only the text of a command reading no protected file, and says
+            to reword it: reword that text and say so in the report. A read-only command on files in
             your own worktree (no credential, no personal data) that the classifier refused as
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its
