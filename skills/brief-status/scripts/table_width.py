@@ -1,11 +1,12 @@
 """Width of each markdown table as a terminal draws it, to check a report fits before sending.
 
-Run: python3 table_width.py [--cols 80] < report.md
+Run: python3 table_width.py [--cols 78] < report.md
 Prints one line per table (first line number, width) and exits 1 when any table is wider than --cols.
 """
 import argparse, re, sys, unicodedata
 
 # Claude Code draws a table with a border and one space of padding on each side of every cell.
+# Overcounts on the safe side: an escaped \| splits a cell, and VS16 after an already-wide emoji adds 1.
 BORDER_PER_COL, BORDER_EDGE = 3, 1
 
 
@@ -13,10 +14,10 @@ def text_width(s):
     s = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s).replace("**", "").replace("`", "")
     w = 0
     for ch in s:
-        if ch == "️":
+        if ch == "\ufe0f":
             # VS16 turns a narrow symbol such as ⚠ into a two-column emoji.
             w += 1
-        elif unicodedata.combining(ch) or ch == "‍":
+        elif unicodedata.combining(ch) or ch == "\u200d":
             continue
         else:
             w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
@@ -49,7 +50,7 @@ def table_width(rows):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cols", type=int, default=80)
+    ap.add_argument("--cols", type=int, default=78)
     cols = ap.parse_args().cols
     over = False
     for start, rows in tables(sys.stdin.read()):
