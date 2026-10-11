@@ -711,6 +711,8 @@ def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
         why = "git 상태를 읽지 못함"
     elif facts.get("dirty"):
         why = "변경 있음(추적 안 되는 파일 포함)"
+    elif not ref and "idle" not in facts:
+        why = "연결된 PR 없음(워커가 만든 카드가 아님)"
     elif not ref and (idle is None or idle < min_age):
         why = "연결된 PR 없음, 세션이 " + ("조용한지 알 수 없음" if idle is None else f"{age(idle)} 만 조용")
     elif not ref:
@@ -772,7 +774,7 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
     landed = None
     if not ref:
         default = git(["git", "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False)
-        # Not an ancestor and a failed check both answer None: either way the checkout stays.
+        # A failed check reads as not an ancestor, so the checkout stays.
         landed = None if not default else git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
                                               check=False) is not None
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
@@ -894,7 +896,9 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
                 # Without the list, a user's takeover and a live turn look the same as a finished worker.
                 facts["live"] = "워커 목록을 읽지 못함"
             source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
-            if not facts.get("pr"):
+            # Only a worker's card: a lead or a card someone opened by hand also sits on the default branch with no PR,
+            # and nothing but quiet transcripts would tell it from a finished one.
+            if not facts.get("pr") and path in made:
                 facts["idle"] = quiet(path)
             if "orca-worktree" in kinds:
                 # `--hours 0` must not let a card that just went quiet go.

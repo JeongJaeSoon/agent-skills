@@ -453,12 +453,17 @@ with tempfile.TemporaryDirectory() as tmp:
     reap.orca_workers = lambda state=None: [{"terminalState": "retained", "resource": {"worktreeId": "r::" + wt}}]
     assert reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get) == []
     # A no-PR card is judged by how long its sessions have been quiet, floored at NO_PR_MIN_HOURS even under --hours 0.
-    reap.orca_workers = lambda state=None: []
-    reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
+    reap.orca_workers = lambda state=None: [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::" + wt}}]
+    reap.orca_json = lambda *a: {"worktrees": []}
     reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "pr": None, "landed": True, "live": live}
     for idle, hours, target in ((3 * 3600, 0, True), (3600, 0, False), (3 * 3600, 6, False), (7 * 3600, 6, True)):
         got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, hours=hours, quiet=lambda p, i=idle: i)
         assert [i["target"] for i in got] == [target], (idle, hours, got)
+    # A no-PR card a worker did not make (a lead, a card opened by hand) is never a target, however quiet.
+    reap.orca_workers = lambda state=None: []
+    reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
+    got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt)], [], PRS.get, hours=6, quiet=lambda p: 99 * 3600)
+    assert [(i["target"], i["why"]) for i in got] == [(False, "연결된 PR 없음(워커가 만든 카드가 아님)")], got
     reap.orca_json = lambda *a: None
     notes = []
     assert reap.janitor_scan({"orca-worktree"}, [], [], notes, PRS.get) == [] and "orca worktree list" in notes[0], notes
@@ -474,7 +479,7 @@ assert done(quiet=H)["target"] is False and "만 조용" in done(quiet=H)["why"]
 assert done(quiet=None)["target"] is False
 assert done(asked="2026-10-10T12:00")["target"] is False and "이미 요청함" in done(asked="2026-10-10T12:00")["why"]
 for kw in ({"pr": "acme/app#1"}, {"dirty": True}, {"unpushed": True, "head": "h9"}, {"pr": None}, {"turn": "살아 있는 워커 턴(d1)"},
-           {"users": []}, {"unreadable": True}, {"pr": None, "landed": True, "age": 9 * H}):
+           {"users": []}, {"unreadable": True}, {"pr": None, "landed": True, "idle": 9 * H}):
     assert done(**kw) is None, kw
 
 saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json
