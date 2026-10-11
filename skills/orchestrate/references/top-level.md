@@ -72,8 +72,8 @@ The cron prompt is the only context a wake gets, so it carries everything:
 
 - The human's standing instruction, in their words, and the date it was given.
 - Where your state lives: the program notes, `~/.local/state/agent-skills/brief-last/`, the dashboard inbox.
-- What each wake moves, every part beyond one short read sent to a background subagent (SKILL.md, "Stay answerable"): your orchestration mail, read and acked; a lead silent since the last wake (nudge it once if idle, otherwise put what it waits on in the inbox); each PR event one step as the "PR events" table says (you never merge); the review requests waiting on the human, as one inbox item; the `done-card` items of `janitor-plan.json` (SKILL.md, "Stay answerable"); the next queued item when a slot is free. A production act is not one of them: the prompt quotes the human but is not their chat ("Acts only the human's session may take"), so it goes to the inbox.
-- End every wake with a "Periodic report" (the `brief` skill): one row per lead, every row every time, facts from `orch status` and `worker-list` at that wake, not from the last report.
+- What each wake moves, every part beyond one short read sent to a background subagent (SKILL.md, "Stay answerable"): your orchestration mail, read and acked; each lead's screen, a permission dialog on it answered inside the approved scope (SKILL.md Drain); a lead silent since the last wake (nudge it once if idle, otherwise put what it waits on in the inbox); each PR event one step as the "PR events" table says (you never merge); the review requests waiting on the human, as one inbox item; the `done-card` items of `janitor-plan.json` (SKILL.md, "Stay answerable"); the next queued item when a slot is free. A production act is not one of them: the prompt quotes the human but is not their chat ("Acts only the human's session may take"), so it goes to the inbox.
+- End every wake with a "Periodic report" (the `brief` skill): a row per lead and a row per sub-task under it, every row every time, facts from `orch status` and `worker-list` at that wake, not from the last report.
 - The job's expiry date (below).
 
 Schedule rules:
@@ -81,7 +81,7 @@ Schedule rules:
 - Pick a minute off :00 and :30 (`7 * * * *`, not `0 * * * *`). A recurring job fires up to 10% of its period late (at most 15 minutes); choose the interval with that slack in mind.
 - A recurring job expires 7 days after it is created: it fires once more, then is gone. Write the expiry date into the prompt, on the last day before it create the replacement, then `CronDelete` the old one, and tell the human about the limit when you first create it.
 - When the standing instruction changes, create a new job with the new prompt, then `CronDelete` the old one. Keep one heartbeat per session; `CronList` shows what is live.
-- The heartbeat does not replace the background `check --wait` ("Injected notices"); keep both.
+- The heartbeat does not replace the one inbox wait (SKILL.md Drain, "One inbox wait, always"); keep both, and on every wake check first that the wait is alive.
 
 ## Messages to a chat
 
@@ -89,7 +89,7 @@ Before sending anything to a chat channel or thread, read the destination and ch
 
 ## Injected notices
 
-Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Keep one such background wait running at all times; it is what keeps the notice out of the human's typing. That rule is yours and a program coordinator's, never a worker's: a worker keeps no standing wait, and its brief bounds how long it waits for an answer (`brief.md`, WAITING). `orch wait` passes `--types`, so it does not count. When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and hand the mailbox check to the background wait.
+Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Your one inbox wait (SKILL.md Drain, "One inbox wait, always") is that wait: `check --peek --wait` passes no `--types`, so it keeps the notice out of the human's typing. A program coordinator's `orch wait` passes `--types` and does not keep the notice out; it still runs no second wait, and ends a turn that only carries the notice with no tool call. A worker keeps no standing wait, and its brief bounds how long it waits for an answer (`brief.md`, WAITING). When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and leave the mailbox to the inbox wait.
 
 ## PR events
 
