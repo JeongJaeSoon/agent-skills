@@ -160,6 +160,7 @@ assert set(p.COLLECTORS) == set(p.KINDS)
 assert not p.delivered({"k": {"kind": "ready_to_merge"}}, "k", "unreleased")
 assert not p.delivered({"k": {"kind": "review_request"}}, "k", "ownergate")
 assert p.delivered({"k": {"kind": "ownergate"}}, "k", "review_request") and p.delivered({"k": {}}, "k", "unreleased")
+assert p.delivered({"k": {"kind": "retired_kind"}}, "k", "review_request"), "an unknown kind in the ledger is sent, not a crash"
 try:
     p.compute(Fake([]), {**cfg, "kinds": ["merge_queue"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
@@ -259,6 +260,8 @@ dead.write_text("#!/bin/sh\nexit 3\n")
 dead.chmod(0o755)
 p.ORCH_DASH = str(dead)
 assert p.deliver(gstate, covered).splitlines()[-1] == "대시보드 inbox 등록 실패 acme/access#5: exit 3"
+# verify rebuilds body.txt from plan.json, so the failure has to live there too.
+assert p.body(p.read_json(gstate / "plan.json", {})).splitlines()[-1] == "대시보드 inbox 등록 실패 acme/access#5: exit 3"
 p.ORCH_DASH = str(fake_dash)
 p.deliver(gstate, covered)
 # A title that carries the marker text is not a round step: steps come from plan.json only.

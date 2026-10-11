@@ -206,8 +206,8 @@ A ready item carries `gh pr merge <N> -R <owner/name> --<method> --match-head-co
 round never adds `--admin` or `--auto` and never approves. `merges` records each head in the ledger
 before printing its command, so a refused or failed merge is never retried at that head, even when
 the round stops before `verify` or `commit`; a second `merges` prints nothing for it. Kinds share the
-ledger key shape, and an entry counts only for its own kind, so a PR this round merged is still
-picked up as `unreleased`.
+ledger key shape, and an entry counts for its kind and every earlier kind in `KINDS`, so a PR this
+round merged (`ready_to_merge`) is still picked up as `unreleased`.
 
 ## Unreleased merges
 
@@ -296,8 +296,8 @@ because their steps run before the send: merges and `verify` first, then `round`
 (`PRE_SEND_STEP`), whose results are appended to the message. Every prompt ends with the rule that
 a refused act is reported, never retried. Items of a kind with no `PROMPT_STEPS` entry never
 reach `plan.json`, so they are neither sent nor recorded; the precheck output and the message list
-them as uncovered. The round's own commands are `precheck`, `plan --body` and `commit`, plus `round`
-and `result` with `ownergate`, so the
+them as uncovered. The round's own commands are `precheck`, `plan --body` and `commit`, plus `merges`
+and `verify` with `ready_to_merge` and `round` and `result` with `ownergate`, so the
 prompt is fixed when it is made: after `kinds` changes, rerun `schedule --edit <id>` before the
 next round (check `orca automations list` first so other kinds' steps are not lost).
 Every command starts with `python3`: a scheduled session can refuse a leading `env` or `VAR=`

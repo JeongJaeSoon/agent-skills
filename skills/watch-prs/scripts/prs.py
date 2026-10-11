@@ -854,7 +854,10 @@ def delivered(ledger, k, kind):
     """Kinds share the key shape owner/repo#N@head, so a head sent under an earlier kind comes back once under a
     later one: a PR merged by ready_to_merge is still due as unreleased, and a review request that turned into an
     owner gate is sent again as one. A head already sent under a later kind is not sent again under an earlier one."""
-    return k in ledger and KINDS.index(kind) <= KINDS.index(ledger[k].get("kind", kind))
+    if k not in ledger:
+        return False
+    sent = ledger[k].get("kind", kind)  # a row from before kinds were recorded counts as this kind's
+    return sent not in KINDS or KINDS.index(kind) <= KINDS.index(sent)  # an unknown kind (another version) is sent
 
 
 def compute(gh, cfg, ledger, now):
@@ -907,6 +910,7 @@ def body(plan):
     if drafts:
         lines.append("없는 규칙 (tune-automode 초안, 설정은 고치지 않았다):")
         lines += [f"- {d}" for d in drafts]
+    lines += plan.get("inbox_failed", [])
     if plan.get("uncovered"):
         lines.append(f"회차 단계(PROMPT_STEPS)가 없는 kind 의 항목 {len(plan['uncovered'])}건은 보내지도 기록하지도 않았다: "
                      f"{', '.join(plan['uncovered'])}")
@@ -1026,7 +1030,11 @@ def deliver(state, plan):
         ledger.update({f"attempt:{i['key']}": {"at": plan["run"], "kind": "attempt"} for i in steps})
         write_json(state / "ledger.json", ledger)
     failed = [inbox_add(i) for i in plan["new"] if i["kind"] == "ownergate" and i["run_by"] == "owner"]
-    text = "\n".join([body(plan)] + [f for f in failed if f]) if plan["new"] else ""
+    # Kept in plan.json so body() still shows them after verify rewrites body.txt.
+    plan["inbox_failed"] = [f for f in failed if f]
+    if plan["new"]:
+        write_json(state / "plan.json", plan)
+    text = body(plan)
     state.mkdir(parents=True, exist_ok=True)
     (state / "body.txt").write_text(text)
     return text
