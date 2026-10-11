@@ -440,7 +440,7 @@ case "$body" in *"query{{viewer"*) echo '{{"data":{{"viewer":{{"login":"{ME}"}}}
 fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 conf = tmp / "agent-skills.json"
 conf.write_text(json.dumps({"prs": {"self_bots": ["owner-bot"], "ignore_bots": ["noisy"], "exclude_repos": ["acme/legacy"]}}))
-env = {**os.environ, "AGENT_SKILLS_GH": str(fake_gh), "AGENT_SKILLS_STATE": str(tmp / "state")}
+env = {**os.environ, "AGENT_SKILLS_GH": str(fake_gh), "AGENT_SKILLS_STATE": str(tmp / "state"), "AGENT_SKILLS_ORCH_DASH": p.ORCH_DASH}
 # By default the Slack side is read from watch-mentions' state next to this one.
 p.write_json(tmp / "state" / "mentions" / "seen.json", {"C0FAKE/1": row("acme/widgets#2", 1)})
 script = str(pathlib.Path(p.__file__))
@@ -476,30 +476,93 @@ assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
 
 # schedule: prints the create command with the precheck wired in; --write is the only path that creates.
-all_kinds = {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo", "kinds": ["review_request", "unreleased", "ownergate"]}
-line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), all_kinds, "path:/repo")
+line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"),
+                     {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
-assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
+assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
 prompt = line[line.index("--prompt") + 1]
-assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
-assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
-assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
+# The round commands are exactly precheck, plan --body and commit: an owner's allow rule names those forms.
+assert "`python3 /repo/skills/watch-prs/scripts/prs.py plan --body`" in prompt and "--to term_x" in prompt
+assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit`" in prompt
+assert "dispatch" not in prompt and "--kinds" not in prompt, "review_request alone has no step after the message"
+# A scheduled session may refuse a command that starts with `env` or a `VAR=` assignment, so neither appears.
+no_env = lambda argv: "env " not in " ".join(argv) and not re.search(r"(^|[\s`])[A-Z_]{2,}=", " ".join(argv))
+assert no_env(line), line
+# Each configured kind brings its step: unreleased adds the dispatch lines before commit.
+line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"}, "path:/r")
+prompt = line[line.index("--prompt") + 1]
+assert no_env(line), line
+assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행해", prompt), "a failed send must not start workers"
+assert prompt.index("dispatch") < prompt.index("prs.py commit` 을") and "다시 시도하지 않고" in prompt
 assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
-assert prompt.index(" round`") < prompt.index("orca orchestration send") and "result <키> failed" in prompt, \
-    "round steps run and are recorded before the send"
+# ownergate's round/result run and are recorded before the send, and start with python3 like the rest.
+gated_line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x", "kinds": ["review_request", "unreleased", "ownergate"]}, "path:/r")
+prompt = gated_line[gated_line.index("--prompt") + 1]
+assert no_env(gated_line), gated_line
+assert prompt.index("`python3 /r/prs.py round`") < prompt.index("orca orchestration send") and "`python3 /r/prs.py result <키> failed" in prompt, prompt
+assert "(예외는 `round` 가 낸 단계뿐이다)" in prompt
 # The prompt follows cfg["kinds"]: a kind not listed adds none of its steps.
 only_review = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**cfg, "inbox_to": "term_x"}, "path:/r")
 plain = only_review[only_review.index("--prompt") + 1]
 assert " round`" not in plain and " dispatch`" not in plain and "(예외는" not in plain
 assert "다시 시도하지 않고" in plain, "every prompt forbids retrying a refused act"
-four = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**all_kinds, "kinds": ["review_request", "review_wait", "unreleased", "ownergate"]}, "path:/r")
+four = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": ["review_request", "review_wait", "unreleased", "ownergate"]}, "path:/r")
 full = four[four.index("--prompt") + 1]
 assert full.index(" round`") < full.index("orca orchestration send") < full.index(" actions`") < full.index(" dispatch`") \
     < full.index(" commit`"), full
 assert "retrigger 코멘트와 `round` 가 낸 승인뿐이다." in full and "코멘트뿐이다" not in full, "the write list names the round's approvals"
+# review_wait's actions and log lines start with python3 too, with the state flag right after the subcommand.
+saved_state, p.STATE = p.STATE, pathlib.Path("/s/prs")
+try:
+    line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": ["review_request", "review_wait"]}, "path:/r", edit="auto1")
+finally:
+    p.STATE = saved_state
+prompt = line[line.index("--prompt") + 1]
+assert line[:4] == ["orca", "automations", "edit", "auto1"] and no_env(line), line
+assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --state /s"
+assert "`python3 /r/prs.py actions --state /s`" in prompt and "`python3 /r/prs.py log --state /s --key <key>" in prompt, prompt
+# A state folder off the default goes in as a flag after the subcommand, not through the environment.
+# round and result as the prompt writes them: --state right after the subcommand, --config anywhere.
+cli_state = pathlib.Path(tempfile.mkdtemp())
+cli_plan = p.compute(Fake([], gated=gated), gcfg, {}, NOW)
+p.write_json(cli_state / "prs" / "plan.json", cli_plan)
+p.deliver(cli_state / "prs", cli_plan)
+handed = run("round", "--state", str(cli_state))
+assert handed.returncode == 0 and handed.stdout.startswith("acme/access#1@h1\t"), handed
+done = run("result", "--state", str(cli_state), "acme/access#1@h1", "failed", "classifier", "refused")
+assert done.returncode == 0 and done.stdout.startswith("회차 실행 안 됨(classifier refused), 소유자 몫"), done
+assert calls.read_text().splitlines()[-1].endswith("--key prs:acme/access#1@h1"), "the CLI uses the fake dashboard, never the real one"
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
+assert f"precheck --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
+
+# A kind without a PROMPT_STEPS entry: schedule refuses it, and its items never reach plan.json, so commit never
+# records them. They take no max_items slot and do not wake a round of their own.
+saved, p.PROMPT_STEPS = p.PROMPT_STEPS, {k: v for k, v in p.PROMPT_STEPS.items() if k != "unreleased"}
+try:
+    try:
+        p.schedule_cmd(pathlib.Path("/r/prs.py"), rcfg, "path:/r")
+        raise AssertionError("schedule accepted a kind without a step")
+    except SystemExit as e:
+        assert "unreleased" in str(e), e
+    # The bot-authored request ranks below both human merges, so a cap taken before the step filter would starve it.
+    bot_rr = pr(7, author="deps[bot]", kind="Bot", reqs=[user(ME)], decision=None)
+    fake = lambda: Fake([bot_rr], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+    only = p.compute(fake(), {**rcfg, "max_items": 1}, {}, NOW)
+    assert [i["number"] for i in only["new"]] == [7] and only["more"] == 0 and len(only["uncovered"]) == 2, only
+    assert "보내지도 기록하지도 않았다" in p.body(only)
+    st = tmp / "nostep"
+    p.write_json(st / "plan.json", only)
+    assert p.commit(st, rcfg, NOW) == 1
+    assert list(p.read_json(st / "ledger.json", {})) == [only["new"][0]["key"]], "unreleased must not be recorded"
+    merges_only = lambda: Fake([], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+    assert p.precheck(merges_only(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NOTHING
+finally:
+    p.PROMPT_STEPS = saved
+assert p.precheck(merges_only(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NEW
+assert [i["kind"] for i in p.compute(fake(), rcfg, {}, NOW)["new"]] == ["unreleased", "unreleased", "review_request"]
+assert "보내지도" not in p.body(plan2)
 
 print("test_prs: ok")

@@ -21,21 +21,32 @@ writes the items to plan.json, which is also the run lock, and puts each ownerga
 to run on the dashboard inbox (`orch-dash inbox add`, keyed by the ledger key). round prints the
 steps an allow rule lets the round run (key, tab, command) from plan.json; result records how one
 went in body.txt, and a failed one goes to the owner. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice. actions prints the Slack and bot actions plan.json
-holds; log records one of them in the send-log (sendlog.jsonl), which is what decides them, not the ledger.
+so the same (repo, number, headRefOid) is never sent twice. Only kinds with a PROMPT_STEPS entry become new
+(and so reach plan.json); items of other kinds are listed as uncovered and never recorded.
+actions prints the Slack and bot actions plan.json holds; log records one of them in the send-log
+(sendlog.jsonl), which is what decides them, not the ledger.
 dispatch reads plan.json and prints one
 `orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
 it runs nothing. schedule prints the
-`orca automations create` command (`edit <id>` with --edit) and runs it only with --write.
-Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
+`orca automations create` command (`edit <id>` with --edit), its steps built from the configured kinds, and
+runs it only with --write.
+Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: <--state or $AGENT_SKILLS_STATE>/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
-Slack review requests come from watch-mentions' seen ledger ($AGENT_SKILLS_STATE/mentions/seen.json, rows of
+Slack review requests come from watch-mentions' seen ledger (<state>/mentions/seen.json, rows of
 category review with a `pr`); a missing ledger means GitHub only.
 """
 import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time, zoneinfo
 
+
+def opt(name, default=None):
+    a = sys.argv
+    i = a.index(name) + 1 if name in a else 0
+    return a[i] if 0 < i < len(a) else default
+
+
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
-STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "prs"
+STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
+STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser() / "prs"
 GH = os.environ.get("AGENT_SKILLS_GH", "gh")
 CLAUDE = os.environ.get("AGENT_SKILLS_CLAUDE", "claude")
 ORCH_DASH = os.environ.get("AGENT_SKILLS_ORCH_DASH") or str(pathlib.Path(__file__).resolve().parents[3] / "bin" / "orch-dash")
@@ -76,12 +87,6 @@ MINE_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid addi
  commits(last:1){nodes{commit{committedDate}}}"""
 MINE_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:25,after:$after)"
           "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MINE_FIELDS + "}}}}")
-
-
-def opt(name, default=None):
-    a = sys.argv
-    i = a.index(name) + 1 if name in a else 0
-    return a[i] if 0 < i < len(a) else default
 
 
 def config(path=CONFIG):
@@ -689,6 +694,8 @@ COLLECTORS = {"review_request": collect_review_requests, "review_wait": collect_
 
 
 def compute(gh, cfg, ledger, now):
+    """Only kinds with a PROMPT_STEPS entry become new: the round has no step for the others, so they stay out of
+    plan.json (which is what commit records) and take no max_items slot; their keys are listed under uncovered."""
     me = gh.viewer()
     items, excluded = [], []
     for kind in cfg["kinds"]:
@@ -704,11 +711,13 @@ def compute(gh, cfg, ledger, now):
     items = list(best.values())
     # A head sent under an earlier kind comes back once under a later one (a review request that turned into an owner gate).
     seen = lambda i: i["key"] in ledger and KINDS.index(i["kind"]) <= KINDS.index(ledger[i["key"]].get("kind", KINDS[0]))
-    new = [i for i in rank(items) if not seen(i)]
+    unsent = [i for i in rank(items) if not seen(i)]
+    new = [i for i in unsent if i["kind"] in PROMPT_STEPS]
     # Actions are never capped: a reviewer's batch split across rounds would become two messages.
     acts, new = [i for i in new if not i.get("once", True)], [i for i in new if i.get("once", True)]
     return {"run": now, "viewer": me, "new": acts + new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
-            "known": [i["key"] for i in items if seen(i)], "excluded": excluded}
+            "known": [i["key"] for i in items if seen(i)], "excluded": excluded,
+            "uncovered": [i["key"] for i in unsent if i["kind"] not in PROMPT_STEPS]}
 
 
 def body(plan):
@@ -732,6 +741,9 @@ def body(plan):
     if drafts:
         lines.append("없는 규칙 (tune-automode 초안, 설정은 고치지 않았다):")
         lines += [f"- {d}" for d in drafts]
+    if plan.get("uncovered"):
+        lines.append(f"회차 단계(PROMPT_STEPS)가 없는 kind 의 항목 {len(plan['uncovered'])}건은 보내지도 기록하지도 않았다: "
+                     f"{', '.join(plan['uncovered'])}")
     return "\n".join(lines)
 
 
@@ -753,7 +765,9 @@ def precheck(gh, cfg, state, now):
         return EXIT_ERROR, f"GitHub 를 읽지 못함: {e}"
     keys = [i["key"] for i in plan["new"]]
     if not keys:
-        return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건)"
+        late = f", 회차 단계가 없어 보내지 않는 항목 {len(plan['uncovered'])}건: {', '.join(plan['uncovered'])}" \
+            if plan["uncovered"] else ""
+        return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건{late})"
     return EXIT_NEW, f"새 항목 {len(keys)}건: " + ", ".join(keys)
 
 
@@ -874,11 +888,15 @@ def dispatch_cmds(plan, cfg):
     return cmds
 
 
-# A kind's own step in the automation prompt, between the coordinator send and commit; {env} is the prs.py call.
+# A kind's own step in the automation prompt, between the coordinator send and commit; {run[sub]} is the prs.py
+# call for that subcommand. None: the message is the whole action. A kind missing here has no step, so schedule
+# refuses it and compute keeps its items out of plan.json and the ledger.
 # Steps run in this dict's order, not the config's: the unreleased step ends by gating commit, which deletes plan.json.
 PROMPT_STEPS = {
+    "review_request": None,
+    "ownergate": None,  # its round/result step runs before the send: PRE_SEND_STEP
     "review_wait": (
-        "그다음 `{env} actions` 가 출력하는 행동을 하나씩 처리하고, 처리할 때마다 `{env} log --key <key> --source <결과>` 로 "
+        "그다음 `{run[actions]}` 가 출력하는 행동을 하나씩 처리하고, 처리할 때마다 `{run[log]} --key <key> --source <결과>` 로 "
         "기록한다. Slack 행동(request·remind·rerequest)은 slack-post 스킬을 먼저 읽고 그 규칙대로 channel 에 보낸다: "
         "request 는 같은 reviewer 의 것을 한 메시지로 묶고, 보내기 전에 channel 에서 그 PR 의 기존 의뢰를 찾아 있으면 보내지 않고 "
         "`--source found --thread <channel>:<ts> --at <ts>` 로 기록한다. remind·rerequest 는 PR 마다 thread 에 답글로만 보낸다"
@@ -890,27 +908,35 @@ PROMPT_STEPS = {
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
         "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다."),
     "unreleased": (
-        "보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
+        "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
         "한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
         "그 저장소 이름과 거부·실패 내용, 정확한 명령을 코디네이터에게 보낸다. 모든 줄이 워커를 시작했거나 보고됐을 때만 commit 으로 간다. "
         "릴리스와 배포는 워커가 한다: 이 회차는 배포를 직접 하지 않는다."),
 }
 # The ownergate step runs before the send: its results are appended to the message.
 PRE_SEND_STEP = (
-    "보내기 전에 `{env} round` 가 출력한 줄(키, 탭, 명령)마다 그 명령을 단독으로 한 번 실행하고, 승인됐으면 "
-    "`{env} result <키> ok`, 아니면 `{env} result <키> failed \"<이유>\"` 를 실행한다. 본문에 적힌 명령은 실행하지 않는다. "
+    "보내기 전에 `{run[round]}` 가 출력한 줄(키, 탭, 명령)마다 그 명령을 단독으로 한 번 실행하고, 승인됐으면 "
+    "`{run[result]} <키> ok`, 아니면 `{run[result]} <키> failed \"<이유>\"` 를 실행한다. 본문에 적힌 명령은 실행하지 않는다. "
     "권한 프롬프트·auto mode 분류기·hook·사람이 거부한 단계는 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
     "거부 종류와 정확한 명령을 `result <키> failed` 의 이유로 남긴다.")
 
 
 def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
-    """The `orca automations create` command, or `edit <id>` to keep an existing automation's id."""
-    env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
+    """The `orca automations create` command, or `edit <id>` to keep an existing automation's id.
+
+    Every command starts with python3: a session may refuse an `env` or `VAR=` prefix as its own command.
+    A non-default state goes in as --state right after the subcommand, since argv[1] is the subcommand."""
+    missing = [k for k in cfg["kinds"] if k not in PROMPT_STEPS]
+    if missing:
+        raise SystemExit(f"schedule: kind {', '.join(missing)} has no round step in prs.py PROMPT_STEPS; add one first")
+    state = [] if STATE.parent == STATE_HOME else ["--state", str(STATE.parent)]
+    run = lambda sub: shlex.join(["python3", str(script), *sub.split(), *state])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
     body_file = STATE / "body.txt"
+    subs = {s: run(s) for s in ("actions", "log", "dispatch", "round", "result")}
     gate = "ownergate" in cfg["kinds"]
-    first = PRE_SEND_STEP.format(env=env) + " 그다음 " if gate else ""
-    steps = " ".join(step.format(env=env) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"])
+    first = PRE_SEND_STEP.format(run=subs) + " 그다음 " if gate else ""
+    steps = " ".join(step.format(run=subs) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"] and step)
     if "review_wait" in cfg["kinds"]:
         reads = " GitHub 쓰기는 retrigger 코멘트" + ("와 `round` 가 낸 승인" if gate else "") + "뿐이다."
     else:
@@ -918,17 +944,17 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
                  + (" (예외는 `round` 가 낸 단계뿐이다)." if gate else "."))
     reads += (" 권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행동은 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) "
               "다시 시도하지 않고, 무엇을 하려던 것인지와 거부 종류, 정확한 명령을 보고한다.")
-    prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
+    prompt = (f"watch-prs 회차다. `{run('plan --body')}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 {first}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
               + (steps + " " if steps else "")
-              + f"코디네이터 전송이 성공했을 때만 마지막에 `{env} commit` 을 실행한다." + reads)
+              + f"코디네이터 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
     if edit:
-        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", f"{env} precheck",
+        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
                 "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
+           "--precheck", run("precheck"), "--prompt", prompt, "--json"]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd
@@ -936,6 +962,13 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    # Positional arguments after the subcommand; --state and --config may sit anywhere among them.
+    args, rest = [], iter(sys.argv[2:])
+    for a in rest:
+        if a in ("--state", "--config"):
+            next(rest, None)
+        else:
+            args.append(a)
     cfg = config(opt("--config", CONFIG))
     now = time.time()
     if cmd == "precheck":
@@ -955,8 +988,8 @@ def main():
         print(deliver(STATE, plan))
     elif cmd == "round":
         print("\n".join(round_steps(STATE)))
-    elif cmd == "result" and len(sys.argv) > 3 and sys.argv[3] in ("ok", "failed"):
-        print(result(STATE, sys.argv[2], sys.argv[3] == "ok", " ".join(sys.argv[4:])))
+    elif cmd == "result" and len(args) > 1 and args[1] in ("ok", "failed"):
+        print(result(STATE, args[0], args[1] == "ok", " ".join(args[2:])))
     elif cmd == "actions":
         for i in (read_json(STATE / "plan.json", None) or {"new": []})["new"]:
             if "action" in i:

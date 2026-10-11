@@ -1,5 +1,5 @@
 """Judgement rules of reap.py, plus one real reap of throwaway processes. Run: python3 test_reap.py"""
-import json, os, pathlib, subprocess, sys, tempfile, time
+import json, os, pathlib, re, subprocess, sys, tempfile, time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import reap
 
@@ -584,9 +584,14 @@ with tempfile.TemporaryDirectory() as tmp:
 argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo", ledger=pathlib.Path("/l/ledger.jsonl"))
 assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
 assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "17 */3 * * *"
-# The automation does not inherit the shell that ran schedule, so the precheck names the state and ledger itself.
-assert argv[argv.index("--precheck") + 1] == \
-    "env AGENT_SKILLS_STATE=/s AGENT_SKILLS_LEDGER=/l/ledger.jsonl python3 /abs/reap.py precheck"
+# The automation does not inherit the shell that ran schedule, so a state or ledger off the default goes in as flags,
+# never an `env` or `VAR=` prefix, which a scheduled session may refuse as a command of its own.
+assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck --state /s --ledger /l/ledger.jsonl"
+joined = " ".join(argv)
+assert "env " not in joined and not re.search(r"(^|[\s`])[A-Z_]{2,}=", joined), joined
+assert "`python3 /abs/reap.py reap --plan /s/janitor-plan.json --state /s --ledger /l/ledger.jsonl`" in joined, joined
+default = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", ledger=reap.STATE_HOME / "ledger.jsonl")
+assert default[default.index("--precheck") + 1] == "python3 /abs/reap.py precheck", default
 
 # CLI: ledger add, precheck twice, reap moves a settled tmpdir to the trash and skips what no longer holds, schedule only prints.
 with tempfile.TemporaryDirectory() as tmp:
@@ -730,9 +735,9 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         holder.kill()
 
-prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))[1]
+prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))
 assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
 assert "우회하지 않는다" in prompt and "orchestration send" not in prompt, prompt
-assert "--to run:r1" in reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"), inbox="run:r1")[1]
+assert "--to run:r1" in reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"), inbox="run:r1")
 
 print("ok")

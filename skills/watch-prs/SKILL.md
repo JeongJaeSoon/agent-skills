@@ -43,7 +43,7 @@ never in this repo.
 `repos` is in. Bot logins match with or without the `[bot]` suffix. `mentions_seen` overrides where
 the Slack side is read (default: `watch-mentions`' `seen.json` under the same state root). Other
 keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
-(`$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
+(`--state <dir>` or `$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
 `plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
 
 ## What counts
@@ -231,16 +231,26 @@ python3 "$P" schedule --write    # creates it
 python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's trigger, prompt and precheck, keeping its id
 ```
 
-The prompt is built from `kinds`: each configured kind with a `PROMPT_STEPS` entry adds its step, in
-`PROMPT_STEPS` order (`unreleased` last, since it gates `commit`), and `ownergate` adds its
-`round`/`result` step before the send (`PRE_SEND_STEP`), since the results go into the message.
-Without `review_wait` the prompt forbids GitHub writes other than the `round` steps; with it, the
-prompt names the retrigger comment and, with `ownergate`, the `round` approvals as the only ones.
-Every prompt ends with the rule that a refused act is reported, never retried. After `kinds` changes, rerun `schedule --edit <id>` (check `orca automations list` first so other
-kinds' steps are not lost).
+The prompt is built from `kinds`: each configured kind's `PROMPT_STEPS` entry (next to `COLLECTORS`
+in `prs.py`; `None` when the message is the whole action) adds its step, in `PROMPT_STEPS` order
+(`unreleased` last, since it gates `commit`), and `schedule` refuses a kind without an entry.
+`ownergate` adds its `round`/`result` step before the send (`PRE_SEND_STEP`), since the results go
+into the message. Without `review_wait` the prompt forbids GitHub writes other than the `round`
+steps; with it, the prompt names the retrigger comment and, with `ownergate`, the `round` approvals
+as the only ones. Every prompt ends with the rule that a refused act is reported, never retried.
+Items of a kind with no `PROMPT_STEPS` entry never
+reach `plan.json`, so they are neither sent nor recorded; the precheck output and the message list
+them as uncovered. The round's own commands are `precheck`, `plan --body` and `commit`, plus `round`
+and `result` with `ownergate`, so the
+prompt is fixed when it is made: after `kinds` changes, rerun `schedule --edit <id>` before the
+next round (check `orca automations list` first so other kinds' steps are not lost).
+Every command starts with `python3`: a scheduled session can refuse a leading `env` or `VAR=`
+assignment as a command of its own, so a non-default state goes in as `--state`.
 
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps
-that path. The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:
+that path.
+
+The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:
 
 | code | meaning |
 |---|---|
@@ -251,8 +261,8 @@ that path. The precheck (`prs.py precheck`) uses no model. It reads GitHub and e
 The default trigger is every 15 minutes, for a proof window. The steady state is weekday business
 hours, e.g. `*/15 9-19 * * 1-5` with `timezone` set; change `cron` in the config and run
 `schedule --edit <id> --write` (it rewrites the trigger from the config, so a cron set only in Orca is lost). `orca automations run` skips the precheck, so it
-proves nothing about it: test the precheck by running it directly with `AGENT_SKILLS_STATE`
-pointing at a scratch folder, and judge the automation by a scheduled run in
+proves nothing about it: test the precheck by running it directly with `--state` pointing at a
+scratch folder, and judge the automation by a scheduled run in
 `orca automations runs --id <id>`. Devices and their trade-offs:
 [docs/automation.md](../../docs/automation.md).
 
