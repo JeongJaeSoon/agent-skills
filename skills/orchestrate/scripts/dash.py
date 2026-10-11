@@ -727,12 +727,16 @@ def ledger_gaps(cfg, events, workers, prs, tnow):
               for d in re.findall(r"ctx_[0-9a-f]+", " ".join(str(e.get(k) or "") for k in ("note", "dispatch")))}
     landed = {e.get("pr") for e in events if e["ev"] == "landed"}
     decided = {e.get("sha") for e in events if e["ev"] in ("main_green", "main_red")} | set(prog.stack_lower(events))
+    # Merged into another PR's branch (a top-down fold, `land --onto-lower`): its commit reaches the base only in
+    # that PR's landing, whose CI run is the one to record.
+    heads = {x.get("branch") for x in prs} - {None}
+    folded = {x["number"] for x in prs if x.get("base") in heads}
     t0 = prog.parse_ts(cfg["created_at"])
     return {
         "spawns": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in mapped],
         "landings": sorted(p["number"] for p in prs if p["state"] == "merged" and p.get("merged_at")
                            and prog.parse_ts(p["merged_at"]) >= t0 and p["number"] not in landed),
-        "ci": [e.get("pr") for e in events if e["ev"] == "landed" and e.get("sha") not in decided
+        "ci": [e.get("pr") for e in events if e["ev"] == "landed" and e.get("sha") not in decided and e.get("pr") not in folded
                and tnow - prog.parse_ts(e["ts"]) > dt.timedelta(hours=2)],
     }
 

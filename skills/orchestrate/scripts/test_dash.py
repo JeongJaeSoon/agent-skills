@@ -362,6 +362,11 @@ assert gaps == {"spawns": ["ctx_bb"], "landings": [3], "ci": [2]}, gaps
 stacked = [{"ts": ago(300), "ev": "landed", "pr": 5, "sha": "s5", "stack_top": 6},
            {"ts": ago(300), "ev": "landed", "pr": 6, "sha": "s6"}, {"ts": ago(290), "ev": "main_green", "sha": "s6"}]
 assert dash.ledger_gaps(cfg_g, stacked, [], [], now)["ci"] == [], "a lower stack layer has no main CI run to record"
+folded = [{"ts": ago(300), "ev": "landed", "pr": 7, "sha": "s7"}, {"ts": ago(290), "ev": "landed", "pr": 8, "sha": "s8"},
+          {"ts": ago(280), "ev": "main_green", "sha": "s8"}]
+prs_f = [{"number": 7, "state": "merged", "merged_at": ago(300), "branch": "t-upper", "base": "t-lower"},
+         {"number": 8, "state": "merged", "merged_at": ago(290), "branch": "t-lower", "base": "feat/x"}]
+assert dash.ledger_gaps(cfg_g, folded, [], prs_f, now)["ci"] == [], "a PR folded into a lower branch has no CI run of its own"
 
 # ensure: starts this store's server once, then finds it; a second serve on the store refuses.
 import socket, subprocess, signal
