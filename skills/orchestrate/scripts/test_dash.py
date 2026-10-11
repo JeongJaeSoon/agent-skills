@@ -372,6 +372,11 @@ tip = [{"ts": ago(300), "ev": "landed", "pr": 9, "sha": "s9"}, {"ts": ago(290), 
 assert dash.ledger_gaps(cfg_g, tip, [], [], now, contains=lambda a, b: (a, b) == ("s9", "s10"))["ci"] == [], \
     "a later green at the branch tip covers the landing under it"
 assert dash.ledger_gaps(cfg_g, tip, [], [], now, contains=lambda a, b: False)["ci"] == [9], "not in its history: still a gap"
+mixed = [{"number": 11, "state": "merged", "merged_at": ago(100), "base": "feat/x", "branch": "a"},
+         {"number": 12, "state": "merged", "merged_at": ago(90), "base": "feat/x", "branch": "b"},
+         {"number": 13, "state": "merged", "merged_at": ago(80), "base": "main", "branch": "c"}]
+assert dash.ledger_gaps(cfg_g, [{"ts": ago(100), "ev": "landed", "pr": 11, "sha": "s11"}], [], mixed, now)["landings"] == [12], \
+    "a merge into another base belongs to another session"
 
 # ensure: starts this store's server once, then finds it; a second serve on the store refuses.
 import socket, subprocess, signal

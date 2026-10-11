@@ -752,10 +752,14 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
     covered = lambda e: any(g["sha"] != e["sha"] and prog.parse_ts(g["ts"]) >= prog.parse_ts(e["ts"])
                             and contains(e["sha"], g["sha"]) for g in greens)
     t0 = prog.parse_ts(cfg["created_at"])
+    # Only the bases this program lands into: another session's merge into main is not this ledger's gap.
+    ours = {x.get("base") for x in prs if x["number"] in landed} | {x.get("branch") for x in prs if x["number"] in landed}
+    ours = (ours | {cfg.get("base")}) - {None}
     return {
         "spawns": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in mapped],
         "landings": sorted(p["number"] for p in prs if p["state"] == "merged" and p.get("merged_at")
-                           and prog.parse_ts(p["merged_at"]) >= t0 and p["number"] not in landed),
+                           and prog.parse_ts(p["merged_at"]) >= t0 and p["number"] not in landed
+                           and (not ours or p.get("base") in ours)),
         "ci": [e.get("pr") for e in events if e["ev"] == "landed" and e.get("sha") not in decided and e.get("pr") not in folded
                and tnow - prog.parse_ts(e["ts"]) > dt.timedelta(hours=2) and not covered(e)],
     }
