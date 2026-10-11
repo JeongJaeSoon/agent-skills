@@ -197,9 +197,13 @@ def mpr(n, repo="acme/widgets", draft=False, labels=(), branch=None, base="main"
                            "mergeCommitAllowed": merge, "rebaseMergeAllowed": rebase},
             "reviewThreads": {"totalCount": len(threads) if total is None else total,
                               "nodes": [{"isResolved": t} for t in threads]},
-            "reviews": {"nodes": [{"author": {"__typename": t, "login": a}, "state": st, "body": "", "commit": {"oid": oid}}
-                                  for a, t, st, oid in reviews]},
-            "comments": {"nodes": [{"author": {"__typename": t, "login": a}, "body": b} for a, t, b in comments]},
+            # Fixture order is time order: reviews first, then comments.
+            "reviews": {"totalCount": len(reviews), "nodes": [
+                {"author": {"__typename": r[1], "login": r[0]}, "state": r[2], "body": "", "commit": {"oid": r[3]},
+                 "authorAssociation": r[4] if len(r) > 4 else "COLLABORATOR", "createdAt": iso(NOW - 100 + k)}
+                for k, r in enumerate(reviews)][-100:]},
+            "comments": {"nodes": [{"author": {"__typename": t, "login": a}, "body": b, "createdAt": iso(NOW - 50 + k)}
+                                   for k, (a, t, b) in enumerate(comments)]},
             "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks} if checks else None}}]}}
 
 
@@ -251,6 +255,11 @@ cases = {
              comments=[(ME, "User", f"head {H(26)}\n결론: pass")]), "변경 요청이 남아 있음"),
     27: (mpr(27, reviews=[("bob", "User", "APPROVED", H(27))]), None),                    # approved on this head, none required
     28: (mpr(28, reviews=[("bob", "User", "CHANGES_REQUESTED", "old"), ("bob", "User", "APPROVED", H(28))]), None),
+    29: (mpr(29, reviews=[("drive-by", "User", "APPROVED", H(29), "NONE")]), "head 리뷰 기록 없음: review_wait 로"),
+    30: (mpr(30, comments=[(ME, "User", f"second review — head {H(30)}\n결론: fail")]), "head 리뷰 기록 없음: review_wait 로"),
+    31: (mpr(31, reviews=[], comments=[(ME, "User", f"head {H(31)}\n> 결론: pass\n- `결론: pass`\n결론: pass / fail\n결론: fail")]),
+         "head 리뷰 기록 없음: review_wait 로"),                                              # quoted passes, real fail
+    32: (mpr(32, reviews=[("bob", "User", "APPROVED", "old")] * 101), "리뷰가 100건을 넘어 확인 불가"),
     21: (mpr(21), "다른 worktree·프로그램이 진행 중"),                                    # in an active program's ledger
     22: (mpr(22, reviews=[], comments=[(ME, "User", "review of an older head m0ld000")]), "head 리뷰 기록 없음: review_wait 로"),
 }
@@ -355,5 +364,15 @@ for broken in (str(fake_orca), "/nonexistent/orca"):
         raise AssertionError("a truncated or unreadable Orca list must raise")
     except (RuntimeError, OSError):
         pass
+
+# merges records each attempt before the round runs it: a refused merge whose verify never ran is not offered again.
+mtmp = pathlib.Path(tempfile.mkdtemp())
+p.write_json(mtmp / "prs" / "plan.json", {**mplan, "new": mplan["new"][:1]})
+mconf = mtmp / "agent-skills.json"
+mconf.write_text(json.dumps({"prs": {"kinds": ["ready_to_merge"], "merge_repos": ["acme/widgets"]}}))
+out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)], capture_output=True, text=True,
+                     env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
+assert out.returncode == 0 and out.stdout.splitlines()[1] == mplan["new"][0]["cmd"], out
+assert list(p.read_json(mtmp / "prs" / "ledger.json", {})) == [mplan["new"][0]["key"]]
 
 print("test_prs: ok")

@@ -28,7 +28,7 @@ never in this repo.
          "merge_repos": ["<owner/name>"], "merge_deny_repos": ["<repo whose merge deploys to production>"],
          "merge_methods": ["squash", "merge", "rebase"], "hold_labels": ["hold", "do-not-merge", "wip"],
          "required_bots": ["<review bot that must review each head>"], "review_bots": ["<bot whose pass verdict counts>"],
-         "review_pass_pattern": "<regex, default ^\\W*(결론|verdict)\\W*pass\\b>", "ci_wait_minutes": 15,
+         "review_verdict_pattern": "<regex with one (pass|fail) group; default in DEFAULTS>", "ci_wait_minutes": 15,
          "programs_home": "~/.claude/programs", "program_days": 7}}
 ```
 
@@ -79,11 +79,14 @@ nothing is merged.
 5. no reviewer's latest non-comment review is CHANGES_REQUESTED or DISMISSED (an approval a retarget
    or push dismissed belongs to review_wait);
 6. `mergeStateStatus` is CLEAN and `reviewDecision` is APPROVED or empty (no review required);
-7. where no review is required, the head still passed a review: an approval on that commit from
-   someone other than the user, or a comment or review body that names the full head sha and matches
-   `review_pass_pattern` (default: a line `결론: pass` or `Verdict: pass`, an independent review's
-   sticky result) from the user or one of `review_bots`. A self-reply, a failing verdict, or any other
-   bot printing the sha does not count. Without one the PR belongs to review_wait;
+7. where no review is required, the head still passed a review: an approval on that commit from a
+   collaborator (author association OWNER, MEMBER or COLLABORATOR) other than the user, or a passing
+   latest review result. A review result is a comment or review body from the user or one of
+   `review_bots` that names the full head sha and has a verdict line matching
+   `review_verdict_pattern` (default: a whole line `결론: pass|fail` or `Verdict: pass|fail`, an
+   independent review's sticky result); its last verdict line counts, and the latest result wins, so
+   a later fail overrides an earlier pass. A self-reply, a quoted verdict, or any other account does
+   not count. Without one the PR belongs to review_wait. More than 100 reviews hold the PR back;
 8. the head's check rollup is SUCCESS (no checks is not green), and no review thread is unresolved;
 9. each of `required_bots` left an APPROVED or COMMENTED review on this head. A bot that was
    rate-limited or skipped left a comment, not a review;
@@ -91,9 +94,9 @@ nothing is merged.
     allowed one is used.
 
 A ready item carries `gh pr merge <N> -R <owner/name> --<method> --match-head-commit <head>`. The
-round never adds `--admin` or `--auto` and never approves. The ledger records the head whether the
-merge went through or was refused, so a refused or failed merge is reported once and not retried at
-that head.
+round never adds `--admin` or `--auto` and never approves. `merges` records each head in the ledger
+before printing its command, so a refused or failed merge is never retried at that head, even when
+the round stops before `verify` or `commit`.
 
 ## Run
 

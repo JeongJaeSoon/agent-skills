@@ -36,7 +36,7 @@ DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs"
             "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None,
             "merge_repos": [], "merge_deny_repos": [], "merge_methods": ["squash", "merge", "rebase"],
             "hold_labels": ["hold", "do-not-merge", "wip"], "required_bots": [], "review_bots": [],
-            "review_pass_pattern": r"^\W*(결론|verdict)\W*pass\b", "ci_wait_minutes": 15,
+            "review_verdict_pattern": r"^\**(?:결론|verdict)(?:\**\s*[:：]|\s*[:：]\s*\**)\s*\**(pass|fail)\**\s*$", "ci_wait_minutes": 15,
             "programs_home": os.environ.get("PROGRAMS_HOME", "~/.claude/programs"), "program_days": 7}
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 
@@ -206,8 +206,8 @@ def collect_review_requests(gh, me, cfg, ledger, now):
 MERGE_FIELDS = """id number title url isDraft createdAt headRefOid headRefName baseRefName additions deletions
  reviewDecision mergeStateStatus state author{__typename login} labels(first:100){nodes{name}}
  repository{nameWithOwner defaultBranchRef{name} squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed}
- reviewThreads(first:100){totalCount nodes{isResolved}} reviews(last:50){nodes{author{__typename login} state body commit{oid}}}
- comments(last:50){nodes{author{__typename login} body}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}"""
+ reviewThreads(first:100){totalCount nodes{isResolved}} reviews(last:100){totalCount nodes{author{__typename login} authorAssociation state body createdAt commit{oid}}}
+ comments(last:100){nodes{author{__typename login} body createdAt}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}"""
 MERGE_SEARCH_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
                   "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MERGE_FIELDS + "}}}}")
 MERGED_Q = """query($ids:[ID!]!){nodes(ids:$ids){... on PullRequest{id state mergeCommit{oid statusCheckRollup{state
@@ -253,20 +253,27 @@ def owned_elsewhere(cfg, now):
     return {"branches": branches, "prs": prs}
 
 
+TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+
 def review_record(pr, me, cfg):
-    """A passing review of this head when none is required: an approval on this commit from someone other than the
-    owner, or a result naming the full head sha with a pass verdict (an independent review's sticky comment) from the
-    owner or one of review_bots. A self-reply, a failing verdict, or a bot that merely prints the sha does not count."""
+    """A passing review of this head when none is required: an approval on this commit from a collaborator other than
+    the owner, or, when the latest review result naming the full head sha (an independent review's sticky comment,
+    from the owner or one of review_bots) ends on a pass verdict. A later fail overrides an earlier pass."""
     head = pr["headRefOid"]
-    passed = re.compile(cfg["review_pass_pattern"], re.I | re.M)
+    verdict = re.compile(cfg["review_verdict_pattern"], re.I | re.M)
     bots = {bot_name(b) for b in cfg["review_bots"]}
 
     def login(n):
         return (n.get("author") or {}).get("login")
-    return (any(r["state"] == "APPROVED" and login(r) != me and (r.get("commit") or {}).get("oid") == head
-                for r in pr["reviews"]["nodes"])
-            or any((login(c) == me or bot_name(login(c)) in bots) and head in (c.get("body") or "")
-                   and passed.search(c.get("body") or "") for c in pr["reviews"]["nodes"] + pr["comments"]["nodes"]))
+    if any(r["state"] == "APPROVED" and login(r) != me and r.get("authorAssociation") in TRUSTED
+           and (r.get("commit") or {}).get("oid") == head for r in pr["reviews"]["nodes"]):
+        return True
+    results = sorted((n.get("createdAt") or "", found[-1].lower())
+                     for n in pr["reviews"]["nodes"] + pr["comments"]["nodes"]
+                     if (login(n) == me or bot_name(login(n)) in bots) and head in (n.get("body") or "")
+                     and (found := verdict.findall(n.get("body") or "")))
+    return bool(results) and results[-1][1] == "pass"
 
 
 def merge_readiness(pr, cfg, owned, me):
@@ -289,6 +296,8 @@ def merge_readiness(pr, cfg, owned, me):
         return None, "다른 worktree·프로그램이 진행 중"
     if pr["baseRefName"] != (repo.get("defaultBranchRef") or {}).get("name"):
         return None, f"stack 하위 PR (base {pr['baseRefName']})"
+    if pr["reviews"]["totalCount"] > len(pr["reviews"]["nodes"]):
+        return None, "리뷰가 100건을 넘어 확인 불가"
     latest = {}
     for r in pr["reviews"]["nodes"]:
         if r["state"] != "COMMENTED":
@@ -516,9 +525,14 @@ def main():
         (STATE / "body.txt").write_text(body(plan))
         print(body(plan))
     elif cmd == "merges":
-        for i in read_json(STATE / "plan.json", {}).get("new", []):
-            if i.get("cmd"):
-                print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}")
+        # Recorded before the round runs them: a refused or failed merge is never retried at that head, even
+        # when verify or commit never happens.
+        acts = [i for i in read_json(STATE / "plan.json", {}).get("new", []) if i.get("cmd")]
+        ledger = read_json(STATE / "ledger.json", {})
+        ledger.update({i["key"]: {"at": now, "kind": i["kind"], "id": i["id"]} for i in acts})
+        write_json(STATE / "ledger.json", ledger)
+        for i in acts:
+            print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}")
     elif cmd == "verify":
         print(verify(GitHub(), STATE, cfg))
     elif cmd == "commit":
