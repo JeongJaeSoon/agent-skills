@@ -694,6 +694,7 @@ def dispatch_cmds(plan, cfg):
 
 
 # A kind's own step in the automation prompt, between the coordinator send and commit; {env} is the prs.py call.
+# Steps run in this dict's order, not the config's: the unreleased step ends by gating commit, which deletes plan.json.
 PROMPT_STEPS = {
     "review_wait": (
         "그다음 `{env} actions` 가 출력하는 행동을 하나씩 처리하고, 처리할 때마다 `{env} log --key <key> --source <결과>` 로 "
@@ -720,8 +721,8 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
     env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
     body_file = STATE / "body.txt"
-    steps = " ".join(PROMPT_STEPS[k].format(env=env) for k in cfg["kinds"] if k in PROMPT_STEPS)
-    reads = "" if steps else " 이 회차는 읽기만 한다: 리뷰·코멘트·재요청 같은 GitHub 쓰기는 하지 않는다."
+    steps = " ".join(step.format(env=env) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"])
+    reads = "" if "review_wait" in cfg["kinds"] else " 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다."
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "

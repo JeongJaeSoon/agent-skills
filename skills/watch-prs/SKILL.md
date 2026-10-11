@@ -183,8 +183,9 @@ python3 "$P" schedule --write    # creates it
 python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's trigger, prompt and precheck, keeping its id
 ```
 
-The prompt is built from `kinds`: each configured kind with a `PROMPT_STEPS` entry adds its step, so
-after `kinds` changes, rerun `schedule --edit <id>` (check `orca automations list` first so other
+The prompt is built from `kinds`: each configured kind with a `PROMPT_STEPS` entry adds its step, in
+`PROMPT_STEPS` order (`unreleased` last, since it gates `commit`). Without `review_wait` the prompt
+forbids GitHub writes. After `kinds` changes, rerun `schedule --edit <id>` (check `orca automations list` first so other
 kinds' steps are not lost).
 
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps

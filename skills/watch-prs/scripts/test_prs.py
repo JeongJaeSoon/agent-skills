@@ -335,6 +335,7 @@ prompt = line[line.index("--prompt") + 1]
 assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
 assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
 assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
+assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 

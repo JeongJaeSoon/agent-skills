@@ -238,9 +238,12 @@ assert {i["key"] for i in after["new"]} == {"acme/widgets#33@h33/request/bob", "
 script = pathlib.Path("/repo/skills/watch-prs/scripts/prs.py")
 with_wait = p.schedule_cmd(script, {**c, "inbox_to": "term_x"}, "path:/repo")
 prompt = with_wait[with_wait.index("--prompt") + 1]
-assert "actions" in prompt and "slack-post" in prompt and "--source refused" in prompt and "읽기만 한다" not in prompt
+assert "actions" in prompt and "slack-post" in prompt and "--source refused" in prompt and "직접 하지 않는다" not in prompt
 plain = p.schedule_cmd(script, {**c, "kinds": ["review_request"]}, "path:/repo")
-assert "actions" not in plain[plain.index("--prompt") + 1] and "읽기만 한다" in plain[plain.index("--prompt") + 1]
+assert "actions" not in plain[plain.index("--prompt") + 1] and "직접 하지 않는다" in plain[plain.index("--prompt") + 1]
+both = p.schedule_cmd(script, {**c, "kinds": ["unreleased", "review_wait"]}, "path:/repo")
+both = both[both.index("--prompt") + 1]
+assert both.index(" actions`") < both.index(" dispatch`"), "the unreleased step gates commit, so it runs last whatever the config order"
 edit = p.schedule_cmd(script, c, "path:/repo", edit="auto-1")
 assert edit[:4] == ["orca", "automations", "edit", "auto-1"] and edit[edit.index("--trigger") + 1] == c["cron"]
 assert edit[edit.index("--timezone") + 1] == "Asia/Tokyo" and "--precheck" in edit
