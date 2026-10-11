@@ -1,6 +1,6 @@
 # Program note template
 
-Create it through `use-notes` at `Project/<project>/program-<slug>.md`, or where and under the title the store's rules file says (create or replace). Korean prose, identifiers as-is. The note is the handoff: a new coordinator reads only this note and `program.json`.
+Create it through `use-notes` at `Project/<project>/program-<slug>.md`, or where and under the title the store's rules file says; its tags and headings follow that file too (create or replace). Korean prose, identifiers as-is. The note is the handoff: a new coordinator reads only this note and `program.json`.
 
 ```markdown
 #<project> #program

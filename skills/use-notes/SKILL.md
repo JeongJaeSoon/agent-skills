@@ -24,8 +24,10 @@ Read the adapter's reference before the first read or write in a session:
 
 The store may carry its own rules file (the vault's `CLAUDE.md`, or `<root>/README.md`). Read it
 through the adapter's read tool once per session before the first write, whether creating,
-editing or appending, and apply it to every note you touch: folder, file name, tags, first
-heading level, links, section order, the marker for finished work. Where it and this skill
+editing or appending. A new note follows all of it: folder, file name, tags, first heading
+level, links, section order, the marker for finished work. A note you edit or append to follows
+its content rules in the part you write; a name or folder that breaks the rules is reported,
+and moved or renamed only with the user's approval. Where the rules file and this skill
 differ, it wins. The names below are defaults for a store without rules: under a rule like
 "titles in the user's language", `worklog-<ticket>` becomes a title in that language that still
 names the ticket.

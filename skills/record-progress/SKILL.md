@@ -34,7 +34,7 @@ still investigating. Record when one of these happened:
 |---|---|---|
 | PR opened | ticket to `started`, PR linked (`use-tracker` "Milestones"); no ticket for real work → file one (`write-ticket`) | — |
 | Review requested | `review` with the review line | — |
-| Merged, or deployed and verified | the completion comment with the evidence; `completed` only when the ticket's own done holds | the worklog line, if the work kept one |
+| Merged, or deployed and verified | the completion comment with the evidence and `completed` when the ticket's own done holds; else one comment naming the open criterion (`use-tracker` "Reconcile") | the worklog line, if the work kept one |
 | Investigation or design concluded | a comment linking the note, if a ticket exists | the conclusion: chosen, ruled out, why, the trap |
 | Follow-up found | NOW only, classified below | LATER and DROP reasons, if not in the tracker |
 | Session wrapping up | `use-tracker` "Reconcile" over the tickets touched | one worklog line on what this session did |
@@ -52,15 +52,18 @@ still investigating. Record when one of these happened:
   **Work to an Exit Condition**, `use-tracker` "Exit condition"): only NOW becomes a ticket,
   LATER goes on the deferred list with its revisit trigger, DROP gets its reason. Report epics
   as "N/M 완료 조건 충족", never as tickets filed.
-- **Epic upkeep is part of the job.** A ticket with no parent that belongs under an epic gets
+- **Epic upkeep is part of the job** outside a program. A ticket with no parent that belongs under an epic gets
   one; an epic whose exit condition is met gets closed. List each change in the report so it
   can be undone.
 - **In the background.** When the user's instructions or the config name a delegate agent for
   the tracker or the notes store (`tracker.delegate_agent`, `notes.delegate_agent`), start both
   in one message with the facts, absolute dates, `owner/repo#n` with its URL, and the commands
   and output that verified each claim. Keep working while they run.
-- **Inside a program or brief,** follow what it says the worker records; the coordinator
-  reconciles tickets on `worker_done`, so a worker does not file or move them on its own.
+- **Inside a program or brief,** follow what it says the worker records. A worker still makes
+  its milestone moves (`deliver-ticket`), files no follow-ups (they go in its `worker_done`),
+  and leaves Reconcile and epic upkeep to the coordinator.
+- **Once.** When the latest comment already says it, do not post it again; `deliver-ticket`
+  may have recorded the milestone already.
 
 ## 3. Report
 
