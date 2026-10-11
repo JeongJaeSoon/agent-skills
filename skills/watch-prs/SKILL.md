@@ -27,7 +27,8 @@ never in this repo.
          "kinds": ["review_request", "ready_to_merge"],
          "merge_repos": ["<owner/name>"], "merge_deny_repos": ["<repo whose merge deploys to production>"],
          "merge_methods": ["squash", "merge", "rebase"], "hold_labels": ["hold", "do-not-merge", "wip"],
-         "required_bots": ["<review bot that must review each head>"], "ci_wait_minutes": 15,
+         "required_bots": ["<review bot that must review each head>"], "review_bots": ["<bot whose pass verdict counts>"],
+         "review_pass_pattern": "<regex, default ^\\W*(결론|verdict)\\W*pass\\b>", "ci_wait_minutes": 15,
          "programs_home": "~/.claude/programs", "program_days": 7}}
 ```
 
@@ -75,12 +76,14 @@ nothing is merged.
    `program_days`. If Orca cannot be read, nothing is ready. A PR you want merged by the round lives
    on a branch no worktree has checked out;
 4. its base is the default branch: a stacked child waits for its parent;
-5. the latest non-comment review is not DISMISSED: an approval a retarget or push dismissed belongs to
-   review_wait;
+5. no reviewer's latest non-comment review is CHANGES_REQUESTED or DISMISSED (an approval a retarget
+   or push dismissed belongs to review_wait);
 6. `mergeStateStatus` is CLEAN and `reviewDecision` is APPROVED or empty (no review required);
-7. where no review is required, the head was still reviewed: a review on that commit, or a comment
-   naming its sha (an independent review's sticky result), by the user or a bot. A comment from
-   anyone else does not count. Without one the PR belongs to review_wait;
+7. where no review is required, the head still passed a review: an approval on that commit from
+   someone other than the user, or a comment or review body that names the full head sha and matches
+   `review_pass_pattern` (default: a line `결론: pass` or `Verdict: pass`, an independent review's
+   sticky result) from the user or one of `review_bots`. A self-reply, a failing verdict, or any other
+   bot printing the sha does not count. Without one the PR belongs to review_wait;
 8. the head's check rollup is SUCCESS (no checks is not green), and no review thread is unresolved;
 9. each of `required_bots` left an APPROVED or COMMENTED review on this head. A bot that was
    rate-limited or skipped left a comment, not a review;
@@ -105,7 +108,9 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    the chat, then run the command on its own, once. A merge the auto-mode classifier or a hook
    refuses is reported in the message, not retried in any form. Then `python3 "$P" verify` reads each
    PR back (MERGED or not), waits up to `ci_wait_minutes` for the default branch CI run on the merge
-   commit, and rewrites `<state>/body.txt` with the outcome; a red run's URL is in the line.
+   commit, and rewrites `<state>/body.txt` with the outcome; a red run's URL is in the line. A merge
+   commit with no checks after two minutes is reported as a branch without CI. If `verify` fails,
+   send nothing and do not commit.
 3. Send it as one message:
 
    ```bash

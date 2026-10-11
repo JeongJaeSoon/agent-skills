@@ -22,7 +22,7 @@ merge commit's CI and rewrites body.txt. schedule prints the
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
 """
-import datetime as dt, json, os, pathlib, shlex, subprocess, sys, time
+import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "prs"
@@ -35,7 +35,8 @@ DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs"
             "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
             "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None,
             "merge_repos": [], "merge_deny_repos": [], "merge_methods": ["squash", "merge", "rebase"],
-            "hold_labels": ["hold", "do-not-merge", "wip"], "required_bots": [], "ci_wait_minutes": 15,
+            "hold_labels": ["hold", "do-not-merge", "wip"], "required_bots": [], "review_bots": [],
+            "review_pass_pattern": r"^\W*(결론|verdict)\W*pass\b", "ci_wait_minutes": 15,
             "programs_home": os.environ.get("PROGRAMS_HOME", "~/.claude/programs"), "program_days": 7}
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 
@@ -203,7 +204,7 @@ def collect_review_requests(gh, me, cfg, ledger, now):
 
 
 MERGE_FIELDS = """id number title url isDraft createdAt headRefOid headRefName baseRefName additions deletions
- reviewDecision mergeStateStatus state author{__typename login} labels(first:20){nodes{name}}
+ reviewDecision mergeStateStatus state author{__typename login} labels(first:100){nodes{name}}
  repository{nameWithOwner defaultBranchRef{name} squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed}
  reviewThreads(first:100){totalCount nodes{isResolved}} reviews(last:50){nodes{author{__typename login} state body commit{oid}}}
  comments(last:50){nodes{author{__typename login} body}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}"""
@@ -252,17 +253,20 @@ def owned_elsewhere(cfg, now):
     return {"branches": branches, "prs": prs}
 
 
-def review_record(pr, me):
-    """A review of this head when none is required: a review on it, or a comment naming it (an independent review's
-    sticky result), by the owner or a bot. Anyone else's comment does not count."""
+def review_record(pr, me, cfg):
+    """A passing review of this head when none is required: an approval on this commit from someone other than the
+    owner, or a result naming the full head sha with a pass verdict (an independent review's sticky comment) from the
+    owner or one of review_bots. A self-reply, a failing verdict, or a bot that merely prints the sha does not count."""
     head = pr["headRefOid"]
+    passed = re.compile(cfg["review_pass_pattern"], re.I | re.M)
+    bots = {bot_name(b) for b in cfg["review_bots"]}
 
-    def trusted(n):
-        author = n.get("author") or {}
-        return author.get("login") == me or author.get("__typename") == "Bot"
-    return (any(trusted(r) and (r.get("commit") or {}).get("oid") == head and r["state"] in ("APPROVED", "COMMENTED")
+    def login(n):
+        return (n.get("author") or {}).get("login")
+    return (any(r["state"] == "APPROVED" and login(r) != me and (r.get("commit") or {}).get("oid") == head
                 for r in pr["reviews"]["nodes"])
-            or any(trusted(c) and head[:7] in (c.get("body") or "") for c in pr["reviews"]["nodes"] + pr["comments"]["nodes"]))
+            or any((login(c) == me or bot_name(login(c)) in bots) and head in (c.get("body") or "")
+                   and passed.search(c.get("body") or "") for c in pr["reviews"]["nodes"] + pr["comments"]["nodes"]))
 
 
 def merge_readiness(pr, cfg, owned, me):
@@ -285,14 +289,19 @@ def merge_readiness(pr, cfg, owned, me):
         return None, "다른 worktree·프로그램이 진행 중"
     if pr["baseRefName"] != (repo.get("defaultBranchRef") or {}).get("name"):
         return None, f"stack 하위 PR (base {pr['baseRefName']})"
-    verdicts = [r["state"] for r in pr["reviews"]["nodes"] if r["state"] != "COMMENTED"]
-    if verdicts and verdicts[-1] == "DISMISSED":
+    latest = {}
+    for r in pr["reviews"]["nodes"]:
+        if r["state"] != "COMMENTED":
+            latest[(r.get("author") or {}).get("login")] = r["state"]
+    if "CHANGES_REQUESTED" in latest.values():
+        return None, "변경 요청이 남아 있음"
+    if "DISMISSED" in latest.values():
         return None, "승인이 해제됨: review_wait 로"
     if pr["mergeStateStatus"] != "CLEAN":
         return None, f"mergeStateStatus {pr['mergeStateStatus']}"
     if pr.get("reviewDecision") not in ("APPROVED", None, ""):
         return None, f"리뷰 {pr['reviewDecision']}"
-    if pr.get("reviewDecision") != "APPROVED" and not review_record(pr, me):
+    if pr.get("reviewDecision") != "APPROVED" and not review_record(pr, me, cfg):
         return None, "head 리뷰 기록 없음: review_wait 로"
     rollup = (pr["commits"]["nodes"] or [{}])[0].get("commit", {}).get("statusCheckRollup")
     if not rollup or rollup["state"] != "SUCCESS":
@@ -375,8 +384,12 @@ def body(plan):
     return "\n".join(lines)
 
 
-def merge_outcome(node):
-    """(result line, CI settled) for a PR the round tried to merge: merged or not, and the merge commit's CI."""
+NO_CI_GRACE = 120
+
+
+def merge_outcome(node, waited=0):
+    """(result line, CI settled) for a PR the round tried to merge: merged or not, and the merge commit's CI.
+    A merge commit with no checks after NO_CI_GRACE seconds is taken as a branch without CI."""
     if not node or node.get("state") != "MERGED":
         return f"머지 안 됨 (state {(node or {}).get('state', '?')}): 거부·실패는 이 head 에서 다시 시도하지 않음", True
     commit = node["mergeCommit"] or {}
@@ -388,6 +401,8 @@ def merge_outcome(node):
         bad = [c.get("detailsUrl") or c.get("targetUrl") for c in rollup["contexts"]["nodes"]
                if c.get("conclusion") in ("FAILURE", "TIMED_OUT", "CANCELLED") or c.get("state") in ("FAILURE", "ERROR")]
         return f"머지됨 {sha}, 기본 브랜치 CI red: {', '.join(u for u in bad if u) or '실패 체크'}", True
+    if not rollup and waited >= NO_CI_GRACE:
+        return f"머지됨 {sha}, 기본 브랜치 CI 없음 ({NO_CI_GRACE}초 동안 체크가 붙지 않음)", True
     return f"머지됨 {sha}, 기본 브랜치 CI {rollup.get('state') or '아직 시작 안 됨'}", False
 
 
@@ -398,11 +413,13 @@ def verify(gh, state, cfg, clock=time.time, sleep=time.sleep):
     if not plan:
         raise SystemExit("verify: no plan.json; run plan --body first")
     acted = {i["id"]: i for i in plan["new"] if i.get("cmd")}
-    deadline = clock() + cfg["ci_wait_minutes"] * 60
+    start = clock()
+    deadline = start + cfg["ci_wait_minutes"] * 60
     outcomes = {}
     while acted:
         by_id = {n["id"]: n for n in gh.merged(list(acted), plan.get("viewer"))}
-        outcomes = {k: merge_outcome(by_id.get(k)) for k in acted}
+        waited = clock() - start
+        outcomes = {k: merge_outcome(by_id.get(k), waited) for k in acted}
         if all(done for _, done in outcomes.values()) or clock() >= deadline:
             break
         sleep(30)
@@ -462,7 +479,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
     merge_step = (f"`{env} merges` 가 출력하는 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
                   f"그 아래 `gh pr merge` 명령을 단독 명령으로 한 번씩 실행한다(--admin·--auto 를 붙이지 않는다). 거부되거나 실패한 "
                   f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않는다. 그다음 `{env} verify` 로 MERGED 와 기본 브랜치 CI 를 확인해 "
-                  f"본문을 다시 쓰고, ") if merging else ""
+                  f"본문을 다시 쓴다. verify 가 실패하면 보내지도 commit 하지도 않고 그 오류를 남긴 채 끝낸다. 성공하면 ") if merging else ""
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 {merge_step}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보내고(N 은 본문 첫 줄의 건수), 보내기가 성공했을 때만 "

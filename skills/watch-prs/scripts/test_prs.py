@@ -188,7 +188,7 @@ def mpr(n, repo="acme/widgets", draft=False, labels=(), branch=None, base="main"
         checks="SUCCESS", threads=(), total=None, reviews="record", comments=(), squash=True, merge=True, rebase=False):
     head = f"m{n}ead000"
     if reviews == "record":  # an independent review's result names the head: the no-review path's record
-        reviews, comments = [], [(ME, "User", f"review of {head}: no blockers")] + list(comments)
+        reviews, comments = [], [(ME, "User", f"independent review — head {head}\n결론: pass")] + list(comments)
     return {"id": f"M_{repo}_{n}", "number": n, "title": f"Ship {n}", "url": f"https://github.com/{repo}/pull/{n}",
             "isDraft": draft, "createdAt": iso(NOW - 2 * DAY), "headRefOid": head, "headRefName": branch or f"b{n}",
             "baseRefName": base, "additions": 3, "deletions": 1, "reviewDecision": decision, "mergeStateStatus": merge_state,
@@ -217,7 +217,7 @@ class MergeFake(Fake):
 
 
 mcfg = {**cfg, "kinds": ["ready_to_merge"], "merge_repos": ["acme/widgets", "acme/infra"], "merge_deny_repos": ["acme/infra"],
-        "required_bots": []}
+        "required_bots": [], "review_bots": ["reviewbot[bot]"]}
 owned = {"branches": {"lead-card"}, "prs": {"acme/widgets#21"}}
 real_owned = p.owned_elsewhere
 p.owned_elsewhere = lambda c, now: owned
@@ -243,7 +243,14 @@ cases = {
     17: (mpr(17, squash=False, merge=False), "허용된 머지 방식 없음"),
     18: (mpr(18, reviews=[]), "head 리뷰 기록 없음: review_wait 로"),                     # CLEAN alone is not a review
     19: (mpr(19, reviews=[], comments=[("mallory", "User", f"LGTM {H(19)}")]), "head 리뷰 기록 없음: review_wait 로"),
-    20: (mpr(20, reviews=[("reviewbot", "Bot", "COMMENTED", H(20))]), None),             # a bot reviewed this head
+    20: (mpr(20, reviews=[], comments=[("reviewbot", "Bot", f"Reviewed {H(20)}\n**Verdict:** pass")]), None),  # a review bot
+    23: (mpr(23, reviews=[], comments=[(ME, "User", f"head {H(23)}\n결론: fail")]), "head 리뷰 기록 없음: review_wait 로"),
+    24: (mpr(24, reviews=[(ME, "User", "COMMENTED", H(24))]), "head 리뷰 기록 없음: review_wait 로"),  # a self-reply
+    25: (mpr(25, reviews=[], comments=[("previewbot", "Bot", f"Deployed {H(25)}\n결론: pass")]), "head 리뷰 기록 없음: review_wait 로"),
+    26: (mpr(26, reviews=[("bob", "User", "CHANGES_REQUESTED", "old"), (ME, "User", "COMMENTED", H(26))],
+             comments=[(ME, "User", f"head {H(26)}\n결론: pass")]), "변경 요청이 남아 있음"),
+    27: (mpr(27, reviews=[("bob", "User", "APPROVED", H(27))]), None),                    # approved on this head, none required
+    28: (mpr(28, reviews=[("bob", "User", "CHANGES_REQUESTED", "old"), ("bob", "User", "APPROVED", H(28))]), None),
     21: (mpr(21), "다른 worktree·프로그램이 진행 중"),                                    # in an active program's ledger
     22: (mpr(22, reviews=[], comments=[(ME, "User", "review of an older head m0ld000")]), "head 리뷰 기록 없음: review_wait 로"),
 }
@@ -257,19 +264,19 @@ assert p.merge_readiness(mpr(1), mcfg, None, ME)[1] == "프로그램 소유 여�
 # Required review bots must have reviewed this head; a rate-limited bot leaves no review, an old review does not count.
 bcfg = {**mcfg, "required_bots": ["reviewbot[bot]"]}
 assert p.merge_readiness(mpr(1), bcfg, owned, ME)[1] == "필수 봇 reviewbot[bot] 이 head 를 리뷰하지 않음"
-assert p.merge_readiness(mpr(1, reviews=[("reviewbot", "Bot", "COMMENTED", "old")], comments=[(ME, "User", H(1))]), bcfg, owned, ME)[1].startswith("필수 봇")
-assert p.merge_readiness(mpr(1, reviews=[("reviewbot", "Bot", "COMMENTED", H(1))]), bcfg, owned, ME) == ("squash", None)
+assert p.merge_readiness(mpr(1, reviews=[("reviewbot", "Bot", "COMMENTED", "old")], comments=[(ME, "User", f"{H(1)}\n결론: pass")]), bcfg, owned, ME)[1].startswith("필수 봇")
+assert p.merge_readiness(mpr(1, reviews=[("reviewbot", "Bot", "COMMENTED", H(1))], comments=[(ME, "User", f"{H(1)}\n결론: pass")]), bcfg, owned, ME) == ("squash", None)
 
 # The collector: search scoped to merge_repos, one item per ready PR with the exact merge command; the rest excluded.
 fake = MergeFake([c[0] for c in cases.values()])
 mplan = p.compute(fake, mcfg, {}, NOW)
 assert fake.queries == ["is:pr is:open archived:false author:@me repo:acme/widgets repo:acme/infra"], fake.queries
-assert [i["number"] for i in mplan["new"]] == [1, 2, 20], mplan["new"]
+assert [i["number"] for i in mplan["new"]] == [1, 2, 20, 27, 28], mplan["new"]
 one = mplan["new"][0]
 assert one["key"] == f"acme/widgets#1@{H(1)}" and one["method"] == "squash"
 assert one["cmd"] == f"gh pr merge 1 -R acme/widgets --squash --match-head-commit {H(1)}", one["cmd"]
 mwhy = {e["pr"]: e["why"] for e in mplan["excluded"]}
-assert len(mwhy) == len(cases) - 3 and mwhy["acme/widgets#12"] == "다른 worktree·프로그램이 진행 중"
+assert len(mwhy) == len(cases) - 5 and mwhy["acme/widgets#12"] == "다른 worktree·프로그램이 진행 중"
 # An empty merge_repos merges nothing and does not search.
 empty = MergeFake([mpr(1)])
 assert p.compute(empty, {**mcfg, "merge_repos": []}, {}, NOW)["new"] == [] and empty.queries == []
@@ -290,7 +297,7 @@ red = [{"id": "M_acme/widgets_1", "state": "MERGED", "mergeCommit": {"oid": "abc
         "contexts": {"nodes": [{"name": "test", "conclusion": "FAILURE", "detailsUrl": "https://ci.example.test/run/9"},
                                {"name": "lint", "conclusion": "SUCCESS", "detailsUrl": "https://ci.example.test/run/8"}]}}}},
        pending[1]]
-clock = iter([0, 10, 40])
+clock = iter([0, 0, 10, 30, 40])
 slept = []
 text = p.verify(MergeFake([], [pending, red]), mstate, mcfg, clock=lambda: next(clock), sleep=slept.append)
 assert slept == [30], slept
@@ -301,9 +308,16 @@ assert (mstate / "body.txt").read_text() == text
 assert all(i.get("result") for i in p.read_json(mstate / "plan.json", {})["new"])
 # CI still running at the deadline: reported as such, not as green.
 p.write_json(mstate / "plan.json", two)
-clock = iter([0, 901])
+clock = iter([0, 0, 901, 901])
 text = p.verify(MergeFake([], [pending]), mstate, mcfg, clock=lambda: next(clock), sleep=lambda s: None)
 assert "기본 브랜치 CI PENDING" in text
+# A default branch without CI: no checks attach to the merge commit; after the grace it is reported, not awaited.
+bare = [{**pending[0], "mergeCommit": {"oid": "abc1234def", "statusCheckRollup": None}}, pending[1]]
+p.write_json(mstate / "plan.json", two)
+clock = iter([0, 0, 30, 30, 150, 150])
+slept = []
+text = p.verify(MergeFake([], [bare]), mstate, mcfg, clock=lambda: next(clock), sleep=slept.append)
+assert slept == [30, 30] and "기본 브랜치 CI 없음" in text, (slept, text)
 # commit records the merged heads: the same head is never offered again, merged or refused.
 assert p.commit(mstate, mcfg, NOW) == 2
 assert p.compute(MergeFake([c[0] for c in cases.values()][:2]), mcfg, p.read_json(mstate / "ledger.json", {}), NOW)["new"] == []
