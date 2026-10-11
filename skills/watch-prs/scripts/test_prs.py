@@ -507,7 +507,7 @@ assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp /
 line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"),
                      {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
 assert line[:3] == ["orca", "automations", "create"]
-assert line[line.index("--trigger") + 1] == "*/15 * * * *"
+assert line[line.index("--trigger") + 1] == "*/30 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
 prompt = line[line.index("--prompt") + 1]
