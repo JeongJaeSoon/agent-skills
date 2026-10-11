@@ -33,9 +33,12 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=(), merged=(), deployed=None, live=()):
-        self.found, self.by_id = list(search), {n["id"]: n for n in nodes}
+    def __init__(self, search, nodes=(), merged=(), deployed=None, live=(), mine=()):
+        self.found, self.by_id, self.own = list(search), {n["id"]: n for n in nodes}, list(mine)
         self.merged, self.deployed, self.live, self.queries = list(merged), deployed, set(live), []
+
+    def mine(self, self_bots):
+        return self.own
 
     def viewer(self):
         return ME
@@ -151,10 +154,10 @@ assert list(p.read_json(state / "ledger.json", {})) == [still]
 # A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
-    p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
+    p.compute(Fake([]), {**cfg, "kinds": ["ready_to_merge"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
-    assert "review_wait" in str(e)
+    assert "ready_to_merge" in str(e)
 
 # Slack review requests from watch-mentions' seen ledger: one entry per PR, permalinks attached.
 seen_file = state.parent / "mentions-seen.json"
@@ -322,14 +325,15 @@ assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
 
 # schedule: prints the create command with the precheck wired in; --write is the only path that creates.
-line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
+line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"),
+                     {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck --kinds review_request"
 prompt = line[line.index("--prompt") + 1]
 assert "plan --body --kinds review_request`" in prompt and "--to term_x" in prompt
-assert "보내기가 성공했을 때만 `python3 /repo/skills/watch-prs/scripts/prs.py commit --kinds review_request`" in prompt
+assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit --kinds review_request`" in prompt
 assert "dispatch" not in prompt, "review_request alone has no step after the message"
 # A scheduled session may refuse a command that starts with `env` or a `VAR=` assignment, so neither appears.
 no_env = lambda argv: "env " not in " ".join(argv) and not re.search(r"(^|[\s`])[A-Z_]{2,}=", " ".join(argv))
@@ -340,15 +344,26 @@ prompt = line[line.index("--prompt") + 1]
 assert no_env(line), line
 assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행해", prompt), "a failed send must not start workers"
 assert prompt.index("dispatch") < prompt.index("commit --kinds review_request,unreleased` 을") and "다시 시도하지 않고" in prompt
+assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
+# review_wait's actions and log lines start with python3 too, with the state flag right after the subcommand.
+saved_state, p.STATE = p.STATE, pathlib.Path("/s/prs")
+try:
+    line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": ["review_request", "review_wait"]}, "path:/r", edit="auto1")
+finally:
+    p.STATE = saved_state
+prompt = line[line.index("--prompt") + 1]
+assert line[:4] == ["orca", "automations", "edit", "auto1"] and no_env(line), line
+assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --kinds review_request,review_wait --state /s"
+assert "`python3 /r/prs.py actions --state /s`" in prompt and "`python3 /r/prs.py log --state /s --key <key>" in prompt, prompt
 # A kind with no step is refused at schedule time rather than committed behind a prompt that never acts on it.
-saved, p.STEPS = p.STEPS, {k: v for k, v in p.STEPS.items() if k != "unreleased"}
+saved, p.PROMPT_STEPS = p.PROMPT_STEPS, {k: v for k, v in p.PROMPT_STEPS.items() if k != "unreleased"}
 try:
     p.schedule_cmd(pathlib.Path("/r/prs.py"), rcfg, "path:/r")
     raise AssertionError("schedule accepted a kind without a step")
 except SystemExit as e:
     assert "unreleased" in str(e), e
 finally:
-    p.STEPS = saved
+    p.PROMPT_STEPS = saved
 # A state folder off the default goes in as a flag after the subcommand, not through the environment.
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout

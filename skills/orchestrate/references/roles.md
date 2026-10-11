@@ -128,21 +128,32 @@ EVERY COMMIT
 CONTRACTS   A change to a running program's contract (merge policy, predicate, the brief's required
             fields, landing rules) waits for that coordinator's confirmation: ask, then commit.
 FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is editing.
-            An act refused by a permission prompt, the auto-mode classifier, a Claude Code hook or
-            the human is not tried again in any form: not re-run, not moved into a script or
-            another tool, not aimed at a renamed target, not handed to a subagent or another
-            session. Report it with what the act was for, the refusal's category and the exact
-            command, and put this rule in every subagent prompt you write. Taking the path this
-            brief already names for that act (`orch land` for a merge) is not a retry, nor is
-            doing the act again after the human added a rule for it or approved it in your own
-            chat. A hook that blocked only the text of a command reading no protected file, and
-            says to reword it: reword that text and say so in the report. A read-only command on
-            files in your own worktree (no credential, no personal data) that the classifier
-            refused as something it does not do, such as destruction or exfiltration: do the same
-            read once with the Read or Grep tool, and report the refused command and its
+            An act refused by a permission prompt, the auto-mode classifier (including an error that
+            returns no verdict), a Claude Code hook or the human is not tried again in any form: not
+            re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
+            aimed at a renamed target, not handed to a subagent or another session. Report it in the
+            same turn to whoever gave you this work, with what the act was for, the refusal's
+            category (`no verdict` when the classifier gave none) and the exact command: a worker
+            reports to its coordinator as an orchestration message of type escalation (its terminal
+            is not read), a subagent to the session that started it, in its result; a card with no
+            orchestration channel to the human in its own chat, with its Human only batch. Paste
+            this paragraph, from "An act refused" through "run it again.", verbatim into every
+            subagent prompt you write: a summary drops the forms it lists. Taking the path this
+            brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
+            retry, nor is doing the act again after the human added a rule for it or approved it in
+            the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
+            Write got no verdict: the session that started that unit, never the refused one, takes
+            the whole unit back once (a coordinator restarts it as a new card, a worker does it in
+            its own session), and a second `no verdict` there goes to the human, reported the same
+            way. If you are the refused one, stop that edit and report it; do not finish it another
+            way. A hook that blocked only the text of a command reading no protected file, and says
+            to reword it: reword that text and say so in the report. A read-only command on files in
+            your own worktree (no credential, no personal data) that the classifier refused as
+            something it does not do, such as destruction or exfiltration, or with no verdict: do
+            the same read once with the Read or Grep tool, and report the refused command and its
             category. A second refusal, or any doubt that the read is harmless, is reported and
-            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the
-            cause and run it again.
+            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the cause
+            and run it again.
 REPORT      One status per commit, draft PR or ticket: the sha or PR URL, the diff
             summary, the audit's findings and what was applied, the grep and its result, each
             candidate dropped as "not applied: <candidate> — <reason>", and whether a reload is

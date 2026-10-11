@@ -69,6 +69,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `handoff-ticket` | 끝난 뒤 다음 티켓을 새 Orca 카드로 |
 | `dispatch-card` | 이 세션은 계속하면서 다른 저장소나 곁가지를 카드로 |
 | `end-session` | 세션·카드·worktree 정리. Orca 워커와 브리프로 띄운 카드는 일을 마치면 스스로 닫는다 |
+| `record-progress` | PR·리뷰·머지·조사 결론마다 묻지 않고 기록: 트래커에는 근거 있는 상태, 노트에는 판단의 이유 |
 
 **프로젝트 하나 (Orca 여러 워커)**
 
@@ -87,7 +88,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 **채팅**: `watch-mentions`(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 분류해 코디네이터에게 한 통으로 보내고, 작업 의뢰는 기표 초안으로).
 
-**GitHub**: `watch-prs`(팀·CODEOWNERS가 아니라 나를 지명한 리뷰 요청만 골라 우선순위대로 코디네이터에게 한 통으로 보낸다. 리뷰한 PR에 재요청 없이 새 커밋이 오면 한 번 다시 알린다. dev 경로를 선언한 저장소에서 머지된 내 PR은 저장소마다 릴리스 워커 하나를 띄워 dev 반영·동작·로그를 확인하게 한다. 15분 주기 automation, 모델 없는 precheck).
+**GitHub**: `watch-prs`(팀·CODEOWNERS가 아니라 나를 지명한 리뷰 요청만 골라 우선순위대로 코디네이터에게 한 통으로 보낸다. 리뷰한 PR에 재요청 없이 새 커밋이 오면 한 번 다시 알린다. dev 경로를 선언한 저장소에서 머지된 내 PR은 저장소마다 릴리스 워커 하나를 띄워 dev 반영·동작·로그를 확인하게 한다. 내 PR 중 리뷰를 기다리는 것은 송신 로그 규칙에 따라 Slack 리뷰 의뢰·리마인드와 리뷰 봇 재트리거로 바꾼다. 15분 주기 automation, 모델 없는 precheck).
 
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
@@ -114,7 +115,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief-status/scripts/test_table_width.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 
