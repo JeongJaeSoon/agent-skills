@@ -27,9 +27,9 @@ Write `.claude/skills/verify-<app>/SKILL.md` with YAML frontmatter (`name: verif
 - **Doctor:** one read-only check that answers "is this instance worth driving?" — process up, right version/build, port owned by us, auth valid. An agent runs this first whenever anything looks off.
 - **Drive:** the harness recipe with real selectors/commands from this repo, not examples. Prefer stable handles (ARIA labels, data attributes, prompt strings, route paths) over coordinates and tab order.
 - **Evidence:** what to capture for a proof and where it goes. State the proof standards: exercise the real user path, not internal setters or test-only endpoints; capture the action and the resulting state, not just the final screen; verify side effects (files written, rows inserted, messages sent) alongside what's visible; mocks only where a production boundary already isolates the external system. When the safe path is a dry-run or test mode, verify what it actually skips by observing (files, network, git refs) rather than trusting its name: some dry-runs still touch the network or open a browser.
-- **Cleanup:** how to tear down instances the run created. Never kill by process name; kill what you started. Cleanup removes instances and scratch state, never the evidence: proof artifacts survive the teardown, in a location the skill names.
+- **Cleanup:** how to tear down instances the run created. Never kill by process name; kill what you started. Cleanup takes the instance to remove as a required argument (its run id or state file) and refuses to run without one: several agents drive the same machine at once, and a default such as "the latest run" resolves to another agent's instance. Cleanup removes instances and scratch state, never the evidence: proof artifacts survive the teardown, in a location the skill names.
 - **Helpers:** any script the skill ships is executable and its invocation is shown in the skill body. A helper the reader has to reverse-engineer is not a helper.
-- **State between steps:** in Claude Code each Bash call starts a fresh shell, so a PID, port or run directory set in Launch is gone by Drive. Have Launch write them to a state file the later sections `source`.
+- **State between steps:** in Claude Code each Bash call starts a fresh shell, so a PID, port or run directory set in Launch is gone by Drive. Have Launch write them to a state file of that instance's own (named by its run id, never a shared `latest` link) and print its path; the later sections `source` that path.
 
 ## 3. Seed the feature map
 
@@ -37,7 +37,7 @@ Create `.claude/skills/verify-<app>/features/README.md` plus one file per user-f
 
 ## 4. Prove the generated skill before handing it over
 
-Run its own instructions end to end once: launch, doctor, drive ONE mapped feature (one is enough; the map exists so later runs can cover the rest), capture evidence, clean up. After cleanup, confirm the evidence still exists at the named location — a cleanup that eats the proof fails this step. Fix what fails, and run the generated cleanup after every failed iteration too, so broken attempts don't strand processes and ports. A generated skill that was never executed is a draft, not a deliverable.
+Run its own instructions end to end once: launch, doctor, drive ONE mapped feature (one is enough; the map exists so later runs can cover the rest), capture evidence, clean up. After cleanup, confirm the evidence still exists at the named location — a cleanup that eats the proof fails this step. Where the app can run two instances side by side, launch a second one before cleaning up the first and confirm it is still running afterwards; then clean it up too. Fix what fails, and run the generated cleanup after every failed iteration too, so broken attempts don't strand processes and ports. A generated skill that was never executed is a draft, not a deliverable.
 
 ## 5. Offer the maintenance loop
 
