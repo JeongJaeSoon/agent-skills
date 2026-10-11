@@ -33,8 +33,11 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=()):
-        self.found, self.by_id = list(search), {n["id"]: n for n in nodes}
+    def __init__(self, search, nodes=(), mine=()):
+        self.found, self.by_id, self.own = list(search), {n["id"]: n for n in nodes}, list(mine)
+
+    def mine(self, self_bots):
+        return self.own
 
     def viewer(self):
         return ME
@@ -130,13 +133,13 @@ p.write_json(state / "plan.json", {"run": NOW + 61 * DAY, "new": []})
 p.commit(state, cfg, NOW + 61 * DAY)
 assert list(p.read_json(state / "ledger.json", {})) == [still]
 
-# Only review_request has a collector; a later kind fails loudly instead of silently sending nothing.
+# A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
-    p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
+    p.compute(Fake([]), {**cfg, "kinds": ["ready_to_merge"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
-    assert "review_wait" in str(e)
+    assert "ready_to_merge" in str(e)
 
 # CLI end to end with a fake gh: exit codes and the --body output.
 tmp = pathlib.Path(tempfile.mkdtemp())
