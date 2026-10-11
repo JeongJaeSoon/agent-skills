@@ -13,6 +13,10 @@ SCOPE       Paths this unit may write and paths it may not. Its own worktree and
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them.
+DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
+            a schema, a config key, a message format): name the contract and those units. Run
+            `architect` on it before the first edit and put the sketch in the ticket's plan
+            comment (deliver-ticket §1); the units that build on it get that sketch in CONTEXT.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / orch dep).
             Class: normal | urgent | gate.
             Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
