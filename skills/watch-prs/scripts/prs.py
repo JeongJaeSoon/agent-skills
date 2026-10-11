@@ -15,15 +15,17 @@ plan prints the same items as JSON and writes nothing. plan --body is the run's 
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
 so the same (repo, number, headRefOid) is never sent twice. --kinds names the kinds the round's prompt has
-a step for: items of other kinds are not new for precheck, plan or commit, only listed as uncovered. dispatch reads plan.json and prints one
+a step for: items of other kinds are not new for precheck, plan or commit, only listed as uncovered.
+dispatch reads plan.json and prints one
 `orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
 it runs nothing. schedule prints the
 `orca automations create` command, its steps built from the configured kinds, and runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: <--state or $AGENT_SKILLS_STATE>/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
+Slack review requests come from watch-mentions' seen ledger (<state>/mentions/seen.json, rows of
+category review with a `pr`); a missing ledger means GitHub only.
 """
-import datetime as dt, json, os, pathlib, shlex, subprocess, sys, time
-
+import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time
 
 
 def opt(name, default=None):
@@ -41,7 +43,7 @@ KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "owner
 LABELS = {"review_request": "리뷰 요청", "unreleased": "dev 확인 전"}
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
             "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
-            "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None,
+            "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None, "mentions_seen": None,
             "deploy": {}, "dispatch_run": None, "worker_agent": "claude", "release_approval": None}
 REFERENCE = pathlib.Path(__file__).resolve().parents[2] / "deliver-ticket/references/post-merge-release.md"
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
@@ -53,6 +55,9 @@ PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCom
 SEARCH_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
             "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + PR_FIELDS + "}}}}")
 NODES_Q = "query($ids:[ID!]!,$me:String!){nodes(ids:$ids){... on PullRequest{" + PR_FIELDS + "}}}"
+PR_Q = ("query($owner:String!,$name:String!,$number:Int!,$me:String!)"
+        "{repository(owner:$owner,name:$name){pullRequest(number:$number){" + PR_FIELDS + "}}}")
+PR_REF = re.compile(r"^([\w.-]+)/([\w.-]+)#(\d+)$")
 
 
 def config(path=CONFIG):
@@ -108,6 +113,11 @@ class GitHub:
 
     def nodes(self, ids, me):
         return [n for i in range(0, len(ids), 50) for n in gh_graphql(NODES_Q, partial=True, ids=ids[i:i + 50], me=me)["nodes"] if n]
+
+    def pr(self, ref, me):
+        owner, name, number = PR_REF.match(ref).groups()
+        repo = gh_graphql(PR_Q, partial=True, owner=owner, name=name, number=int(number), me=me).get("repository")
+        return (repo or {}).get("pullRequest")
 
     def revision(self, cmd):
         """The commit the dev environment runs, from the repo's declared revision_cmd."""
@@ -181,7 +191,7 @@ def item(pr, me, cfg, now, reason):
             "number": pr["number"], "title": pr["title"], "url": pr["url"], "author": author.get("login"),
             "human": human, "age_days": days(pr["createdAt"], now), "idle_days": idle,
             "size": pr["additions"] + pr["deletions"], "only_blocker": only_blocker(pr, me), "stale": stale,
-            "reason": reason, "why": why}
+            "reason": reason, "why": why, "source": "slack" if reason == "slack" else "github", "slack": []}
 
 
 def rank(items):
@@ -189,12 +199,40 @@ def rank(items):
     return sorted(items, key=lambda i: (i["stale"], not i["only_blocker"], not i["human"], -i["age_days"], i["size"]))
 
 
+def slack_reviews(cfg):
+    """owner/repo#N (lowercased: GitHub names are case-insensitive) → permalinks of the Slack review requests."""
+    rows = read_json(cfg.get("mentions_seen") or STATE.parent / "mentions" / "seen.json", {})
+    refs = {}
+    for row in rows.values() if isinstance(rows, dict) else []:
+        if isinstance(row, dict) and row.get("category") == "review" and PR_REF.match(str(row.get("pr") or "")):
+            links = refs.setdefault(row["pr"].lower(), [])
+            if isinstance(row.get("permalink"), str) and row["permalink"] not in links:
+                links.append(row["permalink"])
+    return refs
+
+
+def slack_skip(pr, me, cfg):
+    """A Slack request names the owner directly, so only the PR's own state can rule it out."""
+    if pr["state"] != "OPEN":
+        return "닫힘"
+    if pr["isDraft"]:
+        return "draft"
+    if (pr.get("author") or {}).get("login") == me:
+        return "본인 PR"
+    mine = pr["reviews"]["nodes"]
+    if mine and (mine[0].get("commit") or {}).get("oid") == pr["headRefOid"]:
+        return "head 를 이미 리뷰함"
+    return out_of_scope(pr, cfg)
+
+
 def collect_review_requests(gh, me, cfg, ledger, now):
-    """Personal review requests, plus ledger PRs the owner reviewed that got new commits without a re-request."""
-    items, excluded, seen = [], [], set()
+    """Personal review requests, ledger PRs the owner reviewed that got new commits without a re-request,
+    and Slack review requests: one item per PR, the Slack permalinks attached."""
+    items, excluded, seen, found = [], [], set(), {}
     for pr in gh.search("is:pr is:open archived:false review-requested:@me", me):
         seen.add(pr["id"])
         name = f"{pr['repository']['nameWithOwner']}#{pr['number']}"
+        found[name.lower()] = pr
         why = (out_of_scope(pr, cfg) or (None if personal_request(pr, me) else "팀·CODEOWNERS 요청뿐")
                or ("draft" if pr["isDraft"] else None))
         if why:
@@ -203,10 +241,29 @@ def collect_review_requests(gh, me, cfg, ledger, now):
             items.append(item(pr, me, cfg, now, "requested"))
     watch = sorted({v["id"] for v in ledger.values() if v.get("kind") == "review_request" and v.get("id")} - seen)
     for pr in gh.nodes(watch, me) if watch else []:
+        found.setdefault(f"{pr['repository']['nameWithOwner']}#{pr['number']}".lower(), pr)
         mine = pr["reviews"]["nodes"]
         if (pr["state"] == "OPEN" and not pr["isDraft"] and not out_of_scope(pr, cfg)
                 and mine and (mine[0].get("commit") or {}).get("oid") != pr["headRefOid"]):
             items.append(item(pr, me, cfg, now, "new_commits"))
+    # Merge on the PR node id: a Slack ref in another case, or naming a renamed repo, is still the same PR.
+    listed = {i["id"]: i for i in items}
+    for ref, links in sorted(slack_reviews(cfg).items()):
+        pr = found.get(ref) or gh.pr(ref, me)
+        if not pr:
+            excluded.append({"pr": ref, "why": "Slack 요청, PR 을 읽지 못함"})
+            continue
+        name = f"{pr['repository']['nameWithOwner']}#{pr['number']}"
+        excluded = [e for e in excluded if e["pr"] != name]
+        if pr["id"] in listed:
+            hit = listed[pr["id"]]
+            hit["slack"] += [u for u in links if u not in hit["slack"]]
+            hit["source"] = "slack" if hit["source"] == "slack" else "github+slack"
+        elif why := slack_skip(pr, me, cfg):
+            excluded.append({"pr": name, "why": f"Slack 요청, {why}"})
+        else:
+            listed[pr["id"]] = {**item(pr, me, cfg, now, "slack"), "slack": list(links)}
+            items.append(listed[pr["id"]])
     return items, excluded
 
 
@@ -278,9 +335,10 @@ def body(plan):
     head = f"PR {len(plan['new'])}건이 나를 기다린다" + (f" (그 밖에 {plan['more']}건은 다음 회차)" if plan["more"] else "")
     lines = [head]
     for n, i in enumerate(plan["new"], 1):
-        tag = "새 커밋, 재요청 없음" if i["reason"] == "new_commits" else LABELS[i["kind"]]
+        tag = {"new_commits": "새 커밋, 재요청 없음", "slack": "Slack 리뷰 요청"}.get(i["reason"], LABELS[i["kind"]])
+        slack = f" · Slack {' '.join(i['slack'])}" if i.get("slack") else ""
         lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
-                     f"±{i['size']} · {', '.join(i['why'])} — {i['url']}")
+                     f"±{i['size']} · {', '.join(i['why'])} — {i['url']}{slack}")
     if plan.get("uncovered"):
         lines.append(f"이 회차 프롬프트에 단계가 없는 항목 {len(plan['uncovered'])}건은 보내지 않았다: "
                      f"{', '.join(plan['uncovered'])}. `prs.py schedule` 출력으로 자동화의 prompt 를 고친다.")

@@ -437,7 +437,7 @@
 | `set` | 노트가 바뀌면 정책·ceiling·기한·predicate·독점 경로를 맞춘다 |
 | `status` | predicate 진척, main 상태, in-flight/상한, 다음 행동. STALE, LANDED-BUT-OPEN, STALLED, SPARE, LEDGER GAP 줄 |
 | `record` | 원장 이벤트 기록(spawned, parked, admitted, main_green/red, predicate_verified 등). 스택 아래층 커밋의 main_green/red는 거부한다: main CI는 맨 위층 커밋에서 한 번만 돈다 |
-| `verdict` | 리뷰한 head의 판정 기록. 출처는 `codex-review`, `subagent-review`, `verifier:<다른 모델 계열>`, `live:<기능>` 중 하나만 받는다 |
+| `verdict` | 리뷰한 head의 판정 기록. 출처는 `codex-review`, `subagent-review`, `claude-review:independent`(Codex를 쓸 수 없을 때, `--note`에 Codex 오류 줄 필수), `verifier:<다른 모델 계열>`, `live:<기능>` 중 하나만 받는다 |
 | `gate` | human-gate용 결정 gate를 연다 |
 | `dep` | 착지 순서 의존 기록 |
 | `queue` | 착지 순서와 PR마다 멈춘 이유 |
