@@ -24,6 +24,7 @@ never in this repo.
 
 ```json
 {"prs": {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
+         "exclude_title_patterns": ["^chore: sync shared config"],
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
          "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
          "max_items": 10, "stale_days": 30, "cron": "*/15 * * * *", "timezone": "<IANA tz>",
@@ -47,8 +48,12 @@ never in this repo.
 ```
 
 `orgs` and `repos` empty mean every repository; otherwise an `owner` in `orgs` or an `owner/name` in
-`repos` is in. Bot logins match with or without the `[bot]` suffix. `mentions_seen` overrides where
-the Slack side is read (default: `watch-mentions`' `seen.json` under the same state root). Other
+`repos` is in. `exclude_title_patterns` drops a PR whose title matches any of its regexes
+(`re.search`, case-sensitive unless the pattern starts with `(?i)`) in every kind, at collection: it
+is never listed, reminded, merged or dispatched. Use it for a batch of PRs that other teams open
+across many repositories, where `exclude_repos` would also hide that repository's real review
+requests. An invalid pattern fails every command with exit 2. Bot logins match with or without
+the `[bot]` suffix. `mentions_seen` overrides where the Slack side is read (default: `watch-mentions`' `seen.json` under the same state root). Other
 keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
 (`--state <dir>` or `$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
 `plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
