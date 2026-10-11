@@ -44,6 +44,7 @@ The pattern list lives outside the repo, one pattern per line: `~/.config/agent-
 ```bash
 git add <changed paths> && git diff --cached | grep -n -i -E -f ~/.config/agent-skills/internal-names.txt; echo "hits: $?"
 git log -1 --format=%B | grep -i -E -f ~/.config/agent-skills/internal-names.txt   # after committing
+gh pr view <n> --json title,body -q '.title+"\n"+.body' | grep -i -E -f ~/.config/agent-skills/internal-names.txt   # after creating or editing the PR
 ```
 
 `hits: 1` (grep found nothing) is the pass. Any hit is rewritten generically, then the grep runs again. Show the command and its output in the report.
