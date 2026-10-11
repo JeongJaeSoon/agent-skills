@@ -15,7 +15,7 @@ In this order, each left out when empty:
 
 1. **Done** — each item with its evidence: merge sha, check result, test count, or the PR link. An item with no real output behind it is not done; it goes under In progress with what is missing.
 2. **In progress** — what is moving, who or what moves it, and the next event (CI running, review requested, worker on step N).
-3. **Decision needed** — numbered across the whole report. Each item: the question in one line, the options, and one recommendation with its reason. Only decisions outside the approved scope reach the human (`orchestrate` "What reaches the human"); decide the rest and report them under Done. Inside a program, a decision registered with `orch decide add` keeps its id beside the number (`1. (d3) …`), so an answer by either closes it.
+3. **Decision needed** — numbered across the whole report. Each item: the question in one line, the options, and one recommendation with its reason, and what happens if the human does not answer. Only decisions outside the approved scope reach the human (`orchestrate` "What reaches the human"); decide the rest and report them under Done. Inside a program, a decision registered with `orch decide add` keeps its id beside the number (`1. (d3) …`), so an answer by either closes it.
 4. **Only you** — what the human alone can do: a permission dialog, a login, a payment, an approval a ruleset requires from a person. Say where and what to press or run.
 
 When the report covers several work items (tickets, tracks, a program's predicate items), each In progress item carries three fields:
@@ -33,7 +33,7 @@ When those items ship through PRs and deploys, the three fields take the form of
 - Above the table, two or three lines of the facts it reads against: the version on prod and on dev, and the legend. These are part of the report, not a preamble.
 - Where `orch` is installed (orchestrate), the table is a record: write each cell when you verify it (`orch stage set <row> --col dev --mark ok --evidence v1.8.0`), then report the output of `orch stage show --md`, or `--telegram` for Telegram, instead of rebuilding the table. The merge cell comes from the PR list. Build the table by hand only when no rows are recorded.
 
-No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
+Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
 ## 2. Channel
 

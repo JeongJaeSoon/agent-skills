@@ -52,8 +52,11 @@
 | `skills/write-plainly/SKILL.md` | `pstack/skills/technical-writing/SKILL.md`, `pstack/skills/poteto-mode/SKILL.md` | derived | 모델 호출 허용. technical-writing의 상위 규칙 세 개·Diátaxis·STE·Global English에서 원칙 8개와 문서 종류 고르기를 추렸다. poteto-mode의 Writing the reply와 Autonomy의 "No is an acceptable answer"를 답변 절로 옮겼다. 출처 줄, `unslop`·`technical-writing` 참조, Cursor repo 전용 규칙(탭 들여쓰기 등)은 뺐다 |
 | `skills/write-plainly/references/english.md` | `pstack/skills/unslop/SKILL.md`, `pstack/skills/technical-writing/SKILL.md`, `pstack/skills/poteto-mode/SKILL.md` | derived | unslop 규칙 번호와 내용을 유지하고 문장을 다듬었다. Process 절(초안 뒤 훑기)은 "쓰면서 적용"과 맞지 않아 뺐다. technical-writing의 Google·STE·Global English 문장 규칙, poteto-mode의 Comments 절, 스킬 본문 작성 규칙을 더했다 |
 | `skills/write-plainly/references/korean.md` | `pstack/skills/unslop/SKILL.md` | derived | unslop의 서식 금지(긴 대시, 문장 중간 콜론, 굵은 글씨+콜론 목록, 장식 이모지)와 챗봇 문구 규칙을 한국어로 옮겼다. 상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, 문체 규칙과 예문은 여기서 새로 썼다 |
+| `skills/brief-status/SKILL.md` §1 결정 항목·이름 규칙 두 문장 | `pstack/skills/ketchup/SKILL.md`(pin 이후 upstream `978ca6e`에 추가) | derived | 결정 항목에 "답하지 않으면 어떻게 되는지"를, PR·브랜치·워커는 사람이 아는 이름으로 부른다는 규칙을 옮겼다. "마지막 메시지 이후" 범위와 `/ketchup` 명령은 `recall`·`brief-status`와 겹쳐 가져오지 않았다 |
 
 `skills/principles/SKILL.md`는 vendoring 대상이 아니다. poteto-mode의 `## Principles` 절을 참고해 여기서 새로 쓴 인덱스이며, 본문에 출처를 적었다.
+
+`skills/map-features/SKILL.md`도 vendoring 대상이 아니다. pstack의 feature map(`create-verification-skill`의 `features/`, benny의 `feature-map.example.md`)은 에이전트가 기능을 구동하는 지도라서, 사람이 읽는 제품 기능 지도(기준 커밋, 상태, 근거)는 여기서 새로 썼다.
 
 `skills/why/references/sources/google-drive.md`, `obsidian.md`도 vendoring 대상이 아니다. upstream playbook 형식을 따라 여기서 새로 썼다. upstream의 `datadog.md`, `sentry.md`, `databricks.md`는 연결된 MCP가 없어 가져오지 않았다.
 
