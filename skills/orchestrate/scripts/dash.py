@@ -720,7 +720,22 @@ def stalls(workers, tnow):
     return out
 
 
-def ledger_gaps(cfg, events, workers, prs, tnow):
+_CONTAINS = {}
+
+
+def gh_contains(repo, older, newer):
+    """Whether commit `older` is in `newer`'s history (GitHub compare). Cached: commits do not change."""
+    key = (repo, older, newer)
+    if key not in _CONTAINS:
+        try:
+            st = sh(["gh", "api", f"repos/{repo}/compare/{older}...{newer}", "--jq", "{s: .status}"])["s"]
+        except (SourceError, KeyError, TypeError):
+            return False  # unknown is not cached: the next collect asks again
+        _CONTAINS[key] = st in ("ahead", "identical")
+    return _CONTAINS[key]
+
+
+def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
     """What happened that the ledger never heard about. Cap, land order and CI state are computed from the
     ledger, so each gap makes them wrong; the fix is to record, never to keep a side file."""
     mapped = {d for e in events if e["ev"] == "spawned"
@@ -731,13 +746,18 @@ def ledger_gaps(cfg, events, workers, prs, tnow):
     # that PR's landing, whose CI run is the one to record.
     heads = {x.get("branch") for x in prs} - {None}
     folded = {x["number"] for x in prs if x.get("base") in heads}
+    # A branch CI started by hand runs at the branch tip, so a green there covers every earlier landing it contains.
+    contains = contains or (lambda older, newer: gh_contains(cfg["repo"], older, newer))
+    greens = [g for g in events if g["ev"] == "main_green" and g.get("sha")]
+    covered = lambda e: any(g["sha"] != e["sha"] and prog.parse_ts(g["ts"]) >= prog.parse_ts(e["ts"])
+                            and contains(e["sha"], g["sha"]) for g in greens)
     t0 = prog.parse_ts(cfg["created_at"])
     return {
         "spawns": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in mapped],
         "landings": sorted(p["number"] for p in prs if p["state"] == "merged" and p.get("merged_at")
                            and prog.parse_ts(p["merged_at"]) >= t0 and p["number"] not in landed),
         "ci": [e.get("pr") for e in events if e["ev"] == "landed" and e.get("sha") not in decided and e.get("pr") not in folded
-               and tnow - prog.parse_ts(e["ts"]) > dt.timedelta(hours=2)],
+               and tnow - prog.parse_ts(e["ts"]) > dt.timedelta(hours=2) and not covered(e)],
     }
 
 
