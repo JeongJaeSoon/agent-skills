@@ -740,19 +740,25 @@ def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
     return [stall_line(x) for x in fresh]
 
 
+def ensure_dash():
+    """Start the dashboard server, or restart it when its code changed; returns its one-line answer.
+    ORCH_DASH=off skips it (tests)."""
+    if os.environ.get("ORCH_DASH") == "off":
+        return None
+    try:
+        r = subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("dash.py")), "ensure",
+                            "--port", os.environ.get("ORCH_DASH_PORT", "4780")],
+                           capture_output=True, text=True, timeout=40)
+        return ((r.stdout or r.stderr).strip().splitlines() or ["dashboard: ensure printed nothing"])[-1]
+    except subprocess.TimeoutExpired:
+        return "dashboard: `orch-dash ensure` timed out; the lines below may be stale"
+
+
 def dashboard_lines(slug):
     """Keep the dashboard server up (`orch-dash ensure`), and bring back what only its collector sees:
     whether each worker's session is moving, free capacity and ledger gaps. Stale data prints nothing.
     ORCH_DASH=off skips the server (tests)."""
-    out = []
-    if os.environ.get("ORCH_DASH") != "off":
-        try:
-            r = subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("dash.py")), "ensure",
-                                "--port", os.environ.get("ORCH_DASH_PORT", "4780")],
-                               capture_output=True, text=True, timeout=40)
-            out.append(((r.stdout or r.stderr).strip().splitlines() or ["dashboard: ensure printed nothing"])[-1])
-        except subprocess.TimeoutExpired:
-            out.append("dashboard: `orch-dash ensure` timed out; the lines below may be stale")
+    out = [line] if (line := ensure_dash()) else []
     st = dash_state(HOME / slug)
     if st is None:
         return out
@@ -1855,6 +1861,9 @@ def cmd_wait(argv):
         sys.exit("orch wait reads and acks the coordinator's Run inbox, and this terminal is one of the Run's"
                  " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
                  " background command such as `gh run watch <id>`.")
+    # STALLED comes from the collector; a coordinator that only loops `wait` would otherwise keep an old server.
+    if (line := ensure_dash()) and not line.startswith("dashboard: http"):
+        print(line, flush=True)
     for i in range(rounds):
         res = orca_json("orchestration", "check", "--run", run_id, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
                         "--timeout-ms", timeout)

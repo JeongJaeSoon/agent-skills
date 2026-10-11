@@ -318,6 +318,7 @@ def fake_orca(*a):
     return {}
 saved = prog.orca_json, prog.Program, prog.run_workers
 prog.orca_json, prog.run_workers = fake_orca, lambda run: []
+prog.os.environ["ORCH_DASH"] = "off"
 _pdir = pathlib.Path(tempfile.mkdtemp())
 prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_x", "repo": "o/r"}, "slug": slug, "events": lambda self: [],
                                            "dir": _pdir})()
@@ -425,6 +426,18 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "2"])
 assert "STALLED" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
+# wait keeps the collector on the current code: STALLED lines are only as new as its server.
+saved_ensure, prog.ensure_dash = prog.ensure_dash, lambda: "dashboard started: http://127.0.0.1:4780/"
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert out.getvalue().startswith("dashboard started"), out.getvalue()
+prog.ensure_dash = lambda: "dashboard: http://127.0.0.1:4780/"
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "dashboard" not in out.getvalue(), "a server already current stays quiet"
+prog.ensure_dash = saved_ensure
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},
