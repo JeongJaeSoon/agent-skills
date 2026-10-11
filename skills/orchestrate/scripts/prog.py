@@ -330,10 +330,19 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     dispatch worked a ticket that has landed. A released worker's card stays until `orca worktree rm`.
 
     A ticket can take several PRs, a backfilled landing among them: while the tracker says it is open,
-    a landing is not its live worker's end. Without the tracker, a landing is."""
+    a landing is not its live worker's end. Without the tracker, a landing is, except for a card spawned after it."""
     ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
     # A fold into a lower PR's branch reaches the base only with that PR: its ticket is still in flight.
-    landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed" and not e.get("onto")} - {None}
+    tickets_of = pr_ticket(events)
+    last_land = {}
+    for e in events:
+        t = tickets_of.get(e.get("pr")) if e["ev"] == "landed" and not e.get("onto") else None
+        if t:
+            last_land[t] = max(last_land.get(t, ""), e["ts"])
+    landed = set(last_land)
+    # A card spawned on a ticket after its last landing carries follow-up work that has not landed.
+    spawned = {d: e["ts"] for e in events if e["ev"] == "spawned"
+               for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or ""))}
     still_open = {t for t in landed if ((issues_by_id or {}).get(t) or {}).get("state_type") in OPEN_STATES}
     present = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     cards = {}
@@ -344,7 +353,9 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     out = []
     for wt, ws in cards.items():
         tickets = {ticket_by_task.get(w.get("taskId")) for w in ws}
-        if tickets <= landed:
+        later = any(spawned.get(w.get("dispatchId"), "") > last_land.get(ticket_by_task.get(w.get("taskId")), "~")
+                    for w in ws)
+        if tickets <= landed and not later:
             active = [w for w in ws if w.get("terminalState") == "active"]
             if active and tickets & still_open:
                 continue

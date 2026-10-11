@@ -120,7 +120,7 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
 - Declare start-after edges as Orca task deps when creating tasks; plan land-after chains as stacks from the start, with `orch dep`.
 - Read `status` on every drain:
   - `STALE` lines are PRs that have waited `stale_hours` (default 3). Each gets an action on the reason `queue` gives.
-  - `LANDED-BUT-OPEN` lines are workers whose PR landed. Release them and remove their worktrees in the same turn.
+  - `LANDED-BUT-OPEN` lines are workers whose PR landed (a card spawned on the ticket after that landing is follow-up work and is not listed). Release them and remove their worktrees in the same turn.
   - `HELD` lines are PRs on hold (`record parked`). They do not count as stale, so they never block spawning; close a superseded one on GitHub so it leaves the land order.
 - A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
 - Merges you did not make: `land` records a PR that was merged outside it.
