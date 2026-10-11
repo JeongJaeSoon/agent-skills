@@ -604,9 +604,13 @@ def compute(gh, cfg, ledger, now):
         excluded += out
     unsent = [i for i in rank(items) if i["key"] not in ledger]
     new = [i for i in unsent if i["kind"] in PROMPT_STEPS]
-    # Actions are never capped: a reviewer's batch split across rounds would become two messages.
+    # Never capped: actions (a reviewer's batch split across rounds would become two messages) and unreleased
+    # merges (a repo's batch split across rounds would start two release workers; ranked last, they would starve).
     acts, new = [i for i in new if not i.get("once", True)], [i for i in new if i.get("once", True)]
-    return {"run": now, "viewer": me, "new": acts + new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
+    capped = [i for i in new if i["kind"] != "unreleased"]
+    keep = {i["key"] for i in capped[: cfg["max_items"]]}
+    return {"run": now, "viewer": me, "new": acts + [i for i in new if i["kind"] == "unreleased" or i["key"] in keep],
+            "more": max(0, len(capped) - cfg["max_items"]),
             "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded,
             "uncovered": [i["key"] for i in unsent if i["kind"] not in PROMPT_STEPS]}
 

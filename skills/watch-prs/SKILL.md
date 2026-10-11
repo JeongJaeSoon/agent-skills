@@ -128,7 +128,8 @@ behaviour and logs checked on dev. The revision decides the action instead. `rev
 item carries `deployed` true (check only) or false (release, or wait for the sync, first). When the
 probe or compare fails, the merges still become items, with `deployed` null and the reason in `why`,
 so a broken probe shows up in the message and the worker checks dev itself instead of the merge
-aging out of `lookback_days` unseen. `deploy` alone collects nothing: `kinds` must list `unreleased`.
+aging out of `lookback_days` unseen. They take no `max_items` slot: ranked after older items they would
+starve, and a repo's merges split across rounds would start two release workers. `deploy` alone collects nothing: `kinds` must list `unreleased`.
 
 `dispatch` turns them into one release worker per repo: an `orca orchestration worker-start` line
 whose brief (in `<state>/brief-<n>.txt`) holds the PRs and merge commits, the declaration, the

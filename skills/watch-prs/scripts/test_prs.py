@@ -223,6 +223,11 @@ assert f"author:{ME}" in q and "repo:acme/widgets " in q and "merged:>=2027-01-1
 lines = p.body({**both, "new": rel}).splitlines()
 assert lines[1].startswith("1. [dev 확인 전] acme/widgets#20 Change 20") and "dev 에 반영됨, 동작 확인 전" in lines[1]
 assert "dev 에 아직 없음" in lines[2]
+# Unreleased merges are not capped: they rank after older items, so a cap would starve them or split a repo's batch.
+crowd = [pr(n, reqs=[user(ME)], age=30 + n) for n in range(40, 45)]
+uncapped = p.compute(Fake(crowd, merged=[merged(20), merged(21)], deployed="d0", live={"m20"}), {**rcfg, "max_items": 2}, {}, NOW)
+assert sorted(i["number"] for i in uncapped["new"] if i["kind"] == "unreleased") == [20, 21], uncapped["new"]
+assert sum(i["kind"] == "review_request" for i in uncapped["new"]) == 2 and uncapped["more"] == 3
 
 # Nothing declared, or everything already handed on: no revision probe at all.
 silent = Fake([], merged=[merged(20)], deployed=RuntimeError("must not run"))
