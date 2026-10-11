@@ -888,7 +888,7 @@ PROMPT_STEPS = {
         "`--source sent --thread <channel>:<ts>` 로 기록한다. retrigger 는 그 PR 에 `gh pr comment <url> --body <comment>` 를 "
         "달고 `--source sent` 로 기록한다. 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨, 리뷰어의 slack id 없음 등)은 "
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
-        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. GitHub 쓰기는 retrigger 코멘트뿐이다."),
+        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다."),
     "unreleased": (
         "보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
         "한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
@@ -911,8 +911,13 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
     gate = "ownergate" in cfg["kinds"]
     first = PRE_SEND_STEP.format(env=env) + " 그다음 " if gate else ""
     steps = " ".join(step.format(env=env) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"])
-    reads = "" if "review_wait" in cfg["kinds"] else (" 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다"
-                                                      + (" (예외는 `round` 가 낸 단계뿐이다)." if gate else "."))
+    if "review_wait" in cfg["kinds"]:
+        reads = " GitHub 쓰기는 retrigger 코멘트" + ("와 `round` 가 낸 승인" if gate else "") + "뿐이다."
+    else:
+        reads = (" 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다"
+                 + (" (예외는 `round` 가 낸 단계뿐이다)." if gate else "."))
+    reads += (" 권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행동은 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) "
+              "다시 시도하지 않고, 무엇을 하려던 것인지와 거부 종류, 정확한 명령을 보고한다.")
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 {first}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "

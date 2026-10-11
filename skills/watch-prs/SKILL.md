@@ -188,8 +188,8 @@ P="${CLAUDE_SKILL_DIR}/scripts/prs.py"
 python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state>/body.txt and the items in plan.json
 ```
 
-1. If the output is empty, stop: send nothing and do not commit. Otherwise run each command
-   `python3 "$P" round` prints (key, tab, command) once, as a standalone command, then
+1. If the output is empty, stop: send nothing and do not commit. Otherwise, if `kinds` has
+   `ownergate`, run each command `python3 "$P" round` prints (key, tab, command) once, as a standalone command, then
    `python3 "$P" result <key> ok`, or `result <key> failed "<why>"`, which hands it to the owner
    with a `!` line and an inbox item. Both append to `body.txt`. Never run a `!` line, and never
    retry an act a permission prompt, the classifier, a hook or a person refused, in any form.
@@ -234,7 +234,9 @@ python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's 
 The prompt is built from `kinds`: each configured kind with a `PROMPT_STEPS` entry adds its step, in
 `PROMPT_STEPS` order (`unreleased` last, since it gates `commit`), and `ownergate` adds its
 `round`/`result` step before the send (`PRE_SEND_STEP`), since the results go into the message.
-Without `review_wait` the prompt forbids GitHub writes other than the `round` steps. After `kinds` changes, rerun `schedule --edit <id>` (check `orca automations list` first so other
+Without `review_wait` the prompt forbids GitHub writes other than the `round` steps; with it, the
+prompt names the retrigger comment and, with `ownergate`, the `round` approvals as the only ones.
+Every prompt ends with the rule that a refused act is reported, never retried. After `kinds` changes, rerun `schedule --edit <id>` (check `orca automations list` first so other
 kinds' steps are not lost).
 
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps

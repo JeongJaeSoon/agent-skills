@@ -493,10 +493,12 @@ assert prompt.index(" round`") < prompt.index("orca orchestration send") and "re
 only_review = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**cfg, "inbox_to": "term_x"}, "path:/r")
 plain = only_review[only_review.index("--prompt") + 1]
 assert " round`" not in plain and " dispatch`" not in plain and "(예외는" not in plain
+assert "다시 시도하지 않고" in plain, "every prompt forbids retrying a refused act"
 four = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**all_kinds, "kinds": ["review_request", "review_wait", "unreleased", "ownergate"]}, "path:/r")
 full = four[four.index("--prompt") + 1]
 assert full.index(" round`") < full.index("orca orchestration send") < full.index(" actions`") < full.index(" dispatch`") \
     < full.index(" commit`"), full
+assert "retrigger 코멘트와 `round` 가 낸 승인뿐이다." in full and "코멘트뿐이다" not in full, "the write list names the round's approvals"
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 
