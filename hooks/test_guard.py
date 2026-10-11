@@ -120,6 +120,7 @@ assert bash(f"{NEW} --prompt 'app: lead\n{LEAD}'", transcript=AS_LEAD) == "deny"
 for t in (TOP, WORKER, META, None, str(pathlib.Path(HOME) / "absent.jsonl"), transcript("bad", "x")):
     assert bash(LEAD_CARD, transcript=t) == "none", t  # a later lead-shaped prompt does not count; unreadable fails open
 assert bash(WORKER_CARD, transcript=AS_LEAD) == "none"
+assert bash(f'{NEW} --prompt "{LEAD}"', transcript=AS_LEAD) == "deny"  # MODE opening the prompt, no /goal
 
 # A foreground sleep loop is refused; the same loop in the background, and a sleep outside a loop, are not.
 O = "/tmp/t/b1.output"

@@ -44,7 +44,7 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 # In command position only: a grep or echo that quotes the words is not a card being made.
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
-MODE = re.compile(r"(?m)^\s*MODE\b")
+MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
 # The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
 LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:["']|$)""")
 LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
@@ -90,7 +90,7 @@ def is_lead(text):
 
 def started_as_lead(transcript):
     try:
-        with open(transcript) as f:
+        with open(transcript, encoding="utf-8") as f:
             for line in f:
                 rec = json.loads(line)
                 if rec.get("type") != "user" or rec.get("isMeta"):
@@ -134,7 +134,7 @@ def bash(cmd, background=False, transcript=None):
                                   "references/brief.md \"Lead\" (dispatch-card §2).")
         if lead and transcript and started_as_lead(transcript):
             return decide("deny", "This session is a lead, and a lead does not start another lead. Give the card a "
-                                  "worker brief (orchestrate references/brief.md \"Single worker\" or the program brief) "
+                                  "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
                                   "without the Lead's MODE line or `<project>: lead` head; only the human or the "
                                   "top-level starts a lead.")
     words = simple_words(cmd)

@@ -127,8 +127,9 @@ DELEGATE    You do not investigate, implement, verify or drive a browser yoursel
             small. Each goes one layer down: a worker or card with a brief (`orchestrate`
             references/brief.md), or a background subagent for a read. You judge results, land,
             record decisions, and put what waits on the human in front of them. Cards and
-            workers you start get a worker brief ("Single worker" or the program brief), never
-            this Lead brief; only the human or the top-level starts a lead.
+            workers you start get a worker brief (the one at the top of references/brief.md,
+            or "Single worker"), never this Lead brief; only the human or the top-level starts
+            a lead.
 PREDICATE   The countable done condition, and what is out of scope.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
