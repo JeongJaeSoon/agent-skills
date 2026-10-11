@@ -483,6 +483,51 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reap.precheck(items, st, now=1000)[0] == 0
     assert reap.precheck([], st)[0] == 1
 
+# A plan that keeps not running (a refused reap) stops waking the model after `repeat` rounds, retries once a day,
+# and is announced once per set; a reap or a new set starts the count over.
+with tempfile.TemporaryDirectory() as tmp:
+    st, sent = pathlib.Path(tmp), []
+    items = [{"key": "tmpdir:/a", "target": True}]
+    ok = lambda n: sent.append(n) or True
+    assert [reap.precheck(items, st, now=1000 + k, notify=ok)[0] for k in range(4)] == [0, 0, 1, 1]
+    assert sent == [2], sent
+    assert reap.precheck(items, st, now=1001 + reap.RETRY_AFTER, notify=ok)[0] == 0
+    assert reap.precheck(items, st, now=1002 + reap.RETRY_AFTER, notify=ok)[0] == 1 and sent == [2], sent
+    # A new set counts from zero and is announced again.
+    other = items + [{"key": "tmpdir:/b", "target": True}]
+    assert [reap.precheck(other, st, now=2000 + k, notify=ok)[0] for k in range(3)] == [0, 0, 1] and sent == [2, 2], sent
+    # Any reap starts over, even one that failed on a different set.
+    reap.record_reap(st, [], now=3000)
+    assert reap.precheck(other, st, now=3001, notify=ok)[0] == 0
+    # A send that failed is tried on the next round.
+    with tempfile.TemporaryDirectory() as tmp2:
+        st2, tries = pathlib.Path(tmp2), []
+        fail = lambda n: tries.append(n) and False
+        assert [reap.precheck(items, st2, now=k, repeat=1, notify=fail)[0] for k in (1, 2, 3)] == [0, 1, 1] and tries == [1, 1]
+# notify_unrun sends one escalation to the configured address; without one it prints only.
+calls = []
+send = lambda argv, check: calls.append(argv) or "{}"
+assert reap.notify_unrun("run:r1", "python3 reap.py reap --plan /s/p.json", send)(2) is True
+assert calls[0][:5] == ["orca", "orchestration", "send", "--to", "run:r1"] and "reap --plan /s/p.json" in calls[0][-2], calls
+assert reap.notify_unrun(None, "x", send)(2) is False and len(calls) == 1
+assert reap.notify_unrun("run:r1", "x", lambda argv, check: None)(2) is False
+
+# Finder's trash auto-empty keeps every user-folder target unless a plain trash folder is set.
+saved = reap.user_folder_scan, reap.trash_auto_empty, os.environ.pop("AGENT_SKILLS_TRASH", None)
+reap.user_folder_scan = lambda *a, **k: [{"kind": "user-folder", "key": "user-folder:/d/x", "name": "/d/x", "target": True, "why": "old"}]
+try:
+    for auto, folder, target in ((True, None, False), (True, "/t", True), (False, None, True)):
+        reap.trash_auto_empty = lambda: auto
+        if folder:
+            os.environ["AGENT_SKILLS_TRASH"] = folder
+        got = reap.scan({"user-folder"}, 6, {"user_folder_days": 7}, [])[0]
+        os.environ.pop("AGENT_SKILLS_TRASH", None)
+        assert got[0]["target"] is target and (target or "휴지통 자동 비움" in got[0]["why"]), (auto, folder, got)
+finally:
+    reap.user_folder_scan, reap.trash_auto_empty = saved[:2]
+    if saved[2] is not None:
+        os.environ["AGENT_SKILLS_TRASH"] = saved[2]
+
 # trash: only /usr/bin/trash, never another `trash` on PATH (one reads -s as "empty the trash"), and a hung call fails.
 with tempfile.TemporaryDirectory() as tmp:
     t = pathlib.Path(tmp)
@@ -687,5 +732,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
 prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))[1]
 assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
+assert "우회하지 않는다" in prompt and "orchestration send" not in prompt, prompt
+assert "--to run:r1" in reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"), inbox="run:r1")[1]
 
 print("ok")

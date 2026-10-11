@@ -9,7 +9,7 @@
 |---|---|---|---|
 | Orca automation + `--precheck` | 남는다(Orca 앱이 돌린다) | 된다 | 된다. precheck가 0이 아니면 그 회차는 모델을 부르지 않고 건너뛴다 |
 | 클라우드 routine | 남는다 | 안 된다(로컬 파일을 못 본다) | 안 된다 |
-| `CronCreate`, `ScheduleWakeup` | 세션과 함께 사라진다 | 된다 | 안 된다 |
+| `CronCreate`, `ScheduleWakeup` | 세션과 함께 사라진다. `claude --continue`로 같은 세션을 재개하면 cron이 다시 살아난 관측이 있다(재개하지 않으면 사라진다. 7일 만료는 확인하지 않았다) | 된다 | 안 된다 |
 | `Monitor`, 백그라운드 Bash(`run_in_background`) | 세션과 함께 사라진다 | 된다 | 된다(스크립트가 거른 뒤 깨운다) |
 | hooks | 설정이 남아 있는 동안 | 된다 | 된다(결정적인 반응만) |
 
@@ -27,6 +27,10 @@
 
 ## Orca automation을 걸 때 지킬 것
 
+- `completed`는 성공이 아니다. 회차는 에이전트가 거부당하고 아무것도 못 해도 `completed`로 끝난다. 회차
+  출력의 실제 결과(정리 건수, 거부된 명령)로 판정하고, 거부·중단은 설정한 inbox 주소로 올린다.
+- 예약 회차의 프롬프트는 오너의 채팅 지시가 아니다. 오너의 지시를 요건으로 하는 auto mode 허용 규칙은 예약
+  회차를 덮지 못한다. automation을 켜기 전에 그 회차가 실행할 명령의 허용 규칙을 따로 둔다(`tune-automode`).
 - precheck의 cwd는 `--workspace`로 준 worktree가 아니라 저장소의 메인 체크아웃이다. precheck 스크립트는 절대
   경로와 `git -C`를 쓴다.
 - precheck가 `schedule`을 실행한 셸의 환경 변수를 물려받는다고 가정하지 않는다. 상태 폴더 같은 경로는 precheck 명령에
@@ -36,7 +40,8 @@
   폴더를 따로 둔다(reap.py는 `AGENT_SKILLS_STATE`).
 - `--workspace-mode existing`을 쓴다. `new-per-run`은 회차마다 worktree를 만들어 치울 것을 늘린다.
 - precheck는 할 일이 없으면 exit 1이다. 지난 회차와 같은 결과도 할 일이 없는 것으로 친다. 그래야 모델 호출이
-  바뀐 것이 있을 때만 일어난다.
+  바뀐 것이 있을 때만 일어난다. 같은 계획이 회차마다 실행되지 않고 쌓이면(거부) 정해 둔 횟수 뒤부터 건너뛰고,
+  하루 한 번만 다시 시도하며, inbox로 한 번 알린다(reap.py는 `reap.plan_repeat` 기본 2회, `reap.inbox_to`).
 - 다른 automation이 이미 하는 감시는 겹쳐 걸지 않는다. 예를 들어 PR 감시 automation이 따로 있으면, 정리
   작업은 PR을 감시하지 않고 scan할 때 `gh`로 PR 상태를 직접 읽는다.
 - 실제 플래그는 `orca automations create --help`로 확인한다.
@@ -45,10 +50,14 @@
 
 `skills/reap-resources`의 `reap.py`가 맡는다. 에이전트가 만든 것(ledger에 올린 것과 Orca 오케스트레이션
 워커가 만든 worktree)과 `~/Downloads`·`~/Desktop`에서 7일 넘게 안 바뀐 항목을 정리한다. automation의 에이전트는
-`reap --plan`을 한 번 돌려 대상을 닫거나 휴지통으로 옮기고, 무엇을 했는지 보고한다. 영구 삭제와 휴지통 비우기는 하지 않는다.
+`reap --plan`을 한 번 돌려 대상을 닫거나 휴지통으로 옮기고, 무엇을 했는지 보고한다. 도구는 영구 삭제도
+휴지통 비우기도 하지 않지만, OS 설정(Finder의 "30일 후 휴지통에서 항목 제거")이 켜져 있으면 휴지통으로 옮긴 것은
+30일 뒤 지워진다. scan과 precheck는 이 설정을 `## 경보`로 알리고, 그동안 `~/Downloads`·`~/Desktop` 항목은
+`$AGENT_SKILLS_TRASH`(일반 폴더)를 주지 않는 한 옮기지 않고 남긴다. reap이 거부되면 회차는 우회하지 않고 거부된
+명령을 `reap.inbox_to`로 보낸다.
 
 ```bash
-python3 <reap.py 절대 경로> precheck     # 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안 exit 1
+python3 <reap.py 절대 경로> precheck     # 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안, 같은 계획이 reap 없이 plan_repeat 번 쌓이면 하루 한 번만 exit 0
 python3 <reap.py 절대 경로> schedule     # 만들 `orca automations create …` 명령을 출력만 한다. 스킬을 로드하는 체크아웃에서 돌린다
 python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다
