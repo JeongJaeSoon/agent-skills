@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 33 skills (the 34 `skills/*/SKILL.md` minus the `brief` alias), 4 aliases (3 old names in `legacy/` plus `brief`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([Aliases](#aliases)).
+This page covers the 34 skills (the 35 `skills/*/SKILL.md` minus the `brief` alias), 4 aliases (3 old names in `legacy/` plus `brief`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([Aliases](#aliases)).
 
 ## Flow
 
@@ -199,6 +199,16 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **Bundled:** `references/obsidian.md`, `references/markdown.md`.
 
 ## Writing
+
+### map-features
+- **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is `how`.
+- **What it does:**
+  - The first line names the baseline (repo, ref, short sha, commit date), and every row is true as of that commit.
+  - It finds the deployable units (apps) from build and deploy config and puts them in a table; apps a reader would expect but which don't exist go in a list with what exists in their place.
+  - From the public surfaces (routes or OpenAPI, CLI, UI menus, config flags) it writes one row per thing a user can do, grouped by area. Features that only plans or docs promise get rows too.
+  - Status is one of five fixed values: works, partial, documented only, absent, unknown. Every row carries evidence a reader can open (a path, endpoint, flag, `owner/repo#N`). A row without evidence is not "works".
+  - The doc goes baseline line, plain-words summary, apps table, feature map, limits. It is saved via `use-notes` or where the user says, and goes into the product repo only on request.
+- **Related:** When a verify skill's `features/` exists, it reads it as a source for the feature list and doesn't edit it. Prose follows `write-plainly`.
 
 ### write-plainly
 - **When:** Writing or revising tickets, PR bodies, commit messages, design docs, notes, worklogs, standalone reports and skill text. Code comments only when asked to edit them. Ordinary per-turn replies don't count. "문서 다듬어줘" (polish the doc), "읽기 쉽게 고쳐줘" (make it easier to read), "AI 티 안 나게" (so it doesn't sound like AI), "번역투 고쳐줘" (fix the translationese), "unslop".
