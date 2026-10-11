@@ -74,7 +74,9 @@ end. The brief has:
 - **Background** — what happened in repo A and why this work follows from it.
 - **Sources** — links, not summaries: repo, PR, commit, note paths the target session reads itself.
 - **Deliverable and done** — the exact output and what makes it complete.
-- **Do not** — repo A is off limits; anything else the target must leave alone.
+- **Do not** — repo A is off limits; anything else the target must leave alone. Paste the
+  refused-act paragraph of `orchestrate` `references/brief.md` FORBIDDEN verbatim: a card
+  restarted after a `no verdict` needs it most.
 - **Approved** — the acts the human already approved for this work, each with their words and
   the date (merge, deploy, restarting an app, a settings or language change, an upgrade). The
   card decides inside them with the recommended default and reports what it chose; it does not
