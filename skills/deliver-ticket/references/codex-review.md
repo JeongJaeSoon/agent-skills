@@ -55,8 +55,10 @@ context (a `fork`, or a subagent briefed on how and why the change was made) doe
 for it; step 3's context-free review is the one exception. Get Codex to run instead:
 
 1. **Diagnose**, a few minutes at most:
-   - `codex login status`. Logged out or expired is the human's to fix: Codex is unavailable,
-     and the report names it so the human logs in again before the next ticket.
+   - `codex login status`. Logged out or expired: Codex is unavailable, and logging in again
+     is the human's. Step 3 still lands the work so an unattended run does not stop on it; the
+     PR body's review-scope line and the final report both say "Codex login expired: the
+     owner must run `codex login`", so it reaches the human.
    - Stuck at "Starting Codex review thread": that workspace's broker is stale. Kill the pid in
      `~/.claude/plugins/data/codex-openai-codex/state/<workspace>-<hash>/broker.json` and the
      hung companion; a fresh broker starts with the next run. A review that started and then
@@ -71,8 +73,9 @@ for it; step 3's context-free review is the one exception. Get Codex to run inst
      error, the `login status` output). The next steps cite it as evidence.
 2. **Fix what the diagnosis found and rerun the same review command.** Up to three retries,
    waiting 2, 5 and 10 minutes before them (a Bash `sleep` with `run_in_background`). When the
-   diagnosis shows Codex itself is unavailable (spend cap or usage limit, a service outage,
-   login), one rerun after the 5-minute wait confirms it; then go to step 3.
+   diagnosis shows Codex itself is unavailable, that schedule is replaced: a spend-cap,
+   usage-limit or service error gets a single rerun after 5 minutes, a failed login none; if
+   it still fails, go to step 3.
 3. **Codex itself unavailable: an independent Claude Code review stands in.** Only when step 1
    kept a line that puts the cause on Codex's side: a spend-cap or usage-limit message, a
    service error, a failed `login status`. Not when Codex ran and returned findings, not when

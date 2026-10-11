@@ -402,7 +402,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | `set` | When the note changes, brings policy, ceiling, deadline, predicate and exclusive paths in line |
 | `status` | Predicate progress, main status, in-flight/cap, next action. STALE, LANDED-BUT-OPEN, STALLED, SPARE and LEDGER GAP lines |
 | `record` | Records ledger events (spawned, parked, admitted, main_green/red, predicate_verified, and so on). Rejects main_green/red for a commit in a lower stack layer, because main CI runs only once, on the top layer's commit |
-| `verdict` | Records the verdict for a reviewed head. It accepts exactly one source: `codex-review`, `subagent-review`, `verifier:<another model family>`, or `live:<feature>` |
+| `verdict` | Records the verdict for a reviewed head. It accepts exactly one source: `codex-review`, `subagent-review`, `claude-review:independent` (Codex unavailable; `--note` with the Codex error line is required), `verifier:<another model family>`, or `live:<feature>` |
 | `gate` | Opens a decision gate for human-gate |
 | `dep` | Records a landing-order dependency |
 | `queue` | Landing order, and why each PR is stuck |

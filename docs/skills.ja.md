@@ -402,7 +402,7 @@
 | `set` | ノートが変わったら、ポリシー・ceiling・期限・predicate・専有パスを合わせます |
 | `status` | predicate の進み具合、main の状態、in-flight/上限、次の行動。STALE、LANDED-BUT-OPEN、STALLED、SPARE、LEDGER GAP の行 |
 | `record` | 台帳のイベントを記録します（spawned、parked、admitted、main_green/red、predicate_verified など）。スタックの下の層のコミットに対する main_green/red は拒否します。main CI は一番上の層のコミットで一度だけ回るためです |
-| `verdict` | レビューした head の判定を記録します。出典は `codex-review`、`subagent-review`、`verifier:<別のモデル系統>`、`live:<機能>` のうち一つだけを受け付けます |
+| `verdict` | レビューした head の判定を記録します。出典は `codex-review`、`subagent-review`、`claude-review:independent`(Codex を使えないとき。`--note` に Codex のエラー行が必須)、`verifier:<別のモデル系統>`、`live:<機能>` のうち一つだけを受け付けます |
 | `gate` | human-gate 用の決定ゲートを開きます |
 | `dep` | 着地の順序の依存を記録します |
 | `queue` | 着地の順序と、PR ごとに止まっている理由 |

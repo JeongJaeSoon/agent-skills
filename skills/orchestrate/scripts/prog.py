@@ -20,6 +20,7 @@ Usage: orch <command> <slug> [options]
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
+                                     --note is required with --source claude-review:independent
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      coordinator-owned landing Task; the user resolves it in Orca
