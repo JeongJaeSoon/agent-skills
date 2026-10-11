@@ -160,10 +160,11 @@ assert [(i["number"], i["kind"], i["run_by"], i["prod"]) for i in owner_only["ne
     [(1, "ownergate", "owner", False), (5, "ownergate", "owner", True)], owner_only["new"]
 # #1 is also in the review search, where ignore_bots drops it; the gate still takes it.
 assert {e["pr"]: e["why"] for e in owner_only["excluded"]} == {"acme/access#1": "무시하는 봇이 작성",
-    "acme/access#2": "승인 대기 아님", "acme/access#3": "사람 작성 또는 다른 작성자", "acme/access#4": "게이트 제목 아님",
-    "acme/other#6": "게이트 저장소 아님"}, owner_only["excluded"]
+    "acme/access#2": "승인 대기 아님", "acme/access#3": "사람 작성", "acme/access#4": "게이트 조건 밖",
+    "acme/other#6": "게이트 조건 밖"}, owner_only["excluded"]
 g1 = owner_only["new"][0]
-assert g1["command"] == "gh api -X POST repos/acme/access/pulls/1/reviews -f event=APPROVE -f commit_id=h1"
+assert g1["command"] == ('[ "$(gh pr view 1 -R acme/access --json headRefOid -q .headRefOid)" = h1 ] && '
+                         'gh api -X POST repos/acme/access/pulls/1/reviews -f event=APPROVE -f commit_id=h1 || echo "not approved: head moved"')
 assert g1["diff"] == "파일 1개 ±10: members/a.json" and g1["rule_draft"].startswith("allow: Scheduled watch-prs round approving access PRs")
 gtext = p.body(owner_only).splitlines()
 assert gtext[1].startswith("1. [소유자 승인] acme/access#1 [Auto] Add access for 1 user — @grant-bot · 2일 · 파일 1개 ±10") \
@@ -175,22 +176,36 @@ assert gtext[5].startswith("없는 규칙") and gtext[6] == "- " + g1["rule_draf
 # The same head from two collectors is one item; the later kind in KINDS wins.
 both = p.compute(Fake([gated[0]], gated=gated[:1]), {**gcfg, "ignore_bots": []}, {}, NOW)
 assert [(i["key"], i["kind"]) for i in both["new"]] == [("acme/access#1@h1", "ownergate")], both["new"]
+# A head already sent as a review request comes back once as an owner gate, then not again.
+was_review = {"acme/access#1@h1": {"at": NOW, "kind": "review_request", "id": "x"}}
+assert [i["key"] for i in p.compute(Fake([], gated=gated[:1]), gcfg, was_review, NOW)["new"]] == ["acme/access#1@h1"]
+assert p.compute(Fake([], gated=gated[:1]), gcfg, {"acme/access#1@h1": {"at": NOW, "kind": "ownergate"}}, NOW)["new"] == []
 
-# An allow rule that names the act moves the non-production item to the round; production stays with the owner.
+# Production: more changed files than were read is unknown, which stays with the owner.
+assert p.deploys_prod({**gated[0], "changedFiles": 250}, gate) is None
+assert p.deploys_prod(gated[0], {"prod": False}) is False and p.deploys_prod(gated[0], {}) is None
+# Two gates on one author: a title only the second matches is still an item; the stricter production answer wins.
+prd = pr(7, **A, title="[prd] Rotate", files=["members/c.json"])
+two = {**gcfg, "ownergate": [gate, {"name": "prd", "authors": ["grant-bot"], "title": r"^\[(prd|Auto)\]", "prod": True}]}
+got = p.compute(Fake([], gated=[prd, gated[0]]), two, {}, NOW)["new"]
+assert [(i["number"], i["gate"], i["prod"]) for i in got] == [(1, "access", True), (7, "prd", True)], got
+
+# An allow rule that starts with the gate's phrase moves the non-production item to the round; production stays.
 gate["allow_rule"] = "Scheduled watch-prs round approving access PRs"
 allow_rules.append("Scheduled watch-prs round approving access PRs: in a turn started by ...")
 covered = p.compute(Fake([], gated=gated), gcfg, {}, NOW)
 assert [(i["number"], i["run_by"]) for i in covered["new"]] == [(1, "round"), (5, "owner")]
 assert p.body(covered).splitlines()[2] == "   규칙이 덮음, 이 회차가 실행: " + g1["command"]
+allow_rules[0] = "Other rule. Scheduled watch-prs round approving access PRs"
+assert p.compute(Fake([], gated=gated), gcfg, {}, NOW)["new"][0]["run_by"] == "owner", "the phrase must open the rule"
 allow_rules.clear()
 assert p.compute(Fake([], gated=gated), gcfg, {}, NOW)["new"][0]["run_by"] == "owner", "a rule that went away covers nothing"
-# Unknown production impact counts as production: no round rule is drafted.
-del gate["prod_paths"]
-unknown = p.compute(Fake([], gated=gated[:1]), gcfg, {}, NOW)["new"][0]
-assert unknown["prod"] is None and unknown["run_by"] == "owner" and "프로덕션 배포: 모름" in p.body({**owner_only, "new": [unknown]})
-gate["prod_paths"] = ["deploy/"]
+allow_rules.append("Scheduled watch-prs round approving access PRs: in a turn started by ...")
 
-# commit puts each owner item on the dashboard inbox with the ledger key; round items are not added.
+# A bad title regex is "could not check" (2), not "nothing new" (1).
+assert p.precheck(Fake([], gated=gated), {**gcfg, "ownergate": [{**gate, "title": "["}]}, pathlib.Path(tempfile.mkdtemp()), NOW)[0] == p.EXIT_ERROR
+
+# deliver: owner steps go on the dashboard inbox with the ledger key before the send; a failed add is in the message.
 calls = pathlib.Path(tempfile.mkdtemp()) / "calls"
 fake_dash = calls.parent / "orch-dash"
 fake_dash.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n")
@@ -198,10 +213,31 @@ fake_dash.chmod(0o755)
 p.ORCH_DASH = str(fake_dash)
 gstate = pathlib.Path(tempfile.mkdtemp())
 p.write_json(gstate / "plan.json", covered)
-assert p.commit(gstate, gcfg, NOW) == 2
+text = p.deliver(gstate, covered)
 added = calls.read_text().splitlines()
 assert len(added) == 1 and added[0].startswith("inbox add --type run_command --title acme/access#5 승인: [Auto] Rotate role")
 assert added[0].endswith("--key prs:acme/access#5@h5") and "--command " + covered["new"][1]["command"] in added[0]
+assert text == p.body(covered) == (gstate / "body.txt").read_text()
+dead = calls.parent / "dead"
+dead.write_text("#!/bin/sh\nexit 3\n")
+dead.chmod(0o755)
+p.ORCH_DASH = str(dead)
+assert p.deliver(gstate, covered).splitlines()[-1] == "대시보드 inbox 등록 실패 acme/access#5: exit 3"
+p.ORCH_DASH = str(fake_dash)
+p.deliver(gstate, covered)
+# A title that carries the marker text is not a round step: steps come from plan.json only.
+assert [i["key"] for i in covered["new"] if i["run_by"] == "round"] == ["acme/access#1@h1"]
+# result: a step that went through is noted; one that did not goes to the owner and the inbox.
+assert p.result(gstate, "acme/access#1@h1", False, "classifier refused").startswith("회차 실행 안 됨(classifier refused), 소유자 몫: acme/access#1")
+assert p.read_json(gstate / "plan.json", {})["new"][0]["run_by"] == "owner"
+assert calls.read_text().splitlines()[-1].endswith("--key prs:acme/access#1@h1")
+assert (gstate / "body.txt").read_text().endswith("   ! " + g1["command"])
+try:
+    p.result(gstate, "acme/access#1@h1", True)
+    raise AssertionError("a step already handed to the owner is not a round step")
+except SystemExit:
+    pass
+assert p.commit(gstate, gcfg, NOW) == 2
 assert p.read_json(gstate / "ledger.json", {})["acme/access#5@h5"]["kind"] == "ownergate"
 
 # CLI end to end with a fake gh: exit codes and the --body output.
@@ -245,7 +281,7 @@ assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
 prompt = line[line.index("--prompt") + 1]
-assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
+assert all(w in prompt for w in ("plan --body", "--to term_x", "commit", " round", "result <키> failed"))
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 
