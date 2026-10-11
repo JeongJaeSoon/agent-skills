@@ -20,19 +20,20 @@ action for its class.
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7,
-"user_folder_screenshot_days": 1, "done_card_hours": 2}.
+"user_folder_screenshot_days": 1, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists or an Orca orchestration worker made. user-folder covers top-level entries of ~/Downloads and ~/Desktop
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
-default 1). done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
-through `skills-sync nudge`, to close itself. reap moves files to the trash, never deletes them for good, and leaves a
-chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
+default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
+through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
+alerts when Finder's auto-empty is on), and leaves a chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
 The ledger is $AGENT_SKILLS_LEDGER or --ledger, default $AGENT_SKILLS_STATE/ledger.jsonl (state default
 ~/.local/state/agent-skills). precheck scans the janitor kinds and user-folder (at most once a day), writes janitor-plan.json
-to the state dir and exits 0 only when the target set is non-empty and changed since the last report. schedule prints the
+to the state dir and exits 0 when there are targets, except: the set the last reap failed on, for a day; and a set already
+planned reap.plan_repeat times with no reap since, retried once a day, with one message to reap.inbox_to. schedule prints the
 `orca automations create` command; only --write runs it.
 """
-import contextlib, datetime as dt, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
+import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ("codex", "orphan", "docker", "branch", "worktree")
@@ -426,7 +427,18 @@ def scan(kinds, hours, cfg, repo_list, root=None):
         shot_days = days and user_folder_days(cfg, notes, "user_folder_screenshot_days", 1,
                                               f"스크린샷도 {days:g}일 기준")
         items += user_folder_scan(days, notes, shot_days) if days else []
+        if not os.environ.get("AGENT_SKILLS_TRASH") and trash_auto_empty():
+            for i in items:
+                if i["kind"] == "user-folder" and i["target"]:
+                    i.update(target=False, why="휴지통 자동 비움이 켜져 있어 남김(AGENT_SKILLS_TRASH 로 일반 폴더를 주면 정리)")
     return items, notes
+
+
+@functools.cache
+def trash_auto_empty():
+    """Finder's "Remove items from the Trash after 30 days": what goes to the trash is then deleted for good."""
+    return sys.platform == "darwin" and \
+        (run(["defaults", "read", "com.apple.finder", "FXRemoveOldTrashItems"], check=False) or "").strip() == "1"
 
 
 # Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker).
@@ -984,26 +996,44 @@ def user_folder_due(state_dir, now=None):
 RETRY_AFTER = 86400
 
 
-def precheck(items, state_dir, now=None):
+def precheck(items, state_dir, now=None, repeat=2, notify=None):
     """Exit code for an Orca automation precheck: 0 when there are targets, unless they are exactly what the last reap
-    left behind (it failed on them) less than RETRY_AFTER ago. Only reap records that set, so a run that never
-    happened leaves nothing recorded and the next precheck runs again."""
+    left behind (it failed on them) less than RETRY_AFTER ago, or the same set was already planned `repeat` times with
+    no reap since: a run that keeps getting refused would otherwise call the model every round. That set is retried
+    once per RETRY_AFTER, and notify(count) is called until it returns true, once per set: precheck output reaches
+    nobody."""
     targets = sorted(i["key"] for i in items if i["target"])
     if not targets:
         return 1, targets
+    now = now or time.time()
     with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
         last = json.loads((state_dir / "janitor-last.json").read_text())
-        if last["targets"] == targets and (now or time.time()) - last["t"] < RETRY_AFTER:
+        if last["targets"] == targets and now - last["t"] < RETRY_AFTER:
             return 1, targets
+    path, digest = state_dir / "janitor-plan-log.json", hashlib.sha256("\n".join(targets).encode()).hexdigest()
+    log = {}
+    with contextlib.suppress(OSError, ValueError):
+        log = json.loads(path.read_text())
+    if not isinstance(log, dict) or log.get("set") != digest:
+        log = {"set": digest, "count": 0, "t": 0}
+    state_dir.mkdir(parents=True, exist_ok=True)
+    if log["count"] >= repeat and now - log["t"] < RETRY_AFTER:
+        if not log.get("notified") and notify and notify(log["count"]):
+            log["notified"] = True
+            path.write_text(json.dumps(log))
+        return 1, targets
+    log.update(count=log["count"] + 1, t=now)
+    path.write_text(json.dumps(log))
     return 0, targets
 
 
 def record_reap(state_dir, left, now=None):
     state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "janitor-plan-log.json").unlink(missing_ok=True)
     (state_dir / "janitor-last.json").write_text(json.dumps({"t": now or time.time(), "targets": sorted(left)}))
 
 
-def schedule_prompt(script, state_dir, ledger=None):
+def schedule_prompt(script, state_dir, ledger=None, inbox=None):
     plan = state_dir / "janitor-plan.json"
     env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(state_dir))}",
                     f"AGENT_SKILLS_LEDGER={shlex.quote(str(ledger or state_dir / 'ledger.jsonl'))}", "python3", shlex.quote(str(script))])
@@ -1012,12 +1042,32 @@ def schedule_prompt(script, state_dir, ledger=None):
               "출력에 '에이전트가 처리'로 남은 chrome-window 는 브라우저 도구가 있고 그 창·탭의 URL 이 출력에 적힌 URL 과 같을 때만 닫는다. "
               "다르거나 브라우저 도구가 없으면 남긴다. "
               "그 뒤 정리한 것, 건너뛴 것, 남긴 것과 이유를 한국어로 보고한다. "
-              "계획에 없는 것은 건드리지 않고, rm 으로 지우거나 휴지통을 비우지 않는다.")
+              "계획에 없는 것은 건드리지 않고, rm 으로 지우거나 휴지통을 비우지 않는다. "
+              "reap 이 권한·분류기에 거부되면 다른 명령으로 우회하지 않는다. "
+              + (f"거부된 명령 한 줄을 `orca orchestration send --to {shlex.quote(inbox)} --type escalation "
+                 "--subject 'reap-resources janitor: reap 거부됨' --body '<명령>'` 로 보내고, 보고 첫 줄에도 적는다."
+                 if inbox else "거부된 명령 한 줄을 보고 첫 줄에 적는다."))
     return env, prompt
 
 
-def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None):
-    env, prompt = schedule_prompt(script, state_dir, ledger)
+def notify_unrun(inbox, command, send=run):
+    """The precheck's own alarm for a plan that keeps not running: a line on stdout, and one Orca message when
+    reap.inbox_to is set. True once the message went out."""
+    def notify(count):
+        line = f"janitor 계획이 {count}번 실행되지 않음(reap 거부 가능성). 직접 실행: {command}"
+        print(line)
+        if not inbox:
+            return False
+        if send(["orca", "orchestration", "send", "--to", inbox, "--type", "escalation",
+                 "--subject", "reap-resources janitor: 계획이 실행되지 않음", "--body", line, "--json"], check=False) is None:
+            print(f"메모: {inbox} 로 보내지 못함", file=sys.stderr)
+            return False
+        return True
+    return notify
+
+
+def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, inbox=None):
+    env, prompt = schedule_prompt(script, state_dir, ledger, inbox)
     return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", "17 */3 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
@@ -1335,7 +1385,7 @@ def main():
         workspace = opt("--workspace") or (top and f"path:{top.strip()}")
         if not workspace:
             sys.exit("schedule needs --workspace <selector>: the checkout the automation runs in")
-        argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude", ledger_path())
+        argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude", ledger_path(), cfg.get("inbox_to"))
         print(" ".join(shlex.quote(a) for a in argv))
         if "--write" in sys.argv:
             out = run(argv)
@@ -1359,18 +1409,26 @@ def main():
     items, notes = scan(kinds, hours, cfg, repo_list, root=root and real(root).rstrip("/"))
     notes = pre_notes + notes
     msgs, totals = alerts(items, {**ALERT, **(cfg.get("alert") or {})})
-    data = {"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "hours": hours,
+    if trash_auto_empty():
+        msgs.append("휴지통 자동 비움 켜짐(Finder: 30일 지난 항목 제거): 휴지통으로 옮긴 것은 30일 뒤 영구 삭제된다")
+    data ={"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "hours": hours,
             "kinds": [k for k in KINDS + SCHEDULED if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
     if cmd == "precheck":
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
-        code, targets = precheck(items, STATE)
+        plan = shlex.quote(str(STATE / "janitor-plan.json"))
+        command = f"{schedule_prompt(pathlib.Path(__file__).resolve(), STATE, ledger_path())[0]} reap --plan {plan}"
+        code, targets = precheck(items, STATE, repeat=int(cfg.get("plan_repeat") or 2),
+                                 notify=notify_unrun(cfg.get("inbox_to"), command))
         # With targets the stamp waits for reap; with none, the day's sweep is this check.
         if "user-folder" in kinds and not any(i["target"] for i in items if i["kind"] == "user-folder"):
             stamp_user_folder(STATE)
         for n in notes + [f"{i['key']}: {i['why']}" for i in items if "읽지 못함" in i["why"]]:
             print(f"메모: {n}", file=sys.stderr)
-        print(f"정리 대상 {len(targets)}개, " + ("실행" if code == 0 else "대상 없음, 또는 지난 reap 이 실패한 대상과 같음: 건너뜀"))
+        for m in msgs:
+            print(f"경보: {m}", file=sys.stderr)
+        print(f"정리 대상 {len(targets)}개, " + ("실행" if code == 0 else
+              "대상 없음, 지난 reap 이 실패한 대상과 같음, 또는 같은 계획이 실행되지 않고 쌓임: 건너뜀"))
         sys.exit(code)
     if opt("--plan"):
         pathlib.Path(opt("--plan")).write_text(json.dumps(data, ensure_ascii=False, indent=1))

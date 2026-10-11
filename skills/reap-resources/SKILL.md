@@ -42,8 +42,9 @@ made. A user's own worktree and the main checkout never show up; anything not re
 only as the unregistered-media lines of `evidence`, never as a target. `reap --plan` re-checks each
 target and runs its action. A file or directory goes to the trash (`/usr/bin/trash`, macOS 15+, so Finder's
 Put Back works; never another `trash` on PATH, which may read `-s` as "empty the trash"; else `~/.Trash`;
-`$AGENT_SKILLS_TRASH` replaces it with a plain folder). Nothing is
-deleted for good and the trash is never emptied: emptying it is the user's call.
+`$AGENT_SKILLS_TRASH` replaces it with a plain folder). The tool never deletes for good and never
+empties the trash; the OS setting may (Finder's "Remove items from the Trash after 30 days"), and
+scan and precheck report it under `## 경보`.
 
 ```bash
 python3 "$R" ledger add --kind tmpdir --path /tmp/build-x --pr acme/app#12     # right after creating it
@@ -88,6 +89,8 @@ the general count). Kept: a download in progress (`.download`, `.crdownload`,
 `.part`), an entry any of this user's processes holds open or uses as cwd (`lsof`; an unreadable list
 keeps everything), a directory it cannot read all of or with more than 20,000 entries, and hidden
 entries (`.DS_Store`). Targets go to the trash. The precheck sweeps them at most once a day.
+While Finder empties the trash on its own, every entry is kept, with that reason, unless
+`$AGENT_SKILLS_TRASH` names a plain folder: the user's own files would otherwise be gone for good in 30 days.
 
 ```bash
 python3 "$R" scan --kinds user-folder
@@ -99,7 +102,7 @@ user's call.
 ## Scheduled run
 
 ```bash
-python3 "$R" precheck    # janitor kinds + user-folder; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago
+python3 "$R" precheck    # janitor kinds + user-folder; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago, or the same set was planned reap.plan_repeat times with no reap since (retried once a day)
 python3 "$R" schedule    # prints the `orca automations create` command; nothing is created without --write
 ```
 
@@ -111,9 +114,23 @@ automation that exists, `orca automations edit <id> --prompt "<text>"`.
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the command keeps
 that path. `orca automations run` skips the precheck, so test it by running it directly, with
 `AGENT_SKILLS_STATE` pointing at a scratch folder: a `reap` records what it failed on, and the next
-scheduled precheck would skip that set for a day. A precheck that never led to a `reap` records
-nothing, so the next one runs again. A precheck prints what it could not read (`gh`,
-`orca`) to stderr. `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
+scheduled precheck would skip that set for a day. A run marked completed is not a cleanup: judge it
+by the reap output in its report.
+
+- Before turning the automation on, auto mode must allow the `reap --plan` command (draft the rule
+  with `tune-automode`). A scheduled prompt is not the owner's chat instruction, so a rule that
+  needs one does not cover it.
+- A refused `reap` is not worked around with another command. The run sends the refused command,
+  one line, to `reap.inbox_to` and puts it first in its report. `inbox_to` is an Orca address; a
+  run address (`run:<id>`) outlives a terminal restart, a terminal handle does not. Unset, only the
+  report line and the precheck's stdout carry it.
+- The precheck counts how often it planned the same set. After `reap.plan_repeat` (default 2)
+  rounds with no `reap`, it stops waking the model for that set, retries it once a day, and sends
+  one message to `reap.inbox_to` with the command to run by hand; a failed send is tried again on
+  the next round. A `reap` or a different set starts the count over.
+
+A precheck prints what it could not read (`gh`, `orca`) and the alerts to stderr.
+`worker-list` without `--run` sees only the bound Run from a run-bound terminal,
 so a scan there can see fewer workers than the automation does. Any process in a worktree keeps
 it from removal, Orca's idle shell in an open card included: an orca-worktree becomes a target once its card's
 terminals are closed, and until then `orca-worker` reports the reclaimable terminal. A finished card
@@ -159,7 +176,7 @@ Finished compose stacks (every container stopped) are reported with their `docke
 
 Never: `pkill`/`killall` by pattern, `docker system prune`, `docker volume prune`, `git worktree prune`, `--force`,
 or anything not in the plan. A kill the auto-mode classifier refuses is not worked around: hand
-the exact `reap --plan` command to the user.
+the exact `reap --plan` command to the user (a scheduled run: to `reap.inbox_to`, see Scheduled run).
 
 ## Config
 
@@ -168,6 +185,7 @@ not in this repo:
 
 ```json
 {"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
+          "inbox_to": "run:<id>", "plan_repeat": 2,
           "alert": {"codex_procs": 300, "codex_rss_mb": 4096, "orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10}}}
 ```
