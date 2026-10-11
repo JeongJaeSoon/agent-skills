@@ -385,6 +385,20 @@ class LinearCli(unittest.TestCase):
                 self.assertEqual((sets, out["state"], out.get("unchanged")), ([], current.split(":")[0], True),
                                  f"{current} --to {target}")
 
+    def test_review_status_from_config(self):
+        self.env.config({"tracker": {"linear": {"review_status": "Todo"}}})
+        proc, out = self.env.run("transition", "ENG-10", "--to", "review", FAKE_ORCA_STATE="Backlog:backlog")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((out["state"], out["state_type"]), ("Todo", "unstarted"))
+        self.assertEqual(self.env.orca_calls()[-1][:6], ["linear", "status", "set", "ENG-10", "--to", "Todo"])
+
+        self.env.config({"tracker": {"linear": {"review_status": "Waiting"}}})
+        before = len(self.env.orca_calls())
+        proc, _ = self.env.run("transition", "ENG-10", "--to", "review", FAKE_ORCA_STATE="Todo:unstarted")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("review_status 'Waiting'", proc.stderr)
+        self.assertFalse([c for c in self.env.orca_calls()[before:] if c[1] == "status"])
+
     def test_writes_refuse_ids_orca_cannot_parse(self):
         proc, _ = self.env.run("label", "9X-5", "--add", "bug")
         self.assertEqual(proc.returncode, 1)
@@ -503,6 +517,23 @@ class JiraCli(unittest.TestCase):
         proc, _ = self.env.run("transition", "ABC-2", "--to", "completed")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("no single transition leads to 'completed'", proc.stderr)
+
+    def test_review_status_from_config(self):
+        self.env.config({"tracker": {"adapter": "jira",
+                                     "jira": {"base_url": self.jira.url, "review_status": "Awaiting Review"}}})
+        self.jira.transitions += [
+            {"id": "41", "name": "Ask review", "to": {"name": "In Review", "statusCategory": {"key": "indeterminate"}}},
+            {"id": "51", "name": "Hand over", "to": {"name": "Awaiting Review", "statusCategory": {"key": "new"}}}]
+        proc, out = self.env.run("transition", "ABC-3", "--to", "review")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.jira.requests[-1][2], {"transition": {"id": "51"}})
+        self.assertEqual((out["state"], out["state_type"]), ("Awaiting Review", "unstarted"))
+
+        self.jira.transitions.pop()
+        proc, _ = self.env.run("transition", "ABC-3", "--to", "review")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("review_status 'Awaiting Review'", proc.stderr)
+        self.assertEqual(self.jira.requests[-1][0], "GET", "missing review_status: nothing posted")
 
     def test_bad_token_error_never_leaks_secret(self):
         proc, _ = self.env.run("get", "ABC-1", JIRA_API_TOKEN="wrong-token-zzz")

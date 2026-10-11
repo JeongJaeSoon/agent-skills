@@ -7,8 +7,9 @@ The vault name comes from `notes.obsidian.vault` in the config (default `Private
 | Operation | Tool |
 |---|---|
 | read | `vault_read` / `vault_batch_read` |
-| create or replace | `vault_write` |
-| edit in place | `vault_edit` on the current content |
+| change an existing note | `vault_edit` on the current content, `dry_run` first |
+| create a new note | `vault_write`, only at a path that holds no note |
+| replace a whole note | `vault_write`, only with the user's approval |
 | append a log line | `vault_append` |
 | search | `vault_search` |
 | where things go | `vault_read("CLAUDE.md")` — the vault's own rules (folders, tags, headings, file names) |
@@ -18,7 +19,8 @@ The vault name comes from `notes.obsidian.vault` in the config (default `Private
 - Never open the vault folder with `cat`, `Read`, `grep`, or the Obsidian CLI for content.
 - The `obsidian:obsidian-cli` plugin skill reads the disk copy and its "read, create, search"
   triggers overlap with MCP; for content, MCP wins. Use the CLI only for plugin/theme
-  development or app-level actions (reload, screenshot, run command).
+  development or app-level actions (reload, screenshot, run command). The user's instructions
+  may bar the CLI entirely; theirs win.
 - A large MCP result gets saved to `tool-results/` and you may split it into the scratchpad
   to read in pieces. That copy is a snapshot. Before editing code against a design doc, or after
   any pause longer than a few minutes, re-read the doc through MCP; do not trust the scratchpad.

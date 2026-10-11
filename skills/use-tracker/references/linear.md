@@ -11,6 +11,8 @@ else `orca linear`, else `tracker.py`. Scripts always call `tracker.py`.
 | `team` | `write-ticket` | Default team key for a new ticket when neither the program nor an originating ticket names one. `tracker.py create` ignores it: it takes the team from the project |
 | `project` | `write-ticket` | Default project for a new ticket, same fallback rule |
 | `templates` | `write-ticket` | Issue template names: `{"dev": "개발 티켓", "spike": "조사 티켓"}`. Absent → `write-ticket` uses its bundled skeletons |
+| `review_status` | `tracker.py` | State name `--to review` moves to, whatever its type. Absent → "In Review", else the one started state whose name contains "review" |
+| `language` | `write-ticket` | Language of a new ticket's title and body. Absent → the user's own rule for this tracker, else Korean |
 
 ```json
 {"tracker": {"adapter": "linear",

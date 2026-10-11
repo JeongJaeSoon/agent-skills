@@ -1,6 +1,6 @@
 ---
 name: use-notes
-description: "Use whenever working docs are read or written — \"obs 에 기록해줘\", \"obs 에 업데이트해줘\", \"설계안을 obs 에\", design docs, worklogs, program notes, research notes, \"정본\", \"worklog\", \"노트에 적어\", a vault path like Project/<name>/*.md, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown)."
+description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"노트에 업데이트해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, research notes, \"정본\", \"worklog\", \"노트에 적어\", a vault path like Project/<name>/*.md, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown)."
 ---
 
 # Working notes
@@ -22,6 +22,8 @@ Read the adapter's reference before the first read or write in a session:
 
 ## Conventions every adapter keeps
 
+- When `notes.delegate_agent` is set in the config, or the user's own instructions name an agent
+  for writes to the store, hand every write to that agent with the facts. Reads stay here.
 - Paths are `Project/<project>/<name>.md`. Worklogs are `worklog-<ticket-or-topic>.md`, updated
   as each piece lands, pruned when the project wraps. Program notes are `program-<slug>.md`
   (`orchestrate`).

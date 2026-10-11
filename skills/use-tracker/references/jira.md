@@ -29,7 +29,8 @@ it, and always from scripts, use `tracker.py --adapter jira` (Jira Cloud REST v3
 - `transition` picks the first transition whose `to.statusCategory.key` matches the target
   (`indeterminate` for started and review, `done` for completed/canceled). A done-category transition whose name
   mentions cancel / won't do / reject / decline / duplicate counts as canceled, any other as completed.
-  `review` needs the one target status whose name contains "review".
+  `review` goes to the status named by `tracker.jira.review_status` (matched by name, any category)
+  when that is set, else to the one target status whose name contains "review".
   If none fits, it fails and lists the available transitions. It does not set a resolution field.
 - `create` uses issue type `tracker.jira.issue_type` (default `Task`) and turns the body file into ADF
   paragraphs.

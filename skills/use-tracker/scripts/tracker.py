@@ -29,9 +29,9 @@ from datetime import datetime, timezone
 DEFAULT_CONFIG = {
     "tracker": {
         "adapter": "linear",
-        "linear": {"workspace": None},
+        "linear": {"workspace": None, "review_status": None},
         "jira": {"base_url": None, "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN",
-                 "issue_type": "Task"},
+                 "issue_type": "Task", "review_status": None},
     },
 }
 DEFAULT_CONFIG_PATH = "~/.claude/agent-skills.json"
@@ -208,6 +208,7 @@ def normalize_linear(raw):
 class LinearAdapter:
     def __init__(self, cfg):
         self.workspace = (cfg or {}).get("workspace")
+        self.review_status = (cfg or {}).get("review_status")
 
     def _orca(self, *args):
         cmd = ["orca", "linear", *args, "--json"]
@@ -351,7 +352,12 @@ class LinearAdapter:
         team = issue_id.rsplit("-", 1)[0]
         states = self._orca("team", "states", "--team", team).get("states") or []
         names = ", ".join(f"{s.get('name')} ({s.get('type')})" for s in states)
-        if target == "review":
+        if target == "review" and self.review_status:
+            matches = [s for s in states if (s.get("name") or "").lower() == self.review_status.lower()]
+            if not matches:
+                raise TrackerError(f"transition {issue_id}: team {team} has no state named review_status "
+                                   f"'{self.review_status}', left unchanged; states: {names}")
+        elif target == "review":
             # orca-linear's rule: "In Review", else the one started state whose name says review.
             matches = [s for s in states if (s.get("name") or "").lower() == "in review"] or [
                 s for s in states if (s.get("type") or "").lower() == "started" and "review" in (s.get("name") or "").lower()]
@@ -367,7 +373,7 @@ class LinearAdapter:
             return unchanged(issue_id, current)
         self._orca("status", "set", issue_id, "--to", state["name"])
         return {"ok": True, "op": "transition", "id": issue_id, "state": state["name"],
-                "state_type": "started" if target == "review" else target}
+                "state_type": (state.get("type") or "started").lower() if target == "review" else target}
 
 
 # ---------------------------------------------------------------- jira (REST v3)
@@ -464,6 +470,7 @@ class JiraAdapter:
             raise TrackerError(f"jira adapter: environment variable(s) not set: {', '.join(missing)}")
         self._auth = "Basic " + base64.b64encode(f"{email}:{token}".encode()).decode()
         self.issue_type = cfg.get("issue_type") or "Task"
+        self.review_status = cfg.get("review_status")
 
     def _request(self, method, path, body=None, params=None):
         url = self.base_url + path
@@ -581,6 +588,9 @@ class JiraAdapter:
 
         def matches(t):
             to = t.get("to") or {}
+            if target == "review" and self.review_status:
+                # The configured status may sit in any category, so the name alone decides.
+                return (to.get("name") or "").lower() == self.review_status.lower()
             if ((to.get("statusCategory") or {}).get("key") or "").lower() != category:
                 return False
             if target == "review":
@@ -593,15 +603,18 @@ class JiraAdapter:
         picks = [t for t in transitions if matches(t)]
         if not picks or (target == "review" and len({(t.get("to") or {}).get("name") for t in picks}) > 1):
             avail = ", ".join(f"{t.get('name')} -> {(t.get('to') or {}).get('name')}" for t in transitions)
-            raise TrackerError(f"transition {issue_id}: no single transition leads to '{target}', left unchanged;"
+            wanted = f"review_status '{self.review_status}'" if target == "review" and self.review_status else f"'{target}'"
+            raise TrackerError(f"transition {issue_id}: no single transition leads to {wanted}, left unchanged;"
                                f" available: {avail or 'none'}")
         pick = picks[0]
         current = self.get(issue_id)
         if already_there(current, target, (pick.get("to") or {}).get("name")):
             return unchanged(issue_id, current)
         self._request("POST", path, {"transition": {"id": pick["id"]}})
-        return {"ok": True, "op": "transition", "id": issue_id, "state": (pick.get("to") or {}).get("name"),
-                "state_type": "started" if target == "review" else target}
+        to = pick.get("to") or {}
+        review_type = JIRA_CATEGORY.get(((to.get("statusCategory") or {}).get("key") or "").lower(), "started")
+        return {"ok": True, "op": "transition", "id": issue_id, "state": to.get("name"),
+                "state_type": review_type if target == "review" else target}
 
 
 # ---------------------------------------------------------------- CLI

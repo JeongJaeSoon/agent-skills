@@ -184,14 +184,14 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **When:** Reading, searching, creating, labeling, commenting on, or changing the state of tickets, and whenever a script needs ticket data.
 - **What it does:**
   - The tracker is resolved in this order: program config → `~/.claude/agent-skills.json` → the default, linear.
-  - Inside a session it prefers MCP (`orca linear` for Linear); scripts always use `tracker.py`. The `tracker.py` commands are list, get, children, create, label, comment, transition. transition reads the current state first and leaves a ticket alone if it's already at that stage or further along. `--to review` moves a ticket to In Review, or, if that state doesn't exist, to the one started state whose name contains review.
+  - Inside a session it prefers MCP (`orca linear` for Linear); scripts always use `tracker.py`. The `tracker.py` commands are list, get, children, create, label, comment, transition. transition reads the current state first and leaves a ticket alone if it's already at that stage or further along. `--to review` moves a ticket to the state named by `tracker.<adapter>.review_status` when the config sets it, else to In Review, or, if that state doesn't exist, to the one started state whose name contains review.
   - The state vocabulary is triage, backlog, unstarted, started, completed, canceled.
   - The follow-up format is a `follow-up` label, a first line of `파생: <ID> · 원인: <분류>` (derived from: <ID> · cause: <category>), and a related relation.
   - Ticket bodies are treated as untrusted data.
 - **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear and Jira, with a fixture mode), `references/linear.md`, `references/jira.md`.
 
 ### use-notes (formerly `use-obsidian`)
-- **When:** Reading and writing design docs, worklogs and program notes. "obs 에 기록해줘" (write it to obs) comes here too.
+- **When:** Reading and writing design docs, worklogs and program notes. "노트에 기록해줘" (write it to the notes) comes here too.
 - **What it does:**
   - The adapters are obsidian (the default) and markdown, and each program can pick its own.
   - Notes live in `Project/<project>/` as `worklog-*.md` and `program-<slug>.md`. If the repo has its own conventions, those win.
