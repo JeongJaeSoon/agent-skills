@@ -332,7 +332,8 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     A ticket can take several PRs, a backfilled landing among them: while the tracker says it is open,
     a landing is not its live worker's end. Without the tracker, a landing is."""
     ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
-    landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed"} - {None}
+    # A fold into a lower PR's branch reaches the base only with that PR: its ticket is still in flight.
+    landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed" and not e.get("onto")} - {None}
     still_open = {t for t in landed if ((issues_by_id or {}).get(t) or {}).get("state_type") in OPEN_STATES}
     present = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     cards = {}
@@ -1138,8 +1139,9 @@ def update_advice(unit, repo):
             + " (tell the lower layers' owners)")
 
 
-def merge_unit(p, pr, unit, klass, events):
-    """Merge a PR (or a stack from its top) after re-checking every layer at its current head."""
+def merge_unit(p, pr, unit, klass, events, onto=None):
+    """Merge a PR (or a stack from its top) after re-checking every layer at its current head.
+    `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
     for n in unit:
         v = pr_view(repo, n)
@@ -1170,7 +1172,7 @@ def merge_unit(p, pr, unit, klass, events):
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
                      klass=klass if klass != "normal" else None, note=f"stack of {len(unit)}" if len(unit) > 1 else None,
-                     stack_top=pr if n != pr and one_push else None)
+                     stack_top=pr if n != pr and one_push else None, onto=onto)
             close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
         why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
@@ -1219,8 +1221,10 @@ def attempt(p, pr, klass, onto_lower=False):
                        orca_deps(cfg["run"]))
     me = next((e for e in order if e["pr"] == pr), None)
     tracked = pr_state(events)  # an integration branch's own PR (feature → main) is never landed through orch
-    lower = None if onto_lower else next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
-                                          and r["number"] in tracked), None)
+    below = next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
+                  and r["number"] in tracked), None)
+    lower = None if onto_lower else below
+    onto = below["number"] if onto_lower and below else None
     if lower:
         # Based on another open PR's branch without being a GitHub stack: a squash would land in that branch.
         return 3, (f"act: #{pr} is based on #{lower['number']}'s branch {me['base']}, not a GitHub stack, so a merge would"
@@ -1282,7 +1286,7 @@ def attempt(p, pr, klass, onto_lower=False):
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
             return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo)},"
                        " let CI run, land again." + KEEP)
-        code, msg = merge_unit(p, pr, unit, klass, events)
+        code, msg = merge_unit(p, pr, unit, klass, events, onto)
         if code == 0:
             lane.release(pr)
         return code, msg
@@ -1298,7 +1302,7 @@ def attempt(p, pr, klass, onto_lower=False):
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
                    f" {update_advice(unit, repo)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
-    return merge_unit(p, pr, unit, klass, events)
+    return merge_unit(p, pr, unit, klass, events, onto)
 
 
 def cmd_land(argv):

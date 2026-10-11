@@ -341,6 +341,8 @@ code, out = prog(env, "land", "t", "--pr", "27")
 assert code == 3 and "based on #26's branch b26" in out and "--base main" in out, out
 code, out = prog(env, "land", "t", "--pr", "27", "--onto-lower")
 assert code == 0 and "landed #27" in out, out
+# The fold is marked: #27 reaches the base only with #26, so its ticket is not finished.
+assert [e.get("onto") for e in ledger(d) if e["ev"] == "landed"] == [26], ledger(d)
 # An untracked PR whose head is the base (the integration branch's own PR to main) does not block.
 feat = pr(28); feat["headRefName"] = "feature/x"
 d, env = setup({"28": feat, "29": pr(29, base="feature/x")})
