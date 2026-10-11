@@ -945,8 +945,8 @@ PROMPT_STEPS = {
         "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. 이 단계의 GitHub 쓰기는 retrigger 코멘트뿐이다."),
     "unreleased": (
         "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: worker-start 는 Run 에 묶인 "
-        "코디네이터 터미널에서만 된다. 줄이 있으면 그 줄들을 그대로 본문으로, 제목 \"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 "
-        "코디네이터에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
+        "코디네이터 터미널에서만 된다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
+        "\"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 코디네이터에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
         "이 회차는 워커를 띄우지도 배포하지도 않는다."),
 }
 
@@ -971,7 +971,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
                   f"그다음 `{run('verify')}` 로 MERGED 와 기본 브랜치 CI 를 확인해 본문을 다시 쓴다. verify 가 실패하면 보내지도 "
                   f"commit 하지도 않고 그 오류를 남긴 채 끝낸다. 성공하면 ") if merging else ""
     subs = {s: run(s) for s in ("actions", "log", "dispatch")}
-    steps = " ".join(step.format(run=subs) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"] and step)
+    steps = " ".join(step.format(run=subs, dispatch_file=shlex.quote(str(STATE / "dispatch.txt"))) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"] and step)
     reads = (" 이 회차는 머지 단계 밖에서 승인·리뷰·배포를 직접 하지 않는다."
              + ("" if "review_wait" in cfg["kinds"] else " 코멘트·재요청도 하지 않는다.") if merging else
              "" if "review_wait" in cfg["kinds"] else " 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다.")
@@ -1040,12 +1040,16 @@ def main():
         if not plan:
             sys.exit("dispatch: no plan.json; run plan --body first")
         # The brief is multi-line, so it goes to a file and each printed command stays on one line.
+        lines = []
         for n, line in enumerate(dispatch_cmds(plan, cfg)):
             i = line.index("--spec")
             # Named by run: the coordinator may start the line after the next round has written its own briefs.
             brief = STATE / f"brief-{int(plan['run'])}-{n}.txt"
             brief.write_text(line[i + 1])
-            print(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')
+            lines.append(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')
+        # The round forwards these as a message body; a file keeps `$(cat …)` from expanding in the round's shell.
+        (STATE / "dispatch.txt").write_text("\n".join(lines))
+        print("\n".join(lines))
     elif cmd == "commit":
         print(f"commit: {commit(STATE, cfg, now)} items recorded")
     elif cmd == "schedule":
