@@ -22,7 +22,8 @@ Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [..
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
-what the ledger lists or an Orca orchestration worker made. user-folder covers top-level entries of ~/Downloads and ~/Desktop
+what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
+--parent-worktree (lineage origin cli). user-folder covers top-level entries of ~/Downloads and ~/Desktop
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
 through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
@@ -685,25 +686,40 @@ def judge_orca_worker(rows):
              "how": [f"orca orchestration worker-release --dispatch {w['dispatchId']} --json"]} for w in rows]
 
 
-def judge_orca_worktree(path, source, facts, pr_state):
-    """facts: the git and process state of one checkout, read by worktree_facts."""
+def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
+    """facts: the git and process state of one checkout, read by worktree_facts. A checkout with no PR goes only when
+    its HEAD is on the remote default branch (end-session §4) and its sessions' transcripts have been quiet for
+    min_age: a new card, and a lead or a read-only card still at work, sit there too."""
     base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
             "how": [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
                     f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
     ref = facts.get("pr")
     s = pr_state(ref) if ref else None
+    idle = facts.get("idle")
     if facts.get("live"):
         why = facts["live"]
-    elif not ref:
+    elif not ref and facts.get("pr_unread"):
+        why = "브랜치의 PR 을 읽지 못함(gh)"
+    elif not ref and facts.get("landed") is None:
+        why = "연결된 PR 없음, 기본 브랜치(origin/HEAD)를 모름"
+    elif not ref and not facts["landed"]:
         why = "연결된 PR 없음"
-    elif s is None:
+    elif ref and s is None:
         why = f"PR {ref} 상태를 읽지 못함"
-    elif s["state"] == "OPEN":
+    elif ref and s["state"] == "OPEN":
         why = f"열린 PR {ref}"
     elif facts.get("unreadable"):
         why = "git 상태를 읽지 못함"
     elif facts.get("dirty"):
         why = "변경 있음(추적 안 되는 파일 포함)"
+    elif not ref and not facts.get("worker_card"):
+        # A lead or a card opened by hand also sits on the default branch with no PR; only a PR tells it is done.
+        why = "연결된 PR 없음(워커가 만든 카드가 아님)"
+    elif (not ref or facts.get("quiet_needed")) and (idle is None or idle < min_age):
+        why = (f"PR {ref} {s['state'].lower()}" if ref else "연결된 PR 없음") + ", 세션이 " + \
+            ("조용한지 알 수 없음" if idle is None else f"{age(idle)} 만 조용")
+    elif not ref:
+        return {**base, "why": f"PR 없음, HEAD 가 기본 브랜치에 있고 세션이 {age(idle)} 조용 ({source})", "target": True}
     elif facts.get("unpushed") and facts.get("head") != s.get("headRefOid"):
         why = "원격에 없는 커밋"
     else:
@@ -714,7 +730,8 @@ def judge_orca_worktree(path, source, facts, pr_state):
 def judge_done_card(path, source, facts, pr_state, quiet, idle_s, asked):
     """A card only a process keeps (its Claude session idle at the prompt) that would otherwise be an orca-worktree
     target: the session is asked once to close itself by end-session §8. None when something else keeps it."""
-    if facts.get("turn") or not facts.get("users") or facts.get("unreadable"):
+    # No PR: an idle lead waiting on its workers looks the same, and a card is asked only once.
+    if facts.get("turn") or not facts.get("users") or facts.get("unreadable") or not facts.get("pr"):
         return None
     settled = judge_orca_worktree(path, source, {**facts, "live": None}, pr_state)
     if not settled["target"]:
@@ -744,26 +761,48 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
     if real(main) == real(path):
         return {"main": True}
     users = [pid for pid, c in users_cwd.items() if under(real(c), real(path))]
-    ref = ledger_pr
+    ref, pr_unread = ledger_pr, False
     if not ref:
         branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
         prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,isCrossRepository"],
                               cwd=path, check=False)
+        # A failed lookup is not an empty answer: a card with an open PR would pass as one without.
+        pr_unread = bool(branch) and prs is None
         # A fork's PR with the same head name is not this branch's.
         own = [p for p in json.loads(prs) if not p.get("isCrossRepository")] if prs else []
         if own:
             url = own[0]["url"]
             m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
             ref = m and f"{m.group(1)}#{m.group(2)}"
+    landed = None
+    if not ref:
+        default = git(["git", "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False)
+        # A failed check reads as not an ancestor, so the checkout stays.
+        landed = None if not default else git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
+                                              check=False) is not None
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
     status = git(["git", "-C", path, "status", "--porcelain"], check=False)
     ahead = git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)
-    return {"main": False, "repo": main, "pr": ref, "turn": live_turn, "users": users,
+    return {"main": False, "repo": main, "pr": ref, "pr_unread": pr_unread, "landed": landed, "turn": live_turn, "users": users,
             "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
             # None is a failed read, not an empty answer.
             "unreadable": status is None or ahead is None,
             "dirty": bool(status), "unpushed": bool(ahead),
             "head": (git(["git", "-C", path, "rev-parse", "HEAD"], check=False) or "").strip()}
+
+
+NO_PR_MIN_HOURS = 2
+
+
+def cli_cards(res):
+    """Real paths of worktrees an agent made with `orca worktree create --parent-worktree` (Orca records origin "cli";
+    the app's own New Worktree records "manual"). None when the list is unreadable or truncated."""
+    if not isinstance(res, dict) or res.get("truncated"):
+        return None
+    return {real(w["path"]) for w in res.get("worktrees") or []
+            if w.get("path") and not w.get("isMainWorktree") and not w.get("isPinned")
+            and w.get("hostId", "local") == "local"
+            and (w.get("lineage") or {}).get("origin") == "cli" and (w.get("lineage") or {}).get("parentWorktreeId")}
 
 
 def orca_json(*args):
@@ -837,13 +876,17 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         if workers is None:
             notes.append("orca-worktree: 오케스트레이션 워커 목록을 읽지 못함, ledger worktree 는 보존한다")
         live, made, users = worker_worktrees(workers or [])
+        cards = cli_cards(orca_json("worktree", "list", "--limit", "10000")) if shutil.which("orca") else set()
+        if cards is None:
+            notes.append("orca-worktree: orca worktree list 를 읽지 못함, CLI 로 만든 카드는 ledger 에 있는 것만 본다")
+        cards = cards or set()
         ledger = {real(e["id"]): e for e in latest(entries, "orca-worktree")}
         # A done-card line in the ledger only records that the card was asked once.
         asked = {real(e["id"]): e.get("ts") for e in latest(entries, "done-card")}
         quiet = quiet or transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
                                           / "projects", now or time.time())
         repos_real = {real(r) for r in repo_list}
-        for path in sorted((set(ledger) | made) - users):
+        for path in sorted((set(ledger) | made | cards) - users):
             if not os.path.isdir(path):
                 continue
             e = ledger.get(path)
@@ -855,9 +898,15 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
             if workers is None and not facts["live"]:
                 # Without the list, a user's takeover and a live turn look the same as a finished worker.
                 facts["live"] = "워커 목록을 읽지 못함"
-            source = "ledger" if e else "오케스트레이션 워커"
+            source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
+            facts["worker_card"] = path in made
+            # A PR found by branch name alone may be an old merged one whose name a lead reused: such a card waits for quiet.
+            facts["quiet_needed"] = path not in made and not (e and (e.get("links") or {}).get("pr"))
+            if facts["quiet_needed"] or (not facts.get("pr") and facts["worker_card"]):
+                facts["idle"] = quiet(path)
             if "orca-worktree" in kinds:
-                items.append(judge_orca_worktree(path, source, facts, pr_state))
+                # `--hours 0` must not let a card that just went quiet go.
+                items.append(judge_orca_worktree(path, source, facts, pr_state, max(hours, NO_PR_MIN_HOURS) * 3600))
             if "done-card" in kinds and workers is not None and (d := judge_done_card(path, source, facts, pr_state, quiet, done_idle_s,
                                                               asked.get(path))):
                 items.append(d)
