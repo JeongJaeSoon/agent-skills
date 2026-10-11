@@ -168,6 +168,10 @@ three = state(14, reqs=[u("bob")], events=[asked("bob", at(14, 20))])
 assert acts([one, three], pending, now=at(14, 23)) == []
 assert acts([one, three], pending, now=at(15, 9, 5)) == [("request", W + "14", "bob")]
 
+skipped_later = [row(W + "10", "bob", "request", at(14, 22), source="skipped", post_at=at(15, 9))]
+assert acts([one, three], skipped_later, now=at(15, 9, 5)) == [("request", W + "14", "bob")], \
+    "a skipped row with post_at does not hold the reviewer's batch"
+
 # Channels: reviewer > repository > default.
 r = p.decide([state(20, reqs=[u("carol")], labels=["security"]), state(21, repo="acme/tools", reqs=[u("bob")], labels=["security"])],
              [], NOW, cfg)
@@ -176,28 +180,29 @@ assert {(a["pr"], a["channel"], a["slack"]) for a in r} == {(W + "20", "CCAROL",
 
 # The collector: exclusions, program PRs (repo-qualified, parked included, idle programs not), notices and actions.
 progs = pathlib.Path(tempfile.mkdtemp())
-for slug, repo, rows in (("live", "acme/widgets", [{"ev": "spawned", "pr": 30}, {"ev": "landed", "pr": 31}]),
-                         ("held", "acme/widgets", [{"ev": "landed", "pr": 32}, {"ev": "parked", "pr": 32}]),
-                         ("elsewhere", "acme/other", [{"ev": "spawned", "pr": 33}]),
-                         ("idle", "acme/widgets", [{"ev": "spawned", "pr": 39}])):
+fresh, old = iso(NOW - 86400), iso(NOW - 40 * 86400)
+for slug, repo, rows in (("live", "acme/widgets", [{"ev": "spawned", "pr": 30, "ts": fresh}, {"ev": "landed", "pr": 31, "ts": fresh}]),
+                         ("held", "acme/widgets", [{"ev": "landed", "pr": 32, "ts": old}, {"ev": "parked", "pr": 32, "ts": fresh}]),
+                         ("elsewhere", "acme/other", [{"ev": "spawned", "pr": 33, "ts": fresh}]),
+                         ("idle", "acme/widgets", [{"ev": "spawned", "pr": 39, "ts": old}]),
+                         ("stopped", "acme/widgets", [{"ev": "spawned", "pr": 40, "ts": fresh}, {"ev": "stop", "ts": fresh}])):
     (progs / slug).mkdir()
     (progs / slug / "program.json").write_text(json.dumps({"repo": repo}))
     (progs / slug / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
-import os
-os.utime(progs / "idle" / "ledger.jsonl", (NOW - 40 * 86400, NOW - 40 * 86400))
 p.STATE = pathlib.Path(tempfile.mkdtemp()) / "prs"
 c = {**cfg, "programs_dir": str(progs), "exclude_repos": ["acme/legacy"]}
 own = [mine(30, reqs=[u("bob")]), mine(32, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)]),
        mine(33, reqs=[u("bob")], labels=["security"]), mine(34, draft=True), mine(35, idle=40), mine(36, repo="acme/legacy"),
        mine(37, threads=[thread("bob", "bob", NOW - H)], reviews=[review("bob", "COMMENTED", "h37")]),
        mine(38, author="owner-bot", kind="Bot", reviews=[review("rabbit", "CHANGES_REQUESTED", "h38", kind="Bot")]),
-       mine(39, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)])]
+       mine(39, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)]),
+       mine(40, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)])]
 plan = p.compute(Fake := type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: own})(), c, {}, NOW)
 why = {e["pr"]: e["why"] for e in plan["excluded"]}
 assert why == {W + "30": "프로그램 PR (live)", W + "32": "프로그램 PR (held)", W + "34": "draft", W + "35": "stale: 40일 움직임 없음",
                "acme/legacy#36": "제외 대상 저장소"}, why
 got = {(i["key"], i.get("action")) for i in plan["new"]}
-assert got == {("acme/widgets#39@h39/request/bob", "request"), ("acme/widgets#33@h33/request/bob", "request"),
+assert got == {("acme/widgets#39@h39/request/bob", "request"), ("acme/widgets#40@h40/request/bob", "request"), ("acme/widgets#33@h33/request/bob", "request"),
                ("acme/widgets#37@h37/review_wait", None), ("acme/widgets#38@h38/retrigger/rabbit", "retrigger"),
                ("acme/widgets#38@h38/review_wait", None)}, got
 assert next(i for i in plan["new"] if i["key"].endswith("#38@h38/review_wait"))["why"] == ["리뷰어 없음"]
@@ -208,7 +213,7 @@ assert "[내 PR 대기] acme/widgets#37" in text and "리뷰 의뢰 → @bob" in
 
 # Actions are not capped by max_items: a reviewer's batch must not split into two messages.
 capped = p.compute(Fake, {**c, "max_items": 0}, {}, NOW)
-assert len([i for i in capped["new"] if "action" in i]) == 3 and capped["more"] == 2
+assert len([i for i in capped["new"] if "action" in i]) == 4 and capped["more"] == 2
 
 # log + commit: the send-log decides actions, the ledger only notices. A failed send stays due.
 p.write_json(p.STATE / "plan.json", plan)
@@ -226,7 +231,7 @@ for bad in (("nope", "sent"), (k, "maybe")):
 p.commit(p.STATE, c, NOW)
 assert set(p.read_json(p.STATE / "ledger.json", {})) == {"acme/widgets#37@h37/review_wait", "acme/widgets#38@h38/review_wait"}
 after = p.compute(Fake, c, p.read_json(p.STATE / "ledger.json", {}), NOW + 60)
-assert {i["key"] for i in after["new"]} == {"acme/widgets#33@h33/request/bob"}, "the unlogged request is still due"
+assert {i["key"] for i in after["new"]} == {"acme/widgets#33@h33/request/bob", "acme/widgets#40@h40/request/bob"}, "the unlogged request is still due"
 
 # schedule: the prompt carries a kind's step only when that kind is configured; --edit keeps the automation id.
 script = pathlib.Path("/repo/skills/watch-prs/scripts/prs.py")
@@ -248,7 +253,7 @@ p.write_json(tmp / "prs" / "plan.json", plan)
 run = lambda *a: subprocess.run([sys.executable, str(pathlib.Path(p.__file__)), *a, "--config", str(conf)],
                                 env={**os.environ, "AGENT_SKILLS_STATE": str(tmp)}, capture_output=True, text=True)
 lines = [json.loads(x) for x in run("actions").stdout.splitlines()]
-assert sorted(x["action"] for x in lines) == ["request", "request", "retrigger"] and "post_at" in lines[0]
+assert sorted(x["action"] for x in lines) == ["request", "request", "request", "retrigger"] and "post_at" in lines[0]
 out = run("log", "--key", k, "--source", "scheduled", "--scheduled", "Q9", "--post-at", str(at(15, 9)), "--thread", "CFAKE:7.7")
 assert out.returncode == 0, out
 assert p.read_jsonl(tmp / "prs" / "sendlog.jsonl")[0]["post_at"] == at(15, 9)

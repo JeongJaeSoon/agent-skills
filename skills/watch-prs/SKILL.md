@@ -158,8 +158,8 @@ that path. The precheck (`prs.py precheck`) uses no model. It reads GitHub and e
 | 2 | could not check: no `prs` key in the config, or `gh` failed |
 
 The default trigger is every 15 minutes, for a proof window. The steady state is weekday business
-hours, e.g. `*/15 9-19 * * 1-5` with `timezone` set; change it with
-`orca automations edit <id> --trigger "<cron>"`. `orca automations run` skips the precheck, so it
+hours, e.g. `*/15 9-19 * * 1-5` with `timezone` set; change `cron` in the config and run
+`schedule --edit <id> --write` (it rewrites the trigger from the config, so a cron set only in Orca is lost). `orca automations run` skips the precheck, so it
 proves nothing about it: test the precheck by running it directly with `AGENT_SKILLS_STATE`
 pointing at a scratch folder, and judge the automation by a scheduled run in
 `orca automations runs --id <id>`. Devices and their trade-offs:

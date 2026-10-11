@@ -268,20 +268,19 @@ def post_at(now, cfg):
 
 
 def program_prs(cfg, now):
-    """{(repo, number): slug} for PRs a live orchestrate program drives (its ledger written within stale_days);
-    `orch wait` follows those, and a parked one is held on purpose. Programs have no closed state, so an idle
-    ledger is how an abandoned program's PRs come back to reminders."""
+    """{(repo, number): slug} for PRs a live orchestrate program drives; `orch wait` follows those, and a parked
+    one is held on purpose. Live: not stopped (`stop` after the last `resume`) and a ledger event within
+    stale_days, so an abandoned program's PRs come back to reminders."""
     root = pathlib.Path(cfg["programs_dir"] or os.environ.get("PROGRAMS_HOME") or "~/.claude/programs").expanduser()
     out = {}
     for prog in root.glob("*/program.json"):
-        ledger = prog.parent / "ledger.jsonl"
-        try:
-            if now - ledger.stat().st_mtime > cfg["stale_days"] * 86400:
-                continue
-        except OSError:
+        rows = read_jsonl(prog.parent / "ledger.jsonl")
+        marks = [r.get("ev") for r in rows if r.get("ev") in ("stop", "resume")]
+        last = max((ts(r["ts"]) for r in rows if isinstance(r.get("ts"), str)), default=0)
+        if (marks and marks[-1] == "stop") or now - last > cfg["stale_days"] * 86400:
             continue
         repo = read_json(prog, {}).get("repo")
-        out.update({(repo, r["pr"]): prog.parent.name for r in read_jsonl(ledger) if isinstance(r.get("pr"), int)})
+        out.update({(repo, r["pr"]): prog.parent.name for r in rows if isinstance(r.get("pr"), int)})
     return out
 
 
@@ -356,7 +355,8 @@ def decide(states, sendlog, now, cfg):
     acts, held, bots, by = [], {}, review_bots(cfg), {}
     for r in sendlog:
         by.setdefault((r["pr"], r["reviewer"]), []).append(r)
-    scheduled = {r["reviewer"] for r in sendlog if r["action"] == "request" and (r.get("post_at") or 0) > now}
+    scheduled = {r["reviewer"] for r in sendlog
+                 if r["action"] == "request" and r["source"] == "scheduled" and (r.get("post_at") or 0) > now}
     for s in states:
         for who in s["pending"] + s["stale_approvals"]:
             mine = by.get((s["pr"], who), [])
