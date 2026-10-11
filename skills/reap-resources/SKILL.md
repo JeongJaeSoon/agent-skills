@@ -31,6 +31,8 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
 - `--kinds codex,orphan,docker,branch,worktree` limits the scan, `--hours N` sets the age
   threshold (default 6), `--repo PATH` (repeatable) picks the repos for `branch` and
   `worktree` (default: every repo in `orca repo list`).
+- `--under PATH` limits `codex` to brokers whose `--cwd` is PATH or below it. Closing one card
+  passes its path: an unscoped scan also reaps other sessions' brokers idle past `--hours`.
 - Show the user the scan before the first `reap` in a session unless they asked to reap.
 
 ## Janitor: what agents created

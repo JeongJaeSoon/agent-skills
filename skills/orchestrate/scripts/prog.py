@@ -1526,8 +1526,9 @@ def close_out(msgs, workers, worktrees):
             out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks and --run-hooks in end-session §4),"
                     " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]
             # A Codex plugin broker outlives its worker; once the card is gone, reap.py targets it (cwd missing).
+            # --under keeps it to this card's brokers: an unscoped scan also reaps other sessions' idle ones.
             plan, reap = f"/tmp/reap-{d}.json", f"python3 {shlex.quote(str(REAP))}"
-            out.append(f"  {reap} scan --kinds codex --plan {plan} && {reap} reap --plan {plan}")
+            out.append(f"  {reap} scan --kinds codex --under {shlex.quote(p)} --plan {plan} && {reap} reap --plan {plan}")
     return out
 
 

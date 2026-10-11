@@ -2,7 +2,7 @@
 """Inventory and reap what dead sessions left behind on this machine.
 
 Usage:
-  python3 reap.py scan [--hours N] [--kinds codex,orphan,docker,branch,worktree] [--repo PATH]...
+  python3 reap.py scan [--hours N] [--kinds codex,orphan,docker,branch,worktree] [--repo PATH]... [--under PATH]
                        [--plan OUT.json] [--json]
   python3 reap.py reap --plan PLAN.json
   python3 reap.py load [--top N] [--json]
@@ -15,6 +15,7 @@ scan only reads. reap re-scans and acts only on the plan's targets that are stil
 same identity (pid and start time, branch tip), so nothing outside the list is touched.
 load only reads: the top CPU consumers, each classed ours-idle, ours-working, leftover or system, with the
 action for its class.
+--under: the codex kind sees only brokers whose --cwd is PATH or below it (one finished card, not the machine).
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
@@ -148,7 +149,7 @@ def is_claude(cmd):
     return bool(argv) and (os.path.basename(argv[0]) == "claude" or "/@anthropic-ai/claude-code/" in argv[-1])
 
 
-def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
+def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir, root=None):
     claude = {pid: real(c) for pid, c in (cwd_of or {}).items() if pid in rows and is_claude(rows[pid]["cmd"])}
     # An own claude with no cwd on record could be the one using any broker.
     blind = cwd_of is None or any(is_claude(r["cmd"]) and r.get("uid", os.getuid()) == os.getuid() and pid not in cwd_of
@@ -159,6 +160,8 @@ def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir):
             continue
         m = BROKER_CWD.search(r["cmd"])
         cwd = m.group(1) if m else None
+        if root and not (cwd and under(cwd, root)):
+            continue
         live = [pid for pid, c in claude.items() if cwd and under(c, real(cwd))]
         if live:
             why, target = f"cwd에 살아 있는 claude(pid {live[0]})", False
@@ -390,12 +393,12 @@ def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, orca=frozenset(), 
     return {**base, "why": why, "target": False, "age": idle}
 
 
-def scan(kinds, hours, cfg, repo_list):
+def scan(kinds, hours, cfg, repo_list, root=None):
     notes, items = [], []
     rows = processes() if {"codex", "orphan"} & kinds else {}
     cwd_of = cwds() if {"codex", "worktree"} & kinds else {}
     if "codex" in kinds:
-        items += judge_brokers(rows, cwd_of, hours)
+        items += judge_brokers(rows, cwd_of, hours, root=root)
     if "orphan" in kinds:
         if not cfg.get("orphan_paths"):
             notes.append(f"orphan: {CONFIG} 의 reap.orphan_paths 가 비어 있어 건너뜀")
@@ -1352,7 +1355,8 @@ def main():
     hours = float(opt("--hours") or cfg.get("hours") or 6)
     repo_list = repos([a for i, a in enumerate(sys.argv) if i and sys.argv[i - 1] == "--repo"]) \
         if {"branch", "worktree", "orca-worktree", "done-card"} & kinds else []
-    items, notes = scan(kinds, hours, cfg, repo_list)
+    root = opt("--under")
+    items, notes = scan(kinds, hours, cfg, repo_list, root=root and real(root).rstrip("/"))
     notes = pre_notes + notes
     msgs, totals = alerts(items, {**ALERT, **(cfg.get("alert") or {})})
     data = {"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "hours": hours,

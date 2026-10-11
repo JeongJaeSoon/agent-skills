@@ -184,7 +184,7 @@ def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
 done = co({"dispatchId": "d1", "outcome": "succeeded"})
 assert done[-2] == "  orca worktree rm --worktree path:/w/1", done
-assert "scan --kinds codex --plan /tmp/reap-d1.json && " in done[-1] and done[-1].endswith("reap --plan /tmp/reap-d1.json"), done
+assert "scan --kinds codex --under /w/1 --plan /tmp/reap-d1.json && " in done[-1] and done[-1].endswith("reap --plan /tmp/reap-d1.json"), done
 assert co('{"dispatchId": "d1", "outcome": "succeeded"}') == co({"dispatchId": "d1", "outcome": "succeeded"})
 assert not any("worktree rm" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
 failed = co({"dispatchId": "d1", "outcome": "failed"})

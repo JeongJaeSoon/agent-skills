@@ -37,6 +37,9 @@ assert got == {10: False, 20: False, 30: False, 40: False}, got
 # A live claude still in a vanished cwd keeps its broker.
 got = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, {50: "/wt/gone"}, 6, exists=lambda p: p != "/wt/gone")}
 assert got[30] is False, got
+# --under scopes the codex kind to one card: a broker elsewhere is not even listed.
+got = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, {50: "/home", 60: "/home"}, 6, exists=lambda p: p != "/wt/gone", root="/wt/gone")}
+assert got == {30: True}, got
 # A claude installed through npm runs as node; it still protects its cwd.
 assert reap.is_claude("node /n/lib/node_modules/@anthropic-ai/claude-code/cli.js -p")
 assert not reap.is_claude("node /x/app-server-broker.mjs serve") and not reap.is_claude("claudette")
