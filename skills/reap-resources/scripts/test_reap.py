@@ -366,12 +366,13 @@ assert judge(dirty=True)["why"].startswith("변경 있음")
 assert judge(live="살아 있는 워커 턴(ctx_1)")["why"].startswith("살아 있는")
 assert judge(pr=None, landed=False)["why"] == "연결된 PR 없음" and judge(pr="acme/app#3")["target"]
 # No PR: it goes only when HEAD is on the remote default branch (end-session §4) and its sessions are quiet long enough.
-nopr = lambda **kw: reap.judge_orca_worktree("/wt/a", "오케스트레이션 워커", {**ok, "pr": None, "landed": True, "idle": 7 * 3600, **kw},
+nopr = lambda **kw: reap.judge_orca_worktree("/wt/a", "오케스트레이션 워커", {**ok, "pr": None, "landed": True, "worker_card": True, "idle": 7 * 3600, **kw},
                                              PRS.get, 6 * 3600)
 assert nopr()["target"] and nopr()["why"] == "PR 없음, HEAD 가 기본 브랜치에 있고 세션이 7h0m 조용 (오케스트레이션 워커)", nopr()
 assert nopr(landed=False)["why"] == "연결된 PR 없음" and "origin/HEAD" in nopr(landed=None)["why"]
 assert nopr(idle=3600)["target"] is False and "만 조용" in nopr(idle=3600)["why"], "a lead or a new card sits on the default branch too"
 assert nopr(idle=None)["target"] is False
+assert nopr(worker_card=False)["why"] == "연결된 PR 없음(워커가 만든 카드가 아님)"
 assert nopr(pr_unread=True)["target"] is False and "읽지 못함" in nopr(pr_unread=True)["why"], "a failed gh lookup is not no PR"
 assert nopr(dirty=True)["why"].startswith("변경 있음") and nopr(unreadable=True)["why"] == "git 상태를 읽지 못함"
 assert nopr(live="살아 있는 워커 턴(ctx_1)")["target"] is False
@@ -448,8 +449,13 @@ with tempfile.TemporaryDirectory() as tmp:
     # An unregistered card made through the CLI is seen; one the user's takeover retained is not.
     reap.orca_workers = lambda state=None: []
     reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
-    got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get)
+    got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, quiet=lambda p: 7 * 3600)
     assert [(i["target"], i["why"]) for i in got] == [(True, "PR acme/app#2 merged (CLI 로 만든 카드)")], got
+    # Known only by lineage, it may be a lead whose branch name an old merged PR used: it waits for quiet too.
+    got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, quiet=lambda p: 3600)
+    assert [(i["target"], i["why"]) for i in got] == [(False, "PR acme/app#2 merged, 세션이 1h0m 만 조용")], got
+    got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get, quiet=lambda p: 60)
+    assert [i["target"] for i in got] == [True], "a ledger card with its PR link needs no quiet"
     reap.orca_workers = lambda state=None: [{"terminalState": "retained", "resource": {"worktreeId": "r::" + wt}}]
     assert reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get) == []
     # A no-PR card is judged by how long its sessions have been quiet, floored at NO_PR_MIN_HOURS even under --hours 0.

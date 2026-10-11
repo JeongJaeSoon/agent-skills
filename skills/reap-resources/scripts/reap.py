@@ -711,10 +711,12 @@ def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
         why = "git 상태를 읽지 못함"
     elif facts.get("dirty"):
         why = "변경 있음(추적 안 되는 파일 포함)"
-    elif not ref and "idle" not in facts:
+    elif not ref and not facts.get("worker_card"):
+        # A lead or a card opened by hand also sits on the default branch with no PR; only a PR tells it is done.
         why = "연결된 PR 없음(워커가 만든 카드가 아님)"
-    elif not ref and (idle is None or idle < min_age):
-        why = "연결된 PR 없음, 세션이 " + ("조용한지 알 수 없음" if idle is None else f"{age(idle)} 만 조용")
+    elif (not ref or facts.get("quiet_needed")) and (idle is None or idle < min_age):
+        why = (f"PR {ref} {s['state'].lower()}" if ref else "연결된 PR 없음") + ", 세션이 " + \
+            ("조용한지 알 수 없음" if idle is None else f"{age(idle)} 만 조용")
     elif not ref:
         return {**base, "why": f"PR 없음, HEAD 가 기본 브랜치에 있고 세션이 {age(idle)} 조용 ({source})", "target": True}
     elif facts.get("unpushed") and facts.get("head") != s.get("headRefOid"):
@@ -896,9 +898,10 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
                 # Without the list, a user's takeover and a live turn look the same as a finished worker.
                 facts["live"] = "워커 목록을 읽지 못함"
             source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
-            # Only a worker's card: a lead or a card someone opened by hand also sits on the default branch with no PR,
-            # and nothing but quiet transcripts would tell it from a finished one.
-            if not facts.get("pr") and path in made:
+            facts["worker_card"] = path in made
+            # A card known only by its lineage may be a lead, or reuse an old merged branch's name: it also waits for quiet.
+            facts["quiet_needed"] = not e and path not in made
+            if facts["quiet_needed"] or (not facts.get("pr") and facts["worker_card"]):
                 facts["idle"] = quiet(path)
             if "orca-worktree" in kinds:
                 # `--hours 0` must not let a card that just went quiet go.
