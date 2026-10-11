@@ -57,8 +57,10 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             An act refused by a permission prompt, the auto-mode classifier, a Claude Code hook or
             the human is not tried again in any form: not re-run, not moved into a script or
             another tool, not aimed at a renamed target, not handed to a subagent or another
-            session. Report it with what the act was for, the refusal's category and the exact
-            command, and put this rule in every subagent prompt you write. Taking the path this
+            session. Report it to the coordinator in the same turn, as an orchestration message
+            of type escalation (your terminal is not read), with what the act was for, the
+            refusal's category and the exact command, and put this rule in every subagent
+            prompt you write. Taking the path this
             brief already names for that act (`orch land` for a merge) is not a retry, nor is
             doing the act again after the human added a rule for it or approved it in your own
             chat. A hook that blocked only the text of a command reading no protected file, and
