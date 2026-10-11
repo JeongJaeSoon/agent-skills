@@ -42,8 +42,11 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
 
 1. One summary line; `변화 없음` when nothing changed since the last report.
 2. A table with one row per lead (per repository when there are no leads). Columns: 진행 `N/M (추정 %)` · 완료 (증거) · 남은 일, filled by the Progress, Done so far and Left rules above. Every row goes out every time, changed or not.
-3. What the human has to do now: Decision needed and Only you.
-4. Later, each item with its condition.
+3. Decision needed, its own section, as §1 describes it.
+4. Only you, its own section, as §1 describes it: what to run, press or log in to, and where.
+5. Later, each item with its condition.
+
+A report with nothing new still carries sections 3 to 5 when they hold items: an open decision is asked again, in the same words and with its `orch decide` id when it has one, until the human answers it.
 
 Put ▲ in front of each row that changed since the last report, and ▲ in the legend. After sending, save the table to `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`) for the next report to compare against. With no saved table, send it without ▲ and say so in the summary line. On Telegram each row is one line, ▲ at its start.
 

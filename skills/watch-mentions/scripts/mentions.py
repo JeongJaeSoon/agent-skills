@@ -8,6 +8,7 @@ Usage:
   python3 mentions.py ingest CANDIDATES.json
   python3 mentions.py bundle ITEMS.json
   python3 mentions.py commit [ITEMS.json]
+  python3 mentions.py annotate ITEMS.json
   python3 mentions.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 Slack is read by the agent through its Slack MCP tools; this script never talks to Slack.
@@ -16,15 +17,18 @@ plan takes the run lock and prints the searches to run. ingest drops what must n
 (the owner's own messages, bots, non-public channels, excluded channels, anything seen before or older
 than the window). bundle renders the one coordinator message. commit marks the items seen,
 moves the cursor to the run's start and releases the lock; with no file it only does the last two.
+annotate sets `pr` on rows already in the ledger (a backfill); it refuses while a run holds the lock
+and moves no cursor.
 Config: ~/.claude/agent-skills.json → "mentions" (see SKILL.md). State: $AGENT_SKILLS_STATE/mentions
-(default ~/.local/state/agent-skills/mentions). The ledger holds ids and categories, never message text.
+(default ~/.local/state/agent-skills/mentions). The ledger holds ids, categories and PR refs, never message text.
 """
-import datetime as dt, json, os, pathlib, shlex, subprocess, sys, time
+import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "mentions"
 CATEGORIES = {"review": "리뷰 의뢰", "work": "작업 의뢰", "question": "질문", "decision": "결정·공유", "chat": "잡담"}
 KINDS = ("mention", "name", "thread")
+PR_REF = re.compile(r"^(?:https?://[^/]+/)?([\w.-]+/[\w.-]+)(?:#|/pull/)(\d+)(?:[/?#].*)?$")
 DEFAULTS = {"names": [], "channels": [], "exclude_channels": [], "read_private": False, "lookback_hours": 24,
             "thread_lookback_days": 7, "max_threads": 30, "overlap_minutes": 10, "lock_minutes": 60,
             "keep_days": 30, "summary_chars": 120, "cron": "*/20 9-20 * * 1-5", "timezone": None, "inbox_to": None}
@@ -59,6 +63,12 @@ def write_json(path, data):
 
 def key(item):
     return f"{item['channel_id']}/{item['ts']}"
+
+
+def pr_ref(value):
+    """owner/repo#N from that form or a PR URL; None for anything else. watch-prs matches on it."""
+    m = PR_REF.match(str(value or "").strip())
+    return f"{m[1]}#{m[2]}" if m else None
 
 
 def day_before(unix):
@@ -181,12 +191,26 @@ def commit(items, cfg, state, now):
     seen = read_json(state / "seen.json", {})
     for i in items:
         seen[key(i)] = {"at": lock["run"], "category": i.get("category"), "permalink": i.get("permalink")}
+        if pr_ref(i.get("pr")):
+            seen[key(i)]["pr"] = pr_ref(i.get("pr"))
     horizon = now - cfg["keep_days"] * 86400
     seen = {k: v for k, v in seen.items() if v["at"] >= horizon}
     write_json(state / "seen.json", seen)
     write_json(state / "cursor.json", {"until": lock["run"]})
     (state / "lock.json").unlink()
     return len(items)
+
+
+def annotate(items, cfg, state, now):
+    if lock_held(state, cfg, now):
+        raise SystemExit("annotate: a run holds the lock; its commit would race this write")
+    seen, n = read_json(state / "seen.json", {}), 0
+    for i in items:
+        ref = pr_ref(i.get("pr"))
+        if ref and key(i) in seen:
+            seen[key(i)]["pr"], n = ref, n + 1
+    write_json(state / "seen.json", seen)
+    return n
 
 
 def schedule_cmd(script, cfg, workspace, provider="claude"):
@@ -228,6 +252,8 @@ def main():
     elif cmd == "commit":
         items = read_json(sys.argv[2], []) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else []
         print(f"commit: {commit(items, cfg, STATE, now)} items marked seen")
+    elif cmd == "annotate":
+        print(f"annotate: {annotate(read_json(sys.argv[2], None) or [], cfg, STATE, now)} rows given a PR")
     elif cmd == "schedule":
         script = pathlib.Path(__file__).resolve()
         line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"))

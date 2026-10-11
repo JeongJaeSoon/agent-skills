@@ -20,6 +20,7 @@ Usage: orch <command> <slug> [options]
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
+                                     --note is required with --source claude-review:independent
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      coordinator-owned landing Task; the user resolves it in Orca
@@ -992,13 +993,19 @@ def cmd_verdict(argv):
     p = Program(argv[0])
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
-        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
+        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, "
+                 "subagent-review, claude-review:independent, verifier:codex, live:<feature>)")
     # Workers run on Claude, so a verifier names another family; a Claude subagent's review is subagent-review.
+    # claude-review:independent is the context-free Claude Code review that stands in when Codex is unavailable.
     kind, _, what = src.partition(":")
-    if not (src in ("codex-review", "subagent-review") or (kind == "live" and what)
+    if not (src in ("codex-review", "subagent-review", "claude-review:independent") or (kind == "live" and what)
             or (kind == "verifier" and what.lower().startswith(VERIFIER_FAMILIES))):
-        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), verifier:<model of another "
-                 "family than the Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
+        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), claude-review:independent "
+                 "(Codex unavailable, deliver-ticket codex-review.md), verifier:<model of another family than the "
+                 "Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
+    if src == "claude-review:independent" and not opt(argv, "--note"):
+        sys.exit("claude-review:independent needs --note with the Codex line that shows Codex was unavailable "
+                 "(spend cap, outage, login)")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
