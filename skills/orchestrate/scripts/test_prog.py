@@ -412,6 +412,19 @@ with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "STUCK a1" in out.getvalue() and "EMPTY" in out.getvalue(), out.getvalue()
 prog.read_screen = saved_read
+# A stall the collector sees ends the wait early once; the next wait does not repeat it.
+screens["h1"] = idle
+(_pdir / "dashboard").mkdir(exist_ok=True)
+(_pdir / "dashboard" / "state.json").write_text(json.dumps({"generated_at": prog.dt.datetime.now(prog.dt.timezone.utc).isoformat(),
+    "summary": {"stalls": [{"dispatch": "a9", "ticket": "T-9", "kind": "silent", "minutes": 25}]}}))
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "3"])
+assert "STALLED T-9 (a9)" in out.getvalue() and "wait 2/3" not in out.getvalue(), out.getvalue()
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "2"])
+assert "STALLED" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},

@@ -701,6 +701,45 @@ STALL_TEXT = {
 }
 
 
+def dash_state(pdir):
+    """The collector's state.json, or None when it is missing or older than 3 minutes."""
+    try:
+        st = json.loads((pdir / "dashboard" / "state.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not st.get("generated_at") or dt.datetime.now(dt.timezone.utc) - parse_ts(st["generated_at"]) > dt.timedelta(minutes=3):
+        return None
+    return st
+
+
+def stall_line(x):
+    return f"  STALLED {x.get('ticket') or '?'} ({x['dispatch']}): " + STALL_TEXT[x["kind"]].format(**{"tool": "", "detail": "", **x})
+
+
+def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
+    """STALLED lines `orch wait` has not shown in the last 30 minutes. A coordinator that only loops `orch wait`
+    never reads `orch status`, so a stall shown only there went unseen for hours."""
+    st = dash_state(pdir)
+    if st is None:
+        return []
+    state, now = pdir / "stalls-seen.json", dt.datetime.now(dt.timezone.utc)
+    try:
+        seen = json.loads(state.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    seen = seen if isinstance(seen, dict) else {}
+    stalls = (st.get("summary") or {}).get("stalls") or []
+    fresh = [x for x in stalls if f"{x['dispatch']}:{x['kind']}" not in seen
+             or now - parse_ts(seen[f"{x['dispatch']}:{x['kind']}"]) >= renotify]
+    keep = {f"{x['dispatch']}:{x['kind']}": seen.get(f"{x['dispatch']}:{x['kind']}") for x in stalls}
+    keep.update({f"{x['dispatch']}:{x['kind']}": now.isoformat() for x in fresh})
+    try:
+        state.write_text(json.dumps({k: v for k, v in keep.items() if v}))
+    except OSError:
+        pass
+    return [stall_line(x) for x in fresh]
+
+
 def dashboard_lines(slug):
     """Keep the dashboard server up (`orch-dash ensure`), and bring back what only its collector sees:
     whether each worker's session is moving, free capacity and ledger gaps. Stale data prints nothing.
@@ -714,15 +753,11 @@ def dashboard_lines(slug):
             out.append(((r.stdout or r.stderr).strip().splitlines() or ["dashboard: ensure printed nothing"])[-1])
         except subprocess.TimeoutExpired:
             out.append("dashboard: `orch-dash ensure` timed out; the lines below may be stale")
-    try:
-        st = json.loads((HOME / slug / "dashboard" / "state.json").read_text())
-    except (OSError, ValueError):
-        return out
-    if not st.get("generated_at") or dt.datetime.now(dt.timezone.utc) - parse_ts(st["generated_at"]) > dt.timedelta(minutes=3):
+    st = dash_state(HOME / slug)
+    if st is None:
         return out
     s = st.get("summary") or {}
-    for x in s.get("stalls") or []:
-        out.append(f"  STALLED {x.get('ticket') or '?'} ({x['dispatch']}): " + STALL_TEXT[x["kind"]].format(**{"tool": "", "detail": "", **x}))
+    out += [stall_line(x) for x in s.get("stalls") or []]
     sp, gaps = s.get("spare") or {}, s.get("gaps") or {}
     if sp.get("slots") and sp.get("ready"):
         out.append(f"  SPARE {sp['slots']} slot(s) under the cap; tasks ready to start: {', '.join(map(str, sp['ready'][:6]))}")
@@ -1855,6 +1890,10 @@ def cmd_wait(argv):
         if print_stuck(p, run_id, only_new=True):
             print_sweep(run_id, p.dir / "self-check.json")
             print("STUCK: a worker waits on a prompt nobody sees; answer or escalate it now", flush=True)
+            return
+        if stalled := new_stalls(p.dir):
+            print("\n".join(stalled), flush=True)
+            print("STALLED: a worker stopped with its ticket open and nothing will wake it; wake it now", flush=True)
             return
     print_sweep(run_id, p.dir / "self-check.json")
     print_stuck(p, run_id)
