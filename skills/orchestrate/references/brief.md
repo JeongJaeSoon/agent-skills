@@ -74,8 +74,9 @@ REPORT      worker_done once, after landing and main CI (or at READY under human
             Body: what changed, what was verified and how, what remains. Include the PR URL,
             merge commit, review rounds and who reviewed, the PR body's review-scope line (deliver-ticket §3), the VERIFY output you actually saw,
             the main-CI run you read, and the findings with their proposed class. --outcome succeeded only
-            when the ticket's acceptance criteria hold. Then close yourself in the same turn:
-            end-session §7.
+            when the ticket's acceptance criteria hold. Load end-session §7 before you send it:
+            worker_done is one of the closing calls §7 picks, and the coordinator may release
+            this terminal the moment it arrives.
 KEEP        <optional: the next task this worker's terminal or card is kept for>
 STANDING    <the program note's standing orders for workers, pasted verbatim, numbered; the
             coordinator-only ones stay in the note>
@@ -105,7 +106,7 @@ LAND        A change: its normal flow (deliver-ticket), or the push the owner al
 WAITING     `ask` what you cannot decide. After two waits in a row end with no answer,
             `orch decide add` the question and end your turn; the answer is typed into your terminal.
 REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
-            Then close yourself in the same turn: end-session §7.
+            Load end-session §7 before you send it; it picks worker_done and the closing calls.
 KEEP        <optional, as above>
 ```
 
