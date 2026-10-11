@@ -76,7 +76,7 @@ One message, three reviewers launched together. Claude reviewers use the `Agent`
 | Lens | Runner | Prompt template |
 |---|---|---|
 | Judgment | `Agent`, `model: "opus"` | `references/judgment-reviewer.md` |
-| Tooling | Codex: `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"`, the configured default model, then wait with `status <job id> --wait --timeout-ms 1800000` as a Bash call with `run_in_background`, which wakes you when the job ends, and read `result <job id>`. Ending the turn to wait instead ends an unattended run for good. Read-only without `--write`. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. Codex sees only its own MCP servers, so inline any ticket or thread it will need. | `references/tooling-reviewer.md` |
+| Tooling | Codex: `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"`, the configured default model, then wait with `status <job id> --wait --timeout-ms 1800000` as a Bash call with `run_in_background`, which wakes you when the job ends, and read `result <job id>`. Ending the turn while that call runs is how you wait; ending it with nothing running in the background ends an unattended run for good. Read-only without `--write`. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. Codex sees only its own MCP servers, so inline any ticket or thread it will need. | `references/tooling-reviewer.md` |
 | Divergent | `Agent`, `model: "opus"` | `references/divergent-reviewer.md` |
 
 Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in their final response (Codex: `result <job id>`).
