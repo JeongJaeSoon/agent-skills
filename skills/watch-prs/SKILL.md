@@ -69,8 +69,10 @@ For each repo in `deploy`, an `unreleased` item is a PR the user authored, merge
 dev syncs on its own is usually synced before a round looks, and the change still needs its
 behaviour and logs checked on dev. The revision decides the action instead. `revision_cmd` (run by the precheck,
 60 s) prints what dev runs; GitHub's compare says whether that contains the merge commit, and the
-item carries `deployed` true (check only) or false (release, or wait for the sync, first). A probe
-that fails puts that repo's merges in `excluded` with the reason; other repos and kinds go on.
+item carries `deployed` true (check only) or false (release, or wait for the sync, first). When the
+probe or compare fails, the merges still become items, with `deployed` null and the reason in `why`,
+so a broken probe shows up in the message and the worker checks dev itself instead of the merge
+aging out of `lookback_days` unseen. `deploy` alone collects nothing: `kinds` must list `unreleased`.
 
 `dispatch` turns them into one release worker per repo: an `orca orchestration worker-start` line
 whose brief (in `<state>/brief-<n>.txt`) holds the PRs and merge commits, the declaration, the
@@ -95,7 +97,7 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 
    From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
    to its Run's coordinator.
-3. `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
+3. Only after the send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
    Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
    hook) is not tried again in any form (re-run, script, other tool, another session): send the
    coordinator the repo, the refusal and the exact command instead.

@@ -1,6 +1,6 @@
 """Rules of prs.py: who counts as a personal request, ranking, the ledger, precheck exit codes, unreleased merges, dispatch, schedule.
 Run: python3 test_prs.py"""
-import json, os, pathlib, shlex, stat, subprocess, sys, tempfile
+import json, os, pathlib, re, shlex, stat, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prs as p
 
@@ -177,12 +177,34 @@ silent = Fake([], merged=[merged(20)], deployed=RuntimeError("must not run"))
 assert p.compute(silent, {**rcfg, "deploy": {}}, {}, NOW)["new"] == []
 assert p.compute(silent, rcfg, {"acme/widgets#20@h20": {"at": NOW, "kind": "unreleased"}}, NOW)["new"] == []
 
-# A probe that fails excludes that repo's merges with the reason; other kinds still go through.
+# A probe that fails still hands the merge on, flagged, so it cannot age out of lookback_days unseen.
 broke = p.compute(Fake([pr(1, reqs=[user(ME)])], merged=[merged(20)], deployed=RuntimeError("exit 1")), rcfg, {}, NOW)
-assert [i["kind"] for i in broke["new"]] == ["review_request"]
-assert broke["excluded"][-1]["pr"] == "acme/widgets#20" and "dev 리비전 확인 실패" in broke["excluded"][-1]["why"]
+assert [(i["kind"], i.get("deployed")) for i in broke["new"]] == [("review_request", None), ("unreleased", None)]
+assert broke["new"][1]["why"] == ["dev 리비전 확인 실패: exit 1"] and "dev 리비전 확인 실패" in p.body(broke)
+assert "dev 리비전을 읽지 못함" in p.dispatch_cmds(broke, rcfg)[0][4]
 assert "revision_cmd 없음" in p.compute(Fake([], merged=[merged(20)], deployed="d0"),
-                                        {**rcfg, "deploy": {"acme/widgets": {}}}, {}, NOW)["excluded"][0]["why"]
+                                        {**rcfg, "deploy": {"acme/widgets": {}}}, {}, NOW)["new"][0]["why"][0]
+
+# The real probes: revision_cmd through the shell, containment through gh's compare status.
+gh_dir = pathlib.Path(tempfile.mkdtemp())
+cmp_gh = gh_dir / "gh"
+cmp_gh.write_text('#!/bin/sh\ncase "$2" in *m20...d0) echo ahead;; *m21...d0) echo behind;; *same...d0) echo identical;; *) echo boom >&2; exit 1;; esac\n')
+cmp_gh.chmod(0o755)
+p.GH = str(cmp_gh)
+real = p.GitHub()
+assert [real.contains("acme/widgets", c, "d0") for c in ("m20", "m21", "same")] == [True, False, True]
+try:  # gh failing (bad sha, lost access) is an error, not "not deployed"
+    real.contains("acme/widgets", "unknown", "d0")
+    raise AssertionError("a failed compare must raise")
+except RuntimeError as e:
+    assert "boom" in str(e)
+assert real.revision("printf 'abc123\\n'") == "abc123"
+for bad in ("exit 3", "true"):
+    try:
+        real.revision(bad)
+        raise AssertionError(f"{bad} must raise")
+    except RuntimeError:
+        pass
 
 # dispatch: one worker-start per repo; the brief carries the procedure, the declaration and the approval.
 two = {**rcfg["deploy"], "acme/gadgets": {"revision_cmd": "x"}}
@@ -254,6 +276,7 @@ assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
 prompt = line[line.index("--prompt") + 1]
 assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
+assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
 assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout

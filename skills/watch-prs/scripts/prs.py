@@ -226,8 +226,11 @@ def collect_unreleased(gh, me, cfg, ledger, now):
             deployed = gh.revision(decl["revision_cmd"])
             got = [(pr, gh.contains(repo, pr["mergeCommit"]["oid"], deployed)) for pr in due]
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            excluded += [{"pr": f"{repo}#{pr['number']}", "why": f"dev 리비전 확인 실패: {e}"} for pr in due]
-            continue
+            # Still an item: dropping it would let the merge age out of lookback_days unseen. The worker checks dev itself.
+            deployed, failed = None, f"dev 리비전 확인 실패: {str(e)[:200]}"
+            got = [(pr, None) for pr in due]
+        else:
+            failed = None
         for pr, live in got:
             merged = days(pr["mergedAt"], now)
             items.append({"kind": "unreleased", "key": key(pr), "id": pr["id"], "repo": repo, "number": pr["number"],
@@ -235,7 +238,7 @@ def collect_unreleased(gh, me, cfg, ledger, now):
                           "idle_days": merged, "size": pr["additions"] + pr["deletions"], "only_blocker": False,
                           "stale": False, "reason": "merged", "merge_commit": pr["mergeCommit"]["oid"],
                           "deployed_revision": deployed, "deployed": live,
-                          "why": ["dev 에 반영됨, 동작 확인 전" if live else "dev 에 아직 없음"]})
+                          "why": [failed or ("dev 에 반영됨, 동작 확인 전" if live else "dev 에 아직 없음")]})
     return items, excluded
 
 
@@ -313,7 +316,8 @@ def release_brief(repo, items, cfg):
     lines = [f"{repo} 에서 머지된 PR 을 dev 에서 확인하고 증거를 각 PR 에 sticky comment 로 남긴다.",
              f"절차: {REFERENCE} 를 따른다.", "PR:"]
     lines += [f"- #{i['number']} {i['url']} merge {i['merge_commit']} · "
-              + ("dev 에 반영됨" if i["deployed"] else f"dev({i['deployed_revision']}) 에 아직 없음") for i in items]
+              + ("dev 리비전을 읽지 못함, 직접 확인" if i["deployed"] is None else "dev 에 반영됨" if i["deployed"]
+                 else f"dev({i['deployed_revision']}) 에 아직 없음") for i in items]
     lines += ["배포 선언:"] + [f"- {k}: {decl[k]}" for k in ("dev_release", "revision_cmd", "logs", "verify", "ticket") if decl.get(k)]
     lines += [f"승인: {cfg['release_approval']}" if cfg.get("release_approval")
               else "승인: dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 코디네이터에게 묻는다.",
@@ -351,7 +355,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
-              f"그다음 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
+              f"보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
               f"한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
               f"그 저장소 이름과 거부·실패 내용, 정확한 명령을 같은 방법으로 {shlex.quote(to)} 에 보낸다. "
               f"본문 전송이 성공했고 모든 줄이 워커를 시작했거나 보고됐을 때만 `{env} commit` 을 실행한다. "
