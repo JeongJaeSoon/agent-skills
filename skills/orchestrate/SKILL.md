@@ -114,6 +114,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
    - The dashboard server is detached and serves every program, so it neither needs stopping nor defers the `/goal` stop check. `state.json` stays for later reading.
    - Run `measure-delivery`, save its output as `~/.claude/programs/<slug>/reflect/delivery.md` for `reflect`, and audit the trail per `show-me-your-work`.
    - Run `reflect` in program mode. It turns the signals and the ledger's failures into lessons in the lessons ledger, fills in whether earlier lessons held, and opens at most one draft PR against `agent-skills` for the lessons that recurred. Put its digest lines and the PR link in the digest; the human approves and merges. Run it even with no signals and no failures: it then only records that the applied lessons held, and the digest gets one line saying so.
+   - Neither step is skipped for a brief's MODEL CALLS line: `measure-delivery` only reads, and `reflect` is the model call Close exists for. The signals are yours to fold in here unless a flow improver you spawned is running; leaving them to one that does not exist drops them.
 
 ## How the human's words change the program
 
