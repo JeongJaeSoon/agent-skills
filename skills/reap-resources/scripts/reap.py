@@ -22,7 +22,8 @@ Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [..
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
-what the ledger lists or an Orca orchestration worker made. user-folder covers top-level entries of ~/Downloads and ~/Desktop
+what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
+--parent-worktree (lineage origin cli). user-folder covers top-level entries of ~/Downloads and ~/Desktop
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
 through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
@@ -684,8 +685,9 @@ def judge_orca_worker(rows):
              "how": [f"orca orchestration worker-release --dispatch {w['dispatchId']} --json"]} for w in rows]
 
 
-def judge_orca_worktree(path, source, facts, pr_state):
-    """facts: the git and process state of one checkout, read by worktree_facts."""
+def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
+    """facts: the git and process state of one checkout, read by worktree_facts. A checkout with no PR goes only when
+    its HEAD is on the remote default branch (end-session §4) and it is min_age old: a new card is there too."""
     base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
             "how": [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
                     f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
@@ -693,8 +695,16 @@ def judge_orca_worktree(path, source, facts, pr_state):
     s = pr_state(ref) if ref else None
     if facts.get("live"):
         why = facts["live"]
-    elif not ref:
+    elif not ref and not facts.get("landed"):
         why = "연결된 PR 없음"
+    elif not ref and facts.get("unreadable"):
+        why = "git 상태를 읽지 못함"
+    elif not ref and facts.get("dirty"):
+        why = "변경 있음(추적 안 되는 파일 포함)"
+    elif not ref and (facts.get("age") is None or facts["age"] < min_age):
+        why = "연결된 PR 없음, 만든 지 " + ("알 수 없음" if facts.get("age") is None else age(facts["age"]))
+    elif not ref:
+        return {**base, "why": f"PR 없음, HEAD 가 기본 브랜치에 있음 ({source})", "target": True}
     elif s is None:
         why = f"PR {ref} 상태를 읽지 못함"
     elif s["state"] == "OPEN":
@@ -713,7 +723,8 @@ def judge_orca_worktree(path, source, facts, pr_state):
 def judge_done_card(path, source, facts, pr_state, quiet, idle_s, asked):
     """A card only a process keeps (its Claude session idle at the prompt) that would otherwise be an orca-worktree
     target: the session is asked once to close itself by end-session §8. None when something else keeps it."""
-    if facts.get("turn") or not facts.get("users") or facts.get("unreadable"):
+    # No PR: an idle lead waiting on its workers looks the same, and a card is asked only once.
+    if facts.get("turn") or not facts.get("users") or facts.get("unreadable") or not facts.get("pr"):
         return None
     settled = judge_orca_worktree(path, source, {**facts, "live": None}, pr_state)
     if not settled["target"]:
@@ -754,15 +765,35 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
             url = own[0]["url"]
             m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
             ref = m and f"{m.group(1)}#{m.group(2)}"
+    landed = None
+    if not ref:
+        default = git(["git", "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False)
+        landed = bool(default) and git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
+                                       check=False) is not None
+    try:
+        # A worktree's .git file is written once, when the checkout is made.
+        made_s = time.time() - os.stat(os.path.join(path, ".git")).st_mtime
+    except OSError:
+        made_s = None
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
     status = git(["git", "-C", path, "status", "--porcelain"], check=False)
     ahead = git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)
-    return {"main": False, "repo": main, "pr": ref, "turn": live_turn, "users": users,
+    return {"main": False, "repo": main, "pr": ref, "landed": landed, "age": made_s, "turn": live_turn, "users": users,
             "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
             # None is a failed read, not an empty answer.
             "unreadable": status is None or ahead is None,
             "dirty": bool(status), "unpushed": bool(ahead),
             "head": (git(["git", "-C", path, "rev-parse", "HEAD"], check=False) or "").strip()}
+
+
+def cli_cards(res):
+    """Real paths of worktrees an agent made with `orca worktree create --parent-worktree` (Orca records origin "cli";
+    the app's own New Worktree records "manual"). None when the list is unreadable or truncated."""
+    if not res or res.get("truncated"):
+        return None
+    return {real(w["path"]) for w in res.get("worktrees") or []
+            if not w.get("isMainWorktree") and (w.get("lineage") or {}).get("origin") == "cli"
+            and (w.get("lineage") or {}).get("parentWorktreeId")}
 
 
 def orca_json(*args):
@@ -836,13 +867,17 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         if workers is None:
             notes.append("orca-worktree: 오케스트레이션 워커 목록을 읽지 못함, ledger worktree 는 보존한다")
         live, made, users = worker_worktrees(workers or [])
+        cards = cli_cards(orca_json("worktree", "list", "--limit", "10000")) if shutil.which("orca") else set()
+        if cards is None:
+            notes.append("orca-worktree: orca worktree list 를 읽지 못함, CLI 로 만든 카드는 ledger 에 있는 것만 본다")
+        cards = (cards or set()) - made
         ledger = {real(e["id"]): e for e in latest(entries, "orca-worktree")}
         # A done-card line in the ledger only records that the card was asked once.
         asked = {real(e["id"]): e.get("ts") for e in latest(entries, "done-card")}
         quiet = quiet or transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
                                           / "projects", now or time.time())
         repos_real = {real(r) for r in repo_list}
-        for path in sorted((set(ledger) | made) - users):
+        for path in sorted((set(ledger) | made | cards) - users):
             if not os.path.isdir(path):
                 continue
             e = ledger.get(path)
@@ -854,9 +889,9 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
             if workers is None and not facts["live"]:
                 # Without the list, a user's takeover and a live turn look the same as a finished worker.
                 facts["live"] = "워커 목록을 읽지 못함"
-            source = "ledger" if e else "오케스트레이션 워커"
+            source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
             if "orca-worktree" in kinds:
-                items.append(judge_orca_worktree(path, source, facts, pr_state))
+                items.append(judge_orca_worktree(path, source, facts, pr_state, hours * 3600))
             if "done-card" in kinds and workers is not None and (d := judge_done_card(path, source, facts, pr_state, quiet, done_idle_s,
                                                               asked.get(path))):
                 items.append(d)
