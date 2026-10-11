@@ -21,6 +21,8 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt, with the absolute paths of this `SKILL.md` and `references/rationale-template.md` so a runner can read them. Each candidate produces a design package shaped per `references/rationale-template.md`. Arena's default runners (Claude opus, Claude fable, Codex) are the design runners; a Claude runner that writes sketch files into the repo gets `isolation: "worktree"`.
 
+When the caller limits model calls (a brief's MODEL CALLS line) and the contract is one boundary inside one system, write the candidates yourself instead of spawning runners, and say so in the rationale; spawn the arena when the contract crosses systems or the caller asks for it.
+
 Design it twice. Require at least two structurally distinct candidates before synthesis, even when the first looks sufficient. This is the **exhaust-the-design-space** principle skill made concrete. Whole-shape alternatives, not point fixes inside one shape.
 
 Screen every candidate against [`references/design-red-flags.md`](references/design-red-flags.md) before synthesis. Reject or revise shallow modules, information leakage, temporal decomposition, and pass-through methods.
