@@ -1,6 +1,6 @@
 ---
 name: watch-prs
-description: Use when the user wants the pull requests that are waiting on them picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request. In a repo that declares a dev path, the user's merged PRs not yet checked on dev start one release worker per repo. Writes nothing to GitHub itself. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
+description: Use when the user wants the pull requests that are waiting on them picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request; a review request made on Slack (from watch-mentions' ledger) joins the same list, one entry per PR. In a repo that declares a dev path, the user's merged PRs not yet checked on dev start one release worker per repo. Writes nothing to GitHub itself. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
 ---
 
 # Watch PRs
@@ -34,8 +34,9 @@ never in this repo.
 ```
 
 `orgs` and `repos` empty mean every repository; otherwise an `owner` in `orgs` or an `owner/name` in
-`repos` is in. Bot logins match with or without the `[bot]` suffix. Other keys and defaults are in
-`scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
+`repos` is in. Bot logins match with or without the `[bot]` suffix. `mentions_seen` overrides where
+the Slack side is read (default: `watch-mentions`' `seen.json` under the same state root). Other
+keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
 (`$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
 `plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
 
@@ -51,6 +52,13 @@ A PR is an item when all hold:
 A PR in the ledger that left the search comes back once when the user's latest review is on an
 older commit than the head: new commits after a review, with no re-request. The ledger key is
 `owner/repo#N@headRefOid`, so each head is sent at most once.
+
+A Slack review request counts too. `watch-mentions` records the PR (`owner/repo#N`) of each
+`review` item in its seen ledger; each such PR is one entry, with the Slack permalinks attached
+(`slack`) and `source` set to `github`, `slack` or `github+slack`. A PR GitHub already lists gets
+the permalinks; one GitHub does not list (no request, or a team or CODEOWNERS one only) is listed
+as `source: slack` when it is open, not a draft, not the user's own, in scope and not already
+reviewed by the user at its head. No ledger means GitHub only.
 
 Order: stale last; then the user as the only pending reviewer while the decision is
 `REVIEW_REQUIRED`; then a human author before a bot; then older first; then smaller diff first.
