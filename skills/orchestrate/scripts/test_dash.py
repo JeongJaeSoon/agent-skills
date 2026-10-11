@@ -315,6 +315,11 @@ ws = [{"dispatch": "a", "outcome": "in_progress", "since": ago(60), "motion": {"
 assert [(x["dispatch"], x["kind"]) for x in dash.stalls(ws, now)] == [("a", "idle"), ("c", "start_unconfirmed"), ("e", "long_tool"),
                                                                       ("h", "silent")]
 assert "{" not in dash.prog.STALL_TEXT["silent"].format(dispatch="h", minutes=150)
+# A parked ticket's worker waits on purpose; admitting the ticket again brings its stall back.
+ws_p = [{"dispatch": "p1", "ticket": "T-5", "outcome": "in_progress", "since": ago(90), "motion": {"state": "idle", "since": ago(60)}}]
+parked = [{"ts": ago(70), "ev": "parked", "ticket": "T-5", "note": "waits on human"}]
+assert dash.stalls(ws_p, now, dash.parked_tickets(parked)) == []
+assert [x["dispatch"] for x in dash.stalls(ws_p, now, dash.parked_tickets(parked + [{"ts": ago(5), "ev": "admitted", "ticket": "T-5"}]))] == ["p1"]
 held = dash.spare({"next": "stop spawning: land what is verified", "cap": 4, "in_flight": 1}, [])
 assert held["slots"] == 0 and held["held"].startswith("stop spawning"), held
 free = dash.spare({"next": "may spawn 3 more", "cap": 4, "in_flight": 1},

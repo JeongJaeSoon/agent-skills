@@ -700,11 +700,23 @@ TOOL_MIN = 45        # one tool call still running (a CI watch past this is wort
 SILENT_MIN = 20
 
 
-def stalls(workers, tnow):
+def parked_tickets(events):
+    """Tickets the coordinator put on hold (`record parked --ticket`) and has not admitted since."""
+    last = {}
+    for e in events:
+        if e["ev"] in ("parked", "admitted") and e.get("ticket") and not e.get("pr"):
+            last[e["ticket"]] = e["ev"]
+    return {t for t, ev in last.items() if ev == "parked"}
+
+
+def stalls(workers, tnow, held=frozenset()):
+    """`held`: parked tickets, whose idle worker waits on purpose (often on the human) and wakes nobody."""
     out = []
     mins = lambda ts: (tnow - prog.parse_ts(ts)).total_seconds() / 60
     for w in workers:
         m = w.get("motion") or {}
+        if w.get("ticket") in held:
+            continue
         if w.get("outcome") != "in_progress" or (w.get("model") or "").startswith(("gpt", "o3", "o4", "codex")):
             continue
         row = {"dispatch": w["dispatch"], "ticket": w.get("ticket") or w.get("worktree")}
@@ -1036,7 +1048,7 @@ def _merge(slug, d, cfg, fetched, interval):
 
     notes = read_jsonl(dash / "notes.jsonl")
     summary = summarize(cfg, events, issues, workers, tnow, order, sum(not c["active"] for c in cards))
-    summary["stalls"], summary["spare"] = stalls(workers, tnow), spare(summary, tasks)
+    summary["stalls"], summary["spare"] = stalls(workers, tnow, parked_tickets(events)), spare(summary, tasks)
     summary["gaps"] = ledger_gaps(cfg, events, workers, prs, tnow)
     open_prs = [p for p in prs if p["state"] == "open" and not p.get("draft") and p.get("created_at")]
     oldest = min(open_prs, key=lambda p: p["created_at"], default=None)
