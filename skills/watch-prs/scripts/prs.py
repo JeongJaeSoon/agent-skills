@@ -264,7 +264,8 @@ def personal_request(pr, me):
 
 def request_why(pr, me):
     """None when a person asked the owner personally; else why not. An app that requests its own reviewers (the PR's
-    author, an auto-assign bot) is not a person asking, even when it names the owner as a User."""
+    author, an auto-assign bot) is not a person asking, even when it names the owner as a User. The timeline window
+    holds the last 50 request events of any reviewer; an owner request older than that counts as not a person's."""
     if not personal_request(pr, me):
         return "팀·CODEOWNERS 요청뿐"
     asks = [e for e in pr["timelineItems"]["nodes"]

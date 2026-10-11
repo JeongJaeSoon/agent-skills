@@ -878,8 +878,12 @@ asked = lambda n, *actors: {**pr(n, reqs=[user(ME)]), "timelineItems": {"nodes":
 askers = [pr(80, reqs=[user(ME)]), pr(81, reqs=[user(ME)], asker=("Bot", "assign-bot")), asked(82, "Bot", "User"),
           asked(83, "User", "Bot"), asked(84), {**asked(85, "User"), "timelineItems": {"nodes": [{
               "actor": None, "requestedReviewer": {"__typename": "User", "login": ME}}]}}]
+later_bot = asked(86, "User")  # a bot asking someone else afterwards does not change who asked the owner
+later_bot["timelineItems"]["nodes"].append({"actor": {"__typename": "Bot", "login": "x"},
+                                            "requestedReviewer": {"__typename": "User", "login": "carol"}})
+askers.append(later_bot)
 got = p.compute(Fake(askers), cfg, {}, NOW)
-assert sorted(i["number"] for i in got["new"]) == [80, 82], got["new"]
+assert sorted(i["number"] for i in got["new"]) == [80, 82, 86], got["new"]
 assert {e["pr"]: e["why"] for e in got["excluded"]} == {f"acme/widgets#{n}": "사람이 아닌 계정의 요청" for n in (81, 83, 84, 85)}
 
 # The new-commits path never brings back a PR whose current request of the owner is a team, CODEOWNERS or app one:

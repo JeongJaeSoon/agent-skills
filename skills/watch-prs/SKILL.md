@@ -7,7 +7,8 @@ description: Use when the user wants the pull requests that are waiting on them,
 
 GitHub's `review-requested:@me` mixes three things: a request to the user by name, a request to a
 team they belong to, and a CODEOWNERS auto-assignment. On a busy account the last two drown the
-first. This skill keeps only the personal ones, ranks them, and hands them on once per head commit.
+first. Apps and bots also request reviewers themselves. This skill keeps only the personal requests
+a person made, ranks them, and hands them on once per head commit.
 
 It never writes a review of its own judgement, re-requests or labels. Its GitHub writes are a review bot's
 re-review trigger comment on the user's own PR (`review_wait`, below); when `kinds` includes
@@ -77,7 +78,7 @@ at most once.
 A Slack review request counts too. `watch-mentions` records the PR (`owner/repo#N`) of each
 `review` item in its seen ledger; each such PR is one entry, with the Slack permalinks attached
 (`slack`) and `source` set to `github`, `slack` or `github+slack`. A PR GitHub already lists gets
-the permalinks; one GitHub does not list (no request, or a team or CODEOWNERS one only) is listed
+the permalinks; one GitHub does not list (no request, or only a team, CODEOWNERS or app-made one) is listed
 as `source: slack` when it is open, not a draft, not the user's own, in scope and not already
 reviewed by the user at its head. No ledger means GitHub only.
 
@@ -104,8 +105,8 @@ opens. Each gate in `ownergate` names them:
 ```
 
 A PR is an item when it is open, not a draft, asks for the user's review the way a review request
-must ([What counts](#what-counts): personal, made by a person), its author is a GitHub App, its repository is in scope (`exclude_*`), `reviewDecision` is
-`REVIEW_REQUIRED`, and at least one gate matches it: author in `authors`, repository in `repos`
+must ([What counts](#what-counts): personal, made by a person), its author is a GitHub App, its
+repository is in scope (`exclude_*`), `reviewDecision` is `REVIEW_REQUIRED`, and at least one gate matches it: author in `authors`, repository in `repos`
 (empty: any), title matches `title`. A person's PR is never an item. `ignore_bots` does not apply
 here. A bad `title` regex makes the precheck exit 2, whether or not a PR matches. An app that
 requests its own reviewers, or reaches the user only through CODEOWNERS, never makes a gate item.
