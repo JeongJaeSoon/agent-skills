@@ -1,4 +1,4 @@
-"""Rules of prs.py: who counts as a personal request, ranking, the ledger, precheck exit codes, schedule.
+"""Rules of prs.py: who counts as a personal request, ranking, the ledger, precheck exit codes, unreleased merges, dispatch, schedule.
 Run: python3 test_prs.py"""
 import json, os, pathlib, shlex, stat, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -33,15 +33,28 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=()):
+    def __init__(self, search, nodes=(), merged=(), deployed=None, live=()):
         self.found, self.by_id = list(search), {n["id"]: n for n in nodes}
+        self.merged, self.deployed, self.live, self.queries = list(merged), deployed, set(live), []
 
     def viewer(self):
         return ME
 
     def search(self, q, me):
-        assert "review-requested:@me" in q and me == ME
+        assert me == ME
+        self.queries.append(q)
+        if "is:merged" in q:
+            return [m for m in self.merged if f"repo:{m['repository']['nameWithOwner']} " in q]
+        assert "review-requested:@me" in q
         return self.found
+
+    def revision(self, cmd):
+        if isinstance(self.deployed, Exception):
+            raise self.deployed
+        return self.deployed
+
+    def contains(self, repo, commit, deployed):
+        return commit in self.live
 
     def nodes(self, ids, me):
         return [self.by_id[i] for i in ids if i in self.by_id]
@@ -130,13 +143,64 @@ p.write_json(state / "plan.json", {"run": NOW + 61 * DAY, "new": []})
 p.commit(state, cfg, NOW + 61 * DAY)
 assert list(p.read_json(state / "ledger.json", {})) == [still]
 
-# Only review_request has a collector; a later kind fails loudly instead of silently sending nothing.
+# A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
     p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
     assert "review_wait" in str(e)
+
+# unreleased: the owner's merges in a declared repo within lookback_days; the dev revision decides the action, not membership.
+def merged(n, repo="acme/widgets", hours=3, sha=None):
+    return {**pr(n, repo=repo, author=ME, age=1), "state": "MERGED", "mergedAt": iso(NOW - hours * 3600),
+            "mergeCommit": {"oid": sha or f"m{n}"}}
+
+decl = {"dev_release": "auto-sync", "revision_cmd": "print-dev-sha", "logs": "dev log viewer",
+        "verify": "verify-widgets", "lookback_days": 1, "orca_repo": "name:widgets"}
+rcfg = {**cfg, "kinds": ["review_request", "unreleased"], "deploy": {"acme/widgets": decl}, "dispatch_run": "run_x",
+        "release_approval": "dev 배포 승인됨(테스트)"}
+fake = Fake([pr(1, reqs=[user(ME)])], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+both = p.compute(fake, rcfg, {}, NOW)
+rel = [i for i in both["new"] if i["kind"] == "unreleased"]
+assert [(i["number"], i["deployed"], i["merge_commit"], i["key"]) for i in rel] == \
+    [(20, True, "m20", "acme/widgets#20@h20"), (21, False, "m21", "acme/widgets#21@h21")], rel
+assert [i["kind"] for i in both["new"]][0] == "review_request"
+q = [x for x in fake.queries if "is:merged" in x][0]
+assert f"author:{ME}" in q and "repo:acme/widgets " in q and "merged:>=2027-01-14T08:00:00Z" in q, q
+lines = p.body({**both, "new": rel}).splitlines()
+assert lines[1].startswith("1. [dev 확인 전] acme/widgets#20 Change 20") and "dev 에 반영됨, 동작 확인 전" in lines[1]
+assert "dev 에 아직 없음" in lines[2]
+
+# Nothing declared, or everything already handed on: no revision probe at all.
+silent = Fake([], merged=[merged(20)], deployed=RuntimeError("must not run"))
+assert p.compute(silent, {**rcfg, "deploy": {}}, {}, NOW)["new"] == []
+assert p.compute(silent, rcfg, {"acme/widgets#20@h20": {"at": NOW, "kind": "unreleased"}}, NOW)["new"] == []
+
+# A probe that fails excludes that repo's merges with the reason; other kinds still go through.
+broke = p.compute(Fake([pr(1, reqs=[user(ME)])], merged=[merged(20)], deployed=RuntimeError("exit 1")), rcfg, {}, NOW)
+assert [i["kind"] for i in broke["new"]] == ["review_request"]
+assert broke["excluded"][-1]["pr"] == "acme/widgets#20" and "dev 리비전 확인 실패" in broke["excluded"][-1]["why"]
+assert "revision_cmd 없음" in p.compute(Fake([], merged=[merged(20)], deployed="d0"),
+                                        {**rcfg, "deploy": {"acme/widgets": {}}}, {}, NOW)["excluded"][0]["why"]
+
+# dispatch: one worker-start per repo; the brief carries the procedure, the declaration and the approval.
+two = {**rcfg["deploy"], "acme/gadgets": {"revision_cmd": "x"}}
+plan2 = p.compute(Fake([], merged=[merged(20), merged(21), merged(30, repo="acme/gadgets")], deployed="d0", live={"m20"}),
+                  {**rcfg, "deploy": two}, {}, NOW)
+cmds = p.dispatch_cmds(plan2, {**rcfg, "deploy": two})
+assert [c[c.index("--repo") + 1] for c in cmds] == ["name:gadgets", "name:widgets"]
+w = cmds[1]
+assert w[:3] == ["orca", "orchestration", "worker-start"] and w[w.index("--run") + 1] == "run_x"
+assert w[w.index("--worktree") + 1] == "new-top-level" and w[w.index("--agent") + 1] == "claude"
+spec = w[w.index("--spec") + 1]
+for want in ("post-merge-release.md", "#20 ", "merge m20", "dev 에 반영됨", "#21 ", "dev(d0) 에 아직 없음", "- revision_cmd: print-dev-sha",
+             "- verify: verify-widgets", "승인: dev 배포 승인됨(테스트)", "사람만: 프로덕션", "다시 시도하지 않는다"):
+    assert want in spec, want
+assert pathlib.Path(spec.split("절차: ")[1].split(" ")[0]).exists(), "the brief points at a reference that exists"
+assert "--run" not in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "dispatch_run": None})[0]
+assert "승인이 없다" in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "release_approval": None})[0][4]
+assert p.dispatch_cmds(plan, rcfg) == [], "review requests are messaged, never dispatched"
 
 # CLI end to end with a fake gh: exit codes and the --body output.
 tmp = pathlib.Path(tempfile.mkdtemp())
@@ -168,6 +232,16 @@ assert not (tmp / "state" / "prs" / "plan.json").exists(), "a plan with nothing 
 # One ledger PR GitHub can no longer resolve (deleted repo, lost access) must not fail the whole lookup.
 p.GH = str(fake_gh)
 assert p.GitHub().nodes(["PR_gone"], ME) == []
+# dispatch prints one runnable line per due repo from plan.json, and nothing without a plan.
+assert run("dispatch").returncode != 0
+conf.write_text(json.dumps({"prs": {"deploy": {"acme/widgets": decl}}}))
+p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
+d = run("dispatch")
+printed = d.stdout.splitlines()
+assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["orca", "orchestration", "worker-start"], d
+assert printed[0].endswith(f'--spec "$(cat {tmp / "state" / "prs" / "brief-0.txt"})"')
+assert "#20 " in (tmp / "state" / "prs" / "brief-0.txt").read_text()
+(tmp / "state" / "prs" / "plan.json").unlink()
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)], env=broken, capture_output=True).returncode == 2
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
@@ -180,6 +254,7 @@ assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
 prompt = line[line.index("--prompt") + 1]
 assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
+assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 
