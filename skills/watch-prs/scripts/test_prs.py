@@ -91,16 +91,17 @@ assert lines[0] == "PR 5건이 나를 기다린다" and len(lines) == 6
 assert lines[1].startswith("1. [리뷰 요청] acme/widgets#1 Change 1 — @alice · 3일 · ±50 · 남은 리뷰어가 나뿐, 사람 작성")
 assert p.body({**plan, "new": []}) == ""
 
-# precheck: 0 with new items, 1 when the same set is pending, 1 after commit, 2 without config.
+# precheck: 0 with new items, 1 while a run holds plan.json, 1 after commit, 2 without config.
 assert p.precheck(Fake(found), None, state, NOW)[0] == p.EXIT_ERROR
 assert p.precheck(Fake(found), cfg, state, NOW)[0] == p.EXIT_NEW
-assert p.precheck(Fake(found), cfg, state, NOW + 60)[0] == p.EXIT_NOTHING, "the run that took this set is still going"
-assert p.precheck(Fake(found), cfg, state, NOW + 61 * 60)[0] == p.EXIT_NEW, "a dead run's set is retried"
+p.write_json(state / "plan.json", plan)
+assert p.precheck(Fake(found + [pr(12, reqs=[user(ME)])]), cfg, state, NOW + 60)[0] == p.EXIT_NOTHING, \
+    "a run between plan and commit is not overlapped, even when something else arrived"
+assert p.precheck(Fake(found), cfg, state, NOW + 61 * 60)[0] == p.EXIT_NEW, "a dead run's plan stops blocking"
 
 # commit records exactly what plan delivered; the same (repo, N, head) is not sent twice.
-p.write_json(state / "plan.json", plan)
 assert p.commit(state, cfg, NOW) == 5
-assert not (state / "plan.json").exists() and not (state / "pending.json").exists()
+assert not (state / "plan.json").exists()
 ledger = p.read_json(state / "ledger.json", {})
 assert set(ledger) == {i["key"] for i in plan["new"]}
 assert p.precheck(Fake(found), cfg, state, NOW + 120)[0] == p.EXIT_NOTHING
@@ -121,10 +122,13 @@ assert p.compute(Fake(rest, [pushed]), cfg, ledger, NOW)["new"] == []
 for gone in (pr(1, head="h1b", reviewed="h1b"), pr(1, head="h1c", reviewed="h1", state="MERGED"), pr(1, head="h1c")):
     assert p.compute(Fake(rest, [gone]), cfg, ledger, NOW)["new"] == [], gone
 
-# The ledger forgets entries older than keep_days.
-p.write_json(state / "plan.json", {"run": NOW, "new": []})
+# The ledger forgets entries older than keep_days, unless the PR is still showing up (known).
+still = "acme/widgets#2@h2"
+p.write_json(state / "plan.json", {"run": NOW + 59 * DAY, "new": [], "known": [still]})
+p.commit(state, cfg, NOW + 59 * DAY)
+p.write_json(state / "plan.json", {"run": NOW + 61 * DAY, "new": []})
 p.commit(state, cfg, NOW + 61 * DAY)
-assert p.read_json(state / "ledger.json", {}) == {}
+assert list(p.read_json(state / "ledger.json", {})) == [still]
 
 # Only review_request has a collector; a later kind fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
@@ -142,7 +146,7 @@ fixture.write_text(json.dumps({"data": {"search": {"pageInfo": {"hasNextPage": F
 fake_gh.write_text(f"""#!/bin/sh
 body=$(cat)
 case "$body" in *"query{{viewer"*) echo '{{"data":{{"viewer":{{"login":"{ME}"}}}}}}';; *search*) cat {shlex.quote(str(fixture))};;
-  *) echo '{{"data":{{"nodes":[]}}}}';; esac
+  *) echo '{{"data":{{"nodes":[null]}},"errors":[{{"message":"Could not resolve to a node"}}]}}'; exit 1;; esac
 """)
 fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 conf = tmp / "agent-skills.json"
@@ -157,6 +161,10 @@ assert run("commit").returncode == 0
 r = run("precheck")
 assert r.returncode == 1 and "새 항목 없음" in r.stderr, r
 assert run("plan", "--body").stdout.strip() == ""
+assert not (tmp / "state" / "prs" / "plan.json").exists(), "a plan with nothing new holds no lock"
+# One ledger PR GitHub can no longer resolve (deleted repo, lost access) must not fail the whole lookup.
+p.GH = str(fake_gh)
+assert p.GitHub().nodes(["PR_gone"], ME) == []
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)], env=broken, capture_output=True).returncode == 2
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2

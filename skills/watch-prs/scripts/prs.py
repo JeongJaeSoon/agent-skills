@@ -8,9 +8,9 @@ Usage:
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 precheck asks GitHub (through `gh`) for the items and exits 0 when some are not in the ledger yet,
-1 when nothing is new or the same new set was handed to a run less than pending_minutes ago, and
-2 when it could not ask (no config, `gh` failed). It uses no model and writes only pending.json.
-plan computes the same items, writes them to plan.json and prints the plan as JSON, or with --body
+1 when nothing is new or a run still holds plan.json (younger than lock_minutes), and 2 when it
+could not ask (no config, `gh` failed). It uses no model and writes nothing.
+plan computes the same items, writes them to plan.json (the run lock; only when some are new) and prints the plan as JSON, or with --body
 only the coordinator message (empty when nothing is new), which it also keeps in body.txt. commit records what plan.json delivered,
 so the same (repo, number, headRefOid) is never sent twice. schedule prints the
 `orca automations create` command and runs it only with --write.
@@ -27,13 +27,13 @@ KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "owner
 LABELS = {"review_request": "리뷰 요청"}
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
             "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
-            "keep_days": 60, "pending_minutes": 60, "cron": "*/15 * * * *", "timezone": None}
+            "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None}
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 
 PR_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid additions deletions reviewDecision state
  repository{nameWithOwner} author{__typename login}
  reviewRequests(first:50){nodes{asCodeOwner requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
- reviews(author:$me,last:1){nodes{commit{oid}}}"""
+ reviews(author:$me,last:1,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{commit{oid}}}"""
 SEARCH_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
             "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + PR_FIELDS + "}}}}")
 NODES_Q = "query($ids:[ID!]!,$me:String!){nodes(ids:$ids){... on PullRequest{" + PR_FIELDS + "}}}"
@@ -41,7 +41,8 @@ NODES_Q = "query($ids:[ID!]!,$me:String!){nodes(ids:$ids){... on PullRequest{" +
 
 def opt(name, default=None):
     a = sys.argv
-    return a[a.index(name) + 1] if name in a else default
+    i = a.index(name) + 1 if name in a else 0
+    return a[i] if 0 < i < len(a) else default
 
 
 def config(path=CONFIG):
@@ -66,13 +67,18 @@ def write_json(path, data):
     tmp.replace(path)
 
 
-def gh_graphql(query, **variables):
+def gh_graphql(query, partial=False, **variables):
+    """partial: keep the data GitHub did return when some nodes failed (a deleted repo, lost access)."""
     # --input keeps list variables (nodes ids) as JSON arrays; -f would send them as strings.
     body = json.dumps({"query": query, "variables": {k: v for k, v in variables.items() if v is not None}})
     out = subprocess.run([GH, "api", "graphql", "--input", "-"], input=body, capture_output=True, text=True, timeout=60)
-    if out.returncode:
+    try:
+        data = json.loads(out.stdout).get("data")
+    except ValueError:
+        data = None
+    if data is None or (out.returncode and not partial):
         raise RuntimeError(f"gh api graphql: {out.stderr.strip()[:300]}")
-    return json.loads(out.stdout)["data"]
+    return data
 
 
 class GitHub:
@@ -91,7 +97,7 @@ class GitHub:
             after = page["pageInfo"]["endCursor"]
 
     def nodes(self, ids, me):
-        return [n for i in range(0, len(ids), 50) for n in gh_graphql(NODES_Q, ids=ids[i:i + 50], me=me)["nodes"] if n]
+        return [n for i in range(0, len(ids), 50) for n in gh_graphql(NODES_Q, partial=True, ids=ids[i:i + 50], me=me)["nodes"] if n]
 
 
 def key(pr):
@@ -207,21 +213,25 @@ def body(plan):
     return "\n".join(lines)
 
 
+def lock_held(state, cfg, now):
+    """plan.json is the run lock: written by plan, removed by commit. A run that dies frees it after lock_minutes."""
+    plan = read_json(state / "plan.json", None)
+    return bool(plan) and now - plan.get("run", 0) < cfg["lock_minutes"] * 60
+
+
 def precheck(gh, cfg, state, now):
     if cfg is None:
         return EXIT_ERROR, 'config 에 "prs" 가 없음'
+    if lock_held(state, cfg, now):
+        return EXIT_NOTHING, "이전 회차가 아직 진행 중(plan.json)"
     ledger = read_json(state / "ledger.json", {})
     try:
         plan = compute(gh, cfg, ledger, now)
-    except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as e:
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as e:
         return EXIT_ERROR, f"GitHub 를 읽지 못함: {e}"
-    keys = sorted(i["key"] for i in plan["new"])
+    keys = [i["key"] for i in plan["new"]]
     if not keys:
         return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건)"
-    pending = read_json(state / "pending.json", {})
-    if pending.get("keys") == keys and now - pending.get("at", 0) < cfg["pending_minutes"] * 60:
-        return EXIT_NOTHING, f"새 항목 {len(keys)}건은 이미 진행 중인 회차가 맡음"
-    write_json(state / "pending.json", {"at": now, "keys": keys})
     return EXIT_NEW, f"새 항목 {len(keys)}건: " + ", ".join(keys)
 
 
@@ -232,11 +242,14 @@ def commit(state, cfg, now):
     ledger = read_json(state / "ledger.json", {})
     for i in plan["new"]:
         ledger[i["key"]] = {"at": plan["run"], "kind": i["kind"], "id": i["id"]}
+    # A request left open for months is still known; only keys that stopped appearing age out.
+    for k in plan.get("known", []):
+        if k in ledger:
+            ledger[k]["at"] = plan["run"]
     horizon = now - cfg["keep_days"] * 86400
     ledger = {k: v for k, v in ledger.items() if v["at"] >= horizon}
     write_json(state / "ledger.json", ledger)
     (state / "plan.json").unlink()
-    (state / "pending.json").unlink(missing_ok=True)
     return len(plan["new"])
 
 
@@ -246,7 +259,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
     body_file = STATE / "body.txt"
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
-              f"--body \"$(cat {body_file})\" --json` 로 한 통만 보내고(N 은 본문 첫 줄의 건수), 보내기가 성공했을 때만 "
+              f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보내고(N 은 본문 첫 줄의 건수), 보내기가 성공했을 때만 "
               f"`{env} commit` 을 실행한다. 이 회차는 읽기만 한다: 리뷰·코멘트·재요청 같은 GitHub 쓰기는 하지 않는다.")
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
@@ -267,8 +280,12 @@ def main():
     if cmd in ("plan", "commit", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
     if cmd == "plan":
+        if lock_held(STATE, cfg, now):
+            sys.exit("plan: another run holds plan.json; it frees after lock_minutes")
         plan = compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now)
-        write_json(STATE / "plan.json", plan)
+        if plan["new"]:
+            write_json(STATE / "plan.json", plan)
+        STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "body.txt").write_text(body(plan))
         print(body(plan) if "--body" in sys.argv else json.dumps(plan, ensure_ascii=False, indent=1))
     elif cmd == "commit":

@@ -28,7 +28,7 @@ never in this repo.
 `repos` is in. Bot logins match with or without the `[bot]` suffix. Other keys and defaults are in
 `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
 (`$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
-`plan.json` and `body.txt` (the run in progress) and `pending.json` (the set the last precheck handed to a run).
+`plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
 
 ## What counts
 
@@ -69,8 +69,9 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 
    From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
    to its Run's coordinator.
-3. `python3 "$P" commit` records what `plan.json` held. Commit only after the send succeeded: an
-   uncommitted run is retried, a committed one is never sent again.
+3. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
+   succeeded: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
+   committed one is never sent again.
 
 `python3 "$P" plan` without `--body` prints the plan as JSON: `new` (ranked items), `known` (keys
 already sent) and `excluded` (repo#N and why), for checking what the filter did.
@@ -88,7 +89,7 @@ that path. The precheck (`prs.py precheck`) uses no model. It reads GitHub and e
 | code | meaning |
 |---|---|
 | 0 | new items; the run goes ahead |
-| 1 | nothing new, or the same new set went to a run less than `pending_minutes` ago |
+| 1 | nothing new, or a run still holds `plan.json` (younger than `lock_minutes`) |
 | 2 | could not check: no `prs` key in the config, or `gh` failed |
 
 The default trigger is every 15 minutes, for a proof window. The steady state is weekday business
