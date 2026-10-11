@@ -33,6 +33,48 @@ for rows in periodic:
         for i, cap in CAPS.items():
             assert text_width(row[i]) <= cap, (row, i)
 
+# Each sub-task of a lead gets its own └ row right under it, so some lead in the example shows at least two.
+def is_sub(row):
+    return row[1].replace("**", "").startswith("└")
+
+
+def subtask_runs(rows):
+    """Number of └ rows after each lead row; the first entry counts └ rows before any lead."""
+    runs, n = [], 0
+    for row in rows[1:]:
+        if is_sub(row):
+            n += 1
+        else:
+            runs.append(n)
+            n = 0
+    return runs + [n]
+
+
+def check_periodic(rows):
+    assert subtask_runs(rows)[0] == 0, "a └ row comes before any lead"
+    for i, row in enumerate(rows[1:], 1):
+        for cell in row:
+            assert len(re.findall(r"#\d+", cell)) <= 1, ("several PRs in one cell", row)
+        if not is_sub(row) and i + 1 < len(rows) and is_sub(rows[i + 1]):
+            assert re.fullmatch(r"[▓░]{8} \d+/\d+|—", row[2]), ("a lead with └ rows keeps evidence out of its cell", row)
+
+
+lead = ["", "리드", "진행", "다음"]
+assert subtask_runs([lead, ["🟢", "a", "", ""], ["🟢", "└ #1 x", "", ""], ["🟡", "**└ #2 y**", "", ""], ["🟢", "b", "", ""]]) == [0, 2, 0]
+for bad in (
+    [lead, ["🟢", "└ #1 x", "", ""], ["🟢", "a", "", ""]],
+    [lead, ["🟢", "a", "▓▓░░░░░░ 2/8 #1 #2", ""]],
+    [lead, ["🟢", "a", "▓▓░░░░░░ 2/8 #1", ""], ["🟢", "└ #1 x", "", ""]],
+):
+    try:
+        check_periodic(bad)
+    except AssertionError:
+        continue
+    raise AssertionError(("check_periodic passed a bad table", bad))
+for rows in periodic:
+    check_periodic(rows)
+assert max(n for rows in periodic for n in subtask_runs(rows)) >= 2
+
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
 r = subprocess.run([sys.executable, str(HERE / "table_width.py"), "--cols", "78"], input=wide, capture_output=True, text=True)
 assert r.returncode == 1 and r.stdout == "line 1: 88 cols > 78\n", (r.returncode, r.stdout)
