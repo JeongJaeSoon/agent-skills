@@ -155,6 +155,9 @@ env = {**os.environ, "AGENT_SKILLS_GH": str(fake_gh), "AGENT_SKILLS_STATE": str(
 script = str(pathlib.Path(p.__file__))
 run = lambda *a: subprocess.run([sys.executable, script, *a, "--config", str(conf)], env=env, capture_output=True, text=True)
 r0 = run("precheck"); assert r0.returncode == 0, r0
+diag = run("plan")
+assert diag.returncode == 0 and len(json.loads(diag.stdout)["new"]) == 5
+assert not (tmp / "state" / "prs" / "plan.json").exists(), "the diagnostic plan takes no lock"
 out = run("plan", "--body")
 assert out.returncode == 0 and out.stdout.startswith("PR 5건이 나를 기다린다"), out
 assert run("commit").returncode == 0

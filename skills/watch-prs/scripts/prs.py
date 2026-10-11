@@ -10,8 +10,9 @@ Usage:
 precheck asks GitHub (through `gh`) for the items and exits 0 when some are not in the ledger yet,
 1 when nothing is new or a run still holds plan.json (younger than lock_minutes), and 2 when it
 could not ask (no config, `gh` failed). It uses no model and writes nothing.
-plan computes the same items, writes them to plan.json (the run lock; only when some are new) and prints the plan as JSON, or with --body
-only the coordinator message (empty when nothing is new), which it also keeps in body.txt. commit records what plan.json delivered,
+plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
+coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
+writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
 so the same (repo, number, headRefOid) is never sent twice. schedule prints the
 `orca automations create` command and runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
@@ -279,7 +280,9 @@ def main():
         sys.exit(code)
     if cmd in ("plan", "commit", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
-    if cmd == "plan":
+    if cmd == "plan" and "--body" not in sys.argv:
+        print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now), ensure_ascii=False, indent=1))
+    elif cmd == "plan":
         if lock_held(STATE, cfg, now):
             sys.exit("plan: another run holds plan.json; it frees after lock_minutes")
         plan = compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now)
@@ -287,7 +290,7 @@ def main():
             write_json(STATE / "plan.json", plan)
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "body.txt").write_text(body(plan))
-        print(body(plan) if "--body" in sys.argv else json.dumps(plan, ensure_ascii=False, indent=1))
+        print(body(plan))
     elif cmd == "commit":
         print(f"commit: {commit(STATE, cfg, now)} items recorded")
     elif cmd == "schedule":

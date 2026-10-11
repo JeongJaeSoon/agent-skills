@@ -71,10 +71,12 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    to its Run's coordinator.
 3. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
    succeeded: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
-   committed one is never sent again.
+   committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
+   and then commit.
 
-`python3 "$P" plan` without `--body` prints the plan as JSON: `new` (ranked items), `known` (keys
-already sent) and `excluded` (repo#N and why), for checking what the filter did.
+`python3 "$P" plan` without `--body` writes nothing and takes no lock. It prints the plan as JSON
+for checking what the filter did: `new` (ranked items), `known` (keys already sent) and
+`excluded` (repo#N and why).
 
 ## Scheduled run
 
