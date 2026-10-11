@@ -1,6 +1,6 @@
-"""Rules of prs.py: who counts as a personal request, ranking, the ledger, precheck exit codes, schedule.
+"""Rules of prs.py: who counts as a personal request, ranking, the ledger, precheck exit codes, unreleased merges, dispatch, schedule.
 Run: python3 test_prs.py"""
-import json, os, pathlib, shlex, stat, subprocess, sys, tempfile
+import json, os, pathlib, re, shlex, stat, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prs as p
 
@@ -33,22 +33,40 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=()):
+    def __init__(self, search, nodes=(), merged=(), deployed=None, live=()):
         self.found, self.by_id = list(search), {n["id"]: n for n in nodes}
+        self.merged, self.deployed, self.live, self.queries = list(merged), deployed, set(live), []
 
     def viewer(self):
         return ME
 
     def search(self, q, me):
-        assert "review-requested:@me" in q and me == ME
+        assert me == ME
+        self.queries.append(q)
+        if "is:merged" in q:
+            return [m for m in self.merged if f"repo:{m['repository']['nameWithOwner']} " in q]
+        assert "review-requested:@me" in q
         return self.found
+
+    def revision(self, cmd):
+        if isinstance(self.deployed, Exception):
+            raise self.deployed
+        return self.deployed
+
+    def contains(self, repo, commit, deployed):
+        return commit in self.live
 
     def nodes(self, ids, me):
         return [self.by_id[i] for i in ids if i in self.by_id]
 
+    def pr(self, ref, me):
+        repo, n = ref.lower().replace("acme/old-widgets", "acme/widgets").split("#")  # a renamed repo resolves
+        return {x["id"]: x for x in self.found}.get(f"PR_{repo}_{n}") or self.by_id.get(f"PR_{repo}_{n}")
 
-cfg = {**p.DEFAULTS, "self_bots": ["owner-bot"], "ignore_bots": ["noisy[bot]"], "exclude_repos": ["acme/legacy"]}
+
 state = pathlib.Path(tempfile.mkdtemp()) / "prs"
+cfg = {**p.DEFAULTS, "self_bots": ["owner-bot"], "ignore_bots": ["noisy[bot]"], "exclude_repos": ["acme/legacy"],
+       "mentions_seen": str(state.parent / "no-mentions.json")}
 
 # Who is in: a personal, non-CODEOWNERS request on a non-draft PR whose author is not a self or ignored bot.
 found = [
@@ -130,13 +148,130 @@ p.write_json(state / "plan.json", {"run": NOW + 61 * DAY, "new": []})
 p.commit(state, cfg, NOW + 61 * DAY)
 assert list(p.read_json(state / "ledger.json", {})) == [still]
 
-# Only review_request has a collector; a later kind fails loudly instead of silently sending nothing.
+# A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
     p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
     assert "review_wait" in str(e)
+
+# Slack review requests from watch-mentions' seen ledger: one entry per PR, permalinks attached.
+seen_file = state.parent / "mentions-seen.json"
+link = lambda n: f"https://example.test/archives/C0FAKE/p{n}"
+row = lambda ref, n, category="review": {"at": NOW, "category": category, "permalink": link(n), "pr": ref}
+p.write_json(seen_file, {
+    "C0FAKE/1": row("acme/widgets#1", 1), "C0FAKE/2": row("Acme/Widgets#1", 2),   # GitHub lists #1 too: merged
+    "C0FAKE/11": row("acme/old-widgets#1", 11),                                    # #1 under its old repo name
+    "C0FAKE/3": row("acme/widgets#5", 3),                                          # team-only on GitHub: Slack lists it
+    "C0FAKE/4": row("acme/widgets#20", 4),                                         # not in the search: fetched
+    "C0FAKE/5": row("acme/widgets#21", 5), "C0FAKE/6": row("acme/widgets#22", 6),  # merged PR, reviewed at head
+    "C0FAKE/7": row("acme/widgets#23", 7), "C0FAKE/8": row("acme/gone#1", 8),      # my own PR, unreadable
+    "C0FAKE/9": row("acme/widgets#24", 9, "work"), "C0FAKE/10": {"at": NOW, "category": "review", "permalink": link(10)},
+    "C0FAKE/12": {**row("acme/widgets#20", 12), "permalink": ["not", "a", "link"]},  # hand-edited row
+})
+extra = [pr(20, reqs=[], age=2), pr(21, reqs=[], state="MERGED"), pr(22, reqs=[], head="h22", reviewed="h22"),
+         pr(23, author=ME, reqs=[]), pr(24, reqs=[])]
+scfg = {**cfg, "mentions_seen": str(seen_file)}
+mixed = p.compute(Fake(found, extra), scfg, {}, NOW)
+by = {i["number"]: i for i in mixed["new"]}
+assert sorted(by) == [1, 2, 3, 4, 5, 11, 20], sorted(by)
+assert len(mixed["new"]) == len(by), "one entry per PR, whatever case or old name Slack used"
+assert by[1]["source"] == "github+slack" and sorted(by[1]["slack"]) == sorted([link(1), link(2), link(11)])
+assert by[1]["reason"] == "requested"
+assert by[5]["source"] == by[20]["source"] == "slack" and by[20]["slack"] == [link(4)] and by[20]["key"] == "acme/widgets#20@h20"
+assert by[2]["source"] == "github" and by[2]["slack"] == []
+why = {e["pr"]: e["why"] for e in mixed["excluded"]}
+assert why["acme/widgets#21"] == "Slack 요청, 닫힘" and why["acme/widgets#22"] == "Slack 요청, head 를 이미 리뷰함"
+assert why["acme/widgets#23"] == "Slack 요청, 본인 PR" and why["acme/gone#1"] == "Slack 요청, PR 을 읽지 못함"
+assert "acme/widgets#5" not in why and "acme/widgets#24" not in why and len(why) == len(mixed["excluded"])
+p.write_json(seen_file, {"C0FAKE/1": row("acme/widgets#7", 1)})  # a draft GitHub already excluded: one reason, Slack's
+assert [e for e in p.compute(Fake(found), scfg, {}, NOW)["excluded"] if e["pr"] == "acme/widgets#7"] == \
+    [{"pr": "acme/widgets#7", "why": "Slack 요청, draft"}]
+lines = {l.split("] ")[1].split(" ")[0]: l for l in p.body(mixed).splitlines()[1:]}
+assert lines["acme/widgets#1"].endswith(f"— https://github.com/acme/widgets/pull/1 · Slack {link(11)} {link(1)} {link(2)}")
+assert "[Slack 리뷰 요청] acme/widgets#20" in lines["acme/widgets#20"]
+p.write_json(seen_file, {"C0FAKE/4": row("acme/widgets#20", 4)})
+# A Slack-only item is new for precheck, and once sent its head is known like any other.
+assert p.precheck(Fake([], extra), scfg, state.parent / "slack-state", NOW) == (p.EXIT_NEW, "새 항목 1건: acme/widgets#20@h20")
+sent = {i["key"]: {"at": NOW, "kind": i["kind"], "id": i["id"]} for i in mixed["new"]}
+assert p.compute(Fake(found, extra), scfg, sent, NOW)["new"] == []
+# No seen ledger, or one that is not a JSON object: GitHub only, same plan as before.
+seen_file.write_text("[]")
+assert p.compute(Fake(found), scfg, {}, NOW)["new"] == plan["new"]
+
+# unreleased: the owner's merges in a declared repo within lookback_days; the dev revision decides the action, not membership.
+def merged(n, repo="acme/widgets", hours=3, sha=None):
+    return {**pr(n, repo=repo, author=ME, age=1), "state": "MERGED", "mergedAt": iso(NOW - hours * 3600),
+            "mergeCommit": {"oid": sha or f"m{n}"}}
+
+decl = {"dev_release": "auto-sync", "revision_cmd": "print-dev-sha", "logs": "dev log viewer",
+        "verify": "verify-widgets", "lookback_days": 1, "orca_repo": "name:widgets"}
+rcfg = {**cfg, "kinds": ["review_request", "unreleased"], "deploy": {"acme/widgets": decl}, "dispatch_run": "run_x",
+        "release_approval": "dev 배포 승인됨(테스트)"}
+fake = Fake([pr(1, reqs=[user(ME)])], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+both = p.compute(fake, rcfg, {}, NOW)
+rel = [i for i in both["new"] if i["kind"] == "unreleased"]
+assert [(i["number"], i["deployed"], i["merge_commit"], i["key"]) for i in rel] == \
+    [(20, True, "m20", "acme/widgets#20@h20"), (21, False, "m21", "acme/widgets#21@h21")], rel
+assert [i["kind"] for i in both["new"]][0] == "review_request"
+q = [x for x in fake.queries if "is:merged" in x][0]
+assert f"author:{ME}" in q and "repo:acme/widgets " in q and "merged:>=2027-01-14T08:00:00Z" in q, q
+lines = p.body({**both, "new": rel}).splitlines()
+assert lines[1].startswith("1. [dev 확인 전] acme/widgets#20 Change 20") and "dev 에 반영됨, 동작 확인 전" in lines[1]
+assert "dev 에 아직 없음" in lines[2]
+
+# Nothing declared, or everything already handed on: no revision probe at all.
+silent = Fake([], merged=[merged(20)], deployed=RuntimeError("must not run"))
+assert p.compute(silent, {**rcfg, "deploy": {}}, {}, NOW)["new"] == []
+assert p.compute(silent, rcfg, {"acme/widgets#20@h20": {"at": NOW, "kind": "unreleased"}}, NOW)["new"] == []
+
+# A probe that fails still hands the merge on, flagged, so it cannot age out of lookback_days unseen.
+broke = p.compute(Fake([pr(1, reqs=[user(ME)])], merged=[merged(20)], deployed=RuntimeError("exit 1")), rcfg, {}, NOW)
+assert [(i["kind"], i.get("deployed")) for i in broke["new"]] == [("review_request", None), ("unreleased", None)]
+assert broke["new"][1]["why"] == ["dev 리비전 확인 실패: exit 1"] and "dev 리비전 확인 실패" in p.body(broke)
+assert "dev 리비전을 읽지 못함" in p.dispatch_cmds(broke, rcfg)[0][4]
+assert "revision_cmd 없음" in p.compute(Fake([], merged=[merged(20)], deployed="d0"),
+                                        {**rcfg, "deploy": {"acme/widgets": {}}}, {}, NOW)["new"][0]["why"][0]
+
+# The real probes: revision_cmd through the shell, containment through gh's compare status.
+gh_dir = pathlib.Path(tempfile.mkdtemp())
+cmp_gh = gh_dir / "gh"
+cmp_gh.write_text('#!/bin/sh\ncase "$2" in *m20...d0) echo ahead;; *m21...d0) echo behind;; *same...d0) echo identical;; *) echo boom >&2; exit 1;; esac\n')
+cmp_gh.chmod(0o755)
+p.GH = str(cmp_gh)
+real = p.GitHub()
+assert [real.contains("acme/widgets", c, "d0") for c in ("m20", "m21", "same")] == [True, False, True]
+try:  # gh failing (bad sha, lost access) is an error, not "not deployed"
+    real.contains("acme/widgets", "unknown", "d0")
+    raise AssertionError("a failed compare must raise")
+except RuntimeError as e:
+    assert "boom" in str(e)
+assert real.revision("printf 'abc123\\n'") == "abc123"
+for bad in ("exit 3", "true"):
+    try:
+        real.revision(bad)
+        raise AssertionError(f"{bad} must raise")
+    except RuntimeError:
+        pass
+
+# dispatch: one worker-start per repo; the brief carries the procedure, the declaration and the approval.
+two = {**rcfg["deploy"], "acme/gadgets": {"revision_cmd": "x"}}
+plan2 = p.compute(Fake([], merged=[merged(20), merged(21), merged(30, repo="acme/gadgets")], deployed="d0", live={"m20"}),
+                  {**rcfg, "deploy": two}, {}, NOW)
+cmds = p.dispatch_cmds(plan2, {**rcfg, "deploy": two})
+assert [c[c.index("--repo") + 1] for c in cmds] == ["name:gadgets", "name:widgets"]
+w = cmds[1]
+assert w[:3] == ["orca", "orchestration", "worker-start"] and w[w.index("--run") + 1] == "run_x"
+assert w[w.index("--worktree") + 1] == "new-top-level" and w[w.index("--agent") + 1] == "claude"
+spec = w[w.index("--spec") + 1]
+for want in ("post-merge-release.md", "#20 ", "merge m20", "dev 에 반영됨", "#21 ", "dev(d0) 에 아직 없음", "- revision_cmd: print-dev-sha",
+             "- verify: verify-widgets", "승인: dev 배포 승인됨(테스트)", "사람만: 프로덕션", "다시 시도하지 않는다"):
+    assert want in spec, want
+assert pathlib.Path(spec.split("절차: ")[1].split(" ")[0]).exists(), "the brief points at a reference that exists"
+assert "--run" not in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "dispatch_run": None})[0]
+assert "승인이 없다" in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "release_approval": None})[0][4]
+assert p.dispatch_cmds(plan, rcfg) == [], "review requests are messaged, never dispatched"
 
 # CLI end to end with a fake gh: exit codes and the --body output.
 tmp = pathlib.Path(tempfile.mkdtemp())
@@ -152,6 +287,8 @@ fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 conf = tmp / "agent-skills.json"
 conf.write_text(json.dumps({"prs": {"self_bots": ["owner-bot"], "ignore_bots": ["noisy"], "exclude_repos": ["acme/legacy"]}}))
 env = {**os.environ, "AGENT_SKILLS_GH": str(fake_gh), "AGENT_SKILLS_STATE": str(tmp / "state")}
+# By default the Slack side is read from watch-mentions' state next to this one.
+p.write_json(tmp / "state" / "mentions" / "seen.json", {"C0FAKE/1": row("acme/widgets#2", 1)})
 script = str(pathlib.Path(p.__file__))
 run = lambda *a: subprocess.run([sys.executable, script, *a, "--config", str(conf)], env=env, capture_output=True, text=True)
 r0 = run("precheck"); assert r0.returncode == 0, r0
@@ -160,6 +297,7 @@ assert diag.returncode == 0 and len(json.loads(diag.stdout)["new"]) == 5
 assert not (tmp / "state" / "prs" / "plan.json").exists(), "the diagnostic plan takes no lock"
 out = run("plan", "--body")
 assert out.returncode == 0 and out.stdout.startswith("PR 5건이 나를 기다린다"), out
+assert "acme/widgets#2 Change 2" in out.stdout and f"· Slack {link(1)}" in out.stdout, out.stdout
 assert run("commit").returncode == 0
 r = run("precheck")
 assert r.returncode == 1 and "새 항목 없음" in r.stderr, r
@@ -168,6 +306,17 @@ assert not (tmp / "state" / "prs" / "plan.json").exists(), "a plan with nothing 
 # One ledger PR GitHub can no longer resolve (deleted repo, lost access) must not fail the whole lookup.
 p.GH = str(fake_gh)
 assert p.GitHub().nodes(["PR_gone"], ME) == []
+assert p.GitHub().pr("acme/gone#1", ME) is None
+# dispatch prints one runnable line per due repo from plan.json, and nothing without a plan.
+assert run("dispatch").returncode != 0
+conf.write_text(json.dumps({"prs": {"deploy": {"acme/widgets": decl}}}))
+p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
+d = run("dispatch")
+printed = d.stdout.splitlines()
+assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["orca", "orchestration", "worker-start"], d
+assert printed[0].endswith(f'--spec "$(cat {tmp / "state" / "prs" / "brief-0.txt"})"')
+assert "#20 " in (tmp / "state" / "prs" / "brief-0.txt").read_text()
+(tmp / "state" / "prs" / "plan.json").unlink()
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)], env=broken, capture_output=True).returncode == 2
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
@@ -180,6 +329,8 @@ assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
 prompt = line[line.index("--prompt") + 1]
 assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
+assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
+assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 

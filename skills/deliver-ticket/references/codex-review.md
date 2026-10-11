@@ -50,11 +50,15 @@ anything. Read the body: when it says Codex could not read the repository or the
 repository-access timeouts, "unable to review"), the run is no review, whatever the exit code
 and verdict say. So is a job that never gets past "Starting Codex review thread".
 
-No review does not close the review, and a Claude subagent's review does not stand in for it.
-Get Codex to run instead:
+No review does not close the review. A Claude reviewer that carries the implementing session's
+context (a `fork`, or a subagent briefed on how and why the change was made) does not stand in
+for it; step 3's context-free review is the one exception. Get Codex to run instead:
 
 1. **Diagnose**, a few minutes at most:
-   - `codex login status`. Logged out or expired is the human's to fix; go to step 3.
+   - `codex login status`. Logged out or expired: Codex is unavailable, and logging in again
+     is the human's. Step 3 still lands the work so an unattended run does not stop on it; the
+     PR body's review-scope line and the final report both say "Codex login expired: the
+     owner must run `codex login`", so it reaches the human.
    - Stuck at "Starting Codex review thread": that workspace's broker is stale. Kill the pid in
      `~/.claude/plugins/data/codex-openai-codex/state/<workspace>-<hash>/broker.json` and the
      hung companion; a fresh broker starts with the next run. A review that started and then
@@ -65,10 +69,39 @@ Get Codex to run instead:
      fails too, run `codex exec --skip-git-repo-check --sandbox read-only "Reply ok"` from a
      scratch directory. That one failing points at the network or the Codex service; only the
      repository one failing points at the sandbox's access to this checkout.
+   - Keep the line that names the cause (the spend-cap or usage-limit message, the service
+     error, the `login status` output). The next steps cite it as evidence.
 2. **Fix what the diagnosis found and rerun the same review command.** Up to three retries,
-   waiting 2, 5 and 10 minutes before them (a Bash `sleep` with `run_in_background`).
-3. **Still no review: hold the land and go to the human.** Record no verdict and do not merge.
-   Report the failing runs' job ids and the body line that says no review, the diagnosis
-   output, and what you tried; in an orchestrated program, as an `ask` to the coordinator. A
-   Claude subagent may review the diff meanwhile as an extra reviewer, and its Act-on findings
-   get fixed, but its result is not recorded in Codex's place.
+   waiting 2, 5 and 10 minutes before them (a Bash `sleep` with `run_in_background`). When the
+   diagnosis shows Codex itself is unavailable, that schedule is replaced: a spend-cap,
+   usage-limit or service error gets a single rerun after 5 minutes, a failed login none; if
+   it still fails, go to step 3.
+3. **Codex itself unavailable: an independent Claude Code review stands in.** Only when step 1
+   kept a line that puts the cause on Codex's side: a spend-cap or usage-limit message, a
+   service error, a failed `login status`. Not when Codex ran and returned findings, not when
+   only the repository repro failed or the run timed out reading the checkout, and not when
+   "Reply ok" failed on a local network or proxy error: those go to step 4.
+   - **Launch** a reviewer that shares no context with the implementing session: a new
+     subagent (not a `fork`, which inherits your context) or a separate headless `claude`
+     process. Its prompt carries the repository, the PR number and the head sha, nothing about
+     how or why the change was made, and has it run Claude Code's own code review (the
+     `code-review` skill, `/code-review <PR>`) on that head and report the sha it actually
+     reviewed. A different sha means the head moved: review again.
+   - **Sort** its findings as `SKILL.md` §3 does. Every Act-on finding is a blocker: fix it,
+     push, and review the new head with a fresh reviewer the same way; §3's round cap applies
+     as it does to Codex. Try Codex again before each round and before the land; once it
+     reviews, its result closes the review and its Act-on findings get fixed, whatever the
+     stand-in found.
+   - **Record** one PR comment (a sticky comment where the repo uses one) with the review
+     summary, the blocker list or "none", the reviewed head sha, and the Codex line from step 1.
+   - **Land** with zero blockers, CI green and merge state CLEAN: record the verdict on that
+     head with source `claude-review:independent` and the Codex line as its note, and land
+     under the merge approval the work already has; this path adds no approval of its own and
+     replaces only the Codex row, not a triggered row of §3. If a permission prompt or the
+     auto-mode classifier refuses the land, report the refusal like any other; do not retry it
+     in another form.
+4. **Still no review, and step 3 does not apply: hold the land and go to the human.** Record no
+   verdict and do not merge. Report the failing runs' job ids and the body line that says no
+   review, the diagnosis output, and what you tried; in an orchestrated program, as an `ask` to
+   the coordinator. A Claude subagent may review the diff meanwhile as an extra reviewer, and
+   its Act-on findings get fixed, but its result is not recorded in Codex's place.
