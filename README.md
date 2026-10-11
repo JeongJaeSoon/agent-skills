@@ -87,7 +87,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 **채팅**: `watch-mentions`(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 분류해 코디네이터에게 한 통으로 보내고, 작업 의뢰는 기표 초안으로).
 
-**GitHub**: `watch-prs`(팀·CODEOWNERS가 아니라 나를 지명한 리뷰 요청만 골라 우선순위대로 코디네이터에게 한 통으로 보낸다. 리뷰한 PR에 재요청 없이 새 커밋이 오면 한 번 다시 알린다. 15분 주기 automation, 모델 없는 precheck).
+**GitHub**: `watch-prs`(팀·CODEOWNERS가 아니라 나를 지명한 리뷰 요청만 골라 우선순위대로 코디네이터에게 한 통으로 보낸다. 리뷰한 PR에 재요청 없이 새 커밋이 오면 한 번 다시 알린다. 내 계정만 할 수 있는 봇 PR 승인은 링크·diff 요약·프로덕션 여부·`!` 실행 줄과 함께 묶어 보내고 대시보드 inbox에 올린다. 15분 주기 automation, 모델 없는 precheck).
 
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 

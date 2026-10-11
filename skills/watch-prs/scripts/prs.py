@@ -13,26 +13,30 @@ could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice. schedule prints the
+so the same (repo, number, headRefOid) is never sent twice, and puts each ownergate item the owner has
+to run on the dashboard inbox (`orch-dash inbox add`, keyed by the ledger key). schedule prints the
 `orca automations create` command and runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
 """
-import datetime as dt, json, os, pathlib, shlex, subprocess, sys, time
+import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "prs"
 GH = os.environ.get("AGENT_SKILLS_GH", "gh")
-# Only review_request has a collector yet; the rest are reserved so later flows extend COLLECTORS, not the CLI.
+CLAUDE = os.environ.get("AGENT_SKILLS_CLAUDE", "claude")
+ORCH_DASH = os.environ.get("AGENT_SKILLS_ORCH_DASH") or str(pathlib.Path(__file__).resolve().parents[3] / "bin" / "orch-dash")
+# Kinds without a collector are reserved so later flows extend COLLECTORS, not the CLI. Order is precedence:
+# when two collectors return the same PR head, the later kind wins.
 KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate")
-LABELS = {"review_request": "리뷰 요청"}
+LABELS = {"review_request": "리뷰 요청", "ownergate": "소유자 승인"}
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
-            "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
+            "ignore_bots": [], "self_bots": [], "ownergate": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
             "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None}
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 
 PR_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid additions deletions reviewDecision state
- repository{nameWithOwner} author{__typename login}
+ changedFiles files(first:100){nodes{path}} repository{nameWithOwner} author{__typename login}
  reviewRequests(first:50){nodes{asCodeOwner requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
  reviews(author:$me,last:1,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{commit{oid}}}"""
 SEARCH_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
@@ -185,7 +189,82 @@ def collect_review_requests(gh, me, cfg, ledger, now):
     return items, excluded
 
 
-COLLECTORS = {"review_request": collect_review_requests}
+APPROVE = "gh api -X POST repos/{repo}/pulls/{number}/reviews -f event=APPROVE -f commit_id={head}"
+
+
+def automode_allow():
+    """The allow rules auto mode applies now. Read only; a failed read covers nothing."""
+    try:
+        out = subprocess.run([CLAUDE, "auto-mode", "config"], capture_output=True, text=True, timeout=60)
+        return json.loads(out.stdout).get("allow", []) if out.returncode == 0 else []
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+
+
+def deploys_prod(pr, gate):
+    """True, False, or None when unknown. Unknown is treated as production."""
+    paths = [n["path"] for n in (pr.get("files") or {}).get("nodes", [])]
+    prefixes = gate.get("prod_paths") or []
+    if gate.get("prod") is True or any(p.startswith(x) for p in paths for x in prefixes):
+        return True
+    if prefixes and (pr.get("changedFiles") or 0) <= len(paths):
+        return False
+    return gate.get("prod")
+
+
+def diff_summary(pr):
+    paths = [n["path"] for n in (pr.get("files") or {}).get("nodes", [])]
+    n = pr.get("changedFiles") or len(paths)
+    more = f" 외 {n - 3}개" if n > 3 else ""
+    return f"파일 {n}개 ±{pr['additions'] + pr['deletions']}: {', '.join(paths[:3])}{more}"
+
+
+def rule_draft(gate, prod):
+    if prod is not False:
+        return f"{gate['name']}: 머지가 프로덕션 배포(또는 모름)라 회차가 할 규칙은 만들지 않는다. 소유자 몫으로 남는다."
+    authors = ", ".join(gate.get("authors", []))
+    repos = ", ".join(gate.get("repos", [])) or "any repository in scope"
+    return (f"allow: Scheduled watch-prs round approving {gate['name']} PRs: in a turn started by the watch-prs automation, "
+            f"the agent may run `{APPROVE.format(repo='<repo>', number='<n>', head='<head sha>')}` once, as a standalone "
+            f"command, on an open PR in {repos} whose author is the app {authors} and whose title matches "
+            f"`{gate.get('title') or '.*'}`, at the head the round's plan listed, when merging it does not deploy to "
+            f"production. Not covered: a PR by a person, another author or repository, merging, a production deploy.")
+
+
+def collect_ownergate(gh, me, cfg, ledger, now):
+    """Bot PRs a configured gate says wait on the owner's approval; each is marked for the round or for the owner."""
+    items, excluded, seen, allow = [], [], set(), None
+    scope = {**cfg, "self_bots": [], "ignore_bots": []}  # a bot ignored for reviews can still need the owner's approval
+    for gate in cfg["ownergate"]:
+        gate = {"name": (gate.get("authors") or ["gate"])[0], **gate}
+        for login in gate.get("authors", []):
+            for pr in gh.search(f"is:pr is:open archived:false draft:false review-requested:@me author:app/{bot_name(login)}", me):
+                if pr["id"] in seen:
+                    continue
+                seen.add(pr["id"])
+                author = pr.get("author") or {}
+                why = (out_of_scope(pr, scope)
+                       or (None if author.get("__typename") == "Bot" and bot_name(author.get("login")) == bot_name(login)
+                           else "사람 작성 또는 다른 작성자")
+                       or (None if not gate.get("repos") or pr["repository"]["nameWithOwner"] in gate["repos"] else "게이트 저장소 아님")
+                       or (None if re.search(gate.get("title") or "", pr["title"]) else "게이트 제목 아님")
+                       or (None if pr.get("reviewDecision") == "REVIEW_REQUIRED" else "승인 대기 아님"))
+                if why:
+                    excluded.append({"pr": f"{pr['repository']['nameWithOwner']}#{pr['number']}", "why": why})
+                    continue
+                prod = deploys_prod(pr, gate)
+                if gate.get("allow_rule") and allow is None:
+                    allow = automode_allow()
+                covered = prod is False and bool(gate.get("allow_rule")) and any(gate["allow_rule"] in r for r in allow or [])
+                it = item(pr, me, cfg, now, "gate")
+                it.update(kind="ownergate", gate=gate["name"], prod=prod, diff=diff_summary(pr),
+                          command=APPROVE.format(repo=pr["repository"]["nameWithOwner"], number=pr["number"], head=pr["headRefOid"]),
+                          run_by="round" if covered else "owner", rule_draft=None if covered else rule_draft(gate, prod))
+                items.append(it)
+    return items, excluded
+
+
+COLLECTORS = {"review_request": collect_review_requests, "ownergate": collect_ownergate}
 
 
 def compute(gh, cfg, ledger, now):
@@ -197,6 +276,11 @@ def compute(gh, cfg, ledger, now):
         got, out = COLLECTORS[kind](gh, me, cfg, ledger, now)
         items += got
         excluded += out
+    best = {}
+    for i in items:
+        if i["key"] not in best or KINDS.index(i["kind"]) > KINDS.index(best[i["key"]]["kind"]):
+            best[i["key"]] = i
+    items = list(best.values())
     new = [i for i in rank(items) if i["key"] not in ledger]
     return {"run": now, "viewer": me, "new": new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
             "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded}
@@ -206,11 +290,22 @@ def body(plan):
     if not plan["new"]:
         return ""
     head = f"PR {len(plan['new'])}건이 나를 기다린다" + (f" (그 밖에 {plan['more']}건은 다음 회차)" if plan["more"] else "")
-    lines = [head]
+    lines, drafts = [head], []
     for n, i in enumerate(plan["new"], 1):
         tag = "새 커밋, 재요청 없음" if i["reason"] == "new_commits" else LABELS[i["kind"]]
+        if i["kind"] != "ownergate":
+            lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
+                         f"±{i['size']} · {', '.join(i['why'])} — {i['url']}")
+            continue
+        prod = {True: "예", False: "아니오", None: "모름"}[i["prod"]]
         lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
-                     f"±{i['size']} · {', '.join(i['why'])} — {i['url']}")
+                     f"{i['diff']} · 프로덕션 배포: {prod} — {i['url']}")
+        lines.append(f"   ! {i['command']}" if i["run_by"] == "owner" else f"   규칙이 덮음, 이 회차가 실행: {i['command']}")
+        if i["rule_draft"] and i["rule_draft"] not in drafts:
+            drafts.append(i["rule_draft"])
+    if drafts:
+        lines.append("없는 규칙 (tune-automode 초안, 설정은 고치지 않았다):")
+        lines += [f"- {d}" for d in drafts]
     return "\n".join(lines)
 
 
@@ -240,6 +335,10 @@ def commit(state, cfg, now):
     plan = read_json(state / "plan.json", None)
     if not plan:
         raise SystemExit("commit: no plan.json; run plan first")
+    # Before the ledger: a commit that dies here is retried, and the same --key does not duplicate the inbox item.
+    for i in plan["new"]:
+        if i["kind"] == "ownergate" and i["run_by"] == "owner":
+            inbox_add(i)
     ledger = read_json(state / "ledger.json", {})
     for i in plan["new"]:
         ledger[i["key"]] = {"at": plan["run"], "kind": i["kind"], "id": i["id"]}
@@ -254,6 +353,18 @@ def commit(state, cfg, now):
     return len(plan["new"])
 
 
+def inbox_add(i):
+    cmd = [ORCH_DASH, "inbox", "add", "--type", "run_command", "--title", f"{i['repo']}#{i['number']} 승인: {i['title']}"[:200],
+           "--url", i["url"], "--command", i["command"], "--key", f"prs:{i['key']}"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        failed = r.returncode and r.stderr.strip()[:200]
+    except (OSError, subprocess.TimeoutExpired) as e:
+        failed = str(e)
+    if failed:
+        print(f"commit: orch-dash inbox add failed for {i['key']}: {failed}", file=sys.stderr)
+
+
 def schedule_cmd(script, cfg, workspace, provider="claude"):
     env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
@@ -261,7 +372,10 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보내고(N 은 본문 첫 줄의 건수), 보내기가 성공했을 때만 "
-              f"`{env} commit` 을 실행한다. 이 회차는 읽기만 한다: 리뷰·코멘트·재요청 같은 GitHub 쓰기는 하지 않는다.")
+              f"`{env} commit` 을 실행한다. 이 회차는 GitHub 에 쓰지 않는다: 리뷰·코멘트·재요청 모두. 예외는 본문에 "
+              f"'규칙이 덮음, 이 회차가 실행' 으로 적힌 명령뿐이다: 보내기 전에 각각 단독 명령으로 한 번 실행하고 결과를 본문 끝에 "
+              f"덧붙인다. '!' 로 시작하는 줄은 소유자 몫이라 실행하지 않는다. 권한 프롬프트·auto mode 분류기·훅·사람이 거부한 "
+              f"행동은 어떤 형태로도 다시 시도하지 않는다: 다시 실행, 스크립트로 옮기기, 다른 도구·세션에 맡기기 모두.")
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]

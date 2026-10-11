@@ -23,24 +23,27 @@ def team(slug):
 
 
 def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False, age=5, idle=1, size=10,
-       decision="REVIEW_REQUIRED", head=None, reviewed=None, state="OPEN"):
-    return {"id": f"PR_{repo}_{n}", "number": n, "title": f"Change {n}", "url": f"https://github.com/{repo}/pull/{n}",
+       decision="REVIEW_REQUIRED", head=None, reviewed=None, state="OPEN", title=None, files=()):
+    return {"id": f"PR_{repo}_{n}", "number": n, "title": title or f"Change {n}", "url": f"https://github.com/{repo}/pull/{n}",
             "isDraft": draft, "createdAt": iso(NOW - age * DAY), "updatedAt": iso(NOW - idle * DAY),
             "headRefOid": head or f"h{n}", "additions": size, "deletions": 0, "reviewDecision": decision, "state": state,
             "repository": {"nameWithOwner": repo}, "author": {"__typename": kind, "login": author},
-            "reviewRequests": {"nodes": list(reqs)},
+            "reviewRequests": {"nodes": list(reqs)}, "changedFiles": len(files),
+            "files": {"nodes": [{"path": x} for x in files]},
             "reviews": {"nodes": [{"commit": {"oid": reviewed}}] if reviewed else []}}
 
 
 class Fake:
-    def __init__(self, search, nodes=()):
-        self.found, self.by_id = list(search), {n["id"]: n for n in nodes}
+    def __init__(self, search, nodes=(), gated=()):
+        self.found, self.by_id, self.gated = list(search), {n["id"]: n for n in nodes}, list(gated)
 
     def viewer(self):
         return ME
 
     def search(self, q, me):
         assert "review-requested:@me" in q and me == ME
+        if "author:app/" in q:
+            return [x for x in self.gated if q.endswith("author:app/" + p.bot_name(x["author"]["login"]))]
         return self.found
 
     def nodes(self, ids, me):
@@ -137,6 +140,69 @@ try:
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
     assert "review_wait" in str(e)
+
+# ownergate: app PRs a gate names that still need an approval; never a person's PR.
+gate = {"name": "access", "authors": ["grant-bot[bot]"], "repos": ["acme/access"], "title": r"^\[Auto\] ", "prod_paths": ["deploy/"]}
+gcfg = {**cfg, "kinds": ["review_request", "ownergate"], "ownergate": [gate], "ignore_bots": ["grant-bot"]}
+A = dict(repo="acme/access", author="grant-bot", kind="Bot", reqs=[team("sec")])
+gated = [
+    pr(1, **{**A, "reqs": [user(ME)]}, title="[Auto] Add access for 1 user", files=["members/a.json"], age=2),
+    pr(2, **A, title="[Auto] Add access for 2 users", decision="APPROVED"),
+    pr(3, repo="acme/access", author="grant-bot", kind="User", title="[Auto] Add access by hand"),
+    pr(4, **A, title="Bump version"),
+    pr(5, **A, title="[Auto] Rotate role", files=["deploy/prod.yml", "members/b.json"], age=9),
+    pr(6, **{**A, "repo": "acme/other"}, title="[Auto] Add access elsewhere"),
+]
+allow_rules = []
+p.automode_allow = lambda: allow_rules
+owner_only = p.compute(Fake([gated[0]], gated=gated), gcfg, {}, NOW)
+assert [(i["number"], i["kind"], i["run_by"], i["prod"]) for i in owner_only["new"]] == \
+    [(1, "ownergate", "owner", False), (5, "ownergate", "owner", True)], owner_only["new"]
+# #1 is also in the review search, where ignore_bots drops it; the gate still takes it.
+assert {e["pr"]: e["why"] for e in owner_only["excluded"]} == {"acme/access#1": "무시하는 봇이 작성",
+    "acme/access#2": "승인 대기 아님", "acme/access#3": "사람 작성 또는 다른 작성자", "acme/access#4": "게이트 제목 아님",
+    "acme/other#6": "게이트 저장소 아님"}, owner_only["excluded"]
+g1 = owner_only["new"][0]
+assert g1["command"] == "gh api -X POST repos/acme/access/pulls/1/reviews -f event=APPROVE -f commit_id=h1"
+assert g1["diff"] == "파일 1개 ±10: members/a.json" and g1["rule_draft"].startswith("allow: Scheduled watch-prs round approving access PRs")
+gtext = p.body(owner_only).splitlines()
+assert gtext[1].startswith("1. [소유자 승인] acme/access#1 [Auto] Add access for 1 user — @grant-bot · 2일 · 파일 1개 ±10") \
+    and gtext[1].endswith("프로덕션 배포: 아니오 — https://github.com/acme/access/pull/1"), gtext[1]
+assert gtext[2] == "   ! " + g1["command"]
+assert "프로덕션 배포: 예" in gtext[3] and gtext[4].startswith("   ! ")
+assert gtext[5].startswith("없는 규칙") and gtext[6] == "- " + g1["rule_draft"] and "프로덕션 배포(또는 모름)" in gtext[7]
+
+# The same head from two collectors is one item; the later kind in KINDS wins.
+both = p.compute(Fake([gated[0]], gated=gated[:1]), {**gcfg, "ignore_bots": []}, {}, NOW)
+assert [(i["key"], i["kind"]) for i in both["new"]] == [("acme/access#1@h1", "ownergate")], both["new"]
+
+# An allow rule that names the act moves the non-production item to the round; production stays with the owner.
+gate["allow_rule"] = "Scheduled watch-prs round approving access PRs"
+allow_rules.append("Scheduled watch-prs round approving access PRs: in a turn started by ...")
+covered = p.compute(Fake([], gated=gated), gcfg, {}, NOW)
+assert [(i["number"], i["run_by"]) for i in covered["new"]] == [(1, "round"), (5, "owner")]
+assert p.body(covered).splitlines()[2] == "   규칙이 덮음, 이 회차가 실행: " + g1["command"]
+allow_rules.clear()
+assert p.compute(Fake([], gated=gated), gcfg, {}, NOW)["new"][0]["run_by"] == "owner", "a rule that went away covers nothing"
+# Unknown production impact counts as production: no round rule is drafted.
+del gate["prod_paths"]
+unknown = p.compute(Fake([], gated=gated[:1]), gcfg, {}, NOW)["new"][0]
+assert unknown["prod"] is None and unknown["run_by"] == "owner" and "프로덕션 배포: 모름" in p.body({**owner_only, "new": [unknown]})
+gate["prod_paths"] = ["deploy/"]
+
+# commit puts each owner item on the dashboard inbox with the ledger key; round items are not added.
+calls = pathlib.Path(tempfile.mkdtemp()) / "calls"
+fake_dash = calls.parent / "orch-dash"
+fake_dash.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n")
+fake_dash.chmod(0o755)
+p.ORCH_DASH = str(fake_dash)
+gstate = pathlib.Path(tempfile.mkdtemp())
+p.write_json(gstate / "plan.json", covered)
+assert p.commit(gstate, gcfg, NOW) == 2
+added = calls.read_text().splitlines()
+assert len(added) == 1 and added[0].startswith("inbox add --type run_command --title acme/access#5 승인: [Auto] Rotate role")
+assert added[0].endswith("--key prs:acme/access#5@h5") and "--command " + covered["new"][1]["command"] in added[0]
+assert p.read_json(gstate / "ledger.json", {})["acme/access#5@h5"]["kind"] == "ownergate"
 
 # CLI end to end with a fake gh: exit codes and the --body output.
 tmp = pathlib.Path(tempfile.mkdtemp())

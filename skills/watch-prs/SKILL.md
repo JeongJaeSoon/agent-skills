@@ -1,6 +1,6 @@
 ---
 name: watch-prs
-description: Use when the user wants the pull requests that are waiting on them picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request. Reads GitHub only. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
+description: Use when the user wants the pull requests that are waiting on them picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request. Also collects bot PRs only the user's account can approve ("내가 승인해야 할 봇 PR", "owner approval") with a ready-to-run `!` line each. Never writes to GitHub itself unless an autoMode allow rule names the act. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
 ---
 
 # Watch PRs
@@ -9,7 +9,8 @@ GitHub's `review-requested:@me` mixes three things: a request to the user by nam
 team they belong to, and a CODEOWNERS auto-assignment. On a busy account the last two drown the
 first. This skill keeps only the personal ones, ranks them, and hands them on once per head commit.
 
-It reads; it never writes to GitHub: no review, comment, re-request or label.
+It reads; it never writes to GitHub: no review, comment, re-request or label. The one exception is an
+`ownergate` approval that an autoMode allow rule names (below).
 
 ## Config
 
@@ -20,6 +21,7 @@ never in this repo.
 ```json
 {"prs": {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
+         "kinds": ["review_request", "ownergate"], "ownergate": [<gate>, ...],
          "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
          "max_items": 10, "stale_days": 30, "cron": "*/15 * * * *", "timezone": "<IANA tz>"}}
 ```
@@ -49,9 +51,41 @@ Stale means no update for more than `stale_days`; such an item says "요청 해�
 coordinator can propose asking the author to withdraw the request. Each item carries repo#N,
 title, author, age in days, diff size and the reasons it ranked where it did.
 
-Every item has a `kind`. Only `review_request` is collected now; `review_wait`, `ready_to_merge`,
-`unreleased` and `ownergate` are reserved in `KINDS`, and a later flow adds a collector to
-`COLLECTORS` without changing the CLI. Listing an uncollected kind in `kinds` is an error.
+Every item has a `kind`. `review_request` and `ownergate` are collected; `review_wait`,
+`ready_to_merge` and `unreleased` are reserved in `KINDS`, and a later flow adds a collector to
+`COLLECTORS` without changing the CLI. Listing an uncollected kind in `kinds` is an error. When two
+collectors return the same head, the kind later in `KINDS` keeps it.
+
+## Owner gate
+
+Steps only the user's account can take, such as approving the PRs a deploy or access-grant bot
+opens. Each gate in `ownergate` names them:
+
+```json
+{"name": "<label>", "authors": ["<app login>[bot]"], "repos": ["<owner/name>"], "title": "<regex>",
+ "prod": false, "prod_paths": ["<path prefix whose change deploys>"], "allow_rule": "<phrase>"}
+```
+
+A PR is an item when it is open, not a draft, asks for the user's review (a team request counts),
+its author is a GitHub App in `authors`, its repository is in `repos` (empty: any in scope) and
+`exclude_*`, its title matches `title`, and `reviewDecision` is `REVIEW_REQUIRED`. A person's PR is
+never an item. `ignore_bots` does not apply here.
+
+Production: `prod: true` or a changed path under `prod_paths` is yes; with `prod_paths` set and every
+changed path read, no; otherwise `prod`, or unknown when unset. Unknown counts as production.
+
+Each item carries the link, author, a one-line diff summary, whether merging deploys to production,
+and an approval pinned to the head the round saw:
+`gh api -X POST repos/<repo>/pulls/<n>/reviews -f event=APPROVE -f commit_id=<head>`.
+
+- **The round runs it** only when the item does not deploy to production, its author is an App, and
+  the gate's `allow_rule` phrase appears verbatim in an `allow` rule of `claude auto-mode config`
+  (read only). The message shows it as `규칙이 덮음, 이 회차가 실행`.
+- **Otherwise the owner does**: the message shows `! <command>`, which the owner pastes after `!` in
+  a session, and `commit` adds one `orch-dash inbox add --type run_command` per item with
+  `--key prs:<ledger key>`, so a retried commit does not duplicate it (`$AGENT_SKILLS_ORCH_DASH`
+  overrides the path). The message ends with a tune-automode-style allow-rule draft per gate that
+  could have been covered; nothing edits settings. A production item gets no draft.
 
 ## Run
 
@@ -60,7 +94,9 @@ P="${CLAUDE_SKILL_DIR}/scripts/prs.py"
 python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state>/body.txt and the items in plan.json
 ```
 
-1. If the output is empty, stop: send nothing and do not commit.
+1. If the output is empty, stop: send nothing and do not commit. Run each `규칙이 덮음, 이 회차가 실행`
+   command once, as a standalone command, and append its result to the message. Never run a `!` line,
+   and never retry an act a permission prompt, the classifier, a hook or a person refused, in any form.
 2. Send it as one message:
 
    ```bash
