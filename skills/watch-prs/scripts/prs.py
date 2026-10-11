@@ -112,7 +112,8 @@ def config(path=CONFIG):
         raw = None
     if raw is None:
         return None
-    pats = raw.get("exclude_title_patterns") or []
+    pats = raw.get("exclude_title_patterns")
+    pats = [] if pats is None else pats
     if not isinstance(pats, list) or not all(isinstance(x, str) for x in pats):
         raise ConfigError("exclude_title_patterns must be a list of regex strings")
     for x in pats:

@@ -53,8 +53,8 @@ never in this repo.
 is never listed, reminded, merged or dispatched. Use it for a batch of PRs that other teams open
 across many repositories, where `exclude_repos` would also hide that repository's real review
 requests. An invalid pattern fails every command with exit 2. Bot logins match with or without
-the `[bot]` suffix. `mentions_seen` overrides where the Slack side is read (default: `watch-mentions`' `seen.json` under the same state root). Other
-keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
+the `[bot]` suffix. `mentions_seen` overrides where the Slack side is read (default:
+`watch-mentions`' `seen.json` under the same state root). Other keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
 (`--state <dir>` or `$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
 `plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
 

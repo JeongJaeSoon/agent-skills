@@ -845,7 +845,8 @@ tconf = pathlib.Path(tempfile.mkdtemp()) / "agent-skills.json"
 for raw in ({}, {"exclude_title_patterns": None}, {"exclude_title_patterns": []}):
     tconf.write_text(json.dumps({"prs": raw}))
     assert p.config(tconf)["exclude_title_patterns"] == [], raw
-for bad, msg in ((["^ok", "["], "invalid regex '['"), ("^Remove", "must be a list"), ([1], "must be a list")):
+for bad, msg in ((["^ok", "["], "invalid regex '['"), ("^Remove", "must be a list"), ([1], "must be a list"),
+                 ("", "must be a list"), (False, "must be a list"), ({}, "must be a list")):
     tconf.write_text(json.dumps({"prs": {"exclude_title_patterns": bad}}))
     try:
         p.config(tconf)
