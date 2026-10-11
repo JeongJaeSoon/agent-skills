@@ -33,10 +33,10 @@ DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs"
             "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
             "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None,
             "channel": None, "repo_channels": {}, "reviewers": {}, "review_bots": {}, "holidays": [],
-            "urgent_labels": [], "batch_min": 2, "batch_wait_hours": 2, "repeat_hours": 24, "night_hour": 21,
+            "urgent_labels": [], "batch_min": 2, "batch_wait_hours": 2, "night_hour": 21,
             "morning_hour": 9, "programs_dir": None}
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
-SOURCES = ("sent", "scheduled", "found", "refused", "no_thread")
+SOURCES = ("sent", "scheduled", "found", "refused", "no_thread", "skipped")
 
 PR_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid additions deletions reviewDecision state
  repository{nameWithOwner} author{__typename login}
@@ -267,18 +267,21 @@ def post_at(now, cfg):
     return dt.datetime.combine(day, dt.time(cfg["morning_hour"], tzinfo=l.tzinfo)).timestamp()
 
 
-def program_prs(cfg):
-    """{(repo, number): slug} for PRs an orchestrate program drives; `orch wait` follows those, not reminders.
-    A PR whose last ledger row is `parked` was handed to humans, so it stays in."""
+def program_prs(cfg, now):
+    """{(repo, number): slug} for PRs a live orchestrate program drives (its ledger written within stale_days);
+    `orch wait` follows those, and a parked one is held on purpose. Programs have no closed state, so an idle
+    ledger is how an abandoned program's PRs come back to reminders."""
     root = pathlib.Path(cfg["programs_dir"] or os.environ.get("PROGRAMS_HOME") or "~/.claude/programs").expanduser()
     out = {}
     for prog in root.glob("*/program.json"):
-        last = {}
-        for row in read_jsonl(prog.parent / "ledger.jsonl"):
-            if isinstance(row.get("pr"), int):
-                last[row["pr"]] = row.get("ev")
+        ledger = prog.parent / "ledger.jsonl"
+        try:
+            if now - ledger.stat().st_mtime > cfg["stale_days"] * 86400:
+                continue
+        except OSError:
+            continue
         repo = read_json(prog, {}).get("repo")
-        out.update({(repo, n): prog.parent.name for n, ev in last.items() if ev != "parked"})
+        out.update({(repo, r["pr"]): prog.parent.name for r in read_jsonl(ledger) if isinstance(r.get("pr"), int)})
     return out
 
 
@@ -300,7 +303,8 @@ def wait_state(pr, me, cfg):
     reviews = {login(r): r for r in pr["latestReviews"]["nodes"] if login(r)}
     people = {who for who, r in reviews.items() if r["author"].get("__typename") == "User" and who.lower() not in owner}
     # A push (or a retarget) voided the approval: dismissed, or still APPROVED on an older head while the PR needs one.
-    stale = sorted(who for who in people if pr.get("reviewDecision") != "APPROVED" and (
+    # Only REVIEW_REQUIRED: null means no review is required, CHANGES_REQUESTED means it waits on someone else.
+    stale = sorted(who for who in people if pr.get("reviewDecision") == "REVIEW_REQUIRED" and (
         (reviews[who]["state"] == "APPROVED" and (reviews[who].get("commit") or {}).get("oid") != pr["headRefOid"])
         or (reviews[who]["state"] == "DISMISSED" and who in dismissed)))
     pending = [r["login"] for r in reqs if r.get("__typename") == "User" and r["login"] not in stale]
@@ -341,7 +345,8 @@ def decide(states, sendlog, now, cfg):
     remind     once per request row, one business day after it (or after its scheduled post), in its thread.
     rerequest  a voided approval, once per head: the same reviewer is not pinged again until a new push.
     retrigger  a review bot's stale CHANGES_REQUESTED, once per head, with the bot's trigger comment.
-    A refused row stops every action for that (PR, reviewer). Unmapped reviewers get no action, only a notice.
+    A refused row stops every action for that (PR, reviewer); a skipped row (the round judged it moot) stops
+    only that action at that head. Unmapped reviewers get no action, only a notice.
     Slack actions outside business hours carry post_at: the next business morning."""
     at = post_at(now, cfg)
     acts, held, bots, by = [], {}, review_bots(cfg), {}
@@ -353,22 +358,25 @@ def decide(states, sendlog, now, cfg):
             mine = by.get((s["pr"], who), [])
             if who not in cfg["reviewers"] or any(r["source"] == "refused" for r in mine):
                 continue
+            skip = {r["action"] for r in mine if r["source"] == "skipped" and r["head"] == s["head"]}
+            mine = [r for r in mine if r["source"] != "skipped"]
             asks = [r for r in mine if r["action"] in ("request", "rerequest")]
             thread = next((r["thread"] for r in reversed(mine) if r.get("thread")), None)
             if who in s["stale_approvals"]:
-                if not any(r["head"] == s["head"] for r in asks):
+                if "rerequest" not in skip and not any(r["head"] == s["head"] for r in asks):
                     acts.append(wait_action("rerequest", s, who, cfg, at, thread))
             elif not asks:
-                held.setdefault(who, []).append(s)
+                if "request" not in skip:
+                    held.setdefault(who, []).append(s)
             else:
                 last = max(asks, key=lambda r: r["at"])
                 since = max(last["at"], last.get("post_at") or 0)
                 reminded = any(r["action"] == "remind" and r["at"] >= last["at"] for r in mine)
-                if not reminded and now >= one_business_day_after(since, cfg):
+                if "remind" not in skip and not reminded and now >= one_business_day_after(since, cfg):
                     acts.append(wait_action("remind", s, who, cfg, at, thread))
         for bot in s["bot_stale"]:
             comment = bots.get(bot_name(bot))
-            if comment and not any(r["head"] == s["head"] for r in by.get((s["pr"], bot), [])):
+            if comment and not any(r["head"] == s["head"] or r["source"] == "refused" for r in by.get((s["pr"], bot), [])):
                 acts.append(wait_action("retrigger", s, bot, cfg, None, comment=comment))
     for who, waiting in held.items():
         if who in scheduled:
@@ -417,7 +425,7 @@ def wait_item(pr, now, k, why):
 def collect_review_wait(gh, me, cfg, ledger, now):
     """The owner's open PRs waiting on people: one notice per head for the coordinator, and the actions decide() finds
     due. Actions carry once=False: the send-log, not the ledger, decides whether they were done."""
-    programs = program_prs(cfg)
+    programs = program_prs(cfg, now)
     items, excluded, states = [], [], {}
     for pr in gh.mine(cfg["self_bots"]):
         repo, n = pr["repository"]["nameWithOwner"], pr["number"]
@@ -513,7 +521,8 @@ def commit(state, cfg, now):
     if not plan:
         raise SystemExit("commit: no plan.json; run plan first")
     ledger = read_json(state / "ledger.json", {})
-    for i in (i for i in plan["new"] if i.get("once", True)):
+    once = [i for i in plan["new"] if i.get("once", True)]
+    for i in once:
         ledger[i["key"]] = {"at": plan["run"], "kind": i["kind"], "id": i["id"]}
     # A request left open for months is still known; only keys that stopped appearing age out.
     for k in plan.get("known", []):
@@ -523,7 +532,7 @@ def commit(state, cfg, now):
     ledger = {k: v for k, v in ledger.items() if v["at"] >= horizon}
     write_json(state / "ledger.json", ledger)
     (state / "plan.json").unlink()
-    return len(plan["new"])
+    return len(once)
 
 
 # A kind's own step in the automation prompt, between the coordinator send and commit; {env} is the prs.py call.
@@ -535,9 +544,10 @@ PROMPT_STEPS = {
         "`--source found --thread <channel>:<ts> --at <ts>` 로 기록한다. remind·rerequest 는 PR 마다 thread 에 답글로만 보낸다"
         "(reply_broadcast false). thread 가 비어 있으면 channel 에서 그 PR 의 의뢰 스레드를 찾고, 없으면 최상위로 올리지 않고 "
         "`--source no_thread` 로 기록한다. post_at 이 있으면 바로 보내지 않고 그 시각으로 예약하고 "
-        "`--source scheduled --scheduled <id> --post-at <post_at> --thread <channel>:<ts>` 로, 보냈으면 "
+        "`--source scheduled --scheduled <id> --post-at <post_at>`(스레드 답글이면 `--thread <channel>:<부모 ts>` 도) 로, 보냈으면 "
         "`--source sent --thread <channel>:<ts>` 로 기록한다. retrigger 는 그 PR 에 `gh pr comment <url> --body <comment>` 를 "
-        "달고 `--source sent` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
+        "달고 `--source sent` 로 기록한다. 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨, 리뷰어의 slack id 없음 등)은 "
+        "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
         "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. GitHub 쓰기는 retrigger 코멘트뿐이다."),
 }
 
@@ -555,7 +565,8 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
               + (steps + " " if steps else "")
               + f"코디네이터 전송이 성공했을 때만 마지막에 `{env} commit` 을 실행한다." + reads)
     if edit:
-        return ["orca", "automations", "edit", edit, "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
+        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", f"{env} precheck",
+                "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]

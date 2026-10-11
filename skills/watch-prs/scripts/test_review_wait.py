@@ -79,7 +79,9 @@ s = state(3, threads=[thread("bob", "bob", NOW - H), thread("bob", ME, NOW - H),
 assert s["unanswered"] == 1, "only an open thread whose last word is someone else's, after the last push"
 s = state(4, reviews=[review("bob", "APPROVED", "old")], reqs=[u("bob")])
 assert s["stale_approvals"] == ["bob"] and s["pending"] == [], "approval on an older head, re-requested: stale, not waiting"
-assert state(4, reviews=[review("bob", "APPROVED", "old")], decision="APPROVED")["stale_approvals"] == []
+for other in ("APPROVED", None, "CHANGES_REQUESTED"):
+    assert state(4, reviews=[review("bob", "APPROVED", "old")], decision=other)["stale_approvals"] == [], \
+        f"{other}: approved anyway, no review required, or waiting on someone else"
 assert state(4, reviews=[review("bob", "APPROVED", "h4")])["stale_approvals"] == []
 dismissed = {"__typename": "ReviewDismissedEvent", "createdAt": iso(NOW - H), "previousReviewState": "APPROVED",
              "review": {"author": {"login": "bob"}}}
@@ -141,6 +143,11 @@ assert acts([state(6, reviews=[review("other", "CHANGES_REQUESTED", "h6", kind="
 assert p.notices(state(6, reviews=[review("other", "CHANGES_REQUESTED", "h6", kind="Bot")], decision=None), cfg) == \
     ["봇 재리뷰 필요(트리거 미설정): @other"]
 
+# A skipped row (moot at send time) stops only that action at that head; a new head offers it again.
+assert acts([one], [row(W + "10", "bob", "request", NOW - 3 * H, source="skipped")], now=NOW + 3 * H) == []
+assert acts([stale4], [row(W + "4", "bob", "rerequest", NOW, head="h4", source="skipped")]) == []
+assert acts([newer], [row(W + "4", "bob", "rerequest", NOW, head="h4", source="skipped")]) == [("rerequest", W + "4", "bob")]
+
 # A refused row stops every later action for that (PR, reviewer); no retry in any form.
 assert acts([one], [row(W + "10", "bob", "request", NOW - 3 * 86400, source="refused")], now=NOW + 3 * H) == []
 assert acts([stale4], [row(W + "4", "bob", "rerequest", NOW, head="old", source="refused")]) == []
@@ -165,26 +172,30 @@ r = p.decide([state(20, reqs=[u("carol")], labels=["security"]), state(21, repo=
 assert {(a["pr"], a["channel"], a["slack"]) for a in r} == {(W + "20", "CCAROL", "U0FAKECAROL"),
                                                            ("acme/tools#21", "CTOOLS", "U0FAKEBOB")}
 
-# The collector: exclusions, program PRs (repo-qualified; parked ones stay), notices and actions as items.
+# The collector: exclusions, program PRs (repo-qualified, parked included, idle programs not), notices and actions.
 progs = pathlib.Path(tempfile.mkdtemp())
 for slug, repo, rows in (("live", "acme/widgets", [{"ev": "spawned", "pr": 30}, {"ev": "landed", "pr": 31}]),
-                         ("handed", "acme/widgets", [{"ev": "landed", "pr": 32}, {"ev": "parked", "pr": 32}]),
-                         ("elsewhere", "acme/other", [{"ev": "spawned", "pr": 33}])):
+                         ("held", "acme/widgets", [{"ev": "landed", "pr": 32}, {"ev": "parked", "pr": 32}]),
+                         ("elsewhere", "acme/other", [{"ev": "spawned", "pr": 33}]),
+                         ("idle", "acme/widgets", [{"ev": "spawned", "pr": 39}])):
     (progs / slug).mkdir()
     (progs / slug / "program.json").write_text(json.dumps({"repo": repo}))
     (progs / slug / "ledger.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
+import os
+os.utime(progs / "idle" / "ledger.jsonl", (NOW - 40 * 86400, NOW - 40 * 86400))
 p.STATE = pathlib.Path(tempfile.mkdtemp()) / "prs"
 c = {**cfg, "programs_dir": str(progs), "exclude_repos": ["acme/legacy"]}
 own = [mine(30, reqs=[u("bob")]), mine(32, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)]),
        mine(33, reqs=[u("bob")], labels=["security"]), mine(34, draft=True), mine(35, idle=40), mine(36, repo="acme/legacy"),
        mine(37, threads=[thread("bob", "bob", NOW - H)], reviews=[review("bob", "COMMENTED", "h37")]),
-       mine(38, author="owner-bot", kind="Bot", reviews=[review("rabbit", "CHANGES_REQUESTED", "h38", kind="Bot")])]
+       mine(38, author="owner-bot", kind="Bot", reviews=[review("rabbit", "CHANGES_REQUESTED", "h38", kind="Bot")]),
+       mine(39, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)])]
 plan = p.compute(Fake := type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: own})(), c, {}, NOW)
 why = {e["pr"]: e["why"] for e in plan["excluded"]}
-assert why == {W + "30": "프로그램 PR (live)", W + "34": "draft", W + "35": "stale: 40일 움직임 없음",
+assert why == {W + "30": "프로그램 PR (live)", W + "32": "프로그램 PR (held)", W + "34": "draft", W + "35": "stale: 40일 움직임 없음",
                "acme/legacy#36": "제외 대상 저장소"}, why
 got = {(i["key"], i.get("action")) for i in plan["new"]}
-assert got == {("acme/widgets#32@h32/request/bob", "request"), ("acme/widgets#33@h33/request/bob", "request"),
+assert got == {("acme/widgets#39@h39/request/bob", "request"), ("acme/widgets#33@h33/request/bob", "request"),
                ("acme/widgets#37@h37/review_wait", None), ("acme/widgets#38@h38/retrigger/rabbit", "retrigger"),
                ("acme/widgets#38@h38/review_wait", None)}, got
 assert next(i for i in plan["new"] if i["key"].endswith("#38@h38/review_wait"))["why"] == ["리뷰어 없음"]
@@ -199,9 +210,9 @@ assert len([i for i in capped["new"] if "action" in i]) == 3 and capped["more"] 
 
 # log + commit: the send-log decides actions, the ledger only notices. A failed send stays due.
 p.write_json(p.STATE / "plan.json", plan)
-k = "acme/widgets#32@h32/request/bob"
+k = "acme/widgets#39@h39/request/bob"
 rowed = p.log(p.STATE, k, "found", NOW, thread="CFAKE:5.5", at=NOW - 600)
-assert rowed == {"pr": W + "32", "reviewer": "bob", "head": "h32", "action": "request", "source": "found", "at": NOW - 600,
+assert rowed == {"pr": W + "39", "reviewer": "bob", "head": "h39", "action": "request", "source": "found", "at": NOW - 600,
                  "post_at": None, "thread": "CFAKE:5.5", "scheduled": None}
 p.log(p.STATE, "acme/widgets#38@h38/retrigger/rabbit", "sent", NOW)
 for bad in (("nope", "sent"), (k, "maybe")):
@@ -223,7 +234,8 @@ assert "actions" in prompt and "slack-post" in prompt and "--source refused" in 
 plain = p.schedule_cmd(script, {**c, "kinds": ["review_request"]}, "path:/repo")
 assert "actions" not in plain[plain.index("--prompt") + 1] and "읽기만 한다" in plain[plain.index("--prompt") + 1]
 edit = p.schedule_cmd(script, c, "path:/repo", edit="auto-1")
-assert edit[:4] == ["orca", "automations", "edit", "auto-1"] and "--trigger" not in edit and "--precheck" in edit
+assert edit[:4] == ["orca", "automations", "edit", "auto-1"] and edit[edit.index("--trigger") + 1] == c["cron"]
+assert edit[edit.index("--timezone") + 1] == "Asia/Tokyo" and "--precheck" in edit
 
 # CLI: actions prints one JSON line per action in plan.json; log appends the row and parses numbers.
 import os, subprocess

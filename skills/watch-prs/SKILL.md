@@ -64,9 +64,9 @@ Listing an uncollected kind in `kinds` is an error.
 
 The user's open PRs, plus PRs by a `self_bots` app that are assigned to the user (a bot app is often
 shared across an organisation, so authorship alone is not enough). Out: drafts, out-of-scope
-repositories, no update for more than `stale_days`, and PRs an orchestrate program drives (a PR
-number in a `~/.claude/programs/*/ledger.jsonl` whose `program.json` names the same repo; `orch
-wait` follows those). A PR whose last program row is `parked` was handed to humans and stays in.
+repositories, no update for more than `stale_days`, and PRs a live orchestrate program drives (a PR
+number in a `~/.claude/programs/*/ledger.jsonl` written within `stale_days`, whose `program.json`
+names the same repo; `orch wait` follows those, and a parked one is held on purpose).
 
 Each PR gets its states from GitHub alone:
 
@@ -75,7 +75,7 @@ Each PR gets its states from GitHub alone:
 | `no_reviewer` | review required, nobody requested or reviewing | coordinator notice |
 | `waiting` | a user reviewer requested and silent | `request`, later `remind` |
 | `unanswered` | an open thread whose last comment is someone else's, after the last push | coordinator notice |
-| `approval_stale` | an approval dismissed, or on an older head while the PR still needs one | `rerequest` |
+| `approval_stale` | an approval dismissed, or on an older head, while the decision is `REVIEW_REQUIRED` | `rerequest` |
 | `bot_stale` | a review bot's `CHANGES_REQUESTED` with none of its threads still open | `retrigger` |
 
 `decide()` turns states, the send-log and the clock into the actions due now:
@@ -85,8 +85,8 @@ Each PR gets its states from GitHub alone:
   once a row exists, a new push on a still-waiting PR does not request again.
 - `remind`: one business day after the request (or after its scheduled post), once per request, as a
   reply in the request's thread, one per PR.
-- `rerequest`: a voided approval, once per head, in the earlier thread. A new push is the only way the
-  same reviewer hears about the same PR again within `repeat_hours`.
+- `rerequest`: a voided approval, once per head, in the earlier thread. So within a day the same
+  reviewer hears about the same PR again only after a new push.
 - `retrigger`: the bot's `review_bots` comment, once per head, posted at any hour.
 - Outside business hours (after `night_hour` 21, before `morning_hour` 9, weekends, `holidays`) a
   Slack action carries `post_at`, the next business morning, and is scheduled instead of sent. While a
@@ -98,8 +98,9 @@ Each PR gets its states from GitHub alone:
 The send-log (`<state>/sendlog.jsonl`: pr, reviewer, head, action, source, at, post_at, thread,
 scheduled id) is what decides actions; the ledger does not record them (`once: false`), so an action
 that failed to send stays due. `source` is `sent`, `scheduled`, `found` (someone already asked in the
-channel; `--at` is that message's time), `no_thread` (no thread to reply in, so nothing was posted)
-or `refused`. A `refused` row stops every later action for that PR and reviewer.
+channel; `--at` is that message's time), `no_thread` (no thread to reply in, so nothing was posted),
+`skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
+A `refused` row stops every later action for that PR and reviewer.
 
 ## Run
 
@@ -123,7 +124,8 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    message per reviewer in the channel, unless the channel already has a request for that PR
    (`found`); a reminder or re-request is a thread reply only, never broadcast; with no thread known,
    search the channel for one, and with none found post nothing (`no_thread`). With `post_at`, schedule
-   for that time. `retrigger` is `gh pr comment <url> --body <comment>`. An action refused by a
+   for that time. `retrigger` is `gh pr comment <url> --body <comment>`. An action already moot (approved
+   meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
    permission prompt, the classifier or a hook is logged `refused` and reported, never retried.
 4. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
    succeeded: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
@@ -139,7 +141,7 @@ for checking what the filter did: `new` (ranked items), `known` (keys already se
 ```bash
 python3 "$P" schedule            # prints the `orca automations create` command
 python3 "$P" schedule --write    # creates it
-python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's prompt and precheck, keeping its id
+python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's trigger, prompt and precheck, keeping its id
 ```
 
 The prompt is built from `kinds`: each configured kind with a `PROMPT_STEPS` entry adds its step, so
