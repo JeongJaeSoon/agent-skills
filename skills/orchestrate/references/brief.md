@@ -117,7 +117,7 @@ FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. The refused-ac
             program brief's FORBIDDEN above, pasted verbatim. <unit-specific bans>
 APPROVED    The acts the human already approved for this unit, with their words and date. Inside
             them, decide with the recommended default and report what you chose; do not ask.
-HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any irreversible or
+HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and any irreversible or
             outward act not under APPROVED. Ask for these together, once.
 MODEL CALLS Another model (a subagent, Codex, an API) only when the task needs it; say which and
             why before the call, and pick the model then.
@@ -135,7 +135,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `MODE`, `DELEGATE`, `PREDICATE` or `CLOSE`). A lead whose brief had no DELEGATE line investigated and implemented on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `DELEGATE` and `PREDICATE`). A lead whose brief had no DELEGATE line investigated and implemented on its own.
 
 ```
 <project>: lead
@@ -164,7 +164,7 @@ PERMISSIONS The autoMode rules for this repo's merge and deploy, quoted, or "mis
 APPROVED    The acts the human already approved for this project, with their words and date.
             Decisions inside them are yours and your workers': the recommended default, then a
             report. Copy the lines a worker's unit needs into its brief.
-HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any irreversible or
+HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and any irreversible or
             outward act not under APPROVED. Batched into one message to the human.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
