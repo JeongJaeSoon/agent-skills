@@ -456,6 +456,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [(i["target"], i["why"]) for i in got] == [(False, "PR acme/app#2 merged, 세션이 1h0m 만 조용")], got
     got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get, quiet=lambda p: 60)
     assert [i["target"] for i in got] == [True], "a ledger card with its PR link needs no quiet"
+    got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt)], [], PRS.get, quiet=lambda p: 60)
+    assert [i["target"] for i in got] == [False], "a ledger card without a PR link (dispatch-card §3) waits like a cli card"
     reap.orca_workers = lambda state=None: [{"terminalState": "retained", "resource": {"worktreeId": "r::" + wt}}]
     assert reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get) == []
     # A no-PR card is judged by how long its sessions have been quiet, floored at NO_PR_MIN_HOURS even under --hours 0.

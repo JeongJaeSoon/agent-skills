@@ -899,8 +899,8 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
                 facts["live"] = "워커 목록을 읽지 못함"
             source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
             facts["worker_card"] = path in made
-            # A card known only by its lineage may be a lead, or reuse an old merged branch's name: it also waits for quiet.
-            facts["quiet_needed"] = not e and path not in made
+            # A PR found by branch name alone may be an old merged one whose name a lead reused: such a card waits for quiet.
+            facts["quiet_needed"] = path not in made and not (e and (e.get("links") or {}).get("pr"))
             if facts["quiet_needed"] or (not facts.get("pr") and facts["worker_card"]):
                 facts["idle"] = quiet(path)
             if "orca-worktree" in kinds:
