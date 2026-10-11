@@ -95,8 +95,8 @@ end. The brief has:
 
 A card that will run a project for this session through cards of its own (a lead) gets
 `orchestrate` `references/brief.md` "Lead" instead of the list above, and its `--prompt` also
-carries the `MODE` and `PREDICATE` lines; the hook refuses a prompt with a `MODE` line and no `PREDICATE`. A
-lead once briefed in a format of the coordinator's own, with neither line, reported done and
+carries the `MODE`, `DELEGATE` and `PREDICATE` lines; the hook refuses a lead's prompt (a `MODE`
+line or a `<project>: lead` head) that lacks one of them. A lead once briefed in a format of the coordinator's own, with neither line, reported done and
 waited for its next order for two days.
 
 Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no
