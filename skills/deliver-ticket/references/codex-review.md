@@ -16,6 +16,13 @@ at a time; two concurrent jobs kill each other.
 `review` hunts defects. `adversarial-review` challenges the approach itself and earns its own
 round whenever the design, not the defect count, is what you are unsure about.
 
+On security code (a guard, a scanner, a redactor), a free-form `task` or subagent prompt that
+asks for an attack, such as an input that leaks a value or slips past a check, can be refused
+by the model's cyber-safety filter even though the code is defensive; the diff-scoped `review`
+and `adversarial-review` still run. Put the attack cases in a test oracle you run yourself (generated
+inputs, a must-fail control), and treat a refusal like any other: report it, do not reword it
+and retry.
+
 ## Which model
 
 Both reviews run on whatever `~/.codex/config.toml` sets, which is `gpt-6-sol` (reasoning
