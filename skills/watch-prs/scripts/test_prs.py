@@ -381,6 +381,11 @@ assert f"author:{ME}" in q and "repo:acme/widgets " in q and "merged:>=2027-01-1
 lines = p.body({**both, "new": rel}).splitlines()
 assert lines[1].startswith("1. [dev 확인 전] acme/widgets#20 Change 20") and "dev 에 반영됨, 동작 확인 전" in lines[1]
 assert "dev 에 아직 없음" in lines[2]
+# Unreleased merges are not capped: they rank after older items, so a cap would starve them or split a repo's batch.
+crowd = [pr(n, reqs=[user(ME)], age=30 + n) for n in range(40, 45)]
+uncapped = p.compute(Fake(crowd, merged=[merged(20), merged(21)], deployed="d0", live={"m20"}), {**rcfg, "max_items": 2}, {}, NOW)
+assert sorted(i["number"] for i in uncapped["new"] if i["kind"] == "unreleased") == [20, 21], uncapped["new"]
+assert sum(i["kind"] == "review_request" for i in uncapped["new"]) == 2 and uncapped["more"] == 3
 
 # Nothing declared, or everything already handed on: no revision probe at all.
 silent = Fake([], merged=[merged(20)], deployed=RuntimeError("must not run"))
@@ -475,8 +480,10 @@ p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
 d = run("dispatch")
 printed = d.stdout.splitlines()
 assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["orca", "orchestration", "worker-start"], d
-assert printed[0].endswith(f'--spec "$(cat {tmp / "state" / "prs" / "brief-0.txt"})"')
-assert "#20 " in (tmp / "state" / "prs" / "brief-0.txt").read_text()
+brief = tmp / "state" / "prs" / f"brief-{int(plan2['run'])}-0.txt"
+assert printed[0].endswith(f'--spec "$(cat {brief})"'), "named by run, so the next round cannot overwrite it"
+assert "#20 " in brief.read_text()
+assert (tmp / "state" / "prs" / "dispatch.txt").read_text() == d.stdout.rstrip("\n")
 (tmp / "state" / "prs" / "plan.json").unlink()
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)], env=broken, capture_output=True).returncode == 2
@@ -501,8 +508,11 @@ assert no_env(line), line
 line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"}, "path:/r")
 prompt = line[line.index("--prompt") + 1]
 assert no_env(line), line
-assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행해", prompt), "a failed send must not start workers"
-assert prompt.index("dispatch") < prompt.index("prs.py commit` 을") and "다시 시도하지 않고" in prompt
+assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행한다", prompt), "a failed send must not dispatch"
+# A scheduled round cannot start a worker (consumer_fenced): it forwards the lines and the coordinator starts them.
+assert "출력된 줄은 실행하지 않는다" in prompt and "릴리스 워커 <줄 수>건 시작 요청" in prompt
+assert re.search(r'--body "\$\(cat \S*dispatch\.txt\)"', prompt), "lines go as a file so $(cat …) stays literal"
+assert prompt.index("dispatch") < prompt.index("prs.py commit` 을")
 assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
 # ownergate's round/result run and are recorded before the send, and start with python3 like the rest.
 gated_line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x", "kinds": ["review_request", "unreleased", "ownergate"]}, "path:/r")
