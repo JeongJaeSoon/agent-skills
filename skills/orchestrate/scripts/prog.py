@@ -992,7 +992,7 @@ def cmd_verdict(argv):
     if src == "claude-review:independent" and not opt(argv, "--note"):
         sys.exit("claude-review:independent needs --note with the Codex line that shows Codex was unavailable "
                  "(spend cap, outage, login)")
-    head =pr_view(p.cfg["repo"], pr)["headRefOid"]
+    head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
     row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),

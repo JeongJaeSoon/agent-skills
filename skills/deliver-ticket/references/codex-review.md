@@ -72,7 +72,7 @@ for it; step 3's context-free review is the one exception. Get Codex to run inst
 2. **Fix what the diagnosis found and rerun the same review command.** Up to three retries,
    waiting 2, 5 and 10 minutes before them (a Bash `sleep` with `run_in_background`). When the
    diagnosis shows Codex itself is unavailable (spend cap or usage limit, a service outage,
-   login), one rerun confirms it; then go to step 3.
+   login), one rerun after the 5-minute wait confirms it; then go to step 3.
 3. **Codex itself unavailable: an independent Claude Code review stands in.** Only when step 1
    kept a line that puts the cause on Codex's side: a spend-cap or usage-limit message, a
    service error, a failed `login status`. Not when Codex ran and returned findings, not when
@@ -85,8 +85,10 @@ for it; step 3's context-free review is the one exception. Get Codex to run inst
      `code-review` skill, `/code-review <PR>`) on that head and report the sha it actually
      reviewed. A different sha means the head moved: review again.
    - **Sort** its findings as `SKILL.md` §3 does. Every Act-on finding is a blocker: fix it,
-     push, and review the new head with a fresh reviewer the same way, within §3's round cap.
-     Try Codex again before each round; once it reviews, it closes the review as usual.
+     push, and review the new head with a fresh reviewer the same way; §3's round cap applies
+     as it does to Codex. Try Codex again before each round and before the land; once it
+     reviews, its result closes the review and its Act-on findings get fixed, whatever the
+     stand-in found.
    - **Record** one PR comment (a sticky comment where the repo uses one) with the review
      summary, the blocker list or "none", the reviewed head sha, and the Codex line from step 1.
    - **Land** with zero blockers, CI green and merge state CLEAN: record the verdict on that

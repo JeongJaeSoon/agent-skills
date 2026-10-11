@@ -706,6 +706,8 @@ for good in ("codex-review", "subagent-review", "claude-review:independent", "ve
     with contextlib.redirect_stdout(io.StringIO()):
         prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good, "--note", "spend cap"])
     assert prog.Program("gt").events()[-1]["source"] == good
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", "codex-review"])
 prog.pr_view, prog.patch_id = real_view, real_pid
 
 print("prog.py verdict source: all pass")
