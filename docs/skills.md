@@ -499,12 +499,16 @@
 
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
-### 압축 후 재정렬
-`hooks/reorient.py`(SessionStart, `compact`). 문맥이 압축된 직후(자동이든 `/compact`든) 이 터미널이 `orch init`으로 등록된 프로그램의 코디네이터일 때만 한 단락을 넣는다. 내용은 네 가지다.
-- `agent-skills:orchestrate`를 다시 불러 읽는다.
-- 프로그램 노트를 읽는다.
-- `orch status`를 돌려 출력된 모든 줄에 대응한다.
-- 이후에는 `orch wait`로만 drain한다.
+### 코디네이터 재정렬
+`hooks/reorient.py`(SessionStart `startup|resume|compact`, UserPromptSubmit). 이 터미널이 코디네이터일 때만 한 단락을 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않는다. 코디네이터 판정은 둘 중 하나다.
+- `orca orchestration run-current`의 `coordinator_handle`이 이 터미널의 `$ORCA_TERMINAL_HANDLE`이다.
+- `~/.claude/agent-skills.json`의 `orchestrate.top_level_handles`에 이 handle이 있다. Run 없이 도는 최상위 코디네이터용이다.
+
+넣는 내용은 경우마다 다르다.
+- `orch init`으로 등록된 프로그램의 Run이면: `agent-skills:orchestrate`를 다시 읽고, 프로그램 노트를 읽고, `orch status`의 모든 줄에 대응하고, 이후에는 `orch wait`로만 drain한다. 압축 직후면 앞서 따르던 규칙이 문맥에서 빠졌을 수 있다는 말을 덧붙인다.
+- 프로그램이 없으면(최상위 코디네이터): `agent-skills:orchestrate`를 지금 불러 읽고, 자기 턴은 라우팅과 몇 초짜리 읽기만 하며, 조사·구현·검증·브라우저 작업은 한 층 아래로 보내고, 진행 보고는 `agent-skills:brief-status`로 한다.
+
+SessionStart는 매번 다시 판정한다. UserPromptSubmit은 세션의 첫 프롬프트에서만 판정하고 결과를 `$AGENT_SKILLS_STATE/reorient/<session_id>.json`(기본 `~/.local/state/agent-skills`)에 남겨, 이후 프롬프트는 `orca`를 부르지 않는다. `/reload-plugins`로 hook을 받은 기존 세션은 SessionStart를 다시 거치지 않으므로, 다음 프롬프트에서 한 번 받는다.
 
 ### 결정 자동 닫기
 `hooks/decision.py`(UserPromptSubmit). `orch decide add`로 결정을 등록한 터미널(`$ORCA_TERMINAL_HANDLE`)에 사람이 친 프롬프트만 본다. 첫 줄이 id로 시작하거나(`d3 허락`, `decision d3: 허락`) 그 터미널의 열린 결정 가운데 하나에만 있는 선택지 이름으로 시작하면 그 결정을 답과 함께 done으로 닫고 코디네이터에게 알린다. 애매하면 닫지 않고 열린 결정 목록을 알림으로만 넣는다. 다른 터미널(워커)의 입력으로는 닫지 않고, 오류는 모두 exit 0이다. 이미 떠 있던 세션은 `/reload-plugins`나 재시작 뒤부터 적용된다.
@@ -560,7 +564,7 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`.
-- **hook:** 권한 결정(`guard.py`), 압축 후 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`).
+- **hook:** 권한 결정(`guard.py`), 코디네이터 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`).
 
 ### upstream 동기화 상태
 - **pin 이후 커밋:** upstream `main`(0.15.5)은 pin 뒤로 두 커밋이 더 있다.

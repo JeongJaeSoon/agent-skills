@@ -235,7 +235,8 @@ keeps flaking, a thread you resolved on the author's behalf, a migration you can
 After the merge commit is confirmed, finish whatever the ticket still asks for — a release, a
 deploy, a migration run, a verification that only makes sense on main. A merged PR with a
 criterion left open is not done, and the session stays open until that criterion is met or the
-user says to stop.
+user says to stop. In a repo that ships, the dev release, behaviour check and log read follow
+[references/post-merge-release.md](references/post-merge-release.md).
 
 Only then: move the ticket to done with a completion comment carrying the merge commit, the PR
 link, and each criterion with the evidence that it holds (`use-tracker`). Update the worklog
