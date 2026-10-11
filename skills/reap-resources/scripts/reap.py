@@ -27,8 +27,8 @@ untouched for reap.user_folder_days (default 7; screenshots and screen recording
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
 through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
 alerts when Finder's auto-empty is on), and leaves a chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
-The ledger is $AGENT_SKILLS_LEDGER or --ledger, default $AGENT_SKILLS_STATE/ledger.jsonl (state default
-~/.local/state/agent-skills). precheck scans the janitor kinds and user-folder (at most once a day), writes janitor-plan.json
+The ledger is --ledger or $AGENT_SKILLS_LEDGER, default <state>/ledger.jsonl (state: --state or $AGENT_SKILLS_STATE,
+default ~/.local/state/agent-skills). precheck scans the janitor kinds and user-folder (at most once a day), writes janitor-plan.json
 to the state dir and exits 0 when there are targets, except: the set the last reap failed on, for a day; and a set already
 planned reap.plan_repeat times with no reap since, retried once a day, with one message to reap.inbox_to. schedule prints the
 `orca automations create` command; only --write runs it.
@@ -446,7 +446,8 @@ JANITOR = ("orca-worktree", "done-card", "orca-worker", "tmpdir", "gui-app", "ch
 # What the scheduled run covers: the janitor kinds plus the user's download and desktop folders.
 SCHEDULED = JANITOR + ("user-folder",)
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
-STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
+STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser()
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 
 
@@ -1033,11 +1034,19 @@ def record_reap(state_dir, left, now=None):
     (state_dir / "janitor-last.json").write_text(json.dumps({"t": now or time.time(), "targets": sorted(left)}))
 
 
+def round_cmd(script, state_dir, ledger, *sub):
+    """A scheduled round's command starts with python3: a session may refuse an `env` or `VAR=` prefix as its own
+    command. Flags follow the subcommand and appear only for a state or ledger off the default."""
+    flags = [] if state_dir == STATE_HOME else ["--state", str(state_dir)]
+    if ledger and pathlib.Path(ledger) != state_dir / "ledger.jsonl":
+        flags += ["--ledger", str(ledger)]
+    return shlex.join(["python3", str(script), *sub, *flags])
+
+
 def schedule_prompt(script, state_dir, ledger=None, inbox=None):
     plan = state_dir / "janitor-plan.json"
-    env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(state_dir))}",
-                    f"AGENT_SKILLS_LEDGER={shlex.quote(str(ledger or state_dir / 'ledger.jsonl'))}", "python3", shlex.quote(str(script))])
-    prompt = (f"reap-resources janitor 회차다. 정리 계획 {plan} 의 대상을 `{env} reap --plan {plan}` 로 한 번 정리한다. "
+    reap_line = round_cmd(script, state_dir, ledger, "reap", "--plan", str(plan))
+    prompt = (f"reap-resources janitor 회차다. 정리 계획 {plan} 의 대상을 `{reap_line}` 로 한 번 정리한다. "
               "reap 은 계획의 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮기고, 바뀐 것은 건너뛴다. "
               "출력에 '에이전트가 처리'로 남은 chrome-window 는 브라우저 도구가 있고 그 창·탭의 URL 이 출력에 적힌 URL 과 같을 때만 닫는다. "
               "다르거나 브라우저 도구가 없으면 남긴다. "
@@ -1047,7 +1056,7 @@ def schedule_prompt(script, state_dir, ledger=None, inbox=None):
               + (f"거부된 명령 한 줄을 `orca orchestration send --to {shlex.quote(inbox)} --type escalation "
                  "--subject 'reap-resources janitor: reap 거부됨' --body '<명령>'` 로 보내고, 보고 첫 줄에도 적는다."
                  if inbox else "거부된 명령 한 줄을 보고 첫 줄에 적는다."))
-    return env, prompt
+    return prompt
 
 
 def notify_unrun(inbox, command, send=run):
@@ -1067,10 +1076,10 @@ def notify_unrun(inbox, command, send=run):
 
 
 def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, inbox=None):
-    env, prompt = schedule_prompt(script, state_dir, ledger, inbox)
     return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", "17 */3 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-            "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
+            "--precheck", round_cmd(script, state_dir, ledger, "precheck"),
+            "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json"]
 
 
 BUSY_CHILD_CPU = 25
@@ -1416,8 +1425,7 @@ def main():
     if cmd == "precheck":
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
-        plan = shlex.quote(str(STATE / "janitor-plan.json"))
-        command = f"{schedule_prompt(pathlib.Path(__file__).resolve(), STATE, ledger_path())[0]} reap --plan {plan}"
+        command = round_cmd(pathlib.Path(__file__).resolve(), STATE, ledger_path(), "reap", "--plan", str(STATE / "janitor-plan.json"))
         code, targets = precheck(items, STATE, repeat=int(cfg.get("plan_repeat") or 2),
                                  notify=notify_unrun(cfg.get("inbox_to"), command))
         # With targets the stamp waits for reap; with none, the day's sweep is this check.
