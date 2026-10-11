@@ -3,8 +3,8 @@
 ## What this source contains
 
 - Design docs written before the code (`Project/<project>/*.md`)
-- Worklogs (`worklog-<ticket-or-topic>.md`) updated as each piece landed: what was tried, what was dropped, and why
-- Program notes (`program-<slug>.md`) recording milestone-level decisions
+- Worklogs (`worklog-<ticket-or-topic>.md`, or the title the vault's rules give them) updated as each piece landed: what was tried, what was dropped, and why
+- Program notes (`program-<slug>.md`, or the vault's title for them) recording milestone-level decisions
 - Research notes that preceded a design
 
 These are the author's own working notes, often the only place a rejected approach or a mid-task decision was written down.
