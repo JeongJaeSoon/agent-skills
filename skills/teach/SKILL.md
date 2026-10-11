@@ -17,4 +17,17 @@ Teach sits on top of `how` and `why`. Get your bearings on what the work is and 
 
 Write every response with `write-plainly`, in the user's language, the way you'd explain it to a colleague. Be tight, not terse: state the concrete mechanism, not a metaphor, a framing, or a preview of what is coming. This is the target density: "Virtualization runs in two parts, one for rendering and one for loading from disk. When an item scrolls out past the buffer, both its DOM node and its in-memory data are evicted." Give each concept one name and keep it. The words in these steps are directions to you, not labels to print.
 
-**Reply:** the explanation itself, never a report about what you did. Lead with the main point, then the plain account of what it is, how it works, and why, and the threads worth chasing with `how` or `why`.
+## Shareable page
+
+When the explanation is a page for people outside this conversation (an Artifact or HTML page a team will read), nobody can ask a follow-up, so drop the pacing of steps 3 and 4 and write it to be read once, top to bottom, in this order:
+
+1. One or two sentences at the top that answer the whole question.
+2. The core structure as step 5's diagram series, inline SVG or mermaid, one part added per figure.
+3. Scenes: what a user actually goes through in the few cases that matter.
+4. While the work is in progress, a stage table: each stage with its ticket link and a status mark (done, in progress, not started).
+5. What this work covers and what it leaves to something else.
+6. The open questions.
+
+The page's design (layout, theming, sizing) follows the `artifact-design` skill.
+
+**Reply:** the explanation itself, never a report about what you did. Lead with the main point, then the plain account of what it is, how it works, and why, and the threads worth chasing with `how` or `why`. For a shareable page, the reply is the link and the page's top summary.
