@@ -183,6 +183,9 @@ workers = [
 ]
 assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/w/1"), ("A-2", "d2", True, "/w/2")], \
     prog.landed_but_open(ev, workers, tasks, wts)
+# A fold into a lower PR's branch does not finish its ticket.
+fold = [{"ev": "landed", "pr": 3, "ticket": "A-3", "onto": 9, "ts": "2026-09-24T00:00:00+00:00"}]
+assert prog.landed_but_open(ev + fold, workers, tasks, wts) == prog.landed_but_open(ev, workers, tasks, wts)
 # orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
@@ -690,16 +693,24 @@ print("prog.py stacks: all pass")
 # --- verdict sources are a closed set ------------------------------------------------------------
 real_view, real_pid = prog.pr_view, prog.patch_id
 prog.pr_view, prog.patch_id = (lambda repo, n: {"headRefOid": "h1"}), (lambda repo, n: "p1")
-for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:anthropic", "live:", "verifier"):
+for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:anthropic", "live:", "verifier",
+            "claude-review", "claude-review:self"):
     try:
         prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", bad])
         raise AssertionError(f"verdict accepted --source {bad}")
     except SystemExit as e:
         assert "--source is" in str(e), e
-for good in ("codex-review", "subagent-review", "verifier:codex", "live:checkout"):
+try:
+    prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", "claude-review:independent"])
+    raise AssertionError("verdict accepted claude-review:independent without the Codex line")
+except SystemExit as e:
+    assert "--note" in str(e), e
+for good in ("codex-review", "subagent-review", "claude-review:independent", "verifier:codex", "live:checkout"):
     with contextlib.redirect_stdout(io.StringIO()):
-        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good])
+        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good, "--note", "spend cap"])
     assert prog.Program("gt").events()[-1]["source"] == good
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", "codex-review"])
 prog.pr_view, prog.patch_id = real_view, real_pid
 
 print("prog.py verdict source: all pass")

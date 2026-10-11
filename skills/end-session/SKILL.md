@@ -24,7 +24,7 @@ verified as started is the request.
 
 | What the user said | What they mean | Do |
 |---|---|---|
-| "정리해줘", "마무리해줘" (no object) | leave the record, keep talking | Report. **Do not end, do not ask to end.** |
+| "정리해줘", "마무리해줘" (no object) | leave the record, keep talking | `record-progress`, then report. **Do not end, do not ask to end.** |
 | "종료하면 돼?", "종료해도 될까?" | is anything left undone? | Answer that. No prompt, no command. |
 | "세션 정리", "카드 정리", "종료해줘" | end this session | Continue to §2. |
 
@@ -60,7 +60,7 @@ they actually asked for.
 ## 3. Leave the record before anything dies
 
 Orca metadata and this transcript die with the session. Before the command runs, the record must
-already exist where it survives:
+already exist where it survives (`record-progress` decides what goes where):
 
 - Every ticket this session touched → `use-tracker` "Reconcile", so none is left behind its PR
   or deploy. The ticket linked to this card → final state (moved to completed, or left
@@ -142,7 +142,7 @@ up "next turn", and never write anything after `EndConversation`.
 The report says, in Korean: what this session delivered, where the record lives (worklog,
 ticket, PR), what the user should still check themselves — or plainly that nothing is left,
 never an invented item — and which command is about to run. Write it per `write-plainly`. Its
-layout follows `brief-status`, which leaves these items and the Korean in place. When the user
+layout follows the `brief` skill, which leaves these items and the Korean in place. When the user
 writes from Telegram, send the report with the Telegram reply tool before the ending command: text
 left only on the terminal never reaches them.
 

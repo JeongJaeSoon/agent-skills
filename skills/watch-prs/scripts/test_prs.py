@@ -33,9 +33,12 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=(), merged=(), deployed=None, live=()):
-        self.found, self.by_id = list(search), {n["id"]: n for n in nodes}
+    def __init__(self, search, nodes=(), merged=(), deployed=None, live=(), mine=()):
+        self.found, self.by_id, self.own = list(search), {n["id"]: n for n in nodes}, list(mine)
         self.merged, self.deployed, self.live, self.queries = list(merged), deployed, set(live), []
+
+    def mine(self, self_bots):
+        return self.own
 
     def viewer(self):
         return ME
@@ -59,9 +62,14 @@ class Fake:
     def nodes(self, ids, me):
         return [self.by_id[i] for i in ids if i in self.by_id]
 
+    def pr(self, ref, me):
+        repo, n = ref.lower().replace("acme/old-widgets", "acme/widgets").split("#")  # a renamed repo resolves
+        return {x["id"]: x for x in self.found}.get(f"PR_{repo}_{n}") or self.by_id.get(f"PR_{repo}_{n}")
 
-cfg = {**p.DEFAULTS, "self_bots": ["owner-bot"], "ignore_bots": ["noisy[bot]"], "exclude_repos": ["acme/legacy"]}
+
 state = pathlib.Path(tempfile.mkdtemp()) / "prs"
+cfg = {**p.DEFAULTS, "self_bots": ["owner-bot"], "ignore_bots": ["noisy[bot]"], "exclude_repos": ["acme/legacy"],
+       "mentions_seen": str(state.parent / "no-mentions.json")}
 
 # Who is in: a personal, non-CODEOWNERS request on a non-draft PR whose author is not a self or ignored bot.
 found = [
@@ -146,10 +154,54 @@ assert list(p.read_json(state / "ledger.json", {})) == [still]
 # A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
-    p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
+    p.compute(Fake([]), {**cfg, "kinds": ["ready_to_merge"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
-    assert "review_wait" in str(e)
+    assert "ready_to_merge" in str(e)
+
+# Slack review requests from watch-mentions' seen ledger: one entry per PR, permalinks attached.
+seen_file = state.parent / "mentions-seen.json"
+link = lambda n: f"https://example.test/archives/C0FAKE/p{n}"
+row = lambda ref, n, category="review": {"at": NOW, "category": category, "permalink": link(n), "pr": ref}
+p.write_json(seen_file, {
+    "C0FAKE/1": row("acme/widgets#1", 1), "C0FAKE/2": row("Acme/Widgets#1", 2),   # GitHub lists #1 too: merged
+    "C0FAKE/11": row("acme/old-widgets#1", 11),                                    # #1 under its old repo name
+    "C0FAKE/3": row("acme/widgets#5", 3),                                          # team-only on GitHub: Slack lists it
+    "C0FAKE/4": row("acme/widgets#20", 4),                                         # not in the search: fetched
+    "C0FAKE/5": row("acme/widgets#21", 5), "C0FAKE/6": row("acme/widgets#22", 6),  # merged PR, reviewed at head
+    "C0FAKE/7": row("acme/widgets#23", 7), "C0FAKE/8": row("acme/gone#1", 8),      # my own PR, unreadable
+    "C0FAKE/9": row("acme/widgets#24", 9, "work"), "C0FAKE/10": {"at": NOW, "category": "review", "permalink": link(10)},
+    "C0FAKE/12": {**row("acme/widgets#20", 12), "permalink": ["not", "a", "link"]},  # hand-edited row
+})
+extra = [pr(20, reqs=[], age=2), pr(21, reqs=[], state="MERGED"), pr(22, reqs=[], head="h22", reviewed="h22"),
+         pr(23, author=ME, reqs=[]), pr(24, reqs=[])]
+scfg = {**cfg, "mentions_seen": str(seen_file)}
+mixed = p.compute(Fake(found, extra), scfg, {}, NOW)
+by = {i["number"]: i for i in mixed["new"]}
+assert sorted(by) == [1, 2, 3, 4, 5, 11, 20], sorted(by)
+assert len(mixed["new"]) == len(by), "one entry per PR, whatever case or old name Slack used"
+assert by[1]["source"] == "github+slack" and sorted(by[1]["slack"]) == sorted([link(1), link(2), link(11)])
+assert by[1]["reason"] == "requested"
+assert by[5]["source"] == by[20]["source"] == "slack" and by[20]["slack"] == [link(4)] and by[20]["key"] == "acme/widgets#20@h20"
+assert by[2]["source"] == "github" and by[2]["slack"] == []
+why = {e["pr"]: e["why"] for e in mixed["excluded"]}
+assert why["acme/widgets#21"] == "Slack 요청, 닫힘" and why["acme/widgets#22"] == "Slack 요청, head 를 이미 리뷰함"
+assert why["acme/widgets#23"] == "Slack 요청, 본인 PR" and why["acme/gone#1"] == "Slack 요청, PR 을 읽지 못함"
+assert "acme/widgets#5" not in why and "acme/widgets#24" not in why and len(why) == len(mixed["excluded"])
+p.write_json(seen_file, {"C0FAKE/1": row("acme/widgets#7", 1)})  # a draft GitHub already excluded: one reason, Slack's
+assert [e for e in p.compute(Fake(found), scfg, {}, NOW)["excluded"] if e["pr"] == "acme/widgets#7"] == \
+    [{"pr": "acme/widgets#7", "why": "Slack 요청, draft"}]
+lines = {l.split("] ")[1].split(" ")[0]: l for l in p.body(mixed).splitlines()[1:]}
+assert lines["acme/widgets#1"].endswith(f"— https://github.com/acme/widgets/pull/1 · Slack {link(11)} {link(1)} {link(2)}")
+assert "[Slack 리뷰 요청] acme/widgets#20" in lines["acme/widgets#20"]
+p.write_json(seen_file, {"C0FAKE/4": row("acme/widgets#20", 4)})
+# A Slack-only item is new for precheck, and once sent its head is known like any other.
+assert p.precheck(Fake([], extra), scfg, state.parent / "slack-state", NOW) == (p.EXIT_NEW, "새 항목 1건: acme/widgets#20@h20")
+sent = {i["key"]: {"at": NOW, "kind": i["kind"], "id": i["id"]} for i in mixed["new"]}
+assert p.compute(Fake(found, extra), scfg, sent, NOW)["new"] == []
+# No seen ledger, or one that is not a JSON object: GitHub only, same plan as before.
+seen_file.write_text("[]")
+assert p.compute(Fake(found), scfg, {}, NOW)["new"] == plan["new"]
 
 # unreleased: the owner's merges in a declared repo within lookback_days; the dev revision decides the action, not membership.
 def merged(n, repo="acme/widgets", hours=3, sha=None):
@@ -238,6 +290,8 @@ fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 conf = tmp / "agent-skills.json"
 conf.write_text(json.dumps({"prs": {"self_bots": ["owner-bot"], "ignore_bots": ["noisy"], "exclude_repos": ["acme/legacy"]}}))
 env = {**os.environ, "AGENT_SKILLS_GH": str(fake_gh), "AGENT_SKILLS_STATE": str(tmp / "state")}
+# By default the Slack side is read from watch-mentions' state next to this one.
+p.write_json(tmp / "state" / "mentions" / "seen.json", {"C0FAKE/1": row("acme/widgets#2", 1)})
 script = str(pathlib.Path(p.__file__))
 run = lambda *a: subprocess.run([sys.executable, script, *a, "--config", str(conf)], env=env, capture_output=True, text=True)
 r0 = run("precheck"); assert r0.returncode == 0, r0
@@ -246,6 +300,7 @@ assert diag.returncode == 0 and len(json.loads(diag.stdout)["new"]) == 5
 assert not (tmp / "state" / "prs" / "plan.json").exists(), "the diagnostic plan takes no lock"
 out = run("plan", "--body")
 assert out.returncode == 0 and out.stdout.startswith("PR 5건이 나를 기다린다"), out
+assert "acme/widgets#2 Change 2" in out.stdout and f"· Slack {link(1)}" in out.stdout, out.stdout
 assert run("commit").returncode == 0
 r = run("precheck")
 assert r.returncode == 1 and "새 항목 없음" in r.stderr, r
@@ -254,6 +309,7 @@ assert not (tmp / "state" / "prs" / "plan.json").exists(), "a plan with nothing 
 # One ledger PR GitHub can no longer resolve (deleted repo, lost access) must not fail the whole lookup.
 p.GH = str(fake_gh)
 assert p.GitHub().nodes(["PR_gone"], ME) == []
+assert p.GitHub().pr("acme/gone#1", ME) is None
 # dispatch prints one runnable line per due repo from plan.json, and nothing without a plan.
 assert run("dispatch").returncode != 0
 conf.write_text(json.dumps({"prs": {"deploy": {"acme/widgets": decl}}}))
@@ -269,16 +325,67 @@ assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
 
 # schedule: prints the create command with the precheck wired in; --write is the only path that creates.
-line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
+line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"),
+                     {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
-assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
+assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
 prompt = line[line.index("--prompt") + 1]
-assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
-assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
-assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
+# The round commands are exactly precheck, plan --body and commit: an owner's allow rule names those forms.
+assert "`python3 /repo/skills/watch-prs/scripts/prs.py plan --body`" in prompt and "--to term_x" in prompt
+assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit`" in prompt
+assert "dispatch" not in prompt and "--kinds" not in prompt, "review_request alone has no step after the message"
+# A scheduled session may refuse a command that starts with `env` or a `VAR=` assignment, so neither appears.
+no_env = lambda argv: "env " not in " ".join(argv) and not re.search(r"(^|[\s`])[A-Z_]{2,}=", " ".join(argv))
+assert no_env(line), line
+# Each configured kind brings its step: unreleased adds the dispatch lines before commit.
+line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"}, "path:/r")
+prompt = line[line.index("--prompt") + 1]
+assert no_env(line), line
+assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행해", prompt), "a failed send must not start workers"
+assert prompt.index("dispatch") < prompt.index("prs.py commit` 을") and "다시 시도하지 않고" in prompt
+assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
+# review_wait's actions and log lines start with python3 too, with the state flag right after the subcommand.
+saved_state, p.STATE = p.STATE, pathlib.Path("/s/prs")
+try:
+    line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": ["review_request", "review_wait"]}, "path:/r", edit="auto1")
+finally:
+    p.STATE = saved_state
+prompt = line[line.index("--prompt") + 1]
+assert line[:4] == ["orca", "automations", "edit", "auto1"] and no_env(line), line
+assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --state /s"
+assert "`python3 /r/prs.py actions --state /s`" in prompt and "`python3 /r/prs.py log --state /s --key <key>" in prompt, prompt
+# A state folder off the default goes in as a flag after the subcommand, not through the environment.
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
+assert f"precheck --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
+
+# A kind without a PROMPT_STEPS entry: schedule refuses it, and its items never reach plan.json, so commit never
+# records them. They take no max_items slot and do not wake a round of their own.
+saved, p.PROMPT_STEPS = p.PROMPT_STEPS, {k: v for k, v in p.PROMPT_STEPS.items() if k != "unreleased"}
+try:
+    try:
+        p.schedule_cmd(pathlib.Path("/r/prs.py"), rcfg, "path:/r")
+        raise AssertionError("schedule accepted a kind without a step")
+    except SystemExit as e:
+        assert "unreleased" in str(e), e
+    # The bot-authored request ranks below both human merges, so a cap taken before the step filter would starve it.
+    bot_rr = pr(7, author="deps[bot]", kind="Bot", reqs=[user(ME)], decision=None)
+    fake = lambda: Fake([bot_rr], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+    only = p.compute(fake(), {**rcfg, "max_items": 1}, {}, NOW)
+    assert [i["number"] for i in only["new"]] == [7] and only["more"] == 0 and len(only["uncovered"]) == 2, only
+    assert "보내지도 기록하지도 않았다" in p.body(only)
+    st = tmp / "nostep"
+    p.write_json(st / "plan.json", only)
+    assert p.commit(st, rcfg, NOW) == 1
+    assert list(p.read_json(st / "ledger.json", {})) == [only["new"][0]["key"]], "unreleased must not be recorded"
+    merges_only = lambda: Fake([], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+    assert p.precheck(merges_only(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NOTHING
+finally:
+    p.PROMPT_STEPS = saved
+assert p.precheck(merges_only(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NEW
+assert [i["kind"] for i in p.compute(fake(), rcfg, {}, NOW)["new"]] == ["unreleased", "unreleased", "review_request"]
+assert "보내지도" not in p.body(plan2)
 
 print("test_prs: ok")

@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル34個（`skills/*/SKILL.md` 35個からエイリアス `brief` を除いた数）、エイリアス4個（`legacy/` の旧名3個と `brief`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[エイリアス](#エイリアス)）。
+`agent-skills` プラグインに入っているスキル（`skills/*/SKILL.md`）、エイリアス3個（`legacy/` の旧名）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます。
 
 ## 流れ
 
@@ -103,7 +103,7 @@
 - **内容:** コーディネーターが所有するのはコードではなくプログラムです。毎回のセッションは `orca skills get orchestration` を読むところから始めます。
   - **即答の原則（Stay answerable）:** ターンの中では振り分け、数秒で終わる確認、ユーザーへの返答だけを行います。調査・実装・検証・長い待機・監視は受け取った時点でバックグラウンドのサブエージェントか Orca ワーカーに渡し、フォアグラウンドのループ、`sleep`、バックグラウンドでない `check --wait` は使いません。完了は通知で受け取ります。コーディネーターは小さくても PR を自分で書かず、ワーカーカードか Codex に任せます。自分が立ち上げたカード・サブエージェント・worktree は自分で閉じます。この原則は top-level、プログラムのコーディネーター、別のセッションが立ち上げたリードカードのすべてに当てはまります。リードのいるプロジェクトの仕事はそのリードに送り、リードには `references/brief.md` の Lead ブリーフ（DELEGATE と PERMISSIONS の行）を渡します。
   - **top-level モード**（`references/top-level.md`）: 単独タスクのセッションとプロジェクトのコーディネーターの上に立つセッション。依頼の振り分け表、ユーザーが開いたセッションは読むだけ、ワーカー起動の確認は `--screen` でバックグラウンドから（信頼確認の画面は直前に起動したワーカーに限り ↓ を確認してから Enter、止められたらインボックスへ）、終わった dispatch には `run:` へ、本文はファイル経由、AskUserQuestion の代わりにダッシュボードのインボックス（`orch-dash inbox add`）と決定の登録（`orch decide add`、チャットで答えが出たらすぐ `done`）、フィルターなしのバックグラウンド `check --wait` 一つで通知の割り込みを防ぐ、PR レビューイベント（`pr-events.jsonl`）への反応、スキルが変わったら `skills-sync broadcast`。
-  - **拒否された行動（Refused acts）:** 権限レイヤーが拒否した行動を別のセッションが代わりに行うことはありません。拒否されたセッションが報告し、コーディネーターが `tune-automode` でルール案を作って定型文とともにユーザーに上げます。ルールが入ったら、拒否されたセッションがもう一度だけ行います。自分の worktree を読むだけのコマンドの誤検知は、Read か Grep ツールで一度だけ読みます。
+  - **拒否された行動（Refused acts）:** 権限レイヤーが拒否した行動を別のセッションが代わりに行うことはありません。拒否されたセッションが報告し、コーディネーターが `tune-automode` でルール案を作って定型文とともにユーザーに上げます。ルールが入ったら、拒否されたセッションがもう一度だけ行います。自分の worktree を読むだけのコマンドの誤検知は、Read か Grep ツールで一度だけ読みます。分類器が判定を返さずエラーになった拒否（`no verdict`）はルール申請にしません。サブエージェントの Edit・Write がそれで止まったら、その単位を起動したセッションが単位全体を一度だけ引き取り（コーディネーターは新しいカードで）、自分の worktree の読み取りは上の Read・Grep の例外に従い、2 回目の `no verdict` やそれ以外の行動はユーザーに上げます。
   - 以下の 1〜8 は **program モード**です。
   1. **Frame:** 完了条件（predicate）は、数えられるチケット ID と実際の成果物の検査で決めます。人の指示は standing order としてそのまま書き写します。依存は開始の順序（Orca task deps）と着地の順序（GitHub stack、`orch dep`）に分けます。このリポジトリのマージ・デプロイに対するユーザーの継続的な承認が `autoMode.allow` のルールとしてあるかを確かめ、なければ `tune-automode` で案を作り、実行行をユーザーに渡します。Run を作り、`orch init` で登録します。
   2. **検証の準備と Pilot:** verify スキルがなければ、Pilot の前に `create-verification-skill` を回すか、ワーカー一つに任せます。そのスキルが入るまでは手で検証し、ワーカー一つで最後まで一度回してみます。
@@ -383,14 +383,6 @@
 | `dispatch-work` | `dispatch-card` |
 | `use-obsidian` | `use-notes` |
 
-短いスラッシュコマンドは、ユーザーが打つ名前を短くするだけです。モデルはこのエイリアスを呼びません（`disable-model-invocation`）。
-
-| コマンド | スキル |
-|---|---|
-| `/agent-skills:brief` | `brief-status` |
-
-`brief` エイリアスはこのプラグインのスキル一つだけで、`/agent-skills:brief` で呼びます。`/brief` だけを打ってもこのスキルには届きません。Claude Code 2.1.295 では、対話セッションは `Unknown command: /brief` を返し、`claude -p` では組み込みコマンド（brief-only モードの切り替え）が受け取って `/brief isn't available in this environment.` を返します。
-
 ## コマンド
 
 ### `orch` (プログラムの台帳と着地ゲート)
@@ -402,7 +394,7 @@
 | `set` | ノートが変わったら、ポリシー・ceiling・期限・predicate・専有パスを合わせます |
 | `status` | predicate の進み具合、main の状態、in-flight/上限、次の行動。STALE、LANDED-BUT-OPEN、STALLED、SPARE、LEDGER GAP の行 |
 | `record` | 台帳のイベントを記録します（spawned、parked、admitted、main_green/red、predicate_verified など）。スタックの下の層のコミットに対する main_green/red は拒否します。main CI は一番上の層のコミットで一度だけ回るためです |
-| `verdict` | レビューした head の判定を記録します。出典は `codex-review`、`subagent-review`、`verifier:<別のモデル系統>`、`live:<機能>` のうち一つだけを受け付けます |
+| `verdict` | レビューした head の判定を記録します。出典は `codex-review`、`subagent-review`、`claude-review:independent`(Codex を使えないとき。`--note` に Codex のエラー行が必須)、`verifier:<別のモデル系統>`、`live:<機能>` のうち一つだけを受け付けます |
 | `gate` | human-gate 用の決定ゲートを開きます |
 | `dep` | 着地の順序の依存を記録します |
 | `queue` | 着地の順序と、PR ごとに止まっている理由 |

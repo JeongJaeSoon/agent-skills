@@ -20,6 +20,7 @@ Usage: orch <command> <slug> [options]
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
+                                     --note is required with --source claude-review:independent
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      coordinator-owned landing Task; the user resolves it in Orca
@@ -61,7 +62,7 @@ Usage: orch <command> <slug> [options]
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]
-                                     no slug: the stage table brief-status reports, one row per work item.
+                                     no slug: the stage table the brief skill reports, one row per work item.
                                      Write a cell where you verified it; ok needs --evidence. The merge
                                      cell of a row with --pr comes from the fleet PR list. `next` replaces
                                      the next-steps list (no lines clears it); done rows leave after 7
@@ -331,7 +332,8 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     A ticket can take several PRs, a backfilled landing among them: while the tracker says it is open,
     a landing is not its live worker's end. Without the tracker, a landing is."""
     ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
-    landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed"} - {None}
+    # A fold into a lower PR's branch reaches the base only with that PR: its ticket is still in flight.
+    landed = {pr_ticket(events).get(e.get("pr")) for e in events if e["ev"] == "landed" and not e.get("onto")} - {None}
     still_open = {t for t in landed if ((issues_by_id or {}).get(t) or {}).get("state_type") in OPEN_STATES}
     present = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
     cards = {}
@@ -992,13 +994,19 @@ def cmd_verdict(argv):
     p = Program(argv[0])
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
-        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
+        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, "
+                 "subagent-review, claude-review:independent, verifier:codex, live:<feature>)")
     # Workers run on Claude, so a verifier names another family; a Claude subagent's review is subagent-review.
+    # claude-review:independent is the context-free Claude Code review that stands in when Codex is unavailable.
     kind, _, what = src.partition(":")
-    if not (src in ("codex-review", "subagent-review") or (kind == "live" and what)
+    if not (src in ("codex-review", "subagent-review", "claude-review:independent") or (kind == "live" and what)
             or (kind == "verifier" and what.lower().startswith(VERIFIER_FAMILIES))):
-        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), verifier:<model of another "
-                 "family than the Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
+        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), claude-review:independent "
+                 "(Codex unavailable, deliver-ticket codex-review.md), verifier:<model of another family than the "
+                 "Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
+    if src == "claude-review:independent" and not opt(argv, "--note"):
+        sys.exit("claude-review:independent needs --note with the Codex line that shows Codex was unavailable "
+                 "(spend cap, outage, login)")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
@@ -1131,8 +1139,9 @@ def update_advice(unit, repo):
             + " (tell the lower layers' owners)")
 
 
-def merge_unit(p, pr, unit, klass, events):
-    """Merge a PR (or a stack from its top) after re-checking every layer at its current head."""
+def merge_unit(p, pr, unit, klass, events, onto=None):
+    """Merge a PR (or a stack from its top) after re-checking every layer at its current head.
+    `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
     for n in unit:
         v = pr_view(repo, n)
@@ -1163,7 +1172,7 @@ def merge_unit(p, pr, unit, klass, events):
         if x["state"] == "MERGED" and "landed" not in states.get(n, {}):
             p.append("landed", pr=n, sha=(x.get("mergeCommit") or {}).get("oid"),
                      klass=klass if klass != "normal" else None, note=f"stack of {len(unit)}" if len(unit) > 1 else None,
-                     stack_top=pr if n != pr and one_push else None)
+                     stack_top=pr if n != pr and one_push else None, onto=onto)
             close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
         why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
@@ -1212,8 +1221,10 @@ def attempt(p, pr, klass, onto_lower=False):
                        orca_deps(cfg["run"]))
     me = next((e for e in order if e["pr"] == pr), None)
     tracked = pr_state(events)  # an integration branch's own PR (feature → main) is never landed through orch
-    lower = None if onto_lower else next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
-                                          and r["number"] in tracked), None)
+    below = next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
+                  and r["number"] in tracked), None)
+    lower = None if onto_lower else below
+    onto = below["number"] if onto_lower and below else None
     if lower:
         # Based on another open PR's branch without being a GitHub stack: a squash would land in that branch.
         return 3, (f"act: #{pr} is based on #{lower['number']}'s branch {me['base']}, not a GitHub stack, so a merge would"
@@ -1275,7 +1286,7 @@ def attempt(p, pr, klass, onto_lower=False):
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
             return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo)},"
                        " let CI run, land again." + KEEP)
-        code, msg = merge_unit(p, pr, unit, klass, events)
+        code, msg = merge_unit(p, pr, unit, klass, events, onto)
         if code == 0:
             lane.release(pr)
         return code, msg
@@ -1291,7 +1302,7 @@ def attempt(p, pr, klass, onto_lower=False):
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
                    f" {update_advice(unit, repo)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
-    return merge_unit(p, pr, unit, klass, events)
+    return merge_unit(p, pr, unit, klass, events, onto)
 
 
 def cmd_land(argv):

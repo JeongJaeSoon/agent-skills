@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the 34 skills (the 35 `skills/*/SKILL.md` minus the `brief` alias), 4 aliases (3 old names in `legacy/` plus `brief`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([Aliases](#aliases)).
+This page covers the skills in `skills/*/SKILL.md`, 3 aliases (old names in `legacy/`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief`.
 
 ## Flow
 
@@ -103,7 +103,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **What it does:** The coordinator owns the program, not the code. Every session starts by reading `orca skills get orchestration`.
   - **Stay answerable:** inside its turn it only routes, runs checks that take seconds, and answers the human. Investigation, implementation, verification, long waits and monitoring go to a background subagent or an Orca worker the moment they arrive; no foreground loops, `sleep`, or `check --wait` outside the background. Completion arrives as a notification. The coordinator writes no PR, however small, and hands it to a worker card or Codex; the cards, subagents and worktrees it started, it closes. This binds the top-level, a program coordinator and a lead card another session started alike: a led project's work goes to its lead, and the lead gets the Lead brief in `references/brief.md` (its DELEGATE and PERMISSIONS lines).
   - **Top-level mode** (`references/top-level.md`): the session above single-task sessions and program coordinators. A routing table; sessions the human opened are read only; worker starts are confirmed with `--screen` in the background (a trust prompt on a worker it just started gets ↓, a check, then Enter; if blocked, the inbox); mail for a finished dispatch goes to `run:`; message bodies go through files; the dashboard inbox (`orch-dash inbox add`) and registered decisions (`orch decide add`, then `done` as soon as an answer arrives in chat) instead of AskUserQuestion; one unfiltered background `check --wait` keeps notices out of the human's typing; reactions to PR review events (`pr-events.jsonl`); `skills-sync broadcast` when skills change.
-  - **Refused acts:** an act a permission layer refused is never run by another session. The refused session reports it; its coordinator drafts a rule with `tune-automode` and puts it to the human with a fixed message; once the rule is in, the refused session does the act once more. A read-only command on its own worktree refused as something it does not do is read once with the Read or Grep tool.
+  - **Refused acts:** an act a permission layer refused is never run by another session. The refused session reports it; its coordinator drafts a rule with `tune-automode` and puts it to the human with a fixed message; once the rule is in, the refused session does the act once more. A read-only command on its own worktree refused as something it does not do is read once with the Read or Grep tool. A classifier error that returns no verdict (`no verdict`) is never a rule request: when it stops a subagent's Edit or Write, the session that started that unit takes the whole unit back once (a coordinator as a new card); a read on its own worktree follows the Read or Grep case above, and a second `no verdict` or any other act goes to the human.
   - Steps 1–8 below are **program mode**.
   1. **Frame:** The done condition (predicate) is set as countable ticket IDs plus checks on the real deliverables. Human instructions are carried over verbatim as standing orders. Dependencies are split into start order (Orca task deps) and landing order (GitHub stack, `orch dep`). It checks that the human's standing approval for this repo's merges and deploys exists as `autoMode.allow` rules; if not, it drafts them with `tune-automode` and hands the human the run line. It creates a Run and registers it with `orch init`.
   2. **Verification setup and Pilot:** If there is no verify skill, it runs `create-verification-skill` before Pilot or hands it to one worker. Until that skill lands it verifies by hand and runs one worker end to end as a trial.
@@ -383,14 +383,6 @@ A session that started before a rename can still call the old name and gets rout
 | `dispatch-work` | `dispatch-card` |
 | `use-obsidian` | `use-notes` |
 
-A short slash command only shortens the name the user types. The model never calls the alias (`disable-model-invocation`).
-
-| Command | Skill |
-|---|---|
-| `/agent-skills:brief` | `brief-status` |
-
-The `brief` alias is this one plugin skill, called as `/agent-skills:brief`. A bare `/brief` does not reach it. On Claude Code 2.1.295 an interactive session answers `Unknown command: /brief`, and under `claude -p` the built-in command (toggling brief-only mode) takes it and answers `/brief isn't available in this environment.`
-
 ## Commands
 
 ### `orch` (program ledger and landing gate)
@@ -402,7 +394,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | `set` | When the note changes, brings policy, ceiling, deadline, predicate and exclusive paths in line |
 | `status` | Predicate progress, main status, in-flight/cap, next action. STALE, LANDED-BUT-OPEN, STALLED, SPARE and LEDGER GAP lines |
 | `record` | Records ledger events (spawned, parked, admitted, main_green/red, predicate_verified, and so on). Rejects main_green/red for a commit in a lower stack layer, because main CI runs only once, on the top layer's commit |
-| `verdict` | Records the verdict for a reviewed head. It accepts exactly one source: `codex-review`, `subagent-review`, `verifier:<another model family>`, or `live:<feature>` |
+| `verdict` | Records the verdict for a reviewed head. It accepts exactly one source: `codex-review`, `subagent-review`, `claude-review:independent` (Codex unavailable; `--note` with the Codex error line is required), `verifier:<another model family>`, or `live:<feature>` |
 | `gate` | Opens a decision gate for human-gate |
 | `dep` | Records a landing-order dependency |
 | `queue` | Landing order, and why each PR is stuck |

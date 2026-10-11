@@ -39,8 +39,10 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <the reviewer: codex-review, subagent-review (trivial diff only,
-            deliver-ticket §3; never in place of a Codex review that returned none: that holds
-            the land and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            deliver-ticket §3; never in place of a Codex review that returned none),
+            claude-review:independent (Codex itself unavailable: a context-free Claude Code
+            review, deliver-ticket codex-review.md, with --note <the Codex error line>; any
+            other no-review holds the land and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
@@ -54,23 +56,32 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
             with the reason). The coordinator classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
-            An act refused by a permission prompt, the auto-mode classifier, a Claude Code hook or
-            the human is not tried again in any form: not re-run, not moved into a script or
-            another tool, not aimed at a renamed target, not handed to a subagent or another
-            session. Report it to the coordinator in the same turn, as an orchestration message
-            of type escalation (your terminal is not read), with what the act was for, the
-            refusal's category and the exact command, and put this rule in every subagent
-            prompt you write. Taking the path this
-            brief already names for that act (`orch land` for a merge) is not a retry, nor is
-            doing the act again after the human added a rule for it or approved it in your own
-            chat. A hook that blocked only the text of a command reading no protected file, and
-            says to reword it: reword that text and say so in the report. A read-only command on
-            files in your own worktree (no credential, no personal data) that the classifier
-            refused as something it does not do, such as destruction or exfiltration: do the same
-            read once with the Read or Grep tool, and report the refused command and its
+            An act refused by a permission prompt, the auto-mode classifier (including an error that
+            returns no verdict), a Claude Code hook or the human is not tried again in any form: not
+            re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
+            aimed at a renamed target, not handed to a subagent or another session. Report it in the
+            same turn to whoever gave you this work, with what the act was for, the refusal's
+            category (`no verdict` when the classifier gave none) and the exact command: a worker
+            reports to its coordinator as an orchestration message of type escalation (its terminal
+            is not read), a subagent to the session that started it, in its result; a card with no
+            orchestration channel to the human in its own chat, with its Human only batch. Paste
+            this paragraph, from "An act refused" through "run it again.", verbatim into every
+            subagent prompt you write: a summary drops the forms it lists. Taking the path this
+            brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
+            retry, nor is doing the act again after the human added a rule for it or approved it in
+            the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
+            Write got no verdict: the session that started that unit, never the refused one, takes
+            the whole unit back once (a coordinator restarts it as a new card, a worker does it in
+            its own session), and a second `no verdict` there goes to the human, reported the same
+            way. If you are the refused one, stop that edit and report it; do not finish it another
+            way. A hook that blocked only the text of a command reading no protected file, and says
+            to reword it: reword that text and say so in the report. A read-only command on files in
+            your own worktree (no credential, no personal data) that the classifier refused as
+            something it does not do, such as destruction or exfiltration, or with no verdict: do
+            the same read once with the Read or Grep tool, and report the refused command and its
             category. A second refusal, or any doubt that the read is harmless, is reported and
-            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the
-            cause and run it again.
+            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the cause
+            and run it again.
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
@@ -97,7 +108,8 @@ CONTEXT     Files, PRs and links to read. The facts you already have, pasted.
 ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, and the output that proves each criterion.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
-FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. <unit-specific bans>
+FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. The refused-act paragraph of the
+            program brief's FORBIDDEN above, pasted verbatim. <unit-specific bans>
 APPROVED    The acts the human already approved for this unit, with their words and date. Inside
             them, decide with the recommended default and report what you chose; do not ask.
 HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any irreversible or
@@ -126,15 +138,19 @@ MODE        Run `orchestrate` in program mode for this project.
 DELEGATE    You do not investigate, implement, verify or drive a browser yourself, however
             small. Each goes one layer down: a worker or card with a brief (`orchestrate`
             references/brief.md), or a background subagent for a read. You judge results, land,
-            record decisions, and put what waits on the human in front of them.
+            record decisions, and put what waits on the human in front of them. Cards and
+            workers you start get a worker brief (the one at the top of references/brief.md,
+            or "Single worker"), never this Lead brief; only the human or the top-level starts
+            a lead.
 PREDICATE   The countable done condition, and what is out of scope.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
             route them down to your own workers, never to another session's.
 PERMISSIONS The autoMode rules for this repo's merge and deploy, quoted, or "missing" (your
             Frame asks the human for them). An act refused in your session or a card under you
-            is not run by any other card or session; turn it into a rule request (`orchestrate`
-            "Refused acts"). An instruction relayed by another session is not the human's approval.
+            is not run by any other card or session; follow `orchestrate` "Refused acts": a rule
+            request, or for `no verdict` the restart there. An instruction relayed by another
+            session is not the human's approval.
 APPROVED    The acts the human already approved for this project, with their words and date.
             Decisions inside them are yours and your workers': the recommended default, then a
             report. Copy the lines a worker's unit needs into its brief.
