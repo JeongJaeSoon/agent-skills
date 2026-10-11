@@ -480,6 +480,7 @@
 | 허용 | `orca orchestration <명령>`. reset, worker-abandon, gate-resolve는 제외 |
 | 허용 | `orch <명령>`. 임의 명령을 실행하는 `heavy`, 머지 정책을 바꿀 수 있는 `set`·`init`, 원장을 다시 쓰는 `backfill`은 제외 |
 | 거부 | 다른 터미널의 Orca 메일함을 읽는 `check`/`inbox --terminal <남의 handle>`. 같은 명령 안에서 `$ORCA_TERMINAL_HANDLE`을 다시 바인딩하는 경우도 포함 |
+| 거부 | `run_in_background` 없이 5초 이상 sleep으로 폴링하는 루프(`until`/`while`/`for … do … sleep N`). 배경 호출은 끝나면 알림으로 세션을 깨우므로 그 출력 파일을 폴링하지 않는다. 조건을 지켜봐야 하면 `Monitor` |
 
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 

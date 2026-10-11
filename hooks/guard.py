@@ -9,6 +9,10 @@ Deny: `orca worktree create --prompt` whose command text has no `CLOSE` or `KEEP
 `MODE` line without `PREDICATE`. A card whose first prompt lacks them reports done and idles for days
 (dispatch-card §2). The text is read as written: a prompt built from a file or variable is denied too.
 
+Deny: a foreground Bash call that polls with a sleep loop (`until/while/for …; do … sleep N` with N of 5 s or a
+variable). Workers kept one running for up to ten minutes over a background call's output file; the
+call's completion notice already wakes them, and `Monitor` runs a real until-loop.
+
 Allow, so workers never stall on a prompt hours after they loaded a skill:
 - this plugin's skills
 - `orca orchestration <verb>`, except reset, worker-abandon and gate-resolve
@@ -37,6 +41,7 @@ CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
 LEAD = re.compile(r"(?m)^\s*MODE\b")
 PREDICATE = re.compile(r"\bPREDICATE\b")
+SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
 
@@ -72,7 +77,14 @@ def own_skills():
     return names
 
 
-def bash(cmd):
+def bash(cmd, background=False):
+    loop = None if background else SLEEP_LOOP.search(cmd)
+    # A short retry loop (sleep 1-4) is left alone; polling loops seen in practice slept 5 to 30 s.
+    if loop and (loop[1] == "$" or int(loop[1]) >= 5):
+        return decide("deny", "Waiting is fine; only this foreground form is refused. A foreground sleep loop "
+                              "blocks this session until it ends. Run the same command with run_in_background: true and end your turn (its completion notice wakes you), or watch "
+                              "the condition with the Monitor tool. A call already running in the background wakes "
+                              "you by itself: do not poll its output file.")
     own = os.environ.get("ORCA_TERMINAL_HANDLE")
     for handle in MAILBOX.findall(cmd):
         handle = handle.strip("'\"")
@@ -107,7 +119,7 @@ def main():
         return 0
     tool, args = event.get("tool_name"), event.get("tool_input") or {}
     if tool == "Bash":
-        bash(args.get("command") or "")
+        bash(args.get("command") or "", args.get("run_in_background") is True)
     elif tool == "Skill":
         skill = str(args.get("skill") or "")
         name = skill.removeprefix(f"{PLUGIN}:")

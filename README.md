@@ -36,7 +36,7 @@ claude plugin install agent-skills@jeongjaesoon
 ```
 
 - 스킬 이름은 `/agent-skills:<이름>`. 다른 플러그인과 겹치지 않으면 `/<이름>`도 된다.
-- 권한: 플러그인은 권한 규칙을 설정으로 실을 수 없어 `hooks/guard.py`가 대신 결정한다. 이 플러그인의 스킬, `orca orchestration` 명령(reset·worker-abandon·gate-resolve 제외), `orch` 명령(`heavy`·`set`·`init`·`backfill` 제외)을 허용하고, 다른 터미널의 Orca 메일함 읽기를 거부한다. 나머지는 평소 권한 흐름을 탄다. 자세한 규칙은 [스킬 카탈로그](docs/skills.md#권한-결정).
+- 권한: 플러그인은 권한 규칙을 설정으로 실을 수 없어 `hooks/guard.py`가 대신 결정한다. 이 플러그인의 스킬, `orca orchestration` 명령(reset·worker-abandon·gate-resolve 제외), `orch` 명령(`heavy`·`set`·`init`·`backfill` 제외)을 허용하고, 다른 터미널의 Orca 메일함 읽기와 foreground sleep 폴링 루프를 거부한다. 나머지는 평소 권한 흐름을 탄다. 자세한 규칙은 [스킬 카탈로그](docs/skills.md#권한-결정).
 - 이름이 바뀐 스킬(`ship-pr` → `deliver-ticket`, `dispatch-work` → `dispatch-card`, `use-obsidian` → `use-notes`)은 `legacy/`의 안내용 별칭으로 남아 있다.
 
 예전 `scripts/install.py`(symlink와 settings 병합)로 설치했다면, 그 설치로 시작한 프로그램이 모두 끝난 뒤 `python3 scripts/migrate.py`(바뀔 내용 보기), `--write`(symlink·옛 규칙·옛 hook 제거 뒤 `bootstrap.py --write`) 순서로 옮긴다.

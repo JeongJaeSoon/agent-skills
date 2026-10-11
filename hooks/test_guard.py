@@ -90,4 +90,17 @@ assert bash("orca worktree create --help") == "none"
 assert bash(f'cd /r && {NEW} --prompt "/goal fix X"') == "deny"
 assert bash('grep -rn "orca worktree create\\|--prompt" skills') == "none"
 assert bash("echo 'run orca worktree create --prompt x'") == "none"
+
+# A foreground sleep loop is refused; the same loop in the background, and a sleep outside a loop, are not.
+O = "/tmp/t/b1.output"
+for cmd in (f"until grep -q '^exit=' {O}; do sleep 10; done; tail -3 {O}",
+            f"for i in $(seq 1 115); do grep -q 'exited with code' {O} && break; sleep 5; done; cat {O}",
+            f"while [ ! -s {O} ]; do sleep 5; done",
+            "until ! gh pr checks 304 | grep -q pending; do\n  sleep 30\ndone",
+            f"cd /w && until [ -s {O} ]; do sleep $N; done"):
+    assert bash(cmd) == "deny", cmd
+    assert run("Bash", {"command": cmd, "run_in_background": True}, "term_me") == "none", cmd
+for cmd in ("sleep 5; cat /tmp/x", "for i in 1 2 3; do curl -fs x && break; sleep 2; done", "for f in *.py; do python3 $f; done", "grep -rn 'sleep 5' skills",
+            "echo 'until x; do sleep 1; done'", "git log --format=%s | grep -c 'do not sleep'"):
+    assert bash(cmd) != "deny", cmd
 print("guard: all pass")
