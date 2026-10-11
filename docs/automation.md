@@ -33,8 +33,9 @@
   회차를 덮지 못한다. automation을 켜기 전에 그 회차가 실행할 명령의 허용 규칙을 따로 둔다(`tune-automode`).
 - precheck의 cwd는 `--workspace`로 준 worktree가 아니라 저장소의 메인 체크아웃이다. precheck 스크립트는 절대
   경로와 `git -C`를 쓴다.
-- precheck가 `schedule`을 실행한 셸의 환경 변수를 물려받는다고 가정하지 않는다. 상태 폴더 같은 경로는 precheck 명령에
-  `env NAME=value`로 넣는다(reap.py `schedule`은 `AGENT_SKILLS_STATE`와 `AGENT_SKILLS_LEDGER`를 넣는다).
+- precheck가 `schedule`을 실행한 셸의 환경 변수를 물려받는다고 가정하지 않는다. 상태 폴더 같은 경로는 precheck와
+  회차 명령에 플래그로 넣는다(reap.py·prs.py `schedule`은 기본값이 아닐 때만 `--state`, reap.py는 `--ledger`도 붙인다).
+  명령은 `python3`로 시작한다: 예약 회차는 맨 앞의 `env`나 `NAME=value`를 그 자체로 하나의 명령으로 보고 거부할 수 있다.
 - `orca automations run`(수동 실행)은 precheck를 건너뛴다. precheck가 맞게 거르는지는 스크립트를 직접 돌려서
   exit code로 확인한다. 지난 결과를 기억하는 precheck라면 직접 돌린 회차도 기억되므로, 검증할 때는 상태
   폴더를 따로 둔다(reap.py는 `AGENT_SKILLS_STATE`).
