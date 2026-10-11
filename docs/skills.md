@@ -26,8 +26,9 @@
   - 골격은 설정의 트래커 템플릿(`tracker.<adapter>.templates`)을 먼저 쓰고, 없으면 동봉 템플릿을 쓴다. 템플릿을 읽다 실패하면 멈춘다.
   - `🛠 구현 힌트`에는 실제로 열어 본 경로만 적는다.
   - 제목은 동사로 시작하고, 수용 기준에는 확인 방법을 붙이고, `🚫 범위 밖`은 반드시 적는다.
+  - 제목과 본문의 언어는 설정의 `tracker.<adapter>.language`, 없으면 그 트래커에 대한 사용자 규칙, 그것도 없으면 한국어다.
   - 의존은 트래커 relation으로 걸고, 1티켓 = 1PR로 나눈다. 서로 의존하는 PR은 GitHub stack으로 계획한다.
-  - 초안 전체를 한 번 보여 주고 승인받은 뒤 등록한다. 섞인 요청과 세션이 스스로 올리는 NOW follow-up은 먼저 등록한다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸ 보류`를 갖는다.
+  - 초안 전체를 한 번 보여 주고 승인받은 뒤 등록한다. 사용자 지시가 묻지 않고 등록하라고 하면, 그리고 섞인 요청과 세션이 스스로 올리는 NOW follow-up은 먼저 등록하고 URL을 보여 준다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸ 보류`를 갖는다.
 - **동봉:** `references/templates.md`(개발 티켓과 조사 티켓 골격).
 - **관계:** 트래커 조작은 모두 `use-tracker`로 한다. follow-up 형식은 `orchestrate`와 `measure-delivery`가 센다.
 
@@ -191,7 +192,9 @@
 - **언제:** 티켓을 읽기, 찾기, 만들기, 라벨·댓글 달기, 상태 바꾸기 할 때와 스크립트가 티켓 데이터를 쓸 때.
 - **내용:**
   - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → 기본값 linear 순서로 정한다.
-  - 세션에서는 MCP(Linear는 `orca linear`)를 우선하고, 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, transition이다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 In Review로, 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
+  - 세션에서는 MCP(Linear는 `orca linear`)를 우선하고, 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, transition이다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
+  - 설정의 `tracker.delegate_agent`나 사용자 지시가 트래커 쓰기 담당 에이전트를 정하면 쓰기는 모두 그 에이전트에 맡기고, 읽기만 여기서 한다.
+  - 값을 가리는 읽기 경로(`<PERSON>`, `****` 같은 토큰)에서 읽은 값은 데이터가 아니다. 판단·되쓰기 전에 가리지 않는 경로로 다시 읽고, 가려진 값을 필드에 되쓰지 않는다.
   - 상태 어휘는 triage, backlog, unstarted, started, completed, canceled다.
   - 완료 조건은 상위 티켓 본문(`✅ 완료 조건`, `🚫 범위 밖`, `⏸ 보류`)에, 부모 없는 티켓은 인수 조건에 둔다. NOW로 분류한 발견만 티켓이 된다.
   - follow-up 형식은 `follow-up` 라벨, 첫 줄 `파생: <ID> · 원인: <분류>`, 둘째 줄 `완료 조건: <항목>`, related relation이다.
@@ -199,11 +202,12 @@
 - **동봉:** `scripts/tracker.py`(표준 라이브러리만 쓰는 Linear·Jira 어댑터, fixture 모드 포함), `references/linear.md`, `references/jira.md`.
 
 ### use-notes (옛 이름 `use-obsidian`)
-- **언제:** 설계 문서, worklog, 프로그램 노트를 읽고 쓸 때. "obs 에 기록해줘"도 여기로 온다.
+- **언제:** 설계 문서, worklog, 프로그램 노트를 읽고 쓸 때. "노트에 기록해줘"도 여기로 온다.
 - **내용:**
   - 어댑터는 obsidian(기본)과 markdown이고, 프로그램마다 따로 정할 수 있다.
+  - 설정의 `notes.delegate_agent`나 사용자 지시가 노트 쓰기 담당 에이전트를 정하면 쓰기는 모두 그 에이전트에 맡긴다.
   - 노트는 `Project/<project>/`에 `worklog-*.md`, `program-<slug>.md`로 둔다. 저장소 자체 규칙이 있으면 그쪽이 우선한다.
-  - Obsidian은 동기화된 상태를 봐야 하므로 MCP 도구로만 읽고 쓴다. 사용자에게 보여 줄 때는 MCP로 읽어 Artifact로 만든다.
+  - Obsidian은 동기화된 상태를 봐야 하므로 MCP 도구로만 읽고 쓴다. 기존 노트는 `vault_edit`(먼저 `dry_run`)로 고치고, `vault_write`는 새 노트에만 쓰며, 노트를 통째로 바꾸는 일은 사용자 승인을 받는다. 사용자에게 보여 줄 때는 MCP로 읽어 Artifact로 만든다.
 - **동봉:** `references/obsidian.md`, `references/markdown.md`.
 
 ## 글쓰기
