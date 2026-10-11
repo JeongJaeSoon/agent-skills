@@ -44,8 +44,10 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
-            `&` or a redirect: the completion notice carries its output and exit code). Act on
-            exit 3, report on exit 1.
+            `&` or a redirect: the completion notice carries its output and exit code, and
+            wakes you, so end your turn to wait; never a sleep loop over its output file). Act on
+            exit 3, report on exit 1. Pending checks are waited on the same way, or with a
+            `Monitor` until-loop on `gh pr checks` (deliver-ticket review-loop).
             Never merge any other way. (human-gate: stop at READY and report instead.)
 FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each finding in the
             worker_done body with a proposed class (NOW: a predicate item or a reproduced
