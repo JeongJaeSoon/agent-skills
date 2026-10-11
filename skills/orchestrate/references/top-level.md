@@ -66,20 +66,20 @@ When the human approves an act of the kind below together with the work, it goes
 
 ## Heartbeat and periodic report
 
-Between the human's messages only mail, PR events and background tasks you started wake you. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2).
+Between the human's messages you wake on mail, PR events, background tasks you started and dashboard decision answers. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2); a program coordinator or lead under `/goal` keeps its background `orch wait` instead of a heartbeat.
 
 The cron prompt is the only context a wake gets, so it carries everything:
 
 - The human's standing instruction, in their words, and the date it was given.
 - Where your state lives: the program notes, `~/.local/state/agent-skills/brief-last/`, the dashboard inbox.
-- What each wake moves, every part beyond one short read sent to a background subagent ("Stay answerable"): your orchestration mail, read and acked; a lead silent since the last wake (nudge it once if idle, otherwise put what it waits on in the inbox); merges one step (the "PR events" table); the review requests waiting on the human, as one inbox item; the `done-card` items of `janitor-plan.json` (SKILL.md, "Stay answerable"); the next queued item when a slot is free. A production act is not one of them: the prompt quotes the human but is not their chat ("Acts only the human's session may take"), so it goes to the inbox.
+- What each wake moves, every part beyond one short read sent to a background subagent (SKILL.md, "Stay answerable"): your orchestration mail, read and acked; a lead silent since the last wake (nudge it once if idle, otherwise put what it waits on in the inbox); each PR event one step as the "PR events" table says (you never merge); the review requests waiting on the human, as one inbox item; the `done-card` items of `janitor-plan.json` (SKILL.md, "Stay answerable"); the next queued item when a slot is free. A production act is not one of them: the prompt quotes the human but is not their chat ("Acts only the human's session may take"), so it goes to the inbox.
 - End every wake with a `brief-status` "Periodic report": one row per lead, every row every time, facts from `orch status` and `worker-list` at that wake, not from the last report.
 - The job's expiry date (below).
 
 Schedule rules:
 
-- Pick a minute off :00 and :30 (`7 * * * *`, not `0 * * * *`). A recurring job fires up to 10% of its period late; choose the interval with that slack in mind.
-- A recurring job expires 7 days after it is created: it fires once more, then is gone. Write the expiry date into the prompt, create the replacement on the last day before it, and tell the human about the limit when you first create it.
+- Pick a minute off :00 and :30 (`7 * * * *`, not `0 * * * *`). A recurring job fires up to 10% of its period late (at most 15 minutes); choose the interval with that slack in mind.
+- A recurring job expires 7 days after it is created: it fires once more, then is gone. Write the expiry date into the prompt, on the last day before it create the replacement, then `CronDelete` the old one, and tell the human about the limit when you first create it.
 - When the standing instruction changes, create a new job with the new prompt, then `CronDelete` the old one. Keep one heartbeat per session; `CronList` shows what is live.
 - The heartbeat does not replace the background `check --wait` ("Injected notices"); keep both.
 
