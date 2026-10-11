@@ -980,7 +980,7 @@ def cmd_verdict(argv):
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
         sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, "
-                 "claude-review:independent, verifier:codex, live:<feature>)")
+                 "subagent-review, claude-review:independent, verifier:codex, live:<feature>)")
     # Workers run on Claude, so a verifier names another family; a Claude subagent's review is subagent-review.
     # claude-review:independent is the context-free Claude Code review that stands in when Codex is unavailable.
     kind, _, what = src.partition(":")
@@ -989,7 +989,10 @@ def cmd_verdict(argv):
         sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), claude-review:independent "
                  "(Codex unavailable, deliver-ticket codex-review.md), verifier:<model of another family than the "
                  "Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
-    head = pr_view(p.cfg["repo"], pr)["headRefOid"]
+    if src == "claude-review:independent" and not opt(argv, "--note"):
+        sys.exit("claude-review:independent needs --note with the Codex line that shows Codex was unavailable "
+                 "(spend cap, outage, login)")
+    head =pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
     row = p.append("verdict", pr=pr, sha=head, patch_id=patch_id(p.cfg["repo"], pr),

@@ -697,9 +697,14 @@ for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "ve
         raise AssertionError(f"verdict accepted --source {bad}")
     except SystemExit as e:
         assert "--source is" in str(e), e
+try:
+    prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", "claude-review:independent"])
+    raise AssertionError("verdict accepted claude-review:independent without the Codex line")
+except SystemExit as e:
+    assert "--note" in str(e), e
 for good in ("codex-review", "subagent-review", "claude-review:independent", "verifier:codex", "live:checkout"):
     with contextlib.redirect_stdout(io.StringIO()):
-        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good])
+        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good, "--note", "spend cap"])
     assert prog.Program("gt").events()[-1]["source"] == good
 prog.pr_view, prog.patch_id = real_view, real_pid
 

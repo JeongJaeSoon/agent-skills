@@ -41,8 +41,8 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             --sha <head> --source <the reviewer: codex-review, subagent-review (trivial diff only,
             deliver-ticket §3; never in place of a Codex review that returned none),
             claude-review:independent (Codex itself unavailable: a context-free Claude Code
-            review, deliver-ticket codex-review.md; any other no-review holds the land and goes
-            to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            review, deliver-ticket codex-review.md, with --note <the Codex error line>; any
+            other no-review holds the land and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not

@@ -50,11 +50,13 @@ anything. Read the body: when it says Codex could not read the repository or the
 repository-access timeouts, "unable to review"), the run is no review, whatever the exit code
 and verdict say. So is a job that never gets past "Starting Codex review thread".
 
-No review does not close the review. A Claude subagent the implementing session starts, which
-shares its context and reads its own diff, does not stand in for it. Get Codex to run instead:
+No review does not close the review. A Claude reviewer that carries the implementing session's
+context (a `fork`, or a subagent briefed on how and why the change was made) does not stand in
+for it; step 3's context-free review is the one exception. Get Codex to run instead:
 
 1. **Diagnose**, a few minutes at most:
-   - `codex login status`. Logged out or expired is the human's to fix; Codex is unavailable.
+   - `codex login status`. Logged out or expired is the human's to fix: Codex is unavailable,
+     and the report names it so the human logs in again before the next ticket.
    - Stuck at "Starting Codex review thread": that workspace's broker is stale. Kill the pid in
      `~/.claude/plugins/data/codex-openai-codex/state/<workspace>-<hash>/broker.json` and the
      hung companion; a fresh broker starts with the next run. A review that started and then
@@ -72,21 +74,25 @@ shares its context and reads its own diff, does not stand in for it. Get Codex t
    diagnosis shows Codex itself is unavailable (spend cap or usage limit, a service outage,
    login), one rerun confirms it; then go to step 3.
 3. **Codex itself unavailable: an independent Claude Code review stands in.** Only when step 1
-   shows Codex cannot run at all: the "Reply ok" repro fails, or the output is a spend-cap,
-   service or login error. Not when Codex ran and returned findings, and not when only the
-   repository repro failed or the run timed out reading the checkout: those go to step 4.
+   kept a line that puts the cause on Codex's side: a spend-cap or usage-limit message, a
+   service error, a failed `login status`. Not when Codex ran and returned findings, not when
+   only the repository repro failed or the run timed out reading the checkout, and not when
+   "Reply ok" failed on a local network or proxy error: those go to step 4.
    - **Launch** a reviewer that shares no context with the implementing session: a new
      subagent (not a `fork`, which inherits your context) or a separate headless `claude`
      process. Its prompt carries the repository, the PR number and the head sha, nothing about
      how or why the change was made, and has it run Claude Code's own code review (the
-     `code-review` skill, `/code-review <PR>`) on that head.
+     `code-review` skill, `/code-review <PR>`) on that head and report the sha it actually
+     reviewed. A different sha means the head moved: review again.
    - **Sort** its findings as `SKILL.md` §3 does. Every Act-on finding is a blocker: fix it,
-     push, and review the new head with a fresh reviewer the same way.
+     push, and review the new head with a fresh reviewer the same way, within §3's round cap.
+     Try Codex again before each round; once it reviews, it closes the review as usual.
    - **Record** one PR comment (a sticky comment where the repo uses one) with the review
      summary, the blocker list or "none", the reviewed head sha, and the Codex line from step 1.
    - **Land** with zero blockers, CI green and merge state CLEAN: record the verdict on that
-     head with source `claude-review:independent` and land under the merge approval the work
-     already has; this path adds no approval of its own. If a permission prompt or the
+     head with source `claude-review:independent` and the Codex line as its note, and land
+     under the merge approval the work already has; this path adds no approval of its own and
+     replaces only the Codex row, not a triggered row of §3. If a permission prompt or the
      auto-mode classifier refuses the land, report the refusal like any other; do not retry it
      in another form.
 4. **Still no review, and step 3 does not apply: hold the land and go to the human.** Record no
