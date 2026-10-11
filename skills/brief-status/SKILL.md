@@ -40,15 +40,19 @@ When the human names the columns they want, save them to `~/.local/state/agent-s
 
 A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report every N hours" the human set) keeps one shape every time, so the human can compare it with the last one:
 
-1. One summary line; `변화 없음` when nothing changed since the last report.
-2. A table with one row per lead (per repository when there are no leads). Columns: 진행 `N/M (추정 %)` · 완료 (증거) · 남은 일, filled by the Progress, Done so far and Left rules above. Every row goes out every time, changed or not.
-3. Decision needed, its own section, as §1 describes it.
-4. Only you, its own section, as §1 describes it: what to run, press or log in to, and where.
-5. Later, each item with its condition.
+1. One summary line, led by the time (`14:30 · …`); `변화 없음` when nothing changed since the last report.
+2. One table per repository, or per group the human named, with one row per lead (per item when there are no leads). Every row goes out every time, changed or not. Always these four columns, headed `| | 리드 | 진행 | 다음 |`:
+   - Status, one icon: 🟢 moving · 🟡 waiting on a person or something outside · 🔴 blocked · ✅ done.
+   - Name, the lead or item.
+   - Progress: an 8-cell bar and N/M from the Progress rule above (`▓▓▓▓░░░░ 4/8`; `—` when there is no basis; the legend says the bar is an estimate), then the evidence for what is done: a PR number, or a 7-character sha when there is no PR.
+   - Next: the next stage and who moves it, in a few words.
+3. Decision needed, as §1 describes it.
+4. Only you, as §1 describes it: what to run, press or log in to, and where.
+5. Later, each item with the condition that brings it back.
 
 A report with nothing new still carries sections 3 to 5 when they hold items: an open decision is asked again, in the same words and with its `orch decide` id when it has one, until the human answers it.
 
-Put ▲ in front of each row that changed since the last report, and ▲ in the legend. After sending, save the table to `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`) for the next report to compare against. With no saved table, send it without ▲ and say so in the summary line. On Telegram each row is one line, ▲ at its start.
+A row that changed since the last report has its name in bold, and the legend says so. Bold is the only mark: a symbol beside the status icon reads as part of the status. After sending, save the table to `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`) for the next report to compare against. With no saved table, send it with no row in bold and say so in the summary line. On Telegram, which has no bold, each row is one line and a changed row has `(바뀜)` after its name.
 
 Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
@@ -92,7 +96,38 @@ An illustrative shape (the items are made up):
 
 ### Terminal
 
-- Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left; or the stage table (§1) when the items ship through PRs and deploys. An illustrative stage table (the items are made up):
+- Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left; or the stage table (§1) when the items ship through PRs and deploys.
+- A table fits in 80 columns as Claude Code draws it, or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. In the periodic table the name takes at most 14 columns, the progress 20, the next step 28. Detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py --cols 80 < draft.md` (in this skill's directory) prints each table's width.
+- Decision needed, Only you and Later each start with a bold lead and take one line per item: `**❓ 결정 필요** — 1. 질문: 선택지 → 추천 (이유) · 답이 없으면 …`, `**🙋 지금 사람만 할 일** — …`, `**⏸ 나중에** — 조건 → 할 일`.
+- `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
+- The same sections and the same numbering of decisions.
+
+An illustrative periodic report (the items are made up):
+
+```markdown
+**14:30 · 검색 개선 머지, 나머지는 변화 없음**
+🟢 진행 · 🟡 대기(사람·외부) · 🔴 막힘 · ✅ 완료 · **굵은 이름** 직전 보고 뒤 바뀜 · 진행 막대는 단계 기준 추정
+
+### acme/web
+| | 리드 | 진행 | 다음 |
+|---|---|---|---|
+| ✅ | **검색 개선** | ▓▓▓▓▓▓▓▓ 8/8 #42 | — |
+| 🟢 | 알림 정리 | ▓▓▓▓░░░░ 4/8 #47 | dev 확인 · 에이전트 |
+| 🟡 | 로그인 개선 | ▓▓▓▓▓▓░░ 6/8 #40 | prod 배포 승인 · 사람¹ |
+
+### acme/ops
+| | 리드 | 진행 | 다음 |
+|---|---|---|---|
+| 🔴 | 인덱스 재구축 | ▓▓░░░░░░ 2/8 | 권한 오류 · 결정 1 |
+
+¹ 배포 창이 금요일뿐이라 다음 창은 10/16.
+
+**❓ 결정 필요** — 1. 재색인 권한: 서비스 계정 / 개인 토큰 → 추천 서비스 계정 (만료 없음) · 답이 없으면 재색인 보류
+**🙋 지금 사람만 할 일** — acme/web Actions의 deploy-prod 승인 버튼
+**⏸ 나중에** — v1.8.0 prod 배포 → 캐시 TTL 다시 보기
+```
+
+An illustrative stage table (the items are made up):
 
 ```markdown
 prod: v1.7.2 (10/1 배포) · dev: v1.8.0 (10/3 배포)
@@ -100,18 +135,18 @@ prod: v1.7.2 (10/1 배포) · dev: v1.8.0 (10/3 배포)
 
 | 작업 | feature·대표 PR | PR 머지 | dev 확인 | prod 확인 |
 |---|---|---|---|---|
-| 로그인 개선 | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ 10/1 로그인 성공률 99.8% |
-| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 QA 리드 확인 중 |
-| ㄴ 인덱스 재구축 | acme/ops#88 | ✅ 10/2 | ✅ 1,204건 재색인 | 해당 없음 |
+| 로그인 개선 | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ 10/1 |
+| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 QA 확인 중 |
+| ㄴ 재색인 | acme/ops#88 | ✅ 10/2 | ✅ 1,204건 | 해당 없음 |
 | ㄴ 정렬 버그 | acme/web#45 | ❌ 리뷰 대기 | ❌ | ❌ |
-| 알림 정리 | acme/web#47 | ✅ 10/3 | ⚠️ 로그로만 확인 | ❌ 다음 배포 대기 |
+| 알림 정리 | acme/web#47 | ✅ 10/3 | ⚠️ 로그만¹ | ❌ 다음 배포 |
+
+¹ 알림 정리의 dev 확인은 로그로만 했다. 화면 확인은 아직.
 
 다음 순서
 1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)
 2. v1.8.0 prod 배포 (사람, 미정)
 ```
-- `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
-- The same four sections and the same numbering of decisions.
 
 Write the text per `write-plainly`, in the language the human writes in. A skill that delegates its report here keeps its own required items and language (`end-session` §6); this skill adds only the sections' order and the layout.
 
