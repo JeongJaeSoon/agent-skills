@@ -69,6 +69,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `handoff-ticket` | 끝난 뒤 다음 티켓을 새 Orca 카드로 |
 | `dispatch-card` | 이 세션은 계속하면서 다른 저장소나 곁가지를 카드로 |
 | `end-session` | 세션·카드·worktree 정리. Orca 워커와 브리프로 띄운 카드는 일을 마치면 스스로 닫는다 |
+| `record-progress` | PR·리뷰·머지·조사 결론마다 묻지 않고 기록: 트래커에는 근거 있는 상태, 노트에는 판단의 이유 |
 
 **프로젝트 하나 (Orca 여러 워커)**
 
