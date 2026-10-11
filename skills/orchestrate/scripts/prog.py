@@ -20,6 +20,7 @@ Usage: orch <command> <slug> [options]
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
+                                     --note is required with --source claude-review:independent
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      coordinator-owned landing Task; the user resolves it in Orca
@@ -588,6 +589,19 @@ def ci_summary(rollup):
     return failed, pending, sorted(runs)
 
 
+def runs_unfinished(repo, sha):
+    """Workflow runs at `sha` that have not finished. The check rollup alone is not enough: a bot's status
+    (a review app) can be its only entry before Actions starts, and a job behind `needs` has no check until
+    the jobs before it end, so an early all-green rollup once landed a PR before its CI ran."""
+    try:
+        rs = gh_json("run", "list", "--repo", repo, "--commit", sha, "--json", "status,name", "--limit", "100")
+    except (SystemExit, Exception) as e:
+        return [f"workflow runs unreadable ({type(e).__name__})"]
+    if not rs:
+        return ["no workflow run at the head yet"]
+    return [f"{r.get('name')} {r.get('status')}" for r in rs if r.get("status") != "completed"]
+
+
 def tracker_issues(cfg, ids=()):
     """Normalized issues (use-tracker schema) for the program's tracker project, or None if unset.
     `ids` that the project list lacks (tickets filed elsewhere) are fetched one by one."""
@@ -979,13 +993,19 @@ def cmd_verdict(argv):
     p = Program(argv[0])
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
-        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, verifier:codex, live:<feature>)")
+        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, "
+                 "subagent-review, claude-review:independent, verifier:codex, live:<feature>)")
     # Workers run on Claude, so a verifier names another family; a Claude subagent's review is subagent-review.
+    # claude-review:independent is the context-free Claude Code review that stands in when Codex is unavailable.
     kind, _, what = src.partition(":")
-    if not (src in ("codex-review", "subagent-review") or (kind == "live" and what)
+    if not (src in ("codex-review", "subagent-review", "claude-review:independent") or (kind == "live" and what)
             or (kind == "verifier" and what.lower().startswith(VERIFIER_FAMILIES))):
-        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), verifier:<model of another "
-                 "family than the Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
+        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), claude-review:independent "
+                 "(Codex unavailable, deliver-ticket codex-review.md), verifier:<model of another family than the "
+                 "Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
+    if src == "claude-review:independent" and not opt(argv, "--note"):
+        sys.exit("claude-review:independent needs --note with the Codex line that shows Codex was unavailable "
+                 "(spend cap, outage, login)")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
@@ -1130,6 +1150,8 @@ def merge_unit(p, pr, unit, klass, events):
         runs += r_
         if failed or pending or v["mergeStateStatus"] in ("BEHIND", "DIRTY"):
             return 2, f"#{n} moved since the order was read; land again"
+        if unfinished := runs_unfinished(repo, v["headRefOid"]):
+            return 2, f"yield: CI has not finished at #{n}'s head ({', '.join(unfinished[:3])}); land again"
     head = v["headRefOid"]
     if len(unit) == 1:
         r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash", "--match-head-commit", head], check=False)
@@ -1346,6 +1368,8 @@ def cmd_land_check(argv):
     elif mss == "BEHIND":
         problems.append(f"behind base: gh pr update-branch {pr} --repo {repo}, then wait for CI")
     failed, pending, runs = ci_summary(v["statusCheckRollup"])
+    if not failed and not pending:
+        pending = runs_unfinished(repo, v["headRefOid"])
     if failed:
         problems.append("CI failed: " + ", ".join(failed))
     if pending:

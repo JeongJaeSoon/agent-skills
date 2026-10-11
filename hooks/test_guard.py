@@ -7,17 +7,17 @@ CHECK = "orca orchestration check"
 HOME = tempfile.mkdtemp()  # no user skills unless a case adds one
 
 
-def run(tool, tool_input, own):
+def run(tool, tool_input, own, transcript=None):
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT"}
     env["ORCA_TERMINAL_HANDLE"] = own
     env["HOME"] = HOME
     out = subprocess.run([sys.executable, HERE / "guard.py"], input=json.dumps(
-        {"tool_name": tool, "tool_input": tool_input, "cwd": HOME}), capture_output=True, text=True, env=env).stdout
+        {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript}), capture_output=True, text=True, env=env).stdout
     return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out.strip() else "none"
 
 
-def bash(cmd, own="term_me"):
-    return run("Bash", {"command": cmd}, own)
+def bash(cmd, own="term_me", transcript=None):
+    return run("Bash", {"command": cmd}, own, transcript)
 
 
 def skill(name):
@@ -76,20 +76,51 @@ assert skill("") == "none"
 assert skill("tdd") == "none"
 assert skill("agent-skills:tdd") == "allow"
 
-# A card's first prompt carries its CLOSE (or KEEP) line, and a lead's its PREDICATE, literally.
+# A card's first prompt carries its CLOSE (or KEEP) line, and a lead's its MODE, DELEGATE and PREDICATE, literally.
 NEW = "orca worktree create --repo name:app --name app-x --agent claude"
 assert bash(f'{NEW} --prompt "/goal fix X. 브리프: /tmp/b.md\nCLOSE: end-session §8" --json') == "none"
 assert bash(f"{NEW} --prompt '/goal ENG-1. KEEP: I reuse this card'") == "none"
 assert bash(f'{NEW} --prompt "/goal fix X. 브리프: /tmp/b.md" --json') == "deny"
 assert bash(f'{NEW} --prompt "$(cat /tmp/brief.md)"') == "deny"  # unreadable as written
 assert bash(f'{NEW} --prompt "/goal run app as lead\nMODE orchestrate\nCLOSE: §8"') == "deny"
-assert bash(f'{NEW} --prompt "/goal run app\nMODE orchestrate\nPREDICATE ENG-1, ENG-2 Done\nCLOSE: §8"') == "none"
+LEAD = "MODE orchestrate\nDELEGATE nothing yourself\nPREDICATE ENG-1, ENG-2 Done\nCLOSE: §8"
+assert bash(f'{NEW} --prompt "/goal run app\n{LEAD}"') == "none"
+assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("DELEGATE", "WHO")}"') == "deny"
+assert bash(f"{NEW} --prompt 'app: lead\nGOAL ship X\nDELEGATE all\nPREDICATE ENG-1 Done\nCLOSE: §8'") == "deny"  # no MODE
+assert bash(f"{NEW} --prompt 'app: lead\n{LEAD}'") == "none"
 assert bash(f'{NEW} --prompt "/goal take the lead on X. CLOSE: §8"') == "none"  # the word alone is not a lead brief
+assert bash(f'{NEW} --prompt "/goal fix X\nPROGRAM app (lead: term_x)\nNote: lead review first\nCLOSE: §8"') == "none"  # a worker
 assert bash("orca worktree create --repo name:app --name app-x --json") == "none"  # no agent task
 assert bash("orca worktree create --help") == "none"
 assert bash(f'cd /r && {NEW} --prompt "/goal fix X"') == "deny"
 assert bash('grep -rn "orca worktree create\\|--prompt" skills') == "none"
 assert bash("echo 'run orca worktree create --prompt x'") == "none"
+
+# A lead never starts another lead: the caller's own first prompt tells whether it is one.
+def transcript(name, *records):
+    path = pathlib.Path(HOME) / f"{name}.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    return str(path)
+
+
+def said(content, **extra):
+    return {"type": "user", "message": {"role": "user", "content": content}, **extra}
+
+
+GOAL = "<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>run widgets. 브리프: /tmp/b.md\n"
+AS_LEAD = transcript("lead", {"type": "attachment"}, said(GOAL + LEAD + "</command-args>"), said("next"))
+HEAD_LEAD = transcript("head", said([{"type": "text", "text": "widgets: lead\n" + LEAD}]))
+TOP = transcript("top", said("오케스트레이터로 모든 세션 관리해줘"), said(f"/goal x\n{LEAD}"))
+WORKER = transcript("worker", said("/goal fix X\nPROGRAM widgets (lead: term_x)\nCLOSE: §8"))
+META = transcript("meta", said("MODE injected", isMeta=True), said([{"type": "tool_result", "content": "MODE x"}]), said("hi"))
+LEAD_CARD, WORKER_CARD = f'{NEW} --prompt "/goal run app\n{LEAD}"', f'{NEW} --prompt "/goal fix X\nCLOSE: §8"'
+assert bash(LEAD_CARD, transcript=AS_LEAD) == "deny"
+assert bash(LEAD_CARD, transcript=HEAD_LEAD) == "deny"
+assert bash(f"{NEW} --prompt 'app: lead\n{LEAD}'", transcript=AS_LEAD) == "deny"
+for t in (TOP, WORKER, META, None, str(pathlib.Path(HOME) / "absent.jsonl"), transcript("bad", "x")):
+    assert bash(LEAD_CARD, transcript=t) == "none", t  # a later lead-shaped prompt does not count; unreadable fails open
+assert bash(WORKER_CARD, transcript=AS_LEAD) == "none"
+assert bash(f'{NEW} --prompt "{LEAD}"', transcript=AS_LEAD) == "deny"  # MODE opening the prompt, no /goal
 
 # A foreground sleep loop is refused; the same loop in the background, and a sleep outside a loop, are not.
 O = "/tmp/t/b1.output"

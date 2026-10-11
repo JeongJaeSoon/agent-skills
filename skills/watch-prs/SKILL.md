@@ -1,6 +1,6 @@
 ---
 name: watch-prs
-description: Use when the user wants the pull requests that are waiting on them, or their own PRs waiting on reviewers, picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "내 PR 리뷰 리마인드", "리뷰 안 된 내 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request. For the user's own PRs it finds which wait on a reviewer, an answer or a review bot, and turns the due ones into review requests and reminders under the send-log's rules. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
+description: Use when the user wants the pull requests that are waiting on them, or their own PRs waiting on reviewers, picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "내 PR 리뷰 리마인드", "리뷰 안 된 내 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request; a review request made on Slack (from watch-mentions' ledger) joins the same list, one entry per PR. In a repo that declares a dev path, the user's merged PRs not yet checked on dev start one release worker per repo. For the user's own PRs it finds which wait on a reviewer, an answer or a review bot, and turns the due ones into review requests and reminders under the send-log's rules; its only GitHub write is a review bot's re-review trigger on the user's own PR. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
 ---
 
 # Watch PRs
@@ -10,7 +10,8 @@ team they belong to, and a CODEOWNERS auto-assignment. On a busy account the las
 first. This skill keeps only the personal ones, ranks them, and hands them on once per head commit.
 
 It never reviews, re-requests or labels. Its only GitHub write is a review bot's re-review trigger comment on
-the user's own PR (`review_wait`, below); Slack requests and reminders go through the user's Slack-posting rules.
+the user's own PR (`review_wait`, below); Slack requests and reminders go through the user's Slack-posting rules. The release
+workers it starts for merged PRs do their own writing.
 
 ## Config
 
@@ -23,16 +24,24 @@ never in this repo.
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
          "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
          "max_items": 10, "stale_days": 30, "cron": "*/15 * * * *", "timezone": "<IANA tz>",
-         "kinds": ["review_request", "review_wait"],
+         "kinds": ["review_request", "review_wait", "unreleased"],
          "channel": "<default Slack channel id>", "repo_channels": {"<owner/repo>": "<channel id>"},
          "reviewers": {"<github login>": {"slack": "<Slack user id>", "channel": "<optional override>"}},
          "review_bots": {"<bot login>": "<the bot's re-review trigger comment>"},
-         "holidays": ["<YYYY-MM-DD>"], "urgent_labels": ["<label>"]}}
+         "holidays": ["<YYYY-MM-DD>"], "urgent_labels": ["<label>"],
+         "deploy": {"<owner/repo>": {"dev_release": "auto-sync | <how main reaches dev>",
+                                     "revision_cmd": "<prints the commit or ref dev runs>",
+                                     "logs": "<where dev logs are read>", "verify": "<verify-* skill or smoke check>",
+                                     "ticket": "<optional>", "orca_repo": "<optional Orca repo selector>",
+                                     "lookback_days": 2}},
+         "dispatch_run": "<optional Orca run id the release workers join>", "worker_agent": "claude",
+         "release_approval": "<the owner's dev-deploy approval, quoted with its date>"}}
 ```
 
 `orgs` and `repos` empty mean every repository; otherwise an `owner` in `orgs` or an `owner/name` in
-`repos` is in. Bot logins match with or without the `[bot]` suffix. Other keys and defaults are in
-`scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
+`repos` is in. Bot logins match with or without the `[bot]` suffix. `mentions_seen` overrides where
+the Slack side is read (default: `watch-mentions`' `seen.json` under the same state root). Other
+keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
 (`$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
 `plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
 
@@ -49,14 +58,21 @@ A PR in the ledger that left the search comes back once when the user's latest r
 older commit than the head: new commits after a review, with no re-request. The ledger key is
 `owner/repo#N@headRefOid`, so each head is sent at most once.
 
+A Slack review request counts too. `watch-mentions` records the PR (`owner/repo#N`) of each
+`review` item in its seen ledger; each such PR is one entry, with the Slack permalinks attached
+(`slack`) and `source` set to `github`, `slack` or `github+slack`. A PR GitHub already lists gets
+the permalinks; one GitHub does not list (no request, or a team or CODEOWNERS one only) is listed
+as `source: slack` when it is open, not a draft, not the user's own, in scope and not already
+reviewed by the user at its head. No ledger means GitHub only.
+
 Order: stale last; then the user as the only pending reviewer while the decision is
 `REVIEW_REQUIRED`; then a human author before a bot; then older first; then smaller diff first.
 Stale means no update for more than `stale_days`; such an item says "요청 해제 제안" so the
 coordinator can propose asking the author to withdraw the request. Each item carries repo#N,
 title, author, age in days, diff size and the reasons it ranked where it did.
 
-Every item has a `kind`. `review_request` and `review_wait` are collected; `ready_to_merge`,
-`unreleased` and `ownergate` are reserved in `KINDS`, and a later flow adds a collector to
+Every item has a `kind`. `review_request`, `review_wait` and `unreleased` are collected;
+`ready_to_merge` and `ownergate` are reserved in `KINDS`, and a later flow adds a collector to
 `COLLECTORS` (and, when its round must act, a step to `PROMPT_STEPS`) without changing the CLI.
 Listing an uncollected kind in `kinds` is an error.
 
@@ -102,6 +118,25 @@ channel; `--at` is that message's time), `no_thread` (no thread to reply in, so 
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
 A `refused` row stops every later action for that PR and reviewer.
 
+## Unreleased merges
+
+For each repo in `deploy`, an `unreleased` item is a PR the user authored, merged within
+`lookback_days`, not yet in the ledger. The dev revision does not decide membership: a repo whose
+dev syncs on its own is usually synced before a round looks, and the change still needs its
+behaviour and logs checked on dev. The revision decides the action instead. `revision_cmd` (run by the precheck,
+60 s) prints what dev runs; GitHub's compare says whether that contains the merge commit, and the
+item carries `deployed` true (check only) or false (release, or wait for the sync, first). When the
+probe or compare fails, the merges still become items, with `deployed` null and the reason in `why`,
+so a broken probe shows up in the message and the worker checks dev itself instead of the merge
+aging out of `lookback_days` unseen. `deploy` alone collects nothing: `kinds` must list `unreleased`.
+
+`dispatch` turns them into one release worker per repo: an `orca orchestration worker-start` line
+whose brief (in `<state>/brief-<n>.txt`) holds the PRs and merge commits, the declaration, the
+`release_approval` (without it the worker asks before any release), production and anything outside
+dev as human only, and the rule that a refused act is reported, never retried. The worker follows
+deliver-ticket's [post-merge-release.md](../deliver-ticket/references/post-merge-release.md). The
+round itself releases nothing.
+
 ## Run
 
 ```bash
@@ -118,7 +153,11 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 
    From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
    to its Run's coordinator.
-3. If `kinds` has `review_wait`, handle each line of `python3 "$P" actions` and record its outcome
+3. Only after the send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
+   Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
+   hook) is not tried again in any form (re-run, script, other tool, another session): send the
+   coordinator the repo, the refusal and the exact command instead.
+4. If `kinds` has `review_wait`, handle each line of `python3 "$P" actions` and record its outcome
    with `python3 "$P" log --key <key> --source <source> [--thread <channel>:<ts>] [--scheduled <id>] [--post-at <epoch>] [--at <epoch>]`.
    Slack actions follow the user's Slack-posting rules (read that skill first): a request is one
    message per reviewer in the channel, unless the channel already has a request for that PR
@@ -127,8 +166,8 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    for that time. `retrigger` is `gh pr comment <url> --body <comment>`. An action already moot (approved
    meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
    permission prompt, the classifier or a hook is logged `refused` and reported, never retried.
-4. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
-   succeeded: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
+5. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
+   succeeded and each step-3 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
    and then commit.
 

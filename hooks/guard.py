@@ -5,9 +5,14 @@ Deny: `orca orchestration check|inbox --terminal <handle>` for a handle that is 
 ($ORCA_TERMINAL_HANDLE, set in every Orca terminal). It would read, and with --ack consume, another
 agent's messages.
 
-Deny: `orca worktree create --prompt` whose command text has no `CLOSE` or `KEEP` line, or has a lead's
-`MODE` line without `PREDICATE`. A card whose first prompt lacks them reports done and idles for days
-(dispatch-card §2). The text is read as written: a prompt built from a file or variable is denied too.
+Deny: `orca worktree create --prompt` whose command text has no `CLOSE` or `KEEP` line, or is a lead's (a `MODE`
+line, or the template's `<project>: lead` head) without all of `MODE`, `DELEGATE` and `PREDICATE`. A card whose first
+prompt lacks them reports done and idles for days, and a lead without DELEGATE did the work itself (dispatch-card §2).
+The text is read as written: a prompt built from a file or variable is denied too.
+
+Deny: a lead's card started from a session that is itself a lead, known by its transcript's first user prompt
+passing the same lead test. Only the human or the top-level starts a lead (orchestrate references/brief.md "Lead").
+A missing or unreadable transcript, or one restarted by /clear, gets no decision.
 
 Deny: a foreground Bash call that polls with a sleep loop (`until/while/for …; do … sleep N` with N of 5 s or a
 variable). Workers kept one running for up to ten minutes over a background call's output file; the
@@ -39,8 +44,10 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 # In command position only: a grep or echo that quotes the words is not a card being made.
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
-LEAD = re.compile(r"(?m)^\s*MODE\b")
-PREDICATE = re.compile(r"\bPREDICATE\b")
+MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
+# The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
+LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:["']|$)""")
+LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
@@ -77,7 +84,28 @@ def own_skills():
     return names
 
 
-def bash(cmd, background=False):
+def is_lead(text):
+    return bool(MODE.search(text) or LEAD_HEAD.search(text))
+
+
+def started_as_lead(transcript):
+    try:
+        with open(transcript, encoding="utf-8") as f:
+            for line in f:
+                rec = json.loads(line)
+                if rec.get("type") != "user" or rec.get("isMeta"):
+                    continue
+                content = (rec.get("message") or {}).get("content")
+                if isinstance(content, list):  # tool results carry no text block
+                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+                if content:
+                    return is_lead(content)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return False
+
+
+def bash(cmd, background=False, transcript=None):
     loop = None if background else SLEEP_LOOP.search(cmd)
     # A short retry loop (sleep 1-4) is left alone; polling loops seen in practice slept 5 to 30 s.
     if loop and (loop[1] == "$" or int(loop[1]) >= 5):
@@ -95,13 +123,20 @@ def bash(cmd, background=False):
         missing = []
         if not CLOSE_OR_KEEP.search(cmd):
             missing.append("CLOSE or KEEP")
-        if LEAD.search(cmd) and not PREDICATE.search(cmd):
-            missing.append("PREDICATE")
+        lead = is_lead(cmd)
+        if lead:
+            missing += [w for w in LEAD_LINES if not re.search(rf"\b{w}\b", cmd)]
         if missing:
             return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Write it literally in "
                                   "--prompt (not from a file or variable): `CLOSE: 완료 기준을 채우고 결과를 적으면 "
                                   "end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP when this session will reuse the card; "
-                                  "a lead also gets its PREDICATE line (dispatch-card §2, orchestrate brief.md \"Lead\").")
+                                  "a lead also gets its MODE, DELEGATE and PREDICATE lines, copied from orchestrate "
+                                  "references/brief.md \"Lead\" (dispatch-card §2).")
+        if lead and transcript and started_as_lead(transcript):
+            return decide("deny", "This session is a lead, and a lead does not start another lead. Give the card a "
+                                  "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
+                                  "without the Lead's MODE line or `<project>: lead` head; only the human or the "
+                                  "top-level starts a lead.")
     words = simple_words(cmd)
     if not words or REBINDS.search(cmd):
         return
@@ -119,7 +154,7 @@ def main():
         return 0
     tool, args = event.get("tool_name"), event.get("tool_input") or {}
     if tool == "Bash":
-        bash(args.get("command") or "", args.get("run_in_background") is True)
+        bash(args.get("command") or "", args.get("run_in_background") is True, event.get("transcript_path"))
     elif tool == "Skill":
         skill = str(args.get("skill") or "")
         name = skill.removeprefix(f"{PLUGIN}:")

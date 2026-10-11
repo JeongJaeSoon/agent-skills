@@ -175,7 +175,7 @@ assert acts([one, three], skipped_later, now=at(15, 9, 5)) == [("request", W + "
 # Channels: reviewer > repository > default.
 r = p.decide([state(20, reqs=[u("carol")], labels=["security"]), state(21, repo="acme/tools", reqs=[u("bob")], labels=["security"])],
              [], NOW, cfg)
-assert {(a["pr"], a["channel"], a["slack"]) for a in r} == {(W + "20", "CCAROL", "U0FAKECAROL"),
+assert {(a["pr"], a["channel"], a["slack_user"]) for a in r} == {(W + "20", "CCAROL", "U0FAKECAROL"),
                                                            ("acme/tools#21", "CTOOLS", "U0FAKEBOB")}
 
 # The collector: exclusions, program PRs (repo-qualified, parked included, idle programs not), notices and actions.
@@ -210,6 +210,7 @@ assert next(i for i in plan["new"] if i["number"] == 37)["why"] == ["답하지 �
 assert all(i["kind"] == "review_wait" and i["once"] is False for i in plan["new"] if "action" in i)
 text = p.body(plan)
 assert "[내 PR 대기] acme/widgets#37" in text and "리뷰 의뢰 → @bob" in text and "봇 재리뷰 트리거 → @rabbit" in text
+assert "U0FAKE" not in text and "Slack U" not in text, "the Slack user id is not a permalink list"
 
 # Actions are not capped by max_items: a reviewer's batch must not split into two messages.
 capped = p.compute(Fake, {**c, "max_items": 0}, {}, NOW)
