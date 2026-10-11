@@ -4,9 +4,11 @@
 Usage:
   python3 prs.py precheck [--config PATH]
   python3 prs.py plan [--body] [--config PATH]
+  python3 prs.py actions [--config PATH]
+  python3 prs.py log --key KEY --source SOURCE [--thread CHANNEL:TS] [--scheduled ID] [--post-at EPOCH] [--at EPOCH]
   python3 prs.py commit [--config PATH]
   python3 prs.py dispatch [--config PATH]
-  python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--write]
+  python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--edit AUTOMATION_ID] [--write]
 
 precheck asks GitHub (through `gh`) for the items and exits 0 when some are not in the ledger yet,
 1 when nothing is new or a run still holds plan.json (younger than lock_minutes), and 2 when it
@@ -14,29 +16,35 @@ could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice. dispatch reads plan.json and prints one
+so the same (repo, number, headRefOid) is never sent twice. actions prints the Slack and bot actions plan.json
+holds; log records one of them in the send-log (sendlog.jsonl), which is what decides them, not the ledger.
+dispatch reads plan.json and prints one
 `orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
 it runs nothing. schedule prints the
-`orca automations create` command and runs it only with --write.
+`orca automations create` command (`edit <id>` with --edit) and runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
 Slack review requests come from watch-mentions' seen ledger ($AGENT_SKILLS_STATE/mentions/seen.json, rows of
 category review with a `pr`); a missing ledger means GitHub only.
 """
-import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time
+import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time, zoneinfo
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "prs"
 GH = os.environ.get("AGENT_SKILLS_GH", "gh")
 # Kinds without a collector are reserved so later flows extend COLLECTORS, not the CLI.
 KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate")
-LABELS = {"review_request": "리뷰 요청", "unreleased": "dev 확인 전"}
+LABELS = {"review_request": "리뷰 요청", "review_wait": "내 PR 대기", "unreleased": "dev 확인 전"}
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
             "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
             "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None, "mentions_seen": None,
-            "deploy": {}, "dispatch_run": None, "worker_agent": "claude", "release_approval": None}
+            "deploy": {}, "dispatch_run": None, "worker_agent": "claude", "release_approval": None,
+            "channel": None, "repo_channels": {}, "reviewers": {}, "review_bots": {}, "holidays": [],
+            "urgent_labels": [], "batch_min": 2, "batch_wait_hours": 2, "night_hour": 21,
+            "morning_hour": 9, "programs_dir": None}
 REFERENCE = pathlib.Path(__file__).resolve().parents[2] / "deliver-ticket/references/post-merge-release.md"
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
+SOURCES = ("sent", "scheduled", "found", "refused", "no_thread", "skipped")
 
 PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCommit{oid} headRefOid additions deletions reviewDecision state
  repository{nameWithOwner} author{__typename login}
@@ -48,6 +56,18 @@ NODES_Q = "query($ids:[ID!]!,$me:String!){nodes(ids:$ids){... on PullRequest{" +
 PR_Q = ("query($owner:String!,$name:String!,$number:Int!,$me:String!)"
         "{repository(owner:$owner,name:$name){pullRequest(number:$number){" + PR_FIELDS + "}}}")
 PR_REF = re.compile(r"^([\w.-]+)/([\w.-]+)#(\d+)$")
+MINE_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid additions deletions reviewDecision state
+ repository{nameWithOwner} author{__typename login} labels(first:20){nodes{name}}
+ reviewRequests(first:50){nodes{asCodeOwner requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
+ latestReviews(first:50){nodes{author{__typename login} state submittedAt commit{oid}}}
+ reviewThreads(first:100){nodes{isResolved opener:comments(first:1){nodes{author{login}}}
+  last:comments(last:1){nodes{author{login} createdAt}}}}
+ timelineItems(last:50,itemTypes:[REVIEW_REQUESTED_EVENT,REVIEW_DISMISSED_EVENT]){nodes{__typename
+  ... on ReviewRequestedEvent{createdAt requestedReviewer{__typename ... on User{login}}}
+  ... on ReviewDismissedEvent{createdAt previousReviewState review{author{login}}}}}
+ commits(last:1){nodes{commit{committedDate}}}"""
+MINE_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:25,after:$after)"
+          "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MINE_FIELDS + "}}}}")
 
 
 def opt(name, default=None):
@@ -98,14 +118,22 @@ class GitHub:
     def viewer(self):
         return gh_graphql("query{viewer{login}}")["viewer"]["login"]
 
-    def search(self, q, me):
+    def _paged(self, query, **variables):
         nodes, after = [], None
         while True:
-            page = gh_graphql(SEARCH_Q, q=q, me=me, after=after)["search"]
+            page = gh_graphql(query, after=after, **variables)["search"]
             nodes += [n for n in page["nodes"] if n]
             if not page["pageInfo"]["hasNextPage"]:
                 return nodes
             after = page["pageInfo"]["endCursor"]
+
+    def search(self, q, me):
+        return self._paged(SEARCH_Q, q=q, me=me)
+
+    def mine(self, self_bots):
+        """The owner's open PRs, plus a self bot's PRs assigned to the owner: a bot app is often shared org-wide."""
+        qs = ["author:@me"] + [f"author:app/{bot_name(b)} assignee:@me" for b in self_bots]
+        return list({n["id"]: n for q in qs for n in self._paged(MINE_Q, q=f"is:pr is:open archived:false {q}")}.values())
 
     def nodes(self, ids, me):
         return [n for i in range(0, len(ids), 50) for n in gh_graphql(NODES_Q, partial=True, ids=ids[i:i + 50], me=me)["nodes"] if n]
@@ -140,17 +168,27 @@ def bot_name(login):
     return (login or "").lower().removesuffix("[bot]")
 
 
+def ts(iso):
+    return dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+
+
 def days(since, now):
-    return int((now - dt.datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp()) // 86400)
+    return int((now - ts(since)) // 86400)
 
 
-def out_of_scope(pr, cfg):
-    repo = pr["repository"]["nameWithOwner"]
+def repo_out_of_scope(repo, cfg):
     org = repo.split("/")[0]
     if repo in cfg["exclude_repos"] or org in cfg["exclude_orgs"]:
         return "제외 대상 저장소"
     if (cfg["orgs"] or cfg["repos"]) and org not in cfg["orgs"] and repo not in cfg["repos"]:
         return "대상 저장소 아님"
+    return None
+
+
+def out_of_scope(pr, cfg):
+    why = repo_out_of_scope(pr["repository"]["nameWithOwner"], cfg)
+    if why:
+        return why
     author = pr.get("author") or {}
     name = bot_name(author.get("login"))
     if name in {bot_name(b) for b in cfg["self_bots"]}:
@@ -299,7 +337,253 @@ def collect_unreleased(gh, me, cfg, ledger, now):
     return items, excluded
 
 
-COLLECTORS = {"review_request": collect_review_requests, "unreleased": collect_unreleased}
+def read_jsonl(path):
+    """Rows of a JSONL file; a torn line (another writer mid-append) is skipped, not fatal."""
+    try:
+        lines = pathlib.Path(path).read_text().splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass
+    return rows
+
+
+def local(t, cfg):
+    return dt.datetime.fromtimestamp(t, zoneinfo.ZoneInfo(cfg["timezone"]) if cfg.get("timezone") else None)
+
+
+def business_day(d, cfg):
+    return d.weekday() < 5 and d.isoformat() not in cfg["holidays"]
+
+
+def next_business_day(d, cfg):
+    d += dt.timedelta(days=1)
+    while not business_day(d, cfg):
+        d += dt.timedelta(days=1)
+    return d
+
+
+def one_business_day_after(t, cfg):
+    l = local(t, cfg)
+    return dt.datetime.combine(next_business_day(l.date(), cfg), l.timetz()).timestamp()
+
+
+def post_at(now, cfg):
+    """None in business hours; otherwise the next business morning, for which a Slack message is scheduled instead."""
+    l = local(now, cfg)
+    if business_day(l.date(), cfg) and cfg["morning_hour"] <= l.hour < cfg["night_hour"]:
+        return None
+    early = business_day(l.date(), cfg) and l.hour < cfg["morning_hour"]
+    day = l.date() if early else next_business_day(l.date(), cfg)
+    return dt.datetime.combine(day, dt.time(cfg["morning_hour"], tzinfo=l.tzinfo)).timestamp()
+
+
+def program_prs(cfg, now):
+    """{(repo, number): slug} for PRs a live orchestrate program drives; `orch wait` follows those, and a parked
+    one is held on purpose. Live: not stopped (`stop` after the last `resume`) and a ledger event within
+    stale_days, so an abandoned program's PRs come back to reminders."""
+    root = pathlib.Path(cfg["programs_dir"] or os.environ.get("PROGRAMS_HOME") or "~/.claude/programs").expanduser()
+    out = {}
+    for prog in root.glob("*/program.json"):
+        rows = read_jsonl(prog.parent / "ledger.jsonl")
+        marks = [r.get("ev") for r in rows if r.get("ev") in ("stop", "resume")]
+        last = max((ts(r["ts"]) for r in rows if isinstance(r.get("ts"), str)), default=0)
+        if (marks and marks[-1] == "stop") or now - last > cfg["stale_days"] * 86400:
+            continue
+        repo = read_json(prog, {}).get("repo")
+        out.update({(repo, r["pr"]): prog.parent.name for r in rows if isinstance(r.get("pr"), int)})
+    return out
+
+
+def login(node):
+    return ((node or {}).get("author") or {}).get("login") or ""
+
+
+def wait_state(pr, me, cfg):
+    """What one of the owner's PRs waits on, from GitHub alone."""
+    owner = {me.lower()} | {bot_name(b) for b in cfg["self_bots"]}
+    bots = review_bots(cfg)
+    reqs = [n["requestedReviewer"] for n in pr["reviewRequests"]["nodes"] if n["requestedReviewer"]]
+    asked, dismissed = {}, set()
+    for e in pr["timelineItems"]["nodes"]:
+        if e["__typename"] == "ReviewRequestedEvent" and (e.get("requestedReviewer") or {}).get("login"):
+            asked[e["requestedReviewer"]["login"]] = ts(e["createdAt"])
+        elif e["__typename"] == "ReviewDismissedEvent" and e.get("previousReviewState") == "APPROVED":
+            dismissed.add(login(e.get("review")))
+    reviews = {login(r): r for r in pr["latestReviews"]["nodes"] if login(r)}
+    people = {who for who, r in reviews.items() if r["author"].get("__typename") == "User" and who.lower() not in owner}
+    # A push (or a retarget) voided the approval: dismissed, or still APPROVED on an older head while the PR needs one.
+    # Only REVIEW_REQUIRED: null means no review is required, CHANGES_REQUESTED means it waits on someone else.
+    stale = sorted(who for who in people if pr.get("reviewDecision") == "REVIEW_REQUIRED" and (
+        (reviews[who]["state"] == "APPROVED" and (reviews[who].get("commit") or {}).get("oid") != pr["headRefOid"])
+        or (reviews[who]["state"] == "DISMISSED" and who in dismissed)))
+    pending = [r["login"] for r in reqs if r.get("__typename") == "User" and r["login"] not in stale]
+    head_at = max((ts(c["commit"]["committedDate"]) for c in pr["commits"]["nodes"]), default=0)
+    open_threads = [t for t in pr["reviewThreads"]["nodes"] if not t["isResolved"]]
+    unanswered = sum(1 for t in open_threads for c in t["last"]["nodes"][-1:]
+                     if bot_name(login(c)) not in owner and ts(c["createdAt"]) > head_at)
+    bot_stale = sorted(who for who, r in reviews.items() if r["state"] == "CHANGES_REQUESTED"
+                       and (r["author"].get("__typename") == "Bot" or bot_name(who) in bots)
+                       and not any(bot_name(login(c)) == bot_name(who) for t in open_threads for c in t["opener"]["nodes"]))
+    repo = pr["repository"]["nameWithOwner"]
+    return {"pr": f"{repo}#{pr['number']}", "repo": repo, "head": pr["headRefOid"], "url": pr["url"],
+            "title": pr["title"], "pending": pending, "asked": {w: asked.get(w, ts(pr["createdAt"])) for w in pending},
+            "teams": [r["slug"] for r in reqs if r.get("__typename") == "Team"], "stale_approvals": stale,
+            "unanswered": unanswered, "bot_stale": bot_stale,
+            "no_reviewer": pr.get("reviewDecision") == "REVIEW_REQUIRED" and not reqs and not people,
+            "urgent": any(l["name"] in cfg["urgent_labels"] for l in pr["labels"]["nodes"])}
+
+
+def slack_id(who, cfg):
+    return (cfg["reviewers"].get(who) or {}).get("slack")
+
+
+def review_bots(cfg):
+    return {bot_name(b): comment for b, comment in cfg["review_bots"].items()}
+
+
+def wait_action(kind, s, who, cfg, at, thread=None, comment=None):
+    person = cfg["reviewers"].get(who, {})
+    slack = kind != "retrigger"
+    return {"action": kind, "pr": s["pr"], "head": s["head"], "reviewer": who, "url": s["url"], "title": s["title"],
+            "slack_user": person.get("slack"), "thread": thread, "comment": comment, "post_at": at if slack else None,
+            "channel": (person.get("channel") or cfg["repo_channels"].get(s["repo"]) or cfg["channel"]) if slack else None}
+
+
+def decide(states, sendlog, now, cfg):
+    """The actions due now, from PR states, the send-log and the clock; pure, so each reminder rule is a test.
+
+    request    pending reviewer with no row for this PR yet. Batched per reviewer: due once they have batch_min
+               waiting, the oldest waited batch_wait_hours, or one is urgent, and never while a request to them
+               is still scheduled (a scheduled message cannot be edited, so the next batch waits for it).
+    remind     once per request row, one business day after it (or after its scheduled post), in its thread.
+    rerequest  a voided approval, once per head: the same reviewer is not pinged again until a new push.
+    retrigger  a review bot's stale CHANGES_REQUESTED, once per head, with the bot's trigger comment.
+    A refused row stops every action for that (PR, reviewer); a skipped row (the round judged it moot) stops
+    only that action at that head. Unmapped reviewers get no action, only a notice.
+    Slack actions outside business hours carry post_at: the next business morning."""
+    at = post_at(now, cfg)
+    acts, held, bots, by = [], {}, review_bots(cfg), {}
+    for r in sendlog:
+        by.setdefault((r["pr"], r["reviewer"]), []).append(r)
+    scheduled = {r["reviewer"] for r in sendlog
+                 if r["action"] == "request" and r["source"] == "scheduled" and (r.get("post_at") or 0) > now}
+    for s in states:
+        for who in s["pending"] + s["stale_approvals"]:
+            mine = by.get((s["pr"], who), [])
+            if not slack_id(who, cfg) or any(r["source"] == "refused" for r in mine):
+                continue
+            skip = {r["action"] for r in mine if r["source"] == "skipped" and r["head"] == s["head"]}
+            mine = [r for r in mine if r["source"] != "skipped"]
+            asks = [r for r in mine if r["action"] in ("request", "rerequest")]
+            thread = next((r["thread"] for r in reversed(mine) if r.get("thread")), None)
+            if who in s["stale_approvals"]:
+                if "rerequest" not in skip and not any(r["head"] == s["head"] for r in asks):
+                    acts.append(wait_action("rerequest", s, who, cfg, at, thread))
+            elif not asks:
+                if "request" not in skip:
+                    held.setdefault(who, []).append(s)
+            else:
+                last = max(asks, key=lambda r: r["at"])
+                since = max(last["at"], last.get("post_at") or 0)
+                reminded = any(r["action"] == "remind" and r["at"] >= last["at"] for r in mine)
+                if "remind" not in skip and not reminded and now >= one_business_day_after(since, cfg):
+                    acts.append(wait_action("remind", s, who, cfg, at, thread))
+        for bot in s["bot_stale"]:
+            comment = bots.get(bot_name(bot))
+            if comment and not any(r["head"] == s["head"] or r["source"] == "refused" for r in by.get((s["pr"], bot), [])):
+                acts.append(wait_action("retrigger", s, bot, cfg, None, comment=comment))
+    for who, waiting in held.items():
+        if who in scheduled:
+            continue
+        oldest = min(s["asked"][who] for s in waiting)
+        if (len(waiting) >= cfg["batch_min"] or now - oldest >= cfg["batch_wait_hours"] * 3600
+                or any(s["urgent"] for s in waiting)):
+            acts += [wait_action("request", s, who, cfg, at) for s in waiting]
+    return acts
+
+
+def notices(s, cfg):
+    """What the coordinator hears about once per head: states no Slack action covers."""
+    out = []
+    if s["no_reviewer"]:
+        out.append("리뷰어 없음")
+    if s["unanswered"]:
+        out.append(f"답하지 않은 스레드 {s['unanswered']}건")
+    unmapped = [w for w in s["pending"] + s["stale_approvals"] if not slack_id(w, cfg)]
+    if unmapped:
+        out.append("Slack 매핑 없는 리뷰어: " + ", ".join(f"@{w}" for w in unmapped))
+    if s["teams"] and not s["pending"]:
+        out.append("팀 리뷰 대기: " + ", ".join(s["teams"]))
+    stuck = [b for b in s["bot_stale"] if bot_name(b) not in review_bots(cfg)]
+    if stuck:
+        out.append("봇 재리뷰 필요(트리거 미설정): " + ", ".join(f"@{b}" for b in stuck))
+    return out
+
+
+def describe(a, cfg):
+    when = f" · {local(a['post_at'], cfg).strftime('%m-%d %H:%M')} 예약" if a["post_at"] else ""
+    return {"request": f"리뷰 의뢰 → @{a['reviewer']}", "remind": f"리마인드 → @{a['reviewer']}",
+            "rerequest": f"재리뷰 요청(승인 무효) → @{a['reviewer']}",
+            "retrigger": f"봇 재리뷰 트리거 → @{a['reviewer']}"}[a["action"]] + when
+
+
+def wait_item(pr, now, k, why):
+    author = pr.get("author") or {}
+    return {"kind": "review_wait", "key": k, "id": pr["id"], "repo": pr["repository"]["nameWithOwner"],
+            "number": pr["number"], "title": pr["title"], "url": pr["url"], "author": author.get("login"),
+            "human": author.get("__typename") == "User", "age_days": days(pr["createdAt"], now),
+            "idle_days": days(pr["updatedAt"], now), "size": pr["additions"] + pr["deletions"],
+            "only_blocker": False, "stale": False, "reason": "waiting", "why": why}
+
+
+def collect_review_wait(gh, me, cfg, ledger, now):
+    """The owner's open PRs waiting on people: one notice per head for the coordinator, and the actions decide() finds
+    due. Actions carry once=False: the send-log, not the ledger, decides whether they were done."""
+    programs = program_prs(cfg, now)
+    items, excluded, states = [], [], {}
+    for pr in gh.mine(cfg["self_bots"]):
+        repo, n = pr["repository"]["nameWithOwner"], pr["number"]
+        idle = days(pr["updatedAt"], now)
+        why = (repo_out_of_scope(repo, cfg) or ("draft" if pr["isDraft"] else None)
+               or (f"stale: {idle}일 움직임 없음" if idle > cfg["stale_days"] else None)
+               or (f"프로그램 PR ({programs[(repo, n)]})" if (repo, n) in programs else None))
+        if why:
+            excluded.append({"pr": f"{repo}#{n}", "why": why})
+            continue
+        s = wait_state(pr, me, cfg)
+        states[s["pr"]] = (pr, s)
+        if why := notices(s, cfg):
+            items.append(wait_item(pr, now, f"{key(pr)}/review_wait", why))
+    for a in decide([s for _, s in states.values()], read_jsonl(STATE / "sendlog.jsonl"), now, cfg):
+        pr = states[a["pr"]][0]
+        items.append({**wait_item(pr, now, f"{key(pr)}/{a['action']}/{a['reviewer']}", [describe(a, cfg)]), **a, "once": False})
+    return items, excluded
+
+
+def log(state, k, source, now, **fields):
+    """Append the outcome of one plan.json action to the send-log, the record decide() reads."""
+    plan = read_json(state / "plan.json", None) or {"new": []}
+    act = next((i for i in plan["new"] if i["key"] == k and "action" in i), None)
+    if act is None:
+        raise SystemExit(f"log: {k} is not an action in plan.json")
+    if source not in SOURCES:
+        raise SystemExit(f"log: source must be one of {', '.join(SOURCES)}")
+    row = {"pr": act["pr"], "reviewer": act["reviewer"], "head": act["head"], "action": act["action"],
+           "source": source, "at": fields.get("at") or now, "post_at": fields.get("post_at"),
+           "thread": fields.get("thread"), "scheduled": fields.get("scheduled")}
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / "sendlog.jsonl").open("a") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
+COLLECTORS = {"review_request": collect_review_requests, "review_wait": collect_review_wait,
+              "unreleased": collect_unreleased}
 
 
 def compute(gh, cfg, ledger, now):
@@ -312,7 +596,9 @@ def compute(gh, cfg, ledger, now):
         items += got
         excluded += out
     new = [i for i in rank(items) if i["key"] not in ledger]
-    return {"run": now, "viewer": me, "new": new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
+    # Actions are never capped: a reviewer's batch split across rounds would become two messages.
+    acts, new = [i for i in new if not i.get("once", True)], [i for i in new if i.get("once", True)]
+    return {"run": now, "viewer": me, "new": acts + new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
             "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded}
 
 
@@ -356,7 +642,8 @@ def commit(state, cfg, now):
     if not plan:
         raise SystemExit("commit: no plan.json; run plan first")
     ledger = read_json(state / "ledger.json", {})
-    for i in plan["new"]:
+    once = [i for i in plan["new"] if i.get("once", True)]
+    for i in once:
         ledger[i["key"]] = {"at": plan["run"], "kind": i["kind"], "id": i["id"]}
     # A request left open for months is still known; only keys that stopped appearing age out.
     for k in plan.get("known", []):
@@ -366,7 +653,7 @@ def commit(state, cfg, now):
     ledger = {k: v for k, v in ledger.items() if v["at"] >= horizon}
     write_json(state / "ledger.json", ledger)
     (state / "plan.json").unlink()
-    return len(plan["new"])
+    return len(once)
 
 
 def release_brief(repo, items, cfg):
@@ -406,18 +693,44 @@ def dispatch_cmds(plan, cfg):
     return cmds
 
 
-def schedule_cmd(script, cfg, workspace, provider="claude"):
+# A kind's own step in the automation prompt, between the coordinator send and commit; {env} is the prs.py call.
+# Steps run in this dict's order, not the config's: the unreleased step ends by gating commit, which deletes plan.json.
+PROMPT_STEPS = {
+    "review_wait": (
+        "그다음 `{env} actions` 가 출력하는 행동을 하나씩 처리하고, 처리할 때마다 `{env} log --key <key> --source <결과>` 로 "
+        "기록한다. Slack 행동(request·remind·rerequest)은 slack-post 스킬을 먼저 읽고 그 규칙대로 channel 에 보낸다: "
+        "request 는 같은 reviewer 의 것을 한 메시지로 묶고, 보내기 전에 channel 에서 그 PR 의 기존 의뢰를 찾아 있으면 보내지 않고 "
+        "`--source found --thread <channel>:<ts> --at <ts>` 로 기록한다. remind·rerequest 는 PR 마다 thread 에 답글로만 보낸다"
+        "(reply_broadcast false). thread 가 비어 있으면 channel 에서 그 PR 의 의뢰 스레드를 찾고, 없으면 최상위로 올리지 않고 "
+        "`--source no_thread` 로 기록한다. post_at 이 있으면 바로 보내지 않고 그 시각으로 예약하고 "
+        "`--source scheduled --scheduled <id> --post-at <post_at>`(스레드 답글이면 `--thread <channel>:<부모 ts>` 도) 로, 보냈으면 "
+        "`--source sent --thread <channel>:<ts>` 로 기록한다. retrigger 는 그 PR 에 `gh pr comment <url> --body <comment>` 를 "
+        "달고 `--source sent` 로 기록한다. 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨, 리뷰어의 slack id 없음 등)은 "
+        "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
+        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. GitHub 쓰기는 retrigger 코멘트뿐이다."),
+    "unreleased": (
+        "보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
+        "한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
+        "그 저장소 이름과 거부·실패 내용, 정확한 명령을 코디네이터에게 보낸다. 모든 줄이 워커를 시작했거나 보고됐을 때만 commit 으로 간다. "
+        "릴리스와 배포는 워커가 한다: 이 회차는 배포를 직접 하지 않는다."),
+}
+
+
+def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
+    """The `orca automations create` command, or `edit <id>` to keep an existing automation's id."""
     env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
     body_file = STATE / "body.txt"
+    steps = " ".join(step.format(env=env) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"])
+    reads = "" if "review_wait" in cfg["kinds"] else " 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다."
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
-              f"보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
-              f"한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
-              f"그 저장소 이름과 거부·실패 내용, 정확한 명령을 같은 방법으로 {shlex.quote(to)} 에 보낸다. "
-              f"본문 전송이 성공했고 모든 줄이 워커를 시작했거나 보고됐을 때만 `{env} commit` 을 실행한다. "
-              f"이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다.")
+              + (steps + " " if steps else "")
+              + f"코디네이터 전송이 성공했을 때만 마지막에 `{env} commit` 을 실행한다." + reads)
+    if edit:
+        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", f"{env} precheck",
+                "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
@@ -434,7 +747,7 @@ def main():
         code, why = precheck(GitHub(), cfg, STATE, now)
         print(why, file=sys.stderr)
         sys.exit(code)
-    if cmd in ("plan", "commit", "dispatch", "schedule") and cfg is None:
+    if cmd in ("plan", "actions", "log", "commit", "dispatch", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
     if cmd == "plan" and "--body" not in sys.argv:
         print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now), ensure_ascii=False, indent=1))
@@ -447,6 +760,16 @@ def main():
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "body.txt").write_text(body(plan))
         print(body(plan))
+    elif cmd == "actions":
+        for i in (read_json(STATE / "plan.json", None) or {"new": []})["new"]:
+            if "action" in i:
+                print(json.dumps({k: i[k] for k in ("key", "action", "url", "title", "reviewer", "slack_user", "channel",
+                                                     "thread", "post_at", "comment")}, ensure_ascii=False))
+    elif cmd == "log":
+        num = lambda name: float(opt(name)) if opt(name) else None
+        row = log(STATE, opt("--key"), opt("--source"), now, thread=opt("--thread"), scheduled=opt("--scheduled"),
+                  post_at=num("--post-at"), at=num("--at"))
+        print(json.dumps(row, ensure_ascii=False))
     elif cmd == "dispatch":
         plan = read_json(STATE / "plan.json", None)
         if not plan:
@@ -461,7 +784,8 @@ def main():
         print(f"commit: {commit(STATE, cfg, now)} items recorded")
     elif cmd == "schedule":
         script = pathlib.Path(__file__).resolve()
-        line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"))
+        line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"),
+                            opt("--edit"))
         print(shlex.join(line))
         if "--write" in sys.argv:
             sys.exit(subprocess.run(line).returncode)

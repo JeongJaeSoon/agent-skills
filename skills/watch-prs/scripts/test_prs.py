@@ -33,9 +33,12 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=(), merged=(), deployed=None, live=()):
-        self.found, self.by_id = list(search), {n["id"]: n for n in nodes}
+    def __init__(self, search, nodes=(), merged=(), deployed=None, live=(), mine=()):
+        self.found, self.by_id, self.own = list(search), {n["id"]: n for n in nodes}, list(mine)
         self.merged, self.deployed, self.live, self.queries = list(merged), deployed, set(live), []
+
+    def mine(self, self_bots):
+        return self.own
 
     def viewer(self):
         return ME
@@ -151,10 +154,10 @@ assert list(p.read_json(state / "ledger.json", {})) == [still]
 # A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
-    p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
+    p.compute(Fake([]), {**cfg, "kinds": ["ready_to_merge"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
-    assert "review_wait" in str(e)
+    assert "ready_to_merge" in str(e)
 
 # Slack review requests from watch-mentions' seen ledger: one entry per PR, permalinks attached.
 seen_file = state.parent / "mentions-seen.json"
@@ -322,7 +325,8 @@ assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
 
 # schedule: prints the create command with the precheck wired in; --write is the only path that creates.
-line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
+line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"),
+                     {**cfg, "kinds": ["review_request", "unreleased"], "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
@@ -331,6 +335,7 @@ prompt = line[line.index("--prompt") + 1]
 assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
 assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
 assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
+assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 
