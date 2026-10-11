@@ -57,8 +57,8 @@ python3 "$R" scan --kinds janitor          # a plain scan leaves the janitor kin
 ```
 
 The ledger is append-only JSON lines `{ts, run, kind, id, links: {pr, worktree}, by}` at
-`~/.local/state/agent-skills/ledger.jsonl` (`$AGENT_SKILLS_STATE` moves the folder,
-`$AGENT_SKILLS_LEDGER` or `--ledger` the file). The last line per id wins. A link is "done" when its
+`~/.local/state/agent-skills/ledger.jsonl` (`--state` or `$AGENT_SKILLS_STATE` moves the folder,
+`--ledger` or `$AGENT_SKILLS_LEDGER` the file). The last line per id wins. A link is "done" when its
 PR (`owner/repo#N`, read with `gh`) is merged or closed, or its worktree is gone.
 
 | Kind | Target when | Kept when | Action |
@@ -108,12 +108,14 @@ python3 "$R" schedule    # prints the `orca automations create` command; nothing
 
 `schedule` builds an existing-workspace automation on `17 */3 * * *` whose precheck is
 `python3 <absolute reap.py> precheck` (its cwd is the repo's main checkout, so paths are absolute).
+Every command it builds starts with `python3`, with `--state`/`--ledger` after the subcommand when
+those are off the default: a scheduled session can refuse a leading `env` or `VAR=` assignment.
 Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close the chrome-window
 targets it can, and report what went, what was skipped and what stayed. To change the prompt of an
 automation that exists, `orca automations edit <id> --prompt "<text>"`.
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the command keeps
 that path. `orca automations run` skips the precheck, so test it by running it directly, with
-`AGENT_SKILLS_STATE` pointing at a scratch folder: a `reap` records what it failed on, and the next
+`--state` pointing at a scratch folder: a `reap` records what it failed on, and the next
 scheduled precheck would skip that set for a day. A run marked completed is not a cleanup: judge it
 by the reap output in its report.
 

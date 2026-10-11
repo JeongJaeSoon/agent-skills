@@ -36,7 +36,7 @@ never in this repo.
 `orgs` and `repos` empty mean every repository; otherwise an `owner` in `orgs` or an `owner/name` in
 `repos` is in. Bot logins match with or without the `[bot]` suffix. Other keys and defaults are in
 `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
-(`$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
+(`--state <dir>` or `$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
 `plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
 
 ## What counts
@@ -104,7 +104,8 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 4. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
    succeeded and each step-3 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
-   and then commit.
+   and then commit. `commit --kinds <k1,k2>` records only those kinds and leaves the rest for the
+   next round; the scheduled round passes the kinds its prompt has steps for.
 
 `python3 "$P" plan` without `--body` writes nothing and takes no lock. It prints the plan as JSON
 for checking what the filter did: `new` (ranked items), `known` (keys already sent) and
@@ -118,7 +119,14 @@ python3 "$P" schedule --write    # creates it
 ```
 
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps
-that path. The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:
+that path. The prompt's steps come from `kinds`: each kind's entry in `STEPS` (next to `COLLECTORS`
+in `prs.py`) adds what the round does after the message, and `schedule` refuses a kind without one.
+The round passes `--kinds` to `plan --body` and `commit`, so an item of a kind added to the config
+after the automation was made is named in the message and stays unrecorded until the prompt is
+regenerated. Every command starts with `python3`: a scheduled session can refuse a leading `env` or
+`VAR=` assignment as a command of its own, so a non-default state goes in as `--state`.
+
+The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:
 
 | code | meaning |
 |---|---|
@@ -129,8 +137,8 @@ that path. The precheck (`prs.py precheck`) uses no model. It reads GitHub and e
 The default trigger is every 15 minutes, for a proof window. The steady state is weekday business
 hours, e.g. `*/15 9-19 * * 1-5` with `timezone` set; change it with
 `orca automations edit <id> --trigger "<cron>"`. `orca automations run` skips the precheck, so it
-proves nothing about it: test the precheck by running it directly with `AGENT_SKILLS_STATE`
-pointing at a scratch folder, and judge the automation by a scheduled run in
+proves nothing about it: test the precheck by running it directly with `--state` pointing at a
+scratch folder, and judge the automation by a scheduled run in
 `orca automations runs --id <id>`. Devices and their trade-offs:
 [docs/automation.md](../../docs/automation.md).
 

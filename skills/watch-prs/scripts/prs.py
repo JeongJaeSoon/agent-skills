@@ -4,7 +4,7 @@
 Usage:
   python3 prs.py precheck [--config PATH]
   python3 prs.py plan [--body] [--config PATH]
-  python3 prs.py commit [--config PATH]
+  python3 prs.py commit [--kinds K1,K2] [--config PATH]
   python3 prs.py dispatch [--config PATH]
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
@@ -14,17 +14,27 @@ could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice. dispatch reads plan.json and prints one
+so the same (repo, number, headRefOid) is never sent twice; with --kinds it records only those kinds, the
+ones the round's prompt has a step for, and leaves the rest to come back next round. dispatch reads plan.json and prints one
 `orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
 it runs nothing. schedule prints the
-`orca automations create` command and runs it only with --write.
-Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
+`orca automations create` command, its steps built from the configured kinds, and runs it only with --write.
+Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: <--state or $AGENT_SKILLS_STATE>/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
 """
 import datetime as dt, json, os, pathlib, shlex, subprocess, sys, time
 
+
+
+def opt(name, default=None):
+    a = sys.argv
+    i = a.index(name) + 1 if name in a else 0
+    return a[i] if 0 < i < len(a) else default
+
+
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
-STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "prs"
+STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
+STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser() / "prs"
 GH = os.environ.get("AGENT_SKILLS_GH", "gh")
 # Kinds without a collector are reserved so later flows extend COLLECTORS, not the CLI.
 KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate")
@@ -43,12 +53,6 @@ PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCom
 SEARCH_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
             "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + PR_FIELDS + "}}}}")
 NODES_Q = "query($ids:[ID!]!,$me:String!){nodes(ids:$ids){... on PullRequest{" + PR_FIELDS + "}}}"
-
-
-def opt(name, default=None):
-    a = sys.argv
-    i = a.index(name) + 1 if name in a else 0
-    return a[i] if 0 < i < len(a) else default
 
 
 def config(path=CONFIG):
@@ -243,6 +247,11 @@ def collect_unreleased(gh, me, cfg, ledger, now):
 
 
 COLLECTORS = {"review_request": collect_review_requests, "unreleased": collect_unreleased}
+# What a scheduled round does for a kind after the message went out, given run(subcommand) -> command line.
+# None: the message is the whole action. A kind missing here has no step: schedule refuses it, and commit
+# --kinds leaves its items out of the ledger so they are not lost behind a prompt that never acts on them.
+STEPS = {"review_request": None,
+         "unreleased": lambda run: f"`{run('dispatch')}` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다)"}
 
 
 def compute(gh, cfg, ledger, now):
@@ -259,7 +268,7 @@ def compute(gh, cfg, ledger, now):
             "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded}
 
 
-def body(plan):
+def body(plan, kinds=None):
     if not plan["new"]:
         return ""
     head = f"PR {len(plan['new'])}건이 나를 기다린다" + (f" (그 밖에 {plan['more']}건은 다음 회차)" if plan["more"] else "")
@@ -268,6 +277,10 @@ def body(plan):
         tag = "새 커밋, 재요청 없음" if i["reason"] == "new_commits" else LABELS[i["kind"]]
         lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
                      f"±{i['size']} · {', '.join(i['why'])} — {i['url']}")
+    uncovered = sorted({i["kind"] for i in plan["new"]} - set(kinds)) if kinds is not None else []
+    if uncovered:
+        lines.append(f"이 회차 프롬프트에 단계가 없는 kind: {', '.join(uncovered)}. 기록하지 않아 다음 회차에 다시 온다. "
+                     "`prs.py schedule` 출력으로 자동화의 prompt 를 고친다.")
     return "\n".join(lines)
 
 
@@ -293,12 +306,14 @@ def precheck(gh, cfg, state, now):
     return EXIT_NEW, f"새 항목 {len(keys)}건: " + ", ".join(keys)
 
 
-def commit(state, cfg, now):
+def commit(state, cfg, now, kinds=None):
+    """Records the delivered items; with kinds, only those. Returns (recorded count, keys left for next round)."""
     plan = read_json(state / "plan.json", None)
     if not plan:
         raise SystemExit("commit: no plan.json; run plan first")
     ledger = read_json(state / "ledger.json", {})
-    for i in plan["new"]:
+    done = [i for i in plan["new"] if kinds is None or i["kind"] in kinds]
+    for i in done:
         ledger[i["key"]] = {"at": plan["run"], "kind": i["kind"], "id": i["id"]}
     # A request left open for months is still known; only keys that stopped appearing age out.
     for k in plan.get("known", []):
@@ -308,7 +323,7 @@ def commit(state, cfg, now):
     ledger = {k: v for k, v in ledger.items() if v["at"] >= horizon}
     write_json(state / "ledger.json", ledger)
     (state / "plan.json").unlink()
-    return len(plan["new"])
+    return len(done), [i["key"] for i in plan["new"] if i not in done]
 
 
 def release_brief(repo, items, cfg):
@@ -349,20 +364,30 @@ def dispatch_cmds(plan, cfg):
 
 
 def schedule_cmd(script, cfg, workspace, provider="claude"):
-    env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
+    """The round's commands start with python3: a session may refuse an `env` or `VAR=` prefix as its own command."""
+    missing = [k for k in cfg["kinds"] if k not in STEPS]
+    if missing:
+        raise SystemExit(f"schedule: kind {', '.join(missing)} has no round step in prs.py STEPS; add one first")
+    state = [] if STATE.parent == STATE_HOME else ["--state", str(STATE.parent)]
+    run = lambda sub: shlex.join(["python3", str(script), *sub.split(), *state])
+    covered = f"--kinds {','.join(cfg['kinds'])}"
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
     body_file = STATE / "body.txt"
-    prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
+    steps = [STEPS[k](run) for k in cfg["kinds"] if STEPS[k]]
+    prompt = (f"watch-prs 회차다. `{run('plan --body ' + covered)}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
-              f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
-              f"보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
-              f"한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
-              f"그 저장소 이름과 거부·실패 내용, 정확한 명령을 같은 방법으로 {shlex.quote(to)} 에 보낸다. "
-              f"본문 전송이 성공했고 모든 줄이 워커를 시작했거나 보고됐을 때만 `{env} commit` 을 실행한다. "
-              f"이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다.")
+              f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). ")
+    if steps:
+        prompt += (f"보내기가 성공했을 때만 {'. 그 다음 '.join(steps)}. "
+                   f"한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
+                   f"그 저장소 이름과 거부·실패 내용, 정확한 명령을 같은 방법으로 {shlex.quote(to)} 에 보낸다. "
+                   f"본문 전송이 성공했고 모든 줄이 끝났거나 보고됐을 때만 `{run('commit ' + covered)}` 을 실행한다. ")
+    else:
+        prompt += f"보내기가 성공했을 때만 `{run('commit ' + covered)}` 을 실행한다. "
+    prompt += "이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다."
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
+           "--precheck", run("precheck"), "--prompt", prompt, "--json"]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd
@@ -371,6 +396,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     cfg = config(opt("--config", CONFIG))
+    kinds = opt("--kinds") and opt("--kinds").split(",")
     now = time.time()
     if cmd == "precheck":
         code, why = precheck(GitHub(), cfg, STATE, now)
@@ -387,8 +413,9 @@ def main():
         if plan["new"]:
             write_json(STATE / "plan.json", plan)
         STATE.mkdir(parents=True, exist_ok=True)
-        (STATE / "body.txt").write_text(body(plan))
-        print(body(plan))
+        text = body(plan, kinds)
+        (STATE / "body.txt").write_text(text)
+        print(text)
     elif cmd == "dispatch":
         plan = read_json(STATE / "plan.json", None)
         if not plan:
@@ -400,7 +427,10 @@ def main():
             brief.write_text(line[i + 1])
             print(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')
     elif cmd == "commit":
-        print(f"commit: {commit(STATE, cfg, now)} items recorded")
+        done, left = commit(STATE, cfg, now, kinds)
+        print(f"commit: {done} items recorded")
+        if left:
+            print(f"commit: not recorded, kind has no step in this round: {', '.join(left)}", file=sys.stderr)
     elif cmd == "schedule":
         script = pathlib.Path(__file__).resolve()
         line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"))

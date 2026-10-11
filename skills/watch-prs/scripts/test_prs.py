@@ -113,7 +113,7 @@ assert p.precheck(Fake(found + [pr(12, reqs=[user(ME)])]), cfg, state, NOW + 60)
 assert p.precheck(Fake(found), cfg, state, NOW + 61 * 60)[0] == p.EXIT_NEW, "a dead run's plan stops blocking"
 
 # commit records exactly what plan delivered; the same (repo, N, head) is not sent twice.
-assert p.commit(state, cfg, NOW) == 5
+assert p.commit(state, cfg, NOW) == (5, [])
 assert not (state / "plan.json").exists()
 ledger = p.read_json(state / "ledger.json", {})
 assert set(ledger) == {i["key"] for i in plan["new"]}
@@ -273,12 +273,38 @@ line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
-assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
+assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
 prompt = line[line.index("--prompt") + 1]
-assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
-assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
-assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
+assert "plan --body --kinds review_request`" in prompt and "--to term_x" in prompt
+assert "보내기가 성공했을 때만 `python3 /repo/skills/watch-prs/scripts/prs.py commit --kinds review_request`" in prompt
+assert "dispatch" not in prompt, "review_request alone has no step after the message"
+# A scheduled session may refuse a command that starts with `env` or a `VAR=` assignment, so neither appears.
+no_env = lambda argv: "env " not in " ".join(argv) and not re.search(r"(^|[\s`])[A-Z_]{2,}=", " ".join(argv))
+assert no_env(line), line
+# Each configured kind brings its step: unreleased adds the dispatch lines, and commit covers both kinds.
+line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"}, "path:/r")
+prompt = line[line.index("--prompt") + 1]
+assert no_env(line), line
+assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행해", prompt), "a failed send must not start workers"
+assert prompt.index("dispatch") < prompt.index("commit --kinds review_request,unreleased` 을") and "다시 시도하지 않고" in prompt
+# A kind with no step is refused at schedule time rather than committed behind a prompt that never acts on it.
+saved, p.STEPS = p.STEPS, {k: v for k, v in p.STEPS.items() if k != "unreleased"}
+try:
+    p.schedule_cmd(pathlib.Path("/r/prs.py"), rcfg, "path:/r")
+    raise AssertionError("schedule accepted a kind without a step")
+except SystemExit as e:
+    assert "unreleased" in str(e), e
+finally:
+    p.STEPS = saved
+# A state folder off the default goes in as a flag after the subcommand, not through the environment.
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
+assert f"precheck --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
+# commit --kinds records only the kinds the round's prompt acts on; the rest come back next round, named in the body.
+p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
+c = run("commit", "--kinds", "review_request")
+assert c.returncode == 0 and "commit: 0 items recorded" in c.stdout and "acme/widgets#20" in c.stderr, c
+assert not any(k.startswith("acme/widgets#20") for k in p.read_json(tmp / "state" / "prs" / "ledger.json", {})), "unreleased must not be recorded"
+assert "단계가 없는 kind: unreleased" in p.body(plan2, ["review_request"]) and "단계가 없는" not in p.body(plan2, None)
 
 print("test_prs: ok")
