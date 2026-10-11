@@ -87,7 +87,8 @@ The user's open PRs, plus PRs by a `self_bots` app that are assigned to the user
 shared across an organisation, so authorship alone is not enough). Out: drafts, out-of-scope
 repositories, no update for more than `stale_days`, and PRs a live orchestrate program drives (a PR
 number in a `~/.claude/programs/*/ledger.jsonl` written within `stale_days`, whose `program.json`
-names the same repo; `orch wait` follows those, and a parked one is held on purpose).
+names the same repo and that is not stopped (no `stop` after its last `resume`); `orch wait`
+follows those, and a parked one is held on purpose). A stopped program's PRs come back to reminders.
 
 Each PR gets its states from GitHub alone:
 
@@ -149,7 +150,8 @@ nothing is merged.
    so order is not trusted). Otherwise a pass result, or an approval on that commit from a
    collaborator (author association OWNER, MEMBER or COLLABORATOR) other than the user, is the
    record. A self-reply, a quoted verdict, or any other account does not count. Without one the PR
-   belongs to review_wait. More than 100 reviews or comments hold the PR back;
+   belongs to review_wait. A fail result stops holding the PR once it is edited to pass or deleted,
+   or once a new push moves the head. More than 100 reviews or comments hold the PR back;
 8. the head's check rollup is SUCCESS (no checks is not green), and no review thread is unresolved;
 9. each of `required_bots` left an APPROVED or COMMENTED review on this head. A bot that was
    rate-limited or skipped left a comment, not a review;
