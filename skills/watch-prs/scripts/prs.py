@@ -18,23 +18,34 @@ could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice. actions prints the Slack and bot actions plan.json
-holds; log records one of them in the send-log (sendlog.jsonl), which is what decides them, not the ledger.
+so the same (repo, number, headRefOid) is never sent twice. Only kinds with a PROMPT_STEPS entry become new
+(and so reach plan.json); items of other kinds are listed as uncovered and never recorded.
+actions prints the Slack and bot actions plan.json holds; log records one of them in the send-log
+(sendlog.jsonl), which is what decides them, not the ledger.
 merges prints the `gh pr merge` command for each ready_to_merge item in plan.json; the round runs
 them itself. verify then checks each is MERGED, waits for the merge commit's CI and rewrites body.txt.
 dispatch reads plan.json and prints one
 `orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
 it runs nothing. schedule prints the
-`orca automations create` command (`edit <id>` with --edit) and runs it only with --write.
-Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
+`orca automations create` command (`edit <id>` with --edit), its steps built from the configured kinds, and
+runs it only with --write.
+Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: <--state or $AGENT_SKILLS_STATE>/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
-Slack review requests come from watch-mentions' seen ledger ($AGENT_SKILLS_STATE/mentions/seen.json, rows of
+Slack review requests come from watch-mentions' seen ledger (<state>/mentions/seen.json, rows of
 category review with a `pr`); a missing ledger means GitHub only.
 """
 import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time, zoneinfo
 
+
+def opt(name, default=None):
+    a = sys.argv
+    i = a.index(name) + 1 if name in a else 0
+    return a[i] if 0 < i < len(a) else default
+
+
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
-STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "prs"
+STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
+STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser() / "prs"
 GH = os.environ.get("AGENT_SKILLS_GH", "gh")
 ORCA = os.environ.get("AGENT_SKILLS_ORCA", "orca")
 # Kinds without a collector are reserved so later flows extend COLLECTORS, not the CLI.
@@ -77,12 +88,6 @@ MINE_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid addi
  commits(last:1){nodes{commit{committedDate}}}"""
 MINE_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:25,after:$after)"
           "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MINE_FIELDS + "}}}}")
-
-
-def opt(name, default=None):
-    a = sys.argv
-    i = a.index(name) + 1 if name in a else 0
-    return a[i] if 0 < i < len(a) else default
 
 
 def config(path=CONFIG):
@@ -748,6 +753,8 @@ def delivered(ledger, k, kind):
 
 
 def compute(gh, cfg, ledger, now):
+    """Only kinds with a PROMPT_STEPS entry become new: the round has no step for the others, so they stay out of
+    plan.json (which is what commit records) and take no max_items slot; their keys are listed under uncovered."""
     me = gh.viewer()
     items, excluded = [], []
     for kind in cfg["kinds"]:
@@ -756,11 +763,13 @@ def compute(gh, cfg, ledger, now):
         got, out = COLLECTORS[kind](gh, me, cfg, ledger, now)
         items += got
         excluded += out
-    new = [i for i in rank(items) if not delivered(ledger, i["key"], i["kind"])]
+    unsent = [i for i in rank(items) if not delivered(ledger, i["key"], i["kind"])]
+    new = [i for i in unsent if i["kind"] in PROMPT_STEPS]
     # Actions are never capped: a reviewer's batch split across rounds would become two messages.
     acts, new = [i for i in new if not i.get("once", True)], [i for i in new if i.get("once", True)]
     return {"run": now, "viewer": me, "new": acts + new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
-            "known": [i["key"] for i in items if delivered(ledger, i["key"], i["kind"])], "excluded": excluded}
+            "known": [i["key"] for i in items if delivered(ledger, i["key"], i["kind"])], "excluded": excluded,
+            "uncovered": [i["key"] for i in unsent if i["kind"] not in PROMPT_STEPS]}
 
 
 def body(plan):
@@ -777,6 +786,9 @@ def body(plan):
         slack = f" · Slack {' '.join(i['slack'])}" if i.get("slack") else ""
         lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
                      f"±{i['size']} · {', '.join(i['why'])} — {i['url']}{slack}")
+    if plan.get("uncovered"):
+        lines.append(f"회차 단계(PROMPT_STEPS)가 없는 kind 의 항목 {len(plan['uncovered'])}건은 보내지도 기록하지도 않았다: "
+                     f"{', '.join(plan['uncovered'])}")
     return "\n".join(lines)
 
 
@@ -845,7 +857,9 @@ def precheck(gh, cfg, state, now):
         return EXIT_ERROR, f"GitHub 를 읽지 못함: {e}"
     keys = [i["key"] for i in plan["new"]]
     if not keys:
-        return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건)"
+        late = f", 회차 단계가 없어 보내지 않는 항목 {len(plan['uncovered'])}건: {', '.join(plan['uncovered'])}" \
+            if plan["uncovered"] else ""
+        return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건{late})"
     return EXIT_NEW, f"새 항목 {len(keys)}건: " + ", ".join(keys)
 
 
@@ -905,11 +919,15 @@ def dispatch_cmds(plan, cfg):
     return cmds
 
 
-# A kind's own step in the automation prompt, between the coordinator send and commit; {env} is the prs.py call.
+# A kind's own step in the automation prompt, between the coordinator send and commit; {run[sub]} is the prs.py
+# call for that subcommand. None: the message is the whole action. A kind missing here has no step, so schedule
+# refuses it and compute keeps its items out of plan.json and the ledger.
 # Steps run in this dict's order, not the config's: the unreleased step ends by gating commit, which deletes plan.json.
 PROMPT_STEPS = {
+    "review_request": None,
+    "ready_to_merge": None,   # its merge step precedes the send, so schedule_cmd builds it
     "review_wait": (
-        "그다음 `{env} actions` 가 출력하는 행동을 하나씩 처리하고, 처리할 때마다 `{env} log --key <key> --source <결과>` 로 "
+        "그다음 `{run[actions]}` 가 출력하는 행동을 하나씩 처리하고, 처리할 때마다 `{run[log]} --key <key> --source <결과>` 로 "
         "기록한다. Slack 행동(request·remind·rerequest)은 slack-post 스킬을 먼저 읽고 그 규칙대로 channel 에 보낸다: "
         "request 는 같은 reviewer 의 것을 한 메시지로 묶고, 보내기 전에 channel 에서 그 PR 의 기존 의뢰를 찾아 있으면 보내지 않고 "
         "`--source found --thread <channel>:<ts> --at <ts>` 로 기록한다. remind·rerequest 는 PR 마다 thread 에 답글로만 보낸다"
@@ -921,7 +939,7 @@ PROMPT_STEPS = {
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
         "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. 이 단계의 GitHub 쓰기는 retrigger 코멘트뿐이다."),
     "unreleased": (
-        "보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
+        "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
         "한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
         "그 저장소 이름과 거부·실패 내용, 정확한 명령을 코디네이터에게 보낸다. 모든 줄이 워커를 시작했거나 보고됐을 때만 commit 으로 간다. "
         "릴리스와 배포는 워커가 한다: 이 회차는 배포를 직접 하지 않는다."),
@@ -929,32 +947,40 @@ PROMPT_STEPS = {
 
 
 def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
-    """The `orca automations create` command, or `edit <id>` to keep an existing automation's id."""
-    env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
+    """The `orca automations create` command, or `edit <id>` to keep an existing automation's id.
+
+    Every command starts with python3: a session may refuse an `env` or `VAR=` prefix as its own command.
+    A non-default state goes in as --state right after the subcommand, since argv[1] is the subcommand."""
+    missing = [k for k in cfg["kinds"] if k not in PROMPT_STEPS]
+    if missing:
+        raise SystemExit(f"schedule: kind {', '.join(missing)} has no round step in prs.py PROMPT_STEPS; add one first")
+    state = [] if STATE.parent == STATE_HOME else ["--state", str(STATE.parent)]
+    run = lambda sub: shlex.join(["python3", str(script), *sub.split(), *state])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
     body_file = STATE / "body.txt"
     merging = "ready_to_merge" in cfg["kinds"]
     # Merging comes before the send so the bundle carries each merge's result and its default-branch CI.
-    merge_step = (f"`{env} merges` 가 출력하는 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
+    merge_step = (f"`{run('merges')}` 가 출력하는 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
                   f"그 아래 `gh pr merge` 명령을 단독 명령으로 한 번씩 실행한다(--admin·--auto 를 붙이지 않는다). 거부되거나 실패한 "
                   f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않으며, 그 PR 과 거부·실패 내용, 정확한 명령을 본문 끝에 덧붙여 보고한다. "
-                  f"그다음 `{env} verify` 로 MERGED 와 기본 브랜치 CI 를 확인해 본문을 다시 쓴다. verify 가 실패하면 보내지도 "
+                  f"그다음 `{run('verify')}` 로 MERGED 와 기본 브랜치 CI 를 확인해 본문을 다시 쓴다. verify 가 실패하면 보내지도 "
                   f"commit 하지도 않고 그 오류를 남긴 채 끝낸다. 성공하면 ") if merging else ""
-    steps = " ".join(step.format(env=env) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"])
+    subs = {s: run(s) for s in ("actions", "log", "dispatch")}
+    steps = " ".join(step.format(run=subs) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"] and step)
     reads = (" 이 회차는 머지 단계 밖에서 승인·리뷰·배포를 직접 하지 않는다."
              + ("" if "review_wait" in cfg["kinds"] else " 코멘트·재요청도 하지 않는다.") if merging else
              "" if "review_wait" in cfg["kinds"] else " 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다.")
-    prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
+    prompt = (f"watch-prs 회차다. `{run('plan --body')}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 {merge_step}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
               + (steps + " " if steps else "")
-              + f"코디네이터 전송이 성공했을 때만 마지막에 `{env} commit` 을 실행한다." + reads)
+              + f"코디네이터 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
     if edit:
-        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", f"{env} precheck",
+        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
                 "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
+           "--precheck", run("precheck"), "--prompt", prompt, "--json"]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd
@@ -979,8 +1005,9 @@ def main():
         if plan["new"]:
             write_json(STATE / "plan.json", plan)
         STATE.mkdir(parents=True, exist_ok=True)
-        (STATE / "body.txt").write_text(body(plan))
-        print(body(plan))
+        text = body(plan)
+        (STATE / "body.txt").write_text(text)
+        print(text)
     elif cmd == "merges":
         # Recorded before the round runs them: a refused or failed merge is never retried at that head, even
         # when verify or commit never happens.
