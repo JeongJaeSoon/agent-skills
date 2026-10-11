@@ -17,5 +17,7 @@ def paragraph(name):
 brief = paragraph("brief.md")
 assert paragraph("roles.md") == brief, "roles.md's refused-act paragraph differs from brief.md's"
 assert 'from "An act refused" through "run it again."' in brief, "paste boundary no longer names the paragraph's ends"
+for name in ("../SKILL.md", "top-level.md"):
+    assert "no-verdict restart" in (refs / name).read_text(), f"{name}: exception list lost the no-verdict restart"
 
 print("test_refusal_copies: ok")
