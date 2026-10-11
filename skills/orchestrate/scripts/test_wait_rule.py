@@ -28,6 +28,8 @@ assert "keep both" not in top.split("## Injected notices", 1)[1].split("##", 1)[
 lead = brief[brief.index("## Lead"):brief.index("## Rules for filling it")]
 assert re.search(r"^INBOX\s", lead, re.M), "Lead brief template lost its INBOX line"
 assert "`INBOX`" in lead.split("```", 1)[0], "Lead first prompt does not carry INBOX"
+card = (root.parent / "dispatch-card" / "SKILL.md").read_text()
+assert "`MODE`, `INBOX`, `DELEGATE` and `PREDICATE` lines" in card, "dispatch-card: a lead's prompt does not carry INBOX"
 
 for name in ("SKILL.md", "brief.md"):
     assert "first-write confirmation hook" in texts[name], f"{name}: lost the policy-skill-before-first-write rule"
