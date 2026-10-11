@@ -305,4 +305,14 @@ verdict(d, 24, "T-24")
 code, out = prog(env, "land", "t", "--pr", "24")
 assert code == 0 and "workflow run" not in out, out
 
+# A flag whose value an empty shell variable swallowed fails with its name, not a traceback, and records nothing.
+d, env = setup({})
+led = d / "programs" / "t" / "ledger.jsonl"
+n = len(ledger(d)) if led.exists() else 0
+code, out = prog(env, "record", "t", "spawned", "--ticket", "T-1 ctx_1 task_1", "--note")
+assert code == 1 and "--note needs a value" in out and "Traceback" not in out, out
+code, out = prog(env, "record", "t", "spawned", "--note", "--ticket", "T-1")
+assert code == 1 and "--note needs a value" in out, out
+assert (len(ledger(d)) if led.exists() else 0) == n
+
 print("prog.py land against fake gh: all pass")

@@ -133,7 +133,13 @@ def gh_json(*args):
 
 
 def opt(argv, name, default=None):
-    return argv[argv.index(name) + 1] if name in argv else default
+    if name not in argv:
+        return default
+    i = argv.index(name) + 1
+    if i >= len(argv) or argv[i].startswith("--"):
+        # An unquoted empty shell variable vanishes from argv; say which flag lost its value.
+        sys.exit(f"{name} needs a value (an empty shell variable drops out of the command line)")
+    return argv[i]
 
 
 class Program:
