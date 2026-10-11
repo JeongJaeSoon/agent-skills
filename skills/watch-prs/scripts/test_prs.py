@@ -34,9 +34,12 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=(), merged=(), deployed=None, live=(), gated=()):
-        self.found, self.by_id, self.gated = list(search), {n["id"]: n for n in nodes}, list(gated)
+    def __init__(self, search, nodes=(), merged=(), deployed=None, live=(), mine=(), gated=()):
+        self.found, self.by_id, self.own, self.gated = list(search), {n["id"]: n for n in nodes}, list(mine), list(gated)
         self.merged, self.deployed, self.live, self.queries = list(merged), deployed, set(live), []
+
+    def mine(self, self_bots):
+        return self.own
 
     def viewer(self):
         return ME
@@ -154,10 +157,10 @@ assert list(p.read_json(state / "ledger.json", {})) == [still]
 # A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
-    p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
+    p.compute(Fake([]), {**cfg, "kinds": ["ready_to_merge"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
-    assert "review_wait" in str(e)
+    assert "ready_to_merge" in str(e)
 
 # ownergate: app PRs a gate names that still need an approval; never a person's PR.
 gate = {"name": "access", "authors": ["grant-bot[bot]"], "repos": ["acme/access"], "title": r"^\[Auto\] ", "prod_paths": ["deploy/"]}
@@ -483,12 +486,17 @@ prompt = line[line.index("--prompt") + 1]
 assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
 assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
 assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
+assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
 assert prompt.index(" round`") < prompt.index("orca orchestration send") and "result <키> failed" in prompt, \
     "round steps run and are recorded before the send"
 # The prompt follows cfg["kinds"]: a kind not listed adds none of its steps.
 only_review = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**cfg, "inbox_to": "term_x"}, "path:/r")
 plain = only_review[only_review.index("--prompt") + 1]
-assert " round`" not in plain and " dispatch`" not in plain and "보내기가 성공했을 때만 `" in plain
+assert " round`" not in plain and " dispatch`" not in plain and "(예외는" not in plain
+four = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**all_kinds, "kinds": ["review_request", "review_wait", "unreleased", "ownergate"]}, "path:/r")
+full = four[four.index("--prompt") + 1]
+assert full.index(" round`") < full.index("orca orchestration send") < full.index(" actions`") < full.index(" dispatch`") \
+    < full.index(" commit`"), full
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 
