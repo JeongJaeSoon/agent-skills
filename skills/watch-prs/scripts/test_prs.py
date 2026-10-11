@@ -322,8 +322,9 @@ p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
 d = run("dispatch")
 printed = d.stdout.splitlines()
 assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["orca", "orchestration", "worker-start"], d
-assert printed[0].endswith(f'--spec "$(cat {tmp / "state" / "prs" / "brief-0.txt"})"')
-assert "#20 " in (tmp / "state" / "prs" / "brief-0.txt").read_text()
+brief = tmp / "state" / "prs" / f"brief-{int(plan2['run'])}-0.txt"
+assert printed[0].endswith(f'--spec "$(cat {brief})"'), "named by run, so the next round cannot overwrite it"
+assert "#20 " in brief.read_text()
 (tmp / "state" / "prs" / "plan.json").unlink()
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)], env=broken, capture_output=True).returncode == 2
@@ -348,8 +349,10 @@ assert no_env(line), line
 line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"}, "path:/r")
 prompt = line[line.index("--prompt") + 1]
 assert no_env(line), line
-assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행해", prompt), "a failed send must not start workers"
-assert prompt.index("dispatch") < prompt.index("prs.py commit` 을") and "다시 시도하지 않고" in prompt
+assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행한다", prompt), "a failed send must not dispatch"
+# A scheduled round cannot start a worker (consumer_fenced): it forwards the lines and the coordinator starts them.
+assert "출력된 줄은 실행하지 않는다" in prompt and "릴리스 워커 <줄 수>건 시작 요청" in prompt
+assert prompt.index("dispatch") < prompt.index("prs.py commit` 을")
 assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
 # review_wait's actions and log lines start with python3 too, with the state flag right after the subcommand.
 saved_state, p.STATE = p.STATE, pathlib.Path("/s/prs")

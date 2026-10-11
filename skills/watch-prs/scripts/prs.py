@@ -25,8 +25,9 @@ actions prints the Slack and bot actions plan.json holds; log records one of the
 merges prints the `gh pr merge` command for each ready_to_merge item in plan.json; the round runs
 them itself. verify then checks each is MERGED, waits for the merge commit's CI and rewrites body.txt.
 dispatch reads plan.json and prints one
-`orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
-it runs nothing. schedule prints the
+`orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<run>-<n>.txt;
+it runs nothing, and the round only forwards the lines: worker-start works only from the coordinator terminal bound
+to the Run. schedule prints the
 `orca automations create` command (`edit <id>` with --edit), its steps built from the configured kinds, and
 runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: <--state or $AGENT_SKILLS_STATE>/prs
@@ -943,10 +944,10 @@ PROMPT_STEPS = {
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
         "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. 이 단계의 GitHub 쓰기는 retrigger 코멘트뿐이다."),
     "unreleased": (
-        "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
-        "한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
-        "그 저장소 이름과 거부·실패 내용, 정확한 명령을 코디네이터에게 보낸다. 모든 줄이 워커를 시작했거나 보고됐을 때만 commit 으로 간다. "
-        "릴리스와 배포는 워커가 한다: 이 회차는 배포를 직접 하지 않는다."),
+        "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: worker-start 는 Run 에 묶인 "
+        "코디네이터 터미널에서만 된다. 줄이 있으면 그 줄들을 그대로 본문으로, 제목 \"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 "
+        "코디네이터에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
+        "이 회차는 워커를 띄우지도 배포하지도 않는다."),
 }
 
 
@@ -1041,7 +1042,8 @@ def main():
         # The brief is multi-line, so it goes to a file and each printed command stays on one line.
         for n, line in enumerate(dispatch_cmds(plan, cfg)):
             i = line.index("--spec")
-            brief = STATE / f"brief-{n}.txt"
+            # Named by run: the coordinator may start the line after the next round has written its own briefs.
+            brief = STATE / f"brief-{int(plan['run'])}-{n}.txt"
             brief.write_text(line[i + 1])
             print(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')
     elif cmd == "commit":

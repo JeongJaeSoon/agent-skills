@@ -177,11 +177,13 @@ aging out of `lookback_days` unseen. They take no `max_items` slot: ranked after
 starve, and a repo's merges split across rounds would start two release workers. `deploy` alone collects nothing: `kinds` must list `unreleased`.
 
 `dispatch` turns them into one release worker per repo: an `orca orchestration worker-start` line
-whose brief (in `<state>/brief-<n>.txt`) holds the PRs and merge commits, the declaration, the
+whose brief (in `<state>/brief-<run>-<n>.txt`) holds the PRs and merge commits, the declaration, the
 `release_approval` (without it the worker asks before any release), production and anything outside
 dev as human only, and the rule that a refused act is reported, never retried. The worker follows
 deliver-ticket's [post-merge-release.md](../deliver-ticket/references/post-merge-release.md). The
-round itself releases nothing.
+round itself starts no worker and releases nothing: `worker-start` works only from the coordinator
+terminal bound to the Run (from a scheduled round it fails `consumer_fenced`), so the round forwards
+the lines and the coordinator starts them.
 
 ## Run
 
@@ -216,12 +218,11 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    for that time. `retrigger` is `gh pr comment <url> --body <comment>`. An action already moot (approved
    or merged meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
    permission prompt, the classifier or a hook is logged `refused` and reported, never retried.
-5. Only after the coordinator send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
-   Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
-   hook) is not tried again in any form (re-run, script, other tool, another session): send the
-   coordinator the repo, the refusal and the exact command instead.
+5. Only after the coordinator send succeeded, `python3 "$P" dispatch` prints one command per repo with
+   unreleased items (nothing otherwise). Do not run them: send the lines as they are to the
+   coordinator in one message, which starts each worker from its bound terminal.
 6. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
-   succeeded and each step-5 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
+   succeeded, and after step 5's message when it had lines: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
    and then commit.
 
