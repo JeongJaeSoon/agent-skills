@@ -35,8 +35,9 @@ From the open PR to ready: all CI checks green and all review threads resolved.
 
 A fork PR to a repo you can only read, or a maintainer who lands it themselves. Once the PR is
 ready, do not end the turn waiting. Watch it: a `Monitor` until-loop on
-`gh pr view <n> --json state,mergedAt,mergeCommit,reviewDecision,latestReviews` every few
-minutes, or `ScheduleWakeup` at 20–30 min under `/loop`. Give the watch a timeout and stop it
+`gh pr view <n> --json state,mergedAt,mergeCommit,reviewDecision,latestReviews`, or
+`ScheduleWakeup` under `/loop`, no more often than the wait rule in `orchestrate`'s
+`references/brief.md` LAND allows ("A wait on a human review"). Give the watch a timeout and stop it
 when the session ends. Wake on a merge, a close, or a new review; `CHANGES_REQUESTED` sends you
 back to the loop above.
 
