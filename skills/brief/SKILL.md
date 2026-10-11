@@ -47,14 +47,14 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
    - Progress: an 8-cell bar and N/M from the Progress rule above (`▓▓▓▓░░░░ 4/8`, filled cells = round(8·N/M); `—` when there is no basis; the legend says the bar is an estimate), then the evidence for what is done: a PR number, or a 7-character sha when there is no PR, or nothing before the first commit.
    - Next: the next stage and who moves it, in a few words.
 
-   Under each lead row, one row per sub-task the lead owns (each card, worker and open PR), named `└ <identifier> <short name>` (`└ #49 설정`, `└ w2 발송`) and filling the same four columns. A worker and the PR it opened are one sub-task, one row, named by the PR. Several PRs never share a cell, and no sub-task moves to a footnote or drops out; a sub-task in another repository goes under the same lead in that repository's table. A lead row with sub-task rows leaves its evidence to them. The rows come from four reads at each report: the list of lead handles, each lead's latest report, one read per repository of the owner's open PRs, and the worker list.
+   Under each lead row, one row per sub-task the lead owns (each card, worker and open PR), named `└ <identifier> <short name>` (`└ #49 설정`, `└ w2 발송`, `└ ABC-1 색인`) and filling the same four columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, and no sub-task moves to a footnote or drops out: a merged one stays, ✅, until its lead is done. A lead row with sub-task rows keeps its own progress basis but leaves the evidence to them, and its status is the worst of its rows (🔴, then 🟡, then 🟢). A sub-task in another repository goes in that repository's table, under a row with only the lead's name and `—` in progress and next. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
 3. Decision needed, as §1 describes it.
 4. Only you, as §1 describes it: what to run, press or log in to, and where.
 5. Later, each item with the condition that brings it back.
 
 A report with nothing new still carries sections 3 to 5 when they hold items: an open decision is asked again, in the same words and with its `orch decide` id when it has one, until the human answers it.
 
-A row that changed since the last report has its name in bold, and the legend says so. Bold is the only mark: a symbol beside the status icon reads as part of the status. After sending, save the table to `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`) for the next report to compare against: each row keyed by repository and name without the bold marks (a sub-task row by its lead too), with its status, progress and next. With no saved table, send it with no row in bold and say so in the summary line. On Telegram, which has no bold, each row is one line, a sub-task line starts with `└`, and a changed row has `(바뀜)` after its name.
+A row that changed since the last report, or that it did not have, has its name in bold (after the `└` on a sub-task row), and the legend says so. Bold is the only mark: a symbol beside the status icon reads as part of the status. After sending, save the table to `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`) for the next report to compare against: each row keyed by repository and name without the bold marks (a sub-task row by its lead and identifier), with its status, progress and next. With no saved table, send it with no row in bold and say so in the summary line. On Telegram, which has no bold, each row is one line, a sub-task line starts with `└`, and a changed row has `(바뀜)` after its name.
 
 Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
@@ -115,7 +115,7 @@ An illustrative periodic report (the items are made up):
 | | 리드 | 진행 | 다음 |
 |---|---|---|---|
 | ✅ | **검색 개선** | ▓▓▓▓▓▓▓▓ 8/8 #42 | — |
-| 🟢 | 알림 정리 | ▓▓▓░░░░░ 3/8 | #47 dev 확인 · 에이전트 |
+| 🟡 | 알림 정리 | ▓▓▓░░░░░ 3/8 | 하위 3건 진행 중 |
 | 🟢 | └ #47 문구 | ▓▓▓▓░░░░ 4/8 | dev 확인 · 에이전트 |
 | 🟡 | └ #49 설정 | ▓▓▓░░░░░ 3/8 | 리뷰 · 사람 |
 | 🟢 | └ w2 발송 | ▓▓░░░░░░ 2/8 3f9a1c2 | PR 작성 · 워커 |
