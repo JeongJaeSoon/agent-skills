@@ -787,7 +787,8 @@ def cmd_status(argv):
     gaps = sorted(parse_ts(b["ts"]) - parse_ts(a["ts"]) for a, b in zip(landed_recent, landed_recent[1:]))
     interval = (gaps[len(gaps) // 2].total_seconds() / 60 if gaps else knob(cfg, "land_interval_minutes"))
     backlog_h = len(order) * interval / 60
-    stale = [e for e in order if e["age_h"] >= knob(cfg, "stale_hours")]
+    held = [e for e in order if held_pr(events, e)]
+    stale = [e for e in order if e["age_h"] >= knob(cfg, "stale_hours") and e not in held]
     lines.append(f"flow: main {main} · in-flight {units}/{cap} cap (ceiling {cfg['ceiling']}) · ready-to-land {len(ready)}"
                  f" · human-wait {len(human)} · landed {len(landed_recent)} in 3h · {rate:.1f}/h overall"
                  + (f" · idle-waiting: {', '.join(waiting)} (prompt? worker-read --source terminal)" if waiting else "")
@@ -797,6 +798,11 @@ def cmd_status(argv):
                  + ("  (* ready; `orch queue` says why the rest wait)" if order else ""))
     for e in stale:
         lines.append(f"  STALE {fmt_entry(order.index(e) + 1, e)}")
+    for e in held:
+        note = next((x.get("note") for x in reversed(events) if x["ev"] == "parked" and x.get("pr") == e["pr"]), None)
+        lines.append(f"  HELD #{e['pr']}{f' ({note})' if note else ''}: not counted as stale; if superseded, "
+                     f"gh pr close {e['pr']} --repo {cfg['repo']} --comment '<what replaced it>', "
+                     f"or `orch record {p.slug} admitted --pr {e['pr']}` to land it")
     worktrees = orca_json("worktree", "list").get("worktrees", [])
     leftover = landed_but_open(events, workers, tasks, worktrees, by_id)
     for tk, dispatch, active, path in leftover:
@@ -848,7 +854,8 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order, leftover=0
     gaps = sorted(parse_ts(b["ts"]) - parse_ts(a["ts"]) for a, b in zip(landed_recent, landed_recent[1:]))
     interval = gaps[len(gaps) // 2].total_seconds() / 60 if gaps else knob(cfg, "land_interval_minutes")
     backlog_h = len(order) * interval / 60
-    stale = [e for e in order if e.get("age_h", 0) >= knob(cfg, "stale_hours")]
+    # A PR the coordinator put on hold waits on purpose; counting it would block spawning until someone closes it.
+    stale = [e for e in order if e.get("age_h", 0) >= knob(cfg, "stale_hours") and not held_pr(events, e)]
     cap = cap_from(events, cfg.get("ceiling", 6))
     if stopped(events):
         return "STOP line active: spawn nothing; let in-flight finish", used
@@ -1709,6 +1716,10 @@ def print_stuck(p, run_id, only_new=False):
 
 
 HOLD = re.compile(r"\bhold\b|do.?not.?merge|\bwip\b", re.I)
+
+
+def held_pr(events, entry):
+    return entry.get("pr") is not None and on_hold(events, entry["pr"])
 
 
 def on_hold(events, pr):

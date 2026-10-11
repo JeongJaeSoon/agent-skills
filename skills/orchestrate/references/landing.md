@@ -121,6 +121,7 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
 - Read `status` on every drain:
   - `STALE` lines are PRs that have waited `stale_hours` (default 3). Each gets an action on the reason `queue` gives.
   - `LANDED-BUT-OPEN` lines are workers whose PR landed. Release them and remove their worktrees in the same turn.
+  - `HELD` lines are PRs on hold (`record parked`). They do not count as stale, so they never block spawning; close a superseded one on GitHub so it leaves the land order.
 - A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
 - Merges you did not make: `land` records a PR that was merged outside it.
 - Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `heavy_slots`.

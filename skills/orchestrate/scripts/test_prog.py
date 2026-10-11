@@ -146,6 +146,10 @@ assert nm(done + [at(0.1, "landed", pr=2, sha="m2")], None).startswith("may spaw
 assert nm([], True).startswith("tickets done")
 assert nm([], None, live=4) == "at cap: drain and land"
 assert nm([], None, order=[{"age_h": 3.5}]).startswith("unstick first: 1 PR")
+held = [{"ts": "2026-01-01T00:00:00+00:00", "ev": "parked", "pr": 7, "note": "superseded"}]
+assert not nm(held, None, order=[{"pr": 7, "age_h": 3.5}]).startswith("unstick"), "a held PR waits on purpose"
+assert nm(held + [{"ts": "2026-01-01T01:00:00+00:00", "ev": "admitted", "pr": 7}], None,
+          order=[{"pr": 7, "age_h": 3.5}]).startswith("unstick first: 1 PR"), "admitted again, it counts"
 # Released cards still open go before spawning, never before a safety stop, Close or a stale PR.
 left = lambda ev, td=None, live=0, order=(): prog.next_move(NCFG, ev, NOW, tickets_done=td, live=live, human=0,
                                                               order=list(order), leftover=8)[0]
