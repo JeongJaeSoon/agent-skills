@@ -33,6 +33,20 @@ for rows in periodic:
         for i, cap in CAPS.items():
             assert text_width(row[i]) <= cap, (row, i)
 
+# Each sub-task of a lead gets its own └ row right under it, so some lead in the example shows at least two.
+def subtask_runs(rows):
+    runs, n = [], 0
+    for row in rows[1:]:
+        if row[1].startswith("└"):
+            n += 1
+        else:
+            runs.append(n)
+            n = 0
+    return runs + [n]
+
+assert subtask_runs([["", "리드", "진행", "다음"], ["🟢", "a", "", ""], ["🟢", "└ #1 x", "", ""], ["🟡", "└ #2 y", "", ""], ["🟢", "b", "", ""]]) == [0, 2, 0]
+assert max(n for rows in periodic for n in subtask_runs(rows)) >= 2
+
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
 r = subprocess.run([sys.executable, str(HERE / "table_width.py"), "--cols", "78"], input=wide, capture_output=True, text=True)
 assert r.returncode == 1 and r.stdout == "line 1: 88 cols > 78\n", (r.returncode, r.stdout)
