@@ -292,7 +292,7 @@ def deploys_prod(pr, gate):
     """True, False, or None when unknown. Unknown is treated as production."""
     if gate.get("prod") is not None and not isinstance(gate["prod"], bool):
         raise ValueError(f"ownergate {gate.get('name')}: prod must be true, false or absent")
-    paths =[n["path"] for n in (pr.get("files") or {}).get("nodes", [])]
+    paths = [n["path"] for n in (pr.get("files") or {}).get("nodes", [])]
     prefixes = gate.get("prod_paths") or []
     if gate.get("prod") is True or any(p.startswith(x) for p in paths for x in prefixes):
         return True
@@ -331,6 +331,9 @@ def gate_match(gate, pr):
 def collect_ownergate(gh, me, cfg, ledger, now):
     """App PRs a configured gate says wait on the owner's approval; each is marked for the round or for the owner."""
     gates = [{"name": (g.get("authors") or ["gate"])[0], **g} for g in cfg["ownergate"]]
+    for g in gates:  # a config error shows on every run, not only when some PR matches
+        re.compile(g.get("title") or "")
+        deploys_prod({}, g)
     found = {}
     for login in dict.fromkeys(a for g in gates for a in g.get("authors", [])):
         for pr in gh.search(f"is:pr is:open archived:false draft:false review-requested:@me author:app/{bot_name(login)}", me):
@@ -349,7 +352,7 @@ def collect_ownergate(gh, me, cfg, ledger, now):
         prods = [deploys_prod(pr, g) for g in matched]
         prod = True if True in prods else None if None in prods else False
         phrases = [g.get("allow_rule") or "" for g in matched]
-        # A step the round already tried (round marks it before running) is never the round's again: the owner takes it.
+        # A step the round already tried (plan --body marks it) is never the round's again: the owner takes it.
         eligible = prod is False and f"attempt:{key(pr)}" not in ledger and all(len(x) >= ALLOW_RULE_MIN for x in phrases)
         if eligible and allow is None:
             allow = automode_allow()
@@ -521,8 +524,8 @@ def result(state, key, ok, note=""):
     """How one round step went, appended to body.txt; a step that did not go through is handed to the owner."""
     plan = read_json(state / "plan.json", None)
     i = next((x for x in (plan or {}).get("new", []) if x["key"] == key and x.get("run_by") == "round"), None)
-    if not i:
-        raise SystemExit(f"result: {key} is not a round step in plan.json")
+    if not i or not i.get("handed"):
+        raise SystemExit(f"result: {key} is not a round step `round` handed out")
     if ok:
         i["done"] = True
         write_json(state / "plan.json", plan)
@@ -530,7 +533,7 @@ def result(state, key, ok, note=""):
     else:
         i["run_by"] = "owner"
         write_json(state / "plan.json", plan)
-        line ="\n".join(x for x in (f"회차 실행 안 됨({note or '이유 없음'}), 소유자 몫: {i['repo']}#{i['number']}",
+        line = "\n".join(x for x in (f"회차 실행 안 됨({note or '이유 없음'}), 소유자 몫: {i['repo']}#{i['number']}",
                                        f"   ! {i['command']}", inbox_add(i)) if x)
     with (state / "body.txt").open("a") as fh:
         fh.write("\n" + line)
@@ -540,7 +543,8 @@ def result(state, key, ok, note=""):
 def round_steps(state):
     """The steps an allow rule lets this round run, each handed out once per run."""
     plan = read_json(state / "plan.json", None) or {"new": []}
-    steps = [i for i in plan["new"] if i.get("run_by") == "round" and not i.get("handed")]
+    marked = read_json(state / "ledger.json", {})
+    steps = [i for i in plan["new"] if i.get("run_by") == "round" and not i.get("handed") and f"attempt:{i['key']}" in marked]
     for i in steps:
         i["handed"] = True
     if steps:

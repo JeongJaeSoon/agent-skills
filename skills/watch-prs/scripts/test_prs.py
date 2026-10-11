@@ -257,6 +257,12 @@ p.deliver(gstate, covered)
 # A title that carries the marker text is not a round step: steps come from plan.json only.
 assert [i["key"] for i in covered["new"] if i["run_by"] == "round"] == ["acme/access#1@h1"]
 # result: a step that went through is noted; one that did not goes to the owner and the inbox.
+try:
+    p.result(gstate, "acme/access#1@h1", True)
+    raise AssertionError("a step round never handed out has no result")
+except SystemExit:
+    pass
+assert p.round_steps(gstate) == ["acme/access#1@h1\t" + g1["command"]]
 assert p.result(gstate, "acme/access#1@h1", False, "classifier refused").startswith("회차 실행 안 됨(classifier refused), 소유자 몫: acme/access#1")
 assert p.read_json(gstate / "plan.json", {})["new"][0]["run_by"] == "owner"
 assert calls.read_text().splitlines()[-1].endswith("--key prs:acme/access#1@h1")
@@ -292,7 +298,13 @@ p.deliver(rstate, rplan)
 p.round_steps(rstate)
 assert p.result(rstate, "acme/access#1@h1", True) == "회차가 실행함: acme/access#1"
 # A non-boolean prod is a config error (precheck exit 2), never "not production".
-assert p.precheck(Fake([], gated=gated), {**gcfg, "ownergate": [{**gate, "prod": "true"}]}, pathlib.Path(tempfile.mkdtemp()), NOW)[0] == p.EXIT_ERROR
+for bad in ({**gate, "prod": "true"}, {**gate, "title": "("}):  # checked even when no PR matches
+    for prs_found in (gated, []):
+        assert p.precheck(Fake([], gated=prs_found), {**gcfg, "ownergate": [bad]}, pathlib.Path(tempfile.mkdtemp()), NOW)[0] == p.EXIT_ERROR
+# plan.json written but deliver never marked the step (it failed in between): round hands out nothing.
+lost = pathlib.Path(tempfile.mkdtemp())
+p.write_json(lost / "plan.json", rplan)
+assert p.round_steps(lost) == []
 p.commit(rstate, gcfg, NOW)
 assert p.compute(Fake([], gated=gated), gcfg, p.read_json(rstate / "ledger.json", {}), NOW)["new"] == []
 # Slack review requests from watch-mentions' seen ledger: one entry per PR, permalinks attached.

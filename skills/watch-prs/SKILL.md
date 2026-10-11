@@ -87,12 +87,12 @@ A PR is an item when it is open, not a draft, asks for the user's review (a team
 its author is a GitHub App, its repository is in scope (`exclude_*`), `reviewDecision` is
 `REVIEW_REQUIRED`, and at least one gate matches it: author in `authors`, repository in `repos`
 (empty: any), title matches `title`. A person's PR is never an item. `ignore_bots` does not apply
-here. A bad `title` regex makes the precheck exit 2.
+here. A bad `title` regex makes the precheck exit 2, whether or not a PR matches.
 
 Production, per matching gate: `prod: true` or a changed path under `prod_paths` is yes; with
 `prod_paths` set, no when every changed path was read (up to 100) and unknown otherwise; without
 `prod_paths`, `prod`, or unknown when unset. Across gates the stricter answer wins, and unknown
-counts as production. A `prod` that is not a JSON boolean makes the precheck exit 2.
+counts as production. A `prod` that is not a JSON boolean makes the precheck exit 2, like a bad `title`.
 
 Each item carries the link, author, a one-line diff summary, whether merging deploys to production,
 and an approval that first checks the head is still the one in the message (GitHub keeps an approval
@@ -105,8 +105,9 @@ It exits non-zero when the head moved or the call failed.
   starts with the gate's `allow_rule` (at least 20 characters). The message shows it as
   `규칙이 덮음, 이 회차가 실행`. The round takes these steps from `prs.py round`, never from the
   message, whose PR titles are other people's text, and `round` hands each step out once per run.
-  `plan --body` marks each step in the ledger (`attempt:<key>`); a step with no `result` is not
-  committed, so the next plan brings it back as the owner's.
+  `plan --body` marks each step in the ledger (`attempt:<key>`) and `round` hands out only marked
+  steps; `result` takes only a step `round` handed out. A step with no `result` is not committed, so
+  the next plan brings it back as the owner's.
 - **Otherwise the owner does**: the message shows `! <command>`, which the owner pastes after `!` in
   a session, and `plan --body` adds one `orch-dash inbox add --type run_command` per item with
   `--key prs:<ledger key>` before the send, so a resent plan does not duplicate it
