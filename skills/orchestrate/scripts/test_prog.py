@@ -186,6 +186,13 @@ assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/
 # A fold into a lower PR's branch does not finish its ticket.
 fold = [{"ev": "landed", "pr": 3, "ticket": "A-3", "onto": 9, "ts": "2026-09-24T00:00:00+00:00"}]
 assert prog.landed_but_open(ev + fold, workers, tasks, wts) == prog.landed_but_open(ev, workers, tasks, wts)
+# A card spawned on a ticket after it landed carries follow-up work: ctx_b2's card is live, ctx_a1's is not.
+wk = [{"dispatchId": "ctx_a1", "taskId": "t1", "terminalState": "released", "resource": {"worktreeId": "w1"}},
+      {"dispatchId": "ctx_b2", "taskId": "t2", "terminalState": "active", "resource": {"worktreeId": "w2"}}]
+later = [{"ev": "spawned", "ticket": "A-1", "note": "ctx_a1", "ts": "2026-09-23T00:00:00+00:00"},
+         {"ev": "spawned", "ticket": "A-2", "note": "follow-up ctx_b2", "ts": "2026-09-24T01:00:00+00:00"}]
+assert prog.landed_but_open(ev + later, wk, tasks, wts) == [("A-1", "ctx_a1", False, "/w/1")], \
+    prog.landed_but_open(ev + later, wk, tasks, wts)
 # orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
