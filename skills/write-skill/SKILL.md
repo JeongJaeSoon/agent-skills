@@ -58,12 +58,15 @@ gh pr view <n> --json title,body -q '.title+"\n"+.body' | grep -i -E -f ~/.confi
 
 ## 6. Land (public repo)
 
-Commit and push as part of finishing this change, not in a batch at the end of the session: other machines pull from `origin`, so a change that is only local is invisible there. Commit signed, message in the log's form (`feat(<skill>): …`, Korean), with what was ruled out when a design choice was made. Then fast-forward the loaded checkout and push, each as its own command with a literal path (a `-C` path from a shell variable is blocked):
+Commit and push as part of finishing this change, not in a batch at the end of the session: other machines pull from `origin`, so a change that is only local is invisible there. Commit signed, message in the log's form (`feat(<skill>): …`, Korean), with what was ruled out when a design choice was made. Then push from the worktree first and fast-forward the loaded checkout after, each as its own command with a literal path (a `-C` path from a shell variable is blocked):
 
 ```bash
+git fetch origin && git rebase origin/main     # then rerun step 5 if origin moved
+git push origin HEAD:main
 git -C <main checkout> merge --ff-only <branch>
-git -C <main checkout> push origin main
 ```
+
+In this order a rejected push leaves nothing local moved. Fast-forwarding first and losing the push race leaves the loaded checkout with a commit origin replaced, which `skills-sync` then stops on.
 
 Other machines pick it up through `skills-sync sync` (launchd every 15 minutes: fetch, fast-forward only, stops with a notification on a dirty or diverged checkout; `docs/platform.md` §3). Changes under `~/.claude` have no such sync; say so in the report.
 
