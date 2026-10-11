@@ -98,7 +98,7 @@ An illustrative shape (the items are made up):
 
 - Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left; or the stage table (§1) when the items ship through PRs and deploys; a periodic report has one table per repository (below).
 - A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. In the periodic table the name takes at most 14 columns, the progress 22, the next step 26. Detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
-- Decision needed, Only you and Later each start with a bold lead and take one line per item, the first item on the lead line and each further item on its own line below: `**❓ 결정 필요** — 1. 질문: 선택지 → 추천 (이유) · 답이 없으면 …`, `**🙋 지금 사람만 할 일** — …`, `**⏸ 나중에** — 조건 → 할 일`. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
+- Decision needed, Only you and Later each start with a bold lead and take one line per item, the first item on the lead line and each further item below it after a blank line: `**❓ 결정 필요** — 1. 질문: 선택지 → 추천 (이유) · 답이 없으면 …`, `**🙋 지금 사람만 할 일** — …`, `**⏸ 나중에** — 조건 → 할 일`. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same sections and the same numbering of decisions.
 
@@ -124,6 +124,7 @@ An illustrative periodic report (the items are made up):
 ¹ 배포 창이 금요일뿐이라 다음 창은 10/16.
 
 **❓ 결정 필요** — 1. 재색인 권한: 서비스 계정 / 개인 토큰 → 추천 서비스 계정 (만료 없음) · 답이 없으면 재색인 보류
+
 2. 알림 문구: 현행 / 새 안 → 추천 새 안 (문의 감소) · 답이 없으면 현행 유지
 
 **🙋 지금 사람만 할 일** — acme/web Actions의 deploy-prod 승인 버튼
