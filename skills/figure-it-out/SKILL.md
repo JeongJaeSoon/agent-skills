@@ -44,6 +44,6 @@ Log the run with the **show-me-your-work** skill. Work of this size usually earn
 
 ## Phase E: Verify and hand back
 
-Check the whole against the Phase A predicate on the real product, not only the harness. Encode any recurring correction as a gate, a lint rule, a check, or a script (the **encode-lessons-in-structure** principle skill).
+Check the whole against the Phase A predicate on the real product, not only the harness. Encode any recurring correction as a gate, a lint rule, a check, or a script (`principles` → Encode Lessons in Structure).
 
 **Reply:** the playbook you designed, the rigor level and why, the decision-trail path, what is verified against the predicate, and what is still open.

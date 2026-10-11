@@ -90,7 +90,7 @@ One `Agent` call, `subagent_type: "general-purpose"`, `model: "opus"`. The synth
 Write every Accepted, Backlog and Rejected finding to the lessons ledger. A finding that matches an existing row adds its evidence and raises Occurrences instead of making a new row; evidence the row already holds raises nothing.
 
 - An Accepted finding stays Accepted only with two or more independent occurrences (different tickets, workers or sessions), or when it is a reproduced security or data defect. A `usage` row is a measurement: a later window of the same skill and flag raises Occurrences on its row, its two occurrences are two windows that do not overlap, and a window on a `rejected` row adds its evidence and leaves it rejected. Count occurrences from the ledger's rows and from the `signal` rows in other programs' ledgers in the store, since a program that ran before the ledger existed left no rows. Otherwise it stays `candidate` in the ledger and waits for a second occurrence.
-- For any item that would be enforced more reliably by a lint rule, script, metadata flag, or runtime check, move it from Accepted to Backlog. See the **encode-lessons-in-structure** principle skill.
+- For any item that would be enforced more reliably by a lint rule, script, metadata flag, or runtime check, move it from Accepted to Backlog. See `principles` → Encode Lessons in Structure.
 - Never propose changes to `hooks/guard.py`, the `orch land` gate in `skills/orchestrate/scripts/prog.py`, tests or eval graders, or this skill. A finding about one of them goes to Backlog for the human.
 
 ### 5. Apply
@@ -117,9 +117,9 @@ This plugin's skills (`agent-skills`) come from the `JeongJaeSoon/agent-skills` 
 For each approved Accepted item, follow the Routing field exactly:
 
 - Trivial existing-skill edit (a one-line bullet, a tightened sentence, a stale fact corrected): parent does directly.
-- Substantive existing-skill edit (a new section, a new pattern table, more than ~10 lines): hand to the **skill-creator** skill and run its draft / test / iterate loop.
-- `tune description: <skill path>` (the skill exists but didn't trigger when it should have): hand to **skill-creator** and run its description-optimization loop.
-- `new skill via skill-creator: <kebab-name>`: hand creation to **skill-creator**. Do not invent the shape ad hoc.
+- Substantive existing-skill edit (a new section, a new pattern table, more than ~10 lines): hand to the `skill-creator:skill-creator` skill and run its draft / test / iterate loop.
+- `tune description: <skill path>` (the skill exists but didn't trigger when it should have): hand to `skill-creator:skill-creator` and run its description-optimization loop.
+- `new skill via skill-creator: <kebab-name>`: hand creation to `skill-creator:skill-creator`. Do not invent the shape ad hoc.
 
 Before declaring done, run the `write-skill` steps on the change (prompt audit, internal-name grep, tests, `claude plugin validate`) and fix what they report. Put the lesson IDs in the commit message (`L-4`), and mark the rows `applied` once the change reaches main.
 

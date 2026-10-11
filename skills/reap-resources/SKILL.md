@@ -1,6 +1,6 @@
 ---
 name: reap-resources
-description: Use when dead sessions may have left resources piling up on this machine — "방치 리소스 정리해줘", "죽은 프로세스 정리", "codex 프로세스 너무 많아", "메모리·CPU 누가 먹고 있어", "머신 부하가 높아", leftover Codex plugin broker trees, orphaned test processes, dangling Docker volumes and untagged images, merged local branches, stale scratchpad worktrees — and for the resource steward's periodic round. Also the janitor ("janitor", "자동 정리", "정기 정리", "에이전트가 만든 리소스 정리"): a ledger of what agents created (temp dirs, GUI apps, browser windows) plus settled Orca worker worktrees and terminals, cleaned up on a 3-hour Orca automation with a model-free precheck. Also files in ~/Downloads and ~/Desktop untouched for 7 days, screenshots for 1 ("다운로드 폴더 정리", "바탕화면 정리"). Inventories first (count, RSS, CPU, age per kind), then reaps only the listed targets; files go to the trash, never deleted for good.
+description: "Use when the machine is slow or cluttered with what finished sessions and agents left behind — \"방치 리소스 정리해줘\", \"죽은 프로세스 정리\", \"메모리·CPU 누가 먹고 있어\", \"에이전트가 만든 리소스 정리\", \"다운로드 폴더 정리\", \"janitor\" — and for the resource steward's and the janitor's periodic rounds. Inventories first, then reaps only the listed targets; files go to the trash."
 ---
 
 # Reap resources

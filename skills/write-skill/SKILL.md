@@ -25,7 +25,7 @@ Before a new skill, or a new section longer than about ten lines, look for its h
 2. Grep the topic's key terms across those directories' `SKILL.md` and agent files.
 3. A skill that already owns the moment (its description names the trigger) gets the change. A new skill only when no existing one is a real home and the need recurs.
 
-Say in the report which skills you checked and why the change went where it did. Drafting a new skill from scratch, or tuning a description that fails to fire, goes through the `skill-creator` skill's loop; this skill's steps 3 to 7 still follow it.
+Say in the report which skills you checked and why the change went where it did. Drafting a new skill from scratch, or tuning a description that fails to fire, goes through the `skill-creator:skill-creator` skill's loop; this skill's steps 3 to 7 still follow it.
 
 ## 2. Edit
 
