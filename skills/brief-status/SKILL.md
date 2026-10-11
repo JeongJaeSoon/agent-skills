@@ -17,6 +17,7 @@ In this order, each left out when empty:
 2. **In progress** — what is moving, who or what moves it, and the next event (CI running, review requested, worker on step N).
 3. **Decision needed** — numbered across the whole report. Each item: the question in one line, the options, and one recommendation with its reason, and what happens if the human does not answer. Only decisions outside the approved scope reach the human (`orchestrate` "What reaches the human"); decide the rest and report them under Done. Inside a program, a decision registered with `orch decide add` keeps its id beside the number (`1. (d3) …`), so an answer by either closes it.
 4. **Only you** — what the human alone can do: a permission dialog, a login, a payment, an approval a ruleset requires from a person. Say where and what to press or run.
+5. **Later** — work deliberately deferred, each item with the condition that brings it back (a merge, a date, a decision).
 
 When the report covers several work items (tickets, tracks, a program's predicate items), each In progress item carries three fields:
 
@@ -35,6 +36,17 @@ When those items ship through PRs and deploys, the three fields take the form of
 
 When the human names the columns they want, save them to `~/.local/state/agent-skills/brief-format.json` and use them in place of the default columns above in the next reports, until they change them.
 
+### Periodic report
+
+A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report every N hours" the human set) keeps one shape every time, so the human can compare it with the last one:
+
+1. One summary line; `변화 없음` when nothing changed since the last report.
+2. A table with one row per lead (per repository when there are no leads). Columns: 진행 `N/M (추정 %)` · 완료 (증거) · 남은 일, filled by the Progress, Done so far and Left rules above. Every row goes out every time, changed or not.
+3. What the human has to do now: Decision needed and Only you.
+4. Later, each item with its condition.
+
+Put ▲ in front of each row that changed since the last report, and ▲ in the legend. After sending, save the table to `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`) for the next report to compare against. With no saved table, send it without ▲ and say so in the summary line. On Telegram each row is one line, ▲ at its start.
+
 Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
 ## 2. Channel
@@ -48,7 +60,7 @@ The human's last message decides it. It came in as a Telegram `<channel source="
 The reply tool sends plain text by default, so every markdown mark shows as typed: `**`, backticks, `#`, `|` tables, `[text](url)`. Its `markdownv2` format fails the whole send on one unescaped character. So:
 
 - No markdown syntax at all. Emphasis comes only from the emoji leads.
-- One emoji lead per section: 📋 the stage table, ✅ Done, 🔄 In progress, ❓ Decision needed, 🙋 Only you. Inside a stage line, 🔄 is the cell mark (being checked now).
+- One emoji lead per section: 📋 the stage table, ✅ Done, 🔄 In progress, ❓ Decision needed, 🙋 Only you, ⏸️ Later. Inside a stage line, 🔄 is the cell mark (being checked now).
 - One line per item, two at most; per-item progress as `<item> — 4/8 단계(추정 50%) · 완료: … · 남음: … (담당, 시각)`. A stage-table row becomes one line with the same four fields: `<item> (owner/repo#123) — 머지 ✅ … · dev ✅ … · prod 🔄 …`, a child line prefixed `ㄴ`, the versions on the 📋 lead line, `다음 순서` below. A chat post elsewhere that renders no tables takes this form too. Links as bare URLs. PRs as `owner/repo#123` plus the URL when the human will open it.
 - Decision items numbered `1.` `2.` … so the human can answer "1, 3 진행" or "2번은 B". Read such a reply against the numbers in this report.
 - The reply tool splits text over 4096 characters by itself, by default at the character count, mid-line. Keep sections short enough that one report stays in one message; a report that cannot goes out as one reply per section. (A `chunkMode` of `newline` in the Telegram access settings makes it split at paragraph breaks instead; that setting is the human's.) A table the human truly needs (a long comparison) goes as an attached image or file, with its one-line conclusion in the text.
