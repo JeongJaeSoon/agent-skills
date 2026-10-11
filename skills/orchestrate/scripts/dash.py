@@ -695,6 +695,9 @@ def collect_usage(dash, workers, cfg):
 IDLE_MIN = 15        # its turn ended and nothing it armed (ScheduleWakeup, Monitor, background job) will wake it
 START_MIN = 10       # dispatched, but its session has written nothing since
 TOOL_MIN = 45        # one tool call still running (a CI watch past this is worth a look)
+# A turn should be writing: the last row is input (a prompt, a tool result, a task-notification) and nothing
+# followed. A notification that lands after the turn ended can sit there without ever starting a turn.
+SILENT_MIN = 20
 
 
 def stalls(workers, tnow):
@@ -712,6 +715,8 @@ def stalls(workers, tnow):
         elif m.get("state") == "tool" and mins(m["since"]) >= TOOL_MIN:
             out.append({**row, "kind": "long_tool", "minutes": round(mins(m["since"])), "tool": m.get("tool"),
                         "detail": m.get("detail")})
+        elif m.get("state") == "working" and mins(m["since"]) >= SILENT_MIN:
+            out.append({**row, "kind": "silent", "minutes": round(mins(m["since"]))})
     return out
 
 

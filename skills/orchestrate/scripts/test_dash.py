@@ -309,8 +309,12 @@ ws = [{"dispatch": "a", "outcome": "in_progress", "since": ago(60), "motion": {"
       {"dispatch": "d", "outcome": "in_progress", "since": ago(30), "motion": None, "model": "gpt-6"},
       {"dispatch": "e", "outcome": "in_progress", "since": ago(90), "motion": {"state": "tool", "since": ago(50), "tool": "Bash"}},
       {"dispatch": "f", "outcome": "in_progress", "since": ago(90), "motion": {"state": "working", "since": ago(1)}},
-      {"dispatch": "g", "outcome": "succeeded", "since": ago(90), "motion": {"state": "idle", "since": ago(80)}}]
-assert [(x["dispatch"], x["kind"]) for x in dash.stalls(ws, now)] == [("a", "idle"), ("c", "start_unconfirmed"), ("e", "long_tool")]
+      {"dispatch": "g", "outcome": "succeeded", "since": ago(90), "motion": {"state": "idle", "since": ago(80)}},
+      # A task-notification row after the turn ended: "working" with nothing written since.
+      {"dispatch": "h", "outcome": "in_progress", "since": ago(200), "motion": {"state": "working", "since": ago(150)}}]
+assert [(x["dispatch"], x["kind"]) for x in dash.stalls(ws, now)] == [("a", "idle"), ("c", "start_unconfirmed"), ("e", "long_tool"),
+                                                                      ("h", "silent")]
+assert "{" not in dash.prog.STALL_TEXT["silent"].format(dispatch="h", minutes=150)
 held = dash.spare({"next": "stop spawning: land what is verified", "cap": 4, "in_flight": 1}, [])
 assert held["slots"] == 0 and held["held"].startswith("stop spawning"), held
 free = dash.spare({"next": "may spawn 3 more", "cap": 4, "in_flight": 1},

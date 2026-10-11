@@ -90,7 +90,9 @@ Then review by scope, not by vendor:
 
 Write in the PR body which of these the diff triggered and what ran; a triggered one you skipped
 gets its reason there; an Orca worker copies the line into its worker_done. A Codex review alone
-does not stand in for a triggered row.
+does not stand in for a triggered row. Each review above ends in a report: fold its findings in and go
+on to the next step in the same turn; a turn that ends on a review report leaves the ticket
+stalled with no one waiting for it.
 
 **Trivial** means all of these: about 20 changed lines or fewer, no auth, crypto, migration,
 concurrency, CI or public-contract change, and a test that covers it. A trivial diff still gets

@@ -695,6 +695,9 @@ STALL_TEXT = {
             "one line (orca terminal send --text 'run your orchestration check' --enter)",
     "start_unconfirmed": "dispatched {minutes} min ago and its session has written nothing: check it got the brief",
     "long_tool": "one {tool} call running for {minutes} min ({detail}): still waiting on purpose?",
+    "silent": "its session has written nothing for {minutes} min though its last row is input, not an ended turn "
+              "(a notification that arrived after the turn ended looks like this): read its terminal, and if it sits "
+              "at the prompt, send the content to dispatch:{dispatch} and nudge its terminal as for an idle one",
 }
 
 
