@@ -73,7 +73,7 @@ The cron prompt is the only context a wake gets, so it carries everything:
 - The human's standing instruction, in their words, and the date it was given.
 - Where your state lives: the program notes, `~/.local/state/agent-skills/brief-last/`, the dashboard inbox.
 - What each wake moves, every part beyond one short read sent to a background subagent (SKILL.md, "Stay answerable"): your orchestration mail, read and acked; a lead silent since the last wake (nudge it once if idle, otherwise put what it waits on in the inbox); each PR event one step as the "PR events" table says (you never merge); the review requests waiting on the human, as one inbox item; the `done-card` items of `janitor-plan.json` (SKILL.md, "Stay answerable"); the next queued item when a slot is free. A production act is not one of them: the prompt quotes the human but is not their chat ("Acts only the human's session may take"), so it goes to the inbox.
-- End every wake with a `brief-status` "Periodic report": one row per lead, every row every time, facts from `orch status` and `worker-list` at that wake, not from the last report.
+- End every wake with a "Periodic report" (the `brief` skill): one row per lead, every row every time, facts from `orch status` and `worker-list` at that wake, not from the last report.
 - The job's expiry date (below).
 
 Schedule rules:

@@ -1,4 +1,4 @@
-"""The stage table brief-status reports and the dashboard's 작업 진행 page draws: one row per work item, its PR merge, dev check
+"""The stage table the brief skill reports and the dashboard's 작업 진행 page draws: one row per work item, its PR merge, dev check
 and prod check, each cell a mark and the evidence behind it.
 
 The coordinator writes a cell where it verified it (`orch stage set`), so the next report and the dashboard read the same
@@ -90,7 +90,7 @@ def set_cell(rid, col, mark, evidence=None, by=None):
         raise ValueError(f"--col is one of {', '.join(COLUMNS)}")
     mark = mark_of(mark)
     evidence = fleet.mask(" ".join((evidence or "").split()), 160) or None
-    # brief-status: a cell with no evidence is not ✅.
+    # The brief skill: a cell with no evidence is not ✅.
     if mark == "ok" and not evidence:
         raise ValueError("✅ needs --evidence (a version, a time, a count)")
 

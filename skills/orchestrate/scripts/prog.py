@@ -62,7 +62,7 @@ Usage: orch <command> <slug> [options]
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]
-                                     no slug: the stage table brief-status reports, one row per work item.
+                                     no slug: the stage table the brief skill reports, one row per work item.
                                      Write a cell where you verified it; ok needs --evidence. The merge
                                      cell of a row with --pr comes from the fleet PR list. `next` replaces
                                      the next-steps list (no lines clears it); done rows leave after 7
