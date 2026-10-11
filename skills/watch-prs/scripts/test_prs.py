@@ -1,6 +1,6 @@
-"""Rules of prs.py: who counts as a personal request, ranking, the ledger, precheck exit codes, schedule.
+"""Rules of prs.py: who counts as a personal request, ranking, the ledger, precheck exit codes, unreleased merges, dispatch, schedule.
 Run: python3 test_prs.py"""
-import json, os, pathlib, shlex, stat, subprocess, sys, tempfile
+import json, os, pathlib, re, shlex, stat, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prs as p
 
@@ -34,17 +34,30 @@ def pr(n, repo="acme/widgets", author="alice", kind="User", reqs=(), draft=False
 
 
 class Fake:
-    def __init__(self, search, nodes=(), gated=()):
+    def __init__(self, search, nodes=(), merged=(), deployed=None, live=(), gated=()):
         self.found, self.by_id, self.gated = list(search), {n["id"]: n for n in nodes}, list(gated)
+        self.merged, self.deployed, self.live, self.queries = list(merged), deployed, set(live), []
 
     def viewer(self):
         return ME
 
     def search(self, q, me):
-        assert "review-requested:@me" in q and me == ME
+        assert me == ME
+        self.queries.append(q)
+        if "is:merged" in q:
+            return [m for m in self.merged if f"repo:{m['repository']['nameWithOwner']} " in q]
+        assert "review-requested:@me" in q
         if "author:app/" in q:
             return [x for x in self.gated if q.endswith("author:app/" + p.bot_name(x["author"]["login"]))]
         return self.found
+
+    def revision(self, cmd):
+        if isinstance(self.deployed, Exception):
+            raise self.deployed
+        return self.deployed
+
+    def contains(self, repo, commit, deployed):
+        return commit in self.live
 
     def nodes(self, ids, me):
         return [self.by_id[i] for i in ids if i in self.by_id]
@@ -133,7 +146,7 @@ p.write_json(state / "plan.json", {"run": NOW + 61 * DAY, "new": []})
 p.commit(state, cfg, NOW + 61 * DAY)
 assert list(p.read_json(state / "ledger.json", {})) == [still]
 
-# Only review_request has a collector; a later kind fails loudly instead of silently sending nothing.
+# A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
     p.compute(Fake([]), {**cfg, "kinds": ["review_wait"]}, {}, NOW)
@@ -164,7 +177,16 @@ assert {e["pr"]: e["why"] for e in owner_only["excluded"]} == {"acme/access#1": 
     "acme/other#6": "게이트 조건 밖"}, owner_only["excluded"]
 g1 = owner_only["new"][0]
 assert g1["command"] == ('[ "$(gh pr view 1 -R acme/access --json headRefOid -q .headRefOid)" = h1 ] && '
-                         'gh api -X POST repos/acme/access/pulls/1/reviews -f event=APPROVE -f commit_id=h1 || echo "not approved: head moved"')
+                         'gh api -X POST repos/acme/access/pulls/1/reviews -f event=APPROVE -f commit_id=h1 '
+                         '|| { echo "not approved: head moved or the call failed"; false; }')
+# The line fails (non-zero) when the head moved or the API call failed, so nobody records it as approved.
+for head_now, api_rc, want in (("h1", 0, 0), ("h9", 0, 1), ("h1", 1, 1)):
+    shim = pathlib.Path(tempfile.mkdtemp())
+    (shim / "gh").write_text(f'#!/bin/sh\n[ "$1" = pr ] && {{ echo {head_now}; exit 0; }}\nexit {api_rc}\n')
+    (shim / "gh").chmod(0o755)
+    rc = subprocess.run(["sh", "-c", g1["command"]], env={**os.environ, "PATH": f"{shim}:{os.environ['PATH']}"},
+                        capture_output=True).returncode
+    assert (rc != 0) == bool(want), (head_now, api_rc, rc)
 assert g1["diff"] == "파일 1개 ±10: members/a.json" and g1["rule_draft"].startswith("allow: Scheduled watch-prs round approving access PRs")
 gtext = p.body(owner_only).splitlines()
 assert gtext[1].startswith("1. [소유자 승인] acme/access#1 [Auto] Add access for 1 user — @grant-bot · 2일 · 파일 1개 ±10") \
@@ -184,6 +206,7 @@ assert p.compute(Fake([], gated=gated[:1]), gcfg, {"acme/access#1@h1": {"at": NO
 # Production: more changed files than were read is unknown, which stays with the owner.
 assert p.deploys_prod({**gated[0], "changedFiles": 250}, gate) is None
 assert p.deploys_prod(gated[0], {"prod": False}) is False and p.deploys_prod(gated[0], {}) is None
+assert p.deploys_prod(gated[0], {"prod": "false"}) is None, "only the JSON boolean false means not production"
 # Two gates on one author: a title only the second matches is still an item; the stricter production answer wins.
 prd = pr(7, **A, title="[prd] Rotate", files=["members/c.json"])
 two = {**gcfg, "ownergate": [gate, {"name": "prd", "authors": ["grant-bot"], "title": r"^\[(prd|Auto)\]", "prod": True}]}
@@ -201,6 +224,8 @@ assert p.compute(Fake([], gated=gated), gcfg, {}, NOW)["new"][0]["run_by"] == "o
 allow_rules.clear()
 assert p.compute(Fake([], gated=gated), gcfg, {}, NOW)["new"][0]["run_by"] == "owner", "a rule that went away covers nothing"
 allow_rules.append("Scheduled watch-prs round approving access PRs: in a turn started by ...")
+assert p.compute(Fake([], gated=gated), {**gcfg, "ownergate": [{**gate, "allow_rule": "Scheduled"}]}, {}, NOW)["new"][0]["run_by"] \
+    == "owner", "a phrase shorter than ALLOW_RULE_MIN covers nothing"
 
 # A bad title regex is "could not check" (2), not "nothing new" (1).
 assert p.precheck(Fake([], gated=gated), {**gcfg, "ownergate": [{**gate, "title": "["}]}, pathlib.Path(tempfile.mkdtemp()), NOW)[0] == p.EXIT_ERROR
@@ -240,6 +265,96 @@ except SystemExit:
 assert p.commit(gstate, gcfg, NOW) == 2
 assert p.read_json(gstate / "ledger.json", {})["acme/access#5@h5"]["kind"] == "ownergate"
 
+# round marks each step before handing it out. A step with no result (crash, refused `result`) is not committed,
+# and the next plan gives it to the owner instead of running it again.
+rstate = pathlib.Path(tempfile.mkdtemp())
+p.write_json(rstate / "plan.json", p.compute(Fake([], gated=gated), gcfg, {}, NOW))
+assert p.round_steps(rstate, NOW) == ["acme/access#1@h1\t" + g1["command"]]
+p.commit(rstate, gcfg, NOW)
+rledger = p.read_json(rstate / "ledger.json", {})
+assert "acme/access#1@h1" not in rledger and "attempt:acme/access#1@h1" in rledger
+again = p.compute(Fake([], gated=gated), gcfg, rledger, NOW)
+assert [(i["key"], i["run_by"]) for i in again["new"]] == [("acme/access#1@h1", "owner")], again["new"]
+# A step that went through is committed and not sent again.
+p.write_json(rstate / "plan.json", p.compute(Fake([], gated=gated), gcfg, {}, NOW))
+p.round_steps(rstate, NOW)
+assert p.result(rstate, "acme/access#1@h1", True) == "회차가 실행함: acme/access#1"
+p.commit(rstate, gcfg, NOW)
+assert p.compute(Fake([], gated=gated), gcfg, p.read_json(rstate / "ledger.json", {}), NOW)["new"] == []
+
+# unreleased: the owner's merges in a declared repo within lookback_days; the dev revision decides the action, not membership.
+def merged(n, repo="acme/widgets", hours=3, sha=None):
+    return {**pr(n, repo=repo, author=ME, age=1), "state": "MERGED", "mergedAt": iso(NOW - hours * 3600),
+            "mergeCommit": {"oid": sha or f"m{n}"}}
+
+decl = {"dev_release": "auto-sync", "revision_cmd": "print-dev-sha", "logs": "dev log viewer",
+        "verify": "verify-widgets", "lookback_days": 1, "orca_repo": "name:widgets"}
+rcfg = {**cfg, "kinds": ["review_request", "unreleased"], "deploy": {"acme/widgets": decl}, "dispatch_run": "run_x",
+        "release_approval": "dev 배포 승인됨(테스트)"}
+fake = Fake([pr(1, reqs=[user(ME)])], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+both = p.compute(fake, rcfg, {}, NOW)
+rel = [i for i in both["new"] if i["kind"] == "unreleased"]
+assert [(i["number"], i["deployed"], i["merge_commit"], i["key"]) for i in rel] == \
+    [(20, True, "m20", "acme/widgets#20@h20"), (21, False, "m21", "acme/widgets#21@h21")], rel
+assert [i["kind"] for i in both["new"]][0] == "review_request"
+q = [x for x in fake.queries if "is:merged" in x][0]
+assert f"author:{ME}" in q and "repo:acme/widgets " in q and "merged:>=2027-01-14T08:00:00Z" in q, q
+lines = p.body({**both, "new": rel}).splitlines()
+assert lines[1].startswith("1. [dev 확인 전] acme/widgets#20 Change 20") and "dev 에 반영됨, 동작 확인 전" in lines[1]
+assert "dev 에 아직 없음" in lines[2]
+
+# Nothing declared, or everything already handed on: no revision probe at all.
+silent = Fake([], merged=[merged(20)], deployed=RuntimeError("must not run"))
+assert p.compute(silent, {**rcfg, "deploy": {}}, {}, NOW)["new"] == []
+assert p.compute(silent, rcfg, {"acme/widgets#20@h20": {"at": NOW, "kind": "unreleased"}}, NOW)["new"] == []
+
+# A probe that fails still hands the merge on, flagged, so it cannot age out of lookback_days unseen.
+broke = p.compute(Fake([pr(1, reqs=[user(ME)])], merged=[merged(20)], deployed=RuntimeError("exit 1")), rcfg, {}, NOW)
+assert [(i["kind"], i.get("deployed")) for i in broke["new"]] == [("review_request", None), ("unreleased", None)]
+assert broke["new"][1]["why"] == ["dev 리비전 확인 실패: exit 1"] and "dev 리비전 확인 실패" in p.body(broke)
+assert "dev 리비전을 읽지 못함" in p.dispatch_cmds(broke, rcfg)[0][4]
+assert "revision_cmd 없음" in p.compute(Fake([], merged=[merged(20)], deployed="d0"),
+                                        {**rcfg, "deploy": {"acme/widgets": {}}}, {}, NOW)["new"][0]["why"][0]
+
+# The real probes: revision_cmd through the shell, containment through gh's compare status.
+gh_dir = pathlib.Path(tempfile.mkdtemp())
+cmp_gh = gh_dir / "gh"
+cmp_gh.write_text('#!/bin/sh\ncase "$2" in *m20...d0) echo ahead;; *m21...d0) echo behind;; *same...d0) echo identical;; *) echo boom >&2; exit 1;; esac\n')
+cmp_gh.chmod(0o755)
+p.GH = str(cmp_gh)
+real = p.GitHub()
+assert [real.contains("acme/widgets", c, "d0") for c in ("m20", "m21", "same")] == [True, False, True]
+try:  # gh failing (bad sha, lost access) is an error, not "not deployed"
+    real.contains("acme/widgets", "unknown", "d0")
+    raise AssertionError("a failed compare must raise")
+except RuntimeError as e:
+    assert "boom" in str(e)
+assert real.revision("printf 'abc123\\n'") == "abc123"
+for bad in ("exit 3", "true"):
+    try:
+        real.revision(bad)
+        raise AssertionError(f"{bad} must raise")
+    except RuntimeError:
+        pass
+
+# dispatch: one worker-start per repo; the brief carries the procedure, the declaration and the approval.
+two = {**rcfg["deploy"], "acme/gadgets": {"revision_cmd": "x"}}
+plan2 = p.compute(Fake([], merged=[merged(20), merged(21), merged(30, repo="acme/gadgets")], deployed="d0", live={"m20"}),
+                  {**rcfg, "deploy": two}, {}, NOW)
+cmds = p.dispatch_cmds(plan2, {**rcfg, "deploy": two})
+assert [c[c.index("--repo") + 1] for c in cmds] == ["name:gadgets", "name:widgets"]
+w = cmds[1]
+assert w[:3] == ["orca", "orchestration", "worker-start"] and w[w.index("--run") + 1] == "run_x"
+assert w[w.index("--worktree") + 1] == "new-top-level" and w[w.index("--agent") + 1] == "claude"
+spec = w[w.index("--spec") + 1]
+for want in ("post-merge-release.md", "#20 ", "merge m20", "dev 에 반영됨", "#21 ", "dev(d0) 에 아직 없음", "- revision_cmd: print-dev-sha",
+             "- verify: verify-widgets", "승인: dev 배포 승인됨(테스트)", "사람만: 프로덕션", "다시 시도하지 않는다"):
+    assert want in spec, want
+assert pathlib.Path(spec.split("절차: ")[1].split(" ")[0]).exists(), "the brief points at a reference that exists"
+assert "--run" not in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "dispatch_run": None})[0]
+assert "승인이 없다" in p.dispatch_cmds(plan2, {**rcfg, "deploy": two, "release_approval": None})[0][4]
+assert p.dispatch_cmds(plan, rcfg) == [], "review requests are messaged, never dispatched"
+
 # CLI end to end with a fake gh: exit codes and the --body output.
 tmp = pathlib.Path(tempfile.mkdtemp())
 fake_gh = tmp / "gh"
@@ -270,18 +385,37 @@ assert not (tmp / "state" / "prs" / "plan.json").exists(), "a plan with nothing 
 # One ledger PR GitHub can no longer resolve (deleted repo, lost access) must not fail the whole lookup.
 p.GH = str(fake_gh)
 assert p.GitHub().nodes(["PR_gone"], ME) == []
+# dispatch prints one runnable line per due repo from plan.json, and nothing without a plan.
+assert run("dispatch").returncode != 0
+conf.write_text(json.dumps({"prs": {"deploy": {"acme/widgets": decl}}}))
+p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
+d = run("dispatch")
+printed = d.stdout.splitlines()
+assert d.returncode == 0 and len(printed) == 1 and shlex.split(printed[0])[:3] == ["orca", "orchestration", "worker-start"], d
+assert printed[0].endswith(f'--spec "$(cat {tmp / "state" / "prs" / "brief-0.txt"})"')
+assert "#20 " in (tmp / "state" / "prs" / "brief-0.txt").read_text()
+(tmp / "state" / "prs" / "plan.json").unlink()
 broken = {**env, "AGENT_SKILLS_GH": "/nonexistent/gh"}
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)], env=broken, capture_output=True).returncode == 2
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
 
 # schedule: prints the create command with the precheck wired in; --write is the only path that creates.
-line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
+all_kinds = {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo", "kinds": ["review_request", "unreleased", "ownergate"]}
+line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), all_kinds, "path:/repo")
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1].endswith("/repo/skills/watch-prs/scripts/prs.py precheck")
 prompt = line[line.index("--prompt") + 1]
-assert all(w in prompt for w in ("plan --body", "--to term_x", "commit", " round", "result <키> failed"))
+assert "plan --body" in prompt and "--to term_x" in prompt and "commit" in prompt
+assert re.search(r"보내기가 성공했을 때만 `[^`]* dispatch`", prompt), "a failed send must not start workers"
+assert prompt.index("dispatch") < prompt.index("commit` 을") and "다시 시도하지 않고" in prompt
+assert prompt.index(" round`") < prompt.index("orca orchestration send") and "result <키> failed" in prompt, \
+    "round steps run and are recorded before the send"
+# The prompt follows cfg["kinds"]: a kind not listed adds none of its steps.
+only_review = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**cfg, "inbox_to": "term_x"}, "path:/r")
+plain = only_review[only_review.index("--prompt") + 1]
+assert " round`" not in plain and " dispatch`" not in plain and "보내기가 성공했을 때만 `" in plain
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 

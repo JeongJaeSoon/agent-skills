@@ -21,7 +21,7 @@ This design replaced three that failed on a real program (2026-09-23/24):
 **Normal lane** (most PRs). `land` merges as soon as all of these hold at the current head:
 
 - a passing verdict whose patch-id matches the PR now
-- CI completed and green. No checks yet counts as pending, and a green check is not proof, so read the logs of the runs it prints.
+- CI completed and green, with every workflow run at the head finished. No checks yet counts as pending, and so does a rollup that holds only a bot's status or the first jobs of a run (jobs behind `needs` appear later). A green check is not proof, so read the logs of the runs it prints.
 - no conflict, not a draft
 - its dependencies landed
 - main is not red
