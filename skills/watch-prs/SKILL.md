@@ -28,7 +28,7 @@ never in this repo.
          "exclude_title_patterns": ["^chore: sync shared config"],
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
          "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
-         "max_items": 10, "stale_days": 30, "cron": "*/15 * * * *", "timezone": "<IANA tz>",
+         "max_items": 10, "stale_days": 30, "cron": "*/30 * * * *", "timezone": "<IANA tz>",
          "kinds": ["review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate"],
          "ownergate": [<gate>, ...],
          "channel": "<default Slack channel id>", "repo_channels": {"<owner/repo>": "<channel id>"},
@@ -329,8 +329,9 @@ The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:
 | 1 | nothing new, or a run still holds `plan.json` (younger than `lock_minutes`) |
 | 2 | could not check: no `prs` key in the config, or `gh` failed |
 
-The default trigger is every 15 minutes, for a proof window. The steady state is weekday business
-hours, e.g. `*/15 9-19 * * 1-5` with `timezone` set; change `cron` in the config and run
+The default trigger is every 30 minutes: GitHub's GraphQL limit (5000 points per hour) is shared by
+every session using the same token. The steady state is weekday business hours, e.g.
+`*/30 9-19 * * 1-5` with `timezone` set; change `cron` in the config and run
 `schedule --edit <id> --write` (it rewrites the trigger from the config, so a cron set only in Orca is lost). `orca automations run` skips the precheck, so it
 proves nothing about it: test the precheck by running it directly with `--state` pointing at a
 scratch folder, and judge the automation by a scheduled run in

@@ -64,7 +64,7 @@ LABELS = {"review_request": "리뷰 요청", "review_wait": "내 PR 대기", "re
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
             "exclude_title_patterns": [],
             "ignore_bots": [], "self_bots": [], "ownergate": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
-            "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None, "mentions_seen": None,
+            "keep_days": 60, "lock_minutes": 60, "cron": "*/30 * * * *", "timezone": None, "mentions_seen": None,
             "deploy": {}, "dispatch_run": None, "worker_agent": "claude", "release_approval": None,
             "channel": None, "repo_channels": {}, "reviewers": {}, "review_bots": {}, "holidays": [],
             "urgent_labels": [], "batch_min": 2, "batch_wait_hours": 2, "night_hour": 21,

@@ -50,6 +50,11 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             wakes you, so end your turn to wait; never a sleep loop over its output file). Act on
             exit 3, report on exit 1. Pending checks are waited on the same way, or with a
             `Monitor` until-loop on `gh pr checks` (deliver-ticket review-loop).
+            A wait on a human review or another outside event reads the PR at most once every
+            60 minutes, or not at all: end your turn or `ask`, and the notice comes through
+            watch-prs or the coordinator. GitHub's GraphQL limit (5000 points per hour) is shared
+            by every session using the same token. On a rate-limit error, retry nothing: wait
+            until the reset time (the error's `retry-after`, else `gh api rate_limit`).
             Never merge any other way. (human-gate: stop at READY and report instead.)
 FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each finding in the
             worker_done body with a proposed class (NOW: a predicate item or a reproduced
@@ -117,6 +122,8 @@ HUMAN ONLY  Permission dialogs, logins, payments, document submissions, and any 
 MODEL CALLS Another model (a subagent, Codex, an API) only when the task needs it; say which and
             why before the call, and pick the model then.
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
+            Waiting on a review or another outside event: the program brief's LAND sentences from
+            "A wait on a human review" through "rate_limit`).", pasted verbatim.
 WAITING     `ask` what you cannot decide. After two waits in a row end with no answer,
             `orch decide add` the question and end your turn; the answer is typed into your terminal.
 REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
