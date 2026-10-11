@@ -17,7 +17,8 @@ command. `EndConversation` is the fallback for what Orca cannot reach, not the d
 Ending is yours to do. The user asked; do not ask back unless the state is off-script (§4) or
 the ending is `EndConversation`, which has its own rule (§5). An Orca worker is not asked at
 all: settling its task is the request (§7). Nor is a card whose brief has a `CLOSE` line:
-reaching the brief's done is the request (§8).
+reaching the brief's done is the request (§8). Nor is `handoff-ticket` §5: a successor card
+verified as started is the request.
 
 ## 1. Is this even a request to end
 
@@ -227,7 +228,8 @@ note that the card is left for the parent or the human.
   this drops the resume records for good.
 - Calling `EndConversation` on the first "종료해줘", with no confirmation turn.
 - Ending because a task finished, stalled, or went badly. Only the user's request ends a
-  session, or, for an Orca worker, settling its task by §7, or a brief's `CLOSE` line (§8).
+  session, or, for an Orca worker, settling its task by §7, or a brief's `CLOSE` line (§8),
+  or `handoff-ticket` §5 once its successor card has started.
 - A dispatched card that reached its done and idles on "다음은 무엇을 할지 정해 주세요" or
   "정리는 오케스트레이터가 합니다". §8 closes it in that turn.
 - An Orca worker sending `worker_done` and idling on a clean, landed card. Nothing closes it

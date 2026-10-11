@@ -28,6 +28,4 @@ When the explanation is a page for people outside this conversation (an Artifact
 5. What this work covers and what it leaves to something else.
 6. The open questions.
 
-The page's design (layout, theming, sizing) follows the `artifact-design` skill.
-
 **Reply:** the explanation itself, never a report about what you did. Lead with the main point, then the plain account of what it is, how it works, and why, and the threads worth chasing with `how` or `why`. For a shareable page, the reply is the link and the page's top summary.

@@ -1,6 +1,6 @@
 ---
 name: brief-status
-description: "Use when the human asks where the work stands — \"현황 보고해줘\", \"상황 정리해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"status update\", or a message that is just `/brief` (a channel bot command) — and when a turn for the human ends with a report spanning several items (finished work, open work, decisions to take). Not for reports whose shape is fixed by a contract: a subagent's result, an Orca worker_done body, JSON or a script's output. Picks the layout by channel: plain short lines with no markdown when the human writes from Telegram, markdown tables in the terminal. \"어디까지 했지\" (reconstructing past sessions) is recall; \"남은 작업 있어?\" (what runs next) is handoff-ticket; a program's numbers come from orchestrate's `orch status`."
+description: "Use when the human asks where the work stands — \"현황 보고해줘\", \"상황 정리해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"status update\", a message that is just `/brief` — including progress as a table (\"진행상황 표로\", spaced or not), detailed progress per lead or per item, and what the human has to check or do; and when a turn for the human ends with a report spanning several items. Not for reports whose shape a contract fixes: a subagent's result, an Orca worker_done body, JSON or a script's output. Layout by channel: plain lines on Telegram, markdown tables in the terminal. \"어디까지 했지\" is recall; \"남은 작업 있어?\" is handoff-ticket; a program's numbers come from orchestrate's `orch status`."
 ---
 
 # Brief status
@@ -32,6 +32,8 @@ When those items ship through PRs and deploys, the three fields take the form of
 - Each cell is one mark and its evidence in a few words (a version, a time, a count): ✅ done and verified · ❌ not done or failed · ⚠️ partial, or inferred without a direct check · 🔄 being checked now, by whom · `해당 없음` when the item has no such stage. A cell with no evidence is not ✅.
 - Above the table, two or three lines of the facts it reads against: the version on prod and on dev, and the legend. These are part of the report, not a preamble.
 - Where `orch` is installed (orchestrate), the table is a record: write each cell when you verify it (`orch stage set <row> --col dev --mark ok --evidence v1.8.0`), then report the output of `orch stage show --md`, or `--telegram` for Telegram, instead of rebuilding the table. The merge cell comes from the PR list. Build the table by hand only when no rows are recorded.
+
+When the human names the columns they want, save them to `~/.local/state/agent-skills/brief-format.json` and use them in place of the default columns above in the next reports, until they change them.
 
 Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 

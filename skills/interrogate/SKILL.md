@@ -1,13 +1,13 @@
 ---
 name: interrogate
-description: "Use for \"interrogate\", \"adversarial review\", \"multi-model review\", \"codex 교차 검증\", \"적대적 리뷰\", \"codex 로 설계안/계획 점검\", \"문제없는지 codex 에게 리뷰\", \"challenge this\", or \"find blind spots\" on a design, plan or diff. Multiple LLM reviewers challenge it from independent angles. A PR on its way to main goes through deliver-ticket's Codex review instead."
+description: "Use for \"interrogate\", \"adversarial review\", \"multi-model review\", \"codex 로 설계안/계획 점검\", \"문제없는지 codex 에게 리뷰\", \"challenge this\", or \"find blind spots\" on a design, plan or decision — not a PR on its way to main (that is deliver-ticket's Codex review). Multiple LLM reviewers challenge it from independent angles."
 ---
 
 # Interrogate
 
 Spawn one reviewer per configured model to adversarially review code changes. Each model gets the same prompt and rubric. The adversarial signal comes from model diversity, not assigned personas.
 
-The deliverable is a synthesized verdict. Do NOT auto-apply changes.
+The deliverable is a synthesized verdict; this skill changes no files. When `deliver-ticket` calls it, the caller applies the Act on findings.
 
 ## Step 1, Determine Scope
 
