@@ -103,7 +103,9 @@ a reviewer other than its author: one subagent running `/code-review` on it (ver
 `review` for defects, and `adversarial-review` when the design, not the defect count, is what you
 are unsure about. The commands, the model to pick, and what to do when Codex returns no review
 are in [references/codex-review.md](references/codex-review.md): a run that reviewed nothing is
-retried until Codex reviews or goes to the human, never replaced by a subagent's review.
+retried until Codex reviews, never replaced by your own subagent's review. Only when Codex itself
+is unavailable (spend cap, outage, login) does an independent Claude Code review stand in;
+otherwise it goes to the human.
 
 Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
 Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That

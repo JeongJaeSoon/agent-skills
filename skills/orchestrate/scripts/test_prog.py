@@ -690,13 +690,14 @@ print("prog.py stacks: all pass")
 # --- verdict sources are a closed set ------------------------------------------------------------
 real_view, real_pid = prog.pr_view, prog.patch_id
 prog.pr_view, prog.patch_id = (lambda repo, n: {"headRefOid": "h1"}), (lambda repo, n: "p1")
-for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:anthropic", "live:", "verifier"):
+for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:anthropic", "live:", "verifier",
+            "claude-review", "claude-review:self"):
     try:
         prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", bad])
         raise AssertionError(f"verdict accepted --source {bad}")
     except SystemExit as e:
         assert "--source is" in str(e), e
-for good in ("codex-review", "subagent-review", "verifier:codex", "live:checkout"):
+for good in ("codex-review", "subagent-review", "claude-review:independent", "verifier:codex", "live:checkout"):
     with contextlib.redirect_stdout(io.StringIO()):
         prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good])
     assert prog.Program("gt").events()[-1]["source"] == good
