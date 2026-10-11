@@ -14,6 +14,10 @@ st = json.load(open(path))
 a = sys.argv[1:]
 def save(): json.dump(st, open(path, "w"))
 def pr(n): return st["prs"][str(n)]
+flaky = st.get("flaky", {})
+if flaky.get(" ".join(a[:2])):
+    flaky[" ".join(a[:2])] -= 1; save()
+    sys.exit('Post "https://api.github.com/graphql": net/http: TLS handshake timeout')
 if a[:2] == ["pr", "list"]:
     print(json.dumps([dict(p, number=int(n)) for n, p in st["prs"].items() if p["state"] == "OPEN"]))
 elif a[:2] == ["pr", "view"] and a[-1] == "files":
@@ -273,5 +277,32 @@ st = json.loads((d / "state.json").read_text()); st["workers"] = [{"agentTermina
 (d / "state.json").write_text(json.dumps(st))
 code, out = prog(dict(env, ORCA_TERMINAL_HANDLE="term_role"), "wait", "t", "--rounds", "1")
 assert code == 1 and "coordinator's Run inbox" in out, out
+
+# A GitHub hiccup is a yield, not a refusal: on the merge call and on a read; the next pass lands.
+for call in ("pr merge", "pr view"):
+    d, env = setup({"21": pr(21)})
+    verdict(d, 21, "T-21")
+    st = json.loads((d / "state.json").read_text()); st["flaky"] = {call: 1}; (d / "state.json").write_text(json.dumps(st))
+    code, out = prog(env, "land", "t", "--pr", "21")
+    assert code == 2 and "TLS handshake timeout" in out and "land again" in out, (call, out)
+    assert "land_failed" not in [e["ev"] for e in ledger(d)], call
+    code, out = prog(env, "land", "t", "--pr", "21")
+    assert code == 0 and "landed #21" in out, (call, out)
+# A refusal that is not a hiccup still stops.
+d, env = setup({"22": pr(22)})
+verdict(d, 22, "T-22")
+st = json.loads((d / "state.json").read_text()); st["prs"]["22"]["stacked"] = True; (d / "state.json").write_text(json.dumps(st))
+code, out = prog(env, "land", "t", "--pr", "22")
+assert code == 1 and "merge refused" in out, out
+
+# A landing on a feature base says how to start its CI when push CI covers only the default branch.
+d, env = setup({"23": pr(23, base="feature/x")})
+verdict(d, 23, "T-23")
+code, out = prog(env, "land", "t", "--pr", "23")
+assert code == 0 and "gh workflow run <ci workflow file> --repo o/r --ref feature/x" in out, out
+d, env = setup({"24": pr(24)})
+verdict(d, 24, "T-24")
+code, out = prog(env, "land", "t", "--pr", "24")
+assert code == 0 and "workflow run" not in out, out
 
 print("prog.py land against fake gh: all pass")

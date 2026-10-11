@@ -89,7 +89,7 @@ When PRs must land in order (a dependency chain, consecutive migrations, layers 
 
 ## Feature integration branches
 
-A series of cards reworking one area works on `feat/<topic>`, branched from main and unprotected. Sub-PRs take it as their base and land into it with the same `orch land` (lanes are per base). The branch merges `origin/main` periodically. When the series is done, one `feat/<topic>` → main PR lands.
+A series of cards reworking one area works on `feat/<topic>`, branched from main and unprotected. Sub-PRs take it as their base and land into it with the same `orch land` (lanes are per base). The branch merges `origin/main` periodically. A CI that runs on push only for the default branch starts no run when a sub-PR lands there, so after each landing start it with `gh workflow run <ci workflow file> --ref feat/<topic>` and watch that run before `record main_green`; `land` prints this line when the base is not `main` or `master`. When the series is done, one `feat/<topic>` → main PR lands.
 
 ## What a worker does: `orch land <slug> --pr N [--wait-minutes 50]`
 
@@ -98,7 +98,7 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 | Exit | Meaning | Do |
 |---|---|---|
 | 0 | Landed. It printed the merge commit and the main-CI watch command. | Watch main CI, `record main_green\|main_red --sha`, finish the ticket, `worker_done` |
-| 2 | Yield: CI still running, a dependency or the stack top first, or another PR holds the exclusive lane | Nothing. Keep the `--wait-minutes` loop |
+| 2 | Yield: CI still running, a dependency or the stack top first, another PR holds the exclusive lane, or GitHub did not answer (timeout, 5xx) | Nothing. Keep the `--wait-minutes` loop |
 | 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again |
 | 1 | Refused: STOP line, main red (only `--class main-fix` lands), or the human gate | Report and stop |
 

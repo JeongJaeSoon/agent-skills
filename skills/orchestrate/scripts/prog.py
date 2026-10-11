@@ -88,6 +88,10 @@ REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 PASSING = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 ACTIONABLE = {"worker_done", "escalation", "question"}
+# GitHub or network hiccups that a later land pass gets past; attempt() rereads PR state, so a merge that went
+# through before the error is recorded on the next pass, never merged twice.
+TRANSIENT = re.compile(r"timeout|timed out|connection (reset|refused)|unexpected EOF|TLS handshake|HTTP 50[234]|"
+                       r"could not resolve host|temporarily unavailable|something went wrong", re.I)
 
 
 def now():
@@ -1076,6 +1080,8 @@ def merge_unit(p, pr, unit, klass, events):
             close_gate_task(p, n, "completed")
     if merged[pr]["state"] != "MERGED":
         why = (r.stderr or r.stdout).strip()[:300] or "merge-async did not finish in 15 minutes"
+        if r.returncode != 0 and TRANSIENT.search(why):
+            return 2, f"yield: GitHub did not answer the merge ({why[:160]}); land again"
         p.append("land_failed", pr=pr, note=why)
         if "not up to date" in why or "behind" in why.lower():
             return 3, f"act: the base requires up-to-date branches: {update_advice(unit, repo)}, then land again"
@@ -1083,7 +1089,16 @@ def merge_unit(p, pr, unit, klass, events):
     sha = (merged[pr].get("mergeCommit") or {}).get("oid")
     return 0, (f"landed {' '.join('#' + str(n) for n in unit)} (merge commit {sha[:8]}; CI runs {' '.join(runs) or '-'}; read their logs in the report). "
                f"Watch main: gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status, "
-               f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}")
+               f"then gh run watch <id> --repo {repo} --exit-status and orch record {p.slug} main_green|main_red --pr {pr} --sha {sha}"
+               + base_ci_hint(repo, merged[pr].get("baseRefName")))
+
+
+def base_ci_hint(repo, base):
+    """A push-triggered CI often covers only the default branch, so a landing on a feature base starts no run."""
+    if not base or base in ("main", "master"):
+        return ""
+    return (f". The base is {base}: if gh run list shows no run for the merge commit, its CI does not run on push"
+            f" there; start it with gh workflow run <ci workflow file> --repo {repo} --ref {base} and watch that run")
 
 
 def attempt(p, pr, klass):
@@ -1191,7 +1206,12 @@ def cmd_land(argv):
     klass = klass or next((e["klass"] for e in reversed(p.events()) if e.get("pr") == pr and e.get("klass")), "normal")
     deadline = time.monotonic() + 60 * float(opt(argv, "--wait-minutes", "0"))
     while True:
-        code, msg = attempt(p, pr, klass)
+        try:
+            code, msg = attempt(p, pr, klass)
+        except SystemExit as e:
+            if not TRANSIENT.search(str(e.code)):
+                raise
+            code, msg = 2, f"yield: GitHub or Orca did not answer ({str(e.code)[:160]}); land again"
         print(msg, flush=True)
         if code != 2 or time.monotonic() >= deadline:
             sys.exit(code)
@@ -1270,6 +1290,8 @@ def cmd_landed(argv):
     print(f"landed #{pr} as {sha[:8]}. Watch main CI in the background, then record main_green or main_red:")
     print(f"  gh run list --repo {repo} --commit {sha} --json databaseId,workflowName,status")
     print(f"  gh run watch <databaseId> --repo {repo} --exit-status")
+    if hint := base_ci_hint(repo, v.get("baseRefName")):
+        print(" " + hint.lstrip(". "))
 
 
 def cmd_gate(argv):
