@@ -212,6 +212,14 @@ text = p.body(plan)
 assert "[내 PR 대기] acme/widgets#37" in text and "리뷰 의뢰 → @bob" in text and "봇 재리뷰 트리거 → @rabbit" in text
 assert "U0FAKE" not in text and "Slack U" not in text, "the Slack user id is not a permalink list"
 
+# A title exclude drops the PR before its state is read: no notice and no reminder, while the rest stay as they were.
+drop = {**mine(41, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)]), "title": "Remove legacy config"}
+tfake = type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: own + [drop]})()
+assert "acme/widgets#41@h41/request/bob" in {i["key"] for i in p.compute(tfake, c, {}, NOW)["new"]}
+tplan = p.compute(tfake, {**c, "exclude_title_patterns": ["^Remove legacy"]}, {}, NOW)
+assert {i["key"] for i in tplan["new"]} == {i["key"] for i in plan["new"]}, tplan["new"]
+assert {e["pr"]: e["why"] for e in tplan["excluded"]} == {**why, W + "41": "제외 대상 제목"}
+
 # Actions are not capped by max_items: a reviewer's batch must not split into two messages.
 capped = p.compute(Fake, {**c, "max_items": 0}, {}, NOW)
 assert len([i for i in capped["new"] if "action" in i]) == 4 and capped["more"] == 2

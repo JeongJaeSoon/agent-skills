@@ -800,4 +800,61 @@ shared = {"acme/widgets#20@m20": {"at": NOW, "kind": "ready_to_merge", "id": "x"
 assert p.delivered(shared, "acme/widgets#20@m20", "ready_to_merge")
 assert not p.delivered(shared, "acme/widgets#20@m20", "unreleased") and not p.delivered({}, "k", "unreleased")
 
+# exclude_title_patterns: a matching title is dropped at collection by every kind, so it is never ranked, sent,
+# merged or dispatched; another PR in the same repo stays. review_wait is covered in test_review_wait.py.
+class AllFake(Fake):
+    def __init__(self, mfound, **kw):
+        super().__init__(**kw)
+        self.mfound = mfound
+
+    def search_merge(self, q, me):
+        return self.mfound
+
+
+DROP = "Remove legacy config"
+tseen = pathlib.Path(tempfile.mkdtemp()) / "seen.json"
+p.write_json(tseen, {f"C0FAKE/{n}": {"at": NOW, "category": "review", "permalink": link(n), "pr": f"acme/widgets#{n}"}
+                     for n in (64, 71)})
+tfake = lambda: AllFake(
+    [{**mpr(67), "title": DROP}, mpr(68)],
+    search=[pr(60, reqs=[user(ME)], title=DROP), pr(61, reqs=[user(ME)])],
+    nodes=[pr(62, head="h62b", reviewed="h62", title=DROP), pr(63, head="h63b", reviewed="h63"),
+           pr(64, title=DROP), pr(71)],
+    gated=[pr(65, **A, title="[Auto] Remove access", files=["members/c.json"]),
+           pr(66, **A, title="[Auto] Add access for 3 users", files=["members/d.json"])],
+    merged=[{**merged(69), "title": DROP}, merged(70)], deployed="d0")
+tledger = {f"acme/widgets#{n}@h{n}": {"at": NOW, "kind": "review_request", "id": f"PR_acme/widgets_{n}"} for n in (62, 63)}
+tcfg = {**cfg, "kinds": [k for k in p.KINDS if k != "review_wait"], "mentions_seen": str(tseen),
+        "merge_repos": ["acme/widgets"], "deploy": {"acme/widgets": decl}, "ownergate": [gate], "ignore_bots": ["grant-bot"]}
+kept = p.compute(tfake(), {**tcfg, "exclude_title_patterns": [rf"^{DROP}", r"^\[Auto\] Remove"]}, tledger, NOW)
+assert sorted((i["kind"], i["number"]) for i in kept["new"]) == [("ownergate", 66), ("ready_to_merge", 68),
+    ("review_request", 61), ("review_request", 63), ("review_request", 71), ("unreleased", 70)], kept["new"]
+assert {(e["pr"], e["why"]) for e in kept["excluded"] if "제목" in e["why"]} == {
+    ("acme/widgets#60", "제외 대상 제목"), ("acme/widgets#64", "Slack 요청, 제외 대상 제목"),
+    ("acme/access#65", "제외 대상 제목"), ("acme/widgets#67", "제외 대상 제목"), ("acme/widgets#69", "제외 대상 제목")}, kept["excluded"]
+assert not kept["known"] and not kept["uncovered"]
+# Case-sensitive unless the pattern says otherwise.
+assert 60 in [i["number"] for i in p.compute(tfake(), {**tcfg, "exclude_title_patterns": ["^remove legacy"]}, tledger, NOW)["new"]]
+assert 60 not in [i["number"] for i in p.compute(tfake(), {**tcfg, "exclude_title_patterns": ["(?i)^remove legacy"]}, tledger, NOW)["new"]]
+# An empty list changes nothing: every one of those PRs is back.
+alln = sorted(i["number"] for i in p.compute(tfake(), {**tcfg, "exclude_title_patterns": []}, tledger, NOW)["new"])
+assert alln == [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71], alln
+
+# config: a missing or null key is the empty list; a bad regex or a non-list fails the load, and every command exits 2.
+tconf = pathlib.Path(tempfile.mkdtemp()) / "agent-skills.json"
+for raw in ({}, {"exclude_title_patterns": None}, {"exclude_title_patterns": []}):
+    tconf.write_text(json.dumps({"prs": raw}))
+    assert p.config(tconf)["exclude_title_patterns"] == [], raw
+for bad, msg in ((["^ok", "["], "invalid regex '['"), ("^Remove", "must be a list"), ([1], "must be a list"),
+                 ("", "must be a list"), (False, "must be a list"), ({}, "must be a list")):
+    tconf.write_text(json.dumps({"prs": {"exclude_title_patterns": bad}}))
+    try:
+        p.config(tconf)
+        raise AssertionError(f"config must refuse {bad!r}")
+    except p.ConfigError as e:
+        assert msg in str(e), e
+    for sub in ("precheck", "plan"):
+        r = subprocess.run([sys.executable, script, sub, "--config", str(tconf)], env=env, capture_output=True, text=True)
+        assert r.returncode == p.EXIT_ERROR and "exclude_title_patterns" in r.stderr and "Traceback" not in r.stderr, r
+
 print("test_prs: ok")

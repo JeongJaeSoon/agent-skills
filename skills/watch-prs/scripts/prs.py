@@ -62,6 +62,7 @@ KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "owner
 LABELS = {"review_request": "리뷰 요청", "review_wait": "내 PR 대기", "ready_to_merge": "머지", "unreleased": "dev 확인 전",
           "ownergate": "소유자 승인"}
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
+            "exclude_title_patterns": [],
             "ignore_bots": [], "self_bots": [], "ownergate": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
             "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None, "mentions_seen": None,
             "deploy": {}, "dispatch_run": None, "worker_agent": "claude", "release_approval": None,
@@ -100,12 +101,27 @@ MINE_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:25,a
           "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MINE_FIELDS + "}}}}")
 
 
+class ConfigError(ValueError):
+    pass
+
+
 def config(path=CONFIG):
     try:
         raw = json.loads(pathlib.Path(path).read_text()).get("prs")
     except (OSError, ValueError):
         raw = None
-    return None if raw is None else {**DEFAULTS, **raw}
+    if raw is None:
+        return None
+    pats = raw.get("exclude_title_patterns")
+    pats = [] if pats is None else pats
+    if not isinstance(pats, list) or not all(isinstance(x, str) for x in pats):
+        raise ConfigError("exclude_title_patterns must be a list of regex strings")
+    for x in pats:
+        try:
+            re.compile(x)
+        except re.error as e:
+            raise ConfigError(f"exclude_title_patterns: invalid regex {x!r}: {e}") from None
+    return {**DEFAULTS, **raw, "exclude_title_patterns": pats}
 
 
 def read_json(path, default):
@@ -217,8 +233,15 @@ def repo_out_of_scope(repo, cfg):
     return None
 
 
+def title_out_of_scope(pr, cfg):
+    """Checked at collection, so a matching PR never reaches ranking, the ledger or the send-log."""
+    if any(re.search(x, pr["title"]) for x in cfg["exclude_title_patterns"]):
+        return "제외 대상 제목"
+    return None
+
+
 def out_of_scope(pr, cfg):
-    why = repo_out_of_scope(pr["repository"]["nameWithOwner"], cfg)
+    why = repo_out_of_scope(pr["repository"]["nameWithOwner"], cfg) or title_out_of_scope(pr, cfg)
     if why:
         return why
     author = pr.get("author") or {}
@@ -501,6 +524,8 @@ def merge_readiness(pr, cfg, owned, me):
     names the first gate that holds it."""
     repo = pr["repository"]
     name, head = repo["nameWithOwner"], pr["headRefOid"]
+    if why := title_out_of_scope(pr, cfg):
+        return None, why
     if name in cfg["merge_deny_repos"]:
         return None, "머지 금지 저장소"
     if name not in cfg["merge_repos"]:
@@ -590,8 +615,12 @@ def collect_unreleased(gh, me, cfg, ledger, now):
     items, excluded = [], []
     for repo, decl in sorted(cfg["deploy"].items()):
         since = dt.datetime.fromtimestamp(now - decl.get("lookback_days", 2) * 86400, dt.timezone.utc)
-        due = [pr for pr in gh.search(f"is:pr is:merged author:{me} repo:{repo} merged:>={since:%Y-%m-%dT%H:%M:%SZ}", me)
-               if not delivered(ledger, key(pr), "unreleased") and pr.get("mergeCommit")]
+        due = []
+        for pr in gh.search(f"is:pr is:merged author:{me} repo:{repo} merged:>={since:%Y-%m-%dT%H:%M:%SZ}", me):
+            if why := title_out_of_scope(pr, cfg):
+                excluded.append({"pr": f"{repo}#{pr['number']}", "kind": "unreleased", "why": why})
+            elif not delivered(ledger, key(pr), "unreleased") and pr.get("mergeCommit"):
+                due.append(pr)
         if not due:
             continue
         try:
@@ -814,7 +843,7 @@ def collect_review_wait(gh, me, cfg, ledger, now):
     for pr in gh.mine(cfg["self_bots"]):
         repo, n = pr["repository"]["nameWithOwner"], pr["number"]
         idle = days(pr["updatedAt"], now)
-        why = (repo_out_of_scope(repo, cfg) or ("draft" if pr["isDraft"] else None)
+        why = (repo_out_of_scope(repo, cfg) or title_out_of_scope(pr, cfg) or ("draft" if pr["isDraft"] else None)
                or (f"stale: {idle}일 움직임 없음" if idle > cfg["stale_days"] else None)
                or (f"프로그램 PR ({programs[(repo, n)]})" if (repo, n) in programs else None))
         if why:
@@ -1208,7 +1237,11 @@ def main():
             next(rest, None)
         else:
             args.append(a)
-    cfg = config(opt("--config", CONFIG))
+    try:
+        cfg = config(opt("--config", CONFIG))
+    except ConfigError as e:
+        print(f"config: {e}", file=sys.stderr)
+        sys.exit(EXIT_ERROR)
     now = time.time()
     if cmd == "precheck":
         code, why = precheck(GitHub(), cfg, STATE, now)
