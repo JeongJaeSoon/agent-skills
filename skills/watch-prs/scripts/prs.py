@@ -4,6 +4,8 @@
 Usage:
   python3 prs.py precheck [--config PATH]
   python3 prs.py plan [--body] [--config PATH]
+  python3 prs.py merges [--config PATH]
+  python3 prs.py verify [--config PATH]
   python3 prs.py commit [--config PATH]
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
@@ -13,7 +15,9 @@ could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice. schedule prints the
+so the same (repo, number, headRefOid) is never sent twice. merges prints the `gh pr merge` command for each
+ready_to_merge item in plan.json; the round runs them itself. verify then checks each is MERGED, waits for the
+merge commit's CI and rewrites body.txt. schedule prints the
 `orca automations create` command and runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
@@ -23,12 +27,16 @@ import datetime as dt, json, os, pathlib, shlex, subprocess, sys, time
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "prs"
 GH = os.environ.get("AGENT_SKILLS_GH", "gh")
-# Only review_request has a collector yet; the rest are reserved so later flows extend COLLECTORS, not the CLI.
+ORCA = os.environ.get("AGENT_SKILLS_ORCA", "orca")
+# Kinds without a collector are reserved so later flows extend COLLECTORS, not the CLI.
 KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate")
-LABELS = {"review_request": "리뷰 요청"}
+LABELS = {"review_request": "리뷰 요청", "ready_to_merge": "머지"}
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
             "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
-            "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None}
+            "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None,
+            "merge_repos": [], "merge_deny_repos": [], "merge_methods": ["squash", "merge", "rebase"],
+            "hold_labels": ["hold", "do-not-merge", "wip"], "required_bots": [], "ci_wait_minutes": 15,
+            "programs_home": os.environ.get("PROGRAMS_HOME", "~/.claude/programs"), "program_days": 7}
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 
 PR_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid additions deletions reviewDecision state
@@ -71,7 +79,9 @@ def write_json(path, data):
 def gh_graphql(query, partial=False, **variables):
     """partial: keep the data GitHub did return when some nodes failed (a deleted repo, lost access)."""
     # --input keeps list variables (nodes ids) as JSON arrays; -f would send them as strings.
-    body = json.dumps({"query": query, "variables": {k: v for k, v in variables.items() if v is not None}})
+    # Only variables the query declares: GraphQL rejects an unused one, and the readers share one argument list.
+    body = json.dumps({"query": query, "variables": {k: v for k, v in variables.items()
+                                                     if v is not None and f"${k}:" in query}})
     out = subprocess.run([GH, "api", "graphql", "--input", "-"], input=body, capture_output=True, text=True, timeout=60)
     try:
         data = json.loads(out.stdout).get("data")
@@ -83,22 +93,28 @@ def gh_graphql(query, partial=False, **variables):
 
 
 class GitHub:
-    """The three reads watch-prs needs. Tests replace it with a fake holding fixture nodes."""
+    """The reads watch-prs needs. Tests replace it with a fake holding fixture nodes."""
 
     def viewer(self):
         return gh_graphql("query{viewer{login}}")["viewer"]["login"]
 
-    def search(self, q, me):
+    def search(self, q, me, query=SEARCH_Q):
         nodes, after = [], None
         while True:
-            page = gh_graphql(SEARCH_Q, q=q, me=me, after=after)["search"]
+            page = gh_graphql(query, q=q, me=me, after=after)["search"]
             nodes += [n for n in page["nodes"] if n]
             if not page["pageInfo"]["hasNextPage"]:
                 return nodes
             after = page["pageInfo"]["endCursor"]
 
-    def nodes(self, ids, me):
-        return [n for i in range(0, len(ids), 50) for n in gh_graphql(NODES_Q, partial=True, ids=ids[i:i + 50], me=me)["nodes"] if n]
+    def nodes(self, ids, me, query=NODES_Q):
+        return [n for i in range(0, len(ids), 50) for n in gh_graphql(query, partial=True, ids=ids[i:i + 50], me=me)["nodes"] if n]
+
+    def search_merge(self, q, me):
+        return self.search(q, me, MERGE_SEARCH_Q)
+
+    def merged(self, ids, me):
+        return self.nodes(ids, me, MERGED_Q)
 
 
 def key(pr):
@@ -161,7 +177,8 @@ def item(pr, me, cfg, now, reason):
 
 def rank(items):
     """Stale last; then the owner as the only blocking reviewer, a human author, older first, smaller first."""
-    return sorted(items, key=lambda i: (i["stale"], not i["only_blocker"], not i["human"], -i["age_days"], i["size"]))
+    return sorted(items, key=lambda i: (i.get("stale", False), not i.get("only_blocker"), not i.get("human", True),
+                                        -i["age_days"], i["size"]))
 
 
 def collect_review_requests(gh, me, cfg, ledger, now):
@@ -185,7 +202,147 @@ def collect_review_requests(gh, me, cfg, ledger, now):
     return items, excluded
 
 
-COLLECTORS = {"review_request": collect_review_requests}
+MERGE_FIELDS = """id number title url isDraft createdAt headRefOid headRefName baseRefName additions deletions
+ reviewDecision mergeStateStatus state author{__typename login} labels(first:20){nodes{name}}
+ repository{nameWithOwner defaultBranchRef{name} squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed}
+ reviewThreads(first:100){totalCount nodes{isResolved}} reviews(last:50){nodes{author{__typename login} state body commit{oid}}}
+ comments(last:50){nodes{author{__typename login} body}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}"""
+MERGE_SEARCH_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
+                  "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MERGE_FIELDS + "}}}}")
+MERGED_Q = """query($ids:[ID!]!){nodes(ids:$ids){... on PullRequest{id state mergeCommit{oid statusCheckRollup{state
+ contexts(first:50){nodes{... on CheckRun{name conclusion detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}}"""
+ALLOWED = {"squash": "squashMergeAllowed", "merge": "mergeCommitAllowed", "rebase": "rebaseMergeAllowed"}
+
+
+def read_jsonl(path):
+    """Rows of a JSONL file another process may be appending to: a missing file or a torn line is skipped."""
+    try:
+        lines = pathlib.Path(path).read_text().splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass
+    return rows
+
+
+def owned_elsewhere(cfg, now):
+    """Branches checked out in a live Orca worktree (a worker, a lead's card), and PRs an orchestrate program
+    active within program_days has recorded. Someone else is driving those; this round does not merge them.
+
+    A program's PR reaches its ledger only at verdict or land, so the worktree branch is the net that holds
+    before review. Raises when Orca cannot be read or its list is truncated."""
+    out = subprocess.run([ORCA, "worktree", "list", "--limit", "10000", "--json"], capture_output=True, text=True, timeout=60)
+    if out.returncode:
+        raise RuntimeError(f"orca worktree list: {out.stderr.strip()[:200]}")
+    res = json.loads(out.stdout)["result"]
+    if res.get("truncated"):
+        raise RuntimeError("orca worktree list is truncated")
+    branches = {w["branch"].removeprefix("refs/heads/") for w in res["worktrees"] if w.get("branch") and not w.get("isArchived")}
+    prs = set()
+    for prog in pathlib.Path(cfg["programs_home"]).expanduser().glob("*/program.json"):
+        repo = read_json(prog, {}).get("repo")
+        events = read_jsonl(prog.parent / "ledger.jsonl")
+        last = max((dt.datetime.fromisoformat(e["ts"]).timestamp() for e in events if e.get("ts")), default=0)
+        if repo and now - last < cfg["program_days"] * 86400:
+            prs |= {f"{repo}#{e['pr']}" for e in events if e.get("pr")}
+    return {"branches": branches, "prs": prs}
+
+
+def review_record(pr, me):
+    """A review of this head when none is required: a review on it, or a comment naming it (an independent review's
+    sticky result), by the owner or a bot. Anyone else's comment does not count."""
+    head = pr["headRefOid"]
+
+    def trusted(n):
+        author = n.get("author") or {}
+        return author.get("login") == me or author.get("__typename") == "Bot"
+    return (any(trusted(r) and (r.get("commit") or {}).get("oid") == head and r["state"] in ("APPROVED", "COMMENTED")
+                for r in pr["reviews"]["nodes"])
+            or any(trusted(c) and head[:7] in (c.get("body") or "") for c in pr["reviews"]["nodes"] + pr["comments"]["nodes"]))
+
+
+def merge_readiness(pr, cfg, owned, me):
+    """(merge method, None) when the PR may merge now, else (None, why). Checked in this order so the reason
+    names the first gate that holds it."""
+    repo = pr["repository"]
+    name, head = repo["nameWithOwner"], pr["headRefOid"]
+    if name in cfg["merge_deny_repos"]:
+        return None, "머지 금지 저장소"
+    if name not in cfg["merge_repos"]:
+        return None, "머지 허용 목록 밖"
+    if pr["isDraft"]:
+        return None, "draft"
+    held = {lb["name"].lower() for lb in pr["labels"]["nodes"]} & {h.lower() for h in cfg["hold_labels"]}
+    if held:
+        return None, f"보류 라벨: {', '.join(sorted(held))}"
+    if owned is None:
+        return None, "프로그램 소유 여부 확인 불가"
+    if pr["headRefName"] in owned["branches"] or f"{name}#{pr['number']}" in owned["prs"]:
+        return None, "다른 worktree·프로그램이 진행 중"
+    if pr["baseRefName"] != (repo.get("defaultBranchRef") or {}).get("name"):
+        return None, f"stack 하위 PR (base {pr['baseRefName']})"
+    verdicts = [r["state"] for r in pr["reviews"]["nodes"] if r["state"] != "COMMENTED"]
+    if verdicts and verdicts[-1] == "DISMISSED":
+        return None, "승인이 해제됨: review_wait 로"
+    if pr["mergeStateStatus"] != "CLEAN":
+        return None, f"mergeStateStatus {pr['mergeStateStatus']}"
+    if pr.get("reviewDecision") not in ("APPROVED", None, ""):
+        return None, f"리뷰 {pr['reviewDecision']}"
+    if pr.get("reviewDecision") != "APPROVED" and not review_record(pr, me):
+        return None, "head 리뷰 기록 없음: review_wait 로"
+    rollup = (pr["commits"]["nodes"] or [{}])[0].get("commit", {}).get("statusCheckRollup")
+    if not rollup or rollup["state"] != "SUCCESS":
+        return None, f"체크 {rollup['state'] if rollup else '없음'}"
+    threads = pr["reviewThreads"]
+    if threads["totalCount"] > len(threads["nodes"]) or any(not t["isResolved"] for t in threads["nodes"]):
+        return None, "미해결 스레드"
+    for bot in cfg["required_bots"]:
+        # A bot that was rate-limited or skipped leaves a comment, not a review on this head.
+        if not any(bot_name((r.get("author") or {}).get("login")) == bot_name(bot) and r["state"] in ("APPROVED", "COMMENTED")
+                   and (r.get("commit") or {}).get("oid") == head for r in pr["reviews"]["nodes"]):
+            return None, f"필수 봇 {bot} 이 head 를 리뷰하지 않음"
+    method = next((m for m in cfg["merge_methods"] if repo.get(ALLOWED.get(m, ""))), None)
+    return (method, None) if method else (None, "허용된 머지 방식 없음")
+
+
+def merge_cmd(pr, method):
+    return shlex.join(["gh", "pr", "merge", str(pr["number"]), "-R", pr["repository"]["nameWithOwner"], f"--{method}",
+                       "--match-head-commit", pr["headRefOid"]])
+
+
+def collect_ready_to_merge(gh, me, cfg, ledger, now):
+    """The owner's open PRs in merge_repos that may merge now: approved, or reviewed at this head where no review is
+    required; CLEAN, checks green, driven by no one else."""
+    if not cfg["merge_repos"]:
+        return [], [{"pr": "*", "kind": "ready_to_merge", "why": "merge_repos 비어 있음: 머지하지 않음"}]
+    q = "is:pr is:open archived:false author:@me " + " ".join(f"repo:{r}" for r in cfg["merge_repos"])
+    found = gh.search_merge(q, me)
+    if not found:
+        return [], []
+    try:
+        owned = owned_elsewhere(cfg, now)
+    except Exception:  # any failure to read ownership holds every PR back
+        owned = None
+    items, excluded = [], []
+    for pr in found:
+        method, why = merge_readiness(pr, cfg, owned, me)
+        repo = pr["repository"]["nameWithOwner"]
+        if why:
+            excluded.append({"pr": f"{repo}#{pr['number']}", "kind": "ready_to_merge", "why": why})
+            continue
+        review = "승인됨" if pr.get("reviewDecision") == "APPROVED" else "리뷰 불요, head 리뷰 기록 있음"
+        items.append({"kind": "ready_to_merge", "key": key(pr), "id": pr["id"], "repo": repo, "number": pr["number"],
+                      "title": pr["title"], "url": pr["url"], "age_days": days(pr["createdAt"], now),
+                      "size": pr["additions"] + pr["deletions"], "method": method, "cmd": merge_cmd(pr, method),
+                      "why": [f"CLEAN, 체크 green, {review}, {method}"]})
+    return items, excluded
+
+
+COLLECTORS = {"review_request": collect_review_requests, "ready_to_merge": collect_ready_to_merge}
 
 
 def compute(gh, cfg, ledger, now):
@@ -208,10 +365,53 @@ def body(plan):
     head = f"PR {len(plan['new'])}건이 나를 기다린다" + (f" (그 밖에 {plan['more']}건은 다음 회차)" if plan["more"] else "")
     lines = [head]
     for n, i in enumerate(plan["new"], 1):
+        if i.get("cmd"):
+            lines.append(f"{n}. [{LABELS[i['kind']]}] {i['repo']}#{i['number']} {i['title']} — "
+                         f"{i.get('result') or i['method'] + ' 로 머지 예정'} — {i['url']}")
+            continue
         tag = "새 커밋, 재요청 없음" if i["reason"] == "new_commits" else LABELS[i["kind"]]
         lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
                      f"±{i['size']} · {', '.join(i['why'])} — {i['url']}")
     return "\n".join(lines)
+
+
+def merge_outcome(node):
+    """(result line, CI settled) for a PR the round tried to merge: merged or not, and the merge commit's CI."""
+    if not node or node.get("state") != "MERGED":
+        return f"머지 안 됨 (state {(node or {}).get('state', '?')}): 거부·실패는 이 head 에서 다시 시도하지 않음", True
+    commit = node["mergeCommit"] or {}
+    rollup = commit.get("statusCheckRollup") or {}
+    sha = (commit.get("oid") or "")[:7]
+    if rollup.get("state") == "SUCCESS":
+        return f"머지됨 {sha}, 기본 브랜치 CI green", True
+    if rollup.get("state") in ("FAILURE", "ERROR"):
+        bad = [c.get("detailsUrl") or c.get("targetUrl") for c in rollup["contexts"]["nodes"]
+               if c.get("conclusion") in ("FAILURE", "TIMED_OUT", "CANCELLED") or c.get("state") in ("FAILURE", "ERROR")]
+        return f"머지됨 {sha}, 기본 브랜치 CI red: {', '.join(u for u in bad if u) or '실패 체크'}", True
+    return f"머지됨 {sha}, 기본 브랜치 CI {rollup.get('state') or '아직 시작 안 됨'}", False
+
+
+def verify(gh, state, cfg, clock=time.time, sleep=time.sleep):
+    """After the round ran the merge commands: record each command item's outcome in plan.json and rewrite body.txt.
+    Waits up to ci_wait_minutes for the merge commits' CI to settle."""
+    plan = read_json(state / "plan.json", None)
+    if not plan:
+        raise SystemExit("verify: no plan.json; run plan --body first")
+    acted = {i["id"]: i for i in plan["new"] if i.get("cmd")}
+    deadline = clock() + cfg["ci_wait_minutes"] * 60
+    outcomes = {}
+    while acted:
+        by_id = {n["id"]: n for n in gh.merged(list(acted), plan.get("viewer"))}
+        outcomes = {k: merge_outcome(by_id.get(k)) for k in acted}
+        if all(done for _, done in outcomes.values()) or clock() >= deadline:
+            break
+        sleep(30)
+    for k, i in acted.items():
+        i["result"] = outcomes[k][0]
+    write_json(state / "plan.json", plan)
+    text = body(plan)
+    (state / "body.txt").write_text(text)
+    return text
 
 
 def lock_held(state, cfg, now):
@@ -258,10 +458,17 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
     env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
     body_file = STATE / "body.txt"
+    merging = "ready_to_merge" in cfg["kinds"]
+    merge_step = (f"`{env} merges` 가 출력하는 머지 대상마다, 주석 줄(PR, CLEAN, 체크, 리뷰, 머지 방식)을 채팅에 그대로 적은 뒤 "
+                  f"그 아래 `gh pr merge` 명령을 단독 명령으로 한 번씩 실행한다(--admin·--auto 를 붙이지 않는다). 거부되거나 실패한 "
+                  f"머지는 다시 시도하지 않고 다른 형태로 바꾸지도 않는다. 그다음 `{env} verify` 로 MERGED 와 기본 브랜치 CI 를 확인해 "
+                  f"본문을 다시 쓰고, ") if merging else ""
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
-              f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
+              f"아니면 {merge_step}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보내고(N 은 본문 첫 줄의 건수), 보내기가 성공했을 때만 "
-              f"`{env} commit` 을 실행한다. 이 회차는 읽기만 한다: 리뷰·코멘트·재요청 같은 GitHub 쓰기는 하지 않는다.")
+              f"`{env} commit` 을 실행한다. "
+              + ("머지 말고는 GitHub 에 쓰지 않는다: 리뷰·승인·코멘트·재요청을 하지 않는다." if merging else
+                 "이 회차는 읽기만 한다: 리뷰·코멘트·재요청 같은 GitHub 쓰기는 하지 않는다."))
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
@@ -278,7 +485,7 @@ def main():
         code, why = precheck(GitHub(), cfg, STATE, now)
         print(why, file=sys.stderr)
         sys.exit(code)
-    if cmd in ("plan", "commit", "schedule") and cfg is None:
+    if cmd in ("plan", "merges", "verify", "commit", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
     if cmd == "plan" and "--body" not in sys.argv:
         print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now), ensure_ascii=False, indent=1))
@@ -291,6 +498,12 @@ def main():
         STATE.mkdir(parents=True, exist_ok=True)
         (STATE / "body.txt").write_text(body(plan))
         print(body(plan))
+    elif cmd == "merges":
+        for i in read_json(STATE / "plan.json", {}).get("new", []):
+            if i.get("cmd"):
+                print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}")
+    elif cmd == "verify":
+        print(verify(GitHub(), STATE, cfg))
     elif cmd == "commit":
         print(f"commit: {commit(STATE, cfg, now)} items recorded")
     elif cmd == "schedule":
