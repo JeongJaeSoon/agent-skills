@@ -87,6 +87,8 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 **채팅**: `watch-mentions`(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 분류해 코디네이터에게 한 통으로 보내고, 작업 의뢰는 기표 초안으로).
 
+**GitHub**: `watch-prs`(팀·CODEOWNERS가 아니라 나를 지명한 리뷰 요청만 골라 우선순위대로 코디네이터에게 한 통으로 보낸다. 리뷰한 PR에 재요청 없이 새 커밋이 오면 한 번 다시 알린다. 15분 주기 automation, 모델 없는 precheck).
+
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
 **글쓰기**: `write-plainly`(한국어·영어 문체), `map-features`(PRD·현황 문서용 제품 기능 지도: 커밋 하나를 기준으로 앱 표와 기능별 상태·근거), `brief-status`(현황 보고: 완료·진행·결정·사람만, Telegram이면 markdown 없는 짧은 줄, Claude Code에서는 `/agent-skills:brief`로도), `prune-comments`(diff의 주석 정리), `write-skill`(스킬을 쓰거나 고친 뒤의 점검: 겹침 확인, prompt audit, 사내 이름 grep, 테스트, reload).
@@ -112,7 +114,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 
