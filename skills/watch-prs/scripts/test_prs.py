@@ -121,7 +121,7 @@ assert p.precheck(Fake(found + [pr(12, reqs=[user(ME)])]), cfg, state, NOW + 60)
 assert p.precheck(Fake(found), cfg, state, NOW + 61 * 60)[0] == p.EXIT_NEW, "a dead run's plan stops blocking"
 
 # commit records exactly what plan delivered; the same (repo, N, head) is not sent twice.
-assert p.commit(state, cfg, NOW) == (5, [])
+assert p.commit(state, cfg, NOW) == 5
 assert not (state / "plan.json").exists()
 ledger = p.read_json(state / "ledger.json", {})
 assert set(ledger) == {i["key"] for i in plan["new"]}
@@ -330,20 +330,21 @@ line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"),
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
-assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck --kinds review_request"
+assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
 prompt = line[line.index("--prompt") + 1]
-assert "plan --body --kinds review_request`" in prompt and "--to term_x" in prompt
-assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit --kinds review_request`" in prompt
-assert "dispatch" not in prompt, "review_request alone has no step after the message"
+# The round commands are exactly precheck, plan --body and commit: an owner's allow rule names those forms.
+assert "`python3 /repo/skills/watch-prs/scripts/prs.py plan --body`" in prompt and "--to term_x" in prompt
+assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit`" in prompt
+assert "dispatch" not in prompt and "--kinds" not in prompt, "review_request alone has no step after the message"
 # A scheduled session may refuse a command that starts with `env` or a `VAR=` assignment, so neither appears.
 no_env = lambda argv: "env " not in " ".join(argv) and not re.search(r"(^|[\s`])[A-Z_]{2,}=", " ".join(argv))
 assert no_env(line), line
-# Each configured kind brings its step: unreleased adds the dispatch lines, and commit covers both kinds.
+# Each configured kind brings its step: unreleased adds the dispatch lines before commit.
 line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"}, "path:/r")
 prompt = line[line.index("--prompt") + 1]
 assert no_env(line), line
 assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행해", prompt), "a failed send must not start workers"
-assert prompt.index("dispatch") < prompt.index("commit --kinds review_request,unreleased` 을") and "다시 시도하지 않고" in prompt
+assert prompt.index("dispatch") < prompt.index("prs.py commit` 을") and "다시 시도하지 않고" in prompt
 assert "리뷰·코멘트·재요청·배포를 직접 하지 않는다" in prompt, "without review_wait the round writes nothing to GitHub"
 # review_wait's actions and log lines start with python3 too, with the state flag right after the subcommand.
 saved_state, p.STATE = p.STATE, pathlib.Path("/s/prs")
@@ -353,38 +354,38 @@ finally:
     p.STATE = saved_state
 prompt = line[line.index("--prompt") + 1]
 assert line[:4] == ["orca", "automations", "edit", "auto1"] and no_env(line), line
-assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --kinds review_request,review_wait --state /s"
+assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --state /s"
 assert "`python3 /r/prs.py actions --state /s`" in prompt and "`python3 /r/prs.py log --state /s --key <key>" in prompt, prompt
-# A kind with no step is refused at schedule time rather than committed behind a prompt that never acts on it.
-saved, p.PROMPT_STEPS = p.PROMPT_STEPS, {k: v for k, v in p.PROMPT_STEPS.items() if k != "unreleased"}
-try:
-    p.schedule_cmd(pathlib.Path("/r/prs.py"), rcfg, "path:/r")
-    raise AssertionError("schedule accepted a kind without a step")
-except SystemExit as e:
-    assert "unreleased" in str(e), e
-finally:
-    p.PROMPT_STEPS = saved
 # A state folder off the default goes in as a flag after the subcommand, not through the environment.
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
-assert f"precheck --kinds review_request --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
-# commit --kinds records only the kinds the round's prompt acts on and leaves the rest unrecorded.
-rr = {**plan2["new"][0], "kind": "review_request", "key": "acme/widgets#9@h9"}
-p.write_json(tmp / "state" / "prs" / "plan.json", {**plan2, "new": [rr] + plan2["new"]})
-c = run("commit", "--kinds", "review_request")
-recorded = p.read_json(tmp / "state" / "prs" / "ledger.json", {})
-assert c.returncode == 0 and "commit: 1 items recorded" in c.stdout and "acme/widgets#20" in c.stderr, c
-assert "acme/widgets#9@h9" in recorded and not any(k.startswith(("acme/widgets#20", "acme/widgets#21", "acme/gadgets")) for k in recorded), recorded
-# Kinds outside --kinds never reach new: they take no max_items slot and do not wake a round to be re-sent each time.
-# The bot-authored request ranks below both human merges, so a cap taken before the kind filter would starve it.
-bot_rr = pr(7, author="deps[bot]", kind="Bot", reqs=[user(ME)], decision=None)
-fake = lambda: Fake([bot_rr], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+assert f"precheck --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
+
+# A kind without a PROMPT_STEPS entry: schedule refuses it, and its items never reach plan.json, so commit never
+# records them. They take no max_items slot and do not wake a round of their own.
+saved, p.PROMPT_STEPS = p.PROMPT_STEPS, {k: v for k, v in p.PROMPT_STEPS.items() if k != "unreleased"}
+try:
+    try:
+        p.schedule_cmd(pathlib.Path("/r/prs.py"), rcfg, "path:/r")
+        raise AssertionError("schedule accepted a kind without a step")
+    except SystemExit as e:
+        assert "unreleased" in str(e), e
+    # The bot-authored request ranks below both human merges, so a cap taken before the step filter would starve it.
+    bot_rr = pr(7, author="deps[bot]", kind="Bot", reqs=[user(ME)], decision=None)
+    fake = lambda: Fake([bot_rr], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+    only = p.compute(fake(), {**rcfg, "max_items": 1}, {}, NOW)
+    assert [i["number"] for i in only["new"]] == [7] and only["more"] == 0 and len(only["uncovered"]) == 2, only
+    assert "보내지도 기록하지도 않았다" in p.body(only)
+    st = tmp / "nostep"
+    p.write_json(st / "plan.json", only)
+    assert p.commit(st, rcfg, NOW) == 1
+    assert list(p.read_json(st / "ledger.json", {})) == [only["new"][0]["key"]], "unreleased must not be recorded"
+    merges_only = lambda: Fake([], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+    assert p.precheck(merges_only(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NOTHING
+finally:
+    p.PROMPT_STEPS = saved
+assert p.precheck(merges_only(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NEW
 assert [i["kind"] for i in p.compute(fake(), rcfg, {}, NOW)["new"]] == ["unreleased", "unreleased", "review_request"]
-only = p.compute(fake(), {**rcfg, "max_items": 1}, {}, NOW, ["review_request"])
-assert [i["number"] for i in only["new"]] == [7] and only["more"] == 0 and len(only["uncovered"]) == 2, only
-fake = lambda: Fake([], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
-assert p.precheck(fake(), rcfg, tmp / "fresh", NOW, ["review_request"])[0] == p.EXIT_NOTHING
-assert p.precheck(fake(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NEW
-assert "보내지 않았다" in p.body({**plan2, "uncovered": ["acme/x#1@a"]}) and "보내지 않았다" not in p.body(plan2)
+assert "보내지도" not in p.body(plan2)
 
 print("test_prs: ok")

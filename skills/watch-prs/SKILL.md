@@ -169,8 +169,7 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 5. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
    succeeded and each step-3 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
-   and then commit. `--kinds <k1,k2>` on `precheck`, `plan` and `commit` limits the run to those
-   kinds; the scheduled round passes the kinds its prompt has steps for.
+   and then commit.
 
 `python3 "$P" plan` without `--body` writes nothing and takes no lock. It prints the plan as JSON
 for checking what the filter did: `new` (ranked items), `known` (keys already sent) and
@@ -187,10 +186,11 @@ python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's 
 The prompt is built from `kinds`: each configured kind's `PROMPT_STEPS` entry (next to `COLLECTORS`
 in `prs.py`; `None` when the message is the whole action) adds its step, in `PROMPT_STEPS` order
 (`unreleased` last, since it gates `commit`), and `schedule` refuses a kind without an entry. Without
-`review_wait` the prompt forbids GitHub writes. The precheck, `plan --body` and `commit` get
-`--kinds`, so an item of a kind added to the config after the automation was made is not sent or
-recorded: the precheck output and the next message list it as uncovered. After `kinds` changes,
-rerun `schedule --edit <id>` (check `orca automations list` first so other kinds' steps are not lost).
+`review_wait` the prompt forbids GitHub writes. Items of a kind with no `PROMPT_STEPS` entry never
+reach `plan.json`, so they are neither sent nor recorded; the precheck output and the message list
+them as uncovered. The round's commands stay exactly `precheck`, `plan --body` and `commit`, so the
+prompt is fixed when it is made: after `kinds` changes, rerun `schedule --edit <id>` before the
+next round (check `orca automations list` first so other kinds' steps are not lost).
 Every command starts with `python3`: a scheduled session can refuse a leading `env` or `VAR=`
 assignment as a command of its own, so a non-default state goes in as `--state`.
 

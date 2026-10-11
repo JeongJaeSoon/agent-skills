@@ -2,11 +2,11 @@
 """Bookkeeping for watch-prs: which pull requests need the owner, ranked, sent once per head.
 
 Usage:
-  python3 prs.py precheck [--kinds K1,K2] [--config PATH]
-  python3 prs.py plan [--body] [--kinds K1,K2] [--config PATH]
+  python3 prs.py precheck [--config PATH]
+  python3 prs.py plan [--body] [--config PATH]
   python3 prs.py actions [--config PATH]
   python3 prs.py log --key KEY --source SOURCE [--thread CHANNEL:TS] [--scheduled ID] [--post-at EPOCH] [--at EPOCH]
-  python3 prs.py commit [--kinds K1,K2] [--config PATH]
+  python3 prs.py commit [--config PATH]
   python3 prs.py dispatch [--config PATH]
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--edit AUTOMATION_ID] [--write]
 
@@ -16,8 +16,8 @@ could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice. --kinds names the kinds the round's prompt has
-a step for: items of other kinds are not new for precheck, plan or commit, only listed as uncovered.
+so the same (repo, number, headRefOid) is never sent twice. Only kinds with a PROMPT_STEPS entry become new
+(and so reach plan.json); items of other kinds are listed as uncovered and never recorded.
 actions prints the Slack and bot actions plan.json holds; log records one of them in the send-log
 (sendlog.jsonl), which is what decides them, not the ledger.
 dispatch reads plan.json and prints one
@@ -591,9 +591,9 @@ COLLECTORS = {"review_request": collect_review_requests, "review_wait": collect_
               "unreleased": collect_unreleased}
 
 
-def compute(gh, cfg, ledger, now, kinds=None):
-    """kinds: the kinds the round acts on. Others stay out of new, so they neither take max_items slots nor
-    trigger a round that would send them again every time; their keys are listed under uncovered."""
+def compute(gh, cfg, ledger, now):
+    """Only kinds with a PROMPT_STEPS entry become new: the round has no step for the others, so they stay out of
+    plan.json (which is what commit records) and take no max_items slot; their keys are listed under uncovered."""
     me = gh.viewer()
     items, excluded = [], []
     for kind in cfg["kinds"]:
@@ -603,12 +603,12 @@ def compute(gh, cfg, ledger, now, kinds=None):
         items += got
         excluded += out
     unsent = [i for i in rank(items) if i["key"] not in ledger]
-    new = [i for i in unsent if kinds is None or i["kind"] in kinds]
+    new = [i for i in unsent if i["kind"] in PROMPT_STEPS]
     # Actions are never capped: a reviewer's batch split across rounds would become two messages.
     acts, new = [i for i in new if not i.get("once", True)], [i for i in new if i.get("once", True)]
     return {"run": now, "viewer": me, "new": acts + new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
             "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded,
-            "uncovered": [i["key"] for i in unsent if kinds is not None and i["kind"] not in kinds]}
+            "uncovered": [i["key"] for i in unsent if i["kind"] not in PROMPT_STEPS]}
 
 
 def body(plan):
@@ -622,8 +622,8 @@ def body(plan):
         lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
                      f"±{i['size']} · {', '.join(i['why'])} — {i['url']}{slack}")
     if plan.get("uncovered"):
-        lines.append(f"이 회차 프롬프트에 단계가 없는 항목 {len(plan['uncovered'])}건은 보내지 않았다: "
-                     f"{', '.join(plan['uncovered'])}. `prs.py schedule` 출력으로 자동화의 prompt 를 고친다.")
+        lines.append(f"회차 단계(PROMPT_STEPS)가 없는 kind 의 항목 {len(plan['uncovered'])}건은 보내지도 기록하지도 않았다: "
+                     f"{', '.join(plan['uncovered'])}")
     return "\n".join(lines)
 
 
@@ -633,33 +633,31 @@ def lock_held(state, cfg, now):
     return bool(plan) and now - plan.get("run", 0) < cfg["lock_minutes"] * 60
 
 
-def precheck(gh, cfg, state, now, kinds=None):
+def precheck(gh, cfg, state, now):
     if cfg is None:
         return EXIT_ERROR, 'config 에 "prs" 가 없음'
     if lock_held(state, cfg, now):
         return EXIT_NOTHING, "이전 회차가 아직 진행 중(plan.json)"
     ledger = read_json(state / "ledger.json", {})
     try:
-        plan = compute(gh, cfg, ledger, now, kinds)
+        plan = compute(gh, cfg, ledger, now)
     except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as e:
         return EXIT_ERROR, f"GitHub 를 읽지 못함: {e}"
     keys = [i["key"] for i in plan["new"]]
     if not keys:
-        late = f", 프롬프트에 단계가 없어 보내지 않는 항목 {len(plan['uncovered'])}건: {', '.join(plan['uncovered'])}" \
+        late = f", 회차 단계가 없어 보내지 않는 항목 {len(plan['uncovered'])}건: {', '.join(plan['uncovered'])}" \
             if plan["uncovered"] else ""
         return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건{late})"
     return EXIT_NEW, f"새 항목 {len(keys)}건: " + ", ".join(keys)
 
 
-def commit(state, cfg, now, kinds=None):
-    """Records the delivered items; with kinds, only those. Returns (recorded count, keys left for next round)."""
+def commit(state, cfg, now):
     plan = read_json(state / "plan.json", None)
     if not plan:
         raise SystemExit("commit: no plan.json; run plan first")
     ledger = read_json(state / "ledger.json", {})
     once = [i for i in plan["new"] if i.get("once", True)]
-    done = [i for i in once if kinds is None or i["kind"] in kinds]
-    for i in done:
+    for i in once:
         ledger[i["key"]] = {"at": plan["run"], "kind": i["kind"], "id": i["id"]}
     # A request left open for months is still known; only keys that stopped appearing age out.
     for k in plan.get("known", []):
@@ -669,7 +667,7 @@ def commit(state, cfg, now, kinds=None):
     ledger = {k: v for k, v in ledger.items() if v["at"] >= horizon}
     write_json(state / "ledger.json", ledger)
     (state / "plan.json").unlink()
-    return len(done), [i["key"] for i in once if i not in done]
+    return len(once)
 
 
 def release_brief(repo, items, cfg):
@@ -711,7 +709,7 @@ def dispatch_cmds(plan, cfg):
 
 # A kind's own step in the automation prompt, between the coordinator send and commit; {run[sub]} is the prs.py
 # call for that subcommand. None: the message is the whole action. A kind missing here has no step, so schedule
-# refuses it and the round's --kinds keeps its items out of plan.json and the ledger.
+# refuses it and compute keeps its items out of plan.json and the ledger.
 # Steps run in this dict's order, not the config's: the unreleased step ends by gating commit, which deletes plan.json.
 PROMPT_STEPS = {
     "review_request": None,
@@ -745,23 +743,22 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
         raise SystemExit(f"schedule: kind {', '.join(missing)} has no round step in prs.py PROMPT_STEPS; add one first")
     state = [] if STATE.parent == STATE_HOME else ["--state", str(STATE.parent)]
     run = lambda sub: shlex.join(["python3", str(script), *sub.split(), *state])
-    covered = f"--kinds {','.join(cfg['kinds'])}"
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
     body_file = STATE / "body.txt"
     subs = {s: run(s) for s in ("actions", "log", "dispatch")}
     steps = " ".join(step.format(run=subs) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"] and step)
     reads = "" if "review_wait" in cfg["kinds"] else " 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다."
-    prompt = (f"watch-prs 회차다. `{run('plan --body ' + covered)}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
+    prompt = (f"watch-prs 회차다. `{run('plan --body')}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 `orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
               + (steps + " " if steps else "")
-              + f"코디네이터 전송이 성공했을 때만 마지막에 `{run('commit ' + covered)}` 을 실행한다." + reads)
+              + f"코디네이터 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
     if edit:
-        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck " + covered),
+        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
                 "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", run("precheck " + covered), "--prompt", prompt, "--json"]
+           "--precheck", run("precheck"), "--prompt", prompt, "--json"]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd
@@ -770,20 +767,19 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     cfg = config(opt("--config", CONFIG))
-    kinds = opt("--kinds") and opt("--kinds").split(",")
     now = time.time()
     if cmd == "precheck":
-        code, why = precheck(GitHub(), cfg, STATE, now, kinds)
+        code, why = precheck(GitHub(), cfg, STATE, now)
         print(why, file=sys.stderr)
         sys.exit(code)
     if cmd in ("plan", "actions", "log", "commit", "dispatch", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
     if cmd == "plan" and "--body" not in sys.argv:
-        print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now, kinds), ensure_ascii=False, indent=1))
+        print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now), ensure_ascii=False, indent=1))
     elif cmd == "plan":
         if lock_held(STATE, cfg, now):
             sys.exit("plan: another run holds plan.json; it frees after lock_minutes")
-        plan = compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now, kinds)
+        plan = compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now)
         if plan["new"]:
             write_json(STATE / "plan.json", plan)
         STATE.mkdir(parents=True, exist_ok=True)
@@ -811,10 +807,7 @@ def main():
             brief.write_text(line[i + 1])
             print(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')
     elif cmd == "commit":
-        done, left = commit(STATE, cfg, now, kinds)
-        print(f"commit: {done} items recorded")
-        if left:
-            print(f"commit: not recorded, kind has no step in this round: {', '.join(left)}", file=sys.stderr)
+        print(f"commit: {commit(STATE, cfg, now)} items recorded")
     elif cmd == "schedule":
         script = pathlib.Path(__file__).resolve()
         line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"),
