@@ -324,6 +324,10 @@ def wait_state(pr, me, cfg):
             "urgent": any(l["name"] in cfg["urgent_labels"] for l in pr["labels"]["nodes"])}
 
 
+def slack_id(who, cfg):
+    return (cfg["reviewers"].get(who) or {}).get("slack")
+
+
 def review_bots(cfg):
     return {bot_name(b): comment for b, comment in cfg["review_bots"].items()}
 
@@ -356,7 +360,7 @@ def decide(states, sendlog, now, cfg):
     for s in states:
         for who in s["pending"] + s["stale_approvals"]:
             mine = by.get((s["pr"], who), [])
-            if who not in cfg["reviewers"] or any(r["source"] == "refused" for r in mine):
+            if not slack_id(who, cfg) or any(r["source"] == "refused" for r in mine):
                 continue
             skip = {r["action"] for r in mine if r["source"] == "skipped" and r["head"] == s["head"]}
             mine = [r for r in mine if r["source"] != "skipped"]
@@ -395,7 +399,7 @@ def notices(s, cfg):
         out.append("리뷰어 없음")
     if s["unanswered"]:
         out.append(f"답하지 않은 스레드 {s['unanswered']}건")
-    unmapped = [w for w in s["pending"] + s["stale_approvals"] if w not in cfg["reviewers"]]
+    unmapped = [w for w in s["pending"] + s["stale_approvals"] if not slack_id(w, cfg)]
     if unmapped:
         out.append("Slack 매핑 없는 리뷰어: " + ", ".join(f"@{w}" for w in unmapped))
     if s["teams"] and not s["pending"]:

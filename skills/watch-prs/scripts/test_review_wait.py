@@ -102,6 +102,8 @@ assert acts([one, two]) == [("request", W + "10", "bob"), ("request", W + "11", 
 assert acts([state(12, reqs=[u("bob")], events=[asked("bob", NOW)], labels=["security"])]) == [("request", W + "12", "bob")]
 assert acts([state(13, reqs=[u("dave")], events=[asked("dave", NOW - 5 * H)])]) == [], "unmapped reviewer: no Slack"
 assert p.notices(state(13, reqs=[u("dave")]), cfg) == ["Slack 매핑 없는 리뷰어: @dave"]
+noid = {**cfg, "reviewers": {**cfg["reviewers"], "erin": {"channel": "CFAKE"}}}
+assert acts([state(13, reqs=[u("erin")], labels=["security"])], c=noid) == [], "mapped without a Slack id: no action"
 
 # One request per PR per reviewer: a row already there (any head) moves the PR to the reminder path.
 assert acts([one, two], [row(W + "10", "bob", "request", NOW - 2 * H)]) == [], "#11 alone waited 10m: hold"

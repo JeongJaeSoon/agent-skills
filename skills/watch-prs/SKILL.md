@@ -85,14 +85,14 @@ Each PR gets its states from GitHub alone:
   once a row exists, a new push on a still-waiting PR does not request again.
 - `remind`: one business day after the request (or after its scheduled post), once per request, as a
   reply in the request's thread, one per PR.
-- `rerequest`: a voided approval, once per head, in the earlier thread. So within a day the same
-  reviewer hears about the same PR again only after a new push.
+- `rerequest`: a voided approval, once per head, in the earlier thread: the same reviewer hears about
+  the same PR again only after a new push.
 - `retrigger`: the bot's `review_bots` comment, once per head, posted at any hour.
 - Outside business hours (after `night_hour` 21, before `morning_hour` 9, weekends, `holidays`) a
   Slack action carries `post_at`, the next business morning, and is scheduled instead of sent. While a
   scheduled request to a reviewer is pending, their next batch waits: a scheduled message cannot be
   edited, and two would arrive at once.
-- A reviewer not in `reviewers` gets no Slack action, only a notice: who to ask is not delegated. The
+- A reviewer not in `reviewers` (or without a `slack` id there) gets no Slack action, only a notice: who to ask is not delegated. The
   channel is the reviewer's, else `repo_channels`, else `channel`.
 
 The send-log (`<state>/sendlog.jsonl`: pr, reviewer, head, action, source, at, post_at, thread,
