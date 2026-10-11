@@ -7,6 +7,7 @@ Usage:
   python3 prs.py merges [--config PATH]
   python3 prs.py verify [--config PATH]
   python3 prs.py commit [--config PATH]
+  python3 prs.py dispatch [--config PATH]
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 precheck asks GitHub (through `gh`) for the items and exits 0 when some are not in the ledger yet,
@@ -17,7 +18,9 @@ coordinator message (empty when nothing is new), keeps it in body.txt, and, when
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
 so the same (repo, number, headRefOid) is never sent twice. merges prints the `gh pr merge` command for each
 ready_to_merge item in plan.json; the round runs them itself. verify then checks each is MERGED, waits for the
-merge commit's CI and rewrites body.txt. schedule prints the
+merge commit's CI and rewrites body.txt. dispatch reads plan.json and prints one
+`orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
+it runs nothing. schedule prints the
 `orca automations create` command and runs it only with --write.
 Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: $AGENT_SKILLS_STATE/prs
 (default ~/.local/state/agent-skills/prs). The ledger holds keys, node ids and timestamps, never PR text.
@@ -30,17 +33,19 @@ GH = os.environ.get("AGENT_SKILLS_GH", "gh")
 ORCA = os.environ.get("AGENT_SKILLS_ORCA", "orca")
 # Kinds without a collector are reserved so later flows extend COLLECTORS, not the CLI.
 KINDS = ("review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate")
-LABELS = {"review_request": "리뷰 요청", "ready_to_merge": "머지"}
+LABELS = {"review_request": "리뷰 요청", "ready_to_merge": "머지", "unreleased": "dev 확인 전"}
 DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
             "ignore_bots": [], "self_bots": [], "inbox_to": None, "max_items": 10, "stale_days": 30,
             "keep_days": 60, "lock_minutes": 60, "cron": "*/15 * * * *", "timezone": None,
             "merge_repos": [], "merge_deny_repos": [], "merge_methods": ["squash", "merge", "rebase"],
             "hold_labels": ["hold", "do-not-merge", "wip"], "required_bots": [], "review_bots": [],
             "review_verdict_pattern": r"^\**(?:결론|verdict)(?:\**\s*[:：]|\s*[:：]\s*\**)\s*\**(pass|fail)\**\s*$", "ci_wait_minutes": 15,
-            "programs_home": os.environ.get("PROGRAMS_HOME", "~/.claude/programs"), "program_days": 7}
+            "programs_home": os.environ.get("PROGRAMS_HOME", "~/.claude/programs"), "program_days": 7,
+            "deploy": {}, "dispatch_run": None, "worker_agent": "claude", "release_approval": None}
+REFERENCE = pathlib.Path(__file__).resolve().parents[2] / "deliver-ticket/references/post-merge-release.md"
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 
-PR_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid additions deletions reviewDecision state
+PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCommit{oid} headRefOid additions deletions reviewDecision state
  repository{nameWithOwner} author{__typename login}
  reviewRequests(first:50){nodes{asCodeOwner requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
  reviews(author:$me,last:1,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{commit{oid}}}"""
@@ -114,8 +119,24 @@ class GitHub:
     def search_merge(self, q, me):
         return self.search(q, me, MERGE_SEARCH_Q)
 
-    def merged(self, ids, me):
+    def merge_state(self, ids, me):
         return self.nodes(ids, me, MERGED_Q)
+
+    def revision(self, cmd):
+        """The commit the dev environment runs, from the repo's declared revision_cmd."""
+        out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+        sha = out.stdout.strip()
+        if out.returncode or not sha:
+            raise RuntimeError(f"revision_cmd exit {out.returncode}: {out.stderr.strip()[:200]}")
+        return sha
+
+    def contains(self, repo, commit, deployed):
+        # compare/{commit}...{deployed}: "ahead" or "identical" means deployed already has commit.
+        out = subprocess.run([GH, "api", f"repos/{repo}/compare/{commit}...{deployed}", "--jq", ".status"],
+                             capture_output=True, text=True, timeout=60)
+        if out.returncode:
+            raise RuntimeError(f"gh compare: {out.stderr.strip()[:200]}")
+        return out.stdout.strip() in ("ahead", "identical")
 
 
 def key(pr):
@@ -360,7 +381,44 @@ def collect_ready_to_merge(gh, me, cfg, ledger, now):
     return items, excluded
 
 
-COLLECTORS = {"review_request": collect_review_requests, "ready_to_merge": collect_ready_to_merge}
+def collect_unreleased(gh, me, cfg, ledger, now):
+    """The owner's PRs merged within lookback_days in a repo with a deploy declaration, not yet handed to a release worker.
+
+    Membership does not depend on the dev revision: a repo that auto-syncs dev is usually synced before a
+    15-minute round looks, and the merge still needs its behaviour and logs checked. The revision decides the
+    worker's action instead: deployed false means release (or wait for the sync) first.
+    """
+    items, excluded = [], []
+    for repo, decl in sorted(cfg["deploy"].items()):
+        since = dt.datetime.fromtimestamp(now - decl.get("lookback_days", 2) * 86400, dt.timezone.utc)
+        due = [pr for pr in gh.search(f"is:pr is:merged author:{me} repo:{repo} merged:>={since:%Y-%m-%dT%H:%M:%SZ}", me)
+               if key(pr) not in ledger and pr.get("mergeCommit")]
+        if not due:
+            continue
+        try:
+            if not decl.get("revision_cmd"):
+                raise RuntimeError("revision_cmd 없음")
+            deployed = gh.revision(decl["revision_cmd"])
+            got = [(pr, gh.contains(repo, pr["mergeCommit"]["oid"], deployed)) for pr in due]
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            # Still an item: dropping it would let the merge age out of lookback_days unseen. The worker checks dev itself.
+            deployed, failed = None, f"dev 리비전 확인 실패: {str(e)[:200]}"
+            got = [(pr, None) for pr in due]
+        else:
+            failed = None
+        for pr, live in got:
+            merged = days(pr["mergedAt"], now)
+            items.append({"kind": "unreleased", "key": key(pr), "id": pr["id"], "repo": repo, "number": pr["number"],
+                          "title": pr["title"], "url": pr["url"], "author": me, "human": True, "age_days": merged,
+                          "idle_days": merged, "size": pr["additions"] + pr["deletions"], "only_blocker": False,
+                          "stale": False, "reason": "merged", "merge_commit": pr["mergeCommit"]["oid"],
+                          "deployed_revision": deployed, "deployed": live,
+                          "why": [failed or ("dev 에 반영됨, 동작 확인 전" if live else "dev 에 아직 없음")]})
+    return items, excluded
+
+
+COLLECTORS = {"review_request": collect_review_requests, "ready_to_merge": collect_ready_to_merge,
+              "unreleased": collect_unreleased}
 
 
 def compute(gh, cfg, ledger, now):
@@ -426,7 +484,7 @@ def verify(gh, state, cfg, clock=time.time, sleep=time.sleep):
     deadline = start + cfg["ci_wait_minutes"] * 60
     outcomes = {}
     while acted:
-        by_id = {n["id"]: n for n in gh.merged(list(acted), plan.get("viewer"))}
+        by_id = {n["id"]: n for n in gh.merge_state(list(acted), plan.get("viewer"))}
         waited = clock() - start
         outcomes = {k: merge_outcome(by_id.get(k), waited) for k in acted}
         if all(done for _, done in outcomes.values()) or clock() >= deadline:
@@ -480,6 +538,43 @@ def commit(state, cfg, now):
     return len(plan["new"])
 
 
+def release_brief(repo, items, cfg):
+    decl = cfg["deploy"][repo]
+    lines = [f"{repo} 에서 머지된 PR 을 dev 에서 확인하고 증거를 각 PR 에 sticky comment 로 남긴다.",
+             f"절차: {REFERENCE} 를 따른다.", "PR:"]
+    lines += [f"- #{i['number']} {i['url']} merge {i['merge_commit']} · "
+              + ("dev 리비전을 읽지 못함, 직접 확인" if i["deployed"] is None else "dev 에 반영됨" if i["deployed"]
+                 else f"dev({i['deployed_revision']}) 에 아직 없음") for i in items]
+    lines += ["배포 선언:"] + [f"- {k}: {decl[k]}" for k in ("dev_release", "revision_cmd", "logs", "verify", "ticket") if decl.get(k)]
+    lines += [f"승인: {cfg['release_approval']}" if cfg.get("release_approval")
+              else "승인: dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 코디네이터에게 묻는다.",
+              "사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 코디네이터에게 보고한다.",
+              "권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행위는 어떤 형태로도 다시 시도하지 않는다"
+              "(재실행, 스크립트·다른 도구로 옮기기, 대상 이름 바꾸기, 서브에이전트나 다른 세션에 넘기기 모두 금지). "
+              "무엇을 하려던 것인지, 거부 종류, 정확한 명령을 보고한다.",
+              "끝나면 worker_done 한 통에 PR 별 sticky comment URL, 확인한 리비전, 읽은 로그 줄을 담는다."]
+    return "\n".join(lines)
+
+
+def dispatch_cmds(plan, cfg):
+    """One worker-start per repo with due unreleased items; items of other kinds are only messaged."""
+    by_repo = {}
+    for i in plan["new"]:
+        if i["kind"] == "unreleased" and i["repo"] in cfg["deploy"]:
+            by_repo.setdefault(i["repo"], []).append(i)
+    cmds = []
+    for repo, items in sorted(by_repo.items()):
+        decl = cfg["deploy"][repo]
+        cmd = ["orca", "orchestration", "worker-start", "--spec", release_brief(repo, items, cfg),
+               "--task-title", f"dev 확인: {repo} " + " ".join(f"#{i['number']}" for i in items),
+               "--repo", decl.get("orca_repo") or f"name:{repo.split('/')[1]}", "--worktree", "new-top-level",
+               "--agent", cfg["worker_agent"], "--json"]
+        if cfg.get("dispatch_run"):
+            cmd[-1:-1] = ["--run", cfg["dispatch_run"]]
+        cmds.append(cmd)
+    return cmds
+
+
 def schedule_cmd(script, cfg, workspace, provider="claude"):
     env = " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}", "python3", shlex.quote(str(script))])
     to = cfg.get("inbox_to") or "<prs.inbox_to>"
@@ -491,10 +586,13 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
                   f"본문을 다시 쓴다. verify 가 실패하면 보내지도 commit 하지도 않고 그 오류를 남긴 채 끝낸다. 성공하면 ") if merging else ""
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 {merge_step}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
-              f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보내고(N 은 본문 첫 줄의 건수), 보내기가 성공했을 때만 "
-              f"`{env} commit` 을 실행한다. "
-              + ("머지 말고는 GitHub 에 쓰지 않는다: 리뷰·승인·코멘트·재요청을 하지 않는다." if merging else
-                 "이 회차는 읽기만 한다: 리뷰·코멘트·재요청 같은 GitHub 쓰기는 하지 않는다."))
+              f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
+              f"보내기가 성공했을 때만 `{env} dispatch` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다). "
+              f"한 줄이 실패하거나 권한 프롬프트·분류기·hook 에 거부되면 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) 다시 시도하지 않고, "
+              f"그 저장소 이름과 거부·실패 내용, 정확한 명령을 같은 방법으로 {shlex.quote(to)} 에 보낸다. "
+              f"본문 전송이 성공했고 모든 줄이 워커를 시작했거나 보고됐을 때만 `{env} commit` 을 실행한다. "
+              + ("이 회차는 위의 머지 말고는 GitHub 에 쓰지 않는다: 리뷰·승인·코멘트·재요청·배포를 직접 하지 않는다." if merging else
+                 "이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다."))
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", f"{env} precheck", "--prompt", prompt, "--json"]
@@ -511,7 +609,7 @@ def main():
         code, why = precheck(GitHub(), cfg, STATE, now)
         print(why, file=sys.stderr)
         sys.exit(code)
-    if cmd in ("plan", "merges", "verify", "commit", "schedule") and cfg is None:
+    if cmd in ("plan", "merges", "verify", "commit", "dispatch", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
     if cmd == "plan" and "--body" not in sys.argv:
         print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now), ensure_ascii=False, indent=1))
@@ -535,6 +633,16 @@ def main():
             print(f"# {i['repo']}#{i['number']} {i['why'][0]}\n{i['cmd']}")
     elif cmd == "verify":
         print(verify(GitHub(), STATE, cfg))
+    elif cmd == "dispatch":
+        plan = read_json(STATE / "plan.json", None)
+        if not plan:
+            sys.exit("dispatch: no plan.json; run plan --body first")
+        # The brief is multi-line, so it goes to a file and each printed command stays on one line.
+        for n, line in enumerate(dispatch_cmds(plan, cfg)):
+            i = line.index("--spec")
+            brief = STATE / f"brief-{n}.txt"
+            brief.write_text(line[i + 1])
+            print(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')
     elif cmd == "commit":
         print(f"commit: {commit(STATE, cfg, now)} items recorded")
     elif cmd == "schedule":

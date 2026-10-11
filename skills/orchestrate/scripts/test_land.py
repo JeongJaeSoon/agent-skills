@@ -42,6 +42,8 @@ elif a[:1] == ["api"] and "/compare/" in a[1]:
         p = pr(right[1:])
         print(json.dumps({"behind_by": p.get("behind", 0), "merge_base_commit": {"sha": "mb"},
                           "files": [{"filename": f} for f in p["files"]]}))
+elif a[:2] == ["run", "list"]:
+    print(json.dumps(st.get("runs", {}).get(a[a.index("--commit") + 1], [{"name": "CI", "status": "completed"}])))
 elif a[:1] == ["api"] and a[-1].endswith("cli_internal/pulls/stacks"):
     print(json.dumps(st.get("stacks", [])))
 elif a[:3] == ["api", "-X", "PUT"] and "merge-async" in a[3]:
@@ -300,6 +302,19 @@ for call in ("pr merge", "pr view"):
     assert "land_failed" not in [e["ev"] for e in ledger(d)], call
     code, out = prog(env, "land", "t", "--pr", "21")
     assert code == 0 and "landed #21" in out, (call, out)
+# A green rollup is not CI done: a review bot's status before Actions starts, or jobs behind `needs` not yet
+# created. land yields until every workflow run at the head has finished, and merges nothing meanwhile.
+for runs, why in (([], "no workflow run"), ([{"name": "CI", "status": "queued"}], "CI queued")):
+    d, env = setup({"23": pr(23)})
+    verdict(d, 23, "T-23")
+    st = json.loads((d / "state.json").read_text()); st["runs"] = {"h23": runs}; (d / "state.json").write_text(json.dumps(st))
+    code, out = prog(env, "land", "t", "--pr", "23")
+    assert code == 2 and why in out and "land again" in out, (runs, out)
+    assert json.loads((d / "state.json").read_text())["prs"]["23"]["state"] == "OPEN", out
+    st = json.loads((d / "state.json").read_text()); st["runs"] = {"h23": [{"name": "CI", "status": "completed"}]}
+    (d / "state.json").write_text(json.dumps(st))
+    code, out = prog(env, "land", "t", "--pr", "23")
+    assert code == 0 and "landed #23" in out, out
 # A refusal that is not a hiccup still stops.
 d, env = setup({"22": pr(22)})
 verdict(d, 22, "T-22")

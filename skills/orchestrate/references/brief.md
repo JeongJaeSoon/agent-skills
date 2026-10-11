@@ -39,8 +39,10 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <the reviewer: codex-review, subagent-review (trivial diff only,
-            deliver-ticket §3; never in place of a Codex review that returned none: that holds
-            the land and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            deliver-ticket §3; never in place of a Codex review that returned none),
+            claude-review:independent (Codex itself unavailable: a context-free Claude Code
+            review, deliver-ticket codex-review.md, with --note <the Codex error line>; any
+            other no-review holds the land and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
@@ -116,7 +118,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without them). A lead whose brief had no DELEGATE line investigated and implemented on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without them). A lead whose brief had no DELEGATE line investigated and implemented on its own.
 
 ```
 <project>: lead
@@ -126,7 +128,10 @@ MODE        Run `orchestrate` in program mode for this project.
 DELEGATE    You do not investigate, implement, verify or drive a browser yourself, however
             small. Each goes one layer down: a worker or card with a brief (`orchestrate`
             references/brief.md), or a background subagent for a read. You judge results, land,
-            record decisions, and put what waits on the human in front of them.
+            record decisions, and put what waits on the human in front of them. Cards and
+            workers you start get a worker brief (the one at the top of references/brief.md,
+            or "Single worker"), never this Lead brief; only the human or the top-level starts
+            a lead.
 PREDICATE   The countable done condition, and what is out of scope.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
