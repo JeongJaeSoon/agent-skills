@@ -143,7 +143,7 @@ An answer typed into the coordinator's terminal closes the decision too. The plu
 
 ### The stage table
 
-The per-item stage table that `brief-status` reports (merge / dev check / prod check) is a record, not something rebuilt for each report. The coordinator writes a cell at the moment it verifies it, with the evidence, and `stages.json` in the state directory keeps it (`scripts/stages.py`, masked on write):
+The per-item stage table that the `brief` skill reports (merge / dev check / prod check) is a record, not something rebuilt for each report. The coordinator writes a cell at the moment it verifies it, with the evidence, and `stages.json` in the state directory keeps it (`scripts/stages.py`, masked on write):
 
 ```sh
 orch stage add chat --group --title "Chat revamp"                  # a heading: no PR, no cells

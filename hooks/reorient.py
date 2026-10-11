@@ -61,7 +61,7 @@ def message(me, compacted):
         return (f"You are the top-level coordinator{of_run}. Load agent-skills:orchestrate now. Your turn is routing "
                 "and seconds-long reads, so the human's next message is answered in seconds; investigation, "
                 "implementation, verification and browser work go one layer down. Status reports go through "
-                "agent-skills:brief-status.")
+                "agent-skills:brief.")
     return None
 
 

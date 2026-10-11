@@ -92,7 +92,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 **어댑터**: `use-tracker`(Linear, Jira), `use-notes`(Obsidian, Markdown).
 
-**글쓰기**: `write-plainly`(한국어·영어 문체), `map-features`(PRD·현황 문서용 제품 기능 지도: 커밋 하나를 기준으로 앱 표와 기능별 상태·근거), `brief-status`(현황 보고: 완료·진행·결정·사람만, Telegram이면 markdown 없는 짧은 줄, Claude Code에서는 `/agent-skills:brief`로도), `prune-comments`(diff의 주석 정리), `write-skill`(스킬을 쓰거나 고친 뒤의 점검: 겹침 확인, prompt audit, 사내 이름 grep, 테스트, reload).
+**글쓰기**: `write-plainly`(한국어·영어 문체), `map-features`(PRD·현황 문서용 제품 기능 지도: 커밋 하나를 기준으로 앱 표와 기능별 상태·근거), `brief`(현황 보고: 완료·진행·결정·사람만, Telegram이면 markdown 없는 짧은 줄, Claude Code에서는 `/agent-skills:brief`로도), `prune-comments`(diff의 주석 정리), `write-skill`(스킬을 쓰거나 고친 뒤의 점검: 겹침 확인, prompt audit, 사내 이름 grep, 테스트, reload).
 
 **pstack**: `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why`. 원본 이름을 유지해 upstream을 따라간다.
 
@@ -115,7 +115,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief-status/scripts/test_table_width.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

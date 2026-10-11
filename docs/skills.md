@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md` 37개에서 별칭 `brief`를 뺀 수), 별칭 4개(`legacy/`의 옛 이름 3개와 `brief`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([별칭](#별칭)).
+`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 별칭 3개(`legacy/`의 옛 이름), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 ## 흐름
 
@@ -224,8 +224,8 @@
 
 ## 글쓰기
 
-### brief-status
-- **언제:** 사람에게 진행 현황을 보고할 때. "현황 보고해줘", "상황 정리해줘", "브리핑해줘", "진행 상황 알려줘", 또는 `/brief` 한 줄(채널 봇 명령, Claude Code에서는 별칭 `/agent-skills:brief`). 진행상황을 표로, 리드별·항목별 상세 진행상황, 사람이 확인하거나 해야 할 것을 물을 때도. 사람에게 여러 항목(끝난 일, 진행 중인 일, 결정할 일)을 담은 보고로 턴을 끝낼 때도. 서브에이전트 결과, `worker_done` 본문, JSON처럼 형식이 정해진 출력은 해당하지 않는다. "어디까지 했지"는 `recall`, "남은 작업 있어?"는 `handoff-ticket`.
+### brief
+- **언제:** 사람에게 진행 현황을 보고할 때. "현황 보고해줘", "상황 정리해줘", "브리핑해줘", "진행 상황 알려줘", 또는 `/brief` 한 줄(채널 봇 명령). Claude Code에서는 `/agent-skills:brief`로 부른다. 맨 `/brief`는 이 스킬로 가지 않는다. Claude Code 2.1.295에서 대화형 세션은 `Unknown command: /brief`를 내고, `claude -p`에서는 내장 명령(brief-only 모드 전환)이 받아 `/brief isn't available in this environment.`를 낸다. 진행상황을 표로, 리드별·항목별 상세 진행상황, 사람이 확인하거나 해야 할 것을 물을 때도. 사람에게 여러 항목(끝난 일, 진행 중인 일, 결정할 일)을 담은 보고로 턴을 끝낼 때도. 서브에이전트 결과, `worker_done` 본문, JSON처럼 형식이 정해진 출력은 해당하지 않는다. "어디까지 했지"는 `recall`, "남은 작업 있어?"는 `handoff-ticket`.
 - **내용:**
   - 섹션은 완료, 진행 중, 결정 필요, 사람만, 나중에(미룬 일과 다시 꺼낼 조건) 순서이고 빈 섹션은 뺀다. 완료 항목은 머지 sha, 체크 결과, 테스트 수 같은 실제 출력과 함께만 쓴다. 결정 항목은 보고 전체에 걸쳐 번호를 매기고 추천 하나와 이유, 답하지 않으면 어떻게 되는지를 붙인다. PR·브랜치·워커는 사람이 아는 이름으로 부른다. 프로그램 안에서 `orch decide add`로 등록한 결정은 번호 옆에 그 id(`d3`)를 함께 적는다.
   - `/brief`만 온 메시지도 보고 요청이다. 봇 `/` 메뉴 등록은 봇 토큰을 가진 세션이 사람 승인을 받고 한 번만 한다. `getMyCommands`로 먼저 확인하고, 그 사람 채팅 범위의 `setMyCommands`로 `brief`를 플러그인의 `start`·`help`·`status`와 함께 등록한다(채팅 범위 목록은 그 채팅의 메뉴 전체를 대체한다). 토큰은 출력하지 않는다.
@@ -430,14 +430,6 @@
 | `dispatch-work` | `dispatch-card` |
 | `use-obsidian` | `use-notes` |
 
-짧은 슬래시 명령은 사용자가 치는 이름만 줄인다. 모델은 이 별칭을 부르지 않는다(`disable-model-invocation`).
-
-| 명령 | 스킬 |
-|---|---|
-| `/agent-skills:brief` | `brief-status` |
-
-`brief` 별칭은 이 플러그인 스킬 하나뿐이고, `/agent-skills:brief`로 부른다. 맨 `/brief`는 이 스킬로 가지 않는다. Claude Code 2.1.295에서 대화형 세션은 `Unknown command: /brief`를 내고, `claude -p`에서는 내장 명령(brief-only 모드 전환)이 받아 `/brief isn't available in this environment.`를 낸다.
-
 ## 명령
 
 ### `orch` (프로그램 원장과 착지 게이트)
@@ -518,7 +510,7 @@
 
 넣는 내용은 경우마다 다르다.
 - `orch init`으로 등록된 프로그램의 Run이면: `agent-skills:orchestrate`를 다시 읽고, 프로그램 노트를 읽고, `orch status`의 모든 줄에 대응하고, 이후에는 `orch wait`로만 drain한다. 압축 직후면 앞서 따르던 규칙이 문맥에서 빠졌을 수 있다는 말을 덧붙인다.
-- 프로그램이 없으면(최상위 코디네이터): `agent-skills:orchestrate`를 지금 불러 읽고, 자기 턴은 라우팅과 몇 초짜리 읽기만 하며, 조사·구현·검증·브라우저 작업은 한 층 아래로 보내고, 진행 보고는 `agent-skills:brief-status`로 한다.
+- 프로그램이 없으면(최상위 코디네이터): `agent-skills:orchestrate`를 지금 불러 읽고, 자기 턴은 라우팅과 몇 초짜리 읽기만 하며, 조사·구현·검증·브라우저 작업은 한 층 아래로 보내고, 진행 보고는 `agent-skills:brief`로 한다.
 
 SessionStart는 매번 다시 판정한다. UserPromptSubmit은 세션의 첫 프롬프트에서만 판정하고 결과를 `$AGENT_SKILLS_STATE/reorient/<session_id>.json`(기본 `~/.local/state/agent-skills`)에 남겨, 이후 프롬프트는 `orca`를 부르지 않는다. `/reload-plugins`로 hook을 받은 기존 세션은 SessionStart를 다시 거치지 않으므로, 다음 프롬프트에서 한 번 받는다.
 
