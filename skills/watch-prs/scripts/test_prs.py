@@ -496,6 +496,7 @@ mline = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {*
 mprompt = mline[mline.index("--prompt") + 1]
 assert all(s in mprompt for s in ("merges", "verify", "gh pr merge", "--admin", "다시 시도하지 않", "commit")), mprompt
 assert "merges" not in prompt and "감지하고 넘기기만" in prompt
+assert "코멘트·재요청도 하지 않는다" in mprompt
 # With review_wait too, merging still precedes the send and the actions step follows it.
 both = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**mcfg, "kinds": ["ready_to_merge", "review_wait"], "inbox_to": "t"}, "path:/x")
 both = both[both.index("--prompt") + 1]
@@ -511,14 +512,17 @@ fake_orca = otmp / "orca"
 fake_orca.write_text(f"#!/bin/sh\ncat {shlex.quote(str(otmp / 'trees.json'))}\n")
 fake_orca.chmod(fake_orca.stat().st_mode | stat.S_IEXEC)
 home = otmp / "programs"
-for slug, ts, n in (("live", NOW - DAY, 7), ("old", NOW - 40 * DAY, 8)):
+for slug, ts, n in (("live", NOW - DAY, 7), ("old", NOW - 40 * DAY, 8), ("stopped", NOW - DAY, 9)):
     (home / slug).mkdir(parents=True)
     (home / slug / "program.json").write_text(json.dumps({"repo": "acme/widgets"}))
     row = json.dumps({"ts": iso(ts).replace("Z", "+00:00"), "ev": "verdict", "pr": n})
-    (home / slug / "ledger.jsonl").write_text(row + "\n" + '{"ts": "torn')   # a writer mid-append
+    stop = json.dumps({"ts": iso(ts).replace("Z", "+00:00"), "ev": "stop"}) + "\n" if slug == "stopped" else ""
+    (home / slug / "ledger.jsonl").write_text(row + "\n" + stop + '{"ts": "torn')   # a writer mid-append
 p.ORCA = str(fake_orca)
 got = real_owned({**mcfg, "programs_dir": str(home)}, NOW)
-assert got == {"branches": {"lead-card"}, "prs": {"acme/widgets#7"}}, got
+# A stopped program still owns its PRs for merging (a human gate may be pending), though review_wait resumes them.
+assert got == {"branches": {"lead-card"}, "prs": {"acme/widgets#7", "acme/widgets#9"}}, got
+assert set(p.program_prs({**mcfg, "programs_dir": str(home)}, NOW)) == {("acme/widgets", 7)}
 trees["result"]["truncated"] = True
 (otmp / "trees.json").write_text(json.dumps(trees))
 for broken in (str(fake_orca), "/nonexistent/orca"):

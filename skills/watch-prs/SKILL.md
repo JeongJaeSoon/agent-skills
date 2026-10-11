@@ -28,7 +28,7 @@ never in this repo.
          "kinds": ["review_request", "review_wait", "ready_to_merge", "unreleased"],
          "channel": "<default Slack channel id>", "repo_channels": {"<owner/repo>": "<channel id>"},
          "reviewers": {"<github login>": {"slack": "<Slack user id>", "channel": "<optional override>"}},
-         "review_bots": {"<bot login>": "<the bot's re-review trigger comment>"},
+         "review_bots": {"<bot login>": "<the bot's re-review trigger comment; its verdict lines also count for ready_to_merge>"},
          "holidays": ["<YYYY-MM-DD>"], "urgent_labels": ["<label>"],
          "deploy": {"<owner/repo>": {"dev_release": "auto-sync | <how main reaches dev>",
                                      "revision_cmd": "<prints the commit or ref dev runs>",
@@ -133,8 +133,9 @@ nothing is merged.
    `merge_repos`;
 2. not a draft, and no label from `hold_labels` (case-insensitive);
 3. no one else is driving it: its head branch is not checked out in a live (unarchived) Orca
-   worktree — a worker's, or a lead's or other card's — and its number is not in the ledger of an
-   live orchestrate program (the same test as `review_wait`'s). If Orca cannot be read, nothing is ready. A PR you want merged by the round lives
+   worktree — a worker's, or a lead's or other card's — and its number is not in the ledger of a
+   live orchestrate program (as for `review_wait`, except that a stopped program still holds its PRs: a
+   stop halts new workers, not the coordinator's or a human gate's hold). If Orca cannot be read, nothing is ready. A PR you want merged by the round lives
    on a branch no worktree has checked out;
 4. its base is the default branch: a stacked child waits for its parent;
 5. no reviewer's latest non-comment review is CHANGES_REQUESTED or DISMISSED (an approval a retarget
@@ -205,21 +206,21 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 
    From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
    to its Run's coordinator.
-4. Only after the send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
-   Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
-   hook) is not tried again in any form (re-run, script, other tool, another session): send the
-   coordinator the repo, the refusal and the exact command instead.
-5. If `kinds` has `review_wait`, handle each line of `python3 "$P" actions` and record its outcome
+4. If `kinds` has `review_wait`, handle each line of `python3 "$P" actions` and record its outcome
    with `python3 "$P" log --key <key> --source <source> [--thread <channel>:<ts>] [--scheduled <id>] [--post-at <epoch>] [--at <epoch>]`.
    Slack actions follow the user's Slack-posting rules (read that skill first): a request is one
    message per reviewer in the channel, unless the channel already has a request for that PR
    (`found`); a reminder or re-request is a thread reply only, never broadcast; with no thread known,
    search the channel for one, and with none found post nothing (`no_thread`). With `post_at`, schedule
    for that time. `retrigger` is `gh pr comment <url> --body <comment>`. An action already moot (approved
-   meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
+   or merged meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
    permission prompt, the classifier or a hook is logged `refused` and reported, never retried.
+5. Only after the coordinator send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
+   Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
+   hook) is not tried again in any form (re-run, script, other tool, another session): send the
+   coordinator the repo, the refusal and the exact command instead.
 6. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
-   succeeded and each step-4 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
+   succeeded and each step-5 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
    and then commit.
 
@@ -236,8 +237,8 @@ python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's 
 ```
 
 The prompt is built from `kinds`: each configured kind with a `PROMPT_STEPS` entry adds its step, in
-`PROMPT_STEPS` order (`unreleased` last, since it gates `commit`). Without `review_wait` the prompt
-forbids GitHub writes. After `kinds` changes, rerun `schedule --edit <id>` (check `orca automations list` first so other
+`PROMPT_STEPS` order (`unreleased` last, since it gates `commit`). The prompt forbids every GitHub
+write the configured kinds do not need: with neither `review_wait` nor `ready_to_merge` it writes nothing. After `kinds` changes, rerun `schedule --edit <id>` (check `orca automations list` first so other
 kinds' steps are not lost).
 
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps

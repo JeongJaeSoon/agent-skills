@@ -359,7 +359,7 @@ def owned_elsewhere(cfg, now):
     if res.get("truncated"):
         raise RuntimeError("orca worktree list is truncated")
     branches = {w["branch"].removeprefix("refs/heads/") for w in res["worktrees"] if w.get("branch") and not w.get("isArchived")}
-    return {"branches": branches, "prs": {f"{repo}#{n}" for repo, n in program_prs(cfg, now)}}
+    return {"branches": branches, "prs": {f"{repo}#{n}" for repo, n in program_prs(cfg, now, stopped=True)}}
 
 
 TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -537,17 +537,18 @@ def post_at(now, cfg):
     return dt.datetime.combine(day, dt.time(cfg["morning_hour"], tzinfo=l.tzinfo)).timestamp()
 
 
-def program_prs(cfg, now):
+def program_prs(cfg, now, stopped=False):
     """{(repo, number): slug} for PRs a live orchestrate program drives; `orch wait` follows those, and a parked
     one is held on purpose. Live: not stopped (`stop` after the last `resume`) and a ledger event within
-    stale_days, so an abandoned program's PRs come back to reminders."""
+    stale_days, so an abandoned program's PRs come back to reminders. stopped=True keeps a stopped program's PRs:
+    a stop halts new workers, but the coordinator, or a human gate, still owns what it has."""
     root = pathlib.Path(cfg["programs_dir"] or os.environ.get("PROGRAMS_HOME") or "~/.claude/programs").expanduser()
     out = {}
     for prog in root.glob("*/program.json"):
         rows = read_jsonl(prog.parent / "ledger.jsonl")
         marks = [r.get("ev") for r in rows if r.get("ev") in ("stop", "resume")]
         last = max((ts(r["ts"]) for r in rows if isinstance(r.get("ts"), str)), default=0)
-        if (marks and marks[-1] == "stop") or now - last > cfg["stale_days"] * 86400:
+        if (marks and marks[-1] == "stop" and not stopped) or now - last > cfg["stale_days"] * 86400:
             continue
         repo = read_json(prog, {}).get("repo")
         out.update({(repo, r["pr"]): prog.parent.name for r in rows if isinstance(r.get("pr"), int)})
@@ -916,7 +917,7 @@ PROMPT_STEPS = {
         "`--source no_thread` 로 기록한다. post_at 이 있으면 바로 보내지 않고 그 시각으로 예약하고 "
         "`--source scheduled --scheduled <id> --post-at <post_at>`(스레드 답글이면 `--thread <channel>:<부모 ts>` 도) 로, 보냈으면 "
         "`--source sent --thread <channel>:<ts>` 로 기록한다. retrigger 는 그 PR 에 `gh pr comment <url> --body <comment>` 를 "
-        "달고 `--source sent` 로 기록한다. 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨, 리뷰어의 slack id 없음 등)은 "
+        "달고 `--source sent` 로 기록한다. 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨·머지됨, 리뷰어의 slack id 없음 등)은 "
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
         "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. 이 단계의 GitHub 쓰기는 retrigger 코멘트뿐이다."),
     "unreleased": (
@@ -940,7 +941,8 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
                   f"그다음 `{env} verify` 로 MERGED 와 기본 브랜치 CI 를 확인해 본문을 다시 쓴다. verify 가 실패하면 보내지도 "
                   f"commit 하지도 않고 그 오류를 남긴 채 끝낸다. 성공하면 ") if merging else ""
     steps = " ".join(step.format(env=env) for k, step in PROMPT_STEPS.items() if k in cfg["kinds"])
-    reads = (" 이 회차는 머지 단계 밖에서 승인·리뷰·배포를 직접 하지 않는다." if merging else
+    reads = (" 이 회차는 머지 단계 밖에서 승인·리뷰·배포를 직접 하지 않는다."
+             + ("" if "review_wait" in cfg["kinds"] else " 코멘트·재요청도 하지 않는다.") if merging else
              "" if "review_wait" in cfg["kinds"] else " 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다.")
     prompt = (f"watch-prs 회차다. `{env} plan --body` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
               f"아니면 {merge_step}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
