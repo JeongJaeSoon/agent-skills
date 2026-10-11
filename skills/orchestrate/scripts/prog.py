@@ -766,6 +766,30 @@ def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
     return [stall_line(x) for x in fresh]
 
 
+def new_leftovers(pdir, renotify=dt.timedelta(minutes=30)):
+    """LANDED-BUT-OPEN lines for released cards that `orch wait` has not shown in the last 30 minutes. A worker
+    ended with worker-stop sends no worker_done, so no CLOSE OUT line names its card."""
+    st = dash_state(pdir)
+    if st is None:
+        return []
+    state, now = pdir / "leftovers-seen.json", dt.datetime.now(dt.timezone.utc)
+    try:
+        seen = json.loads(state.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    seen = seen if isinstance(seen, dict) else {}
+    cards = [c for c in st.get("landed_open") or [] if not c.get("active")]
+    fresh = [c for c in cards if c["dispatch"] not in seen or now - parse_ts(seen[c["dispatch"]]) >= renotify]
+    keep = {c["dispatch"]: seen.get(c["dispatch"]) for c in cards}
+    keep.update({c["dispatch"]: now.isoformat() for c in fresh})
+    try:
+        state.write_text(json.dumps({k: v for k, v in keep.items() if v}))
+    except OSError:
+        pass
+    return [f"  LANDED-BUT-OPEN {c.get('ticket') or '?'} (dispatch {c['dispatch']}): released, but its card is still"
+            f" there: `orca worktree rm --worktree path:{c['path']}`" for c in fresh]
+
+
 def ensure_dash():
     """Start the dashboard server, or restart it when its code changed; returns its one-line answer.
     ORCH_DASH=off skips it (tests)."""
@@ -1939,6 +1963,8 @@ def cmd_wait(argv):
             print_sweep(run_id, p.dir / "self-check.json")
             print("STUCK: a worker waits on a prompt nobody sees; answer or escalate it now", flush=True)
             return
+        if leftovers := new_leftovers(p.dir):
+            print("\n".join(leftovers), flush=True)
         if stalled := new_stalls(p.dir):
             print("\n".join(stalled), flush=True)
             print("STALLED: a worker stopped with its ticket open and nothing will wake it; wake it now", flush=True)

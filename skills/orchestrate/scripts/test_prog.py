@@ -436,6 +436,16 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "2"])
 assert "STALLED" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
+# A released card left behind (worker-stop sends no worker_done) is named once per 30 min; the wait goes on.
+(_pdir / "dashboard" / "state.json").write_text(json.dumps({"generated_at": prog.dt.datetime.now(prog.dt.timezone.utc).isoformat(),
+    "landed_open": [{"ticket": "T-8", "dispatch": "a8", "active": False, "path": "/w/8"},
+                    {"ticket": "T-7", "dispatch": "a7", "active": True, "path": "/w/7"}]}))
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_wait(["s", "--rounds", "2"])
+assert "LANDED-BUT-OPEN T-8 (dispatch a8)" in out.getvalue() and "path:/w/8" in out.getvalue() \
+    and "T-7" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
+assert out.getvalue().count("LANDED-BUT-OPEN") == 1, out.getvalue()
 # wait keeps the collector on the current code: STALLED lines are only as new as its server.
 saved_ensure, prog.ensure_dash = prog.ensure_dash, lambda: "dashboard started: http://127.0.0.1:4780/"
 out = io.StringIO()
