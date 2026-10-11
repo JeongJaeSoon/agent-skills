@@ -47,7 +47,7 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
    - Progress: an 8-cell bar and N/M from the Progress rule above (`▓▓▓▓░░░░ 4/8`, filled cells = round(8·N/M); `—` when there is no basis; the legend says the bar is an estimate), then the evidence for what is done: a PR number, or a 7-character sha when there is no PR, or nothing before the first commit.
    - Next: the next stage and who moves it, in a few words.
 
-   Under each lead row, one row per sub-task the lead owns (each card, worker and open PR), named `└ <identifier> <short name>` (`└ #49 설정`, `└ w2 발송`, `└ ABC-1 색인`) and filling the same four columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, and no sub-task moves to a footnote or drops out: a merged one stays, ✅, until its lead is done. A lead row with sub-task rows keeps its own progress basis but leaves the evidence to them, and its status is the worst of its rows (🔴, then 🟡, then 🟢). A sub-task in another repository goes in that repository's table, under a row with only the lead's name and `—` in progress and next. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
+   Under each lead row, one row per sub-task the lead owns (each card, worker and open PR), named `└ <identifier> <short name>` (`└ #49 설정`, `└ w2 발송`, `└ ABC-1 색인`) and filling the same four columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, and no sub-task moves to a footnote or drops out: a merged one stays, ✅, until its lead is done. A lead row with sub-task rows keeps its own progress basis but leaves the evidence to them, and its status is the worst of its rows (🔴, then 🟡, then 🟢; ✅ only when the lead is done). A sub-task in another repository goes in that repository's table, under a row with only the lead's name and `—` in status, progress and next. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
 3. Decision needed, as §1 describes it.
 4. Only you, as §1 describes it: what to run, press or log in to, and where.
 5. Later, each item with the condition that brings it back.
@@ -109,7 +109,7 @@ An illustrative periodic report (the items are made up):
 ```markdown
 **14:30 · 검색 개선 완료, 나머지는 변화 없음**
 
-🟢 진행 · 🟡 대기(사람·외부) · 🔴 막힘 · ✅ 완료 · **굵은 이름** 직전 보고 뒤 바뀜 · └ 리드의 하위 작업 · 진행 막대는 단계 기준 추정
+🟢 진행 · 🟡 대기(사람·외부) · 🔴 막힘 · ✅ 완료 · **굵은 이름** 직전 보고 뒤 바뀜·새로 생김 · └ 리드의 하위 작업 · 진행 막대는 단계 기준 추정
 
 ### acme/web
 | | 리드 | 진행 | 다음 |
