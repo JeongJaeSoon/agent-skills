@@ -273,7 +273,7 @@ line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/15 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
-assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
+assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck --kinds review_request"
 prompt = line[line.index("--prompt") + 1]
 assert "plan --body --kinds review_request`" in prompt and "--to term_x" in prompt
 assert "보내기가 성공했을 때만 `python3 /repo/skills/watch-prs/scripts/prs.py commit --kinds review_request`" in prompt
@@ -299,12 +299,20 @@ finally:
 # A state folder off the default goes in as a flag after the subcommand, not through the environment.
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
-assert f"precheck --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
-# commit --kinds records only the kinds the round's prompt acts on; the rest come back next round, named in the body.
-p.write_json(tmp / "state" / "prs" / "plan.json", plan2)
+assert f"precheck --kinds review_request --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
+# commit --kinds records only the kinds the round's prompt acts on and leaves the rest unrecorded.
+rr = {**plan2["new"][0], "kind": "review_request", "key": "acme/widgets#9@h9"}
+p.write_json(tmp / "state" / "prs" / "plan.json", {**plan2, "new": [rr] + plan2["new"]})
 c = run("commit", "--kinds", "review_request")
-assert c.returncode == 0 and "commit: 0 items recorded" in c.stdout and "acme/widgets#20" in c.stderr, c
-assert not any(k.startswith("acme/widgets#20") for k in p.read_json(tmp / "state" / "prs" / "ledger.json", {})), "unreleased must not be recorded"
-assert "단계가 없는 kind: unreleased" in p.body(plan2, ["review_request"]) and "단계가 없는" not in p.body(plan2, None)
+recorded = p.read_json(tmp / "state" / "prs" / "ledger.json", {})
+assert c.returncode == 0 and "commit: 1 items recorded" in c.stdout and "acme/widgets#20" in c.stderr, c
+assert "acme/widgets#9@h9" in recorded and not any(k.startswith(("acme/widgets#20", "acme/widgets#21", "acme/gadgets")) for k in recorded), recorded
+# Kinds outside --kinds never reach new: they take no max_items slot and do not wake a round to be re-sent each time.
+fake = lambda: Fake([], merged=[merged(20), merged(21)], deployed="d0", live={"m20"})
+only = p.compute(fake(), {**rcfg, "max_items": 1}, {}, NOW, ["review_request"])
+assert only["new"] == [] and len(only["uncovered"]) == 2, only
+assert p.precheck(fake(), rcfg, tmp / "fresh", NOW, ["review_request"])[0] == p.EXIT_NOTHING
+assert p.precheck(fake(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NEW
+assert "보내지 않았다" in p.body({**plan2, "uncovered": ["acme/x#1@a"]}) and "보내지 않았다" not in p.body(plan2)
 
 print("test_prs: ok")

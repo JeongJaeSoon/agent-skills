@@ -104,8 +104,8 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 4. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
    succeeded and each step-3 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
-   and then commit. `commit --kinds <k1,k2>` records only those kinds and leaves the rest for the
-   next round; the scheduled round passes the kinds its prompt has steps for.
+   and then commit. `--kinds <k1,k2>` on `precheck`, `plan` and `commit` limits the run to those
+   kinds; the scheduled round passes the kinds its prompt has steps for.
 
 `python3 "$P" plan` without `--body` writes nothing and takes no lock. It prints the plan as JSON
 for checking what the filter did: `new` (ranked items), `known` (keys already sent) and
@@ -121,9 +121,9 @@ python3 "$P" schedule --write    # creates it
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the precheck keeps
 that path. The prompt's steps come from `kinds`: each kind's entry in `STEPS` (next to `COLLECTORS`
 in `prs.py`) adds what the round does after the message, and `schedule` refuses a kind without one.
-The round passes `--kinds` to `plan --body` and `commit`, so an item of a kind added to the config
-after the automation was made is named in the message and stays unrecorded until the prompt is
-regenerated. Every command starts with `python3`: a scheduled session can refuse a leading `env` or
+The precheck, `plan --body` and `commit` get `--kinds`, so an item of a kind added to the config
+after the automation was made is not sent or recorded: the precheck output and the next message
+list it as uncovered until the prompt is regenerated. Every command starts with `python3`: a scheduled session can refuse a leading `env` or
 `VAR=` assignment as a command of its own, so a non-default state goes in as `--state`.
 
 The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:

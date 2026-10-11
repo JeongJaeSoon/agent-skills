@@ -2,8 +2,8 @@
 """Bookkeeping for watch-prs: which pull requests need the owner, ranked, sent once per head.
 
 Usage:
-  python3 prs.py precheck [--config PATH]
-  python3 prs.py plan [--body] [--config PATH]
+  python3 prs.py precheck [--kinds K1,K2] [--config PATH]
+  python3 prs.py plan [--body] [--kinds K1,K2] [--config PATH]
   python3 prs.py commit [--kinds K1,K2] [--config PATH]
   python3 prs.py dispatch [--config PATH]
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--write]
@@ -14,8 +14,8 @@ could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
 coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock. commit records what plan.json delivered,
-so the same (repo, number, headRefOid) is never sent twice; with --kinds it records only those kinds, the
-ones the round's prompt has a step for, and leaves the rest to come back next round. dispatch reads plan.json and prints one
+so the same (repo, number, headRefOid) is never sent twice. --kinds names the kinds the round's prompt has
+a step for: items of other kinds are not new for precheck, plan or commit, only listed as uncovered. dispatch reads plan.json and prints one
 `orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<n>.txt;
 it runs nothing. schedule prints the
 `orca automations create` command, its steps built from the configured kinds, and runs it only with --write.
@@ -254,7 +254,9 @@ STEPS = {"review_request": None,
          "unreleased": lambda run: f"`{run('dispatch')}` 를 실행해 출력된 줄마다 그 명령을 한 번씩 실행한다(줄이 없으면 건너뛴다)"}
 
 
-def compute(gh, cfg, ledger, now):
+def compute(gh, cfg, ledger, now, kinds=None):
+    """kinds: the kinds the round acts on. Others stay out of new, so they neither take max_items slots nor
+    trigger a round that would send them again every time; their keys are listed under uncovered."""
     me = gh.viewer()
     items, excluded = [], []
     for kind in cfg["kinds"]:
@@ -263,12 +265,14 @@ def compute(gh, cfg, ledger, now):
         got, out = COLLECTORS[kind](gh, me, cfg, ledger, now)
         items += got
         excluded += out
-    new = [i for i in rank(items) if i["key"] not in ledger]
+    unsent = [i for i in rank(items) if i["key"] not in ledger]
+    new = [i for i in unsent if kinds is None or i["kind"] in kinds]
     return {"run": now, "viewer": me, "new": new[: cfg["max_items"]], "more": max(0, len(new) - cfg["max_items"]),
-            "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded}
+            "known": [i["key"] for i in items if i["key"] in ledger], "excluded": excluded,
+            "uncovered": [i["key"] for i in unsent if i not in new]}
 
 
-def body(plan, kinds=None):
+def body(plan):
     if not plan["new"]:
         return ""
     head = f"PR {len(plan['new'])}건이 나를 기다린다" + (f" (그 밖에 {plan['more']}건은 다음 회차)" if plan["more"] else "")
@@ -277,10 +281,9 @@ def body(plan, kinds=None):
         tag = "새 커밋, 재요청 없음" if i["reason"] == "new_commits" else LABELS[i["kind"]]
         lines.append(f"{n}. [{tag}] {i['repo']}#{i['number']} {i['title']} — @{i['author']} · {i['age_days']}일 · "
                      f"±{i['size']} · {', '.join(i['why'])} — {i['url']}")
-    uncovered = sorted({i["kind"] for i in plan["new"]} - set(kinds)) if kinds is not None else []
-    if uncovered:
-        lines.append(f"이 회차 프롬프트에 단계가 없는 kind: {', '.join(uncovered)}. 기록하지 않아 다음 회차에 다시 온다. "
-                     "`prs.py schedule` 출력으로 자동화의 prompt 를 고친다.")
+    if plan.get("uncovered"):
+        lines.append(f"이 회차 프롬프트에 단계가 없는 항목 {len(plan['uncovered'])}건은 보내지 않았다: "
+                     f"{', '.join(plan['uncovered'])}. `prs.py schedule` 출력으로 자동화의 prompt 를 고친다.")
     return "\n".join(lines)
 
 
@@ -290,19 +293,21 @@ def lock_held(state, cfg, now):
     return bool(plan) and now - plan.get("run", 0) < cfg["lock_minutes"] * 60
 
 
-def precheck(gh, cfg, state, now):
+def precheck(gh, cfg, state, now, kinds=None):
     if cfg is None:
         return EXIT_ERROR, 'config 에 "prs" 가 없음'
     if lock_held(state, cfg, now):
         return EXIT_NOTHING, "이전 회차가 아직 진행 중(plan.json)"
     ledger = read_json(state / "ledger.json", {})
     try:
-        plan = compute(gh, cfg, ledger, now)
+        plan = compute(gh, cfg, ledger, now, kinds)
     except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as e:
         return EXIT_ERROR, f"GitHub 를 읽지 못함: {e}"
     keys = [i["key"] for i in plan["new"]]
     if not keys:
-        return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건)"
+        late = f", 프롬프트에 단계가 없어 보내지 않는 항목 {len(plan['uncovered'])}건: {', '.join(plan['uncovered'])}" \
+            if plan["uncovered"] else ""
+        return EXIT_NOTHING, f"새 항목 없음 (제외 {len(plan['excluded'])}건{late})"
     return EXIT_NEW, f"새 항목 {len(keys)}건: " + ", ".join(keys)
 
 
@@ -387,7 +392,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude"):
     prompt += "이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다."
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", run("precheck"), "--prompt", prompt, "--json"]
+           "--precheck", run("precheck " + covered), "--prompt", prompt, "--json"]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd
@@ -399,21 +404,21 @@ def main():
     kinds = opt("--kinds") and opt("--kinds").split(",")
     now = time.time()
     if cmd == "precheck":
-        code, why = precheck(GitHub(), cfg, STATE, now)
+        code, why = precheck(GitHub(), cfg, STATE, now, kinds)
         print(why, file=sys.stderr)
         sys.exit(code)
     if cmd in ("plan", "commit", "dispatch", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
     if cmd == "plan" and "--body" not in sys.argv:
-        print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now), ensure_ascii=False, indent=1))
+        print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now, kinds), ensure_ascii=False, indent=1))
     elif cmd == "plan":
         if lock_held(STATE, cfg, now):
             sys.exit("plan: another run holds plan.json; it frees after lock_minutes")
-        plan = compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now)
+        plan = compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now, kinds)
         if plan["new"]:
             write_json(STATE / "plan.json", plan)
         STATE.mkdir(parents=True, exist_ok=True)
-        text = body(plan, kinds)
+        text = body(plan)
         (STATE / "body.txt").write_text(text)
         print(text)
     elif cmd == "dispatch":
