@@ -117,8 +117,8 @@ FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. The refused-ac
             program brief's FORBIDDEN above, pasted verbatim. <unit-specific bans>
 APPROVED    The acts the human already approved for this unit, with their words and date. Inside
             them, decide with the recommended default and report what you chose; do not ask.
-HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and any irreversible or
-            outward act not under APPROVED. Ask for these together, once.
+HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
+            any irreversible or outward act not under APPROVED. Ask for these together, once.
 MODEL CALLS Another model (a subagent, Codex, an API) only when the task needs it; say which and
             why before the call, and pick the model then.
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
@@ -164,8 +164,8 @@ PERMISSIONS The autoMode rules for this repo's merge and deploy, quoted, or "mis
 APPROVED    The acts the human already approved for this project, with their words and date.
             Decisions inside them are yours and your workers': the recommended default, then a
             report. Copy the lines a worker's unit needs into its brief.
-HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and any irreversible or
-            outward act not under APPROVED. Batched into one message to the human.
+HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
+            any irreversible or outward act not under APPROVED. Batched into one message to the human.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
