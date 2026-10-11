@@ -154,10 +154,10 @@ assert list(p.read_json(state / "ledger.json", {})) == [still]
 # A kind without a collector fails loudly instead of silently sending nothing.
 assert set(p.COLLECTORS) < set(p.KINDS)
 try:
-    p.compute(Fake([]), {**cfg, "kinds": ["ready_to_merge"]}, {}, NOW)
+    p.compute(Fake([]), {**cfg, "kinds": ["ownergate"]}, {}, NOW)
     raise AssertionError("unimplemented kind must raise")
 except RuntimeError as e:
-    assert "ready_to_merge" in str(e)
+    assert "ownergate" in str(e)
 
 # Slack review requests from watch-mentions' seen ledger: one entry per PR, permalinks attached.
 seen_file = state.parent / "mentions-seen.json"
@@ -387,5 +387,217 @@ finally:
 assert p.precheck(merges_only(), rcfg, tmp / "fresh", NOW)[0] == p.EXIT_NEW
 assert [i["kind"] for i in p.compute(fake(), rcfg, {}, NOW)["new"]] == ["unreleased", "unreleased", "review_request"]
 assert "보내지도" not in p.body(plan2)
+
+# ready_to_merge: the owner's PRs in merge_repos that may merge now, each held back by the first gate that applies.
+def mpr(n, repo="acme/widgets", draft=False, labels=(), branch=None, base="main", merge_state="CLEAN", decision=None,
+        checks="SUCCESS", threads=(), total=None, reviews="record", comments=(), squash=True, merge=True, rebase=False):
+    head = f"m{n}ead000"
+    if reviews == "record":  # an independent review's result names the head: the no-review path's record
+        reviews, comments = [], [(ME, "User", f"independent review — head {head}\n결론: pass")] + list(comments)
+    return {"id": f"M_{repo}_{n}", "number": n, "title": f"Ship {n}", "url": f"https://github.com/{repo}/pull/{n}",
+            "isDraft": draft, "createdAt": iso(NOW - 2 * DAY), "headRefOid": head, "headRefName": branch or f"b{n}",
+            "baseRefName": base, "additions": 3, "deletions": 1, "reviewDecision": decision, "mergeStateStatus": merge_state,
+            "state": "OPEN", "author": {"__typename": "User", "login": ME}, "labels": {"nodes": [{"name": x} for x in labels]},
+            "repository": {"nameWithOwner": repo, "defaultBranchRef": {"name": "main"}, "squashMergeAllowed": squash,
+                           "mergeCommitAllowed": merge, "rebaseMergeAllowed": rebase},
+            "reviewThreads": {"totalCount": len(threads) if total is None else total,
+                              "nodes": [{"isResolved": t} for t in threads]},
+            # Fixture order is time order: reviews first, then comments.
+            "reviews": {"totalCount": len(reviews), "nodes": [
+                {"author": {"__typename": r[1], "login": r[0]}, "state": r[2], "body": "", "commit": {"oid": r[3]},
+                 "authorAssociation": r[4] if len(r) > 4 else "COLLABORATOR", "createdAt": iso(NOW - 100 + k)}
+                for k, r in enumerate(reviews)][-100:]},
+            "comments": {"totalCount": len(comments),
+                         "nodes": [{"author": {"__typename": t, "login": a}, "body": b} for a, t, b in comments]},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks} if checks else None}}]}}
+
+
+class MergeFake(Fake):
+    def __init__(self, found, merged=()):
+        super().__init__([])
+        self.mfound, self.queries, self.rounds = list(found), [], list(merged)
+
+    def search_merge(self, q, me):
+        self.queries.append(q)
+        return self.mfound
+
+    def merge_state(self, ids, me):
+        return self.rounds.pop(0) if len(self.rounds) > 1 else self.rounds[0]
+
+
+mcfg = {**cfg, "kinds": ["ready_to_merge"], "merge_repos": ["acme/widgets", "acme/infra"], "merge_deny_repos": ["acme/infra"],
+        "required_bots": [], "review_bots": {"reviewbot[bot]": "@reviewbot review"}}
+owned = {"branches": {"lead-card"}, "prs": {"acme/widgets#21"}}
+real_owned = p.owned_elsewhere
+p.owned_elsewhere = lambda c, now: owned
+H = lambda n: f"m{n}ead000"
+cases = {
+    1: (mpr(1), None),                                                                   # no review required, head reviewed
+    2: (mpr(2, decision="APPROVED", reviews=[("bob", "User", "APPROVED", H(2))]), None),  # approved
+    3: (mpr(3, decision="REVIEW_REQUIRED", merge_state="BLOCKED"), "mergeStateStatus BLOCKED"),
+    4: (mpr(4, decision="CHANGES_REQUESTED"), "리뷰 CHANGES_REQUESTED"),
+    5: (mpr(5, checks="FAILURE"), "체크 FAILURE"),
+    6: (mpr(6, checks="PENDING"), "체크 PENDING"),
+    7: (mpr(7, checks=None), "체크 없음"),
+    8: (mpr(8, threads=[True, False]), "미해결 스레드"),
+    9: (mpr(9, threads=[True] * 100, total=101), "미해결 스레드"),                       # more threads than one page
+    10: (mpr(10, draft=True), "draft"),
+    11: (mpr(11, labels=["Do-Not-Merge"]), "보류 라벨: do-not-merge"),
+    12: (mpr(12, branch="lead-card"), "다른 worktree·프로그램이 진행 중"),                 # checked out in a live card
+    13: (mpr(13, repo="acme/infra"), "머지 금지 저장소"),
+    14: (mpr(14, repo="other/repo"), "머지 허용 목록 밖"),
+    15: (mpr(15, base="feature-a"), "stack 하위 PR (base feature-a)"),
+    16: (mpr(16, decision="REVIEW_REQUIRED", reviews=[("bob", "User", "APPROVED", "old"), ("bob", "User", "DISMISSED", "old")]),
+         "승인이 해제됨: review_wait 로"),                                              # retarget dismissed the approval
+    17: (mpr(17, squash=False, merge=False), "허용된 머지 방식 없음"),
+    18: (mpr(18, reviews=[]), "head 리뷰 기록 없음: review_wait 로"),                     # CLEAN alone is not a review
+    19: (mpr(19, reviews=[], comments=[("mallory", "User", f"LGTM {H(19)}")]), "head 리뷰 기록 없음: review_wait 로"),
+    20: (mpr(20, reviews=[], comments=[("reviewbot", "Bot", f"Reviewed {H(20)}\n**Verdict:** pass")]), None),  # a review bot
+    23: (mpr(23, reviews=[], comments=[(ME, "User", f"head {H(23)}\n결론: fail")]), "head 리뷰 기록 없음: review_wait 로"),
+    24: (mpr(24, reviews=[(ME, "User", "COMMENTED", H(24))]), "head 리뷰 기록 없음: review_wait 로"),  # a self-reply
+    25: (mpr(25, reviews=[], comments=[("previewbot", "Bot", f"Deployed {H(25)}\n결론: pass")]), "head 리뷰 기록 없음: review_wait 로"),
+    26: (mpr(26, reviews=[("bob", "User", "CHANGES_REQUESTED", "old"), (ME, "User", "COMMENTED", H(26))],
+             comments=[(ME, "User", f"head {H(26)}\n결론: pass")]), "변경 요청이 남아 있음"),
+    27: (mpr(27, reviews=[("bob", "User", "APPROVED", H(27))]), None),                    # approved on this head, none required
+    28: (mpr(28, reviews=[("bob", "User", "CHANGES_REQUESTED", "old"), ("bob", "User", "APPROVED", H(28))]), None),
+    29: (mpr(29, reviews=[("drive-by", "User", "APPROVED", H(29), "NONE")]), "head 리뷰 기록 없음: review_wait 로"),
+    30: (mpr(30, comments=[(ME, "User", f"second review — head {H(30)}\n결론: fail")]), "head 리뷰 기록 없음: review_wait 로"),
+    31: (mpr(31, reviews=[], comments=[(ME, "User", f"head {H(31)}\n> 결론: pass\n- `결론: pass`\n결론: pass / fail\n결론: fail")]),
+         "head 리뷰 기록 없음: review_wait 로"),                                              # quoted passes, real fail
+    32: (mpr(32, reviews=[("bob", "User", "APPROVED", "old")] * 101), "리뷰·코멘트가 100건을 넘어 확인 불가"),
+    33: (mpr(33, reviews=[("bob", "User", "APPROVED", H(33))], comments=[(ME, "User", f"head {H(33)}\n결론: fail")]),
+         "head 리뷰 기록 없음: review_wait 로"),                                              # a fail outweighs an approval
+    34: (mpr(34, reviews=[], comments=[("reviewbot", "User", f"head {H(34)}\n결론: pass")]),
+         "head 리뷰 기록 없음: review_wait 로"),                                              # a User named like the bot
+    21: (mpr(21), "다른 worktree·프로그램이 진행 중"),                                    # in an active program's ledger
+    22: (mpr(22, reviews=[], comments=[(ME, "User", "review of an older head m0ld000")]), "head 리뷰 기록 없음: review_wait 로"),
+}
+for n, (x, want) in cases.items():
+    got = p.merge_readiness(x, mcfg, owned, ME)
+    assert got[1] == want, (n, got)
+assert p.merge_readiness(mpr(1), {**mcfg, "merge_methods": ["rebase", "merge"]}, owned, ME) == ("merge", None), \
+    "first allowed in preference order"
+assert p.merge_readiness(mpr(1), mcfg, None, ME)[1] == "프로그램 소유 여부 확인 불가", "ownership unknown fails closed"
+
+# Required review bots must have reviewed this head; a rate-limited bot leaves no review, an old review does not count.
+bcfg = {**mcfg, "required_bots": ["reviewbot[bot]"]}
+assert p.merge_readiness(mpr(1), bcfg, owned, ME)[1] == "필수 봇 reviewbot[bot] 이 head 를 리뷰하지 않음"
+assert p.merge_readiness(mpr(1, reviews=[("reviewbot", "Bot", "COMMENTED", "old")], comments=[(ME, "User", f"{H(1)}\n결론: pass")]), bcfg, owned, ME)[1].startswith("필수 봇")
+assert p.merge_readiness(mpr(1, reviews=[("reviewbot", "Bot", "COMMENTED", H(1))], comments=[(ME, "User", f"{H(1)}\n결론: pass")]), bcfg, owned, ME) == ("squash", None)
+
+# The collector: search scoped to merge_repos, one item per ready PR with the exact merge command; the rest excluded.
+fake = MergeFake([c[0] for c in cases.values()])
+mplan = p.compute(fake, mcfg, {}, NOW)
+assert fake.queries == ["is:pr is:open archived:false author:@me repo:acme/widgets repo:acme/infra"], fake.queries
+assert [i["number"] for i in mplan["new"]] == [1, 2, 20, 27, 28], mplan["new"]
+one = mplan["new"][0]
+assert one["key"] == f"acme/widgets#1@{H(1)}" and one["method"] == "squash"
+assert one["cmd"] == f"gh pr merge 1 -R acme/widgets --squash --match-head-commit {H(1)}", one["cmd"]
+mwhy = {e["pr"]: e["why"] for e in mplan["excluded"]}
+assert len(mwhy) == len(cases) - 5 and mwhy["acme/widgets#12"] == "다른 worktree·프로그램이 진행 중"
+# An empty merge_repos merges nothing and does not search.
+empty = MergeFake([mpr(1)])
+assert p.compute(empty, {**mcfg, "merge_repos": []}, {}, NOW)["new"] == [] and empty.queries == []
+# Orca unreadable: nothing is ready, the reason says why.
+def broken_orca(c, now):
+    raise RuntimeError("orca down")
+p.owned_elsewhere = broken_orca
+assert {e["why"] for e in p.compute(MergeFake([mpr(1)]), mcfg, {}, NOW)["excluded"]} == {"프로그램 소유 여부 확인 불가"}
+p.owned_elsewhere = lambda c, now: owned
+
+# verify: MERGED plus the merge commit's CI, waiting while it is pending; a red run and a refused merge go in the body.
+mstate = pathlib.Path(tempfile.mkdtemp()) / "prs"
+two = {**mplan, "new": mplan["new"][:2]}
+p.write_json(mstate / "plan.json", two)
+pending = [{"id": "M_acme/widgets_1", "state": "MERGED", "mergeCommit": {"oid": "abc1234def", "statusCheckRollup": {"state": "PENDING"}}},
+           {"id": "M_acme/widgets_2", "state": "OPEN", "mergeCommit": None}]
+red = [{"id": "M_acme/widgets_1", "state": "MERGED", "mergeCommit": {"oid": "abc1234def", "statusCheckRollup": {"state": "FAILURE",
+        "contexts": {"nodes": [{"name": "test", "conclusion": "FAILURE", "detailsUrl": "https://ci.example.test/run/9"},
+                               {"name": "lint", "conclusion": "SUCCESS", "detailsUrl": "https://ci.example.test/run/8"}]}}}},
+       pending[1]]
+clock = iter([0, 0, 10, 30, 40])
+slept = []
+text = p.verify(MergeFake([], [pending, red]), mstate, mcfg, clock=lambda: next(clock), sleep=slept.append)
+assert slept == [30], slept
+lines = {l.split("] ")[1].split(" ")[0]: l for l in text.splitlines()[1:]}
+assert "머지됨 abc1234, 기본 브랜치 CI red: https://ci.example.test/run/9 —" in lines["acme/widgets#1"], lines
+assert "머지 안 됨 (state OPEN)" in lines["acme/widgets#2"], lines
+assert (mstate / "body.txt").read_text() == text
+assert all(i.get("result") for i in p.read_json(mstate / "plan.json", {})["new"])
+# CI still running at the deadline: reported as such, not as green.
+p.write_json(mstate / "plan.json", two)
+clock = iter([0, 0, 901, 901])
+text = p.verify(MergeFake([], [pending]), mstate, mcfg, clock=lambda: next(clock), sleep=lambda s: None)
+assert "기본 브랜치 CI PENDING" in text
+# A default branch without CI: no checks attach to the merge commit; after the grace it is reported, not awaited.
+bare = [{**pending[0], "mergeCommit": {"oid": "abc1234def", "statusCheckRollup": None}}, pending[1]]
+p.write_json(mstate / "plan.json", two)
+clock = iter([0, 0, 30, 30, 150, 150])
+slept = []
+text = p.verify(MergeFake([], [bare]), mstate, mcfg, clock=lambda: next(clock), sleep=slept.append)
+assert slept == [30, 30] and "기본 브랜치 CI 없음" in text, (slept, text)
+# commit records the merged heads: the same head is never offered again, merged or refused.
+assert p.commit(mstate, mcfg, NOW) == 2
+assert p.compute(MergeFake([c[0] for c in cases.values()][:2]), mcfg, p.read_json(mstate / "ledger.json", {}), NOW)["new"] == []
+
+# A config that collects ready_to_merge schedules a round that merges; without it the round stays read-only.
+mline = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**mcfg, "inbox_to": "term_x"}, "path:/repo")
+mprompt = mline[mline.index("--prompt") + 1]
+assert all(s in mprompt for s in ("merges", "verify", "gh pr merge", "--admin", "다시 시도하지 않", "commit")), mprompt
+ro = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**cfg, "inbox_to": "t"}, "path:/x")
+ro = ro[ro.index("--prompt") + 1]
+assert "merges" not in ro and "감지하고 넘기기만" in ro
+assert "코멘트·재요청도 하지 않는다" in mprompt
+assert no_env(mline) and "`python3 /repo/skills/watch-prs/scripts/prs.py merges`" in mprompt, mprompt
+# With review_wait too, merging still precedes the send and the actions step follows it.
+both = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**mcfg, "kinds": ["ready_to_merge", "review_wait"], "inbox_to": "t"}, "path:/x")
+both = both[both.index("--prompt") + 1]
+assert both.index(" merges`") < both.index("orca orchestration send") < both.index(" actions`") < both.index(" commit`"), both
+
+# owned_elsewhere: branches of live Orca worktrees, and PRs in the ledger of a live program (program_prs).
+otmp = pathlib.Path(tempfile.mkdtemp())
+trees = {"result": {"truncated": False, "worktrees": [
+    {"branch": "refs/heads/lead-card", "isArchived": False}, {"branch": "refs/heads/old-card", "isArchived": True},
+    {"branch": None, "isArchived": False}]}}
+(otmp / "trees.json").write_text(json.dumps(trees))
+fake_orca = otmp / "orca"
+fake_orca.write_text(f"#!/bin/sh\ncat {shlex.quote(str(otmp / 'trees.json'))}\n")
+fake_orca.chmod(fake_orca.stat().st_mode | stat.S_IEXEC)
+home = otmp / "programs"
+for slug, ts, n in (("live", NOW - DAY, 7), ("old", NOW - 40 * DAY, 8), ("stopped", NOW - DAY, 9)):
+    (home / slug).mkdir(parents=True)
+    (home / slug / "program.json").write_text(json.dumps({"repo": "acme/widgets"}))
+    row = json.dumps({"ts": iso(ts).replace("Z", "+00:00"), "ev": "verdict", "pr": n})
+    stop = json.dumps({"ts": iso(ts).replace("Z", "+00:00"), "ev": "stop"}) + "\n" if slug == "stopped" else ""
+    (home / slug / "ledger.jsonl").write_text(row + "\n" + stop + '{"ts": "torn')   # a writer mid-append
+p.ORCA = str(fake_orca)
+got = real_owned({**mcfg, "programs_dir": str(home)}, NOW)
+# A stopped program still owns its PRs for merging (a human gate may be pending), though review_wait resumes them.
+assert got == {"branches": {"lead-card"}, "prs": {"acme/widgets#7", "acme/widgets#9"}}, got
+assert set(p.program_prs({**mcfg, "programs_dir": str(home)}, NOW)) == {("acme/widgets", 7)}
+trees["result"]["truncated"] = True
+(otmp / "trees.json").write_text(json.dumps(trees))
+for broken in (str(fake_orca), "/nonexistent/orca"):
+    p.ORCA = broken
+    try:
+        real_owned({**mcfg, "programs_dir": str(home)}, NOW)
+        raise AssertionError("a truncated or unreadable Orca list must raise")
+    except (RuntimeError, OSError):
+        pass
+
+# merges records each attempt before the round runs it: a refused merge whose verify never ran is not offered again.
+mtmp = pathlib.Path(tempfile.mkdtemp())
+p.write_json(mtmp / "prs" / "plan.json", {**mplan, "new": mplan["new"][:1]})
+mconf = mtmp / "agent-skills.json"
+mconf.write_text(json.dumps({"prs": {"kinds": ["ready_to_merge"], "merge_repos": ["acme/widgets"]}}))
+out = subprocess.run([sys.executable, script, "merges", "--config", str(mconf)], capture_output=True, text=True,
+                     env={**os.environ, "AGENT_SKILLS_STATE": str(mtmp)})
+assert out.returncode == 0 and out.stdout.splitlines()[1] == mplan["new"][0]["cmd"], out
+assert list(p.read_json(mtmp / "prs" / "ledger.json", {})) == [mplan["new"][0]["key"]]
+
+# Kinds share the ledger key shape: the head ready_to_merge recorded is still due as unreleased once merged.
+shared = {"acme/widgets#20@m20": {"at": NOW, "kind": "ready_to_merge", "id": "x"}}
+assert p.delivered(shared, "acme/widgets#20@m20", "ready_to_merge")
+assert not p.delivered(shared, "acme/widgets#20@m20", "unreleased") and not p.delivered({}, "k", "unreleased")
 
 print("test_prs: ok")
