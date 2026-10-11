@@ -3,6 +3,7 @@
 
 Usage:
   python3 mentions.py precheck
+  python3 mentions.py inbox
   python3 mentions.py plan [--now UNIX]
   python3 mentions.py ingest CANDIDATES.json
   python3 mentions.py bundle ITEMS.json
@@ -10,6 +11,7 @@ Usage:
   python3 mentions.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 Slack is read by the agent through its Slack MCP tools; this script never talks to Slack.
+inbox checks that inbox_to still answers (exit 2 when it does not); precheck runs it too.
 plan takes the run lock and prints the searches to run. ingest drops what must not be reported
 (the owner's own messages, bots, non-public channels, excluded channels, anything seen before or older
 than the window). bundle renders the one coordinator message. commit marks the items seen,
@@ -69,13 +71,37 @@ def lock_held(state, cfg, now):
     return bool(lock) and now - lock.get("run", 0) < cfg["lock_minutes"] * 60
 
 
-def precheck(cfg, state, now):
+def orca_json(args):
+    try:
+        out = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30).stdout
+        return json.loads(out)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return {}
+
+
+def inbox_check(cfg, orca=orca_json):
+    """(0, note) when inbox_to answers, else (2, alarm). A dead address must stop the send, not swallow it."""
+    to = cfg.get("inbox_to")
+    if not to:
+        return 2, "경보: mentions.inbox_to 가 설정되지 않음 — 보낼 곳이 없다. run:<id> 로 설정하라"
+    if to.startswith("run:"):
+        if orca(["orchestration", "run-show", "--id", to[4:]]).get("ok"):
+            return 0, f"inbox_to {to} 확인"
+        return 2, f"경보: inbox_to {to} 의 Run 이 없다 — 보내지 않는다. 설정의 mentions.inbox_to 를 살아 있는 run:<id> 로 고쳐라"
+    if not orca(["terminal", "show", "--terminal", to]).get("ok"):
+        return 2, (f"경보: inbox_to {to} 터미널이 죽었다 — 보내지 않는다. "
+                   "설정의 mentions.inbox_to 를 run:<id> 로 고쳐라")
+    return 0, f"inbox_to {to} 확인. 주의: 터미널 핸들은 재부팅·재시작 때 깨진다. run:<id> 를 권장한다"
+
+
+def precheck(cfg, state, now, orca=orca_json):
     """Exit code for the Orca precheck. Slack is reachable only through MCP, so this cannot count new messages."""
     if not cfg.get("user_id"):
         return 1, "mentions.user_id 가 설정되지 않음"
     if lock_held(state, cfg, now):
         return 1, "이전 회차가 아직 실행 중(lock)"
-    return 0, "실행"
+    code, why = inbox_check(cfg, orca)
+    return code, why if code else f"실행 ({why})"
 
 
 def plan(cfg, state, now):
@@ -182,6 +208,10 @@ def main():
     now = float(opt("--now", time.time()))
     if cmd == "precheck":
         code, why = precheck(cfg, STATE, now)
+        print(why, file=sys.stderr)
+        sys.exit(code)
+    if cmd == "inbox":
+        code, why = inbox_check(cfg)
         print(why, file=sys.stderr)
         sys.exit(code)
     if cmd == "plan":
