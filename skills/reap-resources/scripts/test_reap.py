@@ -364,7 +364,29 @@ assert judge(unpushed=True, head="h9")["why"] == "원격에 없는 커밋"
 assert judge(pr="acme/app#1")["why"] == "열린 PR acme/app#1"
 assert judge(dirty=True)["why"].startswith("변경 있음")
 assert judge(live="살아 있는 워커 턴(ctx_1)")["why"].startswith("살아 있는")
-assert judge(pr=None)["why"] == "연결된 PR 없음" and judge(pr="acme/app#3")["target"]
+assert judge(pr=None, landed=False)["why"] == "연결된 PR 없음" and judge(pr="acme/app#3")["target"]
+# No PR: it goes only when HEAD is on the remote default branch (end-session §4) and its sessions are quiet long enough.
+nopr = lambda **kw: reap.judge_orca_worktree("/wt/a", "오케스트레이션 워커", {**ok, "pr": None, "landed": True, "worker_card": True, "idle": 7 * 3600, **kw},
+                                             PRS.get, 6 * 3600)
+assert nopr()["target"] and nopr()["why"] == "PR 없음, HEAD 가 기본 브랜치에 있고 세션이 7h0m 조용 (오케스트레이션 워커)", nopr()
+assert nopr(landed=False)["why"] == "연결된 PR 없음" and "origin/HEAD" in nopr(landed=None)["why"]
+assert nopr(idle=3600)["target"] is False and "만 조용" in nopr(idle=3600)["why"], "a lead or a new card sits on the default branch too"
+assert nopr(idle=None)["target"] is False
+assert nopr(worker_card=False)["why"] == "연결된 PR 없음(워커가 만든 카드가 아님)"
+assert nopr(pr_unread=True)["target"] is False and "읽지 못함" in nopr(pr_unread=True)["why"], "a failed gh lookup is not no PR"
+assert nopr(dirty=True)["why"].startswith("변경 있음") and nopr(unreadable=True)["why"] == "git 상태를 읽지 못함"
+assert nopr(live="살아 있는 워커 턴(ctx_1)")["target"] is False
+
+# Cards an agent made with `orca worktree create --parent-worktree` count; the app's own New Worktree does not.
+card = lambda path, origin, **kw: {"path": path, "isMainWorktree": False,
+                                   "lineage": {"parentWorktreeId": "r::/r", "origin": origin}, **kw}
+assert reap.cli_cards({"worktrees": [card("/w/cli", "cli"), card("/w/ui", "manual"), {"path": "/w/none", "lineage": None},
+                                     card("/r", "cli", isMainWorktree=True),
+                                     {"path": "/w/orphan", "lineage": {"origin": "cli", "parentWorktreeId": None}}]}) == {"/w/cli"}
+assert reap.cli_cards({"worktrees": [card("/w/cli", "cli")], "truncated": True}) is None and reap.cli_cards(None) is None
+assert reap.cli_cards({"worktrees": [card("/w/pin", "cli", isPinned=True), card("/w/far", "cli", hostId="ssh-1"),
+                                     {"lineage": {"origin": "cli", "parentWorktreeId": "r::/r"}}]}) == set()
+assert reap.cli_cards(["not", "a", "dict"]) is None
 
 # Only worktrees a worker made count; a retained row (context-only dispatch, user takeover) marks the user's.
 ws = [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::/w/made"}},
@@ -388,6 +410,22 @@ mine = {"number": 2, "url": "https://github.com/acme/app/pull/2", "isCrossReposi
 assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([fork]))["pr"] is None
 assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([fork, mine]))["pr"] == "acme/app#2"
 assert reap.worktree_facts("/r", None, None, {}, git=fake_git([mine])) == {"main": True}, "the main checkout is skipped"
+# Without a PR, HEAD is checked against origin/HEAD; an unknown default branch or a failed check is not landed.
+def landed_git(default, ancestor):
+    def git(cmd, cwd=None, check=True):
+        if "symbolic-ref" in cmd:
+            return default
+        if "--is-ancestor" in cmd:
+            return "" if ancestor and cmd[-1] == "origin/main" else None
+        return fake_git([])(cmd, cwd, check)
+    return git
+assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git("origin/main\n", True))["landed"] is True
+assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git("origin/main\n", False))["landed"] is False
+assert reap.worktree_facts("/r-wt", None, None, {}, git=landed_git(None, True))["landed"] is None
+def gh_down(cmd, cwd=None, check=True):
+    return None if cmd[0] == "gh" else fake_git([])(cmd, cwd, check)
+assert reap.worktree_facts("/r-wt", None, None, {}, git=gh_down)["pr_unread"] is True
+assert reap.worktree_facts("/r-wt", None, None, {}, git=fake_git([]))["pr_unread"] is False
 # A git read that fails is not a clean checkout: the worktree is kept with the reason.
 def failing_git(cmd, cwd=None, check=True):
     return None if cmd[-2:] in (["status", "--porcelain"], ["--not", "--remotes"]) else fake_git([mine])(cmd, cwd, check)
@@ -398,16 +436,46 @@ assert reap.judge_orca_worktree("/r-wt", "ledger", facts, PRS.get) == {
             "orca worktree rm --worktree path:/r-wt --run-hooks --json"]}, facts
 
 # An unreadable worker list is not an empty one: a ledger worktree may be a user's takeover, so it is kept.
-saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which
+saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json
 with tempfile.TemporaryDirectory() as tmp:
     wt = os.path.realpath(tmp)
     reap.cwds, reap.shutil.which = (lambda: {}), (lambda name: "/bin/" + name)
+    reap.orca_json = lambda *a: {"worktrees": []}
     reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "live": live}
     for workers, target, why in ((None, False, "워커 목록을 읽지 못함"), ([], True, "PR acme/app#2 merged (ledger)")):
         reap.orca_workers = lambda state=None: workers
         got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get)
         assert [(i["target"], i["why"]) for i in got] == [(target, why)], (workers, got)
-reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which = saved
+    # An unregistered card made through the CLI is seen; one the user's takeover retained is not.
+    reap.orca_workers = lambda state=None: []
+    reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
+    got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, quiet=lambda p: 7 * 3600)
+    assert [(i["target"], i["why"]) for i in got] == [(True, "PR acme/app#2 merged (CLI 로 만든 카드)")], got
+    # Known only by lineage, it may be a lead whose branch name an old merged PR used: it waits for quiet too.
+    got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, quiet=lambda p: 3600)
+    assert [(i["target"], i["why"]) for i in got] == [(False, "PR acme/app#2 merged, 세션이 1h0m 만 조용")], got
+    got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get, quiet=lambda p: 60)
+    assert [i["target"] for i in got] == [True], "a ledger card with its PR link needs no quiet"
+    got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt)], [], PRS.get, quiet=lambda p: 60)
+    assert [i["target"] for i in got] == [False], "a ledger card without a PR link (dispatch-card §3) waits like a cli card"
+    reap.orca_workers = lambda state=None: [{"terminalState": "retained", "resource": {"worktreeId": "r::" + wt}}]
+    assert reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get) == []
+    # A no-PR card is judged by how long its sessions have been quiet, floored at NO_PR_MIN_HOURS even under --hours 0.
+    reap.orca_workers = lambda state=None: [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::" + wt}}]
+    reap.orca_json = lambda *a: {"worktrees": []}
+    reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "pr": None, "landed": True, "live": live}
+    for idle, hours, target in ((3 * 3600, 0, True), (3600, 0, False), (3 * 3600, 6, False), (7 * 3600, 6, True)):
+        got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, hours=hours, quiet=lambda p, i=idle: i)
+        assert [i["target"] for i in got] == [target], (idle, hours, got)
+    # A no-PR card a worker did not make (a lead, a card opened by hand) is never a target, however quiet.
+    reap.orca_workers = lambda state=None: []
+    reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
+    got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt)], [], PRS.get, hours=6, quiet=lambda p: 99 * 3600)
+    assert [(i["target"], i["why"]) for i in got] == [(False, "연결된 PR 없음(워커가 만든 카드가 아님)")], got
+    reap.orca_json = lambda *a: None
+    notes = []
+    assert reap.janitor_scan({"orca-worktree"}, [], [], notes, PRS.get) == [] and "orca worktree list" in notes[0], notes
+reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json = saved
 
 # done-card: a settled card that only its idle Claude session keeps is asked once to close itself.
 H = 3600
@@ -419,13 +487,14 @@ assert done(quiet=H)["target"] is False and "만 조용" in done(quiet=H)["why"]
 assert done(quiet=None)["target"] is False
 assert done(asked="2026-10-10T12:00")["target"] is False and "이미 요청함" in done(asked="2026-10-10T12:00")["why"]
 for kw in ({"pr": "acme/app#1"}, {"dirty": True}, {"unpushed": True, "head": "h9"}, {"pr": None}, {"turn": "살아 있는 워커 턴(d1)"},
-           {"users": []}, {"unreadable": True}):
+           {"users": []}, {"unreadable": True}, {"pr": None, "landed": True, "idle": 9 * H}):
     assert done(**kw) is None, kw
 
-saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which
+saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json
 with tempfile.TemporaryDirectory() as tmp:
     wt = os.path.realpath(tmp)
     reap.cwds, reap.shutil.which = (lambda: {77: wt}), (lambda name: "/bin/" + name)
+    reap.orca_json = lambda *a: {"worktrees": []}
     reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "turn": live, "users": [77],
                                                           "live": live or "pid 77 이 이 worktree 를 cwd 로 사용 중"}
     entries = [e("orca-worktree", wt, pr="acme/app#2")]
@@ -438,7 +507,7 @@ with tempfile.TemporaryDirectory() as tmp:
     asked = scan_dc([], entries + [{"ts": "t", "kind": "done-card", "id": wt}])
     assert [(i["kind"], i["target"]) for i in asked] == [("orca-worktree", False), ("done-card", False)], asked
     assert reap.precheck(got, pathlib.Path(tmp) / "state")[0] == 0
-reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which = saved
+reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json = saved
 
 # The nudge goes to the card's one Claude terminal; a refusal fails the item so precheck holds it back a day.
 saved = reap.orca_json, reap.subprocess.run, reap.ledger_path

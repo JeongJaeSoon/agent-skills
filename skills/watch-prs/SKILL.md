@@ -1,6 +1,6 @@
 ---
 name: watch-prs
-description: Use when the user wants the pull requests that are waiting on them, or their own PRs waiting on reviewers, picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "내 PR 리뷰 리마인드", "리뷰 안 된 내 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request; a review request made on Slack (from watch-mentions' ledger) joins the same list, one entry per PR. In a repo that declares a dev path, the user's merged PRs not yet checked on dev start one release worker per repo. For the user's own PRs it finds which wait on a reviewer, an answer or a review bot, and turns the due ones into review requests and reminders under the send-log's rules. Bot PRs only the user's account can approve ("내가 승인해야 할 봇 PR", "owner approval") come with a ready-to-run `!` line each. Its GitHub writes are a review bot's re-review trigger on the user's own PR and a bot-PR approval an autoMode allow rule names. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
+description: Use when the user wants the pull requests that are waiting on them, or their own PRs waiting on reviewers, picked up as work context — "리뷰 요청 온 PR 정리해줘", "나한테 리뷰 요청 온 거 있어?", "내가 리뷰해야 할 PR", "내 PR 리뷰 리마인드", "리뷰 안 된 내 PR", "PR 감시", "watch my PRs" — and for each round of the watch-prs Orca automation. Lists PRs where the user was asked to review personally (not through a team or CODEOWNERS), ranks them, and sends the coordinator one bundled message only when something is new; a PR the user reviewed comes back once when it gets new commits without a re-request; a review request made on Slack (from watch-mentions' ledger) joins the same list, one entry per PR. In a repo that declares a dev path, the user's merged PRs not yet checked on dev start one release worker per repo. For the user's own PRs it finds which wait on a reviewer, an answer or a review bot, and turns the due ones into review requests and reminders under the send-log's rules, re-triggering a review bot on the user's own PR. When configured with `ready_to_merge`, it also merges the user's own PRs that are approved or reviewed at their head, CLEAN and green — "머지 가능한 내 PR 머지해줘". Bot PRs only the user's account can approve ("내가 승인해야 할 봇 PR", "owner approval") come with a ready-to-run `!` line each; the round approves one itself only when an autoMode allow rule names the act. Not for writing a review (code-flow:review-pr) or for a program's own PRs (orchestrate).
 ---
 
 # Watch PRs
@@ -9,10 +9,12 @@ GitHub's `review-requested:@me` mixes three things: a request to the user by nam
 team they belong to, and a CODEOWNERS auto-assignment. On a busy account the last two drown the
 first. This skill keeps only the personal ones, ranks them, and hands them on once per head commit.
 
-It never reviews, re-requests or labels. Its GitHub writes are a review bot's re-review trigger comment on
-the user's own PR (`review_wait`, below) and an `ownergate` approval that an autoMode allow rule names
-(below); Slack requests and reminders go through the user's Slack-posting rules. The release
-workers it starts for merged PRs do their own writing.
+It never writes a review of its own judgement, re-requests or labels. Its GitHub writes are a review bot's
+re-review trigger comment on the user's own PR (`review_wait`, below); when `kinds` includes
+`ready_to_merge`, merging the user's own PRs that pass every gate in [Ready to merge](#ready-to-merge);
+and an `ownergate` approval that an autoMode allow rule names ([Owner gate](#owner-gate)). Slack
+requests and reminders go through the user's Slack-posting rules. The release workers it starts for
+merged PRs do their own writing.
 
 ## Config
 
@@ -25,10 +27,11 @@ never in this repo.
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
          "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
          "max_items": 10, "stale_days": 30, "cron": "*/15 * * * *", "timezone": "<IANA tz>",
-         "kinds": ["review_request", "review_wait", "unreleased", "ownergate"], "ownergate": [<gate>, ...],
+         "kinds": ["review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate"],
+         "ownergate": [<gate>, ...],
          "channel": "<default Slack channel id>", "repo_channels": {"<owner/repo>": "<channel id>"},
          "reviewers": {"<github login>": {"slack": "<Slack user id>", "channel": "<optional override>"}},
-         "review_bots": {"<bot login>": "<the bot's re-review trigger comment>"},
+         "review_bots": {"<bot login>": "<the bot's re-review trigger comment; its verdict lines also count for ready_to_merge>"},
          "holidays": ["<YYYY-MM-DD>"], "urgent_labels": ["<label>"],
          "deploy": {"<owner/repo>": {"dev_release": "auto-sync | <how main reaches dev>",
                                      "revision_cmd": "<prints the commit or ref dev runs>",
@@ -36,7 +39,11 @@ never in this repo.
                                      "ticket": "<optional>", "orca_repo": "<optional Orca repo selector>",
                                      "lookback_days": 2}},
          "dispatch_run": "<optional Orca run id the release workers join>", "worker_agent": "claude",
-         "release_approval": "<the owner's dev-deploy approval, quoted with its date>"}}
+         "release_approval": "<the owner's dev-deploy approval, quoted with its date>",
+         "merge_repos": ["<owner/name>"], "merge_deny_repos": ["<repo whose merge deploys to production>"],
+         "merge_methods": ["squash", "merge", "rebase"], "hold_labels": ["hold", "do-not-merge", "wip"],
+         "required_bots": ["<review bot that must review each head>"],
+         "review_verdict_pattern": "<regex with one (pass|fail) group; default in DEFAULTS>", "ci_wait_minutes": 15}}
 ```
 
 `orgs` and `repos` empty mean every repository; otherwise an `owner` in `orgs` or an `owner/name` in
@@ -72,11 +79,11 @@ Stale means no update for more than `stale_days`; such an item says "요청 해�
 coordinator can propose asking the author to withdraw the request. Each item carries repo#N,
 title, author, age in days, diff size and the reasons it ranked where it did.
 
-Every item has a `kind`. `review_request`, `review_wait`, `unreleased` and `ownergate` are collected;
-`ready_to_merge` is reserved in `KINDS`, and a later flow adds a collector to `COLLECTORS` (and,
-when its round must act, a step to `PROMPT_STEPS`) without changing the CLI. Listing an uncollected
-kind in `kinds` is an error. When two collectors return the same head, the kind later in `KINDS`
-keeps it, and a head sent under an earlier kind comes back once under the later one.
+Every item has a `kind`, and every kind in `KINDS` is collected. A new kind adds a collector to
+`COLLECTORS` (and, when its round must act, a step to `PROMPT_STEPS`) without changing the CLI.
+Listing an unknown kind in `kinds` is an error. When two collectors return the same head, the kind
+later in `KINDS` keeps it, and a head sent under an earlier kind comes back once under the later one,
+never the other way round.
 
 ## Owner gate
 
@@ -162,6 +169,46 @@ channel; `--at` is that message's time), `no_thread` (no thread to reply in, so 
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
 A `refused` row stops every later action for that PR and reviewer.
 
+## Ready to merge
+
+The owner's open PRs (`author:@me`) in `merge_repos` are checked against these gates in order; the
+first that holds a PR back is its reason in `excluded`. Unlike `repos`, an empty `merge_repos` means
+nothing is merged.
+
+1. its repository is not in `merge_deny_repos` (repos where a merge deploys to production) and is in
+   `merge_repos`;
+2. not a draft, and no label from `hold_labels` (case-insensitive);
+3. no one else is driving it: its head branch is not checked out in a live (unarchived) Orca
+   worktree — a worker's, or a lead's or other card's — and its number is not in the ledger of a
+   live orchestrate program (as for `review_wait`, except that a stopped program still holds its PRs: a
+   stop halts new workers, not the coordinator's or a human gate's hold). If Orca cannot be read, nothing is ready. A PR you want merged by the round lives
+   on a branch no worktree has checked out;
+4. its base is the default branch: a stacked child waits for its parent;
+5. no reviewer's latest non-comment review is CHANGES_REQUESTED or DISMISSED (an approval a retarget
+   or push dismissed belongs to review_wait);
+6. `mergeStateStatus` is CLEAN and `reviewDecision` is APPROVED or empty (no review required);
+7. where no review is required, the head still passed a review. A review result is a comment or
+   review body from the user or a bot in `review_bots` that names the full head sha and has a verdict
+   line matching `review_verdict_pattern` (default: a whole line `결론: pass|fail` or
+   `Verdict: pass|fail`, an independent review's sticky result); its last verdict line counts. Any
+   fail result at this head holds the PR, whatever else passed (a sticky comment is edited in place,
+   so order is not trusted). Otherwise a pass result, or an approval on that commit from a
+   collaborator (author association OWNER, MEMBER or COLLABORATOR) other than the user, is the
+   record. A self-reply, a quoted verdict, or any other account does not count. Without one the PR
+   belongs to review_wait. More than 100 reviews or comments hold the PR back;
+8. the head's check rollup is SUCCESS (no checks is not green), and no review thread is unresolved;
+9. each of `required_bots` left an APPROVED or COMMENTED review on this head. A bot that was
+   rate-limited or skipped left a comment, not a review;
+10. the repository allows one of `merge_methods`, read from the repository in this round; the first
+    allowed one is used.
+
+A ready item carries `gh pr merge <N> -R <owner/name> --<method> --match-head-commit <head>`. The
+round never adds `--admin` or `--auto` and never approves. `merges` records each head in the ledger
+before printing its command, so a refused or failed merge is never retried at that head, even when
+the round stops before `verify` or `commit`; a second `merges` prints nothing for it. Kinds share the
+ledger key shape, and an entry counts only for its own kind, so a PR this round merged is still
+picked up as `unreleased`.
+
 ## Unreleased merges
 
 For each repo in `deploy`, an `unreleased` item is a PR the user authored, merged within
@@ -188,12 +235,21 @@ P="${CLAUDE_SKILL_DIR}/scripts/prs.py"
 python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state>/body.txt and the items in plan.json
 ```
 
-1. If the output is empty, stop: send nothing and do not commit. Otherwise, if `kinds` has
-   `ownergate`, run each command `python3 "$P" round` prints (key, tab, command) once, as a standalone command, then
+1. If the output is empty, stop: send nothing and do not commit.
+2. If `kinds` includes `ready_to_merge`: `python3 "$P" merges` prints, for each ready item, a
+   comment line (PR, gates passed, method) and its `gh pr merge` command. Write the comment line in
+   the chat, then run the command on its own, once. A merge the auto-mode classifier or a hook
+   refuses is reported in the message, not retried in any form. Then `python3 "$P" verify` reads each
+   PR back (MERGED or not), waits up to `ci_wait_minutes` for the default branch CI run on the merge
+   commit, and rewrites `<state>/body.txt` with the outcome; a red run's URL is in the line. A merge
+   commit with no checks after two minutes is reported as a branch without CI. If `verify` fails,
+   send nothing and do not commit.
+3. If `kinds` has `ownergate` (after `verify`, which rewrites `body.txt`), run each command
+   `python3 "$P" round` prints (key, tab, command) once, as a standalone command, then
    `python3 "$P" result <key> ok`, or `result <key> failed "<why>"`, which hands it to the owner
    with a `!` line and an inbox item. Both append to `body.txt`. Never run a `!` line, and never
    retry an act a permission prompt, the classifier, a hook or a person refused, in any form.
-2. Send it as one message:
+4. Send it as one message:
 
    ```bash
    orca orchestration send --to "<inbox_to>" --type status --subject "watch-prs: <N>건" --body "$(cat <state>/body.txt)" --json
@@ -201,21 +257,21 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
 
    From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
    to its Run's coordinator.
-3. Only after the send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
-   Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
-   hook) is not tried again in any form (re-run, script, other tool, another session): send the
-   coordinator the repo, the refusal and the exact command instead.
-4. If `kinds` has `review_wait`, handle each line of `python3 "$P" actions` and record its outcome
+5. If `kinds` has `review_wait`, handle each line of `python3 "$P" actions` and record its outcome
    with `python3 "$P" log --key <key> --source <source> [--thread <channel>:<ts>] [--scheduled <id>] [--post-at <epoch>] [--at <epoch>]`.
    Slack actions follow the user's Slack-posting rules (read that skill first): a request is one
    message per reviewer in the channel, unless the channel already has a request for that PR
    (`found`); a reminder or re-request is a thread reply only, never broadcast; with no thread known,
    search the channel for one, and with none found post nothing (`no_thread`). With `post_at`, schedule
    for that time. `retrigger` is `gh pr comment <url> --body <comment>`. An action already moot (approved
-   meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
+   or merged meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
    permission prompt, the classifier or a hook is logged `refused` and reported, never retried.
-5. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
-   succeeded and each step-3 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
+6. Only after the coordinator send succeeded, `python3 "$P" dispatch` prints one command per repo with unreleased items (nothing otherwise).
+   Run each once. A command that fails or is refused (permission prompt, auto-mode classifier,
+   hook) is not tried again in any form (re-run, script, other tool, another session): send the
+   coordinator the repo, the refusal and the exact command instead.
+7. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
+   succeeded and each step-6 command either started a worker or was reported: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again
    and then commit.
 
@@ -233,12 +289,12 @@ python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's 
 
 The prompt is built from `kinds`: each configured kind's `PROMPT_STEPS` entry (next to `COLLECTORS`
 in `prs.py`; `None` when the message is the whole action) adds its step, in `PROMPT_STEPS` order
-(`unreleased` last, since it gates `commit`), and `schedule` refuses a kind without an entry.
-`ownergate` adds its `round`/`result` step before the send (`PRE_SEND_STEP`), since the results go
-into the message. Without `review_wait` the prompt forbids GitHub writes other than the `round`
-steps; with it, the prompt names the retrigger comment and, with `ownergate`, the `round` approvals
-as the only ones. Every prompt ends with the rule that a refused act is reported, never retried.
-Items of a kind with no `PROMPT_STEPS` entry never
+(`unreleased` last, since it gates `commit`), and `schedule` refuses a kind without an entry. Without
+`review_wait`, `ready_to_merge` or `ownergate` the prompt forbids GitHub writes, and it forbids every
+write the configured kinds do not need. `ready_to_merge`'s and `ownergate`'s entries are `None`
+because their steps run before the send: merges and `verify` first, then `round`/`result`
+(`PRE_SEND_STEP`), whose results are appended to the message. Every prompt ends with the rule that
+a refused act is reported, never retried. Items of a kind with no `PROMPT_STEPS` entry never
 reach `plan.json`, so they are neither sent nor recorded; the precheck output and the message list
 them as uncovered. The round's own commands are `precheck`, `plan --body` and `commit`, plus `round`
 and `result` with `ownergate`, so the
