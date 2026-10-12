@@ -101,10 +101,27 @@ python3 "$R" scan --kinds user-folder
 A folder the process may not read (macOS privacy) is a note, not an error: granting access is the
 user's call.
 
+## Program and hook state
+
+`program` looks at `~/.claude/programs` (`$PROGRAMS_HOME`). A program is closed when its ledger has a
+`predicate_verified` with no landing, predicate edit or admitted follow-up after it (orchestrate's own rule). A closed
+one whose record has not changed for `reap.program_days` (default 7) moves to `<programs>/_archive/<slug>`, never
+the trash: reflect reads old ledgers. The record is everything but `dashboard/` and the top-level `.json` caches,
+which the dashboard and `orch status` keep rewriting for every program. Kept: an open program (the scan says its last
+event, so the owner sees which to close), and any program with a file whose name contains `resume` or `handoff` (a
+parked program waiting to be picked up).
+
+`state-file` covers what the plugin's own hooks and sync leave in `<state>`: the reorient hook's per-session files
+older than `reap.state_days` (default 7; a session alive past that only asks Orca once more) go to the trash as one
+folder, and `sync.log` past `reap.log_max_kb` (default 512) is renamed to `sync.log.1`, the previous `.1` going to
+the trash (launchd and cron reopen the log on each run).
+
+New session files appear every day, so the precheck looks at program and state-file once a day, as it does user-folder.
+
 ## Scheduled run
 
 ```bash
-python3 "$R" precheck    # janitor kinds + user-folder; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago, or the same set was planned reap.plan_repeat times with no reap since (retried once a day)
+python3 "$R" precheck    # janitor kinds + user-folder, program, state-file; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago, or the same set was planned reap.plan_repeat times with no reap since (retried once a day)
 python3 "$R" schedule    # prints the `orca automations create` command; nothing is created without --write
 ```
 
@@ -193,6 +210,7 @@ not in this repo:
 
 ```json
 {"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
+          "program_days": 7, "state_days": 7, "log_max_kb": 512,
           "inbox_to": "run:<id>", "plan_repeat": 2,
           "alert": {"codex_procs": 300, "codex_rss_mb": 4096, "orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10}}}

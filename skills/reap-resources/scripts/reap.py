@@ -20,7 +20,7 @@ action for its class.
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7,
-"user_folder_screenshot_days": 1, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
+"user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
 --parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers top-level entries of ~/Downloads and ~/Desktop
@@ -29,7 +29,10 @@ default 1), and keeps them all while Finder empties the trash on its own, unless
 through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
 alerts when Finder's auto-empty is on), and leaves a chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
 The ledger is --ledger or $AGENT_SKILLS_LEDGER, default <state>/ledger.jsonl (state: --state or $AGENT_SKILLS_STATE,
-default ~/.local/state/agent-skills). precheck scans the janitor kinds and user-folder (at most once a day), writes janitor-plan.json
+default ~/.local/state/agent-skills). program moves a closed program untouched for
+reap.program_days to <programs>/_archive unless it has a resume or handoff note; state-file trashes reorient session files
+older than reap.state_days and rotates sync.log past reap.log_max_kb. precheck scans the janitor kinds, and user-folder,
+program and state-file at most once a day, writes janitor-plan.json
 to the state dir and exits 0 when there are targets, except: the set the last reap failed on, for a day; and a set already
 planned reap.plan_repeat times with no reap since, retried once a day, with one message to reap.inbox_to. schedule prints the
 `orca automations create` command; only --write runs it.
@@ -432,6 +435,10 @@ def scan(kinds, hours, cfg, repo_list, root=None):
             for i in items:
                 if i["kind"] == "user-folder" and i["target"]:
                     i.update(target=False, why="휴지통 자동 비움이 켜져 있어 남김(AGENT_SKILLS_TRASH 로 일반 폴더를 주면 정리)")
+    if "program" in kinds:
+        items += judge_programs(PROGRAMS, float(cfg.get("program_days") or 7), time.time())
+    if "state-file" in kinds:
+        items += judge_state_files(STATE, float(cfg.get("state_days") or 7), float(cfg.get("log_max_kb") or 512), time.time())
     return items, notes
 
 
@@ -444,8 +451,10 @@ def trash_auto_empty():
 
 # Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker).
 JANITOR = ("orca-worktree", "done-card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch")
-# What the scheduled run covers: the janitor kinds plus the user's download and desktop folders.
-SCHEDULED = JANITOR + ("user-folder",)
+# What the scheduled run covers: the janitor kinds, the user's download and desktop folders, closed programs and hook state.
+SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
+# Kinds that would find something new every round; the precheck looks at them once a day.
+DAILY = ("user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
 STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
 STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser()
@@ -1041,15 +1050,123 @@ def user_folder_scan(days, notes, shot_days=None, folders=USER_FOLDERS):
     return items
 
 
-def stamp_user_folder(state_dir, now=None):
+def stamp_user_folder(state_dir, now=None, kind="user-folder"):
     state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "user-folder-last.json").write_text(json.dumps({"at": now or time.time()}))
+    (state_dir / f"{kind}-last.json").write_text(json.dumps({"at": now or time.time()}))
 
 
-def user_folder_due(state_dir, now=None):
+def user_folder_due(state_dir, now=None, kind="user-folder"):
     with contextlib.suppress(OSError, ValueError):
-        return (now or time.time()) - json.loads((state_dir / "user-folder-last.json").read_text())["at"] >= USER_FOLDER_EVERY
+        return (now or time.time()) - json.loads((state_dir / f"{kind}-last.json").read_text())["at"] >= USER_FOLDER_EVERY
     return True
+
+
+PROGRAMS = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
+# orchestrate's slug rule: `_archive`, `_locks` and loose files are not programs.
+SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
+RESUME_NOTE = re.compile(r"resume|handoff", re.I)
+
+
+def final_check_current(events):
+    """orchestrate's prog.final_check_current, which defines a closed program (test_reap checks they agree)."""
+    since = max((i for i, e in enumerate(events) if e.get("ev") == "landed" or (e.get("ev") == "admitted" and e.get("ticket"))
+                 or (e.get("ev") == "config" and (e.get("note") or "").startswith("predicate="))), default=-1)
+    return any(e.get("ev") == "predicate_verified" for e in events[since + 1:])
+
+
+def program_events(path):
+    out = []
+    with contextlib.suppress(OSError):
+        for line in (path / "ledger.jsonl").read_text(errors="replace").splitlines():
+            with contextlib.suppress(ValueError):
+                if isinstance(e := json.loads(line) if line.strip() else None, dict):
+                    out.append(e)
+    return out
+
+
+def judge_programs(home, days, now, touched=last_touch):
+    """A closed program (its final check current) whose record is untouched for `days` moves to <home>/_archive. One with a
+    resume or handoff note was parked to be picked up again and stays, closed or not."""
+    out = []
+    try:
+        names = sorted(os.listdir(home))
+    except OSError:
+        return out
+    for name in names:
+        path = home / name
+        if not SLUG_RE.fullmatch(name) or not (path / "program.json").is_file():
+            continue
+        base = {"kind": "program", "key": f"program:{name}", "name": str(path),
+                "how": [f"mv {shlex.quote(str(path))} {shlex.quote(str(home / '_archive'))}/"]}
+        try:
+            names_in = os.listdir(path)
+            # A lead's resume note may sit in briefs/, not only at the top.
+            notes = [n for _, _, files in os.walk(path) for n in files if RESUME_NOTE.search(n)]
+            # The dashboard and `orch status` rewrite dashboard/ and the top-level .json caches of every program, closed
+            # ones too; the program's own record is the rest (ledger, decisions, reflect/ that Close writes last).
+            t = max((touched(path / n, now - days * 86400) for n in names_in
+                     if n != "dashboard" and not n.endswith(".json")), default=0)
+        except (OSError, TooBig):
+            out.append({**base, "why": "안을 다 읽지 못함(남김)", "target": False})
+            continue
+        events = program_events(path)
+        if notes:
+            why = f"재개 노트 {notes[0]} 있음"
+        elif not final_check_current(events):
+            why = f"닫히지 않음(마지막 기록 {events[-1].get('ev') if events else '없음'})"
+        elif now - t < days * 86400:
+            why = f"닫힌 뒤 {days:g}일 안에 바뀜"
+        else:
+            out.append({**base, "why": f"닫힌 지 {days:g}일 넘게 안 바뀜", "target": True, "age": now - t})
+            continue
+        out.append({**base, "why": why, "target": False, "age": now - t})
+    return out
+
+
+def archive_program(path):
+    path = pathlib.Path(path)
+    dest = path.parent / "_archive"
+    dest.mkdir(exist_ok=True)
+    target = dest / path.name
+    if os.path.lexists(target):
+        target = dest / f"{path.name}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    os.rename(path, target)
+    return f"보관함으로 옮김({target})"
+
+
+def judge_state_files(state_dir, days, log_kb, now):
+    """The reorient hook's per-session files untouched for `days` (a session older than that just asks Orca once more),
+    as one item; and sync.log past `log_kb`, which nothing else trims."""
+    out = []
+    with contextlib.suppress(OSError):
+        old = sorted(str(f) for f in (state_dir / "reorient").glob("*.json") if now - f.stat().st_mtime >= days * 86400)
+        if old:
+            out.append({"kind": "state-file", "key": "state-file:reorient", "name": str(state_dir / "reorient"),
+                        "paths": old, "target": True, "why": f"{days:g}일 넘은 세션 파일 {len(old)}개, 휴지통으로",
+                        "how": [f"trash <{len(old)}개>"]})
+    log = state_dir / "sync.log"
+    with contextlib.suppress(OSError):
+        if (size := log.stat().st_size) > log_kb * 1024:
+            out.append({"kind": "state-file", "key": "state-file:sync.log", "name": str(log), "target": True,
+                        "why": f"{human(size)}, {log_kb:g}KB 넘음", "how": [f"mv {log} {log}.1 (이전 .1 은 휴지통)"]})
+    return out
+
+
+def reap_state_file(item):
+    if item["key"] == "state-file:sync.log":
+        log = pathlib.Path(item["name"])
+        prev = log.with_name(log.name + ".1")
+        if prev.exists():
+            trash(str(prev))
+        # launchd and cron open the log afresh on every run, so a renamed one only takes the rest of a run in progress.
+        os.rename(log, prev)
+        return f"{prev.name} 로 회전"
+    # One folder in the trash, not hundreds of one-line files.
+    bundle = pathlib.Path(item["name"]).parent / f"reorient-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    bundle.mkdir()
+    for p in item["paths"]:
+        os.rename(p, bundle / os.path.basename(p))
+    return trash(str(bundle))
 
 
 # A target reap could not handle is tried again once this has passed, even if nothing changed.
@@ -1356,6 +1473,10 @@ def act(item, notes):
             if how.startswith(LSREGISTER):
                 run([LSREGISTER, "-u", shlex.split(how)[-1]], check=False)
         return trash(item["name"])
+    if kind == "program":
+        return archive_program(item["name"])
+    if kind == "state-file":
+        return reap_state_file(item)
     if kind == "gui-app":
         r = processes().get(item["gpid"])
         if not r or r["start"] != item["start"]:
@@ -1420,8 +1541,8 @@ def main():
                 print(f"- 실패 {label(new)}: {e}")
         if set(plan.get("kinds") or ()) & set(SCHEDULED):
             record_reap(STATE, failed)
-        if "user-folder" in (plan.get("kinds") or ()):
-            stamp_user_folder(STATE)
+        for k in set(DAILY) & set(plan.get("kinds") or ()):
+            stamp_user_folder(STATE, kind=k)
         for n in notes:
             print(f"- 메모: {n}")
         return
@@ -1478,9 +1599,10 @@ def main():
     names = [k for n in names for k in (JANITOR if n == "janitor" else (n,))]
     kinds = set(names) & set(KINDS + SCHEDULED)
     pre_notes = []
-    if cmd == "precheck" and "user-folder" in kinds and not user_folder_due(STATE):
-        kinds.discard("user-folder")
-        pre_notes.append("user-folder: 하루 한 번만 정리한다, 이번 회차는 건너뜀")
+    for k in DAILY:
+        if cmd == "precheck" and k in kinds and not user_folder_due(STATE, kind=k):
+            kinds.discard(k)
+            pre_notes.append(f"{k}: 하루 한 번만 정리한다, 이번 회차는 건너뜀")
     hours = float(opt("--hours") or cfg.get("hours") or 6)
     repo_list = repos([a for i, a in enumerate(sys.argv) if i and sys.argv[i - 1] == "--repo"]) \
         if {"branch", "worktree", "orca-worktree", "done-card"} & kinds else []
@@ -1499,8 +1621,9 @@ def main():
         code, targets = precheck(items, STATE, repeat=int(cfg.get("plan_repeat") or 2),
                                  notify=notify_unrun(cfg.get("inbox_to"), command))
         # With targets the stamp waits for reap; with none, the day's sweep is this check.
-        if "user-folder" in kinds and not any(i["target"] for i in items if i["kind"] == "user-folder"):
-            stamp_user_folder(STATE)
+        for k in set(DAILY) & kinds:
+            if not any(i["target"] for i in items if i["kind"] == k):
+                stamp_user_folder(STATE, kind=k)
         for n in notes + [f"{i['key']}: {i['why']}" for i in items if "읽지 못함" in i["why"]]:
             print(f"메모: {n}", file=sys.stderr)
         for m in msgs:

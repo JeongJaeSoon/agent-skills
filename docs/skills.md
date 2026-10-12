@@ -171,6 +171,8 @@
   - **load:** `reap.py load`는 읽기만 한다. CPU 상위 소비자(Claude 세션과 그 자식, 잔재 트리, 그 밖의 프로세스)를 ours-idle·ours-working·leftover·system으로 나누고, 5분 부하가 한도(기본 CPU 수) 이상이면 분류별 조치를 낸다: 조용한 세션에는 남은 일을 묻고 없으면 스스로 닫게 하고, 잔재는 `reap`으로, 일하는 것은 두고 새 dispatch를 멈추며, system은 우리 것이 아니라고 보고만 한다. 한도 위에서 잰 벤치마크는 증거가 아니다.
   - **janitor:** 에이전트가 ledger(`~/.local/state/agent-skills/ledger.jsonl`)에 올린 tmpdir·GUI 앱·브라우저 창과, Orca 오케스트레이션 워커가 만든 worktree·끝난 워커 터미널만 본다. `reap --plan`이 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮긴다. 도구는 영구 삭제도 휴지통 비우기도 하지 않는다. OS가 휴지통을 자동으로 비우는 설정이면 경보로 알린다. 브라우저 창은 에이전트가 브라우저 도구로 닫는다.
   - **user-folder:** `~/Downloads`와 `~/Desktop`의 최상위 항목 중 7일(`reap.user_folder_days`) 넘게 안 바뀐 것을 휴지통으로 옮긴다. 스크린샷·화면 기록 파일은 1일(`reap.user_folder_screenshot_days`) 기준이다. 다운로드 중인 파일(`.download`, `.crdownload`, `.part`), 열려 있는 파일, 숨김 파일은 남긴다. 정기 실행에서는 하루 한 번만 정리한다.
+  - **program:** `~/.claude/programs`(`PROGRAMS_HOME`)에서 닫힌 프로그램(최종 확인 `predicate_verified` 뒤에 착지·predicate 변경·admitted 후속이 없는 것) 중 기록(대시보드 캐시를 뺀 ledger·decisions·reflect 등)이 7일(`reap.program_days`) 넘게 안 바뀐 것을 `_archive/`로 옮긴다. 지우지 않는다. 이름에 `resume`이나 `handoff`가 든 재개 노트가 있으면 닫혔어도 남긴다.
+  - **state-file:** reorient hook의 세션 파일(`<state>/reorient/*.json`) 중 7일(`reap.state_days`) 지난 것을 한 폴더로 묶어 휴지통으로, 512KB(`reap.log_max_kb`)를 넘은 `sync.log`는 `sync.log.1`로 회전한다(이전 `.1`은 휴지통). program과 함께 정기 실행에서 하루 한 번만 본다.
   - **정기 실행:** `precheck`는 대상이 있으면 exit 0이고, 지난 `reap`이 실패한 대상과 똑같으면 하루 동안 건너뛴다. 3시간 주기 Orca automation의 precheck로 쓰고, `schedule`은 그 등록 명령을 출력만 한다([automation.md](automation.md)).
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(Codex 프로세스·RSS, 고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, 테스트 파일.
