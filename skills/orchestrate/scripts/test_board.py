@@ -268,4 +268,12 @@ assert out["width_ok"], out["text"]
 assert "² #1201 ❗DIRTY→release/2026-10" in out["text"].splitlines(), out["text"]
 assert "³ #1123·#1124→feature/long-target·#1125" in out["text"].splitlines(), out["text"]
 
+# A repository whose only rows are lead-less PRs waiting on one reviewer is a bullet with no table.
+for n in (81, 82):
+    ok("board", "set", f"solo-{n}", "--kind", "task", "--repo", "acme/solo", "--title", f"작업{n}", "--pr", f"acme/solo#{n}")
+prs_json["prs"].update(dict(pr(f"acme/solo#{n}", reviewers=["rev-e"]) for n in (81, 82)))
+(state / "prs.json").write_text(json.dumps(prs_json))
+solo = ok("brief", "render", "--periodic", "--now", NOW)
+assert "**acme/solo → main**\n\n- ⏳ 2건 rev-e 대기 — 분야 작업81·작업82" in solo, solo
+
 print("ok")

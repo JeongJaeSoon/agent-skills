@@ -437,8 +437,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # A section's merge target is the base most of its PRs share; a row with another base names its own.
     bases = {}
     for sec in sections:
-        seen = [prs[k]["base"] for l in lines if l["sec"] == sec for k in ([l["pr"]] if l["pr"] else l["fold"] or [])
-                if (prs.get(k) or {}).get("base")]
+        keys = [k for l in lines if l["sec"] == sec for k in ([l["pr"]] if l["pr"] else l["fold"] or [])]
+        keys += [i["pr"] for (bsec, _), items in bullets.items() if bsec == sec for i in items]
+        seen = [prs[k]["base"] for k in keys if (prs.get(k) or {}).get("base")]
         if seen:
             bases[sec] = max(dict.fromkeys(seen), key=seen.count)
     for l in lines:
@@ -511,7 +512,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     continue
                 body = f"{ICON[l['status']]} {name} — {l['progress']} · {(l['next'] or '—') + l['suffix']}"
                 out.append(("└ " if l["depth"] else "") + body)
-        else:
+        elif mine:  # a section of folded bullets only has no table
             cells, notes = [], []
             # A long progress (100/100) or a full PR column takes from the name, so next keeps its minimum.
             w = table_width.text_width
