@@ -38,7 +38,10 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             a status and end your turn: waking an idle agent on mail is best-effort. After two
             waits in a row end with no answer, register the question with `orch decide add` (it
             shows in Needs you, and the answer is typed into your terminal), then end your turn.
-ACCEPTANCE  Checkable criteria, one per line.
+ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a party outside the
+            repo behaves (a client, an upstream) adds a line observing that real party, on dev
+            or in a recorded trace; a test built on the brief's model of it shares the
+            assumption and passes on the bug.
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
             through `orch heavy <slug> -- <command>`, which caps them machine-wide.
