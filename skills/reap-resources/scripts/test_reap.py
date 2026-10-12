@@ -818,6 +818,112 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         holder.kill()
 
+# Closed programs: the same rule as orchestrate's, and only these move to <home>/_archive.
+sys.path.insert(0, str(pathlib.Path(__file__).parents[2] / "orchestrate" / "scripts"))
+import prog
+for evs in ([], [{"ev": "predicate_verified"}], [{"ev": "predicate_verified"}, {"ev": "landed"}],
+            [{"ev": "predicate_verified"}, {"ev": "spawned"}], [{"ev": "predicate_verified"}, {"ev": "admitted", "ticket": "ABC-1"}],
+            [{"ev": "predicate_verified"}, {"ev": "admitted", "pr": 3}], [{"ev": "predicate_verified"}, {"ev": "config", "note": "predicate=x"}],
+            [{"ev": "landed"}, {"ev": "predicate_verified"}]):
+    assert reap.final_check_current(evs) == prog.final_check_current(evs), evs
+
+D = 86400
+with tempfile.TemporaryDirectory() as tmp:
+    home, now = pathlib.Path(tmp), time.time()
+
+    def program(slug, evs, *extra):
+        d = home / slug
+        (d / "dashboard").mkdir(parents=True)
+        (d / "program.json").write_text("{}")
+        (d / "ledger.jsonl").write_text("".join(json.dumps(e) + "\n" for e in evs) + "torn{\n")
+        for n in extra:
+            (d / n).write_text("x")
+        old = now - 8 * D
+        for f in d.iterdir():
+            os.utime(f, (old, old))
+        return d
+    closed = [{"ev": "landed"}, {"ev": "predicate_verified"}]
+    program("done", closed)
+    program("open", [{"ev": "landed"}])
+    program("parked", closed, "resume-state.md")
+    program("handed", closed, "msg-HANDOFF-1.md")
+    fresh = program("fresh", closed)
+    os.utime(fresh / "ledger.jsonl")
+    # The dashboard and `orch status` keep rewriting these on every program; they say nothing about the program.
+    busy = program("busy", closed, "stuck.json")
+    (busy / "dashboard" / "state.json").write_text("{}")
+    os.utime(busy / "stuck.json")
+    (home / "_archive").mkdir()
+    (home / "_archive" / "program.json").write_text("{}")
+    (home / "notes.md").write_text("x")
+    (home / "noprog").mkdir()
+    # last_touch also reads ctime, which utime cannot set back; mtime stands in for it here.
+    got = {pathlib.Path(i["name"]).name: i for i in reap.judge_programs(home, 7, now, touched=lambda p, n: os.stat(p).st_mtime)}
+    assert set(got) == {"done", "open", "parked", "handed", "fresh", "busy"}, got
+    assert {n for n, i in got.items() if i["target"]} == {"done", "busy"}, got
+    assert "닫히지 않음" in got["open"]["why"] and "재개 노트" in got["parked"]["why"] and "재개 노트" in got["handed"]["why"]
+    assert "7일 안" in got["fresh"]["why"], got["fresh"]
+    (home / "_archive" / "done").mkdir()
+    out = reap.archive_program(got["done"]["name"])
+    assert not (home / "done").exists() and "보관함" in out, out
+    assert [p.name for p in (home / "_archive").iterdir() if p.name.startswith("done-")], os.listdir(home / "_archive")
+
+# Hook state: reorient files past N days as one item, sync.log past the size; both re-checked and acted on by reap.
+with tempfile.TemporaryDirectory() as tmp:
+    st, now = pathlib.Path(tmp) / "state", time.time()
+    (st / "reorient").mkdir(parents=True)
+    for i, a in enumerate((8, 8, 6)):
+        f = st / "reorient" / f"s{i}.json"
+        f.write_text("{}")
+        os.utime(f, (now - a * D, now - a * D))
+    (st / "sync.log").write_text("x" * 600)
+    got = {i["key"]: i for i in reap.judge_state_files(st, 7, 1, now)}
+    assert set(got) == {"state-file:reorient"} and len(got["state-file:reorient"]["paths"]) == 2, got
+    (st / "sync.log").write_text("x" * 2048)
+    (st / "sync.log.1").write_text("old")
+    trash_dir = pathlib.Path(tmp) / "trash"
+    os.environ["AGENT_SKILLS_TRASH"] = str(trash_dir)
+    try:
+        for i in reap.judge_state_files(st, 7, 1, now):
+            reap.reap_state_file(i)
+    finally:
+        del os.environ["AGENT_SKILLS_TRASH"]
+    assert sorted(p.name for p in (st / "reorient").iterdir()) == ["s2.json"]
+    assert not (st / "sync.log").exists() and (st / "sync.log.1").stat().st_size == 2048
+    bundled = [p for p in trash_dir.iterdir() if p.name.startswith("reorient-")]
+    assert len(bundled) == 1 and sorted(os.listdir(bundled[0])) == ["s0.json", "s1.json"], os.listdir(trash_dir)
+    assert (trash_dir / "sync.log.1").read_text() == "old"
+
+# CLI: precheck only plans (programs and state files stay as they were), reap acts, and both kinds wait a day after.
+with tempfile.TemporaryDirectory() as tmp:
+    home = pathlib.Path(os.path.realpath(tmp))
+    (home / ".claude").mkdir()
+    (home / ".claude" / "agent-skills.json").write_text(json.dumps({"reap": {"log_max_kb": 1, "program_days": 1e-6}}))
+    pd = home / "programs" / "done"
+    pd.mkdir(parents=True)
+    (pd / "program.json").write_text("{}")
+    (pd / "ledger.jsonl").write_text(json.dumps({"ev": "predicate_verified"}) + "\n")
+    old = time.time() - 8 * D
+    st = home / "state"
+    (st / "reorient").mkdir(parents=True)
+    (st / "reorient" / "s.json").write_text("{}")
+    os.utime(st / "reorient" / "s.json", (old, old))
+    (st / "sync.log").write_text("x" * 2048)
+    env = {**os.environ, "HOME": str(home), "AGENT_SKILLS_STATE": str(st), "AGENT_SKILLS_TRASH": str(home / "trash"),
+           "PROGRAMS_HOME": str(home / "programs")}
+    cli = lambda *a: subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "reap.py"), *a], env=env,
+                                    capture_output=True, text=True)
+    time.sleep(0.2)  # past program_days
+    first = cli("precheck", "--kinds", "program,state-file")
+    assert first.returncode == 0 and "정리 대상 3개" in first.stdout, (first.stdout, first.stderr)
+    assert pd.is_dir() and (st / "reorient" / "s.json").exists() and (st / "sync.log").stat().st_size == 2048
+    out = cli("reap", "--plan", str(st / "janitor-plan.json"))
+    assert "보관함" in out.stdout and "회전" in out.stdout and out.stdout.count("휴지통") == 1, (out.stdout, out.stderr)
+    assert (home / "programs" / "_archive" / "done" / "program.json").exists() and not pd.exists()
+    assert not (st / "reorient" / "s.json").exists() and (st / "sync.log.1").exists()
+    again = cli("precheck", "--kinds", "program,state-file")
+    assert again.returncode == 1 and again.stderr.count("하루 한 번") == 2, (again.stdout, again.stderr)
+
 prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))
 assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
 assert "우회하지 않는다" in prompt and "orchestration send" not in prompt, prompt
