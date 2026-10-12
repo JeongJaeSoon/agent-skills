@@ -252,4 +252,20 @@ ok("board", "set", "cart/ph1", "--kind", "phase")
 ok("board", "set", "promo/ph1", "--kind", "phase")
 assert "**acme/shop — (프로젝트 미지정)**" in ok("brief", "render", "--periodic", "--now", NOW)
 
+# A long progress and a full PR column take from the name: the table stays within 78 columns. A folded row too long
+# for its cell keeps each PR's own base in the footnote.
+ok("board", "lead", "add", "wide", "--handle", "term_0FAKE9", "--repo", "acme/wide", "--program", "넓은 표")
+ok("board", "set", "wide", "--title", "아주 긴 이름의 리드 작업", "--progress", "100/100", "--pr", "acme/wide#1201",
+   "--next", "다음 단계 설명이 아주 길게 이어짐")
+for n in (1123, 1124, 1125):
+    ok("board", "set", f"wide/p{n}", "--pr", f"acme/wide#{n}", "--status", "waiting")
+prs_json["prs"].update(dict([pr("acme/wide#1201", merge_state="DIRTY", decision=None, base="release/2026-10"),
+                             *(pr(f"acme/wide#{n}", reviewers=["rev-d"], base="feature/long-target" if n == 1124 else "main")
+                               for n in (1123, 1124, 1125))]))
+(state / "prs.json").write_text(json.dumps(prs_json))
+out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "넓은 표"))
+assert out["width_ok"], out["text"]
+assert "² #1201 ❗DIRTY→release/2026-10" in out["text"].splitlines(), out["text"]
+assert "³ #1123·#1124→feature/long-target·#1125" in out["text"].splitlines(), out["text"]
+
 print("ok")

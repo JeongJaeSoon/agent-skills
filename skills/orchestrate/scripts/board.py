@@ -29,6 +29,7 @@ MARKS = "¹²³⁴⁵⁶⁷⁸⁹"
 HEADER = ["", "리드/Phase", "PR", "진행", "다음"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"))
 UNNAMED = "(프로젝트 미지정)"
+LINK = r"\[([^\]]*)\]\([^)]*\)"
 
 
 def path():
@@ -512,12 +513,19 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 out.append(("└ " if l["depth"] else "") + body)
         else:
             cells, notes = [], []
+            # A long progress (100/100) or a full PR column takes from the name, so next keeps its minimum.
+            w = table_width.text_width
+            fixed = (max(w(ICON.get(l["status"], "—")) for l in mine) + max(min(w(l["cell"] or "—"), CAPS["pr"]) for l in mine)
+                     + max(w(x) for x in [l["progress"] for l in mine] + [HEADER[3]]))
+            name_cap = min(CAPS["name"], COLS - table_width.BORDER_PER_COL * len(HEADER) - table_width.BORDER_EDGE
+                           - fixed - CAPS["next_min"])
             for l in mine:  # name and PR first: the next column takes the width they leave
                 prefix = "└ " if l["depth"] else ""
-                name = prefix + fit(l["name"], CAPS["name"] - table_width.text_width(prefix), l["name"], notes)
+                name = prefix + fit(l["name"], name_cap - table_width.text_width(prefix), l["name"], notes)
                 if l["fold"] and table_width.text_width(l["cell"]) > CAPS["pr"]:
                     m = mark()
-                    notes.append(f"{m} {'·'.join(pr_num(k) for k in l['fold'])}")
+                    plain = re.sub(LINK, r"\1", l["cell"])  # the numbers with their bases, no link
+                    notes.append(f"{m} {plain}")
                     cell = f"{len(l['fold'])}건{m}"
                 elif table_width.text_width(l["cell"]) > CAPS["pr"]:  # keep the state's head: ❗ comes first
                     m, num = mark(), pr_text(l["pr"])
