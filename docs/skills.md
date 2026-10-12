@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 별칭 3개(`legacy/`의 옛 이름), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 ## 흐름
 
@@ -420,16 +420,6 @@
   - 결과는 clean, changed(증명된 수정만 PR 하나), blocked 중 하나다.
   - flow improver가 일주일에 한 번 돌리고, verify 스킬이 기능을 못 다루거나 잘못 설명했다는 보고(`deliver-ticket`, QA lead)가 오면 코디네이터가 워커에 맡긴다.
 
-## 별칭
-
-이름을 바꾸기 전에 시작한 세션이 옛 이름을 불러도 새 스킬로 안내한다(`legacy/`).
-
-| 옛 이름 | 새 이름 |
-|---|---|
-| `ship-pr` | `deliver-ticket` |
-| `dispatch-work` | `dispatch-card` |
-| `use-obsidian` | `use-notes` |
-
 ## 명령
 
 ### `orch` (프로그램 원장과 착지 게이트)
@@ -495,7 +485,7 @@
 
 | 결정 | 대상 |
 |---|---|
-| 허용 | 이 플러그인의 스킬과 별칭 호출. 단, 접두사 없는 이름이 `~/.claude/skills`나 프로젝트 `.claude/skills`의 같은 이름 스킬에 가려지면 판정하지 않는다 |
+| 허용 | 이 플러그인의 스킬 호출. 단, 접두사 없는 이름이 `~/.claude/skills`나 프로젝트 `.claude/skills`의 같은 이름 스킬에 가려지면 판정하지 않는다 |
 | 허용 | `orca orchestration <명령>`. reset, worker-abandon, gate-resolve는 제외 |
 | 허용 | `orch <명령>`. 임의 명령을 실행하는 `heavy`, 머지 정책을 바꿀 수 있는 `set`·`init`, 원장을 다시 쓰는 `backfill`은 제외 |
 | 거부 | 다른 터미널의 Orca 메일함을 읽는 `check`/`inbox --terminal <남의 handle>`. 같은 명령 안에서 `$ORCA_TERMINAL_HANDLE`을 다시 바인딩하는 경우도 포함 |

@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル（`skills/*/SKILL.md`）、エイリアス3個（`legacy/` の旧名）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます。
+`agent-skills` プラグインに入っているスキル（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます。
 
 ## 流れ
 
@@ -373,16 +373,6 @@
   - 結果は clean、changed（証明された修正だけの PR 一つ）、blocked のいずれかです。
   - flow improver が週に一度回します。verify スキルが機能を扱えなかった、または誤って説明していたと `deliver-ticket` や QA lead が報告すると、コーディネーターがワーカーに任せます。
 
-## エイリアス
-
-名前を変える前に始めたセッションが古い名前を呼んでも、新しいスキルに案内します（`legacy/`）。
-
-| 旧名 | 新しい名前 |
-|---|---|
-| `ship-pr` | `deliver-ticket` |
-| `dispatch-work` | `dispatch-card` |
-| `use-obsidian` | `use-notes` |
-
 ## コマンド
 
 ### `orch` (プログラムの台帳と着地ゲート)
@@ -448,7 +438,7 @@
 
 | 判定 | 対象 |
 |---|---|
-| 許可 | このプラグインのスキルとエイリアスの呼び出し。ただし、接頭辞のない名前が `~/.claude/skills` やプロジェクトの `.claude/skills` にある同名のスキルに隠される場合は判定しません |
+| 許可 | このプラグインのスキルの呼び出し。ただし、接頭辞のない名前が `~/.claude/skills` やプロジェクトの `.claude/skills` にある同名のスキルに隠される場合は判定しません |
 | 許可 | `orca orchestration <コマンド>`。reset、worker-abandon、gate-resolve は除きます |
 | 許可 | `orch <コマンド>`。任意のコマンドを実行する `heavy`、マージポリシーを変えうる `set`・`init`、台帳を書き換える `backfill` は除きます |
 | 拒否 | 他のターミナルの Orca メールボックスを読む `check`/`inbox --terminal <他人の handle>`。同じコマンドの中で `$ORCA_TERMINAL_HANDLE` を束縛し直す場合も含みます |

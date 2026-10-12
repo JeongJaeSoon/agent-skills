@@ -101,7 +101,7 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 | 바뀐 경로 | 반영 방법 |
 |---|---|
-| `skills/*/SKILL.md`, `legacy/*/SKILL.md` | `/reload-skills` |
+| `skills/*/SKILL.md` | `/reload-skills` |
 | `hooks/hooks.json`, `.mcp.json`, `.claude-plugin/**`, `agents/**` | `/reload-plugins` |
 | `hooks/*.py`, `bin/**`, `skills/*/scripts/**`, `skills/*/references/**`, `docs/**`, 테스트 | 아무것도 안 보낸다. hook 스크립트와 스크립트는 실행할 때마다, 참고 문서는 읽을 때마다 디스크에서 읽힌다 |
 

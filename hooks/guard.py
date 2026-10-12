@@ -78,10 +78,7 @@ def simple_words(cmd):
 
 
 def own_skills():
-    names = set()
-    for d in ("skills", "legacy"):
-        names |= {p.parent.name for p in (ROOT / d).glob("*/SKILL.md")}
-    return names
+    return {p.parent.name for p in (ROOT / "skills").glob("*/SKILL.md")}
 
 
 def is_lead(text):

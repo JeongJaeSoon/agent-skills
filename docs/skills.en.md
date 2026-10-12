@@ -1,7 +1,7 @@
 <!-- translated-from: 5d79230 -->
 # Skill catalog
 
-This page covers the skills in `skills/*/SKILL.md`, 3 aliases (old names in `legacy/`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief`.
+This page covers the skills in `skills/*/SKILL.md`, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief`.
 
 ## Flow
 
@@ -373,16 +373,6 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - The result is one of clean, changed (a single PR with only proven fixes), or blocked.
   - The flow improver runs it once a week, and the coordinator hands it to a worker when `deliver-ticket` or the QA lead reports that the verify skill couldn't drive a feature or described it wrongly.
 
-## Aliases
-
-A session that started before a rename can still call the old name and gets routed to the new skill (`legacy/`).
-
-| Old name | New name |
-|---|---|
-| `ship-pr` | `deliver-ticket` |
-| `dispatch-work` | `dispatch-card` |
-| `use-obsidian` | `use-notes` |
-
 ## Commands
 
 ### `orch` (program ledger and landing gate)
@@ -448,7 +438,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 
 | Decision | Applies to |
 |---|---|
-| Allow | Calls to this plugin's skills and aliases. If an unprefixed name is shadowed by a skill of the same name in `~/.claude/skills` or the project's `.claude/skills`, no decision is made |
+| Allow | Calls to this plugin's skills. If an unprefixed name is shadowed by a skill of the same name in `~/.claude/skills` or the project's `.claude/skills`, no decision is made |
 | Allow | `orca orchestration <command>`, except reset, worker-abandon and gate-resolve |
 | Allow | `orch <command>`, except `heavy` (runs arbitrary commands), `set` and `init` (can change the merge policy), and `backfill` (rewrites the ledger) |
 | Deny | `check`/`inbox --terminal <someone else's handle>`, which reads another terminal's Orca mailbox, including when the same command rebinds `$ORCA_TERMINAL_HANDLE` |

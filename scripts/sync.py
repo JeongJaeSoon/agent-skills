@@ -47,7 +47,7 @@ def reload_kind(paths):
     # read from disk on every use.
     if any(p in ("hooks/hooks.json", ".mcp.json") or p.startswith((".claude-plugin/", "agents/")) for p in paths):
         return "plugins"
-    if any(re.fullmatch(r"(skills|legacy)/[^/]+/SKILL\.md", p) for p in paths):
+    if any(re.fullmatch(r"skills/[^/]+/SKILL\.md", p) for p in paths):
         return "skills"
     return None
 
