@@ -5,57 +5,15 @@ description: "Use when the user asks to end, close or archive this session, card
 
 # Ending the session
 
-Triggers, all meaning this skill: "종료해줘", "세션 종료해줘", "대화 종료해줘", "이제 종료하자",
-"끝내줘", "그만하자", "여기서 마치자"; "세션 정리해줘", "이 세션 닫아줘", "카드 정리해줘",
-"worktree 정리해줘"; "end this session", "close this session", "end the conversation".
-**Bare "정리해줘" / "마무리해줘" with no object is not this skill** — the object decides:
-세션·카드·worktree 정리 ends it, 정리 alone does not.
+Ending is an `orca` command: Claude Code here runs inside an Orca terminal. `EndConversation`
+is the fallback for what Orca cannot reach, not the default.
 
-Claude Code on this machine runs inside an Orca terminal, so ending a session is an `orca`
-command. `EndConversation` is the fallback for what Orca cannot reach, not the default.
-
-Ending is yours to do. The user asked; do not ask back unless the state is off-script (§4) or
-the ending is `EndConversation`, which has its own rule (§5). An Orca worker is not asked at
-all: settling its task is the request (§7). Nor is a card whose brief has a `CLOSE` line:
-reaching the brief's done is the request (§8). Nor is `handoff-ticket` §5: a successor card
-verified as started is the request.
-
-## 1. Is this even a request to end
-
-| What the user said | What they mean | Do |
-|---|---|---|
-| "정리해줘", "마무리해줘" (no object) | leave the record, keep talking | `record-progress`, then report. **Do not end, do not ask to end.** |
-| "종료하면 돼?", "종료해도 될까?" | is anything left undone? | Answer that. No prompt, no command. |
-| "세션 정리", "카드 정리", "종료해줘" | end this session | Continue to §2. |
-
-This user says 정리 for the record and 종료 for the end, and often says 정리 first and 종료
-several turns later. Do not collapse them.
-
-## 2. Ask Orca what this session is
-
-```bash
-orca worktree current --json    # read isMainWorktree and branch
-```
-
-It answers in **every** session, including a plain folder context with no git repo — a memo
-or scratch folder reports a worktree with `isMainWorktree: true` and an empty `branch`. "There
-is no card here" is almost never true, and cwd never proves it. Run the command.
-
-| `orca worktree current` | What this session is | Ending |
-|---|---|---|
-| `isMainWorktree: false` | a worktree card Orca cut for a branch | §4 — the card goes away |
-| `isMainWorktree: true` | the repo's own checkout, or a folder context (memo, scratch) | `orca terminal close --worktree current --all --json`. **Never `worktree rm`** — that selector points at the checkout itself. |
-| errors, or Orca is not running | not under Orca | `EndConversation` (§5) |
-
-`orca terminal close --worktree current --all` stops every terminal process the workspace owns
-and **durably removes its tabs, layouts and resume records**. That kills this process and the
-session does not come back. Orca's Sleep is the resumable one, and it is a UI action with no CLI
-equivalent — `orca --help` has no `sleep`. So when the session has to resume later, run nothing
-and say that Sleep is theirs to do from the app.
-
-`EndConversation` is also the right answer in any row when the user wants the *conversation*
-over but the terminal left standing. Killing terminals is not a polite goodbye; pick by what
-they actually asked for.
+| Who ends this session | Read |
+|---|---|
+| The user asked ("종료해줘", "세션 정리해줘", "종료해도 될까?") | [`references/user-ending.md`](references/user-ending.md) first: §1 (is it a request to end), §2 (what `orca worktree current` says this session is), §5 (`EndConversation`), then §3, §4, §6 here |
+| An Orca worker settling its task | §7 here, no user phrase needed |
+| A card whose brief has a `CLOSE` line, at the brief's done | §8 here, no user phrase needed |
+| `handoff-ticket` §5, once its successor card has started | the user path; the verified start is the request |
 
 ## 3. Leave the record before anything dies
 
@@ -118,18 +76,6 @@ Never pass `--force` to get past a dirty tree — that is the ask-first case.
 when the repo's `orca.yaml` defines an archive hook, so the cleanup the repo asked for runs. A failed
 hook then blocks the removal and changes nothing; treat that as the ask-first case too, not a reason
 for `--allow-failed-archive-hook`.
-
-## 5. `EndConversation` asks first — the Orca paths do not
-
-The asymmetry is not a style choice. The Orca commands run on the user's request alone. The
-tool itself forbids being called without explicit confirmation that the end is permanent, so
-ask once with `AskUserQuestion`, permanence stated in the question, two options and no third:
-
-- **종료** — 이 대화를 끝냅니다. 되돌릴 수 없고 더 이상 메시지를 주고받을 수 없습니다.
-- **계속** — 대화를 유지합니다.
-
-Anything but choosing 종료 means keep going. An earlier "종료해줘" is not the confirmation; it
-has to come *after* the warning.
 
 ## 6. Order inside the final turn
 
@@ -211,22 +157,10 @@ note that the card is left for the parent or the human.
 
 ## Common mistakes
 
-- **"제가 세션을 종료할 수는 없습니다" and pointing at `/exit`.** Orca can end it, and
-  `EndConversation` can end the conversation.
-- **Deciding from cwd instead of `orca worktree current`.** A non-git folder is still an
-  Orca-managed workspace. Checking cwd is how you conclude "no card" and reach for the wrong tool.
 - **`orca worktree rm` on `isMainWorktree: true`.** That selector is the repo checkout or the
   scratch workspace, not a disposable card.
-- Offering "원하시면 지우겠습니다" on a clean tree after the user asked to end. Their request
-  was the permission; run it. This covers user-initiated endings only: a worker ends by §7, a
-  `CLOSE` card by §8, and a refusal there ends in §7's fallback.
 - Checking `origin/main..HEAD` without `git fetch` first — a stale ref hides unpushed commits.
-- Running the git and `gh` lines in a folder context that is not a repo. There `branch` is
-  empty and `isMainWorktree` alone decides.
 - Removing when a PR is still open — the review fix would then need a new worktree.
-- Calling `orca terminal close --all` "sleeping the card". It is the opposite: Sleep resumes,
-  this drops the resume records for good.
-- Calling `EndConversation` on the first "종료해줘", with no confirmation turn.
 - Ending because a task finished, stalled, or went badly. Only the user's request ends a
   session, or, for an Orca worker, settling its task by §7, or a brief's `CLOSE` line (§8),
   or `handoff-ticket` §5 once its successor card has started.

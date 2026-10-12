@@ -5,6 +5,5 @@
   "homepage": "https://github.com/JeongJaeSoon/agent-skills",
   "repository": "https://github.com/JeongJaeSoon/agent-skills",
   "license": "MIT",
-  "keywords": ["pstack", "orca", "linear", "orchestration", "code-review"],
-  "skills": ["./legacy/"]
+  "keywords": ["pstack", "orca", "linear", "orchestration", "code-review"]
 }

@@ -68,7 +68,7 @@ assert bash("orca orchestration send --to term_x --body 'a; b $(c) {d,e} * ~'") 
 
 assert skill("orchestrate") == "allow"
 assert skill("agent-skills:deliver-ticket") == "allow"
-assert skill("ship-pr") == "allow"  # a legacy alias stub
+assert skill("ship-pr") == "none"  # a removed alias
 assert skill("other-plugin:orchestrate") == "none"
 assert skill("brainstorming") == "none"
 assert skill("") == "none"
