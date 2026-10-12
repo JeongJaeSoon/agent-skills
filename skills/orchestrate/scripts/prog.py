@@ -68,6 +68,25 @@ Usage: orch <command> <slug> [options]
                                      the next-steps list (no lines clears it); done rows leave after 7
                                      days; drop removes a row and its children. --group makes a heading
                                      row (a feature or an epic) with no PR and no cells; --parent rows to it
+  board lead add <name> --handle H --repo OWNER/NAME [--run RUN] [--stale-min N] | lead close <name>
+  board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
+                 [--status moving|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
+  board drop <id> | later add <title> --trigger T [--due D] | later drop <n> | todo [LINE]... | show
+                                     no slug: the board the periodic report is rendered from (board.json beside
+                                     stages.json), one row per lead, phase and sub-task. set changes only the
+                                     fields given and stamps reported_at; an id a/b hangs off a. A row without
+                                     --parent is a lead (needs --repo); under a parent it is a task unless
+                                     --kind phase. PR state is joined from the collector's prs.json at render.
+                                     todo replaces the owner's to-do list (no lines clears it)
+  brief render --periodic [--scope top-level|PROGRAM] [--telegram] [--headline T] [--skipped T] [--now ISO8601]
+               [--commit] [--json]
+                                     the brief skill's periodic report items 1-8 from the board, prs.json, open
+                                     decisions and brief-last/<scope>.json (bold = changed since it). --commit
+                                     saves this table as the last one (after sending). Staleness: a row past 90
+                                     min shows its age, prs.json probed over 30 min is in the headline, over
+                                     120 min marks the PR ⚠️, a lead whose terminal left the fleet turns 🔴;
+                                     override in the dashboard config: {"board": {"row_min", "pr_warn_min",
+                                     "pr_stale_min"}}. Exit 1 when a table is wider than 78 columns
   hold <resource> [--note TEXT] [--ttl MIN] [--by WHO] | hold --list [--json]
   release <resource> [--by WHO] [--force]
                                      no slug: take a resource lanes share (browser, a monitoring login)
@@ -2083,6 +2102,64 @@ def cmd_stage(argv):
         sys.exit(str(e))
 
 
+def cmd_board(argv):
+    import board
+    sub, rest = argv[0], argv[1:]
+    rid = rest[0] if rest and not rest[0].startswith("--") else None
+    try:
+        if sub == "lead" and rest[:1] == ["add"] and len(rest) > 1:
+            board.lead_add(rest[1], opt(rest, "--handle"), opt(rest, "--repo"), opt(rest, "--run"), opt(rest, "--stale-min"))
+        elif sub == "lead" and rest[:1] == ["close"] and len(rest) > 1:
+            board.lead_close(rest[1])
+        elif sub == "set" and rid:
+            board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
+                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr")})
+        elif sub == "drop" and rid:
+            board.drop(rid)
+        elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
+            board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"))
+        elif sub == "later" and rest[:1] == ["drop"] and len(rest) > 1:
+            board.later_drop(int(rest[1]))
+        elif sub == "todo":
+            board.set_todo(rest)
+        elif sub == "show":
+            print(json.dumps(board.read(), ensure_ascii=False, indent=1))
+        else:
+            sys.exit("usage: orch board lead add <name> --handle H --repo R [--run RUN] [--stale-min N] | lead close <name> | "
+                     "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
+                     "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | later add <title> --trigger T [--due D] | "
+                     "later drop <n> | todo [LINE]... | show")
+    except (ValueError, OSError) as e:
+        sys.exit(str(e))
+
+
+def cmd_brief(argv):
+    import board
+    if argv[:1] != ["render"] or "--periodic" not in argv:
+        sys.exit("usage: orch brief render --periodic [--scope S] [--telegram] [--headline T] [--skipped T] [--now ISO8601] "
+                 "[--commit] [--json]")
+    now = opt(argv, "--now")
+    scope = opt(argv, "--scope", "top-level")
+    out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
+                       opt(argv, "--headline"), opt(argv, "--skipped"))
+    if not out["text"]:
+        print("board 에 행 없음: 표는 brief 스킬대로 손으로 만든다 (orch board set 으로 행을 기록하면 다음부터 렌더된다)")
+        return
+    print(json.dumps(out, ensure_ascii=False, indent=1) if "--json" in argv else out["text"])
+    if "--commit" in argv:
+        board.commit(scope, out["snapshot"])
+    if not out["width_ok"]:
+        sys.exit("a table is wider than 78 columns")
+
+
+def fleet_parse(s):
+    try:
+        t = parse_ts(s)
+    except ValueError:
+        sys.exit(f"--now {s!r} is not ISO8601")
+    return t if t.tzinfo else t.astimezone()
+
+
 def cmd_hold(argv, release=False):
     import holds
     target = argv[0] if not argv[0].startswith("--") else None
@@ -2112,7 +2189,7 @@ def cmd_hold(argv, release=False):
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage, "hold": cmd_hold, "release": lambda argv: cmd_hold(argv, release=True)}
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "release": lambda argv: cmd_hold(argv, release=True)}
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
