@@ -46,6 +46,9 @@ assert bash('echo -m 다양한\ngit commit -m "fix: 다시 보낸다"') is None
 assert "다양한" in bash('git add -A && git commit -m "docs: 다양한 개선" && git push')
 assert "통해" in bash("git -C sub status && gh pr create --title t --body-file body.md")
 assert bash("cat <<EOF > notes.txt\n다양한 —\nEOF\ngit commit -m clean") is None
+assert "crucial" in bash('gh pr create --title "fix; parser" --body "$(cat <<EOF\nA crucial fix.\nEOF\n)"')
+assert "crucial" in bash("git commit -F - \\\n<<EOF\nA crucial fix.\nEOF\n")
+assert "crucial" in bash("cat <<EOF > a.txt\ndon't\nEOF\ngit commit -F - <<EOF\nA crucial fix.\nEOF\n")
 heredoc = "git commit -F - <<'EOF'\nfeat(x): add y\n\nThis change serves as a crucial testament.\nEOF\n"
 n = bash(heredoc)
 assert n and "serves as" in n and "crucial" in n, n

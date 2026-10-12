@@ -18,7 +18,6 @@ SAVE_TOOL = re.compile(r"^mcp__.*(?:linear|jira|atlassian).*__(?:save_|create|up
 PR_CMD = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
 COMMIT_CMD = re.compile(r"\bgit\b[^;&|\n]*\bcommit\b")  # a cheap prefilter; the parser below finds git's subcommand
 PUBLISH = re.compile(f"{PR_CMD.pattern}|{COMMIT_CMD.pattern}")
-SEPARATOR = re.compile(r"[;\n]|&&|\|\|")
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n\s*\2\s*(?:\n|$)", re.S)
 FENCE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
@@ -50,6 +49,24 @@ PATTERNS = [
 PATTERNS = [(re.compile(p, re.I | re.M), why) for p, why in PATTERNS]
 
 
+def last_command(text):
+    """The text after the last unquoted `;`, `&&`, `||` or newline; a backslash-newline does not end a command."""
+    start, quote, i = 0, None, 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            quote = None if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c in ";\n" or text.startswith(("&&", "||"), i):
+            start = i + (2 if c in "&|" else 1)
+        i += 1
+    return text[start:]
+
+
 def files_text(paths):
     out = []
     for base, p in paths:
@@ -70,7 +87,7 @@ def bash_text(command, cwd):
     # A heredoc counts only when the command it feeds is the publishing one (`git commit -F - <<EOF`,
     # `-m "$(cat <<EOF`), not a `cat <<EOF > file` beside it.
     parts = [m.group(3) for m in HEREDOC.finditer(command)
-             if PUBLISH.search(SEPARATOR.split(command[:m.start()])[-1])]
+             if PUBLISH.search(last_command(HEREDOC.sub(";", command[:m.start()])))]
     try:
         # A newline separates commands like `;` does; inside a quoted message it only adds a harmless `;`.
         text = HEREDOC.sub(";", command).replace("\\\n", " ").replace("\n", " ; ")
