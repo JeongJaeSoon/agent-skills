@@ -1100,7 +1100,8 @@ def judge_programs(home, days, now, touched=last_touch):
                 "how": [f"mv {shlex.quote(str(path))} {shlex.quote(str(home / '_archive'))}/"]}
         try:
             names_in = os.listdir(path)
-            notes = [n for n in names_in if RESUME_NOTE.search(n)]
+            # A lead's resume note may sit in briefs/, not only at the top.
+            notes = [n for _, _, files in os.walk(path) for n in files if RESUME_NOTE.search(n)]
             # The dashboard and `orch status` rewrite dashboard/ and the top-level .json caches of every program, closed
             # ones too; the program's own record is the rest (ledger, decisions, reflect/ that Close writes last).
             t = max((touched(path / n, now - days * 86400) for n in names_in

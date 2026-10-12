@@ -847,6 +847,10 @@ with tempfile.TemporaryDirectory() as tmp:
     program("open", [{"ev": "landed"}])
     program("parked", closed, "resume-state.md")
     program("handed", closed, "msg-HANDOFF-1.md")
+    lead = program("lead", closed)
+    (lead / "briefs").mkdir()
+    (lead / "briefs" / "lead-resume.md").write_text("x")
+    os.utime(lead / "briefs", (now - 8 * D, now - 8 * D))
     fresh = program("fresh", closed)
     os.utime(fresh / "ledger.jsonl")
     # The dashboard and `orch status` keep rewriting these on every program; they say nothing about the program.
@@ -859,9 +863,10 @@ with tempfile.TemporaryDirectory() as tmp:
     (home / "noprog").mkdir()
     # last_touch also reads ctime, which utime cannot set back; mtime stands in for it here.
     got = {pathlib.Path(i["name"]).name: i for i in reap.judge_programs(home, 7, now, touched=lambda p, n: os.stat(p).st_mtime)}
-    assert set(got) == {"done", "open", "parked", "handed", "fresh", "busy"}, got
+    assert set(got) == {"done", "open", "parked", "handed", "lead", "fresh", "busy"}, got
     assert {n for n, i in got.items() if i["target"]} == {"done", "busy"}, got
     assert "닫히지 않음" in got["open"]["why"] and "재개 노트" in got["parked"]["why"] and "재개 노트" in got["handed"]["why"]
+    assert "lead-resume.md" in got["lead"]["why"], got["lead"]
     assert "7일 안" in got["fresh"]["why"], got["fresh"]
     (home / "_archive" / "done").mkdir()
     out = reap.archive_program(got["done"]["name"])
