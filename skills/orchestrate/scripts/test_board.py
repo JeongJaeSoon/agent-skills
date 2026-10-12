@@ -1,0 +1,205 @@
+"""Offline tests for `orch board` and `orch brief render --periodic` (board.py through prog.py), on invented data.
+
+Run: python3 test_board.py [--print]   (--print shows the rendered reports instead of checking them)
+"""
+import json, os, pathlib, subprocess, sys, tempfile
+
+HERE = pathlib.Path(__file__).parent
+sys.path.insert(0, str(HERE.parents[1] / "brief" / "scripts"))
+import table_width  # noqa: E402
+
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
+state = tmp / "dashboard"
+env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
+       "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "TZ": "UTC"}
+T0 = "2026-10-13T14:00:00Z"
+NOW = "2026-10-13T14:30:00Z"
+
+
+def orch(*args):
+    r = subprocess.run([sys.executable, str(HERE / "prog.py"), *args], capture_output=True, text=True, env=env)
+    return r.returncode, r.stdout.rstrip("\n"), r.stderr.strip()
+
+
+def ok(*args):
+    code, out, err = orch(*args)
+    assert code == 0, (args, out, err)
+    return out
+
+
+def stamp(at=T0, **older):
+    """Every row confirmed at `at`, except the ids given, confirmed at their own time."""
+    p = state / "board.json"
+    b = json.loads(p.read_text())
+    for k, r in b["rows"].items():
+        r["reported_at"] = older.get(k, at)
+    p.write_text(json.dumps(b, ensure_ascii=False))
+
+
+assert orch("brief", "render", "--periodic")[1].startswith("board 에 행 없음")
+
+# Refusals say what is missing.
+assert orch("board", "set", "x/y", "--title", "고아")[2] == "no row x to be the parent; add it first"
+assert orch("board", "set", "lone", "--title", "저장소 없음")[2] == "a lead row (lone) needs --repo"
+assert orch("board", "lead", "add", "search", "--handle", "term_0FAKE1", "--repo", "acme/web")[0] == 0
+assert orch("board", "set", "search", "--status", "maybe")[2].startswith("--status is one of")
+assert orch("board", "set", "search", "--progress", "9/8")[2] == "--progress N/M needs 0 <= N <= M and M > 0"
+assert orch("board", "set", "search", "--progress", "half")[2].startswith("--progress is N/M")
+assert orch("board", "later", "add", "캐시 TTL")[2].startswith("board later add needs")
+
+# Lead 1: works in phases; the phases are its rows, the sub-tasks hang under them, one sub-task in another repo.
+ok("board", "set", "search", "--title", "검색 개선", "--program", "검색 개선")
+ok("board", "set", "search/ph1", "--kind", "phase", "--pr", "acme/web#40", "--status", "done", "--progress", "8/8")
+ok("board", "set", "search/ph2", "--kind", "phase", "--pr", "acme/web#42", "--progress", "6/8", "--next", "CI · 워커")
+ok("board", "set", "search/ph3", "--kind", "phase", "--progress", "3/8", "--next", "하위 3건 · 워커")
+ok("board", "set", "search/ph3/w2", "--title", "색인", "--progress", "2/8", "--next", "PR 작성 · 워커")
+ok("board", "set", "search/ph3/sort", "--title", "정렬", "--pr", "acme/web#45", "--progress", "4/8", "--next", "CI 재실행 · 워커")
+ok("board", "set", "search/ph3/reidx", "--title", "재색인", "--repo", "acme/ops", "--pr", "acme/ops#88", "--progress", "2/8",
+   "--next", "권한 · 결정 1")
+ok("board", "set", "search/ph4", "--kind", "phase", "--title", "ph4 · ph5", "--status", "held", "--progress", "0/8",
+   "--next", "ph3 머지 뒤")
+# Lead 2: no phases, so the lead is the row. Three PRs wait only on rev-a: one folded row, and the lead row stays.
+ok("board", "lead", "add", "notify", "--handle", "term_0FAKE2", "--repo", "acme/web")
+ok("board", "set", "notify", "--title", "알림 정리", "--program", "알림 정리", "--status", "waiting", "--progress", "3/4",
+   "--next", "리뷰 · 사람")
+for n, t in (("51", "설정"), ("52", "발송"), ("53", "로그")):
+    ok("board", "set", f"notify/p{n}", "--title", t, "--pr", f"acme/web#{n}", "--status", "waiting", "--progress", "3/4",
+       "--next", "10/13 09:30 의뢰")
+ok("board", "set", "notify/p54", "--title", "문구가 아주 길어서 칸을 넘는 하위 작업", "--pr", "acme/web#54", "--progress", "2/4",
+   "--next", "CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커")
+# Lead 3: two PRs on one reviewer fit the name cell. Lead 4: its terminal is gone and it last reported 3 hours ago.
+ok("board", "lead", "add", "triage", "--handle", "term_0FAKE3", "--repo", "acme/ops")
+ok("board", "set", "triage", "--title", "분류", "--status", "waiting", "--next", "리뷰 · 사람")
+ok("board", "set", "triage/p61", "--pr", "acme/ops#61", "--status", "waiting")
+ok("board", "set", "triage/p62", "--pr", "acme/ops#62", "--status", "waiting")
+ok("board", "lead", "add", "ghost", "--handle", "term_0FAKE4", "--repo", "acme/ops")
+ok("board", "set", "ghost", "--title", "정리 작업", "--progress", "1/3", "--next", "구현 · 워커")
+# Two PRs with no lead, waiting on the same person: a bullet under the section's table.
+ok("board", "set", "loose-70", "--kind", "task", "--repo", "acme/ops", "--title", "로그", "--pr", "acme/ops#70")
+ok("board", "set", "loose-71", "--kind", "task", "--repo", "acme/ops", "--title", "대시보드", "--pr", "acme/ops#71")
+ok("board", "later", "add", "prod 배포 창", "--trigger", "10/16")
+ok("board", "later", "add", "캐시 TTL 다시 보기", "--trigger", "10/20")
+ok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
+stamp(ghost="2026-10-13T11:20:00Z")
+
+
+def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026-10-13T14:25:00Z"):
+    n = key.rsplit("#", 1)[1]
+    return key, {"probed_at": probed, "detail": {
+        "key": key, "url": f"https://example.test/{n}", "state": state_, "merged_at": merged, "draft": False, "ci": ci,
+        "decision": "REVIEW_REQUIRED" if state_ == "OPEN" else None,
+        "reviewers": [{"login": r, "requested": True, "state": None, "team": False} for r in reviewers]}}
+
+
+(state / "prs.json").write_text(json.dumps({"prs": dict([
+    pr("acme/web#40", "MERGED", merged="2026-10-01T03:00:00Z"), pr("acme/web#42", "MERGED", merged="2026-10-13T13:00:00Z"),
+    pr("acme/web#45", ci="failure", reviewers=["rev-a"]),
+    pr("acme/web#51", reviewers=["rev-a"]), pr("acme/web#52", reviewers=["rev-a"]), pr("acme/web#53", reviewers=["rev-a"]),
+    pr("acme/web#54", ci="failure"), pr("acme/ops#88", probed="2026-10-13T11:00:00Z"),
+    pr("acme/ops#61", reviewers=["rev-b"]), pr("acme/ops#62", reviewers=["rev-b"]),
+    pr("acme/ops#70", reviewers=["rev-c"]), pr("acme/ops#71", reviewers=["rev-c"]),
+])}))
+(state / "state.json").write_text(json.dumps({"sessions": [
+    {"id": s, "terminals": [{"handle": h}]} for s, h in (("s1", "term_0FAKE1"), ("s2", "term_0FAKE2"), ("s3", "term_0FAKE3"))]}))
+
+FIRST = orch("brief", "render", "--periodic", "--now", NOW, "--commit", "--skipped", "21:00 이후라 Slack 미전송")
+ok("board", "set", "search/ph2", "--status", "done", "--progress", "8/8", "--next", "-")
+stamp(ghost="2026-10-13T11:20:00Z")
+SECOND = orch("brief", "render", "--periodic", "--now", NOW, "--skipped", "21:00 이후라 Slack 미전송")
+TG = orch("brief", "render", "--periodic", "--now", NOW, "--telegram")
+
+if "--print" in sys.argv:
+    for r in (FIRST, SECOND, TG):
+        print(r[0], r[2], r[1], sep="\n", end="\n\n")
+    sys.exit()
+
+GOLDEN = """\
+**14:30 · 바뀐 행 1 · PR 상태 3h 전 기준**
+
+🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
+
+**acme/web — 검색 개선**
+
+| | 리드/Phase | 진행 | 다음 |
+|---|---|---|---|
+| ✅ | ph1 [#40](https://example.test/40) | ████████ 8/8 | — |
+| ✅ | **ph2 [#42](https://example.test/42)** | ████████ 8/8 | — |
+| 🔄 | ph3 (PR 없음) | ███░░░░░ 3/8 | 하위 3건 · 워커 |
+| 🔄 | └ w2 색인 | ██░░░░░░ 2/8 | PR 작성 · 워커 |
+| 🔄 | └ [#45](https://example.test/45) 정렬 | ████░░░░ 4/8 | CI 재실행 · 워커 |
+| ⏸ | ph4 · ph5 (PR 없음) | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
+
+**acme/ops**
+
+| | 리드/Phase | 진행 | 다음 |
+|---|---|---|---|
+| — | 검색 개선 | — | — |
+| 🔄 | └ [#88](https://example.test/88)⚠️ 재색인 | ██░░░░░░ 2/8 | 권한 · 결정 1 |
+| ⏳ | 분류 (PR 없음) | — | 리뷰 · 사람 |
+| ⏳ | └ [#61](https://example.test/61)·#62 rev-b 대기 | — | 리뷰 · rev-b |
+| 🔴 | 정리 작업 (PR 없음) | ███░░░░░ 1/3 | 세션 없음 · 3h 전 |
+
+- ⏳ 2건 rev-c 대기 — 분야 로그·대시보드
+
+**acme/web — 알림 정리**
+
+| | 리드/Phase | 진행 | 다음 |
+|---|---|---|---|
+| ⏳ | 알림 정리 (PR 없음) | ██████░░ 3/4 | 리뷰 · 사람 |
+| 🔄 | └ [#54](https://example.test/54) 문구가 아주…¹ | ████░░░░ 2/4 | CI 재실행 뒤 리뷰 의뢰…² |
+| ⏳ | └ 3건 rev-a 대기³ | ██████░░ 3/4 | 10/13 09:30 의뢰 |
+
+¹ 문구가 아주 길어서 칸을 넘는 하위 작업
+² CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
+³ #51·#52·#53
+
+21:00 이후라 Slack 미전송
+
+❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
+
+🙋 **지금 오너가 할 일** — 없음
+
+⏸ **나중에** — 10/16 prod 배포 창 · 10/20 캐시 TTL 다시 보기"""
+
+code, first, err = FIRST
+assert code == 0, err
+assert first.splitlines()[0] == "**14:30 · 지난 보고 없음, 굵게 없음 · PR 상태 3h 전 기준**", first.splitlines()[0]
+assert "**" not in "\n".join(l for l in first.splitlines() if l.startswith("| ")), "no saved table, so no row is bold"
+assert "(지난 보고와 동일)" not in first
+code, second, err = SECOND
+assert code == 0, err
+if second != GOLDEN:
+    import difflib
+    sys.exit("\n".join(difflib.unified_diff(GOLDEN.splitlines(), second.splitlines(), "golden", "rendered", lineterm="")))
+for start, rows in table_width.tables(second):
+    assert table_width.table_width(rows) <= 78, (start, table_width.table_width(rows))
+
+# Telegram: no markdown, one line per row, sub-tasks start with └, a changed row says (바뀜).
+code, tg, err = TG
+assert code == 0, err
+assert not any(m in tg for m in ("**", "|", "](")), tg
+assert "✅ ph2 #42 (바뀜) — ████████ 8/8 · —" in tg.splitlines(), tg
+assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4 · 10/13 09:30 의뢰" in tg.splitlines(), tg
+assert "└ 🔄 #54 문구가 아주 길어서 칸을 넘는 하위 작업 — ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
+assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
+
+# --json carries what a dashboard or the model needs beside the text.
+out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--headline", "ph2 머지"))
+# The model's headline replaces the change count only: the staleness facts stay.
+assert out["text"].startswith("**14:30 · ph2 머지 · PR 상태 3h 전 기준**"), out["text"].splitlines()[0]
+assert out["changed"] == ["search/ph2"], out["changed"]
+assert out["stale"] == ["ghost"] and out["width_ok"] is True
+
+# A row the board drops leaves the report; the snapshot keys rows by id, a hand-made one is no saved table.
+(tmp / "brief-last" / "top-level.json").write_text(json.dumps({"ts": T0, "rows": [{"repo": "acme/web", "name": "ph1"}]}))
+assert "지난 보고 없음" in ok("brief", "render", "--periodic", "--now", NOW).splitlines()[0]
+ok("board", "drop", "notify")
+assert "알림 정리" not in ok("brief", "render", "--periodic", "--now", NOW)
+assert "notify/p51" not in json.loads((state / "board.json").read_text())["rows"]
+assert (state / "board.prev.json").exists()
+
+# A scope renders one program's rows only.
+scoped = ok("brief", "render", "--periodic", "--now", NOW, "--scope", "검색 개선")
+assert "분류" not in scoped and "ph1" in scoped
+
+print("ok")
