@@ -30,7 +30,7 @@ CLAIM = re.compile(
     r"|\ball (?:the )?(?:tests|checks) pass(?:ed)?\b|\bworks now\b|\bnow works\b)",
     re.I | re.M)
 UNVERIFIED = re.compile(
-    r"(?:검증하지\s*않|확인하지\s*않|(?:돌리|실행하)지\s*(?:않|못)|검증\s*(?:전|안\s*함)|미검증"
+    r"(?:검증하지\s*않|확인하지\s*않|(?:돌리|실행하)지\s*(?:않|못)|검증\s*(?:전(?:이|에|입니다|이다)?(?![가-힣])|안\s*함)|미검증"
     r"|\bnot (?:yet )?(?:verified|tested|run)\b|\bunverified\b|\buntested\b|NOT VERIFIED)",
     re.I)
 # The error a tool result carries when the call was refused before it ran. A failing command ran: it is not one.

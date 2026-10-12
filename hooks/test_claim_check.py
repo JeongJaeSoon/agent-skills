@@ -63,6 +63,8 @@ assert hook([prompt("x"), *edit("/r/a.py"), say("수정했고 모든 테스트�
 assert hook([prompt("x"), *edit("/r/a.ts"), say("I've fixed the race in the loader.")])
 assert hook([prompt("x"), *edit("/r/a.go"), say("Done. All tests pass.")])
 assert hook([prompt("x"), tool("Write", file_path="/r/new.py"), result(), say("구현 완료했습니다.")])
+assert hook([prompt("x"), *edit("/r/a.py"), say("수정했습니다. 검증 전체가 통과했습니다.")])  # "검증 전체" is not "검증 전"
+assert hook([prompt("x"), *edit("/r/a.py"), say("고쳤습니다. 아직 검증 전입니다.")]) is None
 # A run before the last edit is stale: the run that counts comes after it.
 assert hook([prompt("x"), *edit("/r/a.py"), *bash(), *edit("/r/a.py"), say("고쳤습니다.")])
 # A run refused before it started is no run: by the user, a hook, or auto mode.

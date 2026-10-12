@@ -16,7 +16,8 @@ MAX_HITS = 8
 TEXT_KEYS = {"title", "description", "body", "content", "commentBody", "comment", "summary"}
 SAVE_TOOL = re.compile(r"^mcp__.*(?:linear|jira|atlassian).*__(?:save_|create|update|edit|add)", re.I)
 PR_CMD = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
-COMMIT_CMD = re.compile(r"\bgit\s+(?:-[cC]\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*commit\b")
+COMMIT_CMD = re.compile(r"\bgit\b[^;&|\n]*\bcommit\b")  # a cheap prefilter; the parser below finds git's subcommand
+GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n\s*\2\s*(?:\n|$)", re.S)
 FENCE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
 INLINE = re.compile(r"`[^`\n]*`")
@@ -100,8 +101,8 @@ def bash_text(command, cwd):
             continue
         if w in short and not publishing:
             prog, git_globals = w, w == "git"
-        elif prog == "git" and git_globals and w == "commit":
-            git_globals, publishing = False, True
+        elif git_globals and not w.startswith("-") and words[i - 1] not in GIT_VALUE_OPTS:
+            git_globals, publishing = False, w == "commit"  # git's subcommand, not any later "commit" word
         elif prog == "gh" and w in ("create", "edit") and words[i - 1] == "pr":
             publishing = True
         if nxt and (w == "cd" or (git_globals and w == "-C")):
