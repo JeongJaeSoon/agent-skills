@@ -47,12 +47,12 @@ PATTERNS = [
 PATTERNS = [(re.compile(p, re.I | re.M), why) for p, why in PATTERNS]
 
 
-def files_text(paths, cwd):
+def files_text(paths):
     out = []
-    for p in paths:
+    for base, p in paths:
         if p == "-":
             continue
-        full = os.path.join(cwd or ".", os.path.expanduser(p))
+        full = os.path.join(base, os.path.expanduser(p))
         try:
             with open(full, encoding="utf-8") as f:
                 out.append(f.read(200_000))
@@ -72,14 +72,26 @@ def bash_text(command, cwd):
         return "\n".join(parts) if parts else command
     take = {"-m", "--message", "-t", "--title", "-b", "--body"}
     read = {"-F", "--file", "--body-file"}
-    paths = []
+    # A relative -F or --body-file path resolves where the command runs: after `cd <dir>` and git's own `-C <dir>`.
+    base, git_globals, paths = cwd or ".", False, []
     for i, w in enumerate(words):
+        nxt = words[i + 1] if i + 1 < len(words) else None
         key, eq, val = w.partition("=")
-        if eq and key in take | read:
-            (parts if key in take else paths).append(val)
-        elif w in take | read and i + 1 < len(words):
-            (parts if w in take else paths).append(words[i + 1])
-    return "\n".join(parts + files_text(paths, cwd))
+        if w == "git":
+            git_globals = True
+        elif w == "commit" or w in ("&&", ";", "||", "|"):
+            git_globals = False
+        if nxt and (w == "cd" or (git_globals and w == "-C")):
+            base = os.path.join(base, os.path.expanduser(nxt))
+        elif (key if eq else w) in take | read:
+            flag, value = (key, val) if eq else (w, nxt)
+            if value is None:
+                continue
+            if flag in take:
+                parts.append(value)
+            else:
+                paths.append((base, value))
+    return "\n".join(parts + files_text(paths))
 
 
 def mcp_text(args):

@@ -28,6 +28,13 @@ assert n and "다양한" in n and "원활한" in n and "—" in n and "write-pla
 assert "해당" in bash("gh pr edit 12 --body='해당 파일을 고친다.'")
 (TMP / "body.md").write_text("## 왜\n\n스크립트를 통해 결과를 확인한다.\n")
 assert "통해" in bash("gh pr create --title t --body-file body.md")
+# A relative file resolves where the command runs: after `cd` and git's `-C`, not git commit's own `-C <commit>`.
+(TMP / "sub").mkdir()
+(TMP / "sub" / "msg.txt").write_text("fix: 해당 파일을 고친다\n")
+(TMP / "msg.txt").write_text("fix: 실패한 요청을 다시 보낸다\n")
+assert "해당" in bash("cd sub && gh pr create --title t --body-file msg.txt")
+assert "해당" in bash(f"git -C {TMP / 'sub'} commit -F msg.txt")
+assert bash("git commit -C HEAD -F msg.txt") is None
 # git commit: -m, a heredoc body, and -F.
 assert "진행" in bash('git commit -m "fix(x): 리뷰를 진행했다"')
 assert "다양한" in bash('git -c commit.gpgsign=false -C /r commit -m "docs: 다양한 개선"')  # git's own options first
