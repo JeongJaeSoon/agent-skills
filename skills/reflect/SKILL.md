@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: "Spawn three parallel review subagents over the active transcript or a finished program, surface learnings, record them in the lessons ledger, and route each to a concrete edit on an existing skill. Use when the user says reflect, \"스킬에 반영해줘\", \"스킬이 왜 안 떴어\", \"스킬 갱신이 필요해\", \"이 세션 돌아보고 스킬 개선해줘\", \"개선 이력 보여줘\"; at orchestrate's Close (program mode); each round of the flow improver or a `/loop` (standing mode); and from end-session when the human corrected the work (session mode)."
+description: "Review the active transcript or a finished program with three parallel reviewers, record the learnings in the lessons ledger, and route each to an edit on an existing skill. Use for reflect, \"스킬에 반영해줘\", \"스킬이 왜 안 떴어\", \"이 세션 돌아보고 스킬 개선해줘\", \"개선 이력 보여줘\"; at orchestrate's Close; and each flow-improver or /loop round."
 ---
 
 # Reflect

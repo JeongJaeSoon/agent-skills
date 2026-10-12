@@ -1,6 +1,6 @@
 ---
 name: handoff-ticket
-description: "Use when handing tickets to fresh Orca worktree cards — \"핸드오프\", \"다음 작업으로 넘어가자\", \"다음 티켓/작업 진행해줘\", \"남은 작업 있어?\", \"진행 가능한 다음 작업\", \"머지하고 다음 진행해줘\", \"새 worktree 세션 띄우고 /goal\", \"handoff\" — and the moment this session's ticket is done (every acceptance criterion met) to decide what runs next. \"병렬로 진행\" belongs here only when it means same-repo ticket cards; check whether the user instead means subagents or work dispatched while this session continues. Not when the target is another repo or this session keeps working (dispatch-card)."
+description: "Use when handing the next ticket to a fresh Orca worktree card — \"핸드오프\", \"다음 티켓 진행해줘\", \"남은 작업 있어?\", \"머지하고 다음 진행해줘\", \"handoff\" — and when this session's ticket is done, to decide what runs next. Another repo, or this session keeps working, is dispatch-card."
 ---
 
 # Orca handoff

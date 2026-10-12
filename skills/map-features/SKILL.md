@@ -1,6 +1,6 @@
 ---
 name: map-features
-description: "Use when people need a map of what a product does today, read from its code at one commit: a feature map for a PRD, a roadmap, onboarding or a status doc — \"feature map 만들어줘\", \"기능 지도 그려줘\", \"지금 뭐가 구현돼 있는지 정리해줘\", \"PRD 쓰기 전에 현재 기능 정리\", \"map the features\". The output is a document for humans: a plain summary, an apps table, and one row per feature with its status and evidence. A map that tells an agent how to drive each feature for verification is create-verification-skill; how one subsystem works is how."
+description: "Use for a map of what a product does today, read from its code at one commit, for a PRD, roadmap or status doc — \"feature map 만들어줘\", \"기능 지도 그려줘\", \"지금 뭐가 구현돼 있는지 정리해줘\". A map an agent drives for verification is create-verification-skill; how one subsystem works is how."
 ---
 
 # Map features

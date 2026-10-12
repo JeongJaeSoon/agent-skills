@@ -1,6 +1,6 @@
 ---
 name: recall
-description: "Reconstruct recent working context from past Claude Code sessions, live state, and the shared record (tracker, PRs, worklogs, reported symptoms, reverted fixes), then hand back a tight current-state brief. Use for 'recall my work on X', 'catch me up', \"어디까지 했지\", \"X 작업 어디까지 했더라\", \"최근 작업 정리해줘\", \"이번 주에 뭐 했지\", before starting or resuming work that earlier sessions touched."
+description: "Rebuild recent working context from past sessions, live state and the shared record (tracker, PRs, worklogs) into a short current-state brief. Use for \"어디까지 했지\", \"이번 주에 뭐 했지\", 'catch me up', or resuming work in a fresh or restarted session. A status report on work in flight is brief."
 ---
 
 # Recall

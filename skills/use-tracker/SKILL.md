@@ -1,6 +1,6 @@
 ---
 name: use-tracker
-description: Use when doing any ticket operation — reading, listing, searching, filing, labeling, commenting on, relating, or moving tickets, in Linear or Jira — or when a skill or script needs ticket data. Routes the operation through the active tracker adapter and holds the conventions every skill shares (follow-up ticket format, state vocabulary).
+description: "Use for any ticket operation in Linear or Jira — reading, searching, filing, labeling, commenting, relating, moving — or when a skill or script needs ticket data. Routes through the active tracker adapter and holds the conventions every skill shares."
 ---
 
 # use-tracker

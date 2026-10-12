@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: "Use when this session is the top-level orchestrator above every Claude Code and Orca session (\"오케스트레이터로\", \"모든 세션 관리해줘\", \"전체 태스크 현황\", \"이 세션도 편입해줘\"), or when one session must drive a project or milestone to done through several Orca workers — \"PM 겸 오케스트레이터로 끝까지\", 3+ tickets in parallel with their PRs landed, follow-up tickets kept from swallowing the plan, a progress dashboard (\"대시보드 갱신해줘\", \"전체 진행상황 몇 퍼센트\") — or when taking over (\"resume\") a program another coordinator ran, or asked why a program's PRs are not moving."
+description: "Use when this session is the top-level orchestrator over every Claude Code and Orca session (\"오케스트레이터로\", \"모든 세션 관리해줘\", \"이 세션도 편입해줘\"), or drives a project to done through several Orca workers — \"PM 겸 오케스트레이터로 끝까지\", 3+ tickets in parallel with their PRs landed, a progress dashboard (\"대시보드 갱신해줘\") — or takes over (\"resume\") another coordinator's program, or asks why a program's PRs are not moving."
 ---
 
 # Orchestrate a program

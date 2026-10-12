@@ -1,6 +1,6 @@
 ---
 name: teach
-description: "Explain a body of work plainly so a person actually understands it, weaving what the how and why skills find into one account at the person's pace. Use for 'teach me this', \"이거 제대로 이해하고 싶어\", \"이 변경 이해시켜줘\", \"이 구조 설명 좀 해줘, 처음 봐\", or explaining a change or subsystem to someone new to it. A single how-it-works question is how; a single why question is why."
+description: "Explain a body of work so someone new to it understands it, weaving in what how and why find. Use for 'teach me this', \"이거 제대로 이해하고 싶어\", \"이 변경 이해시켜줘\". A single how or why question goes to that skill."
 ---
 
 # Teach

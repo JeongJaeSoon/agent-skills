@@ -1,6 +1,6 @@
 ---
 name: tune-automode
-description: Use when the auto-mode classifier denied an action and the user wants that kind of action allowed from now on, or when the user asks to change what auto mode lets the agent do — "auto mode 가 막았어", "분류기가 거부했어", "이거 허용되게 규칙 추가해줘", "autoMode 규칙 고쳐줘", "soft_deny 에 넣어줘", "let the agent do X in auto mode". Drafts the smallest allow / soft_deny / environment rule for that one action class, shows the diff, and writes a script the user runs. The agent never edits settings.json and never runs that script. Tool-pattern permission rules (permissions.allow, hooks) belong to update-config.
+description: "Use when the auto-mode classifier denied an action and the user wants that kind allowed from now on, or asks to change what auto mode lets the agent do — \"auto mode 가 막았어\", \"이거 허용되게 규칙 추가해줘\", \"autoMode 규칙 고쳐줘\". Drafts the smallest rule and a script the user runs; never edits settings.json. permissions.allow and hooks belong to update-config."
 ---
 
 # tune-automode

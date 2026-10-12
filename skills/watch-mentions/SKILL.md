@@ -1,6 +1,6 @@
 ---
 name: watch-mentions
-description: Use when the user wants chat that concerns them picked up as work context — "멘션 감시", "나한테 온 슬랙 정리해줘", "내가 말한 스레드에 새 답글 있어?", "슬랙에서 나 언급된 거 챙겨줘", "watch my mentions" — and for each round of the watch-mentions Orca automation. Reads public Slack channels only: mentions of the user, their name without a mention, and new replies in threads they posted in. Classifies each new item, sends the coordinator one bundled message, and drafts a ticket for each work request. Not for posting to Slack (slack-post), for researching why something was decided (why), or for GitHub review requests (watch-prs, which also picks up the PR of each Slack review item).
+description: "Use when the user wants chat that concerns them picked up as work — \"멘션 감시\", \"나한테 온 슬랙 정리해줘\", \"내가 말한 스레드에 새 답글 있어?\", \"watch my mentions\" — and for each round of the watch-mentions automation. Not for posting to Slack (slack-post) or for GitHub review requests (watch-prs)."
 ---
 
 # Watch mentions

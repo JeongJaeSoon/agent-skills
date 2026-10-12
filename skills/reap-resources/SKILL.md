@@ -1,6 +1,6 @@
 ---
 name: reap-resources
-description: "Use when the machine is slow or cluttered with what finished sessions and agents left behind — \"방치 리소스 정리해줘\", \"죽은 프로세스 정리\", \"메모리·CPU 누가 먹고 있어\", \"에이전트가 만든 리소스 정리\", \"다운로드 폴더 정리\", \"janitor\" — and for the resource steward's and the janitor's periodic rounds. Inventories first, then reaps only the listed targets; files go to the trash."
+description: "Use when the machine is slow or cluttered with what finished sessions and agents left behind — \"방치 리소스 정리해줘\", \"죽은 프로세스 정리\", \"메모리·CPU 누가 먹고 있어\", \"janitor\" — and for the resource steward's and janitor's rounds. Inventories first, reaps only listed targets, files go to the trash."
 ---
 
 # Reap resources
