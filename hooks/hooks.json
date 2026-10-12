@@ -4,6 +4,10 @@
       {
         "matcher": "Bash|Skill",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 5 }]
+      },
+      {
+        "matcher": "Bash|mcp__.*([Ll]inear|[Jj]ira|atlassian).*",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prose_check.py\"", "timeout": 5 }]
       }
     ],
     "PermissionRequest": [
@@ -23,6 +27,16 @@
       {
         "matcher": "startup|resume|compact",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/reorient.py\"", "timeout": 10 }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 }]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 }]
       }
     ]
   }

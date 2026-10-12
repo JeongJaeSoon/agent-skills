@@ -11,6 +11,7 @@ A comment stays only when it says something the code cannot:
 - A formatter or lint directive whose rule is style-only or wrong for this line.
 - A doc comment that defines a public API contract, or one the repo's linter or written conventions require.
 - A link to an issue, an RFC or an incident that explains a constraint the code cannot express.
+- Beside an assertion the compiler does not check (a cast, a non-null `!`, an `unwrap`, an index assumed in range): the invariant that makes it safe and where that invariant is established.
 
 Everything else goes: narration of what the next line does, section banners, commented-out code, change notes ("added X", "fixed Y"), TODOs with no ticket, and justifications for a workaround. When you are not sure a keep applies, delete the comment.
 

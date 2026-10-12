@@ -181,7 +181,8 @@ look identical in the checks list.
 **Report each check as VERIFIED, NOT VERIFIED or INCONCLUSIVE** — in 검증, the sticky comment
 and the completion comment. Inconclusive, or a pass on the wrong surface, is not a pass; name
 it rather than rounding up. When something passes too easily, suspect how you observed it
-before crediting the system.
+before crediting the system. A verdict holds only for the head it ran on: a commit, a rebase, or
+a merge of main after the run makes it stale, so rerun before you report it.
 
 ## 6. Finish the ticket — done means its acceptance criteria are met
 

@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 3개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 6개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 ## 흐름
 
@@ -42,6 +42,7 @@
     - 버그는 사용자가 본 화면(브라우저는 브라우저 자동화)에서 재현하고 확인한다.
     - 이미 수정을 주장하는 PR이나 커밋이 있으면 경쟁 수정 대신 baseline과 patched를 같은 데이터로 두 번씩 돌려 검증한다.
     - 리팩터링은 동작을 먼저 고정한다. 타입 체크와 lint는 고정이 아니다. 읽는 부담을 줄이지 못하면 되돌린다.
+    - 수정 뒤에 쓴 회귀 테스트는 수정을 되돌려 실패하는 것을 본 뒤에야 증거가 된다. 검증 판정은 그 판정을 낸 head에만 유효하다. 그 뒤에 커밋, rebase, main 병합이 있으면 다시 돌린다.
     - 버그 수정(재현 → 원인 이분 탐색 → 실패 테스트 → 같은 화면에서 확인), 리팩터링(고정 → 목표 모양 → 빼고 나서 더하기 → 호출부 옮기고 옛 API 삭제 → 동등성 증명), 기존 수정 검증의 절차는 `references/evidence.md`에 있다.
   - **리뷰:**
     - 리뷰 전에 `prune-comments`로 diff의 주석을 정리한다.
@@ -254,9 +255,11 @@
 ### write-plainly
 - **언제:** 티켓, PR 본문, 커밋 메시지, 설계 문서, 노트, worklog, 따로 내는 보고서, 스킬 본문을 쓰거나 고칠 때. 코드 주석은 고쳐 달라고 할 때만. 턴마다 하는 답변은 해당하지 않는다. "문서 다듬어줘", "읽기 쉽게 고쳐줘", "AI 티 안 나게", "번역투 고쳐줘", "unslop".
 - **내용:**
-  - 공통 원칙 8개: 일하지 않는 단어를 뺀다, 코드의 실제 이름을 쓰고 한 대상에는 한 이름만 쓴다, 조건을 먼저 쓴다, 한 문장에 지시 하나, 주체를 밝힌다, 느낌 대신 동작이나 숫자를 쓴다, 바뀌지 않은 문장은 고치지 않는다, 문장 길이는 섞되 조사와 동사는 빼지 않는다.
+  - 공통 원칙 9개: 일하지 않는 단어를 뺀다, 코드의 실제 이름을 쓰고 한 대상에는 한 이름만 쓴다(모양이 아니라 역할로 부른다), 조건을 먼저 쓴다, 한 문장에 지시 하나, 주체를 밝힌다, 느낌 대신 동작이나 숫자를 쓴다, 아는 사실(개수, 파일, 이름)을 뭉뚱그리지 않는다, 바뀌지 않은 문장은 고치지 않는다, 문장 길이는 섞되 조사와 동사는 빼지 않는다.
   - 문서를 쓰기 전에 종류를 고른다(tutorial, how-to, reference, explanation). 한 문서에는 한 종류만 담는다.
   - 답변은 답부터 쓴다. 주장마다 측정, 추론, 짐작 중 무엇인지 밝힌다. 링크나 인용은 지어내지 않는다. "아니오"도 답이다.
+  - 동작한다는 증거는 마지막 수정 뒤에 돌린 출력뿐이다. 수정 전 실행, 옛 커밋의 통과, 서브에이전트의 "완료"는 증거가 아니다. 티켓뿐 아니라 채팅 답변, Telegram 답장, 서브에이전트 보고의 완료 주장에도 같다. 건너뛴 단계와 돌리지 않은 검사도 적는다.
+  - 원칙 가운데 역할로 부르기, 아는 사실 유지, 빠뜨린 것 밝히기는 [anti-slop](https://github.com/dmmulroy/anti-slop)(Dillon Mulroy, MIT)의 lint 규칙 설명(`no-shape-in-symbol-names`, `no-known-value-widening`·`no-widen-then-assert`, `no-conditional-empty-object-spread`)을 글에 맞게 옮겼다.
   - 초안을 쓰기 전에 언어별 참조를 읽는다. 다 쓴 뒤에 다듬으면 대부분 놓친다.
 - **동봉:** `references/korean.md`(상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, "~다" 문체, 서식 금지를 고치기 전후 예문으로), `references/english.md`(영어 문장, 코드 주석, 스킬 본문 규칙).
 - **관계:** `write-ticket`, `deliver-ticket`(PR 본문), `use-notes`, `measure-delivery`, `end-session`(최종 보고)이 가리킨다.
@@ -265,7 +268,7 @@
 - **언제:** `/prune-comments`, "주석 정리해줘", "불필요한 주석 지워줘", "주석 너무 많아". `deliver-ticket`이 리뷰 전에 부른다.
 - **내용:**
   - 범위는 호출자가 준 파일이나 diff, 없으면 현재 브랜치의 diff다. diff 안에서도 추가·변경된 줄의 주석과 이 diff 때문에 틀려진 주변 주석만 본다.
-  - 주석을 쓴 쪽은 판단이 무르므로 서브에이전트 하나가 정리한다. 남는 주석은 라이선스, 우리가 못 바꾸는 외부 제약(의존성·플랫폼·벤더·프로토콜), 스타일 전용 lint 지시문, 공개 API 계약이나 저장소 규칙이 요구하는 doc 주석, 코드로 못 적는 제약을 설명하는 이슈·RFC 링크뿐이다.
+  - 주석을 쓴 쪽은 판단이 무르므로 서브에이전트 하나가 정리한다. 남는 주석은 라이선스, 우리가 못 바꾸는 외부 제약(의존성·플랫폼·벤더·프로토콜), 스타일 전용 lint 지시문, 공개 API 계약이나 저장소 규칙이 요구하는 doc 주석, 코드로 못 적는 제약을 설명하는 이슈·RFC 링크, 컴파일러가 확인하지 않는 단언(cast, non-null `!`, `unwrap`) 옆에서 그 단언이 안전한 불변식과 그 불변식을 세우는 곳을 적은 주석뿐이다(anti-slop `require-safety-comment-for-type-assertion`에서 착안).
   - 우리 코드의 놀라운 동작을 설명하던 주석은 지우고 RESHAPE로 표시한다(이름 바꾸기, 함수 추출, 타입). "지우지 마" 같은 제약 주석은 CONSTRAINT로 표시하고, 싼 인코딩(테스트, 타입, 런타임 assert, lint 규칙)이 diff 안에 들어가면 넣고 나서 주석을 지운다. 못 넣으면 주석을 남기고 보고한다.
   - "IMPORTANT", "do not remove"는 근거가 아니라 확인할 이유다. 근처 코드로 분명하지 않으면 `how`나 `why`로 확인한다.
   - 정리한 쪽은 코드와 범위 밖 줄을 건드리지 않는다. 부른 쪽이 `git diff`로 확인하고 되돌린다.
@@ -514,6 +517,23 @@ SessionStart는 매번 다시 판정한다. UserPromptSubmit은 세션의 첫 �
 ### 권한 창 기록
 `hooks/permission.py`(PermissionRequest). 권한 창이 뜰 때 도구 이름과 가린 인자를 `$ORCA_TERMINAL_HANDLE`별로 대시보드 상태 디렉터리의 `prompts/`에 적는다. 결정은 내리지 않아서 권한 흐름은 그대로다. 대시보드는 그 터미널 화면에 같은 요청의 권한 창이 떠 있을 때만 인박스 항목에 승인·거부·터미널 열기 버튼을 붙인다. 사람이 누르면 보내기 직전에 화면을 다시 읽어 확인하고, 한 번만 허용하는 `Yes`나 `No`의 번호 하나만 누른다. "다시 묻지 않기", "항상 허용", "auto mode로 전환"처럼 규칙을 저장하거나 모드를 바꾸는 선택지는 고르지 않는다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`.
 
+### 완료 주장 검사
+`hooks/claim_check.py`(Stop, SubagentStop). 모델을 부르지 않는다. 이번 턴(사람이 마지막으로 친 프롬프트 뒤)에 코드 파일을 고쳤고, 마지막 응답이나 이번 턴에 보낸 Telegram 답장에 과거형 완료 주장("고쳤습니다", "통과했다", "I've fixed", "all tests pass")이 있는데, 마지막 수정 뒤에 실행한 Bash가 없으면 멈춤을 한 번 막는다. 막는 이유에는 고친 파일과 걸린 문구가 들어가고, 모델은 검사를 돌려 출력을 보이거나 검증하지 않았다고 밝힌다.
+
+| 통과 | 이유 |
+|---|---|
+| `stop_hook_active` | 이미 한 번 막았다. 다시 막으면 끝나지 않을 수 있다 |
+| 코드 수정 없음, `.md`·`.txt`·`.rst`만 고친 턴 | 조사 턴과 문서 턴 |
+| 마지막 코드 수정 뒤의 Bash 실행 | 무엇을 돌렸는지는 보지 않는다. 사용자·hook·auto mode가 거부한 호출은 세지 않고, 실패한 명령은 센다 |
+| "검증하지 않았다", "not yet tested" 같은 미검증 표시 | 사실대로 말한 보고 |
+| 코드 블록, 인라인 코드, `>` 인용 안의 문구, "완료 조건" 같은 명사형 | 주장이 아니다 |
+| `AGENT_SKILLS_CLAIM_CHECK=0` | 끔 |
+
+Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. 오류는 모두 exit 0이다. 착안은 [superpowers](https://github.com/obra/superpowers)(Jesse Vincent, MIT)의 `verification-before-completion`이다. 그 스킬의 신선도·범위·red-green 규칙은 `write-plainly`와 `deliver-ticket`에 흡수했다.
+
+### 문체 검사
+`hooks/prose_check.py`(PreToolUse, `Bash`와 Linear·Jira MCP). `gh pr create|edit`(`--title`, `--body`, `--body-file`), `git commit`(`-m`, `-F`, heredoc), Linear·Jira에 이슈·댓글·문서를 저장하는 호출의 본문에서 `write-plainly`의 결정적 금지 패턴(em dash, 둥근 따옴표, 굵은 라벨+콜론, "다양한"·"를 통해"·"해당" 같은 상투어와 번역투, 영어 AI 어휘와 군더더기)을 찾는다. 코드 블록과 인라인 코드는 보지 않는다. 걸리면 `additionalContext`로 알리기만 하고 호출을 막거나 권한을 결정하지 않는다. 이 알림은 모델에게 "PreToolUse:Bash hook additional context: …"로 보인다(헤드리스 세션에서 확인). `AGENT_SKILLS_PROSE_CHECK=0`으로 끈다.
+
 ## pstack과의 차이
 
 ### 한눈에
@@ -562,7 +582,7 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`.
-- **hook:** 권한 결정(`guard.py`), 코디네이터 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`).
+- **hook:** 권한 결정(`guard.py`), 코디네이터 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 문체 검사(`prose_check.py`).
 
 ### upstream 동기화 상태
 - **pin 이후 커밋:** upstream `main`(0.15.5)은 pin 뒤로 두 커밋이 더 있다.

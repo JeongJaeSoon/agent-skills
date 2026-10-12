@@ -17,11 +17,12 @@ Identifiers, commands, logs, and error text stay verbatim in either language.
 ## Principles
 
 - **Cut every word that does no work.** If the sentence survives without a word, the word goes. "In order to" is "to", and "~하는 것이 중요합니다" is nothing.
-- **The codebase is the word list.** Write the real symbol, file, flag, or command, not a synonym or a description of it. Call each thing by one name everywhere. A doc that says "the gate", "the check", and "the budget" for one thing teaches the reader three things.
+- **The codebase is the word list.** Write the real symbol, file, flag, or command, not a synonym or a description of it. Call each thing by one name everywhere. A doc that says "the gate", "the check", and "the budget" for one thing teaches the reader three things. Name a thing for its role, not its form: "the retry budget", not "the config object".
 - **Condition first.** Put the condition or warning before the step it guards, so the reader can skip what does not apply. "To delete the note, run `x`." "노트를 지우려면 `x`를 실행한다."
 - **One instruction per sentence.** Everywhere else, one thought per sentence. Split an instruction longer than about 20 words and any other sentence the reader has to reread to parse.
 - **Name the actor.** "The loader parses the file", not "the file is parsed". Use the passive only when the actor is unknown or beside the point.
 - **Say what it does, not how it feels.** Name the mechanism or the number. Not "schema changes can cause issues" but "a column rename fails the build". If the sentence could appear unchanged in another project's docs, it says nothing about this one, so cut it.
+- **Keep the precise fact.** When you know the count, the file, or the name, write it. "Some tests failed" for "3 tests in `test_sync.py` failed" throws away what you measured, and the reader has to dig it back up.
 - **Don't churn what didn't change.** When you revise, leave the sentences that were already right. A reworded sentence costs the reviewer a reread and carries no change.
 - **Vary the rhythm, but don't over-compress.** Mix short sentences with longer ones that carry a fact together with its condition. Keep articles, particles, and verbs. Arrows, dropped verbs, and private abbreviations make the reader decode instead of read.
 
@@ -48,7 +49,8 @@ Don't mix types. A reference table inside a tutorial moves to its own page and g
 A report to the user is prose too, and it is read more often than anything else.
 
 - Lead with the answer to what was asked. Evidence comes next, then what is left.
+- Evidence that something works is output from a run after the last edit to it. A run from before a fix, a pass on an older commit, and a subagent's "done" are not evidence. Rerun it, or read the diff yourself. This holds for every claim that something is done, fixed, or passing: a chat answer, a Telegram reply, and a subagent's report, not only a ticket.
 - Every claim carries its evidence or its label in the same sentence. The label is measured (say how), inferred (say from what), or a guess. A prediction or a cause you have not observed is a guess. Don't hand the user a check you could run yourself.
 - Never fabricate a link, citation, or transcript reference. Link only what you produced or read in this session.
 - "No" is an acceptable answer. When asked whether to do something, or shown an approach, give your real judgment, and decline or push back when that is what you think. Candor comes before agreement.
-- Short sentences are not a reason to drop content. Tradeoffs, choices, and open decisions stay in.
+- Short sentences are not a reason to drop content. Tradeoffs, choices, and open decisions stay in, and so does what you left out: a skipped step, a check you did not run, a case you did not cover.
