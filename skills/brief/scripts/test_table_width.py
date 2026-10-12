@@ -25,8 +25,8 @@ blocks = re.findall(r"```markdown\n(.*?)```", skill, re.S)
 assert len(blocks) >= 2, len(blocks)
 widths = [table_width(rows) for block in blocks for _, rows in tables(block)]
 assert len(widths) >= 3 and max(widths) <= 78, widths
-CAPS = {1: 14, 2: 22, 3: 26}
-periodic = [rows for block in blocks for _, rows in tables(block) if rows[0] == ["", "리드", "진행", "다음"]]
+CAPS = {1: 20, 2: 14, 3: 26}
+periodic = [rows for block in blocks for _, rows in tables(block) if rows[0] == ["", "리드/Phase", "진행", "다음"]]
 assert len(periodic) >= 2, len(periodic)
 for rows in periodic:
     for row in rows[1:]:
@@ -52,19 +52,18 @@ def subtask_runs(rows):
 
 def check_periodic(rows):
     assert subtask_runs(rows)[0] == 0, "a └ row comes before any lead"
-    for i, row in enumerate(rows[1:], 1):
+    for row in rows[1:]:
         for cell in row:
             assert len(re.findall(r"#\d+", cell)) <= 1, ("several PRs in one cell", row)
-        if not is_sub(row) and i + 1 < len(rows) and is_sub(rows[i + 1]):
-            assert re.fullmatch(r"[▓░]{8} \d+/\d+|—", row[2]), ("a lead with └ rows keeps evidence out of its cell", row)
+        assert re.fullmatch(r"[█░]{8} \d+/\d+|—", row[2]), ("progress is the bar and N/M only", row)
 
 
-lead = ["", "리드", "진행", "다음"]
-assert subtask_runs([lead, ["🟢", "a", "", ""], ["🟢", "└ #1 x", "", ""], ["🟡", "**└ #2 y**", "", ""], ["🟢", "b", "", ""]]) == [0, 2, 0]
+lead = ["", "리드/Phase", "진행", "다음"]
+assert subtask_runs([lead, ["🔄", "a", "", ""], ["🔄", "└ #1 x", "", ""], ["⏳", "**└ #2 y**", "", ""], ["🔄", "b", "", ""]]) == [0, 2, 0]
 for bad in (
-    [lead, ["🟢", "└ #1 x", "", ""], ["🟢", "a", "", ""]],
-    [lead, ["🟢", "a", "▓▓░░░░░░ 2/8 #1 #2", ""]],
-    [lead, ["🟢", "a", "▓▓░░░░░░ 2/8 #1", ""], ["🟢", "└ #1 x", "", ""]],
+    [lead, ["🔄", "└ #1 x", "—", ""], ["🔄", "a", "—", ""]],
+    [lead, ["🔄", "a #1 #2", "██░░░░░░ 2/8", ""]],
+    [lead, ["🔄", "a", "██░░░░░░ 2/8 #1", ""]],
 ):
     try:
         check_periodic(bad)
