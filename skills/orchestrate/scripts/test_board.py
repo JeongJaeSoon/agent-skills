@@ -206,6 +206,11 @@ prs_json["prs"]["acme/web#45"]["detail"]["merge_state"] = "DIRTY"
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))
 assert out["changed"] == ["search/ph2", "search/ph3/sort"], out["changed"]
 assert "| 🔄 | **└ 정렬** | [#45](https://example.test/45) ❗DIRTY CI✗ |" in out["text"], out["text"]
+# A folded PR keeps a base other than its section's in the cell, and moving it bolds the row.
+prs_json["prs"]["acme/web#52"]["detail"]["base"] = "main"
+(state / "prs.json").write_text(json.dumps(prs_json))
+out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))
+assert "notify/~rev-a" in out["changed"] and "[#51](https://example.test/51)·#52→main·#53 |" in out["text"], out["text"]
 last = json.loads((tmp / "brief-last" / "top-level.json").read_text())
 for r in last["rows"].values():
     r.pop("pr")

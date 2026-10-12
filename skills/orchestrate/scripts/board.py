@@ -442,8 +442,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             bases[sec] = max(dict.fromkeys(seen), key=seen.count)
     for l in lines:
         l["pr_state"] = pr_status(l["pr"], bases.get(l["sec"])) if l["pr"] else ""
-        if l["fold"]:
-            l["cell"] = "·".join([pr_text(l["fold"][0])] + [pr_num(k) for k in l["fold"][1:]])
+        if l["fold"]:  # the numbers, each with its base when not the section's; the states go to the snapshot only
+            to = [(prs.get(k) or {}).get("base") for k in l["fold"]]
+            l["cell"] = "·".join((pr_text(k) if i == 0 else pr_num(k)) + (f"→{b}" if b and b != bases.get(l["sec"]) else "")
+                                 for i, (k, b) in enumerate(zip(l["fold"], to)))
+            l["pr_state"] = " · ".join(pr_status(k, bases.get(l["sec"])) for k in l["fold"])
         else:
             l["cell"] = f"{pr_text(l['pr'])} {l['pr_state']}".strip() if l["pr"] else ""
 
@@ -468,7 +471,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
                                                          if s in used) + "막대=단계(추정)")
-    states = " ".join(l["pr_state"] for l in lines)
+    states = " ".join(l["pr_state"] for l in lines if not l["fold"])
     pr_legend = [f"{m} {w}" for m, w in PR_LEGEND if m in states]
     if re.search(r"(?<![\w/])[0-9a-f]{7}(?![\w/])", states):
         pr_legend.append("7자리=머지 sha")
