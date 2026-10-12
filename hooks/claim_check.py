@@ -9,7 +9,8 @@ Passes without a decision:
   - `stop_hook_active` (the agent already got one block; blocking again could loop),
   - AGENT_SKILLS_CLAIM_CHECK=0,
   - no edit to a code file this turn (an investigation turn, or one that touched only .md, .txt or .rst files),
-  - a Bash call after the last code edit,
+  - a Bash call after the last code edit that ran (one refused by the user, a hook or auto mode did not; a failing
+    command did),
   - no past-tense completion claim in the final reply or in a Telegram reply sent this turn, counting neither
     fenced or inline code nor quoted lines, and none at all when the reply itself says the work is not verified.
 Any error exits 0 silently.
@@ -32,6 +33,9 @@ UNVERIFIED = re.compile(
     r"(?:검증하지\s*않|확인하지\s*않|(?:돌리|실행하)지\s*(?:않|못)|검증\s*(?:전|안\s*함)|미검증"
     r"|\bnot (?:yet )?(?:verified|tested|run)\b|\bunverified\b|\buntested\b|NOT VERIFIED)",
     re.I)
+# The error a tool result carries when the call was refused before it ran. A failing command ran: it is not one.
+NOT_RUN = re.compile(r"\s*(?:\w+:\w+ hook error|The user doesn't want to|Permission for this \w+ was denied"
+                     r"|Claude requested permissions|<tool_use_error>)")
 FENCE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
 INLINE = re.compile(r"`[^`\n]*`")
 
@@ -74,9 +78,24 @@ def strip(text):
     return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(">"))
 
 
+def refused(entries):
+    """Ids of the tool calls this turn that were refused before they ran."""
+    out = set()
+    for entry in entries:
+        for b in blocks(entry) if entry.get("type") == "user" else []:
+            if b.get("type") != "tool_result" or not b.get("is_error"):
+                continue
+            c = b.get("content")
+            text = c if isinstance(c, str) else " ".join(x.get("text") or "" for x in c or [] if isinstance(x, dict))
+            if NOT_RUN.match(text):
+                out.add(b.get("tool_use_id"))
+    return out
+
+
 def judge(entries, last_message=None):
     """The block reason for this turn, or None."""
     edited, last_edit, ran_after, said, final = [], -1, False, [], []
+    skip = refused(entries)
     for i, entry in enumerate(entries):
         if entry.get("type") == "user":
             final = []  # the final reply is the text after the last tool result
@@ -85,7 +104,7 @@ def judge(entries, last_message=None):
         for b in blocks(entry):
             if b.get("type") == "text":
                 final.append(b.get("text") or "")
-            if b.get("type") != "tool_use":
+            if b.get("type") != "tool_use" or b.get("id") in skip:
                 continue
             name, args = b.get("name") or "", b.get("input") or {}
             target = args.get("file_path") or args.get("notebook_path") or ""

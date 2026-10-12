@@ -14,20 +14,29 @@ def say(text):
     return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
-def tool(name, **args):
-    return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": name, "input": args}]}}
+IDS = iter(range(10**6))
 
 
-def result():
-    return {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]}}
+def tool(name, tid=None, **args):
+    block = {"type": "tool_use", "id": tid or f"t{next(IDS)}", "name": name, "input": args}
+    return {"type": "assistant", "message": {"role": "assistant", "content": [block]}}
+
+
+def result(tid=None, error=None):
+    block = {"type": "tool_result", "tool_use_id": tid, "content": error or "ok"}
+    if error:
+        block["is_error"] = True
+    return {"type": "user", "message": {"role": "user", "content": [block]}}
 
 
 def edit(path):
-    return [tool("Edit", file_path=path), result()]
+    tid = f"t{next(IDS)}"
+    return [tool("Edit", tid, file_path=path), result(tid)]
 
 
-def bash(cmd="python3 -m pytest"):
-    return [tool("Bash", command=cmd), result()]
+def bash(cmd="python3 -m pytest", error=None):
+    tid = f"t{next(IDS)}"
+    return [tool("Bash", tid, command=cmd), result(tid, error)]
 
 
 def hook(entries, env=None, event=None, raw=None):
@@ -56,6 +65,14 @@ assert hook([prompt("x"), *edit("/r/a.go"), say("Done. All tests pass.")])
 assert hook([prompt("x"), tool("Write", file_path="/r/new.py"), result(), say("구현 완료했습니다.")])
 # A run before the last edit is stale: the run that counts comes after it.
 assert hook([prompt("x"), *edit("/r/a.py"), *bash(), *edit("/r/a.py"), say("고쳤습니다.")])
+# A run refused before it started is no run: by the user, a hook, or auto mode.
+for refusal in ("The user doesn't want to proceed with this tool use.", "PreToolUse:Bash hook error: blocked",
+                "Permission for this action was denied by the Claude Code auto mode classifier.",
+                [{"type": "text", "text": "<tool_use_error>Blocked: sleep 45</tool_use_error>"}]):
+    assert hook([prompt("x"), *edit("/r/a.py"), *bash(error=refusal), say("All tests pass.")]), refusal
+# A refused edit is no edit.
+assert hook([prompt("x"), tool("Edit", "e1", file_path="/r/a.py"), result("e1", "The user doesn't want to proceed"),
+             say("고쳤습니다.")]) is None
 # A Telegram reply sent this turn counts as a claim, even when the final text says nothing.
 tg = tool("mcp__plugin_telegram_telegram__reply", chat_id="1", text="배포 버그 해결했습니다")
 assert hook([prompt("x"), *edit("/r/a.py"), tg, result(), say("보냈습니다.")])
@@ -67,6 +84,7 @@ assert hook([prompt("x"), *edit("/r/a.py"), say("이 파일을 봤다.")], event
 
 # Passes.
 assert hook([prompt("x"), *edit("/r/a.py"), *bash(), say("고쳤습니다. 테스트 12개 통과.")]) is None    # ran after the edit
+assert hook([prompt("x"), *edit("/r/a.py"), *bash(error="Exit code 1\nFAILED"), say("고쳤습니다.")]) is None  # failed, but ran
 assert hook([prompt("x"), *edit("/r/README.md"), say("문서를 고쳤습니다.")]) is None                 # prose-only turn
 assert hook([prompt("x"), *bash("rg foo"), say("원인을 찾아 해결했습니다.")]) is None                # no edit: investigation
 assert hook([prompt("x"), *edit("/r/a.py"), say("고쳤지만 테스트는 돌리지 않았습니다.")]) is None      # says unverified

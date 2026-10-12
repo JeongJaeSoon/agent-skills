@@ -38,7 +38,10 @@ assert bash("git commit -C HEAD -F msg.txt") is None
 # git commit: -m, a heredoc body, and -F.
 assert "진행" in bash('git commit -m "fix(x): 리뷰를 진행했다"')
 assert "다양한" in bash('git -c commit.gpgsign=false -C /r commit -m "docs: 다양한 개선"')  # git's own options first
-heredoc = "git commit -F - <<'EOF'\nfeat(x): add y\n\nThis change serves as a crucial testament.\nEOF\n"
+assert "다양한" in bash('git commit -m"docs: 다양한 개선"') and "다양한" in bash('git commit -am "docs: 다양한 개선"')
+assert "해당" in bash(f"git -C {TMP / 'sub'} commit -Fmsg.txt")
+assert "다양한" in bash('gh pr create -t "다양한 개선" -b ok') and "통해" in bash("gh pr create -t t -F body.md")
+heredoc ="git commit -F - <<'EOF'\nfeat(x): add y\n\nThis change serves as a crucial testament.\nEOF\n"
 n = bash(heredoc)
 assert n and "serves as" in n and "crucial" in n, n
 assert "것 같" in bash('git commit -m "$(cat <<\'EOF\'\nfix: 캐시 문제인 것 같습니다\nEOF\n)"')

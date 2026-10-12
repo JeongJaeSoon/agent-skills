@@ -70,27 +70,38 @@ def bash_text(command, cwd):
         words = shlex.split(HEREDOC.sub("\n", command), comments=False)
     except ValueError:
         return "\n".join(parts) if parts else command
-    take = {"-m", "--message", "-t", "--title", "-b", "--body"}
-    read = {"-F", "--file", "--body-file"}
+    take = {"--message", "--title", "--body"}
+    read = {"--file", "--body-file"}
+    # Short options that take a value, per command: "text" is the value itself, "file" a path to read.
+    short = {"git": {"m": "text", "F": "file"}, "gh": {"t": "text", "b": "text", "F": "file"}}
     # A relative -F or --body-file path resolves where the command runs: after `cd <dir>` and git's own `-C <dir>`.
-    base, git_globals, paths = cwd or ".", False, []
+    base, prog, git_globals, paths = cwd or ".", None, False, []
+
+    def add(kind, value):
+        if value is None:
+            return
+        if kind == "text":
+            parts.append(value)
+        else:
+            paths.append((base, value))
+
     for i, w in enumerate(words):
         nxt = words[i + 1] if i + 1 < len(words) else None
         key, eq, val = w.partition("=")
-        if w == "git":
-            git_globals = True
+        if w in short:
+            prog, git_globals = w, w == "git"
         elif w == "commit" or w in ("&&", ";", "||", "|"):
             git_globals = False
         if nxt and (w == "cd" or (git_globals and w == "-C")):
             base = os.path.join(base, os.path.expanduser(nxt))
         elif (key if eq else w) in take | read:
-            flag, value = (key, val) if eq else (w, nxt)
-            if value is None:
-                continue
-            if flag in take:
-                parts.append(value)
-            else:
-                paths.append((base, value))
+            add("text" if (key if eq else w) in take else "file", val if eq else nxt)
+        elif prog and not git_globals and re.match(r"-[A-Za-z]", w):
+            # A cluster such as -am "msg", -m"msg" or -Fmsg.txt: the value follows its letter or is the next word.
+            for j, ch in enumerate(w[1:], 1):
+                if ch in short[prog]:
+                    add(short[prog][ch], w[j + 1:] or nxt)
+                    break
     return "\n".join(parts + files_text(paths))
 
 
