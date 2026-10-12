@@ -19,9 +19,8 @@ import json, os, re, sys
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 PROSE_EXT = (".md", ".markdown", ".mdx", ".txt", ".rst")
-TAIL_BYTES = 8 << 20  # a turn longer than this is cut to its last 8 MB, enough for any final run and claim
+TAIL_BYTES = 8 << 20
 
-# Past tense only: "완료 조건" and "fix the bug" are not claims.
 CLAIM = re.compile(
     r"(?:완료(?:했|됐|되었|하였)|고쳤|수정(?:했|하였|됐|되었)|해결(?:했|하였|됐|되었)|구현(?:했|하였)|마쳤|끝냈"
     r"|통과(?:했|합니다|한다)|(?:잘\s*)?(?:동작|작동)(?:합니다|한다|해요)"
@@ -33,7 +32,7 @@ UNVERIFIED = re.compile(
     r"(?:검증하지\s*않|확인하지\s*않|(?:돌리|실행하)지\s*(?:않|못)|검증\s*(?:전(?:이|에|입니다|이다)?(?![가-힣])|안\s*함)|미검증"
     r"|\bnot (?:yet )?(?:verified|tested|run)\b|\bunverified\b|\buntested\b|NOT VERIFIED)",
     re.I)
-# The error a tool result carries when the call was refused before it ran. A failing command ran: it is not one.
+# The error a tool result carries when the call was refused before it ran.
 NOT_RUN = re.compile(r"\s*(?:\w+:\w+ hook error|The user doesn't want to|Permission for this \w+ was denied"
                      r"|Claude requested permissions|<tool_use_error>)")
 FENCE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
@@ -56,7 +55,6 @@ def is_prompt(entry):
 
 
 def turn(path):
-    """The entries after the last typed prompt, oldest first."""
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
         f.seek(max(0, f.tell() - TAIL_BYTES))
@@ -79,7 +77,6 @@ def strip(text):
 
 
 def refused(entries):
-    """Ids of the tool calls this turn that were refused before they ran."""
     out = set()
     for entry in entries:
         for b in blocks(entry) if entry.get("type") == "user" else []:
@@ -93,7 +90,6 @@ def refused(entries):
 
 
 def judge(entries, last_message=None):
-    """The block reason for this turn, or None."""
     edited, last_edit, ran_after, said, final = [], -1, False, [], []
     skip = refused(entries)
     for i, entry in enumerate(entries):

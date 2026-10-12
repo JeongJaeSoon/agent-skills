@@ -17,6 +17,8 @@ TEXT_KEYS = {"title", "description", "body", "content", "commentBody", "comment"
 SAVE_TOOL = re.compile(r"^mcp__.*(?:linear|jira|atlassian).*__(?:save_|create|update|edit|add)", re.I)
 PR_CMD = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
 COMMIT_CMD = re.compile(r"\bgit\b[^;&|\n]*\bcommit\b")  # a cheap prefilter; the parser below finds git's subcommand
+PUBLISH = re.compile(f"{PR_CMD.pattern}|{COMMIT_CMD.pattern}")
+SEPARATOR = re.compile(r"[;\n]|&&|\|\|")
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n\s*\2\s*(?:\n|$)", re.S)
 FENCE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
@@ -63,10 +65,12 @@ def files_text(paths):
 
 
 def bash_text(command, cwd):
-    """The prose a gh pr create|edit or git commit command publishes, or None for any other command."""
-    if not (PR_CMD.search(command) or COMMIT_CMD.search(command)):
+    if not PUBLISH.search(command):
         return None
-    parts = [m.group(3) for m in HEREDOC.finditer(command)]
+    # A heredoc counts only when the command it feeds is the publishing one (`git commit -F - <<EOF`,
+    # `-m "$(cat <<EOF`), not a `cat <<EOF > file` beside it.
+    parts = [m.group(3) for m in HEREDOC.finditer(command)
+             if PUBLISH.search(SEPARATOR.split(command[:m.start()])[-1])]
     try:
         # A newline separates commands like `;` does; inside a quoted message it only adds a harmless `;`.
         text = HEREDOC.sub(";", command).replace("\\\n", " ").replace("\n", " ; ")
@@ -80,7 +84,9 @@ def bash_text(command, cwd):
     # Short options that take a value, per command: "text" is the value itself, "file" a path to read.
     short = {"git": {"m": "text", "F": "file"}, "gh": {"t": "text", "b": "text", "F": "file"}}
     # A relative -F or --body-file path resolves where the command runs: after `cd <dir>` and git's own `-C <dir>`.
-    base, prog, git_globals, paths = cwd or ".", None, False, []
+    # `cd` moves the shell for every later command; git's `-C` moves only its own invocation (`here`).
+    shell = here = cwd or "."
+    prog, git_globals, paths = None, False, []
 
     def add(kind, value):
         if value is None:
@@ -88,7 +94,7 @@ def bash_text(command, cwd):
         if kind == "text":
             parts.append(value)
         else:
-            paths.append((base, value))
+            paths.append((here, value))
 
     # Only the publishing command's own arguments count: collection starts at `git … commit` or `gh pr create|edit`
     # and stops at the next shell operator.
@@ -97,7 +103,7 @@ def bash_text(command, cwd):
         nxt = words[i + 1] if i + 1 < len(words) else None
         key, eq, val = w.partition("=")
         if set(w) <= set(";&|()"):
-            prog, git_globals, publishing = None, False, False
+            prog, git_globals, publishing, here = None, False, False, shell
             continue
         if w in short and not publishing:
             prog, git_globals = w, w == "git"
@@ -105,8 +111,10 @@ def bash_text(command, cwd):
             git_globals, publishing = False, w == "commit"  # git's subcommand, not any later "commit" word
         elif prog == "gh" and w in ("create", "edit") and words[i - 1] == "pr":
             publishing = True
-        if nxt and (w == "cd" or (git_globals and w == "-C")):
-            base = os.path.join(base, os.path.expanduser(nxt))
+        if nxt and w == "cd":
+            shell = here = os.path.join(shell, os.path.expanduser(nxt))
+        elif nxt and git_globals and w == "-C":
+            here = os.path.join(here, os.path.expanduser(nxt))
         elif not publishing:
             continue
         elif (key if eq else w) in take | read:
