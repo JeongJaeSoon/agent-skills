@@ -517,8 +517,7 @@ function fleetSkills() {
 }
 
 // The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
-// while this view is open. The text is the renderer's own: only **bold** (changed since the last report) and PR refs
-// are turned into markup here.
+// while this view is open. The renderer owns rows, order, icons and bold; this only turns its Markdown into HTML.
 async function pollBrief() {
   if (F.briefBusy) return;
   F.briefBusy = true;
@@ -532,6 +531,29 @@ async function pollBrief() {
   } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
   F.briefBusy = false;
 }
+const briefInline = (s) => esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => link(url, text))
+  .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+function briefHtml(text) {
+  const out = [];
+  let rows = null;
+  const flush = () => {
+    if (!rows) return;
+    const [head, ...body] = rows;
+    out.push(`<div class="table-wrap"><table class="brief-table"><thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}</tr></thead>
+      <tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${briefInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+    rows = null;
+  };
+  for (const line of text.split("\n")) {
+    if (line.startsWith("|")) {
+      if (!/^\|[-| ]+\|$/.test(line)) (rows ||= []).push(line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|")));
+      continue;
+    }
+    flush();
+    if (line.trim()) out.push(`<p>${briefInline(line)}</p>`);
+  }
+  flush();
+  return out.join("");
+}
 function fleetBrief() {
   if (!F.brief) pollBrief();
   const b = F.brief;
@@ -539,7 +561,7 @@ function fleetBrief() {
     ${b && b.text ? `<div class="aside muted">바뀐 행 ${(b.changed || []).length} · 낡은 행 ${(b.stale || []).length}${b.width_ok === false ? ` · ${tag("78열 초과", "warn", "")}` : ""}</div>` : ""}</div>`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
   if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "보고할 내용이 없다.")}</div></div>`;
-  return headHtml + `<div class="card"><pre class="brief card-body">${linkRefs(b.text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")}</pre></div>`;
+  return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>`;
 }
 
 // The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell

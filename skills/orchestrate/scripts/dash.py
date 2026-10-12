@@ -1553,6 +1553,7 @@ def cmd_demo(argv):
     env = dash_demo.build(root)
     os.environ.update(env)
     dash_demo.seed_holds(root)
+    dash_demo.seed_board()
     for slug in programs():
         collect(slug, interval=20)
     log(f"demo store at {root}")
