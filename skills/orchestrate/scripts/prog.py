@@ -815,8 +815,7 @@ def ensure_dash():
     if os.environ.get("ORCH_DASH") == "off":
         return None
     try:
-        r = subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("dash.py")), "ensure",
-                            "--port", os.environ.get("ORCH_DASH_PORT", "4780")],
+        r = subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("dash.py")), "ensure"],
                            capture_output=True, text=True, timeout=40)
         return ((r.stdout or r.stderr).strip().splitlines() or ["dashboard: ensure printed nothing"])[-1]
     except subprocess.TimeoutExpired:

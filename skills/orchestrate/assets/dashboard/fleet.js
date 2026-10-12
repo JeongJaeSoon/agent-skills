@@ -8,6 +8,7 @@ const FLEET_SECTIONS = [
   { id: "inbox", label: "Inbox", icon: "inbox" },
   { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "work", label: "작업 진행", icon: "flag" },
+  { id: "brief", label: "정기 보고", icon: "note" },
   { id: "automations", label: "자동화", icon: "clock" },
   { id: "skills", label: "Skills", icon: "spark" },
   { id: "graph", label: "Graph", icon: "graph" },
@@ -515,6 +516,32 @@ function fleetSkills() {
       || '<div class="card"><div class="empty-chart">No skill matches.</div></div>'}`;
 }
 
+// The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
+// while this view is open. The text is the renderer's own: only **bold** (changed since the last report) and PR refs
+// are turned into markup here.
+async function pollBrief() {
+  if (F.briefBusy) return;
+  F.briefBusy = true;
+  try {
+    const r = await fetch("/api/fleet/brief", { cache: "no-store", headers: F.briefEtag ? { "If-None-Match": F.briefEtag } : {} });
+    if (r.status !== 304) {
+      F.brief = r.ok ? await r.json() : { message: `HTTP ${r.status}` };
+      F.briefEtag = r.ok ? r.headers.get("ETag") : null;
+      if (isFleet() && S.section === "brief") renderView();
+    }
+  } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
+  F.briefBusy = false;
+}
+function fleetBrief() {
+  if (!F.brief) pollBrief();
+  const b = F.brief;
+  const headHtml = `<div class="view-head"><div><h2>정기 보고</h2><p>코디네이터가 보내는 정기 보고를 <span class="mono">orch brief render --periodic</span> 이 board·PR 목록·열린 결정에서 만든 그대로 보여 준다. 굵은 행은 지난 보고 뒤 바뀐 것이다.</p></div>
+    ${b && b.text ? `<div class="aside muted">바뀐 행 ${(b.changed || []).length} · 낡은 행 ${(b.stale || []).length}${b.width_ok === false ? ` · ${tag("78열 초과", "warn", "")}` : ""}</div>` : ""}</div>`;
+  if (!b) return headHtml + '<div class="loading">Loading…</div>';
+  if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "보고할 내용이 없다.")}</div></div>`;
+  return headHtml + `<div class="card"><pre class="brief card-body">${linkRefs(b.text).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")}</pre></div>`;
+}
+
 // The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
 // written by the coordinator shows within one poll. The merge cell arrives already filled from the fleet PR list.
 const WORK_MARK = { ok: ["✅", "good", "완료·확인"], fail: ["❌", "bad", "미완료·실패"], partial: ["⚠️", "warn", "일부·추정"],
@@ -720,7 +747,7 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, automations: fleetAutomations, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
