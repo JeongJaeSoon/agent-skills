@@ -398,7 +398,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
                                                          if s in used) + "막대=단계(추정)")
     local = now.astimezone()
-    head = f"{local:%H:%M} · {headline or ' · '.join(facts)}"
+    head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**", "", legend]
     many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
     width_ok, n_mark = True, 0

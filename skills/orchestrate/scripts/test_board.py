@@ -185,7 +185,9 @@ assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
 
 # --json carries what a dashboard or the model needs beside the text.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--headline", "ph2 머지"))
-assert out["text"].startswith("**14:30 · ph2 머지**") and out["changed"] == ["search/ph2"], out["changed"]
+# The model's headline replaces the change count only: the staleness facts stay.
+assert out["text"].startswith("**14:30 · ph2 머지 · PR 상태 3h 전 기준**"), out["text"].splitlines()[0]
+assert out["changed"] == ["search/ph2"], out["changed"]
 assert out["stale"] == ["ghost"] and out["width_ok"] is True
 
 # A row the board drops leaves the report; the snapshot keys rows by id, a hand-made one is no saved table.
