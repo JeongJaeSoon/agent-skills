@@ -67,7 +67,11 @@ def bash_text(command, cwd):
         return None
     parts = [m.group(3) for m in HEREDOC.finditer(command)]
     try:
-        words = shlex.split(HEREDOC.sub("\n", command), comments=False)
+        # A newline separates commands like `;` does; inside a quoted message it only adds a harmless `;`.
+        text = HEREDOC.sub(";", command).replace("\\\n", " ").replace("\n", " ; ")
+        lex = shlex.shlex(text, posix=True, punctuation_chars=";&|()")
+        lex.whitespace_split = True
+        words = list(lex)
     except ValueError:
         return "\n".join(parts) if parts else command
     take = {"--message", "--title", "--body"}
@@ -85,18 +89,28 @@ def bash_text(command, cwd):
         else:
             paths.append((base, value))
 
+    # Only the publishing command's own arguments count: collection starts at `git … commit` or `gh pr create|edit`
+    # and stops at the next shell operator.
+    publishing = False
     for i, w in enumerate(words):
         nxt = words[i + 1] if i + 1 < len(words) else None
         key, eq, val = w.partition("=")
-        if w in short:
+        if set(w) <= set(";&|()"):
+            prog, git_globals, publishing = None, False, False
+            continue
+        if w in short and not publishing:
             prog, git_globals = w, w == "git"
-        elif w == "commit" or w in ("&&", ";", "||", "|"):
-            git_globals = False
+        elif prog == "git" and git_globals and w == "commit":
+            git_globals, publishing = False, True
+        elif prog == "gh" and w in ("create", "edit") and words[i - 1] == "pr":
+            publishing = True
         if nxt and (w == "cd" or (git_globals and w == "-C")):
             base = os.path.join(base, os.path.expanduser(nxt))
+        elif not publishing:
+            continue
         elif (key if eq else w) in take | read:
             add("text" if (key if eq else w) in take else "file", val if eq else nxt)
-        elif prog and not git_globals and re.match(r"-[A-Za-z]", w):
+        elif re.match(r"-[A-Za-z]", w):
             # A cluster such as -am "msg", -m"msg" or -Fmsg.txt: the value follows its letter or is the next word.
             for j, ch in enumerate(w[1:], 1):
                 if ch in short[prog]:

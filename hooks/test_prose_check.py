@@ -41,7 +41,12 @@ assert "다양한" in bash('git -c commit.gpgsign=false -C /r commit -m "docs: �
 assert "다양한" in bash('git commit -m"docs: 다양한 개선"') and "다양한" in bash('git commit -am "docs: 다양한 개선"')
 assert "해당" in bash(f"git -C {TMP / 'sub'} commit -Fmsg.txt")
 assert "다양한" in bash('gh pr create -t "다양한 개선" -b ok') and "통해" in bash("gh pr create -t t -F body.md")
-heredoc ="git commit -F - <<'EOF'\nfeat(x): add y\n\nThis change serves as a crucial testament.\nEOF\n"
+# Only the publishing command's own arguments count, not a neighbor's in the same call.
+assert bash("gh pr create --title clean --body clean && echo --body 다양한") is None
+assert bash('git add -A; gh issue create --body "다양한"; git commit -m "fix: 실패한 요청을 다시 보낸다"') is None
+assert bash('echo -m 다양한\ngit commit -m "fix: 다시 보낸다"') is None
+assert "다양한" in bash('git add -A && git commit -m "docs: 다양한 개선" && git push')
+heredoc = "git commit -F - <<'EOF'\nfeat(x): add y\n\nThis change serves as a crucial testament.\nEOF\n"
 n = bash(heredoc)
 assert n and "serves as" in n and "crucial" in n, n
 assert "것 같" in bash('git commit -m "$(cat <<\'EOF\'\nfix: 캐시 문제인 것 같습니다\nEOF\n)"')
