@@ -5,12 +5,14 @@ Usage: orch-dash <command> [options]
 
   collect <slug>                     rebuild <store>/<slug>/dashboard/state.json from program.json,
                                      the ledger, the tracker, GitHub and Orca (each source optional)
-  serve [--port 4780] [--interval 60] [--host 127.0.0.1]
+  serve [--port P] [--interval 60] [--host 127.0.0.1]
                                      serve the dashboard; full collect every --interval seconds,
                                      ledger and notes re-read every 3 s. One server per store.
-  ensure [--port 4780]               start `serve` in the background unless this store's server,
+  ensure [--port P]                  start `serve` in the background unless this store's server,
                                      running this code, already answers; restart it if it runs
-                                     older code. `orch init` and `orch status` call it.
+                                     older code, move it if it answers on another port.
+                                     `orch init` and `orch status` call it. P defaults to
+                                     $ORCH_DASH_PORT, else the port this store last served on, else 4780.
   note <slug> --kind risk|digest|decision --text TEXT [--author NAME]
                                      add a human-readable line to the dashboard
   demo [--port 4780] [--live] [--no-serve]
@@ -1278,6 +1280,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/work":
             # Read on every poll, not folded into state.json: an `orch stage` write shows on the next poll, not the next collect.
             return self.send_cached(json.dumps(stages.table(), ensure_ascii=False).encode())
+        if path == "/api/fleet/brief":
+            return self.send_cached(json.dumps(brief_report(), ensure_ascii=False).encode())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
@@ -1453,8 +1457,24 @@ def cmd_collect(argv):
 
 
 def cmd_serve(argv):
-    serve(prog.opt(argv, "--host", "127.0.0.1"), int(prog.opt(argv, "--port", "4780")),
+    serve(prog.opt(argv, "--host", "127.0.0.1"), int(prog.opt(argv, "--port") or default_port()),
           int(prog.opt(argv, "--interval", "60")))
+
+
+def brief_report():
+    """The periodic report exactly as `orch brief render` prints it: the renderer is the one implementation of
+    the table rules, so the page shows its output and never builds a second copy. Run per request (well under a
+    second) so a `orch board set` shows on the next poll."""
+    try:
+        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json"],
+                           capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return {"message": "orch brief render timed out after 30 s"}
+    try:
+        out = json.loads(r.stdout)
+    except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
+        return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
+    return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok")}
 
 
 def health(port):
@@ -1465,18 +1485,30 @@ def health(port):
         return None
 
 
+def default_port():
+    """A restart keeps the URL the human bookmarked: the env, else the port this store last served on."""
+    return int(os.environ.get("ORCH_DASH_PORT") or (read_json(home() / ".dash.json") or {}).get("port") or 4780)
+
+
+def stop(h, port):
+    """Identity checked through its own health answer: the pid is this store's server, not a stranger."""
+    os.kill(h["pid"], signal.SIGTERM)
+    until = time.monotonic() + 10
+    while time.monotonic() < until and health(port):
+        time.sleep(0.2)
+
+
 def ensure(port):
-    """(ok, message). Starts or restarts only a server it can identify as this store's."""
+    """(ok, message). Starts, restarts or moves only a server it can identify as this store's."""
+    last = (read_json(home() / ".dash.json") or {}).get("port")
+    if last and last != port and (o := health(last)) and o.get("store") == str(home()):
+        stop(o, last)  # its store lock would make the new server exit
     h, want = health(port), code_version()
     if h and h.get("store") == str(home()):
         stale = not h.get("heartbeat") or utcnow() - prog.parse_ts(h["heartbeat"]) > dt.timedelta(minutes=5)
         if not stale and (h.get("version") == want or (h.get("mtime") or 0) >= code_mtime()):
             return True, f"dashboard: http://127.0.0.1:{port}/"
-        # Identity checked through its own health answer: the pid is this store's server, not a stranger.
-        os.kill(h["pid"], signal.SIGTERM)
-        until = time.monotonic() + 10
-        while time.monotonic() < until and health(port):
-            time.sleep(0.2)
+        stop(h, port)
     elif h:
         return False, f"port {port} serves another store ({h.get('store')}); pass --port"
     else:
@@ -1497,7 +1529,7 @@ def ensure(port):
 
 
 def cmd_ensure(argv):
-    ok, msg = ensure(int(prog.opt(argv, "--port", "4780")))
+    ok, msg = ensure(int(prog.opt(argv, "--port") or default_port()))
     print(msg)
     sys.exit(0 if ok else 1)
 
@@ -1521,6 +1553,7 @@ def cmd_demo(argv):
     env = dash_demo.build(root)
     os.environ.update(env)
     dash_demo.seed_holds(root)
+    dash_demo.seed_board()
     for slug in programs():
         collect(slug, interval=20)
     log(f"demo store at {root}")

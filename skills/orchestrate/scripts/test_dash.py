@@ -243,6 +243,12 @@ try:
     raise AssertionError("a rebinding name read skill usage")
 except urllib.error.HTTPError as e:
     assert e.code == 403, e.code
+# The brief page passes the renderer's output through: its own words for an empty board, the report once rows exist.
+br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
+assert "text" not in br and "board" in br["message"], br
+dash_demo.seed_board()
+br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
+assert "| 🔴 | 로그인 개편 #41 |" in br["text"] and br["width_ok"] is True and "snapshot" not in br, br
 # The work page reads stages.json on each poll: rows nest under their group with a depth, and a write shows at once.
 r = urllib.request.urlopen(f"{base}/api/fleet/work")
 wk, etag = json.loads(r.read()), r.headers["ETag"]
@@ -400,7 +406,20 @@ for p in ("/fleet.js", "/api/programs"):
 again = subprocess.run([sys.executable, str(pathlib.Path(dash.__file__)), "serve", "--port", "0"], capture_output=True,
                        text=True, timeout=20)
 assert again.returncode and "already serves" in again.stderr, again.stderr
-os.kill(h["pid"], signal.SIGTERM)
+# Another port moves this store's server rather than failing on its lock, and a later restart keeps the new port.
+assert dash.default_port() == port
+with socket.socket() as sk:
+    sk.bind(("127.0.0.1", 0))
+    port2 = sk.getsockname()[1]
+ok, msg = dash.ensure(port2)
+assert ok and "started" in msg and dash.health(port) is None, msg
+h2 = dash.health(port2)
+assert h2["store"] == str(dash.home()) and h2["pid"] != h["pid"], h2
+assert dash.default_port() == port2
+os.environ["ORCH_DASH_PORT"] = str(port)
+assert dash.default_port() == port, "the env still wins"
+del os.environ["ORCH_DASH_PORT"]
+os.kill(h2["pid"], signal.SIGTERM)
 # The running code is named in the health answer, and once the code on disk changes under a running server the
 # server says it is stale (a merge landed after it started) rather than serving the old routes silently.
 assert h["stale"] is False and h["disk_version"] == h["version"] and h["script"] == str(pathlib.Path(dash.__file__).resolve()), h

@@ -433,6 +433,20 @@ def seed_holds(root, now=None):
     (locks / "acme__launchpad@main.lock").write_text(json.dumps({"pr": 41, "program": "launchpad-ga", "ts": _ago(now, 0.1)}))
 
 
+def seed_board():
+    """An invented board for the 정기 보고 page, written through board.py into $ORCH_FLEET_STATE (set it first)."""
+    import board
+    board.lead_add("lead-login", "term_0FAKE1", "acme/launchpad")
+    board.set_row("lead-login", title="로그인 개편", status="moving", progress="3/5", next="CI · 워커", pr="acme/launchpad#41")
+    board.set_row("lead-login/export", title="청구 내보내기", status="blocked", progress="1/3", next="리뷰 지적 반영 · 워커",
+                  pr="acme/launchpad#42")
+    board.set_row("lead-login/docs", title="설치 가이드", status="waiting", next="리뷰 · 사람", pr="acme/launchpad#43")
+    board.lead_add("lead-tools", "term_0FAKE2", "acme/tools")
+    board.set_row("lead-tools", title="릴리스 도구", status="done", progress="2/2", next="—", pr="acme/tools#6")
+    board.later_add("v2.5 계획", "v2.4.0 prod 배포 뒤")
+    board.set_todo(["acme/launchpad#43 리뷰"])
+
+
 def live(root, period=20, world=None):
     """Append a few plausible events so the page visibly updates without a reload."""
     ledger = pathlib.Path(root) / "programs" / "launchpad-ga" / "ledger.jsonl"
