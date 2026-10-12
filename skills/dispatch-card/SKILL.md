@@ -130,7 +130,8 @@ orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID o
 # register it, so the janitor asks it to close if it idles once its PRs land (`reap-resources` done-card)
 python3 "<reap-resources dir>/scripts/reap.py" ledger add --kind orca-worktree --path "<result.worktree.path>"
 # close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
-# (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit)
+# (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit;
+#  a setup stopped on a trust prompt never ends: pre-trust as in orchestrate step 4)
 skills-sync close-setup "<result.worktree.path>"
 ```
 

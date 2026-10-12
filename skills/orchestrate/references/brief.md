@@ -14,7 +14,11 @@ SCOPE       Paths this unit may write and paths it may not. Its own worktree and
             directory a VM or container mounts>.
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
-            unit depends on them.
+            unit depends on them. A fact you state here (something is absent from the base,
+            an evidence id) comes from a check that could have come out the other way:
+            `git merge-base --is-ancestor <commit> <base>`, or a search that also finds a
+            symbol known to exist. An empty `git grep -E` proves nothing (`\b` is not a word
+            boundary in ERE). A corrected fact reopens the decisions built on it.
 DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
             a schema, a config key, a message format): name the contract and those units. Run
             `architect` on it before the first edit and put the sketch in the ticket's plan
