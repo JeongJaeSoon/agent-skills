@@ -16,7 +16,9 @@ The rules in §2 decide what ships. This file holds the procedures behind them, 
 3. Plan the fix. If it crosses a function boundary, sketch it with `architect` first. The
    smallest change the evidence justifies ships; a guard that "might help" does not.
 4. Write the failing test that reproduces the bug (`tdd`), watch it fail, then fix. When a local
-   test would be expensive or unclear, the step-1 reproduction is the proof instead.
+   test would be expensive or unclear, the step-1 reproduction is the proof instead. A test
+   written after the fix proves nothing until it fails without the fix: revert the fix, watch the
+   test fail, then restore the fix and watch it pass.
 5. Verify on the same surface. The original reproduction now passes. A unit test shows branch
    behavior, not that the bug is gone.
 6. Commit the failing test before the fix, so the history shows red then green (§4).

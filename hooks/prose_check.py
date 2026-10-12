@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""PreToolUse hook of the agent-skills plugin: points out write-plainly's fixed-string patterns in text about to be published.
+
+Looks at the text a call is about to publish:
+  - Bash `gh pr create|edit` (--title, --body, --body-file) and `git commit` (-m, --message, -F, --file),
+    including a heredoc body,
+  - a Linear or Jira MCP call that saves an issue, a comment or a document (its title, description, body or
+    content fields).
+Fenced and inline code is skipped. A hit adds one note listing the patterns found to the model's context and never
+blocks or decides the call. The patterns are the deterministic subset of skills/write-plainly; anything that needs
+judgment stays with that skill. AGENT_SKILLS_PROSE_CHECK=0 turns it off. Any error exits 0 silently.
+"""
+import json, os, re, shlex, sys
+
+MAX_HITS = 8
+TEXT_KEYS = {"title", "description", "body", "content", "commentBody", "comment", "summary"}
+SAVE_TOOL = re.compile(r"^mcp__.*(?:linear|jira|atlassian).*__(?:save_|create|update|edit|add)", re.I)
+PR_CMD = re.compile(r"\bgh\s+pr\s+(?:create|edit)\b")
+COMMIT_CMD = re.compile(r"\bgit\s+(?:-[cC]\s+\S+\s+|--[\w-]+(?:=\S+)?\s+)*commit\b")
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n\s*\2\s*(?:\n|$)", re.S)
+FENCE = re.compile(r"```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
+INLINE = re.compile(r"`[^`\n]*`")
+
+# (pattern, what write-plainly says instead). Korean entries come from references/korean.md, English ones from
+# references/english.md; a pattern belongs here only when a hit is almost never right.
+PATTERNS = [
+    (r"—|\s–\s", "em or en dash: end the sentence or use a comma"),
+    (r"[“”‘’]", "curly quotes: use straight quotes"),
+    (r"^\s*[-*]?\s*\*\*[^*\n]{1,40}[:：]\*\*", "bold label with a colon: write the item as a sentence"),
+    (r"다양한", "다양한: name the things"),
+    (r"효율적으로|원활한|핵심적인", "stock adjective: give the mechanism or the number"),
+    (r"[을를]\s*통해", "~를 통해: use ~로"),
+    (r"진행(?:했|하였|합니다|한다)|이루어(?:졌|지|집)|수행(?:했|하였)", "진행하다/이루어지다/수행하다 around a noun: use the verb"),
+    (r"해당\s", "해당: name the thing"),
+    (r"에\s*대(?:해|한)\s", "~에 대해/대한: use a particle"),
+    (r"(?:으)?로\s*인(?:해|하여)", "~로 인해: say the cause"),
+    (r"되어진|보여진|에\s*있어서", "translationese: plain verb or particle"),
+    (r"것\s*같(?:습니다|다|아요)", "것 같다: state what you measured or label it a guess"),
+    (r"좋은 질문|도움이 되셨|결론적으로|요약하자면", "chatbot phrase: delete it"),
+    (r"\b(?:delve|tapestry|testament|underscores?|pivotal|showcas\w*|foster\w*|garner\w*|intricate|vibrant|"
+     r"interplay|crucial|additionally)\b", "AI vocabulary: plain word"),
+    (r"\b(?:serves as|stands as|boasts)\b", "fancy 'is': say is or has"),
+    (r"\b(?:in order to|due to the fact that|it is important to note)\b", "filler phrase: cut it"),
+    (r"\b(?:leverag\w*|utiliz\w*|facilitat\w*)\b", "plain word: use, help"),
+    (r"\b(?:I hope this helps|let me know if|great question)\b", "chatbot phrase: delete it"),
+]
+PATTERNS = [(re.compile(p, re.I | re.M), why) for p, why in PATTERNS]
+
+
+def files_text(paths, cwd):
+    out = []
+    for p in paths:
+        if p == "-":
+            continue
+        full = os.path.join(cwd or ".", os.path.expanduser(p))
+        try:
+            with open(full, encoding="utf-8") as f:
+                out.append(f.read(200_000))
+        except OSError:
+            pass
+    return out
+
+
+def bash_text(command, cwd):
+    """The prose a gh pr create|edit or git commit command publishes, or None for any other command."""
+    if not (PR_CMD.search(command) or COMMIT_CMD.search(command)):
+        return None
+    parts = [m.group(3) for m in HEREDOC.finditer(command)]
+    try:
+        words = shlex.split(HEREDOC.sub("\n", command), comments=False)
+    except ValueError:
+        return "\n".join(parts) if parts else command
+    take = {"-m", "--message", "-t", "--title", "-b", "--body"}
+    read = {"-F", "--file", "--body-file"}
+    paths = []
+    for i, w in enumerate(words):
+        key, eq, val = w.partition("=")
+        if eq and key in take | read:
+            (parts if key in take else paths).append(val)
+        elif w in take | read and i + 1 < len(words):
+            (parts if w in take else paths).append(words[i + 1])
+    return "\n".join(parts + files_text(paths, cwd))
+
+
+def mcp_text(args):
+    out = []
+
+    def walk(v, key=None):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                walk(x, k)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x, key)
+        elif isinstance(v, str) and key in TEXT_KEYS:
+            out.append(v)
+
+    walk(args)
+    return "\n".join(out)
+
+
+def findings(text):
+    text = INLINE.sub(" ", FENCE.sub(" ", text))
+    hits = []
+    for rx, why in PATTERNS:
+        m = rx.search(text)
+        if m:
+            hits.append(f"\"{m.group(0).strip()}\" ({why})")
+    return hits[:MAX_HITS]
+
+
+def main():
+    if os.environ.get("AGENT_SKILLS_PROSE_CHECK", "1") == "0":
+        return
+    event = json.load(sys.stdin)
+    name, args = event.get("tool_name") or "", event.get("tool_input") or {}
+    if name == "Bash":
+        text = bash_text(args.get("command") or "", event.get("cwd"))
+    elif SAVE_TOOL.search(name):
+        text = mcp_text(args)
+    else:
+        return
+    hits = findings(text or "")
+    if hits:
+        note = ("prose_check (write-plainly): the text this call publishes has " + "; ".join(hits) + ". If a hit is "
+                "real, fix the text and publish again (edit the PR, amend the commit, or update the ticket); "
+                "a quoted identifier or a template label is fine as it is.")
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": note}},
+                         ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        pass
+    sys.exit(0)
