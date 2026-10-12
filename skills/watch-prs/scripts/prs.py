@@ -75,6 +75,10 @@ DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs"
             "ci_wait_minutes": 15}
 REFERENCE = pathlib.Path(__file__).resolve().parents[2] / "deliver-ticket/references/post-merge-release.md"
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
+GH_RETRY_WAITS = (2, 4)
+# Seconds. A precheck makes about ten paged GraphQL reads of 2-10 s each, plus a retried 5xx: more than Orca's
+# default 60 s.
+PRECHECK_TIMEOUT = 180
 SOURCES = ("sent", "scheduled", "found", "refused", "no_thread", "skipped")
 
 PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCommit{oid} headRefOid additions deletions reviewDecision state
@@ -83,7 +87,7 @@ PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCom
  reviews(author:$me,last:1,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{commit{oid}}}
  timelineItems(last:50,itemTypes:[REVIEW_REQUESTED_EVENT]){nodes{... on ReviewRequestedEvent{actor{__typename login}
   requestedReviewer{__typename ... on User{login}}}}}"""
-SEARCH_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:50,after:$after)"
+SEARCH_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:25,after:$after)"
             "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + PR_FIELDS + "}}}}")
 NODES_Q = "query($ids:[ID!]!,$me:String!){nodes(ids:$ids){... on PullRequest{" + PR_FIELDS + "}}}"
 PR_Q = ("query($owner:String!,$name:String!,$number:Int!,$me:String!)"
@@ -146,7 +150,12 @@ def gh_graphql(query, partial=False, **variables):
     # Only variables the query declares: GraphQL rejects an unused one, and the readers share one argument list.
     body = json.dumps({"query": query, "variables": {k: v for k, v in variables.items()
                                                      if v is not None and f"${k}:" in query}})
-    out = subprocess.run([GH, "api", "graphql", "--input", "-"], input=body, capture_output=True, text=True, timeout=60)
+    # A 502/504 is GitHub's GraphQL timeout (about 10 s) or a passing outage; a short retry saves the round.
+    for wait in (*GH_RETRY_WAITS, None):
+        out = subprocess.run([GH, "api", "graphql", "--input", "-"], input=body, capture_output=True, text=True, timeout=60)
+        if wait is None or not (out.returncode and re.search(r"HTTP 5\d\d", out.stderr)):
+            break
+        time.sleep(wait)
     try:
         data = json.loads(out.stdout).get("data")
     except ValueError:
@@ -490,6 +499,25 @@ def read_jsonl(path):
             rows.append(json.loads(line))
         except ValueError:
             pass
+    return rows
+
+
+def sendlog_rows(path):
+    """The send-log as decide() reads it. A row without `action` was appended by hand for a request someone sent
+    outside the round (pr, reviewer, head and a `date` or `slack_ts`): it counts as a sent request, so that reviewer
+    is not asked again. A row naming no PR, reviewer or time is skipped."""
+    rows = []
+    for r in read_jsonl(path):
+        if not isinstance(r, dict) or not (r.get("pr") and r.get("reviewer")):
+            continue
+        if "action" not in r:
+            try:
+                at = r.get("at") or (ts(r["date"]) if r.get("date") else float(r["slack_ts"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            r = {"pr": r["pr"], "reviewer": r["reviewer"], "head": r.get("head"), "action": "request", "source": "sent",
+                 "at": at, "post_at": None, "thread": None, "scheduled": None}
+        rows.append(r)
     return rows
 
 
@@ -868,7 +896,7 @@ def collect_review_wait(gh, me, cfg, ledger, now):
         states[s["pr"]] = (pr, s)
         if why := notices(s, cfg):
             items.append(wait_item(pr, now, f"{key(pr)}/review_wait", why))
-    for a in decide([s for _, s in states.values()], read_jsonl(STATE / "sendlog.jsonl"), now, cfg):
+    for a in decide([s for _, s in states.values()], sendlog_rows(STATE / "sendlog.jsonl"), now, cfg):
         pr = states[a["pr"]][0]
         items.append({**wait_item(pr, now, f"{key(pr)}/{a['action']}/{a['reviewer']}", [describe(a, cfg)]), **a, "once": False})
     return items, excluded
@@ -1243,10 +1271,10 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
               + f"코디네이터 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
     if edit:
         return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
-                "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
+                "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", run("precheck"), "--prompt", prompt, "--json"]
+           "--precheck", run("precheck"), "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd

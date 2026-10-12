@@ -256,8 +256,42 @@ edit = p.schedule_cmd(script, c, "path:/repo", edit="auto-1")
 assert edit[:4] == ["orca", "automations", "edit", "auto-1"] and edit[edit.index("--trigger") + 1] == c["cron"]
 assert edit[edit.index("--timezone") + 1] == "Asia/Tokyo" and "--precheck" in edit
 
+# A row appended by hand (no action/source/at) once made decide() raise KeyError 'action' every round.
+import os, stat, subprocess
+hand = pathlib.Path(tempfile.mkdtemp()) / "sendlog.jsonl"
+hand.write_text("\n".join(json.dumps(x) for x in [
+    {"date": "2026-10-13T10:00:00+09:00", "pr": W + "10", "head": "h10", "reviewer": "bob", "slack_ts": "1.0", "by": "lead"},
+    {"pr": W + "11", "head": "h11", "reviewer": "bob", "slack_ts": str(at(13, 10))},
+    {"pr": W + "12", "reviewer": "bob"}, {"note": "no pr"}, [1],
+    row(W + "13", "bob", "request", at(13, 9))]) + "\n")
+rows = p.sendlog_rows(hand)
+assert [(r["pr"], r["action"], r["source"], r["at"]) for r in rows] == [
+    (W + "10", "request", "sent", at(13, 10)), (W + "11", "request", "sent", at(13, 10)),
+    (W + "13", "request", "sent", at(13, 9))], rows
+assert acts([one, two], rows, now=at(13, 12)) == [], "a hand-written request counts: bob is not asked again the same day"
+assert acts([one, two], rows, now=at(14, 10)) == [("remind", W + "10", "bob"), ("remind", W + "11", "bob")]
+
+# A GitHub 5xx is retried; any other failure is not.
+gh = pathlib.Path(tempfile.mkdtemp())
+calls = gh / "calls"
+fake = gh / "gh"
+fake.write_text(f"""#!/bin/sh
+echo x >> {calls}
+[ "$(wc -l < {calls})" -le "$FAILS" ] && {{ echo "gh: $ERR" >&2; exit 1; }}
+echo '{{"data":{{"viewer":{{"login":"owner"}}}}}}'
+""")
+fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+p.GH, p.GH_RETRY_WAITS = str(fake), (0, 0)
+for fails, err, ok, n in ((2, "HTTP 502", True, 3), (3, "HTTP 504", False, 3), (1, "HTTP 401", False, 1)):
+    calls.unlink(missing_ok=True)
+    os.environ.update(FAILS=str(fails), ERR=err)
+    try:
+        assert p.gh_graphql("query{viewer{login}}") == {"viewer": {"login": "owner"}} and ok, (fails, err)
+    except RuntimeError as e:
+        assert not ok and err in str(e), (fails, err, e)
+    assert len(calls.read_text().splitlines()) == n, (fails, err)
+
 # CLI: actions prints one JSON line per action in plan.json; log appends the row and parses numbers.
-import os, subprocess
 tmp = pathlib.Path(tempfile.mkdtemp())
 conf = tmp / "agent-skills.json"
 conf.write_text(json.dumps({"prs": {"kinds": ["review_wait"]}}))
