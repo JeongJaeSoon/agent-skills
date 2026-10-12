@@ -129,7 +129,7 @@ GOLDEN = """\
 | 🔄 | └ [#45](https://example.test/45) 정렬 | ████░░░░ 4/8 | CI 재실행 · 워커 |
 | ⏸ | ph4 · ph5 (PR 없음) | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
 
-**acme/ops**
+**acme/ops — (프로젝트 미지정)**
 
 | | 리드/Phase | 진행 | 다음 |
 |---|---|---|---|
@@ -201,5 +201,17 @@ assert (state / "board.prev.json").exists()
 # A scope renders one program's rows only.
 scoped = ok("brief", "render", "--periodic", "--now", NOW, "--scope", "검색 개선")
 assert "분류" not in scoped and "ph1" in scoped
+
+# Two leads in one repository share a table unless each names its project: set warns, the report says which is unnamed.
+assert "pay" not in orch("board", "lead", "add", "pay", "--handle", "term_0FAKE5", "--repo", "acme/api", "--program", "결제")[2]
+code, _, err = orch("board", "lead", "add", "refund", "--handle", "term_0FAKE6", "--repo", "acme/api")
+assert code == 0 and err.startswith("warning: ") and "refund" in err and "triage" in err, err
+ok("board", "set", "refund", "--title", "환불")
+mixed = ok("brief", "render", "--periodic", "--now", NOW)
+assert "**acme/api — 결제**" in mixed and "**acme/api — (프로젝트 미지정)**" in mixed, mixed
+code, _, err = orch("board", "set", "refund", "--program", "환불")
+assert code == 0 and "refund" not in err, err
+split = ok("brief", "render", "--periodic", "--now", NOW)
+assert "**acme/api — 결제**" in split and "**acme/api — 환불**" in split and "acme/api — (프로젝트 미지정)" not in split, split
 
 print("ok")

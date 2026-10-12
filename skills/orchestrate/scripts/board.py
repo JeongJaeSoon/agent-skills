@@ -27,6 +27,7 @@ LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120}  # overridden b
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 MARKS = "¹²³⁴⁵⁶⁷⁸⁹"
 HEADER = ["", "리드/Phase", "진행", "다음"]
+UNNAMED = "(프로젝트 미지정)"
 
 
 def path():
@@ -84,7 +85,7 @@ def progress_of(text):
     return [n, m]
 
 
-def lead_add(name, handle, repo, run=None, stale_min=None):
+def lead_add(name, handle, repo, run=None, stale_min=None, program=None):
     if not name or not handle or not repo:
         raise ValueError("board lead add needs a name, --handle and --repo")
 
@@ -92,7 +93,9 @@ def lead_add(name, handle, repo, run=None, stale_min=None):
         store["leads"][name] = {"name": name, "handle": handle, "repo": repo, "run": run, "started_at": fleet.iso(fleet.utcnow()),
                                 **({"stale_after_min": int(stale_min)} if stale_min else {})}
         if name not in store["rows"]:
-            put(store, name, {"kind": "lead", "repo": repo, "status": "moving"})
+            put(store, name, {"kind": "lead", "repo": repo, "program": program, "status": "moving"})
+        elif program:
+            put(store, name, {"program": program})
         return store["leads"][name]
     return change(go)
 
@@ -139,6 +142,21 @@ def put(store, rid, fields):
     else:
         row.pop("done_at", None)
     return row
+
+
+def unnamed_leads(rows):
+    """Leads with no program in a repository that has two or more leads: their rows would share one table."""
+    by_repo = {}
+    for r in rows.values():
+        if not r.get("parent") and r["kind"] == "lead":
+            by_repo.setdefault(r.get("repo"), []).append(r)
+    return [r["id"] for leads in by_repo.values() if len(leads) > 1 for r in leads if not r.get("program")]
+
+
+def unnamed_warning():
+    ids = unnamed_leads(read()["rows"])
+    return ids and (f"warning: no --program on {', '.join(ids)}, beside another lead in the same repository; the report "
+                    f"heads them {UNNAMED} until each gets --program <project>")
 
 
 def set_row(rid, **fields):
@@ -250,6 +268,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     order = [k for k in store["order"] if k in rows]
     if not order:
         return {"text": "", "headline_facts": [], "changed": [], "stale": [], "width_ok": True, "snapshot": None}
+    unnamed = set(unnamed_leads(rows))
 
     oldest_probe, changed, stale, facts = None, [], [], []
 
@@ -410,8 +429,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     for sec in sections:
         repo, prog = sec
-        title = f"{repo} — {prog}" if repo in many and prog else repo
         mine = [l for l in lines if l["sec"] == sec]
+        if not prog and any(l["key"] in unnamed for l in mine):
+            prog, many = UNNAMED, many | {repo}
+        title = f"{repo} — {prog}" if repo in many and prog else repo
         out += ["", f"📋 {title}" if tg else f"**{title}**"]
         if tg:
             for l in mine:
