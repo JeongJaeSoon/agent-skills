@@ -510,6 +510,7 @@ assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/30 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
 assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
+assert line[line.index("--precheck-timeout") + 1] == "180", "Orca's default 60 s cuts a precheck with a retried 5xx off"
 prompt = line[line.index("--prompt") + 1]
 # The round commands are exactly precheck, plan --body and commit: an owner's allow rule names those forms.
 assert "`python3 /repo/skills/watch-prs/scripts/prs.py plan --body`" in prompt and "--to term_x" in prompt
@@ -559,6 +560,7 @@ finally:
 prompt = line[line.index("--prompt") + 1]
 assert line[:4] == ["orca", "automations", "edit", "auto1"] and no_env(line), line
 assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --state /s"
+assert "--precheck-timeout" in line, "--edit rewrites the timeout too"
 assert "`python3 /r/prs.py actions --state /s`" in prompt and "`python3 /r/prs.py log --state /s --key <key>" in prompt, prompt
 # A state folder off the default goes in as a flag after the subcommand, not through the environment.
 # round and result as the prompt writes them: --state right after the subcommand, --config anywhere.

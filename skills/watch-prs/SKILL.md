@@ -178,7 +178,8 @@ scheduled id) is what decides actions; the ledger does not record them (`once: f
 that failed to send stays due. `source` is `sent`, `scheduled`, `found` (someone already asked in the
 channel; `--at` is that message's time), `no_thread` (no thread to reply in, so nothing was posted),
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
-A `refused` row stops every later action for that PR and reviewer.
+A `refused` row stops every later action for that PR and reviewer. A row appended by hand for a request sent outside the round
+(`pr`, `reviewer`, `head` and an ISO `date` or a `slack_ts`, no `action`) counts as a sent `request`.
 
 ## Ready to merge
 
@@ -330,6 +331,10 @@ The precheck (`prs.py precheck`) uses no model. It reads GitHub and exits:
 | 0 | new items; the run goes ahead |
 | 1 | nothing new, or a run still holds `plan.json` (younger than `lock_minutes`) |
 | 2 | could not check: no `prs` key in the config, or `gh` failed |
+
+A GitHub 5xx (GraphQL's 10-second timeout, or an outage) is retried twice before it counts as
+`gh` failed. `schedule` sets the precheck timeout to 180 seconds; Orca's default of 60 is shorter than a
+precheck with a retry.
 
 The default trigger is every 30 minutes: GitHub's GraphQL limit (5000 points per hour) is shared by
 every session using the same token. The steady state is weekday business hours, e.g.
