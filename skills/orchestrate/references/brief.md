@@ -10,6 +10,8 @@ PROGRAM: <slug>
 
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
+            Scratch root: <none, or the one path outside the worktree it may write, e.g. a
+            directory a VM or container mounts>.
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them.
@@ -63,6 +65,10 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`), and
             give each Bash act that changes a file or its mode its own call, so a refusal names it.
+            Write no file or script outside the worktree except under SCOPE's scratch root; list
+            what you put there (checkouts, files, compose projects) in the report and tear it down
+            before worker_done. No wrapper scripts for evidence: run the commands VERIFY names, one
+            by one.
             An act refused by a permission prompt, the auto-mode classifier (including an error that
             returns no verdict), a Claude Code hook or the human is not tried again in any form: not
             re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
