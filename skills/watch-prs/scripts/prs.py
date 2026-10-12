@@ -1192,6 +1192,15 @@ PRE_SEND_STEP = (
     "거부 종류와 정확한 명령을 `result <키> failed` 의 이유로 남긴다.")
 
 
+def runner_hint(checkout):
+    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다(create 에 모델 옵션이 없다). "
+            "메인 체크아웃에 model 을 넣으면 거기서 여는 대화형 세션도 바뀌므로, 전용 runner worktree 를 한 번 만든다:\n"
+            f"  orca worktree create --repo {shlex.quote('path:' + str(checkout))} --name automations-runner --no-parent --setup skip --json\n"
+            '  <runner>/.claude/settings.local.json 에 {"model": "<고른 모델>"} (gitignored)\n'
+            "그 뒤 schedule --workspace path:<runner> 로 다시 출력한다. 이미 있는 automation 은 "
+            "orca automations edit --id <id> --workspace path:<runner>")
+
+
 def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
     """The `orca automations create` command, or `edit <id>` to keep an existing automation's id.
 
@@ -1321,6 +1330,8 @@ def main():
         line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"),
                             opt("--edit"))
         print(shlex.join(line))
+        if not opt("--workspace"):
+            print(runner_hint(script.parents[3]))
         if "--write" in sys.argv:
             sys.exit(subprocess.run(line).returncode)
         print("\n(출력만 했다. 실제로 만들려면 --write)")

@@ -116,7 +116,11 @@ Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close
 targets it can, and report what went, what was skipped and what stayed. To change the prompt of an
 automation that exists, `orca automations edit <id> --prompt "<text>"`.
 Run `schedule` from the checkout that loads the skills, never a card's worktree: the command keeps
-that path. `orca automations run` skips the precheck, so test it by running it directly, with
+that path. The run's model is whatever Claude Code settings its `--workspace` checkout has; without
+`--workspace`, `schedule` also prints how to make a dedicated runner worktree for that
+([docs/automation.md](../../docs/automation.md)). The janitor never lists the worktree an Orca
+automation runs in (`orca automations list`); when that list is unreadable, scan says so in a note.
+`orca automations run` skips the precheck, so test it by running it directly, with
 `--state` pointing at a scratch folder: a `reap` records what it failed on, and the next
 scheduled precheck would skip that set for a day. A run marked completed is not a cleanup: judge it
 by the reap output in its report.

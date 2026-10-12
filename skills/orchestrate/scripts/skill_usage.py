@@ -525,6 +525,15 @@ def precheck(home=None, collect_first=True, pr_state=gh_pr_state):
     return 0 if new or waiting else 1
 
 
+def runner_hint(checkout):
+    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다(create 에 모델 옵션이 없다). "
+            "메인 체크아웃에 model 을 넣으면 거기서 여는 대화형 세션도 바뀌므로, 전용 runner worktree 를 한 번 만든다:\n"
+            f"  orca worktree create --repo {shlex.quote('path:' + str(checkout))} --name automations-runner --no-parent --setup skip --json\n"
+            '  <runner>/.claude/settings.local.json 에 {"model": "<고른 모델>"} (gitignored)\n'
+            "그 뒤 schedule --workspace path:<runner> 로 다시 출력한다. 이미 있는 automation 은 "
+            "orca automations edit --id <id> --workspace path:<runner>")
+
+
 def schedule_cmd(script, workspace, provider="claude"):
     reflect = script.parents[2] / "reflect" / "SKILL.md"
     prompt = (f"{reflect} 의 standing 모드로 reflect 한 라운드를 돌린다. precheck({script} precheck)가 새 신호를 봤다. "
@@ -556,6 +565,8 @@ def main(argv):
         script = top / script.relative_to(HERE.parents[1].parent) if top else script
         cmd = schedule_cmd(script, opt("--workspace") or f"path:{top}", opt("--provider", "claude"))
         print(" ".join(shlex.quote(a) for a in cmd))
+        if not opt("--workspace"):
+            print(runner_hint(top))
         if "--write" in argv:
             sys.exit(subprocess.run(cmd).returncode)
         print("\n(출력만 했다. 실제로 만들려면 --write)")

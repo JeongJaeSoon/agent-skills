@@ -122,6 +122,8 @@ assert line[:3] == ["orca", "automations", "create"] and "--write" not in line
 pre = line[line.index("--precheck") + 1]
 assert pre.startswith("env AGENT_SKILLS_STATE=") and pre.endswith("/abs/skills/watch-mentions/scripts/mentions.py precheck")
 assert line[line.index("--timezone") + 1] == "Asia/Seoul" and line[line.index("--trigger") + 1] == "*/20 9-20 * * 1-5"
+hint = m.runner_hint(pathlib.Path("/abs dir"))
+assert "--repo 'path:/abs dir'" in hint and "--no-parent" in hint and "settings.local.json" in hint, hint
 
 # CLI: precheck exit codes and plan refusing a second run. A stub orca on PATH answers for inbox_to.
 fakebin = state.parent / "bin"

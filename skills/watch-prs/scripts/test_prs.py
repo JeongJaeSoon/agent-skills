@@ -574,6 +574,9 @@ assert calls.read_text().splitlines()[-1].endswith("--key prs:acme/access#1@h1")
 dry = run("schedule")
 assert dry.returncode == 0 and dry.stdout.startswith("orca automations create") and "--write" in dry.stdout
 assert f"precheck --state {tmp / 'state'}" in dry.stdout and "AGENT_SKILLS_STATE" not in dry.stdout, dry.stdout
+# With no --workspace, schedule also prints how to make a runner worktree whose own settings pick the model.
+assert "--no-parent" in dry.stdout and "settings.local.json" in dry.stdout, dry.stdout
+assert "automations-runner" not in run("schedule", "--workspace", "path:/r").stdout
 
 # A kind without a PROMPT_STEPS entry: schedule refuses it, and its items never reach plan.json, so commit never
 # records them. They take no max_items slot and do not wake a round of their own.

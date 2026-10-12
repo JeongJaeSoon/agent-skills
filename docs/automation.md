@@ -40,6 +40,20 @@
   exit code로 확인한다. 지난 결과를 기억하는 precheck라면 직접 돌린 회차도 기억되므로, 검증할 때는 상태
   폴더를 따로 둔다(reap.py는 `--state`).
 - `--workspace-mode existing`을 쓴다. `new-per-run`은 회차마다 worktree를 만들어 치울 것을 늘린다.
+- 모델은 `--workspace` 체크아웃의 Claude Code 설정을 따른다. `orca automations create`·`edit`에는 모델 옵션이 없고,
+  메인 체크아웃의 `.claude/settings.local.json`에 `model`을 넣으면 그 체크아웃에서 여는 대화형 세션까지 바뀐다.
+  그래서 automation은 전용 runner worktree에서 돌린다. `schedule`을 `--workspace` 없이 돌리면 아래 절차를 함께
+  출력하고, 스크립트는 설정 파일을 쓰지 않는다.
+  1. `orca worktree create --repo path:<메인 체크아웃> --name automations-runner --no-parent --setup skip --json`.
+     `--no-parent`가 없으면 Orca가 지금 터미널의 worktree를 부모로 기록한다.
+  2. `<runner>/.claude/settings.local.json`(gitignored)에 사용자가 고른 모델을 넣는다. 예: `{"model": "sonnet"}`.
+  3. 새 automation은 `schedule --workspace path:<runner>`로 만들고, 이미 있는 것은
+     `orca automations edit --id <id> --workspace path:<runner>`로 옮긴다.
+
+  precheck와 프롬프트의 스크립트는 메인 체크아웃의 절대 경로라 runner는 cwd와 설정만 준다. 다만 회차 세션이 읽는
+  `CLAUDE.md`와 `.claude/settings.json`은 runner의 HEAD 것이라 메인보다 뒤처질 수 있다. runner 하나는 모델 하나다.
+  머지·송신·분류 판단이 있는 회차와 순수 기계적인 회차의 모델을 나누려면 runner를 둘 만든다. janitor는 automation이
+  도는 worktree를 정리 대상으로 잡지 않는다.
 - precheck는 할 일이 없으면 exit 1이다. 지난 회차와 같은 결과도 할 일이 없는 것으로 친다. 그래야 모델 호출이
   바뀐 것이 있을 때만 일어난다. 같은 계획이 회차마다 실행되지 않고 쌓이면(거부) 정해 둔 횟수 뒤부터 건너뛰고,
   하루 한 번만 다시 시도하며, inbox로 한 번 알린다(reap.py는 `reap.plan_repeat` 기본 2회, `reap.inbox_to`).
@@ -60,6 +74,7 @@
 ```bash
 python3 <reap.py 절대 경로> precheck     # 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안, 같은 계획이 reap 없이 plan_repeat 번 쌓이면 하루 한 번만 exit 0
 python3 <reap.py 절대 경로> schedule     # 만들 `orca automations create …` 명령을 출력만 한다. 스킬을 로드하는 체크아웃에서 돌린다
+python3 <reap.py 절대 경로> schedule --workspace path:<runner>   # runner worktree 에서 돌린다(위 "지킬 것"의 모델 항목)
 python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다
 ```
