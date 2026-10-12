@@ -44,14 +44,15 @@ Where `orch` is installed (orchestrate) and its board has rows, the report is th
 
 1. The headline, bold and led by the time: `**14:30 · <what changed, one sentence>**`, or `**14:30 · 변화 없음 — <why, a few words>**`.
 2. The legend, one line: `🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · 막대=단계(추정)`, with `✅ 완료` and `🔴 막힘` added before `막대` when a row uses them.
-3. One section per repository, headed by a bold line, `**owner/repo**`; a repository running several programs gets one section per program, `**owner/repo — <program>**`. Record each lead with its project (epic, program) as `--program`, plus its merge target when that is not the default branch (`검색 개선 → feature/x`); a lead without one beside another lead in the same repository is headed `(프로젝트 미지정)`. Each section has one table, headed `| | 리드/Phase | 진행 | 다음 |`, with one row per lead, or per phase when a lead works in phases (per item when there are no leads). Every row goes out every time, changed or not.
+3. One section per repository, headed by a bold line, `**owner/repo → main**`, ending in the merge target most of its PRs share; a repository running several programs gets one section per program, `**owner/repo — <program> → main**`. Record each lead with its project (epic, program) as `--program`; a lead without one beside another lead in the same repository is headed `(프로젝트 미지정)`. Each section has one table, headed `| | 리드/Phase | PR | 진행 | 다음 |`, with one row per lead, or per phase when a lead works in phases (per item when there are no leads). Every row goes out every time, changed or not.
    - Status, one icon: 🔄 moving · ⏳ waiting on a person · ⏸ held until something else lands · 🔴 blocked · ✅ done.
-   - Name: the lead or phase, then its PR as a link (`ph1 [#12](https://…)`), or `(PR 없음)`. Phases waiting in the same state may share a row (`ph4 · ph5 (PR 없음)`).
+   - Name: the lead or phase. Phases waiting in the same state may share a row (`ph4 · ph5`).
+   - PR: its PR as a link and the PR's state from the PR list, or `—` when it has none. Merged: the merge commit's first 7 characters (`[#12](https://…) a1b2c3d`); closed: `닫힘`; open: what stands before the merge, in this order — `초안`, `❗DIRTY`, `❗리뷰` (a required review missing), `수정요청`, `CI✗`, `CI…`, `BEHIND`, `BLOCKED` — or `✓` when it can merge (`열림` while GitHub has not computed it). `❗` marks what a person must resolve: bold is kept for changed rows. A PR whose base is not the section's adds its own (`[#50](https://…) ❗DIRTY→main`). Under the legend, one line `PR: ❗ 사람이 풀 것 · …` explains the marks the tables use.
    - Progress: an 8-cell bar and N/M from the Progress rule above, and nothing else (`██████░░ 6/8`, filled cells = round(8·N/M)). M is the item's own stage count, so it changes with the item (`3/4`); `—` when there is no basis.
    - Next: the next stage and who moves it, in a few words.
 
-   Under each lead or phase row, one row per sub-task it owns (each card, worker and open PR), named `└ <identifier> <short name>` with a PR as a link (`└ [#49](https://…) 설정`, `└ w2 발송`, `└ ABC-1 색인`), filling the same four columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, except in the reviewer row of item 4. A merged sub-task stays, ✅, until its lead is done. A row with sub-task rows takes the worst of their statuses (🔴, ⏳, ⏸, 🔄; ✅ only when the lead is done). A sub-task in another repository goes in that repository's section, under a row with only the lead's name and `—` in status, progress and next. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
-4. When two or more of a lead's PRs wait only on the same reviewer, they fold into one sub-task row under that lead, `└ #a·#b·#c <reviewer> 대기` (`└ N건 <reviewer> 대기¹` with the numbers in a footnote when they do not fit), and the lead row stays. PRs with no lead fold into a bullet under the table, `⏳ N건 <reviewer> 대기 — 분야 a·b·c`. A PR returns to its own row when anything else happens to it.
+   Under each lead or phase row, one row per sub-task it owns (each card, worker and open PR), named `└ <short name>` with its PR in the PR column, or `└ <identifier> <short name>` without one (`└ 설정`, `└ w2 발송`, `└ ABC-1 색인`), filling the same five columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, except in the reviewer row of item 4. A merged sub-task stays, ✅, until its lead is done. A row with sub-task rows takes the worst of their statuses (🔴, ⏳, ⏸, 🔄; ✅ only when the lead is done). A sub-task in another repository goes in that repository's section, under a row with only the lead's name and `—` in status, progress and next. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
+4. When two or more of a lead's PRs wait only on the same reviewer, they fold into one sub-task row under that lead, `└ <reviewer> 대기` with `#a·#b·#c` in its PR cell (`N건¹` with the numbers in a footnote when they do not fit), and the lead row stays. PRs with no lead fold into a bullet under the table, `⏳ N건 <reviewer> 대기 — 분야 a·b·c`. A PR returns to its own row when anything else happens to it.
 5. After the last section, one line naming the periodic actions this round did not take and why (`21:00 이후라 Slack 미전송 · 머지 가능 PR 없음`). Left out when it took them all.
 6. `❓ **결정 필요**`, numbered as §1 says, each item one line: `1. <question> → 추천: X — <reason>`. An open decision is asked again in the same words, with `(지난 보고와 동일)` and its `orch decide` id when it has one, until the human answers it.
 7. `🙋 **지금 오너가 할 일**`, one line: what to run, press or log in to, and where; or `없음` and when the next one appears.
@@ -59,7 +60,7 @@ Where `orch` is installed (orchestrate) and its board has rows, the report is th
 
 Items 6 and 8 are left out when empty; item 7 is always there, so the human sees there is nothing for them.
 
-A row that changed since the last report, or that it did not have, has its name in bold (after the `└` on a sub-task row). Bold is the only mark: a symbol beside the status icon reads as part of the status. The last report is `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`), each row keyed so the next report can match it, with its status, progress and next; save it after sending. With no saved table, send it with no row in bold and say so in the headline. On Telegram, which has no bold, each row is one line, a sub-task line starts with `└`, and a changed row has `(바뀜)` after its name.
+A row that changed since the last report (status, progress, next or PR state), or that it did not have, has its name in bold (after the `└` on a sub-task row). Bold is the only mark: a symbol beside the status icon reads as part of the status. The last report is `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`), each row keyed so the next report can match it, with its status, progress, next and PR state; save it after sending. With no saved table, send it with no row in bold and say so in the headline. On Telegram, which has no bold, each row is one line with its PR and state after the name (`✅ ph2 #42 9f8e7d6 — …`), a sub-task line starts with `└`, and a changed row has `(바뀜)` after its name.
 
 Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
 
@@ -104,7 +105,7 @@ An illustrative shape (the items are made up):
 ### Terminal
 
 - Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left; or the stage table (§1) when the items ship through PRs and deploys; a periodic report has one table per repository or program (below).
-- A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. In the periodic table the name takes at most 20 columns (a link counts as its text), the progress 14, the next step 26. Detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
+- A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. In the periodic table the name takes at most 17 columns, the PR 17 (a link counts as its text), the progress 14, and the next step what the others leave of 78, at least 12. Detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
 - Decision needed, Only you and Later each start with a bold lead and take one line per item, the first item on the lead line and each further item below it after a blank line: `❓ **결정 필요** — 1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 …`, `🙋 **지금 오너가 할 일** — …`, `⏸ **나중에** — 조건 → 할 일`; a periodic report keeps its shorter items (above). Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same sections and the same numbering of decisions.
@@ -116,33 +117,35 @@ An illustrative periodic report (the items are made up):
 
 🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · ✅ 완료 · 막대=단계(추정)
 
-**acme/web — 검색 개선**
+PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
 
-| | 리드/Phase | 진행 | 다음 |
-|---|---|---|---|
-| ✅ | ph1 [#40](https://example.test/40) | ████████ 8/8 | — |
-| ✅ | **ph2 [#42](https://example.test/42)** | ████████ 8/8 | — |
-| 🔄 | ph3 (PR 없음) | ███░░░░░ 3/8 | 하위 2건 · 워커 |
-| 🔄 | └ [#45](https://example.test/45) 정렬 | ████░░░░ 4/8 | CI 재실행 · 워커 |
-| 🔄 | **└ w2 색인** | ██░░░░░░ 2/8 | PR 작성 · 워커 |
-| ⏸ | ph4 · ph5 (PR 없음) | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
+**acme/web — 검색 개선 → main**
 
-**acme/web — 알림 정리**
+| | 리드/Phase | PR | 진행 | 다음 |
+|---|---|---|---|---|
+| ✅ | ph1 | [#40](https://example.test/40) a1b2c3d | ████████ 8/8 | — |
+| ✅ | **ph2** | [#42](https://example.test/42) 9f8e7d6 | ████████ 8/8 | — |
+| 🔄 | ph3 | — | ███░░░░░ 3/8 | 하위 2건 · 워커 |
+| 🔄 | └ 정렬 | [#45](https://example.test/45) CI… | ████░░░░ 4/8 | CI 대기 · 워커 |
+| 🔄 | **└ w2 색인** | — | ██░░░░░░ 2/8 | PR 작성 · 워커 |
+| ⏸ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
 
-| | 리드/Phase | 진행 | 다음 |
-|---|---|---|---|
-| ⏳ | 알림 정리 | ██████░░ 3/4 | 리뷰 · 사람 |
-| ⏳ | └ [#51](https://example.test/51)·#52·#53 A 대기 | ██████░░ 3/4 | 10/13 09:30 의뢰 |
-| 🔄 | └ [#54](https://example.test/54) 문구 | ████░░░░ 2/4 | CI 재실행 · 워커 |
+**acme/web — 알림 정리 → feature/notify**
+
+| | 리드/Phase | PR | 진행 | 다음 |
+|---|---|---|---|---|
+| ⏳ | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | 충돌 해소 · 사람 |
+| ⏳ | └ A 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | 10/13 09:30 의뢰 |
+| 🔄 | └ 문구 | [#54](https://example.test/54) CI✗ | ████░░░░ 2/4 | CI 재실행 · 워커 |
 
 - ⏳ 2건 리뷰어 B 대기 — 분야 로그·대시보드
 - 다음: 10/13 10:00 리뷰 의뢰
 
-**acme/ops**
+**acme/ops → main**
 
-| | 리드/Phase | 진행 | 다음 |
-|---|---|---|---|
-| ⏳ | 재색인 [#88](https://example.test/88) | ██░░░░░░ 2/8 | 권한 · 결정 1 |
+| | 리드/Phase | PR | 진행 | 다음 |
+|---|---|---|---|---|
+| ⏳ | 재색인 | [#88](https://example.test/88) ❗리뷰 | ██░░░░░░ 2/8 | 권한 · 결정 1 |
 
 21:00 이후라 Slack 미전송 · 머지 가능 PR 없음
 

@@ -72,7 +72,7 @@ Other machines pick it up through `skills-sync sync` (launchd every 15 minutes: 
 
 ## 7. Reload
 
-A running session keeps the old text until it reloads, and a session cannot type a slash command into itself. End the report by asking the user to run `/reload-skills` (a `SKILL.md` or reference file changed) and `/reload-plugins` (`hooks/hooks.json` or the plugin manifest changed) in each open session. Changes to `~/.claude/agents/` or `CLAUDE.md` apply to sessions started after the change; say so. Never type input into another session's terminal to reload it.
+A running session keeps the old text until it reloads. Once the change is in the loaded checkout, run `skills-sync broadcast --skills` (a `SKILL.md` or reference file changed) or `--plugins` (`hooks/hooks.json` or the plugin manifest changed); `docs/platform.md` §4 has the rules. It sends the reload with `orca terminal send --text "/reload-skills" --enter` only to sessions idle at an empty prompt, and keeps a working session pending until it is idle. Never send the reload with `orca terminal send` yourself: a permission dialog takes the Enter as its answer, and the broadcast checks for one first. A session cannot type into itself, so end the report by asking the user to run `/reload-skills` or `/reload-plugins` in this session. Changes to `~/.claude/agents/` or `CLAUDE.md` apply to sessions started after the change; say so.
 
 ## Report
 
@@ -81,4 +81,4 @@ A running session keeps the old text until it reloads, and a session cannot type
 - Prompt audit: findings count, each applied or not with the reason.
 - The internal-name grep command and its output.
 - Tests and validation output.
-- The exact reload commands the user must run.
+- The broadcast output: the sessions reloaded and the ones left pending. Then the reload command the user runs in this session.

@@ -9,7 +9,7 @@ Nothing is hidden for being old: a row past its staleness limit shows its age, a
 render() is the one implementation of the brief skill's periodic report rules (sections, sub-task rows, the
 same-reviewer fold, cell caps and footnotes, bold for changed rows); test_board.py pins its output.
 """
-import datetime as dt, fcntl, json, os, pathlib, shutil, sys
+import datetime as dt, fcntl, json, os, pathlib, re, shutil, sys
 
 import fleet
 from stages import with_descendants
@@ -21,12 +21,13 @@ KINDS = ("lead", "phase", "task")
 ICON = {"moving": "🔄", "waiting": "⏳", "held": "⏸", "blocked": "🔴", "done": "✅"}
 ALIASES = {v: k for k, v in ICON.items()}
 WORST = ("blocked", "waiting", "held", "moving")
-CAPS = {"name": 20, "progress": 14, "next": 26}
+CAPS = {"name": 17, "pr": 17, "next_min": 12}  # next takes what the others leave: 2+17+17+14+12+16 borders = 78
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 MARKS = "¹²³⁴⁵⁶⁷⁸⁹"
-HEADER = ["", "리드/Phase", "진행", "다음"]
+HEADER = ["", "리드/Phase", "PR", "진행", "다음"]
+PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"))
 UNNAMED = "(프로젝트 미지정)"
 
 
@@ -206,6 +207,32 @@ def waits_on(p):
     return pending[0]["login"]
 
 
+def pr_state(p):
+    """A PR's state in a few short tokens: the merge sha once merged, else what stands between it and the merge."""
+    if p.get("merged_at") or p.get("state") == "MERGED":
+        return (p.get("merge_sha") or "")[:7] or "머지됨"
+    if p.get("state") == "CLOSED":
+        return "닫힘"
+    ms, ci, dec, out = p.get("merge_state"), p.get("ci"), p.get("decision"), []
+    if p.get("draft"):
+        out.append("초안")
+    if ms == "DIRTY":
+        out.append("❗DIRTY")
+    if dec == "REVIEW_REQUIRED":
+        out.append("❗리뷰")
+    elif dec == "CHANGES_REQUESTED":
+        out.append("수정요청")
+    if ci in ("failure", "pending"):
+        out.append("CI✗" if ci == "failure" else "CI…")
+    if ms == "BEHIND":
+        out.append("BEHIND")
+    elif ms == "BLOCKED" and not out:  # blocked by something the tokens above do not name
+        out.append("BLOCKED")
+    elif ms == "UNSTABLE" and not out:
+        out.append("UNSTABLE")
+    return " ".join(out) or ("✓" if ms in ("CLEAN", "HAS_HOOKS") else "열림")
+
+
 def bar(progress):
     if not progress:
         return "—"
@@ -300,6 +327,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         warn = "⚠️" if not probed or (now - probed).total_seconds() > limits["pr_stale_min"] * 60 else ""
         return (f"{pr_num(key)}{warn}" if tg or not p.get("url") else f"[{pr_num(key)}]({p['url']}){warn}")
 
+    def pr_status(key, base):
+        """The PR's state, and its merge target when that is not the section's base."""
+        p = prs.get(key)
+        if not p:
+            return ""
+        to = p.get("base")
+        return pr_state(p) + (f"→{to}" if to and to != base else "")
+
     def worst(own, kids):
         if own == "done":
             return "done"
@@ -315,9 +350,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             sections.append(sec)
         return sec
 
-    def line(key, sec, depth, status, name, title, progress, nxt, suffix="", note=None):
-        lines.append({"key": key, "sec": sec, "depth": depth, "status": status, "name": name, "title": title,
-                      "progress": progress, "next": nxt, "suffix": suffix, "note": note})
+    def line(key, sec, depth, status, name, pr, progress, nxt, suffix="", fold=None):
+        """pr: the row's PR key; fold: the PR keys of a same-reviewer row."""
+        lines.append({"key": key, "sec": sec, "depth": depth, "status": status, "name": name, "pr": pr,
+                      "progress": progress, "next": nxt, "suffix": suffix, "fold": fold})
 
     def task_lines(head, sec, tasks):
         out = []
@@ -335,20 +371,18 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             statuses.append(st)
             if t["id"] in folded:
                 continue
-            ident = pr_text(t["pr"]) if t.get("pr") else t["id"].rsplit("/", 1)[-1]
-            title = "" if t["title"] == t["id"].rsplit("/", 1)[-1] and not t.get("pr") else t["title"]
-            line(t["id"], sec, 1, st, ident, title, bar(t.get("progress")), nxt, suf)
+            tail = t["id"].rsplit("/", 1)[-1]
+            name = t["title"] if t.get("pr") or t["title"] == tail else f"{tail} {t['title']}"
+            line(t["id"], sec, 1, st, name, t.get("pr"), bar(t.get("progress")), nxt, suf)
         for rev, ids in by_rev.items():
             if len(ids) < 2:
                 continue
             ts = [rows[i] for i in ids]
-            nums = [pr_text(ts[0]["pr"])] + [pr_num(t["pr"]) for t in ts[1:]]
             progs = {tuple(t.get("progress") or ()) for t in ts}
             nexts = {t.get("next") or "" for t in ts}
-            line(f"{head}/~{rev}", sec, 1, "waiting", "·".join(nums), f"{rev} 대기",
+            line(f"{head}/~{rev}", sec, 1, "waiting", f"{rev} 대기", None,
                  bar(ts[0].get("progress")) if len(progs) == 1 else "—",
-                 nexts.pop() if len(nexts) == 1 and "" not in nexts else f"리뷰 · {rev}",
-                 note={"count": len(ids), "rev": rev, "all": "·".join(pr_num(t["pr"]) for t in ts)})
+                 nexts.pop() if len(nexts) == 1 and "" not in nexts else f"리뷰 · {rev}", fold=[t["pr"] for t in ts])
         return statuses
 
     def head_of(t):
@@ -376,7 +410,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 bullets.setdefault((sec, waits_on(prs.get(r["pr"]))), []).append(r)
                 continue
             st, nxt, suf = derive(r)
-            line(k, sec, 0, st, r["title"], pr_text(r["pr"]) if r.get("pr") else "", bar(r.get("progress")), nxt, suf)
+            line(k, sec, 0, st, r["title"], r.get("pr"), bar(r.get("progress")), nxt, suf)
             continue
         family = with_descendants(rows, {k}) - {k}
         phases = [rows[c] for c in order if c in family and rows[c]["kind"] == "phase"]
@@ -387,8 +421,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             home = [t for t in mine if up(t, "repo") == sec[0]]
             st, nxt, suf = derive(h)
             at = len(lines)
-            pr = pr_text(h["pr"]) if h.get("pr") else ("" if tg else "(PR 없음)")
-            line(h["id"], sec, 0, st, h["title"], pr, bar(h.get("progress")), nxt, suf)
+            line(h["id"], sec, 0, st, h["title"], h.get("pr"), bar(h.get("progress")), nxt, suf)
             kid_status = task_lines(h["id"], sec, home)
             for t in mine:
                 if t not in home:  # another repository: its own section, under a row with only the lead's name
@@ -396,15 +429,32 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     if tsec not in sections:
                         sections.append(tsec)
                     if not any(l["key"] == f"{k}@{tsec[0]}" for l in lines):
-                        line(f"{k}@{tsec[0]}", tsec, 0, None, r["title"], "", "—", "—")
+                        line(f"{k}@{tsec[0]}", tsec, 0, None, r["title"], None, "—", "—")
                     kid_status += task_lines(f"{k}@{tsec[0]}", tsec, [t])
             lines[at]["status"] = worst(st, kid_status)
 
-    # Bold: a row the last report did not have, or whose status, progress or next changed.
+    # A section's merge target is the base most of its PRs share; a row with another base names its own.
+    bases = {}
+    for sec in sections:
+        seen = [prs[k]["base"] for l in lines if l["sec"] == sec for k in ([l["pr"]] if l["pr"] else l["fold"] or [])
+                if (prs.get(k) or {}).get("base")]
+        if seen:
+            bases[sec] = max(dict.fromkeys(seen), key=seen.count)
+    for l in lines:
+        l["pr_state"] = pr_status(l["pr"], bases.get(l["sec"])) if l["pr"] else ""
+        if l["fold"]:
+            l["cell"] = "·".join([pr_text(l["fold"][0])] + [pr_num(k) for k in l["fold"][1:]])
+        else:
+            l["cell"] = f"{pr_text(l['pr'])} {l['pr_state']}".strip() if l["pr"] else ""
+
+    # Bold: a row the last report did not have, or whose status, progress, next or PR state changed.
     snap = {}
     for l in lines:
-        snap[l["key"]] = {"status": l["status"], "progress": l["progress"], "next": l["next"]}
-        if last_rows is not None and last_rows.get(l["key"]) != snap[l["key"]]:
+        snap[l["key"]] = {"status": l["status"], "progress": l["progress"], "next": l["next"],
+                          "pr": l["pr_state"]}
+        prev = (last_rows or {}).get(l["key"])
+        if last_rows is not None and (prev is None or any(prev.get(f) != v for f, v in snap[l["key"]].items()
+                                                          if f in prev)):
             changed.append(l["key"])
     if last_rows is None:
         facts.append("지난 보고 없음, 굵게 없음")
@@ -418,9 +468,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
                                                          if s in used) + "막대=단계(추정)")
+    states = " ".join(l["pr_state"] for l in lines)
+    pr_legend = [f"{m} {w}" for m, w in PR_LEGEND if m in states]
+    if re.search(r"(?<![\w/])[0-9a-f]{7}(?![\w/])", states):
+        pr_legend.append("7자리=머지 sha")
     local = now.astimezone()
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
-    out = [head if tg else f"**{head}**", "", legend]
+    out = [head if tg else f"**{head}**", "", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
     width_ok, n_mark = True, 0
 
@@ -429,45 +483,59 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         n_mark += 1
         return MARKS[n_mark - 1] if n_mark <= len(MARKS) else f"({n_mark})"
 
+    def fit(text, cap, note, notes):
+        """text, or its head cut to cap with a mark whose footnote carries note."""
+        if table_width.text_width(text) <= cap:
+            return text
+        m = mark()
+        notes.append(f"{m} {note}")
+        return clip(text, cap - table_width.text_width(m)) + m
+
     for sec in sections:
         repo, prog = sec
         mine = [l for l in lines if l["sec"] == sec]
         if sec in unnamed_secs:
             prog, many = UNNAMED, many | {repo}
-        title = f"{repo} — {prog}" if repo in many and prog else repo
+        title = (f"{repo} — {prog}" if repo in many and prog else repo) + (f" → {bases[sec]}" if sec in bases else "")
         out += ["", f"📋 {title}" if tg else f"**{title}**"]
         if tg:
             for l in mine:
-                name = f"{l['name']} {l['title']}".strip() + (" (바뀜)" if l["key"] in changed else "")
+                name = (f"{l['name']} {l['cell']}" if l["fold"] is None else f"{l['cell']} {l['name']}").strip()
+                name += " (바뀜)" if l["key"] in changed else ""
                 if l["status"] is None:  # the lead's name over its sub-tasks in another repository
                     out.append(name)
                     continue
                 body = f"{ICON[l['status']]} {name} — {l['progress']} · {(l['next'] or '—') + l['suffix']}"
                 out.append(("└ " if l["depth"] else "") + body)
         else:
-            table, notes = [HEADER], []
-            for l in mine:
+            cells, notes = [], []
+            for l in mine:  # name and PR first: the next column takes the width they leave
                 prefix = "└ " if l["depth"] else ""
-                name = f"{l['name']} {l['title']}".strip()
-                if table_width.text_width(prefix + name) > CAPS["name"]:
+                name = prefix + fit(l["name"], CAPS["name"] - table_width.text_width(prefix), l["name"], notes)
+                if l["fold"] and table_width.text_width(l["cell"]) > CAPS["pr"]:
                     m = mark()
-                    if l["note"]:
-                        name = f"{l['note']['count']}건 {l['note']['rev']} 대기{m}"
-                        notes.append(f"{m} {l['note']['all']}")
-                    else:
-                        notes.append(f"{m} {l['title']}")
-                        room = CAPS["name"] - table_width.text_width(prefix + l["name"] + " " + m)
-                        name = (f"{l['name']} {clip(l['title'], room)}" if room > 1 else l["name"]) + m
+                    notes.append(f"{m} {'·'.join(pr_num(k) for k in l['fold'])}")
+                    cell = f"{len(l['fold'])}건{m}"
+                elif table_width.text_width(l["cell"]) > CAPS["pr"]:  # keep the state's head: ❗ comes first
+                    m, num = mark(), pr_text(l["pr"])
+                    notes.append(f"{m} {pr_num(l['pr'])} {l['pr_state']}")
+                    room = CAPS["pr"] - table_width.text_width(f"{num} {m}")
+                    cell = (f"{num} {clip(l['pr_state'], room)}" if room > 1 else num) + m
+                else:
+                    cell = l["cell"] or "—"
+                cells.append([l, name, cell])
+            wide = [max(table_width.text_width(r[i]) for r in [HEADER] + [[ICON.get(l["status"], "—"), n, c, l["progress"]]
+                                                                         for l, n, c in cells]) for i in range(4)]
+            room = max(CAPS["next_min"], COLS - table_width.BORDER_PER_COL * len(HEADER) - table_width.BORDER_EDGE - sum(wide))
+            table = [HEADER]
+            for l, name, cell in cells:
+                nxt = (l["next"] or "—") + l["suffix"]
+                nxt = fit(nxt, room, nxt, notes)
                 if l["key"] in changed:
                     name = f"**{name}**"
-                nxt = (l["next"] or "—") + l["suffix"]
-                if table_width.text_width(nxt) > CAPS["next"]:
-                    m = mark()
-                    notes.append(f"{m} {nxt}")
-                    nxt = clip(nxt, CAPS["next"] - table_width.text_width(m)) + m
-                table.append([ICON.get(l["status"], "—"), prefix + name, l["progress"], nxt])
+                table.append([ICON.get(l["status"], "—"), name, cell, l["progress"], nxt])
             width_ok &= table_width.table_width(table) <= COLS
-            out += ["", "| | 리드/Phase | 진행 | 다음 |", "|---|---|---|---|"]
+            out += ["", "| | 리드/Phase | PR | 진행 | 다음 |", "|---|---|---|---|---|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
             if notes:
                 out += [""] + notes

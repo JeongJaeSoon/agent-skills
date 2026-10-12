@@ -514,6 +514,7 @@ def read_screen(handle):
 # The probe carries everything the PR page shows except reviewers and threads, and its signature covers the fields
 # that change without moving updatedAt (merge state after a base push, CodeRabbit's status).
 PROBE = ("number state isDraft updatedAt createdAt mergedAt headRefOid url title mergeStateStatus reviewDecision"
+         " baseRefName mergeCommit{oid}"
          " author{login} commits(last:1){nodes{commit{statusCheckRollup{state}"
          ' status{context(name:"CodeRabbit"){state description}}}}}')
 DETAIL = PROBE + (
@@ -593,7 +594,7 @@ def coderabbit(pr):
 
 def probe_sig(pr):
     return [pr.get("state"), pr.get("updatedAt"), pr.get("headRefOid"), rollup(pr), pr.get("mergeStateStatus"),
-            coderabbit(pr), pr.get("isDraft"), pr.get("reviewDecision")]
+            coderabbit(pr), pr.get("isDraft"), pr.get("reviewDecision"), pr.get("baseRefName")]
 
 
 def is_bot(author):
@@ -638,6 +639,7 @@ def shape_pr(repo, pr, me):
             "title": mask(pr.get("title"), 200), "state": pr.get("state"), "draft": bool(pr.get("isDraft")),
             "updated": pr.get("updatedAt"), "head": head, "ci": rollup(pr), "decision": pr.get("reviewDecision"),
             "created": pr.get("createdAt"), "merged_at": pr.get("mergedAt"), "merge_state": pr.get("mergeStateStatus"),
+            "base": pr.get("baseRefName"), "merge_sha": (pr.get("mergeCommit") or {}).get("oid"),
             "coderabbit": coderabbit(pr),
             "author": (pr.get("author") or {}).get("login"), "reviewers": sorted(reviewers.values(), key=lambda r: r["login"]),
             "threads": threads, "reviews": [{"id": n.get("id"), "state": n.get("state"), "at": n.get("submittedAt"),
@@ -903,7 +905,8 @@ class Fleet:
         for k in list(owner_of) + [k for k in swept if k not in owner_of]:
             sid, entry = owner_of.get(k), self.prs.get(k)
             det = (entry or {}).get("detail")
-            if det and k not in now_due and swept.get(k, det["updated"]) == det["updated"]:
+            # A detail read before "base" was collected is read again now, so a merged PR does not wait a day for it.
+            if det and "base" in det and k not in now_due and swept.get(k, det["updated"]) == det["updated"]:
                 t = tier(det, sessions.get(sid, {}).get("phase"), now)
                 last = parse(entry.get("probed_at"))
                 every = TIER_EVERY["hot"] if (viewed or force) and sid and t != "done" else TIER_EVERY[t]

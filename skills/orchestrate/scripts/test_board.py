@@ -8,6 +8,9 @@ HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE.parents[1] / "brief" / "scripts"))
 import table_width  # noqa: E402
 
+sys.path.insert(0, str(HERE))
+import board  # noqa: E402
+
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
 state = tmp / "dashboard"
 env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
@@ -60,8 +63,9 @@ ok("board", "set", "search/ph4", "--kind", "phase", "--title", "ph4 · ph5", "--
    "--next", "ph3 머지 뒤")
 # Lead 2: no phases, so the lead is the row. Three PRs wait only on rev-a: one folded row, and the lead row stays.
 ok("board", "lead", "add", "notify", "--handle", "term_0FAKE2", "--repo", "acme/web")
+# Its PRs go to feature/notify, and the lead's own PR lands that branch on main: the one row naming its own base.
 ok("board", "set", "notify", "--title", "알림 정리", "--program", "알림 정리", "--status", "waiting", "--progress", "3/4",
-   "--next", "리뷰 · 사람")
+   "--next", "리뷰 · 사람", "--pr", "acme/web#50")
 for n, t in (("51", "설정"), ("52", "발송"), ("53", "로그")):
     ok("board", "set", f"notify/p{n}", "--title", t, "--pr", f"acme/web#{n}", "--status", "waiting", "--progress", "3/4",
        "--next", "10/13 09:30 의뢰")
@@ -83,19 +87,22 @@ ok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정
 stamp(ghost="2026-10-13T11:20:00Z")
 
 
-def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026-10-13T14:25:00Z"):
+def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026-10-13T14:25:00Z", base="main",
+       merge_state="BLOCKED", decision="REVIEW_REQUIRED"):
     n = key.rsplit("#", 1)[1]
     return key, {"probed_at": probed, "detail": {
         "key": key, "url": f"https://example.test/{n}", "state": state_, "merged_at": merged, "draft": False, "ci": ci,
-        "decision": "REVIEW_REQUIRED" if state_ == "OPEN" else None,
+        "decision": decision if state_ == "OPEN" else None, "base": base,
+        "merge_state": merge_state if state_ == "OPEN" else "UNKNOWN", "merge_sha": merged and f"{int(n):02d}c0ffee0000",
         "reviewers": [{"login": r, "requested": True, "state": None, "team": False} for r in reviewers]}}
 
 
 (state / "prs.json").write_text(json.dumps({"prs": dict([
     pr("acme/web#40", "MERGED", merged="2026-10-01T03:00:00Z"), pr("acme/web#42", "MERGED", merged="2026-10-13T13:00:00Z"),
-    pr("acme/web#45", ci="failure", reviewers=["rev-a"]),
-    pr("acme/web#51", reviewers=["rev-a"]), pr("acme/web#52", reviewers=["rev-a"]), pr("acme/web#53", reviewers=["rev-a"]),
-    pr("acme/web#54", ci="failure"), pr("acme/ops#88", probed="2026-10-13T11:00:00Z"),
+    pr("acme/web#45", ci="failure", reviewers=["rev-a"], merge_state="CLEAN", decision=None),
+    pr("acme/web#50", merge_state="DIRTY", decision=None),
+    *(pr(f"acme/web#{n}", reviewers=["rev-a"], base="feature/notify") for n in (51, 52, 53)),
+    pr("acme/web#54", ci="failure", base="feature/notify"), pr("acme/ops#88", probed="2026-10-13T11:00:00Z", ci="pending"),
     pr("acme/ops#61", reviewers=["rev-b"]), pr("acme/ops#62", reviewers=["rev-b"]),
     pr("acme/ops#70", reviewers=["rev-c"]), pr("acme/ops#71", reviewers=["rev-c"]),
 ])}))
@@ -118,40 +125,41 @@ GOLDEN = """\
 
 🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
 
-**acme/web — 검색 개선**
+PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
 
-| | 리드/Phase | 진행 | 다음 |
-|---|---|---|---|
-| ✅ | ph1 [#40](https://example.test/40) | ████████ 8/8 | — |
-| ✅ | **ph2 [#42](https://example.test/42)** | ████████ 8/8 | — |
-| 🔄 | ph3 (PR 없음) | ███░░░░░ 3/8 | 하위 3건 · 워커 |
-| 🔄 | └ w2 색인 | ██░░░░░░ 2/8 | PR 작성 · 워커 |
-| 🔄 | └ [#45](https://example.test/45) 정렬 | ████░░░░ 4/8 | CI 재실행 · 워커 |
-| ⏸ | ph4 · ph5 (PR 없음) | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
+**acme/web — 검색 개선 → main**
 
-**acme/ops — (프로젝트 미지정)**
+| | 리드/Phase | PR | 진행 | 다음 |
+|---|---|---|---|---|
+| ✅ | ph1 | [#40](https://example.test/40) 40c0ffe | ████████ 8/8 | — |
+| ✅ | **ph2** | [#42](https://example.test/42) 42c0ffe | ████████ 8/8 | — |
+| 🔄 | ph3 | — | ███░░░░░ 3/8 | 하위 3건 · 워커 |
+| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | PR 작성 · 워커 |
+| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗ | ████░░░░ 4/8 | CI 재실행 · 워커 |
+| ⏸ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
 
-| | 리드/Phase | 진행 | 다음 |
-|---|---|---|---|
-| — | 검색 개선 | — | — |
-| 🔄 | └ [#88](https://example.test/88)⚠️ 재색인 | ██░░░░░░ 2/8 | 권한 · 결정 1 |
-| ⏳ | 분류 (PR 없음) | — | 리뷰 · 사람 |
-| ⏳ | └ [#61](https://example.test/61)·#62 rev-b 대기 | — | 리뷰 · rev-b |
-| 🔴 | 정리 작업 (PR 없음) | ███░░░░░ 1/3 | 세션 없음 · 3h 전 |
+**acme/ops — (프로젝트 미지정) → main**
+
+| | 리드/Phase | PR | 진행 | 다음 |
+|---|---|---|---|---|
+| — | 검색 개선 | — | — | — |
+| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 권한 · 결정 1 |
+| ⏳ | 분류 | — | — | 리뷰 · 사람 |
+| ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — | 리뷰 · rev-b |
+| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 세션 없음 · 3h 전 |
 
 - ⏳ 2건 rev-c 대기 — 분야 로그·대시보드
 
-**acme/web — 알림 정리**
+**acme/web — 알림 정리 → feature/notify**
 
-| | 리드/Phase | 진행 | 다음 |
-|---|---|---|---|
-| ⏳ | 알림 정리 (PR 없음) | ██████░░ 3/4 | 리뷰 · 사람 |
-| 🔄 | └ [#54](https://example.test/54) 문구가 아주…¹ | ████░░░░ 2/4 | CI 재실행 뒤 리뷰 의뢰…² |
-| ⏳ | └ 3건 rev-a 대기³ | ██████░░ 3/4 | 10/13 09:30 의뢰 |
+| | 리드/Phase | PR | 진행 | 다음 |
+|---|---|---|---|---|
+| ⏳ | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | 리뷰 · 사람 |
+| 🔄 | └ 문구가 아주…¹ | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI 재실행 뒤 리…² |
+| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | 10/13 09:30 의뢰 |
 
 ¹ 문구가 아주 길어서 칸을 넘는 하위 작업
 ² CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
-³ #51·#52·#53
 
 21:00 이후라 Slack 미전송
 
@@ -178,9 +186,10 @@ for start, rows in table_width.tables(second):
 code, tg, err = TG
 assert code == 0, err
 assert not any(m in tg for m in ("**", "|", "](")), tg
-assert "✅ ph2 #42 (바뀜) — ████████ 8/8 · —" in tg.splitlines(), tg
+assert "✅ ph2 #42 42c0ffe (바뀜) — ████████ 8/8 · —" in tg.splitlines(), tg
 assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4 · 10/13 09:30 의뢰" in tg.splitlines(), tg
-assert "└ 🔄 #54 문구가 아주 길어서 칸을 넘는 하위 작업 — ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
+assert "└ 🔄 문구가 아주 길어서 칸을 넘는 하위 작업 #54 ❗리뷰 CI✗ — ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
+assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "⏳ 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4 · 리뷰 · 사람" in tg.splitlines(), tg
 assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
 
 # --json carries what a dashboard or the model needs beside the text.
@@ -189,6 +198,24 @@ out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--
 assert out["text"].startswith("**14:30 · ph2 머지 · PR 상태 3h 전 기준**"), out["text"].splitlines()[0]
 assert out["changed"] == ["search/ph2"], out["changed"]
 assert out["stale"] == ["ghost"] and out["width_ok"] is True
+
+# A PR whose state moves bolds its row; a saved table from before PR states were kept bolds nothing for them.
+prs_json = json.loads((state / "prs.json").read_text())
+prs_json["prs"]["acme/web#45"]["detail"]["merge_state"] = "DIRTY"
+(state / "prs.json").write_text(json.dumps(prs_json))
+out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))
+assert out["changed"] == ["search/ph2", "search/ph3/sort"], out["changed"]
+assert "| 🔄 | **└ 정렬** | [#45](https://example.test/45) ❗DIRTY CI✗ |" in out["text"], out["text"]
+last = json.loads((tmp / "brief-last" / "top-level.json").read_text())
+for r in last["rows"].values():
+    r.pop("pr")
+(tmp / "brief-last" / "top-level.json").write_text(json.dumps(last))
+assert json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))["changed"] == ["search/ph2"]
+
+assert board.pr_state({"state": "OPEN", "merge_state": "BLOCKED", "ci": "success"}) == "BLOCKED"
+assert board.pr_state({"state": "MERGED", "merged_at": T0}) == "머지됨"  # read before the merge sha was collected
+assert board.pr_state({"state": "OPEN", "draft": True, "merge_state": "BEHIND", "ci": "pending"}) == "초안 CI… BEHIND"
+assert board.pr_state({"state": "OPEN", "merge_state": "CLEAN", "ci": "success"}) == "✓"
 
 # A row the board drops leaves the report; the snapshot keys rows by id, a hand-made one is no saved table.
 (tmp / "brief-last" / "top-level.json").write_text(json.dumps({"ts": T0, "rows": [{"repo": "acme/web", "name": "ph1"}]}))
