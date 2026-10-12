@@ -50,10 +50,17 @@ def subtask_runs(rows):
     return runs + [n]
 
 
+def is_reviewer_row(row):
+    """A lead's PRs waiting only on one reviewer, folded into one └ row that names them all."""
+    return is_sub(row) and row[1].replace("**", "").rstrip("¹").endswith("대기")
+
+
 def check_periodic(rows):
     assert subtask_runs(rows)[0] == 0, "a └ row comes before any lead"
     for row in rows[1:]:
-        for cell in row:
+        for i, cell in enumerate(row):
+            if i == 1 and is_reviewer_row(row):
+                continue
             assert len(re.findall(r"#\d+", cell)) <= 1, ("several PRs in one cell", row)
         assert re.fullmatch(r"[█░]{8} \d+/\d+|—", row[2]), ("progress is the bar and N/M only", row)
 
@@ -63,6 +70,8 @@ assert subtask_runs([lead, ["🔄", "a", "", ""], ["🔄", "└ #1 x", "", ""], 
 for bad in (
     [lead, ["🔄", "└ #1 x", "—", ""], ["🔄", "a", "—", ""]],
     [lead, ["🔄", "a #1 #2", "██░░░░░░ 2/8", ""]],
+    [lead, ["⏳", "a #1·#2 A 대기", "██░░░░░░ 2/8", ""]],
+    [lead, ["🔄", "a", "—", ""], ["⏳", "└ #1·#2 A 대기", "—", "#3·#4"]],
     [lead, ["🔄", "a", "██░░░░░░ 2/8 #1", ""]],
 ):
     try:
@@ -73,6 +82,14 @@ for bad in (
 for rows in periodic:
     check_periodic(rows)
 assert max(n for rows in periodic for n in subtask_runs(rows)) >= 2
+
+# Folding a lead's PRs that wait on one reviewer must not take the lead row with them: the example shows a
+# reviewer row naming several PRs, right under a lead row or a sibling └ row of that lead.
+folded = [(rows, k) for rows in periodic for k, row in enumerate(rows) if is_reviewer_row(row)]
+assert folded, "no reviewer row in the example"
+for rows, k in folded:
+    assert len(re.findall(r"#\d+", rows[k][1])) >= 2, rows[k]
+    assert subtask_runs(rows[:k])[0] == 0 and any(not is_sub(r) for r in rows[1:k]), ("reviewer row without its lead", rows)
 
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
 r = subprocess.run([sys.executable, str(HERE / "table_width.py"), "--cols", "78"], input=wide, capture_output=True, text=True)
