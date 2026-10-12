@@ -1,6 +1,6 @@
 ---
 name: why
-description: "Use for why code is the way it is or why something was decided: \"why is this like this\", \"why did we do X\", \"why was Y picked over Z\", \"왜 이렇게 됐어\", \"이거 왜 이렇게 짰어\", \"이 결정 배경이 뭐야\", \"왜 이렇게 했지\", \"이 값은 어디서 나왔어\", \"히스토리 좀 찾아줘\". Also design rationale, the history behind a regression or a revert, incident-driven or defensive code, where a threshold or magic number came from, and recovering the reasons before changing code. For what the code does or how it works, use how."
+description: "Find why code is the way it is or why something was decided, from history, PRs, tickets and chat. Use for \"왜 이렇게 됐어\", \"이 결정 배경이 뭐야\", \"이유가 뭐야\", \"why did we do X\", or before changing code whose reason is unclear. What code does is how."
 ---
 
 # Why

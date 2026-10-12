@@ -1,6 +1,6 @@
 ---
 name: how
-description: "Use for \"how does X work\", \"X 는 어떻게 동작해\", \"이 구조 설명해줘\", code walkthroughs before changing something, and placement / ownership / layering questions (\"where should this live\", \"이건 어디에 둬야 해\", \"which package owns this\", \"is this the right layer\"). Explains subsystem architecture, runtime flow, onboarding mental models. For motivation and history (why it is this way, why it was decided), use why."
+description: "Explain how code works by reading it: a subsystem's runtime flow, its architecture, where something should live. Use for \"how does X work\", \"X 는 어떻게 동작해\", \"이 구조 설명해줘\", \"이건 어디에 둬야 해\", or a walkthrough before changing code. Why it is this way, or why it was decided, is why."
 ---
 
 # How

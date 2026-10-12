@@ -1,6 +1,6 @@
 ---
 name: deliver-ticket
-description: "Use when working a ticket from the first edit to done — before multi-file work; before opening, updating or merging a PR (\"PR 올려줘\", \"pr 작성까지 진행해줘\", \"머지해줘\", \"머지까지 진행해줘\", \"머지되면 이어서\"); before a release that follows the merge (\"릴리즈까지 진행해줘\"); when answering review comments (\"리뷰 코멘트 대응해줘\") or getting Codex to cross-check the change (\"codex 교차 검증\", \"적대적 리뷰\", \"codex 따봉\"); when proving it works (\"동작확인하고 머지\", \"동작확인 절차\", \"내가 확인할 거 있어?\"); before declaring a ticket done (\"이 티켓 끝내줘\", \"ship it\"); or when stacking or verifying a change on its way to main."
+description: "Use when working a ticket from the first edit to done — multi-file work; opening, updating or merging a PR (\"PR 올려줘\", \"머지해줘\", \"머지까지 진행해줘\", \"머지되면 이어서\"); a release after the merge (\"릴리즈까지 진행해줘\"); review comments (\"리뷰 코멘트 대응해줘\"); a Codex cross-check (\"codex 교차 검증\", \"적대적 리뷰\"); proving it works (\"동작확인하고 머지\", \"내가 확인할 거 있어?\"); declaring a ticket done (\"이 티켓 끝내줘\", \"ship it\")."
 ---
 
 # Delivering a ticket

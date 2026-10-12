@@ -54,6 +54,8 @@
 | `skills/write-plainly/references/korean.md` | `pstack/skills/unslop/SKILL.md` | derived | unslop의 서식 금지(긴 대시, 문장 중간 콜론, 굵은 글씨+콜론 목록, 장식 이모지)와 챗봇 문구 규칙을 한국어로 옮겼다. 상투어, 번역투, 얼버무림, 주어 생략, 명사 나열, 문체 규칙과 예문은 여기서 새로 썼다 |
 | `skills/brief/SKILL.md` §1 결정 항목·이름 규칙 두 문장 | `pstack/skills/ketchup/SKILL.md`(pin 이후 upstream `978ca6e`에 추가) | derived | 결정 항목에 "답하지 않으면 어떻게 되는지"를, PR·브랜치·워커는 사람이 아는 이름으로 부른다는 규칙을 옮겼다. "마지막 메시지 이후" 범위와 `/ketchup` 명령은 `recall`·`brief`와 겹쳐 가져오지 않았다 |
 
+위 표의 adapted `SKILL.md`는 모두 description을 이 환경의 스킬 목록 예산에 맞춰 줄였다. 트리거 문구와 다른 스킬과의 구분만 남기고 동작 설명은 본문에 맡긴다. upstream의 description 변경은 3-way 병합에서 충돌로 잡히니 이 원칙대로 손으로 합친다.
+
 `skills/principles/SKILL.md`는 vendoring 대상이 아니다. poteto-mode의 `## Principles` 절을 참고해 여기서 새로 쓴 인덱스이며, 본문에 출처를 적었다.
 
 `skills/map-features/SKILL.md`도 vendoring 대상이 아니다. pstack의 feature map(`create-verification-skill`의 `features/`, benny의 `feature-map.example.md`)은 에이전트가 기능을 구동하는 지도라서, 사람이 읽는 제품 기능 지도(기준 커밋, 상태, 근거)는 여기서 새로 썼다.

@@ -1,6 +1,6 @@
 ---
 name: write-skill
-description: "Use before writing or changing any skill, agent definition, or CLAUDE.md-style instruction file — in this plugin's public repo or in the user's own ~/.claude — and before committing such a change: \"스킬 만들어줘\", \"스킬 고쳐줘\", \"스킬 수정\", \"write a skill\", \"update the skill\", reflect's Apply step, the flow improver's commit. Checks for overlap first, then carries the steps every skill change needs: prompt audit, internal-name grep, tests, reload."
+description: "Use before writing or changing a skill, agent definition or CLAUDE.md-style instruction file, in this repo or the user's ~/.claude, and before committing it — \"스킬 만들어줘\", \"스킬 고쳐줘\", \"write a skill\", reflect's Apply step, the flow improver's commit."
 ---
 
 # Write or update a skill

@@ -285,7 +285,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **Related:** Motivation and history ("왜 이렇게 됐어" (how did it end up like this?)) go to `why`.
 
 ### why
-- **When:** "왜 이렇게 됐어" (how did it end up like this?), "이거 왜 이렇게 짰어" (why was this written this way?), "이 결정 배경이 뭐야" (what's the background to this decision?), "이 값은 어디서 나왔어" (where did this value come from?), and looking for the reason behind the current shape before changing code. How something works is `how`'s job.
+- **When:** "왜 이렇게 됐어" (how did it end up like this?), "이거 왜 이렇게 짰어" (why was this written this way?), "이 결정 배경이 뭐야" (what's the background to this decision?), "이유가 뭐야" (what's the reason?), "이 값은 어디서 나왔어" (where did this value come from?), and looking for the reason behind the current shape before changing code. How something works is `how`'s job.
 - **What it does:**
   - A question about one line or one commit ends in narrow mode, answered from git blame → commit → PR alone, and the answer names the sources it didn't search.
   - Otherwise it launches one investigator per source in parallel (git and `gh`, Linear/Jira, Notion, Google Drive, Obsidian, Slack). Each investigator digs only in its own source and just notes leads that point elsewhere. Empty results are recorded as findings too.
@@ -339,7 +339,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **Bundled:** `scripts/log.sh` (appends rows), `references/decision-log-template.tsv`.
 
 ### swarm
-- **When:** `/swarm`, "병렬로 훑어줘" (sweep it in parallel), "나눠서 동시에 확인해줘" (split it up and check it all at once), broad split-up sweeps, or races to see who gets a result first. Competing and merging into one deliverable is `arena`.
+- **When:** `/swarm`, "병렬로 훑어줘" (sweep it in parallel), "나눠서 동시에 확인해줘" (split it up and check it all at once), broad split-up sweeps, or races to see who gets a result first. Competing and merging into one deliverable is `arena`; landing several tickets in parallel is `orchestrate`.
 - **What it does:**
   - First sets the done condition and the shape (split, race, or a mix). A race is decided by the first to pass (first pass) or by a full ranking (rank all).
   - Launches workers as `Agent` (worktree isolation, in the background), and long-running jobs as Orca workers. An Orca worker's `--base-branch` is accepted only for new-top-level and new-child placements.

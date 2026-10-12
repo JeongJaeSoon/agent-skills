@@ -1,6 +1,6 @@
 ---
 name: swarm
-description: "Fan out N parallel workers, drain them, and return one report. Use for /swarm, 'swarm this', \"병렬로 훑어줘\", \"나눠서 동시에 확인해줘\", or parallel coverage, races to a first result, gauntlets, and exploration. For competing candidates merged into one artifact, use arena."
+description: "Fan out parallel workers on one question and return one report: coverage sweeps, races, gauntlets. Use for /swarm, \"병렬로 훑어줘\", \"나눠서 동시에 확인해줘\". Landing several tickets is orchestrate; merging candidates into one artifact is arena."
 ---
 
 # Swarm

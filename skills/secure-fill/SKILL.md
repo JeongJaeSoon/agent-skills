@@ -1,6 +1,6 @@
 ---
 name: secure-fill
-description: Use when a browser auth screen needs a secret (dev API token, test account password) and the agent must not see the value — "토큰 입력해줘", "비밀번호 칸 채워줘", "로그인 화면에 키 넣어줘", "secure-fill". The agent focuses the field and runs secure-fill; the owner approves each fill with Touch ID unless the allowlist marks the item "approval": "none"; the tool reads the value from the Keychain and puts it into the page itself. Never read, echo, or paste the secret yourself, and never edit the allowlist.
+description: "Use when a browser auth screen needs a secret (dev token, test password) the agent must not see — \"토큰 입력해줘\", \"비밀번호 칸 채워줘\", \"secure-fill\". The value goes from the Keychain to the page after the owner's Touch ID. Never read, echo or paste the secret, and never edit the allowlist."
 ---
 
 # Secure fill

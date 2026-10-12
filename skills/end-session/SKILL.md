@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"세션을 마무리짓자\", \"머지하고 종료하자\", \"티켓 정리하고 종료해줘\", \"종료해도 될까?\", \"끝낸 orca 세션·worktree 정리해줘\", \"end this session\" — when handoff-ticket reaches the point where this session should disappear, or when this session is an Orca worker about to send worker_done, or a card whose brief says to close itself when done (no user phrase needed). Not bare \"정리해줘\"/\"마무리해줘\" with no object: that means wrap up the record and keep talking."
+description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"끝낸 orca 세션·worktree 정리해줘\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Not bare \"정리해줘\"/\"마무리해줘\": that is record-progress."
 ---
 
 # Ending the session

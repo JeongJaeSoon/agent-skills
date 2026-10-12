@@ -1,6 +1,6 @@
 ---
 name: brief
-description: "Use when the human asks where the work stands — \"현황 보고해줘\", \"상태 보고해줘\", \"상황 정리해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"status update\", `/agent-skills:brief`, a message that is just `/brief` — including progress as a table (\"진행상황 표로\", spaced or not), detailed progress per lead or per item, and what the human has to check or do; and when a turn for the human ends with a report spanning several items. Not for reports whose shape a contract fixes: a subagent's result, an Orca worker_done body, JSON or a script's output. Layout by channel: plain lines on Telegram, markdown tables in the terminal. \"어디까지 했지\" is recall; \"남은 작업 있어?\" is handoff-ticket; a program's numbers come from orchestrate's `orch status`."
+description: "Use when the human asks where the work stands — \"현황 보고해줘\", \"상태 보고해줘\", \"브리핑해줘\", \"진행 상황 알려줘\", \"진행상황 표로\", \"status update\", `/brief` — or a turn for the human ends with a report spanning several items. \"어디까지 했지\" is recall; \"남은 작업 있어?\" is handoff-ticket."
 ---
 
 # Brief
