@@ -392,7 +392,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     else:
         facts.append("변화 없음")
     if oldest_probe and (now - oldest_probe).total_seconds() > limits["pr_warn_min"] * 60:
-        facts.append(f"PR 상태 {ago((now - oldest_probe).total_seconds()).removesuffix(' 전')} 전 기준")
+        facts.append(f"PR 상태 {ago((now - oldest_probe).total_seconds())} 기준")
 
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
