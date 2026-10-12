@@ -68,7 +68,7 @@ Usage: orch <command> <slug> [options]
                                      the next-steps list (no lines clears it); done rows leave after 7
                                      days; drop removes a row and its children. --group makes a heading
                                      row (a feature or an epic) with no PR and no cells; --parent rows to it
-  board lead add <name> --handle H --repo OWNER/NAME [--run RUN] [--stale-min N] | lead close <name>
+  board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] | lead close <name>
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
                  [--status moving|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
   board drop <id> | later add <title> --trigger T [--due D] | later drop <n> | todo [LINE]... | show
@@ -77,6 +77,9 @@ Usage: orch <command> <slug> [options]
                                      fields given and stamps reported_at; an id a/b hangs off a. A row without
                                      --parent is a lead (needs --repo); under a parent it is a task unless
                                      --kind phase. PR state is joined from the collector's prs.json at render.
+                                     --program is the lead's project (epic, program): leads sharing a repository
+                                     get one table each only when each has one; lead add and set warn until
+                                     they do, and the report heads the rest (프로젝트 미지정)
                                      todo replaces the owner's to-do list (no lines clears it)
   brief render --periodic [--scope top-level|PROGRAM] [--telegram] [--headline T] [--skipped T] [--now ISO8601]
                [--commit] [--json]
@@ -2107,7 +2110,8 @@ def cmd_board(argv):
     rid = rest[0] if rest and not rest[0].startswith("--") else None
     try:
         if sub == "lead" and rest[:1] == ["add"] and len(rest) > 1:
-            board.lead_add(rest[1], opt(rest, "--handle"), opt(rest, "--repo"), opt(rest, "--run"), opt(rest, "--stale-min"))
+            board.lead_add(rest[1], opt(rest, "--handle"), opt(rest, "--repo"), opt(rest, "--run"), opt(rest, "--stale-min"),
+                           opt(rest, "--program"))
         elif sub == "lead" and rest[:1] == ["close"] and len(rest) > 1:
             board.lead_close(rest[1])
         elif sub == "set" and rid:
@@ -2124,12 +2128,14 @@ def cmd_board(argv):
         elif sub == "show":
             print(json.dumps(board.read(), ensure_ascii=False, indent=1))
         else:
-            sys.exit("usage: orch board lead add <name> --handle H --repo R [--run RUN] [--stale-min N] | lead close <name> | "
+            sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] | lead close <name> | "
                      "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
                      "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo [LINE]... | show")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
+    if sub in ("lead", "set") and (warning := board.unnamed_warning()):
+        print(warning, file=sys.stderr)
 
 
 def cmd_brief(argv):
