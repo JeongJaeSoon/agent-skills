@@ -213,5 +213,11 @@ code, _, err = orch("board", "set", "refund", "--program", "환불")
 assert code == 0 and "refund" not in err, err
 split = ok("brief", "render", "--periodic", "--now", NOW)
 assert "**acme/api — 결제**" in split and "**acme/api — 환불**" in split and "acme/api — (프로젝트 미지정)" not in split, split
+# A lead that works in phases shows only its phase rows; its section is still headed unnamed.
+ok("board", "lead", "add", "cart", "--handle", "term_0FAKE7", "--repo", "acme/shop")
+ok("board", "lead", "add", "promo", "--handle", "term_0FAKE8", "--repo", "acme/shop")
+ok("board", "set", "cart/ph1", "--kind", "phase")
+ok("board", "set", "promo/ph1", "--kind", "phase")
+assert "**acme/shop — (프로젝트 미지정)**" in ok("brief", "render", "--periodic", "--now", NOW)
 
 print("ok")

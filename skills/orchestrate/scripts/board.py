@@ -268,7 +268,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     order = [k for k in store["order"] if k in rows]
     if not order:
         return {"text": "", "headline_facts": [], "changed": [], "stale": [], "width_ok": True, "snapshot": None}
-    unnamed = set(unnamed_leads(rows))
+    unnamed, unnamed_secs = set(unnamed_leads(rows)), set()
 
     oldest_probe, changed, stale, facts = None, [], [], []
 
@@ -368,6 +368,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if r.get("parent"):
             continue
         sec = section_of(r)
+        if k in unnamed:
+            unnamed_secs.add(sec)
         if r["kind"] == "task":  # a sub-task with no lead: its own row, or a bullet when it waits with others on one person
             group = next((g for g in alone_rev.values() if r in g and len(g) >= 2), None)
             if group:
@@ -430,7 +432,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     for sec in sections:
         repo, prog = sec
         mine = [l for l in lines if l["sec"] == sec]
-        if not prog and any(l["key"] in unnamed for l in mine):
+        if sec in unnamed_secs:
             prog, many = UNNAMED, many | {repo}
         title = f"{repo} — {prog}" if repo in many and prog else repo
         out += ["", f"📋 {title}" if tg else f"**{title}**"]
