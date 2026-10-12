@@ -23,7 +23,7 @@ Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [..
 "user_folder_screenshot_days": 1, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
---parent-worktree (lineage origin cli). user-folder covers top-level entries of ~/Downloads and ~/Desktop
+--parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers top-level entries of ~/Downloads and ~/Desktop
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
 through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
@@ -813,6 +813,13 @@ def orca_json(*args):
         return None
 
 
+def automation_workspaces(res):
+    """Real paths of the worktrees Orca automations run in (`--workspace`); None when the list is unreadable."""
+    if not isinstance(res, dict):
+        return None
+    return {real(p) for a in res.get("automations") or [] if (p := (a.get("workspaceId") or "").partition("::")[2])}
+
+
 def orca_workers(state=None):
     rows, cursor = [], None
     for _ in range(50):
@@ -880,13 +887,16 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         if cards is None:
             notes.append("orca-worktree: orca worktree list 를 읽지 못함, CLI 로 만든 카드는 ledger 에 있는 것만 본다")
         cards = cards or set()
+        runners = automation_workspaces(orca_json("automations", "list")) if shutil.which("orca") else set()
+        if runners is None:
+            notes.append("orca-worktree: orca automations list 를 읽지 못함, automation 이 도는 worktree 를 가려내지 못한다")
         ledger = {real(e["id"]): e for e in latest(entries, "orca-worktree")}
         # A done-card line in the ledger only records that the card was asked once.
         asked = {real(e["id"]): e.get("ts") for e in latest(entries, "done-card")}
         quiet = quiet or transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
                                           / "projects", now or time.time())
         repos_real = {real(r) for r in repo_list}
-        for path in sorted((set(ledger) | made | cards) - users):
+        for path in sorted((set(ledger) | made | cards) - users - (runners or set())):
             if not os.path.isdir(path):
                 continue
             e = ledger.get(path)
@@ -1129,6 +1139,15 @@ def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, i
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", round_cmd(script, state_dir, ledger, "precheck"),
             "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json"]
+
+
+def runner_hint(checkout):
+    return ("\n모델: automation 은 --workspace 체크아웃의 Claude Code 설정을 따른다(create 에 모델 옵션이 없다). "
+            "메인 체크아웃에 model 을 넣으면 거기서 여는 대화형 세션도 바뀌므로, 전용 runner worktree 를 한 번 만든다:\n"
+            f"  orca worktree create --repo {shlex.quote('path:' + str(checkout))} --name automations-runner --no-parent --setup skip --json\n"
+            '  <runner>/.claude/settings.local.json 에 {"model": "<고른 모델>"} (gitignored)\n'
+            "그 뒤 schedule --workspace path:<runner> 로 다시 출력한다. 이미 있는 automation 은 "
+            "orca automations edit --id <id> --workspace path:<runner>")
 
 
 BUSY_CHILD_CPU = 25
@@ -1445,6 +1464,8 @@ def main():
             sys.exit("schedule needs --workspace <selector>: the checkout the automation runs in")
         argv = schedule_cmd(script, STATE, workspace, opt("--provider") or "claude", ledger_path(), cfg.get("inbox_to"))
         print(" ".join(shlex.quote(a) for a in argv))
+        if not opt("--workspace"):
+            print(runner_hint(top.strip()))
         if "--write" in sys.argv:
             out = run(argv)
             print(out)

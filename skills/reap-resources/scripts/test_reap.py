@@ -475,6 +475,17 @@ with tempfile.TemporaryDirectory() as tmp:
     reap.orca_json = lambda *a: None
     notes = []
     assert reap.janitor_scan({"orca-worktree"}, [], [], notes, PRS.get) == [] and "orca worktree list" in notes[0], notes
+    # A worktree an automation runs in (`--workspace`) is never a candidate, whatever its lineage or PR.
+    listing = {"worktree": {"worktrees": [card(wt, "cli")]}, "automations": {"automations": [{"workspaceId": "r::" + wt}]}}
+    reap.orca_json = lambda *a: listing[a[0]]
+    assert reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get) == []
+    reap.orca_json = lambda *a: listing[a[0]] if a[0] == "worktree" else None
+    notes = []
+    # Unreadable, the list only costs that defense: the card is still judged by the usual rules, with a note.
+    got = reap.janitor_scan({"orca-worktree"}, [], [], notes, PRS.get, quiet=lambda p: 7 * 3600)
+    assert [i["name"] for i in got] == [wt] and "orca automations list" in notes[0], (got, notes)
+assert reap.automation_workspaces({"automations": [{"workspaceId": "r::/w/run"}, {"workspaceId": None}, {}]}) == {"/w/run"}
+assert reap.automation_workspaces({"worktrees": []}) == set() and reap.automation_workspaces(None) is None
 reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json = saved
 
 # done-card: a settled card that only its idle Claude session keeps is asked once to close itself.
@@ -689,6 +700,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "건너뜀 evidence" in out and shot.exists(), out
     out = cli("schedule", "--workspace", "path:/repo")
     assert out.returncode == 0 and out.stdout.startswith("orca automations create") and "--write" in out.stdout, out
+    assert "automations-runner" not in out.stdout, "a chosen workspace needs no runner hint"
+    out = cli("schedule")
+    assert "--no-parent" in out.stdout and "settings.local.json" in out.stdout, out
 
 # user-folder: top-level entries untouched for `days`, not open, not a download in progress.
 D = 86400

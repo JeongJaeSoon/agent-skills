@@ -118,7 +118,8 @@ unset or dead (the same check as `inbox`). A `skipped_precheck` round carrying t
 signal: nothing can be sent, so the fix is the config value. It cannot tell whether anything new
 arrived, because Slack is reachable only through the agent's MCP tools; a run with nothing new
 ends at step 2 having sent nothing. `orca automations run` skips the precheck, so test the precheck by running it
-directly with `AGENT_SKILLS_STATE` pointing at a scratch folder. Devices and their trade-offs:
+directly with `AGENT_SKILLS_STATE` pointing at a scratch folder. Devices and their trade-offs, and
+the runner worktree whose settings pick the run's model (`schedule --workspace path:<runner>`):
 [docs/automation.md](../../docs/automation.md).
 
 Tests: `python3 scripts/test_mentions.py`.

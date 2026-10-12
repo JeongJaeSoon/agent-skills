@@ -301,5 +301,7 @@ assert cmd[cmd.index("--workspace-mode") + 1] == "existing" and cmd[cmd.index("-
 assert cmd[cmd.index("--precheck") + 1] == "python3 /repo/skills/orchestrate/scripts/skill_usage.py precheck", cmd
 prompt = cmd[cmd.index("--prompt") + 1]
 assert "standing" in prompt and "draft PR" in prompt and "머지하지 않" in prompt, prompt
+hint = su.runner_hint(pathlib.Path("/repo"))
+assert "path:/repo --name automations-runner --no-parent" in hint and "settings.local.json" in hint, hint
 
 print("test_skill_usage: ok")
