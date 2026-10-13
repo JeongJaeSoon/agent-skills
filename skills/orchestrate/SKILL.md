@@ -211,7 +211,7 @@ Orca's `orchestration` skill is the default; these are the places a program over
 
 ## Resume (handoff)
 
-The new coordinator's whole prompt is `/goal orchestrate resume <slug>`. On resume:
+The new coordinator's whole prompt is two lines, `/goal orchestrate resume <slug>` and `ROLE: lead <slug>`; the second binds the program to that session for the reorient hook. A session started with `claude --agent agent-skills:lead --name lead:<slug>` needs only the first. On resume:
 
 1. Read the program note.
 2. `orca orchestration run-use --id <run>`.
