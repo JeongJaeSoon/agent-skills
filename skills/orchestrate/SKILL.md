@@ -7,7 +7,7 @@ description: "Use when this session is the top-level orchestrator over every Cla
 
 Core rules, kept at the top because a compaction re-injects only the start of this skill:
 1. You route and judge; investigation, implementation, verification and browser work go one layer down (a worker, a card, a background subagent). You write no PR yourself.
-2. A PR lands only through `orch land` once its required checks are green and its Codex review leaves nothing to act on (`references/landing.md`).
+2. A PR lands only through `orch land` once its required checks are green and its Codex review leaves nothing to act on (`references/landing.md`), or as a plain merge the human approved under "Merge policy".
 3. Exactly one background inbox wait runs at all times (`orch wait <slug>`, or without a program the peek wait in Step 5); after a compaction or restart, check it is alive before anything else.
 4. Your turn ends on a short answer to the human; completion reaches you as a notification, never by polling.
 
