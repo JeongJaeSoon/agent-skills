@@ -1,33 +1,33 @@
-"""reorient.py: a declared orchestrator or lead is reminded on every prompt; an undeclared coordinator terminal is told
-what it coordinates at session start and once on its first prompt; anyone else gets nothing.
+"""reorient.py: an orchestrator or lead, declared by `--agent` or a ROLE line, is reminded at session start and on
+every prompt; anyone else gets nothing.
 Run: python3 hooks/test_reorient.py"""
-import json, os, pathlib, subprocess, sys, tempfile
+import json, pathlib, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 TMP = pathlib.Path(tempfile.mkdtemp())
 (TMP / "bin").mkdir()
-(TMP / "home/.claude").mkdir(parents=True)
 (TMP / "programs/p").mkdir(parents=True)
 (TMP / "programs/p/program.json").write_text(json.dumps({"slug": "p", "run": "run_a", "note": "Project/p/note.md"}))
+# Prompts must stay fast: any external command the hook ran would leave this file behind.
 orca = TMP / "bin/orca"
-orca.write_text("#!/bin/sh\ncat \"$FAKE_RUN\"\n")
+orca.write_text(f"#!/bin/sh\ntouch {TMP / 'orca-called'}\n")
 orca.chmod(0o755)
-RUN_A = json.dumps({"ok": True, "result": {"run": {"id": "run_a", "coordinator_handle": "term_me"}}})
-NO_RUN = json.dumps({"ok": True, "result": {"run": None}})
+ORCH, LEAD = "agent-skills:orchestrator", "agent-skills:lead"
 
 
-def hook(source="compact", own="term_me", reply=RUN_A, programs="programs", event="SessionStart", session="s1",
-         prompt="hi"):
-    (TMP / "reply.json").write_text(reply)
+def hook(event="UserPromptSubmit", session="s1", prompt="hi", source="startup", agent=None, title=None,
+         handle="term_me"):
     env = {"PATH": f"{TMP / 'bin'}:/usr/bin:/bin", "HOME": str(TMP / "home"), "AGENT_SKILLS_STATE": str(TMP / "state"),
-           "PROGRAMS_HOME": str(TMP / programs), "FAKE_RUN": str(TMP / "reply.json")}
-    if own:
-        env["ORCA_TERMINAL_HANDLE"] = own
+           "PROGRAMS_HOME": str(TMP / "programs"), "ORCA_TERMINAL_HANDLE": handle}
     payload = {"hook_event_name": event, "session_id": session}
     if event == "SessionStart":
         payload["source"] = source
     if event == "UserPromptSubmit":
         payload["prompt"] = prompt
+    if agent:
+        payload["agent_type"] = agent
+    if title:
+        payload["session_title"] = title
     out = subprocess.run([sys.executable, HERE / "reorient.py"], input=json.dumps(payload),
                          capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
@@ -38,83 +38,60 @@ def hook(source="compact", own="term_me", reply=RUN_A, programs="programs", even
     return spec["additionalContext"]
 
 
-text = hook()
-assert "just compacted" in text and "orch status p" in text and "orch wait p" in text and "Project/p/note.md" in text \
-    and "run_a" in text, text
-for source in ("startup", "resume"):
-    text = hook(source=source)
-    assert "orch status p" in text and "compacted" not in text, text
-assert hook(source="clear") is None
-assert hook(own="term_other") is None, "a worker or another coordinator is not this program's coordinator"
-assert hook(own=None) is None, "not an Orca terminal"
-assert hook(reply="not json") is None
+START = dict(event="SessionStart")
 
-# A Run with no registered program, or no programs at all: its coordinator is the top-level coordinator.
-top = hook(reply=json.dumps({"ok": True, "result": {"run": {"id": "run_b", "coordinator_handle": "term_me"}}}))
-assert "top-level coordinator of Orca Run run_b" in top and "agent-skills:orchestrate" in top \
-    and "agent-skills:brief." in top, top
-assert "top-level coordinator of Orca Run run_a" in hook(programs="none")
-assert hook(reply=json.dumps({"ok": False, "error": {"code": "no_run"}})) is None
-assert hook(reply=NO_RUN) is None
+# 1. --agent: the hook input's agent_type decides, on every prompt and at every SessionStart that carries it.
+assert "top-level orchestrator" in hook(**START, agent=ORCH, title="orchestrator")
+assert hook(agent=ORCH).startswith("ROLE: orchestrator.")
+assert hook(agent=ORCH, session="s2").startswith("ROLE: orchestrator."), "no record needed"
+text = hook(**START, source="compact", agent=LEAD, title="lead:p", session="l1")
+assert "coordinate the program p" in text and "just compacted" in text and "orch status p" in text \
+    and "Project/p/note.md" in text and "Orca Run run_a" in text, text
+line = hook(agent=LEAD, title="lead:p", session="l1")
+assert line.startswith("ROLE: lead p.") and "orch wait p" in line and "Project/p/note.md" in line and "\n" not in line
+# Resume and fork leave agent_type out of SessionStart; the title stands in.
+assert "coordinate the program p" in hook(**START, source="resume", title="lead:p", session="l1")
+assert "coordinate the program p" in hook(**START, source="fork", title="lead:p", session="l9")
+assert "top-level orchestrator" in hook(**START, source="resume", title="orchestrator", session="o9")
+assert hook(**START, source="resume", title="fix login bug", session="x9") is None
+assert hook(title="lead:p", session="x9") is None, "a prompt is decided by agent_type or a ROLE line, not the title"
+# A lead with no name gets told how to name its program; a ROLE line can.
+assert "no program is named" in hook(agent=LEAD, session="l2")
+assert "coordinate the program q" in hook(agent=LEAD, session="l2", prompt="ROLE: lead q")
+assert hook(agent=LEAD, session="l2").startswith("ROLE: lead q.")
+assert hook(agent=LEAD, session="l2", title="lead:p").startswith("ROLE: lead p."), "the title names the program first"
+assert hook(agent="Explore", session="s3") is None and hook(**START, agent="Explore", session="s3") is None
 
-# Listed in the local config, no Run needed.
-(TMP / "home/.claude/agent-skills.json").write_text(json.dumps({"orchestrate": {"top_level_handles": ["term_top"]}}))
-top = hook(own="term_top", reply=NO_RUN)
-assert top.startswith("You are the top-level coordinator.") and "Run" not in top, top
-assert hook(own="term_other", reply=NO_RUN) is None
-
-# A prompt is judged once per session; SessionStart judges again every time.
-assert "orch status p" in hook(event="UserPromptSubmit", session="u1")
-assert hook(event="UserPromptSubmit", session="u1") is None, "second prompt of the same session"
-assert hook(event="UserPromptSubmit", session="u2", own="term_other") is None
-assert hook(event="UserPromptSubmit", session="u2") is None, "the cache records a worker too"
-assert "orch status p" in hook(event="UserPromptSubmit", session="u3")
-assert "orch status p" in hook(session="u1", source="resume")
-assert hook(event="UserPromptSubmit", session="../x") is None, "an id that is not a file name"
-assert not (TMP / "x.json").exists() and not (TMP / "state/x.json").exists()
-assert hook(event="Stop") is None
-
-# A declared role is bound to the session id: every prompt gets one line, whatever terminal or Run it is in now.
-P = dict(event="UserPromptSubmit", reply=NO_RUN)
-first = hook(session="r1", own="term_old", prompt="/goal steer everything\nROLE: orchestrator\nCLOSE: §8", **P)
-assert "declared the top-level orchestrator" in first and "agent-skills:orchestrate" in first and "ROLE: none" in first
+# 2. A ROLE line: bound to the session id, whatever terminal the session is in now.
+first = hook(session="r1", handle="term_old", prompt="/goal steer everything\nROLE: orchestrator\nCLOSE: §8")
+assert "top-level orchestrator" in first and "ROLE: none" in first, first
 assert json.loads((TMP / "state/roles/r1.json").read_text()) == {"role": "orchestrator"}
-for own in ("term_old", "term_new", None):
-    line = hook(session="r1", own=own, **P)
-    assert line.startswith("ROLE: orchestrator.") and "\n" not in line, line
-assert "declared the top-level orchestrator" in hook(session="r1", own="term_new", source="resume", reply=NO_RUN)
-assert "just compacted" not in hook(session="r1", source="compact", reply=NO_RUN), "top-level has no program to restate"
-assert hook(session="r1", source="clear", reply=NO_RUN) is None
+for handle in ("term_old", "term_new", ""):
+    assert hook(session="r1", handle=handle).startswith("ROLE: orchestrator.")
+for source in ("startup", "resume", "compact"):
+    assert "top-level orchestrator" in hook(**START, source=source, session="r1", handle="term_new")
+assert hook(**START, source="clear", session="r1") is None
+lead = hook(session="r3", prompt="/goal ship p\nMODE orchestrate\nROLE        lead p\nCLOSE: §8")
+assert "coordinate the program p" in lead and "orch status p" in lead and "Project/p/note.md" in lead, lead
+assert "just compacted" in hook(**START, source="compact", session="r3")
+assert hook(session="r3", prompt="ROLE: lead q").startswith("You coordinate the program q")
+assert "orch wait q" in hook(session="r3")
 
-# An earlier false judgement of the terminal does not hide a later declaration.
-assert hook(session="r2", own="term_other", **P) is None
-assert json.loads((TMP / "state/reorient/r2.json").read_text())["coordinator"] is False
-assert "declared the top-level orchestrator" in hook(session="r2", own="term_other", prompt="ROLE: orchestrator", **P)
-assert hook(session="r2", own="term_other", **P).startswith("ROLE: orchestrator.")
+# ROLE: none: one notice, then silence, even for a session started with --agent.
+assert "ROLE cleared" in hook(session="r3", prompt="ok\nROLE: none")
+assert hook(session="r3") is None and hook(**START, source="resume", session="r3") is None
+assert hook(session="r3", prompt="ROLE: none") is None, "already cleared"
+assert "ROLE cleared" in hook(agent=ORCH, session="a1", prompt="ROLE: none")
+assert hook(agent=ORCH, session="a1") is None and hook(**START, source="compact", agent=ORCH, session="a1") is None
+assert hook(**START, source="resume", title="orchestrator", session="a1") is None
 
-# A lead names its program; the slug finds the program note without a Run.
-lead = hook(session="r3", own=None, prompt="/goal ship p\nMODE orchestrate\nROLE        lead p\nCLOSE: §8", **P)
-assert "declared the lead of program p" in lead and "orch status p" in lead and "Project/p/note.md" in lead \
-    and "Orca Run run_a" in lead, lead
-line = hook(session="r3", own=None, **P)
-assert line.startswith("ROLE: lead p.") and "orch wait p" in line and "Project/p/note.md" in line, line
-assert "just compacted" in hook(session="r3", own=None, source="compact", reply=NO_RUN)
-assert hook(session="r3", own=None, prompt="ROLE: lead q", **P).startswith("You are declared the lead of program q")
-assert "orch wait q" in hook(session="r3", own=None, **P)
-
-# Clearing: one notice, then silence. Text that only mentions a role is not a declaration.
-assert "ROLE cleared" in hook(session="r3", own=None, prompt="ok\nROLE: none", **P)
-assert hook(session="r3", own=None, **P) is None
-assert hook(session="r3", own=None, source="resume", reply=NO_RUN) is None
-assert hook(session="r3", own=None, prompt="ROLE: none", **P) is None, "already cleared"
-# A cleared session stays cleared even in the Run's coordinator terminal, which would otherwise be told again.
-hook(session="r6", prompt="ROLE: orchestrator", **P)
-assert "ROLE cleared" in hook(session="r6", prompt="ROLE: none", **P)
-assert hook(session="r6", event="UserPromptSubmit") is None
-assert hook(session="r6") is None and hook(session="r6", source="resume") is None
+# 3. Nothing declared: nothing said, whatever the terminal, and no external command run.
+assert hook(session="u1") is None and hook(**START, session="u1") is None
 for text in ("use ROLE: orchestrator here", "ROLE: lead <slug>", "ROLE: admin", "ROLES: orchestrator"):
-    assert hook(session="r4", own=None, prompt=text, **P) is None, text
-assert not (TMP / "state/roles/r4.json").exists()
-assert hook(session="../r5", own=None, prompt="ROLE: orchestrator", **P) is None
-assert not (TMP / "state/r5.json").exists()
+    assert hook(session="u2", prompt=text) is None, text
+assert not (TMP / "state/roles/u2.json").exists()
+assert hook(session="../u3", prompt="ROLE: orchestrator") is None
+assert not (TMP / "state/u3.json").exists()
+assert hook(event="Stop") is None
+assert not (TMP / "orca-called").exists(), "the hook ran orca"
 print("reorient: all pass")

@@ -5,13 +5,19 @@ description: "Use when this session is the top-level orchestrator over every Cla
 
 # Orchestrate a program
 
+Core rules, kept at the top because a compaction re-injects only the start of this skill:
+1. You route and judge; investigation, implementation, verification and browser work go one layer down (a worker, a card, a background subagent). You write no PR yourself.
+2. A PR lands only through `orch land` once its required checks are green and its Codex review leaves nothing to act on (`references/landing.md`).
+3. Exactly one background inbox wait runs at all times (`orch wait <slug>`, or without a program the peek wait in Step 5); after a compaction or restart, check it is alive before anything else.
+4. Your turn ends on a short answer to the human; completion reaches you as a notification, never by polling.
+
 You own the program, not the code. You frame it, write briefs, drain the inbox, keep dependencies and the land order honest, and decide. Orca already owns the mechanics: Run, Task and its deps, Dispatch, `check --wait`/ack, `ask`/`reply`, gates, the worker contract, recovery and release. This skill adds only the program layer.
 
 **REQUIRED BACKGROUND:** at the start of every coordinator session, run `orca skills get orchestration` and read it. Every Orca command here comes from it; never compose one from memory.
 
 Two modes share these rules. **Top-level:** the one session above every task session and program coordinator the human runs; read `references/top-level.md`. **Program:** one project driven to done through workers; the Steps below.
 
-A session takes its mode by declaring it in a prompt, a line of its own: `ROLE: orchestrator` for the top-level, `ROLE: lead <slug>` for a program's coordinator or lead, `ROLE: none` to clear it (the session then gets no reminder at all). The plugin's reorient hook binds the role to the session id, so it survives compaction and a resume in another terminal, and puts one reminder line before every prompt of a declared session. A lead's first prompt carries its `ROLE` line (`references/brief.md` "Lead"); the human declares the top-level once.
+A session's mode is declared, never guessed from its terminal. Start it with `claude --agent agent-skills:orchestrator --name orchestrator` for the top-level, or `claude --agent agent-skills:lead --name lead:<slug>` for a program's coordinator or lead. A session already running, or a lead card whose launcher cannot pass flags, declares with a prompt line of its own: `ROLE: orchestrator` or `ROLE: lead <slug>`; `ROLE: none` silences either. The plugin's reorient hook reads the role from the session itself, so it survives compaction, resume and fork, and puts one reminder line before every prompt of a declared session. A lead card's first prompt carries its `ROLE` line (`references/brief.md` "Lead").
 
 ## Stay answerable
 
@@ -213,6 +219,6 @@ The new coordinator's whole prompt is `/goal orchestrate resume <slug>`. On resu
 4. `orch status`.
 5. Stop any inbox watcher the program ran before (a Monitor, a script), start the one `orch wait`, and continue at Drain.
 
-After an automatic compaction, the plugin's SessionStart hook tells a declared lead, or the Run's coordinator terminal, to do steps 1 and 4 again. Before them, check that the inbox wait is alive and start it if not (Drain, "One inbox wait, always").
+After an automatic compaction, the plugin's SessionStart hook tells a declared lead to do steps 1 and 4 again. Before them, check that the inbox wait is alive and start it if not (Drain, "One inbox wait, always").
 
 Whenever the note's policy, ceiling, deadline, predicate or exclusive paths change mid-run, mirror them with `orch set` in the same turn. Workers report to the Run inbox, not to a session name, so nothing needs re-pointing. The old coordinator ends only after the new one has printed `status`.
