@@ -49,8 +49,9 @@ MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
 # The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
 LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:["']|$)""")
 LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
-# The line reorient.py records; the template's unfilled `<slug>` and `ROLE: none` do not count.
-LEAD_ROLE = re.compile(r"\bROLE:?[ \t]+lead[ \t]+[\w.-]+")
+# A whole line reorient.py records, the prompt's closing quote allowed after it; the template's unfilled `<slug>`,
+# `ROLE: none`, trailing words and a `\n` escape the shell passes through literally do not count.
+LEAD_ROLE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)[ \t]*ROLE:?[ \t]+lead[ \t]+[\w.-]+[ \t]*(?:$|["'])""")
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}

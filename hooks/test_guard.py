@@ -86,7 +86,10 @@ assert bash(f'{NEW} --prompt "/goal run app as lead\nMODE orchestrate\nCLOSE: §
 LEAD = "MODE orchestrate\nROLE: lead app\nDELEGATE nothing yourself\nPREDICATE ENG-1, ENG-2 Done\nCLOSE: §8"
 assert bash(f'{NEW} --prompt "/goal run app\n{LEAD}"') == "none"
 assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("DELEGATE", "WHO")}"') == "deny"
-for role in ("", "ROLE: none", "ROLE: lead <slug>", "ROLE lead"):
+assert bash(f"{NEW} --prompt 'ROLE: lead app\n{LEAD.replace(chr(10) + 'ROLE: lead app', '')}'") == "none"
+assert bash(f"{NEW} --prompt '/goal run app\\nROLE: lead app\n{LEAD.replace('ROLE: lead app', '')}'") == "deny"  # literal \\n
+for role in ("", "ROLE: none", "ROLE: lead <slug>", "ROLE lead", "ROLE: lead app (program coordinator)",
+             "see ROLE: lead app"):
     assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("ROLE: lead app", role)}"') == "deny", role
 assert bash(f"{NEW} --prompt 'app: lead\nGOAL ship X\nROLE: lead app\nDELEGATE all\nPREDICATE ENG-1 Done\nCLOSE: §8'") == "deny"  # no MODE
 assert bash(f"{NEW} --prompt 'app: lead\n{LEAD}'") == "none"
