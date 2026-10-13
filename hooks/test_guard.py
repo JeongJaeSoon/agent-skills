@@ -7,17 +7,18 @@ CHECK = "orca orchestration check"
 HOME = tempfile.mkdtemp()  # no user skills unless a case adds one
 
 
-def run(tool, tool_input, own, transcript=None):
+def run(tool, tool_input, own, transcript=None, agent=None):
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT"}
     env["ORCA_TERMINAL_HANDLE"] = own
     env["HOME"] = HOME
     out = subprocess.run([sys.executable, HERE / "guard.py"], input=json.dumps(
-        {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript}), capture_output=True, text=True, env=env).stdout
+        {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript, "agent_type": agent}),
+        capture_output=True, text=True, env=env).stdout
     return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out.strip() else "none"
 
 
-def bash(cmd, own="term_me", transcript=None):
-    return run("Bash", {"command": cmd}, own, transcript)
+def bash(cmd, own="term_me", transcript=None, agent=None):
+    return run("Bash", {"command": cmd}, own, transcript, agent)
 
 
 def skill(name):
@@ -88,6 +89,7 @@ assert bash(f'{NEW} --prompt "/goal run app\n{LEAD}"') == "none"
 assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("DELEGATE", "WHO")}"') == "deny"
 assert bash(f"{NEW} --prompt 'ROLE: lead app\n{LEAD.replace(chr(10) + 'ROLE: lead app', '')}'") == "none"
 assert bash(f"{NEW} --prompt '/goal run app\\nROLE: lead app\n{LEAD.replace('ROLE: lead app', '')}'") == "deny"  # literal \\n
+assert bash(f'{NEW} --prompt "/goal orchestrate resume app\nROLE: lead app\nCLOSE: §8"') == "deny"  # no MODE
 for role in ("", "ROLE: none", "ROLE: lead <slug>", "ROLE lead", "ROLE: lead app (program coordinator)",
              "see ROLE: lead app"):
     assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("ROLE: lead app", role)}"') == "deny", role
@@ -126,6 +128,12 @@ for t in (TOP, WORKER, META, None, str(pathlib.Path(HOME) / "absent.jsonl"), tra
     assert bash(LEAD_CARD, transcript=t) == "none", t  # a later lead-shaped prompt does not count; unreadable fails open
 assert bash(WORKER_CARD, transcript=AS_LEAD) == "none"
 assert bash(f'{NEW} --prompt "{LEAD}"', transcript=AS_LEAD) == "deny"  # MODE opening the prompt, no /goal
+RESUMED = transcript("resumed", said(GOAL.replace("run widgets. 브리프: /tmp/b.md", "orchestrate resume widgets")
+                                     + "ROLE: lead widgets</command-args>"))
+assert bash(LEAD_CARD, transcript=RESUMED) == "deny", "a lead resumed by its ROLE line is still a lead"
+assert bash(WORKER_CARD, transcript=RESUMED) == "none"
+assert bash(LEAD_CARD, agent="agent-skills:lead") == "deny", "a lead started with --agent"
+assert bash(LEAD_CARD, agent="agent-skills:orchestrator") == "none" and bash(WORKER_CARD, agent="agent-skills:lead") == "none"
 
 # A foreground sleep loop is refused; the same loop in the background, and a sleep outside a loop, are not.
 O = "/tmp/t/b1.output"
