@@ -7,18 +7,20 @@ CHECK = "orca orchestration check"
 HOME = tempfile.mkdtemp()  # no user skills unless a case adds one
 
 
-def run(tool, tool_input, own, transcript=None, agent=None):
+def run(tool, tool_input, own, transcript=None, agent=None, session="s0"):
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT"}
+    env["AGENT_SKILLS_STATE"] = f"{HOME}/state"
     env["ORCA_TERMINAL_HANDLE"] = own
     env["HOME"] = HOME
     out = subprocess.run([sys.executable, HERE / "guard.py"], input=json.dumps(
-        {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript, "agent_type": agent}),
+        {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript, "agent_type": agent,
+         "session_id": session}),
         capture_output=True, text=True, env=env).stdout
     return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out.strip() else "none"
 
 
-def bash(cmd, own="term_me", transcript=None, agent=None):
-    return run("Bash", {"command": cmd}, own, transcript, agent)
+def bash(cmd, own="term_me", transcript=None, agent=None, session="s0"):
+    return run("Bash", {"command": cmd}, own, transcript, agent, session)
 
 
 def skill(name):
@@ -134,6 +136,12 @@ assert bash(LEAD_CARD, transcript=RESUMED) == "deny", "a lead resumed by its ROL
 assert bash(WORKER_CARD, transcript=RESUMED) == "none"
 assert bash(LEAD_CARD, agent="agent-skills:lead") == "deny", "a lead started with --agent"
 assert bash(LEAD_CARD, agent="agent-skills:orchestrator") == "none" and bash(WORKER_CARD, agent="agent-skills:lead") == "none"
+(pathlib.Path(HOME) / "state/roles").mkdir(parents=True)
+(pathlib.Path(HOME) / "state/roles/joined.json").write_text(json.dumps({"role": "lead", "slug": "widgets"}))
+(pathlib.Path(HOME) / "state/roles/top.json").write_text(json.dumps({"role": "orchestrator"}))
+assert bash(LEAD_CARD, session="joined") == "deny", "a session that joined as a lead with a later ROLE line"
+assert bash(LEAD_CARD, session="top") == "none" and bash(WORKER_CARD, session="joined") == "none"
+assert bash(LEAD_CARD, session="../joined") == "none"
 
 # A foreground sleep loop is refused; the same loop in the background, and a sleep outside a loop, are not.
 O = "/tmp/t/b1.output"

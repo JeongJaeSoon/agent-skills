@@ -12,7 +12,8 @@ work itself, and one without ROLE never gets the reorient hook's per-prompt remi
 The text is read as written: a prompt built from a file or variable is denied too.
 
 Deny: a lead's card started from a session that is itself a lead, known by its `agent_type` (`claude --agent
-agent-skills:lead`) or its transcript's first user prompt passing the same lead test. Only the human or the top-level starts a lead (orchestrate references/brief.md "Lead").
+agent-skills:lead`), its `ROLE: lead` record from the reorient hook, or its transcript's first user prompt passing the
+same lead test. Only the human or the top-level starts a lead (orchestrate references/brief.md "Lead").
 A missing or unreadable transcript, or one restarted by /clear, gets no decision.
 
 Deny: a foreground Bash call that polls with a sleep loop (`until/while/for …; do … sleep N` with N of 5 s or a
@@ -32,6 +33,7 @@ variables other than $ORCA_TERMINAL_HANDLE), so the allowed prefix cannot carry 
 import json, os, pathlib, re, shlex, string, sys
 
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
+ROLES = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "roles"
 PLUGIN = "agent-skills"
 MAILBOX = re.compile(r"\borca\s+orchestration\s+(?:check|inbox)\b[^;&|\n]*?\s--terminal(?:\s+|=)(\S+)")
 OWN_VAR = ("$ORCA_TERMINAL_HANDLE", "${ORCA_TERMINAL_HANDLE}")
@@ -90,6 +92,16 @@ def is_lead(text):
     return bool(MODE.search(text) or LEAD_HEAD.search(text) or LEAD_ROLE.search(text))
 
 
+def declared_lead(session):
+    """The session took the lead role with a later `ROLE: lead <slug>` prompt, recorded by reorient.py."""
+    if not re.fullmatch(r"[\w-]{1,128}", session or ""):
+        return False
+    try:
+        return json.loads((ROLES / f"{session}.json").read_text()).get("role") == "lead"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def started_as_lead(transcript):
     try:
         with open(transcript, encoding="utf-8") as f:
@@ -107,7 +119,7 @@ def started_as_lead(transcript):
     return False
 
 
-def bash(cmd, background=False, transcript=None, agent=None):
+def bash(cmd, background=False, transcript=None, agent=None, session=None):
     loop = None if background else SLEEP_LOOP.search(cmd)
     # A short retry loop (sleep 1-4) is left alone; polling loops seen in practice slept 5 to 30 s.
     if loop and (loop[1] == "$" or int(loop[1]) >= 5):
@@ -136,7 +148,8 @@ def bash(cmd, background=False, transcript=None, agent=None):
                                   "end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP when this session will reuse the card; "
                                   "a lead also gets its MODE, `ROLE: lead <slug>`, DELEGATE and PREDICATE lines, copied from orchestrate "
                                   "references/brief.md \"Lead\" (dispatch-card §2).")
-        if lead and (agent == "agent-skills:lead" or transcript and started_as_lead(transcript)):
+        if lead and (agent == "agent-skills:lead" or declared_lead(session)
+                     or transcript and started_as_lead(transcript)):
             return decide("deny", "This session is a lead, and a lead does not start another lead. Give the card a "
                                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
                                   "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
@@ -159,7 +172,7 @@ def main():
     tool, args = event.get("tool_name"), event.get("tool_input") or {}
     if tool == "Bash":
         bash(args.get("command") or "", args.get("run_in_background") is True, event.get("transcript_path"),
-             event.get("agent_type"))
+             event.get("agent_type"), str(event.get("session_id") or ""))
     elif tool == "Skill":
         skill = str(args.get("skill") or "")
         name = skill.removeprefix(f"{PLUGIN}:")
