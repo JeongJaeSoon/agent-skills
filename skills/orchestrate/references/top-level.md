@@ -10,6 +10,8 @@ orchestrator                      this session
   └ program 3 coordinators A, B
 ```
 
+The human makes a session the orchestrator by sending a prompt with the line `ROLE: orchestrator` (SKILL.md); from then on every prompt there arrives with a one-line reminder to run this mode, whatever the terminal. A session in this mode that has no such reminder asks the human to send that line.
+
 The roster, adoption of sessions the human opened by hand, and the inbox/timeline screen belong to the orchestrator dashboard. This file covers what the orchestrator does with them.
 
 ## Routing

@@ -97,8 +97,9 @@ end. The brief has:
 
 A card that will run a project for this session through cards of its own (a lead) gets
 `orchestrate` `references/brief.md` "Lead" instead of the list above, and its `--prompt` also
-carries the `MODE`, `INBOX`, `DELEGATE` and `PREDICATE` lines; the hook refuses a lead's prompt (a `MODE`
-line or a `<project>: lead` head) that lacks `MODE`, `DELEGATE` or `PREDICATE`. A lead once briefed in a format of the coordinator's own, with none of these lines, reported done and
+carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE` and `PREDICATE` lines; the hook refuses a lead's prompt (a `MODE`
+line or a `<project>: lead` head) that lacks `MODE`, `ROLE`, `DELEGATE` or `PREDICATE`. The `ROLE` line binds the
+lead role to the card's session, so the reorient hook reminds it of its program on every prompt. A lead once briefed in a format of the coordinator's own, with none of these lines, reported done and
 waited for its next order for two days.
 
 Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no

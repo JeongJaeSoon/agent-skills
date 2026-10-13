@@ -6,8 +6,9 @@ Deny: `orca orchestration check|inbox --terminal <handle>` for a handle that is 
 agent's messages.
 
 Deny: `orca worktree create --prompt` whose command text has no `CLOSE` or `KEEP` line, or is a lead's (a `MODE`
-line, or the template's `<project>: lead` head) without all of `MODE`, `DELEGATE` and `PREDICATE`. A card whose first
-prompt lacks them reports done and idles for days, and a lead without DELEGATE did the work itself (dispatch-card §2).
+line, or the template's `<project>: lead` head) without all of `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`. A card
+whose first prompt lacks them reports done and idles for days, a lead without DELEGATE did the work itself, and one
+without ROLE never gets the reorient hook's per-prompt reminder (dispatch-card §2).
 The text is read as written: a prompt built from a file or variable is denied too.
 
 Deny: a lead's card started from a session that is itself a lead, known by its transcript's first user prompt
@@ -47,7 +48,7 @@ CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
 MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
 # The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
 LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:["']|$)""")
-LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
+LEAD_LINES = ("MODE", "ROLE", "DELEGATE", "PREDICATE")
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
@@ -127,7 +128,7 @@ def bash(cmd, background=False, transcript=None):
             return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Write it literally in "
                                   "--prompt (not from a file or variable): `CLOSE: 완료 기준을 채우고 결과를 적으면 "
                                   "end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP when this session will reuse the card; "
-                                  "a lead also gets its MODE, DELEGATE and PREDICATE lines, copied from orchestrate "
+                                  "a lead also gets its MODE, `ROLE: lead <slug>`, DELEGATE and PREDICATE lines, copied from orchestrate "
                                   "references/brief.md \"Lead\" (dispatch-card §2).")
         if lead and transcript and started_as_lead(transcript):
             return decide("deny", "This session is a lead, and a lead does not start another lead. Give the card a "

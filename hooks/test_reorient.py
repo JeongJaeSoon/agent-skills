@@ -1,4 +1,5 @@
-"""reorient.py: only a coordinator is told what it coordinates, at session start and once on its first prompt.
+"""reorient.py: a declared orchestrator or lead is reminded on every prompt; an undeclared coordinator terminal is told
+what it coordinates at session start and once on its first prompt; anyone else gets nothing.
 Run: python3 hooks/test_reorient.py"""
 import json, os, pathlib, subprocess, sys, tempfile
 
@@ -15,7 +16,8 @@ RUN_A = json.dumps({"ok": True, "result": {"run": {"id": "run_a", "coordinator_h
 NO_RUN = json.dumps({"ok": True, "result": {"run": None}})
 
 
-def hook(source="compact", own="term_me", reply=RUN_A, programs="programs", event="SessionStart", session="s1"):
+def hook(source="compact", own="term_me", reply=RUN_A, programs="programs", event="SessionStart", session="s1",
+         prompt="hi"):
     (TMP / "reply.json").write_text(reply)
     env = {"PATH": f"{TMP / 'bin'}:/usr/bin:/bin", "HOME": str(TMP / "home"), "AGENT_SKILLS_STATE": str(TMP / "state"),
            "PROGRAMS_HOME": str(TMP / programs), "FAKE_RUN": str(TMP / "reply.json")}
@@ -24,6 +26,8 @@ def hook(source="compact", own="term_me", reply=RUN_A, programs="programs", even
     payload = {"hook_event_name": event, "session_id": session}
     if event == "SessionStart":
         payload["source"] = source
+    if event == "UserPromptSubmit":
+        payload["prompt"] = prompt
     out = subprocess.run([sys.executable, HERE / "reorient.py"], input=json.dumps(payload),
                          capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
@@ -69,4 +73,43 @@ assert "orch status p" in hook(session="u1", source="resume")
 assert hook(event="UserPromptSubmit", session="../x") is None, "an id that is not a file name"
 assert not (TMP / "x.json").exists() and not (TMP / "state/x.json").exists()
 assert hook(event="Stop") is None
+
+# A declared role is bound to the session id: every prompt gets one line, whatever terminal or Run it is in now.
+P = dict(event="UserPromptSubmit", reply=NO_RUN)
+first = hook(session="r1", own="term_old", prompt="/goal steer everything\nROLE: orchestrator\nCLOSE: §8", **P)
+assert "declared the top-level orchestrator" in first and "agent-skills:orchestrate" in first and "ROLE: none" in first
+assert json.loads((TMP / "state/roles/r1.json").read_text()) == {"role": "orchestrator"}
+for own in ("term_old", "term_new", None):
+    line = hook(session="r1", own=own, **P)
+    assert line.startswith("ROLE: orchestrator.") and "\n" not in line, line
+assert "declared the top-level orchestrator" in hook(session="r1", own="term_new", source="resume", reply=NO_RUN)
+assert "just compacted" not in hook(session="r1", source="compact", reply=NO_RUN), "top-level has no program to restate"
+assert hook(session="r1", source="clear", reply=NO_RUN) is None
+
+# An earlier false judgement of the terminal does not hide a later declaration.
+assert hook(session="r2", own="term_other", **P) is None
+assert json.loads((TMP / "state/reorient/r2.json").read_text())["coordinator"] is False
+assert "declared the top-level orchestrator" in hook(session="r2", own="term_other", prompt="ROLE: orchestrator", **P)
+assert hook(session="r2", own="term_other", **P).startswith("ROLE: orchestrator.")
+
+# A lead names its program; the slug finds the program note without a Run.
+lead = hook(session="r3", own=None, prompt="/goal ship p\nMODE orchestrate\nROLE        lead p\nCLOSE: §8", **P)
+assert "declared the lead of program p" in lead and "orch status p" in lead and "Project/p/note.md" in lead \
+    and "Orca Run run_a" in lead, lead
+line = hook(session="r3", own=None, **P)
+assert line.startswith("ROLE: lead p.") and "orch wait p" in line and "Project/p/note.md" in line, line
+assert "just compacted" in hook(session="r3", own=None, source="compact", reply=NO_RUN)
+assert hook(session="r3", own=None, prompt="ROLE: lead q", **P).startswith("You are declared the lead of program q")
+assert "orch wait q" in hook(session="r3", own=None, **P)
+
+# Clearing: one notice, then silence. Text that only mentions a role is not a declaration.
+assert "ROLE cleared" in hook(session="r3", own=None, prompt="ok\nROLE: none", **P)
+assert not (TMP / "state/roles/r3.json").exists()
+assert hook(session="r3", own=None, **P) is None
+assert hook(session="r3", own=None, source="resume", reply=NO_RUN) is None
+for text in ("use ROLE: orchestrator here", "ROLE: lead <slug>", "ROLE: admin", "ROLES: orchestrator"):
+    assert hook(session="r4", own=None, prompt=text, **P) is None, text
+assert not (TMP / "state/roles/r4.json").exists()
+assert hook(session="../r5", own=None, prompt="ROLE: orchestrator", **P) is None
+assert not (TMP / "state/r5.json").exists()
 print("reorient: all pass")

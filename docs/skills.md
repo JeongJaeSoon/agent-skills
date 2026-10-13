@@ -501,7 +501,11 @@
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
 ### 코디네이터 재정렬
-`hooks/reorient.py`(SessionStart `startup|resume|compact`, UserPromptSubmit). 이 터미널이 코디네이터일 때만 한 단락을 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않는다. 코디네이터 판정은 둘 중 하나다.
+`hooks/reorient.py`(SessionStart `startup|resume|compact`, UserPromptSubmit). 역할을 선언한 세션과 코디네이터 터미널에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않는다.
+
+역할은 선언으로 정한다. 프롬프트에 한 줄로 `ROLE: orchestrator`(최상위), `ROLE: lead <slug>`(프로그램 하나의 코디네이터·리드), `ROLE: none`(해제)을 쓰면, hook이 `$AGENT_SKILLS_STATE/roles/<session_id>.json`에 기록한다. resume은 session_id를 유지하므로 다른 터미널에서 이어도 역할이 남는다. 선언된 세션은 SessionStart에 긴 단락을, 모든 프롬프트에 한 줄을 받는다. 한 번만 넣으면 다음 요청에 묻혀 무시됐기 때문이다. 리드 카드는 첫 프롬프트에 `ROLE` 줄이 들어가고(guard가 없으면 거부한다), 최상위는 사람이 한 번 선언한다. 해제하면 알림 한 번 뒤로 아무것도 넣지 않는다.
+
+선언이 없는 세션은 터미널로 판정한다. 둘 중 하나다.
 - `orca orchestration run-current`의 `coordinator_handle`이 이 터미널의 `$ORCA_TERMINAL_HANDLE`이다.
 - `~/.claude/agent-skills.json`의 `orchestrate.top_level_handles`에 이 handle이 있다. Run 없이 도는 최상위 코디네이터용이다.
 
@@ -509,7 +513,7 @@
 - `orch init`으로 등록된 프로그램의 Run이면: `agent-skills:orchestrate`를 다시 읽고, 프로그램 노트를 읽고, `orch status`의 모든 줄에 대응하고, 이후에는 `orch wait`로만 drain한다. 압축 직후면 앞서 따르던 규칙이 문맥에서 빠졌을 수 있다는 말을 덧붙인다.
 - 프로그램이 없으면(최상위 코디네이터): `agent-skills:orchestrate`를 지금 불러 읽고, 자기 턴은 라우팅과 몇 초짜리 읽기만 하며, 조사·구현·검증·브라우저 작업은 한 층 아래로 보내고, 진행 보고는 `agent-skills:brief`로 한다.
 
-SessionStart는 매번 다시 판정한다. UserPromptSubmit은 세션의 첫 프롬프트에서만 판정하고 결과를 `$AGENT_SKILLS_STATE/reorient/<session_id>.json`(기본 `~/.local/state/agent-skills`)에 남겨, 이후 프롬프트는 `orca`를 부르지 않는다. `/reload-plugins`로 hook을 받은 기존 세션은 SessionStart를 다시 거치지 않으므로, 다음 프롬프트에서 한 번 받는다.
+선언이 없을 때 SessionStart는 매번 다시 판정한다. UserPromptSubmit은 세션의 첫 프롬프트에서만 판정하고 결과를 `$AGENT_SKILLS_STATE/reorient/<session_id>.json`(기본 `~/.local/state/agent-skills`)에 남겨, 이후 프롬프트는 `orca`를 부르지 않는다. `/reload-plugins`로 hook을 받은 기존 세션은 SessionStart를 다시 거치지 않으므로, 다음 프롬프트에서 한 번 받는다.
 
 ### 결정 자동 닫기
 `hooks/decision.py`(UserPromptSubmit). `orch decide add`로 결정을 등록한 터미널(`$ORCA_TERMINAL_HANDLE`)에 사람이 친 프롬프트만 본다. 첫 줄이 id로 시작하거나(`d3 허락`, `decision d3: 허락`) 그 터미널의 열린 결정 가운데 하나에만 있는 선택지 이름으로 시작하면 그 결정을 답과 함께 done으로 닫고 코디네이터에게 알린다. 애매하면 닫지 않고 열린 결정 목록을 알림으로만 넣는다. 다른 터미널(워커)의 입력으로는 닫지 않고, 오류는 모두 exit 0이다. 이미 떠 있던 세션은 `/reload-plugins`나 재시작 뒤부터 적용된다.

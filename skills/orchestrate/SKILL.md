@@ -11,6 +11,8 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 
 Two modes share these rules. **Top-level:** the one session above every task session and program coordinator the human runs; read `references/top-level.md`. **Program:** one project driven to done through workers; the Steps below.
 
+A session takes its mode by declaring it in a prompt, a line of its own: `ROLE: orchestrator` for the top-level, `ROLE: lead <slug>` for a program's coordinator or lead, `ROLE: none` to clear it. The plugin's reorient hook binds the role to the session id, so it survives compaction and a resume in another terminal, and puts one reminder line before every prompt of a declared session. A lead's first prompt carries its `ROLE` line (`references/brief.md` "Lead"); the human declares the top-level once.
+
 ## Stay answerable
 
 The human must get an answer from you within seconds, at any time. You route; you do not do the work.
@@ -211,6 +213,6 @@ The new coordinator's whole prompt is `/goal orchestrate resume <slug>`. On resu
 4. `orch status`.
 5. Stop any inbox watcher the program ran before (a Monitor, a script), start the one `orch wait`, and continue at Drain.
 
-After an automatic compaction, the plugin's SessionStart hook tells a coordinator to do steps 1 and 4 again. Before them, check that the inbox wait is alive and start it if not (Drain, "One inbox wait, always").
+After an automatic compaction, the plugin's SessionStart hook tells a declared lead, or the Run's coordinator terminal, to do steps 1 and 4 again. Before them, check that the inbox wait is alive and start it if not (Drain, "One inbox wait, always").
 
 Whenever the note's policy, ceiling, deadline, predicate or exclusive paths change mid-run, mirror them with `orch set` in the same turn. Workers report to the Run inbox, not to a session name, so nothing needs re-pointing. The old coordinator ends only after the new one has printed `status`.
