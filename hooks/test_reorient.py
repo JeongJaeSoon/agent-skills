@@ -104,9 +104,14 @@ assert "orch wait q" in hook(session="r3", own=None, **P)
 
 # Clearing: one notice, then silence. Text that only mentions a role is not a declaration.
 assert "ROLE cleared" in hook(session="r3", own=None, prompt="ok\nROLE: none", **P)
-assert not (TMP / "state/roles/r3.json").exists()
 assert hook(session="r3", own=None, **P) is None
 assert hook(session="r3", own=None, source="resume", reply=NO_RUN) is None
+assert hook(session="r3", own=None, prompt="ROLE: none", **P) is None, "already cleared"
+# A cleared session stays cleared even in the Run's coordinator terminal, which would otherwise be told again.
+hook(session="r6", prompt="ROLE: orchestrator", **P)
+assert "ROLE cleared" in hook(session="r6", prompt="ROLE: none", **P)
+assert hook(session="r6", event="UserPromptSubmit") is None
+assert hook(session="r6") is None and hook(session="r6", source="resume") is None
 for text in ("use ROLE: orchestrator here", "ROLE: lead <slug>", "ROLE: admin", "ROLES: orchestrator"):
     assert hook(session="r4", own=None, prompt=text, **P) is None, text
 assert not (TMP / "state/roles/r4.json").exists()

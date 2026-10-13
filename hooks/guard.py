@@ -48,7 +48,9 @@ CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
 MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
 # The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
 LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:["']|$)""")
-LEAD_LINES = ("MODE", "ROLE", "DELEGATE", "PREDICATE")
+LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
+# The line reorient.py records; the template's unfilled `<slug>` and `ROLE: none` do not count.
+LEAD_ROLE = re.compile(r"\bROLE:?[ \t]+lead[ \t]+[\w.-]+")
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
@@ -124,6 +126,8 @@ def bash(cmd, background=False, transcript=None):
         lead = is_lead(cmd)
         if lead:
             missing += [w for w in LEAD_LINES if not re.search(rf"\b{w}\b", cmd)]
+            if not LEAD_ROLE.search(cmd):
+                missing.append("`ROLE: lead <slug>`")
         if missing:
             return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Write it literally in "
                                   "--prompt (not from a file or variable): `CLOSE: 완료 기준을 채우고 결과를 적으면 "

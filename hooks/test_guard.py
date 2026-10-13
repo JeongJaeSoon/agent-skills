@@ -86,7 +86,8 @@ assert bash(f'{NEW} --prompt "/goal run app as lead\nMODE orchestrate\nCLOSE: §
 LEAD = "MODE orchestrate\nROLE: lead app\nDELEGATE nothing yourself\nPREDICATE ENG-1, ENG-2 Done\nCLOSE: §8"
 assert bash(f'{NEW} --prompt "/goal run app\n{LEAD}"') == "none"
 assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("DELEGATE", "WHO")}"') == "deny"
-assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("ROLE: lead app", "")}"') == "deny"  # no ROLE
+for role in ("", "ROLE: none", "ROLE: lead <slug>", "ROLE lead"):
+    assert bash(f'{NEW} --prompt "/goal run app\n{LEAD.replace("ROLE: lead app", role)}"') == "deny", role
 assert bash(f"{NEW} --prompt 'app: lead\nGOAL ship X\nROLE: lead app\nDELEGATE all\nPREDICATE ENG-1 Done\nCLOSE: §8'") == "deny"  # no MODE
 assert bash(f"{NEW} --prompt 'app: lead\n{LEAD}'") == "none"
 assert bash(f'{NEW} --prompt "/goal take the lead on X. CLOSE: §8"') == "none"  # the word alone is not a lead brief

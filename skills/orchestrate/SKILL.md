@@ -11,7 +11,7 @@ You own the program, not the code. You frame it, write briefs, drain the inbox, 
 
 Two modes share these rules. **Top-level:** the one session above every task session and program coordinator the human runs; read `references/top-level.md`. **Program:** one project driven to done through workers; the Steps below.
 
-A session takes its mode by declaring it in a prompt, a line of its own: `ROLE: orchestrator` for the top-level, `ROLE: lead <slug>` for a program's coordinator or lead, `ROLE: none` to clear it. The plugin's reorient hook binds the role to the session id, so it survives compaction and a resume in another terminal, and puts one reminder line before every prompt of a declared session. A lead's first prompt carries its `ROLE` line (`references/brief.md` "Lead"); the human declares the top-level once.
+A session takes its mode by declaring it in a prompt, a line of its own: `ROLE: orchestrator` for the top-level, `ROLE: lead <slug>` for a program's coordinator or lead, `ROLE: none` to clear it (the session then gets no reminder at all). The plugin's reorient hook binds the role to the session id, so it survives compaction and a resume in another terminal, and puts one reminder line before every prompt of a declared session. A lead's first prompt carries its `ROLE` line (`references/brief.md` "Lead"); the human declares the top-level once.
 
 ## Stay answerable
 

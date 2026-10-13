@@ -503,7 +503,7 @@
 ### 코디네이터 재정렬
 `hooks/reorient.py`(SessionStart `startup|resume|compact`, UserPromptSubmit). 역할을 선언한 세션과 코디네이터 터미널에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않는다.
 
-역할은 선언으로 정한다. 프롬프트에 한 줄로 `ROLE: orchestrator`(최상위), `ROLE: lead <slug>`(프로그램 하나의 코디네이터·리드), `ROLE: none`(해제)을 쓰면, hook이 `$AGENT_SKILLS_STATE/roles/<session_id>.json`에 기록한다. resume은 session_id를 유지하므로 다른 터미널에서 이어도 역할이 남는다. 선언된 세션은 SessionStart에 긴 단락을, 모든 프롬프트에 한 줄을 받는다. 한 번만 넣으면 다음 요청에 묻혀 무시됐기 때문이다. 리드 카드는 첫 프롬프트에 `ROLE` 줄이 들어가고(guard가 없으면 거부한다), 최상위는 사람이 한 번 선언한다. 해제하면 알림 한 번 뒤로 아무것도 넣지 않는다.
+역할은 선언으로 정한다. 프롬프트에 한 줄로 `ROLE: orchestrator`(최상위), `ROLE: lead <slug>`(프로그램 하나의 코디네이터·리드), `ROLE: none`(해제)을 쓰면, hook이 `$AGENT_SKILLS_STATE/roles/<session_id>.json`에 기록한다. resume은 session_id를 유지하므로 다른 터미널에서 이어도 역할이 남는다. 선언된 세션은 SessionStart에 긴 단락을, 모든 프롬프트에 한 줄을 받는다. 한 번만 넣으면 다음 요청에 묻혀 무시됐기 때문이다. 리드 카드는 첫 프롬프트에 `ROLE` 줄이 들어가고(guard가 없으면 거부한다), 최상위는 사람이 한 번 선언한다. 해제하면 알림 한 번 뒤로 아무것도 넣지 않고, 그 세션은 아래 터미널 판정도 하지 않는다.
 
 선언이 없는 세션은 터미널로 판정한다. 둘 중 하나다.
 - `orca orchestration run-current`의 `coordinator_handle`이 이 터미널의 `$ORCA_TERMINAL_HANDLE`이다.

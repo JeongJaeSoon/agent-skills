@@ -88,18 +88,15 @@ def declared(session):
 
 
 def declare(session, prompt):
-    """Records the last ROLE line of the prompt; returns the role now in force, None when cleared or never set."""
+    """Records the last ROLE line of the prompt and returns the session's entry; None when it never declared."""
     found = ROLE.findall(prompt or "")
     if not found:
         return declared(session)
     role, slug = found[-1]
-    path = ROLES / f"{session}.json"
-    if role == "none":
-        path.unlink(missing_ok=True)
-        return None
-    entry = {"role": "lead", "slug": slug} if slug else {"role": "orchestrator"}
+    # "none" is kept, not deleted: without it the terminal fallback would remind the session again.
+    entry = {"role": "lead", "slug": slug} if slug else {"role": role}
     ROLES.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(entry))
+    (ROLES / f"{session}.json").write_text(json.dumps(entry))
     return entry
 
 
@@ -140,16 +137,20 @@ def main():
                 entry = declare(session, event.get("prompt"))
             except OSError:
                 entry = had
-            if entry and entry != had:
+            if entry and entry.get("role") == "none":
+                if had and had != entry:
+                    text = "ROLE cleared: this session no longer gets the orchestrate reminder."
+            elif entry and entry != had:
                 text = role_long(entry, False) + " `ROLE: none` in a prompt clears the role."
             elif entry:
                 text = role_line(entry)
-            elif had:
-                text = "ROLE cleared: this session no longer gets the orchestrate reminder."
-        elif event.get("source") in ("startup", "resume", "compact") and (entry := declared(session)):
-            text = role_long(entry, event.get("source") == "compact")
+        else:
+            entry = declared(session) if event.get("source") in ("startup", "resume", "compact") else None
+            if entry and entry.get("role") != "none":
+                text = role_long(entry, event.get("source") == "compact")
         if text:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": kind, "additionalContext": text}}))
+        if entry:
             return 0
     if not me:
         return 0
