@@ -6,12 +6,14 @@ Deny: `orca orchestration check|inbox --terminal <handle>` for a handle that is 
 agent's messages.
 
 Deny: `orca worktree create --prompt` whose command text has no `CLOSE` or `KEEP` line, or is a lead's (a `MODE`
-line, or the template's `<project>: lead` head) without all of `MODE`, `DELEGATE` and `PREDICATE`. A card whose first
-prompt lacks them reports done and idles for days, and a lead without DELEGATE did the work itself (dispatch-card §2).
+line, a `ROLE: lead <slug>` line, or the template's `<project>: lead` head) without all of `MODE`, `ROLE`, `DELEGATE`
+and `PREDICATE`. A card whose first prompt lacks them reports done and idles for days, a lead without DELEGATE did the
+work itself, and one without ROLE never gets the reorient hook's per-prompt reminder (dispatch-card §2).
 The text is read as written: a prompt built from a file or variable is denied too.
 
-Deny: a lead's card started from a session that is itself a lead, known by its transcript's first user prompt
-passing the same lead test. Only the human or the top-level starts a lead (orchestrate references/brief.md "Lead").
+Deny: a lead's card started from a session that is itself a lead, known by its `agent_type` (`claude --agent
+agent-skills:lead`), its `ROLE: lead` record from the reorient hook, or its transcript's first user prompt passing the
+same lead test. Only the human or the top-level starts a lead (orchestrate references/brief.md "Lead").
 A missing or unreadable transcript, or one restarted by /clear, gets no decision.
 
 Deny: a foreground Bash call that polls with a sleep loop (`until/while/for …; do … sleep N` with N of 5 s or a
@@ -31,6 +33,7 @@ variables other than $ORCA_TERMINAL_HANDLE), so the allowed prefix cannot carry 
 import json, os, pathlib, re, shlex, string, sys
 
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
+ROLES = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "roles"
 PLUGIN = "agent-skills"
 MAILBOX = re.compile(r"\borca\s+orchestration\s+(?:check|inbox)\b[^;&|\n]*?\s--terminal(?:\s+|=)(\S+)")
 OWN_VAR = ("$ORCA_TERMINAL_HANDLE", "${ORCA_TERMINAL_HANDLE}")
@@ -48,6 +51,10 @@ MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
 # The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
 LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:["']|$)""")
 LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
+# A whole line reorient.py records, the prompt's closing quote (or a transcript's `</command-args>`) allowed after it;
+# the template's unfilled `<slug>`, `ROLE: none`, trailing words and a `\n` escape the shell passes through literally
+# do not count. It also marks a lead, like MODE: a resumed coordinator's prompt carries only this line.
+LEAD_ROLE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)[ \t]*ROLE:?[ \t]+lead[ \t]+[\w.-]+[ \t]*(?:$|["']|</command-args>)""")
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
@@ -82,7 +89,17 @@ def own_skills():
 
 
 def is_lead(text):
-    return bool(MODE.search(text) or LEAD_HEAD.search(text))
+    return bool(MODE.search(text) or LEAD_HEAD.search(text) or LEAD_ROLE.search(text))
+
+
+def declared_lead(session):
+    """The session took the lead role with a later `ROLE: lead <slug>` prompt, recorded by reorient.py."""
+    if not re.fullmatch(r"[\w-]{1,128}", session or ""):
+        return False
+    try:
+        return json.loads((ROLES / f"{session}.json").read_text()).get("role") == "lead"
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def started_as_lead(transcript):
@@ -102,7 +119,7 @@ def started_as_lead(transcript):
     return False
 
 
-def bash(cmd, background=False, transcript=None):
+def bash(cmd, background=False, transcript=None, agent=None, session=None):
     loop = None if background else SLEEP_LOOP.search(cmd)
     # A short retry loop (sleep 1-4) is left alone; polling loops seen in practice slept 5 to 30 s.
     if loop and (loop[1] == "$" or int(loop[1]) >= 5):
@@ -123,16 +140,19 @@ def bash(cmd, background=False, transcript=None):
         lead = is_lead(cmd)
         if lead:
             missing += [w for w in LEAD_LINES if not re.search(rf"\b{w}\b", cmd)]
+            if not LEAD_ROLE.search(cmd):
+                missing.append("`ROLE: lead <slug>`")
         if missing:
             return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Write it literally in "
                                   "--prompt (not from a file or variable): `CLOSE: 완료 기준을 채우고 결과를 적으면 "
                                   "end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP when this session will reuse the card; "
-                                  "a lead also gets its MODE, DELEGATE and PREDICATE lines, copied from orchestrate "
+                                  "a lead also gets its MODE, `ROLE: lead <slug>`, DELEGATE and PREDICATE lines, copied from orchestrate "
                                   "references/brief.md \"Lead\" (dispatch-card §2).")
-        if lead and transcript and started_as_lead(transcript):
+        if lead and (agent == "agent-skills:lead" or declared_lead(session)
+                     or transcript and started_as_lead(transcript)):
             return decide("deny", "This session is a lead, and a lead does not start another lead. Give the card a "
                                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
-                                  "without the Lead's MODE line or `<project>: lead` head; only the human or the "
+                                  "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
                                   "top-level starts a lead.")
     words = simple_words(cmd)
     if not words or REBINDS.search(cmd):
@@ -151,7 +171,8 @@ def main():
         return 0
     tool, args = event.get("tool_name"), event.get("tool_input") or {}
     if tool == "Bash":
-        bash(args.get("command") or "", args.get("run_in_background") is True, event.get("transcript_path"))
+        bash(args.get("command") or "", args.get("run_in_background") is True, event.get("transcript_path"),
+             event.get("agent_type"), str(event.get("session_id") or ""))
     elif tool == "Skill":
         skill = str(args.get("skill") or "")
         name = skill.removeprefix(f"{PLUGIN}:")
