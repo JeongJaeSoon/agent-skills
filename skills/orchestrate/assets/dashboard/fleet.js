@@ -13,6 +13,7 @@ const FLEET_SECTIONS = [
   { id: "monitors", label: "Monitors", icon: "activity" },
   { id: "sent", label: "Sent", icon: "chat" },
   { id: "skills", label: "Skills", icon: "spark" },
+  { id: "stats", label: "PR stats", icon: "merge" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
   { id: "timeline", label: "Timeline", icon: "activity" },
@@ -862,7 +863,93 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+// My pull requests over time (pr_stats.py via /api/fleet/stats): PRs I authored plus those agents opened for me,
+// searched on GitHub every 6 h. Charts are plain SVG strings scaled by viewBox; a bar's <title> is its tooltip.
+async function pollStats() {
+  const failed = (r) => r.error && !r.views;  // a collect error over last good counts is shown, not retried
+  if (F.statsBusy || (F.stats && Date.now() - F.statsAt < (failed(F.stats) ? 5e3 : 60e3))) return;
+  F.statsBusy = true;
+  try {
+    const r = await fetch("/api/fleet/stats", { cache: "no-store" });
+    F.stats = r.ok ? await r.json() : { error: r.status === 503 ? "The first PR stats collect has not finished (it runs dozens of GitHub searches)." : `HTTP ${r.status}` };
+  } catch (e) { F.stats = { error: String(e.message || e) }; }
+  F.statsAt = Date.now(); F.statsBusy = false;
+  if (failed(F.stats)) setTimeout(() => { if (S.section === "stats") renderView(); }, 5e3);
+  if (S.section === "stats") renderView();
+}
+const STAT_STATE = [["merged", "Merged", "var(--accent)"], ["open", "Open", "var(--good)"], ["closed", "Closed", "var(--bad)"]];
+const STAT_SRC_COLORS = ["var(--ink-3)", "var(--derived)", "var(--warn)", "var(--good)", "var(--accent)"];
+// Stacked bars per bucket, with optional lines over them on the same y-scale.
+function statBars({ labels, titles, series, lines = [], height = 220, every }) {
+  const W = 1000, H = height, m = { l: 34, r: 8, t: 8, b: 22 };
+  const tot = labels.map((_, i) => series.reduce((a, s) => a + s.values[i], 0));
+  const max0 = Math.max(1, ...tot, ...lines.flatMap((l) => l.values.filter((v) => v != null)));
+  const step = niceStep(max0), max = Math.max(step, Math.ceil(max0 / step) * step);
+  const band = (W - m.l - m.r) / labels.length, bw = Math.max(1, Math.min(40, band * 0.72));
+  const y = (v) => H - m.b - (v / max) * (H - m.t - m.b), cx = (i) => m.l + band * i + band / 2;
+  const nth = every || Math.max(1, Math.ceil(labels.length / 14));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(series.map((s) => s.name).join(", "))}"><g class="axis">${yAxis(max, m.l, W - m.r, y)}`;
+  labels.forEach((l, i) => { if ((labels.length - 1 - i) % nth === 0) svg += `<text x="${cx(i)}" y="${H - 6}" text-anchor="middle">${esc(l)}</text>`; });
+  svg += "</g>";
+  labels.forEach((_, i) => {
+    let acc = 0;
+    const tip = `${titles[i]}: ${tot[i]}\n${series.map((s) => `${s.name} ${s.values[i]}`).join(" · ")}`;
+    svg += `<g><title>${esc(tip)}</title>`;
+    for (const s of series) {
+      const v = s.values[i];
+      if (v) svg += `<rect x="${cx(i) - bw / 2}" y="${y(acc + v)}" width="${bw}" height="${y(acc) - y(acc + v)}" style="fill:${s.color}"/>`;
+      acc += v;
+    }
+    svg += `<rect x="${m.l + band * i}" y="${m.t}" width="${band}" height="${H - m.t - m.b}" fill="transparent"/></g>`;
+  });
+  for (const l of lines) {
+    const pts = l.values.map((v, i) => (v == null ? null : `${cx(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean);
+    if (pts.length > 1) svg += `<polyline points="${pts.join(" ")}" fill="none" style="stroke:${l.color}" stroke-width="2" ${l.dash ? 'stroke-dasharray="6 4"' : ""} pointer-events="none"/>`;
+  }
+  return `<div class="chart">${svg}</svg></div>`;
+}
+const statLegend = (items) => `<div class="legend">${items.map(([name, color, line]) => `<span><span class="key ${line ? "" : "sq"}" style="background:${color}"></span>${esc(name)}</span>`).join("")}</div>`;
+const statMonth = (s) => (s.endsWith("-01") ? `${s.slice(2, 4)}/1` : String(+s.slice(5)));
+function fleetStats() {
+  pollStats();
+  const rep = F.stats;
+  const headHtml = `<div class="view-head"><div><h2>PR stats</h2><p>Pull requests I opened, and those the agents in the config opened for me, by when they were created. Searched on GitHub every 6 hours from <span class="mono">${esc(rep && rep.since || "since")}</span>; days and hours are this machine's time zone. A campaign is one title on ${rep && rep.batch_min || 10} or more PRs.</p></div>
+    ${rep && rep.views ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)}</div>` : ""}</div>`;
+  if (!rep) return headHtml + '<div class="loading">Loading…</div>';
+  if (!rep.views) return headHtml + `<div class="card"><div class="empty-chart">${esc(rep.error || "No report yet.")}</div></div>`;
+  const failure = rep.error ? `<div class="card"><div class="sub" style="color:var(--bad)">Last collect failed ${relSpan(rep.failed_at)}: ${esc(rep.error)}. Showing the counts from ${relSpan(rep.generated_at)}; retried hourly.</div></div>` : "";
+  const nb = S.filters.pr_stats === "no_batch", v = rep.views[nb ? "no_batch" : "all"];
+  const st = v.states, srcs = rep.sources, years = Object.entries(v.years);
+  const srcColor = (i) => STAT_SRC_COLORS[i % STAT_SRC_COLORS.length];
+  const kpis = `<div class="kpis" style="--n:4">
+    ${kpi("Pull requests", `${v.total}`, `${years.map(([y, n]) => `${y}: ${n}`).join(" · ")}`)}
+    ${kpi("Merged", `${st.merged}`, `${v.total ? Math.round((100 * st.merged) / v.total) : 0}% · ${st.open} open · ${st.closed} closed`)}
+    ${kpi("By source", srcs.map((s) => v.by_source[s]).join(" / "), srcs.map(esc).join(" / "))}
+    ${kpi("Weekly trend", `${v.weekly.slope >= 0 ? "+" : ""}${v.weekly.slope}<small>/wk</small>`, "slope of the weekly fit, current week left out")}</div>`;
+  const toolbar = `<div class="toolbar">${chips("pr_stats", [["all", "All PRs", rep.views.all.total], ["no_batch", "Without campaigns", rep.views.no_batch.total]], nb ? "no_batch" : "all")}
+    ${rep.batch_titles.length ? `<span class="muted">${rep.batch_count} PRs in ${rep.batch_titles.map((t) => `“${esc(t)}”`).join(", ")}</span>` : ""}</div>`;
+  const stateSeries = (b) => STAT_STATE.map(([k, name, color]) => ({ name, color, values: b[k] }));
+  const months = v.months.map(statMonth), mTitles = v.months;
+  const monthly = statBars({ labels: months, titles: mTitles, series: stateSeries(v.monthly), lines: [{ values: v.monthly.trend, color: "var(--ink-2)", dash: true }], every: 1 });
+  const bySource = statBars({ labels: months, titles: mTitles, series: srcs.map((s, i) => ({ name: s, color: srcColor(i), values: v.monthly.by_source[s] })), height: 180, every: 1 });
+  const weeks = v.weeks.map((w) => `${+w.slice(5, 7)}/${+w.slice(8)}`);
+  const weekly = statBars({ labels: weeks, titles: v.weeks.map((w) => `week of ${w}`), series: stateSeries(v.weekly),
+    lines: [{ values: v.weekly.ma4, color: "var(--warn)" }, { values: v.weekly.trend, color: "var(--ink-2)", dash: true }] });
+  const pmax = Math.max(1, ...v.punch.flat()), days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const punch = `<table class="punch"><thead><tr><th></th>${[...Array(24).keys()].map((h) => `<th>${h % 3 ? "" : h}</th>`).join("")}</tr></thead><tbody>${v.punch.map((row, d) =>
+    `<tr><th>${days[d]}</th>${row.map((n, h) => `<td title="${days[d]} ${h}:00 · ${n}" style="${n ? `background:color-mix(in srgb, var(--accent) ${Math.round(12 + (88 * n) / pmax)}%, transparent)` : ""}"></td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const rmax = Math.max(1, ...v.repos.map((r) => r[1]));
+  const repos = v.repos.map(([r, n]) => `<div class="repo-row"><span class="mono ellipsis">${esc(r)}</span><span class="repo-bar"><span style="width:${(100 * n) / rmax}%"></span></span><span class="num">${n}</span></div>`).join("");
+  const card = (title, aside, body, wide) => `<div class="card ${wide ? "wide" : ""}"><div class="card-head"><h3>${title}</h3><span class="aside">${aside}</span></div>${body}</div>`;
+  const stateLegend = STAT_STATE.map(([, name, color]) => [name, color]);
+  return headHtml + failure + kpis + toolbar + `<div class="grid">
+    ${card("Monthly", statLegend([...stateLegend, ["Trend", "var(--ink-2)", true]]), monthly, true)}
+    ${card("By source", statLegend(srcs.map((s, i) => [s, srcColor(i)])), bySource, true)}
+    ${card("Weekly", statLegend([...stateLegend, ["4-week average", "var(--warn)", true], ["Trend", "var(--ink-2)", true]]), weekly, true)}
+    ${card("Weekday × hour", "", punch)}
+    ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
+}
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

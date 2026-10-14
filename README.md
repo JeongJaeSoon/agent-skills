@@ -118,7 +118,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 - 워커가 자기 PR을 `orch land`로 착지시킨다. 준비된 PR은 base보다 뒤처져 있어도 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 최신 base 위에서 머지된다.
 - 의존 관계는 Orca task deps가 정본이다. 순서대로 들어가야 하는 체인은 GitHub stack으로 한 번에 머지한다.
 - main이 red가 되면 main 가디언이 flake 여부부터 보고 hotfix나 revert를 고른다. QA 리드가 티켓 검증, 주기 E2E, 설계·코드 정합성 감사를 맡는다.
-- `orch-dash serve`: 목표, 완료 조건, 착지 순서, 의존 그래프, 워커, 토큰을 보여주는 대시보드(라이트·다크, 창 크기에 맞춤). 모델 호출 없이 JSON으로 갱신한다. fleet의 Work 페이지는 `orch stage` 기록(`stages.json`)을 기능/epic·작업·PR·머지·dev·prod 표로 보이고, 기록이 바뀌면 다음 5초 poll에 반영한다. Automations 페이지는 Orca automation의 주기·다음/마지막 실행·최근 6회 결과와 `▲` 경고를, Monitors 페이지는 살아 있는 Claude Code 세션이 띄운 백그라운드 명령·Monitor의 실행 여부와 죽은 것을, Sent 페이지는 세션이 다른 세션·카드·서브에이전트·inbox·Slack·트래커로 보낸 지시의 원문을 `orch sent add` 기록·대시보드 입력·살아 있는 세션 트랜스크립트에서 모아, Sessions 페이지는 착지 lane과 `orch hold` 자원의 보유자와 시간을 보인다.
+- `orch-dash serve`: 목표, 완료 조건, 착지 순서, 의존 그래프, 워커, 토큰을 보여주는 대시보드(라이트·다크, 창 크기에 맞춤). 모델 호출 없이 JSON으로 갱신한다. fleet의 Work 페이지는 `orch stage` 기록(`stages.json`)을 기능/epic·작업·PR·머지·dev·prod 표로 보이고, 기록이 바뀌면 다음 5초 poll에 반영한다. Automations 페이지는 Orca automation의 주기·다음/마지막 실행·최근 6회 결과와 `▲` 경고를, Monitors 페이지는 살아 있는 Claude Code 세션이 띄운 백그라운드 명령·Monitor의 실행 여부와 죽은 것을, Sent 페이지는 세션이 다른 세션·카드·서브에이전트·inbox·Slack·트래커로 보낸 지시의 원문을 `orch sent add` 기록·대시보드 입력·살아 있는 세션 트랜스크립트에서 모아, PR stats 페이지는 내가 연 PR과 에이전트가 나 대신 연 PR을 월·주·요일×시간·저장소별로 세어 추세선과 함께, Sessions 페이지는 착지 lane과 `orch hold` 자원의 보유자와 시간을 보인다.
 
 orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall orch-panel@jeongjaesoon`으로 지우고, 같은 내용은 대시보드(`orch-dash`)에서 본다.
 

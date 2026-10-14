@@ -473,3 +473,13 @@ table.monitors .cmd { display: block; max-width: 460px; }
 table.sent .sent-cell { max-width: 720px; }
 .sent-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; line-height: 1.5; max-height: 480px; overflow: auto; }
 table.sent details > summary { cursor: pointer; max-width: 720px; }
+
+/* PR stats */
+.punch { border-collapse: separate; border-spacing: 2px; width: 100%; table-layout: fixed; }
+.punch th { font-size: var(--t-xs); color: var(--ink-3); font-weight: 400; text-align: center; }
+.punch tbody th { text-align: right; padding-right: var(--s1); width: 34px; }
+.punch td { height: 16px; border-radius: 3px; background: var(--panel-2); }
+.repo-list { display: grid; gap: var(--s1); }
+.repo-row { display: grid; grid-template-columns: minmax(0, 14em) 1fr 3em; gap: var(--s2); align-items: center; font-size: var(--t-sm); }
+.repo-bar { height: 8px; border-radius: 2px; background: var(--panel-2); }
+.repo-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--warn); }

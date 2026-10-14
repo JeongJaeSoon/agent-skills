@@ -73,6 +73,7 @@ The hierarchy comes from Orca's own records. The root is `root_worktree` from th
 - **Monitors.** Every background watch a live Claude Code session started (see Monitors below): status, what it watches (its description and command), the session, start, last wake (its last output or event) and the end summary or last event. A dead or lost one is flagged `▲`; their count is the sidebar number and a `Monitors ▲N` tag in the header on every fleet page.
 - **Sent.** Every instruction a session sent out (see Sent instructions below): when, from whom to whom, its kind and channel, the subject and the text, and the sources it came from. A text over six lines or 480 characters folds under its first line. Filters: 1, 7 or 30 days, one source, and a search over sender, receiver, channel, repository, subject and text. The page reads `GET /api/fleet/sent?days=N` every 5 s while open.
 - **Skills.** Every installed skill with its uses in 7 and 30 days, how it was triggered, last use, sessions and repositories reached, heuristic misses and flags, grouped by source (see Skill usage below). Filters: flagged, each flag, and one source.
+- **PR stats.** Pull requests I opened, and those agents opened for me, by month (by state with a trend line, and by source), by week (with a 4-week average), by weekday and hour, and by repository, with a toggle that leaves bulk campaigns out (see PR stats below).
 - **Inbox.** Everything a session is waiting on you for, filterable by type. The tab title carries its count, so a background tab shows when something new waits. A click on a row (outside its buttons, links and answer box) opens its session's page; an item whose session Orca no longer lists, or that has none, and a row on its own session's page stay put. Each row links to its session, opens the PR or copies the command, and can be dismissed.
 - **Graph.** Session → pull request → reviewer. The bar on a PR is its CI (green, red, amber). A reviewer edge is green for approved, dashed amber for an approval on an older commit, red for changes requested, blue for commented, grey dotted for requested and not yet answered.
 - **Sessions.** The whole tree as a table: kind, phase, project and branch, PR, Needs you count, last activity (the later of Orca's worktree time and its agents' own, since the worktree time stands still while an agent works). Below it, Shared resources: every `orch hold` resource and landing lane, who holds it (linked to the session when its terminal is known), the note and since when, longest held first; past an hour the time turns amber.
@@ -280,6 +281,22 @@ Each collect appends one row per flag other than `unused_30d`, per skill, per IS
 ```
 
 `evidence` (skill, flag and the ISO-week window) is the idempotency key, so a flag that persists shows up once a week. The collector writes only this file. The flow improver reads it as one input, and `reflect` promotes a signal into the lessons ledger (Source `skill-usage`, Kind `usage`, Evidence a pointer to the row and its window, one row per skill and flag whose Occurrences rise per window); no script writes the lessons ledger. `suggest` lists what may be proposed; retiring a skill is only ever proposed, never applied by the loop.
+
+## PR stats
+
+`scripts/pr_stats.py` (`orch-dash prstats`) searches GitHub with `gh api graphql` for every pull request created since `since`, one search per source per month (a month at the 1,000-hit search cap is split in halves until each part fits), and writes counts to `<fleet state>/pr-stats.json`. `serve` runs it when the file is missing or 6 hours old, and an hour after a failed collect, which keeps the last counts and adds the error the page shows above them; the page reads `/api/fleet/stats`. `ORCH_PR_STATS=off` turns it off.
+
+The first source is always the PRs I authored (`author:@me`). Agents that open PRs on my behalf are added under `pr_stats` in the fleet config:
+
+```json
+{"pr_stats": {"since": "2025-01-01", "sources": [
+  {"name": "Devin", "query": "author:devin-ai-integration[bot] involves:@me"},
+  {"name": "Claude", "query": "in:body \"Requested by Your Name\"", "author": "claude"}]}}
+```
+
+`query` is GitHub search syntax added to `is:pr archived:false`; `author` keeps only hits whose PR author has that login, for a body line other bots also write. Search cannot OR qualifiers such as `author:` and `in:body`, so each source is its own search. A PR several sources find counts once, for the first. An agent whose commits carry my name is told apart only by what its PR shows (its author login or a line in the body), and `involves:@me` also matches agent PRs I only reviewed. `since` defaults to January 1 of last year.
+
+Days, weeks (from Monday) and hours are in the server's time zone. A trend line is a least-squares fit without the last month or week, which is still filling. A campaign is one title on 10 or more PRs (`BATCH_MIN`); the "Without campaigns" view drops them. The file holds counts, repository names and campaign titles, no PR text.
 
 ## Freshness
 
