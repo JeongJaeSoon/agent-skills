@@ -113,7 +113,10 @@ def poll(fetch, me, cfg, seen):
             if me not in [u["login"] for u in users]:
                 keys.append(team)
                 continue
-        if n["reason"] in ACTIVITY and cfg["human_activity_only"]:
+        latest = n["subject"].get("latest_comment_url")
+        # A mention in a PR or issue body has no comment to attribute it to, so only a comment can silence one.
+        mention_comment = n["reason"] == "mention" and latest not in (None, n["subject"].get("url"))
+        if (n["reason"] in ACTIVITY or mention_comment) and cfg["human_activity_only"]:
             try:
                 user = actor(fetch, n)
             except (RuntimeError, ValueError, subprocess.TimeoutExpired):

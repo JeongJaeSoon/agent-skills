@@ -383,6 +383,10 @@ A notification passes when its reason is in `reasons`, its repository is in the 
   silent. The actor is the author of `subject.latest_comment_url`, or of the last `GET <pull>/reviews`
   entry when that URL is the PR itself (a review). No URL (a push) fires nothing, nor does an actor
   who is the user, has `type: Bot` or a login ending in `[bot]`. A failed lookup is retried next poll.
+  `mention` follows the same rule when `latest_comment_url` is a comment, so a bot that repeats the
+  user's handle on each event stays silent; a mention in a PR or issue body (no comment URL, or the
+  URL is the thread itself) always fires. The check sees who acted last, not who mentioned, so a bot
+  comment landing after a person's mention within one poll silences that mention.
 
 The first `watch` with no seen file records the current notifications and prints nothing, so the
 backlog does not fire; `notify.py seed` does the same on demand. Seen keys (no titles) go to

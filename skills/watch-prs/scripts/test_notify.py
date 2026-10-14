@@ -154,6 +154,23 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["human comment", "human review"]))
         self.assertEqual(len(n.read_seen(self.seen)), len(page))
 
+    def test_bot_repeating_a_mention_stays_silent_while_a_human_mention_fires(self):
+        n.write_seen(self.seen, [], 10)
+        comments = {comment_url(50): person("approval-check[bot]", "Bot"), comment_url(51): person("carol")}
+        for day in ("01", "02", "03"):
+            page = [note(50, title="bot mention", updated=f"2026-01-{day}T00:00:00Z", latest=comment_url(50)),
+                    note(51, title="human mention", updated=f"2026-01-{day}T00:00:00Z", latest=comment_url(51))]
+            code, out = self.run_watch(Fake([page], comments=comments))
+            self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["human mention"]))
+        self.assertEqual(len([k for k in n.read_seen(self.seen) if k.startswith("50@")]), 3)
+
+    def test_mention_in_a_pr_body_fires_without_a_reviews_call(self):
+        n.write_seen(self.seen, [], 10)
+        fake = Fake([[note(52, title="body mention", latest="pr")]], reviews={note(52)["subject"]["url"]: [person("ci-runner", "Bot")]})
+        code, out = self.run_watch(fake)
+        self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["body mention"]))
+        self.assertFalse([c for c in fake.calls if "/reviews" in c])
+
     def test_unreadable_activity_is_skipped_without_blocking_other_items(self):
         n.write_seen(self.seen, [], 10)
         page = [note(30, reason="comment", latest=comment_url(30)), note(31, title="Still here")]
