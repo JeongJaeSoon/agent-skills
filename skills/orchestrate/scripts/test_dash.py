@@ -203,7 +203,7 @@ try:
 except urllib.error.HTTPError as e:
     assert e.code == 404
 progs = json.loads(urllib.request.urlopen(f"{base}/api/programs").read())
-assert [p["slug"] for p in progs] == [B, A]
+assert [p["slug"] for p in progs if p["slug"] in (A, B)] == [B, A]
 assert b"<title>" in urllib.request.urlopen(f"{base}/").read()
 
 # Answering a permission prompt is a POST like the others: this server's Host and Origin, and the page's token.

@@ -285,12 +285,27 @@ def beta(now):
         _issue(now, "BILL-20", "Currency symbol spacing in invoice footer", "backlog", 1.1, labels=["follow-up"]),
     ]
     workers = [_worker(now, "ctx_b1000003", "bill-13", "in_progress", "working", "opus", 0.1)]
-    cfg = {"slug": "billing-q4", "repo": repo, "run": "run_demo_beta", "linear_project": "Billing Q4",
+    # The billing lead's Run in FakeFleetWorld: the sidebar puts this program on that lead's row.
+    cfg = {"slug": "billing-q4", "repo": repo, "run": "run_lead", "linear_project": "Billing Q4",
            "predicate": ["BILL-11", "BILL-12", "BILL-13"], "merge_policy": "human-gate", "ceiling": 3,
            "deadline": _ago(now, -10), "created_at": _ago(now, 20), "skills_commit": None, "note": None}
     gh_fail = {"fail": "GraphQL: API rate limit exceeded for user ID 1234."}
     orca = {"workers": workers, "tasks": [], "run": {"id": cfg["run"], "objective": "Billing Q4: EU-ready invoicing"}}
     return cfg, L, issues, gh_fail, orca, []
+
+
+def finished(now, slug, repo, ended_h, verified=True):
+    """A past program: one ticket landed, then the final check (verified), or left without one and gone quiet."""
+    key = slug.split("-")[0].upper()[:4] + "-1"
+    L = [{"ts": _ago(now, ended_h + 6), "ev": "spawned", "ticket": key},
+         {"ts": _ago(now, ended_h + 1), "ev": "landed", "pr": 9, "sha": "m9"}]
+    if verified:
+        L.append({"ts": _ago(now, ended_h), "ev": "predicate_verified"})
+    run = f"run_{slug.replace('-', '_')}"
+    cfg = {"slug": slug, "repo": repo, "run": run, "linear_project": slug, "predicate": [key], "merge_policy": "autonomous",
+           "ceiling": 2, "deadline": None, "created_at": _ago(now, ended_h + 8), "skills_commit": None, "note": None}
+    issues = [_issue(now, key, "Finished work", "completed" if verified else "started", ended_h + 8, ended_h if verified else None)]
+    return cfg, L, issues, [], {"workers": [], "tasks": [], "run": {"id": run, "objective": slug}}, []
 
 
 def write_program(root, cfg, ledger, issues, prs, orca, notes):
@@ -437,6 +452,10 @@ def build(root, now=None):
     a, b = alpha(now), beta(now)
     write_program(root, *a)
     write_program(root, *b)
+    # Each in a repo of its own: the gh fixture is per repo, so sharing one would replace a live program's PRs.
+    for slug, repo, h, ok in (("docs-refresh", "acme/docs", 30, True), ("ci-cache", "acme/ci", 70, True),
+                              ("search-v1", "acme/search", 200, True), ("metrics-spike", "acme/metrics", 300, False)):
+        write_program(root, *finished(now, slug, repo, h, ok))
     projects = _transcripts(root, now, a[4]["workers"] + b[4]["workers"])
     (root / "fleet-state").mkdir(parents=True, exist_ok=True)
     (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
