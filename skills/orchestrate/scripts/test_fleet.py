@@ -500,13 +500,15 @@ const st = {{sessions: [{{id: "wt-coord", name: "coord", phase: "idle"}}], sourc
                session_name: "lead:<i>x</i>", started_at: old, last_at: old, summary: "<img src=x>"}},
              {{id: "b2", kind: "bash", status: "lost", command: "tail -f log", description: "tail", started_at: old, last_at: old}},
              {{id: "m1", kind: "monitor", status: "running", command: "gh pr checks", description: "ci", started_at: old, last_at: old, event: "pass"}}]}};
-process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTroubled(st).map((m) => m.id), empty: fleetMonitors({{}})}}));"""
+process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTroubled(st).map((m) => m.id), empty: fleetMonitors({{}}),
+  warned: fleetMonitors({{sources: {{monitors: {{ok: true, warning: "<b>lead</b>: transcript not found"}}}}}})}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     for raw in ("<script", "<img", "<i>", "<b>wait"):
         assert raw not in got["html"], raw
     assert got["troubled"] == ["b1", "b2"], got["troubled"]
     assert "exit 1" in got["html"] and "종료 기록 없음" in got["html"] and ">Monitor<" in got["html"] and 'href="#/fleet/session/wt-coord"' in got["html"], got["html"]
-    assert "모니터가 없다" in got["empty"], got["empty"]
+    assert "모니터가 없다" in got["empty"] and "일부 누락" not in got["empty"], got["empty"]
+    assert "일부 누락" in got["warned"] and "&lt;b&gt;lead" in got["warned"], got["warned"]
 
     # Avatars: a team has none to ask for, and one that failed is not asked for again on the next redraw.
     js = f"""{helpers}
@@ -945,7 +947,61 @@ assert got["loop"] == ("dead", 127), got
 # Hours later the failures and the lost one drop off; with no live Claude process there is nothing to show.
 assert [m["id"] for m in fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))] == ["wait"]
 assert fleet.fetch_monitors({}, now=now) == []
+assert fleet.MONITOR_SCAN == {}, "a transcript of an ended session is not kept"
+# A shell is this task's only when it runs exactly its command and started with it: a longer command that contains
+# it, a foreground run of it, or a copy started long after is not.
+procs = {100: (1, lstart(0), "claude"), 101: (1, lstart(0), "claude --resume s-live"),
+         300: (101, lstart(3), shell.format("orch wait billing --verbose")),
+         303: (101, lstart(30), shell.format("tail -f build.log")),
+         302: (100, lstart(11), shell.format("while true; do orca orchestration check --wait; done"))}
+got = {m["id"]: m["status"] for m in fleet.fetch_monitors(procs, now=now)}
+assert got["wait"] == "lost" and got["tail"] == "lost", got
+# A broken timestamp, or content that is not a block, does not break the source or drop the task: it is lost, unaged.
+with open(transcript, "a") as fh:
+    fh.write(json.dumps({"type": "assistant", "timestamp": "yesterday", "message": {"content": ["text", None, {
+        "type": "tool_use", "id": "toolu_odd", "name": "Bash", "input": {"command": "sleep 99", "run_in_background": True}}]}}) + "\n")
+    fh.write(json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00", "toolUseResult": {"backgroundTaskId": "odd"},
+                         "message": {"content": [7, {"type": "tool_result", "tool_use_id": "toolu_odd", "content": None}]}}) + "\n")
+    fh.write(json.dumps({"type": "user", "message": "not a dict"}) + "\n" + json.dumps([1, 2]) + "\n")
+    fh.write('{"type": "user", "message": {"content": "<task-notifi')  # still being written
+mons = fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))
+assert {m["id"]: m["status"] for m in mons}.get("odd") == "lost", mons
+assert fleet.MONITOR_SCAN[str(transcript)]["offset"] == transcript.stat().st_size - len('{"type": "user", "message": {"content": "<task-notifi'), \
+    "the partial line is read next time"
+# Content no guard foresaw fails the monitors source alone, as a SourceError.
+real, fleet.scan_transcript = fleet.scan_transcript, lambda path: 1 / 0
+try:
+    fleet.fetch_monitors(procs, now=now)
+    raise AssertionError("expected SourceError")
+except fleet.SourceError as e:
+    assert "ZeroDivisionError" in str(e), e
+fleet.scan_transcript = real
+# A session whose transcript is not where its cwd says is looked up by id, and warned about only when it is nowhere.
+long_dir = home / "projects" / "-work-shortened-1a2b3c"
+long_dir.mkdir(parents=True)
+transcript.rename(long_dir / "s-live.jsonl")
+warn = []
+assert "odd" in {m["id"] for m in fleet.fetch_monitors(procs, now=now, warn=warn)} and warn == [], warn
+(long_dir / "s-live.jsonl").unlink()
+assert fleet.fetch_monitors(procs, now=now, warn=warn) == [] and warn == ["lead:billing: transcript not found"], warn
+# ps prints its start column in the C locale, the one Claude Code writes procStart in, whatever the user's locale.
+seen = {}
+real_run = fleet.subprocess.run
+fleet.subprocess.run = lambda cmd, **kw: seen.update(kw["env"]) or subprocess.CompletedProcess(cmd, 0, stdout=f"  42 1 {lstart(0)} claude\n")
+try:
+    assert fleet.ps_table() == {42: (1, lstart(0), "claude")}
+finally:
+    fleet.subprocess.run = real_run
+assert seen["LC_ALL"] == "C" and seen["TZ"] == "UTC", seen
 del os.environ["CLAUDE_CONFIG_DIR"]
+
+# Commands are shown, so the passwords they carry are masked: in a URL, after a password flag, under a header name.
+pw = "hunter2pw"
+for cmd in (f"psql postgres://app:{pw}@db.example.test/x", f"mysql -uroot -p{pw} db", f"mysql --password {pw}",
+            f"x --password={pw}", f'curl -H "X-Auth-Token-Header: {pw}" https://example.test'):
+    assert pw not in fleet.mask(cmd) and "[masked]" in fleet.mask(cmd), fleet.mask(cmd)
+for cmd in ("mkdir -p a", "mkdir -pv a", "git log -p", "docker run -p 8080:80 x", "https://example.test/a@b", "git@example.test:a/b"):
+    assert fleet.mask(cmd) == cmd, cmd
 
 # Shared resources: a hold by a terminal handle sits on that terminal's session.
 import holds  # noqa: E402

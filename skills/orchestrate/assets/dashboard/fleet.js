@@ -681,7 +681,8 @@ function fleetMonitors(st) {
   const legend = Object.values(MON).map(([g, tone, l]) => `<span><span class="toned tone-${tone}">${g}</span> ${l}</span>`).join("");
   const headHtml = `<div class="view-head"><div><h2>모니터</h2><p>살아 있는 Claude Code 세션이 띄운 백그라운드 명령(run_in_background)과 Monitor. 세션 트랜스크립트의 시작·종료 기록을 프로세스 목록과 맞춰 본다. 비정상 종료는 「죽음」, 종료 기록도 프로세스도 없으면 「알 수 없음」으로 ▲ 표시하고, 6시간이 지나거나 같은 명령을 다시 띄우면 내린다. 서브에이전트 안의 작업, CronCreate, launchd 작업은 수집하지 않는다.</p></div>
     <div class="legend">${legend}</div></div>`;
-  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} 모니터 목록을 읽지 못했다: ${esc(src.error || "")}. 아래는 ${rel(src.updated_at)} 값이다.</div></div>` : "";
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} 모니터 목록을 읽지 못했다: ${esc(src.error || "")}. 아래는 ${rel(src.updated_at)} 값이다.</div></div>`
+    : src.warning ? `<div class="card"><div class="empty-chart">${tag("일부 누락", "warn", "alert")} 트랜스크립트를 찾지 못한 세션은 빠졌다: ${esc(src.warning)}</div></div>` : "";
   const rows = mons.map((m) => {
     const [glyph, tone, label] = MON[m.status] || ["?", "", m.status], s = byId(st)[m.session];
     const result = m.status === "dead" ? `${m.exit != null ? `exit ${esc(m.exit)} · ` : ""}${esc(m.summary || "")}` : m.status === "lost" ? "종료 기록 없음, 프로세스 없음" : esc(m.event || "");

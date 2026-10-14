@@ -636,7 +636,7 @@ class FakeFleetWorld:
     def fetch_automations(self):
         return self.automations
 
-    def fetch_monitors(self):
+    def fetch_monitors(self, warn=None):
         return self.monitors
 
     def graphql(self, query):
