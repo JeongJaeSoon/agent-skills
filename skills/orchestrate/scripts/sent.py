@@ -1,5 +1,5 @@
 """Instructions sent out of a session: to another session or card, a subagent, an inbox, Slack or a tracker. The
-dashboard's 보낸 지시 page shows them so the human can read what was asked of whom.
+dashboard's Sent page shows them so the human can read what was asked of whom.
 
 Three sources, each row tagged with its own:
 - log: `orch sent add`, written by the sender at the moment it sends. One file a day (UTC) under

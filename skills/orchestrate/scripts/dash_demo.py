@@ -434,7 +434,7 @@ def seed_holds(root, now=None):
 
 
 def seed_board():
-    """An invented board for the 정기 보고 page, written through board.py into $ORCH_FLEET_STATE (set it first)."""
+    """An invented board for the Brief page, written through board.py into $ORCH_FLEET_STATE (set it first)."""
     import board
     board.lead_add("lead-login", "term_0FAKE1", "acme/launchpad")
     board.set_row("lead-login", title="로그인 개편", status="moving", progress="3/5", next="CI · 워커", pr="acme/launchpad#41")

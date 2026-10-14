@@ -96,7 +96,7 @@ Usage: orch <command> <slug> [options]
                                      no slug: log an instruction as you send it to another session, card,
                                      inbox, Slack or tracker (the text as sent, from a file or stdin `-`;
                                      --text only for a short string with nothing secret), for the dashboard's
-                                     보낸 지시 page. WHO sending defaults to $ORCA_TERMINAL_HANDLE.
+                                     Sent page. WHO sending defaults to $ORCA_TERMINAL_HANDLE.
                                      list prints the log with what live transcripts and the dashboard sent
   hold <resource> [--note TEXT] [--ttl MIN] [--by WHO] | hold --list [--json]
   release <resource> [--by WHO] [--force]

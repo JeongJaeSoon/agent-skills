@@ -219,7 +219,7 @@ def fetch_runs():
     return {"runs": runs, "workers": workers, "tasks": tasks, "gates": gates}
 
 
-AUTOMATION_RECENT = 6  # runs kept per automation: the dashboard's 자동화 page draws them as a row of blocks
+AUTOMATION_RECENT = 6  # runs kept per automation: the dashboard's Automations page draws them as a row of blocks
 
 
 def fetch_automations():
@@ -240,10 +240,10 @@ def fetch_automations():
     return out
 
 
-MONITOR_KEEP = 6 * 3600  # an ended or lost monitor stays on the 모니터 page this long, unless its command ran again
+MONITOR_KEEP = 6 * 3600  # an ended or lost monitor stays on the Monitors page this long, unless its command ran again
 MONITOR_SCAN = {}  # transcript path -> {"offset", "pending", "tasks"}: each tick reads only what was appended
 NOTICE_RE = re.compile(r"<(task-id|status|summary|output-file|event)>(.*?)</\1>", re.S)
-EXIT_RE = re.compile(r"\(exit(?: code)? (-?\d+)\)")
+EXIT_RE = re.compile(r"\bexit(?: code)? (-?\d+)")  # "(exit code 1)", "failed with exit code 1", "(exit 127)"
 EVAL_RE = re.compile(r"\beval '(.*)' < /dev/null", re.S)  # how Claude Code's shell wraps the command it runs
 BORN_SLACK = dt.timedelta(seconds=15)  # a task's shell starts this close to the result that reported it
 
@@ -309,7 +309,12 @@ def scan_line(c, raw):
         d = json.loads(raw)
     except ValueError:
         return
-    if not isinstance(d, dict) or not isinstance(d.get("message"), dict):
+    if not isinstance(d, dict):
+        return
+    text = notice_text(d)
+    if text:
+        return scan_notice(c, d, text)
+    if not isinstance(d.get("message"), dict):
         return
     content = d["message"].get("content")
     blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
@@ -328,18 +333,34 @@ def scan_line(c, raw):
             m = re.search(r"Output is being written to: (\S+?)\.?(?:\s|$)", str(result.get("content") or ""))
             c["tasks"][tid] = {**use, "id": tid, "started_at": stamp(d), "output": m and m.group(1),
                                "timeout_ms": None if r.get("persistent") else r.get("timeoutMs")}
-    elif d.get("type") == "user" and isinstance(content, str) and content.startswith("<task-notification>"):
-        n = dict(NOTICE_RE.findall(content))
-        t = c["tasks"].get(n.get("task-id"))
-        if not t:
-            return
-        t["output"] = t.get("output") or n.get("output-file")
-        if n.get("event"):
-            t["event_at"], t["event"] = stamp(d), n["event"]
-        if n.get("status") and n["status"] != "running":
-            m = EXIT_RE.search(n.get("summary") or "")
-            t.update(ended_at=stamp(d), end_status=n["status"], exit=int(m.group(1)) if m else None,
-                     summary=n.get("summary"))
+
+
+def notice_text(d):
+    """A task-notification from whichever line carried it: a user turn, the queue it waited in, or the attachment it
+    became when a turn absorbed it. Most notifications are written two or three of these ways; some only as the last two."""
+    if d.get("type") == "queue-operation":
+        text = d.get("content") if d.get("operation") == "enqueue" else None  # its remove line repeats it
+    elif d.get("type") == "attachment":
+        a = d.get("attachment") if isinstance(d.get("attachment"), dict) else {}
+        text = a.get("prompt") if a.get("type") == "queued_command" else None
+    else:
+        m = d.get("message") if isinstance(d.get("message"), dict) else {}
+        text = m.get("content") if d.get("type") == "user" else None
+    return text if isinstance(text, str) and text.startswith("<task-notification>") else None
+
+
+def scan_notice(c, d, text):
+    n = dict(NOTICE_RE.findall(text))
+    t = c["tasks"].get(n.get("task-id"))
+    if not t:
+        return
+    at = stamp(d)
+    t["output"] = t.get("output") or n.get("output-file")
+    if n.get("event") and (at or "") >= (t.get("event_at") or ""):
+        t["event_at"], t["event"] = at, n["event"]
+    if n.get("status") and n["status"] != "running" and not t.get("ended_at"):
+        codes = EXIT_RE.findall(n.get("summary") or "")  # the last: the quoted description may say "exit" too
+        t.update(ended_at=at, end_status=n["status"], exit=int(codes[-1]) if codes else None, summary=n.get("summary"))
 
 
 def stamp(d):
@@ -406,7 +427,8 @@ def collect_monitors(procs, now, warn):
             again = key in seen
             seen.add(key)
             if t.get("ended_at"):
-                ok = t["end_status"] == "completed" and not t.get("exit")
+                # killed and stopped are TaskStop or the UI ending it on purpose
+                ok = t["end_status"] in ("killed", "stopped") or t["end_status"] == "completed" and not t.get("exit")
                 status, at = ("ended" if ok else "dead"), t["ended_at"]
             else:
                 # A foreground run of the same command, or a later copy, is not this task's shell.
@@ -440,7 +462,7 @@ def mtime_iso(path):
 
 
 SENT_SCAN = {}  # transcript path -> {"offset", "rows"}: what a live session sent, read like MONITOR_SCAN
-SENT_KEEP = dt.timedelta(days=30)  # the 보낸 지시 page's longest window; older rows leave SENT_SCAN
+SENT_KEEP = dt.timedelta(days=30)  # the Sent page's longest window; older rows leave SENT_SCAN
 # orca <noun> <verb> -> (the flag naming the receiver, the flag carrying the text, the receiver's kind)
 ORCA_SENDS = {("terminal", "send"): ("--terminal", "--text", "terminal"), ("worktree", "create"): ("--name", "--prompt", "card"),
               ("orchestration", "send"): ("--to", "--body", "inbox")}
@@ -968,19 +990,19 @@ def pr_items(p, me, cfg):
     base = {"pr": p["key"], "url": p["url"]}
     if any(r.get("state") == "CHANGES_REQUESTED" for r in p["reviewers"]):
         who = ", ".join(r["login"] for r in p["reviewers"] if r.get("state") == "CHANGES_REQUESTED")
-        out.append({**base, "type": "changes_requested", "title": f"변경 요청: {who}"})
+        out.append({**base, "type": "changes_requested", "title": f"Changes requested: {who}"})
     threads = [t for t in open_threads(p, me) if bots or not t["last_bot"]]
     if threads:
-        out.append({**base, "type": "review_comment_received", "title": f"미해결 리뷰 스레드 {len(threads)}개",
+        out.append({**base, "type": "review_comment_received", "title": f"Open review threads: {len(threads)}",
                     "url": threads[-1]["last_url"] or p["url"]})
     if p["ci"] == "failure":
-        out.append({**base, "type": "ci_failed", "title": "CI 실패"})
+        out.append({**base, "type": "ci_failed", "title": "CI failed"})
     stale = [r["login"] for r in p["reviewers"] if r.get("stale")]
     fresh = [r for r in p["reviewers"] if r.get("state") == "APPROVED" and not r.get("stale")]
     if stale and not fresh:
-        out.append({**base, "type": "approval_stale", "title": f"승인이 이전 커밋 기준: {', '.join(stale)}"})
+        out.append({**base, "type": "approval_stale", "title": f"Approved on an older commit: {', '.join(stale)}"})
     if fresh and p["ci"] in ("success", None) and not p["draft"] and p["decision"] in ("APPROVED", None):
-        out.append({**base, "type": "ready_to_merge", "title": "승인됨, CI 통과: 머지 판단 대기"})
+        out.append({**base, "type": "ready_to_merge", "title": "Approved, CI green: waiting on a merge call"})
     return out
 
 
@@ -1386,7 +1408,7 @@ class Fleet:
                         self.resolve(it, "answered", now)
                 if a["state"] == "waiting":
                     items.append({"key": f"wait:{pane}:{a['since']}", "type": "permission", "session": s["id"],
-                                  "title": "입력·권한 창에서 대기 중", "detail": a["detail"], "at": a["since"] or iso(now),
+                                  "title": "Waiting on an input or permission prompt", "detail": a["detail"], "at": a["since"] or iso(now),
                                   "source": "orca", **self.pending_prompt(s, a, records)})
             s["last_prompt_at"] = last_prompt
         if sessions:  # an empty list is more likely a bad read than every worktree gone at once
@@ -1585,7 +1607,7 @@ def sync_items(now, terms=None):
         at, every = parse(sync.get("at")), sync.get("interval") or 900
         if sync.get("ok") is False or (at and (now - at).total_seconds() > 2 * every):
             out.append({"key": f"sync:{sync.get('at')}", "type": "sync_stalled", "session": None, "at": sync.get("at"),
-                        "title": "스킬 동기화 멈춤", "detail": mask(sync.get("message"), 300), "source": "skills-sync"})
+                        "title": "Skills sync stopped", "detail": mask(sync.get("message"), 300), "source": "skills-sync"})
     pending = read_json(base / "reload-pending.json")
     if isinstance(pending, dict):
         for handle, why in (pending.get("failed") or {}).items():
@@ -1594,7 +1616,7 @@ def sync_items(now, terms=None):
             sid, title = (terms or {}).get(handle, (None, None))
             out.append({"key": f"reload:{handle}:{pending.get('since')}", "type": "reload_pending", "session": sid,
                         "terminal": handle, "at": pending.get("since"), "source": "skills-sync",
-                        "title": f"reload 못 보냄: {mask(title or handle, 80)}", "detail": mask((why or {}).get("reason"), 200)})
+                        "title": f"Reload not sent: {mask(title or handle, 80)}", "detail": mask((why or {}).get("reason"), 200)})
     return out
 
 

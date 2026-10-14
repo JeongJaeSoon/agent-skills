@@ -7,11 +7,11 @@ const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
   { id: "prs", label: "Pull requests", icon: "prs" },
-  { id: "work", label: "작업 진행", icon: "flag" },
-  { id: "brief", label: "정기 보고", icon: "note" },
-  { id: "automations", label: "자동화", icon: "clock" },
-  { id: "monitors", label: "모니터", icon: "activity" },
-  { id: "sent", label: "보낸 지시", icon: "chat" },
+  { id: "work", label: "Work", icon: "flag" },
+  { id: "brief", label: "Brief", icon: "note" },
+  { id: "automations", label: "Automations", icon: "clock" },
+  { id: "monitors", label: "Monitors", icon: "activity" },
+  { id: "sent", label: "Sent", icon: "chat" },
   { id: "skills", label: "Skills", icon: "spark" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
@@ -143,8 +143,8 @@ function fleetHeader() {
   const missed = (st.items || []).filter((i) => i.missed).length;
   const errs = Object.entries(st.sources || {}).filter(([, v]) => v.ok === false).length, troubled = autoTroubled(st).length, lost = monTroubled(st).length;
   $("#top-right").innerHTML = [missed ? `<a href="#/fleet/inbox">${tag(`${missed} missed`, "bad", "alert")}</a>` : "",
-    troubled ? `<a href="#/fleet/automations">${tag(`자동화 ▲${troubled}`, "bad", "alert")}</a>` : "",
-    lost ? `<a href="#/fleet/monitors">${tag(`모니터 ▲${lost}`, "bad", "alert")}</a>` : "",
+    `<a href="#/fleet/automations">${troubled ? tag(`Automations ▲${troubled}`, "bad", "alert") : tag(`Automations ${(st.automations || []).length}`, "", "clock")}</a>`,
+    lost ? `<a href="#/fleet/monitors">${tag(`Monitors ▲${lost}`, "bad", "alert")}</a>` : "",
     errs ? tag(`${errs} source error${errs > 1 ? "s" : ""}`, "warn", "alert") : ""].join("");
 }
 
@@ -562,17 +562,17 @@ function briefHtml(text) {
 function fleetBrief() {
   if (!F.brief) pollBrief();
   const b = F.brief;
-  const headHtml = `<div class="view-head"><div><h2>정기 보고</h2><p>코디네이터가 보내는 정기 보고를 <span class="mono">orch brief render --periodic</span> 이 board·PR 목록·열린 결정에서 만든 그대로 보여 준다. 굵은 행은 지난 보고 뒤 바뀐 것이다.</p></div>
-    ${b && b.text ? `<div class="aside muted">바뀐 행 ${(b.changed || []).length} · 낡은 행 ${(b.stale || []).length}${b.width_ok === false ? ` · ${tag("78열 초과", "warn", "")}` : ""}</div>` : ""}</div>`;
+  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report the coordinator sends, exactly as <span class="mono">orch brief render --periodic</span> builds it from the board, the PR list and open decisions. Bold rows changed since the last report.</p></div>
+    ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}</div>` : ""}</div>`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
-  if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "보고할 내용이 없다.")}</div></div>`;
+  if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
   return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>`;
 }
 
 // The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
 // written by the coordinator shows within one poll. The merge cell arrives already filled from the fleet PR list.
-const WORK_MARK = { ok: ["✅", "good", "완료·확인"], fail: ["❌", "bad", "미완료·실패"], partial: ["⚠️", "warn", "일부·추정"],
-  checking: ["🔄", "accent", "확인 중"], na: ["–", "", "해당 없음"] };
+const WORK_MARK = { ok: ["✅", "good", "done · verified"], fail: ["❌", "bad", "not done · failed"], partial: ["⚠️", "warn", "partial · inferred"],
+  checking: ["🔄", "accent", "checking"], na: ["–", "", "n/a"] };
 const WORK_DONE_KEEP = 7 * 86400e3;  // stages.py DONE_KEEP_S: a file nobody wrote to since can still hold older rows
 const workShown = (w) => (w.rows || []).filter((r) => !r.done_at || Date.now() - ms(r.done_at) < WORK_DONE_KEEP);
 const workOpen = () => F.work && !F.work.error ? workShown(F.work).filter((r) => !r.group && !r.done_at).length : 0;
@@ -601,53 +601,53 @@ function workCell(c) {
 function fleetWork() {
   if (!F.work) pollWork();
   const w = F.work;
-  const headHtml = `<div class="view-head"><div><h2>작업 진행</h2><p><span class="mono">orch stage</span> 로 기록한 작업별 단계 표. 머지 칸은 PR 목록에서 채우고, dev·prod 칸은 코디네이터가 확인한 때 근거와 함께 쓴다. 끝난 행은 7일 동안 흐리게 남는다.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Work</h2><p>Stages per work item, recorded with <span class="mono">orch stage</span>. The merge column fills from the PR list; the dev and prod columns are written by the coordinator, with evidence, when it checks them. Finished rows stay dimmed for 7 days.</p></div>
     <div class="legend">${Object.values(WORK_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</div></div>`;
   if (!w) return headHtml + '<div class="loading">Loading…</div>';
   if (w.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(w.error)}</div></div>`;
   const all = workShown(w), done = all.filter((r) => r.done_at && !r.group).length;
   const rows = F.workHideDone ? all.filter((r) => !r.done_at) : all;
   const byId = Object.fromEntries(all.map((r) => [r.id, r]));
-  // A group's own rows sit flush under it; each level below them gets one ㄴ step.
+  // A group's own rows sit flush under it; each level below them gets one └ step.
   const level = {};
   rows.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
   const body = rows.map((r) => {
     if (r.group) return `<tr class="wgroup ${r.done_at ? "is-done" : ""}"><td colspan="6"><b>${esc(r.title)}</b></td></tr>`;
     const lv = level[r.id];
     return `<tr class="${r.done_at ? "is-done" : ""}"><td class="wfeat">${r.parent ? "" : '<span class="muted">–</span>'}</td>
-      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">ㄴ </span>' : ""}${esc(r.title)}${r.done_at ? ` <span class="muted">· 끝남 ${relSpan(r.done_at)}</span>` : ""}</td>
+      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">└ </span>' : ""}${esc(r.title)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""}</td>
       <td class="mono nowrap">${r.pr ? linkRefs(r.pr) : '<span class="muted">–</span>'}</td>
       ${["merge", "dev", "prod"].map((c) => `<td>${workCell((r.cells || {})[c])}</td>`).join("")}</tr>`;
   }).join("");
   const { env = {} } = w;
   const envLine = ["prod", "dev"].filter((k) => env[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(env[k])}</span></span>`).join("");
-  const toggle = done ? `<button class="chip" type="button" data-work-done aria-pressed="${!!F.workHideDone}">끝난 행 ${done}개 접기</button>` : "";
-  const table = all.length ? `<div class="card table-wrap"><table class="work"><thead><tr><th>기능/epic</th><th>작업</th><th>PR</th><th>PR 머지</th><th>dev 확인</th><th>prod 확인</th></tr></thead><tbody>${body}</tbody></table></div>`
-    : '<div class="card"><div class="empty-chart">기록된 작업이 없다. <span class="mono">orch stage add</span> 로 행을 만든다.</div></div>';
-  const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>다음 순서</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n)}</li>`).join("")}</ol></div>` : "";
+  const toggle = done ? `<button class="chip" type="button" data-work-done aria-pressed="${!!F.workHideDone}">Hide ${done} done</button>` : "";
+  const table = all.length ? `<div class="card table-wrap"><table class="work"><thead><tr><th>Feature/epic</th><th>Work</th><th>PR</th><th>PR merged</th><th>dev check</th><th>prod check</th></tr></thead><tbody>${body}</tbody></table></div>`
+    : '<div class="card"><div class="empty-chart">No work recorded. Add a row with <span class="mono">orch stage add</span>.</div></div>';
+  const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>Next</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n)}</li>`).join("")}</ol></div>` : "";
   return headHtml + `<div class="toolbar wenv">${envLine ? `<div class="meta">${envLine}${env.at ? `<span class="muted">${relSpan(env.at)}</span>` : ""}</div>` : ""}${toggle}</div>` + table + next;
 }
 document.addEventListener("click", (e) => { if (e.target.closest("[data-work-done]")) { F.workHideDone = !F.workHideDone; renderView(); } });
 
 // Orca automations (state.json automations). An enabled one is ▲ when its last run failed or its next run is 10 min
 // overdue: the scheduler stopped or the app was closed. A switched-off one is never a problem.
-const AUTO_RUN = { completed: ["■", "good", "완료"], failed: ["■", "bad", "실패"], error: ["■", "bad", "실패"], running: ["◧", "warn", "실행 중"],
-  dispatched: ["◧", "warn", "실행 중"], skipped: ["□", "", "건너뜀"] };
-const AUTO_STALL = 10 * 60e3;
+const AUTO_RUN = { completed: ["■", "good", "completed"], failed: ["■", "bad", "failed"], error: ["■", "bad", "failed"], running: ["◧", "warn", "running"],
+  dispatched: ["◧", "warn", "running"], skipped: ["□", "", "skipped"] };
+const AUTO_STALL = 10 * 60e3, AUTO_OVERDUE = "past its run time";
 function autoIssue(a) {
   if (!a.enabled) return "";
-  if (/fail|error/.test(((a.recent || [])[0] || {}).status || "")) return "마지막 실행 실패";
-  return a.next_run_at && Date.now() - ms(a.next_run_at) > AUTO_STALL ? "예정 시각 지남" : "";
+  if (/fail|error/.test(((a.recent || [])[0] || {}).status || "")) return "last run failed";
+  return a.next_run_at && Date.now() - ms(a.next_run_at) > AUTO_STALL ? AUTO_OVERDUE : "";
 }
 const autoTroubled = (st) => (st.automations || []).filter(autoIssue);
 // The few cron shapes automations use, in words; anything else stays as written.
 function cadence(rrule) {
   const r = (rrule || "").trim(), m = (re) => r.match(re), pad = (x) => x.padStart(2, "0");
   let g;
-  if ((g = m(/^(\d+) \*\/(\d+) \* \* \*$/))) return `${g[2]}시간마다 :${pad(g[1])}`;
-  if ((g = m(/^\*\/(\d+) (\d+)-(\d+) \* \* 1-5$/))) return `평일 ${g[2]}–${g[3]}시 ${g[1]}분마다`;
-  if ((g = m(/^\*\/(\d+) \* \* \* \*$/))) return `${g[1]}분마다`;
-  if ((g = m(/^(\d+) (\d+) \* \* \*$/))) return `매일 ${g[2]}:${pad(g[1])}`;
+  if ((g = m(/^(\d+) \*\/(\d+) \* \* \*$/))) return `every ${g[2]}h at :${pad(g[1])}`;
+  if ((g = m(/^\*\/(\d+) (\d+)-(\d+) \* \* 1-5$/))) return `weekdays ${g[2]}–${g[3]}h every ${g[1]}m`;
+  if ((g = m(/^\*\/(\d+) \* \* \* \*$/))) return `every ${g[1]}m`;
+  if ((g = m(/^(\d+) (\d+) \* \* \*$/))) return `daily ${g[2]}:${pad(g[1])}`;
   return r || "?";
 }
 function runBlock(r) {
@@ -659,50 +659,50 @@ function fleetAutomations(st) {
   const autos = st.automations || [], src = (st.sources || {}).automations || {};
   const legend = [AUTO_RUN.completed, AUTO_RUN.failed, AUTO_RUN.running, AUTO_RUN.skipped]
     .map(([g, tone, l]) => `<span><span class="run ${tone ? "tone-" + tone : ""}">${g}</span>${l}</span>`).join("");
-  const headHtml = `<div class="view-head"><div><h2>자동화</h2><p>Orca automation 마다 주기, 다음·마지막 실행, 최근 6회 결과(왼쪽이 오래된 것). 마지막 실행이 실패했거나 예정 시각을 10분 넘기면 ▲ 로 표시한다. 세션 안의 CronCreate 와 launchd 작업은 수집하지 않는다.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>Each Orca automation with its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. CronCreate jobs inside sessions and launchd jobs are not collected.</p></div>
     <div class="legend">${legend}</div></div>`;
-  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} Orca automation 목록을 읽지 못했다: ${esc(src.error || "")}. 아래는 ${rel(src.updated_at)} 값이다.</div></div>` : "";
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the Orca automation list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>` : "";
   const rows = autos.map((a) => {
     const issue = autoIssue(a), last = (a.recent || [])[0];
-    return `<tr class="${a.enabled ? "" : "is-done"}"><td><b>${esc(a.name)}</b>${a.enabled ? "" : ` ${tag("꺼짐")}`}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}</td>
-      <td class="nowrap">${esc(cadence(a.rrule))}</td><td class="nowrap ${issue === "예정 시각 지남" ? "toned tone-bad" : ""}">${a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
+    return `<tr class="${a.enabled ? "" : "is-done"}"><td><b>${esc(a.name)}</b>${a.enabled ? "" : ` ${tag("off")}`}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}</td>
+      <td class="nowrap">${esc(cadence(a.rrule))}</td><td class="nowrap ${issue === AUTO_OVERDUE ? "toned tone-bad" : ""}">${a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
       <td class="nowrap muted">${a.last_run_at ? relSpan(a.last_run_at) : "–"}</td><td class="runs nowrap">${[...(a.recent || [])].reverse().map(runBlock).join("")}</td>
-      <td class="dim"><span class="ellipsis" style="display:block">${last ? esc(last.summary || last.status || "") : '<span class="muted">실행 기록 없음</span>'}</span></td></tr>`;
+      <td class="dim"><span class="ellipsis" style="display:block">${last ? esc(last.summary || last.status || "") : '<span class="muted">no runs yet</span>'}</span></td></tr>`;
   }).join("");
-  const table = autos.length ? `<div class="card table-wrap" data-src="automations"><table class="autos"><thead><tr><th>이름</th><th>주기</th><th>다음</th><th>마지막</th><th>최근 6회</th><th>마지막 결과</th></tr></thead><tbody>${rows}</tbody></table></div>`
-    : '<div class="card"><div class="empty-chart">등록된 Orca automation 이 없다.</div></div>';
+  const table = autos.length ? `<div class="card table-wrap" data-src="automations"><table class="autos"><thead><tr><th>Name</th><th>Cadence</th><th>Next</th><th>Last</th><th>Last 6</th><th>Last result</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : '<div class="card"><div class="empty-chart">No Orca automations registered.</div></div>';
   return headHtml + failed + table;
 }
 
 // Background watches of the live Claude Code sessions (state.json monitors, fleet.py fetch_monitors): a Bash run in the
 // background or a Monitor. Every row but a running one is ▲: it died, or no process runs it and no end was recorded.
-const MON = { running: ["●", "good", "실행 중"], dead: ["▲", "bad", "죽음"], lost: ["▲", "bad", "알 수 없음"] };
+const MON = { running: ["●", "good", "running"], dead: ["▲", "bad", "dead"], lost: ["▲", "bad", "unknown"] };
 const monTroubled = (st) => (st.monitors || []).filter((m) => m.status !== "running");
 function fleetMonitors(st) {
   const mons = st.monitors || [], src = (st.sources || {}).monitors || {};
   const legend = Object.values(MON).map(([g, tone, l]) => `<span><span class="toned tone-${tone}">${g}</span> ${l}</span>`).join("");
-  const headHtml = `<div class="view-head"><div><h2>모니터</h2><p>살아 있는 Claude Code 세션이 띄운 백그라운드 명령(run_in_background)과 Monitor. 세션 트랜스크립트의 시작·종료 기록을 프로세스 목록과 맞춰 본다. 비정상 종료는 「죽음」, 종료 기록도 프로세스도 없으면 「알 수 없음」으로 ▲ 표시하고, 6시간이 지나거나 같은 명령을 다시 띄우면 내린다. 서브에이전트 안의 작업, CronCreate, launchd 작업은 수집하지 않는다.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Monitors</h2><p>Background commands (run_in_background) and Monitors started by live Claude Code sessions, matching each session transcript's start and end records against the process list. A failed exit is "dead"; no end record and no process is "unknown". Both get a ▲ and drop off after 6 hours or once the same command runs again. A normal exit or a deliberate stop is not shown. Tasks inside subagents, CronCreate and launchd jobs are not collected.</p></div>
     <div class="legend">${legend}</div></div>`;
-  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} 모니터 목록을 읽지 못했다: ${esc(src.error || "")}. 아래는 ${rel(src.updated_at)} 값이다.</div></div>`
-    : src.warning ? `<div class="card"><div class="empty-chart">${tag("일부 누락", "warn", "alert")} 트랜스크립트를 찾지 못한 세션은 빠졌다: ${esc(src.warning)}</div></div>` : "";
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the monitor list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>`
+    : src.warning ? `<div class="card"><div class="empty-chart">${tag("partial", "warn", "alert")} Sessions whose transcript was not found are left out: ${esc(src.warning)}</div></div>` : "";
   const rows = mons.map((m) => {
     const [glyph, tone, label] = MON[m.status] || ["?", "", m.status], s = byId(st)[m.session];
-    const result = m.status === "dead" ? `${m.exit != null ? `exit ${esc(m.exit)} · ` : ""}${esc(m.summary || "")}` : m.status === "lost" ? "종료 기록 없음, 프로세스 없음" : esc(m.event || "");
+    const result = m.status === "dead" ? `${m.exit != null ? `exit ${esc(m.exit)} · ` : ""}${esc(m.summary || "")}` : m.status === "lost" ? "no end record, no process" : esc(m.event || "");
     return `<tr><td class="nowrap"><span class="toned tone-${tone}">${glyph} ${label}</span></td>
       <td><b>${esc(m.description || "")}</b> ${tag(m.kind === "monitor" ? "Monitor" : "background")}<div class="mono dim ellipsis cmd" title="${esc(m.command)}">${esc(m.command)}</div></td>
       <td>${s ? `<a href="${sessionHref(s.id)}">${phaseDot(s)} ${esc(s.name)}</a>` : ""}<div class="mono dim nowrap">${esc(m.session_name || "")}</div></td>
       <td class="nowrap muted">${relSpan(m.started_at)}</td><td class="nowrap ${m.status === "running" ? "muted" : "toned tone-bad"}">${m.last_at ? relSpan(m.last_at) : "–"}</td>
       <td class="dim"><span class="ellipsis" style="display:block">${result || '<span class="muted">–</span>'}</span></td></tr>`;
   }).join("");
-  const table = mons.length ? `<div class="card table-wrap" data-src="monitors"><table class="autos monitors"><thead><tr><th>상태</th><th>무엇을</th><th>세션</th><th>시작</th><th>마지막 깨움</th><th>결과·마지막 이벤트</th></tr></thead><tbody>${rows}</tbody></table></div>`
-    : '<div class="card"><div class="empty-chart">살아 있는 세션에 띄워진 모니터가 없다.</div></div>';
+  const table = mons.length ? `<div class="card table-wrap" data-src="monitors"><table class="autos monitors"><thead><tr><th>Status</th><th>What</th><th>Session</th><th>Started</th><th>Last wake</th><th>Result · last event</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : '<div class="card"><div class="empty-chart">No monitors in live sessions.</div></div>';
   return headHtml + failed + table;
 }
 
 // Instructions sent out of a session (sent.py via /api/fleet/sent): the `orch sent add` log, lines typed on the
 // dashboard, and what live sessions sent by Agent, SendMessage or orca. Read on every poll while the page is open.
-const SENT_SRC = { log: ["기록", "accent"], transcript: ["트랜스크립트", ""], dashboard: ["대시보드", "good"] };
-const SENT_DAYS = [["1", "1일"], ["7", "7일"], ["30", "30일"]];
+const SENT_SRC = { log: ["log", "accent"], transcript: ["transcript", ""], dashboard: ["dashboard", "good"] };
+const SENT_DAYS = [["1", "1d"], ["7", "7d"], ["30", "30d"]];
 const SENT_SHOWN = 300;
 const sentDays = () => (SENT_DAYS.some(([d]) => d === S.filters.sent_days) ? S.filters.sent_days : "1");
 async function pollSent() {
@@ -725,7 +725,7 @@ const sentKey = (r) => `${r.ts}|${r.source}|${r.to}|${(r.text || "").length}`;
 function fleetSent(st) {
   if (!F.sent || F.sentDays !== sentDays()) pollSent();
   const d = F.sent, src = (st && st.sources || {}).sent || {};
-  const headHtml = `<div class="view-head"><div><h2>보낸 지시</h2><p>세션이 다른 세션·카드·서브에이전트·inbox·Slack·트래커로 보낸 지시와 원문. 출처는 셋이다: 보낼 때 <span class="mono">orch sent add</span> 로 남긴 기록, 대시보드에서 세션에 친 줄, 살아 있는 Claude Code 세션 트랜스크립트의 Agent·SendMessage·<span class="mono">orca terminal send</span>·<span class="mono">orca worktree create --prompt</span>·<span class="mono">orca orchestration send</span>. 기록과 같은 지시가 트랜스크립트에도 보이면 한 줄로 합친다. 끝난 세션이 보낸 것은 기록에만 남는다. 토큰·비밀번호는 가린다.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Sent</h2><p>Instructions sessions sent to other sessions, cards, subagents, inboxes, Slack or the tracker, with the full text. Three sources: the log written with <span class="mono">orch sent add</span> at send time, lines typed into a session from this dashboard, and the Agent, SendMessage, <span class="mono">orca terminal send</span>, <span class="mono">orca worktree create --prompt</span> and <span class="mono">orca orchestration send</span> calls in live Claude Code session transcripts. An instruction in both the log and a transcript shows as one row. What an ended session sent survives only in the log. Tokens and passwords are masked.</p></div>
     <div class="legend">${Object.values(SENT_SRC).map(([l, tone]) => tag(l, tone)).join(" ")}</div></div>`;
   if (!d) return headHtml + '<div class="loading">Loading…</div>';
   if (d.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(d.error)}</div></div>`;
@@ -734,7 +734,7 @@ function fleetSent(st) {
   const bySrc = (r) => f === "all" || r.source === f || (r.also || []).includes(f);
   const hit = (r) => !q || [r.from, r.to, r.kind, r.channel, r.repo, r.subject, r.text].some((v) => (v || "").toLowerCase().includes(q));
   const shown = rows.filter((r) => bySrc(r) && hit(r));
-  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} 트랜스크립트를 읽지 못했다: ${esc(src.error || "")}. 기록과 대시보드 출처만 보인다.</div></div>` : "";
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read transcripts: ${esc(src.error || "")}. Only the log and dashboard sources are shown.</div></div>` : "";
   const body = shown.slice(0, SENT_SHOWN).map((r) => {
     const text = r.text || "", long = text.split("\n").length > 6 || text.length > 480, k = sentKey(r);
     const srcs = [r.source, ...(r.also || [])].map((x) => tag((SENT_SRC[x] || [x])[0], (SENT_SRC[x] || [, ""])[1])).join(" ");
@@ -743,17 +743,17 @@ function fleetSent(st) {
       <td><div class="nowrap">${esc(r.from || "?")} <span class="muted">→</span> <b>${esc(r.to || "?")}</b></div>
         <div class="dim">${r.kind ? tag(r.kind) : ""} <span class="mono">${esc(r.channel || "")}</span>${r.repo ? ` · <span class="mono">${esc(r.repo)}</span>` : ""}</div></td>
       <td class="sent-cell">${r.subject ? `<div><b>${esc(r.subject)}</b></div>` : ""}${long
-        ? `<details data-sent-key="${esc(k)}" ${F.sentOpen && F.sentOpen.has(k) ? "open" : ""}><summary class="dim ellipsis">${esc(text.split("\n").find((l) => l.trim()) || "")} <span class="muted">(${text.length}자)</span></summary>${pre}</details>` : pre}</td>
+        ? `<details data-sent-key="${esc(k)}" ${F.sentOpen && F.sentOpen.has(k) ? "open" : ""}><summary class="dim ellipsis">${esc(text.split("\n").find((l) => l.trim()) || "")} <span class="muted">(${text.length} chars)</span></summary>${pre}</details>` : pre}</td>
       <td class="nowrap">${srcs}</td></tr>`;
   }).join("");
-  const srcChips = chips("sent_src", [["all", "모든 출처", rows.length], ...Object.entries(SENT_SRC).map(([id, [l]]) => [id, l, rows.filter((r) => r.source === id || (r.also || []).includes(id)).length])], f);
+  const srcChips = chips("sent_src", [["all", "all sources", rows.length], ...Object.entries(SENT_SRC).map(([id, [l]]) => [id, l, rows.filter((r) => r.source === id || (r.also || []).includes(id)).length])], f);
   const toolbar = `<div class="toolbar">${chips("sent_days", SENT_DAYS, sentDays())}${srcChips}
-    <input class="search" id="sent-search" type="search" placeholder="대상·보낸 쪽·원문 검색" value="${esc(S.filters.sent_q || "")}" aria-label="보낸 지시 검색"></div>`;
-  const cut = d.total > rows.length ? `최근 ${rows.length}건만 받았다(전체 ${d.total}건). ` : "";
-  const more = shown.length > SENT_SHOWN ? `${SENT_SHOWN}건까지 보인다(맞는 것 ${shown.length}건). ` : "";
-  const note = cut || more ? `<p class="muted">${cut}${more}검색이나 출처로 좁힌다.</p>` : "";
-  const table = shown.length ? `<div class="card table-wrap" data-src="sent"><table class="sent"><thead><tr><th>언제</th><th>누가 → 누구에게</th><th>원문</th><th>출처</th></tr></thead><tbody>${body}</tbody></table></div>`
-    : `<div class="card"><div class="empty-chart">${rows.length ? "맞는 지시가 없다." : "이 기간에 보낸 지시가 없다."}</div></div>`;
+    <input class="search" id="sent-search" type="search" placeholder="Search recipient, sender, text" value="${esc(S.filters.sent_q || "")}" aria-label="Search sent instructions"></div>`;
+  const cut = d.total > rows.length ? `Fetched the latest ${rows.length} of ${d.total}. ` : "";
+  const more = shown.length > SENT_SHOWN ? `Showing ${SENT_SHOWN} of ${shown.length} matches. ` : "";
+  const note = cut || more ? `<p class="muted">${cut}${more}Narrow with search or source.</p>` : "";
+  const table = shown.length ? `<div class="card table-wrap" data-src="sent"><table class="sent"><thead><tr><th>When</th><th>From → to</th><th>Text</th><th>Source</th></tr></thead><tbody>${body}</tbody></table></div>`
+    : `<div class="card"><div class="empty-chart">${rows.length ? "No matching instructions." : "Nothing sent in this period."}</div></div>`;
   return headHtml + failed + toolbar + note + table;
 }
 document.addEventListener("input", (e) => { if (e.target.id === "sent-search") { S.filters.sent_q = e.target.value; renderView(); } });

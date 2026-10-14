@@ -1,4 +1,4 @@
-"""The stage table the brief skill reports and the dashboard's 작업 진행 page draws: one row per work item, its PR merge, dev check
+"""The stage table the brief skill reports and the dashboard's Work page draws: one row per work item, its PR merge, dev check
 and prod check, each cell a mark and the evidence behind it.
 
 The coordinator writes a cell where it verified it (`orch stage set`), so the next report and the dashboard read the same
