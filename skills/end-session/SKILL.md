@@ -112,7 +112,7 @@ it), then pick the row:
 |---|---|
 | Outcome `succeeded`; `isMainWorktree: false` and §4's Remove row holds (clean tree, the work on `origin/main`, no open PR); no other agent terminal on the card; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done`, then `orca worktree rm --worktree current --json` (`--run-hooks` per §4). The card's terminals, the setup one included, go with it. |
 | The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done`, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
-| Anything else: outcome `failed` (the coordinator retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | Close the card's setup terminal (`skills-sync close-setup <card path>`), then `worker_done` naming what holds the card, and idle. Never `AskUserQuestion`: nobody sees it. |
+| Anything else: outcome `failed` (the coordinator retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
 
 - **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
   not Orca, often refuses `orca worktree rm` as irreversible. Do not run it again in any form:

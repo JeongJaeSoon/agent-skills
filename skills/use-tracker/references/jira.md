@@ -14,6 +14,8 @@ it, and always from scripts, use `tracker.py --adapter jira` (Jira Cloud REST v3
 | Move | `getTransitionsForJiraIssue`, then `transitionJiraIssue` | `transition ABC-1 --to started\|review\|completed\|canceled` |
 | Relate | issue-link tool if the server has one, else `tracker.py` | `create --related ID` (link type "Relates") |
 
+With the MCP server, a child's epic goes in `additional_fields: {"parent": {"id": "<numeric id>"}}`. Its `parent` argument returns 400 and creates nothing.
+
 ## How tracker.py maps Jira
 
 | Jira | state_type |

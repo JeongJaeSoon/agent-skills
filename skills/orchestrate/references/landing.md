@@ -89,7 +89,7 @@ When PRs must land in order (a dependency chain, consecutive migrations, layers 
 
 ## Feature integration branches
 
-A series of cards reworking one area works on `feat/<topic>`, branched from main and unprotected. Sub-PRs take it as their base and land into it with the same `orch land` (lanes are per base). The branch merges `origin/main` periodically. A CI that runs on push only for the default branch starts no run when a sub-PR lands there, so after each landing start it with `gh workflow run <ci workflow file> --ref feat/<topic>` and watch that run before `record main_green`; `land` prints this line when the base is not `main` or `master`. When the series is done, one `feat/<topic>` → main PR lands.
+A series of cards reworking one area works on `feat/<topic>`, branched from main and unprotected. Sub-PRs take it as their base and land into it with the same `orch land` (lanes are per base). The branch merges `origin/main` periodically, through a sync PR (main into `feat/<topic>`) that lands as a merge commit: `gh pr merge <N> --merge --match-head-commit <head>`, then `orch landed <slug> --pr <N>`. `orch land` always squashes, and a squashed sync drops main's history from the branch. A CI that runs on push only for the default branch starts no run when a sub-PR lands there, so after each landing start it with `gh workflow run <ci workflow file> --ref feat/<topic>` and watch that run before `record main_green`; `land` prints this line when the base is not `main` or `master`. When the series is done, one `feat/<topic>` → main PR lands.
 
 ## What a worker does: `orch land <slug> --pr N [--wait-minutes 50]`
 
