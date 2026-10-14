@@ -29,11 +29,13 @@ STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or "
 GH = os.environ.get("AGENT_SKILLS_GH", "gh")
 DEFAULTS = {"reasons": ["mention", "author", "assign", "state_change", "review_requested", "comment"],
             "exclude_title_patterns": [r"^\[Auto\]", r"^chore\(deps", r"^Bump "],
-            "personal_review_only": True, "interval_s": 30, "backoff_s": 60, "max_failures": 10,
-            "max_minutes": 720, "keep_seen": 2000}
+            "personal_review_only": True, "human_activity_only": True, "interval_s": 30, "backoff_s": 60,
+            "max_failures": 10, "max_minutes": 720, "keep_seen": 2000}
 SCOPE = {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": []}
 # A re-request or reassignment bumps updated_at on the same thread; keying these by thread fires them once.
 ONCE_PER_THREAD = ("review_requested", "assign")
+# These also fire on the user's own pushes and comments, CI and bot comments.
+ACTIVITY = ("author", "comment")
 
 
 def config(path=CONFIG):
@@ -76,6 +78,22 @@ def line(n):
     return "\t".join((n["reason"], n["repository"]["full_name"], n["subject"]["title"][:70], web_url(n["subject"].get("url"))))
 
 
+def actor(fetch, n):
+    """The user behind a thread's latest activity, or None when the notification carries none (a push)."""
+    url, latest = n["subject"].get("url"), n["subject"].get("latest_comment_url")
+    if not latest:
+        return None
+    if latest != url:
+        return fetch(latest).get("user")
+    # GitHub points latest_comment_url at the PR itself when the latest activity is a review.
+    reviews = fetch(url + "/reviews?per_page=100") if "/pulls/" in url else []
+    return reviews[-1].get("user") if reviews else None
+
+
+def is_human(user, me):
+    return bool(user) and user["login"] != me and user.get("type") != "Bot" and not user["login"].endswith("[bot]")
+
+
 def poll(fetch, me, cfg, seen):
     """Returns (lines to print, keys to record). A team-only review request is recorded per updated_at,
     so it is checked again only on the next re-request, and still fires once if the user is later asked by name."""
@@ -94,6 +112,14 @@ def poll(fetch, me, cfg, seen):
                 continue  # a PR gone or unreadable must not hold back the rest; asked again next poll
             if me not in [u["login"] for u in users]:
                 keys.append(team)
+                continue
+        if n["reason"] in ACTIVITY and cfg["human_activity_only"]:
+            try:
+                user = actor(fetch, n)
+            except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+                continue
+            if not is_human(user, me):
+                keys.append(k)
                 continue
         keys.append(k)
         lines.append(line(n))

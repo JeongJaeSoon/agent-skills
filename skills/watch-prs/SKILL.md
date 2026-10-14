@@ -378,6 +378,11 @@ A notification passes when its reason is in `reasons`, its repository is in the 
   team-only request is recorded per `updated_at`, so it is looked up again only after a re-request,
   and fires once if the user is later asked by name. A lookup that fails skips only that item until
   the next poll.
+- With `human_activity_only` (default on), `author` and `comment` fire only when the latest activity
+  comes from a person other than the user, so their own pushes and comments, CI and review bots stay
+  silent. The actor is the author of `subject.latest_comment_url`, or of the last `GET <pull>/reviews`
+  entry when that URL is the PR itself (a review). No URL (a push) fires nothing, nor does an actor
+  who is the user, has `type: Bot` or a login ending in `[bot]`. A failed lookup is retried next poll.
 
 The first `watch` with no seen file records the current notifications and prints nothing, so the
 backlog does not fire; `notify.py seed` does the same on demand. Seen keys (no titles) go to
@@ -388,11 +393,13 @@ Config: `~/.claude/agent-skills.json` → `"prs"` → `"notify"`, every field op
 ```json
 {"prs": {"notify": {"reasons": ["mention", "author", "assign", "state_change", "review_requested", "comment"],
                     "exclude_title_patterns": ["^\\[Auto\\]", "^chore\\(deps", "^Bump "],
-                    "personal_review_only": true, "interval_s": 30, "backoff_s": 60,
+                    "personal_review_only": true, "human_activity_only": true,
+                    "interval_s": 30, "backoff_s": 60,
                     "max_failures": 10, "max_minutes": 720, "keep_seen": 2000}}}
 ```
 
 GitHub sends `X-Poll-Interval: 60` for this endpoint; 30 seconds stays well inside the REST limit
-(120 calls an hour plus one per new review request), so `interval_s` trades latency for calls only.
+(120 calls an hour plus one per new review request, comment or review), so `interval_s` trades
+latency for calls only.
 
 Tests: `python3 scripts/test_prs.py`, `python3 scripts/test_review_wait.py` and `python3 scripts/test_notify.py`.
