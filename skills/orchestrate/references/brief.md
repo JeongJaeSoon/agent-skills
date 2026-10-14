@@ -61,6 +61,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
             with the reason). The coordinator classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
+            Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`), and
+            give each Bash act that changes a file or its mode its own call, so a refusal names it.
             An act refused by a permission prompt, the auto-mode classifier (including an error that
             returns no verdict), a Claude Code hook or the human is not tried again in any form: not
             re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
@@ -80,7 +82,9 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             its own session), and a second `no verdict` there goes to the human, reported the same
             way. If you are the refused one, stop that edit and report it; do not finish it another
             way. A hook that blocked only the text of a command reading no protected file, and says
-            to reword it: reword that text and say so in the report. A read-only command on files in
+            to reword it: reword that text inside the same command and say so in the report. When
+            the matched text names a file the command opens, the block is not text-only; a script
+            or another path is never a reword. A read-only command on files in
             your own worktree (no credential, no personal data) that the classifier refused as
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its
