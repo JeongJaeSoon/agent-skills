@@ -261,8 +261,60 @@ def clip(text, budget):
     return out.rstrip() + "…"
 
 
-def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None):
+# A session's phase (fleet.py phase_of) read as a board status and next step.
+PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료"), "waiting": ("waiting", "확인 대기 · 사람"),
+             "open": ("held", "에이전트 없음"), "offline": ("held", "세션 꺼짐")}
+
+
+def fleet_rows(state, leads, board_rows):
+    """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
+    session whose terminal no board lead holds, the cards under it, and the cards the top-level coordinator dispatched
+    itself. Each card carries its newest PR; a card whose PR a board row already has is left to that row. Returns
+    (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board row."""
+    state = state or {}
+    sessions = state.get("sessions") or []
+    held = {l.get("handle") for l in leads.values()}
+    on_board = {r.get("pr") for r in board_rows.values()} - {None}
+    pr_of, under = {}, {}
+    for p in state.get("prs") or []:  # newest first
+        if p.get("session"):
+            pr_of.setdefault(p["session"], p.get("key"))
+    for s in sessions:
+        under.setdefault(s.get("parent"), []).append(s)
+    rows, order = {}, []
+
+    def add(rid, s, kind, parent=None, program=None):
+        status, nxt = PHASE_ROW.get(s.get("phase"), ("held", s.get("phase") or "—"))
+        # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
+        title = s.get("name") if kind == "lead" else s.get("task_title") or s.get("name")
+        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid, 80), "status": status, "next": nxt,
+                     "pr": pr_of.get(s.get("id")), "reported_at": s.get("last_activity"), "parent": parent,
+                     # a card under a lead takes the lead's repo, so the lead heads one section
+                     "repo": None if parent else s.get("gh_repo") or s.get("project") or "—", "program": program}
+        order.append(rid)
+
+    def shown(s):
+        pr = pr_of.get(s.get("id"))
+        return (s.get("phase") != "offline" or pr) and pr not in on_board
+
+    for lead in sessions:
+        if lead.get("kind") != "orchestration" or held & {t.get("handle") for t in lead.get("terminals") or []}:
+            continue
+        lid = f"fleet:{lead['id']}"
+        add(lid, lead, "lead", program=one_line(lead.get("name") or lid, 80))  # two leads in one repo: a section each
+        for s in under.get(lead["id"], []):
+            if shown(s):
+                add(f"{lid}/{s['id']}", s, "task", lid)
+    kind = {s.get("id"): s.get("kind") for s in sessions}
+    for s in sessions:
+        if s.get("kind") == "task" and kind.get(s.get("parent")) == "orchestrator" and shown(s):
+            add(f"fleet:{s['id']}", s, "task")
+    return rows, order
+
+
+def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False):
     """The periodic report (brief skill §1 Periodic report items 1–8) as text, with what the caller needs around it.
+    fill adds fleet_rows() for the leads and cards the board does not have.
 
     Returns {"text", "headline_facts", "changed", "stale", "width_ok", "snapshot"}; text is "" when the board has no
     rows in scope. snapshot is what commit() saves for the next report to compare against."""
@@ -277,6 +329,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     live = None if state is None else {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
+    if fill:
+        extra, extra_order = fleet_rows(state, store["leads"], store["rows"])
+        store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 
     def up(r, field):
@@ -373,7 +428,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if t["id"] in folded:
                 continue
             tail = t["id"].rsplit("/", 1)[-1]
-            name = t["title"] if t.get("pr") or t["title"] == tail else f"{tail} {t['title']}"
+            name = t["title"] if t.get("pr") or t["title"] == tail or t["id"].startswith("fleet:") else f"{tail} {t['title']}"
             line(t["id"], sec, 1, st, name, t.get("pr"), bar(t.get("progress")), nxt, suf)
         for rev, ids in by_rev.items():
             if len(ids) < 2:
@@ -458,8 +513,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         snap[l["key"]] = {"status": l["status"], "progress": l["progress"], "next": l["next"],
                           "pr": l["pr_state"]}
         prev = (last_rows or {}).get(l["key"])
-        if last_rows is not None and (prev is None or any(prev.get(f) != v for f, v in snap[l["key"]].items()
-                                                          if f in prev)):
+        # A fleet row (--fill) is not in a report the board committed, so only a change to one already seen counts.
+        if last_rows is None:
+            continue
+        if (not l["key"].startswith("fleet:") if prev is None
+                else any(prev.get(f) != v for f, v in snap[l["key"]].items() if f in prev)):
             changed.append(l["key"])
     if last_rows is None:
         facts.append("지난 보고 없음, 굵게 없음")

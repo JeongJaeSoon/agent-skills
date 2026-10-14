@@ -123,15 +123,48 @@ function fleetSidebar() {
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
-  const group = $("#session-group");
-  group.hidden = !st;
-  if (!st) return;
-  const live = sessionTree(st).filter(([s]) => s.phase !== "offline" || s.unread || s.kind === "orchestrator");
-  const kids = (s) => (st.sessions || []).filter((x) => x.parent === s.id).length;
-  $("#session-list").innerHTML = live.map(([s, d]) => `<li><a class="nav-item tree ${s.kind === "orchestration" ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
-      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(kindLabel(st, s)[0])} · ${esc(s.phase)}">${phaseDot(s)}
-      <span class="sb-text">${esc(s.name)}</span>${s.kind === "orchestration" ? `<span class="tag tone-accent" title="lead · ${kids(s)} session${kids(s) === 1 ? "" : "s"} under it">lead${kids(s) ? ` ${kids(s)}` : ""}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`).join("") || `<li class="sb-text muted" style="padding:0 8px">No sessions</li>`;
 }
+
+// The sidebar's one tree, in the shape the work runs: the coordinator, then each lead with the program it runs and
+// the cards under it, then the coordinator's own cards. A program whose coordinator is not on screen hangs under the
+// root until it is closed or ARCHIVE_MS quiet, then folds into Archived. st is null when the fleet collector is off.
+const ARCHIVE_MS = 3 * 86400e3;
+function navTree(st, programs) {
+  const ss = st ? st.sessions || [] : [], now = Date.now(), kids = {};
+  const isLead = (s) => s.kind === "orchestrator" || s.kind === "orchestration";
+  const shown = (s) => s.phase !== "offline" || s.unread || isLead(s);
+  ss.filter(shown).forEach((s) => { kids[s.parent] = (kids[s.parent] || 0) + 1; });
+  const runOf = new Map(ss.filter((s) => s.run && isLead(s)).map((s) => [s.run, s.id]));
+  const archived = (p) => p.closed || (!runOf.has(p.run) && now - ms(p.last_event || p.generated_at) > ARCHIVE_MS);
+  const progOf = new Map(programs.filter((p) => runOf.has(p.run) && !archived(p)).map((p) => [runOf.get(p.run), p]));
+  const loose = programs.filter((p) => !runOf.has(p.run) && !archived(p)), old = programs.filter(archived);
+  const progRow = (p, d) => {
+    const s = p.summary || {}, done = s.predicate_total ? `${s.predicate_done ?? "–"}/${s.predicate_total}` : "";
+    return `<li><a class="nav-item tree" style="--d:${d}" href="#/${encodeURIComponent(p.slug)}/${isFleet() ? "overview" : S.section}"
+      ${p.slug === S.slug ? 'aria-current="page"' : ""} title="Program ${esc(p.slug)}${done ? ` · ${done} done` : ""}">
+      <span class="avatar" aria-hidden="true">${esc(p.slug.slice(0, 2))}<span class="dot ${mainTone(s.main) ? "tone-" + mainTone(s.main) : ""}"></span></span>
+      <span class="sb-text">${esc(p.slug)}</span><span class="count">${esc(done)}</span></a></li>`;
+  };
+  const out = [`<li><a class="nav-item" href="#/fleet/overview" ${isFleet() && !F.sessionId ? 'aria-current="page"' : ""} title="Fleet">${icon("fleet")}<span class="sb-text">Fleet</span></a></li>`];
+  const rows = st ? sessionTree(st).filter(([s]) => shown(s)) : [];
+  for (const [s, d] of rows) {
+    const n = kids[s.id] || 0, lead = isLead(s), p = progOf.get(s.id);
+    out.push(`<li><a class="nav-item tree ${lead ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
+      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(kindLabel(st, s)[0])} · ${esc(s.phase)}${n ? ` · ${n} under it` : ""}">${phaseDot(s)}
+      <span class="sb-text">${esc(s.name)}</span>${n ? `<span class="kids" aria-label="${n} under it">${n}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`);
+    if (p) out.push(progRow(p, Math.min(d + 1, 3)));
+    if (s.kind === "orchestrator") out.push(...loose.map((q) => progRow(q, 1)));
+  }
+  if (!rows.some(([s]) => s.kind === "orchestrator")) out.push(...loose.map((q) => progRow(q, 0)));
+  if (old.length) {
+    const open = F.archiveOpen ?? old.some((p) => p.slug === S.slug);
+    out.push(`<li><details class="sb-archive" id="sb-archive" ${open ? "open" : ""}><summary class="nav-item" title="Closed programs, and programs quiet for 3 days with no coordinator on screen">
+      <span class="chev" aria-hidden="true"></span><span class="sb-text">Archived</span><span class="count">${old.length}</span></summary>
+      <ul class="sb-list">${old.map((p) => progRow(p, 1)).join("")}</ul></details></li>`);
+  }
+  return out.join("");
+}
+document.addEventListener("toggle", (e) => { if (e.target.id === "sb-archive") F.archiveOpen = e.target.open; }, true);
 
 function fleetHeader() {
   const st = S.state;
@@ -279,6 +312,8 @@ function avatarNode(x, y, r, login) {
     ${img}</g>`;
 }
 
+const clip = (t, n) => (t && t.length > n ? t.slice(0, n - 1) + "…" : t || "");
+
 // Session -> PR -> reviewer, three columns; each PR is as tall as its reviewer list.
 function relGraph(st, sessionId) {
   const ss = byId(st);
@@ -297,12 +332,12 @@ function relGraph(st, sessionId) {
       const ci = CI_TONE[p.ci] || "", closed = p.state !== "OPEN";
       out.push(`<g class="pr ${closed ? "closed" : ""}"><a href="${esc(safeUrl(p.url) || "#")}" target="_blank" rel="noopener">
         <rect class="box" x="${X[1]}" y="${mid - 13}" width="300" height="26" rx="6"/><rect class="bar tone-${ci}" x="${X[1]}" y="${mid - 13}" width="3" height="26" rx="1.5"/>
-        <text x="${X[1] + 12}" y="${mid + 4}"><tspan class="num">#${esc(p.number)}</tspan> ${esc((p.title || "").slice(0, 34))}</text></a>
-        <title>${esc(p.key)} · ${esc(p.state)} · CI ${esc(p.ci || "none")} · ${esc(p.decision || "no decision")}</title></g>`);
+        <text x="${X[1] + 12}" y="${mid + 4}"><tspan class="num">#${esc(p.number)}</tspan> ${esc(clip(p.title, 34))}</text></a>
+        <title>${esc(p.key)} ${esc(p.title || "")} · ${esc(p.state)} · CI ${esc(p.ci || "none")} · ${esc(p.decision || "no decision")}</title></g>`);
       revs.forEach((r, i) => {
         const ry = y + i * RH + 13, [cls, label] = EDGE[r.status] || EDGE.none;
         out.push(`<path class="edge rv ${cls}" d="M${X[1] + 300} ${mid} C ${X[1] + 360} ${mid}, ${X[2] - 60} ${ry}, ${X[2] - 12} ${ry}"><title>${esc(r.login)}: ${esc(label)}</title></path>
-          ${avatarNode(X[2], ry, 10, r.login)}<text class="rv-name" x="${X[2] + 16}" y="${ry + 4}">${esc(r.login)} <tspan class="muted">${esc(label)}</tspan></text>`);
+          ${avatarNode(X[2], ry, 10, r.login)}<text class="rv-name" x="${X[2] + 16}" y="${ry + 4}">${esc(clip(r.login, 18))} <tspan class="muted">${esc(label)}</tspan><title>${esc(r.login)}: ${esc(label)}</title></text>`);
       });
       if (!revs.length) out.push(`<text class="rv-name muted" x="${X[2] - 12}" y="${mid + 4}">no reviewer</text>`);
       y += h + 6;
@@ -312,11 +347,12 @@ function relGraph(st, sessionId) {
     mids.forEach(([mid, ci]) => out.push(`<path class="edge tone-${ci}" d="M${X[0] + 232} ${sy} C ${X[0] + 262} ${sy}, ${X[1] - 30} ${mid}, ${X[1]} ${mid}"/>`));
     out.push(`<g class="sess"><a href="${sessionHref(sid)}"><rect class="box" x="${X[0]}" y="${sy - 15}" width="232" height="30" rx="6"/>
       <circle class="ph ph-${esc(s.phase)}" cx="${X[0] + 14}" cy="${sy}" r="4"/>
-      <text x="${X[0] + 26}" y="${sy + 4}">${s.project ? `<tspan class="proj-tx">${esc(s.project.slice(0, 14))}</tspan> ` : ""}${esc((s.name || "").slice(0, s.project ? 24 - Math.min(14, s.project.length) : 26))}</text></a>
+      <text x="${X[0] + 26}" y="${sy + 4}">${s.project ? `<tspan class="proj-tx">${esc(clip(s.project, 14))}</tspan> ` : ""}${esc(clip(s.name, s.project ? 24 - Math.min(14, s.project.length) : 26))}</text></a>
       <title>${esc(s.project || "")} · ${esc(s.name)} · ${esc(s.kind || "")} · ${esc(s.phase)}</title></g>`);
     y += 10;
   }
-  return `<div class="relgraph"><svg viewBox="0 0 ${W} ${y}" style="min-width:720px" role="img" aria-label="Sessions, pull requests and reviewers">${out.join("")}</svg></div>
+  // Capped at its own width: scaled up to a wide card, its text would grow to heading size.
+  return `<div class="relgraph"><svg viewBox="0 0 ${W} ${y}" style="min-width:720px;max-width:${W}px" role="img" aria-label="Sessions, pull requests and reviewers">${out.join("")}</svg></div>
     <div class="legend" style="padding:0 var(--s4) var(--s3)">${Object.entries(EDGE).filter(([k]) => k !== "none")
       .map(([, [cls, label]]) => `<span><i class="key ${cls}"></i>${label}</span>`).join("")}${phaseKeys()}</div>`;
 }
@@ -335,12 +371,12 @@ function fleetOverview(st) {
       ${kpi("Runs", `${(st.runs || []).length}`, `${(st.tasks || []).filter((t) => t.status !== "completed").length} open tasks`, { src: "runs" })}
     </div>
     ${projectChips(st)}
-    <div class="grid">
+    <div class="grid fill">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items, { limit: 8 })}</div>
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
       ${leadCard(st)}
-      <div class="card wide" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside">${prUpdated(st)}<a class="go" href="#/fleet/prs">All ${open.length} ${icon("arrow")}</a></span></div>${prRows(st, open.slice(0, 8))}</div>
-      <div class="card wide"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>
+      <div class="card span2" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside">${prUpdated(st)}<a class="go" href="#/fleet/prs">All ${open.length} ${icon("arrow")}</a></span></div>${prRows(st, open.slice(0, 8))}</div>
+      <div class="card"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>
     </div>`;
 }
 
@@ -355,7 +391,7 @@ function leadCard(st) {
     return `<li>${phaseDot(l)}${projBadge(l.project)}<a class="grow ellipsis" href="${sessionHref(l.id)}"><b>${esc(l.name)}</b></a>
       <span class="acts muted">${n(kids.length, "session")} · ${kids.filter((x) => x.phase === "working").length} working · ${n(prs, "open PR")}</span></li>`;
   }).join("");
-  return `<div class="card wide" data-src="orca"><div class="card-head"><h3>Leads</h3><span class="aside">${leads.length}</span></div><ul class="rows">${rows}</ul></div>`;
+  return `<div class="card" data-src="orca"><div class="card-head"><h3>Leads</h3><span class="aside">${leads.length}</span></div><ul class="rows">${rows}</ul></div>`;
 }
 
 function sessionRows(st, list) {
@@ -529,6 +565,7 @@ async function pollBrief() {
   F.briefBusy = true;
   try {
     const r = await fetch("/api/fleet/brief", { cache: "no-store", headers: F.briefEtag ? { "If-None-Match": F.briefEtag } : {} });
+    if (r.ok || r.status === 304) F.briefAt = new Date().toISOString();
     if (r.status !== 304) {
       F.brief = r.ok ? await r.json() : { message: `HTTP ${r.status}` };
       F.briefEtag = r.ok ? r.headers.get("ETag") : null;
@@ -563,8 +600,8 @@ function briefHtml(text) {
 function fleetBrief() {
   if (!F.brief) pollBrief();
   const b = F.brief;
-  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report the coordinator sends, exactly as <span class="mono">orch brief render --periodic</span> builds it from the board, the PR list and open decisions. Bold rows changed since the last report.</p></div>
-    ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}</div>` : ""}</div>`;
+  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report as <span class="mono">orch brief render --periodic --fill</span> builds it from the board, the PR list and open decisions. A lead with no board rows shows from its session and cards; rows a lead wrote with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
+    ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}${F.briefAt ? ` · updated ${relSpan(F.briefAt)}` : ""}</div>` : ""}</div>`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
   if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
   return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>`;

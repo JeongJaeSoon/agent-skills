@@ -67,7 +67,7 @@ const store = {
 const isFleet = () => S.slug === "fleet";
 
 const S = {
-  programs: [], slug: null, section: "overview", state: null, etag: null, version: null, lastOk: 0, down: false, sbOpen: false,
+  programs: [], fleet: null, slug: null, section: "overview", state: null, etag: null, version: null, lastOk: 0, down: false, sbOpen: false,
   filters: { issues: "all", prs: "open", workers: "active", activity: "all" }, q: "", showDone: false,
   sort: (() => { try { return JSON.parse(store.get(LS.sort)) || {}; } catch (e) { return {}; } })(),
 };
@@ -200,16 +200,7 @@ function mainTone(m) { return m === "red" ? "bad" : m === "pending" ? "warn" : m
 
 function renderSidebar() {
   const st = S.state;
-  const fleetItem = `<li><a class="nav-item" href="#/fleet/overview" ${isFleet() ? 'aria-current="page"' : ""} title="Fleet">${icon("fleet")}<span class="sb-text">Fleet</span></a></li>`;
-  $("#session-group").hidden = true;
-  $("#program-list").innerHTML = fleetItem + S.programs.map((p) => {
-    const s = p.summary || {};
-    const cur = p.slug === S.slug;
-    const prog = s.predicate_total ? `${s.predicate_done ?? "–"}/${s.predicate_total}` : "";
-    return `<li><a class="nav-item" href="#/${encodeURIComponent(p.slug)}/${S.section}" ${cur ? 'aria-current="page"' : ""} title="${esc(p.slug)}">
-      <span class="avatar" aria-hidden="true">${esc(p.slug.slice(0, 2))}<span class="dot ${mainTone(s.main) ? "tone-" + mainTone(s.main) : ""}"></span></span>
-      <span class="sb-text">${esc(p.slug)}</span><span class="count">${esc(prog)}</span></a></li>`;
-  }).join("");
+  $("#nav-tree").innerHTML = navTree(S.fleet, S.programs);
   if (isFleet()) { fleetSidebar(); return; }
 
   const counts = st ? {
@@ -548,7 +539,6 @@ function drawDag(st) {
   const H = pad * 2 + tallest * (nodeH + gap) - gap + 24; // room for edges that arc under a row
   cols.forEach((c) => { const off = ((tallest - c.length) * (nodeH + gap)) / 2; c.forEach((n) => { pos[n.id].y += off; }); });
   const maxChars = Math.floor((nodeW - 22) / 7.2);
-  const cut = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + "…" : s || "");
   let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Dependency graph, ${nodes.length} nodes; critical path ${esc((g.critical || []).join(" → "))}">`;
   for (const [a, b] of g.edges) {
     if (!pos[a] || !pos[b]) continue;
@@ -564,8 +554,8 @@ function drawDag(st) {
       <title>${esc(`${n.ticket || n.id} — ${n.title || ""} (${NODE_LABEL[n.status]})`)}</title>
       <rect class="box" width="${nodeW}" height="${nodeH}" rx="6" ${n.status === "waiting" ? 'stroke-dasharray="4 3"' : ""}/>
       <rect class="bar" x="0" y="0" width="3" height="${nodeH}" rx="1.5"/>
-      <text x="12" y="17">${esc(cut(n.ticket || n.id, maxChars))}</text>
-      <text class="sub" x="12" y="31">${esc(cut(`${NODE_LABEL[n.status]}${n.title && n.title !== n.ticket ? " · " + n.title : ""}`, maxChars + 4))}</text></g>`;
+      <text x="12" y="17">${esc(clip(n.ticket || n.id, maxChars))}</text>
+      <text class="sub" x="12" y="31">${esc(clip(`${NODE_LABEL[n.status]}${n.title && n.title !== n.ticket ? " · " + n.title : ""}`, maxChars + 4))}</text></g>`;
   }
   el.innerHTML = svg + "</svg>";
 }
@@ -976,9 +966,12 @@ function render() { renderSidebar(); renderHeader(); renderFresh(); renderView()
 
 async function pollPrograms() {
   try {
-    const r = await fetch("/api/programs", { cache: "no-store" });
+    // A program page still draws the fleet tree in the sidebar; the fleet page polls that state itself.
+    const [r, f] = await Promise.all([fetch("/api/programs", { cache: "no-store" }),
+      isFleet() ? null : fetch("/api/fleet/state", { cache: "no-store" })]);
     if (!r.ok) throw new Error(r.status);
     S.programs = await r.json();
+    if (f) S.fleet = f.ok ? await f.json() : null;
     renderSidebar();
   } catch (e) { S.down = true; setLive(); }
 }
@@ -1027,6 +1020,7 @@ async function pollState() {
     const next = await r.json();
     const quiet = isFleet() && S.state && fleetBody(S.state) === fleetBody(next);
     S.state = next;
+    if (isFleet()) S.fleet = next;
     if (quiet) { renderFresh(); setLive(); } else render();
   } catch (e) { S.down = true; setLive(); if (!S.state) renderView(); }
 }

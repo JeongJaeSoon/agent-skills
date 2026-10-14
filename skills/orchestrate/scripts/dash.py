@@ -1123,10 +1123,27 @@ def programs():
     return sorted(p.name for p in root.iterdir() if (p / "program.json").exists() and SLUG_RE.fullmatch(p.name))
 
 
+LEDGER_TAIL = {}  # ledger path -> ((mtime_ns, size), (closed, last event ts)); the sidebar polls every program's ledger
+
+
+def ledger_tail(slug):
+    f = program_dir(slug) / "ledger.jsonl"
+    try:
+        s = f.stat()
+        key = (s.st_mtime_ns, s.st_size)
+    except OSError:
+        key = None
+    hit = LEDGER_TAIL.get(f)
+    if not hit or hit[0] != key:
+        events = read_jsonl(f)
+        hit = LEDGER_TAIL[f] = (key, (prog.final_check_current(events), events[-1].get("ts") if events else None))
+    return hit[1]
+
+
 def closed(slug):
     """A program with a current final check has stopped moving, so only its ledger is still watched. A landing, a
     predicate edit or an admitted follow-up after the check reopens it."""
-    return prog.final_check_current(read_jsonl(program_dir(slug) / "ledger.jsonl"))
+    return ledger_tail(slug)[0]
 
 
 def signature(slug):
@@ -1233,9 +1250,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for slug in programs():
                 cfg = read_json(home() / slug / "program.json", {})
                 st = read_json(home() / slug / "dashboard" / "state.json", {}) or {}
+                done, last_event = ledger_tail(slug)
                 rows.append({"slug": slug, "repo": cfg.get("repo"), "run": cfg.get("run"),
                              "merge_policy": cfg.get("merge_policy"), "generated_at": st.get("generated_at"),
-                             "summary": st.get("summary"), "errors": len(st.get("errors") or [])})
+                             "summary": st.get("summary"), "errors": len(st.get("errors") or []),
+                             # the sidebar folds a program away once it is closed or quiet with no lead on screen
+                             "closed": done, "last_event": last_event})
             return self.send(200, json.dumps(rows, ensure_ascii=False).encode())
         m = re.fullmatch(r"/api/([^/]+)/state", path)
         if m:
@@ -1502,9 +1522,10 @@ def cmd_serve(argv):
 def brief_report():
     """The periodic report exactly as `orch brief render` prints it: the renderer is the one implementation of
     the table rules, so the page shows its output and never builds a second copy. Run per request (well under a
-    second) so a `orch board set` shows on the next poll."""
+    second) so a `orch board set` shows on the next poll. --fill: a lead that never wrote to the board still shows,
+    from its session and cards."""
     try:
-        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json"],
+        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json", "--fill"],
                            capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return {"message": "orch brief render timed out after 30 s"}

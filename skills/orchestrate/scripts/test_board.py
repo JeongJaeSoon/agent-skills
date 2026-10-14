@@ -276,4 +276,36 @@ prs_json["prs"].update(dict(pr(f"acme/solo#{n}", reviewers=["rev-e"]) for n in (
 solo = ok("brief", "render", "--periodic", "--now", NOW)
 assert "**acme/solo → main**\n\n- ⏳ 2건 rev-e 대기 — 분야 작업81·작업82" in solo, solo
 
+# --fill: a lead session nobody wrote to the board shows with its cards and their PRs, in the lead's section even when a
+# card works in another repo; a lead the board holds (by its terminal) keeps only its board rows; the coordinator's own
+# card is a row of its own unless a board row already has its PR; an offline card with no PR is left out.
+sess = lambda sid, kind, parent, phase, h=None, **kw: {"id": sid, "kind": kind, "parent": parent, "phase": phase, "name": sid,
+                                                      "gh_repo": "acme/fill", "last_activity": "2026-10-13T14:20:00Z",
+                                                      "terminals": [{"handle": h or f"term_{sid}"}], **kw}
+(state / "state.json").write_text(json.dumps({"sessions": [
+    sess("root", "orchestrator", None, "working"),
+    sess("lead9", "orchestration", "root", "idle", name="정산 리드"),
+    sess("c1", "task", "lead9", "working", task_title="FILL-1 영수증", gh_repo="acme/other"), sess("c2", "standalone", "lead9", "waiting"),
+    sess("c3", "task", "lead9", "offline"), sess("c4", "task", "root", "working", last_activity="2026-10-13T11:00:00Z"),
+    sess("held", "orchestration", "root", "working", h="term_0FAKE2"), sess("c5", "task", "root", "working")],
+    "prs": [{"key": "acme/fill#5", "session": "c1"}, {"key": "acme/web#45", "session": "c5"}]}))
+prs_json["prs"].update(dict([pr("acme/fill#5", ci="pending")]))
+(state / "prs.json").write_text(json.dumps(prs_json))
+assert "정산 리드" not in ok("brief", "render", "--periodic", "--now", NOW)
+filled = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--fill"))["text"]
+fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" in l or "정산" in l or "FILL" in l
+             or "c2" in l or "c4" in l]
+assert fill_rows == [
+    "**acme/fill — 정산 리드 → main**",
+    "| ⏳ | 정산 리드 | — | — | 턴 종료 |",
+    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 |",
+    "| ⏳ | └ c2 | — | — | 확인 대기 · 사람 |",
+    "**acme/fill**",
+    "| 🔄 | c4 | — | — | 작업 중 · 3h 전 |"], filled
+assert "held" not in filled and "c3" not in filled and "c5" not in filled, filled
+# The last committed report never had fleet rows (it ran without --fill): they are not bold as new on every poll.
+(tmp / "brief-last" / "top-level.json").write_text(json.dumps({"ts": T0, "rows": {}}))
+changed = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--fill"))["changed"]
+assert not [k for k in changed if k.startswith("fleet:")], changed
+
 print("ok")
