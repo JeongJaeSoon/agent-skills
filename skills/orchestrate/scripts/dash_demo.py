@@ -344,6 +344,31 @@ def _transcripts(root, now, workers):
     return base
 
 
+def pr_stats_report(now):
+    """An invented PR history in pr_stats.py's shape, growing over the year, so the demo never searches GitHub."""
+    import random
+    import pr_stats
+    rnd = random.Random(7)
+    today = now.astimezone().date()
+    since = dt.date(today.year - 1, 1, 1)
+    sources = [{"name": "Me", "query": ""}, {"name": "Agent A", "query": ""}, {"name": "Agent B", "query": ""}]
+    repos = ["acme/api", "acme/web", "acme/infra", "acme/docs", "you/dotfiles", "acme/billing", "acme/mobile"]
+    raw, day = [], since
+    while day <= today:
+        k = (day - since).days / max(1, (today - since).days)
+        for i in range(rnd.choices([0, 1, 2, 3, 5], [3, 3, 2, 1, 1 + 4 * k])[0] + (day.weekday() < 5) * int(4 * k)):
+            src = rnd.choices(["Me", "Agent A", "Agent B"], [10, 3 * k, 2 * k])[0]
+            t = dt.datetime.combine(day, dt.time(rnd.choice([10, 11, 14, 15, 16, 17, 21, 23]), rnd.randrange(60))).astimezone()
+            state = "open" if (today - day).days < 5 and rnd.random() < 0.5 else rnd.choices(["merged", "closed"], [85, 15])[0]
+            raw.append({"url": f"https://example.invalid/{day}/{i}", "title": f"Change {day} {i}", "createdAt": _iso(t),
+                        "state": state.upper(), "repository": {"nameWithOwner": rnd.choice(repos)}, "source": src})
+        day += dt.timedelta(days=1)
+    for i in range(24):  # one bulk campaign, so the campaign toggle has something to hide
+        raw.append({"url": f"https://example.invalid/bulk/{i}", "title": "Bump shared config", "createdAt": _iso(now - dt.timedelta(days=40)),
+                    "state": "MERGED", "repository": {"nameWithOwner": f"acme/svc-{i}"}, "source": "Agent A"})
+    return pr_stats.report(raw, since, sources, today, now)
+
+
 def skills_report(now):
     """An invented skill usage report in skill_usage.py's shape, so the demo never reads real transcripts."""
     rows = [
@@ -415,10 +440,11 @@ def build(root, now=None):
     projects = _transcripts(root, now, a[4]["workers"] + b[4]["workers"])
     (root / "fleet-state").mkdir(parents=True, exist_ok=True)
     (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
+    (root / "fleet-state" / "pr-stats.json").write_text(json.dumps(pr_stats_report(now)))
     (root / "fleet-state" / "stages.json").write_text(json.dumps(stage_table(now), ensure_ascii=False))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
-            "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
+            "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
 

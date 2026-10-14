@@ -19,6 +19,7 @@ Usage: orch-dash <command> [options]
                                      a realistic fake program in a temp store, served offline
   fleet                              one collect of the fleet view (every Orca session), prints a summary
   skills [--no-signals]              one collect of skill usage from local transcripts (skill_usage.py), prints a summary
+  prstats [--out PATH]               one collect of my PR counts from GitHub search (pr_stats.py), prints a summary
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
   adopt [--apply] [--undo all|<worktree>]
@@ -27,7 +28,7 @@ Usage: orch-dash <command> [options]
 
 Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <slug>/dashboard/.
 Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
-and ORCH_SKILLS=off disables only the skill usage collect.
+ORCH_SKILLS=off disables only the skill usage collect, and ORCH_PR_STATS=off only the PR stats collect.
 """
 import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, json, os, pathlib, re, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
 
@@ -37,6 +38,7 @@ import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or
 import fleet  # noqa: E402
 import selfcheck  # noqa: E402
 import skill_usage  # noqa: E402
+import pr_stats  # noqa: E402
 import sent  # noqa: E402
 import stages  # noqa: E402
 
@@ -1278,6 +1280,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not f.exists():
                 return self.send(503, b'{"error":"first skill usage collect has not finished"}')
             return self.send_cached(f.read_bytes())
+        if path == "/api/fleet/stats":
+            f = pr_stats.out_path()
+            if not f.exists():
+                return self.send(503, b'{"error":"first PR stats collect has not finished"}')
+            return self.send_cached(f.read_bytes())
         if path == "/api/fleet/work":
             # Read on every poll, not folded into state.json: an `orch stage` write shows on the next poll, not the next collect.
             return self.send_cached(json.dumps(stages.table(), ensure_ascii=False).encode())
@@ -1378,8 +1385,28 @@ def skills_loop():
         time.sleep(60)
 
 
+PR_STATS_EVERY = 6 * 3600  # dozens of searches a collect; counts by month do not need fresher
+PR_STATS_RETRY = 3600  # after a failure, mostly a rate limit or an expired login
+
+
+def pr_stats_loop():
+    f = pr_stats.out_path()
+    last = read_json(f) if f.exists() else None
+    due = f.stat().st_mtime + (PR_STATS_RETRY if last and last.get("error") else PR_STATS_EVERY) if last else 0
+    while True:
+        if time.time() >= due:
+            try:
+                pr_stats.refresh()
+                due = time.time() + PR_STATS_EVERY
+            except Exception as e:
+                log(f"pr stats: collect failed: {e!r}")
+                pr_stats.record_error(e)
+                due = time.time() + PR_STATS_RETRY
+        time.sleep(60)
+
+
 def code_files():
-    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", HERE / "selfcheck.py", HERE / "skill_usage.py",
+    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", HERE / "selfcheck.py", HERE / "skill_usage.py", HERE / "pr_stats.py",
             *sorted(ASSETS.glob("*")))
 
 
@@ -1446,6 +1473,8 @@ def serve(host, port, interval, make_fleet=None):
         threading.Thread(target=fleet_loop, daemon=True).start()
         if os.environ.get("ORCH_SKILLS") != "off":
             threading.Thread(target=skills_loop, daemon=True).start()
+        if os.environ.get("ORCH_PR_STATS") != "off":
+            threading.Thread(target=pr_stats_loop, daemon=True).start()
     log(f"serving {home()} on http://{host}:{port}/ (tracker+github every {interval}s, "
         f"orca every {ORCA_EVERY}s, ledger every {FAST_TICK}s)")
     try:
@@ -1592,6 +1621,10 @@ def cmd_skills(argv):
     skill_usage.main(argv)
 
 
+def cmd_prstats(argv):
+    pr_stats.main(argv)
+
+
 def cmd_inbox(argv):
     if argv[:1] == ["add"]:
         kind, title = prog.opt(argv, "--type"), prog.opt(argv, "--title")
@@ -1611,7 +1644,7 @@ def cmd_adopt(argv):
 
 
 COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "ensure": cmd_ensure, "note": cmd_note, "demo": cmd_demo,
-            "fleet": cmd_fleet, "skills": cmd_skills, "inbox": cmd_inbox, "adopt": cmd_adopt}
+            "fleet": cmd_fleet, "skills": cmd_skills, "prstats": cmd_prstats, "inbox": cmd_inbox, "adopt": cmd_adopt}
 
 if __name__ == "__main__":
     args = sys.argv[1:]
