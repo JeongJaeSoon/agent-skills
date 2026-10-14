@@ -161,6 +161,15 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["Still here"]))
         self.assertFalse([k for k in n.read_seen(self.seen) if k.startswith("30")])
 
+    def test_issue_thread_pointing_at_itself_is_silent_without_a_reviews_call(self):
+        n.write_seen(self.seen, [], 10)
+        issue = note(40, reason="comment")
+        issue["subject"]["url"] = issue["subject"]["latest_comment_url"] = "https://api.github.com/repos/acme/web/issues/40"
+        fake = Fake([[issue]])
+        self.assertEqual(self.run_watch(fake, max_minutes=1), (1, []))
+        self.assertFalse([c for c in fake.calls if "/reviews" in c])
+        self.assertTrue([k for k in n.read_seen(self.seen) if k.startswith("40@")])
+
     def test_human_activity_only_off_passes_pushes_without_lookups(self):
         n.write_seen(self.seen, [], 10)
         fake = Fake([[note(32, reason="author"), note(33, reason="comment", latest="pr")]])
