@@ -37,6 +37,7 @@ import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or
 import fleet  # noqa: E402
 import selfcheck  # noqa: E402
 import skill_usage  # noqa: E402
+import sent  # noqa: E402
 import stages  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
@@ -1282,6 +1283,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_cached(json.dumps(stages.table(), ensure_ascii=False).encode())
         if path == "/api/fleet/brief":
             return self.send_cached(json.dumps(brief_report(), ensure_ascii=False).encode())
+        if path == "/api/fleet/sent":
+            # The `orch sent` log is read on every poll, like work: a send shows on the next poll, not the next collect.
+            days = re.search(r"[?&]days=(\d{1,2})\b", self.path)
+            return self.send_cached(json.dumps(sent.page(FLEET.sent if FLEET else [], int(days.group(1)) if days else 1),
+                                               ensure_ascii=False).encode())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)
@@ -1561,6 +1567,7 @@ def cmd_demo(argv):
         print(root)
         return
     world = dash_demo.FakeFleetWorld(utcnow())
+    world.seed_sent()
     if "--live" in argv:
         threading.Thread(target=dash_demo.live, args=(root, 20, world), daemon=True).start()
     serve("127.0.0.1", int(prog.opt(argv, "--port", "4780")), 20, make_fleet=world.fleet)

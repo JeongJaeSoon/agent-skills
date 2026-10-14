@@ -469,3 +469,7 @@ tr.is-done td { opacity: 0.5; }
 .run { color: var(--tone, var(--ink-3)); font-size: 15px; line-height: 1; letter-spacing: 1px; }
 table.autos td:last-child { max-width: 340px; }
 table.monitors .cmd { display: block; max-width: 460px; }
+/* sent instructions: the text as sent, wrapped; a long one folds */
+table.sent .sent-cell { max-width: 720px; }
+.sent-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; line-height: 1.5; max-height: 480px; overflow: auto; }
+table.sent details > summary { cursor: pointer; max-width: 720px; }

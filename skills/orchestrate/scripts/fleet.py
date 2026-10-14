@@ -14,7 +14,7 @@ and the state lives outside the repository:
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
 """
-import collections, concurrent.futures, contextlib, datetime as dt, fcntl, hashlib, io, json, os, pathlib, re, subprocess, sys, tempfile, threading, time
+import collections, concurrent.futures, contextlib, datetime as dt, fcntl, hashlib, io, json, os, pathlib, re, shlex, subprocess, sys, tempfile, threading, time
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
@@ -276,19 +276,27 @@ def scan_transcript(path):
     """The transcript's background tasks so far: a Bash run with run_in_background or a Monitor, its start, and the
     task-notification that ended it or carried its last event. Agent and workflow tasks are left out."""
     c = MONITOR_SCAN.setdefault(str(path), {"offset": 0, "pending": {}, "tasks": {}})
+    for raw in appended(path, c, lambda: c.update(pending={}, tasks={})):
+        scan_line(c, raw)
+    return c["tasks"]
+
+
+def appended(path, c, reset):
+    """Each complete line written to path since c["offset"]; the offset moves past a line once the caller took it.
+    A file that shrank was rewritten: reset() clears what the caller kept and it is read from the start."""
     try:
         with open(path, "rb") as f:
             if os.fstat(f.fileno()).st_size < c["offset"]:
-                c.update(offset=0, pending={}, tasks={})
+                c["offset"] = 0
+                reset()
             f.seek(c["offset"])
             for raw in iter(f.readline, b""):
                 if not raw.endswith(b"\n"):
                     break  # a line still being written is read next time
-                scan_line(c, raw)
+                yield raw
                 c["offset"] = f.tell()
     except OSError:
         pass
-    return c["tasks"]
 
 
 def scan_line(c, raw):
@@ -357,7 +365,8 @@ def fetch_monitors(procs=None, now=None, warn=None):
         raise SourceError(f"monitors: {type(e).__name__}: {e}")
 
 
-def collect_monitors(procs, now, warn):
+def live_transcripts(procs, warn):
+    """(session id, session record with its live "pids", transcript path) for each live Claude Code session."""
     home, sessions = claude_home(), {}
     for p in sorted((home / "sessions").glob("*.json")):
         s = read_json(p, {}) or {}
@@ -365,7 +374,7 @@ def collect_monitors(procs, now, warn):
         if s.get("sessionId") and s.get("cwd") and proc and proc[1] == " ".join(str(s.get("procStart")).split()):
             # Resuming a session in a second terminal leaves two live processes writing one transcript.
             sessions.setdefault(s["sessionId"], {**s, "pids": []})["pids"].append(s["pid"])
-    out, scanned = [], set()
+    out = []
     for sid, s in sessions.items():
         path = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", s["cwd"]) / f"{sid}.jsonl"
         if not path.exists():  # a long cwd gets a shortened directory name
@@ -373,6 +382,13 @@ def collect_monitors(procs, now, warn):
         if not path.exists():
             warn.append(f"{s.get('name') or sid}: transcript not found")
             continue
+        out.append((sid, s, path))
+    return out
+
+
+def collect_monitors(procs, now, warn):
+    out, scanned = [], set()
+    for sid, s, path in live_transcripts(procs, warn):
         scanned.add(str(path))
         tasks = scan_transcript(path)
         # Only the session's own shells: a $(…) inside one forks a shell with the same command line.
@@ -419,6 +435,95 @@ def mtime_iso(path):
         return iso(dt.datetime.fromtimestamp(os.stat(path).st_mtime, dt.timezone.utc)) if path else None
     except OSError:
         return None
+
+
+SENT_SCAN = {}  # transcript path -> {"offset", "rows"}: what a live session sent, read like MONITOR_SCAN
+# orca <noun> <verb> -> (the flag naming the receiver, the flag carrying the text, the receiver's kind)
+ORCA_SENDS = {("terminal", "send"): ("--terminal", "--text", "terminal"), ("worktree", "create"): ("--name", "--prompt", "card"),
+              ("orchestration", "send"): ("--to", "--body", "inbox")}
+SHELL_OPS = {"&&", "||", ";", "|", "&", ";;"}
+ORCA_MARKS = tuple(f"{noun} {verb}".encode() for noun, verb in ORCA_SENDS)  # every transcript line names the cwd, often under orca/
+
+
+def orca_sends(command):
+    """[(kind, to, subject, text, channel)] for each `orca terminal send --text`, `orca worktree create --prompt` and
+    `orca orchestration send` in one Bash command. One shlex cannot split, or without its text (--help), is skipped."""
+    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        words = list(lex)
+    except ValueError:
+        return []
+    out = []
+    for i, w in enumerate(words):
+        spec = ORCA_SENDS.get(tuple(words[i + 1:i + 3])) if w == "orca" or w.endswith("/orca") else None
+        if not spec:
+            continue
+        opts, args = {}, words[i + 3:]
+        for j, a in enumerate(args):
+            if a in SHELL_OPS:
+                break
+            if a.startswith("--"):
+                k, eq, v = a.partition("=")
+                nxt = args[j + 1] if j + 1 < len(args) else None
+                opts[k] = v if eq else nxt if nxt is not None and not nxt.startswith("--") and nxt not in SHELL_OPS else True
+        to_flag, text_flag, kind = spec
+        text, subject = opts.get(text_flag), opts.get("--subject")
+        if opts.get("--type") == "heartbeat":
+            continue  # one every 5 min per worker
+        if kind == "inbox" and not isinstance(text, str):
+            text = subject  # a message with only a subject
+        if isinstance(text, str) and text.strip():
+            to = opts.get(to_flag)
+            out.append((kind, to if isinstance(to, str) else None, subject if isinstance(subject, str) else None, text,
+                        f"orca {words[i + 1]} {words[i + 2]}"))
+    return out
+
+
+def sent_line(raw):
+    """What one assistant transcript line sent: a subagent's prompt (Agent), a message to an agent (SendMessage), or
+    an orca send in a Bash command."""
+    if not any(k in raw for k in (b'"Agent"', b'"Task"', b'"SendMessage"', *ORCA_MARKS)):
+        return []
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(d, dict) or d.get("type") != "assistant" or not isinstance(d.get("message"), dict):
+        return []
+    content = d["message"].get("content")
+    out = []
+    for b in content if isinstance(content, list) else []:
+        inp = b.get("input") if isinstance(b, dict) and b.get("type") == "tool_use" and isinstance(b.get("input"), dict) else None
+        name = inp is not None and b.get("name")
+        if name in ("Agent", "Task") and isinstance(inp.get("prompt"), str):
+            out.append(("subagent", inp.get("subagent_type") or "general-purpose", inp.get("description"), inp["prompt"], name))
+        elif name == "SendMessage" and isinstance(inp.get("message"), str):
+            out.append(("agent", inp.get("to"), inp.get("summary"), inp["message"], name))
+        elif name == "Bash" and any(k.decode() in str(inp.get("command")) for k in ORCA_MARKS):
+            out.extend(orca_sends(str(inp["command"])))
+    return [{"ts": stamp(d), "kind": k, "to": to, "subject": subj, "text": text, "channel": ch} for k, to, subj, text, ch in out]
+
+
+def fetch_sent(procs=None):
+    """What the live Claude Code sessions sent, read from their transcripts (see sent_line). An ended session's rows
+    leave with it: the durable record is the `orch sent add` log (sent.py)."""
+    try:
+        out, scanned = [], set()
+        for sid, s, path in live_transcripts(ps_table() if procs is None else procs, []):
+            scanned.add(str(path))
+            c = SENT_SCAN.setdefault(str(path), {"offset": 0, "rows": []})
+            for raw in appended(path, c, lambda: c.update(rows=[])):
+                c["rows"].extend(sent_line(raw))
+            out += [{**r, "from": s.get("name") or sid, "claude_session": sid, "cwd": s["cwd"], "source": "transcript"}
+                    for r in c["rows"]]
+        for k in set(SENT_SCAN) - scanned:
+            del SENT_SCAN[k]
+        return out
+    except SourceError:
+        raise
+    except Exception as e:
+        raise SourceError(f"sent: {type(e).__name__}: {e}")
 
 
 def graphql(query):
@@ -927,15 +1032,16 @@ class Fleet:
     """Holds the caches between ticks and writes state.json. One instance per server process."""
 
     def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen,
-                 fetch_automations=fetch_automations, fetch_monitors=fetch_monitors):
+                 fetch_automations=fetch_automations, fetch_monitors=fetch_monitors, fetch_sent=fetch_sent):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
         self.fetch_automations, self.automations = fetch_automations, []
         self.fetch_monitors, self.monitors = fetch_monitors, []
+        self.fetch_sent, self.sent = fetch_sent, []  # served by /api/fleet/sent with the `orch sent` log, not in state.json
         self.read_screen = read_screen
         self.lock = threading.Lock()
         d = state_dir()
         self.fast, self.runs = None, {"runs": [], "workers": [], "tasks": [], "gates": []}
-        self.sources = {k: {"ok": None, "updated_at": None, "error": None, "warning": None} for k in ("orca", "runs", "github", "automations", "monitors")}
+        self.sources = {k: {"ok": None, "updated_at": None, "error": None, "warning": None} for k in ("orca", "runs", "github", "automations", "monitors", "sent")}
         self.repos = {}
         saved = read_json(d / "prs.json", {}) or {}
         self.prs = saved.get("prs", {})           # key -> {"probe": sig, "detail": shaped, "probed_at": iso}
@@ -998,6 +1104,11 @@ class Fleet:
                     self.ok("monitors", warning="; ".join(warn) or None)
                 except SourceError as e:
                     self.ok("monitors", str(e))
+                try:
+                    self.sent = self.fetch_sent()
+                    self.ok("sent")
+                except SourceError as e:
+                    self.ok("sent", str(e))
                 self.last["runs"] = mono
             if self.fast is None:
                 return self.state

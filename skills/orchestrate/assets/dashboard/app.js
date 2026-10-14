@@ -1082,6 +1082,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) poll
 setInterval(pollState, POLL_MS);
 setInterval(() => { if (isFleet() && S.section === "work" && !document.hidden) pollWork(); }, POLL_MS);
 setInterval(() => { if (isFleet() && S.section === "brief" && !document.hidden) pollBrief(); }, POLL_MS);
+setInterval(() => { if (isFleet() && S.section === "sent" && !document.hidden) pollSent(); }, POLL_MS);
 setInterval(pollPrograms, PROGRAMS_MS);
 setInterval(pollHealth, PROGRAMS_MS);
 setInterval(tick, 1000);

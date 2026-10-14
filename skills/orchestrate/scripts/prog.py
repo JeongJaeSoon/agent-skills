@@ -90,6 +90,13 @@ Usage: orch <command> <slug> [options]
                                      120 min marks the PR ⚠️, a lead whose terminal left the fleet turns 🔴;
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
                                      "pr_stale_min"}}. Exit 1 when a table is wider than 78 columns
+  sent add --to WHO (--text T | --text-file F | -) [--kind card|terminal|inbox|subagent|agent|slack|tracker|other]
+           [--channel HOW] [--repo OWNER/NAME] [--subject S] [--from WHO]
+  sent list [--days 1] [--json]
+                                     no slug: log an instruction as you send it to another session, card,
+                                     inbox, Slack or tracker (the text as sent; - reads stdin), for the
+                                     dashboard's 보낸 지시 page. WHO sending defaults to $ORCA_TERMINAL_HANDLE.
+                                     list prints the log with what live transcripts and the dashboard sent
   hold <resource> [--note TEXT] [--ttl MIN] [--by WHO] | hold --list [--json]
   release <resource> [--by WHO] [--force]
                                      no slug: take a resource lanes share (browser, a monitoring login)
@@ -2191,10 +2198,35 @@ def cmd_hold(argv, release=False):
         sys.exit(str(e))
 
 
+def cmd_sent(argv):
+    import sent
+    sub, rest = argv[0], argv[1:]
+    try:
+        if sub == "add" and opt(rest, "--to"):
+            text, f = opt(rest, "--text"), opt(rest, "--text-file")
+            if text is None:
+                text = pathlib.Path(f).read_text() if f else sys.stdin.read() if "-" in rest else None
+            row = sent.add(opt(rest, "--to"), text, opt(rest, "--kind"), opt(rest, "--channel"), opt(rest, "--repo"),
+                           opt(rest, "--subject"), opt(rest, "--from") or os.environ.get("ORCA_TERMINAL_HANDLE"))
+            print(f"logged {row['ts']} → {row['to']}")
+        elif sub == "list":
+            import fleet
+            rows = sent.page(fleet.fetch_sent(), int(opt(rest, "--days", "1")))["rows"]
+            if "--json" in rest:
+                print(json.dumps(rows, ensure_ascii=False, indent=1))
+            for r in [] if "--json" in rest else rows:
+                print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text']).splitlines()[0][:100]}")
+        else:
+            sys.exit("usage: orch sent add --to WHO (--text T | --text-file F | -) [--kind K] [--channel HOW] [--repo R] "
+                     "[--subject S] [--from WHO] | list [--days N] [--json]")
+    except (ValueError, OSError) as e:
+        sys.exit(str(e))
+
+
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "release": lambda argv: cmd_hold(argv, release=True)}
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True)}
 
 if __name__ == "__main__":
     if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
