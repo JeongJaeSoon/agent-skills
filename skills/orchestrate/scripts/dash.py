@@ -1286,8 +1286,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/sent":
             # The `orch sent` log is read on every poll, like work: a send shows on the next poll, not the next collect.
             days = re.search(r"[?&]days=(\d{1,2})\b", self.path)
-            return self.send_cached(json.dumps(sent.page(FLEET.sent if FLEET else [], int(days.group(1)) if days else 1),
-                                               ensure_ascii=False).encode())
+            try:
+                body = sent.page(FLEET.sent if FLEET else [], max(1, min(int(days.group(1)), sent.DAYS_MAX)) if days else 1)
+            except Exception as e:  # the page says what failed (fleet.js shows "error") instead of never loading
+                body = {"error": f"sent: {type(e).__name__}: {e}"}
+            return self.send_cached(json.dumps(body, ensure_ascii=False).encode())
         if path == "/api/fleet/token":
             return self.send(200, json.dumps({"token": TOKEN}).encode())
         m = re.fullmatch(r"/api/fleet/avatar/([A-Za-z0-9-]{1,39}(?:\[bot\])?)", path)

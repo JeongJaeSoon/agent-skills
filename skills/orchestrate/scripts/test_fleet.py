@@ -1101,6 +1101,51 @@ assert subprocess.run([sys.executable, "prog.py", "sent", "add", "--to", "x"], c
 # The collector keeps the transcript rows for /api/fleet/sent and says how the read went.
 st = f.tick(force=True)
 assert f.sent == world.sent and st["sources"]["sent"]["ok"] and "sent" not in st, st["sources"]
+# One ps a runs cycle feeds both monitors and sent; when ps fails, both say so.
+ps_calls, real_ps = [], f.ps_table
+f.ps_table = lambda: ps_calls.append(1) or {}
+f.tick(force=True)
+assert ps_calls == [1], ps_calls
+f.ps_table = lambda: (_ for _ in ()).throw(fleet.SourceError("ps: gone"))
+st = f.tick(force=True)
+assert [st["sources"][k]["error"] for k in ("monitors", "sent")] == ["ps: gone", "ps: gone"], st["sources"]
+f.ps_table = real_ps
+f.tick(force=True)
+
+# The log keeps raw text, so it is owner-only, even when the file or directory was made before with wider modes.
+import stat  # noqa: E402
+log_file = state_dir / "sent" / f"{now:%Y-%m-%d}.jsonl"
+os.chmod(log_file, 0o644)
+os.chmod(state_dir / "sent", 0o755)
+sent.add("card-y", "again", now=now)
+assert (stat.S_IMODE(log_file.stat().st_mode), stat.S_IMODE((state_dir / "sent").stat().st_mode)) == (0o600, 0o700)
+# A line of the wrong shape, in the log or the dashboard's sends, is skipped instead of failing the whole page.
+with open(log_file, "a") as fh:
+    fh.write('{"ts": 5}\n' + json.dumps({"ts": fleet.iso(now), "to": "x", "text": 7}) + "\n[1]\n")
+fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": 5, "text": "x"})
+fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(now), "session": "wt-x", "text": None})
+p = sent.page([], days=1, now=now + dt.timedelta(minutes=1))
+assert "card-y" in [r["to"] for r in p["rows"]] and "wt-x" not in [r["to"] for r in p["rows"]], p["rows"]
+# Each poll reads only what was appended since the last one; a day file out of the window leaves the cache.
+size = log_file.stat().st_size
+assert sent.LOG_SCAN[str(log_file)]["offset"] == size
+sent.add("card-z", "later", now=now)
+assert "card-z" in [r["to"] for r in sent.read_log(now - dt.timedelta(minutes=5))] and sent.LOG_SCAN[str(log_file)]["offset"] > size
+sent.read_log(now - dt.timedelta(days=1))
+assert not any(k.endswith(f"{day:%Y-%m-%d}.jsonl") for k in sent.LOG_SCAN), sent.LOG_SCAN.keys()
+# Channel, repository and cwd are masked when shown, like the text.
+p = sent.page([{"ts": fleet.iso(now), "to": "t", "text": "hi", "source": "transcript", "channel": f"x GH_TOKEN={secret}",
+                "repo": f"https://u:{secret}@example.test/r", "cwd": f"/w/GH_TOKEN={secret}"}], days=1, now=now)
+assert secret not in json.dumps(p), p
+# A transcript row older than the page's longest window leaves SENT_SCAN, so a long-lived session does not grow it.
+os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+assert len(fleet.fetch_sent(procs, now=now)) == 2
+assert fleet.fetch_sent(procs, now=now + dt.timedelta(days=31)) == [] and fleet.SENT_SCAN[str(transcript)]["rows"] == []
+# orch sent list survives a row with no text to show.
+fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(fleet.utcnow()), "session": "wt-empty", "text": ""})
+out = subprocess.run([sys.executable, "prog.py", "sent", "list"], capture_output=True, text=True, cwd=pathlib.Path(__file__).parent)
+assert out.returncode == 0 and "wt-empty  [dashboard] ?" in out.stdout, out.stderr + out.stdout
+del os.environ["CLAUDE_CONFIG_DIR"]
 
 # Shared resources: a hold by a terminal handle sits on that terminal's session.
 import holds  # noqa: E402

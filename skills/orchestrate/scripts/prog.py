@@ -90,12 +90,13 @@ Usage: orch <command> <slug> [options]
                                      120 min marks the PR ⚠️, a lead whose terminal left the fleet turns 🔴;
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
                                      "pr_stale_min"}}. Exit 1 when a table is wider than 78 columns
-  sent add --to WHO (--text T | --text-file F | -) [--kind card|terminal|inbox|subagent|agent|slack|tracker|other]
+  sent add --to WHO (--text-file F | - | --text T) [--kind card|terminal|inbox|subagent|agent|slack|tracker|other]
            [--channel HOW] [--repo OWNER/NAME] [--subject S] [--from WHO]
   sent list [--days 1] [--json]
                                      no slug: log an instruction as you send it to another session, card,
-                                     inbox, Slack or tracker (the text as sent; - reads stdin), for the
-                                     dashboard's 보낸 지시 page. WHO sending defaults to $ORCA_TERMINAL_HANDLE.
+                                     inbox, Slack or tracker (the text as sent, from a file or stdin `-`;
+                                     --text only for a short string with nothing secret), for the dashboard's
+                                     보낸 지시 page. WHO sending defaults to $ORCA_TERMINAL_HANDLE.
                                      list prints the log with what live transcripts and the dashboard sent
   hold <resource> [--note TEXT] [--ttl MIN] [--by WHO] | hold --list [--json]
   release <resource> [--by WHO] [--force]
@@ -2215,9 +2216,9 @@ def cmd_sent(argv):
             if "--json" in rest:
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:
-                print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text']).splitlines()[0][:100]}")
+                print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text'] or '?').splitlines()[0][:100]}")
         else:
-            sys.exit("usage: orch sent add --to WHO (--text T | --text-file F | -) [--kind K] [--channel HOW] [--repo R] "
+            sys.exit("usage: orch sent add --to WHO (--text-file F | - | --text T) [--kind K] [--channel HOW] [--repo R] "
                      "[--subject S] [--from WHO] | list [--days N] [--json]")
     except (ValueError, OSError) as e:
         sys.exit(str(e))

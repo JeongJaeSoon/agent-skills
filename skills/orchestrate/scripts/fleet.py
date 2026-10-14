@@ -13,6 +13,8 @@ and the state lives outside the repository:
   $ORCH_FLEET_CONFIG (default ~/.config/agent-skills/dashboard/config.json)
 
 Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts and tool inputs are raw text.
+The one exception is the `orch sent add` log (sent/, sent.py): it keeps the text as sent, owner-only (0600 in a 0700
+directory), and is masked when shown.
 """
 import collections, concurrent.futures, contextlib, datetime as dt, fcntl, hashlib, io, json, os, pathlib, re, shlex, subprocess, sys, tempfile, threading, time
 
@@ -438,6 +440,7 @@ def mtime_iso(path):
 
 
 SENT_SCAN = {}  # transcript path -> {"offset", "rows"}: what a live session sent, read like MONITOR_SCAN
+SENT_KEEP = dt.timedelta(days=30)  # the 보낸 지시 page's longest window; older rows leave SENT_SCAN
 # orca <noun> <verb> -> (the flag naming the receiver, the flag carrying the text, the receiver's kind)
 ORCA_SENDS = {("terminal", "send"): ("--terminal", "--text", "terminal"), ("worktree", "create"): ("--name", "--prompt", "card"),
               ("orchestration", "send"): ("--to", "--body", "inbox")}
@@ -505,16 +508,17 @@ def sent_line(raw):
     return [{"ts": stamp(d), "kind": k, "to": to, "subject": subj, "text": text, "channel": ch} for k, to, subj, text, ch in out]
 
 
-def fetch_sent(procs=None):
+def fetch_sent(procs=None, now=None):
     """What the live Claude Code sessions sent, read from their transcripts (see sent_line). An ended session's rows
-    leave with it: the durable record is the `orch sent add` log (sent.py)."""
+    leave with it, and a row older than SENT_KEEP: the durable record is the `orch sent add` log (sent.py)."""
     try:
-        out, scanned = [], set()
+        out, scanned, cutoff = [], set(), iso((now or utcnow()) - SENT_KEEP)
         for sid, s, path in live_transcripts(ps_table() if procs is None else procs, []):
             scanned.add(str(path))
             c = SENT_SCAN.setdefault(str(path), {"offset": 0, "rows": []})
             for raw in appended(path, c, lambda: c.update(rows=[])):
                 c["rows"].extend(sent_line(raw))
+            c["rows"] = [r for r in c["rows"] if (r["ts"] or "") >= cutoff]
             out += [{**r, "from": s.get("name") or sid, "claude_session": sid, "cwd": s["cwd"], "source": "transcript"}
                     for r in c["rows"]]
         for k in set(SENT_SCAN) - scanned:
@@ -1032,8 +1036,9 @@ class Fleet:
     """Holds the caches between ticks and writes state.json. One instance per server process."""
 
     def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen,
-                 fetch_automations=fetch_automations, fetch_monitors=fetch_monitors, fetch_sent=fetch_sent):
+                 fetch_automations=fetch_automations, fetch_monitors=fetch_monitors, fetch_sent=fetch_sent, ps_table=ps_table):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
+        self.ps_table = ps_table  # read once a runs cycle for both monitors and sent
         self.fetch_automations, self.automations = fetch_automations, []
         self.fetch_monitors, self.monitors = fetch_monitors, []
         self.fetch_sent, self.sent = fetch_sent, []  # served by /api/fleet/sent with the `orch sent` log, not in state.json
@@ -1099,16 +1104,22 @@ class Fleet:
                 except SourceError as e:
                     self.ok("automations", str(e))
                 try:
-                    warn = []
-                    self.monitors = self.fetch_monitors(warn=warn)
-                    self.ok("monitors", warning="; ".join(warn) or None)
+                    procs = self.ps_table()
                 except SourceError as e:
                     self.ok("monitors", str(e))
-                try:
-                    self.sent = self.fetch_sent()
-                    self.ok("sent")
-                except SourceError as e:
                     self.ok("sent", str(e))
+                else:
+                    try:
+                        warn = []
+                        self.monitors = self.fetch_monitors(procs=procs, warn=warn)
+                        self.ok("monitors", warning="; ".join(warn) or None)
+                    except SourceError as e:
+                        self.ok("monitors", str(e))
+                    try:
+                        self.sent = self.fetch_sent(procs=procs)
+                        self.ok("sent")
+                    except SourceError as e:
+                        self.ok("sent", str(e))
                 self.last["runs"] = mono
             if self.fast is None:
                 return self.state
