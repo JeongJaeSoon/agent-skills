@@ -510,6 +510,31 @@ process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTrou
     assert "모니터가 없다" in got["empty"] and "일부 누락" not in got["empty"], got["empty"]
     assert "일부 누락" in got["warned"] and "&lt;b&gt;lead" in got["warned"], got["warned"]
 
+    # Sent instructions render escaped; a long text folds, a short one shows whole; source and search filter the rows.
+    long_text = "<script>x</script>\n" + "\n".join(f"step {i}" for i in range(10))
+    js = f"""{helpers}
+{take("chips")}
+const S = {{filters: {{}}, section: "sent"}}, isFleet = () => true;
+{(assets / "fleet.js").read_text()}
+F.sentDays = "1";
+F.sent = {{total: 3, days: 1, rows: [
+  {{ts: new Date().toISOString(), from: "term_coord", to: "<b>card</b>", kind: "card", channel: "orca worktree create", text: {json.dumps(long_text)}, source: "log", also: ["transcript"]}},
+  {{ts: new Date().toISOString(), from: "lead", to: "general-purpose", kind: "subagent", channel: "Agent", subject: "<i>review</i>", text: "short <img src=x>", source: "transcript"}},
+  {{ts: new Date().toISOString(), from: "dashboard", to: "wt-docs", kind: "terminal", channel: "dashboard", text: "dry-run only", source: "dashboard"}}]}};
+const out = {{all: fleetSent({{}})}};
+S.filters.sent_src = "transcript"; out.tx = fleetSent({{}});
+S.filters.sent_src = "all"; S.filters.sent_q = "DRY"; out.q = fleetSent({{}});
+F.sent = {{rows: [], total: 0}}; S.filters.sent_q = ""; out.empty = fleetSent({{sources: {{sent: {{ok: false, error: "<b>ps</b>"}}}}}});
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    for raw in ("<script", "<img", "<i>", "<b>card", "<b>ps"):
+        assert raw not in got["all"] + got["empty"], raw
+    assert got["all"].count("<details") == 1 and "short &lt;img" in got["all"] and "(" + str(len(long_text)) + "자)" in got["all"], got["all"]
+    assert ">트랜스크립트<" in got["all"].split("</tr>")[0], "a logged send also seen in a transcript names both sources"
+    assert "card" in got["tx"] and "general-purpose" in got["tx"] and "wt-docs" not in got["tx"], got["tx"]
+    assert "wt-docs" in got["q"] and "general-purpose" not in got["q"], got["q"]
+    assert "보낸 지시가 없다" in got["empty"] and "수집 실패" in got["empty"], got["empty"]
+
     # Avatars: a team has none to ask for, and one that failed is not asked for again on the next redraw.
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
@@ -1002,6 +1027,125 @@ for cmd in (f"psql postgres://app:{pw}@db.example.test/x", f"mysql -uroot -p{pw}
     assert pw not in fleet.mask(cmd) and "[masked]" in fleet.mask(cmd), fleet.mask(cmd)
 for cmd in ("mkdir -p a", "mkdir -pv a", "git log -p", "docker run -p 8080:80 x", "https://example.test/a@b", "git@example.test:a/b"):
     assert fleet.mask(cmd) == cmd, cmd
+
+# Sends in a Bash command: each orca send with its receiver and text, however it is quoted or chained.
+cmd = ("orca terminal send --terminal term_a --text 'run your check' --enter && "
+       "orca worktree create --name card-x --repo name:app --prompt \"$(cat /tmp/brief.md)\" --json; "
+       "orca orchestration send --to dispatch:ctx_1 --subject 'review on #4' --body \"$(cat <<'EOF'\nfix the two threads\nEOF\n)\" --json")
+got = fleet.orca_sends(cmd)
+assert [(k, to, ch) for k, to, _, _, ch in got] == [("terminal", "term_a", "orca terminal send"), ("card", "card-x", "orca worktree create"),
+                                                    ("inbox", "dispatch:ctx_1", "orca orchestration send")], got
+assert got[0][3] == "run your check" and got[1][3] == "$(cat /tmp/brief.md)" and "fix the two threads" in got[2][3] and got[2][2] == "review on #4", got
+assert fleet.orca_sends("orca orchestration send --to run:r1 --subject 'done: PR open' --type status")[0][3] == "done: PR open"
+for cmd in ("orca terminal send --help", "orca orchestration send --type heartbeat --subject alive --body x",
+            'grep -rn "orca terminal send --text" skills', "orch sent add --to x --text y", "orca terminal send --text 'unclosed",
+            "orca worktree create --name x --prompt=", "orca terminal read --terminal t"):
+    assert fleet.orca_sends(cmd) == [], cmd
+# A transcript line: a subagent's prompt, a message to an agent, an orca send; anything else sends nothing.
+use = lambda name, inp: json.dumps({"type": "assistant", "timestamp": fleet.iso(now), "message": {"content": [
+    {"type": "tool_use", "id": "t", "name": name, "input": inp}]}}).encode() + b"\n"
+assert [(r["kind"], r["to"], r["subject"], r["channel"]) for r in fleet.sent_line(use("Agent", {"prompt": "review it", "description": "Review", "subagent_type": "Explore"}))] == [
+    ("subagent", "Explore", "Review", "Agent")]
+assert fleet.sent_line(use("SendMessage", {"to": "a1", "message": "fix it", "summary": "fix"}))[0]["to"] == "a1"
+assert fleet.sent_line(use("Bash", {"command": "orca terminal send --terminal t --text hi"}))[0]["text"] == "hi"
+assert fleet.sent_line(use("Bash", {"command": "ls orca"})) == [] and fleet.sent_line(use("Read", {"file_path": "orca"})) == []
+assert fleet.sent_line(b'{"type": "assistant", "message": {"content": "orca"}}\n') == [] and fleet.sent_line(b"not json orca\n") == []
+
+# fetch_sent reads the live sessions' transcripts, only what was appended since, and forgets an ended session.
+home = root / "claude-home-sent"
+os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+fleet.write_atomic(home / "sessions" / "500.json", json.dumps({"pid": 500, "sessionId": "s-coord", "cwd": "/work/wt-coord",
+                                                               "procStart": "Mon Jan  5 10:00:00 2026", "name": "orchestrator"}))
+transcript = home / "projects" / "-work-wt-coord" / "s-coord.jsonl"
+fleet.write_atomic(transcript, use("Agent", {"prompt": "deploy with GH_TOKEN=" + secret, "subagent_type": "general-purpose"}).decode())
+procs = {500: (1, "Mon Jan 5 10:00:00 2026", "claude")}
+rows = fleet.fetch_sent(procs)
+assert [(r["from"], r["to"], r["source"], r["claude_session"]) for r in rows] == [("orchestrator", "general-purpose", "transcript", "s-coord")], rows
+with open(transcript, "ab") as fh:
+    fh.write(use("Bash", {"command": "orca terminal send --terminal term_b --text 'go on' --enter"}))
+assert [r["to"] for r in fleet.fetch_sent(procs)] == ["general-purpose", "term_b"]
+assert fleet.fetch_sent({}) == [] and fleet.SENT_SCAN == {}
+del os.environ["CLAUDE_CONFIG_DIR"]
+
+# The `orch sent add` log: one file a day, masked when shown, merged with its transcript copy and the dashboard's lines.
+import sent  # noqa: E402
+day = now - dt.timedelta(days=3)
+sent.add("card-x", "/goal ship it GH_TOKEN=" + secret, "card", "orca worktree create --prompt", "acme/app", sender="term_coord", now=now)
+sent.add("ABC-1", "old comment", "tracker", now=day)
+assert sorted(p.name for p in (state_dir / "sent").glob("*.jsonl")) == sorted({f"{day:%Y-%m-%d}.jsonl", f"{now:%Y-%m-%d}.jsonl"})
+assert secret in (state_dir / "sent" / f"{now:%Y-%m-%d}.jsonl").read_text(), "the log keeps the text as sent"
+for bad in (dict(to="", text="x"), dict(to="x", text=" "), dict(to="x", text="y", kind="fax")):
+    try:
+        sent.add(**bad)
+        raise AssertionError(bad)
+    except ValueError:
+        pass
+twin = {"ts": fleet.iso(now + dt.timedelta(minutes=2)), "from": "orchestrator", "to": "card-x", "kind": "card",
+        "text": "/goal ship it GH_TOKEN=" + secret, "source": "transcript", "claude_session": "s-coord"}
+far = {**twin, "ts": fleet.iso(now + dt.timedelta(hours=1))}
+other = {**twin, "text": "something else"}
+p = sent.page([twin, far, other], days=1, now=now + dt.timedelta(hours=2))
+srcs = [(r["source"], r.get("also"), r["to"]) for r in p["rows"]]
+assert ("log", ["transcript"], "card-x") in srcs and srcs.count(("transcript", None, "card-x")) == 2, srcs
+assert ("dashboard", None, "wt-export") in srcs and not any(r["to"] == "ABC-1" for r in p["rows"]), "typed dashboard lines in, a 3-day-old log row out"
+assert secret not in json.dumps(p) and p["total"] == len(p["rows"]), p
+assert any(r["to"] == "ABC-1" for r in sent.page([], days=7, now=now)["rows"])
+assert len(sent.page([twin, far, other], days=1, now=now + dt.timedelta(hours=2), limit=2)["rows"]) == 2
+# orch sent add reads the text from stdin and names the sender by its terminal handle.
+out = subprocess.run([sys.executable, "prog.py", "sent", "add", "--to", "slack:C0FAKE", "--kind", "slack", "-"], input="리뷰 부탁드립니다",
+                     capture_output=True, text=True, cwd=pathlib.Path(__file__).parent, env={**os.environ, "ORCA_TERMINAL_HANDLE": "term_x"})
+assert out.returncode == 0, out.stderr
+assert any(r.get("from") == "term_x" and r["text"] == "리뷰 부탁드립니다" for r in sent.read_log(now - dt.timedelta(minutes=5))), "stdin text logged"
+assert subprocess.run([sys.executable, "prog.py", "sent", "add", "--to", "x"], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                      cwd=pathlib.Path(__file__).parent).returncode != 0
+# The collector keeps the transcript rows for /api/fleet/sent and says how the read went.
+st = f.tick(force=True)
+assert f.sent == world.sent and st["sources"]["sent"]["ok"] and "sent" not in st, st["sources"]
+# One ps a runs cycle feeds both monitors and sent; when ps fails, both say so.
+ps_calls, real_ps = [], f.ps_table
+f.ps_table = lambda: ps_calls.append(1) or {}
+f.tick(force=True)
+assert ps_calls == [1], ps_calls
+f.ps_table = lambda: (_ for _ in ()).throw(fleet.SourceError("ps: gone"))
+st = f.tick(force=True)
+assert [st["sources"][k]["error"] for k in ("monitors", "sent")] == ["ps: gone", "ps: gone"], st["sources"]
+f.ps_table = real_ps
+f.tick(force=True)
+
+# The log keeps raw text, so it is owner-only, even when the file or directory was made before with wider modes.
+import stat  # noqa: E402
+log_file = state_dir / "sent" / f"{now:%Y-%m-%d}.jsonl"
+os.chmod(log_file, 0o644)
+os.chmod(state_dir / "sent", 0o755)
+sent.add("card-y", "again", now=now)
+assert (stat.S_IMODE(log_file.stat().st_mode), stat.S_IMODE((state_dir / "sent").stat().st_mode)) == (0o600, 0o700)
+# A line of the wrong shape, in the log or the dashboard's sends, is skipped instead of failing the whole page.
+with open(log_file, "a") as fh:
+    fh.write('{"ts": 5}\n' + json.dumps({"ts": fleet.iso(now), "to": "x", "text": 7}) + "\n[1]\n")
+fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": 5, "text": "x"})
+fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(now), "session": "wt-x", "text": None})
+p = sent.page([], days=1, now=now + dt.timedelta(minutes=1))
+assert "card-y" in [r["to"] for r in p["rows"]] and "wt-x" not in [r["to"] for r in p["rows"]], p["rows"]
+# Each poll reads only what was appended since the last one; a day file out of the window leaves the cache.
+size = log_file.stat().st_size
+assert sent.LOG_SCAN[str(log_file)]["offset"] == size
+sent.add("card-z", "later", now=now)
+assert "card-z" in [r["to"] for r in sent.read_log(now - dt.timedelta(minutes=5))] and sent.LOG_SCAN[str(log_file)]["offset"] > size
+sent.read_log(now - dt.timedelta(days=1))
+assert not any(k.endswith(f"{day:%Y-%m-%d}.jsonl") for k in sent.LOG_SCAN), sent.LOG_SCAN.keys()
+# Channel, repository and cwd are masked when shown, like the text.
+p = sent.page([{"ts": fleet.iso(now), "to": "t", "text": "hi", "source": "transcript", "channel": f"x GH_TOKEN={secret}",
+                "repo": f"https://u:{secret}@example.test/r", "cwd": f"/w/GH_TOKEN={secret}"}], days=1, now=now)
+assert secret not in json.dumps(p), p
+# A transcript row older than the page's longest window leaves SENT_SCAN, so a long-lived session does not grow it.
+os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+assert len(fleet.fetch_sent(procs, now=now)) == 2
+assert fleet.fetch_sent(procs, now=now + dt.timedelta(days=31)) == [] and fleet.SENT_SCAN[str(transcript)]["rows"] == []
+# orch sent list survives a row with no text to show.
+fleet.append_line(state_dir / "sends.jsonl", {"typed": True, "at": fleet.iso(fleet.utcnow()), "session": "wt-empty", "text": ""})
+out = subprocess.run([sys.executable, "prog.py", "sent", "list"], capture_output=True, text=True, cwd=pathlib.Path(__file__).parent)
+assert out.returncode == 0 and "wt-empty  [dashboard] ?" in out.stdout, out.stderr + out.stdout
+del os.environ["CLAUDE_CONFIG_DIR"]
 
 # Shared resources: a hold by a terminal handle sits on that terminal's session.
 import holds  # noqa: E402

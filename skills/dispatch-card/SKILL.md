@@ -125,6 +125,11 @@ orca worktree create \
   --prompt "/goal <goal>. 브리프: <note path> + 3-line summary + the CLOSE line, or /goal + the inline brief" \
   --comment "<note path>" \
   --json
+# log the prompt as sent, for the dashboard's 보낸 지시 page (orchestrate references/dashboard.md "Sent instructions");
+# on stdin, not --text: a quoted prompt breaks and shows in ps
+orch sent add --to "<target>-<topic>" --kind card --channel "orca worktree create --prompt" --repo <owner/repo> - <<'EOF'
+<the --prompt text>
+EOF
 # name the card by what it does, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID or target> <short title>" --json
 # register it, so the janitor asks it to close if it idles once its PRs land (`reap-resources` done-card)

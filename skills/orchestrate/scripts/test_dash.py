@@ -264,6 +264,14 @@ import stages
 stages.set_cell("docs", "dev", "ok", "v2.4.0-rc1")
 wk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/work").read())
 assert next(x for x in wk["rows"] if x["id"] == "docs")["cells"]["dev"]["mark"] == "ok", wk["rows"]
+# The sent page clamps its window to 1..30 days, and a failure comes back as the page's error, not a dead request.
+sent_api = lambda q: json.loads(urllib.request.urlopen(f"{base}/api/fleet/sent{q}").read())
+assert [sent_api(q)["days"] for q in ("", "?days=99", "?days=0", "?days=7")] == [1, 30, 1, 7]
+real_page, dash.sent.page = dash.sent.page, lambda *a: {}["boom"]
+try:
+    assert sent_api("?days=1") == {"error": "sent: KeyError: 'boom'"}
+finally:
+    dash.sent.page = real_page
 srv.shutdown()
 
 # A ledger backfilled with landings from before the series began rebuilds the series once.

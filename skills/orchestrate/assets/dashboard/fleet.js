@@ -11,6 +11,7 @@ const FLEET_SECTIONS = [
   { id: "brief", label: "정기 보고", icon: "note" },
   { id: "automations", label: "자동화", icon: "clock" },
   { id: "monitors", label: "모니터", icon: "activity" },
+  { id: "sent", label: "보낸 지시", icon: "chat" },
   { id: "skills", label: "Skills", icon: "spark" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
@@ -24,6 +25,7 @@ const FLEET_SOURCES = [
   ["github", "GitHub", () => [600, 1800]],
   ["automations", "Automations", () => [300, 900]],
   ["monitors", "Monitors", () => [300, 900]],
+  ["sent", "Sent", () => [300, 900]],
 ];
 
 // type -> [label, tone, icon]
@@ -697,6 +699,69 @@ function fleetMonitors(st) {
   return headHtml + failed + table;
 }
 
+// Instructions sent out of a session (sent.py via /api/fleet/sent): the `orch sent add` log, lines typed on the
+// dashboard, and what live sessions sent by Agent, SendMessage or orca. Read on every poll while the page is open.
+const SENT_SRC = { log: ["기록", "accent"], transcript: ["트랜스크립트", ""], dashboard: ["대시보드", "good"] };
+const SENT_DAYS = [["1", "1일"], ["7", "7일"], ["30", "30일"]];
+const SENT_SHOWN = 300;
+const sentDays = () => (SENT_DAYS.some(([d]) => d === S.filters.sent_days) ? S.filters.sent_days : "1");
+async function pollSent() {
+  if (F.sentBusy) return;
+  F.sentBusy = true;
+  const days = sentDays();
+  try {
+    const fresh = F.sentDays === days;
+    const r = await fetch(`/api/fleet/sent?days=${days}`, { cache: "no-store", headers: fresh && F.sentEtag ? { "If-None-Match": F.sentEtag } : {} });
+    if (r.status !== 304) {
+      F.sent = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
+      F.sentEtag = r.ok ? r.headers.get("ETag") : null;
+      F.sentDays = days;
+      if (isFleet() && S.section === "sent") renderView();
+    }
+  } catch (e) { F.sent = { error: String(e.message || e) }; F.sentEtag = null; }
+  F.sentBusy = false;
+}
+const sentKey = (r) => `${r.ts}|${r.source}|${r.to}|${(r.text || "").length}`;
+function fleetSent(st) {
+  if (!F.sent || F.sentDays !== sentDays()) pollSent();
+  const d = F.sent, src = (st && st.sources || {}).sent || {};
+  const headHtml = `<div class="view-head"><div><h2>보낸 지시</h2><p>세션이 다른 세션·카드·서브에이전트·inbox·Slack·트래커로 보낸 지시와 원문. 출처는 셋이다: 보낼 때 <span class="mono">orch sent add</span> 로 남긴 기록, 대시보드에서 세션에 친 줄, 살아 있는 Claude Code 세션 트랜스크립트의 Agent·SendMessage·<span class="mono">orca terminal send</span>·<span class="mono">orca worktree create --prompt</span>·<span class="mono">orca orchestration send</span>. 기록과 같은 지시가 트랜스크립트에도 보이면 한 줄로 합친다. 끝난 세션이 보낸 것은 기록에만 남는다. 토큰·비밀번호는 가린다.</p></div>
+    <div class="legend">${Object.values(SENT_SRC).map(([l, tone]) => tag(l, tone)).join(" ")}</div></div>`;
+  if (!d) return headHtml + '<div class="loading">Loading…</div>';
+  if (d.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(d.error)}</div></div>`;
+  const rows = d.rows || [], q = (S.filters.sent_q || "").toLowerCase();
+  const f = SENT_SRC[S.filters.sent_src] ? S.filters.sent_src : "all";
+  const bySrc = (r) => f === "all" || r.source === f || (r.also || []).includes(f);
+  const hit = (r) => !q || [r.from, r.to, r.kind, r.channel, r.repo, r.subject, r.text].some((v) => (v || "").toLowerCase().includes(q));
+  const shown = rows.filter((r) => bySrc(r) && hit(r));
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} 트랜스크립트를 읽지 못했다: ${esc(src.error || "")}. 기록과 대시보드 출처만 보인다.</div></div>` : "";
+  const body = shown.slice(0, SENT_SHOWN).map((r) => {
+    const text = r.text || "", long = text.split("\n").length > 6 || text.length > 480, k = sentKey(r);
+    const srcs = [r.source, ...(r.also || [])].map((x) => tag((SENT_SRC[x] || [x])[0], (SENT_SRC[x] || [, ""])[1])).join(" ");
+    const pre = `<pre class="sent-text">${esc(text)}</pre>`;
+    return `<tr><td class="nowrap muted">${relSpan(r.ts)}</td>
+      <td><div class="nowrap">${esc(r.from || "?")} <span class="muted">→</span> <b>${esc(r.to || "?")}</b></div>
+        <div class="dim">${r.kind ? tag(r.kind) : ""} <span class="mono">${esc(r.channel || "")}</span>${r.repo ? ` · <span class="mono">${esc(r.repo)}</span>` : ""}</div></td>
+      <td class="sent-cell">${r.subject ? `<div><b>${esc(r.subject)}</b></div>` : ""}${long
+        ? `<details data-sent-key="${esc(k)}" ${F.sentOpen && F.sentOpen.has(k) ? "open" : ""}><summary class="dim ellipsis">${esc(text.split("\n").find((l) => l.trim()) || "")} <span class="muted">(${text.length}자)</span></summary>${pre}</details>` : pre}</td>
+      <td class="nowrap">${srcs}</td></tr>`;
+  }).join("");
+  const srcChips = chips("sent_src", [["all", "모든 출처", rows.length], ...Object.entries(SENT_SRC).map(([id, [l]]) => [id, l, rows.filter((r) => r.source === id || (r.also || []).includes(id)).length])], f);
+  const toolbar = `<div class="toolbar">${chips("sent_days", SENT_DAYS, sentDays())}${srcChips}
+    <input class="search" id="sent-search" type="search" placeholder="대상·보낸 쪽·원문 검색" value="${esc(S.filters.sent_q || "")}" aria-label="보낸 지시 검색"></div>`;
+  const cut = d.total > rows.length ? `최근 ${rows.length}건만 받았다(전체 ${d.total}건). ` : "";
+  const more = shown.length > SENT_SHOWN ? `${SENT_SHOWN}건까지 보인다(맞는 것 ${shown.length}건). ` : "";
+  const note = cut || more ? `<p class="muted">${cut}${more}검색이나 출처로 좁힌다.</p>` : "";
+  const table = shown.length ? `<div class="card table-wrap" data-src="sent"><table class="sent"><thead><tr><th>언제</th><th>누가 → 누구에게</th><th>원문</th><th>출처</th></tr></thead><tbody>${body}</tbody></table></div>`
+    : `<div class="card"><div class="empty-chart">${rows.length ? "맞는 지시가 없다." : "이 기간에 보낸 지시가 없다."}</div></div>`;
+  return headHtml + failed + toolbar + note + table;
+}
+document.addEventListener("input", (e) => { if (e.target.id === "sent-search") { S.filters.sent_q = e.target.value; renderView(); } });
+document.addEventListener("toggle", (e) => {
+  const k = e.target.dataset && e.target.dataset.sentKey;
+  if (k) { F.sentOpen ||= new Set(); e.target.open ? F.sentOpen.add(k) : F.sentOpen.delete(k); }
+}, true);
+
 // Who holds a landing lane or an `orch hold` resource (state.json holds), longest held first.
 function holdsCard(st) {
   const hs = [...(st.holds || [])].sort((a, b) => (a.at || "").localeCompare(b.at || ""));
@@ -797,7 +862,7 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

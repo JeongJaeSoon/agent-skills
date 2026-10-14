@@ -599,6 +599,33 @@ class FakeFleetWorld:
             mon("b2wait", "bash", "running", "wt-lead", "lead:billing", "Restart background inbox wait for billing",
                 "orch wait billing --timeout-ms 3300000", 0.7, 0.2),
         ]
+        # Sent instructions: three logged with `orch sent add`, one of them also seen in the coordinator's transcript,
+        # two more only in transcripts, and a line typed on the dashboard.
+        brief = ("/goal ACME-102 의 CSV 내보내기를 끝내고 PR 을 낸다(머지 금지). CLOSE.\n\n"
+                 "GOAL        ACME-102: 청구서 목록을 CSV 로 내보낸다.\nBACKGROUND  재무팀이 스프레드시트로 읽는다.\n"
+                 "STEPS       1. API handler → 2. UI 버튼 → 3. E2E\nDO NOT      머지 금지. 다른 repo 수정 금지.\n"
+                 "REPORT      orca orchestration send --to run:run_demo : PR URL · E2E 결과\nCLOSE       end-session 으로 스스로 닫는다.")
+        self.sent_log = [
+            dict(to="export-worker", text=brief, kind="card", channel="orca worktree create --prompt", repo="acme/app",
+                 sender="term_coord", now=_ago(now, 2.5)),
+            dict(to="slack:C0FAKE01", text="리뷰 부탁드립니다: acme/app#42 (CSV 내보내기). 변경 140줄, E2E 통과.", kind="slack",
+                 channel="slack-post", sender="term_coord", subject="acme/app#42 리뷰 의뢰", now=_ago(now, 0.6)),
+            dict(to="ABC-7", text="dev 확인 끝: 내보낸 CSV 가 스프레드시트에서 열린다. 근거 acme/app#42 E2E.", kind="tracker",
+                 channel="comment", sender="term_lead", now=_ago(now, 0.3)),
+        ]
+        tx = lambda h, name, kind, to, ch, text, subject=None: {
+            "ts": _ago(now, h), "from": name, "kind": kind, "to": to, "channel": ch, "text": text, "subject": subject,
+            "claude_session": f"demo-{name}", "cwd": "/work/wt-coord", "source": "transcript"}
+        self.sent = [
+            tx(2.5, "orchestrator", "card", "export-worker", "orca worktree create", brief),
+            tx(1.2, "orchestrator", "subagent", "general-purpose", "Agent",
+               "Review acme/app#42 against ACME-102. Report correctness bugs only, with file:line and a failing input.",
+               "Independent review of acme/app#42"),
+            tx(0.4, "lead:billing", "inbox", "dispatch:ctx_demo1", "orca orchestration send",
+               "acme/app#41 에 변경 요청 2건. deliver-ticket 대로 고치고 push 한 뒤 알려줘.", "review on acme/app#41"),
+        ]
+        self.dash_send = {"at": _ago(now, 0.1), "session": "wt-docs", "handle": "term_docs",
+                          "text": "npm publish 는 하지 말고 dry-run 결과만 보고해줘", "ok": True, "typed": True, "code": 200}
         self.prompt = {"v": 1, "id": "prompt-docs-1", "at": _ago(now, 0.5), "handle": "term_docs", "session_id": "demo-docs",
                        "cwd": "/work/wt-docs", "tool": "Bash", "input": {"command": "npm publish --dry-run"}}
         # The coordinator waits on the human for one call it registered with `orch decide add`.
@@ -636,8 +663,11 @@ class FakeFleetWorld:
     def fetch_automations(self):
         return self.automations
 
-    def fetch_monitors(self, warn=None):
+    def fetch_monitors(self, procs=None, warn=None):
         return self.monitors
+
+    def fetch_sent(self, procs=None):
+        return self.sent
 
     def graphql(self, query):
         data = {}
@@ -652,6 +682,14 @@ class FakeFleetWorld:
                            "nodes": [p for p in self.prs.values() if p["state"] == state and p["author"]["login"] == me]}
         return data, []
 
+    def seed_sent(self):
+        """The `orch sent add` log and the dashboard's typed line, written once into the state directory."""
+        import fleet, sent
+        if not sent.read_log(fleet.utcnow() - dt.timedelta(days=30)):
+            for row in self.sent_log:
+                sent.add(**{**row, "now": fleet.parse(row["now"])})
+            fleet.append_line(fleet.state_dir() / "sends.jsonl", self.dash_send)
+
     def fleet(self, clock=None):
         """A fleet.Fleet wired to this world (ORCH_FLEET_STATE must already point at a scratch directory)."""
         import fleet
@@ -659,7 +697,7 @@ class FakeFleetWorld:
         fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
                         read_screen=self.read_screen, fetch_automations=self.fetch_automations,
-                        fetch_monitors=self.fetch_monitors)
+                        fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {})
         f.me = self.ME
         f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
         return f
