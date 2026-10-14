@@ -1,7 +1,8 @@
 """Rules of notify.py: filters, once-per-thread keys, personal review requests only, human activity only,
-seed, exit codes.
+seed, backoff and exit codes.
 Run: python3 test_notify.py"""
 import pathlib, sys, tempfile, unittest
+from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import notify as n
 
@@ -26,25 +27,31 @@ def person(login, kind="User"):
 class Fake:
     """GitHub as a list of notification pages, one per poll, the reviewers requested on each PR,
     comment authors by comment URL and review authors by PR URL."""
-    def __init__(self, pages, reviewers=None, fail=0, comments=None, reviews=None):
+    def __init__(self, pages, reviewers=None, fail=0, comments=None, reviews=None, error="HTTP 502", login=ME):
         self.pages, self.reviewers, self.fail, self.calls = list(pages), reviewers or {}, fail, []
+        self.error, self.login = error, login
         self.comments, self.reviews = comments or {}, reviews or {}
 
     def __call__(self, path):
         self.calls.append(path)
         if path == "user":
-            return {"login": ME}
+            if self.fail:
+                self.fail -= 1
+                raise RuntimeError(self.error)
+            return {"login": self.login}
         if path.endswith("/requested_reviewers"):
-            return {"users": [{"login": u} for u in self.reviewers.get(path, [])], "teams": [{"slug": "core"}]}
-        if path.endswith("/reviews?per_page=100"):
-            return [{"user": u} for u in self.reviews.get(path.split("/reviews")[0], [])]
+            users = self.reviewers.get(path, [])
+            return {"users": None if users is None else [u and {"login": u} for u in users], "teams": [{"slug": "core"}]}
+        if "/reviews?per_page=100" in path:
+            page = int(path.split("&page=")[1]) if "&page=" in path else 1
+            return [{"user": u} for u in self.reviews.get(path.split("/reviews")[0], [])[(page - 1) * 100:page * 100]]
         if "/comments/" in path:
             if path not in self.comments:
                 raise RuntimeError("HTTP 404")
             return {"user": self.comments[path]}
         if self.fail:
             self.fail -= 1
-            raise RuntimeError("HTTP 502")
+            raise RuntimeError(self.error)
         return self.pages.pop(0) if len(self.pages) > 1 else self.pages[0]
 
 
@@ -123,17 +130,24 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual((code, len(out)), (0, 1))
 
     def test_unreadable_review_request_is_skipped_without_blocking_other_items(self):
+        for error, recorded in (("gh: Bad Gateway (HTTP 502)", []), ("gh: Not Found (HTTP 404)", ["12@2026-01-01T00:00:00Z:team"])):
+            n.write_seen(self.seen, [], 10)
+
+            class Unreadable(Fake):
+                def __call__(self, path):
+                    if path == rr_url(12):
+                        raise RuntimeError(error)
+                    return super().__call__(path)
+
+            code, out = self.run_watch(Unreadable([[note(12, reason="review_requested"), note(13, title="Still here")]]))
+            self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["Still here"]))
+            self.assertEqual([k for k in n.read_seen(self.seen) if k.startswith("12")], recorded)
+
+    def test_reviewer_list_with_null_entries_does_not_crash(self):
         n.write_seen(self.seen, [], 10)
-
-        class Gone(Fake):
-            def __call__(self, path):
-                if path == rr_url(12):
-                    raise RuntimeError("HTTP 404")
-                return super().__call__(path)
-
-        code, out = self.run_watch(Gone([[note(12, reason="review_requested"), note(13, title="Still here")]]))
-        self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["Still here"]))
-        self.assertFalse([k for k in n.read_seen(self.seen) if k.startswith("12")])
+        for i, users in ((14, [None, ME]), (15, None)):
+            code, out = self.run_watch(Fake([[note(i, reason="review_requested")]], {rr_url(i): users}), max_minutes=1)
+            self.assertEqual(code, 0 if users else 1)
 
     def test_activity_wakes_only_for_a_human_other_than_the_user(self):
         n.write_seen(self.seen, [], 10)
@@ -171,12 +185,33 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["body mention"]))
         self.assertFalse([c for c in fake.calls if "/reviews" in c])
 
-    def test_unreadable_activity_is_skipped_without_blocking_other_items(self):
+    def test_unreadable_activity_is_retried_and_a_deleted_comment_is_recorded(self):
         n.write_seen(self.seen, [], 10)
-        page = [note(30, reason="comment", latest=comment_url(30)), note(31, title="Still here")]
-        code, out = self.run_watch(Fake([page]))
+
+        class Flaky(Fake):
+            def __call__(self, path):
+                if path == comment_url(30):
+                    raise RuntimeError("HTTP 503")
+                return super().__call__(path)
+
+        page = [note(30, reason="comment", latest=comment_url(30)), note(31, title="Still here"),
+                note(34, reason="comment", latest=comment_url(34))]
+        code, out = self.run_watch(Flaky([page]))
         self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["Still here"]))
-        self.assertFalse([k for k in n.read_seen(self.seen) if k.startswith("30")])
+        seen = n.read_seen(self.seen)
+        self.assertFalse([k for k in seen if k.startswith("30")])
+        self.assertTrue([k for k in seen if k.startswith("34@")])
+
+    def test_latest_review_is_read_from_the_last_page(self):
+        n.write_seen(self.seen, [], 10)
+        pr = note(35)["subject"]["url"]
+        reviews = {pr: [person("review-helper[bot]", "Bot")] * 99 + [person("carol")] + [person("ci-runner", "Bot")] * 50}
+        fake = Fake([[note(35, reason="author", latest="pr")]], reviews=reviews)
+        self.assertEqual(self.run_watch(fake, max_minutes=1), (1, []))
+        self.assertEqual([c for c in fake.calls if "/reviews" in c], [pr + "/reviews?per_page=100", pr + "/reviews?per_page=100&page=2"])
+        reviews[pr] = reviews[pr][:100]
+        code, out = self.run_watch(Fake([[note(35, reason="author", latest="pr", updated="2026-01-02T00:00:00Z")]], reviews=reviews))
+        self.assertEqual((code, len(out)), (0, 1))
 
     def test_issue_thread_pointing_at_itself_is_silent_without_a_reviews_call(self):
         n.write_seen(self.seen, [], 10)
@@ -199,17 +234,55 @@ class NotifyTest(unittest.TestCase):
         code, out = self.run_watch(Fake([[note(10, reason="review_requested")]]), personal_review_only=False)
         self.assertEqual((code, len(out)), (0, 1))
 
-    def test_transient_failures_back_off_then_recover(self):
+    def test_repeated_state_change_fires_once(self):
+        n.write_seen(self.seen, [], 10)
+        code, out = self.run_watch(Fake([[note(16, reason="state_change")]]))
+        self.assertEqual((code, len(out)), (0, 1))
+        again = [note(16, reason="state_change", updated="2026-01-03T00:00:00Z")]
+        self.assertEqual(self.run_watch(Fake([again]), max_minutes=1), (1, []))
+
+    def test_transient_failures_back_off_exponentially_then_recover(self):
         n.write_seen(self.seen, [], 10)
         code, out = self.run_watch(Fake([[note(11)]], fail=3))
         self.assertEqual((code, len(out)), (0, 1))
-        self.assertEqual(self.clock.t, 3 * CFG["backoff_s"])
+        self.assertEqual(self.clock.t, 60 + 120 + 240)
 
-    def test_persistent_failure_exits_2_with_the_error(self):
+    def test_outage_and_rate_limit_never_exit_2(self):
+        for error in ("gh: Bad Gateway (HTTP 502)", "gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+                      'Get "https://api.github.com/user": dial tcp: lookup api.github.com: no such host'):
+            self.clock.t = 0.0
+            code, out = self.run_watch(Fake([[]], fail=999, error=error), max_failures=3, max_minutes=120)
+            self.assertEqual((code, out), (1, []), error)
+
+    def test_backoff_is_capped(self):
         n.write_seen(self.seen, [], 10)
-        code, out = self.run_watch(Fake([[]], fail=99), max_failures=3)
+        sleeps = []
+        n.watch(Fake([[note(17)]], fail=8), CFG, self.seen, sleep=sleeps.append, clock=self.clock)
+        self.assertEqual(sleeps, [60, 120, 240, 480, 900, 900, 900, 900])
+
+    def test_persistent_config_failure_exits_2_with_the_error(self):
+        n.write_seen(self.seen, [], 10)
+        code, out = self.run_watch(Fake([[]], fail=99, error="gh: Bad credentials (HTTP 401)"), max_failures=3)
         self.assertEqual(code, 2)
-        self.assertIn("HTTP 502", out[0])
+        self.assertIn("HTTP 401", out[0])
+
+    def test_startup_waits_out_an_offline_user_lookup_and_an_empty_login_counts(self):
+        code, out = self.run_watch(Fake([[note(18)], [note(18), note(19, title="After")]], fail=2, error="EOF"))
+        self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["After"]))
+        code, out = self.run_watch(Fake([[]], login=""), max_failures=2)
+        self.assertEqual(code, 2)
+        self.assertIn("no login", out[0])
+
+    def test_a_crash_mid_write_keeps_the_old_seen_file(self):
+        n.write_seen(self.seen, ["a", "b"], 10)
+
+        def torn(path, text):
+            open(path, "w").write(text[:1])
+            raise OSError("disk full")
+
+        with mock.patch.object(pathlib.Path, "write_text", torn), self.assertRaises(OSError):
+            n.write_seen(self.seen, ["c", "d"], 10)
+        self.assertEqual(n.read_seen(self.seen), ["a", "b"])
 
     def test_seed_records_every_notification_and_seen_is_trimmed(self):
         self.assertEqual(n.seed(Fake([[note(i) for i in range(5)]]), self.seen, {**CFG, "keep_seen": 3}), 5)

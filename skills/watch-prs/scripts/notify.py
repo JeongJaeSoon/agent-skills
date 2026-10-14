@@ -8,7 +8,9 @@ Usage:
 watch polls `gh api notifications` until a new relevant notification appears, prints one line per item
 (reason, repo, title, web URL; tab-separated) and exits 0. It exits 1 when max_minutes pass with nothing
 new (restart it) and 2 when it cannot work: no "prs" key in the config, or `gh` failing max_failures
-times in a row (the last error is printed). Run under a background shell so the exit wakes the session.
+times in a row with an error retrying cannot fix, such as bad credentials (the last error is printed).
+Network errors, 5xx and rate limits back off exponentially up to max_backoff_s and never count.
+Run under a background shell so the exit wakes the session.
 seed records every current notification as seen and prints the count; watch seeds by itself when no
 seen file exists, so the first run does not dump the backlog.
 Read-only: it never marks a notification read and never writes to GitHub.
@@ -30,12 +32,14 @@ GH = os.environ.get("AGENT_SKILLS_GH", "gh")
 DEFAULTS = {"reasons": ["mention", "author", "assign", "state_change", "review_requested", "comment"],
             "exclude_title_patterns": [r"^\[Auto\]", r"^chore\(deps", r"^Bump "],
             "personal_review_only": True, "human_activity_only": True, "interval_s": 30, "backoff_s": 60,
-            "max_failures": 10, "max_minutes": 720, "keep_seen": 2000}
+            "max_backoff_s": 900, "max_failures": 10, "max_minutes": 720, "keep_seen": 2000}
 SCOPE = {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": []}
-# A re-request or reassignment bumps updated_at on the same thread; keying these by thread fires them once.
-ONCE_PER_THREAD = ("review_requested", "assign")
+# A re-request, reassignment or state change bumps updated_at on the same thread; keying these by thread fires them once.
+ONCE_PER_THREAD = ("review_requested", "assign", "state_change")
 # These also fire on the user's own pushes and comments, CI and bot comments.
 ACTIVITY = ("author", "comment")
+TRANSIENT = re.compile(r"HTTP (5\d\d|429)|rate limit|dial tcp|no such host|connection (refused|reset)|timeout|EOF", re.I)
+LOOKUP_ERRORS = (RuntimeError, ValueError, TypeError, subprocess.TimeoutExpired)
 
 
 def config(path=CONFIG):
@@ -86,17 +90,30 @@ def actor(fetch, n):
     if latest != url:
         return fetch(latest).get("user")
     # GitHub points latest_comment_url at the PR itself when the latest activity is a review.
-    reviews = fetch(url + "/reviews?per_page=100") if "/pulls/" in url else []
-    return reviews[-1].get("user") if reviews else None
+    if "/pulls/" not in url:
+        return None
+    # Reviews come oldest first, so the latest is the last entry of the last page.
+    page, reviews = 1, []
+    while True:
+        batch = fetch(url + "/reviews?per_page=100" + (f"&page={page}" if page > 1 else ""))
+        reviews = batch or reviews
+        if len(batch) < 100:
+            return reviews[-1].get("user") if reviews else None
+        page += 1
 
 
 def is_human(user, me):
     return bool(user) and user["login"] != me and user.get("type") != "Bot" and not user["login"].endswith("[bot]")
 
 
+def gone(e):
+    return bool(re.search(r"HTTP (404|410)", str(e)))
+
+
 def poll(fetch, me, cfg, seen):
     """Returns (lines to print, keys to record). A team-only review request is recorded per updated_at,
-    so it is checked again only on the next re-request, and still fires once if the user is later asked by name."""
+    so it is checked again only on the next re-request, and still fires once if the user is later asked by name.
+    A lookup that 404s is recorded silently; any other failed lookup is retried next poll."""
     lines, keys = [], []
     for n in fetch("notifications?per_page=50"):
         k = key(n)
@@ -107,10 +124,12 @@ def poll(fetch, me, cfg, seen):
             if team in seen:
                 continue
             try:
-                users = fetch(n["subject"]["url"] + "/requested_reviewers").get("users", [])
-            except (RuntimeError, ValueError, subprocess.TimeoutExpired):
-                continue  # a PR gone or unreadable must not hold back the rest; asked again next poll
-            if me not in [u["login"] for u in users]:
+                users = fetch(n["subject"]["url"] + "/requested_reviewers").get("users") or []
+            except LOOKUP_ERRORS as e:
+                if gone(e):
+                    keys.append(team)
+                continue  # an unreadable PR must not hold back the rest
+            if me not in [u.get("login") for u in users if u]:
                 keys.append(team)
                 continue
         latest = n["subject"].get("latest_comment_url")
@@ -119,7 +138,9 @@ def poll(fetch, me, cfg, seen):
         if (n["reason"] in ACTIVITY or mention_comment) and cfg["human_activity_only"]:
             try:
                 user = actor(fetch, n)
-            except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+            except LOOKUP_ERRORS as e:
+                if gone(e):
+                    keys.append(k)
                 continue
             if not is_human(user, me):
                 keys.append(k)
@@ -139,7 +160,9 @@ def read_seen(path):
 def write_seen(path, keys, keep):
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(f"{k}\n" for k in keys[-keep:]))
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("".join(f"{k}\n" for k in keys[-keep:]))
+    os.replace(tmp, path)
 
 
 def seed(fetch, path, cfg):
@@ -150,24 +173,28 @@ def seed(fetch, path, cfg):
 
 def watch(fetch, cfg, path, sleep=time.sleep, clock=time.monotonic):
     """Returns (exit code, output lines)."""
-    failures, last = 0, ""
-    try:
-        me = fetch("user")["login"]
-        if not pathlib.Path(path).exists():
-            seed(fetch, path, cfg)
-    except (RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as e:
-        return 2, [f"notify: {e}"]
-    deadline, seen = clock() + cfg["max_minutes"] * 60, read_seen(path)
+    failures, streak, me, seen = 0, 0, None, None
+    deadline = clock() + cfg["max_minutes"] * 60
     while clock() < deadline:
         try:
+            if me is None:
+                me = fetch("user").get("login") or None
+                if me is None:
+                    raise RuntimeError("gh api user: no login")
+            if seen is None:
+                if not pathlib.Path(path).exists():
+                    seed(fetch, path, cfg)
+                seen = read_seen(path)
             lines, keys = poll(fetch, me, cfg, set(seen))
-        except (RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as e:
-            failures, last = failures + 1, str(e)
-            if failures >= cfg["max_failures"]:
-                return 2, [f"notify: {failures} failures in a row; last: {last}"]
-            sleep(cfg["backoff_s"])
+        except (*LOOKUP_ERRORS, KeyError, OSError) as e:
+            streak += 1
+            if not (isinstance(e, subprocess.TimeoutExpired) or TRANSIENT.search(str(e))):
+                failures += 1
+                if failures >= cfg["max_failures"]:
+                    return 2, [f"notify: {failures} failures in a row; last: {e}"]
+            sleep(min(cfg["backoff_s"] * 2 ** (streak - 1), cfg["max_backoff_s"]))
             continue
-        failures = 0
+        failures = streak = 0
         if keys:
             seen = (seen + keys)[-cfg["keep_seen"]:]
             write_seen(path, seen, cfg["keep_seen"])
