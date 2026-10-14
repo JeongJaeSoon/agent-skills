@@ -20,6 +20,11 @@ From the open PR to ready: all CI checks green and all review threads resolved.
   the commit, then reply with the body in a JSON file:
   `gh api --method POST repos/<owner>/<repo>/pulls/<pr>/comments/<id>/replies --input reply.json`.
   Never churn code only to quiet a bot.
+- A review or coding bot billed by its session's runtime is asked sparingly: one session per PR
+  (a new request, not a long thread), one bot session working at a time, at most two rounds per
+  PR (the review, then one re-check), your replies batched into one message, the scope and its
+  limits in the ask, and an instruction to end its session once it posts. Inside a program, one
+  lead owns these asks.
 - Classify a CI failure before any retrigger. Flake or infrastructure gets one rerun; an
   identical second failure means it was never flake, so read the logs. A failure in code the
   diff never touches points to a stale base: find the commit on main that fixed it and check

@@ -155,6 +155,11 @@ orca terminal wait --terminal <result.agentTerminalHandle> --for tui-idle --time
 orca terminal read --terminal <handle> --screen
 ```
 
+Take the handle only from the `agentTerminalHandle` field of the create output, never from a
+loose `term_…` match: the brief can carry another handle (your own, in its REPORT line), and a
+later `/goal` or nudge sent to the first match landed on the sending session. Before any send,
+check that the handle is not your own (`$ORCA_TERMINAL_HANDLE`).
+
 Once. Read that the agent picked up the brief, report the worktree path, branch and handle, and
 return to what this session was doing. `--parent-worktree active` is how this session finds the
 card again when it ends (`end-session` §3); a `--no-parent` card goes in the worklog instead. Results are fire-and-forget by default: do not loop on
