@@ -266,14 +266,15 @@ PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료
              "open": ("held", "에이전트 없음"), "offline": ("held", "세션 꺼짐")}
 
 
-def fleet_rows(state, leads):
+def fleet_rows(state, leads, board_rows):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the top-level coordinator dispatched
-    itself. Each card carries its newest PR. Returns (rows, order); reported_at is the session's last activity, so a
-    quiet one shows its age like a stale board row."""
+    itself. Each card carries its newest PR; a card whose PR a board row already has is left to that row. Returns
+    (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board row."""
     state = state or {}
     sessions = state.get("sessions") or []
     held = {l.get("handle") for l in leads.values()}
+    on_board = {r.get("pr") for r in board_rows.values()} - {None}
     pr_of, under = {}, {}
     for p in state.get("prs") or []:  # newest first
         if p.get("session"):
@@ -288,11 +289,13 @@ def fleet_rows(state, leads):
         title = s.get("name") if kind == "lead" else s.get("task_title") or s.get("name")
         rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid, 80), "status": status, "next": nxt,
                      "pr": pr_of.get(s.get("id")), "reported_at": s.get("last_activity"), "parent": parent,
-                     "repo": s.get("gh_repo") or s.get("project") or "—", "program": program}
+                     # a card under a lead takes the lead's repo, so the lead heads one section
+                     "repo": None if parent else s.get("gh_repo") or s.get("project") or "—", "program": program}
         order.append(rid)
 
     def shown(s):
-        return s.get("phase") != "offline" or s.get("id") in pr_of
+        pr = pr_of.get(s.get("id"))
+        return (s.get("phase") != "offline" or pr) and pr not in on_board
 
     for lead in sessions:
         if lead.get("kind") != "orchestration" or held & {t.get("handle") for t in lead.get("terminals") or []}:
@@ -327,7 +330,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     if fill:
-        extra, extra_order = fleet_rows(state, store["leads"])
+        extra, extra_order = fleet_rows(state, store["leads"], store["rows"])
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 

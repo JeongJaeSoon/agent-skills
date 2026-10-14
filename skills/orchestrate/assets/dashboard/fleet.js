@@ -132,10 +132,11 @@ const ARCHIVE_MS = 3 * 86400e3;
 function navTree(st, programs) {
   const ss = st ? st.sessions || [] : [], now = Date.now(), kids = {};
   const isLead = (s) => s.kind === "orchestrator" || s.kind === "orchestration";
-  ss.forEach((s) => { kids[s.parent] = (kids[s.parent] || 0) + 1; });
+  const shown = (s) => s.phase !== "offline" || s.unread || isLead(s);
+  ss.filter(shown).forEach((s) => { kids[s.parent] = (kids[s.parent] || 0) + 1; });
   const runOf = new Map(ss.filter((s) => s.run && isLead(s)).map((s) => [s.run, s.id]));
-  const progOf = new Map(programs.filter((p) => runOf.has(p.run)).map((p) => [runOf.get(p.run), p]));
   const archived = (p) => p.closed || (!runOf.has(p.run) && now - ms(p.last_event || p.generated_at) > ARCHIVE_MS);
+  const progOf = new Map(programs.filter((p) => runOf.has(p.run) && !archived(p)).map((p) => [runOf.get(p.run), p]));
   const loose = programs.filter((p) => !runOf.has(p.run) && !archived(p)), old = programs.filter(archived);
   const progRow = (p, d) => {
     const s = p.summary || {}, done = s.predicate_total ? `${s.predicate_done ?? "–"}/${s.predicate_total}` : "";
@@ -145,7 +146,7 @@ function navTree(st, programs) {
       <span class="sb-text">${esc(p.slug)}</span><span class="count">${esc(done)}</span></a></li>`;
   };
   const out = [`<li><a class="nav-item" href="#/fleet/overview" ${isFleet() && !F.sessionId ? 'aria-current="page"' : ""} title="Fleet">${icon("fleet")}<span class="sb-text">Fleet</span></a></li>`];
-  const rows = st ? sessionTree(st).filter(([s]) => s.phase !== "offline" || s.unread || isLead(s)) : [];
+  const rows = st ? sessionTree(st).filter(([s]) => shown(s)) : [];
   for (const [s, d] of rows) {
     const n = kids[s.id] || 0, lead = isLead(s), p = progOf.get(s.id);
     out.push(`<li><a class="nav-item tree ${lead ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
