@@ -98,7 +98,8 @@ def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026
 
 
 (state / "prs.json").write_text(json.dumps({"prs": dict([
-    pr("acme/web#40", "MERGED", merged="2026-10-01T03:00:00Z"), pr("acme/web#42", "MERGED", merged="2026-10-13T13:00:00Z"),
+    # A merged PR is probed once a day (fleet TIER_EVERY "done"): its old probe neither ages the headline nor gets ⚠️.
+    pr("acme/web#40", "MERGED", merged="2026-10-01T03:00:00Z", probed="2026-10-12T17:00:00Z"), pr("acme/web#42", "MERGED", merged="2026-10-13T13:00:00Z"),
     pr("acme/web#45", ci="failure", reviewers=["rev-a"], merge_state="CLEAN", decision=None),
     pr("acme/web#50", merge_state="DIRTY", decision=None),
     *(pr(f"acme/web#{n}", reviewers=["rev-a"], base="feature/notify") for n in (51, 52, 53)),

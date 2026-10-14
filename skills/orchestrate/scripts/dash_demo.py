@@ -604,8 +604,10 @@ class FakeFleetWorld:
         p7.update(mergeStateStatus="BEHIND")
         p6 = base(6, "fix: cache key collision", "h6a", 1, "SUCCESS", "acme/tools")
         p6.update(state="MERGED", mergedAt=_ago(now, 1), mergeStateStatus="UNKNOWN")
-        self.prs = {41: p41, 42: p42, 43: p43, 7: p7, 6: p6}
-        self.branches = {"feat/login": 41, "feat/export": 42, "docs/setup": 43}
+        # The billing lead's card has a PR the board does not know: the Brief's --fill row shows it.
+        p44 = base(44, "feat: invoice PDF", "h44a", 0.2, "PENDING")
+        self.prs = {41: p41, 42: p42, 43: p43, 44: p44, 7: p7, 6: p6}
+        self.branches = {"feat/login": 41, "feat/export": 42, "docs/setup": 43, "feat/invoice": 44}
         # wt-docs sits in a permission dialog that hooks/permission.py recorded.
         self.screens = {"term_docs": ["⏺ Checking what the package would ship before the guide links to it.", "─" * 60,
                                       " Bash command", "", "   npm publish --dry-run", "   Show what would be published", "",

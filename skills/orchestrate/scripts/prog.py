@@ -86,8 +86,8 @@ Usage: orch <command> <slug> [options]
                                      the brief skill's periodic report items 1-8 from the board, prs.json, open
                                      decisions and brief-last/<scope>.json (bold = changed since it). --commit
                                      saves this table as the last one (after sending). Staleness: a row past 90
-                                     min shows its age, prs.json probed over 30 min is in the headline, over
-                                     120 min marks the PR ⚠️, a lead whose terminal left the fleet turns 🔴;
+                                     min shows its age, an open PR probed over 30 min ago is in the headline,
+                                     over 120 min marks it ⚠️ (merged and closed PRs do not age), a lead whose terminal left the fleet turns 🔴;
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
                                      "pr_stale_min"}}. Exit 1 when a table is wider than 78 columns. --fill adds
                                      rows from the fleet's sessions (state.json) for each lead the board has no
