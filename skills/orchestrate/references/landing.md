@@ -85,6 +85,7 @@ When PRs must land in order (a dependency chain, consecutive migrations, layers 
 - A lower layer is `waiting` ("lands with its stack from #top") while the top is not blocked. The top is `ready` only when every open layer below it is ready at its own head. A blocked top releases the lower layers to land alone.
 - Main CI runs once, on the top's merge commit. Record `main_green` or `main_red` for that sha only; the lower commits have no run of their own.
 - The layers of one chain count once against the concurrency cap, since they land as one merge. Start the whole chain together, even in the pilot.
+- On a repo whose ruleset dismisses stale approvals, merging a lower layer on its own dismisses the approval of every PR whose branch contains it: the retarget and the changed merge base both count, even with the head unchanged. Where a human approves each layer, map containment first (`git merge-base --is-ancestor`) and merge each chain from its top, which marks the contained layers merged. When a lower layer must merge alone, say in the first review request that the layers above will need approval again, and ask for those re-approvals once, bundled.
 - Stacked PRs refuse `gh pr merge`. `land` uses `merge-async` and polls until every layer is MERGED. If any layer is exclusive, the stack takes the exclusive lane as one unit.
 
 ## Feature integration branches

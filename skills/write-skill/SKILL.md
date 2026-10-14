@@ -54,7 +54,8 @@ gh pr view <n> --json title,body -q '.title+"\n"+.body' | grep -i -E -f ~/.confi
 - The loop in README "테스트", then `bash scripts/pstack-sync-test.sh`.
 - `claude plugin validate <checkout>`.
 - A skill added or its "when" changed: its entry in `docs/skills.md` and the README table. The English and Japanese catalogs keep their `translated-from` line; `python3 scripts/catalog/build.py <out.html>` warns when they lag.
-- A description or trigger phrase changed: `bash scripts/trigger-probe.sh` on the old and the new checkout, one prompt that should fire it and one that should not.
+- A description or trigger phrase changed: `bash scripts/trigger-probe.sh` on the old and the new checkout, one prompt that should fire it and one that should not. The probe loads project settings only, so a personal skill or a `CLAUDE.md` mapping that takes the same phrase never shows there: when one could, also run the phrase through `claude -p "<phrase>" --output-format stream-json --verbose --no-session-persistence --permission-mode dontAsk` in an empty git directory with user settings, and count the `Skill` tool calls. Probes raise the usage counts that decide which descriptions fit the skill listing's budget (about 1% of the context window, counted in display width, so a CJK character costs two; past it, the least-used skills lose their descriptions first): read `claude -p … --debug-file <f>` for "Skill listing over budget" before probing, not after.
+- An agent definition changed (this repo's `agents/` or `~/.claude/agents/`): a subagent started from the session that edited it still runs the old text. Check from a fresh `claude -p` session that delegates to the agent and asks it to quote a line only the new text has.
 
 ## 6. Land (public repo)
 

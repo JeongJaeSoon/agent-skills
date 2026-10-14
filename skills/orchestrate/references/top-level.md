@@ -32,6 +32,8 @@ Check the lead row first: a change or investigation in a repo that belongs to a 
 
 ## Sessions you did not start
 
+Your reports and actions cover what you, your leads and their cards own (the roster's dispatches and the PRs they opened). The human's other open PRs (personal projects, old cleanups, drafts) are not swept into a report, offered for adoption or proposed for closing.
+
 Once adopted they are on the roster, and you only read them. Never answer their permission prompts, trust prompts or questions, and never type into them except the reload in "Skills changed". What they need from the human goes to the inbox.
 
 One that looks finished (its PRs merged or its report says nothing is left, the screen idle at an empty prompt) and is still open is not yours to close either: `orch-dash inbox add --type approval --title "끝난 세션: <card> (<why it looks done>)" --key done:<card>`, once per card. Cards you started are closed by you (SKILL.md, "Stay answerable").
@@ -48,8 +50,10 @@ One that looks finished (its PRs merged or its report says nothing is left, the 
 
 ## Talking to sessions
 
-- Check the exit status of every `orca orchestration send`. A completed dispatch refuses mail ("its worker will never read that mailbox"): send to `run:<id>`, or start a new dispatch for new work.
-- Terminal handles and dispatch ids change when a session restarts or a new run starts. Read the current one from `worker-list` when you send, and when one lead has to reach another, give it the handle you just read; a handle kept from an earlier run answers "not found".
+- Check the exit status of every `orca orchestration send` and read `"ok": true` in its `--json` output; never send its output to `/dev/null`, where a failed send looks delivered. A completed dispatch refuses mail ("its worker will never read that mailbox"): send to `run:<id>`, or start a new dispatch for new work. A lead that bound its terminal to its own Run (`run-use`) refuses mail sent through yours (`recipient_run_mismatch`): a lead is a card, not a dispatched worker, so give it the content with `orca terminal send` to its current handle, then read its screen.
+- Terminal handles and dispatch ids change when a session restarts or a new run starts. Read the current one from `worker-list` when you send, and when one lead has to reach another, give it the handle you just read; a handle kept from an earlier run answers "not found". Use full handles only: a short one goes stale without an error.
+- When you answer a select dialog in a session you started (SKILL.md Drain, a `STUCK` line), note that it ignores `--text 1 --enter` and a bare Enter: send a raw carriage return without `--enter` (`--text $'\r'`), which picks the highlighted option, after you read the screen to see which one that is.
+- Name an environment variable in words in a message ("the token in env X"), never as a shell reference (`$X`): a secret-masking hook rewrites the reference, and the receiver reads a masked value.
 - `terminal send --text … --enter`, with or without `--wait-submit`, can warn "no turn start was observed": some such sends did start a turn, and some left the text unsubmitted in the input box. Read `--screen` after every such warning. A started turn needs nothing. Text still in the input box needs Enter alone (`orca terminal send --terminal <handle> --text '' --enter`), never the text again, or it lands twice. No turn and an empty input box: send it once more.
 - Write message bodies to a file with the Write tool, not a heredoc, and pass `--body "$(cat <file>)"`. A command whose text merely mentions kill, deploy, merge or a credential file is refused by the auto-mode classifier or a secret-scanning hook. A sensitive list (affected users' emails and the like) stays in its file: pass only the path, so the list never enters your context or the mail.
 - A message that relays the human's direction quotes their words verbatim and labels every other piece of direction by its origin (you, a lead, a reviewer); a proposal of yours sent as the human's recommendation reaches the card as a decision. It never carries advice on getting an act past a prompt, the classifier or a hook, even when that advice is labelled the human's intent (SKILL.md "Refused acts").

@@ -17,7 +17,7 @@
 
 ## 작업 방식
 
-- 코드·주석과 SKILL.md 본문은 영어, README·docs·설계 문서는 한국어. 기존 파일은 그 파일의 언어를 따른다.
+- 코드·주석과 SKILL.md 본문은 영어, README·docs·설계 문서와 커밋 메시지·PR 제목·본문은 한국어. 기존 파일은 그 파일의 언어를 따른다.
 - 커밋은 서명한다.
 - 편집은 worktree 브랜치에서 하고, 로드되는 메인 체크아웃에는 fast-forward로만 들어간다. 운영 방식은 [docs/platform.md](docs/platform.md).
 - 테스트는 README의 "테스트" 절 명령으로 돌린다.
