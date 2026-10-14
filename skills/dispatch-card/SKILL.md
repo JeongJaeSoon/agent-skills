@@ -125,7 +125,7 @@ orca worktree create \
   --prompt "/goal <goal>. 브리프: <note path> + 3-line summary + the CLOSE line, or /goal + the inline brief" \
   --comment "<note path>" \
   --json
-# log the prompt as sent, for the dashboard's 보낸 지시 page (orchestrate references/dashboard.md "Sent instructions");
+# log the prompt as sent, for the dashboard's Sent page (orchestrate references/dashboard.md "Sent instructions");
 # on stdin, not --text: a quoted prompt breaks and shows in ps
 orch sent add --to "<target>-<topic>" --kind card --channel "orca worktree create --prompt" --repo <owner/repo> - <<'EOF'
 <the --prompt text>

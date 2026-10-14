@@ -80,9 +80,9 @@ function rel(iso, now = Date.now()) {
   let s = Math.round((now - t) / 1000);
   const future = s < 0;
   s = Math.abs(s);
-  if (s < 3) return "방금";
-  const txt = s < 60 ? `${s}초` : s < 3600 ? `${Math.floor(s / 60)}분` : s < 86400 * 2 ? `${Math.floor(s / 3600)}시간` : `${Math.floor(s / 86400)}일`;
-  return future ? `${txt} 후` : `${txt} 전`;
+  if (s < 3) return "just now";
+  const txt = s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 * 2 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
+  return future ? `in ${txt}` : `${txt} ago`;
 }
 const relSpan = (iso) => `<span data-rel="${esc(iso || "")}" title="${esc(iso ? new Date(iso).toLocaleString() : "")}">${rel(iso)}</span>`;
 const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -674,7 +674,7 @@ function landOrderCard(st) {
   const lanes = Object.entries(st.landing || {}).filter(([, l]) => l.holder);
   if (!order.length && !lanes.length) return "";  // the card only matters while something lands; the grid refills the row
   const holders = lanes.length ? lanes.map(([base, l]) => `<div class="holder">${icon("lock")}<span class="mono">#${esc(l.holder.pr)}</span>
-      <span class="mono dim">${esc(l.holder.ticket || "")}</span><span class="grow"></span><span class="muted">${esc(base)} · 독점 레인 ${relSpan(l.holder.since)}</span></div>`).join("")
+      <span class="mono dim">${esc(l.holder.ticket || "")}</span><span class="grow"></span><span class="muted">${esc(base)} · exclusive lane ${relSpan(l.holder.since)}</span></div>`).join("")
     : `<div class="holder idle">${icon("lock")}<span>exclusive lane free</span></div>`;
   const prUrl = (n) => (st.prs || []).find((p) => p.number === n)?.url;
   const rows = order.map((e, i) => `<li>
@@ -994,8 +994,8 @@ async function pollHealth() {
     const bar = $("#stale-code");
     bar.hidden = !h.stale;
     if (h.stale) {
-      bar.innerHTML = `이 서버는 시작한 뒤 바뀐 코드를 아직 싣지 않았습니다(실행 중 <code>${esc(h.version)}</code>, 디스크 <code>${esc(h.disk_version)}</code>).
-        다시 띄우기: <code>python3 ${esc(h.script)} ensure --port ${esc(String(h.port))}</code>`;
+      bar.innerHTML = `This server has not loaded code changed since it started (running <code>${esc(h.version)}</code>, on disk <code>${esc(h.disk_version)}</code>).
+        Restart: <code>python3 ${esc(h.script)} ensure --port ${esc(String(h.port))}</code>`;
     }
   } catch (e) {}
 }

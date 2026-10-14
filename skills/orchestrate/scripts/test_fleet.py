@@ -101,8 +101,8 @@ fleet.write_atomic(pending_path, json.dumps({"since": "t1", "failed": {
     "term_gone": {"reason": "x"}}}))
 st = f.tick(force=True)
 assert sorted((i["session"], i["title"], i["detail"]) for i in items(st, "reload_pending")) == [
-    ("wt-export", "reload 못 보냄: ◑ ACME-102", "title shows the agent is busy"),
-    ("wt-login", "reload 못 보냄: ✳ ACME-101", "composer holds a draft")], items(st, "reload_pending")
+    ("wt-export", "Reload not sent: ◑ ACME-102", "title shows the agent is busy"),
+    ("wt-login", "Reload not sent: ✳ ACME-101", "composer holds a draft")], items(st, "reload_pending")
 badges_agree(st)
 
 
@@ -487,7 +487,8 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     for raw in ("<script", "<img", "<i>", "<b>coord"):
         assert raw not in got["autos"] + got["holds"], raw
     assert got["troubled"] == ["late", "broken"], got["troubled"]
-    assert "3시간마다 :17" in got["autos"] and "매일 9:00" in got["autos"] and "20분마다" in got["autos"], got["autos"]
+    assert "every 3h at :17" in got["autos"] and "daily 9:00" in got["autos"] and "every 20m" in got["autos"], got["autos"]
+    assert "past its run time" in got["autos"] and "toned tone-bad" in got["autos"], "an overdue run is flagged and its next-run cell toned"
     assert got["autos"].count('class="run tone-good"') == 2 and 'class="run "' in got["autos"], "a completed and a skipped block"
     assert got["holds"].index("browser") < got["holds"].index("acme/app@main") and "landing lane" in got["holds"], got["holds"]
 
@@ -506,9 +507,24 @@ process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTrou
     for raw in ("<script", "<img", "<i>", "<b>wait"):
         assert raw not in got["html"], raw
     assert got["troubled"] == ["b1", "b2"], got["troubled"]
-    assert "exit 1" in got["html"] and "종료 기록 없음" in got["html"] and ">Monitor<" in got["html"] and 'href="#/fleet/session/wt-coord"' in got["html"], got["html"]
-    assert "모니터가 없다" in got["empty"] and "일부 누락" not in got["empty"], got["empty"]
-    assert "일부 누락" in got["warned"] and "&lt;b&gt;lead" in got["warned"], got["warned"]
+    assert "exit 1" in got["html"] and "no end record" in got["html"] and ">Monitor<" in got["html"] and 'href="#/fleet/session/wt-coord"' in got["html"], got["html"]
+    assert "No monitors" in got["empty"] and "partial" not in got["empty"], got["empty"]
+    assert "partial" in got["warned"] and "&lt;b&gt;lead" in got["warned"], got["warned"]
+
+    # The header always shows the automations chip: neutral with the count, ▲ when one is troubled; monitors only when ▲.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const el = {{}}, $ = (sel) => (el[sel] = el[sel] || {{}}), S = {{}}, old = new Date(Date.now() - 3600e3).toISOString();
+const ok = {{id: "a1", name: "ok", enabled: true, recent: [{{status: "completed", at: old}}]}}, out = {{}};
+for (const [k, st] of Object.entries({{calm: {{sessions: [], automations: [ok, ok]}}, none: {{sessions: []}},
+    bad: {{sessions: [], automations: [ok, {{...ok, recent: [{{status: "failed", at: old}}]}}], monitors: [{{status: "lost"}}, {{status: "running"}}]}}}})) {{
+  S.state = st; fleetHeader(); out[k] = $("#top-right").innerHTML;
+}}
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert "Automations 2" in got["calm"] and "tone-bad" not in got["calm"] and "Monitors" not in got["calm"], got["calm"]
+    assert "Automations 0" in got["none"], got["none"]
+    assert "Automations ▲1" in got["bad"] and "Monitors ▲1" in got["bad"], got["bad"]
 
     # Sent instructions render escaped; a long text folds, a short one shows whole; source and search filter the rows.
     long_text = "<script>x</script>\n" + "\n".join(f"step {i}" for i in range(10))
@@ -529,11 +545,11 @@ process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     for raw in ("<script", "<img", "<i>", "<b>card", "<b>ps"):
         assert raw not in got["all"] + got["empty"], raw
-    assert got["all"].count("<details") == 1 and "short &lt;img" in got["all"] and "(" + str(len(long_text)) + "자)" in got["all"], got["all"]
-    assert ">트랜스크립트<" in got["all"].split("</tr>")[0], "a logged send also seen in a transcript names both sources"
+    assert got["all"].count("<details") == 1 and "short &lt;img" in got["all"] and "(" + str(len(long_text)) + " chars)" in got["all"], got["all"]
+    assert ">transcript<" in got["all"].split("</tr>")[0], "a logged send also seen in a transcript names both sources"
     assert "card" in got["tx"] and "general-purpose" in got["tx"] and "wt-docs" not in got["tx"], got["tx"]
     assert "wt-docs" in got["q"] and "general-purpose" not in got["q"], got["q"]
-    assert "보낸 지시가 없다" in got["empty"] and "수집 실패" in got["empty"], got["empty"]
+    assert "Nothing sent" in got["empty"] and "collection failed" in got["empty"], got["empty"]
 
     # Avatars: a team has none to ask for, and one that failed is not asked for again on the next redraw.
     js = f"""{helpers}
@@ -969,6 +985,29 @@ with open(transcript, "a") as fh:
              '<task-notification>\n<task-id>loop</task-id>\n<status>failed</status>\n<summary>Monitor "x" script failed (exit 127)</summary>\n</task-notification>'}}) + "\n")
 got = {m["id"]: (m["status"], m["exit"]) for m in fleet.fetch_monitors(procs, now=now)}
 assert got["loop"] == ("dead", 127), got
+# A notification that arrives mid-turn is written only to the queue and as an attachment, never as a user turn. A clean
+# exit or a deliberate stop read from either is not trouble, a failure still is, and the first record dates the end.
+lines.clear()
+
+
+def queued(tid, m, status, summary, via=("enqueue", "remove", "attachment")):
+    body = f"<task-notification>\n<task-id>{tid}</task-id>\n<status>{status}</status>\n<summary>{summary}</summary>\n</task-notification>"
+    for i, v in enumerate(via):
+        lines.append({"type": "attachment", "timestamp": at(m + i), "attachment": {"type": "queued_command", "prompt": body}} if v == "attachment"
+                     else {"type": "queue-operation", "operation": v, "timestamp": at(m + i), "content": body})
+
+
+started("img", "make image", 21)
+queued("img", 22, "completed", 'Background command "retry on exit 3" completed (exit code 0)')
+started("stop", "orch wait tax", 21)
+queued("stop", 22, "killed", 'Background command "x" was stopped', via=("enqueue",))
+started("docs", "make docs", 21)
+queued("docs", 22, "failed", 'Background command "x" failed with exit code 2', via=("attachment",))
+with open(transcript, "a") as fh:
+    fh.write("".join(json.dumps(l) + "\n" for l in lines))
+mons = {m["id"]: m for m in fleet.fetch_monitors(procs, now=now)}
+assert "img" not in mons and "stop" not in mons and mons["tail"]["status"] == "lost", mons
+assert (mons["docs"]["status"], mons["docs"]["exit"], mons["docs"]["ended_at"]) == ("dead", 2, at(22)), mons["docs"]
 # Hours later the failures and the lost one drop off; with no live Claude process there is nothing to show.
 assert [m["id"] for m in fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))] == ["wait"]
 assert fleet.fetch_monitors({}, now=now) == []
