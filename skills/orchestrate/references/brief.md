@@ -62,6 +62,11 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             by every session using the same token. On a rate-limit error, retry nothing: wait
             until the reset time (the error's `retry-after`, else `gh api rate_limit`).
             Never merge any other way. (human-gate: stop at READY and report instead.)
+            A base that needs a merge method `land` lacks is a blocked land: report it and stop.
+            The one exception is a plain merge the human approved, under SKILL.md "Merge policy":
+            a verdict at the exact head, a new one for every later commit, zero unresolved threads
+            read right before `gh pr merge --match-head-commit <head>`, then
+            `orch landed <slug> --pr <N>`.
 FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each finding in the
             worker_done body with a proposed class (NOW: a predicate item or a reproduced
             defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
@@ -200,6 +205,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.
+- Direction in CONTEXT is labelled by origin. The owner's words are quoted verbatim as the owner's; a proposal of yours, a lead's or a reviewer's is labelled as such, never as the owner's recommendation. No advice on getting an act past a prompt, the classifier or a hook, even when the layer above calls it the owner's intent ("Refused acts").
 - **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal or card you mean to give the next task needs a `KEEP` line naming that task; without one, a landed, clean card is gone by the time you read its `worker_done`.
 - Never resume-chain a brief. A retry gets a fresh brief with the consolidated scope.
 - A verifier unit on a high-blast-radius PR runs on another model family (`worker-start --agent codex`). It reports PASS, PASS+NOTES or FAIL, with what it drove.
