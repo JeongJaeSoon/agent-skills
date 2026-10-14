@@ -491,6 +491,25 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     assert got["autos"].count('class="run tone-good"') == 2 and 'class="run "' in got["autos"], "a completed and a skipped block"
     assert got["holds"].index("browser") < got["holds"].index("acme/app@main") and "landing lane" in got["holds"], got["holds"]
 
+    # Monitors render escaped; every one not running is flagged and counted, a dead one with its exit code.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const old = new Date(Date.now() - 3600e3).toISOString();
+const st = {{sessions: [{{id: "wt-coord", name: "coord", phase: "idle"}}], sources: {{monitors: {{ok: true}}}},
+  monitors: [{{id: "b1", kind: "bash", status: "dead", exit: 1, command: "<script>x</script>", description: "<b>wait</b>", session: "wt-coord",
+               session_name: "lead:<i>x</i>", started_at: old, last_at: old, summary: "<img src=x>"}},
+             {{id: "b2", kind: "bash", status: "lost", command: "tail -f log", description: "tail", started_at: old, last_at: old}},
+             {{id: "m1", kind: "monitor", status: "running", command: "gh pr checks", description: "ci", started_at: old, last_at: old, event: "pass"}}]}};
+process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTroubled(st).map((m) => m.id), empty: fleetMonitors({{}}),
+  warned: fleetMonitors({{sources: {{monitors: {{ok: true, warning: "<b>lead</b>: transcript not found"}}}}}})}}));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    for raw in ("<script", "<img", "<i>", "<b>wait"):
+        assert raw not in got["html"], raw
+    assert got["troubled"] == ["b1", "b2"], got["troubled"]
+    assert "exit 1" in got["html"] and "종료 기록 없음" in got["html"] and ">Monitor<" in got["html"] and 'href="#/fleet/session/wt-coord"' in got["html"], got["html"]
+    assert "모니터가 없다" in got["empty"] and "일부 누락" not in got["empty"], got["empty"]
+    assert "일부 누락" in got["warned"] and "&lt;b&gt;lead" in got["warned"], got["warned"]
+
     # Avatars: a team has none to ask for, and one that failed is not asked for again on the next redraw.
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
@@ -861,6 +880,128 @@ finally:
 assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
 assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
 assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
+
+# Monitors: the demo world's watches reach state.json on the session whose worktree they run in.
+st = f.tick(force=True)
+assert [(m["id"], m["session"]) for m in st["monitors"]][:2] == [("b3wait", "wt-lead"), ("b5poll", "wt-export")], st["monitors"]
+assert st["sources"]["monitors"]["ok"], st["sources"]
+
+# fetch_monitors on a fake ~/.claude: a session's transcript says what it started and how it ended, ps says what runs.
+home = root / "claude-home"
+os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+t0 = now - dt.timedelta(hours=1)
+at = lambda m: fleet.iso(t0 + dt.timedelta(minutes=m))
+lstart = lambda m: (t0 + dt.timedelta(minutes=m)).strftime("%a %b %d %H:%M:%S %Y")
+for pid, sid in ((100, "s-live"), (101, "s-live"), (200, "s-gone")):
+    fleet.write_atomic(home / "sessions" / f"{pid}.json", json.dumps({"pid": pid, "sessionId": sid, "cwd": "/work/wt-lead",
+                                                                      "procStart": lstart(0), "name": "lead:billing"}))
+lines = []
+
+
+def started(tid, cmd, m, name="Bash", desc=None, **result):
+    use = f"toolu_{tid}"
+    inp = {"command": cmd, "description": desc or tid, **({"run_in_background": True} if name == "Bash" else {})}
+    lines.append({"type": "assistant", "timestamp": at(m), "message": {"content": [{"type": "tool_use", "id": use, "name": name, "input": inp}]}})
+    lines.append({"type": "user", "timestamp": at(m), "toolUseResult": {("taskId" if name == "Monitor" else "backgroundTaskId"): tid, **result},
+                  "message": {"content": [{"type": "tool_result", "tool_use_id": use, "content": f"Command running in background with ID: {tid}."}]}})
+
+
+def notice(tid, m, status=None, summary="", event=None):
+    body = f"<task-notification>\n<task-id>{tid}</task-id>\n" + (f"<status>{status}</status>\n" if status else "") + \
+           f"<summary>{summary}</summary>\n" + (f"<event>{event}</event>\n" if event else "") + "</task-notification>"
+    lines.append({"type": "user", "timestamp": at(m), "message": {"content": body}})
+
+
+started("old", "orch wait billing", 1)
+notice("old", 2, "failed", 'Background command "x" failed with exit code 1')  # re-armed below: not shown
+started("wait", "orch wait billing", 3)  # runs under the second terminal that resumed the session
+started("other", f"orch wait tax GH_TOKEN={secret}", 4, desc="Background inbox wait for tax")
+notice("other", 5, "completed", 'Background command "x" completed (exit code 1)')
+started("ok", "make build", 6)
+notice("ok", 7, "completed", 'Background command "x" completed (exit code 0)')
+started("ci", "gh pr checks 42", 8, name="Monitor", timeoutMs=300000, persistent=False)  # expired 50 min ago
+notice("ci", 9, event="build pass")
+started("tail", "tail -f build.log", 10)  # nothing runs it and nothing ended it
+started("loop", "while true; do orca orchestration check --wait; done", 11, name="Monitor", persistent=True)
+notice("loop", 12, event="mail from wt-tax")
+lines.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu_ag", "name": "Agent", "input": {"prompt": "x"}}]}})
+transcript = home / "projects" / "-work-wt-lead" / "s-live.jsonl"
+fleet.write_atomic(transcript, "".join(json.dumps(l) + "\n" for l in lines))
+shell = "/bin/zsh -c source snap.sh && eval '{}' < /dev/null"
+procs = {100: (1, lstart(0), "claude"), 101: (1, lstart(0), "claude --resume s-live"),
+         300: (101, lstart(3), shell.format("orch wait billing")),
+         301: (300, lstart(3), shell.format("orch wait billing")),  # a $(…) subshell: not a second watch
+         302: (100, lstart(11), shell.format("while true; do orca orchestration check --wait; done"))}
+mons = fleet.fetch_monitors(procs, now=now)
+got = {m["id"]: (m["status"], m["exit"]) for m in mons}
+assert got == {"other": ("dead", 1), "tail": ("lost", None), "loop": ("running", None), "wait": ("running", None)}, got
+assert [m["id"] for m in mons][:2] == ["tail", "other"], "troubled first, newest first"
+assert secret not in json.dumps(mons) and all(m["session_name"] == "lead:billing" for m in mons), mons
+assert next(m for m in mons if m["id"] == "loop")["event"] == "mail from wt-tax"
+# Read on from where the last call stopped: the loop's end arrives, and it is dead.
+with open(transcript, "a") as fh:
+    fh.write(json.dumps({"type": "user", "timestamp": at(20), "message": {"content":
+             '<task-notification>\n<task-id>loop</task-id>\n<status>failed</status>\n<summary>Monitor "x" script failed (exit 127)</summary>\n</task-notification>'}}) + "\n")
+got = {m["id"]: (m["status"], m["exit"]) for m in fleet.fetch_monitors(procs, now=now)}
+assert got["loop"] == ("dead", 127), got
+# Hours later the failures and the lost one drop off; with no live Claude process there is nothing to show.
+assert [m["id"] for m in fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))] == ["wait"]
+assert fleet.fetch_monitors({}, now=now) == []
+assert fleet.MONITOR_SCAN == {}, "a transcript of an ended session is not kept"
+# A shell is this task's only when it runs exactly its command and started with it: a longer command that contains
+# it, a foreground run of it, or a copy started long after is not.
+procs = {100: (1, lstart(0), "claude"), 101: (1, lstart(0), "claude --resume s-live"),
+         300: (101, lstart(3), shell.format("orch wait billing --verbose")),
+         303: (101, lstart(30), shell.format("tail -f build.log")),
+         302: (100, lstart(11), shell.format("while true; do orca orchestration check --wait; done"))}
+got = {m["id"]: m["status"] for m in fleet.fetch_monitors(procs, now=now)}
+assert got["wait"] == "lost" and got["tail"] == "lost", got
+# A broken timestamp, or content that is not a block, does not break the source or drop the task: it is lost, unaged.
+with open(transcript, "a") as fh:
+    fh.write(json.dumps({"type": "assistant", "timestamp": "yesterday", "message": {"content": ["text", None, {
+        "type": "tool_use", "id": "toolu_odd", "name": "Bash", "input": {"command": "sleep 99", "run_in_background": True}}]}}) + "\n")
+    fh.write(json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00", "toolUseResult": {"backgroundTaskId": "odd"},
+                         "message": {"content": [7, {"type": "tool_result", "tool_use_id": "toolu_odd", "content": None}]}}) + "\n")
+    fh.write(json.dumps({"type": "user", "message": "not a dict"}) + "\n" + json.dumps([1, 2]) + "\n")
+    fh.write('{"type": "user", "message": {"content": "<task-notifi')  # still being written
+mons = fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))
+assert {m["id"]: m["status"] for m in mons}.get("odd") == "lost", mons
+assert fleet.MONITOR_SCAN[str(transcript)]["offset"] == transcript.stat().st_size - len('{"type": "user", "message": {"content": "<task-notifi'), \
+    "the partial line is read next time"
+# Content no guard foresaw fails the monitors source alone, as a SourceError.
+real, fleet.scan_transcript = fleet.scan_transcript, lambda path: 1 / 0
+try:
+    fleet.fetch_monitors(procs, now=now)
+    raise AssertionError("expected SourceError")
+except fleet.SourceError as e:
+    assert "ZeroDivisionError" in str(e), e
+fleet.scan_transcript = real
+# A session whose transcript is not where its cwd says is looked up by id, and warned about only when it is nowhere.
+long_dir = home / "projects" / "-work-shortened-1a2b3c"
+long_dir.mkdir(parents=True)
+transcript.rename(long_dir / "s-live.jsonl")
+warn = []
+assert "odd" in {m["id"] for m in fleet.fetch_monitors(procs, now=now, warn=warn)} and warn == [], warn
+(long_dir / "s-live.jsonl").unlink()
+assert fleet.fetch_monitors(procs, now=now, warn=warn) == [] and warn == ["lead:billing: transcript not found"], warn
+# ps prints its start column in the C locale, the one Claude Code writes procStart in, whatever the user's locale.
+seen = {}
+real_run = fleet.subprocess.run
+fleet.subprocess.run = lambda cmd, **kw: seen.update(kw["env"]) or subprocess.CompletedProcess(cmd, 0, stdout=f"  42 1 {lstart(0)} claude\n")
+try:
+    assert fleet.ps_table() == {42: (1, lstart(0), "claude")}
+finally:
+    fleet.subprocess.run = real_run
+assert seen["LC_ALL"] == "C" and seen["TZ"] == "UTC", seen
+del os.environ["CLAUDE_CONFIG_DIR"]
+
+# Commands are shown, so the passwords they carry are masked: in a URL, after a password flag, under a header name.
+pw = "hunter2pw"
+for cmd in (f"psql postgres://app:{pw}@db.example.test/x", f"mysql -uroot -p{pw} db", f"mysql --password {pw}",
+            f"x --password={pw}", f'curl -H "X-Auth-Token-Header: {pw}" https://example.test'):
+    assert pw not in fleet.mask(cmd) and "[masked]" in fleet.mask(cmd), fleet.mask(cmd)
+for cmd in ("mkdir -p a", "mkdir -pv a", "git log -p", "docker run -p 8080:80 x", "https://example.test/a@b", "git@example.test:a/b"):
+    assert fleet.mask(cmd) == cmd, cmd
 
 # Shared resources: a hold by a terminal handle sits on that terminal's session.
 import holds  # noqa: E402

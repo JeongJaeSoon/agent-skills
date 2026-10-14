@@ -137,9 +137,12 @@ def digest(*parts):
 SECRET_RE = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{10,}"
     r"|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}")
-ASSIGN_RE = re.compile(r"\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|CUSTOM_HEADERS)[A-Z0-9_]*)"
+ASSIGN_RE = re.compile(r"\b([A-Z0-9_-]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|CUSTOM_HEADERS)[A-Z0-9_-]*)"
                        r"(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)", re.I)
 AUTH_RE = re.compile(r"\b(Authorization|Proxy-Authorization|X-Api-Key|Bearer|Basic)(\s*[:=]?\s+)([^\s\"']+)", re.I)
+URL_PW_RE = re.compile(r"(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]*:)([^\s/@]+)(@)")
+# --password x, and a password glued to -p (mysql -pX); -pv and the like are flags, not passwords.
+FLAG_PW_RE = re.compile(r"((?<!\S)--pass(?:word|wd)?(?:\s+|=)|(?<!\S)-p(?![A-Za-z]{1,2}(?:\s|$)))([^\s\"']+)", re.I)
 
 
 def mask(text, limit=None):
@@ -149,6 +152,8 @@ def mask(text, limit=None):
     s = SECRET_RE.sub("[masked]", str(text))
     s = ASSIGN_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}[masked]", s)
     s = AUTH_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}[masked]", s)
+    s = URL_PW_RE.sub(lambda m: f"{m.group(1)}[masked]{m.group(3)}", s)
+    s = FLAG_PW_RE.sub(lambda m: f"{m.group(1)}[masked]", s)
     if limit and len(s) > limit:
         s = s[:limit - 1] + "…"
     return s
@@ -231,6 +236,189 @@ def fetch_automations():
                                 "summary": first_line((r.get("outputSnapshot") or {}).get("content") or r.get("error"), 120)}
                                for r in runs]})
     return out
+
+
+MONITOR_KEEP = 6 * 3600  # an ended or lost monitor stays on the 모니터 page this long, unless its command ran again
+MONITOR_SCAN = {}  # transcript path -> {"offset", "pending", "tasks"}: each tick reads only what was appended
+NOTICE_RE = re.compile(r"<(task-id|status|summary|output-file|event)>(.*?)</\1>", re.S)
+EXIT_RE = re.compile(r"\(exit(?: code)? (-?\d+)\)")
+EVAL_RE = re.compile(r"\beval '(.*)' < /dev/null", re.S)  # how Claude Code's shell wraps the command it runs
+BORN_SLACK = dt.timedelta(seconds=15)  # a task's shell starts this close to the result that reported it
+
+
+def claude_home():
+    return pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
+
+
+def ps_table():
+    """pid -> (ppid, start, command). UTC, the clock Claude Code writes a session's procStart in."""
+    try:
+        out = subprocess.run(["ps", "-axwwo", "pid=,ppid=,lstart=,command="], capture_output=True, text=True, timeout=10,
+                             env={**os.environ, "TZ": "UTC", "LC_ALL": "C"}).stdout
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise SourceError(f"ps: {e}")
+    procs = {}
+    for line in out.splitlines():
+        f = line.split(None, 7)
+        if len(f) == 8 and f[0].isdigit():
+            procs[int(f[0])] = (int(f[1]), " ".join(f[2:7]), f[7])
+    return procs
+
+
+def ps_time(lstart):
+    try:
+        return dt.datetime.strptime(lstart, "%a %b %d %H:%M:%S %Y").replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return None
+
+
+def scan_transcript(path):
+    """The transcript's background tasks so far: a Bash run with run_in_background or a Monitor, its start, and the
+    task-notification that ended it or carried its last event. Agent and workflow tasks are left out."""
+    c = MONITOR_SCAN.setdefault(str(path), {"offset": 0, "pending": {}, "tasks": {}})
+    try:
+        with open(path, "rb") as f:
+            if os.fstat(f.fileno()).st_size < c["offset"]:
+                c.update(offset=0, pending={}, tasks={})
+            f.seek(c["offset"])
+            for raw in iter(f.readline, b""):
+                if not raw.endswith(b"\n"):
+                    break  # a line still being written is read next time
+                scan_line(c, raw)
+                c["offset"] = f.tell()
+    except OSError:
+        pass
+    return c["tasks"]
+
+
+def scan_line(c, raw):
+    if not any(k in raw for k in (b"run_in_background", b'"Monitor"', b"backgroundTaskId", b'"taskId"',
+                                  b"<task-notification>")):
+        return
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return
+    if not isinstance(d, dict) or not isinstance(d.get("message"), dict):
+        return
+    content = d["message"].get("content")
+    blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+    if d.get("type") == "assistant":
+        for b in blocks:
+            inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+            if b.get("type") == "tool_use" and (b.get("name") == "Monitor" or b.get("name") == "Bash" and inp.get("run_in_background")):
+                c["pending"][b.get("id")] = {"kind": "monitor" if b["name"] == "Monitor" else "bash",
+                                             "command": str(inp.get("command") or ""), "description": inp.get("description")}
+    elif d.get("type") == "user" and blocks:
+        r = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
+        tid = r.get("backgroundTaskId") or r.get("taskId")
+        result = next((b for b in blocks if b.get("type") == "tool_result"), {})
+        use = c["pending"].pop(result.get("tool_use_id"), None)
+        if tid and use:
+            m = re.search(r"Output is being written to: (\S+?)\.?(?:\s|$)", str(result.get("content") or ""))
+            c["tasks"][tid] = {**use, "id": tid, "started_at": stamp(d), "output": m and m.group(1),
+                               "timeout_ms": None if r.get("persistent") else r.get("timeoutMs")}
+    elif d.get("type") == "user" and isinstance(content, str) and content.startswith("<task-notification>"):
+        n = dict(NOTICE_RE.findall(content))
+        t = c["tasks"].get(n.get("task-id"))
+        if not t:
+            return
+        t["output"] = t.get("output") or n.get("output-file")
+        if n.get("event"):
+            t["event_at"], t["event"] = stamp(d), n["event"]
+        if n.get("status") and n["status"] != "running":
+            m = EXIT_RE.search(n.get("summary") or "")
+            t.update(ended_at=stamp(d), end_status=n["status"], exit=int(m.group(1)) if m else None,
+                     summary=n.get("summary"))
+
+
+def stamp(d):
+    t = parse(d.get("timestamp")) if d.get("timestamp") else None
+    return iso(t.astimezone(dt.timezone.utc)) if t and t.tzinfo else None
+
+
+def squash(cmd):
+    """A command as both a transcript and ps print it: quotes, backslashes and newlines become spaces."""
+    return " ".join(re.sub(r"\\012|[\\'\"]", " ", cmd or "").split())
+
+
+def fetch_monitors(procs=None, now=None, warn=None):
+    """Background watches the live Claude Code sessions started: every Bash run in the background and every Monitor,
+    from each session's transcript, checked against the process table. A task with no end record is running only if a
+    shell its session started within BORN_SLACK of it runs exactly its command; otherwise it is lost (the UI, a
+    Monitor's expiry or a teardown stopped it without a record, or it died with its shell). Ended tasks are kept
+    MONITOR_KEEP when they failed or were lost, and dropped once the same command runs again in that session.
+    warn: a list that gets one line per live session whose transcript was not found."""
+    try:
+        return collect_monitors(ps_table() if procs is None else procs, now or utcnow(), [] if warn is None else warn)
+    except SourceError:
+        raise
+    except Exception as e:  # a transcript shape not foreseen fails this source only, not the rest of the tick
+        raise SourceError(f"monitors: {type(e).__name__}: {e}")
+
+
+def collect_monitors(procs, now, warn):
+    home, sessions = claude_home(), {}
+    for p in sorted((home / "sessions").glob("*.json")):
+        s = read_json(p, {}) or {}
+        proc = procs.get(s.get("pid"))
+        if s.get("sessionId") and s.get("cwd") and proc and proc[1] == " ".join(str(s.get("procStart")).split()):
+            # Resuming a session in a second terminal leaves two live processes writing one transcript.
+            sessions.setdefault(s["sessionId"], {**s, "pids": []})["pids"].append(s["pid"])
+    out, scanned = [], set()
+    for sid, s in sessions.items():
+        path = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", s["cwd"]) / f"{sid}.jsonl"
+        if not path.exists():  # a long cwd gets a shortened directory name
+            path = next(iter(sorted((home / "projects").glob(f"*/{sid}.jsonl"))), path)
+        if not path.exists():
+            warn.append(f"{s.get('name') or sid}: transcript not found")
+            continue
+        scanned.add(str(path))
+        tasks = scan_transcript(path)
+        # Only the session's own shells: a $(…) inside one forks a shell with the same command line.
+        free = {}
+        for pid, (ppid, start, cmd) in procs.items():
+            m = ppid in s["pids"] and EVAL_RE.search(cmd)
+            if m:
+                free[pid] = (squash(m.group(1)), ps_time(start))
+        rows = sorted(tasks.values(), key=lambda t: t.get("started_at") or "", reverse=True)
+        seen = set()
+        for t in rows:
+            key, began = squash(t["command"]), parse(t.get("started_at"))
+            again = key in seen
+            seen.add(key)
+            if t.get("ended_at"):
+                ok = t["end_status"] == "completed" and not t.get("exit")
+                status, at = ("ended" if ok else "dead"), t["ended_at"]
+            else:
+                # A foreground run of the same command, or a later copy, is not this task's shell.
+                pid = next((pid for pid, (cmd, born) in free.items() if key and cmd == key
+                            and began and born and abs(born - began) <= BORN_SLACK), None)
+                if pid:
+                    del free[pid]
+                status, at = ("running", None) if pid else ("lost", None)
+            last = max(filter(None, [t.get("event_at"), at, mtime_iso(t.get("output"))]), default=t.get("started_at"))
+            if status == "lost" and t.get("timeout_ms") and began and now - began > dt.timedelta(milliseconds=t["timeout_ms"]):
+                status = "ended"  # a Monitor that reached the expiry it was given
+            # One with no time at all stays: its age is unknown, not old.
+            if status == "ended" or status != "running" and (again or last and (now - parse(last)).total_seconds() > MONITOR_KEEP):
+                continue
+            out.append({"id": t["id"], "kind": t["kind"], "status": status, "exit": t.get("exit"),
+                        "command": mask(t["command"], 300), "description": mask(t.get("description"), 120),
+                        "claude_session": sid, "session_name": mask(s.get("name"), 80), "cwd": s["cwd"],
+                        "started_at": t.get("started_at"), "last_at": last, "ended_at": at,
+                        "summary": first_line(t.get("summary"), 160), "event": first_line(t.get("event"), 160)})
+    for k in set(MONITOR_SCAN) - scanned:
+        del MONITOR_SCAN[k]  # its session ended
+    out.sort(key=lambda m: m["last_at"] or m["started_at"] or "", reverse=True)
+    return sorted(out, key=lambda m: m["status"] == "running")  # the ones to look at first
+
+
+def mtime_iso(path):
+    try:
+        return iso(dt.datetime.fromtimestamp(os.stat(path).st_mtime, dt.timezone.utc)) if path else None
+    except OSError:
+        return None
 
 
 def graphql(query):
@@ -739,14 +927,15 @@ class Fleet:
     """Holds the caches between ticks and writes state.json. One instance per server process."""
 
     def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen,
-                 fetch_automations=fetch_automations):
+                 fetch_automations=fetch_automations, fetch_monitors=fetch_monitors):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
         self.fetch_automations, self.automations = fetch_automations, []
+        self.fetch_monitors, self.monitors = fetch_monitors, []
         self.read_screen = read_screen
         self.lock = threading.Lock()
         d = state_dir()
         self.fast, self.runs = None, {"runs": [], "workers": [], "tasks": [], "gates": []}
-        self.sources = {k: {"ok": None, "updated_at": None, "error": None} for k in ("orca", "runs", "github", "automations")}
+        self.sources = {k: {"ok": None, "updated_at": None, "error": None, "warning": None} for k in ("orca", "runs", "github", "automations", "monitors")}
         self.repos = {}
         saved = read_json(d / "prs.json", {}) or {}
         self.prs = saved.get("prs", {})           # key -> {"probe": sig, "detail": shaped, "probed_at": iso}
@@ -774,9 +963,9 @@ class Fleet:
         append_line(path, row)
         self.events.append(row)
 
-    def ok(self, name, err=None):
+    def ok(self, name, err=None, warning=None):
         s = self.sources[name]
-        s["ok"], s["error"] = err is None, err
+        s["ok"], s["error"], s["warning"] = err is None, err, warning
         if err is None:
             s["updated_at"] = iso(self.now())
 
@@ -803,6 +992,12 @@ class Fleet:
                     self.ok("automations")
                 except SourceError as e:
                     self.ok("automations", str(e))
+                try:
+                    warn = []
+                    self.monitors = self.fetch_monitors(warn=warn)
+                    self.ok("monitors", warning="; ".join(warn) or None)
+                except SourceError as e:
+                    self.ok("monitors", str(e))
                 self.last["runs"] = mono
             if self.fast is None:
                 return self.state
@@ -1176,6 +1371,9 @@ class Fleet:
                       "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]
                      if m.get("type") != "heartbeat"]  # one every 5 min per worker: it would bury everything else
         timeline.sort(key=lambda e: e.get("at") or "", reverse=True)
+        paths = sorted(((s["path"].rstrip("/"), sid) for sid, s in sessions.items() if s.get("path")), reverse=True)
+        monitors = [{**m, "session": next((sid for p, sid in paths if m["cwd"] == p or m["cwd"].startswith(p + "/")), None)}
+                    for m in self.monitors]
         import holds  # beside this file; it imports this module, so not at the top
         try:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
@@ -1187,7 +1385,7 @@ class Fleet:
                            "project": task_project.get(t["id"]),
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
-                "timeline": timeline[:300], "holds": held, "automations": self.automations, "sources": self.sources, "me": self.me,
+                "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 

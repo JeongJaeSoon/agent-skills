@@ -468,3 +468,4 @@ tr.is-done td { opacity: 0.5; }
 /* automations: one block per run, coloured by its result */
 .run { color: var(--tone, var(--ink-3)); font-size: 15px; line-height: 1; letter-spacing: 1px; }
 table.autos td:last-child { max-width: 340px; }
+table.monitors .cmd { display: block; max-width: 460px; }

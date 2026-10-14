@@ -10,6 +10,7 @@ const FLEET_SECTIONS = [
   { id: "work", label: "작업 진행", icon: "flag" },
   { id: "brief", label: "정기 보고", icon: "note" },
   { id: "automations", label: "자동화", icon: "clock" },
+  { id: "monitors", label: "모니터", icon: "activity" },
   { id: "skills", label: "Skills", icon: "spark" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
@@ -22,6 +23,7 @@ const FLEET_SOURCES = [
   ["runs", "Runs", () => [300, 900]],
   ["github", "GitHub", () => [600, 1800]],
   ["automations", "Automations", () => [300, 900]],
+  ["monitors", "Monitors", () => [300, 900]],
 ];
 
 // type -> [label, tone, icon]
@@ -114,7 +116,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, work: workOpen() || null, automations: autoTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, work: workOpen() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -137,9 +139,10 @@ function fleetHeader() {
     <div class="meta"><span>${(st.sessions || []).length} sessions</span><span>${n("working")} working</span><span>${n("waiting")} waiting</span>
       <span>${(st.runs || []).length} runs</span>${st.me ? `<span class="mono">@${esc(st.me)}</span>` : ""}</div>`;
   const missed = (st.items || []).filter((i) => i.missed).length;
-  const errs = Object.entries(st.sources || {}).filter(([, v]) => v.ok === false).length, troubled = autoTroubled(st).length;
+  const errs = Object.entries(st.sources || {}).filter(([, v]) => v.ok === false).length, troubled = autoTroubled(st).length, lost = monTroubled(st).length;
   $("#top-right").innerHTML = [missed ? `<a href="#/fleet/inbox">${tag(`${missed} missed`, "bad", "alert")}</a>` : "",
     troubled ? `<a href="#/fleet/automations">${tag(`자동화 ▲${troubled}`, "bad", "alert")}</a>` : "",
+    lost ? `<a href="#/fleet/monitors">${tag(`모니터 ▲${lost}`, "bad", "alert")}</a>` : "",
     errs ? tag(`${errs} source error${errs > 1 ? "s" : ""}`, "warn", "alert") : ""].join("");
 }
 
@@ -669,6 +672,31 @@ function fleetAutomations(st) {
   return headHtml + failed + table;
 }
 
+// Background watches of the live Claude Code sessions (state.json monitors, fleet.py fetch_monitors): a Bash run in the
+// background or a Monitor. Every row but a running one is ▲: it died, or no process runs it and no end was recorded.
+const MON = { running: ["●", "good", "실행 중"], dead: ["▲", "bad", "죽음"], lost: ["▲", "bad", "알 수 없음"] };
+const monTroubled = (st) => (st.monitors || []).filter((m) => m.status !== "running");
+function fleetMonitors(st) {
+  const mons = st.monitors || [], src = (st.sources || {}).monitors || {};
+  const legend = Object.values(MON).map(([g, tone, l]) => `<span><span class="toned tone-${tone}">${g}</span> ${l}</span>`).join("");
+  const headHtml = `<div class="view-head"><div><h2>모니터</h2><p>살아 있는 Claude Code 세션이 띄운 백그라운드 명령(run_in_background)과 Monitor. 세션 트랜스크립트의 시작·종료 기록을 프로세스 목록과 맞춰 본다. 비정상 종료는 「죽음」, 종료 기록도 프로세스도 없으면 「알 수 없음」으로 ▲ 표시하고, 6시간이 지나거나 같은 명령을 다시 띄우면 내린다. 서브에이전트 안의 작업, CronCreate, launchd 작업은 수집하지 않는다.</p></div>
+    <div class="legend">${legend}</div></div>`;
+  const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("수집 실패", "warn", "alert")} 모니터 목록을 읽지 못했다: ${esc(src.error || "")}. 아래는 ${rel(src.updated_at)} 값이다.</div></div>`
+    : src.warning ? `<div class="card"><div class="empty-chart">${tag("일부 누락", "warn", "alert")} 트랜스크립트를 찾지 못한 세션은 빠졌다: ${esc(src.warning)}</div></div>` : "";
+  const rows = mons.map((m) => {
+    const [glyph, tone, label] = MON[m.status] || ["?", "", m.status], s = byId(st)[m.session];
+    const result = m.status === "dead" ? `${m.exit != null ? `exit ${esc(m.exit)} · ` : ""}${esc(m.summary || "")}` : m.status === "lost" ? "종료 기록 없음, 프로세스 없음" : esc(m.event || "");
+    return `<tr><td class="nowrap"><span class="toned tone-${tone}">${glyph} ${label}</span></td>
+      <td><b>${esc(m.description || "")}</b> ${tag(m.kind === "monitor" ? "Monitor" : "background")}<div class="mono dim ellipsis cmd" title="${esc(m.command)}">${esc(m.command)}</div></td>
+      <td>${s ? `<a href="${sessionHref(s.id)}">${phaseDot(s)} ${esc(s.name)}</a>` : ""}<div class="mono dim nowrap">${esc(m.session_name || "")}</div></td>
+      <td class="nowrap muted">${relSpan(m.started_at)}</td><td class="nowrap ${m.status === "running" ? "muted" : "toned tone-bad"}">${m.last_at ? relSpan(m.last_at) : "–"}</td>
+      <td class="dim"><span class="ellipsis" style="display:block">${result || '<span class="muted">–</span>'}</span></td></tr>`;
+  }).join("");
+  const table = mons.length ? `<div class="card table-wrap" data-src="monitors"><table class="autos monitors"><thead><tr><th>상태</th><th>무엇을</th><th>세션</th><th>시작</th><th>마지막 깨움</th><th>결과·마지막 이벤트</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : '<div class="card"><div class="empty-chart">살아 있는 세션에 띄워진 모니터가 없다.</div></div>';
+  return headHtml + failed + table;
+}
+
 // Who holds a landing lane or an `orch hold` resource (state.json holds), longest held first.
 function holdsCard(st) {
   const hs = [...(st.holds || [])].sort((a, b) => (a.at || "").localeCompare(b.at || ""));
@@ -769,7 +797,7 @@ async function chatAction(act) {
   renderView();
 }
 
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, skills: fleetSkills, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
