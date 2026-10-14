@@ -1233,9 +1233,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for slug in programs():
                 cfg = read_json(home() / slug / "program.json", {})
                 st = read_json(home() / slug / "dashboard" / "state.json", {}) or {}
+                events = read_jsonl(home() / slug / "ledger.jsonl")
                 rows.append({"slug": slug, "repo": cfg.get("repo"), "run": cfg.get("run"),
                              "merge_policy": cfg.get("merge_policy"), "generated_at": st.get("generated_at"),
-                             "summary": st.get("summary"), "errors": len(st.get("errors") or [])})
+                             "summary": st.get("summary"), "errors": len(st.get("errors") or []),
+                             # the sidebar folds a program away once it is closed or quiet with no lead on screen
+                             "closed": prog.final_check_current(events), "last_event": events[-1].get("ts") if events else None})
             return self.send(200, json.dumps(rows, ensure_ascii=False).encode())
         m = re.fullmatch(r"/api/([^/]+)/state", path)
         if m:
@@ -1502,9 +1505,10 @@ def cmd_serve(argv):
 def brief_report():
     """The periodic report exactly as `orch brief render` prints it: the renderer is the one implementation of
     the table rules, so the page shows its output and never builds a second copy. Run per request (well under a
-    second) so a `orch board set` shows on the next poll."""
+    second) so a `orch board set` shows on the next poll. --fill: a lead that never wrote to the board still shows,
+    from its session and cards."""
     try:
-        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json"],
+        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json", "--fill"],
                            capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return {"message": "orch brief render timed out after 30 s"}
