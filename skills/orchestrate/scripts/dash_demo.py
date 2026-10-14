@@ -581,6 +581,24 @@ class FakeFleetWorld:
              "next_run_at": None, "last_run_at": _ago(now, 72), "recent": [{"status": "completed", "trigger": "scheduled",
                                                                              "at": _ago(now, 72), "summary": "digest posted"}]},
         ]
+        # Background watches: two inbox waits and a CI Monitor running, one wait that died, one stopped without a record.
+        def mon(tid, kind, status, wt, name, desc, cmd, started, last, exit=None, summary="", event=""):
+            return {"id": tid, "kind": kind, "status": status, "exit": exit, "command": cmd, "description": desc,
+                    "claude_session": f"demo-{wt}", "session_name": name, "cwd": f"/work/{wt}", "started_at": _ago(now, started),
+                    "last_at": _ago(now, last), "ended_at": _ago(now, last) if status == "dead" else None,
+                    "summary": summary, "event": event}
+        self.monitors = [
+            mon("b3wait", "bash", "dead", "wt-lead", "lead:billing", "Background inbox wait for billing", "orch wait billing",
+                1.6, 0.9, exit=1, summary='Background command "Background inbox wait for billing" failed with exit code 1'),
+            mon("b5poll", "bash", "lost", "wt-export", "export-worker", "Poll the staging deploy",
+                "until curl -fs https://staging.example.test/health; do sleep 20; done", 2.2, 1.4),
+            mon("b1wait", "bash", "running", "wt-coord", "orchestrator", "Wait for actionable inbox mail",
+                "orca orchestration check --wait --types escalation,question,worker_done --timeout-ms 3300000 --json", 0.4, 0.05),
+            mon("m7ci", "monitor", "running", "wt-export", "export-worker", "CI and review threads on acme/app#42",
+                "while sleep 60; do gh pr checks 42 --repo acme/app; done", 0.8, 0.1, event="build pass · lint pass · e2e pending"),
+            mon("b2wait", "bash", "running", "wt-lead", "lead:billing", "Restart background inbox wait for billing",
+                "orch wait billing --timeout-ms 3300000", 0.7, 0.2),
+        ]
         self.prompt = {"v": 1, "id": "prompt-docs-1", "at": _ago(now, 0.5), "handle": "term_docs", "session_id": "demo-docs",
                        "cwd": "/work/wt-docs", "tool": "Bash", "input": {"command": "npm publish --dry-run"}}
         # The coordinator waits on the human for one call it registered with `orch decide add`.
@@ -618,6 +636,9 @@ class FakeFleetWorld:
     def fetch_automations(self):
         return self.automations
 
+    def fetch_monitors(self):
+        return self.monitors
+
     def graphql(self, query):
         data = {}
         for alias, branch in re.findall(r'(b\d+): repository\([^)]*\)\{ref\(qualifiedName:"refs/heads/([^"]+)"', query):
@@ -637,7 +658,8 @@ class FakeFleetWorld:
         fleet.write_atomic(fleet.state_dir() / "prompts" / "term_docs.json", json.dumps(self.prompt))
         fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
-                        read_screen=self.read_screen, fetch_automations=self.fetch_automations)
+                        read_screen=self.read_screen, fetch_automations=self.fetch_automations,
+                        fetch_monitors=self.fetch_monitors)
         f.me = self.ME
         f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
         return f
