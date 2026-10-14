@@ -88,7 +88,10 @@ def poll(fetch, me, cfg, seen):
             team = f"{n['id']}@{n['updated_at']}:team"
             if team in seen:
                 continue
-            users = fetch(n["subject"]["url"] + "/requested_reviewers").get("users", [])
+            try:
+                users = fetch(n["subject"]["url"] + "/requested_reviewers").get("users", [])
+            except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+                continue  # a PR gone or unreadable must not hold back the rest; asked again next poll
             if me not in [u["login"] for u in users]:
                 keys.append(team)
                 continue

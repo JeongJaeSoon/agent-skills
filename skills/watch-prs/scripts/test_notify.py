@@ -102,6 +102,19 @@ class NotifyTest(unittest.TestCase):
         code, out = self.run_watch(Fake([later], {rr_url(9): [ME]}))
         self.assertEqual((code, len(out)), (0, 1))
 
+    def test_unreadable_review_request_is_skipped_without_blocking_other_items(self):
+        n.write_seen(self.seen, [], 10)
+
+        class Gone(Fake):
+            def __call__(self, path):
+                if path == rr_url(12):
+                    raise RuntimeError("HTTP 404")
+                return super().__call__(path)
+
+        code, out = self.run_watch(Gone([[note(12, reason="review_requested"), note(13, title="Still here")]]))
+        self.assertEqual((code, [o.split("\t")[2] for o in out]), (0, ["Still here"]))
+        self.assertFalse([k for k in n.read_seen(self.seen) if k.startswith("12")])
+
     def test_personal_review_only_off_passes_team_requests(self):
         n.write_seen(self.seen, [], 10)
         code, out = self.run_watch(Fake([[note(10, reason="review_requested")]]), personal_review_only=False)

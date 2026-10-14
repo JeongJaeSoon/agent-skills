@@ -376,7 +376,8 @@ A notification passes when its reason is in `reasons`, its repository is in the 
 - With `personal_review_only` (default on), `review_requested` fires only when the user's login is in
   `GET <pull>/requested_reviewers` → `users`; a request that reaches them through a team does not. A
   team-only request is recorded per `updated_at`, so it is looked up again only after a re-request,
-  and fires once if the user is later asked by name.
+  and fires once if the user is later asked by name. A lookup that fails skips only that item until
+  the next poll.
 
 The first `watch` with no seen file records the current notifications and prints nothing, so the
 backlog does not fire; `notify.py seed` does the same on demand. Seen keys (no titles) go to
