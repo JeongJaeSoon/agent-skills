@@ -378,9 +378,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if not p:
             return pr_num(key)
         probed = fleet.parse(p.get("probed_at"))
-        if probed and (oldest_probe is None or probed < oldest_probe):
+        # A merged or closed PR cannot change, and the collector probes it only once a day: its probe age means nothing.
+        final = p.get("state") in ("MERGED", "CLOSED")
+        if probed and not final and (oldest_probe is None or probed < oldest_probe):
             oldest_probe = probed
-        warn = "⚠️" if not probed or (now - probed).total_seconds() > limits["pr_stale_min"] * 60 else ""
+        warn = "⚠️" if not final and (not probed or (now - probed).total_seconds() > limits["pr_stale_min"] * 60) else ""
         return (f"{pr_num(key)}{warn}" if tg or not p.get("url") else f"[{pr_num(key)}]({p['url']}){warn}")
 
     def pr_status(key, base):
