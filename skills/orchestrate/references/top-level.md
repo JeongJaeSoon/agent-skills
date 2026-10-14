@@ -32,11 +32,11 @@ Check the lead row first: a change or investigation in a repo that belongs to a 
 
 ## Sessions you did not start
 
-Your reports and actions cover what you, your leads and their cards own (the roster's dispatches and the PRs they opened). The human's other open PRs (personal projects, old cleanups, drafts) are not swept into a report, offered for adoption or proposed for closing.
-
 Once adopted they are on the roster, and you only read them. Never answer their permission prompts, trust prompts or questions, and never type into them except the reload in "Skills changed". What they need from the human goes to the inbox.
 
 One that looks finished (its PRs merged or its report says nothing is left, the screen idle at an empty prompt) and is still open is not yours to close either: `orch-dash inbox add --type approval --title "끝난 세션: <card> (<why it looks done>)" --key done:<card>`, once per card. Cards you started are closed by you (SKILL.md, "Stay answerable").
+
+Your reports and actions cover what you, your leads and their cards own (the roster's dispatches and the PRs they opened). The human's other open PRs (personal projects, old cleanups, drafts) are not swept into a report, offered for adoption or proposed for closing.
 
 ## Starting a worker
 
@@ -50,7 +50,7 @@ One that looks finished (its PRs merged or its report says nothing is left, the 
 
 ## Talking to sessions
 
-- Check the exit status of every `orca orchestration send` and read `"ok": true` in its `--json` output; never send its output to `/dev/null`, where a failed send looks delivered. A completed dispatch refuses mail ("its worker will never read that mailbox"): send to `run:<id>`, or start a new dispatch for new work. A lead that bound its terminal to its own Run (`run-use`) refuses mail sent through yours (`recipient_run_mismatch`): a lead is a card, not a dispatched worker, so give it the content with `orca terminal send` to its current handle, then read its screen.
+- Check the exit status of every `orca orchestration send` and read `"ok": true` in its `--json` output; never send its output to `/dev/null`, where a failed send looks delivered. A completed dispatch refuses mail ("its worker will never read that mailbox"): send to `run:<id>`, or start a new dispatch for new work. A lead that bound its terminal to its own Run (`run-use`) refuses mail sent through yours (`recipient_run_mismatch`): the message did not arrive, so read the lead's current address before sending again.
 - Terminal handles and dispatch ids change when a session restarts or a new run starts. Read the current one from `worker-list` when you send, and when one lead has to reach another, give it the handle you just read; a handle kept from an earlier run answers "not found". Use full handles only: a short one goes stale without an error.
 - When you answer a select dialog in a session you started (SKILL.md Drain, a `STUCK` line), note that it ignores `--text 1 --enter` and a bare Enter: send a raw carriage return without `--enter` (`--text $'\r'`), which picks the highlighted option, after you read the screen to see which one that is.
 - Name an environment variable in words in a message ("the token in env X"), never as a shell reference (`$X`): a secret-masking hook rewrites the reference, and the receiver reads a masked value.
