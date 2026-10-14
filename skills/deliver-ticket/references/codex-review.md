@@ -4,10 +4,15 @@ The `/codex:*` slash commands are user-only, but you run the same reviews yourse
 companion:
 
 ```bash
-node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs review --background --base main --scope branch
-node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs adversarial-review --background --base main --scope branch
+git fetch origin
+node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs review --background --base origin/main --scope branch
+node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs adversarial-review --background --base origin/main --scope branch
 node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs result <job-id>
 ```
+
+Use the PR's base as `origin/<base>`, never a bare branch name: a local `main` can be several
+landings behind, and a review against it covers the wrong diff and still passes. Before trusting
+a verdict, check that the output's `Target:` line names that base.
 
 Run them as Bash calls with `run_in_background`: some companion versions answer inline instead
 of returning a job id, and the background call keeps you working either way. Run one Codex job
