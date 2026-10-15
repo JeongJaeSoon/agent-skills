@@ -901,7 +901,8 @@ async function chatAction(act) {
 }
 
 // My pull requests over time (pr_stats.py via /api/fleet/stats): PRs I authored plus those agents opened for me,
-// searched on GitHub every 6 h. Charts are plain SVG strings scaled by viewBox; a bar's <title> is its tooltip.
+// searched on GitHub every 6 h. Charts are plain SVG strings drawn at the view's pixel width (a resize renders the view
+// again), so a wide window gets wider bars, not taller charts and larger text; a bar's <title> is its tooltip.
 async function pollStats() {
   const failed = (r) => r.error && !r.views;  // a collect error over last good counts is shown, not retried
   if (F.statsBusy || (F.stats && Date.now() - F.statsAt < (failed(F.stats) ? 5e3 : 60e3))) return;
@@ -917,15 +918,19 @@ async function pollStats() {
 const STAT_STATE = [["merged", "Merged", "var(--accent)"], ["open", "Open", "var(--good)"], ["closed", "Closed", "var(--bad)"]];
 const STAT_SRC_COLORS = ["var(--ink-3)", "var(--derived)", "var(--warn)", "var(--good)", "var(--accent)"];
 // Stacked bars per bucket, with optional lines over them on the same y-scale.
+function statWidth() {
+  const view = $("#view"), cs = getComputedStyle(view);
+  return Math.max(320, view.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 2);
+}
 function statBars({ labels, titles, series, lines = [], height = 220, every }) {
-  const W = 1000, H = height, m = { l: 34, r: 8, t: 8, b: 22 };
+  const W = statWidth(), H = height, m = { l: 34, r: 8, t: 8, b: 22 };
   const tot = labels.map((_, i) => series.reduce((a, s) => a + s.values[i], 0));
   const max0 = Math.max(1, ...tot, ...lines.flatMap((l) => l.values.filter((v) => v != null)));
   const step = niceStep(max0), max = Math.max(step, Math.ceil(max0 / step) * step);
   const band = (W - m.l - m.r) / labels.length, bw = Math.max(1, Math.min(40, band * 0.72));
   const y = (v) => H - m.b - (v / max) * (H - m.t - m.b), cx = (i) => m.l + band * i + band / 2;
   const nth = every || Math.max(1, Math.ceil(labels.length / 14));
-  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(series.map((s) => s.name).join(", "))}"><g class="axis">${yAxis(max, m.l, W - m.r, y)}`;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(series.map((s) => s.name).join(", "))}"><g class="axis">${yAxis(max, m.l, W - m.r, y)}`;
   labels.forEach((l, i) => { if ((labels.length - 1 - i) % nth === 0) svg += `<text x="${cx(i)}" y="${H - 6}" text-anchor="middle">${esc(l)}</text>`; });
   svg += "</g>";
   labels.forEach((_, i) => {
@@ -982,8 +987,8 @@ function fleetStats() {
   return headHtml + failure + kpis + toolbar + `<div class="grid">
     ${card("Monthly", statLegend([...stateLegend, ["Trend", "var(--ink-2)", true]]), monthly, true)}
     ${card("By source", statLegend(srcs.map((s, i) => [s, srcColor(i)])), bySource, true)}
-    ${card("Weekly", statLegend([...stateLegend, ["4-week average", "var(--warn)", true], ["Trend", "var(--ink-2)", true]]), weekly, true)}
-    ${card("Weekday × hour", "", punch)}
+    ${card("Weekly", statLegend([...stateLegend, ["4-week average", "var(--warn)", true], ["Trend", "var(--ink-2)", true]]), weekly, true)}</div>
+    <div class="grid">${card("Weekday × hour", "", punch)}
     ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
 }
 const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
