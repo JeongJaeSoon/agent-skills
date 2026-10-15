@@ -642,6 +642,49 @@ process.stdout.write(JSON.stringify(out));"""
           "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), {process, sessionStorage, localStorage: sessionStorage});")
     got = json.loads(subprocess.run(["node", "-e", ss], input=js, capture_output=True, text=True, check=True).stdout)
     assert got == [False, False, False, True, False, True], got
+
+    # The sidebar tree: no second home row, the coordinator on top, then units grouped by their most urgent member.
+    # A lead keeps its program and its idle card under it; the groups' open state is remembered, a re-render's toggle is not.
+    sess = [{"id": "wt-root", "name": "root", "kind": "orchestrator", "parent": None, "phase": "working"},
+            {"id": "wt-lead", "name": "lead one", "kind": "orchestration", "parent": "wt-root", "phase": "working", "run": "run_l"},
+            {"id": "wt-l1", "name": "lead card idle", "kind": "task", "parent": "wt-lead", "phase": "idle"},
+            {"id": "wt-l2", "name": "lead card working", "kind": "task", "parent": "wt-lead", "phase": "working"},
+            {"id": "wt-w", "name": "asks you", "kind": "standalone", "parent": "wt-root", "phase": "idle", "unread": 1},
+            {"id": "wt-i1", "name": "idle one with a long name that the sidebar cuts", "kind": "standalone", "parent": "wt-root", "phase": "idle"},
+            {"id": "wt-i2", "name": "idle two", "kind": "standalone", "parent": "wt-root", "phase": "open"},
+            {"id": "wt-o", "name": "gone lead", "kind": "orchestration", "parent": "wt-root", "phase": "offline", "run": "run_o"},
+            {"id": "wt-x", "name": "gone card", "kind": "standalone", "parent": "wt-root", "phase": "offline"}]
+    js = "\n".join(take(n) for n in ("LS", "store", "S", "isFleet", "mainTone")) + f"""
+{helpers}
+{(assets / "fleet.js").read_text()}
+const fire = (e) => handlers.toggle.forEach((f) => f(e));
+const st = {{sessions: {json.dumps(sess)}}}, progs = [{{slug: "prog-l", run: "run_l", summary: {{}}, generated_at: new Date().toISOString()}}];
+S.slug = "fleet";
+const out = {{plain: navTree(st, progs)}};
+F.sessionId = "wt-i2"; out.current = navTree(st, progs); F.sessionId = null;
+fire({{target: {{dataset: {{fold: "running", was: "1"}}, open: true}}}});
+out.redraw = kv["orch-dash:sb-folds"] ?? null;
+fire({{target: {{dataset: {{fold: "idle", was: ""}}, open: true}}}});
+fire({{target: {{dataset: {{fold: "needs", was: "1"}}, open: false}}}});
+out.stored = navTree(st, progs);
+process.stdout.write(JSON.stringify(out));"""
+    ls = ("const vm = require('vm'), kv = {}, handlers = {}, localStorage = {getItem: (k) => kv[k] ?? null, setItem: (k, v) => { kv[k] = v; }};"
+          "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), {process, kv, handlers, localStorage,"
+          " document: {addEventListener(t, f) { (handlers[t] ||= []).push(f); }}});")
+    got = json.loads(subprocess.run(["node", "-e", ls], input=js, capture_output=True, text=True, check=True).stdout)
+    tree = got["plain"]
+    opened = lambda html: dict(re.findall(r'data-fold="(\w+)" data-was="1?" (open)?', html))
+    assert 'href="#/fleet/overview"' not in tree, "the brand is the only home link"
+    assert re.findall(r'data-fold="(\w+)"', tree) == ["needs", "running", "idle", "offline"], tree
+    assert opened(tree) == {"needs": "open", "running": "open", "idle": "", "offline": ""}, opened(tree)
+    names = re.findall(r'<span class="sb-text">([^<]+)</span>', tree)
+    assert names == ["root", "Needs you", "asks you", "Running", "lead one", "prog-l", "lead card idle", "lead card working",
+                     "Idle", "idle one with a long name that the sidebar cuts", "idle two", "Offline", "gone lead"], names
+    assert 'title="idle one with a long name that the sidebar cuts · standalone · idle"' in tree, "the full name is the tooltip"
+    assert '<span class="count">2</span>' in tree.split('data-fold="idle"')[1].split("</summary>")[0], "the idle fold counts its sessions"
+    assert opened(got["current"])["idle"] == "open", "the fold holding the page's session opens"
+    assert got["redraw"] is None, "a re-render's own toggle is not stored"
+    assert opened(got["stored"]) == {"needs": "", "running": "open", "idle": "open", "offline": ""}, opened(got["stored"])
 else:
     print("test_fleet: node not found, rendering check skipped")
 
