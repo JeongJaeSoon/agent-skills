@@ -125,10 +125,33 @@ function fleetSidebar() {
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
 }
 
-// The sidebar's one tree, in the shape the work runs: the coordinator, then each lead with the program it runs and
-// the cards under it, then the coordinator's own cards. A program whose coordinator is not on screen hangs under the
-// root until it is closed or ARCHIVE_MS quiet, then folds into Archived. st is null when the fleet collector is off.
+// The sidebar's session tree. The coordinator sits on top with the programs that have no lead on screen. Everything
+// else hangs off it as units: a session the coordinator runs, with its program and the cards under it, so a lead keeps
+// its children whatever their own phase. Its most urgent member puts a unit in a group: needs you (a badge or a
+// prompt), running, idle (folded), offline (folded). A program that is closed or ARCHIVE_MS quiet with no coordinator
+// on screen folds into Archived. st is null when the fleet collector is off.
 const ARCHIVE_MS = 3 * 86400e3;
+const FOLDS_KEY = "orch-dash:sb-folds";
+// id -> [label, open by default, phase whose dot marks it, what it holds]
+const FOLDS = {
+  needs: ["Needs you", true, "waiting", "Sessions with an inbox item, or waiting on a prompt"],
+  running: ["Running", true, "working", "Sessions whose agent is working"],
+  idle: ["Idle", false, "idle", "Turn ended, or a terminal with no agent"],
+  offline: ["Offline", false, "offline", "Leads with no live terminal"],
+  archived: ["Archived", false, "", "Closed programs, and programs quiet for 3 days with no coordinator on screen"],
+};
+const folds = () => { try { return JSON.parse(store.get(FOLDS_KEY)) || {}; } catch (e) { return {}; } };
+const urgency = (s) => s.unread || s.phase === "waiting" ? 0 : s.phase === "working" ? 1 : s.phase === "idle" || s.phase === "open" ? 2 : 3;
+const FOLD_OF = ["needs", "running", "idle", "offline"];
+
+function fold(id, n, body) {
+  const [label, def, phase, title] = FOLDS[id], open = folds()[id] ?? (def || body.includes('aria-current="page"'));
+  // data-was is what this render drew, so the toggle a re-render fires is not taken for a click.
+  return `<li><details class="sb-fold" data-fold="${id}" data-was="${open ? 1 : ""}" ${open ? "open" : ""}><summary class="nav-item" title="${title}">
+    <span class="chev" aria-hidden="true"></span>${phase ? phaseDot({ phase }) : ""}<span class="sb-text">${label}</span><span class="count">${n}</span></summary>
+    <ul class="sb-list">${body}</ul></details></li>`;
+}
+
 function navTree(st, programs) {
   const ss = st ? st.sessions || [] : [], now = Date.now(), kids = {};
   const isLead = (s) => s.kind === "orchestrator" || s.kind === "orchestration";
@@ -145,26 +168,38 @@ function navTree(st, programs) {
       <span class="avatar" aria-hidden="true">${esc(p.slug.slice(0, 2))}<span class="dot ${mainTone(s.main) ? "tone-" + mainTone(s.main) : ""}"></span></span>
       <span class="sb-text">${esc(p.slug)}</span><span class="count">${esc(done)}</span></a></li>`;
   };
-  const out = [`<li><a class="nav-item" href="#/fleet/overview" ${isFleet() && !F.sessionId ? 'aria-current="page"' : ""} title="Fleet">${icon("fleet")}<span class="sb-text">Fleet</span></a></li>`];
+  const row = (s, d) => {
+    const n = kids[s.id] || 0, p = progOf.get(s.id);
+    return `<li><a class="nav-item tree ${isLead(s) ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
+      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(kindLabel(st, s)[0])} · ${esc(s.phase)}${n ? ` · ${n} under it` : ""}">${phaseDot(s)}
+      <span class="sb-text">${esc(s.name)}</span>${n ? `<span class="kids" aria-label="${n} under it">${n}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`
+      + (p ? progRow(p, Math.min(d + 1, 3)) : "");
+  };
+  const top = [], units = [];
   const rows = st ? sessionTree(st).filter(([s]) => shown(s)) : [];
   for (const [s, d] of rows) {
-    const n = kids[s.id] || 0, lead = isLead(s), p = progOf.get(s.id);
-    out.push(`<li><a class="nav-item tree ${lead ? "lead" : ""}" style="--d:${Math.min(d, 3)}" href="${sessionHref(s.id)}"
-      ${F.sessionId === s.id ? 'aria-current="page"' : ""} title="${esc(s.name)} · ${esc(kindLabel(st, s)[0])} · ${esc(s.phase)}${n ? ` · ${n} under it` : ""}">${phaseDot(s)}
-      <span class="sb-text">${esc(s.name)}</span>${n ? `<span class="kids" aria-label="${n} under it">${n}</span>` : ""}<span class="slot">${badge(s.unread, s.missed)}</span></a></li>`);
-    if (p) out.push(progRow(p, Math.min(d + 1, 3)));
-    if (s.kind === "orchestrator") out.push(...loose.map((q) => progRow(q, 1)));
+    if (s.kind === "orchestrator") { top.push(row(s, 0), ...loose.map((q) => progRow(q, 1))); continue; }
+    const head = !units.length || d <= units[units.length - 1].d;
+    if (head) units.push({ d, members: [] });
+    units[units.length - 1].members.push([s, d]);
   }
-  if (!rows.some(([s]) => s.kind === "orchestrator")) out.push(...loose.map((q) => progRow(q, 0)));
-  if (old.length) {
-    const open = F.archiveOpen ?? old.some((p) => p.slug === S.slug);
-    out.push(`<li><details class="sb-archive" id="sb-archive" ${open ? "open" : ""}><summary class="nav-item" title="Closed programs, and programs quiet for 3 days with no coordinator on screen">
-      <span class="chev" aria-hidden="true"></span><span class="sb-text">Archived</span><span class="count">${old.length}</span></summary>
-      <ul class="sb-list">${old.map((p) => progRow(p, 1)).join("")}</ul></details></li>`);
+  if (!rows.some(([s]) => s.kind === "orchestrator")) top.push(...loose.map((q) => progRow(q, 0)));
+  const groups = FOLD_OF.map(() => ({ n: 0, html: [] }));
+  for (const u of units) {
+    const g = groups[Math.min(...u.members.map(([s]) => urgency(s)))];
+    g.n += u.members.length;
+    g.html.push(...u.members.map(([s, d]) => row(s, d - u.d)));
   }
+  const out = [...top, ...groups.map((g, i) => g.n ? fold(FOLD_OF[i], g.n, g.html.join("")) : "")];
+  if (old.length) out.push(fold("archived", old.length, old.map((p) => progRow(p, 1)).join("")));
   return out.join("");
 }
-document.addEventListener("toggle", (e) => { if (e.target.id === "sb-archive") F.archiveOpen = e.target.open; }, true);
+document.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (!d.dataset || !d.dataset.fold || d.open === (d.dataset.was === "1")) return;
+  d.dataset.was = d.open ? "1" : "";
+  store.set(FOLDS_KEY, JSON.stringify({ ...folds(), [d.dataset.fold]: d.open }));
+}, true);
 
 function fleetHeader() {
   const st = S.state;

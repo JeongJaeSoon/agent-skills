@@ -110,7 +110,11 @@ svg.i > * { vector-effect: non-scaling-stroke; }
 .code-version { padding: 0 var(--s2); font-size: var(--t-xs); color: var(--ink-3); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stale-code { padding: var(--s2) var(--s5); border-bottom: 1px solid var(--line); background: var(--warn-wash); color: var(--ink); font-size: var(--t-sm); }
 .stale-code code { font-family: var(--mono); user-select: all; }
-.sb-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: var(--s3) var(--s2); }
+.sb-nav { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; padding: var(--s3) var(--s2); }
+/* Sections stay put; the session tree scrolls on its own, and only a very short window scrolls the whole column. */
+.sb-nav > .sb-group { flex: none; }
+.sb-nav > .sb-tree { flex: 1 1 0; min-height: 180px; display: flex; flex-direction: column; }
+#nav-tree { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; align-content: start; }
 .sb-group + .sb-group { margin-top: var(--s4); }
 .sb-title { padding: 0 var(--s2) var(--s1); }
 .sb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s1); }
@@ -344,15 +348,15 @@ th.num .th-sort { justify-content: flex-end; }
 /* Depth indents the whole row, highlight included, so its inner padding stays 8px on both sides. */
 .nav-item.tree { margin-left: calc(var(--d, 0) * 12px); width: calc(100% - var(--d, 0) * 12px); }
 /* A grid track sized to the longest name would push every badge past the sidebar edge. */
-#nav-tree, .sb-archive .sb-list { grid-template-columns: minmax(0, 1fr); }
+#nav-tree, .sb-fold .sb-list { grid-template-columns: minmax(0, 1fr); }
 /* How many sessions hang under a row: a plain grey number, so the name keeps the width. */
 .nav-item.tree .kids { flex: none; font-size: var(--t-xs); color: var(--ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
-.sb-archive > summary { list-style: none; }
-.sb-archive > summary::-webkit-details-marker { display: none; }
-.sb-archive .chev { width: 18px; flex: none; display: grid; place-items: center; color: var(--ink-3); }
-.sb-archive .chev::before { content: ""; border: 4px solid transparent; border-left: 6px solid currentColor; margin-left: 4px; transition: transform .12s; }
-.sb-archive[open] .chev::before { transform: rotate(90deg) translateX(2px); }
-.sb-archive > .sb-list { margin-top: var(--s1); }
+.sb-fold > summary { list-style: none; }
+.sb-fold > summary::-webkit-details-marker { display: none; }
+.sb-fold .chev { width: 18px; flex: none; display: grid; place-items: center; color: var(--ink-3); }
+.sb-fold .chev::before { content: ""; border: 4px solid transparent; border-left: 6px solid currentColor; margin-left: 4px; transition: transform .12s; }
+.sb-fold[open] .chev::before { transform: rotate(90deg) translateX(2px); }
+.sb-fold > .sb-list { margin-top: var(--s1); }
 .nav-item.tree .sb-text { flex: 1; min-width: 0; }
 /* Every row keeps the badge column, so names cut off at one edge whether or not a badge shows. */
 .nav-item.tree .slot { width: 24px; display: grid; justify-items: end; flex: none; }
@@ -368,6 +372,7 @@ td.when { white-space: nowrap; }
   font-size: var(--t-xs); font-weight: 600; color: #fff; background: var(--bad); flex: none; }
 .badge.missed { box-shadow: 0 0 0 2px var(--bad-wash); }
 [data-sb="icons"] .nav-item.tree { margin-left: 0; width: 100%; }
+[data-sb="icons"] .sb-fold:not([data-fold="archived"]) .chev { display: none; }
 [data-sb="icons"] .nav-item.tree .slot { display: contents; }
 [data-sb="icons"] .nav-item.tree .badge { position: absolute; top: 1px; right: 6px; min-width: 14px; height: 14px; font-size: 9px; padding: 0 3px; }
 /* Two-line rows: the type icon sits on the title line, time and buttons on the row's centre. */

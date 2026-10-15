@@ -523,7 +523,7 @@ class FakeFleetWorld:
 
     ME = "you-dev"
 
-    def __init__(self, now):
+    def __init__(self, now, crowd=0):
         self.now, self.step = now, 0
         ms = lambda h: int((now - dt.timedelta(hours=h)).timestamp() * 1000)
         agent = lambda pane, state, h, **kw: {"paneKey": pane, "state": state, "agentType": "claude", "stateStartedAt": ms(h),
@@ -574,6 +574,26 @@ class FakeFleetWorld:
                                 ("lead", "Billing tickets"), ("invoice", "ACME-104 invoice PDF"))],
                      "gates": [{"id": "g1", "status": "pending", "question": "Land #41 before #42?", "options": ["yes", "no"], "task_id": "task_export",
                                 "created_at": _ago(now, 0.5)}]}
+        if crowd:
+            # A machine with dozens of sessions, for the sidebar: a second lead with its cards, then standalones in every phase.
+            self.worktrees.append(wt("wt-crowd-lead", "search lead", "acme/platform", "lead/search", 0.1,
+                                     [agent("p-crowd-lead", "working", 0.1, prompt="Drive the search tickets.")]))
+            self.terminals.append(term("term_crowd_lead", "wt-crowd-lead", "◐ search lead"))
+            self.runs["runs"].append({"id": "run_crowd", "coordinator_handle": "term_crowd_lead", "updated_at": _ago(now, 0.1)})
+            topics = ["search filters", "audit log export", "rate limiter", "settings page redesign", "webhook retries",
+                      "dark mode tokens", "CSV import validation", "session timeout", "billing address form", "release notes",
+                      "flaky e2e on checkout", "dependency upgrades", "onboarding checklist", "permissions matrix",
+                      "cache warmup job", "error page copy", "api pagination", "metrics dashboard", "invite flow",
+                      "mobile nav drawer", "password reset email", "feature flag cleanup", "pdf receipts", "admin search"]
+            phases = ["working", "done", "waiting", "done", "working", "done", "done", "open", "done", "offline"]
+            for i in range(crowd):
+                wid, name = f"wt-c{i}", f"ACME-{200 + i} {topics[i % len(topics)]}"
+                state = phases[i % len(phases)]
+                agents = [] if state in ("open", "offline") else [agent(f"p-c{i}", state, 0.2 + i / 4, prompt=f"Implement ACME-{200 + i}.")]
+                self.worktrees.append(wt(wid, name, "acme/launchpad", f"feat/c{i}", 0.2 + i / 4, agents,
+                                         parentWorktreeId="wt-crowd-lead" if i < 4 else None))
+                if state != "offline":
+                    self.terminals.append(term(f"term_c{i}", wid, name, agent=state != "open"))
         user = lambda login: {"__typename": "User", "login": login, "avatarUrl": None}
         review = lambda rid, login, state, h, oid="h41a": {"id": rid, "state": state, "submittedAt": _ago(now, h),
                                                            "author": user(login), "commit": {"oid": oid}}

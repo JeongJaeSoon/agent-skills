@@ -15,7 +15,7 @@ Usage: orch-dash <command> [options]
                                      $ORCH_DASH_PORT, else the port this store last served on, else 4780.
   note <slug> --kind risk|digest|decision --text TEXT [--author NAME]
                                      add a human-readable line to the dashboard
-  demo [--port 4780] [--live] [--no-serve]
+  demo [--port 4780] [--live] [--no-serve] [--crowd N]
                                      a realistic fake program in a temp store, served offline
   fleet                              one collect of the fleet view (every Orca session), prints a summary
   skills [--no-signals]              one collect of skill usage from local transcripts (skill_usage.py), prints a summary
@@ -1619,7 +1619,7 @@ def cmd_demo(argv):
     if "--no-serve" in argv:
         print(root)
         return
-    world = dash_demo.FakeFleetWorld(utcnow())
+    world = dash_demo.FakeFleetWorld(utcnow(), crowd=int(prog.opt(argv, "--crowd", "0")))
     world.seed_sent()
     if "--live" in argv:
         threading.Thread(target=dash_demo.live, args=(root, 20, world), daemon=True).start()
