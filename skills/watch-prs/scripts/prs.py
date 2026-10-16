@@ -811,7 +811,7 @@ def author_wait(pr, me, cfg):
         return None
     repo = pr["repository"]["nameWithOwner"]
     return {"pr": f"{repo}#{pr['number']}", "repo": repo, "head": pr["headRefOid"], "url": pr["url"],
-            "title": pr["title"], "author": author, "bot": pr["author"].get("__typename") == "Bot", "since": since}
+            "title": pr["title"], "author": author, "bot": (pr.get("author") or {}).get("__typename") == "Bot", "since": since}
 
 
 def slack_thread(permalinks):

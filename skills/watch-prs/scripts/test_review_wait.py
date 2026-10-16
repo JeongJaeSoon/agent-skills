@@ -292,6 +292,9 @@ assert p.slack_thread(["https://x.slack.com/archives/C0FAKE/p1760000000123456"])
 assert p.slack_thread(["https://x.slack.com/archives/C0FAKE/p1760000000999999?thread_ts=1760000000.123456&cid=C0FAKE"]) \
     == "C0FAKE:1760000000.123456", "a reply's permalink points at its thread"
 assert p.slack_thread(["not a link"]) is None
+assert ask(59, reviews=[mine_review("CHANGES_REQUESTED", T, "h59")]) and \
+    p.author_wait({**theirs(59, reviews=[mine_review("CHANGES_REQUESTED", T, "h59")]), "author": None}, ME, cfg)["bot"] is False, \
+    "a deleted account (null author) does not crash the round"
 
 ac = {**cfg, "reviewers": {**cfg["reviewers"], "dana": {"slack": "U0FAKEDANA"}}, "author_wake_prefix": {"helper[bot]": "@helper"}}
 human = {**ask(50, reviews=[mine_review("CHANGES_REQUESTED", T, "h50")]), "thread": "C0FAKE:1.0"}
