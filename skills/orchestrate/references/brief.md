@@ -188,7 +188,9 @@ APPROVED    The acts the human already approved for this project, with their wor
             Decisions inside them are yours and your workers': the recommended default, then a
             report. Copy the lines a worker's unit needs into its brief.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
-            any irreversible or outward act not under APPROVED. Batched into one message to the human.
+            any irreversible or outward act not under APPROVED. Batched into one message, sent once
+            to the session above, which puts it in front of the human (nobody reads your own
+            chat), and registered with `orch decide add`; not restated on later wakes.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
