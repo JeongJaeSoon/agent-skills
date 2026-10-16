@@ -89,7 +89,7 @@ Schedule rules:
 - Pick a minute off :00 and :30 (`7 * * * *`, not `0 * * * *`). A recurring job fires up to 10% of its period late (at most 15 minutes); choose the interval with that slack in mind.
 - A recurring job expires 7 days after it is created: it fires once more, then is gone. Write the expiry date into the prompt, on the last day before it create the replacement, then `CronDelete` the old one, and tell the human about the limit when you first create it.
 - When the standing instruction changes, create a new job with the new prompt, then `CronDelete` the old one. Keep one heartbeat per session; `CronList` shows what is live.
-- The heartbeat does not replace the one inbox wait (SKILL.md Drain, "One inbox wait, always"); keep both, and on every wake check first that the wait is alive.
+- The heartbeat does not replace the one inbox wait (SKILL.md Drain, "One inbox wait, always"); keep both, and on every wake check first that the wait and `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens") are alive.
 
 ## Messages to a chat
 

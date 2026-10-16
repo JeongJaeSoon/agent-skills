@@ -53,6 +53,9 @@ Usage: orch <command> <slug> [options]
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      coordinator only: block until the Run inbox holds actionable
                                      mail; acks heartbeat-only batches; never acks actionable ones
+  watch-cards [--interval 180] [--idle-min 30] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
+                                     no slug: exit on a new stuck screen in any agent terminal but this
+                                     one (cards no Run lists), or low disk; never types (card_watch.py)
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
   decide list | done <id> [--answer TEXT] | drop <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -1775,7 +1778,10 @@ def print_sweep(run_id, state, skip=()):
 
 
 PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
-           (re.compile(r"^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt")]
+           (re.compile(r"^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt"),
+           (re.compile(r"What should Claude do instead\?"), "an interrupted turn"),
+           (re.compile(r"ENOSPC|No space left on device"), "a full disk"),
+           (re.compile(r"Waiting for API response · will retry"), "an API retry loop")]
 
 
 def screen_prompt(lines, activity=None):
@@ -2231,9 +2237,10 @@ def cmd_sent(argv):
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True)}
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
+            "watch-cards": lambda argv: __import__("card_watch").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] == ["watch-cards"]) or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])
