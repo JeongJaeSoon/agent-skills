@@ -140,6 +140,10 @@ python3 "<reap-resources dir>/scripts/reap.py" ledger add --kind orca-worktree -
 skills-sync close-setup "<result.worktree.path>"
 ```
 
+- A card already on the task that the new one replaces (the same PR, branch or ticket) is
+  superseded: in this turn, tell it to stop and close, and drop the questions it left waiting
+  (`orchestrate` "Stay answerable"). Left open, it waits on a question about work the new card
+  already did.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
 - `--name` is `<target>-<topic>`, e.g. `blog-launch-post`. A ticket-backed card uses the
