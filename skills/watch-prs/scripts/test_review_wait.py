@@ -197,7 +197,7 @@ own = [mine(30, reqs=[u("bob")]), mine(32, reqs=[u("bob")], events=[asked("bob",
        mine(38, author="owner-bot", kind="Bot", reviews=[review("rabbit", "CHANGES_REQUESTED", "h38", kind="Bot")]),
        mine(39, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)]),
        mine(40, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)])]
-plan = p.compute(Fake := type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: own})(), c, {}, NOW)
+plan = p.compute(Fake := type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: own, "reviewed": lambda self, me, since: []})(), c, {}, NOW)
 why = {e["pr"]: e["why"] for e in plan["excluded"]}
 assert why == {W + "30": "프로그램 PR (live)", W + "32": "프로그램 PR (held)", W + "34": "draft", W + "35": "stale: 40일 움직임 없음",
                "acme/legacy#36": "제외 대상 저장소"}, why
@@ -214,7 +214,7 @@ assert "U0FAKE" not in text and "Slack U" not in text, "the Slack user id is not
 
 # A title exclude drops the PR before its state is read: no notice and no reminder, while the rest stay as they were.
 drop = {**mine(41, reqs=[u("bob")], events=[asked("bob", NOW - 3 * H)]), "title": "Remove legacy config"}
-tfake = type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: own + [drop]})()
+tfake = type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: own + [drop], "reviewed": lambda self, me, since: []})()
 assert "acme/widgets#41@h41/request/bob" in {i["key"] for i in p.compute(tfake, c, {}, NOW)["new"]}
 tplan = p.compute(tfake, {**c, "exclude_title_patterns": ["^Remove legacy"]}, {}, NOW)
 assert {i["key"] for i in tplan["new"]} == {i["key"] for i in plan["new"]}, tplan["new"]
@@ -255,6 +255,78 @@ assert both.index("prs.py actions") < both.index("prs.py dispatch"), "the unrele
 edit = p.schedule_cmd(script, c, "path:/repo", edit="auto-1")
 assert edit[:4] == ["orca", "automations", "edit", "auto-1"] and edit[edit.index("--trigger") + 1] == c["cron"]
 assert edit[edit.index("--timezone") + 1] == "Asia/Tokyo" and "--precheck" in edit
+
+# remind_author: others' PRs where the owner asked for changes and the author stayed silent.
+def theirs(n, reviews=(), said=(), head=None, author="dana", kind="User", draft=False, repo="acme/widgets"):
+    return {"id": f"PR_{repo}_{n}", "number": n, "title": f"Theirs {n}", "url": f"https://github.com/{repo}/pull/{n}",
+            "isDraft": draft, "createdAt": iso(NOW - 5 * 86400), "updatedAt": iso(NOW - 86400), "headRefOid": head or f"h{n}",
+            "additions": 3, "deletions": 1, "state": "OPEN", "repository": {"nameWithOwner": repo},
+            "author": {"__typename": kind, "login": author}, "reviews": {"nodes": list(reviews)},
+            "comments": {"nodes": [{"author": {"login": w}, "createdAt": iso(t)} for w, t in said if w != "thread"]},
+            "reviewThreads": {"nodes": [{"comments": {"nodes": [{"author": {"login": author}, "createdAt": iso(t)}]}}
+                                        for w, t in said if w == "thread"]}}
+
+
+def mine_review(state, t, oid, body="", inline=()):
+    return {"state": state, "body": body, "submittedAt": iso(t), "commit": {"oid": oid},
+            "comments": {"nodes": [{"body": b} for b in inline]}}
+
+
+def ask(n, **kw):
+    return p.author_wait(theirs(n, **kw), ME, cfg)
+
+
+T = at(13, 10)
+assert ask(50, reviews=[mine_review("CHANGES_REQUESTED", T, "h50")])["since"] == T
+assert ask(51, reviews=[mine_review("COMMENTED", T, "h51", inline=["[MUST] handle the empty case"])])["author"] == "dana", \
+    "a MUST label inline counts like a change request"
+assert ask(51, reviews=[mine_review("COMMENTED", T, "h51", body="nit: rename")]) is None, "a plain comment asks nothing"
+assert ask(52, reviews=[mine_review("CHANGES_REQUESTED", T, "h52"), mine_review("APPROVED", T + H, "h52")]) is None
+assert ask(52, reviews=[mine_review("CHANGES_REQUESTED", T, "h52"), mine_review("COMMENTED", T + H, "h52")])["since"] == T, \
+    "a later plain comment keeps the change request standing"
+assert ask(53, reviews=[mine_review("CHANGES_REQUESTED", T, "old")]) is None, "a push since the ask: re-review, not a reminder"
+assert ask(54, reviews=[mine_review("CHANGES_REQUESTED", T, "h54")], said=[("dana", T + H)]) is None, "the author answered"
+assert ask(54, reviews=[mine_review("CHANGES_REQUESTED", T, "h54")], said=[("thread", T + H)]) is None, "in a review thread"
+assert ask(54, reviews=[mine_review("CHANGES_REQUESTED", T, "h54")], said=[("dana", T - H), ("erin", T + H)]) is not None
+assert p.slack_thread(["https://x.slack.com/archives/C0FAKE/p1760000000123456"]) == "C0FAKE:1760000000.123456"
+assert p.slack_thread(["https://x.slack.com/archives/C0FAKE/p1760000000999999?thread_ts=1760000000.123456&cid=C0FAKE"]) \
+    == "C0FAKE:1760000000.123456", "a reply's permalink points at its thread"
+assert p.slack_thread(["not a link"]) is None
+
+ac = {**cfg, "reviewers": {**cfg["reviewers"], "dana": {"slack": "U0FAKEDANA"}}, "author_wake_prefix": {"helper[bot]": "@helper"}}
+human = {**ask(50, reviews=[mine_review("CHANGES_REQUESTED", T, "h50")]), "thread": "C0FAKE:1.0"}
+bot = {**p.author_wait(theirs(55, author="helper[bot]", kind="Bot", reviews=[mine_review("CHANGES_REQUESTED", T, "h55")]), ME, cfg),
+       "thread": "C0FAKE:2.0"}
+due = at(14, 10)
+assert p.decide([], [], at(14, 9, 59), ac, [human]) == [], "one business day has not passed"
+assert p.decide([], [], at(14, 22), ac, [human]) == [], "outside business hours: wait for the morning round"
+r = {a["pr"]: a for a in p.decide([], [], due, ac, [human, bot])}
+assert (r[W + "50"]["thread"], r[W + "50"]["slack_user"], r[W + "50"]["prefix"]) == ("C0FAKE:1.0", "U0FAKEDANA", None)
+assert (r[W + "55"]["thread"], r[W + "55"]["prefix"], r[W + "55"]["reviewer"]) == (None, "@helper", "helper[bot]"), \
+    "a bot gets a PR comment with its wake prefix, even when a Slack thread exists"
+assert p.decide([], [], due, cfg, [human])[0]["thread"] is None, "no Slack id for the author: a PR comment"
+assert p.decide([], [], due, ac, [{**human, "thread": None}])[0]["prefix"] is None
+assert p.decide([], [row(W + "50", "dana", "remind_author", due, head="h50")], due + 86400 * 3, ac, [human]) == [], "once per head"
+assert p.decide([], [row(W + "50", "dana", "remind_author", due, head="h50", source="refused")], due, ac,
+                [{**human, "head": "h50b"}]) == [], "refused: never again"
+
+p.STATE = pathlib.Path(tempfile.mkdtemp()) / "prs"
+seen = p.STATE.parent / "mentions" / "seen.json"
+seen.parent.mkdir(parents=True)
+seen.write_text(json.dumps({"x": {"category": "review", "pr": "acme/Widgets#50",
+                                  "permalink": "https://x.slack.com/archives/C0FAKE/p1760000000123456"}}))
+others = [theirs(50, reviews=[mine_review("CHANGES_REQUESTED", T, "h50")]),
+          theirs(56, draft=True, reviews=[mine_review("CHANGES_REQUESTED", T, "h56")]),
+          theirs(57, author="owner-bot", kind="Bot", reviews=[mine_review("CHANGES_REQUESTED", T, "h57")]),
+          theirs(58, reviews=[mine_review("APPROVED", T, "h58")])]
+afake = type("F", (), {"viewer": lambda self: ME, "mine": lambda self, b: [], "reviewed": lambda self, me, since: others})()
+aplan = p.compute(afake, {**ac, "mentions_seen": str(seen)}, {}, due)
+assert [(i["key"], i["thread"], i["once"]) for i in aplan["new"]] == [("acme/widgets#50@h50/remind_author/dana", "C0FAKE:1760000000.123456", False)], \
+    aplan["new"]
+assert "리뷰 지적 대응 리마인드(작성자) → @dana" in p.body(aplan)
+p.write_json(p.STATE / "plan.json", aplan)
+assert p.log(p.STATE, "acme/widgets#50@h50/remind_author/dana", "sent", due)["action"] == "remind_author"
+assert p.compute(afake, {**ac, "mentions_seen": str(seen)}, {}, due + 60)["new"] == [], "the send-log holds it at this head"
 
 # A row appended by hand (no action/source/at) once made decide() raise KeyError 'action' every round.
 import os, stat, subprocess

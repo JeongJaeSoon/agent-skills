@@ -544,7 +544,7 @@ four = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": ["review_requ
 full = four[four.index("--prompt") + 1]
 assert full.index(" round`") < full.index("orca orchestration send") < full.index(" actions`") < full.index(" dispatch`") \
     < full.index(" commit`"), full
-assert "retrigger 코멘트와 `round` 가 낸 승인뿐이다." in full and ". GitHub 쓰기는 retrigger 코멘트뿐이다" not in full, \
+assert "retrigger·remind_author 코멘트와 `round` 가 낸 승인뿐이다." in full and ". GitHub 쓰기는 retrigger 코멘트뿐이다" not in full, \
     "the round's write list names its approvals; only review_wait's own step is scoped to the comment"
 # With ready_to_merge too: merges and verify (which rewrites body.txt) come first, then round/result, then the send.
 five = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "kinds": list(p.KINDS)}, "path:/r")

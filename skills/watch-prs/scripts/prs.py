@@ -72,7 +72,7 @@ DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs"
             "merge_repos": [], "merge_deny_repos": [], "merge_methods": ["squash", "merge", "rebase"],
             "hold_labels": ["hold", "do-not-merge", "wip"], "required_bots": [],
             "review_verdict_pattern": r"^\**(?:결론|verdict)(?:\**\s*[:：]|\s*[:：]\s*\**)\s*\**(pass|fail)\**\s*$",
-            "ci_wait_minutes": 15}
+            "ci_wait_minutes": 15, "must_pattern": r"\[MUST\]", "author_wake_prefix": {}}
 REFERENCE = pathlib.Path(__file__).resolve().parents[2] / "deliver-ticket/references/post-merge-release.md"
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 GH_RETRY_WAITS = (2, 4)
@@ -105,6 +105,17 @@ MINE_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid addi
  commits(last:1){nodes{commit{committedDate}}}"""
 MINE_Q = ("query($q:String!,$after:String){search(query:$q,type:ISSUE,first:25,after:$after)"
           "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + MINE_FIELDS + "}}}}")
+# Others' PRs the owner reviewed: the owner's reviews with their inline comments (a MUST label is usually inline),
+# and what the author said since, in the conversation and in review threads.
+AUTHOR_FIELDS = """id number title url isDraft createdAt updatedAt headRefOid additions deletions state
+ repository{nameWithOwner} author{__typename login}
+ reviews(author:$me,last:20,states:[APPROVED,CHANGES_REQUESTED,COMMENTED,DISMISSED]){nodes{state body submittedAt
+  commit{oid} comments(first:30){nodes{body}}}}
+ comments(last:30){nodes{author{login} createdAt}}
+ reviewThreads(first:100){nodes{comments(last:10){nodes{author{login} createdAt}}}}"""
+AUTHOR_Q = ("query($q:String!,$me:String!,$after:String){search(query:$q,type:ISSUE,first:25,after:$after)"
+            "{pageInfo{hasNextPage endCursor} nodes{... on PullRequest{" + AUTHOR_FIELDS + "}}}}")
+SLACK_LINK = re.compile(r"/archives/([A-Z0-9]+)/p(\d{10})(\d{6})(?:.*[?&]thread_ts=([\d.]+))?")
 
 
 class ConfigError(ValueError):
@@ -190,6 +201,10 @@ class GitHub:
         """The owner's open PRs, plus a self bot's PRs assigned to the owner: a bot app is often shared org-wide."""
         qs = ["author:@me"] + [f"author:app/{bot_name(b)} assignee:@me" for b in self_bots]
         return list({n["id"]: n for q in qs for n in self._paged(MINE_Q, q=f"is:pr is:open archived:false {q}")}.values())
+
+    def reviewed(self, me, since):
+        """Others' open PRs the owner reviewed, updated since the date (YYYY-MM-DD)."""
+        return self._paged(AUTHOR_Q, q=f"is:pr is:open archived:false reviewed-by:@me -author:@me updated:>={since}", me=me)
 
     def nodes(self, ids, me, query=NODES_Q):
         return [n for i in range(0, len(ids), 50) for n in gh_graphql(query, partial=True, ids=ids[i:i + 50], me=me)["nodes"] if n]
@@ -775,6 +790,38 @@ def wait_state(pr, me, cfg):
             "urgent": any(l["name"] in cfg["urgent_labels"] for l in pr["labels"]["nodes"])}
 
 
+def author_wait(pr, me, cfg):
+    """One of others' PRs where the owner asked for changes and the author has not answered; None otherwise.
+
+    The ask is the owner's latest review that requested changes or carries must_pattern in its body or inline
+    comments, with no approval or dismissal after it. A push since the ask hands the PR back to review_request
+    (the owner re-reviews it), so it is not reminded; nor is an author who commented or replied in a thread since."""
+    must, ask = re.compile(cfg["must_pattern"]), None
+    for r in pr["reviews"]["nodes"]:
+        if r["state"] in ("APPROVED", "DISMISSED"):
+            ask = None
+        elif r["state"] == "CHANGES_REQUESTED" or any(must.search(b or "") for b in
+                                                      [r["body"]] + [c["body"] for c in r["comments"]["nodes"]]):
+            ask = r
+    if not ask or (ask.get("commit") or {}).get("oid") != pr["headRefOid"]:
+        return None
+    since, author = ts(ask["submittedAt"]), login(pr)
+    said = pr["comments"]["nodes"] + [c for t in pr["reviewThreads"]["nodes"] for c in t["comments"]["nodes"]]
+    if any(login(c) == author and ts(c["createdAt"]) > since for c in said):
+        return None
+    repo = pr["repository"]["nameWithOwner"]
+    return {"pr": f"{repo}#{pr['number']}", "repo": repo, "head": pr["headRefOid"], "url": pr["url"],
+            "title": pr["title"], "author": author, "bot": pr["author"].get("__typename") == "Bot", "since": since}
+
+
+def slack_thread(permalinks):
+    """channel:ts of the thread a Slack permalink sits in (its thread_ts when the link is a reply)."""
+    for link in permalinks:
+        if m := SLACK_LINK.search(link):
+            return f"{m[1]}:{m[4] or m[2] + '.' + m[3]}"
+    return None
+
+
 def slack_id(who, cfg):
     return (cfg["reviewers"].get(who) or {}).get("slack")
 
@@ -791,7 +838,18 @@ def wait_action(kind, s, who, cfg, at, thread=None, comment=None):
             "channel": (person.get("channel") or cfg["repo_channels"].get(s["repo"]) or cfg["channel"]) if slack else None}
 
 
-def decide(states, sendlog, now, cfg):
+def author_action(s, cfg):
+    """A human author with a known Slack thread and id hears it there; a bot, or anyone else, gets a PR comment,
+    which starts with the bot's wake prefix when one is configured (a bot may answer only comments that do)."""
+    who = None if s["bot"] else slack_id(s["author"], cfg)
+    thread = s.get("thread") if who else None
+    wake = {bot_name(b): w for b, w in cfg["author_wake_prefix"].items()}.get(bot_name(s["author"]))
+    return {"action": "remind_author", "pr": s["pr"], "head": s["head"], "reviewer": s["author"], "url": s["url"],
+            "title": s["title"], "slack_user": who if thread else None, "thread": thread, "comment": None,
+            "prefix": None if thread else wake, "post_at": None, "channel": thread.split(":")[0] if thread else None}
+
+
+def decide(states, sendlog, now, cfg, authors=()):
     """The actions due now, from PR states, the send-log and the clock; pure, so each reminder rule is a test.
 
     request    pending reviewer with no row for this PR yet. Batched per reviewer: due once they have batch_min
@@ -800,6 +858,8 @@ def decide(states, sendlog, now, cfg):
     remind     once per request row, one business day after it (or after its scheduled post), in its thread.
     rerequest  a voided approval, once per head: the same reviewer is not pinged again until a new push.
     retrigger  a review bot's stale CHANGES_REQUESTED, once per head, with the bot's trigger comment.
+    remind_author  an author silent one business day after the owner's ask (author_wait), once per head, in
+               business hours only, since it may go out as a PR comment that cannot be scheduled.
     A refused row stops every action for that (PR, reviewer); a skipped row (the round judged it moot) stops
     only that action at that head. Unmapped reviewers get no action, only a notice.
     Slack actions outside business hours carry post_at: the next business morning."""
@@ -834,6 +894,11 @@ def decide(states, sendlog, now, cfg):
             comment = bots.get(bot_name(bot))
             if comment and not any(r["head"] == s["head"] or r["source"] == "refused" for r in by.get((s["pr"], bot), [])):
                 acts.append(wait_action("retrigger", s, bot, cfg, None, comment=comment))
+    for s in authors:
+        rows = by.get((s["pr"], s["author"]), [])
+        if at is None and now >= one_business_day_after(s["since"], cfg) and not any(
+                r["source"] == "refused" or (r["action"] == "remind_author" and r["head"] == s["head"]) for r in rows):
+            acts.append(author_action(s, cfg))
     for who, waiting in held.items():
         if who in scheduled:
             continue
@@ -866,7 +931,8 @@ def describe(a, cfg):
     when = f" · {local(a['post_at'], cfg).strftime('%m-%d %H:%M')} 예약" if a["post_at"] else ""
     return {"request": f"리뷰 의뢰 → @{a['reviewer']}", "remind": f"리마인드 → @{a['reviewer']}",
             "rerequest": f"재리뷰 요청(승인 무효) → @{a['reviewer']}",
-            "retrigger": f"봇 재리뷰 트리거 → @{a['reviewer']}"}[a["action"]] + when
+            "retrigger": f"봇 재리뷰 트리거 → @{a['reviewer']}",
+            "remind_author": f"리뷰 지적 대응 리마인드(작성자) → @{a['reviewer']}"}[a["action"]] + when
 
 
 def wait_item(pr, now, k, why):
@@ -896,7 +962,14 @@ def collect_review_wait(gh, me, cfg, ledger, now):
         states[s["pr"]] = (pr, s)
         if why := notices(s, cfg):
             items.append(wait_item(pr, now, f"{key(pr)}/review_wait", why))
-    for a in decide([s for _, s in states.values()], sendlog_rows(STATE / "sendlog.jsonl"), now, cfg):
+    own, authors, threads = [s for _, s in states.values()], [], slack_reviews(cfg)
+    since = dt.date.fromtimestamp(now - cfg["stale_days"] * 86400).isoformat()
+    for pr in gh.reviewed(me, since):
+        if pr["isDraft"] or out_of_scope(pr, cfg) or not (s := author_wait(pr, me, cfg)):
+            continue
+        states[s["pr"]] = (pr, s)
+        authors.append({**s, "thread": slack_thread(threads.get(s["pr"].lower(), []))})
+    for a in decide(own, sendlog_rows(STATE / "sendlog.jsonl"), now, cfg, authors):
         pr = states[a["pr"]][0]
         items.append({**wait_item(pr, now, f"{key(pr)}/{a['action']}/{a['reviewer']}", [describe(a, cfg)]), **a, "once": False})
     return items, excluded
@@ -1203,9 +1276,12 @@ PROMPT_STEPS = {
         "`--source no_thread` 로 기록한다. post_at 이 있으면 바로 보내지 않고 그 시각으로 예약하고 "
         "`--source scheduled --scheduled <id> --post-at <post_at>`(스레드 답글이면 `--thread <channel>:<부모 ts>` 도) 로, 보냈으면 "
         "`--source sent --thread <channel>:<ts>` 로 기록한다. retrigger 는 그 PR 에 `gh pr comment <url> --body <comment>` 를 "
-        "달고 `--source sent` 로 기록한다. 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨·머지됨, 리뷰어의 slack id 없음 등)은 "
+        "달고 `--source sent` 로 기록한다. remind_author 는 리뷰 지적에 대응해 달라는 작성자 리마인드다: thread 가 있으면 "
+        "slack_user 를 멘션해 그 thread 에 답글로만 보내고(reply_broadcast false) `--source sent --thread <channel>:<ts>` 로, "
+        "thread 가 없으면 `gh pr comment <url> --body <본문>` 로 그 PR 에 달고 `--source sent` 로 기록한다(no_thread 로 남기지 않는다). "
+        "prefix 가 있으면 본문을 그 문자열로 시작한다(그 봇은 그렇게 시작하는 코멘트에만 답한다). 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨·머지됨, 리뷰어의 slack id 없음 등)은 "
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
-        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. 이 단계의 GitHub 쓰기는 retrigger 코멘트뿐이다."),
+        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. 이 단계의 GitHub 쓰기는 retrigger·remind_author 코멘트뿐이다."),
     "unreleased": (
         "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: worker-start 는 Run 에 묶인 "
         "코디네이터 터미널에서만 된다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
@@ -1258,7 +1334,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
         reads = (" 이 회차는 머지 단계" + ("와 `round` 가 낸 승인" if gate else "") + " 밖에서 승인·리뷰·배포를 직접 하지 않는다."
                  + ("" if "review_wait" in cfg["kinds"] else " 코멘트·재요청도 하지 않는다."))
     elif "review_wait" in cfg["kinds"]:
-        reads = " GitHub 쓰기는 retrigger 코멘트" + ("와 `round` 가 낸 승인" if gate else "") + "뿐이다."
+        reads = " GitHub 쓰기는 retrigger·remind_author 코멘트" + ("와 `round` 가 낸 승인" if gate else "") + "뿐이다."
     else:
         reads = (" 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다"
                  + (" (예외는 `round` 가 낸 단계뿐이다)." if gate else "."))
@@ -1329,8 +1405,8 @@ def main():
     elif cmd == "actions":
         for i in (read_json(STATE / "plan.json", None) or {"new": []})["new"]:
             if "action" in i:
-                print(json.dumps({k: i[k] for k in ("key", "action", "url", "title", "reviewer", "slack_user", "channel",
-                                                     "thread", "post_at", "comment")}, ensure_ascii=False))
+                print(json.dumps({k: i.get(k) for k in ("key", "action", "url", "title", "reviewer", "slack_user", "channel",
+                                                         "thread", "post_at", "comment", "prefix")}, ensure_ascii=False))
     elif cmd == "log":
         num = lambda name: float(opt(name)) if opt(name) else None
         row = log(STATE, opt("--key"), opt("--source"), now, thread=opt("--thread"), scheduled=opt("--scheduled"),

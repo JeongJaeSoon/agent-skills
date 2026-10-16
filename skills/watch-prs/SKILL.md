@@ -11,7 +11,8 @@ first. Apps and bots also request reviewers themselves. This skill keeps only th
 a person made, ranks them, and hands them on once per head commit.
 
 It never writes a review of its own judgement, re-requests or labels. Its GitHub writes are a review bot's
-re-review trigger comment on the user's own PR (`review_wait`, below); when `kinds` includes
+re-review trigger comment on the user's own PR and a reminder comment to an author who left the user's
+change request unanswered (`review_wait`, below); when `kinds` includes
 `ready_to_merge`, merging the user's own PRs that pass every gate in [Ready to merge](#ready-to-merge);
 and an `ownergate` approval that an autoMode allow rule names ([Owner gate](#owner-gate)). Slack
 requests and reminders go through the user's Slack-posting rules. The release workers it starts for
@@ -35,6 +36,8 @@ never in this repo.
          "reviewers": {"<github login>": {"slack": "<Slack user id>", "channel": "<optional override>"}},
          "review_bots": {"<bot login>": "<the bot's re-review trigger comment; its verdict lines also count for ready_to_merge>"},
          "holidays": ["<YYYY-MM-DD>"], "urgent_labels": ["<label>"],
+         "must_pattern": "<regex for a must-fix label; default \\[MUST\\]>",
+         "author_wake_prefix": {"<bot login>": "<word a bot author answers to at the start of a comment>"},
          "deploy": {"<owner/repo>": {"dev_release": "auto-sync | <how main reaches dev>",
                                      "revision_cmd": "<prints the commit or ref dev runs>",
                                      "logs": "<where dev logs are read>", "verify": "<verify-* skill or smoke check>",
@@ -166,6 +169,7 @@ Each PR gets its states from GitHub alone:
 - `rerequest`: a voided approval, once per head, in the earlier thread: the same reviewer hears about
   the same PR again only after a new push.
 - `retrigger`: the bot's `review_bots` comment, once per head, posted at any hour.
+- `remind_author`: see [Authors the user is waiting on](#authors-the-user-is-waiting-on).
 - Outside business hours (after `night_hour` 21, before `morning_hour` 9, weekends, `holidays`) a
   Slack action carries `post_at`, the next business morning, and is scheduled instead of sent. While a
   scheduled request to a reviewer is pending, their next batch waits: a scheduled message cannot be
@@ -180,6 +184,28 @@ channel; `--at` is that message's time), `no_thread` (no thread to reply in, so 
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
 A `refused` row stops every later action for that PR and reviewer. A row appended by hand for a request sent outside the round
 (`pr`, `reviewer`, `head` and an ISO `date` or a `slack_ts`, no `action`) counts as a sent `request`.
+
+### Authors the user is waiting on
+
+The same round reminds the author of someone else's PR to answer the user's review. A PR is a
+candidate when it is open, not a draft, in scope (`exclude_*`, not by a `self_bots` or `ignore_bots`
+author), updated within `stale_days`, and the user reviewed it. The ask is the user's latest review
+that is `CHANGES_REQUESTED` or matches `must_pattern` in its body or inline comments, with no
+approval or dismissal after it. The PR is due when:
+
+- the head is still the commit the ask reviewed. A push since then means the author answered with
+  code: the PR goes back to the user as a re-review (`review_request`), never a reminder;
+- the author has not commented on the PR or in a review thread since the ask;
+- one business day has passed since the ask, and the round runs in business hours (a PR comment
+  cannot be scheduled).
+
+`remind_author` goes once per PR and head; its send-log row names the author as `reviewer`. Where it
+goes:
+
+- a person whose PR has a Slack review request (`watch-mentions`' ledger) and a `slack` id in
+  `reviewers`: a reply in that request's thread, mentioning them, never broadcast;
+- anyone else, every bot included: a PR comment. A bot that answers only comments starting with a
+  wake word gets it from `author_wake_prefix` (the action's `prefix`), and the comment starts with it.
 
 ## Ready to merge
 
@@ -279,7 +305,9 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    message per reviewer in the channel, unless the channel already has a request for that PR
    (`found`); a reminder or re-request is a thread reply only, never broadcast; with no thread known,
    search the channel for one, and with none found post nothing (`no_thread`). With `post_at`, schedule
-   for that time. `retrigger` is `gh pr comment <url> --body <comment>`. An action already moot (approved
+   for that time. `retrigger` is `gh pr comment <url> --body <comment>`. `remind_author` with a
+   `thread` is a reply there mentioning `slack_user`; without one it is `gh pr comment <url>` whose body
+   starts with `prefix` when set, logged `sent` (it never searches for a thread or logs `no_thread`). An action already moot (approved
    or merged meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
    permission prompt, the classifier or a hook is logged `refused` and reported, never retried.
 6. Only after the coordinator send succeeded, `python3 "$P" dispatch` prints one command per repo with
