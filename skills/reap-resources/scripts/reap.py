@@ -1487,8 +1487,10 @@ def act(item, notes):
 
 
 def main():
-    if "--under" in sys.argv:
+    if any(a == "--under" or a.startswith("--under=") for a in sys.argv):
         sys.exit("--under is no longer supported; use an explicit plan and supported scope options")
+    if any(a.startswith("--kinds=") for a in sys.argv):
+        sys.exit("use --kinds VALUE with supported kinds; --kinds=VALUE is not supported")
     if "--kinds" in sys.argv:
         requested = opt("--kinds") if sys.argv.index("--kinds") + 1 < len(sys.argv) else None
         if not requested or set(requested.split(",")) - set(KINDS + SCHEDULED + ("janitor",)):

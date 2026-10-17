@@ -212,18 +212,21 @@ with tempfile.TemporaryDirectory() as tmp:
 # Retired scope flags must fail before any inventory or mutation.
 saved_argv = sys.argv
 try:
-    sys.argv = ["reap.py", "scan", "--under", "/example"]
-    try:
-        reap.main()
-        raise AssertionError("retired scope was silently ignored")
-    except SystemExit as e:
-        assert "no longer supported" in str(e)
+    for scope in (["--under", "/example"], ["--under=/example"]):
+        sys.argv = ["reap.py", "scan", *scope]
+        try:
+            reap.main()
+            raise AssertionError("retired scope was silently ignored")
+        except SystemExit as e:
+            assert "no longer supported" in str(e)
 finally:
     sys.argv = saved_argv
 
 # Unknown, retired, empty and mixed kinds must fail before scanning even a valid subset.
 for args in (["--kinds"], ["--kinds", ""], ["--kinds", "retired-provider"],
-             ["--kinds", "orphan,retired-provider"], ["--kinds", "orphan,"]):
+             ["--kinds", "orphan,retired-provider"], ["--kinds", "orphan,"],
+             ["--kinds=retired-provider"], ["--kinds=orphan"], ["--kinds="],
+             ["--kinds", "orphan", "--kinds=retired-provider"]):
     original_config = reap.config
     try:
         reap.config = lambda: (_ for _ in ()).throw(AssertionError("configuration read before validation"))
