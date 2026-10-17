@@ -12,6 +12,9 @@ GOAL        One sentence: the outcome, executable by someone with no access to t
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
             Scratch root: <none, or the one path outside the worktree it may write, e.g. a
             directory a VM or container mounts>.
+            Downloaded logs and artifacts go to <approved system temporary directory>, outside
+            every git worktree. Resolve the platform temporary root (for example TMPDIR) and
+            name a task-specific directory in this SCOPE; do not assume an unset variable is a path.
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them. A fact you state here (something is absent from the base,
@@ -74,8 +77,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`), and
             give each Bash act that changes a file or its mode its own call, so a refusal names it.
-            Write no file or script outside the worktree except under SCOPE's scratch root; list
-            what you put there (checkouts, files, compose projects) in the report and tear it down
+            Write no file or script outside the worktree except under SCOPE's scratch root or
+            its named temporary download directory; list what you put there (checkouts, files, compose projects) in the report and tear it down
             before worker_done. No wrapper scripts for evidence: run the commands VERIFY names, one
             by one.
             An act refused by a permission prompt, the auto-mode classifier (including an error that
@@ -88,7 +91,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
-            subagent prompt you write: a summary drops the forms it lists. Taking the path this
+            subagent prompt you write, including tracker and notes delegates: a summary drops
+            the forms it lists. Taking the path this
             brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
             retry, nor is doing the act again after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
@@ -104,8 +108,14 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its
             category. A second refusal, or any doubt that the read is harmless, is reported and
-            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the cause
-            and run it again.
+            left. A post-execution hook error needs evidence that the act already ran: inspect
+            its output and side effects, report the error, and never repeat that act merely to
+            clear the error. Continue only independently authorized acts that do not depend on
+            the failed check, naming explicit paths (`git add <paths>`, never `-A`). Leave required
+            verification pending; if execution or safety is uncertain, stop the affected act.
+            Report leftover files for the normal card cleanup. A failing check (a git hook,
+            linter, test or CI) is not a refusal: fix the cause and run it again.
+            <repository data-sharing restrictions, applying to every reviewer and tool>
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
@@ -208,7 +218,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
 - **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
 - An agent that will use a write tool guarded by a first-write confirmation hook gets, in its brief or prompt, an instruction to invoke that policy skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
-- Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
+- Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.

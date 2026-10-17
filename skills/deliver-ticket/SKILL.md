@@ -177,7 +177,11 @@ not in CI.
 
 **A green check is not evidence.** Confirm from logs that the step actually ran
 (`gh run view <id> --log`) — a skipped step, a rate-limited reviewer, and a real pass all
-look identical in the checks list.
+look identical in the checks list. Read a failed run with `gh run view <id> --log-failed`
+first. Download logs and artifacts into an explicitly scoped system temporary directory,
+outside git worktrees (`gh run download -D <temporary-directory>`). A standalone card also
+resolves the platform temporary root and names its task-specific download directory before
+use; never expand an unset temporary-root variable into an absolute destination.
 
 **Report each check as VERIFIED, NOT VERIFIED or INCONCLUSIVE** — in 검증, the sticky comment
 and the completion comment. Inconclusive, or a pass on the wrong surface, is not a pass; name
