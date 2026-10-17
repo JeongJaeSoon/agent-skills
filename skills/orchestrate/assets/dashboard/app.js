@@ -570,15 +570,14 @@ function nextTone(n) {
   return "accent";
 }
 
-const CODEX = /^(gpt|o3|o4|codex)/;
 const OPEN_STATES = new Set(["triage", "backlog", "unstarted", "started"]);
 // What a worker's session is doing, from the last rows of its transcript (dash.py step_motion).
 function motionOf(w) {
   const m = w.motion, mins = (Date.now() - ms(m?.since || w.since)) / 60000 || 0;
   if (w.activity === "waiting") return { tone: "warn", moving: false, text: "waiting — a permission prompt?", since: w.seen_at };
-  if (!m) return CODEX.test(w.model || "")
-    ? { tone: "", moving: w.activity === "running", text: `Codex · ${w.activity === "running" ? "running" : "no transcript here"}` }
-    : { tone: mins > 10 ? "warn" : "", moving: false, text: "no session activity since dispatch", since: w.since };
+  if (!m) return w.transcript_expected
+    ? { tone: mins > 10 ? "warn" : "", moving: false, text: "no session activity since dispatch", since: w.since }
+    : { tone: "", moving: w.activity === "running", text: "session activity unavailable", since: w.seen_at };
   if (m.state === "tool") return { tone: mins >= 45 ? "warn" : "", moving: true, text: `${m.tool}${m.detail ? ` · ${m.detail}` : ""}`, since: m.since };
   if (m.state === "working") return { tone: "", moving: true, text: "thinking", since: m.since };
   if (m.parked) return { tone: "", moving: false, text: "waiting for its own wake-up", since: m.since };
@@ -892,9 +891,9 @@ function viewWorkers(st) {
     return `<span class="move ${mo.tone ? "tone-" + mo.tone + " toned" : ""}" title="${esc(mo.text)}">${moveDot(mo)}<span class="ellipsis">${esc(mo.text)}</span>${agoSpan(mo.since)}</span>`;
   };
   const tok = (w) => w.tokens ? `<span title="in ${compact(w.tokens.input_tokens)} · out ${compact(w.tokens.output_tokens)} · cache write ${compact(w.tokens.cache_creation_input_tokens)} · cache read ${compact(w.tokens.cache_read_input_tokens)}">${compact(w.tokens.total)}</span>`
-    : `<span class="muted">${/^(gpt|o3|o4|codex)/.test(w.model || "") ? "n/a" : "—"}</span>`;
+    : `<span class="muted">n/a</span>`;
   return `<div class="view-head"><div><h2>Workers</h2><p>Orca dispatches on run <span class="mono">${esc(st.run)}</span>. Activity is read from each Claude worker's transcript: a tool it is running, thinking, or a finished turn waiting for input (an orchestration message does not wake it).</p></div></div>
-  <div class="card" data-src="orca"><div class="card-head"><h3>Tokens</h3><span class="aside">from Claude Code transcripts · Codex workers n/a</span></div>
+  <div class="card" data-src="orca"><div class="card-head"><h3>Tokens</h3><span class="aside">from available session transcripts · missing usage n/a</span></div>
     <div class="card-body" style="display:flex;flex-wrap:wrap;align-items:center;gap:24px">
       <div><div class="eyebrow">Program total</div><div style="font-size:var(--t-2xl);font-weight:600">${compact(u?.total)}</div></div>
       ${u ? [["input", u.input_tokens], ["output", u.output_tokens], ["cache write", u.cache_creation_input_tokens], ["cache read", u.cache_read_input_tokens]].map(([k, v]) => `<div><div class="eyebrow">${k}</div><div>${compact(v)}</div></div>`).join("") : '<span class="muted">No transcripts found for these workers.</span>'}

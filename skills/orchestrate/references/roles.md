@@ -12,11 +12,8 @@ The flow improver and the resource steward serve every program on the machine, s
 | Flow improver | Folding lesson signals, the human's process feedback and the ledgers' unclaimed signals into the skills while programs run: batched, audited, pushed or proposed as a draft PR, then reloaded | Touch a running program's work, or change its contract (merge policy, predicate, the brief's required fields, landing rules) before that program's coordinator confirms |
 | Resource steward | Reaping settled worktrees the coordinators missed, running `reap-resources` for leftover processes, Docker leftovers and stale branches, watching machine load | Touch a live turn, a dirty tree, an open PR, a coordinator's or standing role's worktree, or the dashboard; `--force` |
 
-They came from the user's own calls on a real program (2026-09-24):
-
-- On red main: "무조건 revert 하기보다는 별도의 agent에 위임해서 revert/hotfix를 자율 판단·대응하고 결과를 너에게 보고 + 필요한 세션에 공유, 너는 조율만".
-- On QA: "중간중간 동작확인 QA, e2e 테스트, 설계구현 정합성 확인도 전문 QA 오케스트레이터로 해야 한다".
-- On process feedback: the coordinator stays on the mission. Feedback about how the work flows goes to a separate session, which improves the skills while programs run and shares the result (2026-09-26).
+These roles apply when the user selects this orchestration workflow. Their presence does
+not authorize unrelated repository work, cleanup, publishing, or permission changes.
 
 ## Main guardian brief
 
@@ -138,8 +135,8 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
-            subagent prompt you write, the tracker and notes delegate agents included: a summary
-            drops the forms it lists. Taking the path this
+            subagent prompt you write, including tracker and notes delegates: a summary drops
+            the forms it lists. Taking the path this
             brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
             retry, nor is doing the act again after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
@@ -155,10 +152,13 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its
             category. A second refusal, or any doubt that the read is harmless, is reported and
-            left. A hook that errors after its command already ran did not refuse it: go on with
-            acts that name explicit paths (`git add <paths>`, never `-A`), leave what it left
-            behind for card removal, and report it. A failing check (a git hook, linter, test or
-            CI) is not a refusal: fix the cause and run it again.
+            left. A post-execution hook error needs evidence that the act already ran: inspect
+            its output and side effects, report the error, and never repeat that act merely to
+            clear the error. Continue only independently authorized acts that do not depend on
+            the failed check, naming explicit paths (`git add <paths>`, never `-A`). Leave required
+            verification pending; if execution or safety is uncertain, stop the affected act.
+            Report leftover files for the normal card cleanup. A failing check (a git hook,
+            linter, test or CI) is not a refusal: fix the cause and run it again.
 REPORT      One status per commit, draft PR or ticket: the sha or PR URL, the diff
             summary, the audit's findings and what was applied, the grep and its result, each
             candidate dropped as "not applied: <candidate> — <reason>", and whether a reload is
@@ -182,7 +182,7 @@ WORKTREES   orca worktree rm (checks and --run-hooks per end-session §4) only w
             (docs/platform.md), a standing role's worktree, a live turn, an open PR, local changes.
 LEFTOVERS   Every round, run the reap-resources skill's scripts/reap.py (its SKILL.md holds the
             rules): scan --plan <scratchpad>/reap-plan.json, reap --plan on that file, then scan
-            again. That covers Codex broker trees, orphaned test processes, Docker leftovers,
+            again. That covers orphaned test processes, Docker leftovers,
             merged branches and scratchpad worktrees; never kill or remove those by hand. Other
             processes (compose stacks, dev servers, headless browsers, test runners) whose
             worktree is gone or settled: stop them the normal way (docker compose down in that

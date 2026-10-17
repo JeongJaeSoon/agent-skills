@@ -21,7 +21,13 @@ Skip when the work is trivial, off-topic, or already covered by an existing skil
 
 ## The lessons ledger
 
-One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. It lives there, not in the public repo, because evidence names private projects and tickets. Create it on first use with this table and a `## History` section under it:
+When upgrading, report an unset ledger explicitly and point to the [configuration migration guide](../../docs/configuration-migration.md). Existing files are not migrated automatically.
+
+Use `reflect.ledger` in the skill configuration or an explicit path supplied for this task.
+Keep private evidence outside public repositories. If no destination is configured, report
+findings in the current task; do not invent a shared note location. Existing ledgers stay at
+their current path and retain their IDs and history. A new ledger uses this table and a
+`## History` section:
 
 | ID | First seen | Source | Kind | Evidence | Occurrences | Learning | Target | Status | Change | Verification | Outcome |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -43,13 +49,13 @@ One note in the notes store (`use-notes`): `Project/agent-skills/learnings.md`. 
 - The transcripts behind the signals: the coordinator's own (reflect runs in the coordinator's session, so find it as in session mode below), and a worker's when a signal names it (its worktree path encoded the same way).
 - Every `applied` ledger row whose Outcome is not `recurred`. Update its Outcome now, judged against the lesson's own Learning, not its Kind: `recurred (<slug>)` when this program repeats the failure that lesson targets; add this slug to its `held through` list when the program ran the step the lesson changed and the failure did not return. A program that never ran that step leaves the row unchanged.
 
-Check each signal against the skills at current HEAD of the `agent-skills` checkout and mark in the pack the ones HEAD already fixes (with the file and line that fixes it), so the reviewers and the synthesizer do not propose them again. `git log --oneline <skills_commit>..HEAD -- skills/`, with `skills_commit` from `program.json` minus any `+local` suffix, lists what changed since the program started.
+Check each signal against the skills at current HEAD of the explicitly selected source checkout and mark in the pack the ones HEAD already fixes (with the file and line that fixes it), so the reviewers and the synthesizer do not propose them again. `git -C <source checkout> log --oneline <skills_commit>..HEAD -- <skill paths>`, with `skills_commit` from `program.json` minus any `+local` suffix, lists what changed since the program started. Use paths within that checkout; if no source checkout is configured, report that verification gap.
 
 With no signal and no failure left open after that, stop after the Outcome update. Otherwise pass the pack path to the reviewers in place of the transcript path.
 
 **Standing mode.** Rounds do not overlap: `mkdir -p ~/.claude/programs/_standing/reflect`, then take `mkdir ~/.claude/programs/_standing/reflect/lock` and write the start time into it. Skip the round while the lock exists, unless it started more than 4 hours ago (stale: remove it). Remove it when the round ends.
 
-Then settle the last standing PR, the newest in the `agent-skills` repo whose branch starts `reflect/standing-` (`gh pr list -R <repo> --state all --limit 100 --json number,state,headRefName,createdAt`): merged, its rows go `applied`; closed unmerged, `rejected (PR closed)`.
+Then settle the last standing PR, the newest in the configured source repository whose branch starts `reflect/standing-` (`gh pr list -R <repo> --state all --limit 100 --json number,state,headRefName,createdAt`): merged, its rows go `applied`; closed unmerged, `rejected (PR closed)`.
 
 New means a `signal`, `land_failed`, `main_red` or failed `verdict` row after the cursor (a ledger the cursor does not list yet: at or after its newest row), whose pointer the lessons ledger does not hold yet, in any `~/.claude/programs/*/ledger.jsonl`, the usage collector's `_skill-usage/ledger.jsonl` included (its `skill_usage` signals carry evidence `skill-usage:<skill>:<flag>@<window>`). The cursor, `~/.claude/programs/_standing/reflect/cursor.json`, maps each ledger's directory name (`<slug>`, `_skill-usage`) to the last `ts` that ledger gave a finished round, written with its UTC offset as the ledger writes it.
 
@@ -75,15 +81,15 @@ One message, three reviewers launched together. Claude reviewers use the `Agent`
 
 | Lens | Runner | Prompt template |
 |---|---|---|
-| Judgment | `Agent`, `model: "opus"` | `references/judgment-reviewer.md` |
-| Tooling | Codex: `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"`, the configured default model, then wait with `status <job id> --wait --timeout-ms 1800000` as a Bash call with `run_in_background`, which wakes you when the job ends, and read `result <job id>`. Ending the turn while that call runs is how you wait; ending it with nothing running in the background ends an unattended run for good. Read-only without `--write`. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. Codex sees only its own MCP servers, so inline any ticket or thread it will need. | `references/tooling-reviewer.md` |
-| Divergent | `Agent`, `model: "opus"` | `references/divergent-reviewer.md` |
+| Judgment | Independent read-only reviewer using available tools | `references/judgment-reviewer.md` |
+| Tooling | Independent read-only reviewer using available tools | `references/tooling-reviewer.md` |
+| Divergent | Independent read-only reviewer using available tools | `references/divergent-reviewer.md` |
 
-Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in their final response (Codex: `result <job id>`).
+Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in their final response.
 
 ### 3. Synthesize
 
-One `Agent` call, `subagent_type: "general-purpose"`, `model: "opus"`. The synthesizer's quality check includes spot-verifying citations, which can require MCP access. The read-only agents lack it. Use `references/synthesizer.md` verbatim, with each reviewer's full output inlined where marked. The synthesizer returns a structured Accepted / Rejected / Backlog list.
+One independent synthesizer using the host's available delegation tool. The synthesizer's quality check includes spot-verifying citations, which can require MCP access. The read-only agents lack it. Use `references/synthesizer.md` verbatim, with each reviewer's full output inlined where marked. The synthesizer returns a structured Accepted / Rejected / Backlog list.
 
 ### 4. Record, count, and check structure
 
@@ -96,7 +102,7 @@ Write every Accepted, Backlog and Rejected finding to the lessons ledger. A find
 ### 5. Apply
 
 **Program and standing mode** run with nobody to approve, so they propose instead of applying:
-1. Make the Accepted edits in one worktree branch of the `agent-skills` checkout (routing below). An edit that changes a command, flag or term greps all of `skills/` and changes every copy in the same branch.
+1. Make the Accepted edits in one worktree branch of the configured source checkout (routing below). An edit that changes a command, flag or term greps all of `skills/` and changes every copy in the same branch.
 2. Verify each against the change it makes, and record the printed result in Verification.
    - A description change: `bash scripts/trigger-probe.sh` on the old and the new checkout, at least 3 runs each, with one prompt that should fire the skill and one that should not.
    - A body or script change: `claude plugin validate <checkout>` and a check of the changed path itself: a test under the skill that fails without the change, or the incident replayed with the tools it needs in a scratch copy of the repo, with the asserted result. `trigger-probe.sh` denies writes and shell commands and reports only which skills fired, so it verifies triggering, never behavior.
@@ -110,9 +116,12 @@ With no Accepted finding, skip the PR and write one digest line saying why (stan
 
 **Session mode.** Before applying any Accepted edit, present the synthesizer's full Accepted/Rejected/Backlog output to the user and wait for explicit approval. The user picks which subset to apply and may redirect routings. Skill changes reach every session that loads this plugin, so nothing is applied without that approval.
 
-In every mode, Backlog items file to the user's ticket tracker (the **use-tracker** skill) automatically, and the ticket goes in the row's Status. Only the Accepted list waits for approval.
+File Backlog items only when the user's task or configured workflow authorizes tracker writes; otherwise keep them as proposed follow-ups in the report.
 
-This plugin's skills (`agent-skills`) come from the `JeongJaeSoon/agent-skills` repo. Make every edit in a checkout of it, on a worktree branch, never in the installed copy under `~/.claude/plugins/cache/`, which an update replaces. `claude --plugin-dir <checkout>` loads the edited copy for a test. A skill from another plugin is not edited in place; record the finding as Backlog instead.
+Choose the source checkout explicitly with `reflect.skill_repository` or the user's task.
+Edit only that authorized repository, on a worktree branch, never an installed plugin cache.
+If the source repository is unknown, report the proposed edit without changing an installed
+copy. Use the target platform's validation and isolated loading mechanism for testing.
 
 For each approved Accepted item, follow the Routing field exactly:
 

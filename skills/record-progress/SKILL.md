@@ -7,7 +7,9 @@ description: "Use when work reaches a moment the shared record should show — a
 
 The tracker and the notes store outlive this session; the transcript does not. This skill
 decides, at each moment that matters, what each of them gets. The writes themselves go through
-`use-tracker` and `use-notes`.
+`use-tracker` and `use-notes`. Use only destinations and external writes authorized by the
+user or the selected workflow. Without that authorization, prepare the proposed record in
+the current task.
 
 | | Tracker (`use-tracker`) | Notes store (`use-notes`) |
 |---|---|---|
@@ -33,7 +35,7 @@ still investigating. Record when one of these happened:
 
 | Moment | Tracker | Notes |
 |---|---|---|
-| PR opened | ticket to `started`, PR linked (`use-tracker` "Milestones"); no ticket for real work → file one (`write-ticket`) | — |
+| PR opened | ticket to `started`, PR linked (`use-tracker` "Milestones"); no ticket → propose one if the workflow needs it (`write-ticket`) | — |
 | Review requested | `review` with the review line | — |
 | Merged, or deployed and verified | the completion comment with the evidence and `completed` when the ticket's own done holds; else one comment naming the open criterion (`use-tracker` "Reconcile") | the worklog line, if the work kept one |
 | Investigation or design concluded | a comment linking the note, if a ticket exists | the conclusion: chosen, ruled out, why, the trap |
@@ -47,8 +49,7 @@ still investigating. Record when one of these happened:
   `git log --oneline origin/<default branch>..HEAD` in each worktree touched. State comes from output read
   in this turn: `gh pr view`, the CI or deploy log, the check the ticket names. Another agent's
   report or a green badge is not evidence. No evidence → say so and leave the state where it is.
-- **Do it, then report it.** These moments are the request to move a ticket, comment on it, or
-  write a note; do not ask first. Ask only when the evidence points two ways, the ticket is
+- **Do it, then report it.** When the selected workflow authorizes these writes, perform them without asking again. Ask only when the evidence points two ways, the ticket is
   someone else's (comment only), or the change touches another team's epic. Filing a new
   ticket keeps `write-ticket`'s approval rule, which the user's own instructions may waive.
 - **Follow-ups against the exit condition.** Classify each one NOW / LATER / DROP (principle

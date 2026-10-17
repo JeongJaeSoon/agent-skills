@@ -1,7 +1,11 @@
-<!-- translated-from: 5d79230 -->
+<!-- translated-from: 28861bcbfcf84e9bc255269217e4a25a81ebd5dd -->
 # Skill catalog
 
-This page covers the skills in `skills/*/SKILL.md`, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 3 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief`.
+This page covers the skills in `skills/*/SKILL.md`, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 6 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief`.
+
+Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
+
+Even small changes need a reviewer other than the author. Trivial means about 20 lines or fewer, no auth, crypto, migration, concurrency, CI or public-contract changes, and a covering test. Run documented commands unchanged in isolated fixtures; mark unexecuted examples NOT VERIFIED. Report and repair stale verification tools and prove acceptance criteria directly. Creating a reusable verify skill is optional when useful within scope; verification itself is mandatory.
 
 ## Flow
 
@@ -35,7 +39,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **Related:** Every tracker operation goes through `use-tracker`. `orchestrate` and `measure-delivery` count tickets in the follow-up format.
 
 ### deliver-ticket (formerly `ship-pr`)
-- **When:** From before the first multi-file edit until the ticket is done. Creating, updating and merging PRs ("pr 작성까지" (up to writing the PR), "머지까지 진행해줘" (take it all the way to the merge)), releases, answering review comments, Codex cross-checks, "동작확인" (check that it works), "내가 확인할 거 있어?" (anything I need to check?), "이 티켓 끝내줘" (finish this ticket), and stack work all belong here.
+- **When:** From before the first multi-file edit until the ticket is done. Creating, updating and merging PRs ("pr 작성까지" (up to writing the PR), "머지까지 진행해줘" (take it all the way to the merge)), releases, answering review comments, independent reviews, "동작확인" (check that it works), "내가 확인할 거 있어?" (anything I need to check?), "이 티켓 끝내줘" (finish this ticket), and stack work all belong here.
 - **What it does:**
   - **Plan:** It doesn't enter plan mode or wait for approval. The ticket gets a single plan comment (edited when the plan changes); progress goes in the worklog and the result in a completion comment. It calls other skills depending on the shape of the work: `figure-it-out` for big migrations or multi-step changes, `architect` (→ `arena`) for design decisions that are hard to undo, `how` for unfamiliar code, and `why` for code whose reason is unclear.
   - **Build:** Only on a worktree branch. Non-trivial logic isn't committed without a runnable test. A bug starts with a failing reproduction test. Anything found outside the scope is fixed in this diff, filed as a follow-up ticket, or only noted in the worklog.
@@ -48,7 +52,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - **Review:**
     - Before review, `prune-comments` cleans up the comments in the diff.
     - Even a trivial diff goes through a reviewer who isn't the author (the `/code-review` subagent).
-    - A non-trivial diff gets Codex `review` and `adversarial-review` in the background. gpt-6-sol is the default model; only hard design questions go up to astra. Commands and model choice are in `references/codex-review.md`.
+    - Use an independent review suited to the change; record the reviewed SHA, evidence and limits. See `references/independent-review.md`.
     - Findings are sorted into Act on / Consider / Noted / Dismissed. It repeats for up to 5 rounds until no Act on is left, and any remaining Consider items go in the PR body.
   - **Commits:** Small, in an order that tells the story. For a bug the failing test comes before the fix; for a refactor the deletion comes before the new shape.
   - **Before pushing:** Runs the whole test suite and E2E. Backends are checked with the CLI or curl and UIs with browser automation, and heavy runs go through `orch heavy`.
@@ -60,7 +64,7 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
     - Inside a program: merges only through `orch land`, and stops at READY under human-gate.
     - Standalone card: squash-merges on its own unless the user put it on hold.
     - After leaving the completion comment, it moves on to `handoff-ticket` in the same turn.
-- **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `codex-review.md` (Codex review commands and models), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for Codex, CodeRabbit, Copilot and human reviews).
+- **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
 - **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `handoff-ticket`.
 
 ### handoff-ticket
@@ -96,17 +100,20 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - Before ending, it checks the background subagents this session started, the git worktrees it made and the child cards it dispatched.
   - Writes the report first and runs the close command as its last tool call.
 
+### record-progress
+Records verified milestones in the configured tracker or notes store within the user's authorized workflow. Keeps state separate from reasoning, classifies follow-ups, avoids duplicate writes, and does not post chat announcements.
+
 ## One project (several Orca workers)
 
 ### orchestrate
 - **When:** This is the top-level orchestrator session the human talks to ("오케스트레이터로", "모든 세션 관리해줘" (manage every session), "전체 태스크 현황" (status of all tasks)), or one session drives a milestone to done through several Orca workers (usually 3 or more); "대시보드 갱신해줘" (update the dashboard); "전체 진행상황 몇 퍼센트" (how many percent done overall); taking over a program another coordinator was running; asking why PRs aren't moving.
 - **What it does:** The coordinator owns the program, not the code. Every session starts by reading `orca skills get orchestration`.
-  - **Stay answerable:** inside its turn it only routes, runs checks that take seconds, and answers the human. Investigation, implementation, verification, long waits and monitoring go to a background subagent or an Orca worker the moment they arrive; no foreground loops, `sleep`, or `check --wait` outside the background. Completion arrives as a notification. The coordinator writes no PR, however small, and hands it to a worker card or Codex; the cards, subagents and worktrees it started, it closes. This binds the top-level, a program coordinator and a lead card another session started alike: a led project's work goes to its lead, and the lead gets the Lead brief in `references/brief.md` (its DELEGATE and PERMISSIONS lines).
-  - **Top-level mode** (`references/top-level.md`): the session above single-task sessions and program coordinators. A routing table; sessions the human opened are read only; worker starts are confirmed with `--screen` in the background (a trust prompt on a worker it just started gets ↓, a check, then Enter; if blocked, the inbox); mail for a finished dispatch goes to `run:`; message bodies go through files; the dashboard inbox (`orch-dash inbox add`) and registered decisions (`orch decide add`, then `done` as soon as an answer arrives in chat) instead of AskUserQuestion; one unfiltered background `check --wait` keeps notices out of the human's typing; reactions to PR review events (`pr-events.jsonl`); `skills-sync broadcast` when skills change.
+  - **Stay answerable:** inside its turn it only routes, runs checks that take seconds, and answers the human. Investigation, implementation, verification, long waits and monitoring go to a background subagent or an Orca worker the moment they arrive; no foreground loops, `sleep`, or `check --wait` outside the background. Completion arrives as a notification. The coordinator writes no PR, however small, and hands it to a worker card or an independent worker; the cards, subagents and worktrees it started, it closes. This binds the top-level, a program coordinator and a lead card another session started alike: a led project's work goes to its lead, and the lead gets the Lead brief in `references/brief.md` (its DELEGATE and PERMISSIONS lines).
+  - **Top-level mode** (`references/top-level.md`): the session above single-task sessions and program coordinators. A routing table; sessions the human opened are read only; worker starts are confirmed with `--screen` in the background (trust and permission prompts go to the user, never auto-accepted); mail for a finished dispatch goes to `run:`; message bodies go through files; the dashboard inbox (`orch-dash inbox add`) and registered decisions (`orch decide add`, then `done` as soon as an answer arrives in chat) instead of AskUserQuestion; one unfiltered background `check --wait` keeps notices out of the human's typing; reactions to PR review events (`pr-events.jsonl`); `skills-sync broadcast` when skills change.
   - **Refused acts:** an act a permission layer refused is never run by another session. The refused session reports it; its coordinator drafts a rule with `tune-automode` and puts it to the human with a fixed message; once the rule is in, the refused session does the act once more. A read-only command on its own worktree refused as something it does not do is read once with the Read or Grep tool. A classifier error that returns no verdict (`no verdict`) is never a rule request: when it stops a subagent's Edit or Write, the session that started that unit takes the whole unit back once (a coordinator as a new card); a read on its own worktree follows the Read or Grep case above, and a second `no verdict` or any other act goes to the human.
   - Steps 1–8 below are **program mode**.
   1. **Frame:** The done condition (predicate) is set as countable ticket IDs plus checks on the real deliverables. Human instructions are carried over verbatim as standing orders. Dependencies are split into start order (Orca task deps) and landing order (GitHub stack, `orch dep`). It checks that the human's standing approval for this repo's merges and deploys exists as `autoMode.allow` rules; if not, it drafts them with `tune-automode` and hands the human the run line. It creates a Run and registers it with `orch init`.
-  2. **Verification setup and Pilot:** If there is no verify skill, it runs `create-verification-skill` before Pilot or hands it to one worker. Until that skill lands it verifies by hand and runs one worker end to end as a trial.
+  - Choose an existing harness or direct checks on the real deliverable. Create a reusable verification skill only when useful within the agreed scope.
   3. **Scale:** Starts the standing roles (a main guardian and a QA lead per program, one flow improver and one resource steward per machine). The concurrency cap for ticket workers starts at 1, goes up by 1 with each green landing on main (default ceiling 6), and halves on red.
   4. **Drain:** Runs exactly one `orch wait` in the background. When worker_done arrives, it handles `CLOSE OUT` in the same turn. Every pass ends with `orch status`, acting on the STALLED, SPARE, LEDGER GAP and LANDED-BUT-OPEN lines. When the way of working went wrong rather than the product (a human correction, a question the brief should have answered, a stall caused by process, a flaw in a skill or script), it leaves a single line with `orch record <slug> signal` and saves the analysis for Close. A session that started `/goal` cards outside a Run also keeps one `orch watch-cards` beside it, which reports cards stuck on a confirmation, a question, an API retry or low disk (the coordinator reads the screen and decides the answer).
   5. **Triage:** Follow-ups are parked by default. Only those that block the predicate or are reproduced defects are admitted. Briefs tell workers to link follow-ups as related, not as children of a parent. Orca defaults to parent, but then the counts and stage bars treat them as planned work of the original ticket.
@@ -143,26 +150,25 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - Counts merged PRs.
   - Measures rework (commits after the PR was opened, and CI reruns).
   - Finds escaped-defect candidates (Bug labels, main CI failures, reverts).
-  - Computes Claude and Codex tokens per PR. codex-companion's review and task jobs leave no session files and can't be counted, so when no Codex session matches it records `미측정` (not measured) instead of 0.
+  - Counts tokens from available local transcripts per PR. Unmeasured sessions are not assumed to have zero usage.
   - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
 
 ## One machine
 
 ### reap-resources
-- **When:** "방치 리소스 정리해줘" ("clean up leftover resources"), "codex 프로세스 너무 많아" ("too many codex processes"), when you want to see what is eating memory or CPU, when the machine's load is high, and on the resource steward's periodic round. It works without a program.
+- **When:** "방치 리소스 정리해줘" ("clean up leftover resources"), when you want to see what is eating memory or CPU, when the machine's load is high, and on the resource steward's periodic round. It works without a program.
 - **What it does:** `scripts/reap.py scan` only reads, and prints per kind the count, processes, RSS, CPU and age, plus the list of targets. `reap --plan` scans again and removes only the targets on that list that are still targets with the same identity (pid and start time, branch tip).
-  - **codex:** Codex plugin broker trees. A tree ends only when its `--cwd` path is gone, or when no live `claude` runs in that path and the broker is N hours old (default 6).
   - **orphan:** processes with ppid 1 whose executable lies under a path in the config's `reap.orphan_paths` (test caches).
   - **docker:** dangling volumes of a compose project that has no container at all, and untagged images no container uses. A project with containers, volumes whose name holds such a project's name, and volumes with no compose label are kept and only reported.
   - **branch:** local branches whose PRs are all merged or closed, with no worktree, and whose tip matches a PR head. It prints the command to restore each one.
   - **worktree:** worktrees whose directory in a temp dir is gone (except Orca's), and clean, pushed, detached worktrees in a Claude scratchpad whose session transcript has been quiet for N hours. Both go through `git worktree remove <path>`, which drops only that entry. Orca worktrees belong to the resource steward.
   - **janitor:** only what agents registered in the ledger (`~/.local/state/agent-skills/ledger.jsonl`: temp dirs, GUI apps, browser windows) and the worktrees and settled terminals of Orca orchestration workers. `reap --plan` re-checks each target, then closes it or moves it to the trash. The tool never deletes for good or empties the trash; when the OS empties it on its own, scan raises an alert. The agent closes browser windows with its browser tools.
-  - **user-folder:** top-level entries of `~/Downloads` and `~/Desktop` untouched for 7 days (`reap.user_folder_days`) go to the trash; screenshot and screen recording files after 1 day (`reap.user_folder_screenshot_days`). Downloads in progress (`.download`, `.crdownload`, `.part`), open files and hidden files stay. The scheduled run sweeps them at most once a day.
+  - **user-folder:** cleans only folders explicitly listed in `reap.user_folders`; disabled when unset. Age, open-file and incomplete-download checks and trash retention still apply.
   - **program:** a closed program in `~/.claude/programs` (`PROGRAMS_HOME`; its final check `predicate_verified` with no landing, predicate edit or admitted follow-up after it) whose record (ledger, decisions, reflect and the rest, not the dashboard caches) is untouched for 7 days (`reap.program_days`) moves to `_archive/`. Nothing is deleted. A program with a resume note (a name containing `resume` or `handoff`) stays, closed or not.
   - **state-file:** reorient hook session files (`<state>/reorient/*.json`) older than 7 days (`reap.state_days`) go to the trash bundled in one folder, and a `sync.log` over 512KB (`reap.log_max_kb`) is rotated to `sync.log.1` (the previous `.1` goes to the trash). Like program, the scheduled run looks at them at most once a day.
   - **Scheduled run:** `precheck` exits 0 when there are targets, and skips for a day a set that is exactly what the last `reap` failed on, for a 3-hour Orca automation; `schedule` prints the command that registers it ([automation.md](automation.md), Korean).
   - **load:** `reap.py load` only reads. It sorts the top CPU consumers (a Claude session with its children, a leftover tree, any other process) into ours-idle, ours-working, leftover and system, and when the 5-minute load is at or above its limit (default: the CPU count) it prints the action for each class: a quiet session is asked whether work is left and to close itself if none, leftovers go through `reap`, working processes are left alone while new dispatches stop, and system load is reported as not ours. A benchmark taken above the limit is not evidence.
-  - It never uses `pkill`, `docker system prune` or `--force`. When a running total (Codex processes and RSS, orphan processes, dangling volumes, branches and worktrees to remove) reaches its limit in the config, it prints an `경보` (alert).
+  - It never uses `pkill`, `docker system prune` or `--force`. When a running total (orphan processes, dangling volumes, branches and worktrees to remove) reaches its limit in the config, it prints an `경보` (alert).
 - **Bundled:** `scripts/reap.py`, a test file.
 - **Related:** The resource steward in `orchestrate` runs it every round, and tells the human through the dashboard inbox when an alert remains.
 
@@ -180,6 +186,14 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **Ships with:** `scripts/automode_rule.py`, its tests, `references/example-settings.json`.
 - **Related:** Tool-pattern permissions (`permissions.allow`, hooks) belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`. `orchestrate`'s Frame and Refused acts use this skill for a repo's standing merge and deploy rules ("프로젝트 지속 승인").
 
+## Chat and reviews
+
+### watch-prs
+Collects personal review requests and the user's PRs waiting for review in configured repositories. A per-head ledger deduplicates work. Notifications, reminders, automatic merging and bot approvals require their settings and user authorization. Program PRs belong to `orchestrate`.
+
+### watch-mentions
+Monitors configured public channels for mentions and replies when requested. Uses a seen ledger to avoid duplicate notifications and routes work proposals to the coordinator; it does not grant permission to read unrelated private conversations.
+
 ## Adapters
 
 ### use-tracker
@@ -195,12 +209,15 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 ### use-notes (formerly `use-obsidian`)
 - **When:** Reading and writing design docs, worklogs and program notes. "노트에 기록해줘" (write it to the notes) comes here too.
 - **What it does:**
-  - The adapters are obsidian (the default) and markdown, and each program can pick its own.
-  - Notes live in `Project/<project>/` as `worklog-*.md` and `program-<slug>.md`. If the repo has its own conventions, those win.
-  - Obsidian has to be seen in its synced state, so notes are read and written only through MCP tools. To show a note to the user, it reads the note through MCP and turns it into an Artifact.
+  - Uses the obsidian or markdown adapter selected in `notes` or by the user. There is no default personal vault.
+  - Paths and filenames follow the selected store’s rules or the user’s destination.
+  - Reads and edits current content using the user-selected tools and permitted access method. Check synchronization; publishing another page is not required to show a note.
 - **Bundled:** `references/obsidian.md`, `references/markdown.md`.
 
 ## Writing
+
+### brief
+Reports completed work, current work, decisions and human-only steps with evidence. Uses the requested channel format; periodic program reports come from `orch brief render --periodic`.
 
 ### map-features
 - **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is `how`.
@@ -232,6 +249,9 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
   - The pruner doesn't touch code or lines outside the scope. The caller checks with `git diff` and reverts anything it shouldn't have changed.
 - **Bundled:** `references/pruner.md` (the instructions for the pruning subagent).
 
+### write-skill
+Checks a skill edit for overlapping triggers, unnecessary policy, prompt quality, private names, runnable tests and plugin validity. Edits the authorized source checkout; installed copies and unrelated global settings are not the target.
+
 ## pstack skills (Lauren Tan, MIT)
 
 These skills come from [pstack](https://github.com/cursor/plugins), adapted for Claude Code. What changed is in [Differences from pstack](#differences-from-pstack) below.
@@ -240,7 +260,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **When:** `/architect`, "상세 설계안 작성해줘" (write a detailed design), "설계안 다듬어줘" (refine the design), "구현 계획 짜줘" (draw up an implementation plan), and work where writing code first would lock in the wrong shape.
 - **What it does:** Works in five steps.
   1. **Ground:** Uses `how` and `why` to understand the surrounding system and why it has its current shape.
-  2. **Sketch:** Launches design runners in parallel through `arena` (Claude opus, Claude fable, Codex). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
+  2. **Sketch:** Launches design runners in parallel through `arena` (available independent runners). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
   3. **Agree:** Asks a human to sign off only when requested.
   4. **Implement:** Builds with the sketch as the contract.
   5. **Scrap:** If the same kind of workaround keeps coming back, it throws the sketch away and draws it again.
@@ -249,8 +269,8 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 ### arena
 - **When:** `/arena`, "경쟁시켜줘" (make them compete), "여러 안 뽑아서 제일 나은 걸로" (draft several and go with the best), "여러 버전 만들어서 비교해줘" (make several versions and compare them), and deliverables where a single attempt would lock in the shape. `architect`'s Sketch step calls it.
 - **What it does:**
-  - Before giving the same task to N candidates at once (by default Claude opus, Claude fable, Codex), it sets 3–6 scoring criteria. Candidates see only the task, never the criteria.
-  - When all candidates finish, a judge from a different model family (Codex, when Claude is the caller) scores each criterion and recommends a base.
+  - Before giving the same task to N candidates at once (by default available independent runners), it sets 3–6 scoring criteria. Candidates see only the task, never the criteria.
+  - An independent judge who did not produce the candidates scores each criterion and recommends a base.
   - It reads every candidate in full, scores them against each criterion, and picks the base. One or two better pieces from the other candidates are grafted on by hand.
   - If the candidates converge on the same shape, it uses that shape as is; if they diverge sharply, it goes back and redefines the task.
   - It returns one deliverable plus a short synthesis note recording the base, what was grafted, what was dropped, and the verification result.
@@ -262,7 +282,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Finds the one fact that makes the change safe, and proves it with a script that runs the real code.
   - Looks where grep can't see (library source, wire formats, execution timing).
   - Pulls in the PRs and commits behind the changed code, following `why`'s procedure.
-  - Cross-checks big changes with Codex.
+  - Cross-checks big changes with an independent reviewer.
   - Reports what the change does, why it's safe, the risks, what was checked, and what to check before merging.
 
 ### figure-it-out
@@ -270,7 +290,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **What it does:** Designs the order of the work before the code.
   1. **Frame:** Writes the done condition as a falsifiable statement, puts numbers on the scope, and sets how strict to be based on the risk. The frame goes in the ticket's plan comment or the worklog, and reversible work doesn't wait for anyone. Only irreversible steps get a one-time approval on the spot.
   2. **Design:** Splits the work into units that can land separately and starts with the least understood one. It first builds a verification harness that captures values from before the change. Designs that are hard to undo are settled with `architect` (→ `arena`). Parallel work only where boundaries separate cleanly, with a worktree for each worker.
-  3. **Loop:** For each unit: a hypothesis, the smallest change, a measurement on the real artifact, then keep or revert. Delegated work is judged by reading the result directly or by Codex. Verdicts are VERIFIED / NOT VERIFIED / INCONCLUSIVE.
+  3. **Loop:** For each unit: a hypothesis, the smallest change, a measurement on the real artifact, then keep or revert. Delegated work is judged by reading the result directly or by an independent reviewer. Verdicts are VERIFIED / NOT VERIFIED / INCONCLUSIVE.
   4. **Trail:** Keeps a decision record with `show-me-your-work` and usually commits it so it can be read in the PR.
   5. **Verify:** Checks the whole result against the Frame's done condition in the real product, and turns corrections that kept recurring into checks or scripts.
 - **Relation to deliver-ticket:** Review, commits and pushes for each unit follow `deliver-ticket`'s rules.
@@ -296,9 +316,9 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **Related:** The counterpart of `how`. Called by `blast-radius` and `architect`. Reads trackers through `use-tracker` and notes through `use-notes`.
 
 ### interrogate
-- **When:** "적대적 리뷰" (adversarial review), "codex 교차 검증" (codex cross-check), "codex 로 설계안 점검" (have codex check the design), "빈틈 찾아줘" (find the gaps). PRs headed for main are covered by `deliver-ticket`'s Codex review instead.
+- **When:** "적대적 리뷰" (adversarial review), "빈틈 찾아줘" (find the gaps). PRs headed for main are covered by `deliver-ticket`'s independent review instead.
 - **What it does:**
-  - The core idea is model-family diversity. Claude (opus) and Codex review separately with the same prompt and rubric.
+  - Reviewers independently assess the same scope and rubric. No particular model or model-family difference is required.
   - A lead merges the results, rules on each finding as Act on / Consider / Noted / Dismissed, and writes a map of where the reviewers agree.
   - When the intent is ambiguous it doesn't ask; it marks what it assumed. Fixes are never applied automatically.
 - **Bundled:** `reviewer-prompt.md`, `rubric.md`, `code-quality-review.md`, `lead-judgment.md`. `deliver-ticket`'s review triage uses this verdict framework.
@@ -321,21 +341,21 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 ### reflect
 - **When:** "reflect", "스킬에 반영해줘" (put this into the skills), "스킬이 왜 안 떴어" (why didn't the skill trigger?), "이 세션 돌아보고 스킬 개선해줘" (look back on this session and improve the skills), "개선 이력 보여줘" (show me the improvement history). It's called automatically in program mode from `orchestrate`'s Close, and in session mode from `end-session` when a human corrected how the work was done.
 - **What it does:**
-  - Session mode reads this session's transcript. Program mode reads an evidence bundle: the ledger's `signal` entries, merge failures, main reds, failed verdicts, decision records, and the `measure-delivery` results. There are three reviewers (judgment: opus, tool use: Codex, divergent thinking: opus).
-  - A synthesizer (opus) sorts the learnings into Accepted / Rejected / Backlog. Every one of them gets a line in the learnings ledger (`Project/agent-skills/learnings.md` in the notes store). For each learning, the ledger records the signal, evidence pointers, how often it happened, what was fixed, the change (PR or commit), the verification numbers a script produced, and whether it recurred later.
+  - Session mode reads this session's transcript. Program mode reads an evidence bundle: the ledger's `signal` entries, merge failures, main reds, failed verdicts, decision records, and the `measure-delivery` results. There are three reviewers (judgment, tooling, divergent thinking).
+  - A synthesizer sorts the learnings into Accepted / Rejected / Backlog. Every one of them gets a line in the learnings ledger (`reflect.ledger` in the notes store). For each learning, the ledger records the signal, evidence pointers, how often it happened, what was fixed, the change (PR or commit), the verification numbers a script produced, and whether it recurred later.
   - A skill changes only after two or more distinct cases (reproduced security or data defects are the exception). A single occurrence stays a candidate until it happens again.
   - Session mode applies changes after the user approves. Program mode has no human around, so it fixes and verifies in a worktree, opens a single draft PR, and leaves an approval request in the digest. A human does the merge. Description changes are checked for triggering with `trigger-probe.sh`; body and script changes are checked for behavior with tests that exercise the changed path or by reproducing the case. Without any verification it records `none`.
   - Before calling the reviewers, it checks for each signal whether the current HEAD already fixed it, and marks it (changes since `skills_commit` in `program.json`). `signal` entries in other programs' ledgers count toward the occurrence count too. A fix that changes a command or flag also updates every copy of it across `skills/`.
   - It runs at every Close, even for a program with no signals and no failures, and records whether the applied learnings held up in this program (`held through`, deduplicated by program slug).
   - It never proposes changes to the permission hook, the `orch land` gate, tests and graders, or reflect itself; those go to Backlog.
-  - In both modes, Backlog items are filed right away through `use-tracker` and recorded in the ledger's Status as `backlog (<ticket>)`. The Codex reviewer is awaited with `status --wait` running in the background. Ending the turn to wait would end an unattended run right there.
+  - File Backlog items only when the user or selected workflow authorizes tracker writes; otherwise report them as proposals.
 
 ### show-me-your-work
 - **When:** Long-running work, or work done while a human is away.
 - **What it does:**
   - Records each decision as one TSV row: what, why, evidence, result. The log is append-only; a wrong row is fixed by appending a correction row.
   - When the work is done, it audits the log against the transcript.
-  - Codex cross-reviews it, and the end of the response says who reviewed it.
+  - An independent reviewer checks it, and the end of the response says who reviewed it.
 - **Bundled:** `scripts/log.sh` (appends rows), `references/decision-log-template.tsv`.
 
 ### swarm
@@ -365,7 +385,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
-  - When a change touches a user-facing surface and there is no verify skill, `deliver-ticket` (before E2E) and `orchestrate` (before Pilot) run it. Upstream keeps it user-invoked; only this fork lets the model invoke it.
+  - `deliver-ticket` and `orchestrate` may use it when a reusable harness is useful within scope; direct checks remain sufficient when they prove the same acceptance criteria. Upstream keeps it user-invoked; this fork allows model invocation.
 - **Bundled:** `references/feature-map-example/` (the feature map of an example app).
 
 ### maintain-verification-skill
@@ -386,7 +406,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 | `set` | When the note changes, brings policy, ceiling, deadline, predicate and exclusive paths in line |
 | `status` | Predicate progress, main status, in-flight/cap, next action. STALE, LANDED-BUT-OPEN, STALLED, SPARE and LEDGER GAP lines |
 | `record` | Records ledger events (spawned, parked, admitted, main_green/red, predicate_verified, and so on). Rejects main_green/red for a commit in a lower stack layer, because main CI runs only once, on the top layer's commit |
-| `verdict` | Records the verdict for a reviewed head. It accepts exactly one source: `codex-review`, `subagent-review`, `claude-review:independent` (Codex unavailable; `--note` with the Codex error line is required), `verifier:<another model family>`, or `live:<feature>` |
+| `verdict` | Records a reviewed-head verdict using `independent-review`, `subagent-review`, `review:<reviewer>`, `verifier:<reviewer>` or `live:<feature>`. Historical ledger sources remain readable unchanged. |
 | `gate` | Opens a decision gate for human-gate |
 | `dep` | Records a landing-order dependency |
 | `queue` | Landing order, and why each PR is stuck |
@@ -419,7 +439,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 
 ## Config file
 
-`~/.claude/agent-skills.json` chooses the tracker and the notes store. Without the file, it uses Linear and the Obsidian vault `Private`. The age threshold, test cache paths and alert limits of `reap-resources` also go in this file, under `reap` (format in that skill's SKILL.md). Values set in a program's `program.json` override this file.
+`~/.claude/agent-skills.json` selects adapters. The existing tracker default is Linear. Notes require `notes` configuration or a destination supplied by the user before external writes. `reflect.ledger` and `reflect.skill_repository` select the learning record and source checkout; `reap.user_folders` explicitly opts folders into cleanup. Program settings take precedence. Existing records are not moved or rewritten.
 
 ```json
 {
@@ -429,7 +449,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
                "templates": {"dev": "개발 티켓", "spike": "조사 티켓"}},
     "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"}
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "Private"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}
 }
 ```
 
@@ -447,18 +467,20 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 
 Allow is given only to a single command with no shell operators, redirections, substitutions or variables. The one variable allowed is `$ORCA_TERMINAL_HANDLE`. The subcommand must come right after the command name; if a flag comes first, no decision is made. Calls without a decision go through the normal permission flow (the auto mode classifier and the user's own rules).
 
-### Re-orienting after compaction
-`hooks/reorient.py` (SessionStart, `compact`). Right after the context is compacted (automatically or with `/compact`), and only when this terminal is the coordinator of a program registered with `orch init`, it adds one paragraph. The paragraph says four things:
-- Invoke `agent-skills:orchestrate` again and read it.
-- Read the program note.
-- Run `orch status` and act on every line it prints.
-- From then on, drain only with `orch wait`.
+### Re-orienting declared roles
+`hooks/reorient.py` runs on SessionStart and UserPromptSubmit for declared roles only. It reads the host's `agent_type`, session title on resume/fork, or an explicit `ROLE: orchestrator` / `ROLE: lead <slug>` line. `ROLE: none` disables the role. A new fork declared only by ROLE must declare again. State lives under `$AGENT_SKILLS_STATE/roles/`; no terminal-handle inference is used. Declared sessions receive role guidance at start and a reminder each prompt. The hook does not block or run external commands.
 
 ### Closing decisions answered in the terminal
 `hooks/decision.py` (UserPromptSubmit). It reads only prompts typed into the terminal that registered a decision with `orch decide add` (`$ORCA_TERMINAL_HANDLE`). When the first line starts with the id (`d3 yes`, `decision d3: yes`), or with an option label that only one of that terminal's open decisions has, it closes that decision as done with the answer and tells the coordinator. When it is ambiguous it closes nothing and only adds a reminder listing the open decisions. Input in any other terminal (a worker's) never closes one, and every error exits 0. Sessions already running pick it up after `/reload-plugins` or a restart.
 
 ### Recording permission prompts
 `hooks/permission.py` (PermissionRequest). When a permission dialog opens, it writes the tool name and its masked arguments to `prompts/` in the dashboard's state directory, keyed by `$ORCA_TERMINAL_HANDLE`. It makes no decision, so the permission flow is unchanged. The dashboard adds Approve, Deny and Open terminal buttons to the inbox item only while that terminal's screen shows the dialog for the same request. When a person clicks one, the server reads the screen again right before sending and presses a single digit: the one-time `Yes` or `No`. It never picks an option that saves a rule or changes the mode, such as "don't ask again", "always allow" or "switch to auto mode". Details are in `skills/orchestrate/references/dashboard.md`.
+
+### Completion claim checks
+`hooks/claim_check.py` checks Stop/SubagentStop for a completion claim after code edits with no subsequent execution. It blocks once, excludes rejected commands and quoted examples, and accepts explicit unverified reports. `AGENT_SKILLS_CLAIM_CHECK=0` disables it. This is a reminder, not proof that the right test ran.
+
+### Prose checks
+`hooks/prose_check.py` checks PR, commit and tracker text for deterministic writing patterns. It gives advisory context without blocking or changing permissions. `AGENT_SKILLS_PROSE_CHECK=0` disables it.
 
 ## Differences from pstack
 
@@ -470,8 +492,8 @@ Allow is given only to a single command with no shell operators, redirections, s
 | Entry point | A single `/poteto-mode` is always on, matches each task to one of 23 playbooks, and follows its steps | No mode router. Each skill's description is its trigger |
 | Skill invocation | Almost all are invoked only by the user or by poteto-mode (`disable-model-invocation`) | The model invokes them on its own (in this fork the two verify skills too) |
 | Workers | Cursor Task subagents, cloud workers | Claude Code `Agent` (worktree isolation), Orca workers |
-| Models | Per-role model rules (`pstack-models.mdc`): grok for code, opus for judgment | Claude (opus, fable) and Codex (gpt-6-sol by default, astra only for hard design questions) |
-| Cross-review | A multi-model panel | Claude + the Codex companion. Codex runs one job at a time |
+| Models | Per-role model rules | Host defaults or the user’s explicit choice |
+| Independent review | Multiple perspectives | Reviewer independent of the implementer; no model-family restriction |
 | Running projects | The orchestrate, autopilot and shipping playbooks, and `orch.ts` (bun, TSV ledger) | The `orchestrate` skill, `orch` (Python, JSONL ledger), landing gate, exclusive lane, main guardian, QA lead, dashboard |
 | Tickets and notes | No assumptions | `use-tracker` (Linear, Jira), `use-notes` (Obsidian, Markdown) |
 | Permissions | Cursor settings | `hooks/guard.py` decides instead |
@@ -485,7 +507,7 @@ Of pstack's 47 skills (23 principles and 24 others), we took all 23 principles a
 - **Taken with changes:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill. Four changes apply to all of them.
   - The model can invoke them on its own.
   - Cursor-specific pieces were replaced with their Claude Code equivalents: paths `.cursor/` → `.claude/`, workers `generalPurpose`/cloud → `Agent`/Orca workers, transcripts `agent-transcripts` → `~/.claude/projects`.
-  - The model panel became Claude + Codex.
+  - The model panel uses available independent reviewers.
   - Calls to a skill we don't install (`unslop`) now point to `write-plainly`. `why` and `arena` were brought in on 2026-09-25, which restored the original links between skills (architect → arena).
   - `why` picks its sources from the MCP tools available in the session instead of Cursor's MCP discovery, and gained a narrow mode for one-line questions. The source files for Datadog, Sentry and the warehouse, which have no connection here, were dropped, and new source files for Google Drive and Obsidian were written.
 - **Further changes on 2026-09-25:** The prompts were audited and revised again for Opus 5.5 (`6eec9fa`). The per-step to-do lists in architect and swarm are gone, and how now handles simple questions directly. reflect no longer has a minimum reviewer count, and show-me-your-work became an append-only log. Per-file changes are listed in `vendor/pstack/NOTICE.md`.

@@ -19,7 +19,7 @@ Skip Phase A only when the work is genuinely greenfield with no surrounding syst
 
 ## Phase B: Sketch
 
-Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt, with the absolute paths of this `SKILL.md` and `references/rationale-template.md` so a runner can read them. Each candidate produces a design package shaped per `references/rationale-template.md`. Arena's default runners (Claude opus, Claude fable, Codex) are the design runners; a Claude runner that writes sketch files into the repo gets `isolation: "worktree"`.
+Run the **arena** skill with the design-sketch task and the Phase A grounding artifacts. Pass `references/runner-prompt.md` as each runner's prompt, with the absolute paths of this `SKILL.md` and `references/rationale-template.md` so a runner can read them. Each candidate produces a design package shaped per `references/rationale-template.md`. Use the available independent runners selected for this task; a runner writing sketch files into the repo needs its own worktree.
 
 When the caller limits model calls (a brief's MODEL CALLS line) and the contract is one boundary inside one system, write the candidates yourself instead of spawning runners, and say so in the rationale; spawn the arena when the contract crosses systems or the caller asks for it.
 

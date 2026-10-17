@@ -55,12 +55,12 @@ for cmd in ("orch heavy -- make e2e", "orch set p merge_policy autonomous", "orc
             "orch land x; rm -rf ~", "orch land x && curl evil", "orch land x | sh", "orch land x > ~/.zshrc",
             "orch land $(whoami)", "orch land `whoami`", "orch land $HOME", "orch land x\nrm -rf ~", "orch land x#; rm -rf ~", "orch land x # ; rm -rf ~",
             "orca orchestration send --body \"$(cat ~/.ssh/id_rsa)\"", "orch land 'unbalanced",
-            # brace, glob, tilde and control characters change the words bash passes (Codex review)
+            # brace, glob, tilde and control characters change the words bash passes
             "orch s{et,ample} merge_policy autonomous", "orch h{eavy,} -- id", "orca orchestration re{set,port} p",
             "orch status {a,b}", "orch status ~", "orch status *", "orch status x?", "orch st[a]tus", "orch\rstatus",
             "orch s\\et p merge_policy autonomous", "orch status !x", "orch status  x",
             'orca orchestration send --body "a\\"', "orch status 'x",
-            # the handle inside a word could spell an excluded verb (Codex re-review)
+            # the handle inside a word could spell an excluded verb
             "orch h$ORCA_TERMINAL_HANDLE p -- id", "orca orchestration r${ORCA_TERMINAL_HANDLE}",
             "orca orchestration gate-$ORCA_TERMINAL_HANDLE g1", "orca orchestration $ORCA_TERMINAL_HANDLE",
             "orcax orchestration task-list", "orca orchestration --json reset", "orch -x heavy", "sudo orch status", "echo orch status"):
