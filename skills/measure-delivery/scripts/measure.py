@@ -11,6 +11,7 @@ per ~/.claude/agent-skills.json).
 --issues: a saved issue list instead: tracker.py's normalized JSON, a Linear MCP list_issues result,
 or `orca linear list-issues --json` output (no completedAt: completed issues fall back to updatedAt,
 and the report says so). A top-level list, {"issues": [...]}, or {"result": {"issues": [...]}}.
+--tz: report timezone, default +00:00 (UTC). Pass +09:00 to preserve earlier report grouping.
 --baseline-until: end of the initial design batch. Default: the first gap of 6h+ in creation times.
 --usage-match: substring of configured project directories to count tokens for
 (default: the repo name). No prices are applied.

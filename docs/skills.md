@@ -2,6 +2,10 @@
 
 `agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 6개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
+설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
+
+작은 변경도 작성자 외 리뷰가 필요하다. 사소한 변경은 약 20줄 이하이며 auth·crypto·migration·concurrency·CI·공개 계약 변경이 없고 테스트가 있어야 한다. 문서 명령은 격리된 fixture에서 그대로 실행하며, 실행하지 못한 예는 NOT VERIFIED로 남긴다. 기존 검증 도구의 오류는 보고·수정하고 수용 기준을 직접 검증한다. 재사용할 verify 스킬 생성은 범위 내에서 유용할 때 선택하며, 검증 자체는 생략하지 않는다.
+
 ## 흐름
 
 ```text
@@ -421,7 +425,7 @@
   - 저장소를 조사해 앱을 사용자처럼 띄우고 조작하고 관찰하는 저장소 전용 스킬 `.claude/skills/verify-<app>/`을 만든다. Launch, Doctor, Drive, Evidence, Cleanup 단계를 둔다.
   - 주요 기능 3~5개의 기능 지도를 함께 만든다.
   - 직접 끝까지 한 번 돌려 증명한다.
-  - 사용자가 보는 표면을 바꾼 작업인데 verify 스킬이 없으면 `deliver-ticket`(E2E 전)과 `orchestrate`(Pilot 전)가 부른다. upstream은 사용자 호출 전용이고, 이 fork만 모델 호출을 허용한다.
+  - `deliver-ticket`과 `orchestrate`는 범위 내에서 재사용할 검증 도구가 유용할 때 호출할 수 있다. 같은 수용 기준을 입증하는 직접 검사도 유효하다. upstream은 사용자 호출 전용이며 이 fork는 모델 호출도 허용한다.
 - **동봉:** `references/feature-map-example/`(예시 앱의 기능 지도).
 
 ### maintain-verification-skill

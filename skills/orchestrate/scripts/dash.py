@@ -399,7 +399,9 @@ def shape_workers(raw, events, tasks=()):
         act = stage.get("activity")
         out.append({"dispatch": w.get("dispatchId"), "task": w.get("taskId"), "ticket": ticket,
                     "worktree": wt or None, "worktree_path": wt_path,
-                    "transcript_expected": (p.get("provider") or {}).get("id") == "claude",
+                    # Older Orca versions omit provider metadata; keep their transcript discovery.
+                    # Only an explicit unsupported provider excludes this host adapter, never a model name.
+                    "transcript_expected": (p.get("provider") or {}).get("id") in (None, "", "claude"),
                     "model": (p.get("provider") or {}).get("model") or (p.get("provider") or {}).get("id"),
                     "liveness": live.get("verdict") or w.get("terminalState"),
                     "activity": {"working": "running", "waiting": "waiting", "idle": "idle"}.get(act, "unknown"),

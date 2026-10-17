@@ -93,6 +93,19 @@ foreign = dash.shape_workers([{"dispatchId": "foreign", "resource": {"worktreeId
 assert foreign[0]["transcript_expected"] is False
 (root / "foreign-usage").mkdir()
 assert dash.collect_usage(root / "foreign-usage", foreign, {})["workers"] == {}
+# Older Orca rows omit provider metadata. Preserve transcript discovery without guessing a model.
+for provider in (None, {}, {"model": "arbitrary-model"}, {"id": "claude"}):
+    workers = dash.shape_workers([{"dispatchId": "legacy", "taskId": "legacy-task",
+        "resource": {"worktreeId": "r::" + w107["worktree_path"]},
+        "projection": {"provider": provider, "outcome": "in_progress"}}], [],
+        [{"id": "legacy-task", "created_at": w107["since"]}])
+    (root / "legacy-usage").mkdir(exist_ok=True)
+    usage = dash.collect_usage(root / "legacy-usage", workers, cfg_a)
+    assert usage["workers"]["legacy"]["total"] == w107["tokens"]["total"], provider
+    assert usage["motion"]["legacy"], provider
+    assert dash.stalls(workers, dash.utcnow())[0]["kind"] == "start_unconfirmed", provider
+    workers[0]["motion"] = {"state": "idle", "since": workers[0]["since"]}
+    assert dash.stalls(workers, dash.utcnow())[0]["kind"] == "idle", provider
 assert tok > 0 and w107["tokens"]["total"] > 0 and st["series"][-1]["tokens"] == tok
 assert next(w for w in st["workers"] if w["model"] == "local-reviewer")["tokens"] is None, "workers without transcripts are unmeasured"
 assert dash.collect(A, sources=("orca",))["usage"]["total"]["total"] == tok, "rescan must not double count"

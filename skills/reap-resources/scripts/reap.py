@@ -1489,6 +1489,11 @@ def act(item, notes):
 def main():
     if "--under" in sys.argv:
         sys.exit("--under is no longer supported; use an explicit plan and supported scope options")
+    if "--kinds" in sys.argv:
+        requested = opt("--kinds") if sys.argv.index("--kinds") + 1 < len(sys.argv) else None
+        if not requested or set(requested.split(",")) - set(KINDS + SCHEDULED + ("janitor",)):
+            sys.exit("--kinds requires a comma-separated list of supported kinds: " +
+                     ",".join(dict.fromkeys(KINDS + SCHEDULED + ("janitor",))))
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     cfg = config()
     if cmd == "reap":

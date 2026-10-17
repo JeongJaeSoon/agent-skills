@@ -35,7 +35,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/measure.py" \
 ```
 
 - `--issues` accepts a top-level list, `{"issues": [...]}` or `{"result": {"issues": [...]}}`.
-- `--tz` sets the report's local time (default `+09:00`); `--json` also writes the headline
+- `--tz` sets the report's local time (default UTC, `+00:00`; previously `+09:00`). Pass `--tz +09:00` to retain the previous report grouping; `--json` also writes the headline
   numbers as JSON.
 - `CLAUDE_CONFIG_DIR` selects the transcript adapter root (default `~/.claude`). No matching usage is unmeasured, not zero.
 - `--usage-match` picks the configured project directories to count tokens for

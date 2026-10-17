@@ -21,6 +21,8 @@ Skip when the work is trivial, off-topic, or already covered by an existing skil
 
 ## The lessons ledger
 
+When upgrading, report an unset ledger explicitly and point to the [configuration migration guide](../../docs/configuration-migration.md). Existing files are not migrated automatically.
+
 Use `reflect.ledger` in the skill configuration or an explicit path supplied for this task.
 Keep private evidence outside public repositories. If no destination is configured, report
 findings in the current task; do not invent a shared note location. Existing ledgers stay at

@@ -3,6 +3,10 @@
 
 `agent-skills` プラグインに入っているスキル（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック6個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます。
 
+既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
+
+小さな変更でも作者以外のレビューが必要です。軽微な変更は約20行以下で、auth・crypto・migration・concurrency・CI・公開契約の変更がなく、テストでカバーされるものです。文書のコマンドは隔離した fixture でそのまま実行し、実行できなかった例は NOT VERIFIED と記録します。古い検証ツールの問題は報告・修正し、受け入れ基準を直接確認します。再利用する verify スキルの作成は範囲内で役立つ場合に選びますが、検証自体は必須です。
+
 ## 流れ
 
 ```text
@@ -312,7 +316,7 @@
 - **関連:** `how` と対になるスキルです。`blast-radius` と `architect` が呼びます。トラッカーは `use-tracker`、ノートは `use-notes` で読みます。
 
 ### interrogate
-- **使う場面:** 「적대적 리뷰」（敵対的レビュー）、「独立レビュー 교차 검증」（独立レビュー で相互検証）、「独立レビュー 로 설계안 점검」（独立レビュー で設計案を点検）、「빈틈 찾아줘」（抜けを探して）。main に向かう PR は `deliver-ticket` の 独立レビューアー レビューが担当します。
+- **使う場面:** 「interrogate」「adversarial review」「challenge this」「find blind spots」で設計・計画・判断のレビューを依頼するとき。main に向かう PR の独立レビューは `deliver-ticket` が担当します。
 - **内容:**
   - 同じ範囲と rubric を独立して確認します。特定のモデルや異なる系統は必須ではありません。
   - リードが結果をまとめて Act on / Consider / Noted / Dismissed で判定し、合意のマップを書きます。
@@ -381,7 +385,7 @@
   - リポジトリを調べ、アプリをユーザーのように起動し、操作し、観察するリポジトリ専用のスキル `.claude/skills/verify-<app>/` を作ります。Launch、Doctor、Drive、Evidence、Cleanup の段階を置きます。
   - 主な機能3〜5個の機能マップも一緒に作ります。
   - 自分で最後まで一度回して証明します。
-  - ユーザーが触れる表面を変えた作業で verify スキルがなければ、`deliver-ticket`（E2E の前）と `orchestrate`（Pilot の前）が呼び出します。upstream はユーザー呼び出し専用で、この fork だけがモデルからの呼び出しを許しています。
+  - `deliver-ticket` と `orchestrate` は、範囲内で再利用する検証が役立つ場合に呼び出せます。同じ受け入れ基準を実証する直接チェックも有効です。upstream はユーザー呼び出し専用で、この fork はモデルからも呼び出せます。
 - **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）。
 
 ### maintain-verification-skill

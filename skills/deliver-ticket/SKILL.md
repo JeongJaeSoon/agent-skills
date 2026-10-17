@@ -94,8 +94,12 @@ does not stand in for a triggered row. Each review above ends in a report: fold 
 on to the next step in the same turn; a turn that ends on a review report leaves the ticket
 stalled with no one waiting for it.
 
-Have an independent reviewer assess non-trivial changes. For a small change, a focused
-review of the diff and relevant tests is sufficient. Use available review tools appropriate
+Every change needs a reviewer other than its author; the author's own reading is never the
+verdict. **Trivial** means all of these: about 20 changed lines or fewer, no auth, crypto,
+migration, concurrency, CI or public-contract change, and a test that covers it. A trivial
+change may use a focused independent review of the diff and relevant tests (record
+`subagent-review` when that is the source). Non-trivial changes need the full independent
+review evidence contract. Use available review tools appropriate
 to the scope; their command names and models are not requirements of this skill.
 Follow [references/independent-review.md](references/independent-review.md) for the evidence
 contract and unavailable-review handling.
@@ -126,13 +130,21 @@ Before pushing, run **both**:
   caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, browser automation for UI
   and web flows (logged-in sites included), IDE diagnostics
   for type and lint
-- a change with no runtime behavior (docs, comments): validate links, examples and contracts
-  with safe fixtures; do not execute destructive examples or live external writes as a test
+- a change with no runtime behavior (docs, comments): validate links and run documented
+  commands and examples exactly as written in a safe, isolated fixture; record commands,
+  outputs and fixture substitutions. If a destructive command or live external write cannot
+  be safely tested within authorization, report that example as NOT VERIFIED with the reason;
+  a prose review alone is not E2E evidence
 
 Use the repository's existing verification skill or harness when it fits the affected
 surface. If none exists, run the appropriate direct checks and retain their evidence.
 Create or maintain a reusable verification skill only when requested or useful within the
-agreed scope; its absence does not block otherwise adequate verification.
+agreed scope; its absence does not block otherwise adequate verification. This changes the
+packaging of verification, never its required coverage or evidence. An existing verification
+skill or harness that cannot drive the changed feature or describes it incorrectly must be
+reported as `verify skill stale: <feature>` (or `verification harness stale: <feature>`).
+Repair it within scope or report the unresolved gap and use direct checks that prove the same
+acceptance criteria; never claim a pass from a stale harness.
 
 After the test suite and E2E check, push and open a PR with `gh pr create` in the draft/ready state the user requested.
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket

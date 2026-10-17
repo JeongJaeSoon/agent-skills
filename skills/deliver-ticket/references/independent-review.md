@@ -5,6 +5,10 @@ implement the change the requirements, repository, base and head, and access to 
 files and tests. Do not seed the review with the implementer's conclusions. A human reviewer
 or an available read-only agent can do this; no model family is required.
 
+Read the repository's data-sharing restrictions before selecting a reviewer. A ban on
+external services applies to every provider; use a reviewer within the allowed boundary or
+report review unavailable. Include that restriction in delegated review instructions.
+
 Check correctness, security, acceptance criteria and regressions. Use adversarial design
 questions when the change alters a public contract or a difficult invariant. Findings need
 file locations, a concrete failure case and severity. Record the reviewer, reviewed SHA,

@@ -3,6 +3,10 @@
 
 This page covers the skills in `skills/*/SKILL.md`, 3 commands (`orch`, `orch-dash`, `skills-sync`), and 6 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief`.
 
+Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
+
+Even small changes need a reviewer other than the author. Trivial means about 20 lines or fewer, no auth, crypto, migration, concurrency, CI or public-contract changes, and a covering test. Run documented commands unchanged in isolated fixtures; mark unexecuted examples NOT VERIFIED. Report and repair stale verification tools and prove acceptance criteria directly. Creating a reusable verify skill is optional when useful within scope; verification itself is mandatory.
+
 ## Flow
 
 ```text
@@ -381,7 +385,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Surveys the repo and builds a repo-specific skill, `.claude/skills/verify-<app>/`, that launches, drives and observes the app the way a user would. It has Launch, Doctor, Drive, Evidence and Cleanup steps.
   - Also builds a feature map of the 3–5 main features.
   - Proves the skill by running it end to end once itself.
-  - When a change touches a user-facing surface and there is no verify skill, `deliver-ticket` (before E2E) and `orchestrate` (before Pilot) run it. Upstream keeps it user-invoked; only this fork lets the model invoke it.
+  - `deliver-ticket` and `orchestrate` may use it when a reusable harness is useful within scope; direct checks remain sufficient when they prove the same acceptance criteria. Upstream keeps it user-invoked; this fork allows model invocation.
 - **Bundled:** `references/feature-map-example/` (the feature map of an example app).
 
 ### maintain-verification-skill

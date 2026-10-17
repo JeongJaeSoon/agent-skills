@@ -221,6 +221,22 @@ try:
 finally:
     sys.argv = saved_argv
 
+# Unknown, retired, empty and mixed kinds must fail before scanning even a valid subset.
+for args in (["--kinds"], ["--kinds", ""], ["--kinds", "retired-provider"],
+             ["--kinds", "orphan,retired-provider"], ["--kinds", "orphan,"]):
+    original_config = reap.config
+    try:
+        reap.config = lambda: (_ for _ in ()).throw(AssertionError("configuration read before validation"))
+        sys.argv = ["reap.py", "scan", *args]
+        try:
+            reap.main()
+            raise AssertionError("invalid kinds silently accepted")
+        except SystemExit as e:
+            assert "supported kinds" in str(e), e
+    finally:
+        sys.argv = saved_argv
+        reap.config = original_config
+
 # No personal folder scan without an explicit list, including malformed configuration.
 for cfg in ({}, {"user_folders": "~/Downloads"}, {"user_folders": [None]}):
     items, notes = reap.scan({"user-folder"}, 6, cfg, [])

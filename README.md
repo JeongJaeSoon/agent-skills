@@ -51,7 +51,7 @@ claude plugin install agent-skills@jeongjaesoon
 bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행해줘" 3 [복사할 저장소]
 ```
 
-트래커는 설정된 어댑터를 사용한다(기존 기본값 Linear). 노트는 `~/.claude/agent-skills.json`의 `notes` 설정이나 사용자가 명시한 목적지가 있어야 쓴다. `reflect.ledger`·`reflect.skill_repository`로 회고 위치와 편집할 원본을 지정하고, `reap.user_folders`에 명시한 개인 폴더만 정리한다. 설정이 없으면 개인 vault나 폴더를 추정하지 않는다.
+트래커는 설정된 어댑터를 사용한다(기존 기본값 Linear). 노트는 `~/.claude/agent-skills.json`의 `notes` 설정이나 사용자가 명시한 목적지가 있어야 쓴다. `reflect.ledger`·`reflect.skill_repository`로 회고 위치와 편집할 원본을 지정하고, `reap.user_folders`에 명시한 개인 폴더만 정리한다. 설정이 없으면 개인 vault나 폴더를 추정하지 않는다. **업그레이드 전에 [설정 전환 안내](docs/configuration-migration.md)를 확인한다.** 기존 노트·회고·개인 폴더 정리는 명시 설정이 필요하며, 성과 보고 시간대 기본값은 UTC로 바뀌었다. 기존 설정 파일을 통째로 덮어쓰거나 원장을 옮기지 않는다.
 
 `recall`이 지난 세션을 빨리 찾게 하려면 Orca 앱에서 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터(Local Mac) 스위치를 켠다. CLI로는 켤 수 없고, 켜기 전에는 `recall`이 `~/.claude/projects`의 transcript를 grep한다. 켜졌는지는 `orca search --index-status`의 `enabled`로 확인한다.
 

@@ -7,6 +7,10 @@ description: "Use for \"interrogate\", \"adversarial review\", \"challenge this\
 
 Have independent reviewers challenge the design or changes against the same prompt and rubric. Evidence and distinct reasoning matter more than model identity.
 
+Select reviewers within the repository's data-sharing and permission boundaries. Read those
+restrictions first and include them in each review brief; if no permitted reviewer is available,
+report the review as unavailable rather than send code to a prohibited service.
+
 The deliverable is a synthesized verdict; this skill changes no files. When `deliver-ticket` calls it, the caller applies the Act on findings.
 
 ## Step 1, Determine Scope
