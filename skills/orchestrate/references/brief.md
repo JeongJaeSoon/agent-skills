@@ -195,7 +195,15 @@ APPROVED    The acts the human already approved for this project, with their wor
             Decisions inside them are yours and your workers': the recommended default, then a
             report. Copy the lines a worker's unit needs into its brief.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
-            any irreversible or outward act not under APPROVED. Batched into one message to the human.
+            any irreversible or outward act not under APPROVED. Batched into one message, sent once
+            through the established channel to the parent coordinator, which puts it before the
+            human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
+            when the blocker or evidence changes, create a replacement with `orch decide add`
+            whose body names the old decision id and changed evidence. After creation succeeds,
+            `orch decide drop <old-id>` closes the obsolete question without erasing its history;
+            notify the parent once with both ids. Never treat an answer to the old question as
+            approval of changed scope. The parent owns delivery to the human; if its channel is
+            unavailable, report that routing gap in the current task.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
