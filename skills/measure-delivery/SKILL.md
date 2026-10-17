@@ -37,7 +37,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/measure.py" \
 - `--issues` accepts a top-level list, `{"issues": [...]}` or `{"result": {"issues": [...]}}`.
 - `--tz` sets the report's local time (default `+09:00`); `--json` also writes the headline
   numbers as JSON.
-- `--usage-match` picks the Claude project dirs / Codex session cwds to count tokens for
+- `CLAUDE_CONFIG_DIR` selects the transcript adapter root (default `~/.claude`). No matching usage is unmeasured, not zero.
+- `--usage-match` picks the configured project directories to count tokens for
   (default: the repo name).
 
 It prints a Korean markdown report. Put it in the project's note (`use-notes`), not only in chat.
@@ -52,7 +53,7 @@ It prints a Korean markdown report. Put it in the project's note (`use-notes`), 
 | 머지 PR | PRs merged in the window | Accepted changes |
 | 재작업 | Commits with an author date after the PR opened (survives rebase); PR-event CI runs on the PR's branch between its open and merge | How much work happened after "ready" |
 | escaped | Bug-labeled issues created, main push CI failures, revert PRs | Candidates only: read each Bug to confirm it came from merged code |
-| 비용 | Claude and Codex tokens from this machine's transcripts in the window, per merged PR. Codex sessions count only the growth inside the window | No prices applied; other machines are missing |
+| 비용 | Tokens from this machine's available transcripts in the window, per merged PR | No prices applied; other machines are missing |
 
 Checked against a hand analysis of a real three-day program: the ratio and the 6h blocks
 matched. Counts differ by ±1–3 at window edges and because this script counts every issue, not

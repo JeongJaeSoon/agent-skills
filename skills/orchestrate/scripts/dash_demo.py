@@ -116,7 +116,7 @@ def alpha(now):
 
     def land(h, pr, ticket, green=True, note=None):
         ev(h + 1.0, "ready", pr=pr, ticket=ticket)
-        ev(h + 0.5, "verdict", pr=pr, sha=f"{pr:x}".ljust(40, "a"), patch_id="p", source="codex-review", result="pass")
+        ev(h + 0.5, "verdict", pr=pr, sha=f"{pr:x}".ljust(40, "a"), patch_id="p", source="independent-review", result="pass")
         ev(h, "landed", pr=pr, sha=f"m{pr}")
         ev(h - 0.4, "main_green" if green else "main_red", sha=f"m{pr}", note=note)
 
@@ -138,15 +138,15 @@ def alpha(now):
     ev(15.5, "spawned", ticket="ACME-106", note="ctx_a1000007")
     ev(11, "parked", ticket="ACME-124")
     ev(10, "ready", pr=206, ticket="ACME-105")
-    ev(9.5, "verdict", pr=206, sha="ce".ljust(40, "a"), patch_id="p0", source="codex-review", result="fail",
+    ev(9.5, "verdict", pr=206, sha="ce".ljust(40, "a"), patch_id="p0", source="independent-review", result="fail",
        note="missing retry test")
-    ev(7, "verdict", pr=206, sha="ce".ljust(40, "b"), patch_id="p1", source="codex-review", result="pass")
+    ev(7, "verdict", pr=206, sha="ce".ljust(40, "b"), patch_id="p1", source="independent-review", result="pass")
     ev(6.5, "landed", pr=206, sha="m206")
     ev(6.1, "main_green", sha="m206")
     ev(5, "admitted", ticket="ACME-125", note="blocks ACME-106 (schema change)")
     ev(5, "spawned", ticket="ACME-125", note="ctx_a1000008")
     ev(4, "ready", pr=207, ticket="ACME-106")
-    ev(3.5, "verdict", pr=207, sha="cf".ljust(40, "a"), patch_id="p", source="verifier:codex", result="pass")
+    ev(3.5, "verdict", pr=207, sha="cf".ljust(40, "a"), patch_id="p", source="verifier:independent", result="pass")
     ev(3.3, "dep", ticket="ACME-107", after=["ACME-106"])
     ev(2.5, "spawned", ticket="ACME-107", note="ctx_a1000009")
     ev(1.2, "ready", pr=208, ticket="ACME-125")
@@ -207,7 +207,7 @@ def alpha(now):
         _worker(now, "ctx_a1000009", "acme-107", "in_progress", "waiting", "sonnet", 0.7),
         _worker(now, "ctx_a1000008", "acme-125", "in_progress", "working", "opus", 0.02),
         _worker(now, "ctx_a1000010", "acme-verify-main", "in_progress", "unknown", "haiku", 1.4, "unverifiable", ("stale",)),
-        _worker(now, "ctx_a1000007", "acme-106", "succeeded", "unknown", "gpt-6-sol", 3.9, "exited"),
+        _worker(now, "ctx_a1000007", "acme-106", "succeeded", "unknown", "local-reviewer", 3.9, "exited"),
         _worker(now, "ctx_a1000006", "acme-105", "succeeded", "unknown", "opus", 9.9, "exited"),
         _worker(now, "ctx_a1000005", "acme-121", "succeeded", "unknown", "opus", 21.9, "exited"),
         _worker(now, "ctx_a1000004", "acme-104", "succeeded", "unknown", "sonnet", 17.4, "exited"),
@@ -264,16 +264,16 @@ def beta(now):
 
     ev(19, "spawned", ticket="BILL-11")
     ev(15, "ready", pr=301, ticket="BILL-11")
-    ev(14.5, "verdict", pr=301, sha="12d".ljust(40, "a"), patch_id="p", source="codex-review", result="pass")
+    ev(14.5, "verdict", pr=301, sha="12d".ljust(40, "a"), patch_id="p", source="independent-review", result="pass")
     ev(14, "approved", pr=301)
     ev(13.8, "landed", pr=301, sha="m301")
     ev(13.5, "main_green", sha="m301")
     ev(13, "spawned", ticket="BILL-12")
     ev(13, "spawned", ticket="BILL-13")
     ev(6, "ready", pr=302, ticket="BILL-12")
-    ev(5.5, "verdict", pr=302, sha="12e".ljust(40, "a"), patch_id="p", source="codex-review", result="pass")
+    ev(5.5, "verdict", pr=302, sha="12e".ljust(40, "a"), patch_id="p", source="independent-review", result="pass")
     ev(4, "ready", pr=303, ticket="BILL-13")
-    ev(3.5, "verdict", pr=303, sha="12f".ljust(40, "a"), patch_id="p", source="codex-review", result="pass")
+    ev(3.5, "verdict", pr=303, sha="12f".ljust(40, "a"), patch_id="p", source="independent-review", result="pass")
     ev(3, "approved", pr=302)
     ev(2.8, "landed", pr=302, sha="m302")
     ev(2.4, "main_red", sha="m302", note="invoice migration test fails on main")
@@ -328,7 +328,7 @@ def _transcripts(root, now, workers):
     """Claude Code-shaped transcripts for the demo workers, with repeated rows per message like the real ones."""
     base = root / "claude-projects"
     for i, w in enumerate(workers):
-        if (w["projection"]["provider"]["model"] or "").startswith("gpt"):
+        if w["dispatchId"] == "ctx_a1000007":  # Fixture with no local transcript.
             continue
         wt = w["resource"]["worktreeId"].split("::", 1)[1]
         d = base / wt.replace("/", "-").replace(".", "-")
@@ -497,7 +497,7 @@ def live(root, period=20, world=None):
     ledger = pathlib.Path(root) / "programs" / "launchpad-ga" / "ledger.jsonl"
     notes = pathlib.Path(root) / "programs" / "launchpad-ga" / "dashboard" / "notes.jsonl"
     steps = [
-        (ledger, {"ev": "verdict", "pr": 208, "sha": "d0".ljust(40, "a"), "patch_id": "p", "source": "codex-review",
+        (ledger, {"ev": "verdict", "pr": 208, "sha": "d0".ljust(40, "a"), "patch_id": "p", "source": "independent-review",
                   "result": "pass"}),
         (ledger, {"ev": "landed", "pr": 207, "sha": "m207"}),
         (ledger, {"ev": "lock_released", "pr": 207, "base": "main", "ticket": "ACME-106"}),

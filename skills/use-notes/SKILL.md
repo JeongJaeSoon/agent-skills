@@ -1,6 +1,6 @@
 ---
 name: use-notes
-description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, \"정본\", a vault path like Project/<name>/*.md, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown)."
+description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, \"정본\", a project note path, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown)."
 ---
 
 # Working notes
@@ -9,10 +9,11 @@ Design docs, worklogs and program notes live in one notes store. Which store is 
 from `~/.claude/agent-skills.json`:
 
 ```json
-{"notes": {"adapter": "obsidian", "obsidian": {"vault": "Private"}, "markdown": {"root": "~/notes"}}}
+{"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}}
 ```
 
-No file, or no `notes` key → `obsidian`. A program may override it in its `program.json`
+No `notes` configuration: use an explicit destination supplied by the user; otherwise keep
+the result in the current task and ask for a destination before any external write. A program may override it in its `program.json`
 (`"notes": {"adapter": "markdown", "root": "<repo>/docs/notes"}`).
 
 Read the adapter's reference before the first read or write in a session:
@@ -47,7 +48,7 @@ goes stale.
 
 ## Conventions every adapter keeps
 
-- Default paths are `Project/<project>/<name>.md`. Worklogs (`worklog-<ticket-or-topic>`) are
+- Paths follow the configured store or the user's requested destination. Worklogs (`worklog-<ticket-or-topic>`) are
   updated as each piece lands and pruned when the project wraps. Program notes are
   `program-<slug>` (`orchestrate`).
 - A note is the source of truth; anything shown to the user (an Artifact page, a chat summary)

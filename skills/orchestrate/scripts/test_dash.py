@@ -88,8 +88,13 @@ assert g["critical"] == ["ACME-106", "ACME-107", "task_ver"], g["critical"]
 # Token usage: repeated rows of one message count once, and a rescan reads only new bytes.
 tok = st["usage"]["total"]["total"]
 w107 = next(w for w in st["workers"] if w["dispatch"] == "ctx_a1000009")
+foreign = dash.shape_workers([{"dispatchId": "foreign", "resource": {"worktreeId": "r::" + w107["worktree_path"]},
+    "projection": {"provider": {"id": "unavailable-adapter", "model": "same-model"}, "outcome": "in_progress"}}], [])
+assert foreign[0]["transcript_expected"] is False
+(root / "foreign-usage").mkdir()
+assert dash.collect_usage(root / "foreign-usage", foreign, {})["workers"] == {}
 assert tok > 0 and w107["tokens"]["total"] > 0 and st["series"][-1]["tokens"] == tok
-assert next(w for w in st["workers"] if w["model"] == "gpt-6-sol")["tokens"] is None, "codex workers are n/a"
+assert next(w for w in st["workers"] if w["model"] == "local-reviewer")["tokens"] is None, "workers without transcripts are unmeasured"
 assert dash.collect(A, sources=("orca",))["usage"]["total"]["total"] == tok, "rescan must not double count"
 assert dash.transcript_dir("/w/my_repo.x").name == "-w-my-repo-x"
 tr = pathlib.Path(os.environ["CLAUDE_PROJECTS_DIR"]) / "-workspaces-acme-107" / "session.jsonl"
@@ -144,7 +149,7 @@ assert st["errors"] == ['orca: {"code": "run_not_found"}'] and st["summary"]["in
 orca_fixture.write_text(saved)
 assert dash.collect(A, sources=("orca",))["errors"] == []
 try:
-    dash.sh(["dash-test-no-such-cli"])
+    dash.sh([str(root / "dash-test-no-such-cli")])
     raise AssertionError("expected SourceError")
 except dash.SourceError as e:
     assert "not found" in str(e)
@@ -305,7 +310,7 @@ n = len(history(A))
 dash.collect(A, sources=())
 assert len(history(A)) == n, "rebuilt once, then appended as usual"
 
-assert [m.upper() for m in dash.TICKET_RE.findall("JeongJaeSoon/94s-135-prep on 2026-09-24, ACME-7")] == ["94S-135", "ACME-7"]
+assert [m.upper() for m in dash.TICKET_RE.findall("example/abc-135-prep on 2026-09-24, ACME-7")] == ["ABC-135", "ACME-7"]
 
 # A landing does not finish a ticket the tracker still has open: a ticket can take several PRs.
 tasks = [{"id": "t1", "ticket": "X-1", "title": "X-1", "status": "dispatched", "deps": []}]
@@ -322,8 +327,8 @@ now = dash.utcnow()
 ago = lambda m: dash.iso(now - dash.dt.timedelta(minutes=m))
 ws = [{"dispatch": "a", "outcome": "in_progress", "since": ago(60), "motion": {"state": "idle", "since": ago(20)}},
       {"dispatch": "b", "outcome": "in_progress", "since": ago(60), "motion": {"state": "idle", "since": ago(20), "parked": True}},
-      {"dispatch": "c", "outcome": "in_progress", "since": ago(30), "motion": None},
-      {"dispatch": "d", "outcome": "in_progress", "since": ago(30), "motion": None, "model": "gpt-6"},
+      {"dispatch": "c", "transcript_expected": True, "outcome": "in_progress", "since": ago(30), "motion": None},
+      {"dispatch": "d", "outcome": "in_progress", "since": ago(30), "motion": None, "model": "local-reviewer"},
       {"dispatch": "e", "outcome": "in_progress", "since": ago(90), "motion": {"state": "tool", "since": ago(50), "tool": "Bash"}},
       {"dispatch": "f", "outcome": "in_progress", "since": ago(90), "motion": {"state": "working", "since": ago(1)}},
       {"dispatch": "g", "outcome": "succeeded", "since": ago(90), "motion": {"state": "idle", "since": ago(80)}},

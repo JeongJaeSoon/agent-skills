@@ -34,6 +34,7 @@ def load_translation(lang):
 
 
 TAGS = {"사용자 호출 전용": "user-only", "user-invoked only": "user-only", "ユーザー呼び出し専用": "user-only"}
+SKILL_NAMES = {p.parent.name for p in (REPO / "skills").glob("*/SKILL.md")}
 ALIAS_H2 = {"별칭", "Aliases", "エイリアス"}
 
 
@@ -98,7 +99,7 @@ def render(src, prefix):
                 toc.append(group)
                 body.append(f'<h2 id="{hid}"{k}>{inline(text)}</h2>')
             else:
-                skills += not past_skills
+                skills += int(name.strip("`").strip() in SKILL_NAMES)
                 if group:
                     group["items"].append((hid, name))
                 body.append(f'<h3 id="{hid}"{k}>{inline(name)}{badge}</h3>')
@@ -195,7 +196,7 @@ for lang, (doc, base, stale) in docs.items():
     parts["INTRO"].append(f'<div {a}>{doc["intro"]}</div>')
     parts["FACTS"].append(
         f'<ul class="facts" {a}><li>{f[0]} <b>{doc["skills"]}</b></li><li>{f[1]} <b>{doc["aliases"]}</b></li>'
-        f'<li>{f[2]} <b>orch · orch-dash</b></li><li>{f[3]} <b>2</b></li>'
+        f'<li>{f[2]} <b>orch · orch-dash · skills-sync</b></li><li>{f[3]} <b>6</b></li>'
         f'<li>pstack pin <b>b42effe</b> → upstream <b>12d587d</b></li></ul>')
     parts["NAV"].append(f'<nav class="toc" {a} aria-label="{ui["nav"]}"><ul>{doc["nav"]}</ul></nav>')
     parts["BODY"].append(f'<div {a}>\n{doc["body"]}\n</div>')

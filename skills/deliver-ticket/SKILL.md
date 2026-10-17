@@ -1,6 +1,6 @@
 ---
 name: deliver-ticket
-description: "Use when working a ticket from the first edit to done — multi-file work; opening, updating or merging a PR (\"PR 올려줘\", \"머지해줘\", \"머지까지 진행해줘\", \"머지되면 이어서\"); a release after the merge (\"릴리즈까지 진행해줘\"); review comments (\"리뷰 코멘트 대응해줘\"); a Codex cross-check (\"codex 교차 검증\", \"적대적 리뷰\"); proving it works (\"동작확인하고 머지\", \"내가 확인할 거 있어?\"); declaring a ticket done (\"이 티켓 끝내줘\", \"ship it\")."
+description: "Use when working a ticket from the first edit to done — multi-file work; opening, updating or merging a PR (\"PR 올려줘\", \"머지해줘\", \"머지까지 진행해줘\", \"머지되면 이어서\"); a release after the merge (\"릴리즈까지 진행해줘\"); review comments (\"리뷰 코멘트 대응해줘\"); proving it works (\"동작확인하고 머지\", \"내가 확인할 거 있어?\"); declaring a ticket done (\"이 티켓 끝내줘\", \"ship it\")."
 ---
 
 # Delivering a ticket
@@ -85,27 +85,20 @@ Then review by scope, not by vendor:
 - `/code-review` — the working diff, before a PR exists
 - `/review` — once a PR exists
 - `/security-review` — the diff touches auth, crypto, or untrusted input
-- `blast-radius` (or `interrogate` for a multi-model pass) — the diff touches auth, migrations,
-  concurrency or a public contract; run it before the first Codex round, not after more rounds
+- `blast-radius` (or `interrogate` for an adversarial pass) — the diff touches auth, migrations,
+  concurrency or a public contract; run it before final review
 
 Write in the PR body which of these the diff triggered and what ran; a triggered one you skipped
-gets its reason there; an Orca worker copies the line into its worker_done. A Codex review alone
+gets its reason there; an Orca worker copies the line into its worker_done. A general review alone
 does not stand in for a triggered row. Each review above ends in a report: fold its findings in and go
 on to the next step in the same turn; a turn that ends on a review report leaves the ticket
 stalled with no one waiting for it.
 
-**Trivial** means all of these: about 20 changed lines or fewer, no auth, crypto, migration,
-concurrency, CI or public-contract change, and a test that covers it. A trivial diff still gets
-a reviewer other than its author: one subagent running `/code-review` on it (verdict source
-`subagent-review`). Your own reading is never the verdict.
-
-**Codex is the second pair of eyes on anything non-trivial**, not an optional extra: its
-`review` for defects, and `adversarial-review` when the design, not the defect count, is what you
-are unsure about. The commands, the model to pick, and what to do when Codex returns no review
-are in [references/codex-review.md](references/codex-review.md): a run that reviewed nothing is
-retried until Codex reviews, never replaced by a review that carries your context. Only when
-Codex itself is unavailable (spend cap, outage, login) does a context-free Claude Code review
-stand in; otherwise it goes to the human.
+Have an independent reviewer assess non-trivial changes. For a small change, a focused
+review of the diff and relevant tests is sufficient. Use available review tools appropriate
+to the scope; their command names and models are not requirements of this skill.
+Follow [references/independent-review.md](references/independent-review.md) for the evidence
+contract and unavailable-review handling.
 
 Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
 Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
@@ -133,19 +126,15 @@ Before pushing, run **both**:
   caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, browser automation for UI
   and web flows (logged-in sites included), IDE diagnostics
   for type and lint
-- a change with no runtime behavior (docs, comments): run every command and example it
-  documents, exactly as written; that is its E2E
+- a change with no runtime behavior (docs, comments): validate links, examples and contracts
+  with safe fixtures; do not execute destructive examples or live external writes as a test
 
-The E2E drives the app through the repo's `.claude/skills/verify-<app>` when it has one. A change
-to a user-facing surface (a UI, a CLI, an API users call) in a repo with none: run
-`create-verification-skill` first, drive the E2E through the skill it writes, and ship that skill
-as its own commit in this PR (a repo that ignores `.claude/`: say so in the report instead). Inside
-a program that is the coordinator's call before Pilot; only the card it dispatched for it does
-this. A `verify-*` skill that could not drive the feature you touched, or described it wrongly:
-inside a program, report `verify skill stale: <feature>`; outside one, run
-`maintain-verification-skill` once this ticket lands.
+Use the repository's existing verification skill or harness when it fits the affected
+surface. If none exists, run the appropriate direct checks and retain their evidence.
+Create or maintain a reusable verification skill only when requested or useful within the
+agreed scope; its absence does not block otherwise adequate verification.
 
-After the test suite and E2E check, push and open a ready PR with `gh pr create`, not a draft.
+After the test suite and E2E check, push and open a PR with `gh pr create` in the draft/ready state the user requested.
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
 with `orca linear attach --current --url <pr> --title "PR"` (outside an Orca card,
 `orca linear attach <ID> --url <pr>`). Move the ticket at each milestone as `use-tracker`

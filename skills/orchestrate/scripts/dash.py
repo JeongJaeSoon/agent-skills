@@ -399,6 +399,7 @@ def shape_workers(raw, events, tasks=()):
         act = stage.get("activity")
         out.append({"dispatch": w.get("dispatchId"), "task": w.get("taskId"), "ticket": ticket,
                     "worktree": wt or None, "worktree_path": wt_path,
+                    "transcript_expected": (p.get("provider") or {}).get("id") == "claude",
                     "model": (p.get("provider") or {}).get("model") or (p.get("provider") or {}).get("id"),
                     "liveness": live.get("verdict") or w.get("terminalState"),
                     "activity": {"working": "running", "waiting": "waiting", "idle": "idle"}.get(act, "unknown"),
@@ -660,8 +661,8 @@ def collect_usage(dash, workers, cfg):
     since = cfg.get("created_at", "").replace("+00:00", "Z")[:19]
     root, per_worker, total, motions = projects_dir(), {}, {}, {}
     for w in workers:
-        if (w.get("model") or "").startswith(("gpt", "o3", "o4", "codex")) or not w.get("worktree_path"):
-            continue  # Codex rollouts are not mapped to worktrees; shown as n/a
+        if not w.get("worktree_path") or not w.get("transcript_expected", False):
+            continue  # No transcript location; usage remains unknown.
         d = transcript_dir(w["worktree_path"])
         if not d.is_dir():
             continue
@@ -696,7 +697,7 @@ def collect_usage(dash, workers, cfg):
 
 # ---------------------------------------------------------------- summary and series
 
-# Minutes before an in-flight Claude worker counts as stalled. Codex workers leave no transcript here: unknown.
+# Minutes before an in-flight worker counts as stalled when session evidence is available.
 IDLE_MIN = 15        # its turn ended and nothing it armed (ScheduleWakeup, Monitor, background job) will wake it
 START_MIN = 10       # dispatched, but its session has written nothing since
 TOOL_MIN = 45        # one tool call still running (a CI watch past this is worth a look)
@@ -722,10 +723,10 @@ def stalls(workers, tnow, held=frozenset()):
         m = w.get("motion") or {}
         if w.get("ticket") in held:
             continue
-        if w.get("outcome") != "in_progress" or (w.get("model") or "").startswith(("gpt", "o3", "o4", "codex")):
+        if w.get("outcome") != "in_progress":
             continue
         row = {"dispatch": w["dispatch"], "ticket": w.get("ticket") or w.get("worktree")}
-        if not m and w.get("since") and mins(w["since"]) >= START_MIN:
+        if not m and w.get("transcript_expected", False) and w.get("since") and mins(w["since"]) >= START_MIN:
             out.append({**row, "kind": "start_unconfirmed", "minutes": round(mins(w["since"]))})
         elif m.get("state") == "idle" and not m.get("parked") and mins(m["since"]) >= IDLE_MIN:
             out.append({**row, "kind": "idle", "minutes": round(mins(m["since"]))})

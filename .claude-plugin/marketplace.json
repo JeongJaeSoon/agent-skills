@@ -8,7 +8,7 @@
     {
       "name": "agent-skills",
       "source": "./",
-      "description": "pstack 기반 개인 스킬 모음: 티켓 작성·전달, Orca 오케스트레이션, 교차 검토, 회고"
+      "description": "pstack 기반 재사용 가능한 스킬 모음: 티켓 작성·전달, Orca 오케스트레이션, 독립 검토, 회고"
     }
   ]
 }

@@ -8,7 +8,7 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 
 전제는 Orca(멀티 에이전트 IDE, `orca` CLI), GitHub, 티켓 트래커(Linear, Jira 어댑터 준비)다. 노트는 Obsidian vault 또는 일반 Markdown 폴더를 쓴다.
 
-선택 도구: 교차 검토는 [Codex 플러그인](https://github.com/openai/codex-plugin-cc)의 companion 스크립트, 브라우저 검증은 브라우저 자동화 도구를 쓴다. 없으면 그 단계만 다른 도구로 바꾼다.
+선택 도구: 독립 리뷰는 사용 가능한 리뷰어와 도구로, 브라우저 검증은 브라우저 자동화 도구로 수행한다. 특정 모델이나 별도 모델 플러그인은 필요하지 않다.
 
 ## 설치
 
@@ -51,7 +51,7 @@ claude plugin install agent-skills@jeongjaesoon
 bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행해줘" 3 [복사할 저장소]
 ```
 
-트래커와 노트 저장소는 설정 없이도 동작한다. 설정 파일이 없으면 트래커는 Linear, 노트는 Obsidian vault `Private`이고, 노트는 연결된 Obsidian MCP 도구로, 트래커는 연결된 Linear MCP 도구(없으면 `orca linear` CLI)로 읽고 쓴다. Jira나 일반 Markdown 폴더, 다른 vault를 쓸 때만 `~/.claude/agent-skills.json`을 둔다(선택). 형식은 `use-tracker`, `use-notes` 스킬에 있다.
+트래커는 설정된 어댑터를 사용한다(기존 기본값 Linear). 노트는 `~/.claude/agent-skills.json`의 `notes` 설정이나 사용자가 명시한 목적지가 있어야 쓴다. `reflect.ledger`·`reflect.skill_repository`로 회고 위치와 편집할 원본을 지정하고, `reap.user_folders`에 명시한 개인 폴더만 정리한다. 설정이 없으면 개인 vault나 폴더를 추정하지 않는다.
 
 `recall`이 지난 세션을 빨리 찾게 하려면 Orca 앱에서 Settings → Agent Session Search → Search inside sessions의 이 컴퓨터(Local Mac) 스위치를 켠다. CLI로는 켤 수 없고, 켜기 전에는 `recall`이 `~/.claude/projects`의 transcript를 grep한다. 켜졌는지는 `orca search --index-status`의 `enabled`로 확인한다.
 
@@ -64,7 +64,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | 스킬 | 언제 |
 |---|---|
 | `write-ticket` | 티켓을 쓸 때. 후속 티켓 형식, 템플릿 |
-| `deliver-ticket` | 첫 수정부터 완료까지: 계획, 테스트, Codex 교차 검토, GitHub stack, E2E, 머지, 완료 기준 |
+| `deliver-ticket` | 첫 수정부터 완료까지: 계획, 테스트, 독립 검토, GitHub stack, E2E, 머지, 완료 기준 |
 | `handoff-ticket` | 끝난 뒤 다음 티켓을 새 Orca 카드로 |
 | `dispatch-card` | 이 세션은 계속하면서 다른 저장소나 곁가지를 카드로 |
 | `end-session` | 세션·카드·worktree 정리. Orca 워커와 브리프로 띄운 카드는 일을 마치면 스스로 닫는다 |
@@ -81,7 +81,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 | 스킬 | 언제 |
 |---|---|
-| `reap-resources` | 죽은 세션이 남긴 Codex broker 트리, 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. 에이전트가 만든 끝난 리소스와 다운로드·바탕화면의 7일(스크린샷은 1일) 지난 항목은 3시간 주기 automation이 휴지통으로 정리한다. 닫힌 지 7일 지난 프로그램 상태는 `_archive/`로 보관하고(재개 노트가 있으면 남김), hook 세션 파일과 `sync.log`도 정리한다 |
+| `reap-resources` | 죽은 세션이 남긴 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. 에이전트가 만든 끝난 리소스와 명시적으로 설정한 개인 폴더의 기준 기간이 지난 항목은 3시간 주기 automation이 휴지통으로 정리한다. 닫힌 지 7일 지난 프로그램 상태는 `_archive/`로 보관하고(재개 노트가 있으면 남김), hook 세션 파일과 `sync.log`도 정리한다 |
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
 
@@ -125,7 +125,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py hooks/test_*.py scripts/test_sync.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

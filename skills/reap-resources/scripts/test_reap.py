@@ -10,40 +10,6 @@ def row(pid, cmd, ppid=1, age=10 * H, rss=1024):
     return {"pid": pid, "ppid": ppid, "age": age, "start": "Sat Sep 26 00:00:00 2026", "rss": rss, "cpu": 1.0, "cmd": cmd}
 
 
-BROKER = "/usr/bin/node /x/scripts/app-server-broker.mjs serve --endpoint unix:/t/b.sock --cwd {} --pid-file /t/b.pid"
-rows = {
-    10: row(10, BROKER.format("/wt/live")),
-    11: row(11, "codex app-server", ppid=10),
-    12: row(12, "SkyComputerUseClient event-stream mcp", ppid=11),
-    20: row(20, BROKER.format("/wt/dead")),
-    30: row(30, BROKER.format("/wt/gone")),
-    40: row(40, BROKER.format("/wt/fresh"), age=H),
-    50: row(50, "claude --permission-mode auto", ppid=99),
-    # A session whose prompt quotes a broker command line is not a broker.
-    60: row(60, "claude --permission-mode auto " + BROKER.format("/wt/gone")),
-}
-got = {i["pid"]: i for i in reap.judge_brokers(rows, {50: "/wt/live/sub", 60: "/home"}, 6, exists=lambda p: p != "/wt/gone")}
-# One own claude missing from the cwd listing blinds every idle verdict.
-blind = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, {50: "/wt/live/sub"}, 6, exists=lambda p: p != "/wt/gone")}
-assert blind == {10: False, 20: False, 30: False, 40: False}, blind
-assert set(got) == {10, 20, 30, 40}, got
-assert not got[10]["target"] and "claude" in got[10]["why"] and got[10]["procs"] == 3
-assert got[20]["target"] and got[20]["why"] == "cwd에 claude 없음"
-assert got[30]["target"] and got[30]["why"] == "cwd 없음"
-assert not got[40]["target"]
-# Without cwd data nothing proves a broker idle, not even a vanished cwd.
-got = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, None, 6, exists=lambda p: p != "/wt/gone")}
-assert got == {10: False, 20: False, 30: False, 40: False}, got
-# A live claude still in a vanished cwd keeps its broker.
-got = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, {50: "/wt/gone"}, 6, exists=lambda p: p != "/wt/gone")}
-assert got[30] is False, got
-# --under scopes the codex kind to one card: a broker elsewhere is not even listed.
-got = {i["pid"]: i["target"] for i in reap.judge_brokers(rows, {50: "/home", 60: "/home"}, 6, exists=lambda p: p != "/wt/gone", root="/wt/gone")}
-assert got == {30: True}, got
-# A claude installed through npm runs as node; it still protects its cwd.
-assert reap.is_claude("node /n/lib/node_modules/@anthropic-ai/claude-code/cli.js -p")
-assert not reap.is_claude("node /x/app-server-broker.mjs serve") and not reap.is_claude("claudette")
-
 # Orphans: ppid 1 and the executable (or its script) under a configured path; never an argument or a prompt.
 rows = {
     1: row(1, "/cache/uv/bin/python /cache/uv/bin/litellm --port 4000"),
@@ -69,8 +35,8 @@ rows = {
     21: {**row(21, "node mcp-server.js", ppid=20), "uid": ME, "cpu": 2.0},
     30: {**row(30, "claude --permission-mode auto", ppid=99), "uid": ME, "cpu": 5.0},
     31: {**row(31, "lockf /tmp/bench.lock python3 bench.py", ppid=30), "uid": ME, "cpu": 95.0},
-    40: {**row(40, BROKER.format("/wt/gone")), "uid": ME, "cpu": 30.0},
-    41: {**row(41, "codex app-server", ppid=40), "uid": ME, "cpu": 10.0},
+    40: {**row(40, "/cache/test-worker"), "uid": ME, "cpu": 30.0},
+    41: {**row(41, "test-helper", ppid=40), "uid": ME, "cpu": 10.0},
     50: {**row(50, "/usr/local/bin/node server.js", ppid=99), "uid": ME, "cpu": 12.0},
     # Ours even from a system path: the Virtualization framework runs a container VM as this user.
     60: {**row(60, "/System/Library/Frameworks/Virtualization.framework/XPCServices/VirtualMachine", ppid=1),
@@ -226,24 +192,39 @@ with tempfile.TemporaryDirectory() as tmp:
     cache.mkdir()
     sleeper = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"
     (cache / "litellm.py").write_text(sleeper)
-    (cache / "app-server-broker.mjs").write_text(sleeper)
+    (cache / "second-worker.py").write_text(sleeper)
     py = sys.executable
     subprocess.run(["sh", "-c", f"'{py}' '{cache}/litellm.py' --port 1 &"], check=True)
-    subprocess.run(["sh", "-c", f"'{py}' '{cache}/app-server-broker.mjs' serve --cwd {tmp}/gone-wt --pid-file x &"], check=True)
+    subprocess.run(["sh", "-c", f"'{py}' '{cache}/second-worker.py' serve --cwd {tmp}/gone-wt --pid-file x &"], check=True)
     time.sleep(1)
     rows = reap.processes()
     orphan = [i for i in reap.judge_orphans(rows, [str(cache)], 0) if i["target"]]
-    broker = [i for i in reap.judge_brokers(rows, reap.cwds(), 0) if i["name"] == f"{tmp}/gone-wt"]
-    assert len(broker) == 1 and broker[0]["target"] and broker[0]["procs"] == 2, broker
-    # The broker also runs from the cache path, so it counts as an orphan too; the plain sleeper is the other one.
+    # Both cache workers are orphans; tree identity protects against PID reuse.
     assert len(orphan) == 2 and all(i["procs"] == 2 for i in orphan), orphan
     pids = [p for i in orphan for p in reap.tree(i["pid"], rows)]
     # Same pid and command but another start time is another process.
-    assert reap.kill_tree({**broker[0], "start": "Thu Jan  1 00:00:00 1970"}, []) == "사라졌거나 다른 프로세스"
+    assert reap.kill_tree({**orphan[0], "start": "Thu Jan  1 00:00:00 1970"}, []) == "사라졌거나 다른 프로세스"
     assert all(reap.kill_tree(i, []) == "종료" for i in orphan)
     assert not set(pids) & set(reap.processes())
     assert reap.kill_tree(orphan[0], []) == "사라졌거나 다른 프로세스"
     assert len(pids) == 4
+
+# Retired scope flags must fail before any inventory or mutation.
+saved_argv = sys.argv
+try:
+    sys.argv = ["reap.py", "scan", "--under", "/example"]
+    try:
+        reap.main()
+        raise AssertionError("retired scope was silently ignored")
+    except SystemExit as e:
+        assert "no longer supported" in str(e)
+finally:
+    sys.argv = saved_argv
+
+# No personal folder scan without an explicit list, including malformed configuration.
+for cfg in ({}, {"user_folders": "~/Downloads"}, {"user_folders": [None]}):
+    items, notes = reap.scan({"user-folder"}, 6, cfg, [])
+    assert items == [] and any("user_folders" in n for n in notes)
 
 # Janitor kinds: the ledger appends, the last line per id wins, and a PR link decides.
 PRS = {"acme/app#1": {"state": "OPEN", "headRefOid": "h1"}, "acme/app#2": {"state": "MERGED", "headRefOid": "h2"},
@@ -600,7 +581,7 @@ try:
         reap.trash_auto_empty = lambda: auto
         if folder:
             os.environ["AGENT_SKILLS_TRASH"] = folder
-        got = reap.scan({"user-folder"}, 6, {"user_folder_days": 7}, [])[0]
+        got = reap.scan({"user-folder"}, 6, {"user_folder_days": 7, "user_folders": ["/d"]}, [])[0]
         os.environ.pop("AGENT_SKILLS_TRASH", None)
         assert got[0]["target"] is target and (target or "휴지통 자동 비움" in got[0]["why"]), (auto, folder, got)
 finally:
@@ -784,7 +765,7 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     home = pathlib.Path(os.path.realpath(tmp))
     (home / ".claude").mkdir()
-    (home / ".claude" / "agent-skills.json").write_text(json.dumps({"reap": {"user_folder_days": 1e-6}}))
+    (home / ".claude" / "agent-skills.json").write_text(json.dumps({"reap": {"user_folder_days": 1e-6, "user_folders": [str(home / "Downloads"), str(home / "Desktop")]}}))
     for sub_dir in ("Downloads", "Desktop"):
         (home / sub_dir).mkdir()
     (home / "Downloads" / "a.pdf").write_text("x")
