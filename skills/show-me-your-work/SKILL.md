@@ -59,16 +59,16 @@ At the end of the run, before handing back, check the log told the truth. Read t
 
 Fix the log, not the story. If the work diverged from what a row claims, the row is wrong: append the correction, append-only as above.
 
-## Cross-model review of the trail
+## Independent review of the trail
 
-Before handing back, have a different model family from the one that did the work review it: Codex through `codex-companion.mjs task` (read-only by default) when Claude did the work. Self-review is not a substitute. The subagent reads the audit trail and the run's transcript, then flags what the user should pay attention to. Not a redo of the work, a scan for what's suboptimal or risky.
+Before handing back, have an available independent reviewer read it without changing files. Self-review is not a substitute. The subagent reads the audit trail and the run's transcript, then flags what the user should pay attention to. Not a redo of the work, a scan for what's suboptimal or risky.
 
 - Decisions logged with weak or absent evidence.
 - Verification steps skipped or claimed without proof in the transcript.
 - Choices that look risky in hindsight (premature, scope-creeping, papering over a symptom).
 - Gaps the user would otherwise miss on a casual skim.
 
-Every reply for a run that produced a trail ends with an "Attention" section. Lead with the reviewer's model on its own line (`reviewed by <model>`), then list each flag pointing to specific rows or moments. "No flags" is a valid value. The model name is not.
+Every reply for a run that produced a trail ends with an "Attention" section. Lead with the reviewer's identity on its own line (`reviewed by <reviewer>`), then list each flag pointing to specific rows or moments. "No flags" is a valid value. The reviewer identity is not a finding.
 
 ## Reviewing the trail
 

@@ -43,9 +43,12 @@ Your reports and actions cover what you, your leads and their cards own (the ros
 - `worker-start` returning `outcome_unknown`, `turn_start_unobserved` or a readiness timeout means "not confirmed", not success. Read the screen as below before any retry: a retry types into whatever is waiting there.
 - Confirm the start from a background subagent, never a foreground loop. It reads `orca terminal read --screen` (the default stream read never showed the trust prompt) until one of these shows:
   - Claude working or idle on the task: done.
-  - The folder trust prompt (`Yes, I trust this folder`): the first worker in a repo whose main clone was never trusted. Trust is recorded against the main clone's path, not the worktree's. For a worker **you started in this turn**, and only for this prompt (the human allowed it on 2026-09-25): wait 2 seconds after it renders (a key sent the moment it appeared was lost), send ↓ (`orca terminal send --terminal <h> --text $'\x1b[B'`), read `--screen` until `❯ Yes, I trust this folder` is selected, then send Enter (`--text '' --enter`). If the selection did not move after one try, or the auto-mode classifier refuses the key send (it has refused keys to another session as "Tmux Self Drive"), stop: `orch-dash inbox add --type login --title "trust prompt: <card>" --key trust:<card>` and move on. Never do this for a permission prompt, an AskUserQuestion, or any session the human opened.
-  - A shell with a bracketed-paste remnant (`^[[200~You are working inside Orca…`): the trust prompt ate the Enter and Claude exited. Send `^C`, save `orca orchestration dispatch-show --task <id> --preamble` to a file, check that the saved preamble still carries the `--dispatch-capability` value, and start `claude "<read that file and follow it>"` in the terminal.
-  - A shell prompt of its own, no agent (a tool asking to trust the new path's config, a shell framework offering an update): the typed agent command was taken as its answer. Send `^C`, trust the path from your own shell (`mise trust <worktree path>`), and start the agent as in the case above. Trusting the root Orca creates worktrees under once (`mise settings add trusted_config_paths <root>`) keeps the trust prompt from coming back.
+  - A trust prompt or another permission request: stop and surface the exact request through
+    the inbox. A past approval for another machine, repository or date is not authorization.
+    Do not send acceptance keys or change global trust settings on the user's behalf.
+  - A shell prompt or a bracketed-paste remnant instead of the agent: report the unconfirmed
+    start and its visible cause. Resume only through the supported startup procedure after
+    the user resolves any permission request; do not treat a tool prompt as an agent prompt.
 - A worker whose preamble lost its capability value cannot send `heartbeat`, `ask` or `worker_done` ("The Dispatch capability is missing"). Resend it the value with `send --to dispatch:<id>`.
 
 ## Talking to sessions

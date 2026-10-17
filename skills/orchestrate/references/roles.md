@@ -12,11 +12,8 @@ The flow improver and the resource steward serve every program on the machine, s
 | Flow improver | Folding lesson signals, the human's process feedback and the ledgers' unclaimed signals into the skills while programs run: batched, audited, pushed or proposed as a draft PR, then reloaded | Touch a running program's work, or change its contract (merge policy, predicate, the brief's required fields, landing rules) before that program's coordinator confirms |
 | Resource steward | Reaping settled worktrees the coordinators missed, running `reap-resources` for leftover processes, Docker leftovers and stale branches, watching machine load | Touch a live turn, a dirty tree, an open PR, a coordinator's or standing role's worktree, or the dashboard; `--force` |
 
-They came from the user's own calls on a real program (2026-09-24):
-
-- On red main: "무조건 revert 하기보다는 별도의 agent에 위임해서 revert/hotfix를 자율 판단·대응하고 결과를 너에게 보고 + 필요한 세션에 공유, 너는 조율만".
-- On QA: "중간중간 동작확인 QA, e2e 테스트, 설계구현 정합성 확인도 전문 QA 오케스트레이터로 해야 한다".
-- On process feedback: the coordinator stays on the mission. Feedback about how the work flows goes to a separate session, which improves the skills while programs run and shares the result (2026-09-26).
+These roles apply when the user selects this orchestration workflow. Their presence does
+not authorize unrelated repository work, cleanup, publishing, or permission changes.
 
 ## Main guardian brief
 
@@ -179,7 +176,7 @@ WORKTREES   orca worktree rm (checks and --run-hooks per end-session §4) only w
             (docs/platform.md), a standing role's worktree, a live turn, an open PR, local changes.
 LEFTOVERS   Every round, run the reap-resources skill's scripts/reap.py (its SKILL.md holds the
             rules): scan --plan <scratchpad>/reap-plan.json, reap --plan on that file, then scan
-            again. That covers Codex broker trees, orphaned test processes, Docker leftovers,
+            again. That covers orphaned test processes, Docker leftovers,
             merged branches and scratchpad worktrees; never kill or remove those by hand. Other
             processes (compose stacks, dev servers, headless browsers, test runners) whose
             worktree is gone or settled: stop them the normal way (docker compose down in that
