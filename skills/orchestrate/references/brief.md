@@ -12,6 +12,9 @@ GOAL        One sentence: the outcome, executable by someone with no access to t
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
             Scratch root: <none, or the one path outside the worktree it may write, e.g. a
             directory a VM or container mounts>.
+            Downloaded logs and artifacts (`gh run download -D`, CI logs) go under `$TMPDIR`,
+            outside every git worktree, the scratch root too when it is a checkout; never
+            inside the worktree.
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
             unit depends on them. A fact you state here (something is absent from the base,
@@ -50,8 +53,10 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             --sha <head> --source <the reviewer: codex-review, subagent-review (trivial diff only,
             deliver-ticket §3; never in place of a Codex review that returned none),
             claude-review:independent (Codex itself unavailable: a context-free Claude Code
-            review, deliver-ticket codex-review.md, with --note <the Codex error line>; any
-            other no-review holds the land and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            review, deliver-ticket codex-review.md, with --note <the Codex error line>; under
+            FORBIDDEN's external-LLM ban, the same review with --note "repo policy: <file> bans
+            external LLM APIs; ..." and Codex never called; any other no-review holds the land
+            and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex; under the ban, an independent Claude verifier, recorded as claude-review:independent with the ban note>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
@@ -77,8 +82,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`), and
             give each Bash act that changes a file or its mode its own call, so a refusal names it.
-            Write no file or script outside the worktree except under SCOPE's scratch root; list
-            what you put there (checkouts, files, compose projects) in the report and tear it down
+            Write no file or script outside the worktree except under SCOPE's scratch root and
+            the `$TMPDIR` downloads SCOPE names; list what you put there (checkouts, files, compose projects) in the report and tear it down
             before worker_done. No wrapper scripts for evidence: run the commands VERIFY names, one
             by one.
             An act refused by a permission prompt, the auto-mode classifier (including an error that
@@ -91,7 +96,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
-            subagent prompt you write: a summary drops the forms it lists. Taking the path this
+            subagent prompt you write, the tracker and notes delegate agents included: a summary
+            drops the forms it lists. Taking the path this
             brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
             retry, nor is doing the act again after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
@@ -107,8 +113,12 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its
             category. A second refusal, or any doubt that the read is harmless, is reported and
-            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the cause
-            and run it again.
+            left. A hook that errors after its command already ran did not refuse it: go on with
+            acts that name explicit paths (`git add <paths>`, never `-A`), leave what it left
+            behind for card removal, and report it. A failing check (a git hook, linter, test or
+            CI) is not a refusal: fix the cause and run it again.
+            <the repo's external-LLM ban, when Frame found one: "<file> bans sending this
+            repo's code to external LLM APIs: no Codex call of any kind">
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
             Body: what changed, what was verified and how, what remains. Include the PR URL,
@@ -203,7 +213,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
 - **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
 - An agent that will use a write tool guarded by a first-write confirmation hook gets, in its brief or prompt, an instruction to invoke that policy skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
-- Keep every write inside the worker's worktree. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
+- Keep every write inside the worker's worktree, except downloaded logs and artifacts, which go under `$TMPDIR` (SCOPE). A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files) comes back in the worker's message, and the coordinator writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
@@ -211,5 +221,5 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - Direction in CONTEXT is labelled by origin. The owner's words are quoted verbatim as the owner's; a proposal of yours, a lead's or a reviewer's is labelled as such, never as the owner's recommendation. No advice on getting an act past a prompt, the classifier or a hook, even when the layer above calls it the owner's intent ("Refused acts").
 - **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal or card you mean to give the next task needs a `KEEP` line naming that task; without one, a landed, clean card is gone by the time you read its `worker_done`.
 - Never resume-chain a brief. A retry gets a fresh brief with the consolidated scope.
-- A verifier unit on a high-blast-radius PR runs on another model family (`worker-start --agent codex`). It reports PASS, PASS+NOTES or FAIL, with what it drove.
+- A verifier unit on a high-blast-radius PR runs on another model family (`worker-start --agent codex`); under a repo's external-LLM ban it runs as an independent Claude worker instead and the brief says why. It reports PASS, PASS+NOTES or FAIL, with what it drove.
 - Feedback the user gives on in-flight work ("improve this", "do it better") becomes a new ticket and a new brief. It is never appended to the running one.

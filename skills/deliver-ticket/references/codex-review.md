@@ -1,5 +1,9 @@
 # Running the Codex reviews
 
+Before the first Codex call, read the repo's instruction files (`CLAUDE.md`, `AGENTS.md` and
+the like). When they ban sending the repo's code to external LLM APIs, never call Codex: go
+straight to step 3 of "When Codex returns no review", with the ban as its cause.
+
 The `/codex:*` slash commands are user-only, but you run the same reviews yourself through the
 companion:
 
@@ -81,11 +85,15 @@ for it; step 3's context-free review is the one exception. Get Codex to run inst
    diagnosis shows Codex itself is unavailable, that schedule is replaced: a spend-cap,
    usage-limit or service error gets a single rerun after 5 minutes, a failed login none; if
    it still fails, go to step 3.
-3. **Codex itself unavailable: an independent Claude Code review stands in.** Only when step 1
-   kept a line that puts the cause on Codex's side: a spend-cap or usage-limit message, a
-   service error, a failed `login status`. Not when Codex ran and returned findings, not when
-   only the repository repro failed or the run timed out reading the checkout, and not when
-   "Reply ok" failed on a local network or proxy error: those go to step 4.
+3. **Codex itself unavailable, or banned by the repo: an independent Claude Code review stands
+   in.** Only when step 1 kept a line that puts the cause on Codex's side: a spend-cap or
+   usage-limit message, a service error, a failed `login status`. Not when Codex ran and
+   returned findings, not when only the repository repro failed or the run timed out reading
+   the checkout, and not when "Reply ok" failed on a local network or proxy error: those go to
+   step 4. The other way in is the repo's instruction files banning external LLM APIs: the
+   ban opens this step with no Codex call and no step 1, the "Codex line" below is
+   `repo policy: <file> bans external LLM APIs; ...`, and Codex is not tried again before
+   rounds or the land.
    - **Launch** a reviewer that shares no context with the implementing session: a new
      subagent (not a `fork`, which inherits your context) or a separate headless `claude`
      process. Its prompt carries the repository, the PR number and the head sha, nothing about

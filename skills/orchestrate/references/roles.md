@@ -138,7 +138,8 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
-            subagent prompt you write: a summary drops the forms it lists. Taking the path this
+            subagent prompt you write, the tracker and notes delegate agents included: a summary
+            drops the forms it lists. Taking the path this
             brief already names for that act (`orch land` for a merge, in a worker's brief) is not a
             retry, nor is doing the act again after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
@@ -154,8 +155,10 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its
             category. A second refusal, or any doubt that the read is harmless, is reported and
-            left. A failing check (a git hook, linter, test or CI) is not a refusal: fix the cause
-            and run it again.
+            left. A hook that errors after its command already ran did not refuse it: go on with
+            acts that name explicit paths (`git add <paths>`, never `-A`), leave what it left
+            behind for card removal, and report it. A failing check (a git hook, linter, test or
+            CI) is not a refusal: fix the cause and run it again.
 REPORT      One status per commit, draft PR or ticket: the sha or PR URL, the diff
             summary, the audit's findings and what was applied, the grep and its result, each
             candidate dropped as "not applied: <candidate> — <reason>", and whether a reload is

@@ -104,8 +104,9 @@ a reviewer other than its author: one subagent running `/code-review` on it (ver
 are unsure about. The commands, the model to pick, and what to do when Codex returns no review
 are in [references/codex-review.md](references/codex-review.md): a run that reviewed nothing is
 retried until Codex reviews, never replaced by a review that carries your context. Only when
-Codex itself is unavailable (spend cap, outage, login) does a context-free Claude Code review
-stand in; otherwise it goes to the human.
+Codex itself is unavailable (spend cap, outage, login), or the repo's instruction files ban
+sending its code to external LLM APIs (checked before the first Codex call; then Codex is never
+called), does a context-free Claude Code review stand in; otherwise it goes to the human.
 
 Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
 Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
@@ -176,7 +177,8 @@ not in CI.
 
 **A green check is not evidence.** Confirm from logs that the step actually ran
 (`gh run view <id> --log`) — a skipped step, a rate-limited reviewer, and a real pass all
-look identical in the checks list.
+look identical in the checks list. A failed run is read with `gh run view <id> --log-failed`
+first; a `gh run download -D` target goes under `$TMPDIR`, never inside a git worktree.
 
 **Report each check as VERIFIED, NOT VERIFIED or INCONCLUSIVE** — in 검증, the sticky comment
 and the completion comment. Inconclusive, or a pass on the wrong surface, is not a pass; name
