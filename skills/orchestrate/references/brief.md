@@ -188,8 +188,12 @@ HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document subm
             any irreversible or outward act not under APPROVED. Batched into one message, sent once
             through the established channel to the parent coordinator, which puts it before the
             human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
-            update the decision and notify the parent when the blocker or evidence changes.
-            If no parent channel is available, report that routing gap in the current task.
+            when the blocker or evidence changes, create a replacement with `orch decide add`
+            whose body names the old decision id and changed evidence. After creation succeeds,
+            `orch decide drop <old-id>` closes the obsolete question without erasing its history;
+            notify the parent once with both ids. Never treat an answer to the old question as
+            approval of changed scope. The parent owns delivery to the human; if its channel is
+            unavailable, report that routing gap in the current task.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
