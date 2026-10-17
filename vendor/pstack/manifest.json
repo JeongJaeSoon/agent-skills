@@ -78,7 +78,7 @@
     {
       "upstream": "skills/principle-attack-the-premise/SKILL.md",
       "local": "skills/principles/references/principle-attack-the-premise.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/principle-boundary-discipline/SKILL.md",
@@ -88,7 +88,7 @@
     {
       "upstream": "skills/principle-build-the-lever/SKILL.md",
       "local": "skills/principles/references/principle-build-the-lever.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/principle-encode-lessons-in-structure/SKILL.md",
@@ -133,7 +133,7 @@
     {
       "upstream": "skills/principle-minimize-reader-load/SKILL.md",
       "local": "skills/principles/references/principle-minimize-reader-load.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/principle-model-the-domain/SKILL.md",

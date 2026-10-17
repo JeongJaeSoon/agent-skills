@@ -11,8 +11,9 @@ per ~/.claude/agent-skills.json).
 --issues: a saved issue list instead: tracker.py's normalized JSON, a Linear MCP list_issues result,
 or `orca linear list-issues --json` output (no completedAt: completed issues fall back to updatedAt,
 and the report says so). A top-level list, {"issues": [...]}, or {"result": {"issues": [...]}}.
+--tz: report timezone, default +00:00 (UTC). Pass +09:00 to preserve earlier report grouping.
 --baseline-until: end of the initial design batch. Default: the first gap of 6h+ in creation times.
---usage-match: substring of Claude project dirs / Codex session cwds to count tokens for
+--usage-match: substring of configured project directories to count tokens for
 (default: the repo name). No prices are applied.
 """
 import collections, datetime as dt, glob, json, os, pathlib, statistics, subprocess, sys
@@ -110,9 +111,9 @@ def blocks(start, end, step):
 
 
 def usage(match, since, until):
-    home = os.path.expanduser("~")
+    home = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"))
     c, seen = collections.Counter(), set()
-    for proj in glob.glob(f"{home}/.claude/projects/*{match}*"):
+    for proj in glob.glob(f"{home}/projects/*{match}*"):
         for f in glob.glob(proj + "/**/*.jsonl", recursive=True):
             for line in open(f, errors="replace"):
                 if '"usage"' not in line:
@@ -134,36 +135,6 @@ def usage(match, since, until):
                 c["claude_output"] += u.get("output_tokens") or 0
                 c["claude_cache_read"] += u.get("cache_read_input_tokens") or 0
                 c["claude_cache_write"] += u.get("cache_creation_input_tokens") or 0
-    for f in glob.glob(f"{home}/.codex/sessions/*/*/*/*.jsonl"):
-        # total_token_usage is cumulative per session, so count only the growth between events
-        # that fall inside the window; a session that straddles `since` contributes its tail.
-        cwd, prev, got = None, None, collections.Counter()
-        for line in open(f, errors="replace"):
-            if cwd is None and '"session_meta"' in line:
-                try:
-                    cwd = json.loads(line)["payload"].get("cwd", "")
-                except (ValueError, KeyError):
-                    cwd = ""
-                if match not in cwd:
-                    break
-            if '"token_count"' not in line:
-                continue
-            try:
-                o = json.loads(line)
-            except ValueError:
-                continue
-            info = (o.get("payload") or {}).get("info") or {}
-            tot, t = info.get("total_token_usage"), ts(o.get("timestamp"))
-            if not tot or not t:
-                continue
-            if since <= t < until:
-                for k in ("input_tokens", "output_tokens"):
-                    got[k] += max(0, tot.get(k, 0) - (prev or {}).get(k, 0))
-            prev = tot
-        if cwd and match in cwd and got:
-            c["codex_sessions"] += 1
-            c["codex_input"] += got["input_tokens"]
-            c["codex_output"] += got["output_tokens"]
     return c
 
 
@@ -173,7 +144,7 @@ def main():
         sys.exit(__doc__)
     since = ts(since)
     until = ts(opt("--until")) or dt.datetime.now(dt.timezone.utc)
-    tz = parse_tz(opt("--tz", "+09:00"))
+    tz = parse_tz(opt("--tz", "+00:00"))
     bug = opt("--bug-label", "Bug")
     local = lambda t: t.astimezone(tz).strftime("%m-%d %H:%M")
 
@@ -186,7 +157,7 @@ def main():
     out = []
     w = out.append
     w(f"# 전달 지표: {repo}\n")
-    w(f"- 구간 {local(since)} ~ {local(until)} (UTC{opt('--tz', '+09:00')})")
+    w(f"- 구간 {local(since)} ~ {local(until)} (UTC{opt('--tz', '+00:00')})")
     w(f"- 기준선(초기 설계): {len(base)}건, {local(cut)}까지 생성. 이후 생성 {len(derived)}건을 파생으로 본다"
       f" ({len(marked)}건은 `follow-up` 라벨이나 `파생:` 첫 줄로 표시됨)")
     if approx:
@@ -242,23 +213,20 @@ def main():
     u = usage(match, since, until)
     n = max(len(prs), 1)
     w("\n## 비용 (토큰, 금액 아님)\n")
-    w(f"- 대상: `~/.claude/projects/*{match}*`, cwd에 `{match}`가 든 Codex 세션")
-    w(f"- Claude: 호출 {u['claude_calls']:,} · output {u['claude_output']:,} · cache read {u['claude_cache_read']:,} · cache write {u['claude_cache_write']:,}")
-    # codex-companion threads are ephemeral and write no session file, so its reviews never show up here.
-    skipped = "codex-companion의 review·task는 ephemeral이라 세션 파일을 남기지 않아 빠진다"
-    if u["codex_sessions"]:
-        w(f"- Codex: 세션 {u['codex_sessions']:,} · input {u['codex_input']:,} · output {u['codex_output']:,} ({skipped})")
+    usage_root = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
+    w(f"- 대상: `{usage_root}/*{match}*`")
+    if not u["claude_calls"]:
+        w("- 미측정: 구간에 맞는 사용량 기록이 없다. 0으로 해석하지 않는다")
     else:
-        w(f"- Codex: 미측정. 맞는 세션 파일이 없다 ({skipped})")
-    codex = f"{u['codex_input'] // n:,}" if u["codex_sessions"] else "미측정"
-    w(f"- 머지 PR당: Claude output {u['claude_output'] // n:,} · Codex input {codex}")
+        w(f"- Claude: 호출 {u['claude_calls']:,} · output {u['claude_output']:,} · cache read {u['claude_cache_read']:,} · cache write {u['claude_cache_write']:,}")
+        w(f"- 머지 PR당: output {u['claude_output'] // n:,}")
     w("- 이 머신의 로컬 기록만 센다. 다른 머신·클라우드 세션은 빠진다")
 
     print("\n".join(out))
     if opt("--json"):
         json.dump({"prs": len(prs), "derived": len(derived), "baseline": len(base), "done": done,
                    "late_commits": sum(late), "main_red": len(main_red), "bugs": len(bugs),
-                   "usage": dict(u, codex_measured=bool(u["codex_sessions"]))},
+                   "usage": dict(u), "usage_measured": bool(u["claude_calls"])},
                   open(opt("--json"), "w"), indent=2)
 
 

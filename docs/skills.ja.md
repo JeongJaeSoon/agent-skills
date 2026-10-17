@@ -1,7 +1,11 @@
-<!-- translated-from: 5d79230 -->
+<!-- translated-from: 28861bcbfcf84e9bc255269217e4a25a81ebd5dd -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック3個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます。
+`agent-skills` プラグインに入っているスキル（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック6個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます。
+
+既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
+
+小さな変更でも作者以外のレビューが必要です。軽微な変更は約20行以下で、auth・crypto・migration・concurrency・CI・公開契約の変更がなく、テストでカバーされるものです。文書のコマンドは隔離した fixture でそのまま実行し、実行できなかった例は NOT VERIFIED と記録します。古い検証ツールの問題は報告・修正し、受け入れ基準を直接確認します。再利用する verify スキルの作成は範囲内で役立つ場合に選びますが、検証自体は必須です。
 
 ## 流れ
 
@@ -35,7 +39,7 @@
 - **関連:** トラッカーの操作はすべて `use-tracker` で行います。follow-up の形式は `orchestrate` と `measure-delivery` が数えます。
 
 ### deliver-ticket (旧名 `ship-pr`)
-- **使う場面:** 複数のファイルを直す前から完了まで使います。PR の作成・更新・マージ（「pr 작성까지」（PR 作成まで）、「머지까지 진행해줘」（マージまで進めて））、リリース、レビューコメントへの対応、codex による相互検証、「동작확인」（動作確認）、「내가 확인할 거 있어?」（自分が確認すべきことはある?）、「이 티켓 끝내줘」（このチケットを終わらせて）、stack の作業もここに入ります。
+- **使う場面:** 複数のファイルを直す前から完了まで使います。PR の作成・更新・マージ（「pr 작성까지」（PR 作成まで）、「머지까지 진행해줘」（マージまで進めて））、リリース、レビューコメントへの対応、独立レビュー、「동작확인」（動作確認）、「내가 확인할 거 있어?」（自分が確認すべきことはある?）、「이 티켓 끝내줘」（このチケットを終わらせて）、stack の作業もここに入ります。
 - **内容:**
   - **計画:** plan mode には入らず、承認も待ちません。チケットには計画コメントを一つだけ残し（変わったら直します）、進捗は worklog に、結果は完了コメントに書きます。作業の形に応じてスキルを呼びます。大きなマイグレーションや多段階の変更は `figure-it-out`、戻しにくい設計判断は `architect`（→ `arena`）、見慣れないコードは `how`、理由の分からないコードは `why` です。
   - **実装:** worktree のブランチでだけ行います。些細でないロジックは、実行できるテストなしにはコミットしません。バグは失敗する再現テストから書きます。範囲外で見つけたものは、この diff で直すか、follow-up チケットにするか、worklog に書くだけにします。
@@ -48,7 +52,7 @@
   - **レビュー:**
     - レビューの前に `prune-comments` で diff のコメントを整理します。
     - 些細な diff でも、作成者ではないレビュアー（サブエージェントの `/code-review`）を通します。
-    - 些細でない diff は Codex の `review` と `adversarial-review` をバックグラウンドで回します。モデルは gpt-6-sol が既定で、難しい設計の問いだけ astra に上げます。コマンドとモデルの選び方は `references/codex-review.md` にあります。
+    - 変更の規模に合った独立レビューを行い、確認した SHA・根拠・制約を記録します。手順は `references/independent-review.md` を参照します。
     - 指摘は Act on / Consider / Noted / Dismissed に分けます。Act on がなくなるまで最大5ラウンド繰り返し、残った Consider は PR 本文に書きます。
   - **コミット:** 小さく、話の筋が通る順にコミットします。バグなら失敗するテストを修正より先に、リファクタリングなら削除を新しい形より先にします。
   - **push の前:** テストスイートと E2E をすべて回します。バックエンドは CLI や curl で、UI はブラウザ自動化で確認し、重い実行は `orch heavy` で回します。
@@ -60,7 +64,7 @@
     - プログラムの中: `orch land` でだけマージし、human-gate なら READY で止まります。
     - 単独のカード: ユーザーが保留にしていなければ、自分で squash マージします。
     - 完了コメントを残したら、同じターンのうちに `handoff-ticket` へ移ります。
-- **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`codex-review.md`（Codex レビューのコマンドとモデル）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。Codex、CodeRabbit、Copilot、人のレビューに使います）。
+- **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
 - **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`handoff-ticket`。
 
 ### handoff-ticket
@@ -96,19 +100,22 @@
   - 終える前に、このセッションが起動したバックグラウンドのサブエージェント、作った git worktree、立ち上げた子カードを確認します。
   - 報告を先に書き、終了コマンドを最後のツール呼び出しとして実行します。
 
+### record-progress
+許可されたワークフローの範囲で、検証済みの節目を設定したトラッカーやノートに記録します。状態と判断の理由を分け、後続作業を分類し、重複書き込みや無断のチャット投稿を避けます。
+
 ## プロジェクト1件（Orca ワーカー複数）
 
 ### orchestrate
 - **使う場面:** ユーザーが話しかける最上位 orchestrator セッションのとき（「오케스트레이터로」、「모든 세션 관리해줘」（全セッションを管理して）、「전체 태스크 현황」（全タスクの状況））、または一つのセッションが複数の Orca ワーカー（たいてい3つ以上）でマイルストーンを最後までやり切るとき、「대시보드 갱신해줘」（ダッシュボードを更新して）、「전체 진행상황 몇 퍼센트」（全体の進捗は何パーセント?）、別のコーディネーターが回していたプログラムを引き継ぐとき、PR がなぜ動かないのかを尋ねられたとき。
 - **内容:** コーディネーターが所有するのはコードではなくプログラムです。毎回のセッションは `orca skills get orchestration` を読むところから始めます。
-  - **即答の原則（Stay answerable）:** ターンの中では振り分け、数秒で終わる確認、ユーザーへの返答だけを行います。調査・実装・検証・長い待機・監視は受け取った時点でバックグラウンドのサブエージェントか Orca ワーカーに渡し、フォアグラウンドのループ、`sleep`、バックグラウンドでない `check --wait` は使いません。完了は通知で受け取ります。コーディネーターは小さくても PR を自分で書かず、ワーカーカードか Codex に任せます。自分が立ち上げたカード・サブエージェント・worktree は自分で閉じます。この原則は top-level、プログラムのコーディネーター、別のセッションが立ち上げたリードカードのすべてに当てはまります。リードのいるプロジェクトの仕事はそのリードに送り、リードには `references/brief.md` の Lead ブリーフ（DELEGATE と PERMISSIONS の行）を渡します。
+  - **即答の原則（Stay answerable）:** ターンの中では振り分け、数秒で終わる確認、ユーザーへの返答だけを行います。調査・実装・検証・長い待機・監視は受け取った時点でバックグラウンドのサブエージェントか Orca ワーカーに渡し、フォアグラウンドのループ、`sleep`、バックグラウンドでない `check --wait` は使いません。完了は通知で受け取ります。コーディネーターは小さくても PR を自分で書かず、ワーカーカードに任せます。自分が立ち上げたカード・サブエージェント・worktree は自分で閉じます。この原則は top-level、プログラムのコーディネーター、別のセッションが立ち上げたリードカードのすべてに当てはまります。リードのいるプロジェクトの仕事はそのリードに送り、リードには `references/brief.md` の Lead ブリーフ（DELEGATE と PERMISSIONS の行）を渡します。
   - **top-level モード**（`references/top-level.md`）: 単独タスクのセッションとプロジェクトのコーディネーターの上に立つセッション。依頼の振り分け表、ユーザーが開いたセッションは読むだけ、ワーカー起動の確認は `--screen` でバックグラウンドから（信頼確認の画面は直前に起動したワーカーに限り ↓ を確認してから Enter、止められたらインボックスへ）、終わった dispatch には `run:` へ、本文はファイル経由、AskUserQuestion の代わりにダッシュボードのインボックス（`orch-dash inbox add`）と決定の登録（`orch decide add`、チャットで答えが出たらすぐ `done`）、フィルターなしのバックグラウンド `check --wait` 一つで通知の割り込みを防ぐ、PR レビューイベント（`pr-events.jsonl`）への反応、スキルが変わったら `skills-sync broadcast`。
   - **拒否された行動（Refused acts）:** 権限レイヤーが拒否した行動を別のセッションが代わりに行うことはありません。拒否されたセッションが報告し、コーディネーターが `tune-automode` でルール案を作って定型文とともにユーザーに上げます。ルールが入ったら、拒否されたセッションがもう一度だけ行います。自分の worktree を読むだけのコマンドの誤検知は、Read か Grep ツールで一度だけ読みます。分類器が判定を返さずエラーになった拒否（`no verdict`）はルール申請にしません。サブエージェントの Edit・Write がそれで止まったら、その単位を起動したセッションが単位全体を一度だけ引き取り（コーディネーターは新しいカードで）、自分の worktree の読み取りは上の Read・Grep の例外に従い、2 回目の `no verdict` やそれ以外の行動はユーザーに上げます。
   - 以下の 1〜8 は **program モード**です。
   1. **Frame:** 完了条件（predicate）は、数えられるチケット ID と実際の成果物の検査で決めます。人の指示は standing order としてそのまま書き写します。依存は開始の順序（Orca task deps）と着地の順序（GitHub stack、`orch dep`）に分けます。このリポジトリのマージ・デプロイに対するユーザーの継続的な承認が `autoMode.allow` のルールとしてあるかを確かめ、なければ `tune-automode` で案を作り、実行行をユーザーに渡します。Run を作り、`orch init` で登録します。
-  2. **検証の準備と Pilot:** verify スキルがなければ、Pilot の前に `create-verification-skill` を回すか、ワーカー一つに任せます。そのスキルが入るまでは手で検証し、ワーカー一つで最後まで一度回してみます。
+  - 実際の成果物に対して既存の harness または直接検査を選びます。再利用可能な検証スキルは合意した範囲で有用な場合だけ作成します。
   3. **Scale:** 常駐の役割（プログラムごとに main ガーディアンと QA リード、マシンに1つずつ flow improver と resource steward）を立ち上げます。チケットワーカーの同時実行の上限は1から始め、main に green で着地するたびに1ずつ増やし（既定の ceiling は6）、red になれば半分にします。
-  4. **Drain:** `orch wait` をバックグラウンドで一つだけ回します。worker_done が来たら、同じターンで `CLOSE OUT` を処理します。毎回 `orch status` で締めくくり、STALLED、SPARE、LEDGER GAP、LANDED-BUT-OPEN の行に対応します。製品ではなく作業の進め方がずれたとき（人による修正、ブリーフが答えておくべきだった質問、プロセスが原因の停滞、スキルやスクリプトの欠陥）は、`orch record <slug> signal` で一行だけ残し、分析は Close に回します。
+  4. **Drain:** `orch wait` をバックグラウンドで一つだけ回します。worker_done が来たら、同じターンで `CLOSE OUT` を処理します。毎回 `orch status` で締めくくり、STALLED、SPARE、LEDGER GAP、LANDED-BUT-OPEN の行に対応します。製品ではなく作業の進め方がずれたとき（人による修正、ブリーフが答えておくべきだった質問、プロセスが原因の停滞、スキルやスクリプトの欠陥）は、`orch record <slug> signal` で一行だけ残し、分析は Close に回します。Run に属さない `/goal` カードを立てたセッションは、その横で `orch watch-cards` も一つ回し、確認プロンプト・質問・API の再試行・ディスク不足で止まったカードを通知で受け取ります（答えはコーディネーターが画面を読んで決めます）。
   5. **Triage:** follow-up は基本的に先送り（park）します。predicate を妨げるものと、再現した欠陥だけを受け入れます。ブリーフでは follow-up を parent ではなく related で結ばせます。Orca の既定は parent ですが、そうすると集計や段階のバーが元のチケットの計画済みの作業として数えてしまいます。
   6. **Land:** ワーカーが `orch land` で自分で着地させます。通常の PR は並列にマージされ、migration・CI・Dockerfile・compose のような共有ファイルは、専有レーンで base ごとに一つずつマージされます。
   7. **main の検証:** red になったら、ガーディアンがまず flake かどうかを見て hotfix か revert を選び、その間は main の修正だけを着地させます。QA リードは、チケットの検証、定期的な E2E、設計の整合性の監査を担当します。
@@ -143,26 +150,25 @@
   - マージされた PR の数を数えます。
   - 手戻り（PR を開いたあとのコミットと、CI の再実行）を見ます。
   - 漏れ出た欠陥の候補（Bug ラベル、main CI の失敗、revert）を探します。
-  - PR あたりの Claude・Codex のトークンを計算します。codex-companion の review・task はセッションファイルを残さず数えられないので、合う Codex セッションがなければ 0 ではなく `미측정`（未測定）と記録します。
+  - PR ごとに利用可能なローカル transcript のトークンを集計します。未測定のセッションをゼロとはみなしません。
   - Linear で正確な終了時刻が必要なら、MCP で書き出したファイルを使います。求められた数字を先に見せ、レポートはノートに保存します。
 
 ## マシン1台
 
 ### reap-resources
-- **使う場面:** 「방치 리소스 정리해줘」（放置リソースを片付けて）、「codex 프로세스 너무 많아」（codex のプロセスが多すぎる）、メモリや CPU を何が使っているか見たいとき、マシンの負荷が高いとき、そして resource steward の定期点検。プログラムがなくても使えます。
+- **使う場面:** 「방치 리소스 정리해줘」（放置リソースを片付けて）、メモリや CPU を何が使っているか見たいとき、マシンの負荷が高いとき、そして resource steward の定期点検。プログラムがなくても使えます。
 - **内容:** `scripts/reap.py scan` は読むだけで、種類ごとの個数・プロセス・RSS・CPU・経過時間と、片付け対象の一覧を出します。`reap --plan` はもう一度スキャンし、その一覧のうち今も対象で、同一性（pid と開始時刻、ブランチの tip）が変わっていないものだけを片付けます。
-  - **codex:** Codex プラグインの broker ツリー。`--cwd` のパスがないか、そのパスで動く `claude` がなく N 時間（既定 6）が過ぎたときだけ、ツリーごと終了します。
   - **orphan:** ppid が 1 で、実行ファイルが設定の `reap.orphan_paths`（テストのキャッシュパス）の下にあるプロセス。
   - **docker:** コンテナが1つもない compose project の dangling volume と、どのコンテナも使っていないタグなしイメージ。コンテナのある project、その名前を含む volume、compose ラベルのない volume は残して報告だけします。
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
   - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
-  - **user-folder:** `~/Downloads` と `~/Desktop` の最上位の項目のうち、7 日（`reap.user_folder_days`）以上変わっていないものをゴミ箱に移します。スクリーンショットと画面収録のファイルは 1 日（`reap.user_folder_screenshot_days`）が基準です。ダウンロード中のファイル（`.download`、`.crdownload`、`.part`）、開いているファイル、隠しファイルは残します。定期実行では 1 日 1 回だけ片付けます。
+  - **user-folder:** `reap.user_folders` に明示したフォルダーだけを整理します。未設定なら無効です。期間・開いているファイル・ダウンロード中の検査とゴミ箱への保管は維持します。
   - **program:** `~/.claude/programs`（`PROGRAMS_HOME`）のうち、閉じたプログラム（最終確認 `predicate_verified` の後に着地・predicate 変更・admitted の後続がないもの）で、記録（ダッシュボードのキャッシュを除く ledger・decisions・reflect など）が 7 日（`reap.program_days`）以上変わっていないものを `_archive/` に移します。削除はしません。名前に `resume` か `handoff` を含む再開ノートがあれば、閉じていても残します。
   - **state-file:** reorient フックのセッションファイル（`<state>/reorient/*.json`）のうち 7 日（`reap.state_days`）を過ぎたものを 1 つのフォルダにまとめてゴミ箱へ、512KB（`reap.log_max_kb`）を超えた `sync.log` は `sync.log.1` にローテーションします（前の `.1` はゴミ箱）。program とあわせて、定期実行では 1 日 1 回だけ見ます。
   - **定期実行:** `precheck` は対象があれば exit 0 で、前回の `reap` が失敗した対象とまったく同じなら 1 日のあいだ飛ばします。3 時間ごとの Orca automation の precheck に使い、`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
   - **load:** `reap.py load` は読むだけです。CPU の上位消費者（Claude セッションとその子、残骸のツリー、その他のプロセス）を ours-idle・ours-working・leftover・system に分け、5 分の負荷が上限（既定は CPU 数）以上なら分類ごとの対処を出します。静かなセッションには残りの作業を尋ね、なければ自分で閉じてもらいます。残骸は `reap` で片付け、動いているものは残して新しい dispatch を止め、system は自分たちのものではないと報告だけします。上限を超えて測ったベンチマークは証拠になりません。
-  - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（Codex のプロセス数と RSS、孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
+  - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
 - **同梱:** `scripts/reap.py`、テストファイル。
 - **関連:** `orchestrate` の resource steward がラウンドごとに呼び、警報が残ればダッシュボードの受信箱で人に知らせます。
 
@@ -180,6 +186,14 @@
 - **同梱:** `scripts/automode_rule.py`、テスト、`references/example-settings.json`。
 - **関係:** ツールパターンの権限（`permissions.allow`、hooks）は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「프로젝트 지속 승인」）をこのスキルで作ります。
 
+## チャットとレビュー
+
+### watch-prs
+設定したリポジトリで個人へのレビュー依頼と自分の PR のレビュー待ちを集め、head ごとの台帳で重複を防ぎます。通知・リマインダー・自動マージ・bot 承認には設定とユーザー権限が必要です。プログラムの PR は `orchestrate` が担当します。
+
+### watch-mentions
+依頼された場合に、設定済みの公開チャンネルのメンションと返信を監視します。台帳で通知の重複を避け、作業提案をコーディネーターへ渡します。無関係な非公開会話へのアクセスは許可しません。
+
 ## アダプター
 
 ### use-tracker
@@ -195,12 +209,15 @@
 ### use-notes (旧名 `use-obsidian`)
 - **使う場面:** 設計文書、worklog、プログラムノートを読み書きするとき。「노트에 기록해줘」（ノートに記録して）もここに来ます。
 - **内容:**
-  - アダプターは obsidian（既定）と markdown で、プログラムごとに別々に決められます。
-  - ノートは `Project/<project>/` に `worklog-*.md`、`program-<slug>.md` として置きます。リポジトリ独自のルールがあれば、そちらが優先です。
-  - Obsidian は同期された状態を見る必要があるので、MCP ツールだけで読み書きします。ユーザーに見せるときは、MCP で読んで Artifact にします。
+  - `notes` 設定またはユーザーが選んだ obsidian / markdown アダプターを使います。個人 vault の既定値はありません。
+  - パスとファイル名は選択した保存先の規則またはユーザー指定に従います。
+  - ユーザーが選んだツールと許可された方法で現在の内容を読み書きします。同期を確認し、表示のための別ページ公開は必須にしません。
 - **同梱:** `references/obsidian.md`、`references/markdown.md`。
 
 ## 文章
+
+### brief
+完了・進行中・判断事項・人だけが行う手順を根拠とともに報告します。指定されたチャンネルの形式を使い、定期レポートには `orch brief render --periodic` を使います。
 
 ### map-features
 - **いつ:** 製品がいま何をするかを人が読む地図が必要なとき。PRD、ロードマップ、オンボーディング、現況ドキュメント。「feature map 만들어줘」（feature map を作って）、「기능 지도 그려줘」（機能地図を描いて）、「지금 뭐가 구현돼 있는지 정리해줘」（いま何が実装されているか整理して）。verify スキルが機能を動かすための地図は `create-verification-skill`、1つのサブシステムの動きは `how` です。
@@ -232,6 +249,9 @@
   - 整理する側は、コードと範囲外の行には触れません。呼び出した側が `git diff` で確認し、元に戻します。
 - **同梱:** `references/pruner.md`（整理するサブエージェントへの指示文）。
 
+### write-skill
+スキル変更のトリガー重複、不要な方針、プロンプト品質、非公開名、テスト、プラグインの妥当性を確認します。許可されたソースを編集し、インストール済みコピーや無関係な全体設定は変更しません。
+
 ## pstack スキル（Lauren Tan、MIT）
 
 [pstack](https://github.com/cursor/plugins) から持ってきて、Claude Code に合わせて直したスキルです。何が違うかは、下の [pstack との違い](#pstack-との違い) にあります。
@@ -240,7 +260,7 @@
 - **使う場面:** `/architect`、「상세 설계안 작성해줘」（詳細な設計案を書いて）、「설계안 다듬어줘」（設計案を練って）、「구현 계획 짜줘」（実装計画を立てて）、コードから書くと形が固まってしまう作業。
 - **内容:** 5つの段階で進めます。
   1. **Ground:** `how` と `why` で、周囲のシステムと今の形になった理由を把握します。
-  2. **Sketch:** `arena` で設計のランナーを並列に立ち上げます（Claude opus、Claude fable、Codex）。構造の違う候補を二つ以上受け取り、red flag でふるいにかけ、インターフェースの深さを基準に統合します。
+  2. **Sketch:** `arena` で設計のランナーを並列に立ち上げます（利用可能な独立ランナー）。構造の違う候補を二つ以上受け取り、red flag でふるいにかけ、インターフェースの深さを基準に統合します。
   3. **Agree:** 求められたときだけ、人の確認を取ります。
   4. **Implement:** スケッチを契約として実装します。
   5. **Scrap:** 同じ形の回避策が繰り返されたら、スケッチを捨てて描き直します。
@@ -249,8 +269,8 @@
 ### arena
 - **使う場面:** `/arena`、「경쟁시켜줘」（競わせて）、「여러 안 뽑아서 제일 나은 걸로」（いくつか案を出して一番良いものに）、「여러 버전 만들어서 비교해줘」（いくつかのバージョンを作って比べて）、一度の試みでは形が固まってしまう成果物。`architect` の Sketch の段階が呼びます。
 - **内容:**
-  - 同じ仕事を候補 N 個（既定は Claude opus、Claude fable、Codex）に同時にやらせる前に、採点基準を3〜6個決めます。候補は課題だけを見て、基準は知りません。
-  - 候補がすべて終わったら、別のモデル系統の審判（Claude が呼ぶなら Codex）が基準ごとに採点し、ベースにする案を推薦します。
+  - 同じ仕事を候補 N 個（既定は 利用可能な独立ランナー）に同時にやらせる前に、採点基準を3〜6個決めます。候補は課題だけを見て、基準は知りません。
+  - 候補を作成していない独立した審判が基準別に採点し、基盤案を推薦します。
   - すべての候補を最後まで読み、基準ごとに採点してベース案を選びます。残りの候補の優れた点を一つか二つ、手で接ぎ木します。
   - 候補が同じ形に収まればそのまま使い、大きく割れたら課題の定義からやり直します。
   - 成果物一つと、ベース案・接ぎ木したもの・捨てたもの・検証結果を書いた短いまとめのノートを返します。
@@ -262,7 +282,7 @@
   - 変更が安全だという根拠になる事実を一つ見つけ、実際のコードを動かすスクリプトで証明します。
   - grep では見えないところ（ライブラリのソース、ワイヤーフォーマット、実行のタイミング）を見ます。
   - 変わるコードの PR とコミットは、`why` の手順で引いてきます。
-  - 大きな変更は Codex で相互に確認します。
+  - 大きな変更は独立レビューアーで相互に確認します。
   - 結果は、何をするか、安全の根拠、リスク、確認したこと、マージ前に確認すべきこと、にまとめます。
 
 ### figure-it-out
@@ -270,7 +290,7 @@
 - **内容:** コードより先に、仕事の順序を設計します。
   1. **Frame:** 完了条件を反証可能な文で書き、範囲を数で表し、リスクに合わせて厳しさを決めます。枠組みはチケットの計画コメントか worklog に書き、元に戻せる仕事は待ちません。元に戻せない段階だけ、その場で一度承認を取ります。
   2. **Design:** 別々に着地できる単位に分け、いちばん分かっていないものから手を付けます。変わる前の値を押さえておく検証の仕組みを先に作ります。戻しにくい設計は `architect`（→ `arena`）で決めます。並列にするのは境界が分かれるところだけで、ワーカーごとに worktree を与えます。
-  3. **Loop:** 単位ごとに、仮説、最小の変更、実際の成果物での測定、そして維持か巻き戻し。委任した仕事は、成果物を直接読むか Codex が判定します。判定は VERIFIED / NOT VERIFIED / INCONCLUSIVE。
+  3. **Loop:** 単位ごとに、仮説、最小の変更、実際の成果物での測定、そして維持か巻き戻し。委任した仕事は、成果物を直接読むか独立レビューアーが判定します。判定は VERIFIED / NOT VERIFIED / INCONCLUSIVE。
   4. **Trail:** `show-me-your-work` で決定の記録を残し、ふつうはコミットして PR で読めるようにします。
   5. **Verify:** 全体を Frame の完了条件に照らして実際の製品で確かめ、繰り返された修正はチェックやスクリプトとして固めます。
 - **deliver-ticket との関係:** 単位ごとのレビュー、コミット、push は `deliver-ticket` のルールに従います。
@@ -296,9 +316,9 @@
 - **関連:** `how` と対になるスキルです。`blast-radius` と `architect` が呼びます。トラッカーは `use-tracker`、ノートは `use-notes` で読みます。
 
 ### interrogate
-- **使う場面:** 「적대적 리뷰」（敵対的レビュー）、「codex 교차 검증」（codex で相互検証）、「codex 로 설계안 점검」（codex で設計案を点検）、「빈틈 찾아줘」（抜けを探して）。main に向かう PR は `deliver-ticket` の Codex レビューが担当します。
+- **使う場面:** 「interrogate」「adversarial review」「challenge this」「find blind spots」で設計・計画・判断のレビューを依頼するとき。main に向かう PR の独立レビューは `deliver-ticket` が担当します。
 - **内容:**
-  - 要はモデル系統の多様性です。Claude（opus）と Codex が、同じプロンプトと rubric で別々にレビューします。
+  - 同じ範囲と rubric を独立して確認します。特定のモデルや異なる系統は必須ではありません。
   - リードが結果をまとめて Act on / Consider / Noted / Dismissed で判定し、合意のマップを書きます。
   - 意図があいまいなら尋ねずに、仮定したことを明記します。修正は自動では適用しません。
 - **同梱:** `reviewer-prompt.md`、`rubric.md`、`code-quality-review.md`、`lead-judgment.md`。`deliver-ticket` のレビューの分類がこの判定の枠組みを使います。
@@ -321,21 +341,21 @@
 ### reflect
 - **使う場面:** 「reflect」、「스킬에 반영해줘」（スキルに反映して）、「스킬이 왜 안 떴어」（スキルはなぜ発動しなかったの?）、「이 세션 돌아보고 스킬 개선해줘」（このセッションを振り返ってスキルを改善して）、「개선 이력 보여줘」（改善の履歴を見せて）。`orchestrate` の Close からはプログラムモードで、人が作業の進め方を直したセッションなら `end-session` からセッションモードで、自動的に呼ばれます。
 - **内容:**
-  - セッションモードはこのセッションの transcript を読みます。プログラムモードは、台帳の `signal`・マージの失敗・main の red・失敗した判定と決定の記録、そして `measure-delivery` の結果をまとめた証拠一式を読みます。レビュアーは3つ（判断は opus、ツールの使い方は Codex、発散は opus）です。
-  - まとめ役（opus）が、学びを Accepted / Rejected / Backlog に分けます。すべて教訓台帳（ノートストアの `Project/agent-skills/learnings.md`）に一行ずつ残ります。台帳には教訓ごとに、シグナル、根拠へのポインタ、発生回数、直した対象、変更（PR・コミット）、スクリプトが出した検証の数値、その後の再発の有無を書きます。
+  - セッションモードはこのセッションの transcript を読みます。プログラムモードは、台帳の `signal`・マージの失敗・main の red・失敗した判定と決定の記録、そして `measure-delivery` の結果をまとめた証拠一式を読みます。レビュアーは3つ（判断、ツール使用、別の観点）です。
+  - まとめ役が、学びを Accepted / Rejected / Backlog に分けます。すべて教訓台帳（ノートストアの `reflect.ledger`）に一行ずつ残ります。台帳には教訓ごとに、シグナル、根拠へのポインタ、発生回数、直した対象、変更（PR・コミット）、スクリプトが出した検証の数値、その後の再発の有無を書きます。
   - スキルを変えるのは、別々の事例が2回以上あったときだけです（再現したセキュリティ・データの欠陥は例外）。1回だけなら候補として残し、次の発生を待ちます。
   - セッションモードは、ユーザーの承認を得てから反映します。プログラムモードは人がいないので、worktree で直して検証したあと draft PR を一つだけ開き、digest に承認の依頼を残します。マージは人が行います。description の変更は `trigger-probe.sh` で発動を、本文・スクリプトの変更は変わった経路を通るテストか事例の再現で動作を確認します。検証がなければ `none` と記録します。
   - レビュアーを呼ぶ前に、シグナルごとに今の HEAD がすでに直しているかを確かめて印を付けます（`program.json` の `skills_commit` 以降の変更）。他のプログラムの台帳にある `signal` も発生回数に数えます。コマンドやフラグを変える修正は、`skills/` 全体にある写しも一緒に直します。
   - シグナルも失敗もないプログラムでも Close のたびに回り、適用した教訓が今回のプログラムで持ちこたえたか（`held through`、プログラムの slug で重複なし）を記録します。
   - 権限の hook、`orch land` のゲート、テストと採点器、reflect 自身については修正を提案せず、Backlog に送ります。
-  - Backlog は両モードとも `use-tracker` ですぐに登録し、台帳の Status に `backlog (<チケット>)` と書きます。Codex レビュアーは `status --wait` をバックグラウンドでかけて待ちます。ターンを終えて待つと、無人の実行はそこで終わってしまいます。
+  - Backlog はユーザーまたは選択したワークフローが許可する場合だけ登録し、それ以外は提案として報告します。
 
 ### show-me-your-work
 - **使う場面:** 時間のかかる作業や、人が席を外している間の作業。
 - **内容:**
   - 決定ごとに、何を、なぜ、証拠、結果を TSV の一行で残します。記録は追記のみで、誤った行は訂正の行を足して正します。
   - 終わったら transcript と照らし合わせて監査します。
-  - Codex が相互にレビューし、応答の最後に誰がレビューしたかを書きます。
+  - 独立レビューアーが相互にレビューし、応答の最後に誰がレビューしたかを書きます。
 - **同梱:** `scripts/log.sh`（行の追加）、`references/decision-log-template.tsv`。
 
 ### swarm
@@ -365,7 +385,7 @@
   - リポジトリを調べ、アプリをユーザーのように起動し、操作し、観察するリポジトリ専用のスキル `.claude/skills/verify-<app>/` を作ります。Launch、Doctor、Drive、Evidence、Cleanup の段階を置きます。
   - 主な機能3〜5個の機能マップも一緒に作ります。
   - 自分で最後まで一度回して証明します。
-  - ユーザーが触れる表面を変えた作業で verify スキルがなければ、`deliver-ticket`（E2E の前）と `orchestrate`（Pilot の前）が呼び出します。upstream はユーザー呼び出し専用で、この fork だけがモデルからの呼び出しを許しています。
+  - `deliver-ticket` と `orchestrate` は、範囲内で再利用する検証が役立つ場合に呼び出せます。同じ受け入れ基準を実証する直接チェックも有効です。upstream はユーザー呼び出し専用で、この fork はモデルからも呼び出せます。
 - **同梱:** `references/feature-map-example/`（サンプルアプリの機能マップ）。
 
 ### maintain-verification-skill
@@ -386,7 +406,7 @@
 | `set` | ノートが変わったら、ポリシー・ceiling・期限・predicate・専有パスを合わせます |
 | `status` | predicate の進み具合、main の状態、in-flight/上限、次の行動。STALE、LANDED-BUT-OPEN、STALLED、SPARE、LEDGER GAP の行 |
 | `record` | 台帳のイベントを記録します（spawned、parked、admitted、main_green/red、predicate_verified など）。スタックの下の層のコミットに対する main_green/red は拒否します。main CI は一番上の層のコミットで一度だけ回るためです |
-| `verdict` | レビューした head の判定を記録します。出典は `codex-review`、`subagent-review`、`claude-review:independent`(Codex を使えないとき。`--note` に Codex のエラー行が必須)、`verifier:<別のモデル系統>`、`live:<機能>` のうち一つだけを受け付けます |
+| `verdict` | 確認済み head の判定を `independent-review`、`subagent-review`、`review:<reviewer>`、`verifier:<reviewer>`、`live:<feature>` で記録します。既存台帳の source は変更せず読み取ります。 |
 | `gate` | human-gate 用の決定ゲートを開きます |
 | `dep` | 着地の順序の依存を記録します |
 | `queue` | 着地の順序と、PR ごとに止まっている理由 |
@@ -419,7 +439,7 @@
 
 ## 設定ファイル
 
-`~/.claude/agent-skills.json` で、トラッカーとノートストアを選びます。ファイルがなければ Linear と Obsidian の vault `Private` を使います。`reap-resources` の基準時間、テストのキャッシュパス、警報の閾値もこのファイルの `reap` に置きます（形式はそのスキルの SKILL.md）。プログラムの `program.json` に書いた値が、このファイルより優先されます。
+`~/.claude/agent-skills.json` でアダプターを選びます。トラッカーの従来の既定値は Linear です。ノートへの外部書き込みには `notes` 設定またはユーザー指定の保存先が必要です。`reflect.ledger` と `reflect.skill_repository` で記録とソースを指定し、`reap.user_folders` で個人フォルダーの整理対象を明示します。プログラム設定が優先し、既存記録は移動・書き換えません。
 
 ```json
 {
@@ -429,7 +449,7 @@
                "templates": {"dev": "개발 티켓", "spike": "조사 티켓"}},
     "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"}
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "Private"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}
 }
 ```
 
@@ -447,18 +467,20 @@
 
 許可を出すのは、シェルの演算子、リダイレクト、置換、変数を含まない単一のコマンドだけです。変数は `$ORCA_TERMINAL_HANDLE` だけが例外です。コマンド名のすぐ後にサブコマンドが来る必要があり、フラグが先に来たら判定しません。判定しなかった呼び出しは、ふだんの権限の流れ（auto mode の分類器、ユーザーのルール）に乗ります。
 
-### 圧縮後の再オリエンテーション
-`hooks/reorient.py`（SessionStart、`compact`）。文脈が圧縮された直後に（自動でも `/compact` でも）、このターミナルが `orch init` で登録されたプログラムのコーディネーターであるときだけ、段落を一つ差し込みます。内容は4つです。
-- `agent-skills:orchestrate` を呼び直して読む。
-- プログラムノートを読む。
-- `orch status` を実行し、出力されたすべての行に対応する。
-- それ以降は `orch wait` だけで drain する。
+### 宣言された役割の再確認
+`hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。操作を止めず外部コマンドも実行しません。
 
 ### ターミナルで答えた決定のクローズ
 `hooks/decision.py`（UserPromptSubmit）。`orch decide add` で決定を登録したターミナル（`$ORCA_TERMINAL_HANDLE`）に人が入力したプロンプトだけを見ます。1 行目が id で始まる（`d3 許可`、`decision d3: 許可`）か、そのターミナルの開いている決定のうち一つにしかない選択肢名で始まると、その決定を答えとともに done でクローズし、コーディネーターに伝えます。曖昧なときはクローズせず、開いている決定の一覧をリマインダーとして差し込むだけです。ほかのターミナル（ワーカー）の入力ではクローズせず、エラーはすべて exit 0 です。すでに起動しているセッションには `/reload-plugins` か再起動のあとから効きます。
 
 ### 権限ダイアログの記録
 `hooks/permission.py`（PermissionRequest）。権限ダイアログが開くと、ツール名とマスクした引数を `$ORCA_TERMINAL_HANDLE` ごとにダッシュボードの状態ディレクトリの `prompts/` に書きます。判定はしないので、権限の流れは変わりません。ダッシュボードは、そのターミナルの画面に同じリクエストのダイアログが出ている間だけ、インボックスの項目に承認・拒否・ターミナルを開くボタンを付けます。人が押すと、送る直前に画面を読み直して確かめ、一回だけ許可する `Yes` か `No` の番号を一つだけ押します。「今後確認しない」「常に許可」「auto mode に切り替え」のようにルールを保存したりモードを変えたりする選択肢は選びません。詳しくは `skills/orchestrate/references/dashboard.md` にあります。
+
+### 完了主張の検査
+`hooks/claim_check.py` は Stop/SubagentStop でコード変更後に実行のない完了主張を一度だけ止めます。拒否されたコマンドや引用例は除外し、未検証と明記した報告を認めます。`AGENT_SKILLS_CLAIM_CHECK=0` で無効になります。適切なテストが実行されたことを保証するものではありません。
+
+### 文体の検査
+`hooks/prose_check.py` は PR・コミット・トラッカーの文章を決定的なパターンで確認します。助言を追加するだけで、操作を止めたり権限を変更したりしません。`AGENT_SKILLS_PROSE_CHECK=0` で無効になります。
 
 ## pstack との違い
 
@@ -470,8 +492,8 @@
 | 入口 | `/poteto-mode` 一つが常にオンで、作業を23個のプレイブックのどれかに当てはめて段階をたどる | モードのルーターはない。スキルごとの description がトリガー |
 | スキルの呼び出し | ほぼすべて、ユーザーか poteto-mode だけが呼ぶ（`disable-model-invocation`） | モデルが自分で呼ぶ（この fork では二つの verify スキルも） |
 | ワーカー | Cursor Task のサブエージェント、クラウドワーカー | Claude Code の `Agent`（worktree で隔離）、Orca のワーカー |
-| モデル | 役割別のモデルルール（`pstack-models.mdc`）。コードは grok、判断は opus | Claude（opus、fable）と Codex（既定は gpt-6-sol、難しい設計だけ astra） |
-| 相互レビュー | 複数モデルのパネル | Claude + Codex companion。Codex は一度に一つの作業だけ |
+| モデル | 役割別のモデル規則 | ホストの設定またはユーザーの選択 |
+| 独立レビュー | 複数の観点 | 実装者と独立したレビューアー。モデル系統の制限なし |
 | プロジェクト運営 | orchestrate、autopilot、shipping のプレイブックと `orch.ts`（bun、TSV の台帳） | `orchestrate` スキル、`orch`（Python、JSONL の台帳）、着地ゲート、専有レーン、main ガーディアン、QA リード、ダッシュボード |
 | チケット・ノート | 前提なし | `use-tracker`（Linear、Jira）、`use-notes`（Obsidian、Markdown） |
 | 権限 | Cursor の設定 | `hooks/guard.py` が代わりに判定 |
@@ -485,7 +507,7 @@ pstack のスキル47個（原則23個と、その他24個）のうち、原則2
 - **直して持ってきたもの:** architect、arena、blast-radius、figure-it-out、how、why、interrogate、recall、reflect、show-me-your-work、swarm、tdd、teach、create-verification-skill、maintain-verification-skill。共通して行ったことは4つです。
   - モデルが自分で呼べるようにしました。
   - Cursor 専用の要素を、Claude Code での対応物に置き換えました。パスは `.cursor/` → `.claude/`、ワーカーは `generalPurpose`/クラウド → `Agent`/Orca ワーカー、transcript は `agent-transcripts` → `~/.claude/projects` です。
-  - モデルのパネルを Claude + Codex にしました。
+  - モデルのパネルを独立レビューアーにしました。
   - インストールしていないスキル（`unslop`）を呼んでいた箇所を `write-plainly` に置き換えました。`why` と `arena` は 2026-09-25 に取り込み、元のつながり（architect → arena）を復活させました。
   - `why` は Cursor の MCP 探索の代わりに、セッションにある MCP ツールで出典を選び、一行の質問用の narrow mode を加えました。接続のない Datadog・Sentry・warehouse の出典ファイルは外し、Google Drive・Obsidian の出典ファイルを新しく書きました。
 - **2026-09-25 の追加修正:** Opus 5.5 に合わせてプロンプトを監査し、さらに直しました（`6eec9fa`）。architect と swarm の段階ごとの ToDo リストをなくし、how は単純な質問を直接処理します。reflect のレビュアー数の下限をなくし、show-me-your-work は追記のみの記録に変えました。ファイルごとの修正内容は `vendor/pstack/NOTICE.md` にあります。

@@ -5,11 +5,9 @@ description: "Use when the machine is slow or cluttered with what finished sessi
 
 # Reap resources
 
-Sessions end and leave things running or lying around: a Codex plugin broker tree per worktree
-(broker → `codex app-server` → computer-use, xcodebuildmcp, cua-repl, code-mode helpers), test
+Sessions end and leave things running or lying around: test
 servers reparented to pid 1, the volumes and images of finished compose stacks, local branches
-of merged PRs, git worktrees in the scratchpad of a finished session. One machine once held 884
-such helpers (7.6 GB, 84% CPU), 21 orphaned test servers and 108 dangling volumes.
+of merged PRs, git worktrees in the scratchpad of a finished session.
 
 This skill needs no program. The janitor kinds below remove settled Orca worker and card worktrees with
 `orca worktree rm`, the same command the resource steward uses (`orchestrate` `references/roles.md`),
@@ -28,12 +26,10 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
   same data, `--plan FILE` saves it.
 - `reap` re-scans and acts only on the plan's targets that are still targets with the same
   identity (pid and start time, branch tip). Anything that changed is printed as `건너뜀`.
-- `--kinds codex,orphan,docker,branch,worktree` limits the scan, `--hours N` sets the age
+- `--kinds orphan,docker,branch,worktree` limits the scan, `--hours N` sets the age
   threshold (default 6), `--repo PATH` (repeatable) picks the repos for `branch` and
   `worktree` (default: every repo in `orca repo list`).
-- `--under PATH` limits `codex` to brokers whose `--cwd` is PATH or below it. Closing one card
-  passes its path: an unscoped scan also reaps other sessions' brokers idle past `--hours`.
-- Show the user the scan before the first `reap` in a session unless they asked to reap.
+
 
 ## Janitor: what agents created
 
@@ -79,10 +75,10 @@ hours that nobody registered, one line per directory. It looks only directly in 
 `$TMPDIR` and one directory below them (`reap.evidence_roots` replaces that list), never deeper and
 never through a symlink. These lines are never targets, so they do not wake the precheck.
 
-## User folders: ~/Downloads and ~/Desktop
+## User folders: explicit opt-in
 
-The `user-folder` kind looks at the top-level entries of `~/Downloads` and `~/Desktop` (screenshots
-included), and nowhere else. An entry is a target when nothing in it has been modified or changed
+The `user-folder` kind looks only at the folders explicitly listed in `reap.user_folders`.
+Unset, empty or malformed configuration disables this kind. An entry is a target when nothing in it has been modified or changed
 (mtime or ctime, so a freshly unpacked archive with old dates stays) for `reap.user_folder_days`
 (default 7; 0 or less turns the kind off). A top-level screenshot or screen recording file (a name
 macOS gives: `Screenshot `, `Screen Recording `, `스크린샷 `, `화면 기록 ` followed by an image or video
@@ -179,7 +175,7 @@ class when the load is at or above the limit:
 | Class | What | Action |
 |---|---|---|
 | ours-idle | a Claude session whose transcripts (its subagents' included) have been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it. Closing 8 idle sessions once took a load of 19.5 down to 11 |
-| leftover | a `codex` or `orphan` target of `scan` | `scan --plan`, then `reap --plan` |
+| leftover | an `orphan` target of `scan` | `scan --plan`, then `reap --plan` |
 | ours-working | anything else of this user's, from any path: a live session, a benchmark, a test run, a container VM | leave it; stop new dispatches and queue heavy runs behind `orch heavy` |
 | system | another user's process | report it as not ours; never touch it |
 
@@ -190,7 +186,6 @@ taken while the load is at or above the limit is not evidence: measure again onc
 
 | Kind | Target when | Kept when | How |
 |---|---|---|---|
-| codex | a broker (`node …/app-server-broker.mjs serve --cwd D`) whose `D` does not exist, or no `claude` process has its cwd in `D` and the broker is ≥ N hours old | a live `claude` in `D` (even when `D` is gone), younger than N, or the cwd of any of this user's `claude` processes could not be read | SIGTERM the whole tree by pid, SIGKILL what is left after 5 s |
 | orphan | ppid 1, and the executable or the script it runs (`argv[1]`) lies under a path in `reap.orphan_paths`, ≥ N hours | anything else | same |
 | docker | a dangling volume whose compose project has no container in any state, ≥ N hours; an untagged image no container uses, ≥ N hours | a project with any container, a volume whose name holds such a project's name, a volume with no compose label (reported only) | `docker volume rm <name>`, `docker image rm <id>` |
 | branch | every PR from that branch is merged or closed, no worktree has it checked out, and its tip is what a PR carried | an open PR, commits after the PR, the default branch, no PR; the whole repo when `origin/HEAD` is unset | `git branch -D`; the output has the restore command |
@@ -212,10 +207,9 @@ not in this repo:
 {"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
           "inbox_to": "run:<id>", "plan_repeat": 2,
-          "alert": {"codex_procs": 300, "codex_rss_mb": 4096, "orphan_procs": 5,
+          "user_folders": [], "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10}}}
 ```
 
-Alerts count everything the scan saw, kept items included (a live broker that leaked 50 helpers
-counts): Codex processes and RSS, orphan processes, dangling volumes, and branch and worktree
+Alerts count everything the scan saw, kept items included: orphan processes, dangling volumes, and branch and worktree
 targets. A total at or above its limit prints under `## 경보` and in `alerts`.

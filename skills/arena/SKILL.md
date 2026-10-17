@@ -15,15 +15,9 @@ The N candidates will receive the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. The rubric is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Default to one per row; a caller such as **architect** may pass its own set. Spawn more when the arena covers multiple design directions. Use the same model N times when the work is generation-bound rather than judgment-sensitive.
-
-   | Runner | How to run it |
-   |--------|---------------|
-   | Claude (opus) | `Agent` tool, `subagent_type: "general-purpose"`, `model: "opus"`, `run_in_background: true` |
-   | Claude (fable) | Same, with `model: "fable"` |
-   | Codex | `node <codex plugin>/scripts/codex-companion.mjs task --background "$(cat <filled prompt file>)"`, the configured default model; add `--model gpt-6-astra --effort medium` only for the hardest design question in the work. Then wait with `status <job id> --wait --timeout-ms 1800000` as a Bash call with `run_in_background`, which wakes you when the job ends, and read `result <job id>`. Ending the turn while that call runs is how you wait; ending it with nothing running in the background ends an unattended run for good. Without `--write` it is read-only, so it returns the artifact in its result and you save it. Find the script with `ls ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs`. |
-
-   Run one Codex job at a time; two concurrent jobs kill each other. If a model name is rejected, use the closest available tier of the same family and say which one ran.
+3. Pick available runners suited to the task and authorized environment. Independent attempts
+   may use the same model. Use the host's supported delegation API and configured defaults;
+   do not require a particular vendor, model family, plugin, or global installation path.
 4. Assign output paths. Each candidate writes to its own location (a git worktree through `isolation: "worktree"` where the artifact lives in the repo, otherwise its own folder in the scratchpad), per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out
@@ -36,7 +30,7 @@ If a candidate fails to produce output, proceed with N-1 and note the dropout in
 
 ## Phase C: Cross-judge
 
-After every Phase B candidate completes, spawn one read-only judge from a model family other than yours: Codex `task` when you are Claude. It sees the rubric and the candidates by path label, scores each criterion, and recommends a base with rationale, while you do your own reading in Phase D.
+After every Phase B candidate completes, spawn one read-only judge who did not produce the candidates. It sees the rubric and the candidates by path label, scores each criterion, and recommends a base with rationale, while you do your own reading in Phase D.
 
 ## Phase D: Pick a base
 

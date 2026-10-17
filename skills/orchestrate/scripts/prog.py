@@ -20,7 +20,6 @@ Usage: orch <command> <slug> [options]
                                      caused, a skill or script defect. PTR points at the proof (message
                                      id, PR comment URL, transcript path:line); nothing is copied in
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
-                                     --note is required with --source claude-review:independent
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
                                      coordinator-owned landing Task; the user resolves it in Orca
@@ -53,6 +52,9 @@ Usage: orch <command> <slug> [options]
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      coordinator only: block until the Run inbox holds actionable
                                      mail; acks heartbeat-only batches; never acks actionable ones
+  watch-cards [--interval 180] [--idle-min 30] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
+                                     no slug: exit on a new stuck screen in any agent terminal but this
+                                     one (cards no Run lists), or low disk; never types (card_watch.py)
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
   decide list | done <id> [--answer TEXT] | drop <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -117,7 +119,6 @@ Tickets come from the tracker adapter (use-tracker/scripts/tracker.py), never fr
 import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, os, pathlib, re, shlex, subprocess, sys, tempfile, time
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
-REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 PASSING = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 ACTIONABLE = {"worker_done", "escalation", "question"}
@@ -1053,26 +1054,19 @@ def cmd_set(argv):
     print(json.dumps(p.append("config", note=f"{key}={value}"), ensure_ascii=False))
 
 
-VERIFIER_FAMILIES = ("codex", "gpt", "gemini", "grok")
-
-
 def cmd_verdict(argv):
     p = Program(argv[0])
     pr, sha, src = int(opt(argv, "--pr")), opt(argv, "--sha"), opt(argv, "--source")
     if not src or not sha:
-        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: codex-review, "
-                 "subagent-review, claude-review:independent, verifier:codex, live:<feature>)")
-    # Workers run on Claude, so a verifier names another family; a Claude subagent's review is subagent-review.
-    # claude-review:independent is the context-free Claude Code review that stands in when Codex is unavailable.
+        sys.exit("verdict needs --sha (the head that was reviewed) and --source (who reviewed: independent-review, "
+                 "review:<reviewer>, verifier:<reviewer>, live:<feature>)")
+    # Independence is established by the review process, not a model-name allowlist.
     kind, _, what = src.partition(":")
-    if not (src in ("codex-review", "subagent-review", "claude-review:independent") or (kind == "live" and what)
-            or (kind == "verifier" and what.lower().startswith(VERIFIER_FAMILIES))):
-        sys.exit("--source is codex-review, subagent-review (a trivial diff, deliver-ticket §3), claude-review:independent "
-                 "(Codex unavailable, deliver-ticket codex-review.md), verifier:<model of another family than the "
-                 "Claude worker, e.g. verifier:codex> or live:<feature>; never the implementer")
-    if src == "claude-review:independent" and not opt(argv, "--note"):
-        sys.exit("claude-review:independent needs --note with the Codex line that shows Codex was unavailable "
-                 "(spend cap, outage, login)")
+    if not (src in ("independent-review", "subagent-review") or
+            (kind in ("review", "verifier", "live") and what.strip() and
+             what.strip().casefold() not in ("self", "implementer"))):
+        sys.exit("--source is independent-review, subagent-review, review:<reviewer>, "
+                 "verifier:<reviewer> or live:<feature>; never the implementer")
     head = pr_view(p.cfg["repo"], pr)["headRefOid"]
     if not head.startswith(sha):
         sys.exit(f"head is {head[:8]}, not the reviewed {sha[:8]}: the new head has not been reviewed")
@@ -1670,10 +1664,6 @@ def close_out(msgs, workers, worktrees):
         else:
             out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks and --run-hooks in end-session §4),"
                     " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]
-            # A Codex plugin broker outlives its worker; once the card is gone, reap.py targets it (cwd missing).
-            # --under keeps it to this card's brokers: an unscoped scan also reaps other sessions' idle ones.
-            plan, reap = f"/tmp/reap-{d}.json", f"python3 {shlex.quote(str(REAP))}"
-            out.append(f"  {reap} scan --kinds codex --under {shlex.quote(p)} --plan {plan} && {reap} reap --plan {plan}")
     return out
 
 
@@ -1775,7 +1765,10 @@ def print_sweep(run_id, state, skip=()):
 
 
 PROMPTS = [(re.compile(r"Enter to select"), "a select menu"),
-           (re.compile(r"^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt")]
+           (re.compile(r"^\s*❯\s*1\.\s*Yes\b", re.M), "a permission prompt"),
+           (re.compile(r"What should Claude do instead\?"), "an interrupted turn"),
+           (re.compile(r"ENOSPC|No space left on device"), "a full disk"),
+           (re.compile(r"Waiting for API response · will retry"), "an API retry loop")]
 
 
 def screen_prompt(lines, activity=None):
@@ -2231,9 +2224,10 @@ def cmd_sent(argv):
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True)}
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
+            "watch-cards": lambda argv: __import__("card_watch").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] == ["watch-cards"]) or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])

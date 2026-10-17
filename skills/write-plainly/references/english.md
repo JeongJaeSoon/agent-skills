@@ -1,6 +1,6 @@
 # Plain English
 
-Patterns that make English prose read machine-written, with the fix for each. They apply to skill text, code comments, and any English prose (a subagent report, a Codex prompt, an English PR).
+Patterns that make English prose read machine-written, with the fix for each. They apply to skill text, code comments, and any English prose (a subagent report, an agent prompt, an English PR).
 
 Rule numbers are stable ids that other text can cite. A removed rule leaves a gap.
 

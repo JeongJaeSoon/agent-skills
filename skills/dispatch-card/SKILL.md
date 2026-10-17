@@ -1,6 +1,6 @@
 ---
 name: dispatch-card
-description: "Use when sending work to another repo, or a side branch of this one, as a new Orca card while this session keeps going — \"별도 세션으로 진행해줘\", \"현재 세션은 두고 ~\", \"~ repo 에 작업 지시해줘\", \"dispatch to <repo>\". Not the next ticket (handoff-ticket), subagents, or Codex."
+description: "Use when sending work to another repo, or a side branch of this one, as a new Orca card while this session keeps going — \"별도 세션으로 진행해줘\", \"현재 세션은 두고 ~\", \"~ repo 에 작업 지시해줘\", \"dispatch to another repository\". Not the next ticket (handoff-ticket), subagents."
 ---
 
 # Orca dispatch
@@ -11,9 +11,9 @@ confirm it started, come back to your own work.
 Triggers, all meaning this skill: "~ repo 에 작성하자", "~ repo 에 지시해줘", "orca 로 ~ 업무
 새로 지시해줘", "~ 에 위임하고 너는 손 떼", "위임해서 진행시키고 너는 ~ 진행해줘", "기존 작업
 하면서 ~ 도 진행해줘", "저쪽 repo 에서 하라고 해줘", "다른 repo 에 맡겨줘", "곁가지로 띄워줘";
-"dispatch", "dispatch to <repo>", "cross-repo". "병렬로" alone is not a trigger (it usually
+"dispatch", "dispatch to another repository", "cross-repo". "병렬로" alone is not a trigger (it usually
 means handoff or a sub-agent); only when paired with this session continuing. Not for
-"서브에이전트로" (Agent tool) or "코덱스에게" (`codex:rescue`).
+"서브에이전트로" (Agent tool).
 
 ## 0. Dispatch or handoff — and is it even this skill
 
@@ -38,7 +38,6 @@ repos. The reverse does not hold — same repo is still dispatch when this sessi
 Where the work goes is a separate question, and only one answer is this skill:
 
 - "서브에이전트로", "sub-agent 로 진행해두고" → the Agent tool, in this session. Not this skill.
-- "코덱스에게 위임", "codex 와 함께" → `codex:rescue`. Not this skill.
 - A new Orca card / worktree, in this repo or another → this skill.
 - Several tickets supervised to a finish line, with this session as the coordinator that lands
   their PRs → `orchestrate`. Not this skill.
@@ -84,7 +83,7 @@ end. The brief has:
 - **Human only** — what stays the human's: permission dialogs, logins, payments, document
   submissions, and any irreversible or outward act not under Approved. The card puts these to
   the human in one batched message and keeps doing the rest.
-- **Model calls** — one line: "다른 모델 호출(서브에이전트, Codex, API)은 필요할 때만, 호출 전에
+- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만, 호출 전에
   무엇을 왜 부르는지 보고하고, 모델은 그때 고른다". Never name a model in the brief: a brief that
   said to use a small model for cheap checks had the card calling it over and over for nothing.
 - **Target repo rules** — one line: "그 repo의 CLAUDE.md와 스킬을 확인하고 적용하라". Never paste
@@ -140,6 +139,10 @@ python3 "<reap-resources dir>/scripts/reap.py" ledger add --kind orca-worktree -
 skills-sync close-setup "<result.worktree.path>"
 ```
 
+- A card already on the task that the new one replaces (the same PR, branch or ticket) is
+  superseded: in this turn, tell it to stop and close, and drop the questions it left waiting
+  (`orchestrate` "Stay answerable"). Left open, it waits on a question about work the new card
+  already did.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
 - `--name` is `<target>-<topic>`, e.g. `blog-launch-post`. A ticket-backed card uses the

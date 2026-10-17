@@ -197,8 +197,7 @@ assert prog.landed_but_open(ev + later, wk, tasks, wts) == [("A-1", "ctx_a1", Fa
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
 done = co({"dispatchId": "d1", "outcome": "succeeded"})
-assert done[-2] == "  orca worktree rm --worktree path:/w/1", done
-assert "scan --kinds codex --under /w/1 --plan /tmp/reap-d1.json && " in done[-1] and done[-1].endswith("reap --plan /tmp/reap-d1.json"), done
+assert done[-1] == "  orca worktree rm --worktree path:/w/1", done
 assert co('{"dispatchId": "d1", "outcome": "succeeded"}') == co({"dispatchId": "d1", "outcome": "succeeded"})
 assert not any("worktree rm" in l for l in co({"dispatchId": "d3a", "outcome": "succeeded"})), "the card was reused for A-3"
 failed = co({"dispatchId": "d1", "outcome": "failed"})
@@ -209,9 +208,9 @@ gone = co({"dispatchId": "dg", "outcome": "succeeded"}, [{"dispatchId": "dg", "t
 assert gone == ["CLOSE OUT dg: release it; its card is not in `orca worktree list`", "  orca orchestration worker-release --dispatch dg"], gone
 # One whose worktree rm the permission layer refused closed only its terminal (§7 fallback): the card is still offered.
 left = co({"dispatchId": "dl", "outcome": "succeeded"}, [{"dispatchId": "dl", "terminalState": "reclaimable", "resource": {"worktreeId": "wx"}}])
-assert left[0].startswith("CLOSE OUT dl: release it, close its terminals and remove its card") and left[-2] == "  orca worktree rm --worktree path:'/w/a b'", left
+assert left[0].startswith("CLOSE OUT dl: release it, close its terminals and remove its card") and left[-1] == "  orca worktree rm --worktree path:'/w/a b'", left
 spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktreeId": "wx"}}]
-assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-2] == "  orca worktree rm --worktree path:'/w/a b'"
+assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"
 assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
                        {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
 settled = [
@@ -710,24 +709,21 @@ print("prog.py stacks: all pass")
 # --- verdict sources are a closed set ------------------------------------------------------------
 real_view, real_pid = prog.pr_view, prog.patch_id
 prog.pr_view, prog.patch_id = (lambda repo, n: {"headRefOid": "h1"}), (lambda repo, n: "p1")
-for bad in ("self-review", "claude-code-review", "verifier:claude-opus-5-5", "verifier:anthropic", "live:", "verifier",
-            "claude-review", "claude-review:self"):
+for bad in ("self-review", "claude-code-review", "verifier:", "verifier:self", "review: self ", "verifier: IMPLEMENTER ", "live:", "verifier",
+            "review:", "review:implementer"):
     try:
         prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", bad])
         raise AssertionError(f"verdict accepted --source {bad}")
     except SystemExit as e:
         assert "--source is" in str(e), e
-try:
-    prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", "claude-review:independent"])
-    raise AssertionError("verdict accepted claude-review:independent without the Codex line")
-except SystemExit as e:
-    assert "--note" in str(e), e
-for good in ("codex-review", "subagent-review", "claude-review:independent", "verifier:codex", "live:checkout"):
+for good in ("independent-review", "subagent-review", "review:person", "verifier:claude-opus", "verifier:local", "live:checkout"):
     with contextlib.redirect_stdout(io.StringIO()):
-        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good, "--note", "spend cap"])
+        prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", good])
     assert prog.Program("gt").events()[-1]["source"] == good
-with contextlib.redirect_stdout(io.StringIO()):
-    prog.cmd_verdict(["gt", "--pr", "1", "--sha", "h1", "--source", "codex-review"])
+# Historical sources remain opaque input: reading a ledger must not migrate or reject them.
+p = prog.Program("gt")
+p.append("verdict", pr=1, sha="h1", patch_id="p1", source="retired-provider-review", result="pass")
+assert p.events()[-1]["source"] == "retired-provider-review"
 prog.pr_view, prog.patch_id = real_view, real_pid
 
 print("prog.py verdict source: all pass")

@@ -12,7 +12,7 @@ Fan out N parallel workers. They may cover separate slices, race the same brief,
 1. State the done predicate and the artifact or report the swarm must return.
 2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass` or `rank all` before spawning.
 3. Set N from the user or derive it from the shape. N is total workers, not the concurrency limit.
-4. Pick the worker model up front: an `Agent` worker takes `model: "sonnet"`, `"opus"`, or `"fable"`; an Orca worker takes `--model`. For a model race, name each arm's model up front. A Codex arm runs through `codex-companion.mjs task` (see the **interrogate** skill), one Codex job at a time.
+4. Use the host's configured worker defaults, or the user's explicit model choice. For a comparison experiment, record each candidate's configuration before launch.
 5. Give each worker its own writable output when it writes. When workers verify or measure commits, each brief names the exact SHAs. A measurement brief also names the method (sample count, what one sample is, order). The worker records both in its result.
 
 ## Phase B: Fan out

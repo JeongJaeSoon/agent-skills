@@ -1,35 +1,16 @@
 # Adapter: obsidian
 
-The vault is the source of truth for design docs and worklogs. It syncs across devices, so the
-copy on disk may lag. Only the `mcp__claude_ai_Obsidian__*` tools see the synced state.
-The vault name comes from `notes.obsidian.vault` in the config (default `Private`).
+Select the vault explicitly with `notes.obsidian.vault` or the user's request. No personal
+vault is assumed. Use the connected vault tools, local Obsidian CLI, or filesystem access
+that the user selected and the environment permits. Confirm which copy is authoritative
+when synchronization could lag; do not assume one tool is always fresher.
 
-| Operation | Tool |
-|---|---|
-| read | `vault_read` / `vault_batch_read` |
-| change an existing note | `vault_edit` on the current content, `dry_run` first |
-| create a new note | `vault_write`, only at a path that holds no note |
-| replace a whole note | `vault_write`, only with the user's approval |
-| append a log line | `vault_append` |
-| search | `vault_search` |
-| where things go | `vault_read("CLAUDE.md")` — the vault's own rules (folders, tags, headings, file names) |
+Read the vault's instructions before a write. Inspect the current note before editing,
+check that a create path is unused, and preserve unrelated content. With connected tools,
+`vault_read`, `vault_search`, `vault_edit` (dry run first), `vault_write` and `vault_append`
+are common operations; discover the actual tools available in this environment.
 
-## Which tool touches the vault
-
-- Never open the vault folder with `cat`, `Read`, `grep`, or the Obsidian CLI for content.
-- The `obsidian:obsidian-cli` plugin skill reads the disk copy and its "read, create, search"
-  triggers overlap with MCP; for content, MCP wins. Use the CLI only for plugin/theme
-  development or app-level actions (reload, screenshot, run command). The user's instructions
-  may bar the CLI entirely; theirs win.
-- A large MCP result gets saved to `tool-results/` and you may split it into the scratchpad
-  to read in pieces. That copy is a snapshot. Before editing code against a design doc, or after
-  any pause longer than a few minutes, re-read the doc through MCP; do not trust the scratchpad.
-- Never write back from a scratchpad copy. Edit the vault doc with `vault_edit` on the current
-  content.
-
-## Showing a doc to the user
-
-- The local Obsidian app and the Orca editor both read the disk copy, which may lag behind sync.
-  Never open a vault note with `open obsidian://…` or `orca file open`.
-- To show a doc: re-read it with `vault_read`, publish an Artifact HTML page from that content,
-  and give the link. The vault note stays the source of truth; the artifact is a view.
+A downloaded copy is a snapshot, not permission to overwrite a newer note. Re-read before
+writing after a pause or conflicting edit. Show the note through its normal link or the
+user's requested view. Publishing an additional page requires authorization; it is not a
+prerequisite for displaying a note.

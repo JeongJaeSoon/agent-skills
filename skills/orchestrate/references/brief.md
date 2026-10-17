@@ -47,11 +47,8 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             through `orch heavy <slug> -- <command>`, which caps them machine-wide.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
-            --sha <head> --source <the reviewer: codex-review, subagent-review (trivial diff only,
-            deliver-ticket §3; never in place of a Codex review that returned none),
-            claude-review:independent (Codex itself unavailable: a context-free Claude Code
-            review, deliver-ticket codex-review.md, with --note <the Codex error line>; any
-            other no-review holds the land and goes to the human), verifier:<model of another family than the worker, e.g. verifier:codex>, live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
+            or live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
@@ -141,7 +138,7 @@ APPROVED    The acts the human already approved for this unit, with their words 
             them, decide with the recommended default and report what you chose; do not ask.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED. Ask for these together, once.
-MODEL CALLS Another model (a subagent, Codex, an API) only when the task needs it; say which and
+MODEL CALLS Another model (a subagent or an API) only when the task needs it; say which and
             why before the call, and pick the model then.
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
             Waiting on a review or another outside event: the program brief's LAND sentences from
@@ -189,8 +186,10 @@ APPROVED    The acts the human already approved for this project, with their wor
             report. Copy the lines a worker's unit needs into its brief.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED. Batched into one message, sent once
-            to the session above, which puts it in front of the human (nobody reads your own
-            chat), and registered with `orch decide add`; not restated on later wakes.
+            through the established channel to the parent coordinator, which puts it before the
+            human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
+            update the decision and notify the parent when the blocker or evidence changes.
+            If no parent channel is available, report that routing gap in the current task.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
@@ -213,5 +212,5 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - Direction in CONTEXT is labelled by origin. The owner's words are quoted verbatim as the owner's; a proposal of yours, a lead's or a reviewer's is labelled as such, never as the owner's recommendation. No advice on getting an act past a prompt, the classifier or a hook, even when the layer above calls it the owner's intent ("Refused acts").
 - **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal or card you mean to give the next task needs a `KEEP` line naming that task; without one, a landed, clean card is gone by the time you read its `worker_done`.
 - Never resume-chain a brief. A retry gets a fresh brief with the consolidated scope.
-- A verifier unit on a high-blast-radius PR runs on another model family (`worker-start --agent codex`). It reports PASS, PASS+NOTES or FAIL, with what it drove.
+- A verifier unit on a high-blast-radius PR runs independently of the implementer using the configured agent. It reports PASS, PASS+NOTES or FAIL, with what it drove.
 - Feedback the user gives on in-flight work ("improve this", "do it better") becomes a new ticket and a new brief. It is never appended to the running one.

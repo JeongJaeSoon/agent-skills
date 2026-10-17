@@ -2,7 +2,7 @@
 """Inventory and reap what dead sessions left behind on this machine.
 
 Usage:
-  python3 reap.py scan [--hours N] [--kinds codex,orphan,docker,branch,worktree] [--repo PATH]... [--under PATH]
+  python3 reap.py scan [--hours N] [--kinds orphan,docker,branch,worktree] [--repo PATH]...
                        [--plan OUT.json] [--json]
   python3 reap.py reap --plan PLAN.json
   python3 reap.py load [--top N] [--json]
@@ -15,15 +15,14 @@ scan only reads. reap re-scans and acts only on the plan's targets that are stil
 same identity (pid and start time, branch tip), so nothing outside the list is touched.
 load only reads: the top CPU consumers, each classed ours-idle, ours-working, leftover or system, with the
 action for its class.
---under: the codex kind sees only brokers whose --cwd is PATH or below it (one finished card, not the machine).
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
-"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folder_days": 7,
+"load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
---parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers top-level entries of ~/Downloads and ~/Desktop
+--parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
 through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
@@ -40,12 +39,9 @@ planned reap.plan_repeat times with no reap since, retried once a day, with one 
 import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
-KINDS = ("codex", "orphan", "docker", "branch", "worktree")
-ALERT = {"codex_procs": 300, "codex_rss_mb": 4096, "orphan_procs": 5, "dangling_volumes": 50,
+KINDS = ( "orphan", "docker", "branch", "worktree")
+ALERT = { "orphan_procs": 5, "dangling_volumes": 50,
          "stale_branches": 30, "stale_worktrees": 10}
-# argv[0] is node and argv[1] the broker script: a session whose prompt quotes this line is not a broker.
-BROKER = re.compile(r"^\S+ \S*/app-server-broker\.mjs serve\b")
-BROKER_CWD = re.compile(r"--cwd (.+?)(?= --[a-z][a-z-]*|$)")
 SCRATCH = re.compile(r"/claude-\d+/([^/]+)/([0-9a-f-]{36})/scratchpad/")
 ENV = {**os.environ, "LC_ALL": "C"}
 
@@ -152,34 +148,6 @@ def is_claude(cmd):
     """The native binary, or an npm install run as `node …/@anthropic-ai/claude-code/cli.js`."""
     argv = cmd.split()[:2]
     return bool(argv) and (os.path.basename(argv[0]) == "claude" or "/@anthropic-ai/claude-code/" in argv[-1])
-
-
-def judge_brokers(rows, cwd_of, hours, exists=os.path.isdir, root=None):
-    claude = {pid: real(c) for pid, c in (cwd_of or {}).items() if pid in rows and is_claude(rows[pid]["cmd"])}
-    # An own claude with no cwd on record could be the one using any broker.
-    blind = cwd_of is None or any(is_claude(r["cmd"]) and r.get("uid", os.getuid()) == os.getuid() and pid not in cwd_of
-                                  for pid, r in rows.items())
-    out = []
-    for r in rows.values():
-        if not BROKER.match(r["cmd"]):
-            continue
-        m = BROKER_CWD.search(r["cmd"])
-        cwd = m.group(1) if m else None
-        if root and not (cwd and under(cwd, root)):
-            continue
-        live = [pid for pid, c in claude.items() if cwd and under(c, real(cwd))]
-        if live:
-            why, target = f"cwd에 살아 있는 claude(pid {live[0]})", False
-        elif blind:
-            why, target = "claude 의 cwd 를 모두 읽지 못함", False
-        elif not cwd or not exists(cwd):
-            why, target = "cwd 없음", True
-        elif r["age"] < hours * 3600:
-            why, target = f"{hours}시간 미만", False
-        else:
-            why, target = "cwd에 claude 없음", True
-        out.append(proc_item("codex", r, rows, name=cwd or "?", why=why, target=target))
-    return out
 
 
 def judge_orphans(rows, prefixes, hours):
@@ -398,12 +366,10 @@ def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, orca=frozenset(), 
     return {**base, "why": why, "target": False, "age": idle}
 
 
-def scan(kinds, hours, cfg, repo_list, root=None):
+def scan(kinds, hours, cfg, repo_list):
     notes, items = [], []
-    rows = processes() if {"codex", "orphan"} & kinds else {}
-    cwd_of = cwds() if {"codex", "worktree"} & kinds else {}
-    if "codex" in kinds:
-        items += judge_brokers(rows, cwd_of, hours, root=root)
+    rows = processes() if "orphan" in kinds else {}
+    cwd_of = cwds() if "worktree" in kinds else {}
     if "orphan" in kinds:
         if not cfg.get("orphan_paths"):
             notes.append(f"orphan: {CONFIG} 의 reap.orphan_paths 가 비어 있어 건너뜀")
@@ -430,7 +396,11 @@ def scan(kinds, hours, cfg, repo_list, root=None):
         days = user_folder_days(cfg, notes)
         shot_days = days and user_folder_days(cfg, notes, "user_folder_screenshot_days", 1,
                                               f"스크린샷도 {days:g}일 기준")
-        items += user_folder_scan(days, notes, shot_days) if days else []
+        folders = cfg.get("user_folders")
+        if not isinstance(folders, list) or not folders or not all(isinstance(f, str) and f.strip() for f in folders):
+            notes.append("user-folder: reap.user_folders is unset or invalid; skipped")
+        elif days:
+            items += user_folder_scan(days, notes, shot_days, folders=folders)
         if not os.environ.get("AGENT_SKILLS_TRASH") and trash_auto_empty():
             for i in items:
                 if i["kind"] == "user-folder" and i["target"]:
@@ -932,7 +902,7 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
     return items
 
 
-USER_FOLDERS = ("~/Downloads", "~/Desktop")
+USER_FOLDERS = ()  # Explicit reap.user_folders configuration opts into personal-folder cleanup.
 PARTIAL = (".download", ".crdownload", ".part")
 # The automation runs every 3 hours; 21 keeps a daily sweep from slipping a slot each day.
 USER_FOLDER_EVERY = 21 * 3600
@@ -1328,7 +1298,7 @@ def transcript_quiet(projects_dir, now):
 def load_report(cfg, top):
     rows, cwd_of = processes(), cwds()
     hours = float(cfg.get("hours") or 6)
-    leftovers = {i["pid"] for i in judge_brokers(rows, cwd_of, hours) + judge_orphans(rows, cfg.get("orphan_paths") or [], hours)
+    leftovers = {i["pid"] for i in judge_orphans(rows, cfg.get("orphan_paths") or [], hours)
                  if i["target"]}
     projects_dir = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     items = judge_load(rows, cwd_of or {}, leftovers, transcript_quiet(projects_dir, time.time()),
@@ -1359,10 +1329,7 @@ def print_load(data):
 
 
 def alerts(items, limits):
-    codex = [i for i in items if i["kind"] == "codex"]
-    got = {"codex_procs": sum(i["procs"] for i in codex),
-           "codex_rss_mb": sum(i["rss"] for i in codex) // 2**20,
-           "orphan_procs": sum(i["procs"] for i in items if i["kind"] == "orphan"),
+    got = {"orphan_procs": sum(i["procs"] for i in items if i["kind"] == "orphan"),
            "dangling_volumes": sum(1 for i in items if i["key"].startswith("volume:")),
            "stale_branches": sum(1 for i in items if i["kind"] == "branch" and i["target"]),
            "stale_worktrees": sum(1 for i in items if i["kind"] == "worktree" and i["target"])}
@@ -1520,6 +1487,15 @@ def act(item, notes):
 
 
 def main():
+    if any(a == "--under" or a.startswith("--under=") for a in sys.argv):
+        sys.exit("--under is no longer supported; use an explicit plan and supported scope options")
+    if any(a.startswith("--kinds=") for a in sys.argv):
+        sys.exit("use --kinds VALUE with supported kinds; --kinds=VALUE is not supported")
+    if "--kinds" in sys.argv:
+        requested = opt("--kinds") if sys.argv.index("--kinds") + 1 < len(sys.argv) else None
+        if not requested or set(requested.split(",")) - set(KINDS + SCHEDULED + ("janitor",)):
+            sys.exit("--kinds requires a comma-separated list of supported kinds: " +
+                     ",".join(dict.fromkeys(KINDS + SCHEDULED + ("janitor",))))
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     cfg = config()
     if cmd == "reap":
@@ -1606,8 +1582,7 @@ def main():
     hours = float(opt("--hours") or cfg.get("hours") or 6)
     repo_list = repos([a for i, a in enumerate(sys.argv) if i and sys.argv[i - 1] == "--repo"]) \
         if {"branch", "worktree", "orca-worktree", "done-card"} & kinds else []
-    root = opt("--under")
-    items, notes = scan(kinds, hours, cfg, repo_list, root=root and real(root).rstrip("/"))
+    items, notes = scan(kinds, hours, cfg, repo_list)
     notes = pre_notes + notes
     msgs, totals = alerts(items, {**ALERT, **(cfg.get("alert") or {})})
     if trash_auto_empty():
