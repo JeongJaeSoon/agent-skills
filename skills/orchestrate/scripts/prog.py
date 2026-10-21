@@ -616,16 +616,16 @@ def patch_id(repo, pr):
 
 
 def local_diff(repo, pr, gh_err):
-    """#pr's merge-base diff from a cached partial clone, flagged to match GitHub's: renames on, myers."""
+    """#pr's merge-base diff from a cached clone, flagged to match GitHub's: renames on, myers."""
     v = pr_view(repo, pr)
     g = GIT_CACHE / f"{repo.replace('/', '__')}.git"
-    # No global or system config: diff.context, diff.noprefix and the like would change the id.
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    # The diff runs offline without user config (diff.context, diff.noprefix and the like change the id);
+    # fetch keeps it for proxies and CAs, and the gh helper authenticates private repos.
+    offline = {**{k: x for k, x in os.environ.items() if not k.startswith("GIT_CONFIG")},
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_LAZY_FETCH": "1"}
 
-    def git(*a, check=True):
-        # The gh helper authenticates private repos and the lazy blob fetches inside diff.
-        r = subprocess.run(["git", "-C", str(g), "-c", "credential.helper=!gh auth git-credential", *a],
-                           capture_output=True, text=True, env=env)
+    def git(*a, check=True, env=None):
+        r = subprocess.run(["git", "-C", str(g), *a], capture_output=True, text=True, env=env)
         if check and r.returncode != 0:
             sys.exit(f"#{pr}: no patch-id: gh pr diff failed ({gh_err}) and git {a[0]} failed too: {r.stderr.strip()[:400]}")
         return r
@@ -638,11 +638,11 @@ def local_diff(repo, pr, gh_err):
         git("init", "-q", "--bare")
         if git("remote", "get-url", "origin", check=False).returncode != 0:
             git("remote", "add", "origin", f"https://{os.environ.get('GH_HOST', 'github.com')}/{repo}")
-        git("fetch", "-q", "--filter=blob:none", "origin", f"+refs/heads/{v['baseRefName']}:refs/base/{v['baseRefName']}",
-            f"+refs/pull/{pr}/head:refs/pull/{pr}")
-        mb = git("merge-base", f"refs/base/{v['baseRefName']}", v["headRefOid"]).stdout.strip()
+        git("-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "fetch", "-q", "origin",
+            f"+refs/heads/{v['baseRefName']}:refs/base/{v['baseRefName']}", f"+refs/pull/{pr}/head:refs/pull/{pr}")
+        mb = git("merge-base", f"refs/base/{v['baseRefName']}", v["headRefOid"], env=offline).stdout.strip()
         return git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--diff-algorithm=myers",
-                   "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"]).stdout
+                   "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"], env=offline).stdout
 
 
 def pr_view(repo, pr):

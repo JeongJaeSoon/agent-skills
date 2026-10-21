@@ -782,13 +782,19 @@ try:
     via_gh = prog.patch_id("acme/app", 5)
     prog.run = gh_diff_says(1, err="HTTP 406: Sorry, the diff exceeded the maximum number of files (300)")
     assert prog.patch_id("acme/app", 5) == via_gh, "the local fallback must give the id a verdict recorded through gh"
-    hostile = pathlib.Path(tempfile.mkdtemp()) / "gitconfig"
-    hostile.write_text("[diff]\n\tcontext = 0\n\talgorithm = histogram\n\trenames = false\n\tnoprefix = true\n")
-    os.environ["GIT_CONFIG_GLOBAL"] = str(hostile)
+    home = pathlib.Path(tempfile.mkdtemp())
+    (home / ".gitconfig").write_text("[diff]\n\tcontext = 0\n\talgorithm = histogram\n\trenames = false\n\tnoprefix = true\n")
+    injected = {"HOME": str(home), "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "diff.context", "GIT_CONFIG_VALUE_0": "0"}
+    saved = {k: os.environ.get(k) for k in injected}
+    os.environ.update(injected)
     try:
         assert prog.patch_id("acme/app", 5) == via_gh, "the user's diff config must not change the fallback's id"
     finally:
-        del os.environ["GIT_CONFIG_GLOBAL"]
+        for k, x in saved.items():
+            if x is None:
+                del os.environ[k]
+            else:
+                os.environ[k] = x
     sgit("update-ref", "-d", "refs/pull/5/head")
     try:
         prog.patch_id("acme/app", 5)
