@@ -1239,9 +1239,10 @@ def update_advice(unit, repo):
             + " (tell the lower layers' owners)")
 
 
-def merge_unit(p, pr, unit, klass, events, onto=None):
+def merge_unit(p, pr, unit, klass, events, onto=None, stacked=False):
     """Merge a PR (or a stack from its top) after re-checking every layer at its current head.
-    `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet."""
+    `onto`: the lower PR whose branch a `--onto-lower` fold merges into; its ticket has not landed yet.
+    `stacked`: the PR is in a GitHub stack, also when it lands alone as a lower layer."""
     repo, states, runs = p.cfg["repo"], pr_state(events), []
     for n in unit:
         v = pr_view(repo, n)
@@ -1255,14 +1256,15 @@ def merge_unit(p, pr, unit, klass, events, onto=None):
         if unfinished := runs_unfinished(repo, v["headRefOid"]):
             return 2, f"yield: CI has not finished at #{n}'s head ({', '.join(unfinished[:3])}); land again"
     head = v["headRefOid"]
-    if len(unit) == 1:
+    use_async = stacked or len(unit) > 1
+    if not use_async:
         r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash", "--match-head-commit", head], check=False)
     else:
-        # A stacked PR refuses `gh pr merge`; merge-async on the top lands it and every layer below.
+        # A stacked PR refuses `gh pr merge`; merge-async on a layer lands it and every layer below, not above.
         r = run(["gh", "api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge-async",
                  "-f", "merge_method=squash", "-f", f"sha={head}"], check=False)
     merged = {}
-    for _ in range(90 if len(unit) > 1 else 1):
+    for _ in range(90 if use_async else 1):
         merged = {n: pr_view(repo, n) for n in unit}
         if all(x["state"] == "MERGED" for x in merged.values()) or r.returncode != 0:
             break
@@ -1317,8 +1319,9 @@ def attempt(p, pr, klass, onto_lower=False):
     if main == "red" and klass != "main-fix":
         return 1, "safety stop: main is red; only the repair lands (--class main-fix)"
     rows = open_rows(repo)
-    order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), repo_stacks(repo),
-                       orca_deps(cfg["run"]))
+    stacks = repo_stacks(repo)
+    order = land_order(events, rows, cfg, dt.datetime.now(dt.timezone.utc), stacks, orca_deps(cfg["run"]))
+    stacked = any(pr in members for members in stacks.values())
     me = next((e for e in order if e["pr"] == pr), None)
     tracked = pr_state(events)  # an integration branch's own PR (feature → main) is never landed through orch
     below = next((r for r in rows if me and not me["stack"] and r.get("headRefName") == me.get("base")
@@ -1386,7 +1389,7 @@ def attempt(p, pr, klass, onto_lower=False):
         if compare(repo, me["base"] or "main", pr_view(repo, pr)["headRefOid"]).get("behind_by"):
             return 3, (f"act: you hold the exclusive lane and it lands on the latest base only: {update_advice(unit, repo)},"
                        " let CI run, land again." + KEEP)
-        code, msg = merge_unit(p, pr, unit, klass, events, onto)
+        code, msg = merge_unit(p, pr, unit, klass, events, onto, stacked)
         if code == 0:
             lane.release(pr)
         return code, msg
@@ -1402,7 +1405,7 @@ def attempt(p, pr, klass, onto_lower=False):
         return 3, (f"act: since your branch point the base changed files you also change ({', '.join(overlap[:5])}):"
                    f" {update_advice(unit, repo)}, check your contract and test assumptions still hold,"
                    " let CI run, land again." + KEEP)
-    return merge_unit(p, pr, unit, klass, events, onto)
+    return merge_unit(p, pr, unit, klass, events, onto, stacked)
 
 
 def cmd_land(argv):

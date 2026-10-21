@@ -218,6 +218,23 @@ code, out = prog(env, "land", "t", "--pr", "7")
 assert code == 0 and "already landed" in out, out
 assert len([e for e in ledger(d) if e["ev"] == "landed"]) == 2
 
+# A lower layer whose upper is outside the program lands alone, still through merge-async: gh pr merge refuses it.
+d, env = setup({"30": pr(30, stacked=True), "31": pr(31, base="b30", stacked=True)}, stacks=[[30, 31]])
+verdict(d, 30, "T-30")
+code, out = prog(env, "land", "t", "--pr", "30")
+assert code == 0 and "landed #30" in out, out
+st = json.loads((d / "state.json").read_text())
+assert [c[3] for c in st["log"]] == ["repos/o/r/pulls/30/merge-async"], st["log"]
+assert st["prs"]["31"]["state"] == "OPEN"
+landed = [e for e in ledger(d) if e["ev"] == "landed"]
+assert [e["pr"] for e in landed] == [30] and landed[0]["sha"] == "m30" and "stack_top" not in landed[0], landed
+# A PR in no stack keeps gh pr merge.
+d, env = setup({"32": pr(32), "33": pr(33)}, stacks=[[33, 34]])
+verdict(d, 32, "T-32")
+code, out = prog(env, "land", "t", "--pr", "32")
+assert code == 0 and "landed #32" in out, out
+assert [c[:2] for c in json.loads((d / "state.json").read_text())["log"]] == [["pr", "merge"]]
+
 # A behind exclusive stack is updated bottom-up: update-branch on the top only pulls the layer below.
 d, env = setup({"7": pr(7, stacked=True, files=["migrations/3.sql"]),
                 "8": pr(8, base="b7", stacked=True, files=["migrations/4.sql"], behind=1)}, stacks=[[7, 8]])
