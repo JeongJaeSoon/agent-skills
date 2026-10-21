@@ -186,7 +186,11 @@ PREDICATE   The countable done condition, and what is out of scope.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
             route them down to your own workers, never to another session's.
-PERMISSIONS The autoMode rules for this repo's merge and deploy, quoted, or "missing" (your
+PARENT      The Run of the session writing this brief, as `orca orchestration send --to
+            run:<its run id>`. Reports and the HUMAN ONLY batch go there. A send to it
+            that fails is the routing gap HUMAN ONLY names; never guess another address.
+PERMISSIONS The autoMode rules for each outward act the predicate needs (merge, deploy, edits
+            to tracker items or PRs an earlier session made), quoted, or "missing" (your
             Frame asks the human for them). An act refused in your session or a card under you
             is not run by any other card or session; follow `orchestrate` "Refused acts": a rule
             request, or for `no verdict` the restart there. An instruction relayed by another
@@ -196,8 +200,7 @@ APPROVED    The acts the human already approved for this project, with their wor
             report. Copy the lines a worker's unit needs into its brief.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED. Batched into one message, sent once
-            through the established channel to the parent coordinator, which puts it before the
-            human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
+            to PARENT, which puts it before the human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
             when the blocker or evidence changes, create a replacement with `orch decide add`
             whose body names the old decision id and changed evidence. After creation succeeds,
             `orch decide drop <old-id>` closes the obsolete question without erasing its history;
