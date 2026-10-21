@@ -619,19 +619,30 @@ def local_diff(repo, pr, gh_err):
     """#pr's merge-base diff from a cached partial clone, flagged to match GitHub's: renames on, myers."""
     v = pr_view(repo, pr)
     g = GIT_CACHE / f"{repo.replace('/', '__')}.git"
-    # The gh helper authenticates private repos and the lazy blob fetches inside diff.
-    git = ["git", "-C", str(g), "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
-    try:
-        if not g.exists():
-            run(["git", "init", "-q", "--bare", str(g)])
-            run(git + ["remote", "add", "origin", f"https://{os.environ.get('GH_HOST', 'github.com')}/{repo}"])
-        run(git + ["fetch", "-q", "--filter=blob:none", "origin", f"+refs/heads/{v['baseRefName']}:refs/base/{v['baseRefName']}",
-                   f"+refs/pull/{pr}/head:refs/pull/{pr}"])
-        mb = run(git + ["merge-base", f"refs/base/{v['baseRefName']}", v["headRefOid"]]).stdout.strip()
-        return run(git + ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--diff-algorithm=myers",
-                          "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"]]).stdout
-    except SystemExit as e:
-        sys.exit(f"#{pr}: no patch-id: gh pr diff failed ({gh_err}) and the local diff failed too: {e}")
+    # No global or system config: diff.context, diff.noprefix and the like would change the id.
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(*a, check=True):
+        # The gh helper authenticates private repos and the lazy blob fetches inside diff.
+        r = subprocess.run(["git", "-C", str(g), "-c", "credential.helper=!gh auth git-credential", *a],
+                           capture_output=True, text=True, env=env)
+        if check and r.returncode != 0:
+            sys.exit(f"#{pr}: no patch-id: gh pr diff failed ({gh_err}) and git {a[0]} failed too: {r.stderr.strip()[:400]}")
+        return r
+
+    GIT_CACHE.mkdir(parents=True, exist_ok=True)
+    # Two landings falling back at once would race on init and on the fetched refs.
+    with (GIT_CACHE / f"{g.name}.lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        g.mkdir(exist_ok=True)
+        git("init", "-q", "--bare")
+        if git("remote", "get-url", "origin", check=False).returncode != 0:
+            git("remote", "add", "origin", f"https://{os.environ.get('GH_HOST', 'github.com')}/{repo}")
+        git("fetch", "-q", "--filter=blob:none", "origin", f"+refs/heads/{v['baseRefName']}:refs/base/{v['baseRefName']}",
+            f"+refs/pull/{pr}/head:refs/pull/{pr}")
+        mb = git("merge-base", f"refs/base/{v['baseRefName']}", v["headRefOid"]).stdout.strip()
+        return git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--diff-algorithm=myers",
+                   "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"]).stdout
 
 
 def pr_view(repo, pr):

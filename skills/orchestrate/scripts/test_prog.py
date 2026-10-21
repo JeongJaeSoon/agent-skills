@@ -748,6 +748,7 @@ assert prog.skills_version(g) == head + "+local", "a pushed feature branch with 
 print("prog.py skills commit: all pass")
 
 # --- patch-id survives a PR too large for gh pr diff -----------------------------------------
+import os
 src = pathlib.Path(tempfile.mkdtemp(prefix="test-pid-src-"))
 sgit = lambda *a: subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t", *a],
                                  capture_output=True, text=True, check=True).stdout.strip()
@@ -781,6 +782,13 @@ try:
     via_gh = prog.patch_id("acme/app", 5)
     prog.run = gh_diff_says(1, err="HTTP 406: Sorry, the diff exceeded the maximum number of files (300)")
     assert prog.patch_id("acme/app", 5) == via_gh, "the local fallback must give the id a verdict recorded through gh"
+    hostile = pathlib.Path(tempfile.mkdtemp()) / "gitconfig"
+    hostile.write_text("[diff]\n\tcontext = 0\n\talgorithm = histogram\n\trenames = false\n\tnoprefix = true\n")
+    os.environ["GIT_CONFIG_GLOBAL"] = str(hostile)
+    try:
+        assert prog.patch_id("acme/app", 5) == via_gh, "the user's diff config must not change the fallback's id"
+    finally:
+        del os.environ["GIT_CONFIG_GLOBAL"]
     sgit("update-ref", "-d", "refs/pull/5/head")
     try:
         prog.patch_id("acme/app", 5)
