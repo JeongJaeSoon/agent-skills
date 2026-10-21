@@ -110,10 +110,14 @@ it), then pick the row:
 
 | State | The turn's last calls |
 |---|---|
-| Outcome `succeeded`; `isMainWorktree: false` and §4's Remove row holds (clean tree, the work on `origin/main`, no open PR); no other agent terminal on the card; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done`, then `orca worktree rm --worktree current --json` (`--run-hooks` per §4). The card's terminals, the setup one included, go with it. |
-| The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done`, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
+| Outcome `succeeded`; `isMainWorktree: false` and §4's Remove row holds (clean tree, the work on `origin/main`, no open PR); no other agent terminal on the card; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca worktree rm --worktree current --json` (`--run-hooks` per §4). The card's terminals, the setup one included, go with it. |
+| The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
 | Anything else: outcome `failed` (the coordinator retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
 
+- **The close waits for the send.** Calls in one message run together, so a `worker_done` and a
+  `worktree rm` sent side by side remove the card even when a hook refused the send, and the
+  report never arrives. A send refused only on its body text is reworded in the same command;
+  after any other refusal the card and this session stay, idle, for the coordinator to find.
 - **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
   not Orca, often refuses `orca worktree rm` as irreversible. Do not run it again in any form:
   not in smaller pieces, not through another tool or a script, not through a subagent. Fall back
