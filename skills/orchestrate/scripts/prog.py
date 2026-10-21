@@ -120,6 +120,7 @@ import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, os, pat
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
+GIT_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "agent-skills" / "orchestrate" / "git"
 PASSING = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 ACTIONABLE = {"worker_done", "escalation", "question"}
 # GitHub or network hiccups that a later land pass gets past; attempt() rereads PR state, so a merge that went
@@ -603,10 +604,49 @@ def repo_stacks(repo):
 
 
 def patch_id(repo, pr):
-    diff = run(["gh", "pr", "diff", str(pr), "--repo", repo]).stdout
+    r = run(["gh", "pr", "diff", str(pr), "--repo", repo], check=False)
+    # gh refuses a PR over 300 files (HTTP 406); the local diff reproduces GitHub's, so a verdict's id still matches.
+    diff = r.stdout if r.returncode == 0 else local_diff(repo, pr, r.stderr.strip()[:200])
     # --verbatim: whitespace-only edits (Python indentation) must change the id and void the verdict.
-    r = subprocess.run(["git", "patch-id", "--verbatim"], input=diff, capture_output=True, text=True)
-    return (r.stdout.split() or [""])[0]
+    ids = subprocess.run(["git", "patch-id", "--verbatim"], input=diff, capture_output=True, text=True).stdout.split()
+    if not ids:
+        # An empty id equals every other empty id, so a later recheck would pass without comparing anything.
+        sys.exit(f"#{pr}: empty patch-id (no diff against its base); nothing to record or compare")
+    return ids[0]
+
+
+def local_diff(repo, pr, gh_err):
+    """#pr's merge-base diff from a cached clone, flagged to match GitHub's: renames on, myers."""
+    v = pr_view(repo, pr)
+    g = GIT_CACHE / f"{repo.replace('/', '__')}.git"
+    # The diff runs offline without user config or GIT_* variables (diff.context, GIT_DIFF_OPTS and the like
+    # change the id); fetch keeps them for proxies and CAs, minus any that would select another repository.
+    local = set(run(["git", "rev-parse", "--local-env-vars"]).stdout.split())
+    fetch_env = {k: x for k, x in os.environ.items() if k not in local}
+    offline = {**{k: x for k, x in os.environ.items() if not k.startswith("GIT_")},
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_LAZY_FETCH": "1"}
+
+    def git(*a, check=True, env=fetch_env):
+        # The gh helper authenticates private repos.
+        r = subprocess.run(["git", "-C", str(g), "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", *a],
+                           capture_output=True, text=True, env=env)
+        if check and r.returncode != 0:
+            sys.exit(f"#{pr}: no patch-id: gh pr diff failed ({gh_err}) and git {a[0]} failed too: {r.stderr.strip()[:400]}")
+        return r
+
+    GIT_CACHE.mkdir(parents=True, exist_ok=True)
+    # Two landings falling back at once would race on init and on the fetched refs.
+    with (GIT_CACHE / f"{g.name}.lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        g.mkdir(exist_ok=True)
+        git("init", "-q", "--bare")
+        if git("remote", "get-url", "origin", check=False).returncode != 0:
+            git("remote", "add", "origin", f"https://{os.environ.get('GH_HOST', 'github.com')}/{repo}")
+        git("fetch", "-q", "origin", f"+refs/heads/{v['baseRefName']}:refs/base/{v['baseRefName']}",
+            f"+refs/pull/{pr}/head:refs/pull/{pr}")
+        mb = git("merge-base", f"refs/base/{v['baseRefName']}", v["headRefOid"], env=offline).stdout.strip()
+        return git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--diff-algorithm=myers",
+                   "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"], env=offline).stdout
 
 
 def pr_view(repo, pr):

@@ -746,3 +746,69 @@ head = git("rev-parse", "--short", "HEAD")
 assert prog.skills_version(g) == head + "+local", "a pushed feature branch with edits records its own head"
 
 print("prog.py skills commit: all pass")
+
+# --- patch-id survives a PR too large for gh pr diff -----------------------------------------
+import os
+src = pathlib.Path(tempfile.mkdtemp(prefix="test-pid-src-"))
+sgit = lambda *a: subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+sgit("init", "-q", "-b", "main")
+(src / "a.py").write_text("def f():\n    return 1\n"); (src / "old.txt").write_text("keep\n" * 20)
+sgit("add", "."); sgit("commit", "-q", "-m", "base")
+sgit("checkout", "-q", "-b", "feat")
+(src / "a.py").write_text("def f():\n    return 2\n"); sgit("mv", "old.txt", "new.txt")
+sgit("commit", "-qam", "feat")
+head = sgit("rev-parse", "HEAD")
+sgit("update-ref", "refs/pull/5/head", head)
+sgit("checkout", "-q", "main"); (src / "b.txt").write_text("base moved\n"); sgit("add", "."); sgit("commit", "-q", "-m", "later")
+# What GitHub serves for the PR: the merge-base diff with renames, myers.
+gh_diff = sgit("diff", "-M", "--diff-algorithm=myers", "main...feat") + "\n"
+
+prog.GIT_CACHE = pathlib.Path(tempfile.mkdtemp(prefix="test-pid-cache-"))
+cache = prog.GIT_CACHE / "acme__app.git"
+subprocess.run(["git", "init", "-q", "--bare", str(cache)], check=True)
+subprocess.run(["git", "-C", str(cache), "remote", "add", "origin", str(src)], check=True)
+
+real_run, real_view = prog.run, prog.pr_view
+def gh_diff_says(code, out="", err=""):
+    def fake(cmd, check=True):
+        if cmd[:3] == ["gh", "pr", "diff"]:
+            return types.SimpleNamespace(returncode=code, stdout=out, stderr=err)
+        return real_run(cmd, check)
+    return fake
+prog.pr_view = lambda repo, n: {"baseRefName": "main", "headRefOid": head}
+try:
+    prog.run = gh_diff_says(0, gh_diff)
+    via_gh = prog.patch_id("acme/app", 5)
+    prog.run = gh_diff_says(1, err="HTTP 406: Sorry, the diff exceeded the maximum number of files (300)")
+    assert prog.patch_id("acme/app", 5) == via_gh, "the local fallback must give the id a verdict recorded through gh"
+    home = pathlib.Path(tempfile.mkdtemp())
+    (home / ".gitconfig").write_text("[diff]\n\tcontext = 0\n\talgorithm = histogram\n\trenames = false\n\tnoprefix = true\n")
+    injected = {"HOME": str(home), "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "diff.context", "GIT_CONFIG_VALUE_0": "0",
+                "GIT_DIFF_OPTS": "--unified=0", "GIT_DIR": str(src / ".git")}
+    saved = {k: os.environ.get(k) for k in injected}
+    os.environ.update(injected)
+    try:
+        assert prog.patch_id("acme/app", 5) == via_gh, "the user's diff config must not change the fallback's id"
+    finally:
+        for k, x in saved.items():
+            if x is None:
+                del os.environ[k]
+            else:
+                os.environ[k] = x
+    sgit("update-ref", "-d", "refs/pull/5/head")
+    try:
+        prog.patch_id("acme/app", 5)
+        raise AssertionError("both paths failed but a patch-id came back")
+    except SystemExit as e:
+        assert "406" in str(e), e
+    prog.run = gh_diff_says(0, "")
+    try:
+        prog.patch_id("acme/app", 5)
+        raise AssertionError("an empty diff gave a patch-id; an empty id would match any verdict recorded the same way")
+    except SystemExit as e:
+        assert "empty" in str(e), e
+finally:
+    prog.run, prog.pr_view = real_run, real_view
+
+print("prog.py patch-id fallback: all pass")
