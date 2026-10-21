@@ -784,7 +784,8 @@ try:
     assert prog.patch_id("acme/app", 5) == via_gh, "the local fallback must give the id a verdict recorded through gh"
     home = pathlib.Path(tempfile.mkdtemp())
     (home / ".gitconfig").write_text("[diff]\n\tcontext = 0\n\talgorithm = histogram\n\trenames = false\n\tnoprefix = true\n")
-    injected = {"HOME": str(home), "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "diff.context", "GIT_CONFIG_VALUE_0": "0"}
+    injected = {"HOME": str(home), "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "diff.context", "GIT_CONFIG_VALUE_0": "0",
+                "GIT_DIFF_OPTS": "--unified=0", "GIT_DIR": str(src / ".git")}
     saved = {k: os.environ.get(k) for k in injected}
     os.environ.update(injected)
     try:
