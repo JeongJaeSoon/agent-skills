@@ -120,6 +120,7 @@ import contextlib, datetime as dt, fcntl, fnmatch, hashlib, heapq, json, os, pat
 
 TRACKER = pathlib.Path(__file__).resolve().parents[2] / "use-tracker" / "scripts" / "tracker.py"
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
+GIT_CACHE = pathlib.Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "agent-skills" / "orchestrate" / "git"
 PASSING = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 ACTIONABLE = {"worker_done", "escalation", "question"}
 # GitHub or network hiccups that a later land pass gets past; attempt() rereads PR state, so a merge that went
@@ -603,10 +604,34 @@ def repo_stacks(repo):
 
 
 def patch_id(repo, pr):
-    diff = run(["gh", "pr", "diff", str(pr), "--repo", repo]).stdout
+    r = run(["gh", "pr", "diff", str(pr), "--repo", repo], check=False)
+    # gh refuses a PR over 300 files (HTTP 406); the local diff reproduces GitHub's, so a verdict's id still matches.
+    diff = r.stdout if r.returncode == 0 else local_diff(repo, pr, r.stderr.strip()[:200])
     # --verbatim: whitespace-only edits (Python indentation) must change the id and void the verdict.
-    r = subprocess.run(["git", "patch-id", "--verbatim"], input=diff, capture_output=True, text=True)
-    return (r.stdout.split() or [""])[0]
+    ids = subprocess.run(["git", "patch-id", "--verbatim"], input=diff, capture_output=True, text=True).stdout.split()
+    if not ids:
+        # An empty id equals every other empty id, so a later recheck would pass without comparing anything.
+        sys.exit(f"#{pr}: empty patch-id (no diff against its base); nothing to record or compare")
+    return ids[0]
+
+
+def local_diff(repo, pr, gh_err):
+    """#pr's merge-base diff from a cached partial clone, flagged to match GitHub's: renames on, myers."""
+    v = pr_view(repo, pr)
+    g = GIT_CACHE / f"{repo.replace('/', '__')}.git"
+    # The gh helper authenticates private repos and the lazy blob fetches inside diff.
+    git = ["git", "-C", str(g), "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
+    try:
+        if not g.exists():
+            run(["git", "init", "-q", "--bare", str(g)])
+            run(git + ["remote", "add", "origin", f"https://{os.environ.get('GH_HOST', 'github.com')}/{repo}"])
+        run(git + ["fetch", "-q", "--filter=blob:none", "origin", f"+refs/heads/{v['baseRefName']}:refs/base/{v['baseRefName']}",
+                   f"+refs/pull/{pr}/head:refs/pull/{pr}"])
+        mb = run(git + ["merge-base", f"refs/base/{v['baseRefName']}", v["headRefOid"]]).stdout.strip()
+        return run(git + ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--diff-algorithm=myers",
+                          "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"]]).stdout
+    except SystemExit as e:
+        sys.exit(f"#{pr}: no patch-id: gh pr diff failed ({gh_err}) and the local diff failed too: {e}")
 
 
 def pr_view(repo, pr):
