@@ -29,7 +29,7 @@ autoMode는 사용자 설정(`~/.claude/settings.json`)과 조직 관리 설정�
 ## 절차
 
 1. **거부를 적는다.** 거부 메시지의 카테고리(예: "Interfere With Workloads")와 거부된 명령이나 행동을 원문 그대로. 사용자 요청에서 시작했다면 사용자가 허용하려는 행동을 한 문장으로.
-2. **지금 규칙을 읽는다.** `claude auto-mode config`(적용 중인 규칙)와 `claude auto-mode defaults`(기본 규칙). 거부를 일으킨 기본 soft_deny 문구를 찾는다. 이미 비슷한 사용자 규칙이 있으면 새로 추가하지 않고 그 규칙을 `replace`로 고친다.
+2. **지금 규칙을 읽는다.** `claude auto-mode config`(적용 중인 규칙)와 `claude auto-mode defaults`(기본 규칙). 거부를 일으킨 기본 soft_deny 문구를 찾는다. 이미 비슷한 사용자 규칙이 있으면 새로 추가하지 않고 그 규칙을 `replace`로 고친다. 같은 행동을 다루는 규칙이 여럿이면 하나를 합친 문구로 `replace`하고 나머지는 `remove`로 지운다. 합친 문구에는 지우는 규칙들의 조건과 `Not covered:`를 하나도 빠뜨리지 않는다.
 3. **섹션을 고른다.**
    - `allow`: 기본 soft_deny에 걸리는 행동 중 이 조건에서는 괜찮은 것.
    - `soft_deny`: 새로 막아야 할 행동. 사용자 의도가 명확하면 풀릴 수 있다.
@@ -47,7 +47,8 @@ autoMode는 사용자 설정(`~/.claude/settings.json`)과 조직 관리 설정�
 
    ```json
    {"add": {"allow": ["<규칙>"]},
-    "replace": [{"section": "allow", "old": "<지금 문구 그대로>", "new": "<고친 문구>"}]}
+    "replace": [{"section": "allow", "old": "<지금 문구 그대로>", "new": "<고친 문구>"}],
+    "remove": [{"section": "allow", "rule": "<지울 문구 그대로>"}]}
    ```
 
    ```bash
@@ -63,7 +64,7 @@ autoMode는 사용자 설정(`~/.claude/settings.json`)과 조직 관리 설정�
 
    `--apply`에 붙는 해시는 사용자가 본 diff의 spec을 가리킨다. emit 뒤에 스크립트의 spec이 바뀌면 해시가 맞지 않아 적용되지 않는다. 규칙을 고쳤으면 다시 emit하고 새 diff와 새 줄을 보여 준다. `--out`은 설정 디렉터리(`~/.claude` 또는 `CLAUDE_CONFIG_DIR`) 밖이어야 한다.
 
-   스크립트는 설정 파일의 JSON을 먼저 검사하고, `settings.json.bak-automode-<시각>`으로 백업하고, 규칙을 병합하고(같은 문구는 건너뛰어 두 번 돌려도 같다), 원자적으로 교체한 뒤 다시 읽어 확인하고, diff와 백업 경로, 되돌리는 명령을 출력한다. 설정 파일이 올바른 JSON이 아니거나 `replace`의 `old`를 찾지 못하면 아무것도 쓰지 않고 거부한다. 파일 전체를 들여쓰기 2칸으로 다시 쓰므로 autoMode 밖의 서식(들여쓰기, 숫자 표기)이 바뀔 수 있다. 값은 바뀌지 않는다. `$defaults`는 추가·교체·삭제할 수 없고, 새로 만드는 섹션은 `$defaults`로 시작한다(빠지면 기본 규칙 전체가 사라진다).
+   스크립트는 설정 파일의 JSON을 먼저 검사하고, `settings.json.bak-automode-<시각>`으로 백업하고, 규칙을 병합하고(같은 문구는 건너뛰어 두 번 돌려도 같다), 원자적으로 교체한 뒤 다시 읽어 확인하고, diff와 백업 경로, 되돌리는 명령을 출력한다. 설정 파일이 올바른 JSON이 아니거나 `replace`의 `old`나 `remove`의 문구를 찾지 못하면 아무것도 쓰지 않고 거부한다. 그래서 `remove`가 든 spec은 두 번째 실행에서 거부된다. 이미 적용된 것이고 바뀌는 것은 없다. 파일 전체를 들여쓰기 2칸으로 다시 쓰므로 autoMode 밖의 서식(들여쓰기, 숫자 표기)이 바뀔 수 있다. 값은 바뀌지 않는다. `$defaults`는 추가·교체·삭제할 수 없고, 새로 만드는 섹션은 `$defaults`로 시작한다(빠지면 기본 규칙 전체가 사라진다).
 8. **적용 뒤.** 사용자가 `claude auto-mode config`로 규칙이 들어갔는지 확인하고, 원하면 `claude auto-mode critique`로 피드백을 받는다. 실행 중인 세션에는 새 규칙이 바로 반영되지 않을 수 있으니, 같은 거부가 다시 나오면 세션을 다시 시작한다. 그 뒤에 원래 행동을 한 번 다시 시도한다.
 
 ## 되돌리기
