@@ -28,7 +28,7 @@ The prose that ships alongside the type sketch. One page. Sentence-case headings
 
 ## Decisions and risks
 
-*Numbered decisions, each a fork that changes what gets built, two to five at most. For each: the question, which claim or part of the Shape it changes, 2 to 4 options with the recommended default marked (the sketch already assumes it), what disappears from the design if another option wins, and whether it is hard to reverse. Rules for placing and answering them are in [`plan-page.md`](plan-page.md). Then the risks worth flagging before implementation starts.*
+*Numbered decisions, each a fork that changes what gets built, at most five, none when the constraints forced the shape. For each: the question, which claim or part of the Shape it changes, 2 to 4 options with the recommended default marked (the sketch already assumes it), what disappears from the design if another option wins, and whether it is hard to reverse. Rules for placing and answering them are in [`plan-page.md`](plan-page.md). Then the risks worth flagging before implementation starts.*
 
 ## Next implementation step
 
