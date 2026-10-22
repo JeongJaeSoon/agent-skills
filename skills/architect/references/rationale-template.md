@@ -26,9 +26,9 @@ The prose that ships alongside the type sketch. One page. Sentence-case headings
 
 *Required. Name at least one concrete alternative shape, with one line on why it lost. Judge each alternative on interface depth, not implementation simplicity alone. Name the complexity it exposes to callers and the complexity it hides. Two or three alternatives belong here when the design space had real contenders. One is fine when the constraints forced the answer, with the conclusion phrased as "this was the only viable shape because..." Avoid listing flavors of the same shape. This section covers design alternatives the chosen shape considered and rejected, not other runner candidates.*
 
-## Open questions and risks
+## Decisions and risks
 
-*Things you noticed during the sketch that the human needs to weigh in on, and risks worth flagging before implementation starts. Phrase as questions, not assertions, so the human's answer is the resolution rather than a comment.*
+*Numbered decisions, each a fork that changes what gets built, two to five at most. For each: the question, which claim or part of the Shape it changes, 2 to 4 options with the recommended default marked (the sketch already assumes it), what disappears from the design if another option wins, and whether it is hard to reverse. Rules for placing and answering them are in [`plan-page.md`](plan-page.md). Then the risks worth flagging before implementation starts.*
 
 ## Next implementation step
 

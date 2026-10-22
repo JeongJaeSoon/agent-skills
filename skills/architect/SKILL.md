@@ -33,7 +33,7 @@ Arena returns one synthesized design package. Its synthesis decision fills the r
 
 ## Phase C: Agree (opt-in)
 
-Default: proceed directly to implementation with the synthesized design. No human checkpoint.
+Default: proceed directly to implementation with the synthesized design. No human checkpoint. Publish the plan page per [`references/plan-page.md`](references/plan-page.md), give its link with the numbered decisions and their defaults, and implement on the defaults. An unanswered decision is not agreement: that file says which ones to ask again and how to treat the answers.
 
 Opt in to a checkpoint when the invoker explicitly asks: "/architect with checkpoint," "stop and show me before implementing," or similar. Then surface the synthesized design and pause for sign-off.
 
@@ -71,4 +71,4 @@ When you scrap:
 
 ## Outputs
 
-The caller's usage is written first and the type sketch derived from it. One file with new types and signatures for small changes. Module map plus type definitions for larger work. The rationale ships alongside, shaped per `references/rationale-template.md`, including the usage sketch and the synthesis decision.
+The caller's usage is written first and the type sketch derived from it. One file with new types and signatures for small changes. Module map plus type definitions for larger work. The rationale ships alongside, shaped per `references/rationale-template.md`, including the usage sketch, the synthesis decision and the numbered decisions, and is shown as the plan page per `references/plan-page.md`.
