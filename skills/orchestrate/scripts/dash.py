@@ -1470,9 +1470,21 @@ def check_code():
         return
     settled = disk == HEALTH.get("disk_version")  # same on two checks: a checkout is not still writing files
     HEALTH.update(disk_version=disk, stale=disk != HEALTH.get("version"))
-    if HEALTH["stale"] and settled and under_agent():
+    if HEALTH["stale"] and settled and under_agent() and HEALTH.get("broken") != disk:
+        if not loads():  # keep serving the old code with its stale banner rather than crash-loop on a bad commit
+            HEALTH["broken"] = disk
+            log(f"code on disk ({disk}) does not import; still serving {HEALTH['version']}")
+            return
         log(f"code on disk changed ({HEALTH['version']} -> {disk}); exiting so launchd starts the new code")
         restart()
+
+
+def loads():
+    try:
+        return subprocess.run([sys.executable, "-c", "import dash"], cwd=HERE, capture_output=True,
+                              timeout=60).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def restart():
@@ -1598,20 +1610,20 @@ def agent_status():
     """{"pid": int | None, "port": int} of the loaded LaunchAgent that serves this store, else None."""
     if sys.platform != "darwin" or not agent_plist().exists():
         return None
-    try:
+    try:  # a hand-edited plist must not break every `orch status`: treat it as no agent
         spec = plistlib.loads(agent_plist().read_bytes())
-    except (OSError, plistlib.InvalidFileException):
+        store = (spec.get("EnvironmentVariables") or {}).get("PROGRAMS_HOME", "~/.claude/programs")
+        args = spec.get("ProgramArguments") or []
+        port = int(args[args.index("--port") + 1]) if "--port" in args else 4780
+        if pathlib.Path(store).expanduser().resolve() != home().resolve():
+            return None
+        p = subprocess.run(["launchctl", "print", agent_target()], capture_output=True, text=True)
+    except Exception:
         return None
-    store = (spec.get("EnvironmentVariables") or {}).get("PROGRAMS_HOME", "~/.claude/programs")
-    if pathlib.Path(store).expanduser() != home():
-        return None
-    p = subprocess.run(["launchctl", "print", agent_target()], capture_output=True, text=True)
     if p.returncode:
         return None  # written but not loaded (booted out): not a manager
-    args = spec.get("ProgramArguments") or []
     pid = re.search(r"^\tpid = (\d+)$", p.stdout, re.M)
-    return {"pid": int(pid.group(1)) if pid else None,
-            "port": int(args[args.index("--port") + 1]) if "--port" in args else 4780}
+    return {"pid": int(pid.group(1)) if pid else None, "port": port}
 
 
 def kickstart(kill):
@@ -1664,8 +1676,8 @@ def agent_spec(port):
 def install_agent(port):
     if sys.platform != "darwin":
         return False, "no launchd on this OS; `orch init` and `orch status` keep the dashboard up with `ensure`"
-    if (HERE.parents[2] / ".git").is_file():
-        return False, f"{HERE.parents[2]} is a git worktree; install from the checkout sessions load"
+    if not (HERE.parents[2] / ".git").is_dir():  # a worktree or the plugin cache goes away under launchd
+        return False, f"{HERE.parents[2]} is not a main git checkout; install from the checkout sessions load"
     domain, want = f"gui/{os.getuid()}", plistlib.dumps(agent_spec(port))
     if not (agent_plist().exists() and agent_plist().read_bytes() == want and agent_status()):
         home().mkdir(parents=True, exist_ok=True)

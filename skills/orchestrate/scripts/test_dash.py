@@ -460,15 +460,21 @@ dash.HEALTH.update(version=dash.code_version())
 dash.check_code()
 assert dash.HEALTH["stale"] is False
 
-# With this store's LaunchAgent loaded, launchd is the only manager. The real agent serves another store, so it
-# is not this one's and never touched here.
+# With this store's LaunchAgent loaded, launchd is the only manager. The tests never run launchctl against a
+# real label: the label is a throwaway one, and install_agent is not called here (see the PR's launchd runs).
 import time
+os.environ["ORCH_DASH_LABEL"] = f"io.github.jeongjaesoon.orch-dash-test-{os.getpid()}"
 assert dash.agent_status() is None
 spec = dash.agent_spec(port)
 assert spec["KeepAlive"] and spec["RunAtLoad"] and spec["EnvironmentVariables"]["PROGRAMS_HOME"] == str(store), spec
 assert spec["ProgramArguments"][2:] == [str(pathlib.Path(dash.__file__).resolve()), "serve", "--port", str(port)], spec
-ok, msg = dash.install_agent(port)
-assert not ok and ("worktree" in msg or "no launchd" in msg or "bootstrap" in msg), msg
+# A broken plist is no agent, so ensure keeps its own path instead of failing every `orch status`.
+real_plist = dash.agent_plist
+for body in (b"<plist><dict><key>Label", b"<?xml version='1.0'?><plist><array/></plist>"):
+    (root / "bad.plist").write_bytes(body)
+    dash.agent_plist = lambda: root / "bad.plist"
+    assert dash.agent_status() is None, body
+dash.agent_plist = real_plist
 # A server launchd starts waits on a held store lock instead of exiting into launchd's retry loop; ensure stops
 # the server launchd did not start, and the waiting one takes over.
 ok, msg = dash.ensure(port)
@@ -480,6 +486,7 @@ agent = subprocess.Popen([sys.executable, str(pathlib.Path(dash.__file__)), "ser
 time.sleep(2)
 assert agent.poll() is None, "launchd's server exited on the held lock"
 kicks, stale, real_health = [], [False], dash.health
+real_status, real_kickstart, real_under, real_restart = dash.agent_status, dash.kickstart, dash.under_agent, dash.restart
 dash.agent_status = lambda: {"pid": agent.pid, "port": port}
 dash.kickstart = lambda kill: (kicks.append(kill), stale.__setitem__(0, False))
 ok, msg = dash.ensure(port)
@@ -498,12 +505,20 @@ agent.wait(10)
 # held for two checks (a checkout still writing files is not restarted mid-way).
 restarts = []
 dash.under_agent, dash.restart = lambda: True, lambda: restarts.append(1)
+real_loads = dash.loads
 dash.HEALTH.update(version="started-as", disk_version="something-else")
 dash.check_code()
 assert dash.HEALTH["stale"] and not restarts
+dash.loads = lambda: False  # a commit that does not import keeps the old server up
+dash.check_code()
+assert not restarts and dash.HEALTH["broken"] == dash.code_version()
+dash.HEALTH.pop("broken")
+dash.loads = real_loads
 dash.check_code()
 assert restarts == [1]
 dash.HEALTH.update(version=dash.code_version())
+dash.agent_status, dash.kickstart, dash.under_agent, dash.restart = real_status, real_kickstart, real_under, real_restart
+del os.environ["ORCH_DASH_LABEL"]
 
 # The wordmark in the sidebar is a link home; the page shows the served version and a banner when it is stale.
 html = (dash.ASSETS / "index.html").read_text()
