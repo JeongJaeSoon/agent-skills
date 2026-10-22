@@ -460,6 +460,72 @@ dash.HEALTH.update(version=dash.code_version())
 dash.check_code()
 assert dash.HEALTH["stale"] is False
 
+# With this store's LaunchAgent loaded, launchd is the only manager. The tests never run launchctl against a
+# real label: the label is a throwaway one, and install_agent is not called here (see the PR's launchd runs).
+import time
+os.environ["ORCH_DASH_LABEL"] = f"io.github.jeongjaesoon.orch-dash-test-{os.getpid()}"
+assert dash.agent_status() is None
+spec = dash.agent_spec(port)
+assert spec["KeepAlive"] and spec["RunAtLoad"] and spec["EnvironmentVariables"]["PROGRAMS_HOME"] == str(store), spec
+assert spec["ProgramArguments"][2:] == [str(pathlib.Path(dash.__file__).resolve()), "serve", "--port", str(port)], spec
+# A broken plist is no agent, so ensure keeps its own path instead of failing every `orch status`.
+real_plist = dash.agent_plist
+for body in (b"<plist><dict><key>Label", b"<?xml version='1.0'?><plist><array/></plist>"):
+    (root / "bad.plist").write_bytes(body)
+    dash.agent_plist = lambda: root / "bad.plist"
+    assert dash.agent_status() is None, body
+dash.agent_plist = real_plist
+# A server launchd starts waits on a held store lock instead of exiting into launchd's retry loop; ensure stops
+# the server launchd did not start, and the waiting one takes over.
+ok, msg = dash.ensure(port)
+foreign = dash.health(port)
+assert ok and foreign, msg
+agent = subprocess.Popen([sys.executable, str(pathlib.Path(dash.__file__)), "serve", "--port", str(port)],
+                         env=dict(os.environ, XPC_SERVICE_NAME=dash.agent_label()),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(2)
+assert agent.poll() is None, "launchd's server exited on the held lock"
+kicks, stale, real_health = [], [False], dash.health
+real_status, real_kickstart, real_under, real_restart = dash.agent_status, dash.kickstart, dash.under_agent, dash.restart
+dash.agent_status = lambda: {"pid": agent.pid, "port": port}
+dash.kickstart = lambda kill: (kicks.append(kill), stale.__setitem__(0, False))
+ok, msg = dash.ensure(port)
+assert ok and dash.health(port)["pid"] == agent.pid and dash.health(port)["pid"] != foreign["pid"], msg
+assert dash.ensure(port) == (True, f"dashboard: http://127.0.0.1:{port}/ (launchd)")
+# Its own server on older code is restarted through launchd (kickstart -k), never started here.
+kicks.clear()
+stale[0] = True
+dash.health = lambda p: (h := real_health(p)) and dict(h, stale=stale[0])
+ok, msg = dash.ensure(port)
+assert ok and kicks == [True], (msg, kicks)
+# ...unless the code on disk does not import: then the old server is the one to keep.
+kicks.clear()
+stale[0] = True
+dash.health = lambda p: (h := real_health(p)) and dict(h, stale=stale[0], broken=h["disk_version"])
+ok, msg = dash.ensure(port)
+assert ok and kicks == [] and "does not import" in msg, (msg, kicks)
+dash.health = real_health
+agent.terminate()
+agent.wait(10)
+# Under launchd a server whose code on disk changed exits for launchd to start the new code, once the change has
+# held for two checks (a checkout still writing files is not restarted mid-way).
+restarts = []
+dash.under_agent, dash.restart = lambda: True, lambda: restarts.append(1)
+real_loads = dash.loads
+dash.HEALTH.update(version="started-as", disk_version="something-else")
+dash.check_code()
+assert dash.HEALTH["stale"] and not restarts
+dash.loads = lambda: False  # a commit that does not import keeps the old server up
+dash.check_code()
+assert not restarts and dash.HEALTH["broken"] == dash.code_version()
+dash.HEALTH.pop("broken")
+dash.loads = real_loads
+dash.check_code()
+assert restarts == [1]
+dash.HEALTH.update(version=dash.code_version())
+dash.agent_status, dash.kickstart, dash.under_agent, dash.restart = real_status, real_kickstart, real_under, real_restart
+del os.environ["ORCH_DASH_LABEL"]
+
 # The wordmark in the sidebar is a link home; the page shows the served version and a banner when it is stale.
 html = (dash.ASSETS / "index.html").read_text()
 assert re.search(r'<a class="brand" href="#/fleet/overview"[^>]*>\s*<span class="logo"', html), "logo is not a home link"

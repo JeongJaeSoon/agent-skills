@@ -13,6 +13,9 @@ Usage: orch-dash <command> [options]
                                      older code, move it if it answers on another port.
                                      `orch init` and `orch status` call it. P defaults to
                                      $ORCH_DASH_PORT, else the port this store last served on, else 4780.
+                                     With this store's LaunchAgent loaded, launchd starts and restarts it instead.
+  install-agent [--port P]           macOS: run `serve` from this checkout as a LaunchAgent (login, crash, code
+                                     update); `$ORCH_DASH_LABEL` names it. uninstall-agent removes it.
   note <slug> --kind risk|digest|decision --text TEXT [--author NAME]
                                      add a human-readable line to the dashboard
   demo [--port 4780] [--live] [--no-serve] [--crowd N]
@@ -30,7 +33,7 @@ Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <sl
 Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
 ORCH_SKILLS=off disables only the skill usage collect, and ORCH_PR_STATS=off only the PR stats collect.
 """
-import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, json, os, pathlib, re, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
+import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1465,7 +1468,27 @@ def check_code():
         disk = code_version()
     except OSError:  # a file mid-replace: the next check reads it whole
         return
+    settled = disk == HEALTH.get("disk_version")  # same on two checks: a checkout is not still writing files
     HEALTH.update(disk_version=disk, stale=disk != HEALTH.get("version"))
+    if HEALTH["stale"] and settled and under_agent() and HEALTH.get("broken") != disk:
+        if not loads():  # keep serving the old code with its stale banner rather than crash-loop on a bad commit
+            HEALTH["broken"] = disk
+            log(f"code on disk ({disk}) does not import; still serving {HEALTH['version']}")
+            return
+        log(f"code on disk changed ({HEALTH['version']} -> {disk}); exiting so launchd starts the new code")
+        restart()
+
+
+def loads():
+    try:
+        return subprocess.run([sys.executable, "-c", "import dash"], cwd=HERE, capture_output=True,
+                              timeout=60).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def restart():
+    os._exit(0)  # KeepAlive starts it again at once: it ran longer than ThrottleInterval
 
 
 HEALTH = {"heartbeat": None}
@@ -1482,7 +1505,12 @@ def serve(host, port, interval, make_fleet=None):
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # held for the life of the process
     except BlockingIOError:
-        sys.exit(f"another orch-dash already serves {home()} (see {home() / '.dash.json'})")
+        if not under_agent():
+            sys.exit(f"another orch-dash already serves {home()} (see {home() / '.dash.json'})")
+        # Exiting would only make launchd retry every ThrottleInterval; wait and take over the moment it goes.
+        log(f"another orch-dash serves {home()} (pid {(read_json(home() / '.dash.json') or {}).get('pid')}); "
+            "waiting for its store lock")
+        fcntl.flock(lock, fcntl.LOCK_EX)
     httpd = http.server.ThreadingHTTPServer((host, port), Handler)  # bind before the loops start
     HEALTH.update(pid=os.getpid(), store=str(home()), version=code_version(), mtime=code_mtime(), port=port,
                   started_at=iso(utcnow()), git=git_sha(), script=str(HERE / "dash.py"))
@@ -1560,8 +1588,127 @@ def stop(h, port):
         time.sleep(0.2)
 
 
+# ---------------------------------------------------------------- launchd
+
+def agent_label():
+    return os.environ.get("ORCH_DASH_LABEL") or "io.github.jeongjaesoon.orch-dash"
+
+
+def agent_plist():
+    return pathlib.Path(f"~/Library/LaunchAgents/{agent_label()}.plist").expanduser()
+
+
+def agent_target():
+    return f"gui/{os.getuid()}/{agent_label()}"
+
+
+def under_agent():
+    return os.environ.get("XPC_SERVICE_NAME") == agent_label()  # launchd sets it to the job's label
+
+
+def agent_status():
+    """{"pid": int | None, "port": int} of the loaded LaunchAgent that serves this store, else None."""
+    if sys.platform != "darwin" or not agent_plist().exists():
+        return None
+    try:  # a hand-edited plist must not break every `orch status`: treat it as no agent
+        spec = plistlib.loads(agent_plist().read_bytes())
+        store = (spec.get("EnvironmentVariables") or {}).get("PROGRAMS_HOME", "~/.claude/programs")
+        args = spec.get("ProgramArguments") or []
+        port = int(args[args.index("--port") + 1]) if "--port" in args else 4780
+        if pathlib.Path(store).expanduser().resolve() != home().resolve():
+            return None
+        p = subprocess.run(["launchctl", "print", agent_target()], capture_output=True, text=True)
+    except Exception:
+        return None
+    if p.returncode:
+        return None  # written but not loaded (booted out): not a manager
+    pid = re.search(r"^\tpid = (\d+)$", p.stdout, re.M)
+    return {"pid": int(pid.group(1)) if pid else None, "port": port}
+
+
+def kickstart(kill):
+    subprocess.run(["launchctl", "kickstart", *(["-k"] if kill else []), agent_target()], capture_output=True)
+
+
+def fresh(h):
+    return bool(h.get("heartbeat")) and utcnow() - prog.parse_ts(h["heartbeat"]) <= dt.timedelta(minutes=5)
+
+
+def ensure_agent(a):
+    """launchd is the only manager: stop this store's servers it did not start, and kickstart it when its own
+    is missing or runs code older than what is on disk. The code it runs is the plist's, not this caller's."""
+    port, url = a["port"], f"http://127.0.0.1:{a['port']}/"
+    last = (read_json(home() / ".dash.json") or {}).get("port")
+    for p in dict.fromkeys((last, port)):
+        if p and (h := health(p)) and h.get("store") == str(home()) and h.get("pid") != a["pid"]:
+            stop(h, p)  # its store lock keeps launchd's server waiting
+    h = health(port)
+    if h and h.get("store") != str(home()):
+        return False, f"port {port} serves another store ({h.get('store')}); fix {agent_plist()}"
+    if h and h.get("pid") == a["pid"] and fresh(h) and not h.get("stale"):
+        return True, f"dashboard: {url} (launchd)"
+    if h and h.get("pid") == a["pid"] and fresh(h) and h.get("broken") == h.get("disk_version"):
+        return True, f"dashboard: {url} (launchd; the code on disk does not import, so it keeps running {h['version']})"
+    kickstart(kill=bool(h and h.get("pid") == a["pid"]))
+    until = time.monotonic() + 20
+    while time.monotonic() < until:
+        h, a = health(port), agent_status() or a
+        if h and h.get("pid") == a["pid"] and not h.get("stale"):
+            return True, f"dashboard started by launchd: {url}"
+        time.sleep(0.3)
+    return False, f"launchd did not bring the dashboard up on port {port}; see {home() / '.dash.log'}"
+
+
+def launchd_path():
+    # launchd starts with a bare PATH; the collectors need the python3, git, gh and orca found now.
+    dirs = [os.path.dirname(w) for w in map(shutil.which, ("python3", "git", "gh", "orca")) if w]
+    return ":".join(dict.fromkeys(dirs + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]))
+
+
+def agent_spec(port):
+    env = {"PATH": launchd_path()}
+    env.update({k: os.environ[k] for k in ("PROGRAMS_HOME", "ORCH_DASH_LABEL", "ORCH_FLEET", "ORCH_FLEET_STATE",
+                                           "ORCH_SKILLS", "ORCH_PR_STATS") if k in os.environ})
+    return {"Label": agent_label(),
+            "ProgramArguments": ["/usr/bin/env", "python3", str(HERE / "dash.py"), "serve", "--port", str(port)],
+            "EnvironmentVariables": env, "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,
+            "StandardOutPath": str(home() / ".dash.log"), "StandardErrorPath": str(home() / ".dash.log")}
+
+
+def install_agent(port):
+    if sys.platform != "darwin":
+        return False, "no launchd on this OS; `orch init` and `orch status` keep the dashboard up with `ensure`"
+    if not (HERE.parents[2] / ".git").is_dir():  # a worktree or the plugin cache goes away under launchd
+        return False, f"{HERE.parents[2]} is not a main git checkout; install from the checkout sessions load"
+    domain, want = f"gui/{os.getuid()}", plistlib.dumps(agent_spec(port))
+    if not (agent_plist().exists() and agent_plist().read_bytes() == want and agent_status()):
+        home().mkdir(parents=True, exist_ok=True)
+        agent_plist().parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["launchctl", "bootout", agent_target()], capture_output=True)
+        agent_plist().write_bytes(want)
+        for _ in range(5):  # bootstrap right after bootout can fail with error 5 until the old job is gone
+            p = subprocess.run(["launchctl", "bootstrap", domain, str(agent_plist())], capture_output=True, text=True)
+            if p.returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            return False, f"launchctl bootstrap failed: {p.stderr.strip()}"
+        print(f"wrote {agent_plist()} and loaded {agent_target()}")
+    a = agent_status()
+    return ensure_agent(a) if a else (False, f"{agent_target()} is not loaded")
+
+
+def uninstall_agent():
+    if sys.platform == "darwin":
+        subprocess.run(["launchctl", "bootout", agent_target()], capture_output=True)
+    agent_plist().unlink(missing_ok=True)
+    return True, f"removed {agent_target()}; `ensure` starts the dashboard itself again"
+
+
 def ensure(port):
     """(ok, message). Starts, restarts or moves only a server it can identify as this store's."""
+    if a := agent_status():
+        return ensure_agent(a)
     last = (read_json(home() / ".dash.json") or {}).get("port")
     if last and last != port and (o := health(last)) and o.get("store") == str(home()):
         stop(o, last)  # its store lock would make the new server exit
@@ -1594,6 +1741,16 @@ def cmd_ensure(argv):
     ok, msg = ensure(int(prog.opt(argv, "--port") or default_port()))
     print(msg)
     sys.exit(0 if ok else 1)
+
+
+def cmd_install_agent(argv):
+    ok, msg = install_agent(int(prog.opt(argv, "--port") or default_port()))
+    print(msg)
+    sys.exit(0 if ok else 1)
+
+
+def cmd_uninstall_agent(argv):
+    print(uninstall_agent()[1])
 
 
 def cmd_note(argv):
@@ -1668,7 +1825,8 @@ def cmd_adopt(argv):
 
 
 COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "ensure": cmd_ensure, "note": cmd_note, "demo": cmd_demo,
-            "fleet": cmd_fleet, "skills": cmd_skills, "prstats": cmd_prstats, "inbox": cmd_inbox, "adopt": cmd_adopt}
+            "fleet": cmd_fleet, "skills": cmd_skills, "prstats": cmd_prstats, "inbox": cmd_inbox, "adopt": cmd_adopt,
+            "install-agent": cmd_install_agent, "uninstall-agent": cmd_uninstall_agent}
 
 if __name__ == "__main__":
     args = sys.argv[1:]
