@@ -2,7 +2,7 @@
 
 The rationale, laid out as one HTML page a reader can take in within a minute: a tree of claims, each proved by one piece of evidence, with the decisions placed on the claims they change. The page is a view. The rationale in the notes store or the PR stays the record (the **use-notes** skill), and both carry the same claims and decisions.
 
-The lead writes it after synthesis, when the rationale is filled in; arena runners write only their rationale. Publishing it is not a checkpoint: give the link and keep going, unless the invoker opted into a checkpoint (Phase C).
+The architect session writes it after synthesis, when the rationale is filled in; arena runners write only their rationale. Publishing it is not a checkpoint: give the link and keep going, unless the invoker opted into a checkpoint (Phase C).
 
 ## The tree
 
