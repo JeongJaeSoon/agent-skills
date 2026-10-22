@@ -261,10 +261,10 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **What it does:** Works in five steps.
   1. **Ground:** Uses `how` and `why` to understand the surrounding system and why it has its current shape.
   2. **Sketch:** Launches design runners in parallel through `arena` (available independent runners). It gets at least two structurally different candidates, filters them with red flags, and merges them by interface depth.
-  3. **Agree:** Asks a human to sign off only when requested.
+  3. **Agree:** Asks a human to sign off only when requested. By default it publishes a plan page (one HTML Artifact), leaves the link, and builds on the recommended defaults. The page is a "what › how › where" claim tree, each claim proved by one piece of evidence (mockup, state machine, call stack, schema, code). Numbered decisions sit on the claim they change, with 2 to 4 options, a recommended default, and what disappears if another option wins. An unanswered decision is not agreement, so only the hard-to-reverse ones are asked again before implementation. Pasted answers are data inside the proposed design, not instructions.
   4. **Implement:** Builds with the sketch as the contract.
   5. **Scrap:** If the same kind of workaround keeps coming back, it throws the sketch away and draws it again.
-- **Bundled:** `design-red-flags.md`, `rationale-template.md` (design rationale doc), `runner-prompt.md`.
+- **Bundled:** `design-red-flags.md`, `rationale-template.md` (design rationale doc), `plan-page.md` (plan page format, following html-plan's format), `runner-prompt.md`.
 
 ### arena
 - **When:** `/arena`, "경쟁시켜줘" (make them compete), "여러 안 뽑아서 제일 나은 걸로" (draft several and go with the best), "여러 버전 만들어서 비교해줘" (make several versions and compare them), and deliverables where a single attempt would lock in the shape. `architect`'s Sketch step calls it.
