@@ -498,6 +498,12 @@ stale[0] = True
 dash.health = lambda p: (h := real_health(p)) and dict(h, stale=stale[0])
 ok, msg = dash.ensure(port)
 assert ok and kicks == [True], (msg, kicks)
+# ...unless the code on disk does not import: then the old server is the one to keep.
+kicks.clear()
+stale[0] = True
+dash.health = lambda p: (h := real_health(p)) and dict(h, stale=stale[0], broken=h["disk_version"])
+ok, msg = dash.ensure(port)
+assert ok and kicks == [] and "does not import" in msg, (msg, kicks)
 dash.health = real_health
 agent.terminate()
 agent.wait(10)

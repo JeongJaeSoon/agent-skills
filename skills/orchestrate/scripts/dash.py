@@ -1647,6 +1647,8 @@ def ensure_agent(a):
         return False, f"port {port} serves another store ({h.get('store')}); fix {agent_plist()}"
     if h and h.get("pid") == a["pid"] and fresh(h) and not h.get("stale"):
         return True, f"dashboard: {url} (launchd)"
+    if h and h.get("pid") == a["pid"] and fresh(h) and h.get("broken") == h.get("disk_version"):
+        return True, f"dashboard: {url} (launchd; the code on disk does not import, so it keeps running {h['version']})"
     kickstart(kill=bool(h and h.get("pid") == a["pid"]))
     until = time.monotonic() + 20
     while time.monotonic() < until:
