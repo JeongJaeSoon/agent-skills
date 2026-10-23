@@ -174,7 +174,8 @@ bash "${CLAUDE_SKILL_DIR}/scripts/sticky-comment.sh" <pr> <body-file>
 
 It upserts on the `<!-- test-results -->` marker, so results never stack. Include suite
 counts, E2E output with each verdict, and an explicit "not covered" section. E2E belongs in that comment,
-not in CI.
+not in CI. A change people see adds screenshots and the lead's verdict on them, never a wait for
+the user: [references/visual-evidence.md](references/visual-evidence.md).
 
 **A green check is not evidence.** Confirm from logs that the step actually ran
 (`gh run view <id> --log`) — a skipped step, a rate-limited reviewer, and a real pass all
