@@ -77,6 +77,11 @@ for extra in ([], ["--scope", "main"]):
     rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", LONG, *extra)
     assert status(res, 390)["horizontal-overflow"] == "FAIL", (extra, status(res, 390))
 
+# A ::after box past the screen fails inside a scope too, where the document width is not consulted.
+PSEUDO = "document.head.insertAdjacentHTML('beforeend', '<style>#wideafter::after { content: \"\"; display: block; width: 1000px; height: 4px; }</style>'); document.querySelector('main').insertAdjacentHTML('beforeend', '<div id=wideafter style=\"width: 100px\">x</div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", PSEUDO, "--scope", "main")
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
 # A box scaled down to fit is judged where it is drawn, not by its layout width.
 SCALED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 600px; transform: scale(.5); transform-origin: left top\">' + 'A'.repeat(60) + '</div>')"
 ROTATED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; height: 300px; white-space: nowrap; transform: rotate(90deg)\">' + 'A'.repeat(20) + '</div>')"

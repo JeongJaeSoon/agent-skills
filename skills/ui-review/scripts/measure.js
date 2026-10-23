@@ -206,13 +206,17 @@
   try {
     const sw = document.documentElement.scrollWidth;
     if (scope === document.body && sw > vw) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
-    // An element overflows by its box or by its own text drawn past it (unbroken text); text rects are on
-    // screen after any transform. Pseudo-element content is left to the document width above.
+    // An element overflows by its box or by what it draws past it. Without a transform on it or an ancestor,
+    // scrollWidth is in screen pixels and counts unbroken text and ::before/::after; under a transform only
+    // its own text rects are on screen, so those are used instead.
     const measured = new Set(all);
     const clipsX = (el) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (/(auto|scroll|hidden|clip)/.test(cs(a).overflowX)) return true; return false; };
+    const transformed = (el) => { for (let a = el; a; a = a.parentElement) { const s = cs(a); if (s.transform !== "none" || s.scale !== "none" || s.rotate !== "none" || (s.zoom && s.zoom !== "1")) return true; } return false; };
     const reach = (el) => {
-      let right = box(el).right;
-      if (cs(el).overflowX !== "visible") return right;
+      const b = box(el);
+      if (cs(el).overflowX !== "visible") return b.right;
+      if (!transformed(el)) return Math.max(b.right, b.left + el.scrollWidth);
+      let right = b.right;
       for (const n of el.childNodes) {
         if (n.nodeType !== 3 || !n.textContent.trim()) continue;
         const rg = document.createRange();
