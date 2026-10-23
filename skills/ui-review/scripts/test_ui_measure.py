@@ -110,6 +110,15 @@ LEFT = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div sty
 rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", LEFT)
 assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
 
+# A fixed banner wider than the phone overflows; so does an icon button whose label points nowhere.
+FIXED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"position: fixed; left: 0; bottom: 0; width: 600px; height: 20px; background: #eee\"></div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", FIXED)
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+for attrs in ('aria-labelledby=missing', 'aria-label=\\" \\"'):
+    UNNAMED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<button " + attrs + "><svg width=16 height=16><circle cx=8 cy=8 r=2 /></svg></button>')"
+    rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "1280", "--before", UNNAMED)
+    assert status(res, 1280)["bare-glyph"] == "FAIL", (attrs, status(res, 1280))
+
 # A box scaled down to fit is judged where it is drawn, not by its layout width.
 SCALED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 600px; transform: scale(.5); transform-origin: left top\">' + 'A'.repeat(60) + '</div>')"
 ROTATED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; height: 200px; margin-left: 100px; white-space: nowrap; transform: rotate(90deg)\">' + 'A'.repeat(20) + '</div>')"

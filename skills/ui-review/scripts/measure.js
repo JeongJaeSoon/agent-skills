@@ -239,7 +239,7 @@
     // Past either edge: a negative margin or a translate can push content off the left side.
     const outside = (el) => reach(el) > vw + 1 || box(el).left < -1;
     for (const el of all) {
-      if (!outside(el) || cs(el).position === "fixed" || clipsX(el) || (measured.has(el.parentElement) && outside(el.parentElement))) continue;
+      if (!outside(el) || clipsX(el) || (measured.has(el.parentElement) && outside(el.parentElement))) continue;
       overItems.push({ el: where(el), detail: box(el).left < -1 ? `left edge ${r1(box(el).left)}px < 0` : `reaches ${r1(reach(el))}px > viewport ${vw}px` });
     }
   } finally {
@@ -276,7 +276,9 @@
 
   // 10. A bare glyph is not a label or a status.
   const glyphItems = [];
-  const named = (el) => ["aria-label", "aria-labelledby", "title"].some((k) => el.getAttribute(k)) || !!el.querySelector("svg title, img[alt]:not([alt=''])");
+  // A name counts only when it resolves to words: aria-labelledby ids that exist and hold text.
+  const labelledBy = (el) => (el.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map((id) => document.getElementById(id)?.textContent || "").join(" ").trim();
+  const named = (el) => !!((el.getAttribute("aria-label") || "").trim() || (el.getAttribute("title") || "").trim() || labelledBy(el)) || !!el.querySelector("svg title, img[alt]:not([alt=''])");
   for (const el of all) {
     if (kids(el).some((c) => text(c))) continue;
     const t = text(el);
