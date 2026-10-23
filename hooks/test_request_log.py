@@ -27,7 +27,7 @@ def opened():
 # An undeclared session logs nothing; a session declared in this very prompt does (reorient may not have written yet).
 assert hook("merge acme/app#1 please", session="s-plain") is None and opened() == []
 text = hook("ROLE: orchestrator\ncheck whether acme/app#1 is merged")
-assert text.startswith("Owner request r1 logged") and "orch req link r1" in text, text
+assert text == "Owner request r1 logged", text
 assert opened() == ["check whether acme/app#1 is merged"]
 (ROLES / "roles").mkdir(parents=True, exist_ok=True)
 (ROLES / "roles" / "s-coord.json").write_text(json.dumps({"role": "orchestrator"}))
@@ -37,11 +37,16 @@ assert hook("look at the flaky test", session="s-quiet") is None
 assert hook("look at the flaky test", agent_type="agent-skills:lead", session="s-agent") is not None  # --agent, no record
 
 # Not human requests: harness rows, card relays, the compaction preamble, Orca's nudge, a bare ROLE line, blanks.
-for p in ["<task-notification><task-id>b1</task-id></task-notification>", "<command-name>/brief</command-name>",
+# A slash command arrives as typed; an answer to a dashboard decision is recorded by decision.py, open or just closed.
+(STATE).mkdir(parents=True, exist_ok=True)
+(STATE / "decisions.json").write_text(json.dumps({"decisions": {"d3": {"id": "d3", "status": "done"}}}))
+for p in ["/brief", "  /reload-plugins", "/goal finish the ledger", "d3: yes", "D3 later",
+          "<task-notification><task-id>b1</task-id></task-notification>", "<command-name>/brief</command-name>",
           "[card-a] PR ready: acme/app#2", "[lead:acme] DONE", "This session is being continued from a previous conversation...",
           "You have 1 orchestration message waiting", "ROLE: orchestrator", "   \n "]:
     assert hook(p) is None, p
-# Human ones: pasted text, an image, a long line (masked and capped).
+# Human ones: pasted text, an image, a long line (masked and capped). (`d9: ...` names no decision, so it is one too,
+# checked further down.)
 assert hook('<pasted_content id="x">log</pasted_content> why does this fail?')
 assert hook("[Image #1] this banner is wrong")
 assert hook("deploy with API_TOKEN=abc123secret then tell me " + "x" * 400, session="s-lead")
@@ -75,9 +80,13 @@ assert [u["id"] for u in s["unlinked"]] == ["r2", "r5"], s
 assert req.line(s).startswith("요청 3건 열림 · 가장 오래된 것 45m · 미연결 30분+: r2 r5"), req.line(s)
 assert req.line(req.summary(later, {})) == ""
 
-# The reminder on the next prompt names what is still open and unlinked.
-text = hook("and reply to the reviewer")
-assert "r6 logged" in text and "3 more open" in text, text
+# The reminder on the next prompt carries ids only: the count, the oldest age, and the unlinked ones.
+f = STATE / "requests.jsonl"
+hour_ago = req.fleet.iso(req.fleet.utcnow() - dt.timedelta(hours=1))
+f.write_text("".join(json.dumps({**r, "ts": hour_ago}) + "\n" for r in req.read()))
+text = hook("d9: and reply to the reviewer")
+assert text == "Owner request r6 logged · 4 open, oldest 1h00m · unlinked 30m+: r2 r5", text
+assert len(text.encode()) < 80, len(text.encode())
 
 # Ids never repeat under concurrent prompts.
 procs = [subprocess.Popen([sys.executable, HERE / "request_log.py"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
