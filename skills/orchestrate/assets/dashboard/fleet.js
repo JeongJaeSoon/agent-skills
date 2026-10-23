@@ -524,18 +524,28 @@ document.addEventListener("toggle", (e) => { if (e.target.id === "prs-merged") F
 const SKILL_FLAG = {
   unused_30d: ["unused 30 d", "warn", "Not invoked in 30 days: rewrite the description, merge it into another skill, or retire it (by PR)"],
   slash_only: ["slash only", "accent", "Only ever typed as /name: the description does not make it fire on its own. Skills with disable-model-invocation: true are never flagged"],
+  retire_candidate: ["retire?", "warn", "No use for three 30-day windows, with misses or an overlapping trigger phrase as evidence: merge it or retire it (by PR)"],
   misses: ["misses", "bad", "Prompts carried one of its quoted trigger phrases and it did not fire (heuristic)"],
 };
+// What was missed, how often and where to look, for the misses chip and the Misses cell.
+const missTip = (r) => [`${r.misses_30d} prompts in 30 d carried a trigger phrase while ${r.name} did not fire`
+  + (r.miss_sessions_30d ? `, in ${r.miss_sessions_30d} sessions` : ""),
+  ...(r.miss_phrases || []).map(([p, n]) => `  "${p}" ×${n}`),
+  r.last_miss ? `last ${r.last_miss.slice(0, 16).replace("T", " ")}` : "",
+  `list them: skill_usage.py misses ${r.name}`].filter(Boolean).join("\n");
+const flagChip = (r, f) => f === "misses"
+  ? `<span title="${esc(missTip(r))}">${tag(`missed ${r.misses_30d}×${r.miss_phrases?.length ? ` · “${r.miss_phrases[0][0]}”` : ""}`, "bad")}</span>`
+  : `<span title="${esc((SKILL_FLAG[f] || [])[2] || f)}">${tag((SKILL_FLAG[f] || [f])[0], (SKILL_FLAG[f] || [])[1] || "")}</span>`;
 const SKILL_FILTERS = {
   all: [() => true, "All"],
-  flagged: [(r) => r.flags.length, "Flagged"],
-  unused_30d: [(r) => r.flags.includes("unused_30d"), "Unused 30 d"],
-  slash_only: [(r) => r.flags.includes("slash_only"), "Slash only"],
-  misses: [(r) => r.flags.includes("misses"), "Misses"],
+  flagged: [(r) => r.shown.length, "Flagged"],
+  unused_30d: [(r) => r.shown.includes("unused_30d"), "Unused 30 d"],
+  slash_only: [(r) => r.shown.includes("slash_only"), "Slash only"],
+  misses: [(r) => r.shown.includes("misses"), "Misses"],
 };
 const SKILL_SORT = {
   name: (r) => r.name, d7: (r) => r.uses_7d, d30: (r) => r.uses_30d, mix: (r) => r.auto_30d + r.chained_30d,
-  last: (r) => ago(r.last_used), reach: (r) => r.sessions_30d, misses: (r) => r.misses_30d, flags: (r) => r.flags.length,
+  last: (r) => ago(r.last_used), reach: (r) => r.sessions_30d, misses: (r) => r.misses_30d, flags: (r) => r.shown.length,
 };
 async function pollSkills() {
   // A report is kept for a minute; any error, including the 503 before the first collect, is retried every 5 s.
@@ -562,23 +572,25 @@ function skillTable(list) {
       <td class="hide-sm">${r.uses_30d ? skillMix(r) : '<span class="muted">—</span>'}</td>
       <td class="muted">${r.last_used ? relSpan(r.last_used) : "never"}</td>
       <td class="num hide-md dim">${r.sessions_30d} · ${r.repos_30d}</td>
-      <td class="num">${r.misses_30d ? `<span class="${r.flags.includes("misses") ? "tone-bad" : ""}">${r.misses_30d}</span>` : '<span class="muted">0</span>'}</td>
-      <td>${r.flags.map((f) => `<span title="${esc((SKILL_FLAG[f] || [])[2] || f)}">${tag((SKILL_FLAG[f] || [f])[0], (SKILL_FLAG[f] || [])[1] || "")}</span>`).join(" ")}</td></tr>`).join("");
+      <td class="num">${r.misses_30d ? `<span class="${r.shown.includes("misses") ? "tone-bad" : "dim"}" title="${esc(missTip(r))}">${r.misses_30d}</span>` : '<span class="muted">0</span>'}</td>
+      <td>${r.shown.map((f) => flagChip(r, f)).join(" ")}${r.flags.length > r.shown.length ? `<span class="muted" title="${esc(r.flags.join(", "))}: not editable here">${r.flags.length - r.shown.length} hidden</span>` : ""}</td></tr>`).join("");
   return `<table><thead><tr>${head.map(([c, l, cls]) => th("fleet_skills", c, l, cls)).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 function fleetSkills() {
   pollSkills();
   const rep = F.skills;
-  const headHtml = `<div class="view-head"><div><h2>Skills</h2><p>How often each installed skill ran in local Claude Code transcripts, and how it was triggered: on its own (auto), loaded by another skill (chained), or typed as /name (slash). Misses are prompts that carried a quoted trigger phrase from the skill's description while it did not fire: a heuristic. Counts only; no transcript text leaves the machine.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Skills</h2><p>How often each installed skill ran in local Claude Code transcripts, and how it was triggered: on its own (auto), loaded by another skill (chained), or typed as /name (slash). Misses are prompts that carried a quoted trigger phrase from the skill's description while it did not fire: a heuristic, flagged past 3 in 30 days when they are at least a fifth of the prompts that carried the phrase. Hover a miss for the phrase and the command that lists the sessions. Flags on sources not editable here are hidden by default. No prompt text is kept.</p></div>
     ${rep && !rep.error ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)} · ${rep.files} transcripts</div>` : ""}</div>`;
   if (!rep) return headHtml + '<div class="loading">Loading…</div>';
   if (rep.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(rep.error)}</div></div>`;
-  const all = rep.skills || [];
+  const editable = new Set(rep.editable || []);
+  // A flag on a source this machine cannot edit has no action behind it: hidden unless "all sources" is picked.
+  const scope = S.filters.fleet_skills_flags === "all" ? "all" : "editable";
+  const all = (rep.skills || []).map((r) => ({ ...r, shown: scope === "all" || editable.has(r.source) ? r.flags : [] }));
   const f = SKILL_FILTERS[S.filters.fleet_skills] ? S.filters.fleet_skills : "all";
   const srcs = (rep.sources || []).map((x) => x.source), src = srcs.includes(S.filters.fleet_skills_src) ? S.filters.fleet_skills_src : "all";
   const shown = all.filter((r) => SKILL_FILTERS[f][0](r) && (src === "all" || r.source === src));
   const srcChip = (v, label, n) => `<button class="chip" type="button" data-group="fleet_skills_src" data-val="${esc(v)}" aria-pressed="${v === src}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
-  const editable = new Set(rep.editable || []);
   const mine = all.filter((r) => editable.has(r.source));
   const kpis = `<div class="kpis" style="--n:4">
     ${kpi("Skills used in 30 d", `${all.filter((r) => r.uses_30d).length}<small>/${all.length}</small>`, `${all.reduce((a, r) => a + r.uses_30d, 0)} invocations`)}
@@ -587,7 +599,8 @@ function fleetSkills() {
     ${kpi("Improvement signals", `${rep.signals ? rep.signals.added : "—"}`, rep.signals ? "new this collect, one per skill and flag per week" : "signals off")}</div>`;
   const groups = {};
   shown.forEach((r) => (groups[r.source] ||= []).push(r));
-  return headHtml + kpis + `<div class="toolbar">${chips("fleet_skills", Object.entries(SKILL_FILTERS).map(([id, [fn, label]]) => [id, label, all.filter(fn).length]), f)}</div>
+  return headHtml + kpis + `<div class="toolbar">${chips("fleet_skills", Object.entries(SKILL_FILTERS).map(([id, [fn, label]]) => [id, label, all.filter(fn).length]), f)}
+    ${chips("fleet_skills_flags", [["editable", "Flags on editable sources"], ["all", "Flags on all sources"]], scope)}</div>
     ${srcs.length > 1 ? `<div class="chips proj-chips" role="group" aria-label="Source">${srcChip("all", "All sources")}${(rep.sources || []).map((x) => srcChip(x.source, x.source, x.skills)).join("")}</div>` : ""}
     ${srcs.filter((x) => groups[x]).map((x) => `<div class="card table-wrap"><div class="card-head"><h3 class="mono">${esc(x)}</h3><span class="aside">${editable.has(x) ? tag("editable", "accent", "") + " " : ""}${groups[x].length} skills</span></div>${skillTable(groups[x])}</div>`).join("")
       || '<div class="card"><div class="empty-chart">No skill matches.</div></div>'}`;

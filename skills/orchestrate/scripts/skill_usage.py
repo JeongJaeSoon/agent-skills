@@ -3,6 +3,7 @@
 
 Usage: skill_usage.py [--out PATH] [--signals PATH | --no-signals] [--misses N]
        skill_usage.py precheck
+       skill_usage.py misses SKILL      each miss of the last 30 days: when, the session to resume, the phrase
        skill_usage.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 Writes an aggregate report (default <fleet state>/skills.json) and appends one `signal` row per flagged skill
@@ -21,7 +22,8 @@ REPO_PLUGIN = "agent-skills"
 EDITABLE = (REPO_PLUGIN, "user")
 SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
-SCAN_VERSION = 3  # raise when scan_file counts differently, so cached transcripts are read again
+MISS_SHARE = 0.2  # misses as a share of the prompts that carried a trigger phrase (misses + auto + chained fires)
+SCAN_VERSION = 4  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 # Only these flags become signals. unused_30d alone stays on the dashboard: zero uses in one window is not a reason
@@ -189,11 +191,11 @@ def _hash(s):
 def scan_file(path, inv, resolve):
     prompted_by_model = "subagents" in pathlib.Path(path).parts
     events, misses = [], []
-    turn = {"ts": None, "hits": set(), "loaded": set()}
+    turn = {"ts": None, "hits": {}, "loaded": set(), "session": None}
 
     def close():
-        for s in turn["hits"] - turn["loaded"]:
-            misses.append([turn["ts"], s])
+        for s in turn["hits"].keys() - turn["loaded"]:
+            misses.append([turn["ts"], s, turn["hits"][s], turn["session"]])
 
     with open(path, errors="replace") as f:
         for line in f:
@@ -210,14 +212,15 @@ def scan_file(path, inv, resolve):
             kind, val = _prompt(d)
             if kind:
                 close()
-                turn = {"ts": ts, "hits": set(), "loaded": set()}
+                turn = {"ts": ts, "hits": {}, "loaded": set(), "session": session}
                 if kind == "command":
                     name = resolve(val)
                     turn["loaded"].add(name)
                     events.append([ts, name, "slash", session, cwd])
                 elif not prompted_by_model:
                     low = re.sub(r"<pasted_content[^>]*>.*?</pasted_content>", " ", val, flags=re.S).lower()
-                    turn["hits"] = {n for n, s in inv.items() if any(phrase_in(p, low) for p in s["phrases"])}
+                    # the phrase that matched, so a miss says which trigger the prompt carried
+                    turn["hits"] = {n: p for n, s in inv.items() for p in [next((p for p in s["phrases"] if phrase_in(p, low)), None)] if p}
                 continue
             if d.get("type") != "assistant":
                 continue
@@ -298,10 +301,14 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
             r["_repos"].add(cwd)
             if age < SHORT:
                 r["uses_7d"] += 1
-    for ts, name in misses:
+    for ts, name, phrase, session in misses:
         t = parse_ts(ts)
         if t and name in rows and (now - t).days < LONG:
-            rows[name]["misses_30d"] += 1
+            r = rows[name]
+            r["misses_30d"] += 1
+            r["_miss_phrases"][phrase] = r["_miss_phrases"].get(phrase, 0) + 1
+            r["_miss_sessions"].add(session)
+            r["last_miss"] = max(r["last_miss"] or "", ts)
     owners = {}
     for n, s in inv.items():
         for ph in s["phrases"]:
@@ -309,6 +316,8 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
     rare = RARE | rare_config()
     for name, r in rows.items():
         r["sessions_30d"], r["repos_30d"] = len(r.pop("_sessions")), len(r.pop("_repos"))
+        r["miss_sessions_30d"] = len(r.pop("_miss_sessions"))
+        r["miss_phrases"] = [list(x) for x in sorted(r.pop("_miss_phrases").items(), key=lambda x: (-x[1], x[0]))[:3]]
         h = seen.setdefault(name, {"first_seen": iso(now), "last_used": None})
         h["last_used"] = max(h["last_used"] or "", r["last_used"] or "") or None
         r["first_seen"], r["last_used_ever"] = h["first_seen"], h["last_used"]
@@ -335,7 +344,8 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
 
 def _row(name, source):
     return {"name": name, "source": source, "uses_7d": 0, "uses_30d": 0, "uses_total": 0, "auto_30d": 0,
-            "slash_30d": 0, "chained_30d": 0, "last_used": None, "misses_30d": 0, "_sessions": set(), "_repos": set()}
+            "slash_30d": 0, "chained_30d": 0, "last_used": None, "misses_30d": 0, "last_miss": None, "_sessions": set(),
+            "_repos": set(), "_miss_sessions": set(), "_miss_phrases": {}}
 
 
 def rare_config(path=None):
@@ -359,7 +369,8 @@ def flags(r, miss_threshold=MISS_THRESHOLD, now=None):
     # A skill with disable-model-invocation: true can only be typed, so slash-only use is its design, not a weak description.
     if r["uses_30d"] and r["auto_30d"] + r["chained_30d"] == 0 and not r.get("slash_by_design"):
         out.append("slash_only")
-    if r["misses_30d"] > miss_threshold:
+    # A skill that fires on most prompts carrying its phrases is working; a few misses beside many uses are noise.
+    if r["misses_30d"] > miss_threshold and r["misses_30d"] >= MISS_SHARE * (r["misses_30d"] + r["auto_30d"] + r["chained_30d"]):
         out.append("misses")
     return out
 
@@ -545,6 +556,22 @@ def schedule_cmd(script, workspace, provider="claude"):
             "--precheck", f"python3 {shlex.quote(str(script))} precheck", "--prompt", prompt, "--json"]
 
 
+def list_misses(skill, cache_path=None, now=None):
+    """Each miss of the last LONG days from the scan cache, newest first: when, the session to resume, the phrase."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    try:
+        files = json.loads(pathlib.Path(cache_path or state_dir() / "skill-usage-cache.json").read_text()).get("files", {})
+    except (OSError, ValueError):
+        print("no scan cache yet: run skill_usage.py once")
+        return 1
+    rows = sorted((m for f in files.values() for m in f.get("misses", [])
+                   if len(m) == 4 and m[1] == skill and (t := parse_ts(m[0])) and (now - t).days < LONG), reverse=True)
+    for ts, _, phrase, session in rows:
+        print(f"{ts}  {session or '-'}  \"{phrase}\"")
+    print(f"{len(rows)} misses of {skill} in {LONG} days (claude --resume <session> opens one)")
+    return 0
+
+
 def main_checkout(path):
     # The precheck runs from the repo's main checkout, so the command names that copy, not a worktree's.
     out = subprocess.run(["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -557,6 +584,8 @@ def main(argv):
         return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else default
     if argv[:1] == ["precheck"]:
         sys.exit(precheck())
+    if argv[:1] == ["misses"] and len(argv) > 1:
+        sys.exit(list_misses(argv[1]))
     if argv[:1] == ["schedule"]:
         top = main_checkout(HERE)
         if not top and not opt("--workspace"):
