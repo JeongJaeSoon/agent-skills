@@ -14,7 +14,7 @@ bin/preview-watch uninstall   # LaunchAgent를 내리고 watcher가 연 항목�
 1. `lsof -nP -F pcn -iTCP@127.0.0.1 -iTCP@[::1] -sTCP:LISTEN` 한 번으로 loopback LISTEN 포트와 프로세스(이름, PID)를 얻는다. `*`(0.0.0.0)이나 LAN 주소에 묶인 포트는 대상이 아니다.
 2. `exclude`에 없고, 허용 범위나 `include`에 든 포트만 후보다.
 3. 새 후보는 웹페이지인지 한 번 확인한다. `GET /`를 보내 같은 호스트·포트 안의 리다이렉트를 따라가고(최대 5번, 요청당 2초), 2xx이고 `Content-Type`이 `text/html`이고 본문 앞 4KB에 `<html` 또는 `<!doctype html`이 있을 때만 웹페이지다. JSON API, 빈 `text/plain`, S3 같은 오브젝트 스토어, DB는 열지 않는다. `include` 포트는 확인하지 않고 연다.
-   - 판정은 상태 파일에 포트와 PID 기준으로 남는다. 웹페이지 판정은 그 프로세스가 포트를 쥐는 동안 유지되고, 아니라는 판정은 10분 뒤 한 번 다시 확인한다(OrbStack은 모든 컨테이너 포트를 한 프로세스로 쥐어서, 같은 포트를 다른 컨테이너가 다시 쓰면 PID가 같다). 그래서 변화가 없는 실행은 HTTP 요청도 tailscale 호출도 하지 않는다.
+   - 판정은 상태 파일에 포트와 PID 기준으로 남고, PID가 바뀌면 다시 확인한다. OrbStack은 모든 컨테이너 포트를 한 프로세스로 쥐어서 같은 포트를 다른 컨테이너가 다시 써도 PID가 같으므로, 판정은 10분마다 한 번 다시 확인한다. 그 사이의 실행은 HTTP 요청도 tailscale 호출도 하지 않는다. 그래서 웹 화면이던 포트를 15초 안에 API 컨테이너가 다시 잡으면 최대 10분 동안 열려 있을 수 있다.
    - 연결 자체가 거부되면 120초 뒤 다시 확인한다.
 4. 새 웹페이지도, 내려야 할 자기 항목도 없으면 여기서 끝난다. 있으면 `tailscale serve status --json`을 한 번 읽는다.
    - 새 웹페이지 포트에 이미 serve 항목이 있으면 남의 것이다. 그 포트가 LISTEN을 멈출 때까지 다시 보지 않는다.
@@ -43,7 +43,7 @@ bin/preview-watch uninstall   # LaunchAgent를 내리고 watcher가 연 항목�
 - 4500–4599: 손으로 띄우는 미리보기 서버.
 - 32768–60999: 검증 스택은 호스트 포트를 비운 `127.0.0.1::<port>`로 compose 포트를 열고, Docker는 Linux ephemeral 범위(`ip_local_port_range` 기본값 32768–60999)에서 포트를 고른다. 이 범위에는 데스크톱 앱이 혼자 쓰는 loopback 포트도 있으므로 OrbStack·Docker Desktop 데몬이 쥔 포트만 받는다(`commands`는 lsof 프로세스 이름의 접두어).
 - `exclude`: 웹페이지여도 열지 않는 포트. 이미 열어 둔 자기 항목은 다음 실행에서 닫는다. 기본값은 4570. 키를 적으면 기본값을 대체하므로 4570도 함께 적는다.
-- `include`: 범위·웹페이지 판정 없이 여는 포트(루트가 JSON인 앱처럼 판정이 놓치는 화면). 남의 serve 항목이 있는 포트는 그래도 건드리지 않는다.
+- `include`: 범위·웹페이지 판정 없이 여는 포트(루트가 JSON인 앱이나 첫 응답이 2초를 넘는 개발 서버처럼 판정이 놓치는 화면). 남의 serve 항목이 있는 포트는 그래도 건드리지 않는다.
 - `interval`을 바꾸면 `install`을 다시 돌린다. `tailscale`을 비우면 PATH의 `tailscale`, 없으면 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. launchd의 PATH는 `/usr/sbin:/usr/bin:/bin`뿐이라, Homebrew 등으로 설치한 CLI는 이 키에 경로를 적는다. CLI를 못 찾으면 로그에 한 줄 남긴다.
 
 ## 상태와 안전 동작

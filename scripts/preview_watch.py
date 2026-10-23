@@ -41,9 +41,9 @@ DEFAULTS = {
     "tailscale": None,
 }
 RETRY_NO_ANSWER_S = 120  # a listener that refused the probe's connection gets another probe after this
-# OrbStack holds every published port under one process, so a port reused by another container keeps the pid;
-# a "not a page" verdict is checked again after this. A page verdict lasts while the process holds the port.
-RECHECK_NOT_PAGE_S = 600
+# OrbStack holds every published port under one process, so a port reused by another container keeps the pid:
+# a verdict is checked again after this even while the same process holds the port.
+RECHECK_S = 600
 PROBE_TIMEOUT_S = 2
 HTML_DOC = re.compile(rb"<(!doctype\s+html|html)[\s>]", re.I)
 
@@ -134,7 +134,7 @@ def probe_page(port, host):
                     continue
                 ctype = (r.getheader("Content-Type") or "").partition(";")[0].strip().lower()
                 return 200 <= r.status < 300 and ctype == "text/html" and bool(HTML_DOC.search(r.read(4096)))
-            except (OSError, http.client.HTTPException):
+            except (OSError, http.client.HTTPException, ValueError):  # ValueError: a Location with a bad port
                 return False
         finally:
             c.close()
@@ -210,9 +210,7 @@ def entries(status):
 def known_page(st, port, now):
     """The cached verdict for the process now on the port: True, False, or None (never probed, or stale)."""
     v = st["pages"].get(port)
-    if not v:
-        return None
-    return True if v[1] else (False if now - v[2] < RECHECK_NOT_PAGE_S else None)
+    return v[1] if v and now - v[2] < RECHECK_S else None
 
 
 def pending(listening, st, cfg, now):
@@ -223,12 +221,12 @@ def pending(listening, st, cfg, now):
     cand = {p: v for p, v in listening.items()
             if p not in exclude and (p in include or allowed(p, v[1], cfg["ranges"]))}
     new = sorted(p for p in cand if p not in owned and not (p in skip and (skip[p] == 0 or skip[p] > now))
-                 and known_page(st, p, now) is not False)
+                 and (p in include or known_page(st, p, now) is not False))
     verify = sorted(p for p in cand if p in owned and p not in include and known_page(st, p, now) is None)
     return cand, new, verify
 
 
-def gone(listening, cand, st, now):
+def gone(listening, cand, st, now, include):
     """{owned port: why it comes down}."""
     out = {}
     for p in st["owned"]:
@@ -236,7 +234,7 @@ def gone(listening, cand, st, now):
             out[p] = "listener gone"
         elif p not in cand:
             out[p] = "out of scope"
-        elif known_page(st, p, now) is False:
+        elif p not in include and known_page(st, p, now) is False:
             out[p] = "not a web page"
     return dict(sorted(out.items()))
 
@@ -275,7 +273,7 @@ def run_once(cfg):
         else:
             st["pages"][p] = [listening[p][2], page, now]
     new = [p for p in new if p in include or known_page(st, p, now)]
-    down = gone(listening, cand, st, now)
+    down = gone(listening, cand, st, now, include)
     if not new and not down:
         if dump_state(st) != before:
             save_state(st)

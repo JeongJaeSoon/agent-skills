@@ -92,8 +92,10 @@ ROUTES = {
     "/to-page": (302, "", b""),
     "/elsewhere": (302, "", b""),
     "/loop": (302, "", b""),
+    "/bad-location": (302, "", b""),
 }
-LOCATIONS = {"/to-page": "/page", "/elsewhere": "https://example.test/", "/loop": "/loop"}
+LOCATIONS = {"/to-page": "/page", "/elsewhere": "https://example.test/", "/loop": "/loop",
+             "/bad-location": "http://127.0.0.1:invalid/"}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -134,7 +136,7 @@ class Probe(unittest.TestCase):
         self.assertIs(self.verdict("/to-page"), True)
 
     def test_not_pages(self):
-        for root in ("/api", "/plain", "/fake-html", "/missing", "/elsewhere", "/loop"):
+        for root in ("/api", "/plain", "/fake-html", "/missing", "/elsewhere", "/loop", "/bad-location"):
             self.assertIs(self.verdict(root), False, root)
 
     def test_non_http_listener_is_not_a_page(self):
@@ -305,6 +307,34 @@ class EndToEnd(Base):
         self.run_pass(http=probe)
         self.assertEqual(self.live()[8080], "http://127.0.0.1:8080")
         self.assertEqual(probes, [])
+
+    def test_include_overrides_a_cached_not_page_verdict(self):
+        self.listening[4590] = ("127.0.0.1", "java", 7)
+        probes, probe = self.counting({4590: False})
+        self.run_pass(http=probe)
+        self.assertNotIn(4590, self.live())
+        self.cfg["include"] = [4590]
+        self.run_pass(http=probe)
+        self.assertEqual(self.live()[4590], "http://127.0.0.1:4590")
+        st = pw.load_state()
+        st["pages"][4590] = [7, False, pw.time.time()]
+        pw.save_state(st)
+        self.run_pass(http=probe)
+        self.assertIn(4590, self.live())  # an owned include is not taken down by a stale verdict either
+
+    def test_page_verdict_is_rechecked_for_a_reused_port(self):
+        self.listening[33897] = ("127.0.0.1", "OrbStack Helper", 7)
+        probes, probe = self.counting({})
+        self.run_pass(http=probe)
+        self.assertIn(33897, self.live())
+        probes2, probe2 = self.counting({33897: False})  # another container took the port under the same pid
+        self.run_pass(http=probe2)
+        self.assertIn(33897, self.live())
+        self.assertEqual(probes2, [])  # cached inside the window
+        with mock.patch.object(pw.time, "time", lambda: 10 ** 12):
+            self.run_pass(http=probe2)
+        self.assertNotIn(33897, self.live())
+        self.assertIn("close https :33897 (not a web page)", pw.LOG.read_text())
 
     def test_foreign_entries_untouched_even_when_excluded(self):
         self.cfg["exclude"] = [13004, 13005, 3000, 4571]
