@@ -55,7 +55,7 @@ well-written `--prompt` beats a session that lost its own first half.
 **What is next.** Rank the unstarted tickets in the same tracker project or parent that serve
 an open exit item (the parent's `✅ 완료 조건`) by priority, dependency (blocked tickets wait),
 and file collision with cards already running. When every exit item is met, close the parent
-and report it instead of starting more, even with lines left on `⏸ 보류`. Spawn it
+and report it instead of starting more, even with lines left on `⏸️ 보류`. Spawn it
 yourself when the user said to keep going, or when one candidate is clearly next. Ask when the
 ranking is genuinely contested — then give the ranking, a recommendation, and any
 parallel-safe combination.

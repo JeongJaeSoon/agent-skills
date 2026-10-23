@@ -138,12 +138,12 @@ Every body of work has one, written before it starts or grows (principle **Work 
 Condition**). It lives in the tracker, on the work's top ticket:
 
 - **An epic or parent issue:** its body carries `## ✅ 완료 조건` (numbered exit items as a
-  checklist, `- [ ] 1. <item> — 확인: <how>`, ticked when met), `## 🚫 범위 밖`, and `## ⏸ 보류`
+  checklist, `- [ ] 1. <item> — 확인: <how>`, ticked when met), `## 🚫 범위 밖`, and `## ⏸️ 보류`
   (the deferred list: one line per LATER finding, `- <what> — 재검토: <trigger> (<source ticket>)`).
   Heading text and the `확인` label word may follow the tracker's language; the checklist form may not. Add a LATER line by editing
   the body; never file a ticket for it.
 - **A single ticket with no parent:** its acceptance criteria and `🚫 범위 밖` are the exit
-  condition. A LATER finding goes in a comment on it starting `⏸ 보류:`.
+  condition. A LATER finding goes in a comment on it starting `⏸️ 보류:`.
 - **A program:** the program note's predicate and out-of-scope list (`orchestrate`).
 
 Report progress as "N/M 완료 조건 충족", read from the checked items, never as a count of

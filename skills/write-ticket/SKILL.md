@@ -95,7 +95,7 @@ The tracker's native fields carry structure; the body does not repeat it.
 - **A parent issue's body has no acceptance criteria and no implementation hints** — those
   belong to the children, and duplicating them guarantees they diverge. Keep
   `🎯 배경 & 목표`, `✅ 완료 조건` (numbered exit items, each checkable), `🚫 범위 밖` and an
-  empty `⏸ 보류` (`use-tracker`, "Exit condition"). Write the exit items before the first
+  empty `⏸️ 보류` (`use-tracker`, "Exit condition"). Write the exit items before the first
   child is filed; the children serve them.
 - Clear outcome and a foreseeable end date → suggest a project. Until then a parent issue is
   enough. Only offer a project or milestone that already exists; don't create structure ahead
