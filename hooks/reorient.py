@@ -16,7 +16,9 @@ A role is declared, never guessed from the terminal, and read in this order:
    whatever started it. A fork gets a new session id and its input names no parent, so a fork of a session declared
    only this way is undeclared until it declares again.
 3. Neither: no output.
-A declared session gets the long paragraph at SessionStart and one line on every prompt. Prompts run no external
+A declared session gets the long paragraph at SessionStart and one line on every prompt. An orchestrator whose session
+title is not `orchestrator` is also told at SessionStart how to name it; a role visible in session lists is how the
+human tells which session routes. Prompts run no external
 command, so the hook stays fast.
 """
 import json, os, pathlib, re, sys
@@ -62,6 +64,16 @@ def role_long(entry, compacted):
             "and seconds-long reads, so the human's next message is answered in seconds; investigation, "
             "implementation, verification and browser work go one layer down. Status reports go through "
             "agent-skills:brief.")
+
+
+def name_check(event):
+    """At SessionStart: the orchestrator's name, for the prompt bar and the Orca tab, when it is not set yet."""
+    if event.get("session_title") == "orchestrator":
+        return ""
+    tab = (" and name this Orca tab: `orca terminal rename --terminal $ORCA_TERMINAL_HANDLE --title orchestrator`"
+           if os.environ.get("ORCA_TERMINAL_HANDLE") else "")
+    return (" This session is not named `orchestrator`: ask the human to run `/rename orchestrator`, so the role shows "
+            f"on the prompt bar and in session lists{tab}.")
 
 
 def role_line(entry):
@@ -147,6 +159,8 @@ def main():
     elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork"):
         if entry := resolve(event, declared(session)):
             text = role_long(entry, event.get("source") == "compact")
+            if entry["role"] == "orchestrator":
+                text += name_check(event)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": kind, "additionalContext": text}}))
     return 0

@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 6개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 7개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -508,8 +508,20 @@
 
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
+### 오케스트레이터 위임 강제
+`hooks/orchestrator_guard.py`(PreToolUse, 모든 도구). 최상위 오케스트레이터의 메인 스레드에서만 판정한다. `agent_id`가 없고 `agent_type`이 `agent-skills:orchestrator`이거나, reorient hook에 `ROLE: orchestrator`로 기록된 세션에서 `agent_id`·`agent_type`이 없는 호출이다. 서브에이전트는 자기 타입과 `agent_id`를 달고 오므로 위임받은 쪽은 막지 않는다. 설계와 다른 안의 비교는 [orchestrator-guard.md](orchestrator-guard.md).
+
+| 결정 | 대상 |
+|---|---|
+| 거부 | 브라우저·데스크톱·채팅 전송 도구, WebFetch, WebSearch |
+| 거부 | 상태 디렉터리(`~/.local/state`, `$AGENT_SKILLS_STATE`, `$PROGRAMS_HOME`, `$CLAUDE_CONFIG_DIR/projects/*/memory`, `orchestrator_guard.write_dirs`) 밖의 Edit·Write·NotebookEdit |
+| 거부 | `run_in_background`인 명령을 `tail`·`head`(`-f` 제외)로 파이프한 것. 감시자의 줄이 끝날 때까지 파이프에 묶여 출력 파일에 안 나온다 |
+| 거부 | 한 턴(`prompt_id`, 10분 공백도 새 턴, `prompt_id`가 없으면 세지 않음)에 직접 작업 호출이 `work_calls`(기본 3)를 넘은 것. 상태 디렉터리 밖 Read, Grep, Glob, 위에서 거부하지 않은 MCP 도구, 라우팅 명령(`orca`, `orch`, `skills-sync` 등과 파이프 뒤 필터) 밖의 Bash를 센다 |
+
+Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도구는 세지도 막지도 않는다. 거부 사유는 위임 경로(Agent, `orca worktree create`, 리드에게 `orca orchestration send`, `orch …`)를 알려 준다. `ROLE: none`이면 그 세션에서, `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`이면 모든 세션에서 꺼진다. 설정은 `~/.claude/agent-skills.json`의 `orchestrator_guard`(`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
+
 ### 코디네이터 재정렬
-`hooks/reorient.py`(SessionStart `startup|resume|compact|fork`, UserPromptSubmit). 역할을 선언한 세션에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않고, 외부 명령도 부르지 않는다.
+`hooks/reorient.py`(SessionStart `startup|resume|compact|fork`, UserPromptSubmit). 역할을 선언한 세션에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않고, 외부 명령도 부르지 않는다. 오케스트레이터의 세션 이름(`session_title`)이 `orchestrator`가 아니면 SessionStart 안내 끝에 사람에게 `/rename orchestrator`를 청하고 자기 Orca 탭 이름을 바꾸라(`orca terminal rename`)는 줄을 붙인다.
 
 역할은 터미널로 추측하지 않고 선언으로 정한다. 판정 순서는 다음과 같다.
 1. hook 입력의 `agent_type`. 세션을 `claude --agent agent-skills:orchestrator --name orchestrator`나 `claude --agent agent-skills:lead --name lead:<slug>`로 띄우면 들어온다. 플러그인의 `agents/orchestrator.md`·`agents/lead.md`는 본문이 비어 있다(본문이 있으면 기본 시스템 프롬프트를 대체한다). 리드의 slug는 세션 이름 `lead:<slug>`에서, 없으면 ROLE 줄에서 읽는다. 실측(Claude Code 2.1.296): `agent_type`은 첫 프롬프트, compact 뒤 SessionStart, resume·fork 뒤 모든 프롬프트에 들어오지만 resume·fork의 SessionStart에는 빠진다. 그 둘에서는 세션 이름(`session_title`)이 `orchestrator`나 `lead:<slug>`이면 그것으로 대신한다.

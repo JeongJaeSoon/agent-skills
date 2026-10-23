@@ -109,6 +109,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 | hook | 언제 | 하는 일 |
 |---|---|---|
 | `guard.py` | Bash·Skill 호출 전 | 이 플러그인 스킬과 `orch`·`orca orchestration` 명령 허용, 남의 메일함 읽기·sleep 폴링 거부 |
+| `orchestrator_guard.py` | 모든 도구 호출 전 | 최상위 오케스트레이터 본인 스레드에서만 브라우저·채팅 전송·웹 도구, 상태 디렉터리 밖 편집, `tail`로 파이프한 배경 감시자, 턴당 네 번째 직접 작업 호출을 거부하고 위임 경로를 알린다. `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`으로 끈다 |
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |
 | `reorient.py` | 세션 시작, 프롬프트 | `--agent agent-skills:orchestrator`·`lead`나 `ROLE:` 줄로 선언한 세션에 다시 읽을 규칙과 매 프롬프트 한 줄을 넣는다 |
