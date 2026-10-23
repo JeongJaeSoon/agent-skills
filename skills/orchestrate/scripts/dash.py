@@ -102,6 +102,15 @@ def read_jsonl(path):
     return rows
 
 
+def ledger_events(path):
+    """(events, rejected): every ledger reader indexes e["ev"], so a hand-edited row that is not an object with a
+    string ev is set aside instead of raising there; _merge reports the rejected ones on the program's row."""
+    events, rejected = [], []
+    for e in read_jsonl(path):
+        (events if isinstance(e, dict) and isinstance(e.get("ev"), str) else rejected).append(e)
+    return events, rejected
+
+
 def write_atomic(path, text):
     path = pathlib.Path(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
@@ -151,7 +160,7 @@ def fetch_issues(cfg):
     out = sh(base + ["list", "--project", project, "--limit", "500"])
     issues = out.get("issues", []) if isinstance(out, dict) else list(out)
     have = {i.get("id") for i in issues}
-    admitted = prog.admitted_tickets(read_jsonl(program_dir(cfg["slug"]) / "ledger.jsonl")) if cfg.get("slug") else []
+    admitted = prog.admitted_tickets(ledger_events(program_dir(cfg["slug"]) / "ledger.jsonl")[0]) if cfg.get("slug") else []
     for pid in dict.fromkeys((cfg.get("predicate") or []) + admitted):
         if pid not in have:  # predicate items and admitted follow-ups can live outside the project
             try:
@@ -970,9 +979,10 @@ def land_order(events, pr_rows, cfg, now, tasks=None):
 
 
 def _merge(slug, d, cfg, fetched, interval):
+    rows, rejected = ledger_events(d / "ledger.jsonl")
     events, bad = [], []
-    for e in read_jsonl(d / "ledger.jsonl"):
-        ts = e.get("ts") if isinstance(e, dict) else None
+    for e in rows:
+        ts = e.get("ts")
         try:
             if prog.parse_ts(ts).tzinfo is not None:  # a naive ts parses but fails every comparison with now
                 events.append(e)
@@ -989,6 +999,8 @@ def _merge(slug, d, cfg, fetched, interval):
     tnow = utcnow()
     if bad:  # every view below parses ts, so those lines are left out rather than failing the whole collect
         errors.append(f"ledger: {len(bad)} event(s) with a bad ts left out, first {bad[0]!r}")
+    if rejected:
+        errors.append(f"ledger: {len(rejected)} row(s) without an ev left out, first {rejected[0]!r:.80}")
 
     def outcome(name):
         """(value, fresh): fresh only when this collect fetched the source successfully."""
@@ -1155,7 +1167,7 @@ def ledger_tail(slug):
         key = None
     hit = LEDGER_TAIL.get(f)
     if not hit or hit[0] != key:
-        events = read_jsonl(f)
+        events = ledger_events(f)[0]
         hit = LEDGER_TAIL[f] = (key, (prog.final_check_current(events), events[-1].get("ts") if events else None))
     return hit[1]
 
