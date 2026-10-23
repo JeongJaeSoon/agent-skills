@@ -43,6 +43,13 @@ START = dict(event="SessionStart")
 # 1. --agent: the hook input's agent_type decides, on every prompt and at every SessionStart that carries it.
 assert "top-level orchestrator" in hook(**START, agent=ORCH, title="orchestrator")
 assert hook(agent=ORCH).startswith("ROLE: orchestrator.")
+# Named `orchestrator`: no naming line. Unnamed: /rename for the human, the Orca tab title for itself.
+assert "/rename" not in hook(**START, agent=ORCH, title="orchestrator")
+unnamed = hook(**START, agent=ORCH, session="n1")
+assert "/rename orchestrator" in unnamed and "orca terminal rename" in unnamed, unnamed
+assert "orca terminal rename" not in hook(**START, agent=ORCH, session="n1", handle="")
+assert "/rename" not in hook(agent=ORCH, session="n1"), "prompts stay one line"
+assert "/rename" not in hook(**START, source="compact", agent=LEAD, title="lead:p", session="l0")
 assert hook(agent=ORCH, session="s2").startswith("ROLE: orchestrator."), "no record needed"
 text = hook(**START, source="compact", agent=LEAD, title="lead:p", session="l1")
 assert "coordinate the program p" in text and "just compacted" in text and "orch status p" in text \
