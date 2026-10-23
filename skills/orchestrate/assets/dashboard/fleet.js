@@ -670,7 +670,7 @@ function fleetFlow() {
     ${kpi("State files", `${rep.stores.length - missing.length}<small>/${rep.stores.length}</small>`, missing.length ? `${missing.length} missing on this machine` : "all present")}
     ${kpi("Stale", `${stale.length}`, stale.map((s) => s.name).join(", ") || "every loop on time")}
     ${kpi("Not in the map", `${rep.unread.length}`, "files no known consumer reads")}
-    ${kpi("Starved consumers", `${starved.length}`, starved.map((c) => c.label.split(" · ")[0]).join(", ") || "every consumer has input")}</div>`;
+    ${kpi("Starved consumers", `${starved.length}`, starved.map((c) => c.label).join(", ") || "every consumer has input")}</div>`;
   const rules = rep.stores.filter((s) => s.rule).map((s) => `<tr><td class="mono">${esc(s.path)}</td><td>${esc(s.writers.join(", "))}</td><td>${esc(s.rule)}</td></tr>`).join("");
   const brief = rep.consumers.find((c) => c.id === "brief");
   return head + kpis + `<div class="card">${flowGraph(rep)}</div>

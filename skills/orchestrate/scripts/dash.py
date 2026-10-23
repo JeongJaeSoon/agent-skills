@@ -1578,7 +1578,9 @@ def flow_report(kind):
     at, body = FLOW_CACHE.get(kind, (0, None))
     if body is None or time.monotonic() - at > FLOW_TTL[kind]:
         try:
-            out = flow.flow((getattr(FLEET, "state", None) or {}).get("sessions")) if kind == "flow" else flow.changes()
+            # Before this process's first tick, the sessions come from the last state.json on disk.
+            st = getattr(FLEET, "state", None) or fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
+            out = flow.flow(st.get("sessions")) if kind == "flow" else flow.changes()
         except Exception as e:  # the panel says what failed instead of never loading
             out = {"error": f"{kind}: {type(e).__name__}: {e}"}
         body = json.dumps(out, ensure_ascii=False).encode()
