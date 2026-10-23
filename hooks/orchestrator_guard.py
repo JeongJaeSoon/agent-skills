@@ -16,7 +16,8 @@ Only the orchestrator's main thread is checked:
 In that thread:
 - Deny browser, desktop and chat-send tools, WebFetch and WebSearch: each is a subagent's or a worker's job.
 - Deny Edit/Write/NotebookEdit outside the state directories: ~/.local/state, $AGENT_SKILLS_STATE, $PROGRAMS_HOME,
-  the memory directories under $CLAUDE_CONFIG_DIR/projects, and the write_dirs below.
+  the memory directories under $CLAUDE_CONFIG_DIR/projects, the temp and scratchpad directories, and the
+  write_dirs below.
 - Deny a background Bash call piped into `tail` or `head` (not `-f`): a watcher's lines stay in the pipe until it
   exits, so its findings never reach the output file that wakes the session.
 - Count work calls per turn: Read outside the state directories, Grep, Glob, any MCP tool not denied above, and
@@ -30,7 +31,7 @@ Config, all optional: ~/.claude/agent-skills.json → "orchestrator_guard": {"wo
 "route_commands": [...], "deny_tools": [regex, ...]}; lists extend the defaults. State:
 $AGENT_SKILLS_STATE/orchestrator-guard/<session_id>.json.
 """
-import json, os, pathlib, re, shlex, sys, time
+import json, os, pathlib, re, shlex, sys, tempfile, time
 
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 PROGRAMS = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
@@ -48,6 +49,7 @@ FILTERS = {"jq", "head", "tail", "grep", "wc", "sort", "uniq", "cut", "tr", "col
 SEPARATORS = {";", ";;", "&", "&&", "||", "|", "|&"}
 PIPES = {"|", "|&"}
 REDIRECTS = {">", ">>", ">|", "&>", "&>>"}
+BODY = re.compile(r"\$\(cat\s+[^\s()`$;|&<>]+\)")
 FOLLOW = re.compile(r"-[A-Za-z]*[fF][A-Za-z]*|--follow(=.*)?")
 DELEGATE = ("Delegate it: a background subagent (Agent with run_in_background), `orca worktree create` or "
             "`dispatch-card` for work in one repo, the project's lead through `orca orchestration send`, or `orch …` "
@@ -102,6 +104,7 @@ def in_state_dirs(path, cfg):
 def commands(cmd):
     """The simple commands of a command line as (after a pipe, words), or None when it runs a substitution or does
     not parse. A newline outside quotes separates commands; one inside a quoted message does not."""
+    cmd = BODY.sub("BODY", cmd)  # `--body "$(cat <file>)"`, the message form top-level.md prescribes
     text, quote = [], None
     for i, c in enumerate(cmd):
         if quote == "'":
@@ -185,6 +188,9 @@ def count(session, event):
 
 def check(event, session):
     cfg = config()
+    # The session's own scratch space holds message bodies and drafts, never task files.
+    temp = [tempfile.gettempdir(), "/tmp", event.get("scratchpad_dir")]
+    cfg["write_dirs"] = listed(cfg, "write_dirs") + [str(d) for d in temp if d]
     tool, args = str(event.get("tool_name") or ""), event.get("tool_input")
     args = args if isinstance(args, dict) else {}
     patterns = DENY_TOOLS + listed(cfg, "deny_tools")
