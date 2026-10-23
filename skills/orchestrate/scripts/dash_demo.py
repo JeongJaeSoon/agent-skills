@@ -667,9 +667,10 @@ class FakeFleetWorld:
              "next_run_at": None, "last_run_at": _ago(now, 72), "recent": [{"status": "completed", "trigger": "scheduled",
                                                                              "at": _ago(now, 72), "summary": "digest posted"}]},
         ]
-        # Background watches: two inbox waits and a CI Monitor running, one wait that died, one stopped without a record.
-        def mon(tid, kind, status, wt, name, desc, cmd, started, last, exit=None, summary="", event=""):
-            return {"id": tid, "kind": kind, "status": status, "exit": exit, "command": cmd, "description": desc,
+        # Background watches: two inbox waits and a CI Monitor running, one wait that died, one stopped without a record,
+        # and a failed run watch its session already received.
+        def mon(tid, kind, status, wt, name, desc, cmd, started, last, exit=None, summary="", event="", seen=False):
+            return {"id": tid, "kind": kind, "status": status, "exit": exit, "seen": seen, "command": cmd, "description": desc,
                     "claude_session": f"demo-{wt}", "session_name": name, "cwd": f"/work/{wt}", "started_at": _ago(now, started),
                     "last_at": _ago(now, last), "ended_at": _ago(now, last) if status == "dead" else None,
                     "summary": summary, "event": event}
@@ -684,6 +685,9 @@ class FakeFleetWorld:
                 "while sleep 60; do gh pr checks 42 --repo acme/app; done", 0.8, 0.1, event="build pass · lint pass · e2e pending"),
             mon("b2wait", "bash", "running", "wt-lead", "lead:billing", "Restart background inbox wait for billing",
                 "orch wait billing --timeout-ms 3300000", 0.7, 0.2),
+            mon("b9run", "bash", "dead", "wt-export", "export-worker", "Wait for the release run",
+                "gh run watch 1234 -R acme/app --exit-status", 3.1, 3.0, exit=1, seen=True,
+                summary='Background command "Wait for the release run" failed with exit code 1'),
         ]
         # Sent instructions: three logged with `orch sent add`, one of them also seen in the coordinator's transcript,
         # two more only in transcripts, and a line typed on the dashboard.

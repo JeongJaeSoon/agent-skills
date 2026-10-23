@@ -500,13 +500,15 @@ const st = {{sessions: [{{id: "wt-coord", name: "coord", phase: "idle"}}], sourc
   monitors: [{{id: "b1", kind: "bash", status: "dead", exit: 1, command: "<script>x</script>", description: "<b>wait</b>", session: "wt-coord",
                session_name: "lead:<i>x</i>", started_at: old, last_at: old, summary: "<img src=x>"}},
              {{id: "b2", kind: "bash", status: "lost", command: "tail -f log", description: "tail", started_at: old, last_at: old}},
-             {{id: "m1", kind: "monitor", status: "running", command: "gh pr checks", description: "ci", started_at: old, last_at: old, event: "pass"}}]}};
+             {{id: "m1", kind: "monitor", status: "running", command: "gh pr checks", description: "ci", started_at: old, last_at: old, event: "pass"}},
+             {{id: "b3", kind: "bash", status: "dead", seen: true, exit: 1, command: "gh run watch 7", description: "run", started_at: old, last_at: old}}]}};
 process.stdout.write(JSON.stringify({{html: fleetMonitors(st), troubled: monTroubled(st).map((m) => m.id), empty: fleetMonitors({{}}),
   warned: fleetMonitors({{sources: {{monitors: {{ok: true, warning: "<b>lead</b>: transcript not found"}}}}}})}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     for raw in ("<script", "<img", "<i>", "<b>wait"):
         assert raw not in got["html"], raw
-    assert got["troubled"] == ["b1", "b2"], got["troubled"]
+    assert got["troubled"] == ["b1", "b2"], "a failure its session received is listed without a ▲"
+    assert "○ dead, seen" in got["html"], got["html"]
     assert "exit 1" in got["html"] and "no end record" in got["html"] and ">Monitor<" in got["html"] and 'href="#/fleet/session/wt-coord"' in got["html"], got["html"]
     assert "No monitors" in got["empty"] and "partial" not in got["empty"], got["empty"]
     assert "partial" in got["warned"] and "&lt;b&gt;lead" in got["warned"], got["warned"]
@@ -1019,6 +1021,7 @@ procs = {100: (1, lstart(0), "claude"), 101: (1, lstart(0), "claude --resume s-l
 mons = fleet.fetch_monitors(procs, now=now)
 got = {m["id"]: (m["status"], m["exit"]) for m in mons}
 assert got == {"other": ("dead", 1), "tail": ("lost", None), "loop": ("running", None), "wait": ("running", None)}, got
+assert next(m for m in mons if m["id"] == "other")["seen"], "its notification was a user turn: the session has it"
 assert [m["id"] for m in mons][:2] == ["tail", "other"], "troubled first, newest first"
 assert secret not in json.dumps(mons) and all(m["session_name"] == "lead:billing" for m in mons), mons
 assert next(m for m in mons if m["id"] == "loop")["event"] == "mail from wt-tax"
@@ -1046,11 +1049,48 @@ started("stop", "orch wait tax", 21)
 queued("stop", 22, "killed", 'Background command "x" was stopped', via=("enqueue",))
 started("docs", "make docs", 21)
 queued("docs", 22, "failed", 'Background command "x" failed with exit code 2', via=("attachment",))
+started("held", "make lint", 21)
+queued("held", 22, "failed", 'Background command "x" failed with exit code 1', via=("enqueue",))
 with open(transcript, "a") as fh:
     fh.write("".join(json.dumps(l) + "\n" for l in lines))
 mons = {m["id"]: m for m in fleet.fetch_monitors(procs, now=now)}
 assert "img" not in mons and "stop" not in mons and mons["tail"]["status"] == "lost", mons
 assert (mons["docs"]["status"], mons["docs"]["exit"], mons["docs"]["ended_at"]) == ("dead", 2, at(22)), mons["docs"]
+assert mons["docs"]["seen"] and not mons["held"]["seen"], "only an end still waiting in the queue is unseen"
+# TaskStop writes no notification, only its tool result: the task ended on purpose. One that failed stopped nothing.
+lines.clear()
+
+
+def task_stop(tid, m, ok=True):
+    use = f"toolu_stop_{tid}"
+    lines.append({"type": "assistant", "timestamp": at(m), "message": {"content": [
+        {"type": "tool_use", "id": use, "name": "TaskStop", "input": {"task_id": tid}}]}})
+    lines.append({"type": "user", "timestamp": at(m),
+                  "toolUseResult": {"message": f"Successfully stopped task: {tid}", "task_id": tid} if ok else "Error",
+                  "message": {"content": [{"type": "tool_result", "tool_use_id": use, "is_error": not ok,
+                                           "content": f"Successfully stopped task: {tid}" if ok else f"No task found with ID: {tid}"}]}})
+
+
+started("watch", "python3 watch.py --interval 120", 23)
+task_stop("watch", 24)
+started("poll", "for i in $(seq 1 96); do gh pr view 1; sleep 300; done", 23)
+task_stop("poll", 24, ok=False)
+with open(transcript, "a") as fh:
+    fh.write("".join(json.dumps(l) + "\n" for l in lines))
+mons = {m["id"]: m for m in fleet.fetch_monitors(procs, now=now)}
+assert "watch" not in mons and mons["poll"]["status"] == "lost", mons
+# A session continued in a new transcript leaves the old one ending in continued-in. The new one repeats what the old one
+# started, so the old one shows nothing, and it stays scanned so the next tick does not read it from the start again.
+old_transcript = home / "projects" / "-work-wt-lead" / "s-old.jsonl"
+fleet.write_atomic(home / "sessions" / "102.json", json.dumps({"pid": 102, "sessionId": "s-old", "cwd": "/work/wt-lead",
+                                                                "procStart": lstart(0), "name": "lead:old"}))
+lines.clear()
+started("gone", "orch wait old", 25)
+lines.append({"type": "continued-in", "timestamp": at(26), "sessionId": "s-old", "continuedInSessionId": "s-live"})
+fleet.write_atomic(old_transcript, "".join(json.dumps(l) + "\n" for l in lines))
+mons = fleet.fetch_monitors({**procs, 102: (1, lstart(0), "claude")}, now=now)
+assert "gone" not in {m["id"] for m in mons} and fleet.MONITOR_SCAN[str(old_transcript)]["offset"] == old_transcript.stat().st_size, mons
+(home / "sessions" / "102.json").unlink()
 # Hours later the failures and the lost one drop off; with no live Claude process there is nothing to show.
 assert [m["id"] for m in fleet.fetch_monitors(procs, now=now + dt.timedelta(hours=7))] == ["wait"]
 assert fleet.fetch_monitors({}, now=now) == []
