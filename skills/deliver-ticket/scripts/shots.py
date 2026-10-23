@@ -13,8 +13,11 @@ script as one JSON literal. EGO_BROWSER overrides the binary (tests use a stub).
 import argparse, json, os, pathlib, re, subprocess, sys
 
 RESULT_TAG = "SHOTS_RESULT "
-NAME_RE = re.compile(r"^(?P<subject>.+?)-(?P<width>\d{3,4})-(?P<theme>light|dark)(?:-.+)?$")
-SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+NAME_RE = re.compile(r"^(?P<subject>.+?)-(?P<width>\d{3,4})-(?P<theme>light|dark)(?:-(?P<tag>.+))?$")
+# No dots: GitHub's alt text keeps everything before the extension, and URLs are keyed by it.
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+# Browser output can carry URLs with tokens, so a failure reports only these known diagnostics.
+DIAGNOSTIC = re.compile(r"(?:page|task)\.\w+ failed|net::ERR_[A-Z_]+|EGO_[A-Z_]+|Timeout \d+ms exceeded|\b(?:Syntax|Type|Reference)Error\b")
 # GitHub rejects attached images above 10 MB.
 MAX_BYTES = 10 * 1024 * 1024
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -84,8 +87,8 @@ if (draft !== "") {
     await page.fill("#new_comment_field", "");
   }
   const urls = {};
-  for (const m of value.matchAll(/<img[^>]*alt="([^"]+)"[^>]*src="(https:\/\/github\.com\/user-attachments\/assets\/[^"]+)"/g)) urls[m[1].replace(/\.[a-z]+$/i, "")] = m[2];
-  for (const m of value.matchAll(/!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[^)\s]+)\)/g)) urls[m[1].replace(/\.[a-z]+$/i, "")] = m[2];
+  for (const m of value.matchAll(/<img[^>]*alt="([^"]+)"[^>]*src="(https:\/\/github\.com\/user-attachments\/assets\/[^"]+)"/g)) urls[m[1].replace(/\.(png|jpe?g|gif|webp)$/i, "")] = m[2];
+  for (const m of value.matchAll(/!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[^)\s]+)\)/g)) urls[m[1].replace(/\.(png|jpe?g|gif|webp)$/i, "")] = m[2];
   const cleared = (await page.evaluate(() => document.querySelector("#new_comment_field")?.value ?? "")) === "";
   await task.finish({ keep: [] });
   console.log("SHOTS_RESULT " + JSON.stringify({ urls, failed, cleared }));
@@ -101,14 +104,9 @@ def run_browser(js, inp):
     for line in (proc.stdout + "\n" + proc.stderr).splitlines():
         if line.startswith(RESULT_TAG):
             return json.loads(line[len(RESULT_TAG):])
-    sys.exit(f"ego-browser gave no result (exit {proc.returncode}):\n{redact(proc.stdout + proc.stderr)[-2000:]}")
-
-
-def redact(text):
-    """Strip what could carry a credential from browser output before it is printed."""
-    text = re.sub(r"(https?://[^\s?#\"'<>]+)[?#][^\s\"'<>]*", r"\1?<redacted>", text)
-    return re.sub(r"(?i)\b(token|jwt|cookie|session|authorization|bearer|password|secret|api[_-]?key)\b(\s*[=:]\s*|\s+)\S+",
-                  r"\1\2<redacted>", text)
+    found = list(dict.fromkeys(DIAGNOSTIC.findall(proc.stdout + proc.stderr)))
+    sys.exit(f"ego-browser gave no result (exit {proc.returncode}): {', '.join(found) or 'no known diagnostic'}. "
+             "Its raw output is not printed, since it can carry URLs with tokens.")
 
 
 def ints(s):
@@ -179,7 +177,16 @@ def table(urls):
             raise SystemExit(f"no URL for {name}: upload it first")
         m = NAME_RE.match(name)
         if m:
-            groups.setdefault(m["subject"], {})[(int(m["width"]), m["theme"])] = (name, url)
+            cell = groups.setdefault(m["subject"], {})
+            key = (int(m["width"]), m["theme"])
+            if key in cell:
+                # A tagged retake replaces the untagged shot of the same cell; two retakes are ambiguous.
+                other = cell[key]
+                if other[2] and m["tag"]:
+                    raise SystemExit(f"two retakes for one cell: {other[0]} and {name}; upload only one")
+                if other[2]:
+                    continue
+            cell[key] = (name, url, m["tag"])
         else:
             singles.append((name, url))
     out = ["### 스크린샷", ""]
@@ -188,7 +195,7 @@ def table(urls):
         out += [f"**{subject}**", "", "| | " + " | ".join(themes) + " |", "| --- |" + " --- |" * len(themes)]
         for w in sorted({k[0] for k in shots}, reverse=True):
             size = 360 if w >= 768 else 180
-            cells = [img(*shots[(w, t)], size) if (w, t) in shots else "—" for t in themes]
+            cells = [img(*shots[(w, t)][:2], size) if (w, t) in shots else "—" for t in themes]
             out.append(f"| {w} | " + " | ".join(cells) + " |")
         out.append("")
     for name, url in singles:

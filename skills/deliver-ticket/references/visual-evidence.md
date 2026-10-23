@@ -26,8 +26,9 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" capture --url http://127.0.0.1:51
   `--widths 1280,390` and the like match a project whose harness uses other sizes; keep 390 for
   the phone. `--wait-for <selector>` holds the shot until the content is there.
 - Files land as `<name>-<width>-<theme>.png`. Keep that form for every shot, including the ones
-  you take by hand; the sticky table is built from it. A retake gets a trailing tag
-  (`settings-390-dark-final`), not a new subject name.
+  you take by hand; the sticky table is built from it. Names use letters, digits, `-` and `_`
+  only. A retake gets a trailing tag (`settings-390-dark-final`), not a new subject name; it
+  replaces the untagged shot in the table, and one cell takes at most one retake.
 - It prints `scrollWidth/innerWidth` for each shot and exits 1 when the page is wider than the
   viewport. Fix the overflow, or record why it is intended.
 - Beyond the default view, shoot each state the change touches: empty, loading, error, signed out,
@@ -49,7 +50,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" upload --repo owner/repo --pr N \
 
 - It needs the PR to exist and `ego-browser` signed in to GitHub as someone who can comment. No
   token or cookie goes on the command line or into the output.
-- It checks each file first: an image type, at most 10 MB, a plain file name. It exits 1 when any
+- It checks each file first: an image type, at most 10 MB, a name in the form above. It exits 1 when any
   file came back without a URL, when GitHub marked an upload failed, or when the comment box could
   not be cleared; the last case leaves a draft on the page, so clear it before going on.
 - On a private repo the images are visible only to people with access, same as the PR.

@@ -49,7 +49,7 @@ r = run("capture", "--url", url, "--name", "card", "--out", str(tmp), "--widths"
         reply={"shots": [shot(390, "dark", 608)]})
 assert r.returncode == 1 and "608/390 OVERFLOW" in r.stdout, (r.returncode, r.stdout)
 
-for bad in (["--name", "../x"], ["--name", "ok", "--themes", "sepia"]):
+for bad in (["--name", "../x"], ["--name", "card.final"], ["--name", "ok", "--themes", "sepia"]):
     r = run("capture", "--url", url, "--out", str(tmp), *(["--name", "ok"] if bad[0] != "--name" else []), *bad)
     assert r.returncode != 0 and r.stderr, (bad, r.stderr)
 
@@ -67,6 +67,10 @@ with open(big, "wb") as f:
     f.truncate(10 * 1024 * 1024 + 1)
 r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(big))
 assert r.returncode != 0 and "10 MB" in r.stderr, r.stderr
+dotted = tmp / "card.final.png"
+dotted.write_bytes(b"\x89PNG\r\n\x1a\n")
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(dotted))
+assert r.returncode != 0 and "plain file stem" in r.stderr, r.stderr
 r = run("upload", "--repo", "acme/app;rm", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
 assert r.returncode != 0 and "owner/repo" in r.stderr, r.stderr
 assert not (tmp / "script.js").exists(), "browser ran despite a rejected input"
@@ -112,16 +116,30 @@ assert md == f"""### 스크린샷
 
 <img width="600" alt="search-results" src="{U}6">
 """, md
+# A tagged retake wins its cell in either order; two retakes for one cell stop the table.
+for order in (["card-390-dark", "card-390-dark-final"], ["card-390-dark-final", "card-390-dark"]):
+    md = table({n: U + n for n in order})
+    assert f'src="{U}card-390-dark-final"' in md and f'src="{U}card-390-dark"' not in md, md
+try:
+    table({"card-390-dark-a": U + "a", "card-390-dark-b": U + "b"})
+    raise AssertionError("two retakes must stop the table")
+except SystemExit as e:
+    assert "two retakes" in str(e)
 try:
     table({"x-390-light": None})
     raise AssertionError("a missing URL must stop the table")
 except SystemExit as e:
     assert "upload it first" in str(e)
 
-# The browser error path prints no query string or credential-looking value.
-stub.write_text("#!/bin/sh\necho 'Error: goto https://example.test/cb?code=SECRET1 failed, token=SECRET2' >&2\nexit 1\n")
+# The browser error path prints only known diagnostics, never the raw output.
+stub.write_text("""#!/bin/sh
+echo 'Error: page.goto failed: net::ERR_ABORTED at https://u:SECRET1@example.test/cb?code=SECRET2' >&2
+echo 'Authorization: Bearer SECRET3 {"token":"SECRET4"} Cookie: a=1; b=SECRET5' >&2
+exit 1
+""")
 r = run("capture", "--url", url, "--name", "card", "--out", str(tmp))
-assert r.returncode != 0 and "SECRET" not in r.stderr and "<redacted>" in r.stderr, r.stderr
+assert r.returncode != 0 and "SECRET" not in r.stderr, r.stderr
+assert "page.goto failed, net::ERR_ABORTED" in r.stderr, r.stderr
 
 # Run the generated JavaScript itself against a fake page and DOM, so the page calls are checked too.
 fake = tmp / "ego-node.mjs"
