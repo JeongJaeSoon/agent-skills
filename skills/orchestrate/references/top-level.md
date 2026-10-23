@@ -121,4 +121,4 @@ The dashboard's collector watches the PRs of every session on the roster and app
 
 ## Skills changed
 
-After an `agent-skills` change reaches the loaded checkout, run `skills-sync broadcast` (`scripts/sync.py`, `docs/platform.md` §4). It sends `/reload-skills` or `/reload-plugins` only to sessions idle at an empty prompt and keeps the rest pending. Never type the reload into sessions yourself.
+After an `agent-skills` change reaches the loaded checkout, run `skills-sync broadcast` (`scripts/sync.py`, `docs/platform.md` §4). It sends `/reload-skills` or `/reload-plugins` only to sessions idle at an empty prompt and keeps the rest pending. Never type the reload into sessions yourself. This session reloads through the same broadcast, aimed at its own handle after its turn ends (`write-skill` §7).
