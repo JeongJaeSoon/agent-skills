@@ -276,9 +276,10 @@ def ps_time(lstart):
 
 def scan_transcript(path):
     """The transcript's background tasks so far: a Bash run with run_in_background or a Monitor, its start, and the
-    task-notification that ended it or carried its last event. Agent and workflow tasks are left out."""
-    c = MONITOR_SCAN.setdefault(str(path), {"offset": 0, "pending": {}, "tasks": {}})
-    for raw in appended(path, c, lambda: c.update(pending={}, tasks={})):
+    task-notification that ended it or carried its last event, or the TaskStop that stopped it (which writes no
+    notification). Agent and workflow tasks are left out."""
+    c = MONITOR_SCAN.setdefault(str(path), {"offset": 0, "pending": {}, "tasks": {}, "continued": False})
+    for raw in appended(path, c, lambda: c.update(pending={}, tasks={}, continued=False)):
         scan_line(c, raw)
     return c["tasks"]
 
@@ -303,13 +304,16 @@ def appended(path, c, reset):
 
 def scan_line(c, raw):
     if not any(k in raw for k in (b"run_in_background", b'"Monitor"', b"backgroundTaskId", b'"taskId"',
-                                  b"<task-notification>")):
+                                  b"<task-notification>", b'"TaskStop"', b'"task_id"', b'"continued-in"')):
         return
     try:
         d = json.loads(raw)
     except ValueError:
         return
     if not isinstance(d, dict):
+        return
+    if d.get("type") == "continued-in":
+        c["continued"] = True  # the session goes on in a new transcript, which repeats what this one started
         return
     text = notice_text(d)
     if text:
@@ -324,12 +328,17 @@ def scan_line(c, raw):
             if b.get("type") == "tool_use" and (b.get("name") == "Monitor" or b.get("name") == "Bash" and inp.get("run_in_background")):
                 c["pending"][b.get("id")] = {"kind": "monitor" if b["name"] == "Monitor" else "bash",
                                              "command": str(inp.get("command") or ""), "description": inp.get("description")}
+            elif b.get("type") == "tool_use" and b.get("name") == "TaskStop":
+                c["pending"][b.get("id")] = {"stop": inp.get("task_id")}
     elif d.get("type") == "user" and blocks:
         r = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
         tid = r.get("backgroundTaskId") or r.get("taskId")
         result = next((b for b in blocks if b.get("type") == "tool_result"), {})
         use = c["pending"].pop(result.get("tool_use_id"), None)
-        if tid and use:
+        stopped = use and c["tasks"].get(use.get("stop"))
+        if stopped and not result.get("is_error") and not stopped.get("ended_at"):
+            stopped.update(ended_at=stamp(d), end_status="stopped", exit=None, summary=None)
+        elif tid and use and not use.get("stop"):
             m = re.search(r"Output is being written to: (\S+?)\.?(?:\s|$)", str(result.get("content") or ""))
             c["tasks"][tid] = {**use, "id": tid, "started_at": stamp(d), "output": m and m.group(1),
                                "timeout_ms": None if r.get("persistent") else r.get("timeoutMs")}
@@ -355,6 +364,8 @@ def scan_notice(c, d, text):
     if not t:
         return
     at = stamp(d)
+    if n.get("status") and n["status"] != "running" and d.get("type") != "queue-operation":
+        t["seen"] = True  # a user turn or an attachment: the end reached the session's model, not only its queue
     t["output"] = t.get("output") or n.get("output-file")
     if n.get("event") and (at or "") >= (t.get("event_at") or ""):
         t["event_at"], t["event"] = at, n["event"]
@@ -378,7 +389,9 @@ def fetch_monitors(procs=None, now=None, warn=None):
     from each session's transcript, checked against the process table. A task with no end record is running only if a
     shell its session started within BORN_SLACK of it runs exactly its command; otherwise it is lost (the UI, a
     Monitor's expiry or a teardown stopped it without a record, or it died with its shell). Ended tasks are kept
-    MONITOR_KEEP when they failed or were lost, and dropped once the same command runs again in that session.
+    MONITOR_KEEP when they failed or were lost, and dropped once the same command runs again in that session. A failure
+    whose notification reached the session's model is marked seen: that session has it. A transcript that was continued
+    in another one is skipped, since the new one repeats its tasks.
     warn: a list that gets one line per live session whose transcript was not found."""
     try:
         return collect_monitors(ps_table() if procs is None else procs, now or utcnow(), [] if warn is None else warn)
@@ -414,6 +427,8 @@ def collect_monitors(procs, now, warn):
     for sid, s, path in live_transcripts(procs, warn):
         scanned.add(str(path))
         tasks = scan_transcript(path)
+        if MONITOR_SCAN[str(path)]["continued"]:
+            continue
         # Only the session's own shells: a $(…) inside one forks a shell with the same command line.
         free = {}
         for pid, (ppid, start, cmd) in procs.items():
@@ -444,6 +459,7 @@ def collect_monitors(procs, now, warn):
             if status == "ended" or status != "running" and (again or last and (now - parse(last)).total_seconds() > MONITOR_KEEP):
                 continue
             out.append({"id": t["id"], "kind": t["kind"], "status": status, "exit": t.get("exit"),
+                        "seen": status == "dead" and bool(t.get("seen")),
                         "command": mask(t["command"], 300), "description": mask(t.get("description"), 120),
                         "claude_session": sid, "session_name": mask(s.get("name"), 80), "cwd": s["cwd"],
                         "started_at": t.get("started_at"), "last_at": last, "ended_at": at,

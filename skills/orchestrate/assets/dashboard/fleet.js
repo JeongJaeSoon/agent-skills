@@ -748,23 +748,24 @@ function fleetAutomations(st) {
 }
 
 // Background watches of the live Claude Code sessions (state.json monitors, fleet.py fetch_monitors): a Bash run in the
-// background or a Monitor. Every row but a running one is ▲: it died, or no process runs it and no end was recorded.
-const MON = { running: ["●", "good", "running"], dead: ["▲", "bad", "dead"], lost: ["▲", "bad", "unknown"] };
-const monTroubled = (st) => (st.monitors || []).filter((m) => m.status !== "running");
+// background or a Monitor. A row is ▲ when it died unseen, or no process runs it and no end was recorded.
+const MON = { running: ["●", "good", "running"], dead: ["▲", "bad", "dead"], seen: ["○", "", "dead, seen"], lost: ["▲", "bad", "unknown"] };
+const monStatus = (m) => (m.status === "dead" && m.seen ? "seen" : m.status);
+const monTroubled = (st) => (st.monitors || []).filter((m) => !["running", "seen"].includes(monStatus(m)));
 function fleetMonitors(st) {
   const mons = st.monitors || [], src = (st.sources || {}).monitors || {};
   const legend = Object.values(MON).map(([g, tone, l]) => `<span><span class="toned tone-${tone}">${g}</span> ${l}</span>`).join("");
-  const headHtml = `<div class="view-head"><div><h2>Monitors</h2><p>Background commands (run_in_background) and Monitors started by live Claude Code sessions, matching each session transcript's start and end records against the process list. A failed exit is "dead"; no end record and no process is "unknown". Both get a ▲ and drop off after 6 hours or once the same command runs again. A normal exit or a deliberate stop is not shown. Tasks inside subagents, CronCreate and launchd jobs are not collected.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Monitors</h2><p>Background commands (run_in_background) and Monitors started by live Claude Code sessions, matching each session transcript's start and end records against the process list. A failed exit is "dead"; no end record and no process is "unknown". Both get a ▲ and drop off after 6 hours or once the same command runs again. A failure the session already received is "dead, seen", listed without a ▲. A normal exit, a deliberate stop (TaskStop included) and a transcript continued in a new session are not shown. Tasks inside subagents, CronCreate and launchd jobs are not collected.</p></div>
     <div class="legend">${legend}</div></div>`;
   const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the monitor list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>`
     : src.warning ? `<div class="card"><div class="empty-chart">${tag("partial", "warn", "alert")} Sessions whose transcript was not found are left out: ${esc(src.warning)}</div></div>` : "";
   const rows = mons.map((m) => {
-    const [glyph, tone, label] = MON[m.status] || ["?", "", m.status], s = byId(st)[m.session];
+    const [glyph, tone, label] = MON[monStatus(m)] || ["?", "", m.status], s = byId(st)[m.session];
     const result = m.status === "dead" ? `${m.exit != null ? `exit ${esc(m.exit)} · ` : ""}${esc(m.summary || "")}` : m.status === "lost" ? "no end record, no process" : esc(m.event || "");
     return `<tr><td class="nowrap"><span class="toned tone-${tone}">${glyph} ${label}</span></td>
       <td><b>${esc(m.description || "")}</b> ${tag(m.kind === "monitor" ? "Monitor" : "background")}<div class="mono dim ellipsis cmd" title="${esc(m.command)}">${esc(m.command)}</div></td>
       <td>${s ? `<a href="${sessionHref(s.id)}">${phaseDot(s)} ${esc(s.name)}</a>` : ""}<div class="mono dim nowrap">${esc(m.session_name || "")}</div></td>
-      <td class="nowrap muted">${relSpan(m.started_at)}</td><td class="nowrap ${m.status === "running" ? "muted" : "toned tone-bad"}">${m.last_at ? relSpan(m.last_at) : "–"}</td>
+      <td class="nowrap muted">${relSpan(m.started_at)}</td><td class="nowrap ${tone === "bad" ? "toned tone-bad" : "muted"}">${m.last_at ? relSpan(m.last_at) : "–"}</td>
       <td class="dim"><span class="ellipsis" style="display:block">${result || '<span class="muted">–</span>'}</span></td></tr>`;
   }).join("");
   const table = mons.length ? `<div class="card table-wrap" data-src="monitors"><table class="autos monitors"><thead><tr><th>Status</th><th>What</th><th>Session</th><th>Started</th><th>Last wake</th><th>Result · last event</th></tr></thead><tbody>${rows}</tbody></table></div>`
