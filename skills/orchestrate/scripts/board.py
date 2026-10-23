@@ -300,16 +300,21 @@ def fleet_rows(state, leads, board_rows):
 
     def add(rid, s, kind, parent=None, program=None):
         status, nxt = PHASE_ROW.get(s.get("phase"), ("held", s.get("phase") or "—"))
+        rep = s.get("report") or {}
+        if rep.get("next") and s.get("phase") != "offline":
+            nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else s.get("task_title") or s.get("name")
-        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid, 80), "status": status, "next": nxt,
-                     "pr": pr_of.get(s.get("id")), "reported_at": s.get("last_activity"), "parent": parent,
+        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid, 80), "status": status, "next": one_line(nxt, 120),
+                     # a lead's digest links its cards' PRs, which are the cards' rows
+                     "pr": pr_of.get(s.get("id")) or (rep.get("pr") if kind != "lead" else None),
+                     "reported_at": max(filter(None, (s.get("last_activity"), rep.get("at"))), default=None), "parent": parent,
                      # a card under a lead takes the lead's repo, so the lead heads one section
                      "repo": None if parent else s.get("gh_repo") or s.get("project") or "—", "program": program}
         order.append(rid)
 
     def shown(s):
-        pr = pr_of.get(s.get("id"))
+        pr = pr_of.get(s.get("id")) or (s.get("report") or {}).get("pr")
         return (s.get("phase") != "offline" or pr) and pr not in on_board
 
     for lead in sessions:
@@ -322,7 +327,11 @@ def fleet_rows(state, leads, board_rows):
                 add(f"{lid}/{s['id']}", s, "task", lid)
     kind = {s.get("id"): s.get("kind") for s in sessions}
     for s in sessions:
-        if s.get("kind") == "task" and kind.get(s.get("parent")) == "orchestrator" and shown(s):
+        # A card made with `orca worktree create` and no Run is standalone: it is work when it has a report file, a PR
+        # or a dispatch, not a resident folder such as an automations runner.
+        card = s.get("kind") == "task" or s.get("kind") == "standalone" and (
+            s.get("report") or pr_of.get(s.get("id")) or s.get("dispatch"))
+        if card and kind.get(s.get("parent")) == "orchestrator" and shown(s):
             add(f"fleet:{s['id']}", s, "task")
     return rows, order
 
