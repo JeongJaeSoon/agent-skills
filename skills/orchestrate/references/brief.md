@@ -75,12 +75,18 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
             with the reason). The coordinator classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
-            Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`), and
-            give each Bash act that changes a file or its mode its own call, so a refusal names it.
+            Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`, a
+            python one-liner), even where the harness allows small shell edits: a Bash-made patch
+            has passed tests that re-applying it with Edit showed broken. A formatter or generator
+            VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
+            that changes a file or its mode its own call, so a refusal names it.
             Write no file or script outside the worktree except under SCOPE's scratch root or
             its named temporary download directory; list what you put there (checkouts, files, compose projects) in the report and tear it down
-            before worker_done. No wrapper scripts for evidence: run the commands VERIFY names, one
-            by one.
+            before worker_done by moving that one named directory to the trash. A script's own
+            temporary files go there too, never loose in the system temporary root. Never `rm` a
+            glob or a path built from a variable: it stops on a permission prompt, and an empty
+            variable widens the target (any other path built from one is written `${VAR:?}`).
+            No wrapper scripts for evidence: run the commands VERIFY names, one by one.
             An act refused by a permission prompt, the auto-mode classifier (including an error that
             returns no verdict), a Claude Code hook or the human is not tried again in any form: not
             re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
