@@ -400,21 +400,31 @@ function fleetOverview(st) {
   const ss = st.sessions || [], items = st.items || [];
   const n = (p) => ss.filter((s) => s.phase === p).length;
   const open = (st.prs || []).filter((p) => p.state === "OPEN");
-  const missed = items.filter((i) => i.missed).length;
+  const missed = items.filter((i) => i.missed).length, rq = st.requests || {};
   return `<div class="kpis" style="--n:4">
       ${kpi("Sessions", `${ss.length}`, phaseLegend(["working", "waiting", "idle"], n), { src: "orca" })}
       ${kpi("Needs you", `${items.length}${missed ? ` ${tag(`${missed} missed`, "bad", "alert")}` : ""}`, Object.entries(st.counts || {}).map(([t, c]) => `${itemMeta(t)[0]} ${c}`).join(" · ") || "inbox empty")}
       ${kpi("Open PRs", `${open.length}`, `${open.filter((p) => p.ci === "failure").length} CI failing · ${open.filter((p) => p.decision === "APPROVED").length} approved`, { src: "github" })}
-      ${kpi("Runs", `${(st.runs || []).length}`, `${(st.tasks || []).filter((t) => t.status !== "completed").length} open tasks`, { src: "runs" })}
+      ${kpi("Your requests", `${rq.open || 0}${(rq.unlinked || []).length ? ` ${tag(`${rq.unlinked.length} unlinked`, "warn", "alert")}` : ""}`, rq.open ? `oldest ${agoSpan(rq.items[0].ts)}` : "none open")}
     </div>
     ${projectChips(st)}
     <div class="grid fill">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items, { limit: 8 })}</div>
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
+      ${requestCard(st)}
       ${leadCard(st)}
       <div class="card span2" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside">${prUpdated(st)}<a class="go" href="#/fleet/prs">All ${open.length} ${icon("arrow")}</a></span></div>${prRows(st, open.slice(0, 8))}</div>
       <div class="card"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>
     </div>`;
+}
+
+// The owner's open requests to a coordinator (orch req, hooks/request_log.py); one unlinked for 30 min is amber.
+function requestCard(st) {
+  const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
+  if (!(rq.items || []).length) return "";
+  const rows = rq.items.slice(0, 8).map((q) => `<li>${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow ellipsis" title="${esc(q.text)}">${esc(q.text)}</span>
+    <span class="acts muted">${q.links.length ? esc(q.links.join(", ")) : "not linked"} · ${relSpan(q.ts)}</span></li>`).join("");
+  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open · <code>orch req list</code></span></div><ul class="rows">${rows}</ul></div>`;
 }
 
 // One row per lead: its sessions, how many of them work, and the open PRs of the lead and those sessions.

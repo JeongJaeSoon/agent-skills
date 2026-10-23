@@ -1621,6 +1621,8 @@ class Fleet:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
         except (OSError, ValueError):
             held = []
+        import owner_requests
+        asked = owner_requests.fold(owner_requests.read())
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),
@@ -1628,6 +1630,8 @@ class Fleet:
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
+                "requests": {**owner_requests.summary(now, asked),
+                             "items": [{**q, "session": by_handle.get(q.get("handle"))} for q in asked.values() if q["status"] == "open"]},
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 

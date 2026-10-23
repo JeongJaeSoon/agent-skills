@@ -349,4 +349,14 @@ assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
 carded = ok("brief", "render", "--periodic", "--now", NOW)
 assert "| 🔄 | 관측 카드 | #77 | — | 리뷰 대기 · rev-a |" in carded and "runner" not in carded, carded
 
+# Open owner requests get one line with their count, the oldest's age and the ones left unlinked; none, no line.
+assert "📝" not in carded
+(state / "requests.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+    {"ev": "open", "id": "r1", "ts": "2026-10-13T13:30:00Z", "text": "merge acme/web#77"},
+    {"ev": "open", "id": "r2", "ts": "2026-10-13T14:20:00Z", "text": "look at the flaky test"},
+    {"ev": "open", "id": "r3", "ts": "2026-10-13T13:00:00Z", "text": "reply to the reviewer"},
+    {"ev": "done", "id": "r3", "ts": "2026-10-13T13:10:00Z", "evidence": "replied"}]))
+asked = ok("brief", "render", "--periodic", "--now", NOW)
+assert "📝 **요청** — 요청 2건 열림 · 가장 오래된 것 1h00m · 미연결 30분+: r1" in asked, asked
+
 print("ok")

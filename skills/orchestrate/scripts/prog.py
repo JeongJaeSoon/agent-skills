@@ -61,6 +61,11 @@ Usage: orch <command> <slug> [options]
                                      dashboard until done or dropped; add prints its id. Each option is a
                                      button that closes it with that answer, then types
                                      "decision <id>: <label>" into this terminal once it is idle
+  req list [--all] [--json] | link <id> <WHERE> | done <id>... --evidence T | drop <id>... --reason T
+                                     no slug: the owner's requests to this coordinator, logged by the
+                                     request_log hook from each human prompt of an orchestrator or lead.
+                                     link says where one went (board row, card, PR, ticket; nothing is
+                                     written to the tracker); done and drop close it
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]
@@ -2272,10 +2277,41 @@ def cmd_sent(argv):
         sys.exit(str(e))
 
 
+def cmd_req(argv):
+    import itertools, owner_requests as req
+    sub, rest = argv[0], argv[1:]
+    ids = list(itertools.takewhile(lambda a: not a.startswith("--"), rest))
+    note = opt(rest, "--evidence" if sub == "done" else "--reason")
+    try:
+        if sub == "list":
+            now = req.fleet.utcnow()
+            qs = [q for q in req.fold(req.read()).values() if "--all" in rest or q["status"] == "open"]
+            if "--json" in rest:
+                print(json.dumps(qs, ensure_ascii=False, indent=1))
+                return
+            for q in qs:
+                where = " → " + ", ".join(q["links"]) if q["links"] else ""
+                state = "" if q["status"] == "open" else f" [{q['status']}: {q.get('note') or ''}]"
+                print(f"{q['id']}  {req.ago(req.age_min(q, now))}  {q['text']}{where}{state}")
+            print(req.line(req.summary(now)) or "열린 요청 없음")
+        elif sub == "link" and len(ids) == 2:
+            req.close(ids[0], "link", to=ids[1])
+            print(f"{ids[0]} → {ids[1]}")
+        elif sub in ("done", "drop") and ids and note:
+            for rid in ids:
+                req.close(rid, sub, note=note)
+            print(f"{sub}: {' '.join(ids)}")
+        else:
+            sys.exit("usage: orch req list [--all] [--json] | link <id> <WHERE> | done <id>... --evidence T | "
+                     "drop <id>... --reason T")
+    except (ValueError, OSError) as e:
+        sys.exit(str(e))
+
+
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "req": cmd_req, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv)}
 
 if __name__ == "__main__":
