@@ -8,7 +8,8 @@
 HASH is the spec hash printed with the diff; a spec edited after review no longer matches it.
 
 SPEC: {"add": {"allow": [...], "soft_deny": [...], "environment": [...]},
-       "replace": [{"section": "allow", "old": "...", "new": "..."}]}
+       "replace": [{"section": "allow", "old": "...", "new": "..."}],
+       "remove": [{"section": "allow", "rule": "..."}]}
 """
 import argparse
 import difflib
@@ -35,11 +36,11 @@ class Refused(Exception):
 
 
 def check_spec(spec):
-    if not isinstance(spec, dict) or set(spec) - {"add", "replace"}:
-        raise Refused("spec must be an object with only 'add' and 'replace'")
-    add, replace = spec.get("add", {}), spec.get("replace", [])
-    if not isinstance(add, dict) or not isinstance(replace, list):
-        raise Refused("'add' must be an object and 'replace' a list")
+    if not isinstance(spec, dict) or set(spec) - {"add", "replace", "remove"}:
+        raise Refused("spec must be an object with only 'add', 'replace' and 'remove'")
+    add, replace, remove = spec.get("add", {}), spec.get("replace", []), spec.get("remove", [])
+    if not isinstance(add, dict) or not isinstance(replace, list) or not isinstance(remove, list):
+        raise Refused("'add' must be an object, 'replace' and 'remove' lists")
     for section, rules in add.items():
         if section not in SECTIONS:
             raise Refused(f"unknown section {section!r}; allowed: {', '.join(SECTIONS)}")
@@ -56,7 +57,13 @@ def check_spec(spec):
         check_rule(item["new"])
         if item["old"] == item["new"]:
             raise Refused("a replace item has the same old and new text")
-    if not any(add.values()) and not replace:
+    for item in remove:
+        if not isinstance(item, dict) or set(item) != {"section", "rule"}:
+            raise Refused("each remove item needs exactly section, rule")
+        if item["section"] not in SECTIONS:
+            raise Refused(f"unknown section {item['section']!r}; allowed: {', '.join(SECTIONS)}")
+        check_rule(item["rule"])
+    if not any(add.values()) and not replace and not remove:
         raise Refused("spec changes nothing")
 
 
@@ -88,6 +95,12 @@ def merge(automode, spec):
             notes.append(f"already replaced in {item['section']}: {item['new'][:60]}")
         else:
             raise Refused(f"replace: rule not found in {item['section']}: {item['old'][:80]}")
+    for item in spec.get("remove", []):
+        rules = result.get(item["section"])
+        if not isinstance(rules, list) or item["rule"] not in rules:
+            # A typo and an earlier apply look the same here, so neither writes anything.
+            raise Refused(f"remove: rule not found in {item['section']} (already removed?): {item['rule'][:80]}")
+        rules.remove(item["rule"])
     for name, new_rules in spec.get("add", {}).items():
         if not new_rules:
             continue
