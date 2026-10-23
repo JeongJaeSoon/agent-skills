@@ -49,6 +49,7 @@ assert orch("board", "set", "search", "--status", "maybe")[2].startswith("--stat
 assert orch("board", "set", "search", "--progress", "9/8")[2] == "--progress N/M needs 0 <= N <= M and M > 0"
 assert orch("board", "set", "search", "--progress", "half")[2].startswith("--progress is N/M")
 assert orch("board", "later", "add", "캐시 TTL")[2].startswith("board later add needs")
+assert orch("board", "doing", "add", "다른 팀 답변", "--owner", "사람")[2].startswith("board doing add needs")
 
 # Lead 1: works in phases; the phases are its rows, the sub-tasks hang under them, one sub-task in another repo.
 ok("board", "set", "search", "--title", "검색 개선", "--program", "검색 개선")
@@ -81,6 +82,9 @@ ok("board", "set", "ghost", "--title", "정리 작업", "--progress", "1/3", "--
 # Two PRs with no lead, waiting on the same person: a bullet under the section's table.
 ok("board", "set", "loose-70", "--kind", "task", "--repo", "acme/ops", "--title", "로그", "--pr", "acme/ops#70")
 ok("board", "set", "loose-71", "--kind", "task", "--repo", "acme/ops", "--title", "대시보드", "--pr", "acme/ops#71")
+# Moving work with no row of its own goes on the 진행 중 line; only work set aside on purpose goes on 보류.
+ok("board", "doing", "add", "다른 팀 답변 대기", "--owner", "사람", "--next", "10/14 회신")
+ok("board", "doing", "add", "로그 누락 조사", "--owner", "워커", "--next", "원인 보고")
 ok("board", "later", "add", "prod 배포 창", "--trigger", "10/16")
 ok("board", "later", "add", "캐시 TTL 다시 보기", "--trigger", "10/20")
 ok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
@@ -164,11 +168,15 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 21:00 이후라 Slack 미전송
 
+🔄 **진행 중** — 다른 팀 답변 대기 · 사람 · 다음: 10/14 회신
+
+로그 누락 조사 · 워커 · 다음: 원인 보고
+
 ❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
 
 🙋 **지금 오너가 할 일** — 없음
 
-⏸ **나중에** — 10/16 prod 배포 창 · 10/20 캐시 TTL 다시 보기"""
+⏸ **보류** — 10/16 → prod 배포 창 · 10/20 → 캐시 TTL 다시 보기"""
 
 code, first, err = FIRST
 assert code == 0, err
@@ -192,6 +200,8 @@ assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4 · 1
 assert "└ 🔄 문구가 아주 길어서 칸을 넘는 하위 작업 #54 ❗리뷰 CI✗ — ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
 assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "⏳ 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4 · 리뷰 · 사람" in tg.splitlines(), tg
 assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
+assert "🔄 진행 중 — 다른 팀 답변 대기 · 사람 · 다음: 10/14 회신" in tg.splitlines(), tg
+assert "⏸ 보류 — 10/16 → prod 배포 창 · 10/20 → 캐시 TTL 다시 보기" in tg.splitlines(), tg
 
 # --json carries what a dashboard or the model needs beside the text.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--headline", "ph2 머지"))
