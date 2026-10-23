@@ -571,5 +571,13 @@ append(B, ts=dash.iso(old), ev="note", note="quiet")
 assert dash.closed(B) and dash.collect(B, sources=())["summary"]["resting"]
 append(B, ev="note", note="back")
 assert not dash.closed(B)
+# A bad timestamp in one ledger leaves that program polled and shows on its row; it does not stop the loop.
+append(B, ts="not-a-time", ev="note", note="hand-edited")
+assert not dash.closed(B) and not dash.resting(False, 12345)
+st = dash.collect(B, sources=())
+assert not st["summary"]["resting"] and "ledger: 1 event(s) with a bad ts left out, first 'not-a-time'" in st["errors"], st["errors"]
+lines = (store / B / "ledger.jsonl").read_text().splitlines()
+(store / B / "ledger.jsonl").write_text("\n".join(l for l in lines if "not-a-time" not in l) + "\n")
+assert not any(e.startswith("ledger:") for e in dash.collect(B, sources=())["errors"])
 
 print("dash.py collect/serve: all pass")

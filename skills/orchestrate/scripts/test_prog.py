@@ -483,7 +483,8 @@ prog.orca_json = lambda *a: (calls.append(a), queue.pop(0))[1]
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_inbox(["--ack", "dv8", "--wait"])
-assert [c[2:] for c in calls] == [("--ack", "dv8"), ("--peek", "--wait", "--timeout-ms", "3300000"), ()], calls
+assert [c[2:5] for c in calls] == [("--ack", "dv8"), ("--peek", "--wait", "--timeout-ms"), ()], calls
+assert 3290000 < int(calls[1][5]) <= 3300000, calls
 lines = out.getvalue().splitlines()
 assert lines[0].startswith("INBOX id=m1 type=status") and "body=PR ready see link" in lines[0] and len(lines) == 2, lines
 assert lines[1] == "1 of 2 to act on (the rest heartbeats or refusals); then: orch inbox --ack dv9 --wait", lines
@@ -492,6 +493,39 @@ out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_inbox([])
 assert len(calls) == 1 and out.getvalue() == "inbox empty; wait again: orch inbox --wait\n", out.getvalue()
+# A batch of only heartbeats is acked and the wait goes on, whether the ack returns an empty batch or the next one.
+hb = lambda d: {"deliveryId": d, "messages": [{"id": d, "type": "heartbeat"}]}
+work = {"deliveryId": "dv3", "messages": [{"id": "m3", "type": "question", "body": "which base?"}]}
+for after_ack, want in (([{"deliveryId": None, "messages": []}, {}, work], ["--ack", "--peek", "check", "--ack", "--peek", "check"]),
+                        ([hb("dv2"), work], ["--ack", "--peek", "check", "--ack", "--ack"])):
+    calls, queue = [], [{"deliveryId": None, "messages": []}, {}, hb("dv1")] + after_ack
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        prog.cmd_inbox(["--ack", "dv0", "--wait"])
+    assert [(c[2:3] or ("check",))[0] for c in calls] == want, calls
+    assert ("--ack", "dv1") in [c[2:4] for c in calls], calls
+    lines = out.getvalue().splitlines()
+    assert lines[0].startswith("INBOX id=m3 type=question") and lines[1].endswith("orch inbox --ack dv3 --wait"), lines
+# A wait that times out says how many heartbeat batches it acked on the way.
+calls, queue = [], [hb("dv1"), {"deliveryId": None, "messages": []}, {}, {"deliveryId": None, "messages": []}]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_inbox(["--wait"])
+assert out.getvalue() == "inbox empty (1 heartbeat(s) or refusals acked); wait again: orch inbox --wait\n", out.getvalue()
+# A stale --ack is reported, and the inbox is still taken and waited on.
+def fake(*a):
+    calls.append(a)
+    if "--ack" in a:
+        raise SystemExit("orca orchestration: {\"code\": \"delivery_not_found\"}")
+    return queue.pop(0)
+calls, queue = [], [{"deliveryId": None, "messages": []}, {}, work]
+prog.orca_json = fake
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_inbox(["--ack", "dv-old", "--wait"])
+assert [(c[2:3] or ("check",))[0] for c in calls] == ["--ack", "check", "--peek", "check"], calls
+lines = out.getvalue().splitlines()
+assert lines[0].startswith("ack dv-old failed (") and lines[1].startswith("INBOX id=m3"), lines
 prog.orca_json = real
 print("prog.py landed_but_open: all pass")
 
