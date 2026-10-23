@@ -196,6 +196,15 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 … idle을 기다릴 필요가 없다")은 이 규칙으로 바꾼다. 턴 진행 중에는 대기열에 들어가더라도, 권한 창에서는 Enter가 답이 되기 때문이다.
 
+### 자기 세션 (2026-10-23)
+
+스킬을 고친 세션도 사람에게 `/reload-skills`를 부탁하지 않고 스스로 받는다. `run_in_background`로 30초씩 기다리며 `skills-sync broadcast --skills --terminal "$ORCA_TERMINAL_HANDLE"`를 되풀이하는 루프를 걸고 턴을 끝낸다. 루프 본문은 `write-skill` §7에 있다.
+
+- 턴이 도는 동안에는 제목이 `✳`가 아니라서 broadcast가 보내지 않는다. 턴이 끝나면 백그라운드 작업이 남아 있어도 제목이 `✳`로 돌아온다(실측: 턴 종료 25초 뒤 `--dry-run`이 `would send /reload-skills`).
+- 성공은 exit 0뿐이다. `--dry-run`은 바쁠 때도 0을 돌려주고, 사유 문자열로 성공을 고르면 아래 실패를 성공으로 센다.
+- `sent, but the screen does not show it was taken`이면 다시 보내지 않는다. 실측(2026-10-23)에서 이 사유가 난 전송은 명령이 아니라 앞에 개행이 붙은 평문 사용자 메시지(`\n/reload-plugins`)로 들어가 턴을 하나 시작했고, reload는 일어나지 않았다. 원인은 아직 확인하지 못했다. Claude에는 Orca의 재제출(`submitRetryDelayMs`)이 없어서 두 번째 Enter 때문은 아니다. 이 기기의 transcript에서 명령으로 실행된 reload는 수천 건이고 이 실패는 1건이다. 이렇게 끝나면 사람에게 그 세션에서 직접 치라고 부탁한다.
+- Orca 밖 세션은 `$ORCA_TERMINAL_HANDLE`이 없으니 예전처럼 사람에게 부탁한다.
+
 ### 셋업 터미널 닫기 (`skills-sync close-setup <카드 경로>`, 2026-09-29)
 
 카드를 만들면 Orca가 셋업 터미널(`agentIdentity` 없는 행)에서 `bash <git dir>/orca/setup-runner.sh`를 돌린다. 스크립트가 끝나도(실패해도) 셸은 `$` 프롬프트로 남는다. 그래서 스킬이 쓰던 `orca terminal wait --for exit … && orca terminal close`는 30분 뒤 시간 초과로 끝나고 `&&` 뒤가 돌지 않았다. 실측한 날 셋업 터미널 세 개가 이렇게 남아 있었다.

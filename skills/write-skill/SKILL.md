@@ -73,7 +73,17 @@ Other machines pick it up through `skills-sync sync` (launchd every 15 minutes: 
 
 ## 7. Reload
 
-A running session keeps the old text until it reloads. Once the change is in the loaded checkout, run `skills-sync broadcast --skills` (a `SKILL.md` or reference file changed) or `--plugins` (`hooks/hooks.json` or the plugin manifest changed); `docs/platform.md` §4 has the rules. It sends the reload with `orca terminal send --text "/reload-skills" --enter` only to sessions idle at an empty prompt, and keeps a working session pending until it is idle. Never send the reload with `orca terminal send` yourself: a permission dialog takes the Enter as its answer, and the broadcast checks for one first. A session cannot type into itself, so end the report by asking the user to run `/reload-skills` or `/reload-plugins` in this session. Changes to `~/.claude/agents/` or `CLAUDE.md` apply to sessions started after the change; say so.
+A running session keeps the old text until it reloads. Once the change is in the loaded checkout, run `skills-sync broadcast --skills` (a `SKILL.md` or reference file changed) or `--plugins` (`hooks/hooks.json` or the plugin manifest changed); `docs/platform.md` §4 has the rules. It sends the reload with `orca terminal send --text "/reload-skills" --enter` only to sessions idle at an empty prompt, and keeps a working session pending until it is idle. Never send the reload with `orca terminal send` yourself: a permission dialog takes the Enter as its answer, and the broadcast checks for one first. This session reloads itself the same way, once its turn has ended: start this loop with `run_in_background`, `--skills` or `--plugins` as above, then end the turn.
+
+```bash
+for i in $(seq 20); do sleep 30
+  out=$(skills-sync broadcast --skills --terminal "$ORCA_TERMINAL_HANDLE"); rc=$?; echo "$out"
+  [ $rc = 0 ] && break
+  case $out in *"sent, but"*|*"not a connected"*|*"no rendered screen"*|*"cannot list"*) break;; esac
+done
+```
+
+While a turn runs, the session is busy and the broadcast sends nothing; once the turn ends, the title goes idle even with this task still running, and the reload goes in. A refusal that can clear (a dialog, the human typing, another broadcast holding the lock) is retried. Only exit 0 is success: the broadcast saw `❯ /reload-…` as the last message with `⎿ Reloaded` under it. `--dry-run` proves nothing here, since it exits 0 even when busy, and neither does a match on the reason text. `sent, but the screen does not show it was taken` means the text went in but did not run as a command: it can land as a plain user message (a newline before the `/`) that starts a turn and reloads nothing, so do not resend after it. The task's notification starts a turn in this session: report from the loop's output. A session outside Orca has no `$ORCA_TERMINAL_HANDLE`, and a loop that ended without exit 0 leaves the old text loaded: end the report by asking the user to run `/reload-skills` or `/reload-plugins` in this session. Changes to `~/.claude/agents/` or `CLAUDE.md` apply to sessions started after the change; say so.
 
 ## Report
 
@@ -82,4 +92,4 @@ A running session keeps the old text until it reloads. Once the change is in the
 - Prompt audit: findings count, each applied or not with the reason.
 - The internal-name grep command and its output.
 - Tests and validation output.
-- The broadcast output: the sessions reloaded and the ones left pending. Then the reload command the user runs in this session.
+- The broadcast output: the sessions reloaded and the ones left pending, and this session's own reload from the loop's output. Only when that did not happen, the reload command the user runs in this session.
