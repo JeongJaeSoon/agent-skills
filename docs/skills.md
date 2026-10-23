@@ -514,9 +514,9 @@
 | 결정 | 대상 |
 |---|---|
 | 거부 | 브라우저·데스크톱·채팅 전송 도구, WebFetch, WebSearch |
-| 거부 | 상태 디렉터리(`~/.local/state`, `$AGENT_SKILLS_STATE`, `$PROGRAMS_HOME`, `$CLAUDE_CONFIG_DIR/projects/*/memory`, `orchestrator_guard.write_dirs`) 밖의 Edit·Write·NotebookEdit |
+| 거부 | 상태 디렉터리(`~/.local/state`, `$AGENT_SKILLS_STATE`, `$PROGRAMS_HOME`, `$CLAUDE_CONFIG_DIR/projects/*/memory`, 임시 디렉터리와 세션 scratchpad, `orchestrator_guard.write_dirs`) 밖의 Edit·Write·NotebookEdit |
 | 거부 | `run_in_background`인 명령을 `tail`·`head`(`-f` 제외)로 파이프한 것. 감시자의 줄이 끝날 때까지 파이프에 묶여 출력 파일에 안 나온다 |
-| 거부 | 한 턴(`prompt_id`, 10분 공백도 새 턴, `prompt_id`가 없으면 세지 않음)에 직접 작업 호출이 `work_calls`(기본 3)를 넘은 것. 상태 디렉터리 밖 Read, Grep, Glob, 위에서 거부하지 않은 MCP 도구, 라우팅 명령(`orca`, `orch`, `skills-sync` 등과 파이프 뒤 필터) 밖의 Bash를 센다 |
+| 거부 | 한 턴(`prompt_id`, 10분 공백도 새 턴, `prompt_id`가 없으면 세지 않음)에 직접 작업 호출이 `work_calls`(기본 3)를 넘은 것. 상태 디렉터리 밖 Read, Grep, Glob, 위에서 거부하지 않은 MCP 도구, 라우팅 명령(`orca`, `orch`, `skills-sync` 등과 파이프 뒤 필터, 메시지 본문용 `"$(cat <파일>)"`) 밖의 Bash를 센다 |
 
 Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도구는 세지도 막지도 않는다. 거부 사유는 위임 경로(Agent, `orca worktree create`, 리드에게 `orca orchestration send`, `orch …`)를 알려 준다. `ROLE: none`이면 그 세션에서, `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`이면 모든 세션에서 꺼진다. 설정은 `~/.claude/agent-skills.json`의 `orchestrator_guard`(`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
 

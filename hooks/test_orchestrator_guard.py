@@ -3,15 +3,17 @@ Run: python3 hooks/test_orchestrator_guard.py"""
 import json, os, pathlib, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-TMP = pathlib.Path(tempfile.mkdtemp()).resolve()
+# Outside /tmp and the hook's $TMPDIR, which it treats as scratch space: paths under TMP stand for task files.
+TMP = pathlib.Path(tempfile.mkdtemp(dir="/var/tmp")).resolve()
 HOME = TMP / "home"
+(TMP / "systmp").mkdir()  # gettempdir() skips a $TMPDIR that does not exist
 STATE = HOME / ".local/state/agent-skills"
 ORCH = "agent-skills:orchestrator"
 
 
-def run(tool, tool_input=None, agent=ORCH, agent_id=None, session="s1", prompt="p1", env_extra=None):
+def run(tool, tool_input=None, agent=ORCH, agent_id=None, session="s1", prompt="p1", env_extra=None, extra=None):
     env = {k: v for k, v in os.environ.items() if k not in ("AGENT_SKILLS_ORCHESTRATOR_GUARD", "PROGRAMS_HOME", "CLAUDE_CONFIG_DIR")}
-    env.update({"HOME": str(HOME), "AGENT_SKILLS_STATE": str(STATE)}, **(env_extra or {}))
+    env.update({"HOME": str(HOME), "AGENT_SKILLS_STATE": str(STATE), "TMPDIR": str(TMP / "systmp")}, **(env_extra or {}))
     event = {"hook_event_name": "PreToolUse", "session_id": session, "tool_name": tool, "tool_input": tool_input or {}}
     if prompt:
         event["prompt_id"] = prompt
@@ -19,6 +21,7 @@ def run(tool, tool_input=None, agent=ORCH, agent_id=None, session="s1", prompt="
         event["agent_type"] = agent
     if agent_id:
         event["agent_id"] = agent_id
+    event.update(extra or {})
     out = subprocess.run([sys.executable, HERE / "orchestrator_guard.py"], input=json.dumps(event),
                          capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
@@ -56,6 +59,8 @@ assert run("Write", {"file_path": str(HOME / ".local/state/messages/cards/x.md")
 assert run("Edit", {"file_path": str(HOME / ".claude/projects/-repo/memory/MEMORY.md")}) == "none"
 assert denied(run("Edit", {"file_path": str(TMP / "code/projects/app/memory/alloc.c")})), "memory only under the config dir"
 assert run("Write", {"file_path": str(HOME / ".claude/programs/p/program.json")}) == "none"
+assert run("Write", {"file_path": str(TMP / "systmp/msg.md")}) == "none", "a message body"
+assert run("Write", {"file_path": str(TMP / "pad/draft.md")}, extra={"scratchpad_dir": str(TMP / "pad")}) == "none"
 for path in (str(TMP / "repo/app.py"), str(HOME / ".local/state/../../repo/app.py"), "", None):
     assert denied(run("Edit", {"file_path": path})), path
 assert denied(run("NotebookEdit", {"notebook_path": str(TMP / "repo/n.ipynb")}))
@@ -73,7 +78,7 @@ assert denied(bash("python3 stuck_watch.py | tail -5", background=True, session=
 assert denied(bash("orch watch-cards p 2>&1 | head -n 20", background=True, session="w"))
 assert bash("orca orchestration check --peek --wait --json | tail -f", background=True, session="w") == "none"
 assert bash("orca orchestration check --peek --wait --json", background=True, session="w") == "none"
-assert bash("orca worker-list || head -1 /dev/null", background=True, session="w2") != "deny", "|| is not a pipe"
+assert not denied(bash("orca worker-list || head -1 /dev/null", background=True, session="w2")), "|| is not a pipe"
 assert not denied(bash("orch watch-cards p | tail --follow", background=True, session="w"))
 
 # Routing never counts: orca, orch, skills-sync, and filters after a pipe.
@@ -83,7 +88,7 @@ for i in range(10):
                 'orca orchestration send --to w --message "fix A; then B | C & D"',
                 "orca orchestration send --to w --message 'run `make` and $(x)'",
                 'orca orchestration send --to w --message "line one\nline two"',
-                "orca worker-list |& tee " + str(HOME / ".local/state/w.log"), "orca worker-list > /dev/null"):
+                "orca orchestration send --to w --body \"$(cat /tmp/msg.md)\"", "orca worker-list |& tee " + str(HOME / ".local/state/w.log"), "orca worker-list > /dev/null"):
         assert bash(cmd, session="r") == "none", cmd
     for tool in ("Agent", "SendMessage", "AskUserQuestion", "Skill", "CronCreate", "Monitor", "TaskStop"):
         assert run(tool, session="r") == "none", tool
