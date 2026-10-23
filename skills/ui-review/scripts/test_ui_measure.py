@@ -89,6 +89,12 @@ for hide in ("opacity: 0", "visibility: hidden"):
         rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", CLOSED, *extra)
         assert status(res, 390)["horizontal-overflow"] == "PASS", (hide, extra, status(res, 390))
 
+# A child that turns visible but is not rendered does not bring its hidden parent back.
+GHOST = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"visibility: hidden; width: 1000px\"><span style=\"display: none; visibility: visible\">x</span>Closed</div>')"
+for extra in ([], ["--scope", "main"]):
+    rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", GHOST, *extra)
+    assert status(res, 390)["horizontal-overflow"] == "PASS", (extra, status(res, 390))
+
 # A visible child of a hidden parent still counts.
 SHOWN = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"visibility: hidden\"><div style=\"visibility: visible; width: 1000px\">Shown</div></div>')"
 rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", SHOWN, "--scope", "main")

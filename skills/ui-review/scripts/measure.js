@@ -204,10 +204,12 @@
   const overItems = [];
   // By cause, not checkVisibility: a display: contents element has no box but its text shows. Opacity 0
   // hides the whole subtree; visibility: hidden only when no descendant turns visible again.
+  // checkVisibility() without options only asks whether the element is laid out (no display: none above it).
+  const rendersVisible = (d) => cs(d).visibility === "visible" && (d.checkVisibility() || cs(d).display === "contents");
   const unseen = [...document.body.querySelectorAll("*")].filter((el) => {
     const s = cs(el);
     if (/^(none|contents)$/.test(s.display)) return false;
-    return px(s.opacity) === 0 || (s.visibility === "hidden" && ![...el.querySelectorAll("*")].some((d) => cs(d).visibility === "visible"));
+    return px(s.opacity) === 0 || (s.visibility === "hidden" && ![...el.querySelectorAll("*")].some(rendersVisible));
   });
   const off = [...excluded, ...document.querySelectorAll(IGNORE), ...unseen].map((el) => [el, el.style.getPropertyValue("display"), el.style.getPropertyPriority("display")]);
   for (const [el] of off) el.style.setProperty("display", "none", "important");
