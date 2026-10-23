@@ -12,6 +12,7 @@ same-reviewer fold, cell caps and footnotes, bold for changed rows); test_board.
 import datetime as dt, fcntl, json, os, pathlib, re, shutil, sys
 
 import fleet
+import owner_requests
 from stages import with_descendants
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "brief" / "scripts"))
@@ -657,6 +658,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     todo = store["owner_todo"]
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + " — " + (todo[0] if todo else "없음")]
     out += [x for it in todo[1:] for x in ("", it)]
+    if asked := owner_requests.line(owner_requests.summary(now)):
+        out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
     if store["later"]:
         out += ["", ("⏸️ 보류" if tg else "⏸️ **보류**") + " — " + " · ".join(f"{l['trigger']} → {l['title']}" for l in store["later"])]
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok,

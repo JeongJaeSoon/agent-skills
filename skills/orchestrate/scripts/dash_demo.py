@@ -507,6 +507,14 @@ def seed_board():
     board.doing_add("결제 팀 API 답변 대기", "사람", "10/14 회신")
     board.later_add("v2.5 계획", "v2.4.0 prod 배포 뒤")
     board.set_todo(["acme/launchpad#43 리뷰"])
+    import owner_requests as req  # the owner's requests to the coordinator, as the request_log hook would log them
+    now = dt.datetime.now(dt.timezone.utc)
+    for ago, text in ((95, "acme/launchpad#41 머지되면 알려줘"), (50, "설치 가이드 스크린샷 다시 확인해줘"),
+                      (12, "결제 팀 답변 왔는지 봐줘"), (5, "릴리스 노트 초안 보여줘")):
+        req.add(text, "s-demo", "term_0FAKE0", now=now - dt.timedelta(minutes=ago))
+    req.close("r1", "link", to="lead-login")
+    req.close("r3", "link", to="lead-login/export")
+    req.close("r4", "done", note="초안 공유함")
 
 
 def live(root, period=20, world=None):
