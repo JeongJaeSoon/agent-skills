@@ -71,6 +71,12 @@ assert status(res, 390)["horizontal-overflow"] == "PASS", status(res, 390)
 rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "390", "--scope", ".inner")
 assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
 
+# Unbroken text past the screen fails even with an ignored subtree on the page, and inside a scope.
+LONG = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div id=long style=\"width: 100px; white-space: nowrap\">' + 'A'.repeat(120) + '</div>')"
+for extra in ([], ["--scope", "main"]):
+    rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", LONG, *extra)
+    assert status(res, 390)["horizontal-overflow"] == "FAIL", (extra, status(res, 390))
+
 # A page or scope that cannot be measured is an error, not a PASS of something else.
 with contextlib.redirect_stderr(io.StringIO()) as err:
     assert ui_measure.main([str(HERE / "testdata/pass.html"), "--widths", "1280", "--scope", "#missing"]) == 2

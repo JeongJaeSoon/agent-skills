@@ -198,15 +198,22 @@
   }
   check("spacing-grid", Object.entries(offGrid).map(([v, xs]) => ({ el: xs.slice(0, 3).join("; "), detail: `${v}px is off the ${OPTS.grid}px grid (${xs.length} uses)` })));
 
-  // 6. Nothing is wider than the viewport.
+  // 6. Nothing is wider than the viewport. Excluded and ignored subtrees are taken out of layout while
+  // widths are read, so neither the page nor an ancestor counts their width, then put back.
   const overItems = [];
-  const sw = document.documentElement.scrollWidth;
-  // The document width speaks for the whole page only; with --scope, --exclude or an ignored subtree the elements below decide.
-  if (sw > vw && scope === document.body && !excluded.length && !document.querySelector(IGNORE)) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
-  // Report the outermost measured element that overflows, not each of its children.
-  const measured = new Set(all);
-  const clipsX = (el) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (/(auto|scroll|hidden|clip)/.test(cs(a).overflowX)) return true; return false; };
-  for (const el of all) if (box(el).right > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(measured.has(el.parentElement) && box(el.parentElement).right > vw + 1)) overItems.push({ el: where(el), detail: `right edge ${r1(box(el).right)}px > viewport ${vw}px` });
+  const off = [...excluded, ...document.querySelectorAll(IGNORE)].map((el) => [el, el.style.getPropertyValue("display"), el.style.getPropertyPriority("display")]);
+  for (const [el] of off) el.style.setProperty("display", "none", "important");
+  try {
+    const sw = document.documentElement.scrollWidth;
+    if (scope === document.body && sw > vw) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
+    // An element overflows by its box or by what it draws past it (unbroken text, ::after); report the outermost one.
+    const measured = new Set(all);
+    const clipsX = (el) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (/(auto|scroll|hidden|clip)/.test(cs(a).overflowX)) return true; return false; };
+    const reach = (el) => Math.max(box(el).right, cs(el).overflowX === "visible" ? box(el).left + el.scrollWidth : 0);
+    for (const el of all) if (reach(el) > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(measured.has(el.parentElement) && reach(el.parentElement) > vw + 1)) overItems.push({ el: where(el), detail: `reaches ${r1(reach(el))}px > viewport ${vw}px` });
+  } finally {
+    for (const [el, v, prio] of off) v ? el.style.setProperty("display", v, prio) : el.style.removeProperty("display");
+  }
   check("horizontal-overflow", overItems);
 
   // 7. Underline marks a link inside running text, and only there.
