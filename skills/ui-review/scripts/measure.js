@@ -2,7 +2,9 @@
 // Every check returns {id, status, items}; an item names the element and the numbers it failed on.
 (OPTS) => {
   const IGNORE = "[data-ui-review-ignore]";
-  const scope = (OPTS.scope && document.querySelector(OPTS.scope)) || document.body;
+  const scope = OPTS.scope ? document.querySelector(OPTS.scope) : document.body;
+  // Measuring the body instead of a missing scope would report on the wrong thing.
+  if (!scope) throw new Error(`--scope ${OPTS.scope} matches nothing`);
   const excluded = OPTS.exclude.flatMap((s) => [...document.querySelectorAll(s)]);
   const vw = window.innerWidth, vh = window.innerHeight;
   const px = (v) => parseFloat(v) || 0;
@@ -271,7 +273,8 @@
   // An on/off setting looks like a switch (a track with a thumb), not a button labeled with its state,
   // whatever its role: the role fixes screen readers, not what people see.
   const onOff = new Set(OPTS.toggleLabels.map((s) => s.toLowerCase()));
-  const drawn = (el) => [...el.querySelectorAll("*")].some((c) => visible(c) && !text(c) && (c.tagName.toLowerCase() === "svg" || filled(c)));
+  const pseudoDrawn = (el) => ["::before", "::after"].some((ps) => { const s = getComputedStyle(el, ps); return s.content !== "none" && s.content !== "normal" && px(s.width) > 0 && (s.backgroundColor !== "rgba(0, 0, 0, 0)" || px(s.borderTopWidth) > 0); });
+  const drawn = (el) => pseudoDrawn(el) || [...el.querySelectorAll("*")].some((c) => visible(c) && (pseudoDrawn(c) || (!text(c) && (c.tagName.toLowerCase() === "svg" || filled(c)))));
   check("toggle-as-button", all.filter((el) => el.matches("button, [role=button], [role=switch]") && onOff.has(text(el).toLowerCase()) && !drawn(el)).map((el) => ({ el: where(el), detail: "on/off state drawn as a text button; draw a switch" })));
 
   // 13. The first screen is not mostly empty: share of the viewport covered by text, controls, media and bordered or filled boxes.

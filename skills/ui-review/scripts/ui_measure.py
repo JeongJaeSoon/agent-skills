@@ -5,7 +5,7 @@
                 [--baseline TARGET] [--json OUT] [--grid 4] [--allow 6,10]
 
 TARGET is a URL or a local HTML file. Prints one markdown table per width and exits 1 when any
-check FAILs (WARN does not fail). Chrome is driven over --remote-debugging-pipe, so only the
+check FAILs (WARN does not fail), 2 when the page or the scope cannot be measured. Chrome is driven over --remote-debugging-pipe, so only the
 standard library is needed; CHROME overrides the binary. The browser runs with a throwaway
 profile and is stopped by the PID this script started.
 """
@@ -113,7 +113,10 @@ def measure(chrome, target, width, height, opts, before=None, settle_ms=500):
         chrome.send("Emulation.setDeviceMetricsOverride", {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False}, sid)
         # mobile: True would let the page zoom out to fit, hiding overflow at the phone width.
         chrome.send("Page.enable", {}, sid)
-        chrome.send("Page.navigate", {"url": to_url(target)}, sid)
+        nav = chrome.send("Page.navigate", {"url": to_url(target)}, sid)
+        # A dead server or a wrong path loads Chrome's error page, which would then be measured.
+        if nav.get("errorText"):
+            raise RuntimeError(f"cannot open {target}: {nav['errorText']}")
         chrome.wait_event("Page.loadEventFired", sid)
         time.sleep(settle_ms / 1000)
         if before:
@@ -194,6 +197,9 @@ def main(argv=None):
             out[w] = r
             failed |= any(c["status"] == "FAIL" for c in r["checks"])
             print(table(w, r) + "\n")
+    except (RuntimeError, TimeoutError) as e:
+        print(f"ui_measure: {e}", file=sys.stderr)
+        return 2
     finally:
         chrome.close()
     if a.json:

@@ -101,7 +101,7 @@ component, that definition is the rule and these defaults step aside; turn it in
 **C6. A toggle is a switch.** [`toggle-as-button`, measured; eye]
 - Evidence: an on/off setting drawn as a button labeled "On" next to a separate save button.
 - Judged: a button or switch whose label is a state word ("On", "Off", "켜짐", "꺼짐") and that
-  draws no track or thumb fails, whatever its ARIA role: the role serves screen readers, not what
+  draws no track or thumb (a child element, an icon or a `::before`/`::after` box) fails, whatever its ARIA role: the role serves screen readers, not what
   people see. By eye: the switch sits at the right edge of its row
   and applies at once or saves with its block, never with a save button of its own.
 

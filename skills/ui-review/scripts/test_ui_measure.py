@@ -67,4 +67,10 @@ for sel in (".kv", "section.card"):
 rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "390", "--scope", ".kv")
 assert status(res, 390)["horizontal-overflow"] == "PASS", status(res, 390)
 
+# A page or scope that cannot be measured is an error, not a PASS of something else.
+with contextlib.redirect_stderr(io.StringIO()) as err:
+    assert ui_measure.main([str(HERE / "testdata/pass.html"), "--widths", "1280", "--scope", "#missing"]) == 2
+    assert ui_measure.main([str(HERE / "testdata/missing.html"), "--widths", "1280"]) == 2
+assert "matches nothing" in err.getvalue() and "cannot open" in err.getvalue(), err.getvalue()
+
 print("test_ui_measure: ok")
