@@ -118,4 +118,73 @@ try:
 except SystemExit as e:
     assert "upload it first" in str(e)
 
+# The browser error path prints no query string or credential-looking value.
+stub.write_text("#!/bin/sh\necho 'Error: goto https://example.test/cb?code=SECRET1 failed, token=SECRET2' >&2\nexit 1\n")
+r = run("capture", "--url", url, "--name", "card", "--out", str(tmp))
+assert r.returncode != 0 and "SECRET" not in r.stderr and "<redacted>" in r.stderr, r.stderr
+
+# Run the generated JavaScript itself against a fake page and DOM, so the page calls are checked too.
+fake = tmp / "ego-node.mjs"
+fake.write_text(r"""#!/usr/bin/env node
+import fs from "node:fs";
+const log = (x) => fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify(x) + "\n");
+const box = { value: process.env.FAKE_DRAFT || "" };
+globalThis.window = { innerWidth: 0 };
+globalThis.document = {
+  documentElement: { scrollWidth: 390, scrollHeight: 2400 },
+  querySelector: () => box,
+  querySelectorAll: () => [],
+};
+const page = {
+  goto: async (u) => log(["goto", u]),
+  waitForSelector: async () => {},
+  waitForTimeout: async () => {},
+  evaluate: async (fn) => fn(),
+  fill: async (s, v) => { log(["fill", v]); box.value = v; },
+  setInputFiles: async (s, files) => {
+    log(["setInputFiles", files.length]);
+    box.value = files.map((f) => { const n = f.split("/").pop().replace(/\.png$/, ""); return `<img width="1" alt="${n}" src="https://github.com/user-attachments/assets/${n}">`; }).join("\n");
+  },
+  cdp: async (m, p) => {
+    log(["cdp", m, p]);
+    if (m === "Emulation.setDeviceMetricsOverride") window.innerWidth = p.width;
+    return m === "Page.captureScreenshot" ? { data: Buffer.from("png").toString("base64") } : {};
+  },
+  screenshot: async ({ path }) => fs.writeFileSync(path, "png"),
+};
+globalThis.taskSpace = async () => ({ page: () => page, finish: async () => log(["finish"]) });
+console.log = (...a) => process.stderr.write(a.join(" ") + "\n");
+const script = fs.readFileSync(0, "utf8");
+await new (async () => {}).constructor(script)();
+""")
+fake.chmod(0o755)
+env["EGO_BROWSER"] = str(fake)
+flog = tmp / "fake.log"
+env["FAKE_LOG"] = str(flog)
+
+
+def calls():
+    out = [json.loads(l) for l in flog.read_text().splitlines()] if flog.exists() else []
+    flog.unlink(missing_ok=True)
+    return out
+
+
+r = run("capture", "--url", "http://127.0.0.1:1/", "--name", "card", "--out", str(tmp / "js"), "--widths", "390", "--themes", "dark")
+assert r.returncode == 0 and "390/390 ok" in r.stdout, (r.stdout, r.stderr)
+c = calls()
+assert all(p["height"] == 900 for k, m, p in (x for x in c if x[0] == "cdp") if m == "Emulation.setDeviceMetricsOverride"), c
+shot = [x[2] for x in c if x[:2] == ["cdp", "Page.captureScreenshot"]]
+assert shot and shot[0]["captureBeyondViewport"] and shot[0]["clip"]["height"] == 2400, shot
+assert (tmp / "js" / "card-390-dark.png").read_bytes() == b"png"
+
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img), str(other))
+assert r.returncode == 0 and "uploaded 2 of 2" in r.stdout and "draft cleared True" in r.stdout, (r.stdout, r.stderr)
+assert ["setInputFiles", 2] in calls()
+
+env["FAKE_DRAFT"] = "half-written review"
+r = run("upload", "--repo", "acme/app", "--pr", "1", "--out", str(tmp / "u.json"), str(img))
+assert r.returncode != 0 and "unsent draft" in r.stderr, r.stderr
+c = calls()
+assert not any(x[0] in ("fill", "setInputFiles") for x in c), c
+
 print("test_shots: ok")

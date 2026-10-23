@@ -38,12 +38,16 @@ for (const width of INPUT.widths) {
       scrollWidth: document.documentElement.scrollWidth,
       scrollHeight: document.documentElement.scrollHeight,
     }));
-    if (INPUT.fullPage && m.scrollHeight > INPUT.height) {
-      await page.cdp("Emulation.setDeviceMetricsOverride", { width, height: Math.min(m.scrollHeight, INPUT.maxHeight), deviceScaleFactor: 1, mobile: false });
-      await page.waitForTimeout(300);
-    }
     const path = `${INPUT.out}/${INPUT.name}-${width}-${theme}.png`;
-    await page.screenshot({ path });
+    if (INPUT.fullPage) {
+      // Capture beyond the viewport rather than resizing it, so 100vh areas, height media
+      // queries and fixed bars keep the layout they have at the real viewport height.
+      const height = Math.min(Math.max(m.scrollHeight, INPUT.height), INPUT.maxHeight);
+      const shot = await page.cdp("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width, height, scale: 1 } });
+      await fs.writeFile(path, Buffer.from(shot.data, "base64"));
+    } else {
+      await page.screenshot({ path });
+    }
     shots.push({ path, width, theme, innerWidth: m.innerWidth, scrollWidth: m.scrollWidth, overflow: m.scrollWidth > width });
   }
 }
@@ -56,30 +60,36 @@ const task = await taskSpace(INPUT.space);
 const page = task.page("p1");
 await page.goto(INPUT.prUrl);
 await page.waitForSelector("#fc-new_comment_field", { state: "attached", timeout: 30000 });
-await page.fill("#new_comment_field", "");
+// GitHub restores an unsent draft into this box; never overwrite or clear someone's text.
+const draft = await page.evaluate(() => document.querySelector("#new_comment_field")?.value ?? "");
 let value = "", failed = 0;
-try {
-  // Attaching to the new-comment box uploads each file and writes its markdown into the box.
-  // The comment itself is never submitted; only the asset URLs are kept.
-  await page.setInputFiles("#fc-new_comment_field", INPUT.files);
-  for (let i = 0; i < INPUT.polls; i++) {
-    await page.waitForTimeout(2000);
-    ({ value, failed } = await page.evaluate(() => ({
-      value: document.querySelector("#new_comment_field")?.value ?? "",
-      failed: document.querySelectorAll(".js-upload-markdown-image.is-failed").length,
-    })));
-    const done = (value.match(/user-attachments\/assets\//g) || []).length;
-    if (failed > 0 || (done >= INPUT.files.length && !/Uploading/.test(value))) break;
+if (draft !== "") {
+  await task.finish({ keep: [] });
+  console.log("SHOTS_RESULT " + JSON.stringify({ draft: true }));
+} else {
+  try {
+    // Attaching to the new-comment box uploads each file and writes its markdown into the box.
+    // The comment itself is never submitted; only the asset URLs are kept.
+    await page.setInputFiles("#fc-new_comment_field", INPUT.files);
+    for (let i = 0; i < INPUT.polls; i++) {
+      await page.waitForTimeout(2000);
+      ({ value, failed } = await page.evaluate(() => ({
+        value: document.querySelector("#new_comment_field")?.value ?? "",
+        failed: document.querySelectorAll(".js-upload-markdown-image.is-failed").length,
+      })));
+      const done = (value.match(/user-attachments\/assets\//g) || []).length;
+      if (failed > 0 || (done >= INPUT.files.length && !/Uploading/.test(value))) break;
+    }
+  } finally {
+    await page.fill("#new_comment_field", "");
   }
-} finally {
-  await page.fill("#new_comment_field", "");
+  const urls = {};
+  for (const m of value.matchAll(/<img[^>]*alt="([^"]+)"[^>]*src="(https:\/\/github\.com\/user-attachments\/assets\/[^"]+)"/g)) urls[m[1].replace(/\.[a-z]+$/i, "")] = m[2];
+  for (const m of value.matchAll(/!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[^)\s]+)\)/g)) urls[m[1].replace(/\.[a-z]+$/i, "")] = m[2];
+  const cleared = (await page.evaluate(() => document.querySelector("#new_comment_field")?.value ?? "")) === "";
+  await task.finish({ keep: [] });
+  console.log("SHOTS_RESULT " + JSON.stringify({ urls, failed, cleared }));
 }
-const urls = {};
-for (const m of value.matchAll(/<img[^>]*alt="([^"]+)"[^>]*src="(https:\/\/github\.com\/user-attachments\/assets\/[^"]+)"/g)) urls[m[1].replace(/\.[a-z]+$/i, "")] = m[2];
-for (const m of value.matchAll(/!\[([^\]]*)\]\((https:\/\/github\.com\/user-attachments\/assets\/[^)\s]+)\)/g)) urls[m[1].replace(/\.[a-z]+$/i, "")] = m[2];
-const cleared = (await page.evaluate(() => document.querySelector("#new_comment_field")?.value ?? "")) === "";
-await task.finish({ keep: [] });
-console.log("SHOTS_RESULT " + JSON.stringify({ urls, failed, cleared }));
 """
 
 
@@ -91,7 +101,14 @@ def run_browser(js, inp):
     for line in (proc.stdout + "\n" + proc.stderr).splitlines():
         if line.startswith(RESULT_TAG):
             return json.loads(line[len(RESULT_TAG):])
-    sys.exit(f"ego-browser gave no result (exit {proc.returncode}):\n{proc.stdout[-2000:]}{proc.stderr[-2000:]}")
+    sys.exit(f"ego-browser gave no result (exit {proc.returncode}):\n{redact(proc.stdout + proc.stderr)[-2000:]}")
+
+
+def redact(text):
+    """Strip what could carry a credential from browser output before it is printed."""
+    text = re.sub(r"(https?://[^\s?#\"'<>]+)[?#][^\s\"'<>]*", r"\1?<redacted>", text)
+    return re.sub(r"(?i)\b(token|jwt|cookie|session|authorization|bearer|password|secret|api[_-]?key)\b(\s*[=:]\s*|\s+)\S+",
+                  r"\1\2<redacted>", text)
 
 
 def ints(s):
@@ -137,6 +154,8 @@ def upload(a):
         "prUrl": f"https://github.com/{a.repo}/pull/{a.pr}",
         "files": [str(f) for f in files], "polls": a.polls,
     })
+    if res.get("draft"):
+        sys.exit("the PR's comment box holds an unsent draft: post or clear it in the browser, then rerun")
     urls = {s: res["urls"].get(s) for s in stems}
     pathlib.Path(a.out).write_text(json.dumps(urls, indent=2) + "\n")
     missing = [s for s, u in urls.items() if not u]
