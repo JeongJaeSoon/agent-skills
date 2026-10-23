@@ -1,0 +1,3 @@
+#!/bin/sh
+# Print every tailnet serve link, marking the ones preview-watch opened.
+exec python3 "$(dirname "$0")/../scripts/preview_watch.py" links
