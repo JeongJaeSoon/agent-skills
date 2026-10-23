@@ -198,10 +198,13 @@
   }
   check("spacing-grid", Object.entries(offGrid).map(([v, xs]) => ({ el: xs.slice(0, 3).join("; "), detail: `${v}px is off the ${OPTS.grid}px grid (${xs.length} uses)` })));
 
-  // 6. Nothing is wider than the viewport. Excluded and ignored subtrees are taken out of layout while
-  // widths are read, so neither the page nor an ancestor counts their width, then put back.
+  // 6. Nothing is wider than the viewport. Excluded, ignored and invisible (opacity 0, visibility hidden)
+  // subtrees are taken out of layout while widths are read, so neither the page nor an ancestor's
+  // scrollWidth counts them, then put back.
   const overItems = [];
-  const off = [...excluded, ...document.querySelectorAll(IGNORE)].map((el) => [el, el.style.getPropertyValue("display"), el.style.getPropertyPriority("display")]);
+  const seenNow = (el) => el.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  const unseen = [...document.body.querySelectorAll("*")].filter((el) => cs(el).display !== "none" && !seenNow(el) && el.parentElement && seenNow(el.parentElement) && ![...el.querySelectorAll("*")].some(seenNow));
+  const off = [...excluded, ...document.querySelectorAll(IGNORE), ...unseen].map((el) => [el, el.style.getPropertyValue("display"), el.style.getPropertyPriority("display")]);
   for (const [el] of off) el.style.setProperty("display", "none", "important");
   try {
     const sw = document.documentElement.scrollWidth;

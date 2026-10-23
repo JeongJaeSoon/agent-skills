@@ -82,6 +82,18 @@ PSEUDO = "document.head.insertAdjacentHTML('beforeend', '<style>#wideafter::afte
 rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", PSEUDO, "--scope", "main")
 assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
 
+# A closed wide panel (opacity 0 or visibility hidden) does not count, in a scope or on the whole page.
+for hide in ("opacity: 0", "visibility: hidden"):
+    CLOSED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"position: absolute; top: 0; width: 1000px; " + hide + "\">Closed</div>')"
+    for extra in ([], ["--scope", "main"]):
+        rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", CLOSED, *extra)
+        assert status(res, 390)["horizontal-overflow"] == "PASS", (hide, extra, status(res, 390))
+
+# A visible child of a hidden parent still counts.
+SHOWN = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"visibility: hidden\"><div style=\"visibility: visible; width: 1000px\">Shown</div></div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", SHOWN, "--scope", "main")
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
 # A box scaled down to fit is judged where it is drawn, not by its layout width.
 SCALED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 600px; transform: scale(.5); transform-origin: left top\">' + 'A'.repeat(60) + '</div>')"
 ROTATED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; height: 300px; white-space: nowrap; transform: rotate(90deg)\">' + 'A'.repeat(20) + '</div>')"
