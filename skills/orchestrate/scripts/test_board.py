@@ -39,7 +39,8 @@ def stamp(at=T0, **older):
     p.write_text(json.dumps(b, ensure_ascii=False))
 
 
-assert orch("brief", "render", "--periodic")[1].startswith("board 에 행 없음")
+assert orch("brief", "render", "--periodic")[1].startswith("board 에도 fleet 에도 리드·카드 없음")
+assert orch("brief", "render", "--periodic", "--no-fill")[1] == "board 에 행 없음"
 
 # Refusals say what is missing.
 assert orch("board", "set", "x/y", "--title", "고아")[2] == "no row x to be the parent; add it first"
@@ -303,8 +304,8 @@ sess = lambda sid, kind, parent, phase, h=None, **kw: {"id": sid, "kind": kind, 
     "prs": [{"key": "acme/fill#5", "session": "c1"}, {"key": "acme/web#45", "session": "c5"}]}))
 prs_json["prs"].update(dict([pr("acme/fill#5", ci="pending")]))
 (state / "prs.json").write_text(json.dumps(prs_json))
-assert "정산 리드" not in ok("brief", "render", "--periodic", "--now", NOW)
-filled = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--fill"))["text"]
+assert "정산 리드" not in ok("brief", "render", "--periodic", "--now", NOW, "--no-fill")
+filled = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json"))["text"]
 fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" in l or "정산" in l or "FILL" in l
              or "c2" in l or "c4" in l]
 assert fill_rows == [
@@ -319,5 +320,33 @@ assert "held" not in filled and "c3" not in filled and "c5" not in filled, fille
 (tmp / "brief-last" / "top-level.json").write_text(json.dumps({"ts": T0, "rows": {}}))
 changed = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--fill"))["changed"]
 assert not [k for k in changed if k.startswith("fleet:")], changed
+
+# A card's report file: the brief (the session's Orca comment) names it on its REPORT line, or says "this note"; the
+# newest milestone's 다음/Next/次 line, else its first line, is the row's next step, and its last PR link the row's PR.
+import fleet  # noqa: E402
+briefs = tmp / "briefs"
+briefs.mkdir()
+(briefs / "a.md").write_text("# a\n\nGOAL: x\nReport: 마일스톤마다 " + str(tmp / "cards" / "a.md") + " 에 추가.\n")
+(briefs / "b.md").write_text("REPORT      orca orchestration send --to term_0FAKE3\n")
+(briefs / "c.md").write_text("REPORT      Digest lines appended to this brief's note at each milestone.\n\n- 2026-10-13 착수\n")
+(tmp / "cards").mkdir()
+(tmp / "cards" / "a.md").write_text("# a\n\n## 10:00 설계\n- 다음: 옛 다음\n\n## 14:00 PR 열림\n"
+                                    "- https://github.com/acme/web/pull/77\n- 다음: 리뷰 대기 · rev-a\n")
+assert fleet.report_path(str(briefs / "a.md")) == tmp / "cards" / "a.md"
+assert fleet.report_path(str(briefs / "b.md")) is None and fleet.report_path("Orca automations runner") is None
+assert fleet.report_path(str(briefs / "c.md")) == briefs / "c.md"
+rep = fleet.report_of(str(briefs / "a.md"))
+assert (rep["next"], rep["pr"]) == ("리뷰 대기 · rev-a", "acme/web#77"), rep
+assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
+
+# A standalone card of the coordinator's (orca worktree create, no Run) is a row once it has a report; a resident
+# standalone session with none (an automations runner) is not.
+(state / "state.json").write_text(json.dumps({"sessions": [
+    sess("root", "orchestrator", None, "working"),
+    sess("card7", "standalone", "root", "working", name="관측 카드", report=rep),
+    sess("runner", "standalone", "root", "idle", name="automations-runner")], "prs": []}))
+(tmp / "brief-last" / "top-level.json").unlink()
+carded = ok("brief", "render", "--periodic", "--now", NOW)
+assert "| 🔄 | 관측 카드 | #77 | — | 리뷰 대기 · rev-a |" in carded and "runner" not in carded, carded
 
 print("ok")

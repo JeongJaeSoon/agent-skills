@@ -1553,10 +1553,10 @@ def cmd_serve(argv):
 def brief_report():
     """The periodic report exactly as `orch brief render` prints it: the renderer is the one implementation of
     the table rules, so the page shows its output and never builds a second copy. Run per request (well under a
-    second) so a `orch board set` shows on the next poll. --fill: a lead that never wrote to the board still shows,
-    from its session and cards."""
+    second) so a `orch board set` shows on the next poll. A lead or card that never wrote to the board still shows,
+    from its session and its report file."""
     try:
-        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json", "--fill"],
+        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json"],
                            capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return {"message": "orch brief render timed out after 30 s"}

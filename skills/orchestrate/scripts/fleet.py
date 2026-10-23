@@ -709,6 +709,84 @@ def build_sessions(fast, runs, cfg):
     return sessions, root
 
 
+# ---------------------------------------------------------------- card reports
+
+# A brief's REPORT line (dispatch-card §2, orchestrate references/brief.md) names the file the card appends its
+# milestones to, or says "this note": the brief itself. A line that only names `orca orchestration send` has no file.
+REPORT_LINE_RE = re.compile(r"^\W{0,4}(?:REPORT|Report|보고|報告)\b(.*)$", re.M)
+REPORT_PATH_RE = re.compile(r"(~?/[^\s`'\"()（）、，,]+\.md)\b")
+THIS_NOTE_RE = re.compile(r"this (?:brief's )?note|this brief|이 노트|이 브리프|この(?:ノート|メモ|ブリーフ)", re.I)
+NEXT_RE = re.compile(r"(?:다음|Next|次)\s*[:：]\s*(.+)")
+BRIEF_HEAD, REPORT_TAIL = 32 * 1024, 8 * 1024
+_reports = {}  # path -> (signature, parsed): a brief or report is read again only once it changed
+
+
+def _sig(path):
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
+
+
+def report_path(comment):
+    """The report file a session's brief names, from the brief path in its Orca comment; None when it names none."""
+    m = REPORT_PATH_RE.fullmatch((comment or "").strip())
+    if not m:
+        return None
+    brief = pathlib.Path(m.group(1)).expanduser()
+    sig = _sig(brief)
+    hit = _reports.get(("brief", str(brief)))
+    if hit and hit[0] == sig:
+        return hit[1]
+    try:
+        with brief.open("rb") as f:
+            head = f.read(BRIEF_HEAD).decode("utf-8", "replace")
+    except OSError:
+        return None
+    out = None
+    for line in REPORT_LINE_RE.findall(head):
+        found = REPORT_PATH_RE.search(line)
+        if found or THIS_NOTE_RE.search(line):
+            out = pathlib.Path(found.group(1)).expanduser() if found else brief
+            break
+    _reports[("brief", str(brief))] = (sig, out)
+    return out
+
+
+def read_report(path):
+    """{path, at, next, pr} from the tail of a report file: the newest milestone (the block from the last heading or
+    top-level bullet), its `다음:`/`Next:`/`次:` line when it has one, and the last PR it links."""
+    sig = _sig(path)
+    if not sig:
+        return None
+    hit = _reports.get(str(path))
+    if hit and hit[0] == sig:
+        return hit[1]
+    try:
+        with path.open("rb") as f:
+            f.seek(max(0, sig[0] - REPORT_TAIL))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    lines = [l.rstrip() for l in tail.splitlines()[1 if sig[0] > REPORT_TAIL else 0:] if l.strip()]
+    start = max((i for i, l in enumerate(lines) if l.startswith(("#", "- ", "* "))), default=0)
+    block = lines[start:]
+    nxt = next((m.group(1) for l in reversed(block) for m in [NEXT_RE.search(l)] if m), None)
+    latest = re.sub(r"^[#*\-\s]+", "", block[0]) if block else ""
+    refs = [m for m in PR_REF_RE.finditer(tail)]
+    pr = refs and (pr_key(refs[-1][1], refs[-1][2]) if refs[-1][1] else pr_key(refs[-1][3], refs[-1][4]))
+    out = {"path": str(path), "at": iso(dt.datetime.fromtimestamp(sig[1] / 1e9, dt.timezone.utc)), "size": sig[0],
+           "next": mask(" ".join((nxt or latest).split()), 160) or None, "pr": pr or None}
+    _reports[str(path)] = (sig, out)
+    return out
+
+
+def report_of(comment):
+    p = report_path(comment)
+    return read_report(p) if p else None
+
+
 # ---------------------------------------------------------------- inbox classification
 
 RULES = [  # (type, regex) on the end of a finished turn; the first match wins
@@ -1150,6 +1228,7 @@ class Fleet:
             for s in sessions.values():
                 s["gh_repo"] = repo_of(s["path"], self.repos) if s.get("path") else None
                 s["project"] = project_of(s.get("path"), s.get("repo_name"), s["gh_repo"])
+                s["report"] = report_of(s.get("comment"))
             # A session whose phase changed (a turn ended, a worker started) may just have merged, pushed or
             # answered a review: its PRs are probed now rather than when their tier comes round.
             phases = self.mem.setdefault("session_phase", {})

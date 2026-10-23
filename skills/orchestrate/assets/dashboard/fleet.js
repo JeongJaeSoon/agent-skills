@@ -635,7 +635,7 @@ function briefHtml(text) {
 function fleetBrief() {
   if (!F.brief) pollBrief();
   const b = F.brief;
-  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report as <span class="mono">orch brief render --periodic --fill</span> builds it from the board, the PR list and open decisions. A lead with no board rows shows from its session and cards; rows a lead wrote with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report as <span class="mono">orch brief render --periodic</span> builds it from the board, the sessions, the PR list and open decisions. A lead or card with no board rows shows from its session, with the next step from the report file its brief names; rows written with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
     ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}${F.briefAt ? ` · updated ${relSpan(F.briefAt)}` : ""}</div>` : ""}</div>`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
   if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;

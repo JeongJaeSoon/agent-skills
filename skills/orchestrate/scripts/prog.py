@@ -87,16 +87,18 @@ Usage: orch <command> <slug> [options]
                                      that is moving but has no row (a wait on another team, an investigation),
                                      later only work set aside on purpose, with the trigger that brings it back
   brief render --periodic [--scope top-level|PROGRAM] [--telegram] [--headline T] [--skipped T] [--now ISO8601]
-               [--commit] [--json] [--fill]
+               [--commit] [--json] [--no-fill]
                                      the brief skill's periodic report items 1-9 from the board, prs.json, open
                                      decisions and brief-last/<scope>.json (bold = changed since it). --commit
                                      saves this table as the last one (after sending). Staleness: a row past 90
                                      min shows its age, an open PR probed over 30 min ago is in the headline,
                                      over 120 min marks it ⚠️ (merged and closed PRs do not age), a lead whose terminal left the fleet turns 🔴;
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
-                                     "pr_stale_min"}}. Exit 1 when a table is wider than 78 columns. --fill adds
-                                     rows from the fleet's sessions (state.json) for each lead the board has no
-                                     lead for, its cards, and the coordinator's own cards (the dashboard's Brief)
+                                     "pr_stale_min"}}. Exit 1 when a table is wider than 78 columns. Rows the
+                                     board lacks come from the fleet's sessions (state.json): each lead the board
+                                     has no lead for, its cards and the coordinator's own cards, each with the
+                                     last milestone of the report file its brief's REPORT line names. --no-fill
+                                     renders the board alone
   sent add --to WHO (--text-file F | - | --text T) [--kind card|terminal|inbox|subagent|agent|slack|tracker|other]
            [--channel HOW] [--repo OWNER/NAME] [--subject S] [--from WHO]
   sent list [--days 1] [--json]
@@ -2195,15 +2197,14 @@ def cmd_brief(argv):
     import board
     if argv[:1] != ["render"] or "--periodic" not in argv:
         sys.exit("usage: orch brief render --periodic [--scope S] [--telegram] [--headline T] [--skipped T] [--now ISO8601] "
-                 "[--commit] [--json] [--fill]")
+                 "[--commit] [--json] [--no-fill]")
     now = opt(argv, "--now")
     scope = opt(argv, "--scope", "top-level")
-    fill = "--fill" in argv
+    fill = "--no-fill" not in argv  # --fill, the old opt-in, is now the default and still accepted
     out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
                        opt(argv, "--headline"), opt(argv, "--skipped"), fill)
     if not out["text"]:
-        print("board 에도 fleet 에도 리드·카드 없음" if fill else
-              "board 에 행 없음: 표는 brief 스킬대로 손으로 만든다 (orch board set 으로 행을 기록하면 다음부터 렌더된다)")
+        print("board 에도 fleet 에도 리드·카드 없음: 표는 brief 스킬대로 손으로 만든다" if fill else "board 에 행 없음")
         return
     print(json.dumps(out, ensure_ascii=False, indent=1) if "--json" in argv else out["text"])
     if "--commit" in argv:

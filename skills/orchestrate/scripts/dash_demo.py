@@ -461,6 +461,12 @@ def build(root, now=None):
     (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
     (root / "fleet-state" / "pr-stats.json").write_text(json.dumps(pr_stats_report(now)))
     (root / "fleet-state" / "stages.json").write_text(json.dumps(stage_table(now), ensure_ascii=False))
+    # The scratch card's brief and report (FakeFleetWorld wt-scratch): the Brief's row for it reads the report.
+    (root / "briefs").mkdir(exist_ok=True)
+    (root / "cards").mkdir(exist_ok=True)
+    (root / "briefs" / "release-check.md").write_text(f"# release script check\n\nReport: 마일스톤마다 {root / 'cards' / 'release-check.md'} 에 추가.\n")
+    (root / "cards" / "release-check.md").write_text("# release script check — card\n\n## 착수\n- 다음: 스크립트 읽기\n\n"
+                                                     "## 막힘\n- GitHub 접근이 없어 태그를 확인하지 못함\n- 다음: 로그인 뒤 재시도 · 사람\n")
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
@@ -543,7 +549,9 @@ class FakeFleetWorld:
                [agent("p-docs", "waiting", 0.5, toolName="Bash", toolInput="npm publish --dry-run", prompt="Write the setup guide.")]),
             wt("wt-scratch", "scratch", "acme/tools", "scratch", 1.5,
                [agent("p-scratch", "done", 1.5, prompt="Check the release script.",
-                      lastAssistantMessage="The release script needs GitHub access.\nLogin required: run `gh auth login` in a terminal, then tell me.")]),
+                      lastAssistantMessage="The release script needs GitHub access.\nLogin required: run `gh auth login` in a terminal, then tell me.")],
+               # A card the coordinator made with `orca worktree create`: the brief in its comment names its report file.
+               comment=str(pathlib.Path(os.environ.get("ORCH_FLEET_STATE", "/nonexistent")).parent / "briefs" / "release-check.md")),
             # A lead: a coordinator the root dispatched, with a Run of its own. One worker came through that Run,
             # one the lead made with `orca worktree create` (only Orca's parent ties it to the lead).
             wt("wt-lead", "billing lead", "acme/platform", "lead/billing", 0.15,
