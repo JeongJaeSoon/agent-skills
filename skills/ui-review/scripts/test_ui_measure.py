@@ -77,6 +77,11 @@ for extra in ([], ["--scope", "main"]):
     rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", LONG, *extra)
     assert status(res, 390)["horizontal-overflow"] == "FAIL", (extra, status(res, 390))
 
+# A box scaled down to fit is judged where it is drawn, not by its layout width.
+SCALED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 600px; transform: scale(.5); transform-origin: left top\">' + 'A'.repeat(60) + '</div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", SCALED)
+assert status(res, 390)["horizontal-overflow"] == "PASS", status(res, 390)
+
 # A page or scope that cannot be measured is an error, not a PASS of something else.
 with contextlib.redirect_stderr(io.StringIO()) as err:
     assert ui_measure.main([str(HERE / "testdata/pass.html"), "--widths", "1280", "--scope", "#missing"]) == 2

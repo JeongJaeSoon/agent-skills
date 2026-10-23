@@ -209,7 +209,12 @@
     // An element overflows by its box or by what it draws past it (unbroken text, ::after); report the outermost one.
     const measured = new Set(all);
     const clipsX = (el) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (/(auto|scroll|hidden|clip)/.test(cs(a).overflowX)) return true; return false; };
-    const reach = (el) => Math.max(box(el).right, cs(el).overflowX === "visible" ? box(el).left + el.scrollWidth : 0);
+    // scrollWidth is in layout pixels; the box is on screen, after any scale or zoom on el or its ancestors.
+    const reach = (el) => {
+      const b = box(el);
+      if (cs(el).overflowX !== "visible" || !el.offsetWidth) return b.right;
+      return Math.max(b.right, b.left + el.scrollWidth * (b.width / el.offsetWidth));
+    };
     for (const el of all) if (reach(el) > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(measured.has(el.parentElement) && reach(el.parentElement) > vw + 1)) overItems.push({ el: where(el), detail: `reaches ${r1(reach(el))}px > viewport ${vw}px` });
   } finally {
     for (const [el, v, prio] of off) v ? el.style.setProperty("display", v, prio) : el.style.removeProperty("display");
