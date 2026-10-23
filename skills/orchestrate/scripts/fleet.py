@@ -176,7 +176,10 @@ def run_json(cmd, timeout=30):
         out = None
     if r.returncode and out is None:
         tail = (r.stderr or r.stdout).strip().splitlines()
-        raise SourceError(mask(tail[-1][:300]) if tail else f"{cmd[0]} exit {r.returncode}")
+        # A Node crash ends in "Node.js vNN"; the cause is its Error line (or its code:/syscall: fields).
+        cause = next((l for pat in (r"\s*\w*Error\b", r"\s*(code|syscall):") for l in tail if re.match(pat, l)),
+                     tail[-1] if tail else None)
+        raise SourceError(mask(cause.strip()[:300]) if cause else f"{cmd[0]} exit {r.returncode}")
     if out is None:
         raise SourceError(f"{cmd[0]}: output was not JSON")
     return out

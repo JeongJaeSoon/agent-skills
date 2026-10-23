@@ -1236,4 +1236,51 @@ st = f.tick(force=True)
 assert [(h["kind"], h["resource"], h["by"], h["session"]) for h in st["holds"]] == [
     ("resource", "browser", "term_docs", "wt-docs")], st["holds"]
 
+# A CLI that crashes because its cwd was removed is named by its cause, not by Node's closing version line.
+fake_cli = root / "fake-orca"
+fake_cli.write_text(f"""#!{sys.executable}
+import os, sys
+try:
+    os.getcwd()
+except FileNotFoundError:
+    sys.stderr.write('''node:internal/bootstrap/switches/does_own_process_state:142
+    cachedCwd = rawMethods.cwd();
+                           ^
+
+Error: ENOENT: process.cwd failed with error no such file or directory, uv_cwd
+    at process.wrappedCwd [as cwd] (node:internal/bootstrap/switches/does_own_process_state:142:28)
+    at resolveInvocationCwd (/opt/fake/cli/index.js:50:85) {{
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'uv_cwd'
+}}
+
+Node.js v24.0.0
+''')
+    sys.exit(1)
+print('{{"ok": true}}')
+""")
+fake_cli.chmod(0o755)
+assert fleet.run_json([str(fake_cli)]) == {"ok": True}
+gone = pathlib.Path(tempfile.mkdtemp(prefix="test-fleet-gone-"))
+live = os.getcwd()
+os.chdir(gone)
+gone.rmdir()
+try:
+    fleet.run_json([str(fake_cli)])
+    raise AssertionError("expected SourceError")
+except fleet.SourceError as e:
+    assert "uv_cwd" in str(e) and not str(e).startswith("Node.js"), e
+finally:
+    os.chdir(live)
+# Without an Error line the code:/syscall: fields still beat the version line; other CLIs keep their last line.
+for stderr, want in (("boom\n  code: 'EACCES',\nNode.js v24.0.0\n", "code: 'EACCES',"),
+                     ("warning: x\nerror: not logged in\n", "error: not logged in")):
+    fake_cli.write_text(f"#!{sys.executable}\nimport sys\nsys.stderr.write({stderr!r})\nsys.exit(1)\n")
+    try:
+        fleet.run_json([str(fake_cli)])
+        raise AssertionError("expected SourceError")
+    except fleet.SourceError as e:
+        assert str(e) == want, (str(e), want)
+
 print("test_fleet: ok")

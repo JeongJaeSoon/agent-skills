@@ -1501,6 +1501,9 @@ def beat():
 def serve(host, port, interval, make_fleet=None):
     global FLEET
     home().mkdir(parents=True, exist_ok=True)
+    # The collectors' `orca` children inherit this cwd; started from a worktree that is later removed, every one
+    # dies at startup with uv_cwd ENOENT. The store outlives any worktree.
+    os.chdir(home())
     lock = (home() / ".dash.lock").open("a")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # held for the life of the process
@@ -1671,7 +1674,7 @@ def agent_spec(port):
                                            "ORCH_SKILLS", "ORCH_PR_STATS") if k in os.environ})
     return {"Label": agent_label(),
             "ProgramArguments": ["/usr/bin/env", "python3", str(HERE / "dash.py"), "serve", "--port", str(port)],
-            "EnvironmentVariables": env, "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,
+            "EnvironmentVariables": env, "WorkingDirectory": str(home()), "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,
             "StandardOutPath": str(home() / ".dash.log"), "StandardErrorPath": str(home() / ".dash.log")}
 
 
@@ -1727,7 +1730,7 @@ def ensure(port):
     home().mkdir(parents=True, exist_ok=True)
     logf = (home() / ".dash.log").open("a")
     subprocess.Popen([sys.executable, str(HERE / "dash.py"), "serve", "--port", str(port)], stdout=logf,
-                     stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True)
+                     stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True, cwd=home())
     until = time.monotonic() + 10
     while time.monotonic() < until:
         h = health(port)

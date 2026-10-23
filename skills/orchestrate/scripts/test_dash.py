@@ -423,10 +423,20 @@ import socket, subprocess, signal
 with socket.socket() as sk:
     sk.bind(("127.0.0.1", 0))
     port = sk.getsockname()[1]
-ok, msg = dash.ensure(port)
+# Started from a directory that is then removed (an archived worktree), the server runs in its store instead:
+# the orca children of its collectors inherit its cwd and die at startup without one.
+gone, live = pathlib.Path(tempfile.mkdtemp(prefix="test-dash-gone-")), os.getcwd()
+os.chdir(gone)
+gone.rmdir()
+try:
+    ok, msg = dash.ensure(port)
+finally:
+    os.chdir(live)
 assert ok and "started" in msg, msg
 h = dash.health(port)
 assert h["store"] == str(dash.home()) and h["version"] == dash.code_version(), h
+cwd = subprocess.run(["lsof", "-a", "-p", str(h["pid"]), "-d", "cwd", "-Fn"], capture_output=True, text=True).stdout
+assert f"n{dash.home().resolve()}" in cwd.splitlines(), cwd
 assert dash.ensure(port) == (True, f"dashboard: http://127.0.0.1:{port}/")
 import urllib.request
 for p in ("/fleet.js", "/api/programs"):
@@ -467,6 +477,7 @@ os.environ["ORCH_DASH_LABEL"] = f"io.github.jeongjaesoon.orch-dash-test-{os.getp
 assert dash.agent_status() is None
 spec = dash.agent_spec(port)
 assert spec["KeepAlive"] and spec["RunAtLoad"] and spec["EnvironmentVariables"]["PROGRAMS_HOME"] == str(store), spec
+assert spec["WorkingDirectory"] == str(dash.home()), spec
 assert spec["ProgramArguments"][2:] == [str(pathlib.Path(dash.__file__).resolve()), "serve", "--port", str(port)], spec
 # A broken plist is no agent, so ensure keeps its own path instead of failing every `orch status`.
 real_plist = dash.agent_plist
