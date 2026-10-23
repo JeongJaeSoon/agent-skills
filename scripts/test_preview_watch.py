@@ -93,14 +93,20 @@ ROUTES = {
     "/elsewhere": (302, "", b""),
     "/loop": (302, "", b""),
     "/bad-location": (302, "", b""),
+    "/ui": (302, "", b""),
+    "/ui/": (302, "", b""),
+    "/ui/index.html": (200, "text/html", b"<html><body>ui</body></html>"),
+    "/q": (302, "", b""),
+    "/q?x=1": (200, "text/html", b"<html><body>q</body></html>"),
 }
 LOCATIONS = {"/to-page": "/page", "/elsewhere": "https://example.test/", "/loop": "/loop",
-             "/bad-location": "http://127.0.0.1:invalid/"}
+             "/bad-location": "http://127.0.0.1:invalid/", "/ui": "/ui/", "/ui/": "index.html", "/q": "?x=1"}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        path = self.server.root if self.path == "/" else self.path
+        # The server stands in for an app whose "/" is root: "/?x=1" is root + "?x=1".
+        path = self.server.root + self.path[1:] if self.path.startswith(("/?", "/#")) or self.path == "/" else self.path
         code, ctype, body = ROUTES[path]
         self.send_response(code)
         if ctype:
@@ -133,7 +139,8 @@ class Probe(unittest.TestCase):
         self.assertIs(self.verdict("/"), True)
 
     def test_same_origin_redirect_to_a_page(self):
-        self.assertIs(self.verdict("/to-page"), True)
+        for root in ("/to-page", "/ui", "/q"):  # absolute path, nested relative path, query only
+            self.assertIs(self.verdict(root), True, root)
 
     def test_not_pages(self):
         for root in ("/api", "/plain", "/fake-html", "/missing", "/elsewhere", "/loop", "/bad-location"):

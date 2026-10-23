@@ -16,7 +16,7 @@ or an entry this opened has to go. Settings live under the "preview-watch" key o
 (see DEFAULTS).
 """
 import fcntl, http.client, json, os, pathlib, plistlib, re, shutil, subprocess, sys, threading, time
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 LABEL = "io.github.jeongjaesoon.preview-watch"
 PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
@@ -123,7 +123,7 @@ def probe_page(port, host):
 
 
 def _probe(port, host):
-    path = "/"
+    url = f"http://{host}:{port}/"
     for _ in range(5):
         c = http.client.HTTPConnection(host.strip("[]"), port, timeout=PROBE_TIMEOUT_S)
         try:
@@ -132,15 +132,16 @@ def _probe(port, host):
             except OSError:
                 return None
             try:
-                c.request("GET", path, headers={"Accept": "text/html"})
+                u = urlsplit(url)
+                c.request("GET", (u.path or "/") + (f"?{u.query}" if u.query else ""), headers={"Accept": "text/html"})
                 r = c.getresponse()
                 if r.status in (301, 302, 303, 307, 308):
-                    loc = urlsplit(r.getheader("Location") or "")
+                    url = urljoin(url, r.getheader("Location") or "")
+                    loc = urlsplit(url)
                     # Elsewhere is not something a tailnet link to this port could show.
-                    if loc.netloc and (loc.scheme != "http" or loc.hostname not in ("localhost", "127.0.0.1", "::1")
-                                       or (loc.port or 80) != port):
+                    if loc.scheme != "http" or loc.hostname not in ("localhost", "127.0.0.1", "::1") \
+                            or (loc.port or 80) != port:
                         return False
-                    path = (loc.path or "/") + (f"?{loc.query}" if loc.query else "")
                     continue
                 ctype = (r.getheader("Content-Type") or "").partition(";")[0].strip().lower()
                 if not (200 <= r.status < 300 and ctype == "text/html"):
