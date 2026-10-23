@@ -463,6 +463,35 @@ pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "n
          "c1": {"workers": [{"dispatchId": "old"}], "page": {"hasMore": False, "nextCursor": None}}}
 real, prog.orca_json = prog.orca_json, lambda *a: pages[a[a.index("--cursor") + 1] if "--cursor" in a else None]
 assert [w["dispatchId"] for w in prog.run_workers("run_x")] == ["new", "old"]
+# An empty wait names each live worker's move instead of a procedure to work them out from.
+pj = lambda **k: {"outcome": "in_progress", "nextAction": {"kind": "none", "argv": []}, **k}
+moves = prog.next_moves([
+    {"dispatchId": "w1", "agentTerminalHandle": "h1", "projection": pj(nextAction={"kind": "reply", "argv": ["orca", "x"]})},
+    {"dispatchId": "w2", "agentTerminalHandle": None, "projection": pj()},
+    {"dispatchId": "w3", "agentTerminalHandle": "h3", "projection": pj(stage={"activity": "waiting"})},
+    {"dispatchId": "w4", "agentTerminalHandle": "h4", "projection": pj(stage={"activity": "idle"})},
+    {"dispatchId": "w5", "agentTerminalHandle": "h5", "projection": {"outcome": "succeeded"}}])
+assert [m.split()[0] for m in moves] == ["w1", "w2", "w3", "w4"], moves
+assert "reply: orca x" in moves[0] and "worker-abandon" in moves[1] and "worker-read --dispatch w3" in moves[2] \
+    and moves[3] == "  w4 idle: orchestration send --to dispatch:w4, then nudge h4", moves
+# orch inbox: one call per wake. It acks what was handled, peek-waits only when nothing is queued, and prints the
+# batch as lines with the next command; heartbeats are counted, not printed.
+calls, queue = [], [{"deliveryId": None, "messages": []}, {},
+                     {"deliveryId": "dv9", "messages": [{"id": "m1", "type": "status", "body": "PR ready\nsee link"},
+                                                        {"id": "m2", "type": "heartbeat"}]}]
+prog.orca_json = lambda *a: (calls.append(a), queue.pop(0))[1]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_inbox(["--ack", "dv8", "--wait"])
+assert [c[2:] for c in calls] == [("--ack", "dv8"), ("--peek", "--wait", "--timeout-ms", "3300000"), ()], calls
+lines = out.getvalue().splitlines()
+assert lines[0].startswith("INBOX id=m1 type=status") and "body=PR ready see link" in lines[0] and len(lines) == 2, lines
+assert lines[1] == "1 of 2 to act on (the rest heartbeats or refusals); then: orch inbox --ack dv9 --wait", lines
+calls, queue = [], [{"deliveryId": None, "messages": []}]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    prog.cmd_inbox([])
+assert len(calls) == 1 and out.getvalue() == "inbox empty; wait again: orch inbox --wait\n", out.getvalue()
 prog.orca_json = real
 print("prog.py landed_but_open: all pass")
 

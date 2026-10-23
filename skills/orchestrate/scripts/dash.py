@@ -826,7 +826,8 @@ def summarize(cfg, events, issues, workers, tnow, order, leftover=0):
                                order=[e for e in order if e.get("state") not in ("gone", "unknown")])
     return {
         "predicate_total": len(pred), "predicate_done": len(done) if issues is not None else None,
-        "final_check": verified, "main": main, "cap": cap, "ceiling": cfg.get("ceiling", 6),
+        "final_check": verified, "resting": resting(verified, events[-1]["ts"] if events else None, tnow),
+        "main": main, "cap": cap, "ceiling": cfg.get("ceiling", 6),
         "in_flight": units, "ready_to_land": len(ready), "human_wait": len(human),
         "landed_total": len(landed), "landed_24h": sum(1 for e in landed if within(e, 24)),
         "derived_total": len(derived) if issues is not None else None,
@@ -1147,10 +1148,17 @@ def ledger_tail(slug):
     return hit[1]
 
 
+QUIET = dt.timedelta(days=3)  # the sidebar folds a program away at the same line (fleet.js ARCHIVE_MS)
+
+
+def resting(done, last_ts, now=None):
+    return bool(done) or bool(last_ts) and (now or dt.datetime.now(dt.timezone.utc)) - prog.parse_ts(last_ts) > QUIET
+
+
 def closed(slug):
-    """A program with a current final check has stopped moving, so only its ledger is still watched. A landing, a
-    predicate edit or an admitted follow-up after the check reopens it."""
-    return ledger_tail(slug)[0]
+    """A program with a current final check, or no ledger event for QUIET, has stopped moving, so only its ledger is
+    still watched. A landing, a predicate edit or any other new event reopens it."""
+    return resting(*ledger_tail(slug))
 
 
 def signature(slug):

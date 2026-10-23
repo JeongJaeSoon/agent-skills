@@ -256,7 +256,7 @@ function sourceLevel(name) {
   const st = S.state, src = st?.sources?.[name], meta = sourceMeta().find((m) => m[0] === name);
   if (!src || !meta) return "none";
   if (src.configured === false) return "off";
-  if (st.summary?.final_check && name !== "ledger") return "good";  // a closed program's sources are no longer polled
+  if (st.summary?.resting && name !== "ledger") return "good";  // a closed or quiet program's sources are no longer polled
   const age = (Date.now() - ms(src.updated_at)) / 1000;
   if (isNaN(age)) return "stale";
   const [warn, stale] = meta[2](st.interval || 60);

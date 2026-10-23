@@ -52,6 +52,10 @@ Usage: orch <command> <slug> [options]
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      coordinator only: block until the Run inbox holds actionable
                                      mail; acks heartbeat-only batches; never acks actionable ones
+  inbox [--ack DELIVERY] [--wait] [--timeout-ms 3300000]
+                                     no slug, a session without a program: ack the batch you handled,
+                                     peek-wait (no --types, so Orca's typed notice stays out), then
+                                     print the next batch one line per message with its ack line
   watch-cards [--interval 180] [--idle-min 30] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
                                      no slug: exit on a new stuck screen in any agent terminal but this
                                      one (cards no Run lists), or low disk; never types (card_watch.py)
@@ -2016,10 +2020,7 @@ def cmd_wait(argv):
             if revoked_echo(m):
                 print(f"ignored: Orca refused a {m.get('type')} from released dispatch {revoked_echo(m)}", flush=True)
         if work:
-            for m in work:
-                body = (m.get("body") or "").replace("\n", " ")
-                print(f"INBOX id={m.get('id')} type={m.get('type')} from={m.get('from_handle')} "
-                      f"subject={m.get('subject')} payload={str(m.get('payload'))[:200]} body={body[:800]}")
+            print("\n".join(map(inbox_line, work)))
             closed = {payload_of(m).get("dispatchId") for m in work if m.get("type") == "worker_done"}
             if closed:
                 try:
@@ -2049,13 +2050,56 @@ def cmd_wait(argv):
     print_sweep(run_id, p.dir / "self-check.json")
     print_stuck(p, run_id)
     print_reviews(p)
-    print(f"EMPTY x{rounds}: orca orchestration worker-list --run {run_id} --json, act on projection.nextAction;"
-          f" a worker whose stage.activity is 'waiting' may be stuck on a permission prompt (worker-read --source terminal);"
-          f" one that ended its turn without worker_done does not wake on send: send the instruction with"
-          f" orca orchestration send --to dispatch:<id>, then nudge it in one line, orca terminal send --terminal"
-          f" <agentTerminalHandle> --text 'run your orchestration check' --enter, and read the terminal to see the turn"
-          f" start (a nudged terminal later closes through its TAKEN OVER self-check); a worker with no terminal gets Orca's recovery (worker-stop or worker-abandon:"
-          f" orca skills get orchestration --reference references/recovery-and-cleanup.md)")
+    moves = next_moves(run_workers(run_id))
+    print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
+                    + moves))
+
+
+def inbox_line(m):
+    body = (m.get("body") or "").replace("\n", " ")
+    return (f"INBOX id={m.get('id')} type={m.get('type')} from={m.get('from_handle')} "
+            f"subject={m.get('subject')} payload={str(m.get('payload'))[:200]} body={body[:800]}")
+
+
+def cmd_inbox(argv):
+    """The inbox wait of a session without a program in one call per wake: the raw peek, take and ack replies are
+    whole JSON batches, and a top-level session read each of them in full."""
+    acked = opt(argv, "--ack")
+    res = orca_json("orchestration", "check", *(["--ack", acked] if acked else []))
+    did, msgs = batch(res)
+    if not msgs and "--wait" in argv:
+        orca_json("orchestration", "check", "--peek", "--wait", "--timeout-ms", opt(argv, "--timeout-ms", "3300000"))
+        did, msgs = batch(orca_json("orchestration", "check"))
+    work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
+    if work:
+        print("\n".join(map(inbox_line, work)))
+    if did:
+        print(f"{len(work)} of {len(msgs)} to act on (the rest heartbeats or refusals); then: orch inbox --ack {did} --wait")
+    else:
+        print("inbox empty; wait again: orch inbox --wait")
+
+
+def next_moves(workers):
+    """The move for each live worker after a wait that stayed empty, read from Orca's projection here so the
+    coordinator does not list the workers and work it out again."""
+    out = []
+    for w in workers:
+        pj = w.get("projection") or {}
+        if pj.get("outcome") != "in_progress":
+            continue
+        d, h, act = w["dispatchId"], w.get("agentTerminalHandle"), pj.get("nextAction") or {}
+        activity = (pj.get("stage") or {}).get("activity") or "unknown"
+        if act.get("kind") not in (None, "none"):
+            out.append(f"  {d} {act['kind']}: {' '.join(act.get('argv') or [])}")
+        elif not h or (pj.get("liveness") or {}).get("verdict") == "exited":
+            out.append(f"  {d} no terminal: worker-stop or worker-abandon (recovery-and-cleanup.md)")
+        elif activity == "idle":  # the turn ended without worker_done; send alone does not wake it (SKILL.md, terminal send)
+            out.append(f"  {d} idle: orchestration send --to dispatch:{d}, then nudge {h}")
+        elif activity == "working":
+            out.append(f"  {d} working")
+        else:  # waiting may be a permission prompt; unknown needs a look either way
+            out.append(f"  {d} {activity}: orca orchestration worker-read --dispatch {d} --source terminal")
+    return out
 
 
 def pid_alive(pid):
@@ -2310,11 +2354,11 @@ def cmd_req(argv):
 
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
-            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "backfill": cmd_backfill, "decide": cmd_decide,
+            "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "req": cmd_req, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 - (sys.argv[1:2] == ["watch-cards"]) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["inbox"])) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])

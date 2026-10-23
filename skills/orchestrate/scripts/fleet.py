@@ -200,26 +200,50 @@ def fetch_fast():
         return {k: f.result().get(k, []) for k, f in futures.items()}
 
 
+RUN_CACHE = {}  # run id -> (monotonic time read, {"workers", "tasks", "gates"}) for runs that had stopped moving
+SETTLED_EVERY = 900  # a settled run whose coordinator is off screen cannot move by itself; re-read it this often anyway
+
+
+def settled_run(got):
+    return (all(w.get("dispatchStatus") in SETTLED for w in got["workers"])
+            and all(t.get("status") in SETTLED for t in got["tasks"])
+            and not any(g.get("status") in ("pending", "open") for g in got["gates"]))
+
+
 def fetch_runs():
     listed = orca("orchestration", "run-list").get("runs", [])
     runs = [r for r in listed if not r.get("legacy") and r.get("id") != "run_legacy_local"]
+    live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
+    out = {"runs": runs, "workers": [], "tasks": [], "gates": []}
+    for r in listed:
+        hit = RUN_CACHE.get(r["id"])
+        if hit and r.get("coordinator_handle") not in live and time.monotonic() - hit[0] < SETTLED_EVERY:
+            got = hit[1]
+        else:
+            got = fetch_run(r, r in runs)
+            RUN_CACHE.pop(r["id"], None)
+            if settled_run(got):
+                RUN_CACHE[r["id"]] = (time.monotonic(), got)
+        for k in ("workers", "tasks", "gates"):
+            out[k] += got[k]
+    return out
+
+
+def fetch_run(r, full):
     # Without --run, worker-list is scoped to the Run bound to the calling terminal: a server started from a
     # coordinator's terminal saw only that Run's workers, and mail from every other Run's settled worker stayed open.
-    workers = []
-    for r in listed:
-        cursor = None
-        while True:
-            res = orca("orchestration", "worker-list", "--run", r["id"], "--limit", "100",
-                       *(["--cursor", cursor] if cursor else []))
-            workers += res.get("workers", [])
-            cursor = (res.get("page") or {}).get("nextCursor")
-            if not (res.get("page") or {}).get("hasMore") or not cursor:
-                break
-    tasks, gates = [], []
-    for r in runs:
-        tasks += orca("orchestration", "task-list", "--run", r["id"]).get("tasks", [])
-        gates += orca("orchestration", "gate-list", "--run", r["id"]).get("gates", [])
-    return {"runs": runs, "workers": workers, "tasks": tasks, "gates": gates}
+    workers, cursor = [], None
+    while True:
+        res = orca("orchestration", "worker-list", "--run", r["id"], "--limit", "100",
+                   *(["--cursor", cursor] if cursor else []))
+        workers += res.get("workers", [])
+        cursor = (res.get("page") or {}).get("nextCursor")
+        if not (res.get("page") or {}).get("hasMore") or not cursor:
+            break
+    if not full:
+        return {"workers": workers, "tasks": [], "gates": []}
+    return {"workers": workers, "tasks": orca("orchestration", "task-list", "--run", r["id"]).get("tasks", []),
+            "gates": orca("orchestration", "gate-list", "--run", r["id"]).get("gates", [])}
 
 
 AUTOMATION_RECENT = 6  # runs kept per automation: the dashboard's Automations page draws them as a row of blocks
