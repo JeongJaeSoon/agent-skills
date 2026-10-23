@@ -580,12 +580,35 @@ lines = (store / B / "ledger.jsonl").read_text().splitlines()
 (store / B / "ledger.jsonl").write_text("\n".join(l for l in lines if "not-a-time" not in l) + "\n")
 assert not any(e.startswith("ledger:") for e in dash.collect(B, sources=())["errors"])
 # A ts without a timezone parses, so only the tzinfo check keeps it from a TypeError against now.
-for bad_ts, bad_row in (("2026-10-23T10:00:00", None), (None, "[1, 2]")):
-    with (store / B / "ledger.jsonl").open("a") as f:
-        f.write((bad_row or json.dumps({"ts": bad_ts, "ev": "note", "note": "hand-edited"})) + "\n")
-    errs = dash.collect(B, sources=())["errors"]
-    assert f"ledger: 1 event(s) with a bad ts left out, first {bad_ts!r}" in errs, errs
-    lines = (store / B / "ledger.jsonl").read_text().splitlines()
-    (store / B / "ledger.jsonl").write_text("\n".join(lines[:-1]) + "\n")
+with (store / B / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": "2026-10-23T10:00:00", "ev": "note", "note": "hand-edited"}) + "\n")
+errs = dash.collect(B, sources=())["errors"]
+assert "ledger: 1 event(s) with a bad ts left out, first '2026-10-23T10:00:00'" in errs, errs
+lines = (store / B / "ledger.jsonl").read_text().splitlines()
+(store / B / "ledger.jsonl").write_text("\n".join(lines[:-1]) + "\n")
+# A row that is not an object, or has no ev, is set aside before anything indexes e["ev"]: closed() runs outside
+# both loops' try, so it once raised there and stopped every program on the loop's second round.
+clean = (store / B / "ledger.jsonl").read_text()
+last_ts = dash.ledger_tail(B)[1]
+with (store / B / "ledger.jsonl").open("a") as f:
+    f.write("[1, 2]\n" + json.dumps({"ts": dash.iso(dash.utcnow()), "note": "no ev"}) + "\n")
+assert not dash.closed(B) and dash.ledger_tail(B)[1] == last_ts  # the last event, not the rejected row after it
+st = dash.collect(B, sources=())
+assert "ledger: 2 row(s) without an ev left out, first [1, 2]" in st["errors"] and st["summary"], st["errors"]
+assert not any(e.startswith("ledger:") for e in dash.collect(A, sources=())["errors"])
+real_sleep, real_collect, rounds, collected = dash.time.sleep, dash.collect, [], []
+dash.collect = lambda slug, *a, **k: collected.append(slug) or {"errors": []}
+def sleep(_):
+    rounds.append(1)
+    if len(rounds) == 2:
+        raise StopIteration
+dash.time.sleep = sleep
+try:
+    dash.slow_loop(1)
+except StopIteration:
+    pass
+dash.time.sleep, dash.collect = real_sleep, real_collect
+assert collected.count(B) == 2 and A in collected, collected  # the second round reached B through closed()
+(store / B / "ledger.jsonl").write_text(clean)
 
 print("dash.py collect/serve: all pass")
