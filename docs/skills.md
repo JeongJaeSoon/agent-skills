@@ -509,14 +509,14 @@
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
 ### 오케스트레이터 위임 강제
-`hooks/orchestrator_guard.py`(PreToolUse, 모든 도구). 최상위 오케스트레이터의 메인 스레드에서만 판정한다. `agent_type`이 `agent-skills:orchestrator`이거나, reorient hook에 `ROLE: orchestrator`로 기록된 세션에서 `agent_id`·`agent_type`이 없는 호출이다. 서브에이전트는 자기 타입과 `agent_id`를 달고 오므로 위임받은 쪽은 막지 않는다. 설계와 다른 안의 비교는 [orchestrator-guard.md](orchestrator-guard.md).
+`hooks/orchestrator_guard.py`(PreToolUse, 모든 도구). 최상위 오케스트레이터의 메인 스레드에서만 판정한다. `agent_id`가 없고 `agent_type`이 `agent-skills:orchestrator`이거나, reorient hook에 `ROLE: orchestrator`로 기록된 세션에서 `agent_id`·`agent_type`이 없는 호출이다. 서브에이전트는 자기 타입과 `agent_id`를 달고 오므로 위임받은 쪽은 막지 않는다. 설계와 다른 안의 비교는 [orchestrator-guard.md](orchestrator-guard.md).
 
 | 결정 | 대상 |
 |---|---|
 | 거부 | 브라우저·데스크톱·채팅 전송 도구, WebFetch, WebSearch |
-| 거부 | 상태 디렉터리(`~/.local/state`, `$AGENT_SKILLS_STATE`, `$PROGRAMS_HOME`, 메모리 디렉터리, `orchestrator_guard.write_dirs`) 밖의 Edit·Write·NotebookEdit |
+| 거부 | 상태 디렉터리(`~/.local/state`, `$AGENT_SKILLS_STATE`, `$PROGRAMS_HOME`, `$CLAUDE_CONFIG_DIR/projects/*/memory`, `orchestrator_guard.write_dirs`) 밖의 Edit·Write·NotebookEdit |
 | 거부 | `run_in_background`인 명령을 `tail`·`head`(`-f` 제외)로 파이프한 것. 감시자의 줄이 끝날 때까지 파이프에 묶여 출력 파일에 안 나온다 |
-| 거부 | 한 턴(`prompt_id`, 10분 공백도 새 턴)에 직접 작업 호출이 `work_calls`(기본 3)를 넘은 것. 상태 디렉터리 밖 Read, Grep, Glob, 위에서 거부하지 않은 MCP 도구, 라우팅 명령(`orca`, `orch`, `skills-sync` 등과 파이프 뒤 필터) 밖의 Bash를 센다 |
+| 거부 | 한 턴(`prompt_id`, 10분 공백도 새 턴, `prompt_id`가 없으면 세지 않음)에 직접 작업 호출이 `work_calls`(기본 3)를 넘은 것. 상태 디렉터리 밖 Read, Grep, Glob, 위에서 거부하지 않은 MCP 도구, 라우팅 명령(`orca`, `orch`, `skills-sync` 등과 파이프 뒤 필터) 밖의 Bash를 센다 |
 
 Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도구는 세지도 막지도 않는다. 거부 사유는 위임 경로(Agent, `orca worktree create`, 리드에게 `orca orchestration send`, `orch …`)를 알려 준다. `ROLE: none`이면 그 세션에서, `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`이면 모든 세션에서 꺼진다. 설정은 `~/.claude/agent-skills.json`의 `orchestrator_guard`(`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
 
