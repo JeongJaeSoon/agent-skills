@@ -32,7 +32,10 @@ already exist where it survives (`record-progress` decides what goes where):
   Condition**, step 5): report "N/M 완료 조건 충족"; for each ticket this session filed under
   it, name the exit item it serves or move it to `⏸️ 보류`; close the epic when every exit item
   is met.
-- Anything learned here that outlives the task → memory, now, not "later".
+- Anything learned here that outlives the task → memory, now, not "later". An Orca worker (§7)
+  or a dispatched card (§8) writes nothing to auto-memory: the memory directory is outside its
+  worktree, so each write stops it on a permission prompt. It puts the lesson in its report,
+  and the session above decides what to keep.
 - The human corrected how the work was done (not what to build), and no program's Close
   covers this session → run `reflect` in session mode before ending. It records the lessons in
   the lessons ledger; apply only what the user approves now.
