@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import http.server, json, os, pathlib, socket, stat, sys, tempfile, threading, unittest
+import http.server, json, os, pathlib, socket, stat, sys, tempfile, threading, time, unittest
 from unittest import mock
 
 TMP = pathlib.Path(tempfile.mkdtemp())
@@ -150,6 +150,44 @@ class Probe(unittest.TestCase):
             c.close()
         threading.Thread(target=greet, daemon=True).start()
         self.assertIs(pw.probe_page(sock.getsockname()[1], "127.0.0.1"), False)
+
+    def raw_server(self, talk):
+        """A loopback listener that runs talk(conn) for its first connection; returns the port."""
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        sock.listen()
+        self.addCleanup(sock.close)
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        def serve():
+            c, _ = sock.accept()
+            c.recv(4096)
+            try:
+                talk(c, stop)
+            except OSError:
+                pass
+            finally:
+                c.close()
+        threading.Thread(target=serve, daemon=True).start()
+        return sock.getsockname()[1]
+
+    def test_streaming_page_is_seen_before_the_stream_ends(self):
+        def talk(c, stop):
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\n\r\n"
+                      b"17\r\n<!doctype html><html>hi\r\n")
+            stop.wait(30)  # keeps the response open, like a server-sent stream
+        t = time.monotonic()
+        self.assertIs(pw.probe_page(self.raw_server(talk), "127.0.0.1"), True)
+        self.assertLess(time.monotonic() - t, 1)
+
+    def test_trickling_server_cannot_hold_the_pass(self):
+        def talk(c, stop):
+            c.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.2):
+                c.sendall(b"X-Slow: 1\r\n")  # each read returns within the socket timeout
+        t = time.monotonic()
+        self.assertIs(pw.probe_page(self.raw_server(talk), "127.0.0.1"), False)
+        self.assertLess(time.monotonic() - t, pw.PROBE_BUDGET_S + 1)
 
     def test_refused_connection_is_unknown(self):
         sock = socket.socket()

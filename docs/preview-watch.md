@@ -13,7 +13,7 @@ bin/preview-watch uninstall   # LaunchAgent를 내리고 watcher가 연 항목�
 
 1. `lsof -nP -F pcn -iTCP@127.0.0.1 -iTCP@[::1] -sTCP:LISTEN` 한 번으로 loopback LISTEN 포트와 프로세스(이름, PID)를 얻는다. `*`(0.0.0.0)이나 LAN 주소에 묶인 포트는 대상이 아니다.
 2. `exclude`에 없고, 허용 범위나 `include`에 든 포트만 후보다.
-3. 새 후보는 웹페이지인지 한 번 확인한다. `GET /`를 보내 같은 호스트·포트 안의 리다이렉트를 따라가고(최대 5번, 요청당 2초), 2xx이고 `Content-Type`이 `text/html`이고 본문 앞 4KB에 `<html` 또는 `<!doctype html`이 있을 때만 웹페이지다. JSON API, 빈 `text/plain`, S3 같은 오브젝트 스토어, DB는 열지 않는다. `include` 포트는 확인하지 않고 연다.
+3. 새 후보는 웹페이지인지 한 번 확인한다. `GET /`를 보내 같은 호스트·포트 안의 리다이렉트를 따라가고(최대 5번, 프로브 전체 3초), 2xx이고 `Content-Type`이 `text/html`이고 본문 앞 4KB에 `<html` 또는 `<!doctype html`이 있을 때만 웹페이지다. JSON API, 빈 `text/plain`, S3 같은 오브젝트 스토어, DB는 열지 않는다. `include` 포트는 확인하지 않고 연다.
    - 판정은 상태 파일에 포트와 PID 기준으로 남고, PID가 바뀌면 다시 확인한다. OrbStack은 모든 컨테이너 포트를 한 프로세스로 쥐어서 같은 포트를 다른 컨테이너가 다시 써도 PID가 같으므로, 판정은 10분마다 한 번 다시 확인한다. 그 사이의 실행은 HTTP 요청도 tailscale 호출도 하지 않는다. 그래서 웹 화면이던 포트를 15초 안에 API 컨테이너가 다시 잡으면 최대 10분 동안 열려 있을 수 있다.
    - 연결 자체가 거부되면 120초 뒤 다시 확인한다.
 4. 새 웹페이지도, 내려야 할 자기 항목도 없으면 여기서 끝난다. 있으면 `tailscale serve status --json`을 한 번 읽는다.

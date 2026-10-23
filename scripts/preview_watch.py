@@ -15,7 +15,7 @@ No model or network API is called. One pass runs `lsof` once, and `tailscale` on
 or an entry this opened has to go. Settings live under the "preview-watch" key of ~/.claude/agent-skills.json
 (see DEFAULTS).
 """
-import fcntl, http.client, json, os, pathlib, plistlib, re, shutil, subprocess, sys, time
+import fcntl, http.client, json, os, pathlib, plistlib, re, shutil, subprocess, sys, threading, time
 from urllib.parse import urlsplit
 
 LABEL = "io.github.jeongjaesoon.preview-watch"
@@ -44,7 +44,8 @@ RETRY_NO_ANSWER_S = 120  # a listener that refused the probe's connection gets a
 # OrbStack holds every published port under one process, so a port reused by another container keeps the pid:
 # a verdict is checked again after this even while the same process holds the port.
 RECHECK_S = 600
-PROBE_TIMEOUT_S = 2
+PROBE_TIMEOUT_S = 2  # per socket operation
+PROBE_BUDGET_S = 3  # the whole probe, redirects included: a server trickling bytes cannot hold the pass
 HTML_DOC = re.compile(rb"<(!doctype\s+html|html)[\s>]", re.I)
 
 
@@ -112,7 +113,16 @@ def target(port, host):
 
 def probe_page(port, host):
     """True: `GET /` ends, after same-origin redirects, in a 2xx text/html HTML document. False: the listener
-    answered something else, or nothing parseable. None: the connection itself failed."""
+    answered something else, nothing parseable, or not within PROBE_BUDGET_S. None: the connection failed."""
+    out = [False]
+    # A daemon thread left behind on timeout ends with this one-shot process.
+    t = threading.Thread(target=lambda: out.__setitem__(0, _probe(port, host)), daemon=True)
+    t.start()
+    t.join(PROBE_BUDGET_S)
+    return False if t.is_alive() else out[0]
+
+
+def _probe(port, host):
     path = "/"
     for _ in range(5):
         c = http.client.HTTPConnection(host.strip("[]"), port, timeout=PROBE_TIMEOUT_S)
@@ -133,7 +143,17 @@ def probe_page(port, host):
                     path = (loc.path or "/") + (f"?{loc.query}" if loc.query else "")
                     continue
                 ctype = (r.getheader("Content-Type") or "").partition(";")[0].strip().lower()
-                return 200 <= r.status < 300 and ctype == "text/html" and bool(HTML_DOC.search(r.read(4096)))
+                if not (200 <= r.status < 300 and ctype == "text/html"):
+                    return False
+                body = b""
+                while len(body) < 4096:  # read1: a page that keeps streaming is judged on what has arrived
+                    chunk = r.read1(4096 - len(body))
+                    if not chunk:
+                        break
+                    body += chunk
+                    if HTML_DOC.search(body):
+                        return True
+                return False
             except (OSError, http.client.HTTPException, ValueError):  # ValueError: a Location with a bad port
                 return False
         finally:
