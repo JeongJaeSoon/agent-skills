@@ -21,6 +21,8 @@ p a { text-decoration: none; }
 .bar { display: flex; align-items: flex-start; height: 40px; gap: 8px; }
 .bar button { margin-top: 8px; }
 .kv { display: grid; grid-template-columns: 64px 1fr; width: 300px; }
+.wide { width: 1000px; }
+.inner { width: 960px; }
 .narrow { width: 160px; word-break: break-all; }
 </style></head>
 <body><main>
@@ -41,4 +43,5 @@ p a { text-decoration: none; }
 <dl class="kv"><dt>App</dt><dd>A07FAKE</dd><dt>Event address</dt><dd>https://example.test/v1/events/agt_FAKE</dd></dl>
 <div class="bar"><span>Notifications</span><button role="switch" aria-checked="true">On</button></div>
 <div class="narrow"><span>https://example.test/a/very/long/hooks/events/endpoint/path</span></div>
+<div class="wide"><div class="inner">Wide region</div></div>
 </main></body></html>

@@ -201,10 +201,12 @@
   // 6. Nothing is wider than the viewport.
   const overItems = [];
   const sw = document.documentElement.scrollWidth;
-  // The document width speaks for the whole page only; with --scope or --exclude the elements below decide.
-  if (sw > vw && scope === document.body && !excluded.length) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
+  // The document width speaks for the whole page only; with --scope, --exclude or an ignored subtree the elements below decide.
+  if (sw > vw && scope === document.body && !excluded.length && !document.querySelector(IGNORE)) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
+  // Report the outermost measured element that overflows, not each of its children.
+  const measured = new Set(all);
   const clipsX = (el) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (/(auto|scroll|hidden|clip)/.test(cs(a).overflowX)) return true; return false; };
-  for (const el of all) if (box(el).right > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(el.parentElement && box(el.parentElement).right > vw + 1)) overItems.push({ el: where(el), detail: `right edge ${r1(box(el).right)}px > viewport ${vw}px` });
+  for (const el of all) if (box(el).right > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(measured.has(el.parentElement) && box(el.parentElement).right > vw + 1)) overItems.push({ el: where(el), detail: `right edge ${r1(box(el).right)}px > viewport ${vw}px` });
   check("horizontal-overflow", overItems);
 
   // 7. Underline marks a link inside running text, and only there.
@@ -236,16 +238,16 @@
 
   // 10. A bare glyph is not a label or a status.
   const glyphItems = [];
+  const named = (el) => ["aria-label", "aria-labelledby", "title"].some((k) => el.getAttribute(k)) || !!el.querySelector("svg title, img[alt]:not([alt=''])");
   for (const el of all) {
     if (kids(el).some((c) => text(c))) continue;
     const t = text(el);
     if (!/^(…|\.\.\.|!+|\?+|!\?)$/.test(t)) continue;
-    const named = el.closest(BUTTON + ", a")?.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("aria-label");
-    if (!named) glyphItems.push({ el: where(el), detail: `"${t}" with no name or tooltip` });
+    const host = el.closest(BUTTON + ", a");
+    if (!named(el) && !(host && named(host))) glyphItems.push({ el: where(el), detail: `"${t}" with no name or tooltip` });
   }
   // The same for an icon standing alone: a control holding only an icon (aria-hidden or not, the control
   // still needs a name), or a non-hidden icon whose parent has no words either.
-  const named = (el) => ["aria-label", "aria-labelledby", "title"].some((k) => el.getAttribute(k)) || !!el.querySelector("svg title, img[alt]:not([alt=''])");
   const icons = (el) => [...el.querySelectorAll("svg, img")].some(visible);
   for (const ctl of all.filter((el) => el.matches(BUTTON + ", a[href]") && !text(el) && icons(el) && !named(el))) glyphItems.push({ el: where(ctl), detail: "icon with no name or tooltip" });
   for (const svg of all.filter((el) => el.tagName.toLowerCase() === "svg" && el.getAttribute("aria-hidden") !== "true" && !el.closest(BUTTON + ", a[href]"))) {
