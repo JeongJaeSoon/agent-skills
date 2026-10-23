@@ -44,6 +44,7 @@ import skill_usage  # noqa: E402
 import pr_stats  # noqa: E402
 import sent  # noqa: E402
 import stages  # noqa: E402
+import flow  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1314,6 +1315,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/work":
             # Read on every poll, not folded into state.json: an `orch stage` write shows on the next poll, not the next collect.
             return self.send_cached(json.dumps(stages.table(), ensure_ascii=False).encode())
+        if path in ("/api/fleet/flow", "/api/fleet/changes"):
+            return self.send_cached(flow_report(path.rsplit("/", 1)[1]))
         if path == "/api/fleet/brief":
             return self.send_cached(json.dumps(brief_report(), ensure_ascii=False).encode())
         if path == "/api/fleet/sent":
@@ -1565,6 +1568,24 @@ def brief_report():
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
     return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok")}
+
+
+FLOW_CACHE, FLOW_TTL = {}, {"flow": 30, "changes": 60}
+
+
+def flow_report(kind):
+    """Data flow and skill changes, built in the request at most once per TTL: stat, tails and a bounded git log."""
+    at, body = FLOW_CACHE.get(kind, (0, None))
+    if body is None or time.monotonic() - at > FLOW_TTL[kind]:
+        try:
+            # Before this process's first tick, the sessions come from the last state.json on disk.
+            st = getattr(FLEET, "state", None) or fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
+            out = flow.flow(st.get("sessions")) if kind == "flow" else flow.changes()
+        except Exception as e:  # the panel says what failed instead of never loading
+            out = {"error": f"{kind}: {type(e).__name__}: {e}"}
+        body = json.dumps(out, ensure_ascii=False).encode()
+        FLOW_CACHE[kind] = (time.monotonic(), body)
+    return body
 
 
 def health(port):
