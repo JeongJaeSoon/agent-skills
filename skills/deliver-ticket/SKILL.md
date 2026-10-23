@@ -88,6 +88,7 @@ Then review by scope, not by vendor:
 - `/security-review` — the diff touches auth, crypto, or untrusted input
 - `blast-radius` (or `interrogate` for an adversarial pass) — the diff touches auth, migrations,
   concurrency or a public contract; run it before final review
+- `ui-review` — the diff changes what people see
 
 Write in the PR body which of these the diff triggered and what ran; a triggered one you skipped
 gets its reason there; an Orca worker copies the line into its worker_done. A general review alone

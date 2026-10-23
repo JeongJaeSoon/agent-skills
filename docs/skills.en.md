@@ -67,6 +67,11 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
 - **Bundled:** `scripts/sticky-comment.sh` (keeps PR test results in a single comment). The skill body keeps only the rules that decide what ships; procedures are split into references: `evidence.md` (bug, refactor and existing-fix procedures), `independent-review.md` (independent review procedures), `pull-request.md` (PR body sections and stacks), `review-loop.md` (the loop from opening the PR to ready, and watching when someone else merges), `review-bot-triage.md` (how to sort review threads into fix / dismiss / ask; used for CodeRabbit, Copilot and human reviews).
 - **Related:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, the verdict framework from `interrogate`, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate` (`orch land`, `orch heavy`), `handoff-ticket`.
 
+### ui-review
+- **When:** before a mockup, a screen or a UI PR is shown to a person ("UI 리뷰해줘", "시안 점검해줘"), and after a person points out a UI problem, to add the rule.
+- **What:** measures the page in headless Chrome at 1280 and 390 (row heights, button widths in a column, edge alignment, vertical centers, 4px grid, overflow, link underlines, component consistency against an existing screen) and walks the user's scenario for system steps, duplicated options and grouping. The product's design system comes first. Rules and evidence: `references/rules.md`.
+- **Related:** `deliver-ticket` §3 and visual-evidence, `orchestrate` leads before a mockup goes to the human.
+
 ### handoff-ticket
 - **When:** "핸드오프" (handoff), "다음 작업으로 넘어가자" (let's move on to the next task), "남은 작업 있어?" (is there work left?), "머지하고 다음 진행해줘" (merge and go on to the next one), and the moment a ticket is done. "병렬로 진행" (run in parallel) belongs here only when it means ticket cards in the same repo; if it could mean subagents or side-branch cards, that is settled first. If this session has to keep working, use `dispatch-card`.
 - **What it does:**

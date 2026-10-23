@@ -1,0 +1,151 @@
+"""Fixture tests for ui_measure.py: the clean page passes every check, the broken page fails each one.
+
+Run: python3 test_ui_measure.py   (needs Chrome; CHROME overrides the binary)
+"""
+import contextlib, functools, http.server, io, json, pathlib, sys, tempfile, threading
+
+HERE = pathlib.Path(__file__).parent
+sys.path.insert(0, str(HERE))
+import ui_measure
+
+if not ui_measure.find_chrome():
+    sys.exit("test_ui_measure: no Chrome found; set CHROME")
+
+
+def run(*args):
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d) / "r.json"
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            rc = ui_measure.main([*map(str, args), "--json", str(out)])
+        return rc, json.loads(out.read_text()), printed.getvalue()
+
+
+def status(result, width):
+    return {c["id"]: c["status"] for c in result[str(width)]["checks"]}
+
+
+rc, res, printed = run(HERE / "testdata/pass.html")
+assert rc == 0, printed
+for w in (1280, 390):
+    assert set(status(res, w).values()) == {"PASS"}, (w, status(res, w))
+assert "| row-height | PASS | 0 |" in printed and "#### 390px" in printed
+
+rc, res, printed = run(HERE / "testdata/fail.html", "--baseline", HERE / "testdata/pass.html")
+assert rc == 1 and "판정: FAIL" in printed
+FAILS = {"row-height", "control-column", "edge-alignment", "vertical-center", "spacing-grid", "link-underline",
+         "table-head", "field-consistency", "bare-glyph", "toggle-as-button", "baseline"}
+WARNS = {"value-wrap", "generic-action", "no-color"}
+for w in (1280, 390):
+    st = status(res, w)
+    assert {k for k, v in st.items() if v == "FAIL"} >= FAILS, (w, st)
+    assert {k for k, v in st.items() if v == "WARN"} >= WARNS, (w, st)
+assert status(res, 390)["horizontal-overflow"] == "FAIL" and status(res, 1280)["horizontal-overflow"] == "PASS"
+
+checks = {c["id"]: c for c in res["1280"]["checks"]}
+assert any("60px, the others 48px" in i["detail"] for i in checks["row-height"]["items"]), checks["row-height"]
+assert any(i["detail"].startswith("definition list") for i in checks["row-height"]["items"]), checks["row-height"]
+assert any("underlined link outside running text" in i["detail"] for i in checks["link-underline"]["items"])
+assert any(i["detail"].startswith('"!"') for i in checks["bare-glyph"]["items"])
+assert any(i["detail"] == "icon with no name or tooltip" for i in checks["bare-glyph"]["items"]), checks["bare-glyph"]
+assert any("3px is off the 4px grid" in i["detail"] for i in checks["spacing-grid"]["items"])
+assert any(i["detail"].startswith("field ") for i in checks["baseline"]["items"]), checks["baseline"]
+
+# Options loosen a rule without editing the script: an allowed value and an ignored subtree.
+rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "1280", "--allow", "3,7", "--exclude", ".shifted", "--exclude", ".odd")
+assert status(res, 1280)["spacing-grid"] == "PASS" and status(res, 1280)["bare-glyph"] == "PASS", status(res, 1280)
+
+# --before runs page JS before measuring, e.g. to open the screen under review.
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "1280", "--before", "document.querySelector('main').insertAdjacentHTML('beforeend', '<span>!</span>')")
+assert status(res, 1280)["bare-glyph"] == "FAIL"
+
+# --scope on the set itself still measures it: the scope element is a target too.
+for sel in (".kv", "section.card"):
+    rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "1280", "--scope", sel)
+    assert status(res, 1280)["row-height"] == "FAIL", (sel, status(res, 1280))
+
+# With --scope the page's own width does not fail the part under review.
+rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "390", "--scope", ".kv")
+assert status(res, 390)["horizontal-overflow"] == "PASS", status(res, 390)
+
+# A scope wider than the screen overflows even when its parent is wider still.
+rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "390", "--scope", ".inner")
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
+# Unbroken text past the screen fails even with an ignored subtree on the page, and inside a scope.
+LONG = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div id=long style=\"width: 100px; white-space: nowrap\">' + 'A'.repeat(120) + '</div>')"
+for extra in ([], ["--scope", "main"]):
+    rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", LONG, *extra)
+    assert status(res, 390)["horizontal-overflow"] == "FAIL", (extra, status(res, 390))
+
+# A ::after box past the screen fails inside a scope too, where the document width is not consulted.
+PSEUDO = "document.head.insertAdjacentHTML('beforeend', '<style>#wideafter::after { content: \"\"; display: block; width: 1000px; height: 4px; }</style>'); document.querySelector('main').insertAdjacentHTML('beforeend', '<div id=wideafter style=\"width: 100px\">x</div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", PSEUDO, "--scope", "main")
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
+# A closed wide panel (opacity 0 or visibility hidden) does not count, in a scope or on the whole page.
+for hide in ("opacity: 0", "visibility: hidden"):
+    CLOSED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"position: absolute; top: 0; width: 1000px; " + hide + "\">Closed</div>')"
+    for extra in ([], ["--scope", "main"]):
+        rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", CLOSED, *extra)
+        assert status(res, 390)["horizontal-overflow"] == "PASS", (hide, extra, status(res, 390))
+
+# A child that turns visible but is not rendered does not bring its hidden parent back.
+GHOST = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"visibility: hidden; width: 1000px\"><span style=\"display: none; visibility: visible\">x</span>Closed</div>')"
+for extra in ([], ["--scope", "main"]):
+    rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", GHOST, *extra)
+    assert status(res, 390)["horizontal-overflow"] == "PASS", (extra, status(res, 390))
+
+# A visible child of a hidden parent still counts.
+SHOWN = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"visibility: hidden\"><div style=\"visibility: visible; width: 1000px\">Shown</div></div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", SHOWN, "--scope", "main")
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
+# Text in a display: contents element shows, so its overflow counts.
+CONTENTS = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px\"><span style=\"display: contents; white-space: nowrap\">' + 'A'.repeat(120) + '</span></div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", CONTENTS, "--scope", "main")
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
+# Content pushed off the left edge overflows too.
+LEFT = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; transform: translateX(-200px)\">Off</div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", LEFT)
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
+# A fixed banner wider than the phone overflows; so does an icon button whose label points nowhere.
+FIXED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"position: fixed; left: 0; bottom: 0; width: 600px; height: 20px; background: #eee\"></div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", FIXED)
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+for attrs in ('aria-labelledby=missing', 'aria-label=\\" \\"'):
+    UNNAMED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<button " + attrs + "><svg width=16 height=16><circle cx=8 cy=8 r=2 /></svg></button>')"
+    rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "1280", "--before", UNNAMED)
+    assert status(res, 1280)["bare-glyph"] == "FAIL", (attrs, status(res, 1280))
+
+# All rows (and all buttons) of one table differing is no agreement either.
+SPLIT = "document.querySelector('main').insertAdjacentHTML('beforeend', '<table><tbody>' + [[40, 64], [48, 80], [56, 96]].map(([h, w]) => '<tr style=\"height: ' + h + 'px\"><td>Row</td><td><button style=\"width: ' + w + 'px\">Edit</button></td></tr>').join('') + '</tbody></table>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "1280", "--before", SPLIT)
+st = status(res, 1280)
+assert st["row-height"] == "FAIL" and st["control-column"] == "FAIL", st
+
+# A box scaled down to fit is judged where it is drawn, not by its layout width.
+SCALED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 600px; transform: scale(.5); transform-origin: left top\">' + 'A'.repeat(60) + '</div>')"
+ROTATED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; height: 200px; margin-left: 100px; white-space: nowrap; transform: rotate(90deg)\">' + 'A'.repeat(20) + '</div>')"
+for js in (SCALED, ROTATED):
+    rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", js)
+    assert status(res, 390)["horizontal-overflow"] == "PASS", (js, status(res, 390))
+
+# A page or scope that cannot be measured is an error, not a PASS of something else.
+with contextlib.redirect_stderr(io.StringIO()) as err:
+    assert ui_measure.main([str(HERE / "testdata/pass.html"), "--widths", "1280", "--scope", "#missing"]) == 2
+    assert ui_measure.main([str(HERE / "testdata/missing.html"), "--widths", "1280"]) == 2
+    assert ui_measure.main([str(HERE / "testdata/pass.html"), "--widths", "1280", "--scope", "#closed"]) == 2
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(HERE / "testdata")))
+    server.RequestHandlerClass.log_message = lambda *a: None
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    assert ui_measure.main([base + "/missing.html", "--widths", "1280"]) == 2
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert ui_measure.main([base + "/pass.html", "--widths", "1280"]) == 0
+    server.shutdown()
+e = err.getvalue()
+assert "matches nothing" in e and "cannot open" in e and "HTTP 404" in e and "nothing visible to measure in #closed" in e, e
+
+print("test_ui_measure: ok")

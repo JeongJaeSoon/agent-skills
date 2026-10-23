@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font: 14px/20px sans-serif; color: #222; background: #fff; padding: 24px; }
+main { display: flex; flex-direction: column; gap: 24px; max-width: 960px; }
+h1 { font-size: 24px; line-height: 32px; }
+.card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.row { display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 12px; border-bottom: 1px solid #eee; }
+button { height: 32px; width: 96px; border: 1px solid #ccc; border-radius: 6px; background: #f4f4f4; font: inherit; }
+button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+input, select { height: 32px; border: 1px solid #ccc; border-radius: 6px; padding: 0 8px; font: inherit; width: 100%; }
+table { border-collapse: collapse; width: 100%; }
+th, td { height: 40px; padding: 0 12px; text-align: left; vertical-align: middle; }
+th { font-size: 12px; font-weight: 600; color: #555; }
+a { color: #2563eb; text-decoration: none; }
+p a { text-decoration: underline; }
+ul { list-style: none; display: flex; flex-direction: column; }
+li { height: 40px; display: flex; align-items: center; }
+.ok { color: #15803d; }
+.pseudo { position: relative; padding-left: 40px; }
+.pseudo::before { content: ""; position: absolute; left: 8px; top: 8px; width: 28px; height: 16px; border-radius: 8px; background: #94a3b8; }
+.switch { display: inline-flex; align-items: center; gap: 8px; }
+.track { width: 28px; height: 16px; border-radius: 8px; background: #2563eb; }
+</style></head>
+<body><main>
+<h1>Members</h1>
+<p>Invite people from the <a href="#settings">workspace settings</a> page.</p>
+<section class="card">
+  <div class="row"><span>Alice</span><button>Disable</button></div>
+  <div class="row"><span>Bob</span><button>Disable</button></div>
+  <div class="row"><span>Carol</span><button>Disable</button></div>
+</section>
+<section class="card">
+  <label>Name <input value="alpha"></label>
+  <label>Channel <select><option>#general</option></select></label>
+  <label>Volume <input type="range"></label>
+  <button role="switch" aria-checked="true" class="switch"><span class="track"></span>On</button>
+  <button role="switch" aria-checked="false" class="pseudo">Off</button>
+  <button class="primary">Save</button>
+  <button aria-label="More actions"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2"/></svg></button>
+</section>
+<table>
+  <thead><tr><th>Team</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td><a href="#a">Alpha</a></td><td class="ok">Active</td></tr>
+    <tr><td><a href="#b">Beta</a></td><td class="ok">Active</td></tr>
+    <tr><td><a href="#c">Gamma</a></td><td class="ok">Active</td></tr>
+  </tbody>
+</table>
+<table>
+  <thead><tr><th>Event</th><th>When</th></tr></thead>
+  <tbody><tr><td>Deploy</td><td>Today</td></tr><tr><td>Rollback</td><td>Yesterday</td></tr></tbody>
+</table>
+<ul><li>First item</li><li>Second item</li><li>Third item</li></ul>
+<section class="card"><code>https://example.test/hooks/events</code></section>
+<div style="opacity: 0; position: absolute; top: 0;"><span>!</span><a href="#x" style="text-decoration: underline">Hidden dialog link</a></div>
+<span id="more-label" hidden>More</span><button aria-labelledby="more-label">…</button>
+<div data-ui-review-ignore style="width: 1400px">Mockup controls</div>
+<div id="closed" style="display: none"><span>Closed panel</span></div>
+</main></body></html>

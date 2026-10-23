@@ -67,6 +67,11 @@
 - **同梱:** `scripts/sticky-comment.sh`（PR のテスト結果コメントを一つに保つ）。本文には何をデプロイするかを決めるルールだけを置き、手順は references に分けました。`evidence.md`（バグ・リファクタリング・既存の修正の手順）、`independent-review.md`（独立レビューの手順）、`pull-request.md`（PR 本文の節と stack）、`review-loop.md`（PR を開いてから ready までのループ、他の人がマージするときの見守り）、`review-bot-triage.md`（レビュースレッドを fix / dismiss / ask に分ける基準。CodeRabbit、Copilot、人のレビューに使います）。
 - **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`handoff-ticket`。
 
+### ui-review
+- **いつ:** 試作・画面・UI を変える PR を人に見せる前（「UI 리뷰해줘」「시안 점검해줘」）。人が UI の問題を指摘したあとは、直してから規則を足す。
+- **内容:** headless Chrome で 1280・390 のページを測る（行の高さ、同じ列のボタン幅、揃え線、縦の中心、4px グリッド、はみ出し、リンクの下線、既存画面とのコンポーネント一致）。測れないもの（人に見えるシステムの手順、重複する設定、まとまり）はシナリオ表で実際に操作して判定する。製品のデザインシステムが優先。規則と根拠は `references/rules.md`。
+- **関係:** `deliver-ticket` §3 と visual-evidence、`orchestrate` のリードが試作を人に送る前。
+
 ### handoff-ticket
 - **使う場面:** 「핸드오프」（ハンドオフ）、「다음 작업으로 넘어가자」（次の作業に移ろう）、「남은 작업 있어?」（残りの作業はある?）、「머지하고 다음 진행해줘」（マージして次に進めて）、そしてチケットが終わった瞬間。「병렬로 진행」（並列で進めて）は同じリポジトリのチケットカードのときだけ該当し、サブエージェントや脇ブランチのカードの可能性があれば先に見分けます。このセッションで作業を続ける必要があるなら `dispatch-card` を使います。
 - **内容:**

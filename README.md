@@ -65,6 +65,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 |---|---|
 | `write-ticket` | 티켓을 쓸 때. 후속 티켓 형식, 템플릿 |
 | `deliver-ticket` | 첫 수정부터 완료까지: 계획, 테스트, 독립 검토, GitHub stack, E2E, 머지, 완료 기준 |
+| `ui-review` | 시안·화면·UI PR을 사람에게 보이기 전 관문. 1280·390에서 행 높이·버튼 폭·정렬·여백·밑줄·색을 headless Chrome으로 재고, 시나리오 워크스루로 시스템 단계 노출·중복 옵션·구성을 본다 |
 | `handoff-ticket` | 끝난 뒤 다음 티켓을 새 Orca 카드로 |
 | `dispatch-card` | 이 세션은 계속하면서 다른 저장소나 곁가지를 카드로 |
 | `end-session` | 세션·카드·worktree 정리. Orca 워커와 브리프로 띄운 카드는 일을 마치면 스스로 닫는다 |
@@ -130,7 +131,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 
