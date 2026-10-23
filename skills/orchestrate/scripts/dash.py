@@ -826,7 +826,7 @@ def summarize(cfg, events, issues, workers, tnow, order, leftover=0):
                                order=[e for e in order if e.get("state") not in ("gone", "unknown")])
     return {
         "predicate_total": len(pred), "predicate_done": len(done) if issues is not None else None,
-        "final_check": verified, "resting": resting(verified, events[-1]["ts"] if events else None, tnow),
+        "final_check": verified, "resting": resting(verified, events[-1].get("ts") if events else None, tnow),
         "main": main, "cap": cap, "ceiling": cfg.get("ceiling", 6),
         "in_flight": units, "ready_to_land": len(ready), "human_wait": len(human),
         "landed_total": len(landed), "landed_24h": sum(1 for e in landed if within(e, 24)),
@@ -970,13 +970,25 @@ def land_order(events, pr_rows, cfg, now, tasks=None):
 
 
 def _merge(slug, d, cfg, fetched, interval):
-    events = read_jsonl(d / "ledger.jsonl")
+    events, bad = [], []
+    for e in read_jsonl(d / "ledger.jsonl"):
+        ts = e.get("ts") if isinstance(e, dict) else None
+        try:
+            if prog.parse_ts(ts).tzinfo is not None:  # a naive ts parses but fails every comparison with now
+                events.append(e)
+                continue
+        except (ValueError, TypeError, AttributeError):
+            pass
+        bad.append(ts)
     dash = d / "dashboard"
     dash.mkdir(exist_ok=True)
     prev = read_json(dash / "state.json", {}) or {}
     srcs = {k: dict(v) for k, v in (prev.get("sources") or {}).items() if isinstance(v, dict)}
-    errors = [e for e in prev.get("errors") or [] if e.split(":", 1)[0] not in fetched]
+    # The ledger is read on every collect, so its error is recomputed rather than carried over.
+    errors = [e for e in prev.get("errors") or [] if e.split(":", 1)[0] not in fetched and not e.startswith("ledger:")]
     tnow = utcnow()
+    if bad:  # every view below parses ts, so those lines are left out rather than failing the whole collect
+        errors.append(f"ledger: {len(bad)} event(s) with a bad ts left out, first {bad[0]!r}")
 
     def outcome(name):
         """(value, fresh): fresh only when this collect fetched the source successfully."""
@@ -1152,7 +1164,13 @@ QUIET = dt.timedelta(days=3)  # the sidebar folds a program away at the same lin
 
 
 def resting(done, last_ts, now=None):
-    return bool(done) or bool(last_ts) and (now or dt.datetime.now(dt.timezone.utc)) - prog.parse_ts(last_ts) > QUIET
+    """A timestamp that does not parse counts as moving: the fast loop runs every program, and one bad ledger line
+    must not stop it for the rest (_merge reports it on the program's row)."""
+    try:
+        quiet = bool(last_ts) and (now or dt.datetime.now(dt.timezone.utc)) - prog.parse_ts(last_ts) > QUIET
+    except (ValueError, TypeError, AttributeError):
+        quiet = False
+    return bool(done) or quiet
 
 
 def closed(slug):

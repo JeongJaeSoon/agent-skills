@@ -55,7 +55,9 @@ Usage: orch <command> <slug> [options]
   inbox [--ack DELIVERY] [--wait] [--timeout-ms 3300000]
                                      no slug, a session without a program: ack the batch you handled,
                                      peek-wait (no --types, so Orca's typed notice stays out), then
-                                     print the next batch one line per message with its ack line
+                                     print the next batch one line per message with its ack line;
+                                     with --wait, acks heartbeat-only batches and waits on; a failed
+                                     --ack is reported and the wait still runs
   watch-cards [--interval 180] [--idle-min 30] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
                                      no slug: exit on a new stuck screen in any agent terminal but this
                                      one (cards no Run lists), or low disk; never types (card_watch.py)
@@ -2065,18 +2067,35 @@ def cmd_inbox(argv):
     """The inbox wait of a session without a program in one call per wake: the raw peek, take and ack replies are
     whole JSON batches, and a top-level session read each of them in full."""
     acked = opt(argv, "--ack")
-    res = orca_json("orchestration", "check", *(["--ack", acked] if acked else []))
-    did, msgs = batch(res)
-    if not msgs and "--wait" in argv:
-        orca_json("orchestration", "check", "--peek", "--wait", "--timeout-ms", opt(argv, "--timeout-ms", "3300000"))
+    try:
+        did, msgs = batch(orca_json("orchestration", "check", *(["--ack", acked] if acked else [])))
+    except SystemExit as e:  # a stale delivery id must not cost the wait the caller is about to rely on
+        if not acked:
+            raise
+        print(f"ack {acked} failed ({e}); taking the inbox without it", flush=True)
         did, msgs = batch(orca_json("orchestration", "check"))
+    deadline, skipped = time.monotonic() + int(opt(argv, "--timeout-ms", "3300000")) / 1000, 0
     work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
+    # Like orch wait: a batch of only heartbeats or refusals is acked and the wait goes on, until the deadline.
+    while "--wait" in argv and not work:
+        left = int((deadline - time.monotonic()) * 1000)
+        if left <= 0:
+            break
+        if did:
+            skipped += len(msgs)
+            did, msgs = batch(orca_json("orchestration", "check", "--ack", did))
+        else:
+            orca_json("orchestration", "check", "--peek", "--wait", "--timeout-ms", str(left))
+            did, msgs = batch(orca_json("orchestration", "check"))
+            if not msgs:
+                break
+        work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
     if work:
         print("\n".join(map(inbox_line, work)))
     if did:
         print(f"{len(work)} of {len(msgs)} to act on (the rest heartbeats or refusals); then: orch inbox --ack {did} --wait")
     else:
-        print("inbox empty; wait again: orch inbox --wait")
+        print("inbox empty" + (f" ({skipped} heartbeat(s) or refusals acked)" if skipped else "") + "; wait again: orch inbox --wait")
 
 
 def next_moves(workers):
