@@ -469,9 +469,17 @@ def build(root, now=None):
     (root / "briefs" / "release-check.md").write_text(f"# release script check\n\nReport: 마일스톤마다 {root / 'cards' / 'release-check.md'} 에 추가.\n")
     (root / "cards" / "release-check.md").write_text("# release script check — card\n\n## 착수\n- 다음: 스크립트 읽기\n\n"
                                                      "## 막힘\n- GitHub 접근이 없어 태그를 확인하지 못함\n- 다음: 로그인 뒤 재시도 · 사람\n")
+    # What the watchers and the improvement loop leave beside the fleet state, for the Data flow and Skill changes views.
+    (root / "programs" / "_skill-usage").mkdir(parents=True, exist_ok=True)
+    (root / "programs" / "_skill-usage" / "ledger.jsonl").write_text("".join(json.dumps(
+        {"ts": _ago(now, h), "ev": "signal", "kind": "skill_usage", "skill": f"agent-skills:{s}", "flag": f,
+         "suggest": hint, "evidence": f"skill-usage:{s}:{f}:W{w}"}) + "\n" for s, f, hint, h, w in (
+        ("end-session", "misses", "add the phrase it missed to the description", 30, 42),
+        ("reflect", "slash_only", "say when it fires on its own", 200, 41))))
+    (root / "sync.json").write_text(json.dumps({"at": _ago(now, 0.2), "ok": True, "interval": 900, "message": "up to date"}))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
-            "PROGRAMS_HOME": str(root / "programs"), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
+            "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
 

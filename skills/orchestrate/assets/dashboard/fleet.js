@@ -13,6 +13,8 @@ const FLEET_SECTIONS = [
   { id: "monitors", label: "Monitors", icon: "activity" },
   { id: "sent", label: "Sent", icon: "chat" },
   { id: "skills", label: "Skills", icon: "spark" },
+  { id: "changes", label: "Skill changes", icon: "merge" },
+  { id: "flow", label: "Data flow", icon: "graph" },
   { id: "stats", label: "PR stats", icon: "merge" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
@@ -606,6 +608,118 @@ function fleetSkills() {
       || '<div class="card"><div class="empty-chart">No skill matches.</div></div>'}`;
 }
 
+// Data flow and skill changes come from /api/fleet/flow and /api/fleet/changes (flow.py), each cached by the server.
+async function pollJson(key, url, keepMs) {
+  const at = F[key + "At"] || 0;
+  if (F[key + "Busy"] || (F[key] && Date.now() - at < (F[key].error ? 5e3 : keepMs))) return;
+  F[key + "Busy"] = true;
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    F[key] = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
+  } catch (e) { F[key] = { error: String(e.message || e) }; }
+  F[key + "At"] = Date.now(); F[key + "Busy"] = false;
+  if (S.section === key) renderView();
+}
+const isoOf = (sec) => sec ? new Date(sec * 1000).toISOString() : null;
+const bytes = (n) => n == null ? "" : n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`;
+const storeMeta = (s) => !s.exists ? "missing" : [s.age != null ? rel(isoOf(s.mtime)) : "", s.lines != null ? `${s.lines} lines` : "",
+  s.entries != null ? `${s.entries} files` : bytes(s.size)].filter(Boolean).join(" · ");
+const storeTone = (s) => !s.exists ? "" : s.stale ? "warn" : "good";
+
+function flowGraph(rep) {
+  const RH = 36, W = 1080, X = [8, 310, 780], BW = [250, 400, 290];
+  const stores = rep.stores, ys = {};
+  stores.forEach((s, i) => { ys[s.id] = 30 + i * RH; });
+  const H = 30 + stores.length * RH;
+  // A producer or consumer sits at the mean height of its stores, then is pushed down so no two overlap.
+  const place = (nodes, key) => {
+    let next = 30;
+    return nodes.map((n) => {
+      const mine = stores.filter((s) => s[key].includes(n.id));
+      return { ...n, mine, y: mine.length ? mine.reduce((a, s) => a + ys[s.id], 0) / mine.length : null };
+    }).filter((n) => n.y != null).sort((a, b) => a.y - b.y).map((n) => { n.y = Math.max(n.y, next); next = n.y + RH; return n; });
+  };
+  const prods = place(rep.producers, "writers"), cons = place(rep.consumers, "readers");
+  const out = [];
+  const curve = (x0, y0, x1, y1, cls) => `<path class="edge ${cls}" d="M${x0} ${y0} C ${x0 + 50} ${y0}, ${x1 - 50} ${y1}, ${x1} ${y1}"/>`;
+  prods.forEach((p) => p.mine.forEach((s) => out.push(curve(X[0] + BW[0], p.y + 13, X[1], ys[s.id] + 13, `tone-${storeTone(s)}`))));
+  cons.forEach((c) => c.mine.forEach((s) => out.push(curve(X[1] + BW[1], ys[s.id] + 13, X[2], c.y + 13, s.exists ? "" : "req"))));
+  const box = (x, y, w, label, sub, tone, tip, dashed) => `<g class="fl-node${dashed ? " missing" : ""}"><rect class="box" x="${x}" y="${y}" width="${w}" height="26" rx="6"/>
+    ${tone ? `<rect class="bar tone-${tone}" x="${x}" y="${y}" width="3" height="26" rx="1.5"/>` : ""}
+    <text x="${x + 10}" y="${y + 17}">${esc(clip(label, sub ? 28 : 40))}${sub ? ` <tspan class="muted">${esc(clip(sub, 30))}</tspan>` : ""}</text><title>${esc(tip)}</title></g>`;
+  prods.forEach((p) => out.push(box(X[0], p.y, BW[0], p.label, "", "", p.label)));
+  stores.forEach((s) => out.push(box(X[1], ys[s.id], BW[1], s.name, storeMeta(s), storeTone(s),
+    [s.path, storeMeta(s), s.stale ? `stale: older than ${s.stale_after} s` : "", s.last ? `last row: ${s.last}` : "", s.rule || ""].filter(Boolean).join("\n"), !s.exists)));
+  cons.forEach((c) => out.push(box(X[2], c.y, BW[2], c.label, "", c.starved ? "bad" : "", c.starved ? `${c.label}: none of its inputs exist` : c.rule || c.label, c.starved)));
+  const h = Math.max(H, ...prods.map((p) => p.y + RH), ...cons.map((c) => c.y + RH));
+  return `<div class="relgraph"><svg viewBox="0 0 ${W} ${h}" style="min-width:860px;max-width:${W}px" role="img" aria-label="Producers, state files and consumers">
+    <text class="muted" x="${X[0]}" y="16">PRODUCERS</text><text class="muted" x="${X[1]}" y="16">STATE FILES</text><text class="muted" x="${X[2]}" y="16">CONSUMERS</text>${out.join("")}</svg></div>
+    <div class="legend" style="padding:0 var(--s4) var(--s3)"><span><i class="key tone-good" style="background:var(--tone)"></i>fresh</span><span><i class="key tone-warn" style="background:var(--tone)"></i>stale: older than its producer's interval</span><span><i class="key req"></i>read but missing</span><span>hover a box for its path, last row and rule</span></div>`;
+}
+
+function fleetFlow() {
+  pollJson("flow", "/api/fleet/flow", 30e3);
+  const rep = F.flow;
+  const head = `<div class="view-head"><div><h2>Data flow</h2><p>Who writes each local state file and who reads it. The map is fixed in flow.py; the values are stat, line counts kept incrementally, and the last row of each log. Nothing here calls a model.</p></div>
+    ${rep && !rep.error ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)}</div>` : ""}</div>`;
+  if (!rep) return head + '<div class="loading">Loading…</div>';
+  if (rep.error) return head + `<div class="card"><div class="empty-chart">${esc(rep.error)}</div></div>`;
+  const stale = rep.stores.filter((s) => s.stale), missing = rep.stores.filter((s) => !s.exists), starved = rep.consumers.filter((c) => c.starved);
+  const reports = rep.stores.find((s) => s.id === "reports");
+  const kpis = `<div class="kpis" style="--n:4">
+    ${kpi("State files", `${rep.stores.length - missing.length}<small>/${rep.stores.length}</small>`, missing.length ? `${missing.length} missing on this machine` : "all present")}
+    ${kpi("Stale", `${stale.length}`, stale.map((s) => s.name).join(", ") || "every loop on time")}
+    ${kpi("Not in the map", `${rep.unread.length}`, "files no known consumer reads")}
+    ${kpi("Starved consumers", `${starved.length}`, starved.map((c) => c.label.split(" · ")[0]).join(", ") || "every consumer has input")}</div>`;
+  const rules = rep.stores.filter((s) => s.rule).map((s) => `<tr><td class="mono">${esc(s.path)}</td><td>${esc(s.writers.join(", "))}</td><td>${esc(s.rule)}</td></tr>`).join("");
+  const brief = rep.consumers.find((c) => c.id === "brief");
+  return head + kpis + `<div class="card">${flowGraph(rep)}</div>
+    ${brief ? `<div class="card"><div class="card-head"><h3>How the Brief's rows are derived</h3></div><p style="padding:0 var(--s4) var(--s3)">${esc(brief.rule)}</p></div>` : ""}
+    <div class="grid">
+      <div class="card"><div class="card-head"><h3>Not in the map</h3><span class="aside">${rep.unread.length}</span></div>
+        <ul class="rows">${rep.unread.map((p) => `<li class="mono">${esc(p)}</li>`).join("") || '<li class="muted">Every file has a known reader.</li>'}</ul></div>
+      <div class="card"><div class="card-head"><h3>Report files</h3><span class="aside">${reports ? reports.entries : 0}</span></div>
+        <ul class="rows">${reports ? reports.files.map((f) => `<li><span class="mono">${esc(f.path)}</span> <span class="muted">${f.age != null ? rel(new Date(Date.now() - f.age * 1000).toISOString()) : "missing"}</span></li>`).join("")
+          : '<li class="muted">No session names a brief with a REPORT line.</li>'}</ul></div></div>
+    <div class="card table-wrap"><div class="card-head"><h3>Derivation rules and inputs</h3></div>
+      <table><thead><tr><th>Path</th><th>Written by</th><th>What it holds</th></tr></thead><tbody>${rules}</tbody></table></div>`;
+}
+
+const CHANGE_STATUS = { proposed: "accent", applied: "good", "in PR": "warn", merged: "good" };
+const CHANGE_FILTERS = ["all", "proposed", "in PR", "applied", "merged"];
+function fleetChanges() {
+  pollJson("changes", "/api/fleet/changes", 60e3);
+  const rep = F.changes;
+  const head = `<div class="view-head"><div><h2>Skill changes</h2><p>What agent-skills changed about itself: improvement signals from skill usage (proposed), open PRs (in PR), commits on this checkout pushed straight to main (applied) or merged by PR (merged). From git log, the collector's PR list and the signals ledger only.</p></div>
+    ${rep && !rep.error ? `<div class="aside muted">Last ${rep.days} days · ${relSpan(rep.generated_at)}</div>` : ""}</div>`;
+  if (!rep) return head + '<div class="loading">Loading…</div>';
+  if (rep.error) return head + `<div class="card"><div class="empty-chart">${esc(rep.error)}</div></div>`;
+  const f = CHANGE_FILTERS.includes(S.filters.fleet_changes) ? S.filters.fleet_changes : "all";
+  const skill = rep.skills.some((s) => s.skill === S.filters.fleet_changes_skill) ? S.filters.fleet_changes_skill : "all";
+  const count = (st) => rep.rows.filter((r) => r.status === st).length;
+  const rows = rep.rows.filter((r) => (f === "all" || r.status === f) && (skill === "all" || r.skills.includes(skill)));
+  const les = rep.lessons || {};
+  const kpis = `<div class="kpis" style="--n:4">
+    ${kpi("Merged", `${count("merged")}`, `${count("applied")} pushed straight to main`)}
+    ${kpi("In PR", `${count("in PR")}`, rep.repo ? esc(rep.repo) : "origin unknown")}
+    ${kpi("Proposed", `${count("proposed")}`, "skill usage signals")}
+    ${kpi("Lessons ledger", les.readable ? `${les.lines}` : "—", esc(les.readable ? les.path : les.note || ""))}</div>`;
+  const skillChip = (v, label, n) => `<button class="chip" type="button" data-group="fleet_changes_skill" data-val="${esc(v)}" aria-pressed="${v === skill}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</button>`;
+  const per = rep.skills.slice(0, 14).map((s) => `<tr><td class="mono">${skillChip(s.skill, s.skill)}</td><td class="num">${s.merged || '<span class="muted">0</span>'}</td><td class="num">${s.applied || '<span class="muted">0</span>'}</td>
+    <td class="num">${s["in PR"] || '<span class="muted">0</span>'}</td><td class="num">${s.proposed || '<span class="muted">0</span>'}</td><td class="muted">${relSpan(s.last)}</td></tr>`).join("");
+  const basis = (r) => [r.pr ? link(r.url, `#${r.pr}`) : "", r.sha ? `<span class="mono dim">${esc(r.sha.slice(0, 7))}</span>` : "",
+    ...(r.lessons || []).map((l) => `<span class="mono">${esc(l)}</span>`), r.basis ? `<span class="mono dim" title="${esc(r.basis)}">${esc(clip(r.basis, 28))}</span>` : ""].filter(Boolean).join(" ");
+  const list = rows.slice(0, 200).map((r) => `<tr><td class="muted when">${esc((r.at || "").slice(0, 10))}</td>
+    <td class="mono">${esc(r.skills.join(", "))}${r.also?.length ? ` <span class="muted" title="${esc(r.also.join(", "))}">+${r.also.length}</span>` : ""}</td>
+    <td>${esc(r.change || "")}</td><td>${basis(r)}</td><td>${tag(r.status, CHANGE_STATUS[r.status] || "")}</td></tr>`).join("");
+  return head + kpis + `<div class="toolbar">${chips("fleet_changes", CHANGE_FILTERS.map((s) => [s, s === "all" ? "All" : s, s === "all" ? rep.rows.length : count(s)]), f)}
+      ${skill !== "all" ? `<div class="chips">${skillChip("all", `skill: ${skill} ×`)}</div>` : ""}</div>
+    <div class="card table-wrap"><div class="card-head"><h3>Per skill</h3><span class="aside">${rep.skills.length} skills · pick one to filter</span></div>
+      <table><thead><tr><th>Skill</th><th class="num">Merged</th><th class="num">Applied</th><th class="num">In PR</th><th class="num">Proposed</th><th>Last</th></tr></thead><tbody>${per}</tbody></table></div>
+    <div class="card table-wrap"><div class="card-head"><h3>Changes</h3><span class="aside">${rows.length}${rows.length > 200 ? ", newest 200 shown" : ""}</span></div>
+      <table><thead><tr><th>Date</th><th>Skill</th><th>Change</th><th>Basis</th><th>Status</th></tr></thead><tbody>${list || '<tr><td colspan="5" class="muted">No change matches.</td></tr>'}</tbody></table></div>`;
+}
+
 // The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
 // while this view is open. The renderer owns rows, order, icons and bold; this only turns its Markdown into HTML.
 async function pollBrief() {
@@ -1039,7 +1153,7 @@ function fleetStats() {
     <div class="grid">${card("Weekday × hour", "", punch)}
     ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
 }
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

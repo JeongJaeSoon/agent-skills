@@ -264,6 +264,12 @@ try:
     raise AssertionError("a rebinding name read skill usage")
 except urllib.error.HTTPError as e:
     assert e.code == 403, e.code
+# Data flow and skill changes: served from the demo's own state, cached in the process between polls.
+fl = json.loads(urllib.request.urlopen(f"{base}/api/fleet/flow").read())
+assert next(s for s in fl["stores"] if s["id"] == "skillsj")["exists"] and "error" not in fl, fl.get("error")
+assert urllib.request.urlopen(f"{base}/api/fleet/flow").read() == dash.FLOW_CACHE["flow"][1]
+chg = json.loads(urllib.request.urlopen(f"{base}/api/fleet/changes").read())
+assert any(r["status"] == "proposed" and r["skills"] == ["end-session"] for r in chg["rows"]), chg.get("error")
 # The brief page passes the renderer's output through: its own words for an empty board, the report once rows exist.
 br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
 assert "text" not in br and "board" in br["message"], br

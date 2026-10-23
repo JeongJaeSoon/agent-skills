@@ -17,7 +17,7 @@ Mine the work for durable learnings, record each in the lessons ledger, then rou
 
 Skip when the work is trivial, off-topic, or already covered by an existing skill the parent followed correctly. One-offs are not learnings: a finding changes a skill only once it has two independent occurrences (step 4).
 
-"개선 이력 보여줘" and similar only read the ledger: show its open candidates and the last applied lessons with their outcome, and stop.
+"개선 이력 보여줘" and similar only read the ledger: show its open candidates and the last applied lessons with their outcome, and stop. The dashboard's Skill changes page has the commits, open PRs and usage signals beside them.
 
 ## The lessons ledger
 
