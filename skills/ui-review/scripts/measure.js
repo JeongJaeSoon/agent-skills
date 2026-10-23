@@ -22,6 +22,8 @@
   // The scope element itself counts: --scope '#members' on a table still measures that table.
   const within = (sel) => [scope, ...scope.querySelectorAll(sel)].filter((el) => el.matches(sel));
   const all = within("*").filter((el) => !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "HEAD", "META", "LINK"].includes(el.tagName) && visible(el));
+  // A hidden scope (a closed tab, a panel --before did not open) has nothing to judge; PASS would be a lie.
+  if (!all.length) throw new Error(`nothing visible to measure in ${OPTS.scope || "body"}`);
   const kids = (el) => [...el.children].filter(visible);
   const box = (el) => el.getBoundingClientRect();
   const text = (el) => (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();

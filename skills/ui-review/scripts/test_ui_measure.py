@@ -2,7 +2,7 @@
 
 Run: python3 test_ui_measure.py   (needs Chrome; CHROME overrides the binary)
 """
-import contextlib, io, json, pathlib, sys, tempfile
+import contextlib, functools, http.server, io, json, pathlib, sys, tempfile, threading
 
 HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE))
@@ -71,6 +71,16 @@ assert status(res, 390)["horizontal-overflow"] == "PASS", status(res, 390)
 with contextlib.redirect_stderr(io.StringIO()) as err:
     assert ui_measure.main([str(HERE / "testdata/pass.html"), "--widths", "1280", "--scope", "#missing"]) == 2
     assert ui_measure.main([str(HERE / "testdata/missing.html"), "--widths", "1280"]) == 2
-assert "matches nothing" in err.getvalue() and "cannot open" in err.getvalue(), err.getvalue()
+    assert ui_measure.main([str(HERE / "testdata/pass.html"), "--widths", "1280", "--scope", "#closed"]) == 2
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(HERE / "testdata")))
+    server.RequestHandlerClass.log_message = lambda *a: None
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    assert ui_measure.main([base + "/missing.html", "--widths", "1280"]) == 2
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert ui_measure.main([base + "/pass.html", "--widths", "1280"]) == 0
+    server.shutdown()
+e = err.getvalue()
+assert "matches nothing" in e and "cannot open" in e and "HTTP 404" in e and "nothing visible to measure in #closed" in e, e
 
 print("test_ui_measure: ok")

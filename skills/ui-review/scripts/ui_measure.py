@@ -118,6 +118,9 @@ def measure(chrome, target, width, height, opts, before=None, settle_ms=500):
         if nav.get("errorText"):
             raise RuntimeError(f"cannot open {target}: {nav['errorText']}")
         chrome.wait_event("Page.loadEventFired", sid)
+        status = evaluate(chrome, sid, "performance.getEntriesByType('navigation')[0]?.responseStatus ?? 0")
+        if status >= 400:
+            raise RuntimeError(f"cannot open {target}: HTTP {status}")
         time.sleep(settle_ms / 1000)
         if before:
             evaluate(chrome, sid, f"(async () => {{ {before} }})()")
