@@ -38,14 +38,16 @@
     const p = el.parentElement && el.parentElement !== scope ? el.parentElement.closest("section, form, table, ul, ol, nav, [role=region], [role=table], [role=list], h1, h2, main") : null;
     return p && p !== el ? `${name(el)} in ${p.tagName.toLowerCase()}${p.id ? "#" + p.id : ""}` : name(el);
   };
-  // The value most members share, or null when no value reaches half of them.
+  // The value members should share: the one most share, or the median when none reaches half (all differing is no agreement). null when all agree.
   const majority = (vals, tol = 1) => {
     let best = null, n = 0;
     for (const v of vals) {
       const c = vals.filter((w) => Math.abs(w - v) <= tol).length;
       if (c > n) { best = v; n = c; }
     }
-    return n * 2 >= vals.length && n < vals.length ? best : null;
+    if (n === vals.length) return null;
+    if (n * 2 >= vals.length) return { v: best, of: "the others" };
+    return { v: [...vals].sort((a, b) => a - b)[vals.length >> 1], of: "no shared value, median" };
   };
   // What is drawn inside el (text line boxes, replaced and control boxes), not its stretched box; firstBottom ends the first line.
   const ink = (el) => {
@@ -112,9 +114,9 @@
     const hs = g.rows.map((r) => box(r).height);
     const m = majority(hs);
     // Panels (nav sections, cards) are not rows, and rows of plain text are running text that may wrap.
-    if (m === null || m > 120) continue;
+    if (m === null || m.v > 120) continue;
     if (g.label !== "definition list" && (g.rows.every(textOnly) || !g.rows.some(sideBySide))) continue;
-    g.rows.forEach((r, i) => { if (Math.abs(hs[i] - m) > 1) rowItems.push({ el: where(r), detail: `${g.label}: ${r1(hs[i])}px, the others ${r1(m)}px` }); });
+    g.rows.forEach((r, i) => { if (Math.abs(hs[i] - m.v) > 1) rowItems.push({ el: where(r), detail: `${g.label}: ${r1(hs[i])}px, ${m.of} ${r1(m.v)}px` }); });
   }
   check("row-height", rowItems);
 
@@ -133,8 +135,8 @@
       const ws = bs.map((b) => box(b).width), rs = bs.map((b) => box(b).right);
       const mw = majority(ws), mr = majority(rs, 2);
       bs.forEach((b, k) => {
-        if (mw !== null && Math.abs(ws[k] - mw) > 1) colItems.push({ el: where(b), detail: `column ${+i + 1} from the right: width ${r1(ws[k])}px, the others ${r1(mw)}px` });
-        else if (mr !== null && Math.abs(rs[k] - mr) > 2) colItems.push({ el: where(b), detail: `column ${+i + 1} from the right: right edge ${r1(rs[k])}px, the others ${r1(mr)}px` });
+        if (mw !== null && Math.abs(ws[k] - mw.v) > 1) colItems.push({ el: where(b), detail: `column ${+i + 1} from the right: width ${r1(ws[k])}px, ${mw.of} ${r1(mw.v)}px` });
+        else if (mr !== null && Math.abs(rs[k] - mr.v) > 2) colItems.push({ el: where(b), detail: `column ${+i + 1} from the right: right edge ${r1(rs[k])}px, ${mr.of} ${r1(mr.v)}px` });
       });
     }
   }

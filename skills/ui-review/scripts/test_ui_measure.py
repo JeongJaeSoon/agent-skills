@@ -119,6 +119,12 @@ for attrs in ('aria-labelledby=missing', 'aria-label=\\" \\"'):
     rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "1280", "--before", UNNAMED)
     assert status(res, 1280)["bare-glyph"] == "FAIL", (attrs, status(res, 1280))
 
+# All rows (and all buttons) of one table differing is no agreement either.
+SPLIT = "document.querySelector('main').insertAdjacentHTML('beforeend', '<table><tbody>' + [[40, 64], [48, 80], [56, 96]].map(([h, w]) => '<tr style=\"height: ' + h + 'px\"><td>Row</td><td><button style=\"width: ' + w + 'px\">Edit</button></td></tr>').join('') + '</tbody></table>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "1280", "--before", SPLIT)
+st = status(res, 1280)
+assert st["row-height"] == "FAIL" and st["control-column"] == "FAIL", st
+
 # A box scaled down to fit is judged where it is drawn, not by its layout width.
 SCALED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 600px; transform: scale(.5); transform-origin: left top\">' + 'A'.repeat(60) + '</div>')"
 ROTATED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; height: 200px; margin-left: 100px; white-space: nowrap; transform: rotate(90deg)\">' + 'A'.repeat(20) + '</div>')"
