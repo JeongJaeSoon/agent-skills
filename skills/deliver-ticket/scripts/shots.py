@@ -13,7 +13,8 @@ script as one JSON literal. EGO_BROWSER overrides the binary (tests use a stub).
 import argparse, json, os, pathlib, re, subprocess, sys
 
 RESULT_TAG = "SHOTS_RESULT "
-NAME_RE = re.compile(r"^(?P<subject>.+?)-(?P<width>\d{3,4})-(?P<theme>light|dark)(?:-(?P<tag>.+))?$")
+# Greedy subject: the last -<width>-<theme> is the shot's own, so a subject may contain one too.
+NAME_RE = re.compile(r"^(?P<subject>.+)-(?P<width>\d{3,4})-(?P<theme>light|dark)(?:-(?P<tag>[A-Za-z0-9_-]+))?$")
 # No dots: GitHub's alt text keeps everything before the extension, and URLs are keyed by it.
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 # Browser output can carry URLs with tokens, so a failure reports only these known diagnostics.

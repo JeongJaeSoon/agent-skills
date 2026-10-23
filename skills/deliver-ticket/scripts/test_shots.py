@@ -120,6 +120,10 @@ assert md == f"""### 스크린샷
 for order in (["card-390-dark", "card-390-dark-final"], ["card-390-dark-final", "card-390-dark"]):
     md = table({n: U + n for n in order})
     assert f'src="{U}card-390-dark-final"' in md and f'src="{U}card-390-dark"' not in md, md
+# A subject that itself ends in -<width>-<theme> keeps it; the last pair is the shot's.
+md = table({f"card-390-dark-{w}-{t}": U + f"{w}{t}" for w in (1440, 390) for t in ("light", "dark")})
+assert "**card-390-dark**" in md and md.count("<img") == 4, md
+assert table({"settings-390-dark-final": U + "f"}).count("**settings**") == 1
 try:
     table({"card-390-dark-a": U + "a", "card-390-dark-b": U + "b"})
     raise AssertionError("two retakes must stop the table")
