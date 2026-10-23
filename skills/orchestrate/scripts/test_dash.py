@@ -564,5 +564,12 @@ append(B, ev="predicate_verified", note="final check")
 assert dash.closed(B)
 append(B, ev="landed", pr=999, sha="m999")
 assert not dash.closed(B)
+# Three quiet days rest it the same way, and the page stops counting its unpolled sources as stale.
+old = dash.utcnow() - dash.QUIET - dash.dt.timedelta(minutes=1)
+assert dash.resting(False, dash.iso(old)) and not dash.resting(False, dash.iso(dash.utcnow())) and not dash.resting(False, None)
+append(B, ts=dash.iso(old), ev="note", note="quiet")
+assert dash.closed(B) and dash.collect(B, sources=())["summary"]["resting"]
+append(B, ev="note", note="back")
+assert not dash.closed(B)
 
 print("dash.py collect/serve: all pass")

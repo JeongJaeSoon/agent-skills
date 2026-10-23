@@ -878,6 +878,43 @@ finally:
 assert [r["id"] for r in got["runs"]] == ["run_a", "run_b"], got["runs"]
 assert sorted(w["dispatchId"] for w in got["workers"]) == ["ctx_b1", "ctx_run_a", "ctx_run_b", "ctx_run_legacy_local"], got
 
+# A run whose workers and tasks have all settled is read again only after SETTLED_EVERY, unless its coordinator is on
+# screen: it cannot dispatch anything new without one.
+calls, on_screen = [], []
+def settled_orca(*args, timeout=30):
+    calls.append(args[1] if args[0] == "orchestration" else args[0])
+    if args[1] == "run-list":
+        return {"runs": [{"id": "run_done", "coordinator_handle": "term_c"}, {"id": "run_busy", "coordinator_handle": "term_d"}]}
+    if args[1] == "list":
+        return {"terminals": [{"handle": h} for h in on_screen]}
+    if args[1] == "worker-list":
+        status = "completed" if "run_done" in args else "dispatched"
+        return {"workers": [{"dispatchId": f"ctx_{args[3]}", "dispatchStatus": status}]}
+    if args[1] == "task-list":
+        return {"tasks": [{"status": "completed" if "run_done" in args else "pending"}]}
+    return {}
+
+
+real_orca, fleet.orca = fleet.orca, settled_orca
+fleet.RUN_CACHE.clear()
+try:
+    first = fetch_runs()
+    calls.clear()
+    second = fetch_runs()
+    assert calls.count("worker-list") == 1 and second == first, (calls, second)
+    on_screen.append("term_c")
+    calls.clear()
+    fetch_runs()
+    assert calls.count("worker-list") == 2, calls
+    on_screen.clear()
+    fleet.RUN_CACHE["run_done"] = (fleet.time.monotonic() - fleet.SETTLED_EVERY - 1, fleet.RUN_CACHE["run_done"][1])
+    calls.clear()
+    fetch_runs()
+    assert calls.count("worker-list") == 2, calls
+finally:
+    fleet.orca = real_orca
+    fleet.RUN_CACHE.clear()
+
 # The tree's root is the top-level coordinator even when a program coordinator it dispatched runs a newer Run.
 def tree(run_list, workers, wts, orca_parent=None):
     fast = {"worktrees": [{"worktreeId": w, "path": f"/work/{w}", "agents": [],

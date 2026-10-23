@@ -25,7 +25,7 @@ On macOS, `install-agent`, run from the git checkout sessions load (a worktree o
 | Orca (`worker-list`, `task-list`, `run-show`) | Every 20 s |
 | Ledger | Checked every 3 s; re-collected when it changes, and at least every 30 s |
 
-A closed program (its `predicate_verified` is current) keeps only the ledger check. Its tracker, GitHub and Orca sections stay as last collected, and a landing, a predicate edit or an admitted follow-up after the check reopens it.
+A closed program (its `predicate_verified` is current), or a quiet one (no ledger event for 3 days, the line at which the sidebar folds it away), keeps only the ledger check. Its tracker, GitHub and Orca sections stay as last collected, and a landing, a predicate edit, an admitted follow-up or any other new ledger event reopens it. Most programs on a machine are quiet: polling them every 20 s was most of the collector's Orca calls.
 
 The page polls `/api/<slug>/state` every 5 s with `If-None-Match`, so a poll with nothing new gets a 304 and no body. Keep `--host` at 127.0.0.1: the page shows PR titles and worker paths.
 
@@ -57,7 +57,7 @@ The first screen (`#/fleet/overview`) is not a program. It is every Orca worktre
 | What | Source | How often |
 |---|---|---|
 | Sessions, agents, terminals, orchestration mail | `orca worktree ps`, `orca terminal list`, `orca orchestration inbox --limit 2000` (read without consuming; every message Orca keeps, heartbeats included, so no unanswered question falls out of the window) | Every 10 s while a page is open (it polled in the last 5 min), every 60 s otherwise; opening the page, and every action on it (answer, approve, send, dismiss), refreshes at once, and the page fetches the result about 1.5 s later instead of at its next 5 s poll |
-| Runs, workers, tasks, decision gates | `orca orchestration run-list`, `worker-list`, `task-list`, `gate-list` | Every 120 s, and at once when the page is opened after 5 min away |
+| Runs, workers, tasks, decision gates | `orca orchestration run-list`, `worker-list`, `task-list`, `gate-list` | Every 120 s, and at once when the page is opened after 5 min away. A Run whose workers and tasks have all settled, with no open gate and no coordinator terminal on screen, is read again only every 15 min (`SETTLED_EVERY`): nothing can move it |
 | Which PR a session's branch has | One GraphQL query per 40 branches (`associatedPullRequests`); a branch without an open PR (none yet, or the one it had was merged or closed) is asked again after 10 min | With the PR tick |
 | Every PR of mine, in any repository | A GraphQL search (up to 3 pages of 100) for the open PRs you authored and those merged in the last 24 h, returning only each PR's key and updated time: probe fields on a hundred search nodes time out. A PR is on the page whether or not a live worktree has its branch, so a PR whose worker was released stays, and a new one appears on the next tick instead of after branch discovery's 10 min. A PR the search saw updated is probed on that tick; otherwise it keeps its tier below | Every 30 s while a page is open, every 90 s otherwise. A failed search keeps the last list |
 | PR reviews, review threads, requested reviewers, CI | A cheap probe (state, head, updated time, CI rollup, merge state, review decision, CodeRabbit's commit status) for every PR that is due, then a full read only for the PRs whose probe changed | With the PR tick, 25 PRs to a query (50 took over 10 s and at times timed out); a chunk that fails costs only its own PRs. While a page is open every open PR a session owns is probed at least every 90 s. With no page open a PR is due every 90 s while hot (CI running, approved, its session working, or updated in the last 2 h), 5 min when warm (updated in the last day) and 15 min when cold; once a day after it is merged or closed. Opening the page after 5 min away probes every open PR a session owns at once, and a session whose phase changes (a turn ends, a worker starts) has its PRs probed on that same tick. A probe that saw a change is recorded only once the full read lands, so a failed read is retried on the next probe. Each query's `rateLimit` is kept; below 300 points left, the regular PR tick runs at most once per 15 min until the hour resets (a phase change or opening the page still probes) |
@@ -326,7 +326,7 @@ The bar under the headline shows each source's last success, both as a local tim
 | Ledger, Orca | 60 s | 180 s |
 | Tracker, GitHub | 3 × interval | 6 × interval |
 
-When a source is stale, the panels built from it are greyed out. Treat a grey panel as possibly wrong, not as current. A closed program's unpolled sources are not greyed out.
+When a source is stale, the panels built from it are greyed out. Treat a grey panel as possibly wrong, not as current. A closed or quiet program's unpolled sources are not greyed out.
 
 Every table sorts by a column when its head is clicked. A relative-time column sorts by how long ago, so ascending is newest first. The second click reverses, the third returns to the view's own order, and the browser remembers the choice.
 

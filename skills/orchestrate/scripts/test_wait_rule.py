@@ -13,12 +13,12 @@ texts = {"SKILL.md": skill, "top-level.md": top, "brief.md": brief}
 home = "**One inbox wait, always.**"
 assert skill.count(home) == 1, "SKILL.md Drain lost its one-wait rule"
 rule = skill[skill.index(home):].split("\n", 1)[0]
-for phrase in ("check --peek --wait", "run_in_background", "check --ack <deliveryId>", "orch wait <slug>", "Never both", "same turn",
+for phrase in ("orch inbox --wait", "run_in_background", "orch inbox --ack <delivery> --wait", "orch wait <slug>", "Never both", "same turn",
                "compaction", "claude --continue", "restart", "sleep loop"):
     assert phrase in rule, f"one-wait rule lost {phrase!r}"
 
 for name, n in (("SKILL.md", 1), ("top-level.md", 1), ("brief.md", 0)):
-    assert texts[name].count("check --peek --wait") == n, f"{name}: `check --peek --wait` stated {texts[name].count('check --peek --wait')} times, want {n}"
+    assert texts[name].count("orch inbox --wait") == n, f"{name}: `orch inbox --wait` stated {texts[name].count('orch inbox --wait')} times, want {n}"
 for name, text in texts.items():
     if name != "SKILL.md":
         assert '"One inbox wait, always"' in text, f"{name}: no pointer to the one-wait rule"
