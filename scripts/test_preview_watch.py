@@ -15,12 +15,16 @@ import json, os, pathlib, sys
 if not os.environ.get("TERM"):  # what the Tailscale.app binary does under launchd
     print("The Tailscale GUI failed to start"); sys.exit(0)
 cfg, calls = pathlib.Path(sys.argv[0] + ".json"), pathlib.Path(sys.argv[0] + ".calls")
+mode = pathlib.Path(sys.argv[0] + ".mode")
+mode = mode.read_text().strip() if mode.exists() else ""
 d = json.loads(cfg.read_text())
 a = sys.argv[1:]
 with calls.open("a") as f: f.write(" ".join(a) + "\\n")
 if a[:3] == ["serve", "status", "--json"]:
-    print(json.dumps(d)); sys.exit(0)
+    print({{"empty": "", "garbage": "[]"}}.get(mode, json.dumps(d))); sys.exit(0)
 port = next(x.split("=")[1] for x in a if x.startswith("--https="))
+if a[-1] == "off" and mode == "fail-off":
+    sys.exit(1)
 if a[-1] == "off":
     d["TCP"].pop(port, None); d["Web"].pop("{HOST}:" + port, None)
 else:
@@ -103,6 +107,7 @@ class EndToEnd(Base):
         self.cli.chmod(self.cli.stat().st_mode | stat.S_IXUSR)
         pathlib.Path(f"{self.cli}.json").write_text(json.dumps(status_of(self.USER)))
         pathlib.Path(f"{self.cli}.calls").write_text("")
+        pathlib.Path(f"{self.cli}.mode").unlink(missing_ok=True)
         self.cfg = {**pw.DEFAULTS, "tailscale": str(self.cli)}
         self.listening = {13004: ("127.0.0.1", "ssh"), 13005: ("127.0.0.1", "ssh"), 3000: ("127.0.0.1", "OrbStack"),
                           4571: ("127.0.0.1", "Python")}
@@ -186,6 +191,60 @@ class EndToEnd(Base):
             self.run_pass()
         self.assertEqual(self.live()[4590], "http://127.0.0.1:4590")
         self.assertIn(4590, pw.load_state()["owned"])
+
+    def mode(self, m):
+        pathlib.Path(f"{self.cli}.mode").write_text(m)
+
+    def edit_live(self, fn):
+        p = pathlib.Path(f"{self.cli}.json")
+        d = json.loads(p.read_text())
+        fn(d)
+        p.write_text(json.dumps(d))
+
+    def test_empty_or_garbage_status_takes_nothing(self):
+        self.listening[4590] = ("127.0.0.1", "Python")
+        self.run_pass()
+        for m in ("empty", "garbage"):
+            self.mode(m)
+            self.listening[4591] = ("127.0.0.1", "Python")
+            del self.listening[4590]
+            with self.assertRaises(Exception):
+                self.run_pass()
+            self.listening[4590] = ("127.0.0.1", "Python")
+        self.mode("")
+        self.assertEqual(self.calls().count("serve --bg --https=4591 http://127.0.0.1:4591"), 0)
+        self.assertIn(4590, pw.load_state()["owned"])  # not forgotten while status was unreadable
+
+    def test_port_taken_during_probe_is_not_overwritten(self):
+        self.listening[4590] = ("127.0.0.1", "Python")
+        def probe(p, h):
+            self.edit_live(lambda d: (d["TCP"].update({"4590": {"HTTPS": True}}),
+                                      d["Web"].update({f"{HOST}:4590": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8000"}}}})))
+            return True
+        self.run_pass(http=probe)
+        self.assertEqual(self.live()[4590], "http://127.0.0.1:8000")
+        self.assertNotIn(4590, pw.load_state()["owned"])
+
+    def test_off_failure_is_kept_for_retry(self):
+        self.listening[4590] = ("127.0.0.1", "Python")
+        self.run_pass()
+        self.mode("fail-off")
+        with mock.patch.dict(os.environ):
+            os.environ.pop("TERM", None)
+            self.assertEqual(pw.close_owned(str(self.cli)), [4590])
+        self.assertIn(4590, pw.load_state()["owned"])
+        self.mode("")
+        self.assertEqual(pw.close_owned(str(self.cli)), [])
+        self.assertNotIn(4590, self.live())
+        self.assertIn(13004, self.live())
+
+    def test_repeated_failure_logs_once(self):
+        pw.LOG.unlink(missing_ok=True)
+        for _ in range(3):
+            pw.log("pass failed: X", once=True)
+        pw.log("open  https :4590", once=True)
+        pw.log("pass failed: X", once=True)
+        self.assertEqual(len(pw.LOG.read_text().splitlines()), 3)
 
     def test_never_calls_funnel(self):
         self.listening[4590] = ("127.0.0.1", "Python")

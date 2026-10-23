@@ -42,9 +42,14 @@ def config():
     return {**DEFAULTS, **mine}
 
 
-def log(msg):
+def log(msg, once=False):
+    """once: skip the line when the log already ends with the same message (a failure repeating every pass)."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a") as f:
+    with LOG.open("a+") as f:
+        if once and f.tell():
+            f.seek(max(0, f.tell() - 1024))
+            if f.read().rstrip("\n").rpartition("\n")[2].partition(" ")[2] == msg:
+                return
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
 
 
@@ -72,7 +77,7 @@ def parse_lsof(out):
 def listeners():
     # Not netstat, though it is ~20x faster: run from a Homebrew python it prints nothing at all.
     out = subprocess.run(["lsof", "-nP", "-F", "cn", "-iTCP@127.0.0.1", "-iTCP@[::1]", "-sTCP:LISTEN"],
-                         capture_output=True, text=True).stdout
+                         capture_output=True, text=True, timeout=10).stdout
     return parse_lsof(out)
 
 
@@ -132,7 +137,8 @@ def save_state(st):
 
 def ts(cli, *args):
     # Without TERM (as under launchd) the Tailscale.app binary tries to start its GUI instead of acting as the CLI.
-    return subprocess.run([cli, *args], capture_output=True, text=True,
+    # The timeout keeps a CLI waiting on a prompt from holding the lock and stopping every later pass.
+    return subprocess.run([cli, *args], capture_output=True, text=True, timeout=20,
                           env={**os.environ, "TERM": os.environ.get("TERM") or "dumb"})
 
 
@@ -140,7 +146,12 @@ def serve_status(cli):
     p = ts(cli, "serve", "status", "--json")
     if p.returncode:
         raise RuntimeError(f"tailscale serve status: {p.stderr.strip()}")
-    return json.loads(p.stdout or "{}") or {}
+    # Empty or non-object output is a failed call, not an empty config: read as "no entries", every
+    # foreign entry would look free to take.
+    d = json.loads(p.stdout)
+    if not isinstance(d, dict):
+        raise RuntimeError(f"tailscale serve status: unexpected output {p.stdout[:80]!r}")
+    return d
 
 
 def entries(status):
@@ -175,7 +186,7 @@ def decide(cand, new, gone, owned, live):
 def run_once(cfg):
     cli = tailscale_cli(cfg)
     if not cli:
-        return
+        raise RuntimeError("tailscale CLI not found; set \"tailscale\" under \"preview-watch\" in " + str(CONFIG))
     st = load_state()
     listening = listeners()
     if not listening:
@@ -196,6 +207,9 @@ def run_once(cfg):
         if not speaks_http(p, listening[p][0]):
             st["skip"][p] = now + RETRY_NON_HTTP_S
             continue
+        if p in entries(serve_status(cli)):  # taken since the first read (the probe took time)
+            st["skip"][p] = 0
+            continue
         r = ts(cli, "serve", "--bg", f"--https={p}", t)
         if r.returncode:
             log(f"open {p} failed: {r.stderr.strip()}")
@@ -205,6 +219,9 @@ def run_once(cfg):
         save_state(st)  # record before the next command, so a crash never leaves an entry this does not know
         log(f"open  https :{p} -> {t} ({listening[p][1]})")
     for p in closes:
+        if entries(serve_status(cli)).get(p) != st["owned"][p]:  # re-pointed since the first read
+            forget.append(p)
+            continue
         r = ts(cli, "serve", f"--https={p}", "off")
         if r.returncode:
             log(f"close {p} failed: {r.stderr.strip()}")
@@ -217,17 +234,26 @@ def run_once(cfg):
     save_state(st)
 
 
-def cmd_run():
+def locked(blocking):
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(STATE_DIR / "preview-watch.lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return 0  # another pass is running
+    lock = open(STATE_DIR / "preview-watch.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+    except BlockingIOError:
+        lock.close()
+        return None
+    return lock
+
+
+def cmd_run():
+    lock = locked(blocking=False)
+    if not lock:
+        return 0  # another pass is running
+    with lock:
         try:
             run_once(config())
         except Exception as e:  # launchd reruns in seconds; leave one line instead of a traceback per pass
-            log(f"pass failed: {type(e).__name__}: {e}")
+            log(f"pass failed: {type(e).__name__}: {e}", once=True)
             return 1
     return 0
 
@@ -290,19 +316,35 @@ def cmd_install(here_ok):
     return 1
 
 
+def close_owned(cli):
+    """Turn off every entry this opened that still points where it was pointed. Returns the ports whose `off`
+    failed; they stay in the state file so a later run or uninstall can retry them."""
+    st, failed = load_state(), []
+    live = entries(serve_status(cli)) if st["owned"] else {}
+    for p, t in sorted(st["owned"].items()):
+        if live.get(p) == t:
+            if ts(cli, "serve", f"--https={p}", "off").returncode:
+                failed.append(p)
+                continue
+            print(f"turned off https :{p}")
+        del st["owned"][p]
+    save_state(st)
+    return failed
+
+
 def cmd_uninstall():
     subprocess.run(["launchctl", "bootout", agent_target()], capture_output=True)
     PLIST.unlink(missing_ok=True)
-    cli, st = tailscale_cli(config()), load_state()
-    if cli and st["owned"]:
-        live = entries(serve_status(cli))
-        for p, t in sorted(st["owned"].items()):
-            if live.get(p) == t:
-                ts(cli, "serve", f"--https={p}", "off")
-                print(f"turned off https :{p}")
-    st["owned"] = {}
-    save_state(st)
     print(f"removed {agent_target()}")
+    cli = tailscale_cli(config())
+    if not cli:
+        print("tailscale CLI not found; entries this opened are left on", file=sys.stderr)
+        return 1
+    with locked(blocking=True):
+        failed = close_owned(cli)
+    if failed:
+        print(f"could not turn off https {', '.join(map(str, failed))}; rerun uninstall", file=sys.stderr)
+        return 1
     return 0
 
 
