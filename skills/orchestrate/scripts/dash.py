@@ -972,11 +972,14 @@ def land_order(events, pr_rows, cfg, now, tasks=None):
 def _merge(slug, d, cfg, fetched, interval):
     events, bad = [], []
     for e in read_jsonl(d / "ledger.jsonl"):
+        ts = e.get("ts") if isinstance(e, dict) else None
         try:
-            prog.parse_ts(e.get("ts"))
-            events.append(e)
+            if prog.parse_ts(ts).tzinfo is not None:  # a naive ts parses but fails every comparison with now
+                events.append(e)
+                continue
         except (ValueError, TypeError, AttributeError):
-            bad.append(e.get("ts"))
+            pass
+        bad.append(ts)
     dash = d / "dashboard"
     dash.mkdir(exist_ok=True)
     prev = read_json(dash / "state.json", {}) or {}

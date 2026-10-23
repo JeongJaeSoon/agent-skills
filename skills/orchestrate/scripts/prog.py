@@ -2078,13 +2078,13 @@ def cmd_inbox(argv):
     work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
     # Like orch wait: a batch of only heartbeats or refusals is acked and the wait goes on, until the deadline.
     while "--wait" in argv and not work:
+        left = int((deadline - time.monotonic()) * 1000)
+        if left <= 0:
+            break
         if did:
             skipped += len(msgs)
             did, msgs = batch(orca_json("orchestration", "check", "--ack", did))
         else:
-            left = int((deadline - time.monotonic()) * 1000)
-            if left <= 0:
-                break
             orca_json("orchestration", "check", "--peek", "--wait", "--timeout-ms", str(left))
             did, msgs = batch(orca_json("orchestration", "check"))
             if not msgs:

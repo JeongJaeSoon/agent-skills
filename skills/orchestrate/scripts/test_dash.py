@@ -579,5 +579,13 @@ assert not st["summary"]["resting"] and "ledger: 1 event(s) with a bad ts left o
 lines = (store / B / "ledger.jsonl").read_text().splitlines()
 (store / B / "ledger.jsonl").write_text("\n".join(l for l in lines if "not-a-time" not in l) + "\n")
 assert not any(e.startswith("ledger:") for e in dash.collect(B, sources=())["errors"])
+# A ts without a timezone parses, so only the tzinfo check keeps it from a TypeError against now.
+for bad_ts, bad_row in (("2026-10-23T10:00:00", None), (None, "[1, 2]")):
+    with (store / B / "ledger.jsonl").open("a") as f:
+        f.write((bad_row or json.dumps({"ts": bad_ts, "ev": "note", "note": "hand-edited"})) + "\n")
+    errs = dash.collect(B, sources=())["errors"]
+    assert f"ledger: 1 event(s) with a bad ts left out, first {bad_ts!r}" in errs, errs
+    lines = (store / B / "ledger.jsonl").read_text().splitlines()
+    (store / B / "ledger.jsonl").write_text("\n".join(lines[:-1]) + "\n")
 
 print("dash.py collect/serve: all pass")
