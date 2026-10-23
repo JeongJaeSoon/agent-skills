@@ -11,7 +11,9 @@ import preview_watch as pw  # noqa: E402
 HOST = "box.example.test"
 # Stands in for the tailscale CLI: keeps the serve config in a JSON file and logs every call.
 FAKE_CLI = f'''#!{sys.executable}
-import json, pathlib, sys
+import json, os, pathlib, sys
+if not os.environ.get("TERM"):  # what the Tailscale.app binary does under launchd
+    print("The Tailscale GUI failed to start"); sys.exit(0)
 cfg, calls = pathlib.Path(sys.argv[0] + ".json"), pathlib.Path(sys.argv[0] + ".calls")
 d = json.loads(cfg.read_text())
 a = sys.argv[1:]
@@ -68,6 +70,14 @@ class Ranges(Base):
         self.assertEqual(pw.parse_lsof(out), {4590: ("127.0.0.1", "vite")})
 
 
+    def test_reads_this_machines_listeners(self):
+        if sys.platform != "darwin":
+            self.skipTest("macOS lsof")
+        got = pw.listeners()
+        self.assertTrue(got)  # any Mac has some loopback listener; empty means the scan itself broke
+        self.assertTrue(all(h in ("127.0.0.1", "[::1]") and c for h, c in got.values()), got)
+
+
 class Decide(Base):
     def test_existing_entry_on_a_new_port_is_foreign(self):
         cand = {4571: ("127.0.0.1", "Python"), 4590: ("127.0.0.1", "Python")}
@@ -99,7 +109,8 @@ class EndToEnd(Base):
 
     def run_pass(self, http=lambda p, h: True):
         with mock.patch.object(pw, "listeners", lambda: dict(self.listening)), \
-             mock.patch.object(pw, "speaks_http", http):
+             mock.patch.object(pw, "speaks_http", http), mock.patch.dict(os.environ):
+            os.environ.pop("TERM", None)  # launchd starts the job without one
             pw.run_once(self.cfg)
 
     def live(self):
@@ -166,6 +177,15 @@ class EndToEnd(Base):
         self.run_pass()
         self.assertEqual(self.live()[4590], "http://127.0.0.1:8000")
         self.assertEqual(pw.load_state()["owned"], {})
+
+    def test_empty_scan_turns_nothing_off(self):
+        self.listening[4590] = ("127.0.0.1", "Python")
+        self.run_pass()
+        self.listening = {}
+        with self.assertRaises(RuntimeError):
+            self.run_pass()
+        self.assertEqual(self.live()[4590], "http://127.0.0.1:4590")
+        self.assertIn(4590, pw.load_state()["owned"])
 
     def test_never_calls_funnel(self):
         self.listening[4590] = ("127.0.0.1", "Python")

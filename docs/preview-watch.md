@@ -42,5 +42,6 @@ bin/preview-watch uninstall   # LaunchAgent를 내리고 watcher가 연 항목�
 
 - 상태 파일 `~/.local/state/agent-skills/preview-watch.json`: `owned`(watcher가 연 포트 → 대상), `skip`(남의 항목이거나 HTTP가 아닌 포트). 원자적으로 쓰고, serve 항목을 하나 걸 때마다 바로 기록한다.
 - 상태 파일이 깨졌으면 `preview-watch.json.corrupt-<시각>`으로 옮기고 소유 항목 없이 시작한다. 자기 것임을 증명할 수 없는 항목은 끄지 않으므로, 그때 열려 있던 항목은 손으로 끈다.
+- loopback 리스너가 하나도 안 보이는 스캔은 깨진 스캔으로 보고 아무것도 끄지 않는다. Mac에는 늘 loopback 리스너가 있어서, 빈 결과를 믿으면 열어 둔 항목이 한꺼번에 닫힌다.
 - 실행 로그는 열고 닫은 일과 실패만 `~/.local/state/agent-skills/preview-watch.log`에 한 줄씩 남는다.
 - `install`은 worktree에서 거부한다. worktree가 지워지면 launchd 작업이 조용히 실패하기 때문이다. 검증 목적으로만 `--here`를 붙인다.

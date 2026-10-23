@@ -70,6 +70,7 @@ def parse_lsof(out):
 
 
 def listeners():
+    # Not netstat, though it is ~20x faster: run from a Homebrew python it prints nothing at all.
     out = subprocess.run(["lsof", "-nP", "-F", "cn", "-iTCP@127.0.0.1", "-iTCP@[::1]", "-sTCP:LISTEN"],
                          capture_output=True, text=True).stdout
     return parse_lsof(out)
@@ -129,8 +130,14 @@ def save_state(st):
 
 # ---------------------------------------------------------------- tailscale serve
 
+def ts(cli, *args):
+    # Without TERM (as under launchd) the Tailscale.app binary tries to start its GUI instead of acting as the CLI.
+    return subprocess.run([cli, *args], capture_output=True, text=True,
+                          env={**os.environ, "TERM": os.environ.get("TERM") or "dumb"})
+
+
 def serve_status(cli):
-    p = subprocess.run([cli, "serve", "status", "--json"], capture_output=True, text=True)
+    p = ts(cli, "serve", "status", "--json")
     if p.returncode:
         raise RuntimeError(f"tailscale serve status: {p.stderr.strip()}")
     return json.loads(p.stdout or "{}") or {}
@@ -171,6 +178,10 @@ def run_once(cfg):
         return
     st = load_state()
     listening = listeners()
+    if not listening:
+        # A Mac always has some loopback listener; an empty scan is a broken scan, and acting on it would turn
+        # off every entry this opened.
+        raise RuntimeError("no loopback listener at all; not trusting this scan")
     now = time.time()
     skip = {p: v for p, v in st["skip"].items() if p in listening}
     changed, st["skip"] = skip != st["skip"], skip
@@ -185,7 +196,7 @@ def run_once(cfg):
         if not speaks_http(p, listening[p][0]):
             st["skip"][p] = now + RETRY_NON_HTTP_S
             continue
-        r = subprocess.run([cli, "serve", "--bg", f"--https={p}", t], capture_output=True, text=True)
+        r = ts(cli, "serve", "--bg", f"--https={p}", t)
         if r.returncode:
             log(f"open {p} failed: {r.stderr.strip()}")
             st["skip"][p] = now + RETRY_NON_HTTP_S
@@ -194,7 +205,7 @@ def run_once(cfg):
         save_state(st)  # record before the next command, so a crash never leaves an entry this does not know
         log(f"open  https :{p} -> {t} ({listening[p][1]})")
     for p in closes:
-        r = subprocess.run([cli, "serve", f"--https={p}", "off"], capture_output=True, text=True)
+        r = ts(cli, "serve", f"--https={p}", "off")
         if r.returncode:
             log(f"close {p} failed: {r.stderr.strip()}")
             continue
@@ -287,7 +298,7 @@ def cmd_uninstall():
         live = entries(serve_status(cli))
         for p, t in sorted(st["owned"].items()):
             if live.get(p) == t:
-                subprocess.run([cli, "serve", f"--https={p}", "off"], capture_output=True)
+                ts(cli, "serve", f"--https={p}", "off")
                 print(f"turned off https :{p}")
     st["owned"] = {}
     save_state(st)
