@@ -7,10 +7,16 @@ Usage:
   preview_watch.py install      # macOS: run `run` every StartInterval seconds as a LaunchAgent
   preview_watch.py uninstall    # unload the LaunchAgent; turns off every entry this opened
 
-No model or network API is called. One pass runs `lsof` once, and `tailscale` only when a listener appeared
-or went away. Settings live under the "preview-watch" key of ~/.claude/agent-skills.json (see DEFAULTS).
+Only web pages are published: a listener whose `GET /` (same-origin redirects followed) answers 2xx text/html
+with an HTML document. APIs, object stores and databases stay private. The verdict is kept per port and process,
+so a quiet pass makes no HTTP request.
+
+No model or network API is called. One pass runs `lsof` once, and `tailscale` only when a page appeared
+or an entry this opened has to go. Settings live under the "preview-watch" key of ~/.claude/agent-skills.json
+(see DEFAULTS).
 """
-import fcntl, json, os, pathlib, plistlib, shutil, socket, subprocess, sys, time
+import fcntl, http.client, json, os, pathlib, plistlib, re, shutil, subprocess, sys, time
+from urllib.parse import urlsplit
 
 LABEL = "io.github.jeongjaesoon.preview-watch"
 PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
@@ -29,9 +35,17 @@ DEFAULTS = {
         # Docker or OrbStack daemon holds, so a desktop app's own loopback port in that range stays private.
         {"from": 32768, "to": 60999, "commands": ["OrbStack", "com.docker"]},
     ],
+    # Ports never published (checked before anything else), and ports published without the web page check.
+    "exclude": [4570],
+    "include": [],
     "tailscale": None,
 }
-RETRY_NON_HTTP_S = 120  # a server that listens before it answers HTTP gets another probe after this
+RETRY_NO_ANSWER_S = 120  # a listener that refused the probe's connection gets another probe after this
+# OrbStack holds every published port under one process, so a port reused by another container keeps the pid;
+# a "not a page" verdict is checked again after this. A page verdict lasts while the process holds the port.
+RECHECK_NOT_PAGE_S = 600
+PROBE_TIMEOUT_S = 2
+HTML_DOC = re.compile(rb"<(!doctype\s+html|html)[\s>]", re.I)
 
 
 def config():
@@ -60,23 +74,25 @@ def tailscale_cli(cfg):
 # ---------------------------------------------------------------- what is listening
 
 def parse_lsof(out):
-    """lsof -F cn output -> {port: (host, command)}. 127.0.0.1 wins over ::1 for a port bound to both."""
-    found, cmd = {}, ""
+    """lsof -F pcn output -> {port: (host, command, pid)}. 127.0.0.1 wins over ::1 for a port bound to both."""
+    found, cmd, pid = {}, "", 0
     for line in out.splitlines():
-        if line.startswith("c"):
+        if line.startswith("p"):
+            pid = int(line[1:])
+        elif line.startswith("c"):
             cmd = line[1:]
         elif line.startswith("n"):
             host, _, port = line[1:].rpartition(":")
             if host in ("127.0.0.1", "[::1]") and port.isdigit():
                 p = int(port)
                 if p not in found or host == "127.0.0.1":
-                    found[p] = (host, cmd)
+                    found[p] = (host, cmd, pid)
     return found
 
 
 def listeners():
     # Not netstat, though it is ~20x faster: run from a Homebrew python it prints nothing at all.
-    out = subprocess.run(["lsof", "-nP", "-F", "cn", "-iTCP@127.0.0.1", "-iTCP@[::1]", "-sTCP:LISTEN"],
+    out = subprocess.run(["lsof", "-nP", "-F", "pcn", "-iTCP@127.0.0.1", "-iTCP@[::1]", "-sTCP:LISTEN"],
                          capture_output=True, text=True, timeout=10).stdout
     return parse_lsof(out)
 
@@ -94,42 +110,69 @@ def target(port, host):
     return f"http://{host}:{port}"
 
 
-def speaks_http(port, host):
-    try:
-        with socket.create_connection((host.strip("[]"), port), timeout=0.3) as s:
-            s.settimeout(0.3)
-            s.sendall(b"HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n")
-            return s.recv(5) == b"HTTP/"
-    except OSError:
-        return False
+def probe_page(port, host):
+    """True: `GET /` ends, after same-origin redirects, in a 2xx text/html HTML document. False: the listener
+    answered something else, or nothing parseable. None: the connection itself failed."""
+    path = "/"
+    for _ in range(5):
+        c = http.client.HTTPConnection(host.strip("[]"), port, timeout=PROBE_TIMEOUT_S)
+        try:
+            try:
+                c.connect()
+            except OSError:
+                return None
+            try:
+                c.request("GET", path, headers={"Accept": "text/html"})
+                r = c.getresponse()
+                if r.status in (301, 302, 303, 307, 308):
+                    loc = urlsplit(r.getheader("Location") or "")
+                    # Elsewhere is not something a tailnet link to this port could show.
+                    if loc.netloc and (loc.scheme != "http" or loc.hostname not in ("localhost", "127.0.0.1", "::1")
+                                       or (loc.port or 80) != port):
+                        return False
+                    path = (loc.path or "/") + (f"?{loc.query}" if loc.query else "")
+                    continue
+                ctype = (r.getheader("Content-Type") or "").partition(";")[0].strip().lower()
+                return 200 <= r.status < 300 and ctype == "text/html" and bool(HTML_DOC.search(r.read(4096)))
+            except (OSError, http.client.HTTPException):
+                return False
+        finally:
+            c.close()
+    return False  # redirect loop
 
 
 # ---------------------------------------------------------------- state
 
 def load_state():
-    """{"owned": {port: target}, "skip": {port: retry_at or 0}}. A file that does not parse is moved aside and
-    nothing is owned: an entry this cannot prove it opened is never turned off."""
+    """{"owned": {port: target}, "skip": {port: retry_at or 0}, "pages": {port: [pid, is_page, checked_at]}}.
+    A file that does not parse is moved aside and nothing is owned: an entry this cannot prove it opened is
+    never turned off."""
     try:
         raw = STATE.read_text()
     except FileNotFoundError:
-        return {"owned": {}, "skip": {}}
+        return {"owned": {}, "skip": {}, "pages": {}}
     try:
         d = json.loads(raw)
         owned = {int(p): str(t) for p, t in d["owned"].items()}
         skip = {int(p): float(v) for p, v in d.get("skip", {}).items()}
-        return {"owned": owned, "skip": skip}
-    except (ValueError, KeyError, TypeError, AttributeError):
+        pages = {int(p): [int(v[0]), bool(v[1]), float(v[2])] for p, v in d.get("pages", {}).items()}
+        return {"owned": owned, "skip": skip, "pages": pages}
+    except (ValueError, KeyError, TypeError, AttributeError, IndexError):
         aside = STATE.with_name(f"{STATE.name}.corrupt-{int(time.time())}")
         STATE.rename(aside)
         log(f"state did not parse; moved to {aside} and starting with nothing owned")
-        return {"owned": {}, "skip": {}}
+        return {"owned": {}, "skip": {}, "pages": {}}
+
+
+def dump_state(st):
+    return json.dumps({k: {str(p): v for p, v in sorted(st[k].items())} for k in ("owned", "skip", "pages")},
+                      indent=1)
 
 
 def save_state(st):
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"owned": {str(p): t for p, t in sorted(st["owned"].items())},
-                               "skip": {str(p): v for p, v in sorted(st["skip"].items())}}, indent=1))
+    tmp.write_text(dump_state(st))
     tmp.replace(STATE)
 
 
@@ -164,13 +207,38 @@ def entries(status):
     return out
 
 
-def pending(listening, st, ranges, now):
-    """(candidates {port: (host, cmd)}, new ports, gone ports) from what is listening and what this owns."""
-    owned, skip = st["owned"], st["skip"]
-    cand = {p: hc for p, hc in listening.items() if allowed(p, hc[1], ranges)}
-    new = sorted(p for p in cand if p not in owned and not (p in skip and (skip[p] == 0 or skip[p] > now)))
-    gone = sorted(p for p in owned if p not in cand)
-    return cand, new, gone
+def known_page(st, port, now):
+    """The cached verdict for the process now on the port: True, False, or None (never probed, or stale)."""
+    v = st["pages"].get(port)
+    if not v:
+        return None
+    return True if v[1] else (False if now - v[2] < RECHECK_NOT_PAGE_S else None)
+
+
+def pending(listening, st, cfg, now):
+    """(candidates {port: (host, cmd, pid)}, new ports, owned ports to verify) from what is listening and what
+    this owns. The caller probes both lists and then asks gone() what to take down."""
+    owned, skip, include = st["owned"], st["skip"], set(cfg.get("include") or [])
+    exclude = set(cfg.get("exclude") or [])
+    cand = {p: v for p, v in listening.items()
+            if p not in exclude and (p in include or allowed(p, v[1], cfg["ranges"]))}
+    new = sorted(p for p in cand if p not in owned and not (p in skip and (skip[p] == 0 or skip[p] > now))
+                 and known_page(st, p, now) is not False)
+    verify = sorted(p for p in cand if p in owned and p not in include and known_page(st, p, now) is None)
+    return cand, new, verify
+
+
+def gone(listening, cand, st, now):
+    """{owned port: why it comes down}."""
+    out = {}
+    for p in st["owned"]:
+        if p not in listening:
+            out[p] = "listener gone"
+        elif p not in cand:
+            out[p] = "out of scope"
+        elif known_page(st, p, now) is False:
+            out[p] = "not a web page"
+    return dict(sorted(out.items()))
 
 
 def decide(cand, new, gone, owned, live):
@@ -188,25 +256,33 @@ def run_once(cfg):
     if not cli:
         raise RuntimeError("tailscale CLI not found; set \"tailscale\" under \"preview-watch\" in " + str(CONFIG))
     st = load_state()
+    before = dump_state(st)
     listening = listeners()
     if not listening:
         # A Mac always has some loopback listener; an empty scan is a broken scan, and acting on it would turn
         # off every entry this opened.
         raise RuntimeError("no loopback listener at all; not trusting this scan")
     now = time.time()
-    skip = {p: v for p, v in st["skip"].items() if p in listening}
-    changed, st["skip"] = skip != st["skip"], skip
-    cand, new, gone = pending(listening, st, cfg["ranges"], now)
-    if not new and not gone:
-        if changed:
+    st["skip"] = {p: v for p, v in st["skip"].items() if p in listening}
+    st["pages"] = {p: v for p, v in st["pages"].items() if p in listening and v[0] == listening[p][2]}
+    cand, new, verify = pending(listening, st, cfg, now)
+    include = set(cfg.get("include") or [])
+    for p in [p for p in new if p not in include] + verify:
+        page = probe_page(p, listening[p][0])
+        if page is None:
+            if p in new:
+                st["skip"][p] = now + RETRY_NO_ANSWER_S
+        else:
+            st["pages"][p] = [listening[p][2], page, now]
+    new = [p for p in new if p in include or known_page(st, p, now)]
+    down = gone(listening, cand, st, now)
+    if not new and not down:
+        if dump_state(st) != before:
             save_state(st)
         return
-    opens, closes, forget, foreign = decide(cand, new, gone, st["owned"], entries(serve_status(cli)))
+    opens, closes, forget, foreign = decide(cand, new, list(down), st["owned"], entries(serve_status(cli)))
     st["skip"].update({p: 0 for p in foreign})
     for p, t in opens:
-        if not speaks_http(p, listening[p][0]):
-            st["skip"][p] = now + RETRY_NON_HTTP_S
-            continue
         if p in entries(serve_status(cli)):  # taken since the first read (the probe took time)
             st["skip"][p] = 0
             continue
@@ -220,7 +296,7 @@ def run_once(cfg):
             raise
         if r.returncode:
             log(f"open {p} failed: {r.stderr.strip()}")
-            st["skip"][p] = now + RETRY_NON_HTTP_S
+            st["skip"][p] = now + RETRY_NO_ANSWER_S
             continue
         st["owned"][p] = t
         save_state(st)  # record before the next command, so a crash never leaves an entry this does not know
@@ -234,7 +310,7 @@ def run_once(cfg):
             log(f"close {p} failed: {r.stderr.strip()}")
             continue
         del st["owned"][p]
-        log(f"close https :{p} (listener gone)")
+        log(f"close https :{p} ({down[p]})")
     for p in forget:
         del st["owned"][p]
         log(f"forget :{p} (entry changed by someone else; left as is)")
