@@ -206,14 +206,20 @@
   try {
     const sw = document.documentElement.scrollWidth;
     if (scope === document.body && sw > vw) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
-    // An element overflows by its box or by what it draws past it (unbroken text, ::after); report the outermost one.
+    // An element overflows by its box or by its own text drawn past it (unbroken text); text rects are on
+    // screen after any transform. Pseudo-element content is left to the document width above.
     const measured = new Set(all);
     const clipsX = (el) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (/(auto|scroll|hidden|clip)/.test(cs(a).overflowX)) return true; return false; };
-    // scrollWidth is in layout pixels; the box is on screen, after any scale or zoom on el or its ancestors.
     const reach = (el) => {
-      const b = box(el);
-      if (cs(el).overflowX !== "visible" || !el.offsetWidth) return b.right;
-      return Math.max(b.right, b.left + el.scrollWidth * (b.width / el.offsetWidth));
+      let right = box(el).right;
+      if (cs(el).overflowX !== "visible") return right;
+      for (const n of el.childNodes) {
+        if (n.nodeType !== 3 || !n.textContent.trim()) continue;
+        const rg = document.createRange();
+        rg.selectNodeContents(n);
+        for (const r of rg.getClientRects()) right = Math.max(right, r.right);
+      }
+      return right;
     };
     for (const el of all) if (reach(el) > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(measured.has(el.parentElement) && reach(el.parentElement) > vw + 1)) overItems.push({ el: where(el), detail: `reaches ${r1(reach(el))}px > viewport ${vw}px` });
   } finally {
