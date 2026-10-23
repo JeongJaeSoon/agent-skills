@@ -488,6 +488,7 @@ def seed_board():
     board.set_row("lead-login/docs", title="설치 가이드", status="waiting", next="리뷰 · 사람", pr="acme/launchpad#43")
     board.lead_add("lead-tools", "term_0FAKE2", "acme/tools")
     board.set_row("lead-tools", title="릴리스 도구", status="done", progress="2/2", next="—", pr="acme/tools#6")
+    board.doing_add("결제 팀 API 답변 대기", "사람", "10/14 회신")
     board.later_add("v2.5 계획", "v2.4.0 prod 배포 뒤")
     board.set_todo(["acme/launchpad#43 리뷰"])
 

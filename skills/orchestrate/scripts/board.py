@@ -44,7 +44,7 @@ def last_path(scope):
 def read():
     store = fleet.read_json(path(), {}) or {}
     return {"v": 1, "rows": store.get("rows") or {}, "order": store.get("order") or [], "leads": store.get("leads") or {},
-            "later": store.get("later") or [], "owner_todo": store.get("owner_todo") or []}
+            "doing": store.get("doing") or [], "later": store.get("later") or [], "owner_todo": store.get("owner_todo") or []}
 
 
 def change(fn):
@@ -174,6 +174,21 @@ def drop(rid):
             raise ValueError(f"no row {rid}")
         gone = with_descendants(store["rows"], {rid})
         store["rows"] = {k: r for k, r in store["rows"].items() if k not in gone}
+    return change(go)
+
+
+def doing_add(title, owner, next_):
+    if not all((x or "").strip() for x in (title, owner, next_)):
+        raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
+    item = {"title": one_line(title, 120), "owner": one_line(owner, 40), "next": one_line(next_, 60)}
+    return change(lambda store: store["doing"].append(item))
+
+
+def doing_drop(n):
+    def go(store):
+        if not 1 <= n <= len(store["doing"]):
+            raise ValueError(f"no doing item {n}; there are {len(store['doing'])}")
+        store["doing"].pop(n - 1)
     return change(go)
 
 
@@ -617,6 +632,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             out += ["", f"- ⏳ {len(items)}건 {rev} 대기 — 분야 {'·'.join(i['title'] for i in items)}"]
     if skipped:
         out += ["", skipped]
+    if store["doing"]:
+        items = [f"{d['title']} · {d['owner']} · 다음: {d['next']}" for d in store["doing"]]
+        out += ["", ("🔄 진행 중" if tg else "🔄 **진행 중**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
     decisions = fleet.open_decisions()
     asked = set((last or {}).get("decisions") or []) if last_rows is not None else set()
     if decisions:
@@ -631,7 +649,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + " — " + (todo[0] if todo else "없음")]
     out += [x for it in todo[1:] for x in ("", it)]
     if store["later"]:
-        out += ["", ("⏸ 나중에" if tg else "⏸ **나중에**") + " — " + " · ".join(f"{l['trigger']} {l['title']}" for l in store["later"])]
+        out += ["", ("⏸ 보류" if tg else "⏸ **보류**") + " — " + " · ".join(f"{l['trigger']} → {l['title']}" for l in store["later"])]
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
 

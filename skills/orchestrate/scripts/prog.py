@@ -73,7 +73,8 @@ Usage: orch <command> <slug> [options]
   board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] | lead close <name>
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
                  [--status moving|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
-  board drop <id> | later add <title> --trigger T [--due D] | later drop <n> | todo [LINE]... | show
+  board drop <id> | doing add <title> --owner W --next E | doing drop <n> | later add <title> --trigger T [--due D]
+        | later drop <n> | todo [LINE]... | show
                                      no slug: the board the periodic report is rendered from (board.json beside
                                      stages.json), one row per lead, phase and sub-task. set changes only the
                                      fields given and stamps reported_at; an id a/b hangs off a. A row without
@@ -82,10 +83,12 @@ Usage: orch <command> <slug> [options]
                                      --program is the lead's project (epic, program): leads sharing a repository
                                      get one table each only when each has one; lead add and set warn until
                                      they do, and the report heads the rest (프로젝트 미지정)
-                                     todo replaces the owner's to-do list (no lines clears it)
+                                     todo replaces the owner's to-do list (no lines clears it); doing lists work
+                                     that is moving but has no row (a wait on another team, an investigation),
+                                     later only work set aside on purpose, with the trigger that brings it back
   brief render --periodic [--scope top-level|PROGRAM] [--telegram] [--headline T] [--skipped T] [--now ISO8601]
                [--commit] [--json] [--fill]
-                                     the brief skill's periodic report items 1-8 from the board, prs.json, open
+                                     the brief skill's periodic report items 1-9 from the board, prs.json, open
                                      decisions and brief-last/<scope>.json (bold = changed since it). --commit
                                      saves this table as the last one (after sending). Staleness: a row past 90
                                      min shows its age, an open PR probed over 30 min ago is in the headline,
@@ -2165,6 +2168,10 @@ def cmd_board(argv):
                                   ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr")})
         elif sub == "drop" and rid:
             board.drop(rid)
+        elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
+            board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"))
+        elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
+            board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
             board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"))
         elif sub == "later" and rest[:1] == ["drop"] and len(rest) > 1:
@@ -2176,7 +2183,7 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] | lead close <name> | "
                      "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
-                     "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | later add <title> --trigger T [--due D] | "
+                     "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | doing add <title> --owner W --next E | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo [LINE]... | show")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
