@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 36개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 7개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 37개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 7개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -65,6 +65,16 @@
     - 완료 댓글을 남긴 뒤 같은 턴에 `handoff-ticket`으로 넘어간다.
 - **동봉:** `scripts/sticky-comment.sh`(PR 테스트 결과 댓글을 하나로 유지). 본문에는 무엇을 배포할지 가르는 규칙만 두고, 절차는 references로 나눴다. `evidence.md`(버그·리팩터링·기존 수정 절차), `independent-review.md`(독립 리뷰 근거와 실패 처리), `pull-request.md`(PR 본문 절과 stack), `review-loop.md`(PR을 연 뒤 ready까지의 루프, 남이 머지할 때 지켜보기), `review-bot-triage.md`(리뷰 스레드를 fix / dismiss / ask로 나누는 기준. 독립 리뷰어, CodeRabbit, Copilot, 사람 리뷰에 쓴다).
 - **관계:** `figure-it-out`, `architect`, `how`, `why`, `tdd`, `prune-comments`, `interrogate`의 판정 틀, `write-plainly`, `blast-radius`, `write-ticket`, `use-tracker`, `use-notes`, `orchestrate`(`orch land`, `orch heavy`), `handoff-ticket`.
+
+### ui-review
+- **언제:** 시안이나 화면, 화면을 바꾸는 PR을 사람에게 보이기 전. "UI 리뷰해줘", "시안 점검해줘", "화면 밸런스 봐줘". 사람이 UI 문제를 지적했을 때는 고친 뒤 규칙을 더한다. 스크린샷을 찍어 올리는 일은 `deliver-ticket`의 visual-evidence다.
+- **내용:**
+  - 제품 디자인 시스템(토큰·컴포넌트·Storybook)이 이 스킬의 기본값보다 앞선다. 같은 종류의 기존 화면을 기준(baseline)으로 고른다.
+  - `scripts/ui_measure.py`가 페이지(URL이나 HTML 파일)를 headless Chrome으로 열어 1280·390에서 잰다: 같은 목록·표의 행 높이, 같은 열 버튼의 폭과 오른쪽 끝, 쌓인 블록의 정렬선, 행 안 세로 중심(±1px), 4px 격자 밖 여백, 가로 넘침, 목록·표 링크 밑줄, 표 머리·입력 컨트롤의 일관성, 이름 없는 기호·아이콘, 버튼으로 그린 켜고 끄기, 기준 화면에 없는 컴포넌트 모양. 한 줄 값의 줄바꿈, 대상 없는 버튼 라벨, 휑한 첫 화면, 색이 없는 화면은 경고다. 표준 라이브러리만 쓰고 자기가 띄운 Chrome PID만 끈다.
+  - 측정으로 안 되는 것(사람에게 보이는 시스템 단계, 같은 것을 바꾸는 옵션, 설정 묶음)은 `references/walkthrough.md`의 시나리오 표(장면·클릭·스크롤·주체·막힌 곳)로 실제로 눌러 보며 판정한다.
+  - FAIL이 이유 있는 예외 없이 남아 있으면 시안을 보내지 않는다. 결과 표는 PR sticky나 시안 링크 옆에 둔다.
+  - 규칙과 근거는 `references/rules.md`. 새 지적은 일반 규칙이면 이 스킬에, 한 제품의 규칙이면 그 저장소나 `~/.config/agent-skills/ui-review/rules.md`에 더한다.
+- **관계:** `deliver-ticket` §3 리뷰와 visual-evidence 판정, `orchestrate` 리드가 시안·화면을 사람에게 보내기 전.
 
 ### handoff-ticket
 - **언제:** "핸드오프", "다음 작업으로 넘어가자", "남은 작업 있어?", "머지하고 다음 진행해줘", 그리고 티켓이 끝난 순간. "병렬로 진행"은 같은 저장소의 티켓 카드일 때만 해당하고, 서브에이전트나 곁가지 카드일 수 있으면 먼저 가린다. 이 세션이 계속 일해야 하면 `dispatch-card`를 쓴다.
