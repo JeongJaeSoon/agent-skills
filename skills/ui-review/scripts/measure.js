@@ -14,10 +14,12 @@
     if (skipped(el)) return false;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return false;
-    const s = cs(el);
-    return s.visibility !== "hidden" && s.display !== "none" && px(s.opacity) > 0;
+    // checkVisibility also sees an ancestor's opacity: 0 (a closed modal or panel).
+    return el.checkVisibility({ opacityProperty: true, visibilityProperty: true });
   };
-  const all = [...scope.querySelectorAll("*")].filter((el) => !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "HEAD", "META", "LINK"].includes(el.tagName) && visible(el));
+  // The scope element itself counts: --scope '#members' on a table still measures that table.
+  const within = (sel) => [scope, ...scope.querySelectorAll(sel)].filter((el) => el.matches(sel));
+  const all = within("*").filter((el) => !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "HEAD", "META", "LINK"].includes(el.tagName) && visible(el));
   const kids = (el) => [...el.children].filter(visible);
   const box = (el) => el.getBoundingClientRect();
   const text = (el) => (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
@@ -75,11 +77,11 @@
     seen.add(key);
     groups.push({ rows, label });
   };
-  for (const t of scope.querySelectorAll("table")) addGroup([...t.querySelectorAll(":scope > tbody > tr, :scope > tr")], "table rows");
-  for (const l of scope.querySelectorAll("ul, ol, [role=list]")) addGroup([...l.children], "list items");
+  for (const t of within("table")) addGroup([...t.querySelectorAll(":scope > tbody > tr, :scope > tr")], "table rows");
+  for (const l of within("ul, ol, [role=list]")) addGroup([...l.children], "list items");
   // A key-value list: each term and value should take one line, so its label or value wrapping shows here.
-  for (const d of scope.querySelectorAll("dl")) addGroup([...d.querySelectorAll(":scope > dt, :scope > dd, :scope > div > dt, :scope > div > dd")], "definition list");
-  for (const g of scope.querySelectorAll("[role=table], [role=grid], [role=rowgroup]")) addGroup([...g.querySelectorAll(":scope > [role=row]")], "rows");
+  for (const d of within("dl")) addGroup([...d.querySelectorAll(":scope > dt, :scope > dd, :scope > div > dt, :scope > div > dd")], "definition list");
+  for (const g of within("[role=table], [role=grid], [role=rowgroup]")) addGroup([...g.querySelectorAll(":scope > [role=row]")], "rows");
   for (const p of all) {
     const by = {};
     for (const c of kids(p)) {

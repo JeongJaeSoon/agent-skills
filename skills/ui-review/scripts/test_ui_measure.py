@@ -58,4 +58,9 @@ assert status(res, 1280)["spacing-grid"] == "PASS" and status(res, 1280)["bare-g
 rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "1280", "--before", "document.querySelector('main').insertAdjacentHTML('beforeend', '<span>!</span>')")
 assert status(res, 1280)["bare-glyph"] == "FAIL"
 
+# --scope on the set itself still measures it: the scope element is a target too.
+for sel in (".kv", "section.card"):
+    rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "1280", "--scope", sel)
+    assert status(res, 1280)["row-height"] == "FAIL", (sel, status(res, 1280))
+
 print("test_ui_measure: ok")
