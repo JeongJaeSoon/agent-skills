@@ -45,7 +45,7 @@ def config():
 def log(msg, once=False):
     """once: skip the line when the log already ends with the same message (a failure repeating every pass)."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with LOG.open("a+") as f:
+    with LOG.open("a+", errors="replace") as f:  # the tail seek can land inside a multi-byte character
         if once and f.tell():
             f.seek(max(0, f.tell() - 1024))
             if f.read().rstrip("\n").rpartition("\n")[2].partition(" ")[2] == msg:
@@ -210,7 +210,14 @@ def run_once(cfg):
         if p in entries(serve_status(cli)):  # taken since the first read (the probe took time)
             st["skip"][p] = 0
             continue
-        r = ts(cli, "serve", "--bg", f"--https={p}", t)
+        try:
+            r = ts(cli, "serve", "--bg", f"--https={p}", t)
+        except subprocess.TimeoutExpired:
+            # It may have applied the entry anyway; claim it only if it points where this pointed it.
+            if entries(serve_status(cli)).get(p) == t:
+                st["owned"][p] = t
+                save_state(st)
+            raise
         if r.returncode:
             log(f"open {p} failed: {r.stderr.strip()}")
             st["skip"][p] = now + RETRY_NON_HTTP_S

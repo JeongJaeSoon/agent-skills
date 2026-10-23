@@ -246,6 +246,26 @@ class EndToEnd(Base):
         pw.log("pass failed: X", once=True)
         self.assertEqual(len(pw.LOG.read_text().splitlines()), 3)
 
+    def test_log_tail_survives_a_split_multibyte_character(self):
+        pw.LOG.unlink(missing_ok=True)
+        # "<timestamp> " is 20 bytes, so 1024 bytes back from the end lands on the second byte of "가".
+        pw.log("가" + "x" * 1021)
+        pw.log("pass failed: Y", once=True)
+        pw.log("pass failed: Y", once=True)
+        self.assertEqual(len(pw.LOG.read_text().splitlines()), 2)
+
+    def test_timed_out_open_that_applied_is_still_owned(self):
+        self.listening[4590] = ("127.0.0.1", "Python")
+        real = pw.ts
+        def slow(cli, *args):
+            r = real(cli, *args)
+            if "--bg" in args:
+                raise pw.subprocess.TimeoutExpired(args, 20)
+            return r
+        with mock.patch.object(pw, "ts", slow), self.assertRaises(pw.subprocess.TimeoutExpired):
+            self.run_pass()
+        self.assertEqual(pw.load_state()["owned"].get(4590), "http://127.0.0.1:4590")
+
     def test_never_calls_funnel(self):
         self.listening[4590] = ("127.0.0.1", "Python")
         self.run_pass()
