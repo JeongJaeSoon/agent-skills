@@ -202,8 +202,13 @@
   // subtrees are taken out of layout while widths are read, so neither the page nor an ancestor's
   // scrollWidth counts them, then put back.
   const overItems = [];
-  const seenNow = (el) => el.checkVisibility({ opacityProperty: true, visibilityProperty: true });
-  const unseen = [...document.body.querySelectorAll("*")].filter((el) => cs(el).display !== "none" && !seenNow(el) && el.parentElement && seenNow(el.parentElement) && ![...el.querySelectorAll("*")].some(seenNow));
+  // By cause, not checkVisibility: a display: contents element has no box but its text shows. Opacity 0
+  // hides the whole subtree; visibility: hidden only when no descendant turns visible again.
+  const unseen = [...document.body.querySelectorAll("*")].filter((el) => {
+    const s = cs(el);
+    if (/^(none|contents)$/.test(s.display)) return false;
+    return px(s.opacity) === 0 || (s.visibility === "hidden" && ![...el.querySelectorAll("*")].some((d) => cs(d).visibility === "visible"));
+  });
   const off = [...excluded, ...document.querySelectorAll(IGNORE), ...unseen].map((el) => [el, el.style.getPropertyValue("display"), el.style.getPropertyPriority("display")]);
   for (const [el] of off) el.style.setProperty("display", "none", "important");
   try {
