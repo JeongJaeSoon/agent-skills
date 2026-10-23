@@ -2,7 +2,7 @@
 
 Run: python3 test_skill_usage.py
 """
-import datetime as dt, json, os, pathlib, sys, tempfile, time
+import contextlib, datetime as dt, io, json, os, pathlib, sys, tempfile, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import skill_usage as su
@@ -147,9 +147,18 @@ assert "slash_only" not in ship["flags"], ship
 assert rows["simplify"]["flags"] == [], rows["simplify"]
 assert [s["source"] for s in rep["sources"]] == ["agent-skills", "acme-tools", "user", "other"], rep["sources"]
 
+# A miss keeps the description's phrase it matched (public text) and the session to resume, never the prompt.
+assert tidy["miss_phrases"] == [["정리해줘", 2]] and tidy["miss_sessions_30d"] == 1 and tidy["last_miss"] == ts(20, 6), tidy
 blob = json.dumps(rep, ensure_ascii=False) + cache.read_text()
-for secret in ("ship it now", "배포해줘\"", "lint this please", "/work/alpha", "/work/beta", "again"):
+for secret in ("ship it now", "quoted:", "lint this please", "/work/alpha", "/work/beta", "again"):
     assert secret not in blob, secret
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert su.list_misses("agent-skills:tidy", cache, NOW) == 0
+assert out.getvalue().splitlines() == [f'{ts(20, 6)}  s2  "정리해줘"', f'{ts(20, 5)}  s2  "정리해줘"',
+                                       "2 misses of agent-skills:tidy in 30 days (claude --resume <session> opens one)"], out.getvalue()
+# A skill that fires on most prompts carrying its phrases is not flagged for the few it missed.
+assert su.flags({**ship, "misses_30d": 4, "auto_30d": 40}, 1) == [] and su.flags({**ship, "misses_30d": 4, "auto_30d": 10}, 1) == ["misses"]
 
 rep2 = su.collect(projects_dir=projects, inv=inv, cache_path=cache, now=NOW, miss_threshold=1)
 assert rep2["files_parsed"] == 0 and rep2["files"] == rep["files"] == 5, (rep["files"], rep2["files_parsed"])

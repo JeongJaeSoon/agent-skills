@@ -404,7 +404,9 @@ def skills_report(now):
     for name, src, d7, d30, auto, slash, chained, misses, h in rows:
         r = {"name": name, "source": src, "uses_7d": d7, "uses_30d": d30, "uses_total": d30 + (2 if h else 0),
              "auto_30d": auto, "slash_30d": slash, "chained_30d": chained, "misses_30d": misses,
-             "last_used": _ago(now, h) if h else None, "sessions_30d": min(d30, 5), "repos_30d": min(d30, 2)}
+             "last_used": _ago(now, h) if h else None, "sessions_30d": min(d30, 5), "repos_30d": min(d30, 2),
+             "miss_sessions_30d": min(misses, 4), "miss_phrases": [["wrap this up", misses]] if misses else [],
+             "last_miss": _ago(now, 6) if misses else None}
         r["flags"] = skill_usage.flags(r)
         skills.append(r)
     order = ["agent-skills", "lint-kit", "user", "other"]
