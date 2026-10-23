@@ -97,7 +97,7 @@ Korean; the title and the prose follow `tracker.<adapter>.language` (`write-tick
 
 * 
 
-## ⏸ 보류
+## ⏸️ 보류
 
 *LATER로 분류한 발견. 티켓을 만들지 않고 여기에 한 줄씩 적는다. 처음에는 비워 둔다.*
 

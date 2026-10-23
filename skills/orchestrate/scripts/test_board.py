@@ -46,6 +46,7 @@ assert orch("board", "set", "x/y", "--title", "고아")[2] == "no row x to be th
 assert orch("board", "set", "lone", "--title", "저장소 없음")[2] == "a lead row (lone) needs --repo"
 assert orch("board", "lead", "add", "search", "--handle", "term_0FAKE1", "--repo", "acme/web")[0] == 0
 assert orch("board", "set", "search", "--status", "maybe")[2].startswith("--status is one of")
+assert board.status_of("⏸️") == board.status_of("⏸") == "held"
 assert orch("board", "set", "search", "--progress", "9/8")[2] == "--progress N/M needs 0 <= N <= M and M > 0"
 assert orch("board", "set", "search", "--progress", "half")[2].startswith("--progress is N/M")
 assert orch("board", "later", "add", "캐시 TTL")[2].startswith("board later add needs")
@@ -128,7 +129,7 @@ if "--print" in sys.argv:
 GOLDEN = """\
 **14:30 · 바뀐 행 1 · PR 상태 3h 전 기준**
 
-🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
+🔄 진행 · ⏳ 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
 
 PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
 
@@ -141,7 +142,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 | 🔄 | ph3 | — | ███░░░░░ 3/8 | 하위 3건 · 워커 |
 | 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | PR 작성 · 워커 |
 | 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗ | ████░░░░ 4/8 | CI 재실행 · 워커 |
-| ⏸ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
+| ⏸️ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | ph3 머지 뒤 |
 
 **acme/ops — (프로젝트 미지정) → main**
 
@@ -176,7 +177,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 🙋 **지금 오너가 할 일** — 없음
 
-⏸ **보류** — 10/16 → prod 배포 창 · 10/20 → 캐시 TTL 다시 보기"""
+⏸️ **보류** — 10/16 → prod 배포 창 · 10/20 → 캐시 TTL 다시 보기"""
 
 code, first, err = FIRST
 assert code == 0, err
@@ -201,7 +202,7 @@ assert "└ 🔄 문구가 아주 길어서 칸을 넘는 하위 작업 #54 ❗�
 assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "⏳ 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4 · 리뷰 · 사람" in tg.splitlines(), tg
 assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
 assert "🔄 진행 중 — 다른 팀 답변 대기 · 사람 · 다음: 10/14 회신" in tg.splitlines(), tg
-assert "⏸ 보류 — 10/16 → prod 배포 창 · 10/20 → 캐시 TTL 다시 보기" in tg.splitlines(), tg
+assert "⏸️ 보류 — 10/16 → prod 배포 창 · 10/20 → 캐시 TTL 다시 보기" in tg.splitlines(), tg
 
 # --json carries what a dashboard or the model needs beside the text.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--headline", "ph2 머지"))

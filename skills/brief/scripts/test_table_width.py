@@ -10,6 +10,7 @@ from table_width import table_width, tables, text_width
 
 assert text_width("검색 개선") == 9
 assert text_width("⚠️ 로그만") == 9
+assert text_width("⏸️") == text_width("🔄") == 2
 assert text_width("▓▓▓▓░░░░ 4/8 #42") == 16
 assert text_width("**검색 개선**") == 9
 assert text_width("[acme/web#42](https://example.test/42)") == 11

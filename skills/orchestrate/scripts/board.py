@@ -18,8 +18,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "brief" / "
 import table_width  # noqa: E402
 
 KINDS = ("lead", "phase", "task")
-ICON = {"moving": "🔄", "waiting": "⏳", "held": "⏸", "blocked": "🔴", "done": "✅"}
-ALIASES = {v: k for k, v in ICON.items()}
+ICON = {"moving": "🔄", "waiting": "⏳", "held": "⏸️", "blocked": "🔴", "done": "✅"}
+ALIASES = {v: k for k, v in ICON.items()} | {"⏸": "held"}  # VS16 dropped, as some keyboards and pastes do
 WORST = ("blocked", "waiting", "held", "moving")
 CAPS = {"name": 17, "pr": 17, "next_min": 12}  # next takes what the others leave: 2+17+17+14+12+16 borders = 78
 COLS = 78
@@ -546,7 +546,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append(f"PR 상태 {ago((now - oldest_probe).total_seconds())} 기준")
 
     used = {l["status"] for l in lines}
-    legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
+    legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸️ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
                                                          if s in used) + "막대=단계(추정)")
     states = " ".join(l["pr_state"] for l in lines if not l["fold"])
     pr_legend = [f"{m} {w}" for m, w in PR_LEGEND if m in states]
@@ -649,7 +649,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + " — " + (todo[0] if todo else "없음")]
     out += [x for it in todo[1:] for x in ("", it)]
     if store["later"]:
-        out += ["", ("⏸ 보류" if tg else "⏸ **보류**") + " — " + " · ".join(f"{l['trigger']} → {l['title']}" for l in store["later"])]
+        out += ["", ("⏸️ 보류" if tg else "⏸️ **보류**") + " — " + " · ".join(f"{l['trigger']} → {l['title']}" for l in store["later"])]
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
 
