@@ -2278,6 +2278,6 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "watch-cards": lambda argv: __import__("card_watch").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 - (sys.argv[1:2] == ["watch-cards"]) or sys.argv[1] not in COMMANDS or {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] == ["watch-cards"]) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])
