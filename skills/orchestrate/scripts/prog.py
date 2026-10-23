@@ -2070,6 +2070,8 @@ def cmd_inbox(argv):
     try:
         did, msgs = batch(orca_json("orchestration", "check", *(["--ack", acked] if acked else [])))
     except SystemExit as e:  # a stale delivery id must not cost the wait the caller is about to rely on
+        if not acked:
+            raise
         print(f"ack {acked} failed ({e}); taking the inbox without it", flush=True)
         did, msgs = batch(orca_json("orchestration", "check"))
     deadline, skipped = time.monotonic() + int(opt(argv, "--timeout-ms", "3300000")) / 1000, 0

@@ -526,6 +526,12 @@ with contextlib.redirect_stdout(out):
 assert [(c[2:3] or ("check",))[0] for c in calls] == ["--ack", "check", "--peek", "check"], calls
 lines = out.getvalue().splitlines()
 assert lines[0].startswith("ack dv-old failed (") and lines[1].startswith("INBOX id=m3"), lines
+prog.orca_json = lambda *a: (_ for _ in ()).throw(SystemExit("orca down"))
+try:
+    prog.cmd_inbox(["--wait"])
+    raise AssertionError("a failed take without --ack must exit")
+except SystemExit as e:
+    assert str(e) == "orca down", e
 prog.orca_json = real
 print("prog.py landed_but_open: all pass")
 
