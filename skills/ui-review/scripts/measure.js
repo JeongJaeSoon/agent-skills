@@ -68,7 +68,8 @@
     return { top, bottom: Math.max(...rs.map((r) => r.bottom)), firstBottom: Math.max(...first.map((r) => r.bottom)), lines: new Set(rs.map((r) => Math.round(r.top))).size };
   };
   const BUTTON = "button, [role=button], input[type=button], input[type=submit], [role=switch], a.btn";
-  const FIELD = "input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=button]):not([type=submit]), select, [role=combobox]";
+  // Text-entry fields only: a range, color or file input is a different control and need not match them.
+  const FIELD = "input:is(:not([type]), [type=text], [type=email], [type=password], [type=search], [type=tel], [type=url], [type=number], [type=date], [type=time], [type=datetime-local], [type=month], [type=week]), select, [role=combobox]";
 
   // Sets of repeated rows: table body rows, list items, ARIA rows, and 3+ siblings sharing tag and class.
   const groups = [];
@@ -235,7 +236,12 @@
       }
       return right;
     };
-    for (const el of all) if (reach(el) > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(measured.has(el.parentElement) && reach(el.parentElement) > vw + 1)) overItems.push({ el: where(el), detail: `reaches ${r1(reach(el))}px > viewport ${vw}px` });
+    // Past either edge: a negative margin or a translate can push content off the left side.
+    const outside = (el) => reach(el) > vw + 1 || box(el).left < -1;
+    for (const el of all) {
+      if (!outside(el) || cs(el).position === "fixed" || clipsX(el) || (measured.has(el.parentElement) && outside(el.parentElement))) continue;
+      overItems.push({ el: where(el), detail: box(el).left < -1 ? `left edge ${r1(box(el).left)}px < 0` : `reaches ${r1(reach(el))}px > viewport ${vw}px` });
+    }
   } finally {
     for (const [el, v, prio] of off) v ? el.style.setProperty("display", v, prio) : el.style.removeProperty("display");
   }

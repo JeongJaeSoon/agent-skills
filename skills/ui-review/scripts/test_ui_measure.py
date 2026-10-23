@@ -105,9 +105,14 @@ CONTENTS = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div
 rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", CONTENTS, "--scope", "main")
 assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
 
+# Content pushed off the left edge overflows too.
+LEFT = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; transform: translateX(-200px)\">Off</div>')"
+rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", LEFT)
+assert status(res, 390)["horizontal-overflow"] == "FAIL", status(res, 390)
+
 # A box scaled down to fit is judged where it is drawn, not by its layout width.
 SCALED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 600px; transform: scale(.5); transform-origin: left top\">' + 'A'.repeat(60) + '</div>')"
-ROTATED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; height: 300px; white-space: nowrap; transform: rotate(90deg)\">' + 'A'.repeat(20) + '</div>')"
+ROTATED = "document.querySelector('main').insertAdjacentHTML('beforeend', '<div style=\"width: 100px; height: 200px; margin-left: 100px; white-space: nowrap; transform: rotate(90deg)\">' + 'A'.repeat(20) + '</div>')"
 for js in (SCALED, ROTATED):
     rc, res, _ = run(HERE / "testdata/pass.html", "--widths", "390", "--before", js)
     assert status(res, 390)["horizontal-overflow"] == "PASS", (js, status(res, 390))
