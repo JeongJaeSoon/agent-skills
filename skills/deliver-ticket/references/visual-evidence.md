@@ -65,7 +65,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" table <evidence dir>/urls.json > 
 It prints a `### 스크린샷` section: one table per subject, widths as rows (widest first), light and
 dark as columns, and any file outside the naming form as its own image. Append it to the body file
 below the E2E results, add the verdict line, and post the whole body with `sticky-comment.sh` as
-§5 says. The comment then reads:
+§5 says. An uploaded URL answers 404 until a posted comment references it, so check the images
+load after the sticky is up, not before. The comment then reads:
 
 ```markdown
 ### 화면 판정 (head `abc1234`, 판정: lead)
