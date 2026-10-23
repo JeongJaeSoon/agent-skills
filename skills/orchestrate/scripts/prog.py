@@ -2249,6 +2249,18 @@ def cmd_hold(argv, release=False):
 def cmd_sent(argv):
     import sent
     sub, rest = argv[0], argv[1:]
+    usage = ("usage: orch sent add --to WHO (--text-file F | - | --text T) [--kind K] [--channel HOW] [--repo R] "
+             "[--subject S] [--from WHO] | list [--days N] [--json]  (no <slug>)")
+    if sub == "add":
+        # Every other subcommand takes <slug> first, so a stray slug or flag here is likely; refuse it rather than drop it.
+        valued, i = {"--to", "--text", "--text-file", "--kind", "--channel", "--repo", "--subject", "--from"}, 0
+        while i < len(rest):
+            if rest[i] in valued:
+                i += 2
+            elif rest[i] == "-":
+                i += 1
+            else:
+                sys.exit(f"unexpected argument {rest[i]!r}\n{usage}")
     try:
         if sub == "add" and opt(rest, "--to"):
             text, f = opt(rest, "--text"), opt(rest, "--text-file")
@@ -2265,10 +2277,9 @@ def cmd_sent(argv):
             for r in [] if "--json" in rest else rows:
                 print(f"{r['ts']}  {r.get('from') or '?'} → {r.get('to') or '?'}  [{r['source']}] {(r.get('subject') or r['text'] or '?').splitlines()[0][:100]}")
         else:
-            sys.exit("usage: orch sent add --to WHO (--text-file F | - | --text T) [--kind K] [--channel HOW] [--repo R] "
-                     "[--subject S] [--from WHO] | list [--days N] [--json]")
+            sys.exit(usage)
     except (ValueError, OSError) as e:
-        sys.exit(str(e))
+        sys.exit(f"{e}\n{usage}")
 
 
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
