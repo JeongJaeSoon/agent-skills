@@ -197,7 +197,8 @@
   // 6. Nothing is wider than the viewport.
   const overItems = [];
   const sw = document.documentElement.scrollWidth;
-  if (sw > vw) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
+  // The document width speaks for the whole page only; with --scope or --exclude the elements below decide.
+  if (sw > vw && scope === document.body && !excluded.length) overItems.push({ el: "document", detail: `scrollWidth ${sw}px > viewport ${vw}px` });
   const clipsX = (el) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (/(auto|scroll|hidden|clip)/.test(cs(a).overflowX)) return true; return false; };
   for (const el of all) if (box(el).right > vw + 1 && cs(el).position !== "fixed" && !clipsX(el) && !(el.parentElement && box(el.parentElement).right > vw + 1)) overItems.push({ el: where(el), detail: `right edge ${r1(box(el).right)}px > viewport ${vw}px` });
   check("horizontal-overflow", overItems);
@@ -238,11 +239,14 @@
     const named = el.closest(BUTTON + ", a")?.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("aria-label");
     if (!named) glyphItems.push({ el: where(el), detail: `"${t}" with no name or tooltip` });
   }
-  // The same for an icon standing alone: a control, or an icon whose parent has no words either.
-  for (const svg of all.filter((el) => el.tagName.toLowerCase() === "svg" && el.getAttribute("aria-hidden") !== "true")) {
-    const host = svg.closest(BUTTON + ", a") || svg.parentElement;
-    if (text(host) || (host !== svg.closest(BUTTON + ", a") && text(host.parentElement || host))) continue;
-    if (svg.querySelector("title") || ["aria-label", "aria-labelledby", "title"].some((k) => host.getAttribute(k) || svg.getAttribute(k))) continue;
+  // The same for an icon standing alone: a control holding only an icon (aria-hidden or not, the control
+  // still needs a name), or a non-hidden icon whose parent has no words either.
+  const named = (el) => ["aria-label", "aria-labelledby", "title"].some((k) => el.getAttribute(k)) || !!el.querySelector("svg title, img[alt]:not([alt=''])");
+  const icons = (el) => [...el.querySelectorAll("svg, img")].some(visible);
+  for (const ctl of all.filter((el) => el.matches(BUTTON + ", a[href]") && !text(el) && icons(el) && !named(el))) glyphItems.push({ el: where(ctl), detail: "icon with no name or tooltip" });
+  for (const svg of all.filter((el) => el.tagName.toLowerCase() === "svg" && el.getAttribute("aria-hidden") !== "true" && !el.closest(BUTTON + ", a[href]"))) {
+    const host = svg.parentElement;
+    if (text(host) || text(host.parentElement || host) || named(svg) || named(host)) continue;
     glyphItems.push({ el: where(host), detail: "icon with no name or tooltip" });
   }
   check("bare-glyph", glyphItems);

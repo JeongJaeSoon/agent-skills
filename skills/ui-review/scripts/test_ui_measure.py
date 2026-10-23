@@ -63,4 +63,8 @@ for sel in (".kv", "section.card"):
     rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "1280", "--scope", sel)
     assert status(res, 1280)["row-height"] == "FAIL", (sel, status(res, 1280))
 
+# With --scope the page's own width does not fail the part under review.
+rc, res, _ = run(HERE / "testdata/fail.html", "--widths", "390", "--scope", ".kv")
+assert status(res, 390)["horizontal-overflow"] == "PASS", status(res, 390)
+
 print("test_ui_measure: ok")
