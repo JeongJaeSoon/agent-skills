@@ -938,7 +938,8 @@ with tempfile.TemporaryDirectory() as tmp:
     rows = {1: row(1, "/usr/bin/node server.js"), 2: row(2, "/usr/bin/node a.js"), 3: row(3, "/usr/bin/node b.js"),
             4: row(4, "/usr/bin/node c.js", age=H), 5: row(5, "/usr/bin/node d.js", ppid=77), 6: row(6, "/usr/bin/node e.js")}
     cwd_of = {1: ("/nowhere/gone-card", 9), 2: (live, ino), 3: (live, ino + 1), 4: ("/nowhere/gone-card", 9),
-              5: ("/nowhere/gone-card", 9), 6: (live, None)}
+              5: ("/nowhere/gone-card", 9), 6: (live, None), 7: ("/Users/a/\\xed\\x95\\x9c dir", 9)}
+    rows[7] = row(7, "/usr/bin/node f.js")  # lsof's escape of a non-ASCII name is not a removed directory
     got = {i["pid"]: (i["target"], i["why"]) for i in reap.judge_orphans(rows, [], 6, cwd_of)}
     assert got == {1: (True, "ppid 1, cwd /nowhere/gone-card 가 사라짐"), 3: (True, f"ppid 1, cwd {live} 가 사라짐"),
                    4: (False, "6시간 미만")}, got

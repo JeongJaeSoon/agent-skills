@@ -123,7 +123,7 @@ python3 "$R" schedule    # prints the `orca automations create` command; nothing
 
 `schedule` builds an existing-workspace automation on `17 */3 * * *` whose precheck is
 `python3 <absolute reap.py> precheck` (its cwd is the repo's main checkout, so paths are absolute)
-with `--precheck-timeout 300`: Orca's default 60 seconds once cut off every round with 40 cards to read.
+with `--precheck-timeout 300`: Orca's default 60 seconds is shorter than a precheck that reads `gh` and git for dozens of cards.
 Every command it builds starts with `python3`, with `--state`/`--ledger` after the subcommand when
 those are off the default: a scheduled session can refuse a leading `env` or `VAR=` assignment.
 Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close the chrome-window

@@ -123,7 +123,9 @@ def cwds(inodes=False):
 
 def cwd_gone(path, ino):
     """The directory a process sits in was removed: lsof still prints the old path. One recreated at the same path is
-    another inode."""
+    another inode. lsof under LC_ALL=C prints a non-ASCII name as \\xNN escapes, which no stat finds: unknown, not gone."""
+    if "\\" in path:
+        return False
     try:
         return ino is not None and os.stat(path).st_ino != ino
     except (FileNotFoundError, NotADirectoryError):
@@ -394,11 +396,12 @@ def judge_worktree(repo, w, hours, cwd_of, now, projects_dir, orca=frozenset(), 
 def scan(kinds, hours, cfg, repo_list):
     notes, items = [], []
     rows = processes() if "orphan" in kinds else {}
-    cwd_of = cwds() if "worktree" in kinds else {}
+    # One lsof serves both kinds: it is the slowest read of a scan.
+    proc_cwds = cwds(inodes=True) if {"orphan", "worktree"} & kinds else {}
+    cwd_of = None if proc_cwds is None else {pid: c for pid, (c, _) in proc_cwds.items()}
     if "orphan" in kinds:
         if not cfg.get("orphan_paths"):
             notes.append(f"orphan: {CONFIG} 의 reap.orphan_paths 가 비어 있어 cwd 가 사라진 고아만 본다")
-        proc_cwds = cwds(inodes=True)
         if proc_cwds is None:
             notes.append("orphan: 프로세스 cwd 를 읽지 못함, cwd 가 사라진 고아는 보지 않는다")
         items += judge_orphans(rows, cfg.get("orphan_paths") or [], hours, proc_cwds)
