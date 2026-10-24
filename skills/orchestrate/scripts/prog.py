@@ -1821,10 +1821,27 @@ def gh_pr(path, branch):
         return {"state": "unknown (unreadable gh output)"}
 
 
+def regenerated_copies(path):
+    """True when every untracked file is in an `.agents/skills/<name>/` that Orca regenerates from a tracked
+    `.claude/skills/<name>` (reap-resources' rule): such a copy is not work, and `orca worktree rm` goes after trashing it."""
+    out = run(["git", "-C", path, "ls-files", "--others", "--exclude-standard", "-z"], check=False)
+    names = set()
+    for f in filter(None, out.stdout.split("\0")):
+        parts = f.split("/")
+        if len(parts) < 4 or parts[:2] != [".agents", "skills"]:
+            return False
+        names.add(parts[2])
+    tracked = run(["git", "-C", path, "ls-files", "-z", "--", ".claude/skills", ".agents/skills"], check=False)
+    have = {tuple(f.split("/")[:3]) for f in filter(None, tracked.stdout.split("\0"))}
+    return out.returncode == 0 and tracked.returncode == 0 and bool(names) and \
+        all((".claude", "skills", n) in have and (".agents", "skills", n) not in have for n in names)
+
+
 def card_holds(path, pr=gh_pr):
     if not os.path.isdir(path):
         return None
-    if run(["git", "-C", path, "status", "--porcelain"], check=False).stdout.strip():
+    status = run(["git", "-C", path, "status", "--porcelain"], check=False).stdout.strip()
+    if status and not (all(line.startswith("?? ") for line in status.splitlines()) and regenerated_copies(path)):
         return "uncommitted changes"
     branch = run(["git", "-C", path, "symbolic-ref", "-q", "--short", "HEAD"], check=False).stdout.strip()
     state = (pr(path, branch) or {}) if branch else {}

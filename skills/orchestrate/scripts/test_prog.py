@@ -307,6 +307,18 @@ for oid in (None, "", "0" * 40):
 assert prog.card_holds(repo, pr=lambda path, branch: {"number": 5, "state": "OPEN"}) == "open PR #5"
 git("checkout", "-q", "--detach")
 assert prog.card_holds(repo, pr=lambda path, branch: 1 / 0) == "2 unpushed commit(s)"
+# An untracked .agents/skills/<name>/ that Orca regenerates from a tracked .claude/skills/<name> is not a change.
+pathlib.Path(repo, ".claude/skills/v").mkdir(parents=True)
+pathlib.Path(repo, ".claude/skills/v/SKILL.md").write_text("x")
+git("add", "."); git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "s")
+pathlib.Path(repo, ".agents/skills/v").mkdir(parents=True)
+pathlib.Path(repo, ".agents/skills/v/SKILL.md").write_text("x")
+assert prog.card_holds(repo, pr=lambda path, branch: 1 / 0) == "3 unpushed commit(s)"
+pathlib.Path(repo, ".agents/skills/w").mkdir()
+pathlib.Path(repo, ".agents/skills/w/SKILL.md").write_text("x")
+assert prog.card_holds(repo) == "uncommitted changes", "a copy of a skill the repo does not track is someone's work"
+pathlib.Path(repo, ".agents/skills/w/SKILL.md").unlink()
+pathlib.Path(repo, ".agents/skills/w").rmdir()
 pathlib.Path(repo, "f").write_text("x")
 assert prog.card_holds(repo) == "uncommitted changes"
 assert prog.card_holds("/nonexistent/card") is None
