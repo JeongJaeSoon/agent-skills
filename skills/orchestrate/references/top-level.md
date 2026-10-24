@@ -46,6 +46,8 @@ Your reports and actions cover what you, your leads and their cards own (the ros
   - A trust prompt or another permission request: stop and surface the exact request through
     the inbox. A past approval for another machine, repository or date is not authorization.
     Do not send acceptance keys or change global trust settings on the user's behalf.
+    A prompt that blocks every start of one agent (Codex's hooks review or update screen)
+    is host-wide: surface it once, and start the round's remaining workers on another agent.
   - A shell prompt or a bracketed-paste remnant instead of the agent: report the unconfirmed
     start and its visible cause. Resume only through the supported startup procedure after
     the user resolves any permission request; do not treat a tool prompt as an agent prompt.

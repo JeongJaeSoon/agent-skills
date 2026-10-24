@@ -48,6 +48,8 @@ ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a pa
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
             through `orch heavy <slug> -- <command>`, which caps them machine-wide.
+            A browser check runs `orch hold browser --note "<what it checks>"` first and opens
+            the browser only once that prints held; `orch release browser` when done.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
@@ -147,6 +149,7 @@ SCOPE       Its worktree and branch; the paths it may write and the paths it may
 CONTEXT     Files, PRs and links to read. The facts you already have, pasted.
 ACCEPTANCE  Checkable criteria, one per line.
 VERIFY      Exact commands, and the output that proves each criterion.
+            A browser check: `orch hold browser` before opening it, `orch release browser` after.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 FORBIDDEN   Other work. No force-push. Nothing sent outside Orca. The refused-act paragraph of the
             program brief's FORBIDDEN above, pasted verbatim. <unit-specific bans>
@@ -222,7 +225,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 
 - The spec starts with the ticket ID, never `/`: Orca delivers a `worker-start` spec as the task. A card made with `orca worktree create` starts with `/goal` instead, its APPROVED line in that first prompt or the brief it names (`dispatch-card` §2). The second line, `PROGRAM: <slug>`, is how the user's own skills (`deliver-ticket`, `handoff-ticket`) know they are running inside a program. Nothing else switches them.
 - Name no model for the worker to call, and leave out a "use a cheap model for X" hint: one made a worker call that model again and again with nothing to gain. MODEL CALLS says when another model is worth calling.
-- The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker. Lanes share that browser and its logins, so a worker takes it with `orch hold browser --note "<what it checks>"` before driving it and `orch release browser` when done. `hold` refuses while another lane has it and names the holder: wait for it or ask that lane, never drive over its session.
+- The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker. Lanes share that browser and its logins, so a worker takes it with `orch hold browser --note "<what it checks>"` before driving it and `orch release browser` when done (the VERIFY line in both templates). `hold` refuses while another lane has it and names the holder: wait for it or ask that lane, never drive over its session.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless, unrelated to the ticket. Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
 - **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
