@@ -614,7 +614,7 @@ def evidence_problems(cfg, repo, pr):
     """(problems, notes) from the PR's sticky test-results comment. The brief's rule alone once let a screen
     change land with no screenshot, so land checks it: an image for a visual change unless a person labelled
     the PR no-visual-change, and each failed CI run of the branch named with what resolved it."""
-    v = gh_json("pr", "view", str(pr), "--repo", repo, "--json", "headRefName,labels,comments,commits")
+    v = gh_json("pr", "view", str(pr), "--repo", repo, "--json", "headRefName,labels,comments")
     # The first marker comment, the one sticky-comment.sh keeps updating.
     body = next((c.get("body") or "" for c in v.get("comments") or [] if TEST_RESULTS in (c.get("body") or "")), "")
     problems, notes = [], []
@@ -629,7 +629,8 @@ def evidence_problems(cfg, repo, pr):
                         f" {'renders no image' if body else 'does not exist'}: upload the screenshots into it"
                         f" (deliver-ticket visual-evidence); only a person exempts it, with the label {NO_VISUAL}")
     # The branch name alone also matches a fork's `main` or an earlier PR's reused branch; keep this PR's commits.
-    shas = {c.get("oid") for c in v.get("commits") or []}
+    # pr view returns the oldest 100 commits only; the REST listing pages up to 250, newest included.
+    shas = set(run(["gh", "api", f"repos/{repo}/pulls/{pr}/commits", "--paginate", "--jq", ".[].sha"]).stdout.split())
     runs = gh_json("run", "list", "--repo", repo, "--branch", v["headRefName"], "--json", "databaseId,conclusion,name,headSha",
                    "--limit", "200")
     unexplained = [f"{r['databaseId']} ({r.get('name')} {r['conclusion']})" for r in runs

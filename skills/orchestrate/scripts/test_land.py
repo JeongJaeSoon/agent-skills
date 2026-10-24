@@ -20,10 +20,12 @@ if flaky.get(" ".join(a[:2])):
     sys.exit('Post "https://api.github.com/graphql": net/http: TLS handshake timeout')
 if a[:2] == ["pr", "list"]:
     print(json.dumps([dict(p, number=int(n)) for n, p in st["prs"].items() if p["state"] == "OPEN"]))
-elif a[:2] == ["pr", "view"] and a[-1] == "headRefName,labels,comments,commits":
+elif a[:2] == ["pr", "view"] and a[-1] == "headRefName,labels,comments":
     p = pr(a[2])
-    print(json.dumps({"headRefName": f"b{a[2]}", "commits": [{"oid": f"h{a[2]}"}, {"oid": f"old{a[2]}"}],
+    print(json.dumps({"headRefName": f"b{a[2]}",
                       "labels": [{"name": l} for l in p.get("labels", [])], "comments": [{"body": b} for b in p.get("comments", [])]}))
+elif a[:1] == ["api"] and a[1].endswith("/commits"):
+    n = a[1].split("/pulls/")[1].split("/")[0]; print(f"old{n}\nh{n}")
 elif a[:1] == ["api"] and a[1].endswith("/files"):
     print("\n".join(pr(a[1].split("/pulls/")[1].split("/")[0])["files"]))
 elif a[:2] == ["pr", "view"] and a[-1] == "files":

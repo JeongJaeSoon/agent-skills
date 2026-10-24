@@ -108,7 +108,7 @@ Rebase conflicts change the patch-id. That voids the verdict, so the resolution 
 `land` and `land-check` also read the PR's sticky `<!-- test-results -->` comment (`deliver-ticket` §5):
 
 - A PR that changes a file matching `visual_paths` (default `apps/web/*`, `*.css`, `*.stories.*`, `packages/ui/*`) needs at least one image that comment renders: markdown `![](https://…)` or `<img src="https://…">`, outside code blocks. Text saying screenshots were taken does not count. Only a person exempts a PR, with the label `no-visual-change`; `land` then prints the exemption. A worker never adds that label: `land` sees only that the label is there, not who added it. The first comment carrying the marker counts, the one `sticky-comment.sh` updates.
-- Every failed run (`failure`, `timed_out`, `startup_failure`) at one of the PR's commits needs a line in that comment naming the run id and what resolved it. A run re-run to green shows only its last attempt, so it is not listed.
+- Every failed run (`failure`, `timed_out`, `startup_failure`) at one of the PR's commits needs a line in that comment naming the run id and what resolved it. A run re-run to green shows only its last attempt, and a run at a commit a rebase dropped is no longer the PR's, so neither is listed.
 
 ## Main red: the guardian decides, the coordinator coordinates
 
