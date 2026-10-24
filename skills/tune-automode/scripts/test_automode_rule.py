@@ -176,6 +176,32 @@ class ReplaceTest(Base):
         self.assertEqual(self.settings.read_bytes(), before)
         self.assertEqual(self.backups(), [])
 
+    def test_merge_two_rules_into_one(self):
+        data = json.loads(self.settings.read_text())
+        data["autoMode"]["allow"].append(RULE)
+        self.settings.write_text(json.dumps(data))
+        spec = {"replace": [{"section": "allow", "old": self.OLD, "new": self.NEW}],
+                "remove": [{"section": "allow", "rule": RULE}]}
+        r = self.apply(spec)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.automode()["allow"], ["$defaults", self.NEW])
+
+    def test_remove_without_match_refused(self):
+        before = self.settings.read_bytes()
+        r = self.apply({"remove": [{"section": "allow", "rule": "no such rule"}]})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not found", r.stderr)
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertEqual(self.backups(), [])
+
+    def test_remove_from_missing_section_refused(self):
+        data = json.loads(self.settings.read_text())
+        del data["autoMode"]["environment"]
+        self.settings.write_text(json.dumps(data))
+        r = self.apply({"remove": [{"section": "environment", "rule": "x"}]})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("environment", self.automode())
+
 
 class SpecValidationTest(Base):
     def refused(self, spec):
@@ -187,6 +213,12 @@ class SpecValidationTest(Base):
 
     def test_defaults_cannot_be_replaced(self):
         self.refused({"replace": [{"section": "allow", "old": "$defaults", "new": "x"}]})
+
+    def test_defaults_cannot_be_removed(self):
+        self.refused({"remove": [{"section": "allow", "rule": "$defaults"}]})
+
+    def test_remove_item_shape_checked(self):
+        self.refused({"remove": [{"section": "allow", "old": "x"}]})
 
     def test_defaults_cannot_be_added(self):
         self.refused({"add": {"allow": ["$defaults"]}})
