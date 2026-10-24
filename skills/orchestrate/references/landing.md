@@ -100,10 +100,15 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 |---|---|---|
 | 0 | Landed. It printed the merge commit and the main-CI watch command. | Watch main CI, `record main_green\|main_red --sha`, finish the ticket, `worker_done` |
 | 2 | Yield: CI still running, a dependency or the stack top first, another PR holds the exclusive lane, or GitHub did not answer (timeout, 5xx) | Nothing. Keep the `--wait-minutes` loop |
-| 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again |
+| 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, missing evidence in the test-results comment, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again |
 | 1 | Refused: STOP line, main red (only `--class main-fix` lands), or the human gate | Report and stop |
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
+
+`land` and `land-check` also read the PR's sticky `<!-- test-results -->` comment (`deliver-ticket` §5):
+
+- A PR that changes a file matching `visual_paths` (default `apps/web/*`, `*.css`, `*.stories.*`, `packages/ui/*`) needs at least one image that comment renders: markdown `![](https://…)` or `<img src="https://…">`, outside code blocks. Text saying screenshots were taken does not count. Only a person exempts a PR, with the label `no-visual-change`; `land` then prints the exemption. A worker never adds that label: `land` sees only that the label is there, not who added it. The first comment carrying the marker counts, the one `sticky-comment.sh` updates.
+- Every failed run (`failure`, `timed_out`, `startup_failure`) at one of the PR's commits needs a line in that comment naming the run id and what resolved it. A run re-run to green shows only its last attempt, and a run at a commit a rebase dropped is no longer the PR's, so neither is listed.
 
 ## Main red: the guardian decides, the coordinator coordinates
 
@@ -125,7 +130,7 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
   - `HELD` lines are PRs on hold (`record parked`). They do not count as stale, so they never block spawning; close a superseded one on GitHub so it leaves the land order.
 - A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
 - Merges you did not make: `land` records a PR that was merged outside it.
-- Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `heavy_slots`.
+- Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `visual_paths` (`orch set <slug> visual_paths a/*,b/*`), `heavy_slots`.
 - Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it. A shared JSON file overwritten in place was once left empty mid-write.
 
 ## human-gate
