@@ -20,10 +20,12 @@ if flaky.get(" ".join(a[:2])):
     sys.exit('Post "https://api.github.com/graphql": net/http: TLS handshake timeout')
 if a[:2] == ["pr", "list"]:
     print(json.dumps([dict(p, number=int(n)) for n, p in st["prs"].items() if p["state"] == "OPEN"]))
-elif a[:2] == ["pr", "view"] and a[-1] == "headRefName,files,labels,comments":
+elif a[:2] == ["pr", "view"] and a[-1] == "headRefName,labels,comments,commits":
     p = pr(a[2])
-    print(json.dumps({"headRefName": f"b{a[2]}", "files": [{"path": f} for f in p["files"]],
+    print(json.dumps({"headRefName": f"b{a[2]}", "commits": [{"oid": f"h{a[2]}"}, {"oid": f"old{a[2]}"}],
                       "labels": [{"name": l} for l in p.get("labels", [])], "comments": [{"body": b} for b in p.get("comments", [])]}))
+elif a[:1] == ["api"] and a[1].endswith("/files"):
+    print("\n".join(pr(a[1].split("/pulls/")[1].split("/")[0])["files"]))
 elif a[:2] == ["pr", "view"] and a[-1] == "files":
     print(json.dumps({"files": [{"path": f} for f in pr(a[2])["files"]]}))
 elif a[:2] == ["pr", "view"] and "--jq" in a and a[a.index("--jq") + 1] == ".state":
@@ -401,6 +403,14 @@ for comments in ([SHOT], ["<!-- test-results -->\n<img width=600 src=\"https://x
 d, env = setup({"43": shown(43, ["![x](https://x/a.png)", "<!-- test-results -->\nok"])})
 verdict(d, 43, "T-43")
 assert prog(env, "land", "t", "--pr", "43")[0] == 3
+# Of two marker comments, land reads the first: the one sticky-comment.sh updates. A later one cannot pass it.
+d, env = setup({"43": shown(43, ["<!-- test-results -->\nok", SHOT])})
+verdict(d, 43, "T-43")
+assert prog(env, "land", "t", "--pr", "43")[0] == 3
+d, env = setup({"43": shown(43, files=["src/x.py"] * 120 + ["packages/ui/late.tsx"])})
+verdict(d, 43, "T-43")
+code, out = prog(env, "land", "t", "--pr", "43")
+assert code == 3 and "packages/ui/late.tsx" in out, out
 # Every default visual path counts, and visual_paths replaces them.
 for f in ("packages/ui/button.tsx", "src/app.css", "src/Button.stories.tsx"):
     d, env = setup({"44": shown(44, files=[f])})
@@ -408,6 +418,8 @@ for f in ("packages/ui/button.tsx", "src/app.css", "src/Button.stories.tsx"):
     assert prog(env, "land", "t", "--pr", "44")[0] == 3, f
 d, env = setup({"45": shown(45, files=["site/page.tsx"])})
 verdict(d, 45, "T-45")
+code, out = prog(env, "set", "t", "visual_paths", ",")
+assert code == 1 and "cannot be empty" in out, out
 prog(env, "set", "t", "visual_paths", "site/*")
 code, out = prog(env, "land", "t", "--pr", "45")
 assert code == 3 and "changes the screen (site/page.tsx)" in out, out
@@ -420,20 +432,23 @@ code, out = prog(env, "land-check", "t", "--pr", "46")
 assert "note: #46 changes the screen" in out and "exempt" in out, out
 # A failed CI run of the branch needs a line with its id and what resolved it, visual change or not.
 for body, ok in (("", False), ("<!-- test-results -->\nrun 555 failed", False),
+                 ("<!-- test-results -->\n- run 15559: flaky docker pull, rerun passed", False),
                  ("<!-- test-results -->\n- https://github.com/o/r/actions/runs/555: flaky docker pull, rerun 556 passed", True)):
     p = pr(47); p["comments"] = [body] if body else []
     d, env = setup({"47": p})
     st = json.loads((d / "state.json").read_text())
-    st["branch_runs"] = {"b47": [{"databaseId": 555, "conclusion": "failure", "name": "CI"},
-                                 {"databaseId": 556, "conclusion": "success", "name": "CI"},
-                                 {"databaseId": 557, "conclusion": "cancelled", "name": "CI"}]}
+    st["branch_runs"] = {"b47": [{"databaseId": 555, "conclusion": "failure", "name": "CI", "headSha": "old47"},
+                                 {"databaseId": 556, "conclusion": "success", "name": "CI", "headSha": "h47"},
+                                 {"databaseId": 557, "conclusion": "cancelled", "name": "CI", "headSha": "h47"},
+                                 # Same branch name, another PR's commit (a fork's main, a reused branch).
+                                 {"databaseId": 558, "conclusion": "failure", "name": "CI", "headSha": "elsewhere"}]}
     (d / "state.json").write_text(json.dumps(st))
     verdict(d, 47, "T-47")
     code, out = prog(env, "land", "t", "--pr", "47")
     if ok:
         assert code == 0 and "landed #47" in out, out
     else:
-        assert code == 3 and "555 (CI failure)" in out and "557" not in out, (body, out)
+        assert code == 3 and "555 (CI failure)" in out and "557" not in out and "558" not in out, (body, out)
 # A stack checks every layer it lands.
 d, env = setup({"48": dict(shown(48), stacked=True),
                 "49": dict(pr(49, base="b48", stacked=True), comments=[], labels=[])}, stacks=[[48, 49]])

@@ -604,7 +604,8 @@ def rendered_images(body):
 def explained(body, run_id):
     """A line names the run and says something beyond its id and link."""
     for line in body.splitlines():
-        if run_id in line and len(re.findall(r"\w", re.sub(r"https?://\S+", " ", line).replace(run_id, " "))) >= 10:
+        if re.search(rf"(?<!\d){run_id}(?!\d)", line) and \
+                len(re.findall(r"\w", re.sub(r"https?://\S+", " ", line).replace(run_id, " "))) >= 10:
             return True
     return False
 
@@ -613,21 +614,27 @@ def evidence_problems(cfg, repo, pr):
     """(problems, notes) from the PR's sticky test-results comment. The brief's rule alone once let a screen
     change land with no screenshot, so land checks it: an image for a visual change unless a person labelled
     the PR no-visual-change, and each failed CI run of the branch named with what resolved it."""
-    v = gh_json("pr", "view", str(pr), "--repo", repo, "--json", "headRefName,files,labels,comments")
-    body = next((c.get("body") or "" for c in reversed(v.get("comments") or []) if TEST_RESULTS in (c.get("body") or "")), "")
+    v = gh_json("pr", "view", str(pr), "--repo", repo, "--json", "headRefName,labels,comments,commits")
+    # The first marker comment, the one sticky-comment.sh keeps updating.
+    body = next((c.get("body") or "" for c in v.get("comments") or [] if TEST_RESULTS in (c.get("body") or "")), "")
     problems, notes = [], []
     pats = knob(cfg, "visual_paths")
-    visual = [f["path"] for f in v.get("files") or [] if any(fnmatch.fnmatch(f["path"], g) for g in pats)]
+    # pr view stops at 100 files; the REST listing pages up to 3000.
+    files = run(["gh", "api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"]).stdout.split("\n")
+    visual = [f for f in files if f and any(fnmatch.fnmatch(f, g) for g in pats)]
     if visual and NO_VISUAL in {l.get("name") for l in v.get("labels") or []}:
         notes.append(f"#{pr} changes the screen ({', '.join(visual[:3])}) and is exempt from screenshots by label {NO_VISUAL}")
     elif visual and not rendered_images(body):
         problems.append(f"#{pr} changes the screen ({', '.join(visual[:3])}) but its {TEST_RESULTS} comment"
                         f" {'renders no image' if body else 'does not exist'}: upload the screenshots into it"
                         f" (deliver-ticket visual-evidence); only a person exempts it, with the label {NO_VISUAL}")
-    runs = gh_json("run", "list", "--repo", repo, "--branch", v["headRefName"], "--json", "databaseId,conclusion,name",
+    # The branch name alone also matches a fork's `main` or an earlier PR's reused branch; keep this PR's commits.
+    shas = {c.get("oid") for c in v.get("commits") or []}
+    runs = gh_json("run", "list", "--repo", repo, "--branch", v["headRefName"], "--json", "databaseId,conclusion,name,headSha",
                    "--limit", "200")
     unexplained = [f"{r['databaseId']} ({r.get('name')} {r['conclusion']})" for r in runs
-                   if r.get("conclusion") in FAILED_RUN and not explained(body, str(r["databaseId"]))]
+                   if r.get("conclusion") in FAILED_RUN and r.get("headSha") in shas
+                   and not explained(body, str(r["databaseId"]))]
     if unexplained:
         problems.append(f"#{pr} has failed CI runs its {TEST_RESULTS} comment does not account for:"
                         f" {', '.join(unexplained[:5])}; add a line per run with its id and what resolved it")
@@ -1153,6 +1160,8 @@ def cmd_set(argv):
     conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split}.get(key, str)
     if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check"):
         sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check")
+    if key == "visual_paths" and not conv(value):
+        sys.exit("visual_paths cannot be empty: the screenshot check has no off switch, only the no-visual-change label")
     if key in ("exclusive_paths", "visual_paths"):
         p.update(lambda cfg: cfg.setdefault("landing", {}).__setitem__(key, conv(value)))
     else:
