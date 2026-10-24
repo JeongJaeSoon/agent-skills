@@ -441,7 +441,7 @@ with tempfile.TemporaryDirectory() as tmp:
     wt = os.path.realpath(tmp)
     reap.cwds, reap.shutil.which = (lambda: {}), (lambda name: "/bin/" + name)
     reap.orca_json = lambda *a: {"worktrees": []}
-    reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "live": live}
+    reap.worktree_facts = lambda path, pr, live, cwd_of, **kw: {"main": False, "repo": "/r", **ok, "live": live}
     for workers, target, why in ((None, False, "워커 목록을 읽지 못함"), ([], True, "PR acme/app#2 merged (ledger)")):
         reap.orca_workers = lambda state=None: workers
         got = reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get)
@@ -463,7 +463,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # A no-PR card is judged by how long its sessions have been quiet, floored at NO_PR_MIN_HOURS even under --hours 0.
     reap.orca_workers = lambda state=None: [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::" + wt}}]
     reap.orca_json = lambda *a: {"worktrees": []}
-    reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "pr": None, "landed": True, "live": live}
+    reap.worktree_facts = lambda path, pr, live, cwd_of, **kw: {"main": False, "repo": "/r", **ok, "pr": None, "landed": True, "live": live}
     for idle, hours, target in ((3 * 3600, 0, True), (3600, 0, False), (3 * 3600, 6, False), (7 * 3600, 6, True)):
         got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, hours=hours, quiet=lambda p, i=idle: i)
         assert [i["target"] for i in got] == [target], (idle, hours, got)
@@ -506,7 +506,7 @@ with tempfile.TemporaryDirectory() as tmp:
     wt = os.path.realpath(tmp)
     reap.cwds, reap.shutil.which = (lambda: {77: wt}), (lambda name: "/bin/" + name)
     reap.orca_json = lambda *a: {"worktrees": []}
-    reap.worktree_facts = lambda path, pr, live, cwd_of: {"main": False, "repo": "/r", **ok, "turn": live, "users": [77],
+    reap.worktree_facts = lambda path, pr, live, cwd_of, **kw: {"main": False, "repo": "/r", **ok, "turn": live, "users": [77],
                                                           "live": live or "pid 77 이 이 worktree 를 cwd 로 사용 중"}
     entries = [e("orca-worktree", wt, pr="acme/app#2")]
     scan_dc = lambda workers, entries=entries: (setattr(reap, "orca_workers", lambda state=None: workers) or
@@ -670,6 +670,8 @@ assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck --st
 joined = " ".join(argv)
 assert "env " not in joined and not re.search(r"(^|[\s`])[A-Z_]{2,}=", joined), joined
 assert "`python3 /abs/reap.py reap --plan /s/janitor-plan.json --state /s --ledger /l/ledger.jsonl`" in joined, joined
+# Orca's 60-second default cut off every precheck once the cards passed 40.
+assert argv[argv.index("--precheck-timeout") + 1] == "300"
 default = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo", ledger=reap.STATE_HOME / "ledger.jsonl")
 assert default[default.index("--precheck") + 1] == "python3 /abs/reap.py precheck", default
 
@@ -928,6 +930,106 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not (st / "reorient" / "s.json").exists() and (st / "sync.log.1").exists()
     again = cli("precheck", "--kinds", "program,state-file")
     assert again.returncode == 1 and again.stderr.count("하루 한 번") == 2, (again.stdout, again.stderr)
+
+# Orphans whose directory was removed: lsof still prints the old path, so its absence or another inode decides.
+with tempfile.TemporaryDirectory() as tmp:
+    live = os.path.realpath(tmp)
+    ino = os.stat(live).st_ino
+    rows = {1: row(1, "/usr/bin/node server.js"), 2: row(2, "/usr/bin/node a.js"), 3: row(3, "/usr/bin/node b.js"),
+            4: row(4, "/usr/bin/node c.js", age=H), 5: row(5, "/usr/bin/node d.js", ppid=77), 6: row(6, "/usr/bin/node e.js")}
+    cwd_of = {1: ("/nowhere/gone-card", 9), 2: (live, ino), 3: (live, ino + 1), 4: ("/nowhere/gone-card", 9),
+              5: ("/nowhere/gone-card", 9), 6: (live, None), 7: ("/Users/a/\\xed\\x95\\x9c dir", 9)}
+    rows[7] = row(7, "/usr/bin/node f.js")  # lsof's escape of a non-ASCII name is not a removed directory
+    got = {i["pid"]: (i["target"], i["why"]) for i in reap.judge_orphans(rows, [], 6, cwd_of)}
+    assert got == {1: (True, "ppid 1, cwd /nowhere/gone-card 가 사라짐"), 3: (True, f"ppid 1, cwd {live} 가 사라짐"),
+                   4: (False, "6시간 미만")}, got
+
+# A real orphan left in a removed directory is found from lsof and reaped by pid and start time.
+with tempfile.TemporaryDirectory() as tmp:
+    gone = pathlib.Path(os.path.realpath(tmp)) / "card"
+    gone.mkdir()
+    subprocess.run(["sh", "-c", f"cd '{gone}' && '{sys.executable}' -c 'import time; time.sleep(60)' &"], check=True)
+    time.sleep(1)
+    rows = reap.processes()
+    mine = [r for r in rows.values() if r["ppid"] == 1 and "time.sleep(60)" in r["cmd"]
+            and (reap.cwds() or {}).get(r["pid"]) == str(gone)]
+    assert len(mine) == 1, mine
+    gone.rmdir()
+    got = [i for i in reap.judge_orphans(rows, [], 0, reap.cwds(inodes=True)) if i["pid"] == mine[0]["pid"]]
+    assert len(got) == 1 and got[0]["target"] and "사라짐" in got[0]["why"], got
+    assert reap.kill_tree(got[0], []) == "종료" and mine[0]["pid"] not in reap.processes()
+
+# Regenerated copies: an untracked .agents/skills/<name>/ of a tracked .claude/skills/<name> is not a change.
+with tempfile.TemporaryDirectory() as tmp:
+    t = pathlib.Path(os.path.realpath(tmp))
+    repo, wt = t / "repo", t / "wt"
+    (repo / ".claude" / "skills" / "verify").mkdir(parents=True)
+    (repo / ".claude" / "skills" / "verify" / "SKILL.md").write_text("x")
+    git("init", "-q", "-b", "main", cwd=repo)
+    git("add", ".", cwd=repo)
+    git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "i", cwd=repo)
+    git("worktree", "add", "-q", "-b", "feat", str(wt), cwd=repo)
+    copy = wt / ".agents" / "skills" / "verify"
+    copy.mkdir(parents=True)
+    (copy / "SKILL.md").write_text("x")
+    gh = lambda cmd, cwd=None, check=True: "[]" if cmd[0] == "gh" else reap.run(cmd, cwd, check)
+    facts = reap.worktree_facts(str(wt), "acme/app#2", None, {}, git=gh)
+    assert not facts["dirty"] and facts["regenerated"] == [".agents/skills/verify"], facts
+    # The throwaway repo has no remote; what is under test is the copy, not the push.
+    item = reap.judge_orca_worktree(str(wt), "ledger", {**facts, "unpushed": False}, PRS.get)
+    assert item["target"] and item["regenerated"] == [".agents/skills/verify"] and ".agents/skills/verify" in item["how"][0], item
+    off = reap.worktree_facts(str(wt), "acme/app#2", None, {}, git=gh, regenerated=False)
+    assert off["dirty"] and off["regenerated"] == [], "reap.regenerated_untracked false keeps the old rule"
+    # Anything else untracked keeps the card: a copy of a skill the repo does not track, or a note beside the copy.
+    (wt / ".agents" / "skills" / "other").mkdir()
+    (wt / ".agents" / "skills" / "other" / "SKILL.md").write_text("x")
+    assert reap.worktree_facts(str(wt), "acme/app#2", None, {}, git=gh)["dirty"]
+    (wt / ".agents" / "skills" / "other" / "SKILL.md").unlink()
+    (wt / ".agents" / "skills" / "other").rmdir()
+    (wt / "notes.md").write_text("mine")
+    mixed = reap.worktree_facts(str(wt), "acme/app#2", None, {}, git=gh)
+    assert mixed["dirty"] and reap.judge_orca_worktree(str(wt), "ledger", {**mixed, "unpushed": False}, PRS.get)["why"] == "변경 있음(추적 안 되는 파일 포함)"
+    # reap judges again just before it acts: a file written since the scan stops it with nothing moved.
+    calls, real_run = [], reap.run
+    reap.run = lambda cmd, cwd=None, check=True: calls.append(cmd) or "" if cmd[0] == "orca" else real_run(cmd, cwd, check)
+    os.environ["AGENT_SKILLS_TRASH"] = str(t / "trash")
+    try:
+        try:
+            reap.act(item, [])
+            raise AssertionError("a new untracked file must stop the reap")
+        except RuntimeError as err:
+            assert "남김" in str(err) and copy.exists() and calls == [], err
+        (wt / "notes.md").unlink()
+        out = reap.act(item, [])
+    finally:
+        reap.run = real_run
+        del os.environ["AGENT_SKILLS_TRASH"]
+    assert not copy.exists() and (t / "trash" / "verify" / "SKILL.md").exists() and "재생성 사본 1개" in out, out
+    assert calls == [["orca", "worktree", "rm", "--worktree", f"path:{wt}", "--run-hooks", "--json"]], calls
+
+# Facts are read in parallel; the items and their order are what one reader gives, in less time.
+saved = reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json, reap.FACT_WORKERS
+with tempfile.TemporaryDirectory() as tmp:
+    paths = [os.path.join(os.path.realpath(tmp), f"wt{n:02d}") for n in range(16)]
+    for path in paths:
+        os.mkdir(path)
+    reap.cwds, reap.shutil.which = (lambda: {}), (lambda name: "/bin/" + name)
+    reap.orca_workers = lambda state=None: []
+    reap.orca_json = lambda *a: {"worktrees": []}
+    def slow_facts(path, pr, live, cwd_of, **kw):
+        time.sleep(0.2)
+        n = int(path[-2:])
+        return {"main": False, "repo": "/r", "pr": pr, "live": live, "dirty": n % 3 == 0, "unpushed": False, "head": "h2"}
+    reap.worktree_facts = slow_facts
+    entries = [e("orca-worktree", p, pr="acme/app#1" if int(p[-2:]) % 4 == 0 else "acme/app#2") for p in paths]
+    runs = []
+    for workers in (1, reap.FACT_WORKERS):
+        reap.FACT_WORKERS = workers
+        t0 = time.time()
+        runs.append((reap.janitor_scan({"orca-worktree"}, [], entries, [], PRS.get), time.time() - t0))
+    assert runs[0][0] == runs[1][0] and [i["name"] for i in runs[1][0]] == paths, runs
+    assert runs[1][1] < runs[0][1] / 3, [r[1] for r in runs]
+reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json, reap.FACT_WORKERS = saved
 
 prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))
 assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
