@@ -39,6 +39,7 @@ The lane works like this:
 - Among waiting exclusive PRs, the land order decides who takes the lane next.
 - The holder keeps the lane from its first turn through the update, the restack (migrations) and CI, until it lands. Each attempt refreshes the lock. A holder idle for `exclusive_stale_minutes` (90) is presumed dead, and its lock is broken.
 - It lands only on the latest base: not behind at all.
+- A PR whose acceptance needs a proof at its exact head (live check, E2E) cannot land while other landings on its base come faster than one proof. After its first exit 3 for a moved base, stop retrying: ask the layer above to hold other landings on that base for one proof plus land, and record the hold in decisions.tsv. This is a window for one PR, not a serialized lane.
 
 Normal-lane PRs never wait for the exclusive lane.
 
