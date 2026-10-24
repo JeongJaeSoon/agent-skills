@@ -20,6 +20,10 @@ if flaky.get(" ".join(a[:2])):
     sys.exit('Post "https://api.github.com/graphql": net/http: TLS handshake timeout')
 if a[:2] == ["pr", "list"]:
     print(json.dumps([dict(p, number=int(n)) for n, p in st["prs"].items() if p["state"] == "OPEN"]))
+elif a[:2] == ["pr", "view"] and a[-1] == "headRefName,files,labels,comments":
+    p = pr(a[2])
+    print(json.dumps({"headRefName": f"b{a[2]}", "files": [{"path": f} for f in p["files"]],
+                      "labels": [{"name": l} for l in p.get("labels", [])], "comments": [{"body": b} for b in p.get("comments", [])]}))
 elif a[:2] == ["pr", "view"] and a[-1] == "files":
     print(json.dumps({"files": [{"path": f} for f in pr(a[2])["files"]]}))
 elif a[:2] == ["pr", "view"] and "--jq" in a and a[a.index("--jq") + 1] == ".state":
@@ -42,6 +46,8 @@ elif a[:1] == ["api"] and "/compare/" in a[1]:
         p = pr(right[1:])
         print(json.dumps({"behind_by": p.get("behind", 0), "merge_base_commit": {"sha": "mb"},
                           "files": [{"filename": f} for f in p["files"]]}))
+elif a[:2] == ["run", "list"] and "--branch" in a:
+    print(json.dumps(st.get("branch_runs", {}).get(a[a.index("--branch") + 1], [])))
 elif a[:2] == ["run", "list"]:
     print(json.dumps(st.get("runs", {}).get(a[a.index("--commit") + 1], [{"name": "CI", "status": "completed"}])))
 elif a[:1] == ["api"] and a[-1].endswith("cli_internal/pulls/stacks"):
@@ -366,6 +372,74 @@ d, env = setup({"28": feat, "29": pr(29, base="feature/x")})
 verdict(d, 29, "T-29")
 code, out = prog(env, "land", "t", "--pr", "29")
 assert code == 0, out
+
+# Evidence: a screen change lands only with an image rendered in its test-results comment.
+SHOT = "<!-- test-results -->\n![members 1280](https://github.com/user-attachments/assets/abc)"
+def shown(n, comments=(), labels=(), files=("apps/web/src/members.tsx",)):
+    p = pr(n, files=list(files)); p["comments"] = list(comments); p["labels"] = list(labels)
+    return p
+d, env = setup({"40": shown(40)})
+verdict(d, 40, "T-40")
+code, out = prog(env, "land", "t", "--pr", "40")
+assert code == 3 and "changes the screen (apps/web/src/members.tsx)" in out and "does not exist" in out, out
+assert json.loads((d / "state.json").read_text())["prs"]["40"]["state"] == "OPEN"
+code, out = prog(env, "land-check", "t", "--pr", "40")
+assert code == 1 and "HOLD" in out and "changes the screen" in out, out
+# Words about screenshots, an image inside a code block or a comment, and a relative path render nothing.
+for body in ("<!-- test-results -->\n1280·390 캡처 40장", "<!-- test-results -->\n```\n![x](https://x/a.png)\n```",
+             "<!-- test-results -->\n<!-- ![x](https://x/a.png) -->", "<!-- test-results -->\n![x](shots/a.png)"):
+    d, env = setup({"41": shown(41, [body])})
+    verdict(d, 41, "T-41")
+    code, out = prog(env, "land", "t", "--pr", "41")
+    assert code == 3 and "renders no image" in out, (body, out)
+# Another comment's image does not count; the test-results one does, markdown or <img>.
+for comments in ([SHOT], ["<!-- test-results -->\n<img width=600 src=\"https://x/a.png\">"]):
+    d, env = setup({"42": shown(42, comments)})
+    verdict(d, 42, "T-42")
+    code, out = prog(env, "land", "t", "--pr", "42")
+    assert code == 0 and "landed #42" in out, (comments, out)
+d, env = setup({"43": shown(43, ["![x](https://x/a.png)", "<!-- test-results -->\nok"])})
+verdict(d, 43, "T-43")
+assert prog(env, "land", "t", "--pr", "43")[0] == 3
+# Every default visual path counts, and visual_paths replaces them.
+for f in ("packages/ui/button.tsx", "src/app.css", "src/Button.stories.tsx"):
+    d, env = setup({"44": shown(44, files=[f])})
+    verdict(d, 44, "T-44")
+    assert prog(env, "land", "t", "--pr", "44")[0] == 3, f
+d, env = setup({"45": shown(45, files=["site/page.tsx"])})
+verdict(d, 45, "T-45")
+prog(env, "set", "t", "visual_paths", "site/*")
+code, out = prog(env, "land", "t", "--pr", "45")
+assert code == 3 and "changes the screen (site/page.tsx)" in out, out
+# A person's no-visual-change label exempts it, and the output says so.
+d, env = setup({"46": shown(46, labels=["no-visual-change"])})
+verdict(d, 46, "T-46")
+code, out = prog(env, "land", "t", "--pr", "46")
+assert code == 0 and "exempt from screenshots by label no-visual-change" in out and "landed #46" in out, out
+code, out = prog(env, "land-check", "t", "--pr", "46")
+assert "note: #46 changes the screen" in out and "exempt" in out, out
+# A failed CI run of the branch needs a line with its id and what resolved it, visual change or not.
+for body, ok in (("", False), ("<!-- test-results -->\nrun 555 failed", False),
+                 ("<!-- test-results -->\n- https://github.com/o/r/actions/runs/555: flaky docker pull, rerun 556 passed", True)):
+    p = pr(47); p["comments"] = [body] if body else []
+    d, env = setup({"47": p})
+    st = json.loads((d / "state.json").read_text())
+    st["branch_runs"] = {"b47": [{"databaseId": 555, "conclusion": "failure", "name": "CI"},
+                                 {"databaseId": 556, "conclusion": "success", "name": "CI"},
+                                 {"databaseId": 557, "conclusion": "cancelled", "name": "CI"}]}
+    (d / "state.json").write_text(json.dumps(st))
+    verdict(d, 47, "T-47")
+    code, out = prog(env, "land", "t", "--pr", "47")
+    if ok:
+        assert code == 0 and "landed #47" in out, out
+    else:
+        assert code == 3 and "555 (CI failure)" in out and "557" not in out, (body, out)
+# A stack checks every layer it lands.
+d, env = setup({"48": dict(shown(48), stacked=True),
+                "49": dict(pr(49, base="b48", stacked=True), comments=[], labels=[])}, stacks=[[48, 49]])
+verdict(d, 48, "T-48"); verdict(d, 49, "T-49")
+code, out = prog(env, "land", "t", "--pr", "49")
+assert code == 3 and "#48 changes the screen" in out, out
 
 # dep is per ticket: a self edge is refused, and one already in the ledger does not hold the ticket.
 d, env = setup({"25": pr(25)})

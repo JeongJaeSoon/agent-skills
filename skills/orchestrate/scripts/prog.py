@@ -6,7 +6,7 @@ Usage: orch <command> <slug> [options]
   init <slug> --repo OWNER/NAME --run RUN_ID [--tracker-project NAME] [--tracker linear|jira]
               [--predicate ID,ID,...] [--merge-policy autonomous|human-gate] [--ceiling 6]
               [--deadline ISO8601] [--note NOTES_PATH] [--final-check TEXT]
-  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths|note|final_check> VALUE
+  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths|visual_paths|note|final_check> VALUE
                                      mirror a change made in the program note
   status <slug>                      predicate, flow, growth and the next move, from live sources
   record <slug> <event> [--ticket T] [--pr N] [--sha S] [--class K] [--role R] [--note TEXT]
@@ -34,7 +34,11 @@ Usage: orch <command> <slug> [options]
                                      conflict, deps landed, main not red), behind or not, unless the
                                      base changed files it also changes. Exclusive lane (migrations,
                                      CI, Dockerfile, compose, exclusive_paths, gates): one PR per
-                                     base at a time, on the latest base, in land order. Exit 0
+                                     base at a time, on the latest base, in land order. A PR
+                                     touching visual_paths needs an image in its test-results
+                                     comment (or a person's no-visual-change label), and every
+                                     failed CI run of its branch a line there naming the run id
+                                     and what resolved it. Exit 0
                                      landed, 2 yield (nothing to do yet), 3 act (fix, update or
                                      re-review now), 1 refused
   land-check <slug> --pr N [--main-fix]
@@ -317,7 +321,9 @@ KLASS = {"main-fix": 0, "gate": 1, "urgent": 2, "normal": 3}
 LANDING = {"aging_hours": 2.0, "stale_hours": 3.0, "max_backlog_hours": 2.0, "land_interval_minutes": 25,
            "exclusive_stale_minutes": 90, "heavy_slots": 2,
            # Changes that can break a merge they do not textually touch land one at a time, on the latest base.
-           "exclusive_paths": ["*migrations/*", ".github/*", "*Dockerfile*", "*compose*.yml", "*compose*.yaml"]}
+           "exclusive_paths": ["*migrations/*", ".github/*", "*Dockerfile*", "*compose*.yml", "*compose*.yaml"],
+           # A PR touching these changes what a person sees; fnmatch's * also crosses "/".
+           "visual_paths": ["apps/web/*", "*.css", "*.stories.*", "packages/ui/*"]}
 
 
 def knob(cfg, key):
@@ -582,6 +588,50 @@ def pr_files(repo, pr):
 def is_exclusive(cfg, files):
     pats = knob(cfg, "exclusive_paths")
     return sorted(f for f in files if any(fnmatch.fnmatch(f, g) for g in pats))
+
+
+TEST_RESULTS = "<!-- test-results -->"
+NO_VISUAL = "no-visual-change"
+FAILED_RUN = ("failure", "timed_out", "startup_failure")
+
+
+def rendered_images(body):
+    """Images the comment renders: markdown or <img> pointing at a URL, outside code and HTML comments."""
+    body = re.sub(r"(?s)<!--.*?-->|```.*?(```|$)|~~~.*?(~~~|$)|`[^`\n]*`", " ", body)
+    return re.findall(r"!\[[^\]]*\]\(\s*<?https?://[^)\s>]+|<img\b[^>]*\bsrc\s*=\s*[\"']?https?://", body, re.I)
+
+
+def explained(body, run_id):
+    """A line names the run and says something beyond its id and link."""
+    for line in body.splitlines():
+        if run_id in line and len(re.findall(r"\w", re.sub(r"https?://\S+", " ", line).replace(run_id, " "))) >= 10:
+            return True
+    return False
+
+
+def evidence_problems(cfg, repo, pr):
+    """(problems, notes) from the PR's sticky test-results comment. The brief's rule alone once let a screen
+    change land with no screenshot, so land checks it: an image for a visual change unless a person labelled
+    the PR no-visual-change, and each failed CI run of the branch named with what resolved it."""
+    v = gh_json("pr", "view", str(pr), "--repo", repo, "--json", "headRefName,files,labels,comments")
+    body = next((c.get("body") or "" for c in reversed(v.get("comments") or []) if TEST_RESULTS in (c.get("body") or "")), "")
+    problems, notes = [], []
+    pats = knob(cfg, "visual_paths")
+    visual = [f["path"] for f in v.get("files") or [] if any(fnmatch.fnmatch(f["path"], g) for g in pats)]
+    if visual and NO_VISUAL in {l.get("name") for l in v.get("labels") or []}:
+        notes.append(f"#{pr} changes the screen ({', '.join(visual[:3])}) and is exempt from screenshots by label {NO_VISUAL}")
+    elif visual and not rendered_images(body):
+        problems.append(f"#{pr} changes the screen ({', '.join(visual[:3])}) but its {TEST_RESULTS} comment"
+                        f" {'renders no image' if body else 'does not exist'}: upload the screenshots into it"
+                        f" (deliver-ticket visual-evidence); only a person exempts it, with the label {NO_VISUAL}")
+    runs = gh_json("run", "list", "--repo", repo, "--branch", v["headRefName"], "--json", "databaseId,conclusion,name",
+                   "--limit", "200")
+    unexplained = [f"{r['databaseId']} ({r.get('name')} {r['conclusion']})" for r in runs
+                   if r.get("conclusion") in FAILED_RUN and not explained(body, str(r["databaseId"]))]
+    if unexplained:
+        problems.append(f"#{pr} has failed CI runs its {TEST_RESULTS} comment does not account for:"
+                        f" {', '.join(unexplained[:5])}; add a line per run with its id and what resolved it")
+    return problems, notes
 
 
 def compare(repo, base, head):
@@ -1100,10 +1150,10 @@ def cmd_set(argv):
     if key == "merge_policy" and value not in ("autonomous", "human-gate"):
         sys.exit("merge_policy is autonomous or human-gate")
     split = lambda v: [x for x in v.split(",") if x]
-    conv = {"ceiling": int, "predicate": split, "exclusive_paths": split}.get(key, str)
-    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "note", "final_check"):
-        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, note, final_check")
-    if key == "exclusive_paths":
+    conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split}.get(key, str)
+    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check"):
+        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check")
+    if key in ("exclusive_paths", "visual_paths"):
         p.update(lambda cfg: cfg.setdefault("landing", {}).__setitem__(key, conv(value)))
     else:
         p.update(lambda cfg: cfg.__setitem__(key, conv(value)))
@@ -1375,6 +1425,15 @@ def attempt(p, pr, klass, onto_lower=False):
         todo = [ADVICE.get(r, r).format(pr=pr, repo=repo) for r in me["reasons"]]
         return 3, "act: " + " | ".join(todo)
     unit = (me["stack"] or [pr])[: (me["stack"] or [pr]).index(pr) + 1]
+    missing = []
+    for n in unit:
+        problems, notes = evidence_problems(cfg, repo, n)
+        missing += problems
+        for line in notes:
+            print(line, flush=True)
+    if missing:
+        note_attempt(p, events, pr, "blocked", missing)
+        return 3, "act: " + " | ".join(missing)
     touched = is_exclusive(cfg, [f for n in unit for f in pr_files(repo, n)])
     if bool(touched) != bool((st.get("lane") or {}).get("exclusive")):
         p.append("lane", pr=pr, exclusive=bool(touched), note=", ".join(touched[:5]) or None)
@@ -1497,6 +1556,10 @@ def cmd_land_check(argv):
         problems.append("CI failed: " + ", ".join(failed))
     if pending:
         problems.append("CI pending: " + ", ".join(pending[:5]))
+    missing, notes = evidence_problems(p.cfg, repo, pr)
+    problems += missing
+    for line in notes:
+        print(f"note: {line}")
     print(f"PR {v['url']} head {v['headRefOid'][:8]} mergeState {mss} runs {' '.join(runs) or '-'}")
     for r in runs:
         print(f"  read the log before landing: gh run view {r} --repo {repo} --log | tail -40")
