@@ -1257,6 +1257,11 @@ assert out.returncode == 0, out.stderr
 assert any(r.get("from") == "term_x" and r["text"] == "리뷰 부탁드립니다" for r in sent.read_log(now - dt.timedelta(minutes=5))), "stdin text logged"
 assert subprocess.run([sys.executable, "prog.py", "sent", "add", "--to", "x"], capture_output=True, text=True, stdin=subprocess.DEVNULL,
                       cwd=pathlib.Path(__file__).parent).returncode != 0
+# A slug, an unknown flag or bare text is refused with the usage line, and a refused kind names it too.
+for bad in (["demo", "--to", "x", "--text", "hi"], ["--to", "x", "--note", "hi"], ["--to", "x", "hi"], ["--to", "x", "--kind", "brief", "--text", "hi"]):
+    out = subprocess.run([sys.executable, "prog.py", "sent", "add", *bad], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                         cwd=pathlib.Path(__file__).parent)
+    assert out.returncode != 0 and "usage: orch sent add" in out.stderr, (bad, out.stderr)
 # The collector keeps the transcript rows for /api/fleet/sent and says how the read went.
 st = f.tick(force=True)
 assert f.sent == world.sent and st["sources"]["sent"]["ok"] and "sent" not in st, st["sources"]
