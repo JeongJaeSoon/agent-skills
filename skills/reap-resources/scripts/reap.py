@@ -19,7 +19,8 @@ action for its class.
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
-"user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2}.
+"user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2,
+"regenerated_untracked": true}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
 --parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
@@ -36,7 +37,7 @@ to the state dir and exits 0 when there are targets, except: the set the last re
 planned reap.plan_repeat times with no reap since, retried once a day, with one message to reap.inbox_to. schedule prints the
 `orca automations create` command; only --write runs it.
 """
-import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
+import concurrent.futures, contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ( "orphan", "docker", "branch", "worktree")
@@ -89,31 +90,46 @@ def processes():
     return rows
 
 
-def cwds():
-    """pid → cwd for this user's processes; None unless every one of them was read."""
+def cwds(inodes=False):
+    """pid → cwd for this user's processes; None unless every one of them was read.
+    inodes: pid → (cwd, inode of the directory the process is in, or None when unknown)."""
     if os.path.isdir("/proc/self"):
         out = {}
         for d in os.listdir("/proc"):
             try:
                 if d.isdigit() and os.stat(f"/proc/{d}").st_uid == os.getuid():
                     # A process left in a removed directory reads as "<path> (deleted)".
-                    out[int(d)] = os.readlink(f"/proc/{d}/cwd").removesuffix(" (deleted)")
+                    c = os.readlink(f"/proc/{d}/cwd").removesuffix(" (deleted)")
+                    out[int(d)] = (c, None) if inodes else c
             except FileNotFoundError:
                 pass
             except OSError:
                 return None
         return out
     lsof = shutil.which("lsof") or "/usr/sbin/lsof"
-    listing = run([lsof, "-a", "-u", str(os.getuid()), "-d", "cwd", "-Fpn"], check=False)
+    listing = run([lsof, "-a", "-u", str(os.getuid()), "-d", "cwd", "-Fpin"], check=False)
     if not listing:
         return None
-    out, pid = {}, None
+    out, pid, ino = {}, None, None
     for line in listing.splitlines():
         if line[:1] == "p":
-            pid = int(line[1:])
+            pid, ino = int(line[1:]), None
+        elif line[:1] == "i" and line[1:].isdigit():
+            ino = int(line[1:])
         elif line[:1] == "n" and pid:
-            out[pid] = line[1:]
+            out[pid] = (line[1:], ino) if inodes else line[1:]
     return out
+
+
+def cwd_gone(path, ino):
+    """The directory a process sits in was removed: lsof still prints the old path. One recreated at the same path is
+    another inode."""
+    try:
+        return ino is not None and os.stat(path).st_ino != ino
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
 
 
 def tree(root, rows):
@@ -150,17 +166,26 @@ def is_claude(cmd):
     return bool(argv) and (os.path.basename(argv[0]) == "claude" or "/@anthropic-ai/claude-code/" in argv[-1])
 
 
-def judge_orphans(rows, prefixes, hours):
+def judge_orphans(rows, prefixes, hours, cwd_of=None):
+    """cwd_of: pid → (cwd, inode) from cwds(inodes=True). A process reparented to 1 whose directory was removed (a
+    finished card's dev server, a review worktree's broker) has no session left to stop it."""
     pres = {x for p in prefixes for x in (p.rstrip("/"), real(p).rstrip("/"))}
     out = []
     for r in rows.values():
+        if r["ppid"] != 1:
+            continue
         # Only argv[0] and argv[1] (the script an interpreter runs) count. Looking past options would take an
         # option's value (a report file, a data dir) for the script.
         exe = r["cmd"].split()[:2]
-        if r["ppid"] != 1 or not any(under(e, p) for e in exe for p in pres):
+        cwd = (cwd_of or {}).get(r["pid"])
+        if any(under(e, p) for e in exe for p in pres):
+            why = "ppid 1, 테스트 캐시 경로"
+        elif cwd and cwd_gone(*cwd):
+            why = f"ppid 1, cwd {cwd[0]} 가 사라짐"
+        else:
             continue
         young = r["age"] < hours * 3600
-        out.append(proc_item("orphan", r, rows, name=r["cmd"][:80], why=f"{hours}시간 미만" if young else "ppid 1, 테스트 캐시 경로",
+        out.append(proc_item("orphan", r, rows, name=r["cmd"][:80], why=f"{hours}시간 미만" if young else why,
                              target=not young))
     return out
 
@@ -372,8 +397,11 @@ def scan(kinds, hours, cfg, repo_list):
     cwd_of = cwds() if "worktree" in kinds else {}
     if "orphan" in kinds:
         if not cfg.get("orphan_paths"):
-            notes.append(f"orphan: {CONFIG} 의 reap.orphan_paths 가 비어 있어 건너뜀")
-        items += judge_orphans(rows, cfg.get("orphan_paths") or [], hours)
+            notes.append(f"orphan: {CONFIG} 의 reap.orphan_paths 가 비어 있어 cwd 가 사라진 고아만 본다")
+        proc_cwds = cwds(inodes=True)
+        if proc_cwds is None:
+            notes.append("orphan: 프로세스 cwd 를 읽지 못함, cwd 가 사라진 고아는 보지 않는다")
+        items += judge_orphans(rows, cfg.get("orphan_paths") or [], hours, proc_cwds)
     if "docker" in kinds:
         items += docker_scan(hours, notes)
     if {"branch", "worktree"} & kinds:
@@ -390,6 +418,7 @@ def scan(kinds, hours, cfg, repo_list):
                 notes.append(f"{repo}: {e}")
     if set(JANITOR) & kinds:
         items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
+                              regenerated=cfg.get("regenerated_untracked", True) is not False,
                               evidence_roots=cfg.get("evidence_roots"),
                               done_idle_s=float(cfg.get("done_card_hours") or 2) * 3600)
     if "user-folder" in kinds:
@@ -672,6 +701,9 @@ def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
     base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
             "how": [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
                     f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
+    if facts.get("regenerated"):
+        base["regenerated"] = facts["regenerated"]
+        base["how"].insert(0, "다시 판정한 뒤 재생성 사본 " + " ".join(shlex.quote(c) for c in facts["regenerated"]) + " 을 휴지통으로")
     ref = facts.get("pr")
     s = pr_state(ref) if ref else None
     idle = facts.get("idle")
@@ -732,7 +764,31 @@ def close_line(why):
             "남은 일이 있으면 그것을 한 줄로 답한다")
 
 
-def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
+def regenerated_copies(path, git=run):
+    """Untracked `.agents/skills/<name>/` directories whose `.claude/skills/<name>` is tracked: Orca regenerates them
+    from the tracked skill. [] when nothing is untracked; None when anything else is, or a read failed."""
+    untracked = git(["git", "-C", path, "ls-files", "--others", "--exclude-standard", "-z"], check=False)
+    if untracked is None:
+        return None
+    names = set()
+    for f in filter(None, untracked.split("\0")):
+        parts = f.split("/")
+        if len(parts) < 4 or parts[:2] != [".agents", "skills"]:
+            return None
+        names.add(parts[2])
+    if not names:
+        return []
+    tracked = git(["git", "-C", path, "ls-files", "-z", "--", ".claude/skills", ".agents/skills"], check=False)
+    if tracked is None:
+        return None
+    have = {tuple(f.split("/")[:3]) for f in filter(None, tracked.split("\0"))}
+    # A tracked file beside them makes the directory the repo's own, not a copy.
+    if any((".claude", "skills", n) not in have or (".agents", "skills", n) in have for n in names):
+        return None
+    return sorted(f".agents/skills/{n}" for n in names)
+
+
+def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, regenerated=True):
     common = git(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=False)
     if common is None:
         return None
@@ -761,12 +817,15 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
                                               check=False) is not None
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
     status = git(["git", "-C", path, "status", "--porcelain"], check=False)
+    copies = None
+    if regenerated and status and all(line.startswith("?? ") for line in status.splitlines()):
+        copies = regenerated_copies(path, git)
     ahead = git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)
     return {"main": False, "repo": main, "pr": ref, "pr_unread": pr_unread, "landed": landed, "turn": live_turn, "users": users,
             "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
             # None is a failed read, not an empty answer.
             "unreadable": status is None or ahead is None,
-            "dirty": bool(status), "unpushed": bool(ahead),
+            "dirty": bool(status) and not copies, "regenerated": copies or [], "unpushed": bool(ahead),
             "head": (git(["git", "-C", path, "rev-parse", "HEAD"], check=False) or "").strip()}
 
 
@@ -831,8 +890,13 @@ def worker_worktrees(workers):
     return live, made, users
 
 
+# Each checkout costs a `gh pr list` and a few git reads, about a second; one after another, 40 cards ran past the
+# automation's precheck timeout.
+FACT_WORKERS = 8
+
+
 def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now=None, evidence_roots=None,
-                 done_idle_s=2 * 3600, quiet=None):
+                 done_idle_s=2 * 3600, quiet=None, regenerated=True):
     pr_state = pr_state or pr_reader()
     items = []
     rows = processes() if {"gui-app", "tmpdir"} & kinds else {}
@@ -875,11 +939,19 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         quiet = quiet or transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
                                           / "projects", now or time.time())
         repos_real = {real(r) for r in repo_list}
-        for path in sorted((set(ledger) | made | cards) - users - (runners or set())):
-            if not os.path.isdir(path):
-                continue
+
+        def read(path):
             e = ledger.get(path)
-            facts = worktree_facts(path, e and (e.get("links") or {}).get("pr"), live.get(path), cwd_of or {})
+            facts = worktree_facts(path, e and (e.get("links") or {}).get("pr"), live.get(path), cwd_of or {},
+                                   regenerated=regenerated)
+            if facts and facts.get("pr"):
+                pr_state(facts["pr"])  # fills the reader's cache here, in parallel
+            return facts
+        paths = [p for p in sorted((set(ledger) | made | cards) - users - (runners or set())) if os.path.isdir(p)]
+        with concurrent.futures.ThreadPoolExecutor(FACT_WORKERS) as pool:
+            all_facts = list(pool.map(read, paths))
+        for path, facts in zip(paths, all_facts):
+            e = ledger.get(path)
             if not facts or facts["main"] or (repos_real and real(facts["repo"]) not in repos_real):
                 continue
             if cwd_of is None and not facts["live"]:
@@ -1221,10 +1293,14 @@ def notify_unrun(inbox, command, send=run):
     return notify
 
 
+# Orca's default of 60 seconds is shorter than a precheck that reads `gh` and lsof for dozens of cards.
+PRECHECK_TIMEOUT = 300
+
+
 def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, inbox=None):
     return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", "17 */3 * * *",
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-            "--precheck", round_cmd(script, state_dir, ledger, "precheck"),
+            "--precheck", round_cmd(script, state_dir, ledger, "precheck"), "--precheck-timeout", str(PRECHECK_TIMEOUT),
             "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json"]
 
 
@@ -1463,12 +1539,21 @@ def act(item, notes):
         # `orca worktree rm` deletes ignored files (.env.local, notes, caches) for good; they go to the trash first.
         # Tracked files are in git, and anything untracked left makes the rm refuse.
         p = item["name"]
+        copies = []
+        if item.get("regenerated"):
+            # Judged again right here: a file written since the scan is someone's work, and goes nowhere.
+            copies = regenerated_copies(p)
+            if copies is None:
+                raise RuntimeError("재생성 사본 밖의 추적 안 되는 파일이 생김, 남김")
+            if copies:
+                trash(*(os.path.join(p, c) for c in copies))
         out = run(["git", "-C", p, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])
         ignored = [os.path.join(p, x.rstrip("/")) for x in out.split("\0") if x]
         if ignored:
             trash(*ignored)
         run(["orca", "worktree", "rm", "--worktree", f"path:{p}", "--run-hooks", "--json"])
-        return f"ignored 항목 {len(ignored)}개는 휴지통으로, worktree 는 orca worktree rm 으로 제거"
+        return (f"재생성 사본 {len(copies)}개, " if copies else "") + \
+            f"ignored 항목 {len(ignored)}개는 휴지통으로, worktree 는 orca worktree rm 으로 제거"
     if k.startswith("proc:"):
         return kill_tree(item, notes)
     if k.startswith("volume:"):
