@@ -167,8 +167,10 @@ PR, split the ticket — the other half becomes its own ticket with its own PR. 
 fine: one PR may close several tickets when the diff is inseparable. List every ticket id in
 the body.
 
-**Dependent PRs are a GitHub stack**, one ticket per layer, landed from the top in one merge;
-how to link, verify and land one is in [references/pull-request.md](references/pull-request.md).
+**Check the open PRs before opening one**: stack on a PR this change needs or that already
+covers its scope, instead of opening beside it. **Dependent PRs are a GitHub stack**, one ticket
+per layer, landed from the top in one merge; the check, and how to link, verify, restack and
+land one, are in [references/pull-request.md](references/pull-request.md).
 
 Post the results as a **sticky comment**:
 

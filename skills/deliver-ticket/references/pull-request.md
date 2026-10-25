@@ -25,6 +25,16 @@ every ticket id the PR closes.
 
 ## Stacks
 
+Before opening any PR, list the open ones (`gh pr list --state open --json number,title,headRefName,baseRefName,files`)
+and decide whether this change belongs on top of one:
+
+- An open PR already does this scope: do not open a second PR for it. Build on that PR's
+  branch and stack on it, or add to it when it is yours.
+- This change needs code from an open PR, or must land after it: stack it.
+  `gh pr create --base <lower branch>`, and the body's first line is `Stacked on #<lower>`
+  with the land order (`#<lower> → #<this>`).
+- Neither: base it on the default branch.
+
 Dependent PRs are a GitHub stack (one ticket per layer, stacked because the lower one must
 merge first), not just a PR whose base is another branch. After opening them, link them with
 the `gh stack` extension (`gh stack link <bottom> <top> --base main`, or `gh stack init` /
@@ -37,3 +47,9 @@ A stack lands from its top in one merge: once every layer is verified and green,
 merges the top and every layer below it; confirm each layer MERGED with `gh pr view`. Stacked
 PRs reject `gh pr merge`. Inside a program, `orch land <slug> --pr <top>` does this for you;
 never call merge-async by hand there.
+
+When a lower layer changes, bring the next one onto it (`gh pr update-branch <next>`, or merge
+the lower branch in) and re-verify it. When a lower layer merges on its own, run
+`gh pr edit <next> --base <default branch>` first, since a squash that deletes the lower
+branch closes a PR still based on it, then `gh pr update-branch <next>` so CI runs on the new
+base.
