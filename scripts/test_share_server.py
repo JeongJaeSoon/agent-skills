@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import http.client, http.server, os, pathlib, socket, sys, tempfile, threading, unittest
+import http.client, http.server, os, pathlib, socket, sys, tempfile, threading, time, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -19,7 +19,70 @@ class Groups(unittest.TestCase):
         self.assertEqual(ss.group_key("1280.png"), "1280")
 
 
+class Markdown(unittest.TestCase):
+    def test_blocks(self):
+        out = ss.md_html("# 제목\n\n- [x] 끝\n- 둘\n  - 셋\n\n1. **a**\n\n   이어서\n2. b\n\n> 인용\n\n```py\nx < 1\n```\n\n---")
+        self.assertIn("<h1>제목</h1>", out)
+        self.assertIn('<li><input type="checkbox" disabled checked> 끝</li><li>둘\n<ul><li>셋</li></ul></li>', out)
+        self.assertIn("<ol><li><p><strong>a</strong></p>\n<p>이어서</p></li><li><p>b</p></li></ol>", out)
+        self.assertIn("<blockquote><p>인용</p></blockquote>", out)
+        self.assertIn('<pre><code class="language-py">x &lt; 1</code></pre>', out)
+        self.assertTrue(out.endswith("<hr>"))
+
+    def test_table_keeps_pipes_in_code_and_escapes(self):
+        out = ss.md_html("| a | b |\n|:--|--:|\n| `x|y` | c \\| d |\n| 1 |")
+        self.assertIn('<th style="text-align:left">a</th><th style="text-align:right">b</th>', out)
+        self.assertIn("<td style=\"text-align:left\"><code>x|y</code></td><td style=\"text-align:right\">c | d</td>",
+                      out)
+        self.assertIn("<td style=\"text-align:left\">1</td><td style=\"text-align:right\"></td>", out)
+
+    def test_inline(self):
+        self.assertEqual(ss.inline("**굵게** *기울임* ~~취소~~ `a<b` \\`안 코드\\` snake_case_name"),
+                         "<strong>굵게</strong> <em>기울임</em> <del>취소</del> <code>a&lt;b</code> `안 코드` "
+                         "snake_case_name")
+        self.assertEqual(ss.inline("[`x`](https://e.test/a_(b)) https://e.test/q?a=1&b=2."),
+                         '<a href="https://e.test/a_(b)"><code>x</code></a> '
+                         '<a href="https://e.test/q?a=1&amp;b=2">https://e.test/q?a=1&amp;b=2</a>.')
+        self.assertEqual(ss.inline("a  \nb\\\nc"), "a  <br>\nb<br>\nc")
+
+    def test_link_text_is_formatted_but_not_autolinked(self):
+        self.assertEqual(ss.inline("[**https://e.test/a** <b>](https://e.test/a)"),
+                         '<a href="https://e.test/a"><strong>https://e.test/a</strong> &lt;b&gt;</a>')
+
+    def test_headings_tables_and_rules_need_their_full_shape(self):
+        self.assertEqual(ss.md_html("## 제목 ##"), "<h2>제목</h2>")
+        self.assertEqual(ss.md_html("# C#"), "<h1>C#</h1>")
+        self.assertEqual(ss.md_html("#태그"), "<p>#태그</p>")
+        self.assertEqual(ss.md_html("a | b\n---"), "<p>a | b</p>\n<hr>")
+
+    def test_adversarial_input_stays_fast_and_shallow(self):
+        cases = [" **a" * 20000, " ~~a" * 20000, " *a" * 20000, "# a" + " " * 20000 + "b",
+                 "a|b\n" + " " * 20000 + "x", "![" * 20000, "[" * 20000, "a" + " " * 20000 + "b",
+                 ">" * 3000 + " x", "".join("  " * k + "- x\n" for k in range(1500))]
+        # About 1 MB of paragraphs each under MAX_INLINE, so every inline pattern actually runs.
+        for unit in (" **a", " ~~a", " *a", " _a", "![", "[", "[a](", "<https://a", "`a", "a  "):
+            para = unit * (ss.MAX_INLINE // len(unit) - 1)
+            cases.append("\n\n".join([para] * (ss.MAX_SOURCE // len(para) - 1)))
+        for text in cases:
+            started = time.monotonic()
+            out = ss.md_html(text)
+            self.assertLess(time.monotonic() - started, 1, text[:20])
+            self.assertNotIn("<script", out)
+        self.assertTrue(ss.md_html("x" * (ss.MAX_SOURCE + 1)).startswith("<pre>"))
+        self.assertLessEqual(len(cases[-1]), ss.MAX_SOURCE)
+
+    def test_raw_html_and_unsafe_urls_are_inert(self):
+        out = ss.md_html('<script>alert(1)</script> [x](javascript:alert(1)) ![i](JavaScript:x) [r](../a.png)')
+        self.assertNotIn("<script", out)
+        self.assertIn("&lt;script&gt;", out)
+        self.assertIn('<a href="#">x</a>', out)
+        self.assertIn('<img src="#" alt="i">', out)
+        self.assertIn('<a href="../a.png">r</a>', out)
+
+
 class Server(unittest.TestCase):
+    REPORT = "# 보고서\n\n| 항목 | 결과 |\n|---|---|\n| 설치 | **VERIFIED** |\n\n<script>alert(1)</script>\n"
+
     @classmethod
     def setUpClass(cls):
         quiet = mock.patch.object(ss.Handler, "log_message")
@@ -52,7 +115,11 @@ class Server(unittest.TestCase):
         (root / "gal" / "to-hidden.png").symlink_to(root / "gal" / ".hidden.png")
         (root / ".git").mkdir()
         (root / ".git" / "config").write_text("x")
-        (root / "plain" / "report.md").write_text("r")
+        (root / "plain" / "report.md").write_text(cls.REPORT, encoding="utf-8")
+        for n in ("a.txt", "a.json", "a.csv", "a.log"):
+            (root / "plain" / n).write_text("한글", encoding="utf-8")
+        (root / ".private" / "notes.md").write_text("hidden")
+        (root / "plain" / "a.tar.gz").write_bytes(b"\x1f\x8b")
         (root / "site" / "index.html").write_text("<!doctype html><title>own page</title>")
         cls.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), lambda *a: ss.Handler(*a, root=str(root)))
         cls.port = cls.httpd.server_address[1]
@@ -65,10 +132,13 @@ class Server(unittest.TestCase):
         cls.tmp.cleanup()
 
     def get(self, path):
+        return self.fetch(path)[:2]
+
+    def fetch(self, path):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         c.request("GET", path)
         r = c.getresponse()
-        return r.status, r.read().decode(errors="replace")
+        return r.status, r.read().decode(errors="replace"), r.headers
 
     def raw(self, path):
         with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:
@@ -120,6 +190,42 @@ class Server(unittest.TestCase):
         self.assertIn('href="report.md"', body)
         self.assertNotIn('class="grid"', body)
         self.assertNotIn('id="lb"', body)
+
+    def test_markdown_is_rendered_as_utf8_html(self):
+        code, body, headers = self.fetch("/plain/report.md")
+        self.assertEqual(code, 200)
+        self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
+        self.assertNotIn("script-src", headers["Content-Security-Policy"])
+        self.assertIn("<h1>보고서</h1>", body)
+        self.assertIn("<td>설치</td><td><strong>VERIFIED</strong></td>", body)
+        self.assertNotIn("<script>", body)
+        self.assertIn('href="?raw"', body)
+
+    def test_raw_markdown_is_the_source(self):
+        for query in ("raw", "raw=1", "x&raw"):
+            code, body, headers = self.fetch(f"/plain/report.md?{query}")
+            self.assertEqual((code, body), (200, self.REPORT), query)
+            self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+    def test_text_files_declare_utf8(self):
+        for name, kind in (("a.txt", "text/plain"), ("a.json", "application/json"), ("a.csv", "text/csv"),
+                           ("a.log", "text/plain")):
+            code, body, headers = self.fetch(f"/plain/{name}")
+            self.assertEqual((code, body), (200, "한글"), name)
+            self.assertEqual(headers["Content-Type"], f"{kind}; charset=utf-8", name)
+        self.assertEqual(self.fetch("/site/")[2]["Content-Type"], "text/html")
+        self.assertEqual(self.fetch("/gal/y.jpg")[2]["Content-Type"], "image/jpeg")
+        self.assertEqual(self.fetch("/plain/a.tar.gz")[2]["Content-Type"], "application/gzip")
+
+    def test_oversized_markdown_is_sent_as_source(self):
+        with mock.patch.object(ss, "MAX_SOURCE", 10):
+            code, body, headers = self.fetch("/plain/report.md")
+        self.assertEqual((code, body), (200, self.REPORT))
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+
+    def test_hidden_markdown_is_refused(self):
+        self.assertEqual(self.get("/.private/notes.md")[0], 404)
+        self.assertEqual(self.get("/%2eprivate/notes.md?raw")[0], 404)
 
     def test_index_html_wins(self):
         code, body = self.get("/site/")
