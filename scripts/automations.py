@@ -19,6 +19,7 @@ REAP = REPO / "skills" / "reap-resources" / "scripts" / "reap.py"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REAP.parent))
 import preview_watch as pw  # noqa: E402
+import pressure  # noqa: E402
 import reap  # noqa: E402
 
 ORCA = os.environ.get("SKILLS_SETUP_ORCA", "orca")
@@ -192,7 +193,48 @@ class PreviewWatch:
                       else "끔 (watcher 가 연 serve 항목도 닫았다)")
 
 
-AUTOMATIONS = (Janitor(), PreviewWatch())
+# ---------------------------------------------------------------- pressure-watch (LaunchAgent)
+
+class PressureWatch:
+    name = "pressure-watch"
+    default = True
+    what = ("PC 사용량(load·메모리 압박·swap·디스크·컨테이너)을 모델 없이 재고, 높으면 reap 이 올린 안전한 대상만 "
+            "정리해 알리는 LaunchAgent(docs/pressure.md). 아무것도 종료하지 않고, 정리할 것이 없으면 상위 소비자만 알린다")
+
+    def status(self):
+        if sys.platform != "darwin":
+            return "unsupported", "macOS LaunchAgent 전용"
+        spec, loaded = pressure.plist_spec(), pressure.loaded()
+        if spec is None and not loaded:
+            return "absent", "등록 안 됨"
+        if not loaded:
+            return "off", f"{pressure.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
+        detail = f"{pressure.config()['interval']:g}초마다"
+        if main_checkout() and spec != pressure.spec(pressure.config()["interval"]):
+            script = next((a for a in (spec or {}).get("ProgramArguments", []) if a.endswith(".py")), "?")
+            detail += f" · 등록된 내용이 이 체크아웃과 다름: {script} (enable 로 다시 씀)"
+        return "on", detail
+
+    def enable(self, here):
+        if sys.platform != "darwin":
+            return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 cron 에서 `pressure.py round` 를 주기 실행한다"
+        if pressure.loaded() and pressure.plist_spec() == pressure.spec(pressure.config()["interval"]):
+            return 0, "이미 켜져 있음"
+        refusal = worktree_refusal(here)
+        if refusal:
+            return 1, refusal
+        code = pressure.cmd_install(here)
+        return code, "실패 (위 출력)" if code else "켬"
+
+    def disable(self):
+        if sys.platform != "darwin":
+            return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
+        if pressure.plist_spec() is None and not pressure.loaded():
+            return 0, "이미 꺼져 있음"
+        return pressure.cmd_uninstall(), "끔"
+
+
+AUTOMATIONS = (Janitor(), PreviewWatch(), PressureWatch())
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원"}
 
 

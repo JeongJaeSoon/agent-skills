@@ -343,10 +343,12 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, plan_fn=pl
         if not dry_run:
             out("\n## reap 결과\n")
             out("\n".join(done) or "- 정리된 것 없음 (모두 건너뜀 또는 실패)")
-        names = [f"{i['kind']} {i.get('name') or i['key']}" for i in targets] if dry_run else done
+        names = [reap.label(i) for i in targets] if dry_run else [line[2:] for line in done]
         if names:
+            # reap's label is "<kind> pid N (…) <cmd>" or "<kind> <name> (…)": the part before the details names it.
+            short = [n.split(" (")[0].split(": ")[0][:60] for n in names[:3]]
             message = ("status", f"PC 사용량 {LEVEL_KO[level]}: {'정리 예정' if dry_run else '정리함'} {len(names)}개 "
-                       f"({'; '.join(n.lstrip('- ')[:60] for n in names[:3])}{' 외' if len(names) > 3 else ''}) "
+                       f"({'; '.join(short)}{' 외' if len(names) > 3 else ''}) "
                        f"— 이유: {', '.join(why)}", "\n".join(names))
     elif targets is None:
         out("\n- 정리 대상을 읽지 못해 이번 회차는 정리하지 않음")

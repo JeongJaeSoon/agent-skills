@@ -37,6 +37,8 @@ hook은 swap과 디스크를 경고까지만 센다. 둘 다 몇 시간씩 높�
 
 ## 설치와 확인
 
+`skills-sync setup`의 `pressure-watch` 항목(기본 on)이다. `bootstrap.py --write`의 `apply`가 켜고, `skills-sync setup disable pressure-watch`로 끈다. 직접 부를 때:
+
 ```bash
 python3 <체크아웃>/skills/reap-resources/scripts/pressure.py install    # 메인 체크아웃에서. worktree면 거부한다
 python3 <체크아웃>/skills/reap-resources/scripts/pressure.py status
