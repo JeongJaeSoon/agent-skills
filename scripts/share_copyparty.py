@@ -24,14 +24,16 @@ def hidden(vpath):
     return any(p.startswith(".") for p in vpath.split("/"))
 
 
+def resolves_hidden(vn, rem):
+    root = os.path.realpath(vn.realpath)
+    rel = os.path.relpath(os.path.realpath(os.path.join(root, rem)), root)
+    return rel != "." and hidden(rel.replace(os.sep, "/"))
+
+
 def blocked(cli, resources_ok):
     if resources_ok and cli.vpath.split("/")[0] == ".cpr":  # GET serves these from copyparty itself, never the share
         return False
-    if hidden(cli.vpath):
-        return True
-    root = os.path.realpath(cli.vn.realpath)
-    rel = os.path.relpath(os.path.realpath(os.path.join(root, cli.rem)), root)
-    return rel != "." and hidden(rel.replace(os.sep, "/"))
+    return hidden(cli.vpath) or resolves_hidden(cli.vn, cli.rem)
 
 
 def handle_get(self):
@@ -48,7 +50,7 @@ def handle_post(self):
 
 
 def tx_zip(self, fmt, uarg, vpath, vn, rem, items):
-    kept = [i for i in items if not hidden(i)]
+    kept = [i for i in items if not hidden(i) and not resolves_hidden(vn, os.path.join(rem, i))]
     if items and not kept:  # copyparty reads an empty selection as the whole folder
         return self.tx_404()
     return _tx_zip(self, fmt, uarg, vpath, vn, rem, kept)

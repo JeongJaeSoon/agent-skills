@@ -183,6 +183,7 @@ class Live(unittest.TestCase):
         self.assertEqual(zip_of("/", ".git\n.private")[0], 404)  # not "the whole folder"
         self.assertEqual(zip_of("/.cpr/", "own.txt")[0], 404)
         self.assertEqual(zip_of("/gitlink/", "config")[0], 404)
+        self.assertEqual(zip_of("/", "gitlink\ntoklink")[0], 404)
         self.assertEqual(self.request("GET", "/.cpr/w/util.js")[0], 200)  # copyparty's own assets
 
     def test_listing_hides_dotfiles(self):
