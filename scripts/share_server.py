@@ -8,7 +8,7 @@ Usage:
 
 copyparty and its dependencies are pinned in PINS and installed into a venv under VENVS (venv_dir()). Everyone
 gets read access and nothing else: no accounts, uploads, deletes, moves or WebDAV. A folder's index.html opens
-instead of its listing, folders open as a thumbnail grid, and search covers file names and the first 64 KiB of
+instead of its listing, folders open as a thumbnail grid, and search covers file names and the first 4 KiB of
 text files (share_text_tag.py); a browser's plain link to a .md file opens rendered (share_copyparty.py). The
 search index and thumbnails live in HIST and copyparty's salts in STATE_DIR, both outside the shared folder.
 

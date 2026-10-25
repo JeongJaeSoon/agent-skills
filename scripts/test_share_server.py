@@ -106,6 +106,10 @@ class Live(unittest.TestCase):
         (root / ".private").write_text("dot-content")
         (root / ".git").mkdir()
         (root / ".git" / "config").write_text("dot-content")
+        (root / ".cpr").mkdir()
+        (root / ".cpr" / "own.txt").write_text("dot-content")
+        (root / "gitlink").symlink_to(root / ".git")
+        (root / "toklink").symlink_to(root / ".private")
         (root / "out").symlink_to(outside)
         cls.root, cls.before = root, cls.snapshot(root)
         with socket.socket() as s:
@@ -161,15 +165,24 @@ class Live(unittest.TestCase):
 
     def test_hidden_paths_are_not_served(self):
         for path in ("/.private", "/.git/config", "/.git/", "/.git/?ls", "/.git/?zip", "/%2egit/config",
-                     "/docs/../.git/config"):
+                     "/docs/../.git/config", "/.cpr/own.txt", "/toklink", "/gitlink/config", "/gitlink/?ls"):
             code, body = self.request("GET", path)
             self.assertEqual(code, 404, path)
             self.assertNotIn("dot-content", body, path)
         self.assertEqual(self.request("POST", "/.git/?srch", "{}", {"Content-Type": "application/json"})[0], 404)
         form = {"Content-Type": "multipart/form-data; boundary=b"}
-        code, body = self.request("POST", "/?zip", '--b\r\nContent-Disposition: form-data; name="files"\r\n\r\n'
-                                  '.git/config\n.private\ndocs/note.md\r\n--b--\r\n', form)
+        def zip_of(folder, files):
+            return self.request("POST", folder + "?zip", '--b\r\nContent-Disposition: form-data; name="act"\r\n\r\nzip\r\n'
+                                '--b\r\nContent-Disposition: form-data; name="files"\r\n\r\n'
+                                f'{files}\r\n--b--\r\n', form)
+
+        code, body = zip_of("/", ".git\n.private\ndocs")
+        self.assertEqual(code, 200)
+        self.assertIn("docs/note.md", body)
         self.assertNotIn("dot-content", body)
+        self.assertEqual(zip_of("/", ".git\n.private")[0], 404)  # not "the whole folder"
+        self.assertEqual(zip_of("/.cpr/", "own.txt")[0], 404)
+        self.assertEqual(zip_of("/gitlink/", "config")[0], 404)
         self.assertEqual(self.request("GET", "/.cpr/w/util.js")[0], 200)  # copyparty's own assets
 
     def test_listing_hides_dotfiles(self):
