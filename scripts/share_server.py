@@ -483,8 +483,9 @@ def caddy_command(cfg, root, port):
 
 
 def caddy_missing(cfg, root=None):
-    if any(c in str(root or cfg["root"]) for c in "*?[]\\"):
-        return f"{root or cfg['root']}: caddy reads * ? [ ] \\ in the share folder's path as a glob; rename it"
+    root = pathlib.Path(root or cfg["root"]).expanduser()
+    if any(c in f"{root}{os.path.realpath(root)}" for c in '*?[]\\{}"'):
+        return f"{root}: caddy reads * ? [ ] \\ {{ }} \" in the share folder's path as a glob or placeholder; rename it"
     if not os.access(SANDBOX_EXEC, os.X_OK):
         return f"{SANDBOX_EXEC} not found; the caddy backend needs it to keep symlinks inside the share folder"
     if not caddy_bin(cfg):

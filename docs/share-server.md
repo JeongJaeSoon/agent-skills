@@ -44,7 +44,7 @@ bin/share-server uninstall
 | `backend` | `caddy` | `caddy` 또는 `python` |
 | `caddy` | (PATH의 `caddy`) | caddy 실행 파일 경로 |
 
-`install`은 같은 라벨의 plist가 이미 있고 내용이 다르면 `<라벨>.plist.bak-<시각>`으로 옆에 남긴 뒤 덮어쓴다. caddy(설정 경로, PATH, `/opt/homebrew/bin`, `/usr/local/bin` 순으로 찾는다)나 `sandbox-exec`가 없거나, 공유 폴더 경로에 Caddy가 glob으로 읽는 `* ? [ ] \`가 있거나, `backend`가 모르는 값이면 아무것도 바꾸지 않고 멈춘다. LaunchAgent는 `share_server.py serve`를 띄우고, `serve`가 시작할 때마다 caddy 경로를 찾아 sandbox-exec로 넘긴다. 그래서 `brew upgrade caddy` 뒤에는 재시작만 하면 된다. 로그는 `~/.local/state/agent-skills/share-server.log`, caddy 상태는 `~/.local/state/agent-skills/share-caddy/`.
+`install`은 같은 라벨의 plist가 이미 있고 내용이 다르면 `<라벨>.plist.bak-<시각>`으로 옆에 남긴 뒤 덮어쓴다. caddy(설정 경로, PATH, `/opt/homebrew/bin`, `/usr/local/bin` 순으로 찾는다)나 `sandbox-exec`가 없거나, 공유 폴더 경로(실제 경로 포함)에 Caddy가 glob·placeholder로 읽는 `* ? [ ] \ { } "`가 있거나, `backend`가 모르는 값이면 아무것도 바꾸지 않고 멈춘다. LaunchAgent는 `share_server.py serve`를 띄우고, `serve`가 시작할 때마다 caddy 경로를 찾아 sandbox-exec로 넘긴다. 그래서 `brew upgrade caddy` 뒤에는 재시작만 하면 된다. 로그는 `~/.local/state/agent-skills/share-server.log`, caddy 상태는 `~/.local/state/agent-skills/share-caddy/`.
 
 ## 되돌리기
 

@@ -276,7 +276,8 @@ class Launchd(unittest.TestCase):
         self.assertIn("brew install caddy", ss.caddy_missing({**ss.DEFAULTS, "caddy": "/nope/caddy"}))
 
     def test_a_root_with_glob_characters_is_refused(self):
-        self.assertIn("glob", ss.caddy_missing(ss.DEFAULTS, "/x/sh[are]"))
+        for root in ("/x/sh[are]", "/x/s{http.request.uri.query.r}", '/x/a"b'):
+            self.assertIn("glob", ss.caddy_missing(ss.DEFAULTS, root), root)
 
     def test_unknown_backend_is_refused(self):
         with mock.patch("builtins.print"):
