@@ -139,12 +139,12 @@ class Live(unittest.TestCase):
         return sorted((str(p.relative_to(root)), p.is_file() and p.read_bytes()) for p in root.rglob("*"))
 
     @classmethod
-    def fetch(cls, method, path, body=None, headers=None):
+    def fetch(cls, method, path, body=None, headers=None, header="Content-Type"):
         c = http.client.HTTPConnection("127.0.0.1", cls.port, timeout=5)
         try:
             c.request(method, path, body, {**cls.UA, **(headers or {})})
             r = c.getresponse()
-            return r.status, r.getheader("Content-Type", ""), r.read().decode(errors="replace")
+            return r.status, r.getheader(header), r.read().decode(errors="replace")
         finally:
             c.close()
 
@@ -211,6 +211,24 @@ class Live(unittest.TestCase):
         for path, headers in (("/docs/note.md", None), ("/docs/note.md", html), ("/docs/note.md?", html),
                               ("/docs/plain.txt", None), ("/docs/view.tsx", None), ("/site/index.html", None), ("/", html)):
             self.assertIn("charset=utf-8", self.fetch("GET", path, headers=headers)[1].lower(), f"{path} {headers}")
+
+    def test_search_from_a_page_behind_an_https_proxy(self):
+        page = {"Content-Type": "application/json", "Origin": "https://files.example.test", "Host": "files.example.test",
+                "X-Forwarded-For": "100.64.0.1"}
+        q = json.dumps({"q": "name like *note*"})
+        code, body = self.request("POST", "/?srch", q, page)
+        self.assertEqual(code, 200)
+        self.assertIn("docs/note.md", body)
+        self.assertEqual(self.request("POST", "/?srch", q, {**page, "Origin": "https://other.example.test"})[0], 403)
+
+    def test_other_sites_cannot_read_through_a_visitors_browser(self):
+        proxied, acao = {"X-Forwarded-For": "100.64.0.1", "Host": "files.example.test"}, "Access-Control-Allow-Origin"
+        for path in ("/docs/note.md", "/?ls", "/docs/?ls"):
+            for via in ({}, proxied):
+                got = self.fetch("GET", path, headers={"Origin": "https://other.example.test", **via}, header=acao)[1]
+                self.assertIsNone(got, f"{path} {via}")
+        own = self.fetch("GET", "/?ls", headers={"Origin": "https://files.example.test", **proxied}, header=acao)[1]
+        self.assertEqual(own, "https://files.example.test")
 
     def test_symlink_out_of_the_root_and_traversal_are_refused(self):
         for path in ("/out/secret.txt", "/../outside/secret.txt", "/%2e%2e/outside/secret.txt"):
