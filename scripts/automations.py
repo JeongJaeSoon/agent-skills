@@ -9,7 +9,7 @@ Usage:
 
 Running any of these again changes nothing that is already as asked. `disable` keeps the janitor registered
 but off, so `apply` leaves it off. Turning one on writes paths to this checkout into the job, so it refuses a
-worktree (it goes away under the job); --here allows it for a preview-watch test, never for the shared janitor job.
+worktree (it goes away under the job); --here allows it for a LaunchAgent test, never for the shared janitor job.
 """
 import json, os, pathlib, plistlib, shutil, subprocess, sys
 
@@ -21,6 +21,7 @@ sys.path.insert(0, str(REAP.parent))
 import preview_watch as pw  # noqa: E402
 import pressure  # noqa: E402
 import reap  # noqa: E402
+import share_server as ss  # noqa: E402
 
 ORCA = os.environ.get("SKILLS_SETUP_ORCA", "orca")
 JANITOR_NAME = "agent-skills janitor"  # the --name reap.schedule_cmd creates
@@ -234,7 +235,49 @@ class PressureWatch:
         return pressure.cmd_uninstall(), "끔"
 
 
-AUTOMATIONS = (Janitor(), PreviewWatch(), PressureWatch())
+# ---------------------------------------------------------------- share-server (LaunchAgent)
+
+class ShareServer:
+    name = "share-server"
+    default = False
+    what = ("공유 폴더를 127.0.0.1 에서 서빙하고 이미지 폴더는 갤러리로 보여 주는 LaunchAgent(docs/share-server.md). "
+            "tailnet 공개는 하지 않는다. 공유 폴더를 tailscale serve 로 열어 쓸 때만 켠다")
+
+    def status(self):
+        if sys.platform != "darwin":
+            return "unsupported", "macOS LaunchAgent 전용"
+        spec, loaded = ss.plist_spec(), ss.loaded()
+        if spec is None and not loaded:
+            return "absent", "등록 안 됨"
+        if not loaded:
+            return "off", f"{ss.plist_path()} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
+        cfg = ss.config()
+        detail = f"{cfg['root']} → http://{ss.HOST}:{cfg['port']}/"
+        if main_checkout() and spec != ss.spec():
+            script = next((a for a in (spec or {}).get("ProgramArguments", []) if a.endswith(".py")), "?")
+            detail += f" · 등록된 내용이 이 체크아웃과 다름: {script} (enable 로 다시 씀)"
+        return "on", detail
+
+    def enable(self, here):
+        if sys.platform != "darwin":
+            return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 서비스 관리자로 `share_server.py serve` 를 띄운다"
+        if ss.loaded() and ss.plist_spec() == ss.spec():
+            return 0, "이미 켜져 있음"
+        refusal = worktree_refusal(here)
+        if refusal:
+            return 1, refusal
+        code = ss.cmd_install(here)
+        return code, "실패 (위 출력)" if code else "켬"
+
+    def disable(self):
+        if sys.platform != "darwin":
+            return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
+        if ss.plist_spec() is None and not ss.loaded():
+            return 0, "이미 꺼져 있음"
+        return ss.cmd_uninstall(), "끔"
+
+
+AUTOMATIONS = (Janitor(), PreviewWatch(), PressureWatch(), ShareServer())
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원"}
 
 

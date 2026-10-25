@@ -253,11 +253,61 @@ class Pressure(unittest.TestCase):
         self.uninstall.assert_called_once()
 
 
+class Share(unittest.TestCase):
+    s = au.ShareServer()
+
+    def patch(self, loaded, spec, main=True, rc=0):
+        self.install, self.uninstall = mock.Mock(return_value=rc), mock.Mock(return_value=rc)
+        for p in (mock.patch.object(au.ss, "loaded", return_value=loaded),
+                  mock.patch.object(au.ss, "plist_spec", return_value=spec),
+                  mock.patch.object(au, "main_checkout", return_value=main),
+                  mock.patch.object(au.sys, "platform", "darwin"),
+                  mock.patch.object(au.ss, "cmd_install", self.install),
+                  mock.patch.object(au.ss, "cmd_uninstall", self.uninstall)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_default_off(self):
+        self.assertFalse(self.s.default)
+
+    def test_status(self):
+        self.patch(False, None)
+        self.assertEqual(self.s.status()[0], "absent")
+        self.patch(True, au.ss.spec())
+        self.assertEqual(self.s.status()[0], "on")
+        self.patch(False, au.ss.spec())
+        self.assertEqual(self.s.status()[0], "off")
+        self.patch(True, {"ProgramArguments": ["python3", "-m", "http.server"]})
+        self.assertIn("다름", self.s.status()[1])
+
+    def test_enable(self):
+        self.patch(True, au.ss.spec())
+        self.assertEqual(self.s.enable(False), (0, "이미 켜져 있음"))
+        self.patch(False, None, main=False)
+        self.assertEqual(self.s.enable(False)[0], 1)
+        self.install.assert_not_called()
+        self.patch(True, {"Label": "old"})
+        self.assertEqual(self.s.enable(False), (0, "켬"))
+        self.install.assert_called_once()
+
+    def test_disable(self):
+        self.patch(False, None)
+        self.assertEqual(self.s.disable(), (0, "이미 꺼져 있음"))
+        self.patch(True, au.ss.spec())
+        self.assertEqual(self.s.disable(), (0, "끔"))
+        self.uninstall.assert_called_once()
+
+
 class Apply(Base):
     def setUp(self):
-        p = mock.patch.object(au.PressureWatch, "status", return_value=("on", ""))
-        p.start()
-        self.addCleanup(p.stop)
+        for p in (mock.patch.object(au.PressureWatch, "status", return_value=("on", "")),
+                  mock.patch.object(au.ShareServer, "status", return_value=("absent", "")),
+                  mock.patch.object(au.ShareServer, "enable")):
+            self.share_enable = p.start()
+            self.addCleanup(p.stop)
+
+    def tearDown(self):
+        self.share_enable.assert_not_called()
 
     def test_turns_on_only_default_on_never_set_up(self):
         fake = self.orca([])
