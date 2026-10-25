@@ -189,6 +189,46 @@ class when the load is at or above the limit:
 A session with no transcript on record counts as working. A benchmark or performance number
 taken while the load is at or above the limit is not evidence: measure again once it is under.
 
+## Pressure: before the machine slows down
+
+`scripts/pressure.py` watches the machine without a model and reaps what is safe before anyone notices.
+
+```bash
+P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"
+python3 "$P" check                     # measure only; exit 0 ok, 1 warn, 2 danger
+python3 "$P" round --dry-run --set load_per_cpu=0.5,1   # what a round would reap and send, with lowered thresholds
+python3 "$P" round                     # one round, what the LaunchAgent runs
+python3 "$P" install | uninstall | status   # macOS LaunchAgent, every `interval` seconds, from the main checkout
+```
+
+Each metric has a `[warn, danger]` pair under `reap.pressure`: `load_per_cpu` (5-minute load / logical CPUs),
+`mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's own level, 2 warn, 4 critical),
+`swap_gb`, `disk_free_gb` (the volume holding `$HOME`, at or below), `containers` (running). A metric the OS does not
+offer is left out. The level is the worst metric's.
+
+- **warn**: `reap.py scan --kinds <safe_kinds>` then `reap --plan`, so only what reap itself lists goes. Default
+  `safe_kinds`: `orphan`, `compose-stack`, `gui-app`, `orca-worker` (a kind this reap.py does not know is dropped,
+  with a note). A target inside an Orca card with a live terminal is spared; when Orca or the process cwds cannot be
+  read, the round reaps nothing.
+  When something went, one `status` line to `notify_to` (else `reap.inbox_to`): what and why. A machine that stays at
+  warn is swept again only after `rescan_minutes` (10).
+- **danger**: the same sweep. With nothing reaped (none listed, or reap skipped or failed them all), the top consumers (reap's `load` classes, compose projects with
+  their CPU and memory, each with the Orca card it lies in) go out as one `status` message (an `escalation` needs an
+  active dispatch, which the LaunchAgent has none of), then the round stops. Nothing
+  is stopped or killed, whoever owns it. Sent again only on entering danger or after `renotify_minutes` (30).
+- Never: `compose down -v`, `docker system prune`, volume or image removal, a kill by pattern, anything of a card or
+  lead that is still working (reap's own rules keep those).
+
+`hooks/pressure_gate.py` (PreToolUse, Bash) denies `orch heavy`, `docker compose … up` and `orca worktree create`
+while the level is danger, and at warn until a round has swept in the last `gate_fresh_minutes` (15). The deny says
+to run `round`, then wait with `Monitor` on `check`. Swap and disk raise the gate to warn at most: both stay high for
+hours. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
+`AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
+off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
+a deny and a manual `round`.
+
+Defaults and the measurements behind them: [docs/pressure.md](../../docs/pressure.md).
+
 ## What goes
 
 | Kind | Target when | Kept when | How |
@@ -216,7 +256,10 @@ not in this repo:
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
           "inbox_to": "run:<id>", "plan_repeat": 2,
           "user_folders": [], "regenerated_untracked": true, "preview_ports": [4500, 4599], "alert": {"orphan_procs": 5,
-                    "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10}}}
+                    "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},
+          "pressure": {"interval": 180, "load_per_cpu": [1.0, 2.0], "mem_free_pct": [20, 10], "vm_pressure": [2, 4],
+                       "swap_gb": [8, 16], "disk_free_gb": [50, 20], "containers": [40, 80],
+                       "notify_to": "run:<id>", "rescan_minutes": 10, "renotify_minutes": 30, "gate_fresh_minutes": 15}}}
 ```
 
 Alerts count everything the scan saw, kept items included: orphan processes, dangling volumes, and branch and worktree

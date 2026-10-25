@@ -20,10 +20,11 @@ skills-sync setup disable <이름>         # 끄기
 |---|---|---|---|---|
 | `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로) | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
+| `pressure-watch` | on | LaunchAgent `io.github.jeongjaesoon.pressure-watch` | `pressure.py install`(3분마다 `round`) | `pressure.py uninstall` |
 
 - 같은 상태면 아무것도 하지 않는다. `enable`을 두 번 돌려도 두 번째는 "이미 켜져 있음"이다.
 - 켜기는 job에 이 체크아웃의 절대 경로를 적으므로 worktree에서는 거부한다(worktree가 지워지면 job이 조용히
-  실패한다). preview-watch 테스트에만 `--here`를 붙인다. janitor는 하나뿐인 공유 job이라 `--here`도 받지 않고,
+  실패한다). preview-watch·pressure-watch 테스트에만 `--here`를 붙인다. janitor는 하나뿐인 공유 job이라 `--here`도 받지 않고,
   worktree에서는 차이를 비교하지도 고치지도 않는다(꺼져 있으면 켜기만 한다).
 - 메인 체크아웃에서 돌린 `status`는 등록된 내용이 이 체크아웃과 다르면(다른 경로, `reap.py`의 주기·프롬프트 변경) 그 필드를 적는다.
   `enable`을 다시 돌리면 맞춰진다.
@@ -53,6 +54,7 @@ skills-sync setup disable <이름>         # 끄기
 | skill_usage 수집·reflect 깨우기 | Orca automation precheck(새 신호도, 닫힌 standing PR 뒤에 기다리는 교훈도 없으면 exit 1) + 에이전트 |
 | PR 머지 후 확인 | Orca automation + precheck(gh 상태 diff). 로컬 작업이 필요 없으면 클라우드 routine |
 | 채팅 멘션 감시 | Orca automation + precheck(설정·잠금만. Slack은 MCP로만 닿아 새 메시지 유무는 회차 안에서 판단) |
+| PC 사용량 감시·선제 정리 | LaunchAgent(모델이 판단할 것이 없고, 부하 중에 세션을 띄우지 않으려고. [pressure.md](pressure.md)) |
 | 세션 안 사건 반응 | `Monitor` 또는 `run_in_background`. 결정적인 반응은 hooks |
 
 ## Orca automation을 걸 때 지킬 것

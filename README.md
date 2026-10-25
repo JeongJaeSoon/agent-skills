@@ -44,6 +44,7 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 |---|---|---|---|
 | `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 정기적으로 정리한다. compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
+| `pressure-watch` | on | macOS LaunchAgent | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([docs/pressure.md](docs/pressure.md)) |
 
 자세한 동작과 다른 OS의 대안은 [docs/automation.md](docs/automation.md#처음-설치할-때).
 
@@ -101,7 +102,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 | 스킬 | 언제 |
 |---|---|
-| `reap-resources` | 죽은 세션이 남긴 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. 에이전트가 만든 끝난 리소스와 명시적으로 설정한 개인 폴더의 기준 기간이 지난 항목은 3시간 주기 automation이 휴지통으로 정리한다. 닫힌 지 7일 지난 프로그램 상태는 `_archive/`로 보관하고(재개 노트가 있으면 남김), hook 세션 파일과 `sync.log`도 정리한다 |
+| `reap-resources` | 죽은 세션이 남긴 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. 에이전트가 만든 끝난 리소스와 명시적으로 설정한 개인 폴더의 기준 기간이 지난 항목은 3시간 주기 automation이 휴지통으로 정리한다. 닫힌 지 7일 지난 프로그램 상태는 `_archive/`로 보관하고(재개 노트가 있으면 남김), hook 세션 파일과 `sync.log`도 정리한다. `pressure.py`는 모델 없이 3분마다 load·메모리 압박·swap·디스크·컨테이너 수를 재고, 높으면 안전한 대상부터 정리해 오케스트레이터에 한 줄 알린다([docs/pressure.md](docs/pressure.md)) |
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
 
@@ -130,6 +131,7 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 |---|---|---|
 | `guard.py` | Bash·Skill 호출 전 | 이 플러그인 스킬과 `orch`·`orca orchestration` 명령 허용, 남의 메일함 읽기·sleep 폴링 거부 |
 | `orchestrator_guard.py` | 모든 도구 호출 전 | 최상위 오케스트레이터 본인 스레드에서만 브라우저·채팅 전송·웹 도구, 상태 디렉터리 밖 편집, `tail`로 파이프한 배경 감시자, 턴당 네 번째 직접 작업 호출을 거부하고 위임 경로를 알린다. `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`으로 끈다 |
+| `pressure_gate.py` | Bash 호출 전 | `orch heavy`·`docker compose up`·`orca worktree create`를 PC 사용량이 위험이거나, 경고인데 최근 15분 안에 정리 회차가 없으면 거부하고 정리·대기 방법을 알린다. `AGENT_SKILLS_PRESSURE_GATE=0`으로 끈다 |
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |
 | `reorient.py` | 세션 시작, 프롬프트 | `--agent agent-skills:orchestrator`·`lead`나 `ROLE:` 줄로 선언한 세션에 다시 읽을 규칙과 매 프롬프트 한 줄을 넣는다 |
@@ -150,7 +152,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

@@ -203,13 +203,71 @@ class Preview(unittest.TestCase):
         self.install.assert_not_called()
 
 
+class Pressure(unittest.TestCase):
+    p = au.PressureWatch()
+
+    def patch(self, loaded, spec, main=True, rc=0):
+        self.install, self.uninstall = mock.Mock(return_value=rc), mock.Mock(return_value=rc)
+        for p in (mock.patch.object(au.pressure, "loaded", return_value=loaded),
+                  mock.patch.object(au.pressure, "plist_spec", return_value=spec),
+                  mock.patch.object(au, "main_checkout", return_value=main),
+                  mock.patch.object(au.sys, "platform", "darwin"),
+                  mock.patch.object(au.pressure, "cmd_install", self.install),
+                  mock.patch.object(au.pressure, "cmd_uninstall", self.uninstall)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def current(self):
+        return au.pressure.spec(au.pressure.config()["interval"])
+
+    def test_default_on(self):
+        self.assertTrue(self.p.default)
+
+    def test_status(self):
+        self.patch(False, None)
+        self.assertEqual(self.p.status()[0], "absent")
+        self.patch(True, self.current())
+        self.assertEqual(self.p.status()[0], "on")
+        self.patch(False, self.current())
+        self.assertEqual(self.p.status()[0], "off")
+        self.patch(True, {"ProgramArguments": ["python3", "/elsewhere/pressure.py", "round"]})
+        self.assertIn("/elsewhere/pressure.py", self.p.status()[1])
+
+    def test_enable(self):
+        self.patch(True, self.current())
+        self.assertEqual(self.p.enable(False), (0, "이미 켜져 있음"))
+        self.patch(False, None, main=False)
+        self.assertEqual(self.p.enable(False)[0], 1)
+        self.install.assert_not_called()
+        self.patch(False, None)
+        self.assertEqual(self.p.enable(False), (0, "켬"))
+        self.install.assert_called_once()
+        self.patch(False, None, rc=1)
+        self.assertEqual(self.p.enable(False), (1, "실패 (위 출력)"))
+
+    def test_disable(self):
+        self.patch(False, None)
+        self.assertEqual(self.p.disable(), (0, "이미 꺼져 있음"))
+        self.patch(True, self.current())
+        self.assertEqual(self.p.disable(), (0, "끔"))
+        self.uninstall.assert_called_once()
+
+
 class Apply(Base):
+    def setUp(self):
+        p = mock.patch.object(au.PressureWatch, "status", return_value=("on", ""))
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_turns_on_only_default_on_never_set_up(self):
         fake = self.orca([])
         with mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")), \
-                mock.patch.object(au.PreviewWatch, "enable") as pv:
+                mock.patch.object(au.PreviewWatch, "enable") as pv, \
+                mock.patch.object(au.PressureWatch, "status", return_value=("absent", "")), \
+                mock.patch.object(au.PressureWatch, "enable", return_value=(0, "켬")) as pr:
             self.assertEqual(au.cmd_apply(False), 0)
         pv.assert_not_called()
+        pr.assert_called_once()
         self.assertEqual(len(fake.schedules()), 1)
 
     def test_leaves_a_disabled_janitor_off(self):

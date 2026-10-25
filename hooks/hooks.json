@@ -10,6 +10,10 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/orchestrator_guard.py\"", "timeout": 5 }]
       },
       {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 10 }]
+      },
+      {
         "matcher": "Bash|mcp__.*([Ll]inear|[Jj]ira|atlassian).*",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prose_check.py\"", "timeout": 5 }]
       }
