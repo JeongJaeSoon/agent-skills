@@ -951,7 +951,7 @@ def docker_ts(s):
 
 def compose_stacks():
     """{project: {running, stopped, first (oldest container created), last (newest start or stop), ports, dirs (compose
-    working directories)}}; None when docker cannot be read."""
+    working directories), nodir (containers without one)}}; None when docker cannot be read."""
     if not shutil.which("docker"):
         return {}
     ids = run(["docker", "ps", "-aq", "--no-trunc"], check=False)
@@ -970,9 +970,11 @@ def compose_stacks():
         # ones compose created, which carry the oneoff label, and leaves the rest.
         if not proj or "com.docker.compose.oneoff" not in labels:
             continue
-        s = stacks.setdefault(proj, {"running": 0, "stopped": 0, "first": None, "last": 0.0, "ports": set(), "dirs": set()})
+        s = stacks.setdefault(proj, {"running": 0, "stopped": 0, "first": None, "last": 0.0, "ports": set(), "dirs": set(), "nodir": 0})
         if labels.get("com.docker.compose.project.working_dir"):
             s["dirs"].add(labels["com.docker.compose.project.working_dir"])
+        else:
+            s["nodir"] += 1
         st = c.get("State") or {}
         s["running" if st.get("Status") in ("running", "restarting", "paused") else "stopped"] += 1
         with contextlib.suppress(ValueError, TypeError, AttributeError):

@@ -53,6 +53,8 @@ cases = {
     "터미널 목록을 읽지 못함": card_says(terms=None),
     "출력이 30분 안에": card_says(terms=[{"handle": "t", "lastOutputAt": (NOW - 5 * M) * 1000}]),
     "세션 기록이 10분 전": card_says(quiet=10 * M),
+    "하위 카드 /ws/app/w1 가 남아 있음(리드)": rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P,
+                                                     [], [], ["/ws/app/w1"]),
 }
 for want, (ok, why) in cases.items():
     assert ok is False and want in why, (want, why)
@@ -62,7 +64,11 @@ stack = {"ports": {5173}, "dirs": {"/ws/app/done"}}
 assert rh.judge_stack("v1", stack, lambda d: True, P, set()) == (True, "소유 worktree 가 없어짐: /ws/app/done")
 assert rh.judge_stack("v1", {**stack, "dirs": {"/ws/app/done", "/ws/app/live"}}, lambda d: d.endswith("done"), P,
                       set())[0] is False
-assert rh.judge_stack("v1", {**stack, "dirs": set()}, lambda d: True, P, set()) == (False, "작업 폴더 라벨 없음")
+assert rh.judge_stack("v1", {**stack, "dirs": set()}, lambda d: True, P, set())[0] is False
+# A container with no working-directory label, a relative label, or a protected path keeps the whole project.
+assert rh.judge_stack("v1", {**stack, "nodir": 1}, lambda d: True, P, set()) == (False, "작업 폴더 라벨 없는 컨테이너가 있음")
+assert rh.judge_stack("v1", {**stack, "dirs": {"app"}}, lambda d: True, P, set()) == (False, "상대 경로 작업 폴더 app")
+assert rh.judge_stack("v1", {**stack, "dirs": {"/x/lead/web"}}, lambda d: True, P, set()) == (False, "보호 목록의 경로")
 assert rh.judge_stack("keepme", stack, lambda d: True, P, set())[0] is False
 assert rh.judge_stack("webui", stack, lambda d: True, P, {"webui"})[0] is False
 assert rh.judge_stack("v1", {**stack, "ports": {4999}}, lambda d: True, P, set()) == (False, "보호 포트 4999")
@@ -88,6 +94,7 @@ assert listener_says(rows[9], port=4999)[0] is False
 assert listener_says({**rows[9], "pid": 42})[0] is False
 assert listener_says(rows[11])[0] is False  # a person's shell is its parent
 assert listener_says(proc(12, "postgres -D /data"))[0] is False
+assert listener_says(rows[9], cwd=("/x/lead/web", 1)) == (False, "보호 목록의 경로")
 assert listener_says(proc(13, "node vite", age=5 * M))[0] is False
 assert listener_says(rows[9], cwd=None)[0] is False
 
@@ -100,12 +107,16 @@ entries = rh.serve_entries(status)
 assert sorted(entries) == [("--https", 443, 8080), ("--https", 4600, 4600), ("--https", 13100, 4999),
                            ("--tcp", 45000, 45001)], entries
 R = [(4500, 4699), (32768, 60999)]
-assert rh.judge_serve(("--https", 4600, 4600), set(), {4600}, R, P)[0] is True
-assert rh.judge_serve(("--https", 4600, 4600), set(), set(), R, P)[0] is False  # first dark pass: wait
-assert rh.judge_serve(("--https", 4600, 4600), {4600}, {4600}, R, P)[0] is False
-assert rh.judge_serve(("--https", 443, 8080), set(), {443}, R, P) == (False, "미리보기 포트 범위 밖")
-assert rh.judge_serve(("--https", 13100, 4999), set(), {13100}, R, P) == (False, "보호 포트")
-assert rh.judge_serve(("--tcp", 45000, 45001), set(), {45000}, R, P)[0] is True
+closed = lambda port: False
+K = rh.serve_key
+assert rh.judge_serve(("--https", 4600, 4600), closed, {K(("--https", 4600, 4600))}, R, P)[0] is True
+# The same public port pointed at another local port since the last pass starts over.
+assert rh.judge_serve(("--https", 4600, 4601), closed, {K(("--https", 4600, 4600))}, R, P)[0] is False
+assert rh.judge_serve(("--https", 4600, 4600), closed, set(), R, P)[0] is False  # first dark pass: wait
+assert rh.judge_serve(("--https", 4600, 4600), lambda port: True, {K(("--https", 4600, 4600))}, R, P)[0] is False
+assert rh.judge_serve(("--https", 443, 8080), closed, {K(("--https", 443, 8080))}, R, P) == (False, "미리보기 포트 범위 밖")
+assert rh.judge_serve(("--https", 13100, 4999), closed, {K(("--https", 13100, 4999))}, R, P) == (False, "보호 포트")
+assert rh.judge_serve(("--tcp", 45000, 45001), closed, {K(("--tcp", 45000, 45001))}, R, P)[0] is True
 
 # card_dir: only <root>/<repo>/<card>.
 assert rh.card_dir("/ws/app/done/web/src", "/ws") == "/ws/app/done"
@@ -113,7 +124,7 @@ assert rh.card_dir("/ws/app", "/ws") is None and rh.card_dir("/elsewhere/x/y", "
 
 # A pass: no protect file means nothing is scanned or done, and the brief line says it stopped.
 calls = []
-rh.scan = lambda *a, **k: calls.append("scan") or ([], [], set())
+rh.scan_cards = lambda *a, **k: calls.append("scan") or ([], [], {})
 cfg = {**rh.DEFAULTS, "protect_file": str(tmp / "missing.txt")}
 res, code = rh.run_pass(False, cfg, now=NOW)
 assert code == 2 and calls == [] and "읽지 못함" in res["error"], res
@@ -124,28 +135,46 @@ cfg["protect_file"] = str(f)
 items = [{"kind": "card", "id": "/ws/app/done", "target": True, "why": "w"},
          {"kind": "stack", "id": "v1", "target": True, "why": "w"},
          {"kind": "serve", "id": "--https=4600", "target": False, "why": "k"}]
-rh.scan = lambda *a, **k: ([dict(i) for i in items], ["n"], {4600})
+seen_closed = []
+rh.scan_cards = lambda *a, **k: ([dict(i) for i in items[:1]], ["n"], {})
+
+
+def fake_rest(cfg, protect, dark_before, closed, m, now):
+    seen_closed.append(list(closed))
+    return [dict(i) for i in items[1:]], [], {"--https=4600>4600"}
+
+
+rh.scan_rest = fake_rest
 acted = []
 
 
-def fake_act(item, cfg):
+def fake_act(item, cfg, protect):
     acted.append(item["id"])
     if item["kind"] == "stack":
         raise RuntimeError("docker down failed")
-    return "done"
+    return outcome[0]
+
+
+outcome = ["건너뜀: 다시 보니 열린 PR acme/app#1"]
 
 
 rh.act = fake_act
 res, code = rh.run_pass(True, cfg, now=NOW)
 assert code == 0 and acted == [] and res["acted"] == 2, res
+assert seen_closed[-1] == ["/ws/app/done"]  # a dry-run plans the rest as if the card were closed
 log = [json.loads(line) for line in rh.LOG.read_text().splitlines()]
 assert [r.get("result") for r in log[-2:]] == ["dry-run", "dry-run"] and all(r["dry_run"] for r in log[-2:])
 assert "멈춤" in rh.last_line(now=NOW + 60, interval=900)  # a dry-run does not count as a pass
 res, code = rh.run_pass(False, cfg, now=NOW)
-assert code == 1 and acted == ["/ws/app/done", "v1"] and res["acted"] == 1 and res["failed"] == 1, res
+assert code == 1 and acted == ["/ws/app/done", "v1"] and res["acted"] == 0 and res["skipped"] == 1, res
+# A close skipped on the second look frees neither its stack nor its servers.
+assert seen_closed[-1] == [], seen_closed
+outcome[0] = "터미널 닫음, worktree 제거"
+res, code = rh.run_pass(False, cfg, now=NOW)
+assert seen_closed[-1] == ["/ws/app/done"] and res["acted"] == 1 and res["failed"] == 1, (seen_closed, res)
 log = [json.loads(line) for line in rh.LOG.read_text().splitlines()]
-assert log[-1]["error"] == "docker down failed" and log[-2]["result"] == "done", log[-2:]
-assert rh.read_last()["dark"] == [4600]
+assert log[-1]["error"] == "docker down failed" and log[-2]["result"] == outcome[0], log[-2:]
+assert rh.read_last()["dark"] == ["--https=4600>4600"]
 assert rh.last_line(now=NOW + 120, interval=900) == "🧹 reap-hard " + \
     __import__("time").strftime("%H:%M", __import__("time").localtime(NOW)) + "(2분 전) 닫음 1 · 실패 1 · 남김 1"
 assert "주기를 넘김" in rh.last_line(now=NOW + 3 * 900 + 60, interval=900)

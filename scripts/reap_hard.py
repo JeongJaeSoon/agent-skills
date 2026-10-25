@@ -10,13 +10,14 @@ A pass, in order (each later step sees what the earlier ones closed):
   card      an Orca worktree under `workspaces` whose branch PR (its own, never a fork's) is merged or closed and
             carried the worktree's HEAD, with no open PR on the branch; clean, untracked files included; nothing off
             the remote unless the PR carried HEAD; every Orca terminal silent and its sessions' transcripts quiet
-            for `idle_minutes`; no process in it that a person started from their own shell.
+            for `idle_minutes`; no process in it that a person started from their own shell; no child card left in
+            Orca (a lead's). The whole verdict is taken again right before closing.
             -> `orca terminal close --worktree path:P --all`, ignored files to the trash, `orca worktree rm --run-hooks`
-  stack     a compose project (containers compose created) whose working directories are all gone, or are cards
-            closed in this pass -> `docker compose -p P down`. Never -v: volumes and images stay.
+  stack     a compose project (containers compose created) whose working directories, every one absolute and labelled,
+            are all gone or cards really closed in this pass -> `docker compose -p P down`. Never -v.
   listener  a node/bun/deno/vite process reparented to pid 1, listening on TCP, at least `idle_minutes` old, whose
             cwd was removed or lies in a card that is gone -> SIGTERM to that pid alone, after pid and start time match.
-  serve     a `tailscale serve` entry in `serve_ranges` whose local port has had no listener for two passes in a row
+  serve     a `tailscale serve` entry in `serve_ranges` whose same local port has refused connections two passes in a row
             -> `tailscale serve --https=<port> off` (or --tcp)
 Before any rule, the protect file is read; without it nothing runs (exit 2). It holds `port N`, `pid N`, `path P`
 (a card or any prefix) and `project NAME` lines; `#` starts a comment. Pinned cards, the main checkout, the
@@ -25,7 +26,7 @@ Each decision that acts, or would act under --dry-run, and each failure is one J
 <state>/reap-hard.jsonl; the pass's summary is <state>/reap-hard-last.json.
 Settings: "reap-hard" in ~/.claude/agent-skills.json (DEFAULTS).
 """
-import contextlib, fcntl, json, os, pathlib, plistlib, re, shlex, shutil, signal, subprocess, sys, time, uuid
+import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -102,16 +103,18 @@ def protected_path(p, protect):
 
 # ---------------------------------------------------------------- judgements (pure)
 
-def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders):
+def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=()):
     """(target, why). card: a row of `orca worktree list`; facts: reap.worktree_facts; pr: reap's PR state of
     facts["pr"]; terminals: the card's rows of `orca terminal list`, None when unreadable; quiet_s: seconds since
     its transcripts last changed, None when it has none; people: pids in it a person started; holders: pids in it
-    that are protected or listen on a protected port."""
+    that are protected or listen on a protected port; children: the cards it made that still exist (a lead's)."""
     p = reap.real(card["path"])
     if card.get("isMainWorktree") or card.get("isPinned"):
         return False, "메인 체크아웃 또는 고정된 카드"
     if protected_path(p, protect):
         return False, "보호 목록의 경로"
+    if children:
+        return False, f"하위 카드 {children[0]} 가 남아 있음(리드)"
     if not facts or facts.get("main"):
         return False, "git 상태를 읽지 못함" if not facts else "메인 체크아웃"
     if facts.get("pr_unread"):
@@ -149,8 +152,12 @@ def judge_stack(name, stack, gone, protect, keep):
         return False, "보호 목록·상시 서비스의 프로젝트"
     if hit := sorted(stack["ports"] & protect["port"]):
         return False, f"보호 포트 {hit[0]}"
-    if not stack["dirs"]:
-        return False, "작업 폴더 라벨 없음"
+    if not stack["dirs"] or stack.get("nodir"):
+        return False, "작업 폴더 라벨 없는 컨테이너가 있음"
+    if rel := sorted(d for d in stack["dirs"] if not os.path.isabs(d)):
+        return False, f"상대 경로 작업 폴더 {rel[0]}"
+    if any(protected_path(reap.real(d), protect) for d in stack["dirs"]):
+        return False, "보호 목록의 경로"
     alive = sorted(d for d in stack["dirs"] if not gone(d))
     if alive:
         return False, f"작업 폴더 {alive[0]} 있음"
@@ -177,6 +184,8 @@ def judge_listener(r, port, cwd, now_gone, card_of, cards_alive, idle_s, protect
         return False, f"{int(idle_s // 60)}분 안에 시작됨"
     if cwd is None:
         return False, "cwd 를 읽지 못함"
+    if protected_path(cwd[0], protect):
+        return False, "보호 목록의 경로"
     if now_gone(cwd):
         return True, f"cwd {cwd[0]} 가 사라짐"
     card = card_of(cwd[0])
@@ -200,16 +209,21 @@ def serve_entries(status):
     return out
 
 
-def judge_serve(entry, listening, dark_before, ranges, protect):
-    """(target, why). dark_before: the public ports the last pass saw with no listener."""
+def serve_key(entry):
+    return f"{entry[0]}={entry[1]}>{entry[2]}"
+
+
+def judge_serve(entry, is_open, dark_before, ranges, protect):
+    """(target, why). is_open(port): something answers on it; dark_before: serve_key of each entry the last pass saw
+    with nothing answering, so a public port pointed elsewhere since starts over."""
     flag, public, local = entry
     if public in protect["port"] or local in protect["port"]:
         return False, "보호 포트"
     if not any(lo <= local <= hi for lo, hi in ranges):
         return False, "미리보기 포트 범위 밖"
-    if local in listening:
+    if is_open(local):
         return False, "리스너 있음"
-    if public not in dark_before:
+    if serve_key(entry) not in dark_before:
         return False, "리스너 없음(첫 회차, 다음 회차에 다시 본다)"
     return True, f"127.0.0.1:{local} 리스너가 두 회차 연속 없음"
 
@@ -217,10 +231,16 @@ def judge_serve(entry, listening, dark_before, ranges, protect):
 # ---------------------------------------------------------------- reading the machine
 
 def listeners_all():
-    """{port: pid} for every TCP listener of this user, any address."""
-    out = subprocess.run(["lsof", "-nP", "-a", "-u", str(os.getuid()), "-iTCP", "-sTCP:LISTEN", "-F", "pn"],
-                         capture_output=True, text=True, timeout=20).stdout
-    found, pid = {}, 0
+    """{port: pid} for every TCP listener of this user, any address; None when lsof failed (it also exits 1, silently,
+    when nothing listens)."""
+    try:
+        p = subprocess.run(["lsof", "-nP", "-a", "-u", str(os.getuid()), "-iTCP", "-sTCP:LISTEN", "-F", "pn"],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode and p.stderr.strip():
+        return None
+    out, found, pid = p.stdout, {}, 0
     for line in out.splitlines():
         if line.startswith("p"):
             pid = int(line[1:])
@@ -238,6 +258,15 @@ def people_in(path, rows, cwd_of):
     return sorted(p for p in pids if p in rows and reap.human_owned(p, rows) and not reap.human_shell(p, rows))
 
 
+def port_open(port):
+    """Something accepts on the loopback port, whoever owns it: lsof sees only this user's sockets."""
+    for host in ("127.0.0.1", "::1"):
+        with contextlib.suppress(OSError):
+            socket.create_connection((host, port), timeout=1).close()
+            return True
+    return False
+
+
 def card_dir(path, root):
     """<root>/<repo>/<card> that path lies in, or None."""
     rel = os.path.relpath(path, root)
@@ -249,65 +278,92 @@ def orca(*args):
     return reap.orca_json(*args)
 
 
-def scan(cfg, protect, dark_before, now=None):
-    """Every decision of one pass, in order, with no action taken."""
-    now = now or time.time()
-    idle_s = float(cfg["idle_minutes"]) * 60
+def wt_path(wid):
+    """The path in an Orca worktree id `<repo>::<path>[::workspace:<id>]`."""
+    return (wid or "").split("::")[1] if "::" in (wid or "") else ""
+
+
+def read_machine(now):
+    """What every card verdict reads once per pass; None for a part that could not be read."""
+    cwd_pairs = reap.cwds(inodes=True)
+    listening = listeners_all()
+    return {"rows": reap.processes(), "cwd_pairs": cwd_pairs,
+            "cwd_of": None if cwd_pairs is None else {p: c for p, (c, _) in cwd_pairs.items()},
+            "listening": listening, "pr_state": reap.pr_reader(),
+            "quiet": reap.transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
+                                           / "projects", now)}
+
+
+def card_verdict(w, m, cfg, protect, now):
+    """(target, why, facts) for one row of `orca worktree list`, read fresh from the machine state m."""
+    p = reap.real(w["path"])
+    cwd_of = m["cwd_of"]
+    if cwd_of is None or m["listening"] is None:
+        return False, "프로세스 cwd·리스너를 읽지 못함", None
+    facts = reap.worktree_facts(p, None, None, cwd_of)
+    pr = m["pr_state"](facts["pr"]) if facts and facts.get("pr") else None
+    term = orca("terminal", "list", "--worktree", f"path:{p}")
+    terminals = None if not isinstance(term, dict) else term.get("terminals") or []
+    held = {pid for port, pid in m["listening"].items() if port in protect["port"]}
+    inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), p)]
+    holders = sorted(pid for pid in inside if pid in protect["pid"] or pid in held)
+    children = sorted(c for c in map(wt_path, w.get("childWorktreeIds") or ()) if c and os.path.isdir(c))
+    ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
+                         people_in(p, m["rows"], cwd_of), holders, children)
+    return ok, why, facts
+
+
+def local_cards(wt, root):
+    return [w for w in wt.get("worktrees") or [] if w.get("hostId", "local") == "local"
+            and card_dir(reap.real(w.get("path") or "/"), root) == reap.real(w.get("path") or "/")
+            and os.path.isdir(reap.real(w["path"]))]
+
+
+def scan_cards(cfg, protect, now):
+    """Card decisions, and the machine state the rest of the pass reads."""
     root = reap.real(os.path.expanduser(cfg["workspaces"]))
     items, notes = [], []
-    rows = reap.processes()
-    cwd_pairs = reap.cwds(inodes=True)
-    if cwd_pairs is None:
+    m = read_machine(now)
+    if m["cwd_pairs"] is None:
         notes.append("프로세스 cwd 를 읽지 못함: 카드·리스너는 건너뜀")
-    cwd_of = {p: c for p, (c, _) in (cwd_pairs or {}).items()}
-    listening = listeners_all()
-    held_ports = {pid for port, pid in listening.items() if port in protect["port"]}
-
-    closing = set()
+    if m["listening"] is None:
+        notes.append("lsof 로 리스너를 읽지 못함: 카드·리스너는 건너뜀")
     wt = orca("worktree", "list", "--limit", "10000")
     if not isinstance(wt, dict) or wt.get("truncated"):
         notes.append("orca worktree list 를 읽지 못함 또는 잘림: 카드는 건너뜀")
-    elif cwd_pairs is not None:
-        cards = [w for w in wt.get("worktrees") or [] if w.get("hostId", "local") == "local"
-                 and card_dir(reap.real(w.get("path") or "/"), root) == reap.real(w.get("path") or "/")]
-        quiet = reap.transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
-                                      / "projects", now)
-        pr_state = reap.pr_reader()
-        for w in cards:
-            p = reap.real(w["path"])
-            if not os.path.isdir(p):
-                continue
-            facts = reap.worktree_facts(p, None, None, cwd_of)
-            pr = pr_state(facts["pr"]) if facts and facts.get("pr") else None
-            term = orca("terminal", "list", "--worktree", f"path:{p}")
-            terminals = None if not isinstance(term, dict) else term.get("terminals") or []
-            inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), p)]
-            holders = sorted(pid for pid in inside if pid in protect["pid"] or pid in held_ports)
-            ok, why = judge_card(w, facts, pr, terminals, quiet(p), now, idle_s, protect,
-                                 people_in(p, rows, cwd_of), holders)
-            item = {"kind": "card", "id": p, "target": ok, "why": why}
+    elif m["cwd_of"] is not None and m["listening"] is not None:
+        for w in local_cards(wt, root):
+            ok, why, facts = card_verdict(w, m, cfg, protect, now)
+            item = {"kind": "card", "id": reap.real(w["path"]), "target": ok, "why": why}
             if ok:
-                closing.add(p)
                 item.update(head=facts["head"], regenerated=facts.get("regenerated") or [])
             items.append(item)
+    return items, notes, m
 
+
+def scan_rest(cfg, protect, dark_before, closed, m, now):
+    """Stacks, listeners and serve entries, given the cards closed in this pass (planned ones under --dry-run)."""
+    idle_s = float(cfg["idle_minutes"]) * 60
+    root = reap.real(os.path.expanduser(cfg["workspaces"]))
+    items, notes = [], []
     stacks = reap.compose_stacks()
     if stacks is None:
         notes.append("docker 를 읽지 못함: 스택은 건너뜀")
     keep = always_on()
     downing = set()
-    for name, s in sorted((stacks or {}).items()):
-        ok, why = judge_stack(name, s, lambda d: not os.path.isdir(d) or reap.real(d) in closing
-                              or any(reap.under(reap.real(d), c) for c in closing), protect, keep)
+    for name, st in sorted((stacks or {}).items()):
+        ok, why = judge_stack(name, st, lambda d: not os.path.isdir(d) or any(reap.under(reap.real(d), c) for c in closed),
+                              protect, keep)
         items.append({"kind": "stack", "id": name, "target": ok, "why": why})
         if ok:
-            downing |= s["ports"]
+            downing |= st["ports"]
 
     alive = {reap.real(os.path.join(root, r, c)) for r in (os.listdir(root) if os.path.isdir(root) else ())
              if os.path.isdir(os.path.join(root, r)) for c in os.listdir(os.path.join(root, r))
-             if os.path.isdir(os.path.join(root, r, c))} - closing
+             if os.path.isdir(os.path.join(root, r, c))} - set(closed)
     stopping = set()
-    for port, pid in sorted(listening.items()):
+    rows, cwd_pairs = m["rows"], m["cwd_pairs"]
+    for port, pid in sorted((m["listening"] or {}).items()):
         r = rows.get(pid)
         if not r or cwd_pairs is None or r["ppid"] != 1 or not dev_server(r["cmd"]):
             continue
@@ -320,38 +376,44 @@ def scan(cfg, protect, dark_before, now=None):
 
     dark = set()
     cli = pw.tailscale_cli(pw.config())
+    status = None
     if cli:
         try:
             status = pw.serve_status(cli)
         except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
             notes.append(f"tailscale serve status 를 읽지 못함: {e}")
-            status = {}
-        left = {p for p in listening if p not in stopping and p not in downing}
-        ranges = [tuple(r) for r in cfg["serve_ranges"]]
-        for e in serve_entries(status):
-            if e[2] not in left:
-                dark.add(e[1])
-            ok, why = judge_serve(e, left, dark_before, ranges, protect)
-            items.append({"kind": "serve", "id": f"{e[0]}={e[1]}", "flag": e[0], "port": e[1], "local": e[2],
-                          "target": ok, "why": why})
+    ranges = [tuple(r) for r in cfg["serve_ranges"]]
+    # What this pass stops counts as gone already: under --dry-run nothing was stopped.
+    is_open = functools.lru_cache(None)(lambda port: port not in stopping | downing and port_open(port))
+    for e in serve_entries(status or {}):
+        if not is_open(e[2]):
+            dark.add(serve_key(e))
+        ok, why = judge_serve(e, is_open, dark_before, ranges, protect)
+        items.append({"kind": "serve", "id": f"{e[0]}={e[1]}", "flag": e[0], "port": e[1], "local": e[2],
+                      "target": ok, "why": why})
     return items, notes, dark
 
 
 # ---------------------------------------------------------------- acting
 
-def act(item, cfg):
+def act(item, cfg, protect):
     k = item["kind"]
     if k == "card":
         p = item["id"]
-        cwd_of = reap.cwds()
-        facts = cwd_of is not None and reap.worktree_facts(p, None, None, cwd_of)
-        if not facts or facts.get("head") != item["head"] or facts.get("dirty") or facts.get("unreadable"):
-            return "건너뜀: 판정 뒤 카드가 바뀜"
-        if people := people_in(p, reap.processes(), cwd_of):
-            return f"건너뜀: 판정 뒤 사람이 띄운 프로세스가 생김(pid {people[0]})"
+        # Everything is judged again here: a PR reopened, a session resumed or a person's command since the scan
+        # keeps the card.
+        wt = orca("worktree", "list", "--limit", "10000")
+        row = next((w for w in (wt or {}).get("worktrees") or [] if reap.real(w.get("path") or "") == p), None)
+        if not isinstance(wt, dict) or wt.get("truncated") or row is None:
+            return "건너뜀: orca worktree list 에서 다시 찾지 못함"
+        ok, why, facts = card_verdict(row, read_machine(time.time()), cfg, protect, time.time())
+        if not ok:
+            return f"건너뜀: 다시 보니 {why}"
+        if facts.get("head") != item["head"]:
+            return "건너뜀: 판정 뒤 HEAD 가 바뀜"
         reap.run(["orca", "terminal", "close", "--worktree", f"path:{p}", "--all", "--json"])
         return "터미널 닫음, " + reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{p}", "name": p,
-                                           "regenerated": item.get("regenerated")}, [])
+                                           "regenerated": facts.get("regenerated")}, [])
     if k == "stack":
         reap.run(["docker", "compose", "-p", item["id"], "down"])  # no -v: volumes are data
         return "docker compose down(볼륨·이미지 유지)"
@@ -366,6 +428,11 @@ def act(item, cfg):
         return "SIGTERM"
     if k == "serve":
         cli = pw.tailscale_cli(pw.config())
+        entry = (item["flag"], item["port"], item["local"])
+        if entry not in serve_entries(pw.serve_status(cli)):
+            return "건너뜀: 판정 뒤 serve 설정이 바뀜"
+        if port_open(item["local"]):
+            return "건너뜀: 판정 뒤 리스너가 생김"
         p = pw.ts(cli, "serve", f"{item['flag']}={item['port']}", "off")
         if p.returncode:
             raise RuntimeError(p.stderr.strip()[:200])
@@ -408,24 +475,35 @@ def run_pass(dry, cfg=None, now=None):
         log([{**summary, "kind": "pass"}])
         return summary, 2
     last = read_last() or {}
-    items, notes, dark = scan(cfg, protect, set(last.get("dark") or ()), now)
     rows = []
-    for i in items:
-        if not i["target"]:
-            continue
-        row = {"ts": stamp, "run": run_id, "dry_run": dry, "kind": i["kind"], "id": i["id"], "why": i["why"]}
-        if dry:
-            row["result"] = "dry-run"
-        else:
-            try:
-                row["result"] = act(i, cfg)
-            except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-                row["error"] = str(e)[:300]
-        i["result"] = row.get("result") or "실패: " + row.get("error", "")
-        rows.append(row)
+
+    def do(batch):
+        for i in batch:
+            if not i["target"]:
+                continue
+            row = {"ts": stamp, "run": run_id, "dry_run": dry, "kind": i["kind"], "id": i["id"], "why": i["why"]}
+            if dry:
+                row["result"] = "dry-run"
+            else:
+                try:
+                    row["result"] = act(i, cfg, protect)
+                except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
+                    row["error"] = str(e)[:300]
+            i["result"] = row.get("result") or "실패: " + row.get("error", "")
+            rows.append(row)
+
+    items, notes, m = scan_cards(cfg, protect, now)
+    do(items)
+    # Only a card that is really gone frees its stack and dev servers; a skipped or failed close keeps them.
+    closed = [i["id"] for i in items if i["target"] and (dry or (not i["result"].startswith(("건너뜀", "실패"))
+                                                                 and not os.path.isdir(i["id"])))]
+    rest, more, dark = scan_rest(cfg, protect, set(last.get("dark") or ()), closed, m, now)
+    do(rest)
+    items, notes = items + rest, notes + more
     log(rows)
     summary = {"t": now, "at": stamp, "run": run_id, "dry_run": dry,
-               "acted": sum(1 for r in rows if "result" in r), "failed": sum(1 for r in rows if "error" in r),
+               "acted": sum(1 for r in rows if "result" in r and not r["result"].startswith("건너뜀")),
+               "skipped": sum(1 for r in rows if r.get("result", "").startswith("건너뜀")), "failed": sum(1 for r in rows if "error" in r),
                "kept": sum(1 for i in items if not i["target"]), "notes": notes, "dark": sorted(dark)}
     if not dry:
         write_last(summary)
