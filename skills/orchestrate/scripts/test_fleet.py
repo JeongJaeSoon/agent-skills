@@ -298,7 +298,8 @@ assert len(rows) == 15 and all(r["text"].startswith("prompt ") and "code" in r f
 
 # Adoption: a dry run by default, a write only with the config flag, and undo restores the logged previous value.
 calls = []
-fleet.fetch_fast, fleet.fetch_runs = world.fetch_fast, world.fetch_runs
+real_ps_table = fleet.ps_table
+fleet.fetch_fast, fleet.fetch_runs, fleet.ps_table = world.fetch_fast, world.fetch_runs, lambda: {}
 fleet.orca = lambda *a, **k: calls.append(a) or {}
 world.worktrees[2]["parentWorktreeId"] = "wt-elsewhere"  # a parent the user chose is left alone
 assert fleet.adopt() == 0 and calls == []
@@ -315,6 +316,7 @@ assert sorted(calls) == sorted(("worktree", "set", "--worktree", f"id:{w}", "--n
 calls.clear()
 fleet.adopt(undo="all")
 assert calls == []  # the latest row per worktree is now an undo: nothing to restore twice
+fleet.ps_table = real_ps_table
 
 # Mail asking a coordinator stays until someone replies, even after the coordinator's inbox loop acked it; a day at most.
 ago = lambda h: fleet.iso(now - dt.timedelta(hours=h))
@@ -916,11 +918,11 @@ finally:
     fleet.RUN_CACHE.clear()
 
 # The tree's root is the top-level coordinator even when a program coordinator it dispatched runs a newer Run.
-def tree(run_list, workers, wts, orca_parent=None):
-    fast = {"worktrees": [{"worktreeId": w, "path": f"/work/{w}", "agents": [],
+def tree(run_list, workers, wts, orca_parent=None, declared=(), paths=None):
+    fast = {"worktrees": [{"worktreeId": w, "path": (paths or {}).get(w, f"/work/{w}"), "displayName": w, "agents": [],
                            "parentWorktreeId": (orca_parent or {}).get(w)} for w in wts],
             "terminals": [{"handle": f"term_{w}", "worktreeId": w} for w in wts]}
-    sessions, root = fleet.build_sessions(fast, {"runs": run_list, "workers": workers, "tasks": []}, {})
+    sessions, root = fleet.build_sessions(fast, {"runs": run_list, "workers": workers, "tasks": []}, {}, declared)
     return root, {sid: (s["kind"], s["parent"]) for sid, s in sessions.items()}
 
 
@@ -961,6 +963,40 @@ for sid in ("x", "y"):
     assert sid == "top", got
 root_wt, got = tree([run("r-top", "top", "t9"), run("r-a", "a", "t2"), run("r-b", "b", "t3")], [], ["top", "a", "b"], {"b": "a"})
 assert root_wt == "top" and got["a"] == ("orchestration", "top") and got["b"] == ("orchestration", "a"), got
+
+# A top level with no Run of its own, beside a lead's Run: the declared roles keep the lead off the root. Folder
+# contexts share one path, and the session name picks the declared one; a declared lead with no Run is still a lead.
+declared = [("/home/bench", "top", "orchestrator"), ("/work/ops", "ops-1", "lead"), ("/work/net", "net-1", "lead")]
+root_wt, got = tree([run("r-ops", "ops", "t1")], [worker("r-ops", "w1")], ["top", "bench", "ops", "net", "w1"],
+                    {"net": "top"}, declared, {"top": "/home/bench", "bench": "/home/bench"})
+assert root_wt == "top", root_wt
+assert got == {"top": ("orchestrator", None), "bench": ("standalone", "top"), "ops": ("orchestration", "top"),
+               "net": ("orchestration", "top"), "w1": ("task", "ops")}, got
+root_wt, got = tree([run("r-ops", "ops", "t1")], [], ["ops"], declared=declared[1:2])
+assert root_wt is None and got == {"ops": ("orchestration", None)}, (root_wt, got)
+root_wt, _ = tree([run("r-ops", "ops", "t1")], [], ["ops", "a", "b"], declared=[("/x", "c", "orchestrator")],
+                  paths={"a": "/x", "b": "/x"})
+assert root_wt == "ops", root_wt  # two contexts on that path and neither has the declared name: not guessed
+
+# declared_roles reads the live sessions' ROLE records, else a `--name` that states the role.
+home = root / "roles-home"
+(home / "sessions").mkdir(parents=True)
+for pid, sid, name, cwd in [(1, "s-top", "🔥 top", "/a"), (2, "s-lead", "lead:ops", "/b"), (3, "s-none", "lead:x", "/c"),
+                            (4, "s-plain", "card", "/d"), (5, "s-dead", "orchestrator", "/e")]:
+    (home / "sessions" / f"{pid}.json").write_text(json.dumps({"pid": pid, "sessionId": sid, "name": name, "cwd": cwd,
+                                                               "procStart": "Mon"}))
+state_root = root / "roles-state"
+(state_root / "roles").mkdir(parents=True)
+(state_root / "roles" / "s-top.json").write_text('{"role": "orchestrator"}')
+(state_root / "roles" / "s-none.json").write_text('{"role": "none"}')
+saved = {k: os.environ.get(k) for k in ("CLAUDE_CONFIG_DIR", "AGENT_SKILLS_STATE")}
+os.environ.update(CLAUDE_CONFIG_DIR=str(home), AGENT_SKILLS_STATE=str(state_root))
+try:
+    got = fleet.declared_roles({p: (0, "Mon", "claude") for p in (1, 2, 3, 4)})
+finally:
+    for k, v in saved.items():
+        os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+assert got == [("/a", "🔥 top", "orchestrator"), ("/b", "lead:ops", "lead")], got
 
 # A session's last activity is the later of Orca's worktree time and its agents' own: the worktree time stands still
 # while an agent in it works.

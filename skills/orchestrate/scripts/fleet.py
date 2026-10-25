@@ -428,17 +428,36 @@ def fetch_monitors(procs=None, now=None, warn=None):
         raise SourceError(f"monitors: {type(e).__name__}: {e}")
 
 
-def live_transcripts(procs, warn):
-    """(session id, session record with its live "pids", transcript path) for each live Claude Code session."""
-    home, sessions = claude_home(), {}
-    for p in sorted((home / "sessions").glob("*.json")):
+def live_sessions(procs):
+    """session id -> session record with its live "pids", for each live Claude Code session."""
+    sessions = {}
+    for p in sorted((claude_home() / "sessions").glob("*.json")):
         s = read_json(p, {}) or {}
         proc = procs.get(s.get("pid"))
         if s.get("sessionId") and s.get("cwd") and proc and proc[1] == " ".join(str(s.get("procStart")).split()):
             # Resuming a session in a second terminal leaves two live processes writing one transcript.
             sessions.setdefault(s["sessionId"], {**s, "pids": []})["pids"].append(s["pid"])
+    return sessions
+
+
+def declared_roles(procs):
+    """[(cwd, session name, "orchestrator" | "lead")] for each live Claude Code session that declared a role: the
+    `ROLE:` line hooks/reorient.py recorded in roles/<session id>.json, else a `--name orchestrator` or `lead:<slug>`."""
+    base = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()  # as reorient.py
     out = []
-    for sid, s in sessions.items():
+    for sid, s in live_sessions(procs).items():
+        name = s.get("name") or ""
+        role = (read_json(base / "roles" / f"{sid}.json", {}) or {}).get("role") \
+            or ("orchestrator" if name == "orchestrator" else "lead" if name.startswith("lead:") else None)
+        if role in ("orchestrator", "lead"):
+            out.append((s["cwd"], name, role))
+    return out
+
+
+def live_transcripts(procs, warn):
+    """(session id, session record with its live "pids", transcript path) for each live Claude Code session."""
+    home, out = claude_home(), []
+    for sid, s in live_sessions(procs).items():
         path = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", s["cwd"]) / f"{sid}.jsonl"
         if not path.exists():  # a long cwd gets a shortened directory name
             path = next(iter(sorted((home / "projects").glob(f"*/{sid}.jsonl"))), path)
@@ -662,7 +681,7 @@ def phase_of(agents, live_terms):
     return "open" if live_terms else "offline"
 
 
-def build_sessions(fast, runs, cfg):
+def build_sessions(fast, runs, cfg, declared=()):
     terms_by_wt = {}
     for t in fast["terminals"]:
         terms_by_wt.setdefault(t.get("worktreeId"), []).append(
@@ -715,12 +734,23 @@ def build_sessions(fast, runs, cfg):
         p = s["orca_parent"]
         return p if p in sessions else None
 
+    # declared (declared_roles) names a cwd, and folder contexts share one: the session name picks among them.
+    role_of = {}
+    for cwd, name, role in declared:
+        here = [sid for sid, s in sessions.items() if s["path"] == cwd]
+        here = [sid for sid in here if sessions[sid]["name"] == mask(name, 120)] or here
+        if len(here) == 1 and role_of.get(here[0]) != "orchestrator":
+            role_of[here[0]] = role
+    declared_top = [sid for sid, role in role_of.items() if role == "orchestrator"]
+
     root = cfg.get("root_worktree") if cfg.get("root_worktree") in sessions else None
+    if not root and len(declared_top) == 1:
+        root = declared_top[0]  # a top level without a Run of its own lost the root to a lead's newer Run
     if not root:
         # A program coordinator started with worker-start opens a newer Run of its own, so the newest Run is not
-        # necessarily the top level: take the newest coordinator no other coordinator dispatched.
+        # necessarily the top level: take the newest coordinator no other coordinator dispatched, never a declared lead.
         coords = [coord_of_run[r["id"]] for r in sorted(runs["runs"], key=lambda r: r.get("updated_at") or "", reverse=True)
-                  if coord_of_run.get(r["id"]) in sessions]
+                  if coord_of_run.get(r["id"]) in sessions and role_of.get(coord_of_run[r["id"]]) != "lead"]
         root = next((c for c in coords if not dispatcher(c)), coords[0] if coords else None)
 
     for sid, s in sessions.items():
@@ -740,7 +770,7 @@ def build_sessions(fast, runs, cfg):
             s["parent"] = coord_of_run[w["runId"]]
         else:
             s["parent"] = orca_parent(s) or root
-            s["kind"] = "task" if w else "standalone"
+            s["kind"] = "task" if w else "orchestration" if role_of.get(sid) == "lead" else "standalone"
     # Coordinators that dispatched each other would make a loop the tree never leaves; hang such a one on the root.
     for sid, s in sessions.items():
         seen, p = {sid}, s["parent"]
@@ -1179,12 +1209,14 @@ class Fleet:
     """Holds the caches between ticks and writes state.json. One instance per server process."""
 
     def __init__(self, fetch_fast=fetch_fast, fetch_runs=fetch_runs, graphql=graphql, now=utcnow, read_screen=read_screen,
-                 fetch_automations=fetch_automations, fetch_monitors=fetch_monitors, fetch_sent=fetch_sent, ps_table=ps_table):
+                 fetch_automations=fetch_automations, fetch_monitors=fetch_monitors, fetch_sent=fetch_sent, ps_table=ps_table,
+                 declared_roles=declared_roles):
         self.fetch_fast, self.fetch_runs, self.graphql, self.now = fetch_fast, fetch_runs, graphql, now
         self.ps_table = ps_table  # read once a runs cycle for both monitors and sent
         self.fetch_automations, self.automations = fetch_automations, []
         self.fetch_monitors, self.monitors = fetch_monitors, []
         self.fetch_sent, self.sent = fetch_sent, []  # served by /api/fleet/sent with the `orch sent` log, not in state.json
+        self.declared_roles, self.declared = declared_roles, []
         self.read_screen = read_screen
         self.lock = threading.Lock()
         d = state_dir()
@@ -1263,11 +1295,12 @@ class Fleet:
                         self.ok("sent")
                     except SourceError as e:
                         self.ok("sent", str(e))
+                    self.declared = self.declared_roles(procs)
                 self.last["runs"] = mono
             if self.fast is None:
                 return self.state
             cfg = config()
-            sessions, root = build_sessions(self.fast, self.runs, cfg)
+            sessions, root = build_sessions(self.fast, self.runs, cfg, self.declared)
             for s in sessions.values():
                 s["gh_repo"] = repo_of(s["path"], self.repos) if s.get("path") else None
                 s["project"] = project_of(s.get("path"), s.get("repo_name"), s["gh_repo"])
@@ -2062,7 +2095,7 @@ def adopt(apply=False, undo=None):
         print(f"restored {done} worktree(s)")
         return 0
     cfg = config()
-    sessions, root = build_sessions(fetch_fast(), fetch_runs(), cfg)
+    sessions, root = build_sessions(fetch_fast(), fetch_runs(), cfg, declared_roles(ps_table()))
     if not root:
         print("no orchestrator found: set root_worktree in the config, or start a Run from the orchestrator")
         return 1
