@@ -2,6 +2,8 @@
 
 이 머신의 loopback에서 뜬 웹페이지(문서 정적 서버, 개발 서버, 검증 스택 웹 화면)를 tailnet HTTPS로 자동으로 열고, 서버가 내려가면 자기가 연 항목만 닫는다. 모델·API는 부르지 않는다. launchd가 `StartInterval`마다 한 번 실행하고 끝낸다.
 
+기본은 꺼져 있다. tailscale을 쓰는 머신에서만 `skills-sync setup enable preview-watch`로 켜고 `disable`로 끈다([automation.md](automation.md#처음-설치할-때)). 아래 `install`·`uninstall`은 그 명령이 부르는 것이다.
+
 ```bash
 bin/preview-watch install     # 메인 체크아웃에서. LaunchAgent io.github.jeongjaesoon.preview-watch
 bin/preview-links             # 지금 열린 tailnet 링크. watcher가 연 것은 (watch)

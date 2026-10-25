@@ -26,7 +26,26 @@ python3 <체크아웃>/scripts/bootstrap.py --write   # 적용
 
 - `~/.claude/settings.json`을 백업하고, `env` 블록의 `CLAUDE_CODE_PLUGIN_DIRS`에 체크아웃 경로를 넣는다. 마켓플레이스로 설치한 `agent-skills@jeongjaesoon`이 켜져 있으면 끈다. 둘 다 켜면 hook이 두 번 돈다.
 - macOS면 launchd 작업(`io.github.jeongjaesoon.agent-skills-sync`)을 설치해 15분마다와 로그인 때 `skills-sync sync`를 돌린다. Linux면 crontab 한 줄을 출력한다.
+- 끝에 `skills-sync setup apply`를 돌려 기본으로 켜는 정기 자동화를 켠다. 아래 "정기 자동화" 절.
 - 이미 된 단계는 건너뛰므로 다시 돌려도 된다. 새 설정은 새 세션부터 적용된다. 떠 있는 세션은 재시작한다. 거기서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
+
+### 정기 자동화
+
+`skills-sync setup`이 이 체크아웃의 정기 자동화를 한곳에서 켜고 끈다. 같은 명령을 다시 돌려도 결과는 같다. 메인 체크아웃에서 돌린다.
+
+```bash
+skills-sync setup                        # 목록: 이름, 지금 상태, 기본값, 하는 일
+skills-sync setup apply                  # 기본 on 중 한 번도 설정하지 않은 것만 켠다(bootstrap --write 가 부른다)
+skills-sync setup enable preview-watch   # 하나 켜기
+skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌려도 꺼진 채로 남는다
+```
+
+| 이름 | 기본 | 장치 | 하는 일 |
+|---|---|---|---|
+| `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 정기적으로 정리한다. compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
+| `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
+
+자세한 동작과 다른 OS의 대안은 [docs/automation.md](docs/automation.md#처음-설치할-때).
 
 고치지 않고 쓰기만 하는 PC는 마켓플레이스로 설치해도 된다. 설치본은 커밋 단위 복사본이라 갱신은 `claude plugin marketplace update jeongjaesoon` 뒤 `claude plugin update agent-skills@jeongjaesoon`이다.
 
@@ -86,7 +105,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
 
-**도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)).
+**도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. 기본 off이고 `skills-sync setup enable preview-watch`로 켠다. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)).
 
 **채팅**: `watch-mentions`(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 분류해 코디네이터에게 한 통으로 보내고, 작업 의뢰는 기표 초안으로).
 
@@ -131,7 +150,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

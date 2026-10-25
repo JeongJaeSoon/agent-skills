@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Set this PC up to load this checkout live and keep it in sync (docs/platform.md §5).
+"""Set this PC up to load this checkout live, keep it in sync, and turn on the default-on automations
+(docs/platform.md §5, docs/automation.md).
 
 Usage:
   python3 scripts/bootstrap.py            # dry run: print what would change
@@ -120,11 +121,14 @@ def main():
             shutil.copymode(target, tmp)
         tmp.replace(target)
     scheduler(write)
+    sys.stdout.flush()  # keep this output ahead of the children's
+    automations = [sys.executable, str(REPO / "scripts" / "automations.py")]
     if not write:
-        print("(dry run; add --write to apply)")
+        subprocess.run([*automations, "status"])
+        print("(dry run; add --write to apply, which also runs `skills-sync setup apply`)")
         return 0
-    sys.stdout.flush()  # keep this output ahead of the child's
     subprocess.run([sys.executable, str(REPO / "scripts" / "sync.py"), "sync", "--no-broadcast"])
+    subprocess.run([*automations, "apply"])
     print(f"done. New sessions load {REPO}. Restart the running ones: a /reload-plugins there drops the\n"
           f"marketplace copy without adding the checkout, and leaves them with no agent-skills at all.\n"
           f"If `claude` has never run in {REPO}, start it there once and accept the folder trust prompt.")

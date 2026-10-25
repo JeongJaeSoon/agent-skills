@@ -3,6 +3,35 @@
 정기 작업이나 사건에 반응하는 작업을 어디에 걸지 정하는 표다. 근거는 Claude Code 2.1.292와 Orca 1.4.220에서
 잰 결과다.
 
+## 처음 설치할 때
+
+`skills-sync setup`(`scripts/automations.py`)이 이 저장소가 거는 정기 자동화의 유일한 입구다. 자동화마다
+기본값이 있고, `apply`는 기본 on 중 한 번도 설정하지 않은 것만 켠다. `bootstrap.py --write`가 마지막에 `apply`를
+부르므로, 처음 설치한 사람은 따로 할 일이 없다. 바꾸고 싶으면 아래 명령을 메인 체크아웃에서 돌린다.
+
+```bash
+skills-sync setup [--json]               # 목록과 상태
+skills-sync setup apply                  # 기본값 적용
+skills-sync setup enable <이름>          # 켜기
+skills-sync setup disable <이름>         # 끄기
+```
+
+| 이름 | 기본 | 장치 | 켜기 | 끄기 |
+|---|---|---|---|---|
+| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로) | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
+| `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
+
+- 같은 상태면 아무것도 하지 않는다. `enable`을 두 번 돌려도 두 번째는 "이미 켜져 있음"이다.
+- 켜기는 job에 이 체크아웃의 절대 경로를 적으므로 worktree에서는 거부한다(worktree가 지워지면 job이 조용히
+  실패한다). 테스트에만 `--here`를 붙인다. janitor가 꺼져 있을 뿐 내용이 같으면 worktree에서도 켠다.
+- `status`는 등록된 내용이 이 체크아웃과 다르면(다른 경로, `reap.py`의 주기·프롬프트 변경) 그 필드를 적는다.
+  `enable`을 다시 돌리면 맞춰진다.
+- janitor는 Orca가 있어야 한다. `orca` CLI가 없으면 상태는 "확인 불가"이고 `enable`은 안내만 하고 실패한다.
+- preview-watch는 macOS 전용이다. 다른 OS에서는 상태가 "미지원"이고, `enable`은 cron으로 `bin/preview-watch run`을
+  돌리라는 안내만 한다.
+- `agent-skills-sync` LaunchAgent(15분 동기화)는 자동화 목록에 없다. 체크아웃을 실시간으로 읽는 설치의 일부라
+  `bootstrap.py`가 건다.
+
 ## 장치별 성질
 
 | 장치 | 세션이 끝나도 남나 | 로컬 파일·프로세스 접근 | 모델 없이 거르나 |
@@ -73,6 +102,7 @@
 
 ```bash
 python3 <reap.py 절대 경로> precheck     # 대상이 있으면 exit 0. 지난 reap 이 실패한 대상과 같으면 하루 동안, 같은 계획이 reap 없이 plan_repeat 번 쌓이면 하루 한 번만 exit 0
+skills-sync setup enable janitor        # 등록·갱신은 이 명령으로 한다. 아래 schedule 은 그 내부와 runner 용
 python3 <reap.py 절대 경로> schedule     # 만들 `orca automations create …` 명령을 출력만 한다. 스킬을 로드하는 체크아웃에서 돌린다
 python3 <reap.py 절대 경로> schedule --workspace path:<runner>   # runner worktree 에서 돌린다(위 "지킬 것"의 모델 항목)
 python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
