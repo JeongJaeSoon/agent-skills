@@ -48,6 +48,9 @@ ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a pa
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
             through `orch heavy <slug> -- <command>`, which caps them machine-wide.
+            Once verification is done, down the stacks you started in the same turn
+            (`docker compose -p <project> down`, never `-v`); a stack that has to stay
+            gets a keep reason and deadline in the reap ledger (reap-resources, compose-stack).
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
             the browser only once that prints held; `orch release browser` when done.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.

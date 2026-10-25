@@ -7,6 +7,7 @@ Usage:
   python3 reap.py reap --plan PLAN.json
   python3 reap.py load [--top N] [--json]
   python3 reap.py ledger add --kind KIND (--path P | --id ID | --pid N) [--url U] [--pr owner/repo#N] [--worktree W] [--run R] [--by B]
+                             compose-stack: --id PROJECT [--pid N] [--previewed] [--keep REASON --until ISO]
   python3 reap.py ledger list [--json]
   python3 reap.py precheck [--kinds ...]
   python3 reap.py schedule [--workspace SELECTOR] [--provider claude] [--write]
@@ -20,8 +21,9 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2,
-"regenerated_untracked": true}.
-Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
+"regenerated_untracked": true, "preview_ports": [4500, 4599]}.
+Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack;
+`--kinds janitor`) cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
 --parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
@@ -423,7 +425,8 @@ def scan(kinds, hours, cfg, repo_list):
         items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
                               regenerated=cfg.get("regenerated_untracked", True) is not False,
                               evidence_roots=cfg.get("evidence_roots"),
-                              done_idle_s=float(cfg.get("done_card_hours") or 2) * 3600)
+                              done_idle_s=float(cfg.get("done_card_hours") or 2) * 3600,
+                              preview=tuple(cfg.get("preview_ports") or (4500, 4599)))
     if "user-folder" in kinds:
         days = user_folder_days(cfg, notes)
         shot_days = days and user_folder_days(cfg, notes, "user_folder_screenshot_days", 1,
@@ -452,7 +455,8 @@ def trash_auto_empty():
 
 
 # Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker).
-JANITOR = ("orca-worktree", "done-card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch")
+JANITOR = ("orca-worktree", "done-card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch",
+           "compose-stack")
 # What the scheduled run covers: the janitor kinds, the user's download and desktop folders, closed programs and hook state.
 SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
 # Kinds that would find something new every round; the precheck looks at them once a day.
@@ -791,6 +795,20 @@ def regenerated_copies(path, git=run):
     return sorted(f".agents/skills/{n}" for n in names)
 
 
+def branch_pr(path, git=run):
+    """(owner/repo#N or None, unread) for the branch checked out at path."""
+    branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
+    prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,state,isCrossRepository"],
+                          cwd=path, check=False)
+    # A failed lookup is not an empty answer: a card with an open PR would pass as one without.
+    unread = bool(branch) and prs is None
+    # A fork's PR with the same head name is not this branch's.
+    own = [p for p in json.loads(prs) if not p.get("isCrossRepository")] if prs else []
+    own.sort(key=lambda p: p.get("state") != "OPEN")
+    m = own and re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", own[0]["url"])
+    return (m and f"{m.group(1)}#{m.group(2)}") or None, unread
+
+
 def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, regenerated=True):
     common = git(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=False)
     if common is None:
@@ -799,19 +817,7 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, regenerated=T
     if real(main) == real(path):
         return {"main": True}
     users = [pid for pid, c in users_cwd.items() if under(real(c), real(path))]
-    ref, pr_unread = ledger_pr, False
-    if not ref:
-        branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
-        prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,isCrossRepository"],
-                              cwd=path, check=False)
-        # A failed lookup is not an empty answer: a card with an open PR would pass as one without.
-        pr_unread = bool(branch) and prs is None
-        # A fork's PR with the same head name is not this branch's.
-        own = [p for p in json.loads(prs) if not p.get("isCrossRepository")] if prs else []
-        if own:
-            url = own[0]["url"]
-            m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
-            ref = m and f"{m.group(1)}#{m.group(2)}"
+    ref, pr_unread = (ledger_pr, False) if ledger_pr else branch_pr(path, git)
     landed = None
     if not ref:
         default = git(["git", "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False)
@@ -898,10 +904,128 @@ def worker_worktrees(workers):
 FACT_WORKERS = 8
 
 
+def docker_ts(s):
+    """Docker's RFC 3339 with nanoseconds; Python before 3.11 reads at most microseconds."""
+    return dt.datetime.fromisoformat(re.sub(r"\.\d+", "", s).replace("Z", "+00:00")).timestamp()
+
+
+def compose_stacks():
+    """{project: {running, stopped, first (oldest container created), last (newest start or stop), ports}};
+    None when docker cannot be read."""
+    if not shutil.which("docker"):
+        return {}
+    ids = run(["docker", "ps", "-aq", "--no-trunc"], check=False)
+    if ids is None:
+        return None
+    if not ids.split():
+        return {}
+    out = run(["docker", "inspect", *ids.split()], check=False)
+    if out is None:
+        return None
+    stacks = {}
+    for c in json.loads(out):
+        labels = (c.get("Config") or {}).get("Labels") or {}
+        proj = labels.get("com.docker.compose.project")
+        # An app can copy the project and service labels onto containers it starts; `compose down` matches only the
+        # ones compose created, which carry the oneoff label, and leaves the rest.
+        if not proj or "com.docker.compose.oneoff" not in labels:
+            continue
+        s = stacks.setdefault(proj, {"running": 0, "stopped": 0, "first": None, "last": 0.0, "ports": set()})
+        st = c.get("State") or {}
+        s["running" if st.get("Status") in ("running", "restarting", "paused") else "stopped"] += 1
+        with contextlib.suppress(ValueError, TypeError, AttributeError):
+            created = docker_ts(c.get("Created"))
+            s["first"] = created if s["first"] is None else min(s["first"], created)
+        for k in ("StartedAt", "FinishedAt"):
+            with contextlib.suppress(ValueError, TypeError, AttributeError):
+                s["last"] = max(s["last"], docker_ts(st.get(k)))
+        for binds in ((c.get("NetworkSettings") or {}).get("Ports") or {}).values():
+            s["ports"] |= {int(b["HostPort"]) for b in binds or () if str(b.get("HostPort", "")).isdigit()}
+    return stacks
+
+
+def folded(entries, kind):
+    """One record per id. A line with a PR or worktree link is a registration and starts the record over (a stack
+    brought up again under the same name, after a reap retired it); a keep or previewed line adds to it."""
+    out = {}
+    for e in entries:
+        if e.get("kind") != kind:
+            continue
+        fresh = e["id"] not in out or any((e.get("links") or {}).values())
+        prev = {"registered": e.get("ts")} if fresh else out[e["id"]]
+        links = {**(prev.get("links") or {}), **{k: v for k, v in (e.get("links") or {}).items() if v}}
+        out[e["id"]] = {**prev, **{k: v for k, v in e.items() if v is not None}, "links": links}
+    return [e for e in out.values() if not e.get("retired")]
+
+
+def stack_owner(links, pr_state, pr_of=branch_pr, exists=os.path.exists, head=None):
+    """(done, why) for the card that started a stack: its PR merged or closed, or its worktree gone. A worktree link
+    with no PR link asks the branch's PR, which counts only when it carried the worktree's HEAD: an old closed PR on a
+    reused branch name says nothing about the work in progress."""
+    done, why = link_verdict(links, pr_state, exists)
+    wt = links.get("worktree")
+    if done is False and not links.get("pr") and wt:
+        ref, unread = pr_of(wt)
+        if unread:
+            return False, f"worktree {wt} 의 PR 을 읽지 못함"
+        if not ref:
+            return False, f"worktree {wt} 있음, PR 없음"
+        done, why = link_verdict({"pr": ref}, pr_state, exists)
+        tip = (head or (lambda p: (run(["git", "-C", p, "rev-parse", "HEAD"], check=False) or "").strip()))(wt)
+        if done and (pr_state(ref) or {}).get("headRefOid") != tip:
+            return False, f"{why}, 그 뒤 worktree HEAD 가 바뀜"
+    return done, why
+
+
+def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599)):
+    """Registered stacks only. Target: its owner is done, and it is all stopped or nothing restarted it for `hours`;
+    a stack on a preview port also needs a `previewed` line. A keep line holds it until its deadline."""
+    out, lo, hi = [], *preview
+    for e in folded(entries, "compose-stack"):
+        name, s = e["id"], stacks.get(e["id"])
+        if not s:
+            continue  # already down
+        item = {"kind": "compose-stack", "key": f"compose-stack:{name}", "name": name, "target": False,
+                "age": now - s["last"] if s["last"] > 0 else None, "start": str(s["last"]),
+                "how": [f"docker compose -p {shlex.quote(name)} down"]}
+        out.append(item)
+        until = None
+        with contextlib.suppress(ValueError, TypeError, AttributeError):
+            until = parse_ts(e.get("until"))
+        with contextlib.suppress(ValueError, TypeError, AttributeError):
+            # Containers created after the registration are a new stack under a reused name.
+            if s["first"] is not None and s["first"] > parse_ts(e["registered"]) + 60:
+                item["why"] = "등록 뒤 같은 이름으로 다시 만들어진 스택(보고만)"
+                continue
+        if e.get("keep") and (until is None or now < until):
+            item["why"] = f"남김: {e['keep']}" + (f" ({e['until']}까지)" if until else " (기한을 읽지 못함)")
+            continue
+        done, why = owner(e.get("links") or {})
+        if not done:
+            item["why"] = why if done is False else "소유 카드·PR 링크 없음(보고만)"
+            continue
+        ports = sorted(p for p in s["ports"] if lo <= p <= hi)
+        if ports and not e.get("previewed"):
+            item["why"] = f"{why}, 미리보기 포트 {ports[0]}: 미리보기 확인 기록 전"
+            continue
+        if s["running"] and now - s["last"] < hours * 3600:
+            item["why"] = f"{why}, 실행 중(마지막 시작·정지 {hours:g}시간 미만)"
+            continue
+        item.update(target=True, why=f"{why}, " + ("컨테이너 모두 멈춤" if not s["running"] else
+                                                   f"{hours:g}시간 넘게 시작·정지 없음"))
+    return out
+
+
 def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now=None, evidence_roots=None,
-                 done_idle_s=2 * 3600, quiet=None, regenerated=True):
+                 done_idle_s=2 * 3600, quiet=None, regenerated=True, preview=(4500, 4599)):
     pr_state = pr_state or pr_reader()
     items = []
+    if "compose-stack" in kinds:
+        stacks = compose_stacks()
+        if stacks is None:
+            notes.append("compose-stack: docker 를 읽지 못함, 건너뜀")
+        items += judge_compose(entries, stacks or {}, functools.partial(stack_owner, pr_state=pr_state), hours,
+                               now or time.time(), preview)
     rows = processes() if {"gui-app", "tmpdir"} & kinds else {}
     cwd_of = cwds() if {"tmpdir", "orca-worktree", "done-card"} & kinds else {}
     if "tmpdir" in kinds:
@@ -979,8 +1103,8 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
 
 USER_FOLDERS = ()  # Explicit reap.user_folders configuration opts into personal-folder cleanup.
 PARTIAL = (".download", ".crdownload", ".part")
-# The automation runs every 3 hours; 21 keeps a daily sweep from slipping a slot each day.
-USER_FOLDER_EVERY = 21 * 3600
+# The automation runs every 30 minutes; 23.5 keeps a daily sweep from slipping a slot each day.
+USER_FOLDER_EVERY = 23.5 * 3600
 
 
 WALK_CAP = 20000
@@ -1296,12 +1420,14 @@ def notify_unrun(inbox, command, send=run):
     return notify
 
 
+# Compose stacks a finished card left running hold gigabytes; a precheck with no targets never wakes the model.
+TRIGGER = "7,37 * * * *"
 # Orca's default of 60 seconds is shorter than a precheck that reads `gh` and lsof for dozens of cards.
 PRECHECK_TIMEOUT = 300
 
 
 def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, inbox=None):
-    return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", "17 */3 * * *",
+    return ["orca", "automations", "create", "--name", "agent-skills janitor", "--trigger", TRIGGER,
             "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
             "--precheck", round_cmd(script, state_dir, ledger, "precheck"), "--precheck-timeout", str(PRECHECK_TIMEOUT),
             "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json"]
@@ -1535,6 +1661,11 @@ def act(item, notes):
         return item["how"][0] + " (ledger 에서 내림)"
     if kind == "done-card":
         return nudge_card(item)
+    if kind == "compose-stack":
+        # No -v: the stack's volumes are data, and stay.
+        run(["docker", "compose", "-p", item["name"], "down"])
+        ledger_add(ledger_path(), "compose-stack", item["name"], by="reap", retired=True)
+        return "docker compose down (볼륨 유지, ledger 에서 내림)"
     if kind == "orca-worker":
         run(["orca", "orchestration", "worker-release", "--dispatch", k.split(":", 1)[1], "--json"])
         return "터미널 회수"
@@ -1628,7 +1759,21 @@ def main():
                 sys.exit("ledger add needs --path, --id, or --pid (gui-app) of a live process")
             rid = os.path.realpath(rid) if opt("--path") else rid
             wt = opt("--worktree") and os.path.realpath(opt("--worktree"))
-            print(json.dumps(ledger_add(path, opt("--kind"), rid, opt("--pr"), wt, opt("--run"), opt("--by"), url=opt("--url")),
+            extra = {"url": opt("--url")}
+            if opt("--kind") == "compose-stack":
+                if opt("--keep") and not opt("--until"):
+                    sys.exit("--keep needs --until <ISO time>: a stack kept with no deadline stays forever")
+                if opt("--until"):
+                    try:
+                        parse_ts(opt("--until"))
+                    except ValueError:
+                        sys.exit("--until must be an ISO time, e.g. 2026-10-27T18:00+09:00")
+                pid = opt("--pid")
+                if pid and not pid.isdigit():
+                    sys.exit("--pid must be a number")
+                extra.update(keep=opt("--keep"), until=opt("--until"), pid=pid and int(pid),
+                             previewed=True if "--previewed" in sys.argv else None)
+            print(json.dumps(ledger_add(path, opt("--kind"), rid, opt("--pr"), wt, opt("--run"), opt("--by"), **extra),
                              ensure_ascii=False))
         elif sys.argv[2:3] == ["list"]:
             entries = ledger_read(path)

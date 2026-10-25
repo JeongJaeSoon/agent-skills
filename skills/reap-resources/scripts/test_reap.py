@@ -663,7 +663,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "ignored 항목 2개" in out, out
 argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo", ledger=pathlib.Path("/l/ledger.jsonl"))
 assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
-assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "17 */3 * * *"
+assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "7,37 * * * *"
 # The automation does not inherit the shell that ran schedule, so a state or ledger off the default goes in as flags,
 # never an `env` or `VAR=` prefix, which a scheduled session may refuse as a command of its own.
 assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck --state /s --ledger /l/ledger.jsonl"
@@ -774,12 +774,12 @@ with tempfile.TemporaryDirectory() as tmp:
         cfg = {} if v is None else {"user_folder_screenshot_days": v}
         assert reap.user_folder_days(cfg, notes, "user_folder_screenshot_days", 1, "스크린샷도 7일 기준") == want, (v, notes)
         assert (want is None) == bool(notes) and all("스크린샷도 7일 기준" in n for n in notes), notes
-    # Once a day: a sweep 20 hours ago is not due, one 22 hours ago is.
+    # Once a day: a sweep 20 hours ago is not due, one 24 hours ago is.
     st = f / "state"
     st.mkdir()
     assert reap.user_folder_due(st)
     (st / "user-folder-last.json").write_text(json.dumps({"at": now - 20 * H}))
-    assert not reap.user_folder_due(st, now) and reap.user_folder_due(st, now + 2 * H)
+    assert not reap.user_folder_due(st, now) and reap.user_folder_due(st, now + 4 * H)
 
 # CLI with a temp HOME: precheck plans the old entries of ~/Downloads and ~/Desktop, reap moves them to the trash,
 # keeps a download in progress and an open file, and the next precheck skips user-folder for the day.
@@ -1035,5 +1035,84 @@ prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))
 assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
 assert "우회하지 않는다" in prompt and "orchestration send" not in prompt, prompt
 assert "--to run:r1" in reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"), inbox="run:r1")
+
+
+# compose-stack: only registered stacks; the owner done, then stopped or idle for N hours; preview ports wait for a record.
+NOW = reap.parse_ts("2026-10-25T12:00:00+00:00")
+REG = "2026-10-25T00:00:00+00:00"
+stack = lambda running=0, last=NOW - 8 * H, first=NOW - 13 * H, ports=(): {
+    "running": running, "stopped": 3, "first": first, "last": last, "ports": set(ports)}
+ce = lambda name, ts=REG, **kw: {"ts": ts, "kind": "compose-stack", "id": name,
+                                 "links": {k: kw.pop(k) for k in ("pr", "worktree") if k in kw}, **kw}
+stacks = {"merged-stopped": stack(), "merged-running-old": stack(running=5), "merged-running-new": stack(running=5, last=NOW - H),
+          "open": stack(), "nolink": stack(), "preview": stack(ports=(35000, 4501)), "previewed": stack(ports=(4501,)),
+          "kept": stack(), "kept-expired": stack(), "busy-pid": stack(), "reused": stack(first=NOW - H), "wt-gone": stack(),
+          "wt-merged": stack(), "wt-nopr": stack(), "wt-unread": stack(), "unregistered": stack()}
+entries = [ce("merged-stopped", pr="acme/app#2"), ce("merged-running-old", pr="acme/app#2"),
+           ce("merged-running-new", pr="acme/app#2"), ce("open", pr="acme/app#1"), ce("nolink"),
+           ce("preview", pr="acme/app#2"), ce("previewed", pr="acme/app#2"),
+           ce("previewed", ts="2026-10-25T10:00:00+00:00", previewed=True),
+           ce("kept", pr="acme/app#2"), ce("kept", keep="사용자 시연", until="2026-10-26T00:00:00+00:00"),
+           ce("kept-expired", pr="acme/app#3", keep="시연", until="2026-10-25T06:00:00+00:00"),
+           ce("busy-pid", pr="acme/app#2", pid=4242), ce("reused", pr="acme/app#2"),
+           ce("wt-gone", worktree="/wt/gone"), ce("wt-merged", worktree="/wt/m"), ce("wt-nopr", worktree="/wt/n"),
+           ce("wt-unread", worktree="/wt/u"), ce("gone-stack", pr="acme/app#2"),
+           ce("retired", pr="acme/app#2"), ce("retired", retired=True),
+           # Downed by reap, then brought up again and registered by the card's next heavy run.
+           ce("again", pr="acme/app#2"), ce("again", retired=True), ce("again", ts="2026-10-25T11:00:00+00:00", pr="acme/app#2"),
+           ce("wt-moved", worktree="/wt/moved")]
+stacks.update(retired=stack(), again=stack(first=NOW - 1.5 * H), **{"wt-moved": stack()})
+prs_of = {"/wt/m": ("acme/app#3", False), "/wt/n": (None, False), "/wt/u": (None, True), "/wt/moved": ("acme/app#3", False)}
+heads = {"/wt/m": "h3", "/wt/moved": "h9"}
+owner = lambda links: reap.stack_owner(links, PRS.get, pr_of=prs_of.get, exists=lambda p: p != "/wt/gone", head=heads.get)
+got = {i["name"]: i for i in reap.judge_compose(entries, stacks, owner, 6, NOW)}
+targets = sorted(n for n, i in got.items() if i["target"])
+# busy-pid: the pid is provenance only; heavy exits right after registering, and a reused pid would hold it forever.
+assert targets == ["again", "busy-pid", "kept-expired", "merged-running-old", "merged-stopped", "previewed", "wt-gone",
+                   "wt-merged"], targets
+# A closed PR found by branch name that did not carry the worktree's HEAD is an old one: the card is still working.
+assert "HEAD 가 바뀜" in got["wt-moved"]["why"], got["wt-moved"]
+assert "unregistered" not in got and "gone-stack" not in got and "retired" not in got, sorted(got)
+assert got["merged-stopped"]["how"] == ["docker compose -p merged-stopped down"] and "-v" not in got["merged-stopped"]["how"][0]
+assert "모두 멈춤" in got["merged-stopped"]["why"] and "6시간 넘게" in got["merged-running-old"]["why"], got
+assert "6시간 미만" in got["merged-running-new"]["why"] and got["open"]["why"] == "열린 PR acme/app#1", got
+assert "보고만" in got["nolink"]["why"] and "미리보기 포트 4501" in got["preview"]["why"], got
+assert "사용자 시연" in got["kept"]["why"] and "다시 만들어진" in got["reused"]["why"], got
+assert got["wt-nopr"]["why"].endswith("PR 없음") and "읽지 못함" in got["wt-unread"]["why"], got
+# The identity reap compares: a restart since the scan changes it.
+assert got["merged-stopped"]["start"] != reap.judge_compose(entries, {"merged-stopped": stack(last=NOW - 7 * H)}, owner, 6, NOW)[0]["start"]
+# compose_stacks counts only containers compose created: an app's worker with copied labels survives `compose down`.
+c = lambda proj, svc, status, started, ports=None: {"Created": "2026-10-25T01:00:00.5Z", "Config": {"Labels": {
+    "com.docker.compose.project": proj, "com.docker.compose.service": svc or "worker",
+    **({"com.docker.compose.oneoff": "False"} if svc else {})}},
+    "State": {"Status": status, "StartedAt": started, "FinishedAt": "0001-01-01T00:00:00Z"},
+    "NetworkSettings": {"Ports": ports or {}}}
+fake = [c("s1", "web", "running", "2026-10-25T02:00:00.1Z", {"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "4501"}], "81/tcp": None}),
+        c("s1", "init", "exited", "2026-10-25T01:30:00Z"), c("w1", None, "exited", "2026-10-25T01:00:00Z")]
+saved = reap.run, reap.shutil.which
+reap.shutil.which = lambda name: "/bin/" + name
+reap.run = lambda cmd, cwd=None, check=True: "a\nb\nc\n" if cmd[1] == "ps" else json.dumps(fake)
+got = reap.compose_stacks()
+assert set(got) == {"s1"} and got["s1"]["running"] == 1 and got["s1"]["stopped"] == 1 and got["s1"]["ports"] == {4501}, got
+assert got["s1"]["last"] == reap.parse_ts("2026-10-25T02:00:00+00:00"), got
+reap.run = lambda cmd, cwd=None, check=True: None
+assert reap.compose_stacks() is None
+reap.run, reap.shutil.which = saved
+assert reap.docker_ts("2026-10-25T06:49:59.921306307Z") == reap.parse_ts("2026-10-25T06:49:59+00:00")
+assert "compose-stack" in reap.JANITOR and "compose-stack" in reap.SCHEDULED
+
+# ledger add: a keep needs a deadline, a pid is a number; folded lines keep the owner link.
+with tempfile.TemporaryDirectory() as tmp:
+    led = os.path.join(tmp, "ledger.jsonl")
+    cli = lambda *a: subprocess.run([sys.executable, reap.__file__, "ledger", "add", "--kind", "compose-stack", *a,
+                                     "--ledger", led], capture_output=True, text=True)
+    assert cli("--id", "s1", "--pr", "acme/app#2", "--pid", "77").returncode == 0
+    assert cli("--id", "s1", "--keep", "시연").returncode != 0
+    assert cli("--id", "s1", "--keep", "시연", "--until", "nope").returncode != 0
+    assert cli("--id", "s1", "--pid", "x").returncode != 0
+    assert cli("--id", "s1", "--previewed").returncode == 0
+    (f,) = reap.folded(reap.ledger_read(pathlib.Path(led)), "compose-stack")
+    assert f["links"]["pr"] == "acme/app#2" and f["pid"] == 77 and f["previewed"] is True and f["registered"], f
+
 
 print("ok")

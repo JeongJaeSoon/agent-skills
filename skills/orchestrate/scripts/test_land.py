@@ -83,6 +83,11 @@ def pr(n, mss="CLEAN", base="main", stacked=False, files=None, behind=0):
             "diff": diff(n), "stacked": stacked, "files": files or [f"src/f{n}.py"], "behind": behind}
 
 
+FAKE_DOCKER = r'''#!/bin/sh
+cat "$FAKE_DOCKER_STATE" 2>/dev/null || echo "[]"
+'''
+
+
 def setup(prs, stacks=()):
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "bin").mkdir()
@@ -90,9 +95,12 @@ def setup(prs, stacks=()):
     (d / "bin" / "gh").chmod(0o755)
     (d / "bin" / "orca").write_text(FAKE_ORCA)
     (d / "bin" / "orca").chmod(0o755)
+    (d / "bin" / "docker").write_text(FAKE_DOCKER)
+    (d / "bin" / "docker").chmod(0o755)
     (d / "state.json").write_text(json.dumps({"prs": prs, "stacks": [{"id": i, "pull_requests": s} for i, s in enumerate(stacks)]}))
     env = dict(os.environ, PATH=f"{d / 'bin'}:{os.environ['PATH']}", FAKE_GH_STATE=str(d / "state.json"),
-               PROGRAMS_HOME=str(d / "programs"), ORCH_DASH="off")
+               PROGRAMS_HOME=str(d / "programs"), ORCH_DASH="off",
+               AGENT_SKILLS_LEDGER=str(d / "reap-ledger.jsonl"))
     subprocess.run([sys.executable, HERE / "prog.py", "init", "t", "--repo", "o/r", "--run", "run_x"], env=env, check=True,
                    capture_output=True)
     return d, env
@@ -297,6 +305,25 @@ code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 0 and not (d / "programs" / "_heavy" / "slot-0").exists(), out
 code, out = prog(env, "heavy", "-", "--", "true")
 assert code == 0, out
+
+# heavy registers the compose projects its command left, with a config file in this worktree, in the reap ledger.
+wt = d / "card"
+wt.mkdir()
+subprocess.run(["git", "init", "-q", str(wt)], check=True)
+wt = pathlib.Path(os.path.realpath(wt))
+after = json.dumps([{"Name": "verify-1", "Status": "running(3)", "ConfigFiles": f"{wt}/compose.yaml,/tmp/ports.yml"},
+                    {"Name": "other-card", "Status": "running(2)", "ConfigFiles": "/elsewhere/compose.yaml"}])
+heavy_env = dict(env, FAKE_DOCKER_STATE=str(d / "docker.json"))
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--pr", "acme/app#5", "--", "sh", "-c",
+                    f"printf '%s' '{after}' > {d / 'docker.json'}"], env=heavy_env, cwd=wt, capture_output=True, text=True)
+assert r.returncode == 0, r.stderr
+rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
+assert [(x["kind"], x["id"], x["links"]["worktree"], x["links"]["pr"]) for x in rows] == \
+    [("compose-stack", "verify-1", str(wt), "acme/app#5")], rows
+assert isinstance(rows[0]["pid"], int) and "down" in r.stderr and "-v 금지" in r.stderr and "other-card" in r.stderr, r.stderr
+# A project that was there before is not this run's.
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--", "true"], env=heavy_env, cwd=wt, capture_output=True, text=True)
+assert r.returncode == 0 and len((d / "reap-ledger.jsonl").read_text().splitlines()) == 1, r.stderr
 
 # status and queue run end to end on the same fakes.
 d, env = setup({"17": pr(17), "18": pr(18, files=["db/migrations/9.sql"])})
