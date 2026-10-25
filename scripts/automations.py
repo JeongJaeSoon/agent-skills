@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Turn this checkout's periodic automations on or off, and show which are on (docs/automation.md).
+
+Usage:
+  skills-sync setup [status] [--json]   every automation: name, default, state, what it does
+  skills-sync setup apply               turn on each default-on automation that was never set up
+  skills-sync setup enable NAME [--here]
+  skills-sync setup disable NAME
+
+Running any of these again changes nothing that is already as asked. `disable` keeps the janitor registered
+but off, so `apply` leaves it off. Turning one on writes paths to this checkout into the job, so it refuses a
+worktree (it goes away under the job); --here allows it for a preview-watch test, never for the shared janitor job.
+"""
+import json, os, pathlib, plistlib, shutil, subprocess, sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+REPO = HERE.parent
+REAP = REPO / "skills" / "reap-resources" / "scripts" / "reap.py"
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(REAP.parent))
+import preview_watch as pw  # noqa: E402
+import reap  # noqa: E402
+
+ORCA = os.environ.get("SKILLS_SETUP_ORCA", "orca")
+JANITOR_NAME = "agent-skills janitor"  # the --name reap.schedule_cmd creates
+
+
+def sh(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
+
+
+def main_checkout():
+    return (REPO / ".git").is_dir()
+
+
+def worktree_refusal(here=False):
+    if here or main_checkout():
+        return None
+    return f"{REPO} 는 worktree 다. 세션이 로드하는 메인 체크아웃에서 다시 실행한다(테스트만 --here)"
+
+
+# ---------------------------------------------------------------- janitor (Orca automation)
+
+def orca_automations():
+    """The automations Orca lists, or a reason they could not be read."""
+    if not shutil.which(ORCA):
+        return None, "orca CLI 없음: Orca 를 설치하고 다시 실행한다"
+    p = sh([ORCA, "automations", "list", "--json"])
+    try:
+        return json.loads(p.stdout)["result"]["automations"], None
+    except (ValueError, KeyError, TypeError):
+        return None, f"orca automations list 실패: {(p.stderr or p.stdout).strip()[:200]}"
+
+
+def janitor_want(workspace):
+    """{field: value} reap's schedule would create, in the shape `orca automations list` reports. The workspace
+    is not compared: a janitor moved to a runner worktree stays there."""
+    argv = reap.schedule_cmd(REAP, reap.STATE, workspace, "claude", reap.ledger_path(), reap.config().get("inbox_to"))
+    arg = dict(zip(argv, argv[1:]))
+    return {"trigger": arg["--trigger"], "precheck": arg["--precheck"],
+            "precheck-timeout": int(arg["--precheck-timeout"]), "prompt": arg["--prompt"]}
+
+
+def janitor_drift(a):
+    pre = a.get("precheck") or {}
+    have = {"trigger": a.get("rrule"), "precheck": pre.get("command"),
+            "precheck-timeout": pre.get("timeoutSeconds"), "prompt": a.get("prompt")}
+    want = janitor_want(f"path:{REPO}")
+    return {k: v for k, v in want.items() if have[k] != v}
+
+
+class Janitor:
+    name = "janitor"
+    default = True
+    what = ("정기 정리 라운드(Orca automation, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
+            "compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다")
+
+    def find(self):
+        autos, err = orca_automations()
+        if autos is None:
+            return None, err
+        return next((a for a in autos if a.get("name") == JANITOR_NAME), {}), None
+
+    def status(self):
+        a, err = self.find()
+        if a is None:
+            return "unknown", err
+        if not a:
+            return "absent", "등록 안 됨"
+        # From a worktree every path differs from the job's; that is not drift.
+        drift = janitor_drift(a) if main_checkout() else {}
+        detail = f"{a.get('rrule')} · {(a.get('workspaceId') or '').partition('::')[2]}"
+        if drift:
+            detail += f" · reap schedule 과 다름: {', '.join(drift)} (enable 로 맞춤)"
+        return ("on" if a.get("enabled") else "off"), detail
+
+    def enable(self, here):
+        a, err = self.find()
+        if a is None:
+            return 1, err
+        # --here never applies: the janitor is one shared Orca job, and a worktree's paths die with it.
+        if not a:
+            refusal = worktree_refusal()
+            if refusal:
+                return 1, refusal
+            p = sh([sys.executable, str(REAP), "schedule", "--write"])
+            return p.returncode, (p.stdout + p.stderr).strip()
+        drift = janitor_drift(a) if main_checkout() else {}
+        if not drift and a.get("enabled"):
+            return 0, "이미 켜져 있음"
+        edit = [x for k, v in drift.items() for x in (f"--{k}", str(v))]
+        p = sh([ORCA, "automations", "edit", "--id", a["id"], *edit, "--enabled", "--json"])
+        if p.returncode:
+            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
+        return 0, "켬" + (f" (reap schedule 에 맞춘 필드: {', '.join(drift)})" if drift else "")
+
+    def disable(self):
+        a, err = self.find()
+        if a is None:
+            return 1, err
+        if not a or not a.get("enabled"):
+            return 0, "이미 꺼져 있음"
+        p = sh([ORCA, "automations", "edit", "--id", a["id"], "--disabled", "--json"])
+        if p.returncode:
+            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
+        return 0, "끔 (등록은 남겨 두어 apply 가 다시 켜지 않는다)"
+
+
+# ---------------------------------------------------------------- preview-watch (LaunchAgent)
+
+def launchd_loaded():
+    return sh(["launchctl", "print", pw.agent_target()]).returncode == 0
+
+
+def plist_spec():
+    try:
+        return plistlib.loads(pw.PLIST.read_bytes())
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+
+
+def tailscale_ready():
+    cli = pw.tailscale_cli(pw.config())
+    return bool(cli) and os.access(cli, os.X_OK)
+
+
+class PreviewWatch:
+    name = "preview-watch"
+    default = False
+    what = ("loopback 에서 뜬 웹페이지를 tailnet HTTPS 로 자동 공개하고 내려가면 닫는 LaunchAgent(모델 없음). "
+            "tailscale 을 쓸 때만 켠다")
+
+    def status(self):
+        if sys.platform != "darwin":
+            return "unsupported", "macOS LaunchAgent 전용"
+        spec, loaded = plist_spec(), launchd_loaded()
+        if spec is None and not loaded:
+            return "absent", "등록 안 됨"
+        if not loaded:
+            return "off", f"{pw.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
+        detail = f"{pw.config()['interval']}초마다"
+        if main_checkout() and spec != pw.spec(pw.config()["interval"]):
+            script = next((a for a in (spec or {}).get("ProgramArguments", []) if a.endswith(".py")), "?")
+            detail += f" · 등록된 내용이 이 체크아웃과 다름: {script} (enable 로 다시 씀)"
+        return "on", detail
+
+    def enable(self, here):
+        if sys.platform != "darwin":
+            return 1, "macOS LaunchAgent 전용이다. 다른 OS 는 cron 에서 `bin/preview-watch run` 을 주기 실행한다"
+        if not tailscale_ready():
+            return 1, ("tailscale CLI 를 찾지 못해 켜지 않는다. tailscale 을 설치하고 로그인하거나, "
+                       "~/.claude/agent-skills.json 의 \"preview-watch\".\"tailscale\" 에 CLI 경로를 적는다")
+        if launchd_loaded() and plist_spec() == pw.spec(pw.config()["interval"]):
+            return 0, "이미 켜져 있음"
+        refusal = worktree_refusal(here)
+        if refusal:
+            return 1, refusal
+        code = pw.cmd_install(here_ok=here)
+        return code, "실패 (위 출력)" if code else "켬"
+
+    def disable(self):
+        if sys.platform != "darwin":
+            return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
+        # Entries left open by a failed uninstall keep this going until they are closed.
+        if plist_spec() is None and not launchd_loaded() and not pw.load_state()["owned"]:
+            return 0, "이미 꺼져 있음"
+        code = pw.cmd_uninstall()
+        return code, ("job 은 내렸으나 serve 항목을 다 닫지 못함. disable 을 다시 돌린다" if code
+                      else "끔 (watcher 가 연 serve 항목도 닫았다)")
+
+
+AUTOMATIONS = (Janitor(), PreviewWatch())
+LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원"}
+
+
+def rows():
+    out = []
+    for a in AUTOMATIONS:
+        state, detail = a.status()
+        out.append({"name": a.name, "default": "on" if a.default else "off", "state": state, "detail": detail,
+                    "what": a.what})
+    return out
+
+
+def cmd_status(as_json):
+    rs = rows()
+    if as_json:
+        print(json.dumps(rs, ensure_ascii=False, indent=2))
+        return 0
+    for r in rs:
+        print(f"{r['name']}: {LABEL[r['state']]} (기본 {r['default']}) · {r['detail']}\n  {r['what']}")
+    print("\n켜기: skills-sync setup enable <이름>   끄기: skills-sync setup disable <이름>")
+    return 0
+
+
+def report(a, code, msg):
+    print(f"{a.name}: {msg}", file=sys.stderr if code else sys.stdout)
+    return code
+
+
+def cmd_apply(here):
+    code = 0
+    for a in AUTOMATIONS:
+        state, detail = a.status()
+        if not a.default:
+            report(a, 0, f"기본 off, 그대로 둠 ({LABEL[state]})")
+        elif state == "absent":
+            code |= report(a, *a.enable(here))
+        elif state == "unknown":
+            code |= report(a, 1, detail)
+        else:
+            report(a, 0, f"{LABEL[state]}, 그대로 둠" + (" (사용자가 끔)" if state == "off" else ""))
+    return code
+
+
+def main(argv):
+    cmd = argv[0] if argv and not argv[0].startswith("-") else "status"
+    here = "--here" in argv
+    if cmd == "status":
+        return cmd_status("--json" in argv)
+    if cmd == "apply":
+        return cmd_apply(here)
+    if cmd in ("enable", "disable") and len(argv) > 1:
+        a = next((a for a in AUTOMATIONS if a.name == argv[1]), None)
+        if a is None:
+            print(f"모르는 자동화: {argv[1]}. 있는 것: {', '.join(x.name for x in AUTOMATIONS)}", file=sys.stderr)
+            return 2
+        return report(a, *(a.enable(here) if cmd == "enable" else a.disable()))
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

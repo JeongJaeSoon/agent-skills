@@ -11,6 +11,9 @@ Usage:
   skills-sync close-setup <worktree path>
                                          close a new card's setup terminal once Orca's setup script finished
   skills-sync status                     print the last sync result and the pending reload
+  skills-sync setup [status|apply|enable NAME|disable NAME]
+                                         periodic automations: list, turn on defaults, turn one on or off
+                                         (scripts/automations.py)
 
 The checkout is loaded live through CLAUDE_CODE_PLUGIN_DIRS (docs/platform.md), so a sync changes what
 every session reads. It never rebases, merges, forces or commits: anything but a fast-forward or a push of
@@ -491,6 +494,9 @@ def main(argv):
         return close_setup(argv[1])
     if cmd == "status":
         return status()
+    if cmd == "setup":
+        from automations import main as setup
+        return setup(argv[1:])
     print(__doc__)
     return 2
 
