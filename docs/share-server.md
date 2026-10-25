@@ -36,7 +36,9 @@ bin/share-server uninstall
 ## 보안
 
 - `127.0.0.1`에만 바인딩한다. 바꾸는 설정은 없다.
-- 앞단 프록시는 TLS를 끝내고 `X-Forwarded-For`만 보낸다고 본다(`tailscale serve`). 그래서 프록시를 거친 요청은 https로 다룬다. 그래야 검색·선택 zip POST가 같은 출처로 통과하고, 다른 출처의 POST는 거부된다. 다른 사이트가 방문자 브라우저로 파일·목록을 읽지 못하게 `Access-Control-Allow-Origin`은 같은 출처에만 준다(copyparty 기본은 `*`).
+- loopback에서 온 프록시 요청(`X-Forwarded-For`)만 믿는다. `X-Forwarded-Proto`가 없으면 https로 본다(`tailscale serve`).
+- 다른 사이트가 방문자 브라우저로 파일·목록을 읽거나 검색·zip POST를 보내지 못하게, 교차 출처 허용(`Access-Control-Allow-Origin`)은 같은 출처와 `origins`에 적은 출처에만 준다. copyparty 기본값은 `*`다.
+- 공개 도메인 프록시 → `tailscale serve` → 이 서버처럼 프록시가 둘이면, copyparty가 보는 호스트는 안쪽 프록시의 이름이다. 그래서 브라우저 주소의 출처와 맞지 않아 검색이 `rejected by cors-check`로 막힌다. 이럴 때는 브라우저 주소의 출처를 `origins`에 적는다.
 - 계정이 없고 모두에게 읽기 권한만 준다. 업로드·폴더 만들기·삭제·이동·복사·WebDAV·폼 메시지 기록은 모두 거부되고 폴더는 그대로다.
 - 숨김 항목(`.`으로 시작하는 경로 조각)은 목록·검색·zip에서 빠지고, 주소를 알아도 404다. copyparty 자체는 숨김 파일·폴더를 정확한 주소로 내주므로 `scripts/share_copyparty.py`가 GET·POST와 선택 zip에서 막는다. 숨김 경로를 가리키는 심볼릭 링크도 그 주소와 선택 zip으로는 404지만, 링크 이름은 목록·검색에 보이고 그 링크가 든 폴더를 통째로 zip하면 딸려 나간다. 폴더 썸네일은 copyparty가 숨김 커버 이미지(`.folder.png` 등)로도 만든다. 그런 링크·이미지는 만들지 않고, 비밀값은 공유 폴더에 두지 않는다.
 - 루트 밖으로 나가는 심볼릭 링크와 `..` 경로는 거부한다(`--xvol`).
@@ -51,6 +53,7 @@ bin/share-server uninstall
 | `root` | `~/share` | 서빙할 폴더. 경로에 `:`가 있으면 거부한다 |
 | `port` | `13201` | loopback 포트 |
 | `label` | `io.github.jeongjaesoon.share-server` | LaunchAgent 라벨. 이미 같은 폴더를 서빙하는 LaunchAgent가 있으면 그 라벨을 적어 같은 자리에서 교체한다 |
+| `origins` | `[]` | 같은 출처 말고 교차 출처 요청을 허용할 브라우저 주소 목록. `https://files.example.test`처럼 scheme과 호스트만 적는다. 바꾸면 `launchctl kickstart -k gui/$(id -u)/<라벨>`로 재시작한다 |
 
 `install`은 같은 라벨의 plist가 이미 있고 내용이 다르면 `<라벨>.plist.bak-<시각>`으로 옆에 남긴 뒤 덮어쓴다. 되돌릴 때는 `uninstall` 뒤 백업 plist를 원래 이름으로 복사해 `launchctl bootstrap gui/$(id -u) <plist>`로 올린다. 백업이 없으면(같은 내용이었으면) 이 저장소를 되돌린 커밋에서 `install`을 다시 한다. venv·캐시·상태 폴더는 `uninstall`이 지우지 않는다.
 

@@ -78,6 +78,12 @@ class Venv(unittest.TestCase):
             other = ss.venv_dir()
         self.assertNotEqual(other, ss.venv_dir())
 
+    def test_a_malformed_origin_is_refused(self):
+        with mock.patch.object(ss.os, "execv") as execv, mock.patch("builtins.print"):
+            for bad in (["https://a.test,https://b.test"], ["*"], ["a.test"], "https://a.test"):
+                self.assertEqual(ss.serve(self.tmp.name, 13201, None, bad), 1, bad)
+        execv.assert_not_called()
+
     def test_launchd_serve_never_builds(self):
         with mock.patch.object(ss.subprocess, "run") as run, mock.patch.object(ss.os, "execv") as execv, \
                 mock.patch("builtins.print"):
@@ -116,7 +122,7 @@ class Live(unittest.TestCase):
             s.bind(("127.0.0.1", 0))
             cls.port = s.getsockname()[1]
         with mock.patch.object(ss, "HIST", base / "hist"):
-            args = ss.copyparty_args(str(root), cls.port)
+            args = ss.copyparty_args(str(root), cls.port, ["https://public.example.test"])
         cls.proc = subprocess.Popen([str(ss.venv_dir() / "bin" / "python"), *args],
                                     env={**os.environ, "XDG_CONFIG_HOME": str(base / "state")},
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -219,6 +225,17 @@ class Live(unittest.TestCase):
         code, body = self.request("POST", "/?srch", q, page)
         self.assertEqual(code, 200)
         self.assertIn("docs/note.md", body)
+        self.assertEqual(self.request("POST", "/?srch", q, {**page, "Origin": "https://other.example.test"})[0], 403)
+
+    def test_a_configured_origin_works_through_a_proxy_chain(self):
+        # a public front proxy hands off to tailscale serve, which reports its own node name as the host
+        chain = {"Host": "node.example.test:13200", "X-Forwarded-Host": "node.example.test:13200",
+                 "X-Forwarded-Proto": "https", "X-Forwarded-For": "100.64.0.1"}
+        page = {**chain, "Origin": "https://public.example.test", "Content-Type": "application/json"}
+        q = json.dumps({"q": "name like *note*"})
+        self.assertEqual(self.request("POST", "/?srch", q, page)[0], 200)
+        self.assertEqual(self.fetch("GET", "/?ls", headers=page, header="Access-Control-Allow-Origin")[1],
+                         "https://public.example.test")
         self.assertEqual(self.request("POST", "/?srch", q, {**page, "Origin": "https://other.example.test"})[0], 403)
 
     def test_other_sites_cannot_read_through_a_visitors_browser(self):

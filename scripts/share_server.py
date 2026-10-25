@@ -16,7 +16,7 @@ Binds 127.0.0.1 only; publishing on a network (e.g. `tailscale serve`) is left t
 the "share-server" key of ~/.claude/agent-skills.json (see DEFAULTS); "label" lets an existing LaunchAgent be taken
 over in place, and the plist it replaces is kept next to it as <name>.plist.bak-<time>.
 """
-import hashlib, json, os, pathlib, plistlib, shutil, subprocess, sys, time
+import hashlib, json, os, pathlib, plistlib, re, shutil, subprocess, sys, time
 
 CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 STATE_DIR = pathlib.Path(os.environ.get("SHARE_SERVER_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -24,7 +24,8 @@ VENVS = pathlib.Path("~/.local/share/agent-skills").expanduser()
 HIST = pathlib.Path("~/.cache/agent-skills/copyparty").expanduser()
 LOG = STATE_DIR / "share-server.log"
 HOST = "127.0.0.1"
-DEFAULTS = {"root": "~/share", "port": 13201, "label": "io.github.jeongjaesoon.share-server"}
+DEFAULTS = {"root": "~/share", "port": 13201, "label": "io.github.jeongjaesoon.share-server", "origins": []}
+ORIGIN = re.compile(r"https?://[^/,\s]+")
 # Each pin was released at least 14 days before it was adopted.
 PINS = ("copyparty==1.20.25", "Jinja2==3.1.6", "MarkupSafe==3.0.4", "Pillow==12.3.0", "mutagen==1.48.1")
 LAUNCHER = pathlib.Path(__file__).resolve().with_name("share_copyparty.py")
@@ -72,7 +73,7 @@ def prune_venvs(keep):
             shutil.rmtree(d, ignore_errors=True)
 
 
-def copyparty_args(root, port):
+def copyparty_args(root, port, origins=()):
     mtp = f"body=an,{','.join('e' + e for e in TEXT_EXT)},t10,{TEXT_TAG}"
     return ["-I", str(LAUNCHER), "-i", HOST, "-p", str(int(port)), "--http-only", "-q",
             # index names and text bodies for search; skip content hashes, which only serve upload dedup
@@ -87,15 +88,20 @@ def copyparty_args(root, port):
             # a TLS-terminating proxy in front (tailscale serve) sends X-Forwarded-For but no X-Forwarded-Proto; without
             # these, copyparty takes the page for http and rejects the https Origin of its own search and zip POSTs
             "--rproxy", "-1", "--xf-proto-fb", "https",
-            # copyparty's default --acao * lets any website read files and listings from a visitor's browser
-            "--acao", "",
+            # copyparty's default --acao * lets any website read files and listings from a visitor's browser; allow only
+            # the page's own origin plus the configured ones (a proxy chain can hide the public host from copyparty)
+            "--acao", ",".join(origins),
             "-v", f"{root}::r"]
 
 
-def serve(root, port, venv=None):
+def serve(root, port, venv=None, origins=()):
     root = str(pathlib.Path(root).expanduser().resolve())
     if not os.path.isdir(root):
         print(f"{root} is not a directory", file=sys.stderr)
+        return 1
+    bad = [o for o in origins if not isinstance(o, str) or not ORIGIN.fullmatch(o)]
+    if bad:
+        print(f"share-server.origins wants entries like https://files.example.test, not {bad}", file=sys.stderr)
         return 1
     if ":" in root:  # copyparty's -v splits on it
         print(f"{root}: a root path with ':' is not supported", file=sys.stderr)
@@ -115,7 +121,7 @@ def serve(root, port, venv=None):
     HIST.mkdir(parents=True, exist_ok=True)
     os.environ["XDG_CONFIG_HOME"] = str(STATE_DIR)  # copyparty keeps its salts and session db in <this>/copyparty
     print(f"serving {root} read-only on http://{HOST}:{port}/", flush=True)
-    os.execv(py, [str(py), *copyparty_args(root, port)])
+    os.execv(py, [str(py), *copyparty_args(root, port, origins)])
 
 
 # ---------------------------------------------------------------- launchd
@@ -195,7 +201,7 @@ def main(argv):
     if cmd == "serve":
         cfg = config()
         opts = dict(zip(argv[2::2], argv[3::2]))
-        return serve(opts.get("--root", cfg["root"]), opts.get("--port", cfg["port"]), opts.get("--venv"))
+        return serve(opts.get("--root", cfg["root"]), opts.get("--port", cfg["port"]), opts.get("--venv"), cfg["origins"])
     if cmd == "install":
         return cmd_install("--here" in argv)
     if cmd == "uninstall":
