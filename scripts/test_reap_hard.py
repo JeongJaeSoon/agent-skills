@@ -142,9 +142,25 @@ for role, want in (("none", None), ("orchestrator", "세션 sess-a ROLE 선언")
     assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) == want, role
 os.utime(tdir / "sess-a.jsonl", (start_t - 3600, start_t - 3600))  # an older session of the card, not this process
 assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
-assert rh.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) is None  # no live Claude: nothing to protect
+# A role record or a process row it cannot read keeps the card; only a missing record means "no role".
+os.utime(tdir / "sess-a.jsonl", (start_t + 600, start_t + 600))
+for bad in ("{broken", "[]"):
+    (roles / "sess-a.json").write_text(bad)
+    assert "ROLE 기록을 읽지 못함" in rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles), bad
+(roles / "sess-a.json").write_text(json.dumps({"role": "lead"}))
+(roles / "sess-a.json").chmod(0)
+try:
+    unreadable = rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles)
+finally:
+    (roles / "sess-a.json").chmod(0o644)
+assert os.geteuid() == 0 or "ROLE 기록을 읽지 못함(PermissionError)" in unreadable, unreadable
+(roles / "sess-a.json").unlink()
+assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
+assert rh.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) == "pid 20 의 프로세스 행을 읽지 못함"
+no_claude = {20: lead_rows[20], 21: {**lead_rows[21], "cmd": "node vite"}}
+assert rh.coordinator_in("/ws/app/lead", no_claude, cwd, projects, roles) is None  # no live Claude: nothing to protect
 ok, why = rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], [], "pid 21 --agent agent-skills:lead")
-assert ok is False and why.startswith("리드·오케스트레이터 세션이 살아 있음"), why
+assert ok is False and why.startswith("리드·오케스트레이터 보호: pid 21"), why
 
 # A bare call never cleans: usage and a non-zero exit, and the LaunchAgent names `run`.
 ran, real_pass = [], rh.run_pass

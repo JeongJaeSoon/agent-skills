@@ -116,7 +116,7 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
         return False, "보호 목록의 경로"
     if coordinator:
         # A lead waits on its inbox for hours; quiet is its normal state, so no idle rule may close it.
-        return False, f"리드·오케스트레이터 세션이 살아 있음({coordinator})"
+        return False, f"리드·오케스트레이터 보호: {coordinator}"
     if children:
         return False, f"하위 카드 {children[0]} 가 남아 있음(리드)"
     if not facts or facts.get("main"):
@@ -313,9 +313,12 @@ def lstart_epoch(s):
 def coordinator_in(path, rows, cwd_of, projects, roles=ROLES):
     """Why a live Claude session in path is a lead or the orchestrator, or None: started with `--agent
     agent-skills:lead|orchestrator` (or `--name lead:<slug>`), or a session of this card that has written to its
-    transcript since that process started declared `ROLE: lead|orchestrator` (the reorient hook's record)."""
-    live = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), path) and pid in rows
-            and reap.is_claude(rows[pid]["cmd"])]
+    transcript since that process started declared `ROLE: lead|orchestrator` (the reorient hook's record).
+    Anything it cannot read is an answer too: a reason that keeps the card, never None."""
+    inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), path)]
+    if missing := [pid for pid in inside if pid not in rows]:
+        return f"pid {missing[0]} 의 프로세스 행을 읽지 못함"
+    live = [pid for pid in inside if reap.is_claude(rows[pid]["cmd"])]
     for pid in live:
         if m := COORDINATOR_ARGV.search(rows[pid]["cmd"]):
             return f"pid {pid} {m.group(0)}"
@@ -326,10 +329,16 @@ def coordinator_in(path, rows, cwd_of, projects, roles=ROLES):
         return "claude 시작 시각을 읽지 못함"
     d = pathlib.Path(projects) / re.sub(r"[^A-Za-z0-9]", "-", path)
     for f in d.glob("*.jsonl") if d.is_dir() else ():
-        with contextlib.suppress(OSError, ValueError, AttributeError):
-            if f.stat().st_mtime >= min(starts) - 60 and \
-                    json.loads((pathlib.Path(roles) / f"{f.stem}.json").read_text()).get("role") in COORDINATOR_ROLES:
-                return f"세션 {f.stem[:8]} ROLE 선언"
+        try:
+            if f.stat().st_mtime < min(starts) - 60:
+                continue
+            role = json.loads((pathlib.Path(roles) / f"{f.stem}.json").read_text()).get("role")
+        except FileNotFoundError:
+            continue  # a transcript gone mid-scan, or a session that never declared a role
+        except (OSError, ValueError, AttributeError) as e:
+            return f"세션 {f.stem[:8]} 의 ROLE 기록을 읽지 못함({type(e).__name__})"
+        if role in COORDINATOR_ROLES:
+            return f"세션 {f.stem[:8]} ROLE 선언"
     return None
 
 
