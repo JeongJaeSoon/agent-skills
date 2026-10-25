@@ -100,3 +100,23 @@ write the verdict line above.
 A screen the user asked to see as a mockup before it is built gets that approval before
 implementation, as its own step. The screenshots of the finished PR are still judged here, against
 the approved mockup.
+
+## A live page for a person
+
+A person who looks at a running page instead of screenshots (a mockup, a preview of the branch, a
+docs build) is often away from this machine. When `preview-watch` runs here (`preview-links`
+answers; `docs/preview-watch.md` in this plugin), the page reaches them as a tailnet HTTPS link and
+nobody opens a port:
+
+- One free port per preview, from the watcher's hand-started range (default 4500–4599, the
+  `"preview-watch"` key's `ranges` in `~/.claude/agent-skills.json`). `lsof -nP -iTCP:<port>
+  -sTCP:LISTEN` prints nothing for a free one. Never take over a port another preview listens on:
+  its link then shows your page.
+- Bind the server to 127.0.0.1 (`--host 127.0.0.1`, `python3 -m http.server <port> --bind
+  127.0.0.1`). The watcher opens loopback listeners only.
+- Do not run `tailscale serve` yourself, and do not ask the person to open, forward or serve a
+  port: the watcher opens the link within about 15 seconds of the page answering with HTML.
+- Before you report the link, find it in `preview-links` and fetch it: `curl -sS -o /dev/null -w
+  '%{http_code}' https://<host>.ts.net:<port>/` prints 200. Without that check the link is NOT
+  VERIFIED.
+- With no watcher running, report the local URL and that the watcher is off.

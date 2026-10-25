@@ -63,7 +63,9 @@ page can pass every rule and still not work.
    | 예외 | spacing-grid 6px | 디자인 시스템 chip 토큰 |
    ```
 
-   A mockup is not sent to the user while a FAIL stands without its exception.
+   A mockup is not sent to the user while a FAIL stands without its exception. Its link is a
+   tailnet one on its own port, checked for 200 before it is sent
+   (`deliver-ticket` `references/visual-evidence.md`, "A live page for a person").
 
 ## Verdict
 

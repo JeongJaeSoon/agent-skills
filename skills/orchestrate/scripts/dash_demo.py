@@ -795,7 +795,8 @@ class FakeFleetWorld:
         fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
                         read_screen=self.read_screen, fetch_automations=self.fetch_automations,
-                        fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {})
+                        fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {},
+                        declared_roles=lambda procs: [])
         f.me = self.ME
         f.repos = {w["path"]: f"acme/{w['repo']}" for w in self.worktrees}
         return f
