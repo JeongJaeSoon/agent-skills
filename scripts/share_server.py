@@ -58,13 +58,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=self.root, **kw)
 
     def inside(self, path):
+        """The resolved path stays under the root and no part of it below the root is hidden."""
         real = os.path.realpath(path)
-        return real == self.root or real.startswith(self.root + os.sep)
+        if real == self.root:
+            return True
+        return real.startswith(self.root + os.sep) and \
+            not any(p.startswith(".") for p in os.path.relpath(real, self.root).split(os.sep))
 
     def send_head(self):
         parts = unquote(urlsplit(self.path).path).split("/")
-        if any(p.startswith(".") and p not in (".", "..") or p == ".." for p in parts) or \
-                not self.inside(self.translate_path(self.path)):
+        path = self.translate_path(self.path)
+        # The stdlib opens a folder's index.html itself, following a symlink wherever it points.
+        indexes = [os.path.join(path, n) for n in ("index.html", "index.htm")] if os.path.isdir(path) else []
+        if any(p.startswith(".") and p not in (".", "..") or p == ".." for p in parts) or not self.inside(path) or \
+                any(os.path.lexists(i) and not self.inside(i) for i in indexes):
             self.send_error(404)
             return None
         return super().send_head()

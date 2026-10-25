@@ -42,6 +42,14 @@ class Server(unittest.TestCase):
         (root / "gal" / "leak.png").symlink_to(outside / "leak.png")
         (root / "gal" / "inside.png").symlink_to(root / "gal" / "y.jpg")
         (root / "out").symlink_to(outside)
+        (outside / "page.html").write_text("outside page")
+        (root / "idx-out").mkdir()
+        (root / "idx-out" / "index.html").symlink_to(outside / "page.html")
+        (root / ".private").mkdir()
+        (root / ".private" / "page.html").write_text("hidden page")
+        (root / "idx-hidden").mkdir()
+        (root / "idx-hidden" / "index.html").symlink_to(root / ".private" / "page.html")
+        (root / "gal" / "to-hidden.png").symlink_to(root / "gal" / ".hidden.png")
         (root / ".git").mkdir()
         (root / ".git" / "config").write_text("x")
         (root / "plain" / "report.md").write_text("r")
@@ -91,6 +99,14 @@ class Server(unittest.TestCase):
                      "/%2egit/config"):
             self.assertEqual(self.get(path)[0], 404, path)
         self.assertEqual(self.get("/gal/inside.png")[0], 200)
+        self.assertNotIn("to-hidden.png", body)
+        self.assertEqual(self.get("/gal/to-hidden.png")[0], 404)
+
+    def test_folder_index_symlinked_outside_or_hidden_is_refused(self):
+        for path in ("/idx-out/", "/idx-hidden/"):
+            code, body = self.get(path)
+            self.assertEqual(code, 404, path)
+            self.assertNotIn(" page", body, path)
 
     def test_path_traversal_is_refused(self):
         for path in ("/../outside/secret.txt", "/gal/../../outside/secret.txt", "/%2e%2e/outside/secret.txt",
