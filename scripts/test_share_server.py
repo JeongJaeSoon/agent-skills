@@ -212,6 +212,15 @@ class Live(unittest.TestCase):
                               ("/docs/plain.txt", None), ("/docs/view.tsx", None), ("/site/index.html", None), ("/", html)):
             self.assertIn("charset=utf-8", self.fetch("GET", path, headers=headers)[1].lower(), f"{path} {headers}")
 
+    def test_search_from_a_page_behind_an_https_proxy(self):
+        page = {"Content-Type": "application/json", "Origin": "https://files.example.test", "Host": "files.example.test",
+                "X-Forwarded-For": "100.64.0.1"}
+        q = json.dumps({"q": "name like *note*"})
+        code, body = self.request("POST", "/?srch", q, page)
+        self.assertEqual(code, 200)
+        self.assertIn("docs/note.md", body)
+        self.assertEqual(self.request("POST", "/?srch", q, {**page, "Origin": "https://other.example.test"})[0], 403)
+
     def test_symlink_out_of_the_root_and_traversal_are_refused(self):
         for path in ("/out/secret.txt", "/../outside/secret.txt", "/%2e%2e/outside/secret.txt"):
             code, body = self.request("GET", path)
