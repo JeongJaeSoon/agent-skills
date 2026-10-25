@@ -1,0 +1,3 @@
+#!/bin/sh
+# Serve the share folder on loopback with a gallery view for image folders (scripts/share_server.py).
+exec python3 "$(dirname "$0")/../scripts/share_server.py" "$@"
