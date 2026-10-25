@@ -1,0 +1,3 @@
+#!/bin/sh
+# Close finished cards, their stacks, dev servers and serve entries by fixed rules, with no model (scripts/reap_hard.py).
+exec python3 "$(dirname "$0")/../scripts/reap_hard.py" "$@"

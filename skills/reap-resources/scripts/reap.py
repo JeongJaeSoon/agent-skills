@@ -170,6 +170,43 @@ def is_claude(cmd):
     return bool(argv) and (os.path.basename(argv[0]) == "claude" or "/@anthropic-ai/claude-code/" in argv[-1])
 
 
+SHELLS = ("zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "nu")
+TERMINAL_PARENTS = ("login", "tmux", "screen", "sshd", "sshd-session")
+
+
+def human_shell(pid, rows):
+    """A shell a person types into: a login shell (Orca and Terminal start `-zsh`) or a shell straight under a
+    terminal multiplexer or sshd."""
+    r = rows.get(pid)
+    if not r:
+        return False
+    argv0 = r["cmd"].split()[0] if r["cmd"].split() else ""
+    if argv0.startswith("-"):
+        return True
+    parent = rows.get(r["ppid"]) or {}
+    pargv = (parent.get("cmd") or "").split()[:1]
+    return os.path.basename(argv0) in SHELLS and bool(pargv) and os.path.basename(pargv[0]).lstrip("-") in TERMINAL_PARENTS
+
+
+def human_owned(pid, rows):
+    """The process is a person's: walking up from it, a human shell comes before any Claude session. A process an
+    agent started (a Claude session between it and the shell) is not."""
+    seen = set()
+    while pid in rows and pid not in seen and pid > 1:
+        seen.add(pid)
+        if is_claude(rows[pid]["cmd"]):
+            return False
+        if human_shell(pid, rows):
+            return True
+        pid = rows[pid]["ppid"]
+    return False
+
+
+def human_in_tree(root, rows):
+    """Pids in root's tree that belong to a person (see human_owned)."""
+    return [p for p in tree(root, rows) if human_owned(p, rows)]
+
+
 def judge_orphans(rows, prefixes, hours, cwd_of=None):
     """cwd_of: pid → (cwd, inode) from cwds(inodes=True). A process reparented to 1 whose directory was removed (a
     finished card's dev server, a review worktree's broker) has no session left to stop it."""
@@ -189,8 +226,11 @@ def judge_orphans(rows, prefixes, hours, cwd_of=None):
         else:
             continue
         young = r["age"] < hours * 3600
+        human = human_in_tree(r["pid"], rows)
+        if human:
+            why = f"트리에 사람이 띄운 셸·그 자식(pid {human[0]})"
         out.append(proc_item("orphan", r, rows, name=r["cmd"][:80], why=f"{hours}시간 미만" if young else why,
-                             target=not young))
+                             target=not young and not human))
     return out
 
 
@@ -910,8 +950,8 @@ def docker_ts(s):
 
 
 def compose_stacks():
-    """{project: {running, stopped, first (oldest container created), last (newest start or stop), ports}};
-    None when docker cannot be read."""
+    """{project: {running, stopped, first (oldest container created), last (newest start or stop), ports, dirs (compose
+    working directories)}}; None when docker cannot be read."""
     if not shutil.which("docker"):
         return {}
     ids = run(["docker", "ps", "-aq", "--no-trunc"], check=False)
@@ -930,7 +970,9 @@ def compose_stacks():
         # ones compose created, which carry the oneoff label, and leaves the rest.
         if not proj or "com.docker.compose.oneoff" not in labels:
             continue
-        s = stacks.setdefault(proj, {"running": 0, "stopped": 0, "first": None, "last": 0.0, "ports": set()})
+        s = stacks.setdefault(proj, {"running": 0, "stopped": 0, "first": None, "last": 0.0, "ports": set(), "dirs": set()})
+        if labels.get("com.docker.compose.project.working_dir"):
+            s["dirs"].add(labels["com.docker.compose.project.working_dir"])
         st = c.get("State") or {}
         s["running" if st.get("Status") in ("running", "restarting", "paused") else "stopped"] += 1
         with contextlib.suppress(ValueError, TypeError, AttributeError):
@@ -1597,6 +1639,9 @@ def kill_tree(item, notes):
     r = rows.get(item["pid"])
     if not r or r["cmd"] != item["cmd"] or r["start"] != item["start"]:
         return "사라졌거나 다른 프로세스"
+    # The tree is read again here: a person may have opened a shell under it since the scan.
+    if human := human_in_tree(item["pid"], rows):
+        return f"건너뜀: 트리에 사람이 띄운 셸·그 자식(pid {human[0]})"
     pids = tree(item["pid"], rows)
     ids = {p: (rows[p]["cmd"], rows[p]["start"]) for p in pids}
     for p in pids:
@@ -1650,9 +1695,12 @@ def act(item, notes):
     if kind == "state-file":
         return reap_state_file(item)
     if kind == "gui-app":
-        r = processes().get(item["gpid"])
+        rows = processes()
+        r = rows.get(item["gpid"])
         if not r or r["start"] != item["start"]:
             return "사라졌거나 다른 프로세스"
+        if human_owned(item["gpid"], rows):
+            return "건너뜀: 사람이 띄운 셸의 자식"
         os.kill(item["gpid"], signal.SIGTERM)
         return "SIGTERM 보냄"
     if kind == "chrome-window":

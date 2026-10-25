@@ -108,6 +108,8 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 
 **도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. 기본 off이고 `skills-sync setup enable preview-watch`로 켠다. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)). `share-server`(공유 폴더를 127.0.0.1에서 Caddy `file_server`로 읽기 전용 서빙한다. 최근 순 목록·Grid 썸네일, `.md` 렌더(`?raw`는 원문), 텍스트는 UTF-8. 숨김 경로는 404, 루트 밖 심볼릭 링크는 sandbox-exec로 막는다. 기본 off이고 `skills-sync setup enable share-server`로 켠다. [docs/share-server.md](docs/share-server.md)).
 
+`reap-hard`(끝난 카드·스택·미리보기 포트·tailscale serve 항목을 모델 없이 고정 규칙으로 닫는 LaunchAgent. 15분마다, 등록 여부와 상관없이 `~/orca/workspaces` 아래 카드 전부를 본다. 보호 목록 파일이 없으면 아무것도 하지 않고, 사람이 띄운 셸의 프로세스는 건드리지 않는다. 마지막 실행은 정기 보고에 나온다. [docs/reap-hard.md](docs/reap-hard.md)).
+
 **채팅**: `watch-mentions`(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 분류해 코디네이터에게 한 통으로 보내고, 작업 의뢰는 기표 초안으로).
 
 **GitHub**: `watch-prs`(팀·CODEOWNERS가 아니라 나를 지명한 리뷰 요청만 골라 우선순위대로 코디네이터에게 한 통으로 보낸다. 리뷰한 PR에 재요청 없이 새 커밋이 오면 한 번 다시 알린다. dev 경로를 선언한 저장소에서 머지된 내 PR은 저장소마다 릴리스 워커 하나를 띄워 dev 반영·동작·로그를 확인하게 한다. 내 PR 중 리뷰를 기다리는 것은 송신 로그 규칙에 따라 Slack 리뷰 의뢰·리마인드와 리뷰 봇 재트리거로 바꾼다. 설정하면 허용 목록 저장소의 내 PR 중 승인·green·CLEAN이거나 리뷰가 필요 없는 저장소에서 head 리뷰 통과 기록이 있는 CLEAN인 것을 머지하고 기본 브랜치 CI까지 보고한다. 내 계정만 할 수 있는 봇 PR 승인은 링크·diff 요약·프로덕션 여부·`!` 실행 줄과 함께 묶어 보내고 대시보드 inbox에 올린다. 30분 주기 automation, 모델 없는 precheck. 세션은 백그라운드 셸로 GitHub 알림을 폴링하다 새 항목이 오면 깨어나며, 리뷰 요청은 나를 직접 지명한 것만 한 번 알린다).
@@ -152,7 +154,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

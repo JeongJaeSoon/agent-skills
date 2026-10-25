@@ -166,6 +166,32 @@ whose Claude session sits at an empty prompt would stay forever that way, so `do
 session to close itself; a lead card whose PRs had merged once stayed open two days. Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
 
+## Hard pass: reap-hard
+
+The janitor only sees what was registered and waits on a model and on the card's own session to close; finished
+cards stayed open for a day. `bin/reap-hard` is the backstop: fixed rules, no model, every Orca card under
+`~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
+
+```bash
+bin/reap-hard run --dry-run      # decide and log, touch nothing
+bin/reap-hard run                # what the LaunchAgent runs
+bin/reap-hard install            # from the main checkout; `status`, `uninstall`, `last`
+```
+
+- It reads `~/.config/agent-skills/reap-protect.txt` first (`port`, `pid`, `path`, `project` lines) and does nothing
+  without it. List the lead and orchestrator worktrees and the always-on ports there.
+- Card: its own PR merged or closed and carrying the worktree's HEAD, clean, terminals silent and transcripts quiet
+  for `idle_minutes` (30), no process a person started → terminals closed, ignored files to the trash,
+  `orca worktree rm`. Stack: every compose working directory gone → `docker compose down` (never `-v`). An orphaned
+  dev server whose card is gone → SIGTERM to that pid. A `tailscale serve` entry in the preview ranges with no
+  listener two passes running → off.
+- Each action is a line in `<state>/reap-hard.jsonl`; `orch brief` shows the last pass and flags one that stopped.
+- The rules and settings: [docs/reap-hard.md](../../docs/reap-hard.md).
+
+No cleanup path (orphan, pressure, gui-app, reap-hard) ever stops a process a person started: walking up from it,
+a login shell (or a shell under tmux, screen, sshd) comes before any Claude session. An orphan whose tree holds such a
+process is kept whole.
+
 ## Load
 
 When the machine is slow, or its 5-minute load reaches the limit (`reap.load_limit`, default the
@@ -235,7 +261,7 @@ Defaults and the measurements behind them: [docs/pressure.md](../../docs/pressur
 
 | Kind | Target when | Kept when | How |
 |---|---|---|---|
-| orphan | ppid 1, ≥ N hours, and either the executable or the script it runs (`argv[1]`) lies under a path in `reap.orphan_paths`, or its cwd was removed (gone, or another directory at that path: a finished card's dev server or headless Chrome, a deleted review worktree's broker) | anything else, a cwd lsof cannot list | `kill -TERM` the tree once pid and start time match, `SIGKILL` what is left after 5 s |
+| orphan | ppid 1, ≥ N hours, and either the executable or the script it runs (`argv[1]`) lies under a path in `reap.orphan_paths`, or its cwd was removed (gone, or another directory at that path: a finished card's dev server or headless Chrome, a deleted review worktree's broker) | anything else, a cwd lsof cannot list, a tree holding a person's shell or its child (judged again before the kill) | `kill -TERM` the tree once pid and start time match, `SIGKILL` what is left after 5 s |
 | docker | a dangling volume whose compose project has no container in any state, ≥ N hours; an untagged image no container uses, ≥ N hours | a project with any container, a volume whose name holds such a project's name, a volume with no compose label (reported only) | `docker volume rm <name>`, `docker image rm <id>` |
 | branch | every PR from that branch is merged or closed, no worktree has it checked out, and its tip is what a PR carried | an open PR, commits after the PR, the default branch, no PR; the whole repo when `origin/HEAD` is unset | `git branch -D`; the output has the restore command |
 | worktree | a worktree whose directory in a temp dir is gone and that Orca does not manage (a truncated Orca list keeps them all); a detached-HEAD worktree under a Claude scratchpad whose session transcript is quiet for N hours, with no process in it, clean, not locked, its HEAD on a remote | any of those fails, no transcript to prove the session quiet, a branch checked out (it may back an open PR); Orca's worktrees and any other worktree | `git worktree remove <path>`, which for a vanished directory drops only that entry (never `--force`, never a repo-wide `prune`) |
