@@ -131,7 +131,10 @@ Before pushing, run **both**:
   through `orch heavy - -- <command>`, which
   caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, browser automation for UI
   and web flows (logged-in sites included), IDE diagnostics
-  for type and lint
+  for type and lint. Once the check is done, down the compose stacks you started in the same turn,
+  `docker compose -p <project> down` without `-v` so their volumes stay. A stack that has to stay gets its
+  reason and deadline: `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`
+  (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes
 - a change with no runtime behavior (docs, comments): validate links and run documented
   commands and examples exactly as written in a safe, isolated fixture; record commands,
   outputs and fixture substitutions. If a destructive command or live external write cannot

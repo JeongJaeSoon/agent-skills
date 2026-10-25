@@ -49,10 +49,12 @@ Usage: orch <command> <slug> [options]
                                      (when its work began) until it, at their merge time with their main
                                      push CI result, ahead of the program's own rows, and move created_at
                                      to the first of them. Rerun to add CI results that came in since
-  heavy <slug|-> [--wait-minutes 60] -- <command…>
+  heavy <slug|-> [--wait-minutes 60] [--pr owner/repo#N] -- <command…>
                                      run a heavy local command (compose stack, image build, local
                                      E2E) holding one of heavy_slots (2) machine-wide slots; `-`
-                                     outside a program
+                                     outside a program. A compose project it leaves behind, with a
+                                     config file in this worktree, goes to the reap ledger
+                                     (compose-stack) so the janitor downs it once the card is done
   wait <slug> [--timeout-ms 540000] [--rounds 3]
                                      coordinator only: block until the Run inbox holds actionable
                                      mail; acks heartbeat-only batches; never acks actionable ones
@@ -2221,11 +2223,45 @@ def pid_alive(pid):
         return True
 
 
+REAP = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py"
+
+
+def compose_projects():
+    """{name: [config files]} of every compose project here, stopped ones included; None when docker cannot say."""
+    try:
+        r = subprocess.run(["docker", "compose", "ls", "-a", "--format", "json"], capture_output=True, text=True, timeout=30)
+        return {p["Name"]: [f for f in (p.get("ConfigFiles") or "").split(",") if f] for p in json.loads(r.stdout or "[]")} \
+            if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+
+
+def register_stacks(before, owner, pr):
+    """A stack left running after verification held gigabytes until someone downed it by hand: the ones this run
+    created go to the reap ledger. Only a project with a config file in this worktree: the other slot's card may
+    have started one meanwhile."""
+    after = compose_projects()
+    if before is None or after is None:
+        return
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    wt = os.path.realpath(top.stdout.strip() if top.returncode == 0 else os.getcwd())
+    for name in sorted(set(after) - set(before)):
+        if not any(os.path.realpath(f).startswith(wt + os.sep) for f in after[name]):
+            print(f"heavy: compose 스택 {name} 은 이 worktree 밖에서 떠서 등록하지 않음", file=sys.stderr)
+            continue
+        r = subprocess.run([sys.executable, str(REAP), "ledger", "add", "--kind", "compose-stack", "--id", name,
+                            "--worktree", wt, "--pid", str(os.getpid()), "--by", "orch heavy",
+                            *(["--run", owner] if owner != "-" else []), *(["--pr", pr] if pr else [])],
+                           capture_output=True, text=True)
+        print(f"heavy: compose 스택 {name} 을 reap ledger 에 등록했다. 검증이 끝나면 `docker compose -p {name} down`(-v 금지)"
+              if r.returncode == 0 else f"heavy: compose 스택 {name} 등록 실패: {r.stderr.strip()}", file=sys.stderr)
+
+
 def cmd_heavy(argv):
     """Docker stacks from parallel cards starved the whole machine (Orca UI included), so heavy local work
     queues on slots shared by every program on this machine, like CI shares its runners."""
     if "--" not in argv or argv.index("--") == len(argv) - 1:
-        sys.exit("heavy <slug|-> [--wait-minutes 60] -- <command…>")
+        sys.exit("heavy <slug|-> [--wait-minutes 60] [--pr owner/repo#N] -- <command…>")
     cut = argv.index("--")
     cmd = argv[cut + 1:]
     cfg, owner = ({}, "-") if argv[0] == "-" else (Program(argv[0]).cfg, argv[0])
@@ -2244,10 +2280,12 @@ def cmd_heavy(argv):
                 continue
             os.write(fd, json.dumps({"pid": os.getpid(), "program": owner, "cmd": " ".join(cmd)[:200], "ts": now()}).encode())
             os.close(fd)
+            before = compose_projects()
             try:
                 sys.exit(subprocess.run(cmd).returncode)
             finally:
                 path.unlink(missing_ok=True)
+                register_stacks(before, owner, opt(argv[:cut], "--pr"))
         if time.monotonic() >= deadline:
             holders = [json.loads(f.read_text() or "{}") for f in sorted(slots.glob("slot-*"))]
             sys.exit(f"heavy: every slot busy after waiting: {json.dumps(holders, ensure_ascii=False)}")

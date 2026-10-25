@@ -79,4 +79,4 @@ python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다
 ```
 
-주기는 3시간(`17 */3 * * *`)이다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
+주기는 30분(`7,37 * * * *`)이다. 정리 대상이 없는 precheck는 모델을 깨우지 않으므로, 끝난 카드가 남긴 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 몇 GB를 쥔 채 몇 시간씩 남지 않게 짧게 잡는다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
