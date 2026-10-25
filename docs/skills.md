@@ -188,7 +188,7 @@
   - **program:** `~/.claude/programs`(`PROGRAMS_HOME`)에서 닫힌 프로그램(최종 확인 `predicate_verified` 뒤에 착지·predicate 변경·admitted 후속이 없는 것) 중 기록(대시보드 캐시를 뺀 ledger·decisions·reflect 등)이 7일(`reap.program_days`) 넘게 안 바뀐 것을 `_archive/`로 옮긴다. 지우지 않는다. 이름에 `resume`이나 `handoff`가 든 재개 노트가 있으면 닫혔어도 남긴다.
   - **state-file:** reorient hook의 세션 파일(`<state>/reorient/*.json`) 중 7일(`reap.state_days`) 지난 것을 한 폴더로 묶어 휴지통으로, 512KB(`reap.log_max_kb`)를 넘은 `sync.log`는 `sync.log.1`로 회전한다(이전 `.1`은 휴지통). program과 함께 정기 실행에서 하루 한 번만 본다.
   - **정기 실행:** `precheck`는 대상이 있으면 exit 0이고, 지난 `reap`이 실패한 대상과 똑같으면 하루 동안 건너뛴다. 3시간 주기 Orca automation의 precheck로 쓰고, `schedule`은 그 등록 명령을 출력만 한다([automation.md](automation.md)).
-  - **pressure:** `scripts/pressure.py`가 모델 없이 3분마다(LaunchAgent) load·메모리 압박·swap·디스크·실행 중 컨테이너를 잰다. 경고면 안전 종류(`orphan`, `compose-stack`, `gui-app`, `orca-worker`)만 `reap --plan`으로 정리하고 정리한 것이 있을 때 오케스트레이터에 한 줄 보낸다. 위험인데 정리할 것이 없으면 상위 소비자(프로세스·compose 프로젝트와 그 카드)를 알리고 멈춘다. 남의 것은 종료하지 않는다. 임계값과 근거는 [pressure.md](pressure.md).
+  - **pressure:** `scripts/pressure.py`가 모델 없이 3분마다(LaunchAgent) load·메모리 압박·swap·디스크·실행 중 컨테이너를 잰다. 경고면 안전 종류(`orphan`, `compose-stack`, `gui-app`, `orca-worker`)만 `reap --plan`으로 정리하고 정리한 것이 있을 때 오케스트레이터에 한 줄 보낸다. 터미널이 살아 있는 카드 안의 대상은 남긴다. 위험인데 정리할 것이 없으면 상위 소비자(프로세스·compose 프로젝트와 그 카드)를 알리고 멈춘다. 남의 것은 종료하지 않는다. 임계값과 근거는 [pressure.md](pressure.md).
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, `scripts/pressure.py`, 테스트 파일.
 - **관계:** `orchestrate`의 resource steward가 라운드마다 부르고, 경보가 남으면 대시보드 인박스로 사람에게 알린다.
@@ -568,7 +568,7 @@ Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도�
 Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. 오류는 모두 exit 0이다. 착안은 [superpowers](https://github.com/obra/superpowers)(Jesse Vincent, MIT)의 `verification-before-completion`이다. 그 스킬의 신선도·범위·red-green 규칙은 `write-plainly`와 `deliver-ticket`에 흡수했다.
 
 ### 무거운 시작 전 사용량 확인
-`hooks/pressure_gate.py`(PreToolUse, Bash). 명령 위치에 `orch heavy`, `docker compose … up`, `docker-compose … up`, `orca worktree create`가 있을 때만 `reap-resources`의 `pressure.py`로 머신을 잰다(0.3초 안팎). 위험이면 거부하고, 경고면 최근 15분(`reap.pressure.gate_fresh_minutes`) 안에 정리 회차가 없을 때만 거부한다. 거부 이유에는 먼저 돌릴 `pressure.py round`와, 위험이 이어질 때 `Monitor`로 `pressure.py check`를 기다리는 방법이 들어간다. 남의 카드·프로세스는 종료하지 않는다. 측정이 실패하면 결정을 내리지 않는다. 사용자가 지금 실행하라고 했을 때만 명령 앞에 `AGENT_SKILLS_PRESSURE_GATE=0`을 붙인다.
+`hooks/pressure_gate.py`(PreToolUse, Bash). 명령 위치에 `orch heavy`, `docker compose … up`, `docker-compose … up`, `orca worktree create`가 있을 때만 `reap-resources`의 `pressure.py`로 머신을 잰다(0.3초 안팎). 위험이면 거부하고(swap·디스크는 몇 시간씩 높게 남아 경고까지만 센다), 경고면 최근 15분(`reap.pressure.gate_fresh_minutes`) 안에 정리 회차가 없을 때만 거부한다. 거부 이유에는 먼저 돌릴 `pressure.py round`와, 위험이 이어질 때 `Monitor`로 `pressure.py check`를 기다리는 방법이 들어간다. 남의 카드·프로세스는 종료하지 않는다. 측정이 실패하면 결정을 내리지 않는다. 사용자가 지금 실행하라고 했을 때만 명령 앞에 `AGENT_SKILLS_PRESSURE_GATE=0`을 붙인다.
 
 ### 문체 검사
 `hooks/prose_check.py`(PreToolUse, `Bash`와 Linear·Jira MCP). `gh pr create|edit`(`--title`, `--body`, `--body-file`), `git commit`(`-m`, `-F`, heredoc), Linear·Jira에 이슈·댓글·문서를 저장하는 호출의 본문에서 `write-plainly`의 결정적 금지 패턴(em dash, 둥근 따옴표, 굵은 라벨+콜론, "다양한"·"를 통해"·"해당" 같은 상투어와 번역투, 영어 AI 어휘와 군더더기)을 찾는다. 코드 블록과 인라인 코드는 보지 않는다. 걸리면 `additionalContext`로 알리기만 하고 호출을 막거나 권한을 결정하지 않는다. 이 알림은 모델에게 "PreToolUse:Bash hook additional context: …"로 보인다(헤드리스 세션에서 확인). `AGENT_SKILLS_PROSE_CHECK=0`으로 끈다.

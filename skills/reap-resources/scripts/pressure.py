@@ -158,17 +158,49 @@ def safe_kinds(cfg):
     return [k for k in cfg["safe_kinds"] if k in known]
 
 
-def plan_targets(kinds, plan_path, run=subprocess.run):
-    """reap.py scan over the safe kinds, saved as a plan. (targets, notes); targets None when the scan failed."""
+def unknown_kinds(cfg):
+    known = set(reap.KINDS + reap.SCHEDULED)
+    return [k for k in cfg["safe_kinds"] if k not in known]
+
+
+def plan_targets(kinds, plan_path, run=subprocess.run, cards=None, cwd_of=None):
+    """reap.py scan over the safe kinds, saved as a plan, minus what lies in a card with a live terminal.
+    (targets, notes); targets None when the scan or the card list failed."""
     if not kinds:
         return [], ["safe_kinds 중 reap 이 아는 종류가 없음"]
     try:
         p = run([sys.executable, str(REAP), "scan", "--kinds", ",".join(kinds), "--plan", str(plan_path), "--json"],
                 capture_output=True, text=True, timeout=240)
         data = json.loads(p.stdout)
-    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        targets = [i for i in data["items"] if i["target"]]
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as e:
         return None, [f"reap scan 실패: {type(e).__name__}"]
-    return [i for i in data["items"] if i["target"]], data.get("notes") or []
+    notes = data.get("notes") or []
+    if not targets:
+        return targets, notes
+    cards = orca_cards() if cards is None else cards
+    if cards is None:
+        return None, notes + ["orca worktree ps 를 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음"]
+    live = [c["path"] for c in cards if c["live"]]
+    cwd_of = reap.cwds() if cwd_of is None else cwd_of
+    if cwd_of is None and any("pid" in i for i in targets):
+        return None, notes + ["프로세스 cwd 를 모두 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음"]
+    cwd_of = cwd_of or {}
+    for i in targets:
+        card = next(filter(None, (card_of(x, live) for x in item_paths(i, cwd_of))), None)
+        if card:
+            i.update(target=False, why=f"활동 중인 카드 {os.path.basename(card)} 안: {i['why']}")
+            notes.append(f"남김 {reap.label(i)}")
+    plan_path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+    return [i for i in targets if i["target"]], notes
+
+
+def item_paths(i, cwd_of):
+    """Where a reap item lives: its path or worktree, a process's cwd and the program it runs."""
+    links = i.get("links") or {}
+    out = [i.get("path"), i.get("worktree"), links.get("worktree"), cwd_of.get(i.get("pid"))]
+    out += [w for w in (i.get("cmd") or "").split()[:2] if w.startswith("/")]
+    return [x for x in out if x]
 
 
 def reap_plan(plan_path, run=subprocess.run):
@@ -219,16 +251,20 @@ def card_of(path, cards):
 
 
 def orca_cards(run=sh):
-    out = run(["orca", "worktree", "list", "--limit", "1000", "--json"], timeout=15)
+    """[{path, live}] for every Orca card, live when a terminal is open in it; [] without Orca, None when unreadable."""
+    if not shutil.which("orca"):
+        return []
+    out = run(["orca", "worktree", "ps", "--json"], timeout=15)
     with contextlib.suppress(ValueError, TypeError, KeyError, AttributeError):
-        return [w["path"] for w in json.loads(out)["result"]["worktrees"] if w.get("path")]
-    return []
+        return [{"path": w["path"], "live": bool(w.get("liveTerminalCount"))}
+                for w in json.loads(out)["result"]["worktrees"] if w.get("path")]
+    return None
 
 
 def consumers(cfg, run=sh, load=reap.load_report):
     """The top process consumers (reap's load classes) and compose projects, each with the card it belongs to.
     Reported only: nothing here is stopped, whoever owns it."""
-    cards = orca_cards(run)
+    cards = [c["path"] for c in orca_cards(run) or ()]
     procs = []
     with contextlib.suppress(RuntimeError, OSError):
         for i in load(reap.config(), int(cfg["top"]))["items"]:
@@ -292,9 +328,11 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, plan_fn=pl
     plan_path = PLAN.with_name("pressure-plan.dry-run.json") if dry_run else PLAN
     targets, notes = plan_fn(kinds, plan_path)
     out(f"- 안전 대상 종류: {', '.join(kinds) or '없음'}")
+    if unknown_kinds(cfg):
+        out(f"- 메모: 이 reap.py 에 없는 종류라 뺌: {', '.join(unknown_kinds(cfg))}")
     for n in notes:
         out(f"- 메모: {n}")
-    to, message = notify_to(cfg), None
+    to, message, done = notify_to(cfg), None, []
     if targets:
         out(f"\n## 정리 {'계획' if dry_run else ''} {len(targets)}개\n")
         for i in targets:
@@ -310,7 +348,8 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, plan_fn=pl
                        f"— 이유: {', '.join(why)}", "\n".join(names))
     elif targets is None:
         out("\n- 정리 대상을 읽지 못해 이번 회차는 정리하지 않음")
-    if level == "danger" and not targets:
+    # Danger with nothing gone, whether nothing was listed or reap skipped or failed every target: report and stop.
+    if level == "danger" and not (targets and (dry_run or done)):
         procs, projects = consumers_fn(cfg)
         lines = consumer_lines(procs, projects)
         out("\n## 정리할 것 없음: 상위 소비자 (보고만, 종료하지 않음)\n")

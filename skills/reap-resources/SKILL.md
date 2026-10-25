@@ -207,10 +207,12 @@ Each metric has a `[warn, danger]` pair under `reap.pressure`: `load_per_cpu` (5
 offer is left out. The level is the worst metric's.
 
 - **warn**: `reap.py scan --kinds <safe_kinds>` then `reap --plan`, so only what reap itself lists goes. Default
-  `safe_kinds`: `orphan`, `compose-stack`, `gui-app`, `orca-worker` (a kind this reap.py does not know is dropped).
+  `safe_kinds`: `orphan`, `compose-stack`, `gui-app`, `orca-worker` (a kind this reap.py does not know is dropped,
+  with a note). A target inside an Orca card with a live terminal is spared; when Orca or the process cwds cannot be
+  read, the round reaps nothing.
   When something went, one `status` line to `notify_to` (else `reap.inbox_to`): what and why. A machine that stays at
   warn is swept again only after `rescan_minutes` (10).
-- **danger**: the same sweep. With nothing to reap, the top consumers (reap's `load` classes, compose projects with
+- **danger**: the same sweep. With nothing reaped (none listed, or reap skipped or failed them all), the top consumers (reap's `load` classes, compose projects with
   their CPU and memory, each with the Orca card it lies in) go out as one `escalation`, then the round stops. Nothing
   is stopped or killed, whoever owns it. Sent again only on entering danger or after `renotify_minutes` (30).
 - Never: `compose down -v`, `docker system prune`, volume or image removal, a kill by pattern, anything of a card or
@@ -218,8 +220,11 @@ offer is left out. The level is the worst metric's.
 
 `hooks/pressure_gate.py` (PreToolUse, Bash) denies `orch heavy`, `docker compose … up` and `orca worktree create`
 while the level is danger, and at warn until a round has swept in the last `gate_fresh_minutes` (15). The deny says
-to run `round`, then wait with `Monitor` on `check`. `AGENT_SKILLS_PRESSURE_GATE=0` (environment, or the command's
-first word when the user said to go ahead) turns it off.
+to run `round`, then wait with `Monitor` on `check`. Swap and disk raise the gate to warn at most: both stay high for
+hours. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
+`AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
+off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
+a deny and a manual `round`.
 
 Defaults and the measurements behind them: [docs/pressure.md](../../docs/pressure.md).
 

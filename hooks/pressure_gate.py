@@ -6,31 +6,87 @@ A Bash call that starts something heavy (`orch heavy`, `docker compose … up`, 
 (skills/reap-resources/scripts/pressure.py). At warn it goes through once a pressure round swept the safe targets in the
 last `gate_fresh_minutes`: the safe targets are already gone, and warn alone is no reason to wait. At danger it waits.
 
-`AGENT_SKILLS_PRESSURE_GATE=0`, in the hook's environment or as the command's first word, turns it off.
+`AGENT_SKILLS_PRESSURE_GATE=0`, in the hook's environment or before the heavy command itself, turns it off.
+Swap and disk raise the gate to warn at most: they stay high for hours.
 Any failure to measure gives no decision.
 """
 import json, os, pathlib, re, shlex, sys, time
 
 ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file__).resolve().parents[1])
 SCRIPT = ROOT / "skills" / "reap-resources" / "scripts" / "pressure.py"
-# In command position only: a grep or echo that quotes the words starts nothing.
-HEAVY = re.compile(r"(?:^|[;&|(]|\bdo\b|\bthen\b)\s*(?:\S+=\S*\s+)*(?:\S*/)?"
-                   r"(orch\s+heavy\b|docker\s+compose\b[^;&|\n]*?\sup\b|docker-compose\b[^;&|\n]*?\sup\b"
-                   r"|orca\s+worktree\s+create\b)", re.M)
-BYPASS = re.compile(r"^\s*AGENT_SKILLS_PRESSURE_GATE=0\s")
+WRAPPERS = {"sudo", "env", "nohup", "time", "command", "exec", "nice"}
+SHELLS = {"bash", "sh", "zsh"}
+# docker compose global options that take a value: `docker compose -f a.yml --profile x up`.
+COMPOSE_VALUE = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory",
+                 "--ansi", "--progress", "--parallel"}
+ASSIGN = re.compile(r"[A-Za-z_]\w*=")
+SEPARATORS = set("();&|\n")
+
+
+def segments(cmd):
+    """The simple commands of a shell line as argv lists, split on unquoted ; & | ( ) and newlines.
+    A `bash -c '<text>'` is read as its own line. Unparsable text gives no segments."""
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();&|\n")
+    lex.whitespace, lex.whitespace_split = " \t\r", True
+    out, cur = [], []
+    try:
+        for tok in lex:
+            if tok and set(tok) <= SEPARATORS:
+                out.append(cur)
+                cur = []
+            else:
+                cur.append(tok)
+    except ValueError:
+        return []
+    out.append(cur)
+    for argv in [a for a in out if a]:
+        words = argv[:]
+        while words and ASSIGN.match(words[0]):
+            words.pop(0)
+        if len(words) >= 3 and words[0] in SHELLS and words[1] == "-c":
+            yield from segments(words[2])
+        else:
+            yield argv
+
+
+def starts_heavy(argv):
+    """`orch heavy`, `orca worktree create` or `docker compose … up` for one simple command, else None.
+    A leading AGENT_SKILLS_PRESSURE_GATE=0 or a --help also gives None."""
+    words, i = list(argv), 0
+    while i < len(words) and (ASSIGN.match(words[i]) or words[i] in WRAPPERS or
+                              (i and words[i - 1] in WRAPPERS and words[i].startswith("-"))):
+        if words[i] == "AGENT_SKILLS_PRESSURE_GATE=0":
+            return None
+        i += 1
+    words = words[i:]
+    if not words or "--help" in words:
+        return None
+    head = os.path.basename(words[0])
+    if head == "orch" and words[1:2] == ["heavy"]:
+        return "orch heavy"
+    if head == "orca" and words[1:3] == ["worktree", "create"]:
+        return "orca worktree create"
+    rest = words[2:] if head == "docker" and words[1:2] == ["compose"] else words[1:] if head == "docker-compose" else None
+    j = 0
+    while rest is not None and j < len(rest) and rest[j].startswith("-"):
+        j += 2 if rest[j] in COMPOSE_VALUE else 1
+    if rest is not None and j < len(rest) and rest[j] == "up":
+        return "docker compose up"
+    return None
 
 
 def heavy(cmd):
-    m = HEAVY.search(cmd)
-    return m and " ".join(m[1].split()[:2])
+    return next(filter(None, map(starts_heavy, segments(cmd))), None)
 
 
 def gate(cmd, metrics, state, cfg, now=None, judge=None):
     """(decision, reason) or None."""
     what = heavy(cmd)
-    if not what or BYPASS.match(cmd) or "--help" in cmd:
+    if not what:
         return None
-    level, why = judge(metrics, cfg)
+    # Swap drains slowly and disk is freed by hand: hours of danger would hold every heavy start, so they warn only.
+    level, why = judge(metrics, {**cfg, "swap_gb": [cfg["swap_gb"][0], float("inf")],
+                                 "disk_free_gb": [cfg["disk_free_gb"][0], float("-inf")]})
     if level == "ok":
         return None
     now = now or time.time()

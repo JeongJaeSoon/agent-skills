@@ -20,14 +20,19 @@ def gate(cmd, m, scan_t=None, now=10000.0):
     return out[0] if out else "none"
 
 
-# What counts as a heavy start: in command position only.
+# What counts as a heavy start: each simple command's own words, quotes respected.
 for cmd in ("orch heavy slug -- docker compose up -d", "docker compose -f a.yml up -d", "docker-compose up",
             "cd /w && docker compose up --wait", "orca worktree create --repo x --prompt 'CLOSE'",
-            "FOO=1 docker compose up", "/opt/bin/orch heavy - -- make e2e"):
+            "FOO=1 docker compose up", "/opt/bin/orch heavy - -- make e2e", "sudo docker compose up",
+            "env X=1 docker compose up", "bash -c 'docker compose up -d'", "docker compose --profile up up",
+            "make build; docker compose -p x --env-file vars up"):
     assert g.heavy(cmd), cmd
 for cmd in ("docker compose ps", "docker compose down", "grep 'docker compose up' notes.md", "echo orch heavy",
-            "orca worktree list"):
+            "orca worktree list", 'echo "a; docker compose up"', 'git commit -m "x; orca worktree create later"',
+            "docker compose exec web make up", "docker compose --profile up ps", "orca worktree create --help",
+            "cd x && AGENT_SKILLS_PRESSURE_GATE=0 docker compose up", "echo 'unterminated"):
     assert not g.heavy(cmd), cmd
+assert g.heavy("docker compose up -d && foo --help") == "docker compose up"
 
 # ok: nothing. warn: denied until a sweep ran in gate_fresh_minutes. danger: denied either way.
 assert gate("docker compose up -d", OK) == "none"
@@ -37,7 +42,9 @@ assert gate("docker compose up -d", WARN, scan_t=10000.0 - 16 * 60) == "deny"
 assert gate("docker compose up -d", DANGER, scan_t=10000.0 - 60) == "deny"
 assert gate("docker compose ps", DANGER) == "none"
 assert gate("AGENT_SKILLS_PRESSURE_GATE=0 docker compose up -d", DANGER) == "none"
-assert gate("orca worktree create --help", DANGER) == "none"
+# Swap and disk raise the gate to warn at most: a fresh sweep lets the start through.
+assert gate("docker compose up", {**OK, "swap_gb": 30}, scan_t=10000.0 - 60) == "none"
+assert gate("docker compose up", {**OK, "disk_free_gb": 5}) == "deny"
 reason = g.gate("orch heavy x -- make", DANGER, {}, cfg, now=1.0, judge=pressure.judge)[1]
 assert "pressure.py round" in reason and "Monitor" in reason and "종료하지 않는다" in reason, reason
 assert "round" not in g.gate("orch heavy x -- make", DANGER, {"scan_t": 1.0}, cfg, now=2.0, judge=pressure.judge)[1] \

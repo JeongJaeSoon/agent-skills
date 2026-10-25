@@ -35,6 +35,33 @@ except SystemExit:
 assert p.card_of("/w/app/card-a/sub", ["/w/app", "/w/app/card-a"]) == "/w/app/card-a"
 assert p.card_of("/elsewhere", ["/w/app"]) is None and p.card_of(None, ["/w"]) is None
 
+# The plan: a target in a card with a live terminal is spared (and the plan file says so); unreadable Orca or cwds reap nothing.
+import json, subprocess
+plan = pathlib.Path(os.environ["AGENT_SKILLS_STATE"]) / "plan.json"
+def scan_out(*items):
+    return lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps({"items": list(items), "notes": []}), "")
+orphan = {"kind": "orphan", "key": "proc:5", "target": True, "pid": 5, "cmd": "/usr/bin/node /x/srv.js", "name": "node",
+          "why": "cwd 사라짐", "procs": 1, "rss": 1, "cpu": 0, "age": 1}
+stack = {"kind": "compose-stack", "key": "stack:s", "target": True, "name": "s", "why": "PR 머지됨",
+         "links": {"worktree": "/w/done"}}
+cards = [{"path": "/w/live", "live": True}, {"path": "/w/done", "live": False}]
+got, notes = p.plan_targets(["orphan", "compose-stack"], plan, run=scan_out(orphan, stack), cards=cards,
+                            cwd_of={5: "/w/live/apps/docs"})
+assert [i["key"] for i in got] == ["stack:s"] and any("남김" in n for n in notes), (got, notes)
+saved = {i["key"]: i for i in json.loads(plan.read_text())["items"]}
+assert not saved["proc:5"]["target"] and "활동 중인 카드 live" in saved["proc:5"]["why"] and saved["stack:s"]["target"]
+got, notes = p.plan_targets(["orphan"], plan, run=scan_out(dict(orphan)), cards=[], cwd_of={})
+assert len(got) == 1  # no Orca cards: nothing to spare
+saved_cwds = p.reap.cwds
+p.reap.cwds = lambda: None
+assert p.plan_targets(["orphan"], plan, run=scan_out(dict(orphan)), cards=[])[0] is None
+p.reap.cwds = saved_cwds
+saved_cards = p.orca_cards
+p.orca_cards = lambda: None
+assert p.plan_targets(["orphan"], plan, run=scan_out(dict(orphan)), cwd_of={})[0] is None
+p.orca_cards = saved_cards
+assert p.plan_targets([], plan) == ([], ["safe_kinds 중 reap 이 아는 종류가 없음"])
+
 # Docker grouping: containers of one compose project add up; a non-compose container stands alone.
 def fake_docker(cmd, timeout=None):
     if cmd[1] == "ps":
@@ -76,6 +103,12 @@ assert len(sent) == 1 and sent[0][3] == "escalation" and "pid 7" in sent[0][1] a
 assert "종료하지 않았다" in sent[0][2]
 assert run_round(DANGER, [], consumers=(procs, projects), now=5600.0) == 2 and len(sent) == 1
 assert run_round(DANGER, [], consumers=(procs, projects), now=5000.0 + 31 * 60) == 2 and len(sent) == 2
+
+# Danger where reap skipped every target still reports the consumers.
+sent.clear()
+run_round(OK, [])
+assert run_round(DANGER, [target], reaped=["- 건너뜀 x"], consumers=(procs, projects), now=7000.0) == 2
+assert len(sent) == 1 and sent[0][3] == "escalation", sent
 
 # A failed send is tried again on the next round.
 sent.clear()
