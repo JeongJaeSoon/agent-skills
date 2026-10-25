@@ -22,7 +22,7 @@ KINDS = ("lead", "phase", "task")
 ICON = {"moving": "🔄", "waiting": "⏳", "held": "⏸️", "blocked": "🔴", "done": "✅"}
 ALIASES = {v: k for k, v in ICON.items()} | {"⏸": "held"}  # VS16 dropped, as some keyboards and pastes do
 WORST = ("blocked", "waiting", "held", "moving")
-CAPS = {"name": 17, "pr": 17, "next_min": 12}  # next takes what the others leave: 2+17+17+14+12+16 borders = 78
+CAPS = {"pr": 17}  # the name is never cut; next takes what the others leave of COLS
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
@@ -574,12 +574,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         return MARKS[n_mark - 1] if n_mark <= len(MARKS) else f"({n_mark})"
 
     def fit(text, cap, note, notes):
-        """text, or its head cut to cap with a mark whose footnote carries note."""
+        """text, or its head cut to cap with a mark whose footnote carries note; only the mark when no head fits."""
         if table_width.text_width(text) <= cap:
             return text
         m = mark()
         notes.append(f"{m} {note}")
-        return clip(text, cap - table_width.text_width(m)) + m
+        head = clip(text, cap - table_width.text_width(m))
+        return (head if head != "…" else "") + m
 
     for sec in sections:
         repo, prog = sec
@@ -599,15 +600,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 out.append(("└ " if l["depth"] else "") + body)
         elif mine:  # a section of folded bullets only has no table
             cells, notes = [], []
-            # A long progress (100/100) or a full PR column takes from the name, so next keeps its minimum.
-            w = table_width.text_width
-            fixed = (max(w(ICON.get(l["status"], "—")) for l in mine) + max(min(w(l["cell"] or "—"), CAPS["pr"]) for l in mine)
-                     + max(w(x) for x in [l["progress"] for l in mine] + [HEADER[3]]))
-            name_cap = min(CAPS["name"], COLS - table_width.BORDER_PER_COL * len(HEADER) - table_width.BORDER_EDGE
-                           - fixed - CAPS["next_min"])
             for l in mine:  # name and PR first: the next column takes the width they leave
-                prefix = "└ " if l["depth"] else ""
-                name = prefix + fit(l["name"], name_cap - table_width.text_width(prefix), l["name"], notes)
+                name = ("└ " if l["depth"] else "") + l["name"]
                 if l["fold"] and table_width.text_width(l["cell"]) > CAPS["pr"]:
                     m = mark()
                     plain = re.sub(LINK, r"\1", l["cell"])  # the numbers with their bases, no link
@@ -623,7 +617,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 cells.append([l, name, cell])
             wide = [max(table_width.text_width(r[i]) for r in [HEADER] + [[ICON.get(l["status"], "—"), n, c, l["progress"]]
                                                                          for l, n, c in cells]) for i in range(4)]
-            room = max(CAPS["next_min"], COLS - table_width.BORDER_PER_COL * len(HEADER) - table_width.BORDER_EDGE - sum(wide))
+            # The name is never cut, so next shrinks first and goes under the table, its mark left in the cell, when
+            # nothing fits; only a name too wide for COLS on its own makes the table overflow.
+            room = max(table_width.text_width(HEADER[4]),
+                       COLS - table_width.BORDER_PER_COL * len(HEADER) - table_width.BORDER_EDGE - sum(wide))
             table = [HEADER]
             for l, name, cell in cells:
                 nxt = (l["next"] or "—") + l["suffix"]

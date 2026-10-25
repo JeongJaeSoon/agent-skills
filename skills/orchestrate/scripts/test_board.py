@@ -72,7 +72,7 @@ ok("board", "set", "notify", "--title", "알림 정리", "--program", "알림 �
 for n, t in (("51", "설정"), ("52", "발송"), ("53", "로그")):
     ok("board", "set", f"notify/p{n}", "--title", t, "--pr", f"acme/web#{n}", "--status", "waiting", "--progress", "3/4",
        "--next", "10/13 09:30 의뢰")
-ok("board", "set", "notify/p54", "--title", "문구가 아주 길어서 칸을 넘는 하위 작업", "--pr", "acme/web#54", "--progress", "2/4",
+ok("board", "set", "notify/p54", "--title", "문구 다듬기와 길이 정리", "--pr", "acme/web#54", "--progress", "2/4",
    "--next", "CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커")
 # Lead 3: two PRs on one reviewer fit the name cell. Lead 4: its terminal is gone and it last reported 3 hours ago.
 ok("board", "lead", "add", "triage", "--handle", "term_0FAKE3", "--repo", "acme/ops")
@@ -161,12 +161,13 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 | | 리드/Phase | PR | 진행 | 다음 |
 |---|---|---|---|---|
-| ⏳ | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | 리뷰 · 사람 |
-| 🔄 | └ 문구가 아주…¹ | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI 재실행 뒤 리…² |
-| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | 10/13 09:30 의뢰 |
+| ⏳ | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | 리뷰…¹ |
+| 🔄 | └ 문구 다듬기와 길이 정리 | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI 재…² |
+| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | 10/13…³ |
 
-¹ 문구가 아주 길어서 칸을 넘는 하위 작업
+¹ 리뷰 · 사람
 ² CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
+³ 10/13 09:30 의뢰
 
 21:00 이후라 Slack 미전송
 
@@ -199,7 +200,7 @@ assert code == 0, err
 assert not any(m in tg for m in ("**", "|", "](")), tg
 assert "✅ ph2 #42 42c0ffe (바뀜) — ████████ 8/8 · —" in tg.splitlines(), tg
 assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4 · 10/13 09:30 의뢰" in tg.splitlines(), tg
-assert "└ 🔄 문구가 아주 길어서 칸을 넘는 하위 작업 #54 ❗리뷰 CI✗ — ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
+assert "└ 🔄 문구 다듬기와 길이 정리 #54 ❗리뷰 CI✗ — ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
 assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "⏳ 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4 · 리뷰 · 사람" in tg.splitlines(), tg
 assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
 assert "🔄 진행 중 — 다른 팀 답변 대기 · 사람 · 다음: 10/14 회신" in tg.splitlines(), tg
@@ -265,10 +266,10 @@ ok("board", "set", "cart/ph1", "--kind", "phase")
 ok("board", "set", "promo/ph1", "--kind", "phase")
 assert "**acme/shop — (프로젝트 미지정)**" in ok("brief", "render", "--periodic", "--now", NOW)
 
-# A long progress and a full PR column take from the name: the table stays within 78 columns. A folded row too long
-# for its cell keeps each PR's own base in the footnote.
+# A long progress and a full PR column take from the next step, never the name: the table stays within 78 columns.
+# A folded row too long for its cell keeps each PR's own base in the footnote.
 ok("board", "lead", "add", "wide", "--handle", "term_0FAKE9", "--repo", "acme/wide", "--program", "넓은 표")
-ok("board", "set", "wide", "--title", "아주 긴 이름의 리드 작업", "--progress", "100/100", "--pr", "acme/wide#1201",
+ok("board", "set", "wide", "--title", "긴 이름의 리드 작업", "--progress", "100/100", "--pr", "acme/wide#1201",
    "--next", "다음 단계 설명이 아주 길게 이어짐")
 for n in (1123, 1124, 1125):
     ok("board", "set", f"wide/p{n}", "--pr", f"acme/wide#{n}", "--status", "waiting")
@@ -278,8 +279,22 @@ prs_json["prs"].update(dict([pr("acme/wide#1201", merge_state="DIRTY", decision=
 (state / "prs.json").write_text(json.dumps(prs_json))
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "넓은 표"))
 assert out["width_ok"], out["text"]
-assert "² #1201 ❗DIRTY→release/2026-10" in out["text"].splitlines(), out["text"]
-assert "³ #1123·#1124→feature/long-target·#1125" in out["text"].splitlines(), out["text"]
+assert "| 🔴 | 긴 이름의 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY→r…¹ | ████████ 100/100 | 세션…³ |" \
+    in out["text"].splitlines(), out["text"]
+assert "¹ #1201 ❗DIRTY→release/2026-10" in out["text"].splitlines(), out["text"]
+assert "² #1123·#1124→feature/long-target·#1125" in out["text"].splitlines(), out["text"]
+# A name too wide to leave the next step any room: the name stays whole, the next step keeps the header's width and goes
+# under the table, and only then does the table overflow, which the render reports.
+ok("board", "lead", "add", "huge", "--handle", "term_0FAKE10", "--repo", "acme/huge", "--program", "아주 넓은 표")
+ok("board", "set", "huge", "--title", "이름이 아주 길어서 칸 하나로는 도저히 담기지 않는 리드 작업", "--pr", "acme/wide#1201",
+   "--progress", "100/100", "--next", "다음 단계")
+code, huge, _ = orch("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "아주 넓은 표")
+huge = json.loads(huge)
+assert code == 1 and huge["width_ok"] is False, huge
+assert "| 🔴 | 이름이 아주 길어서 칸 하나로는 도저히 담기지 않는 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY " \
+       "| ████████ 100/100 | 세…¹ |" in huge["text"].splitlines(), huge["text"]
+assert "¹ 세션 없음" in huge["text"].splitlines(), huge["text"]
+ok("board", "drop", "huge")
 
 # A repository whose only rows are lead-less PRs waiting on one reviewer is a bullet with no table.
 for n in (81, 82):
