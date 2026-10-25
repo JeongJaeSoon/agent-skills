@@ -84,7 +84,9 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             python one-liner), even where the harness allows small shell edits: a Bash-made patch
             has passed tests that re-applying it with Edit showed broken. A formatter or generator
             VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
-            that changes a file or its mode its own call, so a refusal names it.
+            that changes a file or its mode its own call, so a refusal names it. Never chain a
+            check or probe with other acts in one Bash call either: a refusal takes every act in
+            the call with it, and none of them may be tried again.
             Write no file or script outside the worktree except under SCOPE's scratch root or
             its named temporary download directory; list what you put there (checkouts, files, compose projects) in the report and tear it down
             before worker_done by moving that one named directory to the trash. A script's own
@@ -100,7 +102,11 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             reports to its coordinator as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
-            orchestration channel to the human in its own chat, with its Human only batch. Paste
+            orchestration channel to the human in its own chat, with its Human only batch. A message
+            sent from Bash carries the command as the path of a file you wrote with the Write tool
+            in your scratch directory, never quoted: a hook that matched the command's text blocks
+            a message quoting it. A report blocked that way goes once more with the path in place
+            of the quoted text, which is not a retry of the refused act. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this

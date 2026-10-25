@@ -133,7 +133,11 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             reports to its coordinator as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
-            orchestration channel to the human in its own chat, with its Human only batch. Paste
+            orchestration channel to the human in its own chat, with its Human only batch. A message
+            sent from Bash carries the command as the path of a file you wrote with the Write tool
+            in your scratch directory, never quoted: a hook that matched the command's text blocks
+            a message quoting it. A report blocked that way goes once more with the path in place
+            of the quoted text, which is not a retry of the refused act. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this
