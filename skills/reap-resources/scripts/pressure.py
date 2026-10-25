@@ -361,7 +361,8 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, plan_fn=pl
         # Consumers shift every round, so only entering danger or renotify_minutes passing sends again.
         if st.get("level") != "danger" or now - st.get("danger_t", 0) >= float(cfg["renotify_minutes"]) * 60:
             top = (lines[:1] or ["읽지 못함"])[0].lstrip("- ")
-            message = ("escalation", f"PC 사용량 위험, 정리할 안전 대상 없음: {', '.join(why)} — 최대 소비자 {top[:80]}",
+            # `escalation` needs an active dispatch of the sender, which a LaunchAgent never has.
+            message = ("status", f"PC 사용량 위험, 정리할 안전 대상 없음: {', '.join(why)} — 최대 소비자 {top[:80]}",
                        f"{summary(m)}\n" + "\n".join(lines) + "\n남의 프로세스·활동 중 카드는 종료하지 않았다. "
                        "새 무거운 작업과 dispatch 를 멈추고, 끝난 카드의 소유자가 정리하게 한다")
             record["danger_t"] = now

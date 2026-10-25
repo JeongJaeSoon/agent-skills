@@ -213,7 +213,8 @@ offer is left out. The level is the worst metric's.
   When something went, one `status` line to `notify_to` (else `reap.inbox_to`): what and why. A machine that stays at
   warn is swept again only after `rescan_minutes` (10).
 - **danger**: the same sweep. With nothing reaped (none listed, or reap skipped or failed them all), the top consumers (reap's `load` classes, compose projects with
-  their CPU and memory, each with the Orca card it lies in) go out as one `escalation`, then the round stops. Nothing
+  their CPU and memory, each with the Orca card it lies in) go out as one `status` message (an `escalation` needs an
+  active dispatch, which the LaunchAgent has none of), then the round stops. Nothing
   is stopped or killed, whoever owns it. Sent again only on entering danger or after `renotify_minutes` (30).
 - Never: `compose down -v`, `docker system prune`, volume or image removal, a kill by pattern, anything of a card or
   lead that is still working (reap's own rules keep those).

@@ -99,7 +99,7 @@ DANGER = {**OK, "load_per_cpu": 2.5}
 procs = [{"pid": 7, "cls": "ours-working", "cpu": 400, "rss": 1 << 30, "cmd": "OrbStack Helper", "card": None}]
 projects = [{"project": "stack", "containers": 12, "cpu": 80, "mem_mb": 2000, "dir": "/w/card", "card": "/w/card"}]
 assert run_round(DANGER, [], consumers=(procs, projects), now=5000.0) == 2
-assert len(sent) == 1 and sent[0][3] == "escalation" and "pid 7" in sent[0][1] and "카드 card" in sent[0][2], sent
+assert len(sent) == 1 and sent[0][3] == "status" and "위험" in sent[0][1] and "pid 7" in sent[0][1] and "카드 card" in sent[0][2], sent
 assert "종료하지 않았다" in sent[0][2]
 assert run_round(DANGER, [], consumers=(procs, projects), now=5600.0) == 2 and len(sent) == 1
 assert run_round(DANGER, [], consumers=(procs, projects), now=5000.0 + 31 * 60) == 2 and len(sent) == 2
@@ -108,7 +108,7 @@ assert run_round(DANGER, [], consumers=(procs, projects), now=5000.0 + 31 * 60) 
 sent.clear()
 run_round(OK, [])
 assert run_round(DANGER, [target], reaped=["- 건너뜀 x"], consumers=(procs, projects), now=7000.0) == 2
-assert len(sent) == 1 and sent[0][3] == "escalation", sent
+assert len(sent) == 1 and "위험" in sent[0][1], sent
 
 # A failed send is tried again on the next round.
 sent.clear()
