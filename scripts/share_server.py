@@ -9,6 +9,8 @@ Usage:
 A folder with index.html serves that page. A folder without one lists its entries, and when it holds images
 (png, jpg, webp, gif) they come first as a thumbnail grid grouped by name with the size/theme suffix
 (-1280, -390, -dark, ...) dropped; clicking one opens it full size, arrow keys step through them.
+A .md file is rendered as a page (raw HTML in it is shown as text); `?raw` returns the source. Text files are
+sent as UTF-8.
 
 Binds 127.0.0.1 only; publishing on a network (e.g. `tailscale serve`) is left to the owner. Hidden entries and
 symlinks that resolve outside the root are neither listed nor served. Settings live under the "share-server" key
@@ -53,6 +55,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     server_version = "share-server"
     sys_version = ""
 
+    extensions_map = {".md": "text/markdown", ".log": "text/plain", ".jsonl": "text/plain"}
+
     def __init__(self, *args, root, **kw):
         self.root = os.path.realpath(root)
         super().__init__(*args, directory=self.root, **kw)
@@ -74,7 +78,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 any(os.path.lexists(i) and not self.inside(i) for i in indexes):
             self.send_error(404)
             return None
+        if path.lower().endswith(".md") and os.path.isfile(path) and \
+                "raw" not in urlsplit(self.path).query.split("&"):
+            return self.markdown(path)
         return super().send_head()
+
+    def guess_type(self, path):
+        kind = super().guess_type(path)
+        # Without a charset browsers read text as the locale's legacy encoding (EUC-KR, Shift_JIS, ...).
+        if kind.startswith("text/") and kind != "text/html" or kind == "application/json":
+            return f"{kind}; charset=utf-8"
+        return kind
+
+    def markdown(self, path):
+        try:
+            with open(path, "rb") as f:
+                text = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            self.send_error(404)
+            return None
+        name = html.escape(os.path.basename(path))
+        body = (f'<!doctype html>\n<html><head><meta charset="utf-8">'
+                f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{name}</title>'
+                f'<style>{CSS}{MD_CSS}</style></head><body><nav><a href="./">./</a> '
+                f'<a href="?raw">{name} 원문</a></nav><article>{md_html(text)}</article></body></html>').encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'")
+        self.end_headers()
+        return io.BytesIO(body)
 
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -180,6 +213,216 @@ LIGHTBOX = """
   });
 })();
 </script>"""
+
+
+# ---------------------------------------------------------------- markdown
+
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+HEADING = re.compile(r"^ {0,3}(#{1,6})(?:\s+(.*?))?(?:\s+#+)?\s*$")
+RULE = re.compile(r"^ {0,3}([-*_])(?:\s*\1){2,}\s*$")
+ITEM = re.compile(r"^( {0,3})([-*+]|\d{1,9}[.)])(\s+|$)")
+TABLE_SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+SAFE_URL = re.compile(r"^(?:https?:|mailto:|[^:]*$)", re.I)
+
+
+def md_html(text):
+    return blocks(text.replace("\r\n", "\n").replace("\t", "    ").split("\n"))
+
+
+def starts_block(line):
+    return bool(FENCE.match(line) or HEADING.match(line) or RULE.match(line) or ITEM.match(line)
+                or line.lstrip().startswith(">"))
+
+
+def blocks(lines, tight=False):
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+        elif m := FENCE.match(line):
+            j = i + 1
+            while j < len(lines) and not lines[j].strip().startswith(m.group(1)):
+                j += 1
+            lang = line.strip()[len(m.group(1)):].strip().split(" ")[0]
+            cls = f' class="language-{html.escape(lang)}"' if lang else ""
+            out.append(f"<pre><code{cls}>{html.escape(chr(10).join(lines[i + 1:j]))}</code></pre>")
+            i = j + 1
+        elif RULE.match(line):
+            out.append("<hr>")
+            i += 1
+        elif m := HEADING.match(line):
+            n = len(m.group(1))
+            out.append(f"<h{n}>{inline(m.group(2) or '')}</h{n}>")
+            i += 1
+        elif line.lstrip().startswith(">"):
+            j = i
+            while j < len(lines) and lines[j].strip() and (lines[j].lstrip().startswith(">") or j > i):
+                j += 1
+            quoted = [re.sub(r"^\s*> ?", "", l) for l in lines[i:j]]
+            out.append(f"<blockquote>{blocks(quoted)}</blockquote>")
+            i = j
+        elif ITEM.match(line):
+            i = listing(lines, i, out)
+        elif "|" in line and i + 1 < len(lines) and TABLE_SEP.match(lines[i + 1]) and "-" in lines[i + 1]:
+            i = table(lines, i, out)
+        else:
+            j = i + 1
+            while j < len(lines) and lines[j].strip() and not starts_block(lines[j]) and \
+                    not ("|" in lines[j] and j + 1 < len(lines) and TABLE_SEP.match(lines[j + 1])):
+                j += 1
+            para = inline("\n".join(l.lstrip() for l in lines[i:j]).rstrip())
+            out.append(para if tight else f"<p>{para}</p>")
+            i = j
+    return "\n".join(out)
+
+
+def listing(lines, i, out):
+    first = ITEM.match(lines[i])
+    ordered = first.group(2)[0].isdigit()
+    items, loose = [], False
+    while i < len(lines) and (m := ITEM.match(lines[i])) and m.group(2)[0].isdigit() == ordered:
+        width = len(m.group(0)) if m.group(3) else len(m.group(0)) + 1
+        body, j = [lines[i][len(m.group(0)):]], i + 1
+        while j < len(lines):
+            l = lines[j]
+            if l.strip() and (len(l) - len(l.lstrip())) >= width:
+                body.append(l[width:])
+            elif l.strip() and not starts_block(l) and body[-1].strip():
+                body.append(l.strip())  # lazy continuation of the paragraph
+            elif not l.strip() and j + 1 < len(lines) and (len(lines[j + 1]) - len(lines[j + 1].lstrip())) >= width \
+                    and lines[j + 1].strip():
+                body.append("")
+                loose = True
+            else:
+                break
+            j += 1
+        items.append(body)
+        if j + 1 < len(lines) and not lines[j].strip() and (n := ITEM.match(lines[j + 1])) and \
+                n.group(2)[0].isdigit() == ordered:
+            loose = True
+            j += 1
+        i = j
+    tag = "ol" if ordered else "ul"
+    start = int(first.group(2)[:-1]) if ordered else 1
+    attr = f' start="{start}"' if start != 1 else ""
+    lis = []
+    for body in items:
+        box = re.match(r"\[([ xX])\]\s+", body[0])
+        if box:
+            body = [body[0][box.end():]] + body[1:]
+        check = f'<input type="checkbox" disabled{" checked" if box.group(1) != " " else ""}> ' if box else ""
+        lis.append(f"<li>{check}{blocks(body, tight=not loose)}</li>")
+    out.append(f"<{tag}{attr}>{''.join(lis)}</{tag}>")
+    return i
+
+
+def cells(row):
+    """Split a table row on pipes outside code spans and backslash escapes."""
+    row = row.strip()
+    row = row[1:] if row.startswith("|") else row
+    row = row[:-1] if row.endswith("|") and not row.endswith("\\|") else row
+    parts, cur, tick, k = [], "", 0, 0
+    while k < len(row):
+        ch = row[k]
+        if ch == "\\" and k + 1 < len(row):
+            cur += row[k:k + 2] if row[k + 1] != "|" or tick else "|"
+            k += 2
+            continue
+        if ch == "`":
+            n = len(row[k:]) - len(row[k:].lstrip("`"))
+            tick = 0 if tick == n else (tick or n)
+            cur += "`" * n
+            k += n
+            continue
+        if ch == "|" and not tick:
+            parts.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+        k += 1
+    return parts + [cur.strip()]
+
+
+def table(lines, i, out):
+    aligns = []
+    for c in cells(lines[i + 1]):
+        a = "center" if c.startswith(":") and c.endswith(":") else "right" if c.endswith(":") else \
+            "left" if c.startswith(":") else ""
+        aligns.append(f' style="text-align:{a}"' if a else "")
+    head = cells(lines[i])
+    rows, j = [], i + 2
+    while j < len(lines) and lines[j].strip() and "|" in lines[j]:
+        rows.append(cells(lines[j]))
+        j += 1
+
+    def tr(row, tag):
+        row = (row + [""] * len(head))[:len(head)]
+        return "<tr>" + "".join(f"<{tag}{aligns[k] if k < len(aligns) else ''}>{inline(c)}</{tag}>"
+                                for k, c in enumerate(row)) + "</tr>"
+    out.append(f'<div class="table"><table><thead>{tr(head, "th")}</thead>'
+               f'<tbody>{"".join(tr(r, "td") for r in rows)}</tbody></table></div>')
+    return j
+
+
+def inline(text, outer=None):
+    stash = [] if outer is None else outer
+
+    def keep(fragment):
+        stash.append(fragment)
+        return f"\x00{len(stash) - 1}\x00"
+
+    def href(url):
+        url = url.strip().strip("<>")
+        return html.escape(url) if SAFE_URL.match(url) else "#"
+
+    if outer is None:
+        text = text.replace("\x00", "")
+        # One pass so a backslash escapes a backtick outside a code span but stays literal inside one.
+        text = re.sub(r"\\([\\`*_{}\[\]()#+\-.!|~<>])|(`+)(.+?)\2",
+                      lambda m: keep(html.escape(m.group(1)) if m.group(1) else
+                                     f"<code>{html.escape(m.group(3).strip())}</code>"), text, flags=re.S)
+    url = r"\(((?:[^()\s]|\([^()\s]*\))+)(?:\s+\"[^\"]*\")?\)"
+    text = re.sub(r"!\[([^\]]*)\]" + url,
+                  lambda m: keep(f'<img src="{href(m.group(2))}" alt="{html.escape(m.group(1))}">'), text)
+    text = re.sub(r"\[([^\]]+)\]" + url,
+                  lambda m: keep(f'<a href="{href(m.group(2))}">{inline(m.group(1), stash)}</a>'), text)
+    text = re.sub(r"<(https?://[^>\s]+)>", lambda m: keep(f'<a href="{href(m.group(1))}">{html.escape(m.group(1))}</a>'),
+                  text)
+    text = re.sub(r"https?://[^\s<>\"']+[^\s<>\"'.,;:!?)\]]",
+                  lambda m: keep(f'<a href="{href(m.group(0))}">{html.escape(m.group(0))}</a>'), text)
+    text = html.escape(text)
+    text = re.sub(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", r"<strong>\2</strong>", text)
+    text = re.sub(r"(?<![\w*])\*(?=\S)(.+?)(?<=\S)\*(?!\*)|(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)",
+                  lambda m: f"<em>{m.group(1) or m.group(2)}</em>", text)
+    text = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<del>\1</del>", text)
+    text = re.sub(r"(?: {2,}|\\)\n", "<br>\n", text)
+    while "\x00" in text:
+        text = re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], text)
+    return text
+
+
+MD_CSS = """
+nav{display:flex;gap:16px;margin:0 auto 16px;max-width:880px;font-size:13px;color:var(--mute)}
+article{max-width:880px;margin:0 auto;font-size:15px;line-height:1.65;overflow-wrap:break-word}
+article *{word-break:normal}
+article h1{font-size:24px;margin:24px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+article h2{font-size:19px;margin:28px 0 10px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+article h3{font-size:16px;margin:20px 0 8px}article h4,article h5,article h6{font-size:15px;margin:16px 0 6px}
+article a{color:#0a66d8}@media (prefers-color-scheme:dark){article a{color:#6cb2ff}}
+article code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--card);
+border:1px solid var(--line);border-radius:4px;padding:0 4px}
+article pre{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px;overflow-x:auto}
+article pre code{border:0;padding:0;background:none}
+article blockquote{margin:12px 0;padding:0 12px;border-left:3px solid var(--line);color:var(--mute)}
+article hr{border:0;border-top:1px solid var(--line);margin:24px 0}
+article img{max-width:100%}article ul,article ol{padding-left:24px}
+.table{overflow-x:auto;margin:12px 0}
+article table{border-collapse:collapse;font-size:14px}
+article th,article td{border:1px solid var(--line);padding:6px 10px;vertical-align:top;min-width:64px}
+article th{background:var(--card);text-align:left}
+@media (max-width:480px){article{font-size:14px}article table{font-size:13px}}
+"""
 
 
 def serve(root, port):
