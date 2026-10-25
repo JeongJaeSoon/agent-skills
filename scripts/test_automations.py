@@ -85,8 +85,8 @@ class Janitor(Base):
         code, msg = self.j.enable(False)
         self.assertEqual(code, 1)
         self.assertIn("worktree", msg)
+        self.assertEqual(self.j.enable(True)[0], 1)
         self.assertEqual(fake.schedules(), [])
-        self.assertEqual(self.j.enable(True)[0], 0)
 
     def test_enable_when_on_changes_nothing(self):
         fake = self.orca([janitor()])
@@ -102,9 +102,15 @@ class Janitor(Base):
         self.assertNotIn("--trigger", edit)
 
     def test_drift_from_a_worktree_is_not_written(self):
-        fake = self.orca([janitor(prompt="old")], main=False)
-        self.assertEqual(self.j.enable(False)[0], 1)
-        self.assertEqual(fake.edits(), [])
+        for here in (False, True):
+            fake = self.orca([janitor(prompt="old")], main=False)
+            self.assertEqual(self.j.enable(here), (0, "이미 켜져 있음"))
+            self.assertEqual(fake.edits(), [])
+            self.assertNotIn("다름", self.j.status()[1])
+
+    def test_null_workspace(self):
+        self.orca([janitor(workspaceId=None)])
+        self.assertEqual(self.j.status()[0], "on")
 
     def test_disabled_without_drift_turns_on_from_a_worktree(self):
         fake = self.orca([janitor(enabled=False)], main=False)
@@ -124,15 +130,16 @@ class Janitor(Base):
 class Preview(unittest.TestCase):
     p = au.PreviewWatch()
 
-    def patch(self, loaded, spec, tailscale=True, main=True):
-        self.install, self.uninstall = mock.Mock(return_value=0), mock.Mock(return_value=0)
+    def patch(self, loaded, spec, tailscale=True, main=True, owned=None, rc=0):
+        self.install, self.uninstall = mock.Mock(return_value=rc), mock.Mock(return_value=rc)
         for p in (mock.patch.object(au, "launchd_loaded", return_value=loaded),
                   mock.patch.object(au, "plist_spec", return_value=spec),
                   mock.patch.object(au, "tailscale_ready", return_value=tailscale),
                   mock.patch.object(au, "main_checkout", return_value=main),
                   mock.patch.object(au.sys, "platform", "darwin"),
                   mock.patch.object(au.pw, "cmd_install", self.install),
-                  mock.patch.object(au.pw, "cmd_uninstall", self.uninstall)):
+                  mock.patch.object(au.pw, "cmd_uninstall", self.uninstall),
+                  mock.patch.object(au.pw, "load_state", return_value={"owned": owned or {}})):
             p.start()
             self.addCleanup(p.stop)
 
@@ -174,6 +181,19 @@ class Preview(unittest.TestCase):
         self.patch(True, self.current())
         self.assertEqual(self.p.disable()[0], 0)
         self.uninstall.assert_called_once()
+
+    def test_failed_uninstall_says_so_and_retries(self):
+        self.patch(True, self.current(), rc=1)
+        code, msg = self.p.disable()
+        self.assertEqual(code, 1)
+        self.assertNotIn("닫았다", msg)
+        self.patch(False, None, owned={"4590": "http://127.0.0.1:4590"})
+        self.assertEqual(self.p.disable()[0], 0)
+        self.uninstall.assert_called_once()
+
+    def test_failed_install_says_so(self):
+        self.patch(False, None, rc=1)
+        self.assertEqual(self.p.enable(False), (1, "실패 (위 출력)"))
 
     def test_other_os_only_explains(self):
         self.patch(False, None)

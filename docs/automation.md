@@ -23,8 +23,9 @@ skills-sync setup disable <이름>         # 끄기
 
 - 같은 상태면 아무것도 하지 않는다. `enable`을 두 번 돌려도 두 번째는 "이미 켜져 있음"이다.
 - 켜기는 job에 이 체크아웃의 절대 경로를 적으므로 worktree에서는 거부한다(worktree가 지워지면 job이 조용히
-  실패한다). 테스트에만 `--here`를 붙인다. janitor가 꺼져 있을 뿐 내용이 같으면 worktree에서도 켠다.
-- `status`는 등록된 내용이 이 체크아웃과 다르면(다른 경로, `reap.py`의 주기·프롬프트 변경) 그 필드를 적는다.
+  실패한다). preview-watch 테스트에만 `--here`를 붙인다. janitor는 하나뿐인 공유 job이라 `--here`도 받지 않고,
+  worktree에서는 차이를 비교하지도 고치지도 않는다(꺼져 있으면 켜기만 한다).
+- 메인 체크아웃에서 돌린 `status`는 등록된 내용이 이 체크아웃과 다르면(다른 경로, `reap.py`의 주기·프롬프트 변경) 그 필드를 적는다.
   `enable`을 다시 돌리면 맞춰진다.
 - janitor는 Orca가 있어야 한다. `orca` CLI가 없으면 상태는 "확인 불가"이고 `enable`은 안내만 하고 실패한다.
 - preview-watch는 macOS 전용이다. 다른 OS에서는 상태가 "미지원"이고, `enable`은 cron으로 `bin/preview-watch run`을

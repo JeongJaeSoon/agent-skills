@@ -9,7 +9,7 @@ Usage:
 
 Running any of these again changes nothing that is already as asked. `disable` keeps the janitor registered
 but off, so `apply` leaves it off. Turning one on writes paths to this checkout into the job, so it refuses a
-worktree (it goes away under the job) unless --here is given for a test.
+worktree (it goes away under the job); --here allows it for a preview-watch test, never for the shared janitor job.
 """
 import json, os, pathlib, plistlib, shutil, subprocess, sys
 
@@ -36,7 +36,7 @@ def main_checkout():
     return (REPO / ".git").is_dir()
 
 
-def worktree_refusal(here):
+def worktree_refusal(here=False):
     if here or main_checkout():
         return None
     return f"{REPO} 는 worktree 다. 세션이 로드하는 메인 체크아웃에서 다시 실행한다(테스트만 --here)"
@@ -90,8 +90,9 @@ class Janitor:
             return "unknown", err
         if not a:
             return "absent", "등록 안 됨"
-        drift = janitor_drift(a)
-        detail = f"{a.get('rrule')} · {a.get('workspaceId', '').partition('::')[2]}"
+        # From a worktree every path differs from the job's; that is not drift.
+        drift = janitor_drift(a) if main_checkout() else {}
+        detail = f"{a.get('rrule')} · {(a.get('workspaceId') or '').partition('::')[2]}"
         if drift:
             detail += f" · reap schedule 과 다름: {', '.join(drift)} (enable 로 맞춤)"
         return ("on" if a.get("enabled") else "off"), detail
@@ -100,18 +101,16 @@ class Janitor:
         a, err = self.find()
         if a is None:
             return 1, err
+        # --here never applies: the janitor is one shared Orca job, and a worktree's paths die with it.
         if not a:
-            refusal = worktree_refusal(here)
+            refusal = worktree_refusal()
             if refusal:
                 return 1, refusal
             p = sh([sys.executable, str(REAP), "schedule", "--write"])
             return p.returncode, (p.stdout + p.stderr).strip()
-        drift = janitor_drift(a)
+        drift = janitor_drift(a) if main_checkout() else {}
         if not drift and a.get("enabled"):
             return 0, "이미 켜져 있음"
-        refusal = drift and worktree_refusal(here)
-        if refusal:  # the drift a worktree sees is its own paths; writing them would point the job at it
-            return 1, refusal
         edit = [x for k, v in drift.items() for x in (f"--{k}", str(v))]
         p = sh([ORCA, "automations", "edit", "--id", a["id"], *edit, "--enabled", "--json"])
         if p.returncode:
@@ -163,7 +162,7 @@ class PreviewWatch:
         if not loaded:
             return "off", f"{pw.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
         detail = f"{pw.config()['interval']}초마다"
-        if spec != pw.spec(pw.config()["interval"]):
+        if main_checkout() and spec != pw.spec(pw.config()["interval"]):
             script = next((a for a in (spec or {}).get("ProgramArguments", []) if a.endswith(".py")), "?")
             detail += f" · 등록된 내용이 이 체크아웃과 다름: {script} (enable 로 다시 씀)"
         return "on", detail
@@ -179,14 +178,18 @@ class PreviewWatch:
         refusal = worktree_refusal(here)
         if refusal:
             return 1, refusal
-        return pw.cmd_install(here_ok=here), "켬"
+        code = pw.cmd_install(here_ok=here)
+        return code, "실패 (위 출력)" if code else "켬"
 
     def disable(self):
         if sys.platform != "darwin":
             return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
-        if plist_spec() is None and not launchd_loaded():
+        # Entries left open by a failed uninstall keep this going until they are closed.
+        if plist_spec() is None and not launchd_loaded() and not pw.load_state()["owned"]:
             return 0, "이미 꺼져 있음"
-        return pw.cmd_uninstall(), "끔 (watcher 가 연 serve 항목도 닫았다)"
+        code = pw.cmd_uninstall()
+        return code, ("job 은 내렸으나 serve 항목을 다 닫지 못함. disable 을 다시 돌린다" if code
+                      else "끔 (watcher 가 연 serve 항목도 닫았다)")
 
 
 AUTOMATIONS = (Janitor(), PreviewWatch())
