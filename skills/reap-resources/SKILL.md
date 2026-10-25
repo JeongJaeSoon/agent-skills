@@ -50,7 +50,7 @@ python3 "$R" ledger add --kind orca-worktree --path <card path>              # a
 python3 "$R" ledger add --kind gui-app --pid 4242 --worktree <worktree path>   # pid + start time are recorded
 python3 "$R" ledger add --kind chrome-window --id <window or tab id> --url <its URL> --pr acme/app#12
 python3 "$R" ledger add --kind evidence --path /tmp/task/shots --pr acme/app#12   # a screenshot or recording, once it is on the PR
-python3 "$R" ledger add --kind compose-stack --id <project> --worktree <card path> [--pid <launcher pid>]   # `orch heavy` does this itself
+python3 "$R" ledger add --kind compose-stack --id <project> --worktree <card path> [--pr acme/app#12]   # `orch heavy` does this itself
 python3 "$R" ledger add --kind compose-stack --id <project> --previewed            # the user has looked at the preview
 python3 "$R" ledger add --kind compose-stack --id <project> --keep "<reason>" --until 2026-10-27T18:00+09:00
 python3 "$R" ledger list
@@ -60,8 +60,9 @@ python3 "$R" scan --kinds janitor          # a plain scan leaves the janitor kin
 The ledger is append-only JSON lines `{ts, run, kind, id, links: {pr, worktree}, by}` at
 `~/.local/state/agent-skills/ledger.jsonl` (`--state` or `$AGENT_SKILLS_STATE` moves the folder,
 `--ledger` or `$AGENT_SKILLS_LEDGER` the file). The last line per id wins. A link is "done" when its
-PR (`owner/repo#N`, read with `gh`) is merged or closed, or its worktree is gone. For `compose-stack` every line of an id
-adds to the earlier ones, so a `--previewed` or `--keep` line keeps the owner links.
+PR (`owner/repo#N`, read with `gh`) is merged or closed, or its worktree is gone. For `compose-stack` a line with a PR or worktree link
+is a registration and starts that id over (a stack brought up again after a reap retired it); a `--previewed` or `--keep`
+line adds to it and keeps the owner links. `--pid` is recorded, never checked: the launcher exits and its pid is reused.
 
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
@@ -72,7 +73,7 @@ adds to the earlier ones, so a `--previewed` or `--keep` line keeps the owner li
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
 | chrome-window | its link is done and its URL is recorded | an open PR, no link, no URL (Chrome reuses ids after a restart, so without the URL the agent cannot tell it is the same tab) | `reap` prints `에이전트가 처리` and retires the id in the ledger, so it is asked once; the agent closes it with its browser tools only when the URL matches, and leaves it otherwise or when it has no browser tools |
 | evidence | a file or directory of screenshots and recordings whose PR has been merged or closed for N hours (`--hours`) | an open PR, no PR link (a worktree link does not prove it was uploaded), a PR state or close time that could not be read, a directory holding anything but images and videos | the trash |
-| compose-stack | in the ledger (`orch heavy` registers a project its command left with a config file in the card's worktree); its PR merged or closed (ledger link, else the worktree branch's own PR) or its worktree gone; every container stopped, or none started or stopped for `--hours`; on a host port in `reap.preview_ports` (default 4500–4599, hand-served previews) only after a `--previewed` line | an open PR, no PR, a PR it could not read, a `--keep` line before its `--until`, the registered pid still running, containers created after the registration (a new stack under a reused name), a stack nobody registered (the `docker` kind reports those) | `docker compose -p <project> down`, never `-v`: volumes stay. The id is retired in the ledger |
+| compose-stack | in the ledger (`orch heavy` registers a project its command left with a config file in the card's worktree); its PR merged or closed (ledger link, else the worktree branch's own PR, an open one first, counted only when it carried the worktree's HEAD) or its worktree gone; every container stopped, or none started or stopped for `--hours`; on a host port in `reap.preview_ports` (default 4500–4599, hand-served previews) only after a `--previewed` line | an open PR, no PR, a PR it could not read, a `--keep` line before its `--until`, containers created after the latest registration (a new stack under a reused name), a stack nobody registered (the `docker` kind reports those) | `docker compose -p <project> down`, never `-v`: volumes stay. The id is retired in the ledger |
 | remote-branch | interface only, never a target | always | - |
 
 `evidence` also reports images and videos (png, jpg, jpeg, gif, webp, mp4, mov, webm) older than N

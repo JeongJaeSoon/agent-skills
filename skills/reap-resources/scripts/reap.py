@@ -798,12 +798,13 @@ def regenerated_copies(path, git=run):
 def branch_pr(path, git=run):
     """(owner/repo#N or None, unread) for the branch checked out at path."""
     branch = (git(["git", "-C", path, "branch", "--show-current"], check=False) or "").strip()
-    prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,isCrossRepository"],
+    prs = branch and git(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,url,state,isCrossRepository"],
                           cwd=path, check=False)
     # A failed lookup is not an empty answer: a card with an open PR would pass as one without.
     unread = bool(branch) and prs is None
     # A fork's PR with the same head name is not this branch's.
     own = [p for p in json.loads(prs) if not p.get("isCrossRepository")] if prs else []
+    own.sort(key=lambda p: p.get("state") != "OPEN")
     m = own and re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", own[0]["url"])
     return (m and f"{m.group(1)}#{m.group(2)}") or None, unread
 
@@ -944,21 +945,23 @@ def compose_stacks():
 
 
 def folded(entries, kind):
-    """One record per id: later lines add to earlier ones (a keep or previewed line keeps the owner links), and the
-    first line's ts is when the stack was registered."""
+    """One record per id. A line with a PR or worktree link is a registration and starts the record over (a stack
+    brought up again under the same name, after a reap retired it); a keep or previewed line adds to it."""
     out = {}
     for e in entries:
         if e.get("kind") != kind:
             continue
-        prev = out.get(e["id"]) or {"registered": e.get("ts")}
+        fresh = e["id"] not in out or any((e.get("links") or {}).values())
+        prev = {"registered": e.get("ts")} if fresh else out[e["id"]]
         links = {**(prev.get("links") or {}), **{k: v for k, v in (e.get("links") or {}).items() if v}}
         out[e["id"]] = {**prev, **{k: v for k, v in e.items() if v is not None}, "links": links}
     return [e for e in out.values() if not e.get("retired")]
 
 
-def stack_owner(links, pr_state, pr_of=branch_pr, exists=os.path.exists):
+def stack_owner(links, pr_state, pr_of=branch_pr, exists=os.path.exists, head=None):
     """(done, why) for the card that started a stack: its PR merged or closed, or its worktree gone. A worktree link
-    with no PR link asks the branch's PR."""
+    with no PR link asks the branch's PR, which counts only when it carried the worktree's HEAD: an old closed PR on a
+    reused branch name says nothing about the work in progress."""
     done, why = link_verdict(links, pr_state, exists)
     wt = links.get("worktree")
     if done is False and not links.get("pr") and wt:
@@ -967,21 +970,14 @@ def stack_owner(links, pr_state, pr_of=branch_pr, exists=os.path.exists):
             return False, f"worktree {wt} 의 PR 을 읽지 못함"
         if not ref:
             return False, f"worktree {wt} 있음, PR 없음"
-        return link_verdict({"pr": ref}, pr_state, exists)
+        done, why = link_verdict({"pr": ref}, pr_state, exists)
+        tip = (head or (lambda p: (run(["git", "-C", p, "rev-parse", "HEAD"], check=False) or "").strip()))(wt)
+        if done and (pr_state(ref) or {}).get("headRefOid") != tip:
+            return False, f"{why}, 그 뒤 worktree HEAD 가 바뀜"
     return done, why
 
 
-def pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except PermissionError:
-        return True
-    except (ProcessLookupError, ValueError, TypeError, OverflowError):
-        return False
-
-
-def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599), alive=pid_alive):
+def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599)):
     """Registered stacks only. Target: its owner is done, and it is all stopped or nothing restarted it for `hours`;
     a stack on a preview port also needs a `previewed` line. A keep line holds it until its deadline."""
     out, lo, hi = [], *preview
@@ -1003,9 +999,6 @@ def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599), aliv
                 continue
         if e.get("keep") and (until is None or now < until):
             item["why"] = f"남김: {e['keep']}" + (f" ({e['until']}까지)" if until else " (기한을 읽지 못함)")
-            continue
-        if e.get("pid") and alive(e["pid"]):
-            item["why"] = f"띄운 프로세스 pid {e['pid']} 실행 중"
             continue
         done, why = owner(e.get("links") or {})
         if not done:

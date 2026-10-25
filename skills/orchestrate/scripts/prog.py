@@ -2285,7 +2285,11 @@ def cmd_heavy(argv):
                 sys.exit(subprocess.run(cmd).returncode)
             finally:
                 path.unlink(missing_ok=True)
-                register_stacks(before, owner, opt(argv[:cut], "--pr"))
+                try:
+                    register_stacks(before, owner, opt(argv[:cut], "--pr"))
+                except (OSError, subprocess.SubprocessError) as e:
+                    # The command's exit code is the result; a failed registration is only reported.
+                    print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
         if time.monotonic() >= deadline:
             holders = [json.loads(f.read_text() or "{}") for f in sorted(slots.glob("slot-*"))]
             sys.exit(f"heavy: every slot busy after waiting: {json.dumps(holders, ensure_ascii=False)}")

@@ -1057,23 +1057,30 @@ entries = [ce("merged-stopped", pr="acme/app#2"), ce("merged-running-old", pr="a
            ce("busy-pid", pr="acme/app#2", pid=4242), ce("reused", pr="acme/app#2"),
            ce("wt-gone", worktree="/wt/gone"), ce("wt-merged", worktree="/wt/m"), ce("wt-nopr", worktree="/wt/n"),
            ce("wt-unread", worktree="/wt/u"), ce("gone-stack", pr="acme/app#2"),
-           ce("retired", pr="acme/app#2"), ce("retired", retired=True)]
-stacks["retired"] = stack()
-prs_of = {"/wt/m": ("acme/app#3", False), "/wt/n": (None, False), "/wt/u": (None, True)}
-owner = lambda links: reap.stack_owner(links, PRS.get, pr_of=prs_of.get, exists=lambda p: p != "/wt/gone")
-got = {i["name"]: i for i in reap.judge_compose(entries, stacks, owner, 6, NOW, alive=lambda pid: pid == 4242)}
+           ce("retired", pr="acme/app#2"), ce("retired", retired=True),
+           # Downed by reap, then brought up again and registered by the card's next heavy run.
+           ce("again", pr="acme/app#2"), ce("again", retired=True), ce("again", ts="2026-10-25T11:00:00+00:00", pr="acme/app#2"),
+           ce("wt-moved", worktree="/wt/moved")]
+stacks.update(retired=stack(), again=stack(first=NOW - 1.5 * H), **{"wt-moved": stack()})
+prs_of = {"/wt/m": ("acme/app#3", False), "/wt/n": (None, False), "/wt/u": (None, True), "/wt/moved": ("acme/app#3", False)}
+heads = {"/wt/m": "h3", "/wt/moved": "h9"}
+owner = lambda links: reap.stack_owner(links, PRS.get, pr_of=prs_of.get, exists=lambda p: p != "/wt/gone", head=heads.get)
+got = {i["name"]: i for i in reap.judge_compose(entries, stacks, owner, 6, NOW)}
 targets = sorted(n for n, i in got.items() if i["target"])
-assert targets == ["kept-expired", "merged-running-old", "merged-stopped", "previewed", "wt-gone", "wt-merged"], targets
+# busy-pid: the pid is provenance only; heavy exits right after registering, and a reused pid would hold it forever.
+assert targets == ["again", "busy-pid", "kept-expired", "merged-running-old", "merged-stopped", "previewed", "wt-gone",
+                   "wt-merged"], targets
+# A closed PR found by branch name that did not carry the worktree's HEAD is an old one: the card is still working.
+assert "HEAD 가 바뀜" in got["wt-moved"]["why"], got["wt-moved"]
 assert "unregistered" not in got and "gone-stack" not in got and "retired" not in got, sorted(got)
 assert got["merged-stopped"]["how"] == ["docker compose -p merged-stopped down"] and "-v" not in got["merged-stopped"]["how"][0]
 assert "모두 멈춤" in got["merged-stopped"]["why"] and "6시간 넘게" in got["merged-running-old"]["why"], got
 assert "6시간 미만" in got["merged-running-new"]["why"] and got["open"]["why"] == "열린 PR acme/app#1", got
 assert "보고만" in got["nolink"]["why"] and "미리보기 포트 4501" in got["preview"]["why"], got
-assert "사용자 시연" in got["kept"]["why"] and "pid 4242" in got["busy-pid"]["why"] and "다시 만들어진" in got["reused"]["why"], got
+assert "사용자 시연" in got["kept"]["why"] and "다시 만들어진" in got["reused"]["why"], got
 assert got["wt-nopr"]["why"].endswith("PR 없음") and "읽지 못함" in got["wt-unread"]["why"], got
 # The identity reap compares: a restart since the scan changes it.
-assert got["merged-stopped"]["start"] != reap.judge_compose(entries, {"merged-stopped": stack(last=NOW - 7 * H)}, owner, 6, NOW,
-                                                            alive=lambda pid: False)[0]["start"]
+assert got["merged-stopped"]["start"] != reap.judge_compose(entries, {"merged-stopped": stack(last=NOW - 7 * H)}, owner, 6, NOW)[0]["start"]
 # compose_stacks counts only containers compose created: an app's worker with copied labels survives `compose down`.
 c = lambda proj, svc, status, started, ports=None: {"Created": "2026-10-25T01:00:00.5Z", "Config": {"Labels": {
     "com.docker.compose.project": proj, "com.docker.compose.service": svc or "worker",
