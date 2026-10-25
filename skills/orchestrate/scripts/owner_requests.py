@@ -125,5 +125,5 @@ def line(s):
     """One line for a report; empty when nothing is open."""
     if not s["open"]:
         return ""
-    flag = f" · 미연결 {UNLINKED_MIN}분+: " + " ".join(q["id"] for q in s["unlinked"]) if s["unlinked"] else ""
+    flag = f" · 미연결 {UNLINKED_MIN}분+ {len(s['unlinked'])}건" if s["unlinked"] else ""
     return f"요청 {s['open']}건 열림 · 가장 오래된 것 {ago(s['oldest_min'])}{flag}"

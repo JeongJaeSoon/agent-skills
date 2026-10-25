@@ -7,9 +7,9 @@ the report. PR state is never stored here: the renderer joins it from prs.json e
 Nothing is hidden for being old: a row past its staleness limit shows its age, a PR list probed long ago says so.
 
 render() is the one implementation of the brief skill's periodic report rules (sections, sub-task rows, the
-same-reviewer fold, cell caps and footnotes, bold for changed rows); test_board.py pins its output.
+same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
 """
-import datetime as dt, fcntl, json, os, pathlib, re, shutil, sys
+import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys
 
 import fleet
 import owner_requests
@@ -22,15 +22,12 @@ KINDS = ("lead", "phase", "task")
 ICON = {"moving": "🔄", "waiting": "⏳", "held": "⏸️", "blocked": "🔴", "done": "✅"}
 ALIASES = {v: k for k, v in ICON.items()} | {"⏸": "held"}  # VS16 dropped, as some keyboards and pastes do
 WORST = ("blocked", "waiting", "held", "moving")
-CAPS = {"pr": 17}  # the name is never cut; next takes what the others leave of COLS
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
-MARKS = "¹²³⁴⁵⁶⁷⁸⁹"
-HEADER = ["", "리드/Phase", "PR", "진행", "다음"]
+HEADER = ["", "리드/Phase", "PR", "진행"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"))
 UNNAMED = "(프로젝트 미지정)"
-LINK = r"\[([^\]]*)\]\([^)]*\)"
 
 
 def path():
@@ -193,11 +190,24 @@ def doing_drop(n):
     return change(go)
 
 
+def same_later(a, b):
+    """One held item written twice: the same trigger and a title reworded rather than another piece of work."""
+    return a["trigger"] == b["trigger"] and difflib.SequenceMatcher(None, a["title"], b["title"]).ratio() >= 0.6
+
+
 def later_add(title, trigger, due=None):
+    """Add a held item, or reword the one it repeats."""
     if not (title or "").strip() or not (trigger or "").strip():
         raise ValueError("board later add needs a title and --trigger (what brings it back)")
     item = {"title": one_line(title, 120), "trigger": one_line(trigger, 60), **({"due": due} if due else {})}
-    return change(lambda store: store["later"].append(item))
+
+    def go(store):
+        old = next((i for i, l in enumerate(store["later"]) if same_later(l, item)), None)
+        if old is None:
+            store["later"].append(item)
+        else:
+            store["later"][old] = item
+    return change(go)
 
 
 def later_drop(n):
@@ -265,16 +275,6 @@ def ago(seconds):
 
 def pr_num(key):
     return "#" + key.rsplit("#", 1)[-1]
-
-
-def clip(text, budget):
-    """text cut to fit budget columns with a trailing …"""
-    out = ""
-    for ch in text:
-        if table_width.text_width(out + ch + "…") > budget:
-            break
-        out += ch
-    return out.rstrip() + "…"
 
 
 # A session's phase (fleet.py phase_of) read as a board status and next step.
@@ -566,21 +566,31 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**", "", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
-    width_ok, n_mark = True, 0
+    width_ok = True
 
-    def mark():
-        nonlocal n_mark
-        n_mark += 1
-        return MARKS[n_mark - 1] if n_mark <= len(MARKS) else f"({n_mark})"
+    def label(l):
+        """A phase is named with its lead outside the table, where no section heading says whose it is."""
+        r = rows.get(l["key"])
+        return f"{lead_of(r)['title']} {l['name']}" if r and r["kind"] == "phase" else l["name"]
 
-    def fit(text, cap, note, notes):
-        """text, or its head cut to cap with a mark whose footnote carries note; only the mark when no head fits."""
-        if table_width.text_width(text) <= cap:
-            return text
-        m = mark()
-        notes.append(f"{m} {note}")
-        head = clip(text, cap - table_width.text_width(m))
-        return (head if head != "…" else "") + m
+    # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, every other
+    # open row's to 진행 중 in table order, a sub-task after its head row.
+    moving, held = [], []
+    for sec in sections:
+        head, head_out = None, False
+        for l in (l for l in lines if l["sec"] == sec):
+            if l["depth"] == 0:
+                head, head_out = l, False
+            if l["status"] in (None, "done"):
+                continue
+            if l["status"] == "held":
+                held.append(f"{l['next'] or '—'} → {label(l)}")
+                continue
+            if l["depth"] and not head_out:
+                moving.append(" ".join(([ICON[head["status"]]] if head["status"] else []) + [label(head)]))
+                head_out = True
+            moving.append(("└ " if l["depth"] else "") + f"{ICON[l['status']]} {label(l)} — {(l['next'] or '—') + l['suffix']}")
+            head_out = head_out or not l["depth"]
 
     for sec in sections:
         repo, prog = sec
@@ -596,52 +606,25 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 if l["status"] is None:  # the lead's name over its sub-tasks in another repository
                     out.append(name)
                     continue
-                body = f"{ICON[l['status']]} {name} — {l['progress']} · {(l['next'] or '—') + l['suffix']}"
-                out.append(("└ " if l["depth"] else "") + body)
+                out.append(("└ " if l["depth"] else "") + f"{ICON[l['status']]} {name} — {l['progress']}")
         elif mine:  # a section of folded bullets only has no table
-            cells, notes = [], []
-            for l in mine:  # name and PR first: the next column takes the width they leave
-                name = ("└ " if l["depth"] else "") + l["name"]
-                if l["fold"] and table_width.text_width(l["cell"]) > CAPS["pr"]:
-                    m = mark()
-                    plain = re.sub(LINK, r"\1", l["cell"])  # the numbers with their bases, no link
-                    notes.append(f"{m} {plain}")
-                    cell = f"{len(l['fold'])}건{m}"
-                elif table_width.text_width(l["cell"]) > CAPS["pr"]:  # keep the state's head: ❗ comes first
-                    m, num = mark(), pr_text(l["pr"])
-                    notes.append(f"{m} {pr_num(l['pr'])} {l['pr_state']}")
-                    room = CAPS["pr"] - table_width.text_width(f"{num} {m}")
-                    cell = (f"{num} {clip(l['pr_state'], room)}" if room > 1 else num) + m
-                else:
-                    cell = l["cell"] or "—"
-                cells.append([l, name, cell])
-            wide = [max(table_width.text_width(r[i]) for r in [HEADER] + [[ICON.get(l["status"], "—"), n, c, l["progress"]]
-                                                                         for l, n, c in cells]) for i in range(4)]
-            # The name is never cut, so next shrinks first and goes under the table, its mark left in the cell, when
-            # nothing fits; only a name too wide for COLS on its own makes the table overflow.
-            room = max(table_width.text_width(HEADER[4]),
-                       COLS - table_width.BORDER_PER_COL * len(HEADER) - table_width.BORDER_EDGE - sum(wide))
             table = [HEADER]
-            for l, name, cell in cells:
-                nxt = (l["next"] or "—") + l["suffix"]
-                nxt = fit(nxt, room, nxt, notes)
-                if l["key"] in changed:
-                    name = f"**{name}**"
-                table.append([ICON.get(l["status"], "—"), name, cell, l["progress"], nxt])
+            for l in mine:
+                name = ("└ " if l["depth"] else "") + (f"**{l['name']}**" if l["key"] in changed else l["name"])
+                table.append([ICON.get(l["status"], "—"), name, l["cell"] or "—", l["progress"]])
+            # Nothing is cut to fit: a table too wide overflows, and the render reports it.
             width_ok &= table_width.table_width(table) <= COLS
-            out += ["", "| | 리드/Phase | PR | 진행 | 다음 |", "|---|---|---|---|---|"]
+            out += ["", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
-            if notes:
-                out += [""] + notes
         for (bsec, rev), items in bullets.items():
             if bsec != sec:
                 continue
             out += ["", f"- ⏳ {len(items)}건 {rev} 대기 — 분야 {'·'.join(i['title'] for i in items)}"]
     if skipped:
         out += ["", skipped]
-    if store["doing"]:
-        items = [f"{d['title']} · {d['owner']} · 다음: {d['next']}" for d in store["doing"]]
-        out += ["", ("🔄 진행 중" if tg else "🔄 **진행 중**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
+    if moving or store["doing"]:
+        items = moving + [f"{ICON['moving']} {d['title']} — {d['next']} · {d['owner']}" for d in store["doing"]]
+        out += ["", "🔄 진행 중" if tg else "🔄 **진행 중**", ""] + [it if tg else f"- {it}" for it in items]
     decisions = fleet.open_decisions()
     asked = set((last or {}).get("decisions") or []) if last_rows is not None else set()
     if decisions:
@@ -657,8 +640,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     out += [x for it in todo[1:] for x in ("", it)]
     if asked := owner_requests.line(owner_requests.summary(now)):
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
-    if store["later"]:
-        out += ["", ("⏸️ 보류" if tg else "⏸️ **보류**") + " — " + " · ".join(f"{l['trigger']} → {l['title']}" for l in store["later"])]
+    later = []
+    for l in reversed(store["later"]):  # a held item written twice before later_add merged them: the newest wording
+        if not any(same_later(l, k) for k in later):
+            later.insert(0, l)
+    if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later])):
+        out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
 

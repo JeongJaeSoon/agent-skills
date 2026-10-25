@@ -161,7 +161,7 @@ orch req done r7 r8 --evidence "merged at 1a2b3c4"
 orch req drop r9 --reason "a remark, nothing asked"
 ```
 
-`link`, `done` and `drop` are lines appended to the same file; a request's state is the fold of its lines, and a closed one refuses another close. Nothing is written to a tracker: a ticket key in `link` is a pointer. The periodic report (`orch brief render --periodic`) adds `📝 요청 — 요청 N건 열림 · 가장 오래된 것 X · 미연결 30분+: r…` while any is open, and the fleet Overview shows a Your requests tile (open count, oldest, unlinked ones in amber) and card. There is no Stop-hook nudge for an unlinked request, since one could not be shown never to loop.
+`link`, `done` and `drop` are lines appended to the same file; a request's state is the fold of its lines, and a closed one refuses another close. Nothing is written to a tracker: a ticket key in `link` is a pointer. The periodic report (`orch brief render --periodic`) adds `📝 요청 — 요청 N건 열림 · 가장 오래된 것 X · 미연결 30분+ M건` while any is open, and the fleet Overview shows a Your requests tile (open count, oldest, unlinked ones in amber) and card. There is no Stop-hook nudge for an unlinked request, since one could not be shown never to loop.
 
 ### The stage table
 
