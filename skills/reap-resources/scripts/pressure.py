@@ -254,10 +254,12 @@ def orca_cards(run=sh):
     """[{path, live}] for every Orca card, live when a terminal is open in it; [] without Orca, None when unreadable."""
     if not shutil.which("orca"):
         return []
-    out = run(["orca", "worktree", "ps", "--json"], timeout=15)
+    out = run(["orca", "worktree", "ps", "--limit", "10000", "--json"], timeout=15)
     with contextlib.suppress(ValueError, TypeError, KeyError, AttributeError):
-        return [{"path": w["path"], "live": bool(w.get("liveTerminalCount"))}
-                for w in json.loads(out)["result"]["worktrees"] if w.get("path")]
+        res = json.loads(out)["result"]
+        if not res.get("truncated"):  # a card left out could be a live one
+            return [{"path": w["path"], "live": bool(w.get("liveTerminalCount"))}
+                    for w in res["worktrees"] if w.get("path")]
     return None
 
 
