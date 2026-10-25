@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Serve a share folder on loopback, showing a folder of images as a gallery.
+"""Serve a share folder read-only on loopback: Caddy's file_server by default, this module's gallery as a fallback.
 
 Usage:
-  share_server.py serve [--root DIR] [--port N]   # foreground; defaults from config
+  share_server.py serve [--root DIR] [--port N] [--backend caddy|python]   # foreground; defaults from config
   share_server.py install [--here]                # macOS: keep `serve` running as a LaunchAgent
   share_server.py uninstall
 
-A folder with index.html serves that page. A folder without one lists its entries, and when it holds images
+backend "caddy" runs share-caddy/Caddyfile (listing sorted newest first with a grid view, .md rendered unless
+?raw=1, text files as UTF-8, no write methods) under share-caddy/sandbox.sb, which keeps caddy from reading
+outside the share folder through a symlink. caddy comes from config "caddy", else PATH (`brew install caddy`).
+
+backend "python" is the stdlib server below. A folder with index.html serves that page. A folder without one lists its entries, and when it holds images
 (png, jpg, webp, gif) they come first as a thumbnail grid grouped by name with the size/theme suffix
 (-1280, -390, -dark, ...) dropped; clicking one opens it full size, arrow keys step through them.
 A .md file is rendered as a page (raw HTML in it is shown as text); `?raw` returns the source. Text files are
@@ -24,7 +28,12 @@ CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-ski
 STATE_DIR = pathlib.Path(os.environ.get("SHARE_SERVER_STATE", "~/.local/state/agent-skills")).expanduser()
 LOG = STATE_DIR / "share-server.log"
 HOST = "127.0.0.1"
-DEFAULTS = {"root": "~/share", "port": 13201, "label": "io.github.jeongjaesoon.share-server"}
+DEFAULTS = {"root": "~/share", "port": 13201, "label": "io.github.jeongjaesoon.share-server", "backend": "caddy",
+            "caddy": ""}
+CADDY_DIR = pathlib.Path(__file__).resolve().with_name("share-caddy")
+CADDY_STATE = STATE_DIR / "share-caddy"
+SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+BACKENDS = ("caddy", "python")
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 # Trailing variant tokens that name the same shot at another width or theme.
 VARIANT = re.compile(r"(?:[-_.@](?:\d{3,4}w?|\d{3,4}x\d{3,4}|[23]x|dark|light|mobile|desktop|tablet))+$", re.I)
@@ -449,11 +458,55 @@ article th{background:var(--card);text-align:left}
 """
 
 
-def serve(root, port):
+def caddy_bin(cfg):
+    """The configured caddy, else the one on PATH or in Homebrew's prefixes (launchd's PATH has neither)."""
+    candidates = [cfg["caddy"]] if cfg.get("caddy") else \
+        [shutil.which("caddy"), "/opt/homebrew/bin/caddy", "/usr/local/bin/caddy"]
+    return next((c for c in candidates if c and os.path.isfile(c) and os.access(c, os.X_OK)), "")
+
+
+def ere_escape(path):
+    return re.sub(r"([\\.\[\](){}*+?|^$])", r"\\\1", path)
+
+
+def caddy_command(cfg, root, port):
+    """(argv, env) that run caddy on the share folder inside the sandbox profile."""
+    root = os.path.realpath(pathlib.Path(root).expanduser())
+    caddy = caddy_bin(cfg)
+    argv = [SANDBOX_EXEC, "-f", str(CADDY_DIR / "sandbox.sb"), "-D", f"ROOT={root}", "-D", f"ROOT_RE={ere_escape(root)}",
+            "-D", f"CONF={CADDY_DIR}", "-D", f"STATE={CADDY_STATE}", "-D", f"CADDY={os.path.realpath(caddy)}",
+            caddy, "run", "--config", str(CADDY_DIR / "Caddyfile"), "--adapter", "caddyfile"]
+    # XDG_* keep caddy's data and autosave dirs inside STATE, the only place the sandbox lets it write.
+    env = {"SHARE_ROOT": root, "SHARE_PORT": str(int(port)), "SHARE_CADDY": str(CADDY_DIR),
+           "XDG_DATA_HOME": str(CADDY_STATE), "XDG_CONFIG_HOME": str(CADDY_STATE)}
+    return argv, env
+
+
+def caddy_missing(cfg, root=None):
+    root = pathlib.Path(root or cfg["root"]).expanduser()
+    if any(c in f"{root}{os.path.realpath(root)}" for c in '*?[]\\{}"'):
+        return f"{root}: caddy reads * ? [ ] \\ {{ }} \" in the share folder's path as a glob or placeholder; rename it"
+    if not os.access(SANDBOX_EXEC, os.X_OK):
+        return f"{SANDBOX_EXEC} not found; the caddy backend needs it to keep symlinks inside the share folder"
+    if not caddy_bin(cfg):
+        return "caddy not found or not executable; `brew install caddy` (or set share-server.caddy to its path)"
+    return ""
+
+
+def serve(root, port, backend="python"):
     root = str(pathlib.Path(root).expanduser())
     if not os.path.isdir(root):
         print(f"{root} is not a directory", file=sys.stderr)
         return 1
+    if backend == "caddy":
+        cfg = config()
+        missing = caddy_missing(cfg, root)
+        if missing:
+            print(missing, file=sys.stderr)
+            return 1
+        argv, env = caddy_command(cfg, root, port)
+        CADDY_STATE.mkdir(parents=True, exist_ok=True)
+        os.execve(argv[0], argv, {**os.environ, **env})
     httpd = http.server.ThreadingHTTPServer((HOST, int(port)), lambda *a: Handler(*a, root=root))
     print(f"serving {root} on http://{HOST}:{port}/", flush=True)
     try:
@@ -474,11 +527,12 @@ def agent_target(cfg=None):
 
 
 def spec(cfg=None):
+    """`serve` resolves caddy and the sandbox paths at each start, so a `brew upgrade caddy` needs no reinstall."""
     cfg = cfg or config()
     return {"Label": cfg["label"],
             "ProgramArguments": [shutil.which("python3") or sys.executable, "-I", str(pathlib.Path(__file__).resolve()),
                                  "serve", "--root", str(pathlib.Path(cfg["root"]).expanduser()),
-                                 "--port", str(int(cfg["port"]))],
+                                 "--port", str(int(cfg["port"])), "--backend", cfg["backend"]],
             "RunAtLoad": True, "KeepAlive": True, "ProcessType": "Background",
             "StandardOutPath": str(LOG), "StandardErrorPath": str(LOG)}
 
@@ -503,8 +557,16 @@ def cmd_install(here_ok):
         print(f"{repo} is not a main git checkout; install from the checkout sessions load (or pass --here)",
               file=sys.stderr)
         return 1
-    plist, want = plist_path(), spec()
+    cfg = config()
+    missing = caddy_missing(cfg) if cfg["backend"] == "caddy" else ""
+    if cfg["backend"] not in BACKENDS:
+        missing = f"unknown backend {cfg['backend']!r}; use one of {', '.join(BACKENDS)}"
+    if missing:
+        print(missing, file=sys.stderr)
+        return 1
+    plist, want = plist_path(), spec(cfg)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    CADDY_STATE.mkdir(parents=True, exist_ok=True)
     plist.parent.mkdir(parents=True, exist_ok=True)
     if plist.exists() and plist_spec() != want:
         backup = plist.with_name(f"{plist.name}.bak-{time.strftime('%Y%m%d%H%M%S')}")
@@ -534,7 +596,11 @@ def main(argv):
     if cmd == "serve":
         cfg = config()
         opts = dict(zip(argv[2::2], argv[3::2]))
-        return serve(opts.get("--root", cfg["root"]), opts.get("--port", cfg["port"]))
+        if opts.get("--backend", cfg["backend"]) not in BACKENDS:
+            print(f"unknown backend; use one of {', '.join(BACKENDS)}", file=sys.stderr)
+            return 2
+        return serve(opts.get("--root", cfg["root"]), opts.get("--port", cfg["port"]),
+                     opts.get("--backend", cfg["backend"]))
     if cmd == "install":
         return cmd_install("--here" in argv)
     if cmd == "uninstall":
