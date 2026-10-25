@@ -87,6 +87,8 @@ def copyparty_args(root, port):
             # a TLS-terminating proxy in front (tailscale serve) sends X-Forwarded-For but no X-Forwarded-Proto; without
             # these, copyparty takes the page for http and rejects the https Origin of its own search and zip POSTs
             "--rproxy", "-1", "--xf-proto-fb", "https",
+            # copyparty's default --acao * lets any website read files and listings from a visitor's browser
+            "--acao", "",
             "-v", f"{root}::r"]
 
 
