@@ -75,6 +75,30 @@ hours that nobody registered, one line per directory. It looks only directly in 
 `$TMPDIR` and one directory below them (`reap.evidence_roots` replaces that list), never deeper and
 never through a symlink. These lines are never targets, so they do not wake the precheck.
 
+## Idle Orca workspaces
+
+`orca-idle` covers every workspace in `orca worktree ps`, the ones the user made in the app included, so it
+is far stricter than `orca-worktree`. A workspace is a target when all of these hold:
+
+- not the main checkout, not pinned, on this host, not a worktree an Orca automation runs in;
+- its newest Orca activity (`lastActivityAt`, `createdAt`, `lastOutputAt`) is at least `reap.orca_idle_days`
+  old (default 14; 0 or less turns the kind off);
+- no terminal open (`terminalVerdict` is `none`; `unverifiable` keeps it) and no agent in a state other than `done`;
+- no process has its cwd in it, git reads clean (untracked files count, regenerated `.agents/skills` copies
+  aside, as for `orca-worktree`) and HEAD is on a remote (`git rev-list HEAD --not --remotes` is empty: pushed,
+  or merged into a pushed branch).
+
+The action is `orca-worktree`'s: ignored files to the trash, then `orca worktree rm --run-hooks`, which deletes
+the local branch only when Orca can prove it merged. A row whose directory is gone (Orca shows "Git status
+unavailable") is removed from Orca's list with `orca worktree rm` alone; a directory git cannot read is only
+reported. A workspace both kinds would remove is left to `orca-worktree`. Every `reap` appends what it removed,
+skipped or failed, and each `orca-idle` workspace it kept past the day count with the reason, to
+`<state>/reap-log.jsonl`. The precheck looks at this kind once a day.
+
+```bash
+python3 "$R" scan --kinds orca-idle    # the dry-run list
+```
+
 ## User folders: explicit opt-in
 
 The `user-folder` kind looks only at the folders explicitly listed in `reap.user_folders`.
@@ -112,12 +136,12 @@ older than `reap.state_days` (default 7; a session alive past that only asks Orc
 folder, and `sync.log` past `reap.log_max_kb` (default 512) is renamed to `sync.log.1`, the previous `.1` going to
 the trash (launchd and cron reopen the log on each run).
 
-New session files appear every day, so the precheck looks at program and state-file once a day, as it does user-folder.
+New session files appear every day, so the precheck looks at program and state-file once a day, as it does user-folder and orca-idle.
 
 ## Scheduled run
 
 ```bash
-python3 "$R" precheck    # janitor kinds + user-folder, program, state-file; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago, or the same set was planned reap.plan_repeat times with no reap since (retried once a day)
+python3 "$R" precheck    # janitor kinds + orca-idle, user-folder, program, state-file; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago, or the same set was planned reap.plan_repeat times with no reap since (retried once a day)
 python3 "$R" schedule    # prints the `orca automations create` command; nothing is created without --write
 ```
 
@@ -205,7 +229,7 @@ the exact `reap --plan` command to the user (a scheduled run: to `reap.inbox_to`
 not in this repo:
 
 ```json
-{"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
+{"reap": {"hours": 6, "orca_idle_days": 14, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
           "inbox_to": "run:<id>", "plan_repeat": 2,
           "user_folders": [], "regenerated_untracked": true, "alert": {"orphan_procs": 5,

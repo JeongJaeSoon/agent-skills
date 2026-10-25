@@ -20,7 +20,7 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2,
-"regenerated_untracked": true}.
+"regenerated_untracked": true, "orca_idle_days": 14}.
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch; `--kinds janitor`) cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
 --parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
@@ -31,7 +31,9 @@ alerts when Finder's auto-empty is on), and leaves a chrome-window to the agent'
 The ledger is --ledger or $AGENT_SKILLS_LEDGER, default <state>/ledger.jsonl (state: --state or $AGENT_SKILLS_STATE,
 default ~/.local/state/agent-skills). program moves a closed program untouched for
 reap.program_days to <programs>/_archive unless it has a resume or handoff note; state-file trashes reorient session files
-older than reap.state_days and rotates sync.log past reap.log_max_kb. precheck scans the janitor kinds, and user-folder,
+older than reap.state_days and rotates sync.log past reap.log_max_kb. orca-idle removes any Orca workspace (not the main
+checkout, not pinned) with no activity for reap.orca_idle_days (default 14), no terminal or running agent, clean and with
+HEAD on a remote; reap logs what it did to <state>/reap-log.jsonl. precheck scans the janitor kinds, and orca-idle, user-folder,
 program and state-file at most once a day, writes janitor-plan.json
 to the state dir and exits 0 when there are targets, except: the set the last reap failed on, for a day; and a set already
 planned reap.plan_repeat times with no reap since, retried once a day, with one message to reap.inbox_to. schedule prints the
@@ -424,6 +426,12 @@ def scan(kinds, hours, cfg, repo_list):
                               regenerated=cfg.get("regenerated_untracked", True) is not False,
                               evidence_roots=cfg.get("evidence_roots"),
                               done_idle_s=float(cfg.get("done_card_hours") or 2) * 3600)
+    if "orca-idle" in kinds and (days := user_folder_days(cfg, notes, "orca_idle_days", ORCA_IDLE_DAYS, "orca-idle 꺼짐")):
+        taken = {i["name"] for i in items if i["kind"] == "orca-worktree" and i["target"]}
+        for i in orca_idle_scan(days, notes, regenerated=cfg.get("regenerated_untracked", True) is not False):
+            if i["target"] and i["name"] in taken:
+                i.update(target=False, why="orca-worktree 가 정리")
+            items.append(i)
     if "user-folder" in kinds:
         days = user_folder_days(cfg, notes)
         shot_days = days and user_folder_days(cfg, notes, "user_folder_screenshot_days", 1,
@@ -453,10 +461,10 @@ def trash_auto_empty():
 
 # Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker).
 JANITOR = ("orca-worktree", "done-card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch")
-# What the scheduled run covers: the janitor kinds, the user's download and desktop folders, closed programs and hook state.
-SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
+# What the scheduled run covers: the janitor kinds, idle Orca workspaces, the user's folders, closed programs and hook state.
+SCHEDULED = JANITOR + ("orca-idle", "user-folder", "program", "state-file")
 # Kinds that would find something new every round; the precheck looks at them once a day.
-DAILY = ("user-folder", "program", "state-file")
+DAILY = ("orca-idle", "user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
 STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
 STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser()
@@ -697,13 +705,16 @@ def judge_orca_worker(rows):
              "how": [f"orca orchestration worker-release --dispatch {w['dispatchId']} --json"]} for w in rows]
 
 
+def rm_how(path):
+    return [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
+            f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]
+
+
 def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
     """facts: the git and process state of one checkout, read by worktree_facts. A checkout with no PR goes only when
     its HEAD is on the remote default branch (end-session §4) and its sessions' transcripts have been quiet for
     min_age: a new card, and a lead or a read-only card still at work, sit there too."""
-    base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
-            "how": [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
-                    f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
+    base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path, "how": rm_how(path)}
     if facts.get("regenerated"):
         base["regenerated"] = facts["regenerated"]
         base["how"].insert(0, "다시 판정한 뒤 재생성 사본 " + " ".join(shlex.quote(c) for c in facts["regenerated"]) + " 을 휴지통으로")
@@ -818,16 +829,20 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, regenerated=T
         # A failed check reads as not an ancestor, so the checkout stays.
         landed = None if not default else git(["git", "-C", path, "merge-base", "--is-ancestor", "HEAD", default.strip()],
                                               check=False) is not None
+    return {"main": False, "repo": main, "pr": ref, "pr_unread": pr_unread, "landed": landed, "turn": live_turn, "users": users,
+            "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
+            **git_state(path, git, regenerated)}
+
+
+def git_state(path, git=run, regenerated=True):
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
     status = git(["git", "-C", path, "status", "--porcelain"], check=False)
     copies = None
     if regenerated and status and all(line.startswith("?? ") for line in status.splitlines()):
         copies = regenerated_copies(path, git)
     ahead = git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)
-    return {"main": False, "repo": main, "pr": ref, "pr_unread": pr_unread, "landed": landed, "turn": live_turn, "users": users,
-            "live": live_turn or (f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None),
-            # None is a failed read, not an empty answer.
-            "unreadable": status is None or ahead is None,
+    # None is a failed read, not an empty answer.
+    return {"unreadable": status is None or ahead is None,
             "dirty": bool(status) and not copies, "regenerated": copies or [], "unpushed": bool(ahead),
             "head": (git(["git", "-C", path, "rev-parse", "HEAD"], check=False) or "").strip()}
 
@@ -977,6 +992,91 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
     return items
 
 
+def last_active(row):
+    """Seconds since epoch of the newest activity Orca recorded for one `orca worktree ps` row."""
+    return max(row.get("lastActivityAt") or 0, row.get("createdAt") or 0, row.get("lastOutputAt") or 0) / 1000
+
+
+def judge_orca_idle(row, days, now, facts, exists=os.path.isdir):
+    """One `orca worktree ps` row: any Orca workspace, the user's own included, untouched for `days`. facts is
+    worktree_idle_facts of its path, None when git could not read it. None for a main checkout."""
+    path = row.get("path") or ""
+    if row.get("isMainWorktree") or not path or (facts or {}).get("main"):
+        return None
+    idle = now - last_active(row)
+    base = {"kind": "orca-idle", "key": f"orca-idle:{path}", "name": path, "age": idle, "how": rm_how(path),
+            "tip": (facts or {}).get("head")}
+    live = [a for a in row.get("agents") or [] if (a.get("mainAgent") or a).get("state") != "done"]
+    if row.get("hostId", "local") != "local":
+        why = f"다른 호스트({row.get('hostId')})"
+    elif row.get("isPinned"):
+        why = "고정됨"
+    elif idle < days * 86400:
+        why = f"{days:g}일 안에 활동"
+    elif row.get("terminalVerdict") != "none":
+        why = "열린 터미널 있음" if row.get("terminalVerdict") == "live" else "터미널 상태를 확인할 수 없음"
+    elif live:
+        why = "실행 중인 에이전트 있음"
+    elif not exists(path):
+        # Orca shows such a row as "Git status unavailable"; only the row is left to remove.
+        return {**base, "how": [base["how"][1]], "why": f"{age(idle)} 활동 없음, 디렉터리 없음: Orca 목록에서만 제거",
+                "target": True, "gone": True}
+    elif facts is None or facts.get("unreadable"):
+        why = "git 상태를 읽지 못함(디렉터리는 있음)"
+    elif facts.get("live"):
+        why = facts["live"]
+    elif facts.get("dirty"):
+        why = "변경 있음(추적 안 되는 파일 포함)"
+    elif facts.get("unpushed"):
+        why = "원격에 없는 커밋(push 안 됨)"
+    else:
+        if facts.get("regenerated"):
+            base["regenerated"] = facts["regenerated"]
+        return {**base, "why": f"{age(idle)} 활동 없음, clean, HEAD 가 원격에 있음", "target": True}
+    return {**base, "why": why, "target": False}
+
+
+def worktree_idle_facts(path, users_cwd, git=run, regenerated=True):
+    common = git(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=False)
+    if common is None:
+        return None
+    if real(os.path.dirname(common.strip().rstrip("/"))) == real(path):
+        return {"main": True}
+    users = [pid for pid, c in (users_cwd or {}).items() if under(real(c), real(path))]
+    return {"main": False, "live": f"pid {users[0]} 이 이 worktree 를 cwd 로 사용 중" if users else None,
+            **git_state(path, git, regenerated)}
+
+
+ORCA_IDLE_DAYS = 14
+
+
+def orca_idle_scan(days, notes, now=None, regenerated=True):
+    res = orca_json("worktree", "ps", "--limit", "10000") if shutil.which("orca") else None
+    if not isinstance(res, dict) or res.get("truncated"):
+        notes.append("orca-idle: orca worktree ps 를 읽지 못했거나 잘림, 건너뜀")
+        return []
+    runners = automation_workspaces(orca_json("automations", "list"))
+    if runners is None:
+        notes.append("orca-idle: orca automations list 를 읽지 못함, 건너뜀")
+        return []
+    now = now or time.time()
+    cwd_of = cwds()
+    items = []
+    for row in res.get("worktrees") or []:
+        path = row.get("path") or ""
+        if real(path) in runners:
+            continue
+        # git is read only for rows that pass every Orca-side check; the rest are judged on those alone.
+        facts = {}
+        if (pre := judge_orca_idle(row, days, now, {}, exists=lambda p: True)) and pre["target"] and os.path.isdir(path):
+            facts = worktree_idle_facts(path, cwd_of, regenerated=regenerated)
+            if facts and cwd_of is None and not facts["live"]:
+                facts["live"] = "프로세스 cwd 를 읽지 못함"
+        if (i := judge_orca_idle(row, days, now, facts)) is not None:
+            items.append(i)
+    return items
+
+
 USER_FOLDERS = ()  # Explicit reap.user_folders configuration opts into personal-folder cleanup.
 PARTIAL = (".download", ".crdownload", ".part")
 # The automation runs every 3 hours; 21 keeps a daily sweep from slipping a slot each day.
@@ -1070,16 +1170,16 @@ def judge_user_folder(folder, days, now, opened, touched=last_touch, shot_days=N
     return out
 
 
-def user_folder_days(cfg, notes, key="user_folder_days", default=7, off="꺼짐"):
+def user_folder_days(cfg, notes, key="user_folder_days", default=7, off="user-folder 꺼짐"):
     """A positive day count from reap.<key>; anything else is None with a note saying what happens instead."""
     v = cfg.get(key, default)
     try:
         days = float(v)
     except (TypeError, ValueError):
-        notes.append(f"user-folder: reap.{key} {v!r} 가 숫자가 아님, {off}")
+        notes.append(f"reap.{key} {v!r} 가 숫자가 아님, {off}")
         return None
     if not days > 0:  # also catches NaN, which would make every entry old
-        notes.append(f"user-folder: reap.{key} {v!r} 라 {off}")
+        notes.append(f"reap.{key} {v!r} 라 {off}")
         return None
     return days
 
@@ -1247,6 +1347,18 @@ def precheck(items, state_dir, now=None, repeat=2, notify=None):
     log.update(count=log["count"] + 1, t=now)
     path.write_text(json.dumps(log))
     return 0, targets
+
+
+def write_reap_log(state_dir, log, now=None):
+    """Append one line per item a reap acted on, skipped or kept to <state>/reap-log.jsonl."""
+    if not log:
+        return
+    ts = dt.datetime.fromtimestamp(now or time.time()).astimezone().isoformat(timespec="seconds")
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "reap-log.jsonl").open("a") as f:
+        for item, result in log:
+            f.write(json.dumps({"ts": ts, "kind": item["kind"], "name": item["name"], "why": item["why"], "result": result},
+                               ensure_ascii=False) + "\n")
 
 
 def record_reap(state_dir, left, now=None):
@@ -1538,7 +1650,10 @@ def act(item, notes):
     if kind == "orca-worker":
         run(["orca", "orchestration", "worker-release", "--dispatch", k.split(":", 1)[1], "--json"])
         return "터미널 회수"
-    if kind == "orca-worktree":
+    if kind == "orca-idle" and item.get("gone"):
+        run(["orca", "worktree", "rm", "--worktree", f"path:{item['name']}", "--json"])
+        return "디렉터리가 없어 Orca 목록에서만 제거"
+    if kind in ("orca-worktree", "orca-idle"):
         # `orca worktree rm` deletes ignored files (.env.local, notes, caches) for good; they go to the trash first.
         # Tracked files are in git, and anything untracked left makes the rm refuse.
         p = item["name"]
@@ -1591,18 +1706,25 @@ def main():
         wanted = {i["key"]: i for i in plan["items"] if i["target"]}
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
-        failed = []
+        failed, log = [], []
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
             if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip")):
                 print(f"- 건너뜀 {label(old)}: 더는 정리 대상이 아님")
+                log.append((old, "건너뜀: 더는 정리 대상이 아님"))
                 continue
             try:
-                print(f"- {label(new)}: {act(new, notes)}")
+                result = act(new, notes)
+                print(f"- {label(new)}: {result}")
+                log.append((new, result))
             except (RuntimeError, OSError) as e:
                 failed.append(key)
                 print(f"- 실패 {label(new)}: {e}")
+                log.append((new, f"실패: {e}"))
+        # An idle workspace kept past the day count is the one the owner may want to look at.
+        log += [(i, "남김") for i in fresh if i["kind"] == "orca-idle" and not i["target"] and "안에 활동" not in i["why"]]
+        write_reap_log(STATE, log)
         if set(plan.get("kinds") or ()) & set(SCHEDULED):
             record_reap(STATE, failed)
         for k in set(DAILY) & set(plan.get("kinds") or ()):

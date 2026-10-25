@@ -1031,6 +1031,102 @@ with tempfile.TemporaryDirectory() as tmp:
     assert runs[1][1] < runs[0][1] / 3, [r[1] for r in runs]
 reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json, reap.FACT_WORKERS = saved
 
+# orca-idle: any Orca workspace untouched for the day count, closed, clean and on a remote; a row with no directory
+# leaves Orca's list only.
+NOW, D = 1_800_000_000, 86400
+def ws(**kw):
+    return {"path": "/wt/old", "hostId": "local", "isMainWorktree": False, "isPinned": False, "terminalVerdict": "none",
+            "agents": [], "lastActivityAt": (NOW - 30 * D) * 1000, "createdAt": (NOW - 60 * D) * 1000, **kw}
+clean = {"main": False, "live": None, "unreadable": False, "dirty": False, "regenerated": [], "unpushed": False, "head": "h1"}
+idle = lambda facts=clean, exists=lambda p: True, **kw: reap.judge_orca_idle(ws(**kw), 14, NOW, facts, exists=exists)
+assert idle()["target"] and idle()["tip"] == "h1" and idle()["how"][1].startswith("orca worktree rm --worktree path:/wt/old")
+assert idle(isMainWorktree=True) is None and idle({"main": True}) is None, "the main checkout is never listed"
+for kw, why in ((dict(isPinned=True), "고정됨"), (dict(hostId="ssh-1"), "다른 호스트(ssh-1)"),
+                (dict(lastActivityAt=(NOW - 3 * D) * 1000), "14일 안에 활동"),
+                (dict(lastOutputAt=(NOW - D) * 1000), "14일 안에 활동"),
+                (dict(createdAt=(NOW - 2 * D) * 1000), "14일 안에 활동"),
+                (dict(terminalVerdict="live"), "열린 터미널 있음"),
+                (dict(terminalVerdict="unverifiable"), "터미널 상태를 확인할 수 없음"),
+                (dict(agents=[{"mainAgent": {"state": "working"}}]), "실행 중인 에이전트 있음")):
+    got = idle(**kw)
+    assert not got["target"] and got["why"] == why, (kw, got)
+assert idle(agents=[{"mainAgent": {"state": "done"}}])["target"], "a finished agent's record is not a live one"
+for facts, why in ((None, "git 상태를 읽지 못함(디렉터리는 있음)"), ({**clean, "unreadable": True}, "git 상태를 읽지 못함(디렉터리는 있음)"),
+                   ({**clean, "live": "pid 7 이 이 worktree 를 cwd 로 사용 중"}, "pid 7 이 이 worktree 를 cwd 로 사용 중"),
+                   ({**clean, "dirty": True}, "변경 있음(추적 안 되는 파일 포함)"), ({**clean, "unpushed": True}, "원격에 없는 커밋(push 안 됨)")):
+    got = idle(facts)
+    assert not got["target"] and got["why"] == why, (facts, got)
+gone = idle(None, exists=lambda p: False)
+assert gone["target"] and gone["gone"] and gone["how"] == [gone["how"][0]] and "Orca 목록에서만" in gone["why"], gone
+assert not idle(None, exists=lambda p: False, terminalVerdict="live")["target"], "a missing directory with a terminal stays"
+
+with tempfile.TemporaryDirectory() as tmp:
+    t = pathlib.Path(os.path.realpath(tmp))
+    origin, repo, wt = t / "origin.git", t / "repo", t / "wt"
+    git("init", "--bare", "-q", str(origin), cwd=t)
+    git("clone", "-q", str(origin), str(repo), cwd=t)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c", cwd=repo)
+    git("push", "-q", "origin", "HEAD", cwd=repo)
+    git("worktree", "add", "-q", "-b", "feat", str(wt), cwd=repo)
+    assert reap.worktree_idle_facts(str(repo), {}) == {"main": True}
+    f = reap.worktree_idle_facts(str(wt), {})
+    assert not (f["dirty"] or f["unpushed"] or f["unreadable"] or f["live"]), f
+    assert reap.worktree_idle_facts(str(wt), {9: str(wt / "sub")})["live"] == "pid 9 이 이 worktree 를 cwd 로 사용 중"
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "local", cwd=wt)
+    assert reap.worktree_idle_facts(str(wt), {})["unpushed"], "a commit on no remote keeps the workspace"
+    assert reap.worktree_idle_facts(str(t / "nothing"), {}) is None
+
+    # The scan reads git only for rows past every Orca-side check, skips automation runners, and needs both lists.
+    rows = [ws(path=str(wt)), ws(path=str(t / "fresh"), lastActivityAt=NOW * 1000), ws(path=str(t / "runner")),
+            ws(path=str(t / "gone")), ws(path=str(repo), isMainWorktree=True)]
+    saved = reap.orca_json, reap.shutil.which, reap.cwds, reap.worktree_idle_facts
+    read = []
+    reap.shutil.which, reap.cwds = (lambda name: "/bin/" + name), (lambda: {})
+    reap.worktree_idle_facts = lambda path, cwd_of, **kw: read.append(path) or dict(clean)
+    lists = {"ps": {"worktrees": rows}, "automations": {"automations": [{"workspaceId": f"r::{t / 'runner'}"}]}}
+    reap.orca_json = lambda *a: lists.get(a[0] if a[0] == "automations" else a[1])
+    try:
+        got = {i["name"]: (i["target"], i["why"]) for i in reap.orca_idle_scan(14, [], now=NOW)}
+        assert read == [str(wt)], read
+        assert set(got) == {str(wt), str(t / "fresh"), str(t / "gone")}, got
+        assert got[str(wt)][0] and got[str(t / "gone")][0] and not got[str(t / "fresh")][0], got
+        for broken in ({"ps": None, "automations": lists["automations"]}, {"ps": {"worktrees": rows, "truncated": True}, "automations": lists["automations"]},
+                       {"ps": lists["ps"], "automations": None}):
+            reap.orca_json = lambda *a, b=broken: b[a[0] if a[0] == "automations" else a[1]]
+            notes = []
+            assert reap.orca_idle_scan(14, notes, now=NOW) == [] and notes, broken
+    finally:
+        reap.orca_json, reap.shutil.which, reap.cwds, reap.worktree_idle_facts = saved
+
+# An orca-idle row with no directory is removed from Orca without --run-hooks (no checkout for a hook to run in).
+calls, real_run = [], reap.run
+reap.run = lambda cmd, cwd=None, check=True: calls.append(cmd) or ""
+try:
+    assert "Orca 목록에서만" in reap.act({**gone, "name": "/wt/gone", "key": "orca-idle:/wt/gone"}, [])
+    assert calls == [["orca", "worktree", "rm", "--worktree", "path:/wt/gone", "--json"]], calls
+finally:
+    reap.run = real_run
+
+# The reap log: one JSON line per item.
+with tempfile.TemporaryDirectory() as tmp:
+    reap.write_reap_log(pathlib.Path(tmp), [({"kind": "orca-idle", "name": "/wt/a", "why": "w"}, "남김")], now=NOW)
+    reap.write_reap_log(pathlib.Path(tmp), [], now=NOW)
+    lines = (pathlib.Path(tmp) / "reap-log.jsonl").read_text().splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["result"] == "남김", lines
+# A workspace both kinds would remove is left to orca-worktree, whose action runs once.
+saved = reap.janitor_scan, reap.orca_idle_scan
+reap.janitor_scan = lambda *a, **kw: [{"kind": "orca-worktree", "name": "/wt/a", "target": True, "why": "PR merged"}]
+reap.orca_idle_scan = lambda days, notes, **kw: [{**gone, "name": n, "gone": False} for n in ("/wt/a", "/wt/b")]
+try:
+    items, _ = reap.scan({"orca-worktree", "orca-idle"}, 6, {}, [])
+    assert [(i["kind"], i["target"], i["why"]) for i in items[1:]] == [
+        ("orca-idle", False, "orca-worktree 가 정리"), ("orca-idle", True, gone["why"])], items
+    items, notes = reap.scan({"orca-idle"}, 6, {"orca_idle_days": 0}, [])
+    assert items == [] and notes == ["reap.orca_idle_days 0 라 orca-idle 꺼짐"], notes
+finally:
+    reap.janitor_scan, reap.orca_idle_scan = saved
+assert "orca-idle" in reap.SCHEDULED and "orca-idle" in reap.DAILY and "orca-idle" not in reap.JANITOR
+
 prompt = reap.schedule_prompt("/abs/reap.py", pathlib.Path("/s"))
 assert "reap --plan /s/janitor-plan.json" in prompt and "휴지통" in prompt and "report-only" not in prompt, prompt
 assert "우회하지 않는다" in prompt and "orchestration send" not in prompt, prompt
