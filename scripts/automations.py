@@ -240,7 +240,7 @@ class PressureWatch:
 class ShareServer:
     name = "share-server"
     default = False
-    what = ("공유 폴더를 127.0.0.1 에서 서빙하고 이미지 폴더는 갤러리로 보여 주는 LaunchAgent(docs/share-server.md). "
+    what = ("공유 폴더를 127.0.0.1 에서 copyparty 로 읽기 전용 서빙하는 LaunchAgent(썸네일·마크다운·검색, docs/share-server.md). "
             "tailnet 공개는 하지 않는다. 공유 폴더를 tailscale serve 로 열어 쓸 때만 켠다")
 
     def status(self):
