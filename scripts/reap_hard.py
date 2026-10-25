@@ -2,7 +2,7 @@
 """Close what finished cards left behind, by rules fixed in code, with no model in the loop.
 
 Usage:
-  reap-hard run [--dry-run] [--json]     one pass; --dry-run decides and logs, and touches nothing
+  reap-hard run [--dry-run] [--json]     one pass; --dry-run decides and logs, and touches nothing (no argument: usage)
   reap-hard last                         the last pass in one line (`orch brief` shows it)
   reap-hard install [--here] | uninstall | status   macOS LaunchAgent, a pass every `interval` seconds
 
@@ -10,8 +10,8 @@ A pass, in order (each later step sees what the earlier ones closed):
   card      an Orca worktree under `workspaces` whose branch PR (its own, never a fork's) is merged or closed and
             carried the worktree's HEAD, with no open PR on the branch; clean, untracked files included; nothing off
             the remote unless the PR carried HEAD; every Orca terminal silent and its sessions' transcripts quiet
-            for `idle_minutes`; no process in it that a person started from their own shell; no child card left in
-            Orca (a lead's). The whole verdict is taken again right before closing.
+            for `idle_minutes`; no process in it that a person started from their own shell; no live lead or orchestrator
+            session in it (launch flags or ROLE record), however quiet; no child card left in Orca (a lead's). The whole verdict is taken again right before closing.
             -> `orca terminal close --worktree path:P --all`, ignored files to the trash, `orca worktree rm --run-hooks`
   stack     a compose project (containers compose created) whose working directories, every one absolute and labelled,
             are all gone or cards really closed in this pass -> `docker compose -p P down`. Never -v.
@@ -103,16 +103,20 @@ def protected_path(p, protect):
 
 # ---------------------------------------------------------------- judgements (pure)
 
-def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=()):
+def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=(), coordinator=None):
     """(target, why). card: a row of `orca worktree list`; facts: reap.worktree_facts; pr: reap's PR state of
     facts["pr"]; terminals: the card's rows of `orca terminal list`, None when unreadable; quiet_s: seconds since
     its transcripts last changed, None when it has none; people: pids in it a person started; holders: pids in it
-    that are protected or listen on a protected port; children: the cards it made that still exist (a lead's)."""
+    that are protected or listen on a protected port; children: the cards it made that still exist (a lead's);
+    coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds."""
     p = reap.real(card["path"])
     if card.get("isMainWorktree") or card.get("isPinned"):
         return False, "메인 체크아웃 또는 고정된 카드"
     if protected_path(p, protect):
         return False, "보호 목록의 경로"
+    if coordinator:
+        # A lead waits on its inbox for hours; quiet is its normal state, so no idle rule may close it.
+        return False, f"리드·오케스트레이터 세션이 살아 있음({coordinator})"
     if children:
         return False, f"하위 카드 {children[0]} 가 남아 있음(리드)"
     if not facts or facts.get("main"):
@@ -294,6 +298,41 @@ def read_machine(now):
                                            / "projects", now)}
 
 
+COORDINATOR_ARGV = re.compile(r"--agent[ =]agent-skills:(lead|orchestrator)\b|--name[ =]lead:")
+COORDINATOR_ROLES = ("lead", "orchestrator")
+ROLES = STATE_DIR / "roles"
+
+
+def lstart_epoch(s):
+    try:
+        return time.mktime(time.strptime(s, "%a %b %d %H:%M:%S %Y"))
+    except (ValueError, TypeError):
+        return None
+
+
+def coordinator_in(path, rows, cwd_of, projects, roles=ROLES):
+    """Why a live Claude session in path is a lead or the orchestrator, or None: started with `--agent
+    agent-skills:lead|orchestrator` (or `--name lead:<slug>`), or a session of this card that has written to its
+    transcript since that process started declared `ROLE: lead|orchestrator` (the reorient hook's record)."""
+    live = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), path) and pid in rows
+            and reap.is_claude(rows[pid]["cmd"])]
+    for pid in live:
+        if m := COORDINATOR_ARGV.search(rows[pid]["cmd"]):
+            return f"pid {pid} {m.group(0)}"
+    starts = [t for t in (lstart_epoch(rows[pid]["start"]) for pid in live) if t is not None]
+    if not live:
+        return None
+    if not starts:
+        return "claude 시작 시각을 읽지 못함"
+    d = pathlib.Path(projects) / re.sub(r"[^A-Za-z0-9]", "-", path)
+    for f in d.glob("*.jsonl") if d.is_dir() else ():
+        with contextlib.suppress(OSError, ValueError, AttributeError):
+            if f.stat().st_mtime >= min(starts) - 60 and \
+                    json.loads((pathlib.Path(roles) / f"{f.stem}.json").read_text()).get("role") in COORDINATOR_ROLES:
+                return f"세션 {f.stem[:8]} ROLE 선언"
+    return None
+
+
 def card_verdict(w, m, cfg, protect, now):
     """(target, why, facts) for one row of `orca worktree list`, read fresh from the machine state m."""
     p = reap.real(w["path"])
@@ -308,8 +347,10 @@ def card_verdict(w, m, cfg, protect, now):
     inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), p)]
     holders = sorted(pid for pid in inside if pid in protect["pid"] or pid in held)
     children = sorted(c for c in map(wt_path, w.get("childWorktreeIds") or ()) if c and os.path.isdir(c))
+    projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
-                         people_in(p, m["rows"], cwd_of), holders, children)
+                         people_in(p, m["rows"], cwd_of), holders, children,
+                         coordinator_in(p, m["rows"], cwd_of, projects))
     return ok, why, facts
 
 
@@ -591,7 +632,10 @@ def cmd_install(here_ok):
 
 
 def main(argv):
-    cmd = argv[0] if argv else "run"
+    if not argv:  # a bare call must not clean: only `run` does
+        print(__doc__, file=sys.stderr)
+        return 2
+    cmd = argv[0]
     if cmd == "run":
         with locked():
             res, code = run_pass("--dry-run" in argv)

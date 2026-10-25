@@ -1,5 +1,5 @@
 """Rules of reap_hard.py, and a pass with the machine replaced. Run: python3 scripts/test_reap_hard.py"""
-import json, os, pathlib, sys, tempfile
+import contextlib, io, json, os, pathlib, sys, tempfile
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 os.environ["AGENT_SKILLS_STATE"] = str(tmp / "state")
@@ -117,6 +117,41 @@ assert rh.judge_serve(("--https", 4600, 4600), lambda port: True, {K(("--https",
 assert rh.judge_serve(("--https", 443, 8080), closed, {K(("--https", 443, 8080))}, R, P) == (False, "미리보기 포트 범위 밖")
 assert rh.judge_serve(("--https", 13100, 4999), closed, {K(("--https", 13100, 4999))}, R, P) == (False, "보호 포트")
 assert rh.judge_serve(("--tcp", 45000, 45001), closed, {K(("--tcp", 45000, 45001))}, R, P)[0] is True
+
+# A lead or orchestrator session alive in the card keeps it, however long it has been quiet: by its launch flags, or
+# by a ROLE record of a session that wrote to this card's transcripts since the process started.
+START = "Mon Oct 26 00:00:00 2026"
+start_t = rh.lstart_epoch(START)
+lead_rows = {
+    20: proc(20, "-/bin/zsh -l", ppid=0), 21: {**proc(21, "claude --agent agent-skills:lead --name lead:x", ppid=20), "start": START},
+    30: proc(30, "-/bin/zsh -l", ppid=0), 31: {**proc(31, "claude --permission-mode auto", ppid=30), "start": START},
+}
+projects, roles = tmp / "projects", tmp / "roles"
+tdir = projects / "-ws-app-lead"
+tdir.mkdir(parents=True)
+roles.mkdir()
+cwd = {20: "/ws/app/lead", 21: "/ws/app/lead", 30: "/ws/app/done", 31: "/ws/app/done"}
+assert rh.coordinator_in("/ws/app/lead", lead_rows, cwd, projects, roles).endswith("--agent agent-skills:lead")
+assert rh.coordinator_in("/ws/app/done", lead_rows, cwd, projects, roles) is None
+orch = {**lead_rows, 21: {**lead_rows[21], "cmd": "claude --permission-mode auto"}}
+assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
+(tdir / "sess-a.jsonl").write_text("{}")
+os.utime(tdir / "sess-a.jsonl", (start_t + 600, start_t + 600))
+for role, want in (("none", None), ("orchestrator", "세션 sess-a ROLE 선언"), ("lead", "세션 sess-a ROLE 선언")):
+    (roles / "sess-a.json").write_text(json.dumps({"role": role}))
+    assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) == want, role
+os.utime(tdir / "sess-a.jsonl", (start_t - 3600, start_t - 3600))  # an older session of the card, not this process
+assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
+assert rh.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) is None  # no live Claude: nothing to protect
+ok, why = rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], [], "pid 21 --agent agent-skills:lead")
+assert ok is False and why.startswith("리드·오케스트레이터 세션이 살아 있음"), why
+
+# A bare call never cleans: usage and a non-zero exit, and the LaunchAgent names `run`.
+ran, real_pass = [], rh.run_pass
+rh.run_pass = lambda *a, **k: ran.append(a)
+with contextlib.redirect_stderr(io.StringIO()):
+    assert rh.main([]) == 2 and ran == []
+rh.run_pass = real_pass
 
 # card_dir: only <root>/<repo>/<card>.
 assert rh.card_dir("/ws/app/done/web/src", "/ws") == "/ws/app/done"

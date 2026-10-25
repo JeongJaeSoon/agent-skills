@@ -181,7 +181,7 @@ bin/reap-hard install            # from the main checkout; `status`, `uninstall`
 - It reads `~/.config/agent-skills/reap-protect.txt` first (`port`, `pid`, `path`, `project` lines) and does nothing
   without it. List the lead and orchestrator worktrees and the always-on ports there.
 - Card: its own PR merged or closed and carrying the worktree's HEAD, clean, terminals silent and transcripts quiet
-  for `idle_minutes` (30), no process a person started → terminals closed, ignored files to the trash,
+  for `idle_minutes` (30), no process a person started, no live lead or orchestrator session in it → terminals closed, ignored files to the trash,
   `orca worktree rm`. Stack: every compose working directory gone → `docker compose down` (never `-v`). An orphaned
   dev server whose card is gone → SIGTERM to that pid. A `tailscale serve` entry in the preview ranges with no
   listener two passes running → off.
