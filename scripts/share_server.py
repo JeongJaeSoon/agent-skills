@@ -33,6 +33,7 @@ DEFAULTS = {"root": "~/share", "port": 13201, "label": "io.github.jeongjaesoon.s
 CADDY_DIR = pathlib.Path(__file__).resolve().with_name("share-caddy")
 CADDY_STATE = STATE_DIR / "share-caddy"
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+BACKENDS = ("caddy", "python")
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 # Trailing variant tokens that name the same shot at another width or theme.
 VARIANT = re.compile(r"(?:[-_.@](?:\d{3,4}w?|\d{3,4}x\d{3,4}|[23]x|dark|light|mobile|desktop|tablet))+$", re.I)
@@ -458,26 +459,36 @@ article th{background:var(--card);text-align:left}
 
 
 def caddy_bin(cfg):
-    return cfg.get("caddy") or shutil.which("caddy") or ""
+    """The configured caddy, else the one on PATH or in Homebrew's prefixes (launchd's PATH has neither)."""
+    candidates = [cfg["caddy"]] if cfg.get("caddy") else \
+        [shutil.which("caddy"), "/opt/homebrew/bin/caddy", "/usr/local/bin/caddy"]
+    return next((c for c in candidates if c and os.path.isfile(c) and os.access(c, os.X_OK)), "")
+
+
+def ere_escape(path):
+    return re.sub(r"([\\.\[\](){}*+?|^$])", r"\\\1", path)
 
 
 def caddy_command(cfg, root, port):
     """(argv, env) that run caddy on the share folder inside the sandbox profile."""
     root = os.path.realpath(pathlib.Path(root).expanduser())
-    argv = [SANDBOX_EXEC, "-f", str(CADDY_DIR / "sandbox.sb"), "-D", f"ROOT={root}", "-D", f"CONF={CADDY_DIR}",
-            "-D", f"STATE={CADDY_STATE}", caddy_bin(cfg), "run", "--config", str(CADDY_DIR / "Caddyfile"),
-            "--adapter", "caddyfile"]
+    caddy = caddy_bin(cfg)
+    argv = [SANDBOX_EXEC, "-f", str(CADDY_DIR / "sandbox.sb"), "-D", f"ROOT={root}", "-D", f"ROOT_RE={ere_escape(root)}",
+            "-D", f"CONF={CADDY_DIR}", "-D", f"STATE={CADDY_STATE}", "-D", f"CADDY={os.path.realpath(caddy)}",
+            caddy, "run", "--config", str(CADDY_DIR / "Caddyfile"), "--adapter", "caddyfile"]
     # XDG_* keep caddy's data and autosave dirs inside STATE, the only place the sandbox lets it write.
     env = {"SHARE_ROOT": root, "SHARE_PORT": str(int(port)), "SHARE_CADDY": str(CADDY_DIR),
            "XDG_DATA_HOME": str(CADDY_STATE), "XDG_CONFIG_HOME": str(CADDY_STATE)}
     return argv, env
 
 
-def caddy_missing(cfg):
+def caddy_missing(cfg, root=None):
+    if any(c in str(root or cfg["root"]) for c in "*?[]\\"):
+        return f"{root or cfg['root']}: caddy reads * ? [ ] \\ in the share folder's path as a glob; rename it"
     if not os.access(SANDBOX_EXEC, os.X_OK):
         return f"{SANDBOX_EXEC} not found; the caddy backend needs it to keep symlinks inside the share folder"
     if not caddy_bin(cfg):
-        return "caddy not found; `brew install caddy` (or set share-server.caddy to its path)"
+        return "caddy not found or not executable; `brew install caddy` (or set share-server.caddy to its path)"
     return ""
 
 
@@ -488,7 +499,7 @@ def serve(root, port, backend="python"):
         return 1
     if backend == "caddy":
         cfg = config()
-        missing = caddy_missing(cfg)
+        missing = caddy_missing(cfg, root)
         if missing:
             print(missing, file=sys.stderr)
             return 1
@@ -515,16 +526,14 @@ def agent_target(cfg=None):
 
 
 def spec(cfg=None):
+    """`serve` resolves caddy and the sandbox paths at each start, so a `brew upgrade caddy` needs no reinstall."""
     cfg = cfg or config()
-    out = {"Label": cfg["label"], "RunAtLoad": True, "KeepAlive": True, "ProcessType": "Background",
-           "StandardOutPath": str(LOG), "StandardErrorPath": str(LOG)}
-    if cfg["backend"] == "caddy":
-        out["ProgramArguments"], out["EnvironmentVariables"] = caddy_command(cfg, cfg["root"], cfg["port"])
-    else:
-        out["ProgramArguments"] = [shutil.which("python3") or sys.executable, "-I", str(pathlib.Path(__file__).resolve()),
-                                   "serve", "--root", str(pathlib.Path(cfg["root"]).expanduser()),
-                                   "--port", str(int(cfg["port"])), "--backend", "python"]
-    return out
+    return {"Label": cfg["label"],
+            "ProgramArguments": [shutil.which("python3") or sys.executable, "-I", str(pathlib.Path(__file__).resolve()),
+                                 "serve", "--root", str(pathlib.Path(cfg["root"]).expanduser()),
+                                 "--port", str(int(cfg["port"])), "--backend", cfg["backend"]],
+            "RunAtLoad": True, "KeepAlive": True, "ProcessType": "Background",
+            "StandardOutPath": str(LOG), "StandardErrorPath": str(LOG)}
 
 
 def plist_spec():
@@ -549,6 +558,8 @@ def cmd_install(here_ok):
         return 1
     cfg = config()
     missing = caddy_missing(cfg) if cfg["backend"] == "caddy" else ""
+    if cfg["backend"] not in BACKENDS:
+        missing = f"unknown backend {cfg['backend']!r}; use one of {', '.join(BACKENDS)}"
     if missing:
         print(missing, file=sys.stderr)
         return 1
@@ -584,6 +595,9 @@ def main(argv):
     if cmd == "serve":
         cfg = config()
         opts = dict(zip(argv[2::2], argv[3::2]))
+        if opts.get("--backend", cfg["backend"]) not in BACKENDS:
+            print(f"unknown backend; use one of {', '.join(BACKENDS)}", file=sys.stderr)
+            return 2
         return serve(opts.get("--root", cfg["root"]), opts.get("--port", cfg["port"]),
                      opts.get("--backend", cfg["backend"]))
     if cmd == "install":

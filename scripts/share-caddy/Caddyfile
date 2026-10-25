@@ -25,15 +25,15 @@ http://:{$SHARE_PORT} {
 			path *.md
 			not query raw=*
 			file {
-				root {$SHARE_ROOT}
+				root "{$SHARE_ROOT}"
 			}
 		}
 		handle @md {
-			header Content-Security-Policy "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'"
-			root * {$SHARE_CADDY}
+			header Content-Security-Policy "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'"
+			root * "{$SHARE_CADDY}"
 			rewrite * /md.html
 			templates {
-				root {$SHARE_ROOT}
+				root "{$SHARE_ROOT}"
 			}
 			file_server
 		}
@@ -44,7 +44,7 @@ http://:{$SHARE_PORT} {
 		@json path *.json
 		header @json Content-Type "application/json; charset=utf-8"
 
-		root * {$SHARE_ROOT}
+		root * "{$SHARE_ROOT}"
 		file_server {
 			index index.html index.htm
 			hide .*

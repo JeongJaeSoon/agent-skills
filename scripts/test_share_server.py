@@ -249,23 +249,49 @@ class Launchd(unittest.TestCase):
         self.assertEqual(args[args.index("--backend") + 1], "python")
         self.assertTrue(s["KeepAlive"])
 
-    def test_caddy_spec_runs_caddy_in_the_sandbox(self):
-        with tempfile.TemporaryDirectory() as d, \
-                mock.patch.object(ss, "config", return_value={**ss.DEFAULTS, "root": d, "port": 13201,
-                                                              "caddy": "/opt/x/caddy"}):
-            s = ss.spec()
-            real = os.path.realpath(d)
-        args, env = s["ProgramArguments"], s["EnvironmentVariables"]
+    def test_caddy_spec_resolves_caddy_at_each_start(self):
+        with mock.patch.object(ss, "config", return_value={**ss.DEFAULTS, "root": "~/s"}):
+            args = ss.spec()["ProgramArguments"]
+        self.assertEqual(args[args.index("--backend") + 1], "caddy")
+        self.assertIn("serve", args)
+
+    def test_caddy_command_runs_caddy_in_the_sandbox(self):
+        with tempfile.TemporaryDirectory() as d:
+            caddy = pathlib.Path(d) / "caddy"
+            caddy.write_text("")
+            caddy.chmod(0o755)
+            root = pathlib.Path(d) / "sh[are (old)"
+            root.mkdir()
+            args, env = ss.caddy_command({**ss.DEFAULTS, "caddy": str(caddy)}, str(root), 13201)
+            real = os.path.realpath(root)
         self.assertEqual(args[:3], [ss.SANDBOX_EXEC, "-f", str(ss.CADDY_DIR / "sandbox.sb")])
         self.assertIn(f"ROOT={real}", args)
-        self.assertEqual(args[args.index("/opt/x/caddy"):][:4], ["/opt/x/caddy", "run", "--config",
-                                                                 str(ss.CADDY_DIR / "Caddyfile")])
+        self.assertIn(f"ROOT_RE={real.replace('[', chr(92) + '[').replace('(', chr(92) + '(').replace(')', chr(92) + ')')}",
+                      args)
+        self.assertEqual(args[args.index(str(caddy)):][:4], [str(caddy), "run", "--config",
+                                                             str(ss.CADDY_DIR / "Caddyfile")])
         self.assertEqual((env["SHARE_ROOT"], env["SHARE_PORT"]), (real, "13201"))
+
+    def test_a_caddy_path_that_does_not_run_counts_as_missing(self):
+        self.assertIn("brew install caddy", ss.caddy_missing({**ss.DEFAULTS, "caddy": "/nope/caddy"}))
+
+    def test_a_root_with_glob_characters_is_refused(self):
+        self.assertIn("glob", ss.caddy_missing(ss.DEFAULTS, "/x/sh[are]"))
+
+    def test_unknown_backend_is_refused(self):
+        with mock.patch("builtins.print"):
+            self.assertEqual(ss.main(["x", "serve", "--backend", "Caddy"]), 2)
+            with mock.patch.object(ss.sys, "platform", "darwin"), \
+                    mock.patch.object(ss, "config", return_value={**ss.DEFAULTS, "backend": "nginx"}), \
+                    mock.patch.object(ss, "plist_path", return_value=pathlib.Path("/nonexistent/a.plist")), \
+                    mock.patch.object(ss.subprocess, "run") as run:
+                self.assertEqual(ss.cmd_install(True), 1)
+        run.assert_not_called()
 
     def test_install_refuses_without_caddy(self):
         with mock.patch.object(ss.sys, "platform", "darwin"), \
-                mock.patch.object(ss, "config", return_value={**ss.DEFAULTS, "caddy": ""}), \
-                mock.patch.object(ss.shutil, "which", return_value=None), \
+                mock.patch.object(ss, "config", return_value={**ss.DEFAULTS, "caddy": "/nope/caddy"}), \
+                mock.patch.object(ss, "plist_path", return_value=pathlib.Path("/nonexistent/a.plist")), \
                 mock.patch("builtins.print") as out, \
                 mock.patch.object(ss.subprocess, "run") as run:
             self.assertEqual(ss.cmd_install(True), 1)
@@ -304,7 +330,7 @@ class Caddy(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         base = pathlib.Path(cls.tmp.name)
-        root, outside = base / "share", base / "outside"
+        root, outside = base / "sh are (old)+", base / "outside"
         for d in (root / "gal", root / "docs", root / "site", root / ".private", outside):
             d.mkdir(parents=True)
         (outside / "secret.txt").write_text("secret")
@@ -317,6 +343,8 @@ class Caddy(unittest.TestCase):
         (root / "gal" / "to-hidden.png").symlink_to(root / "gal" / ".hidden.png")
         (root / "gal" / "inside.png").symlink_to(root / "gal" / "a.png")
         (root / "out").symlink_to(outside)
+        (root / "hosts.txt").symlink_to("/etc/hosts")
+        (root / "usr-share").symlink_to("/usr/share")
         (root / ".private" / "p.md").write_text("# hidden")
         (root / "docs" / "보고서.md").write_text("# 한글 제목\n\n본문 <script>alert(1)</script>\n")
         (root / "docs" / "a<b>.md").write_text("# x")
@@ -388,10 +416,11 @@ class Caddy(unittest.TestCase):
         self.assertNotIn(".hidden.png", self.req("/gal/")[2])
 
     def test_symlinks_cannot_reach_outside_or_hidden_files(self):
-        for path in ("/gal/leak.txt", "/out/secret.txt", "/gal/to-hidden.png"):
+        for path in ("/gal/leak.txt", "/out/secret.txt", "/gal/to-hidden.png", "/hosts.txt", "/usr-share/"):
             code, _, body = self.req(path)
             self.assertNotEqual(code, 200, path)
             self.assertNotIn("secret", body, path)
+            self.assertNotIn("localhost", body, path)
         self.assertEqual(self.req("/gal/inside.png")[0], 200)
 
     def test_write_methods_are_refused(self):

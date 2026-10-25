@@ -1,11 +1,14 @@
 ; sandbox-exec profile for the share server's caddy. Caddy follows symlinks, so a link in the share folder could
-; serve any file the user can read; under this profile caddy reads nothing in home or temp folders except the
-; share folder (ROOT, real path), this config directory (CONF) and its own state (STATE), and nothing hidden
-; inside ROOT, whatever path the request took to get there. Blocked reads come back as 403.
+; serve any file the user can read. Under this profile caddy reads only the share folder (ROOT, real path), this
+; config directory (CONF), its own state (STATE), its binary (CADDY) and the system files a Go binary loads;
+; nothing hidden inside ROOT either, whatever path the request took to get there. Blocked reads come back as 403.
+; ROOT_RE is ROOT escaped for the regex below.
 (version 1)
 (allow default)
-(deny file-read* file-write*
-  (subpath "/Users") (subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/Volumes"))
-(allow file-read* (subpath (param "ROOT")) (subpath (param "CONF")))
-(allow file-read* file-write* (subpath (param "STATE")))
-(deny file-read* (regex (string-append "^" (param "ROOT") "/(.*/)?\\.")))
+(deny file-read* file-write*)
+(allow file-read-metadata)
+(allow file-read* (literal "/") (subpath "/System") (subpath "/usr/lib") (subpath "/private/var/db/timezone")
+  (subpath "/dev") (literal "/private/etc/apache2/mime.types") (literal (param "CADDY"))
+  (subpath (param "ROOT")) (subpath (param "CONF")))
+(allow file-read* file-write* (subpath (param "STATE")) (subpath "/dev"))
+(deny file-read-data (regex (string-append "^" (param "ROOT_RE") "/(.*/)?\\.")))
