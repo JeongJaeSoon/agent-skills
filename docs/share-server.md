@@ -19,7 +19,7 @@ bin/share-server uninstall
 | 경로 | 내용 |
 |---|---|
 | `~/.local/share/agent-skills/copyparty-<키>` | copyparty venv |
-| `~/.cache/agent-skills/copyparty` | 검색 색인(`up2k.db`)과 썸네일 캐시. 지워도 다시 만든다 |
+| `~/.cache/agent-skills/copyparty` | 검색 색인(`up2k.db`)과 썸네일 캐시. 지워도 다시 만든다. 이미 색인한 파일의 본문은 다시 읽지 않으므로 `share_text_tag.py`를 바꾸면 이 폴더를 지우고 재시작한다 |
 | `~/.local/state/agent-skills/copyparty` | copyparty의 salt와 세션 DB |
 | `~/.local/state/agent-skills/share-server.log` | 로그 |
 
