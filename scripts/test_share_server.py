@@ -72,6 +72,8 @@ class Live(unittest.TestCase):
         (root / "gal" / "x-390.png").write_bytes(b"\x89PNG")
         (root / "site" / "index.html").write_text("<!doctype html><title>own page</title>")
         (root / "docs" / "note.md").write_text("# Note\n\nthe quick zebrafish\n")
+        (root / "docs" / "plain.txt").write_text("한글 본문")
+        (root / "docs" / "view.tsx").write_text("export {}")
         (root / ".private").write_text("hidden")
         (root / "out").symlink_to(outside)
         cls.root, cls.before = root, cls.snapshot(root)
@@ -102,11 +104,19 @@ class Live(unittest.TestCase):
         return sorted((str(p.relative_to(root)), p.is_file() and p.read_bytes()) for p in root.rglob("*"))
 
     @classmethod
-    def request(cls, method, path, body=None, headers=None):
+    def fetch(cls, method, path, body=None, headers=None):
         c = http.client.HTTPConnection("127.0.0.1", cls.port, timeout=5)
-        c.request(method, path, body, {**cls.UA, **(headers or {})})
-        r = c.getresponse()
-        return r.status, r.read().decode(errors="replace")
+        try:
+            c.request(method, path, body, {**cls.UA, **(headers or {})})
+            r = c.getresponse()
+            return r.status, r.getheader("Content-Type", ""), r.read().decode(errors="replace")
+        finally:
+            c.close()
+
+    @classmethod
+    def request(cls, method, path, body=None, headers=None):
+        code, _, text = cls.fetch(method, path, body, headers)
+        return code, text
 
     @classmethod
     def search(cls, q):
@@ -128,6 +138,21 @@ class Live(unittest.TestCase):
         self.assertEqual(self.request("GET", "/site/index.html"), (200, "<!doctype html><title>own page</title>"))
         self.assertIn('"idxh": 1', self.request("GET", "/site/")[1])  # the browser opens index.html in its place
         self.assertEqual(self.request("GET", "/docs/note.md")[0], 200)
+
+    def test_a_plain_browser_link_to_markdown_opens_rendered(self):
+        html = {"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+        code, body = self.request("GET", "/docs/note.md", headers=html)
+        self.assertEqual(code, 200)
+        self.assertIn("md.js", body)
+        self.assertIn("view raw", body)
+        self.assertEqual(self.request("GET", "/docs/note.md?", headers=html)[1], "# Note\n\nthe quick zebrafish\n")
+        self.assertEqual(self.request("GET", "/docs/note.md")[1], "# Note\n\nthe quick zebrafish\n")
+
+    def test_text_responses_declare_utf8(self):
+        html = {"Accept": "text/html"}
+        for path, headers in (("/docs/note.md", None), ("/docs/note.md", html), ("/docs/note.md?", html),
+                              ("/docs/plain.txt", None), ("/docs/view.tsx", None), ("/site/index.html", None), ("/", html)):
+            self.assertIn("charset=utf-8", self.fetch("GET", path, headers=headers)[1].lower(), f"{path} {headers}")
 
     def test_symlink_out_of_the_root_and_traversal_are_refused(self):
         for path in ("/out/secret.txt", "/../outside/secret.txt", "/%2e%2e/outside/secret.txt"):

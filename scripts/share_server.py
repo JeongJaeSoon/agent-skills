@@ -9,8 +9,8 @@ Usage:
 copyparty and its dependencies are pinned in PINS and installed into their own venv (VENV) on first use. Everyone
 gets read access and nothing else: no accounts, uploads, deletes, moves or WebDAV. A folder's index.html opens
 instead of its listing, folders open as a thumbnail grid, and search covers file names and the first 64 KiB of
-text files (share_text_tag.py). The search index and thumbnails live in HIST and copyparty's salts in STATE_DIR,
-both outside the shared folder.
+text files (share_text_tag.py); a browser's plain link to a .md file opens rendered (share_copyparty.py). The
+search index and thumbnails live in HIST and copyparty's salts in STATE_DIR, both outside the shared folder.
 
 Binds 127.0.0.1 only; publishing on a network (e.g. `tailscale serve`) is left to the owner. Settings live under
 the "share-server" key of ~/.claude/agent-skills.json (see DEFAULTS); "label" lets an existing LaunchAgent be taken
@@ -27,8 +27,11 @@ HOST = "127.0.0.1"
 DEFAULTS = {"root": "~/share", "port": 13201, "label": "io.github.jeongjaesoon.share-server"}
 # Each pin was released at least 14 days before it was adopted.
 PINS = ("copyparty==1.20.25", "Jinja2==3.1.6", "MarkupSafe==3.0.4", "Pillow==12.3.0", "mutagen==1.48.1")
-TEXT_TAG = pathlib.Path(__file__).resolve().with_name("share_text_tag.py")
+LAUNCHER = pathlib.Path(__file__).resolve().with_name("share_copyparty.py")
+TEXT_TAG = LAUNCHER.with_name("share_text_tag.py")
 TEXT_EXT = ("md", "markdown", "txt", "html", "htm", "json", "csv", "log", "yaml", "yml")
+# Source and config files copyparty would send as a download (or, for ts, as video); show them as text instead.
+PLAIN_EXT = ("ts", "tsx", "jsx", "mjs", "py", "sh", "go", "rs", "yaml", "yml", "toml", "log", "diff", "patch", "tsv")
 
 
 def config():
@@ -56,10 +59,11 @@ def ensure_venv():
 
 def copyparty_args(root, port):
     mtp = f"body=an,{','.join('e' + e for e in TEXT_EXT)},t10,{TEXT_TAG}"
-    return ["-I", "-m", "copyparty", "-i", HOST, "-p", str(int(port)), "--http-only", "-q",
+    return ["-I", str(LAUNCHER), "-i", HOST, "-p", str(int(port)), "--http-only", "-q",
             # index names and text bodies for search; skip content hashes, which only serve upload dedup
             "--hist", str(HIST), "-e2dsa", "-e2ts", "--no-hash", ".", "--re-maxage", "60",
             "-mtp", mtp, "-mte", "+body", "-mth", "body",
+            *[a for e in PLAIN_EXT for a in ("--mime", f"{e}=text/plain")],
             "--ih", "--grid", "--xvol", "--no-robots", "--no-logues",
             # read-only beyond the volume's r permission: no WebDAV, no writes through any other door
             "--no-dav", "--no-del", "--no-mv", "--no-cp", "--unpost", "0", "--urlform", "get",

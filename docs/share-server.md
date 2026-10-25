@@ -27,7 +27,8 @@ bin/share-server uninstall
 
 - 목록은 썸네일 그리드로 연다(`g` 키나 `田` 버튼으로 표 보기). 이미지를 누르면 확대 보기가 열리고 좌우 키로 넘긴다.
 - `index.html`이 있는 폴더는 브라우저가 그 페이지로 바로 연다. 목록을 보려면 주소 끝에 `?v`를 붙인다.
-- `.md`는 렌더링해서 보여 준다. 편집기는 쓰기 권한이 없어 열리지 않는다.
+- `.md`는 렌더링해서 보여 준다. 목록에서 눌러도, 브라우저로 `report.md` 주소를 바로 열어도 문서로 보인다(`scripts/share_copyparty.py`). 원문은 뷰어의 `view raw`(`report.md?`)나 curl 같은 비브라우저 요청으로 받는다. 뷰어의 edit 링크는 보이지만 저장은 거부된다.
+- `text/*` 응답(마크다운·텍스트·HTML·목록)은 `charset=utf-8`을 붙인다. `ts`, `tsx`, `py`, `yaml`, `log` 같은 소스·설정 파일은 내려받기 대신 `text/plain`으로 보여 준다.
 - 🔎 탭에서 파일명·경로로 찾는다. `tags` 칸은 텍스트 파일(`md`, `txt`, `html`, `json`, `csv`, `log`, `yaml` 등) 앞 64 KiB의 본문도 찾는다(`scripts/share_text_tag.py`가 색인). 새 파일은 60초 안에 색인된다.
 
 ## 보안
