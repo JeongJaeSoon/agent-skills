@@ -106,7 +106,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
 
-**도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. 기본 off이고 `skills-sync setup enable preview-watch`로 켠다. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)). `share-server`(공유 폴더를 127.0.0.1에서 copyparty로 읽기 전용 서빙한다. 이미지 썸네일·확대 보기, 마크다운 렌더링, 파일명·본문 검색. 계정·업로드·삭제 없음, 색인과 썸네일 캐시는 공유 폴더 밖에 둔다. 기본 off이고 `skills-sync setup enable share-server`로 켠다. [docs/share-server.md](docs/share-server.md)).
+**도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. 기본 off이고 `skills-sync setup enable preview-watch`로 켠다. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)). `share-server`(공유 폴더를 127.0.0.1에서 서빙하고, `index.html` 없는 이미지 폴더는 파일명으로 묶은 썸네일 갤러리로 보여 준다. 원본 보기·좌우 키 이동. 숨김 파일과 루트 밖 심볼릭 링크는 숨긴다. 기본 off이고 `skills-sync setup enable share-server`로 켠다. [docs/share-server.md](docs/share-server.md)).
 
 **채팅**: `watch-mentions`(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 분류해 코디네이터에게 한 통으로 보내고, 작업 의뢰는 기표 초안으로).
 
