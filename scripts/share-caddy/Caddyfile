@@ -1,0 +1,56 @@
+# Read-only share folder on loopback. share_server.py fills the env placeholders:
+# SHARE_ROOT (folder), SHARE_PORT (port), SHARE_CADDY (this directory, for md.html).
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+http://:{$SHARE_PORT} {
+	bind 127.0.0.1
+
+	header X-Content-Type-Options nosniff
+
+	route {
+		@write not method GET HEAD
+		respond @write 405 {
+			close
+		}
+
+		# Any path segment starting with "." (".git", ".env", ".hidden.png") does not exist.
+		@hidden path_regexp (^|/)\.
+		respond @hidden 404
+
+		@md {
+			path *.md
+			not query raw=*
+			file {
+				root {$SHARE_ROOT}
+			}
+		}
+		handle @md {
+			header Content-Security-Policy "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline'"
+			root * {$SHARE_CADDY}
+			rewrite * /md.html
+			templates {
+				root {$SHARE_ROOT}
+			}
+			file_server
+		}
+
+		# Go knows no charset for these, and browsers would guess one (or download the file).
+		@text path *.md *.txt *.log *.csv *.tsv *.yaml *.yml *.toml *.ini *.conf *.py *.sh *.ts *.tsx *.jsx *.go *.rs *.java *.kt *.rb *.sql *.diff *.patch *.jsonl
+		header @text Content-Type "text/plain; charset=utf-8"
+		@json path *.json
+		header @json Content-Type "application/json; charset=utf-8"
+
+		root * {$SHARE_ROOT}
+		file_server {
+			index index.html index.htm
+			hide .*
+			browse {
+				sort time desc
+			}
+		}
+	}
+}
