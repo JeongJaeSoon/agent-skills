@@ -77,7 +77,7 @@ req.close("r4", "link", to="card-b")
 s = req.summary(later)
 assert s["open"] == 3 and s["oldest_min"] == 45, s
 assert [u["id"] for u in s["unlinked"]] == ["r2", "r5"], s
-assert req.line(s).startswith("요청 3건 열림 · 가장 오래된 것 45m · 미연결 30분+: r2 r5"), req.line(s)
+assert req.line(s) == "요청 3건 열림 · 가장 오래된 것 45m · 미연결 30분+ 2건", req.line(s)
 assert req.line(req.summary(later, {})) == ""
 
 # The reminder on the next prompt carries ids only: the count, the oldest age, and the unlinked ones.
