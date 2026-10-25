@@ -79,7 +79,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 any(os.path.lexists(i) and not self.inside(i) for i in indexes):
             self.send_error(404)
             return None
-        if path.lower().endswith(".md") and os.path.isfile(path) and \
+        if path.lower().endswith(".md") and os.path.isfile(path) and os.path.getsize(path) <= MAX_SOURCE and \
                 "raw" not in parse_qs(urlsplit(self.path).query, keep_blank_values=True):
             return self.markdown(path)
         return super().send_head()
@@ -224,9 +224,9 @@ RULE = re.compile(r"^ {0,3}([-*_])(?:\s*\1){2,}\s*$")
 ITEM = re.compile(r"^( {0,3})([-*+]|\d{1,9}[.)])(\s+|$)")
 TABLE_SEP = re.compile(r"\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?")
 SAFE_URL = re.compile(r"^(?:https?:|mailto:|[^:]*$)", re.I)
-# Past these the text is shown escaped but unformatted: the inline patterns are quadratic on adversarial input
-# and a deep nest would exhaust the stack.
-MAX_SOURCE, MAX_INLINE, MAX_DEPTH = 1 << 20, 4096, 16
+# Bounds on what one request renders. A larger .md is sent as its source, a longer paragraph unformatted, and a
+# deeper nest as text, so an adversarial file cannot hold the server or exhaust the stack.
+MAX_SOURCE, MAX_INLINE, MAX_DEPTH = 1 << 20, 1 << 15, 16
 
 
 def md_html(text):
@@ -405,7 +405,7 @@ def inline(text, outer=None):
     text = re.sub(r"\[([^\[\]]+)\]" + url,
                   lambda m: keep(f'<a href="{href(m.group(2))}">{inline(m.group(1), stash)}</a>'), text)
     if outer is None:  # link text gets no autolinks: no links inside links
-        text = re.sub(r"<(https?://[^>\s]+)>",
+        text = re.sub(r"<(https?://[^<>\s]+)>",
                       lambda m: keep(f'<a href="{href(m.group(1))}">{html.escape(m.group(1))}</a>'), text)
         text = re.sub(r"https?://[^\s<>\"']+[^\s<>\"'.,;:!?)\]]",
                       lambda m: keep(f'<a href="{href(m.group(0))}">{html.escape(m.group(0))}</a>'), text)

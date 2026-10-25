@@ -59,12 +59,17 @@ class Markdown(unittest.TestCase):
         cases = [" **a" * 20000, " ~~a" * 20000, " *a" * 20000, "# a" + " " * 20000 + "b",
                  "a|b\n" + " " * 20000 + "x", "![" * 20000, "[" * 20000, "a" + " " * 20000 + "b",
                  ">" * 3000 + " x", "".join("  " * k + "- x\n" for k in range(1500))]
+        # About 1 MB of paragraphs each under MAX_INLINE, so every inline pattern actually runs.
+        for unit in (" **a", " ~~a", " *a", " _a", "![", "[", "[a](", "<https://a", "`a", "a  "):
+            para = unit * (ss.MAX_INLINE // len(unit) - 1)
+            cases.append("\n\n".join([para] * (ss.MAX_SOURCE // len(para) - 1)))
         for text in cases:
             started = time.monotonic()
             out = ss.md_html(text)
             self.assertLess(time.monotonic() - started, 1, text[:20])
             self.assertNotIn("<script", out)
         self.assertTrue(ss.md_html("x" * (ss.MAX_SOURCE + 1)).startswith("<pre>"))
+        self.assertLessEqual(len(cases[-1]), ss.MAX_SOURCE)
 
     def test_raw_html_and_unsafe_urls_are_inert(self):
         out = ss.md_html('<script>alert(1)</script> [x](javascript:alert(1)) ![i](JavaScript:x) [r](../a.png)')
@@ -211,6 +216,12 @@ class Server(unittest.TestCase):
         self.assertEqual(self.fetch("/site/")[2]["Content-Type"], "text/html")
         self.assertEqual(self.fetch("/gal/y.jpg")[2]["Content-Type"], "image/jpeg")
         self.assertEqual(self.fetch("/plain/a.tar.gz")[2]["Content-Type"], "application/gzip")
+
+    def test_oversized_markdown_is_sent_as_source(self):
+        with mock.patch.object(ss, "MAX_SOURCE", 10):
+            code, body, headers = self.fetch("/plain/report.md")
+        self.assertEqual((code, body), (200, self.REPORT))
+        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
 
     def test_hidden_markdown_is_refused(self):
         self.assertEqual(self.get("/.private/notes.md")[0], 404)
