@@ -25,7 +25,8 @@ HIST = pathlib.Path("~/.cache/agent-skills/copyparty").expanduser()
 LOG = STATE_DIR / "share-server.log"
 HOST = "127.0.0.1"
 DEFAULTS = {"root": "~/share", "port": 13201, "label": "io.github.jeongjaesoon.share-server", "origins": []}
-ORIGIN = re.compile(r"https?://[^/,\s]+")
+# copyparty drops the port from a request Origin before comparing, so a configured origin carries none either.
+ORIGIN = re.compile(r"https?://[^/,:\s]+")
 # Each pin was released at least 14 days before it was adopted.
 PINS = ("copyparty==1.20.25", "Jinja2==3.1.6", "MarkupSafe==3.0.4", "Pillow==12.3.0", "mutagen==1.48.1")
 LAUNCHER = pathlib.Path(__file__).resolve().with_name("share_copyparty.py")
@@ -94,14 +95,20 @@ def copyparty_args(root, port, origins=()):
             "-v", f"{root}::r"]
 
 
+def bad_origins(origins):
+    """Why share-server.origins is unusable, or ""."""
+    if not isinstance(origins, (list, tuple)) or not all(isinstance(o, str) and ORIGIN.fullmatch(o) for o in origins):
+        return f"share-server.origins wants a list like [\"https://files.example.test\"] (no port), not {origins!r}"
+    return ""
+
+
 def serve(root, port, venv=None, origins=()):
     root = str(pathlib.Path(root).expanduser().resolve())
     if not os.path.isdir(root):
         print(f"{root} is not a directory", file=sys.stderr)
         return 1
-    bad = [o for o in origins if not isinstance(o, str) or not ORIGIN.fullmatch(o)]
-    if bad:
-        print(f"share-server.origins wants entries like https://files.example.test, not {bad}", file=sys.stderr)
+    if bad_origins(origins):
+        print(bad_origins(origins), file=sys.stderr)
         return 1
     if ":" in root:  # copyparty's -v splits on it
         print(f"{root}: a root path with ':' is not supported", file=sys.stderr)
@@ -163,6 +170,9 @@ def cmd_install(here_ok):
     if not (repo / ".git").is_dir() and not here_ok:  # a worktree goes away under launchd
         print(f"{repo} is not a main git checkout; install from the checkout sessions load (or pass --here)",
               file=sys.stderr)
+        return 1
+    if bad_origins(config()["origins"]):  # serve would refuse it after the running server is gone
+        print(bad_origins(config()["origins"]), file=sys.stderr)
         return 1
     try:  # before bootout, so a failed build leaves the running server alone
         ensure_venv()

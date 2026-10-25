@@ -53,7 +53,7 @@ bin/share-server uninstall
 | `root` | `~/share` | 서빙할 폴더. 경로에 `:`가 있으면 거부한다 |
 | `port` | `13201` | loopback 포트 |
 | `label` | `io.github.jeongjaesoon.share-server` | LaunchAgent 라벨. 이미 같은 폴더를 서빙하는 LaunchAgent가 있으면 그 라벨을 적어 같은 자리에서 교체한다 |
-| `origins` | `[]` | 같은 출처 말고 교차 출처 요청을 허용할 브라우저 주소 목록. `https://files.example.test`처럼 scheme과 호스트만 적는다. 바꾸면 `launchctl kickstart -k gui/$(id -u)/<라벨>`로 재시작한다 |
+| `origins` | `[]` | 같은 출처 말고 교차 출처 요청을 허용할 브라우저 주소 목록. `https://files.example.test`처럼 scheme과 호스트만 적는다. copyparty가 요청 Origin의 포트를 떼고 비교하므로 포트는 적지 않는다(적으면 `install`·`serve`가 거부한다). 바꾸면 `launchctl kickstart -k gui/$(id -u)/<라벨>`로 재시작한다 |
 
 `install`은 같은 라벨의 plist가 이미 있고 내용이 다르면 `<라벨>.plist.bak-<시각>`으로 옆에 남긴 뒤 덮어쓴다. 되돌릴 때는 `uninstall` 뒤 백업 plist를 원래 이름으로 복사해 `launchctl bootstrap gui/$(id -u) <plist>`로 올린다. 백업이 없으면(같은 내용이었으면) 이 저장소를 되돌린 커밋에서 `install`을 다시 한다. venv·캐시·상태 폴더는 `uninstall`이 지우지 않는다.
 

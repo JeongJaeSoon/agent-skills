@@ -16,6 +16,12 @@ class Args(unittest.TestCase):
             self.assertIn(flag, args)
         self.assertNotIn("-a", args)  # no accounts
 
+    def test_only_the_pages_own_origin_by_default(self):
+        args = ss.copyparty_args("/srv/share", 13201)
+        self.assertEqual(args[args.index("--acao") + 1], "")
+        args = ss.copyparty_args("/srv/share", 13201, ["https://a.test", "https://b.test"])
+        self.assertEqual(args[args.index("--acao") + 1], "https://a.test,https://b.test")
+
     def test_index_and_tag_parser_live_outside_the_share(self):
         args = ss.copyparty_args("/srv/share", 13201)
         self.assertFalse(args[args.index("--hist") + 1].startswith("/srv/share"))
@@ -80,7 +86,8 @@ class Venv(unittest.TestCase):
 
     def test_a_malformed_origin_is_refused(self):
         with mock.patch.object(ss.os, "execv") as execv, mock.patch("builtins.print"):
-            for bad in (["https://a.test,https://b.test"], ["*"], ["a.test"], "https://a.test"):
+            for bad in (["https://a.test,https://b.test"], ["*"], ["a.test"], "https://a.test", ["https://a.test:8443"],
+                        None):
                 self.assertEqual(ss.serve(self.tmp.name, 13201, None, bad), 1, bad)
         execv.assert_not_called()
 
@@ -298,6 +305,16 @@ class Launchd(unittest.TestCase):
             backups = list(pathlib.Path(d).glob("a.b.plist.bak-*"))
             self.assertEqual([b.read_bytes() for b in backups], [b"old"])
             self.assertIn(b"serve", plist.read_bytes())
+
+    def test_bad_origins_leave_the_agent_alone(self):
+        with mock.patch.object(ss.sys, "platform", "darwin"), \
+                mock.patch.object(ss, "config", return_value={**ss.DEFAULTS, "origins": ["https://a.test:8443"]}), \
+                mock.patch.object(ss, "ensure_venv") as build, \
+                mock.patch("builtins.print"), \
+                mock.patch.object(ss.subprocess, "run") as run:
+            self.assertEqual(ss.cmd_install(True), 1)
+        build.assert_not_called()
+        run.assert_not_called()
 
     def test_failed_venv_build_leaves_the_agent_alone(self):
         with mock.patch.object(ss.sys, "platform", "darwin"), \
