@@ -203,8 +203,10 @@ python3 "$P" install | uninstall | status   # macOS LaunchAgent, every `interval
 
 Each metric has a `[warn, danger]` pair under `reap.pressure`: `load_per_cpu` (5-minute load / logical CPUs),
 `mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's own level, 2 warn, 4 critical),
-`swap_gb`, `disk_free_gb` (the volume holding `$HOME`, at or below), `containers` (running). A metric the OS does not
-offer is left out. The level is the worst metric's.
+`swap_gb`, `disk_free_gb` (the volume holding `$HOME`, at or below), `containers` (running; a Kubernetes pod
+counts once, its pause container included, and `kube-system` not at all; the compose projects, container names or
+namespaces in `always_on` are left out and shown apart). A metric the OS does not offer is left out. The level is the
+worst metric's.
 
 - **warn**: `reap.py scan --kinds <safe_kinds>` then `reap --plan`, so only what reap itself lists goes. Default
   `safe_kinds`: `orphan`, `compose-stack`, `gui-app`, `orca-worker` (a kind this reap.py does not know is dropped,
@@ -258,7 +260,7 @@ not in this repo:
           "user_folders": [], "regenerated_untracked": true, "preview_ports": [4500, 4599], "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},
           "pressure": {"interval": 180, "load_per_cpu": [1.0, 2.0], "mem_free_pct": [20, 10], "vm_pressure": [2, 4],
-                       "swap_gb": [8, 16], "disk_free_gb": [50, 20], "containers": [40, 80],
+                       "swap_gb": [8, 16], "disk_free_gb": [50, 20], "containers": [40, 80], "always_on": [],
                        "notify_to": "run:<id>", "rescan_minutes": 10, "renotify_minutes": 30, "gate_fresh_minutes": 15}}}
 ```
 

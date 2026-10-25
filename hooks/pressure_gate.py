@@ -119,7 +119,7 @@ def main():
         sys.path.insert(0, str(SCRIPT.parent))
         import pressure
         cfg = pressure.config()
-        out = gate(cmd, pressure.measure(), pressure.load_state(), cfg, judge=pressure.judge)
+        out = gate(cmd, pressure.measure(always_on=cfg["always_on"]), pressure.load_state(), cfg, judge=pressure.judge)
     except Exception:  # a broken measurement must not block work
         return 0
     if out:
