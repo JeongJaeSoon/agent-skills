@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import http.client, http.server, os, pathlib, socket, sys, tempfile, threading, unittest
+import http.client, http.server, os, pathlib, socket, sys, tempfile, threading, time, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -43,7 +43,28 @@ class Markdown(unittest.TestCase):
         self.assertEqual(ss.inline("[`x`](https://e.test/a_(b)) https://e.test/q?a=1&b=2."),
                          '<a href="https://e.test/a_(b)"><code>x</code></a> '
                          '<a href="https://e.test/q?a=1&amp;b=2">https://e.test/q?a=1&amp;b=2</a>.')
-        self.assertEqual(ss.inline("a  \nb\\\nc"), "a<br>\nb<br>\nc")
+        self.assertEqual(ss.inline("a  \nb\\\nc"), "a  <br>\nb<br>\nc")
+
+    def test_link_text_is_formatted_but_not_autolinked(self):
+        self.assertEqual(ss.inline("[**https://e.test/a** <b>](https://e.test/a)"),
+                         '<a href="https://e.test/a"><strong>https://e.test/a</strong> &lt;b&gt;</a>')
+
+    def test_headings_tables_and_rules_need_their_full_shape(self):
+        self.assertEqual(ss.md_html("## 제목 ##"), "<h2>제목</h2>")
+        self.assertEqual(ss.md_html("# C#"), "<h1>C#</h1>")
+        self.assertEqual(ss.md_html("#태그"), "<p>#태그</p>")
+        self.assertEqual(ss.md_html("a | b\n---"), "<p>a | b</p>\n<hr>")
+
+    def test_adversarial_input_stays_fast_and_shallow(self):
+        cases = [" **a" * 20000, " ~~a" * 20000, " *a" * 20000, "# a" + " " * 20000 + "b",
+                 "a|b\n" + " " * 20000 + "x", "![" * 20000, "[" * 20000, "a" + " " * 20000 + "b",
+                 ">" * 3000 + " x", "".join("  " * k + "- x\n" for k in range(1500))]
+        for text in cases:
+            started = time.monotonic()
+            out = ss.md_html(text)
+            self.assertLess(time.monotonic() - started, 1, text[:20])
+            self.assertNotIn("<script", out)
+        self.assertTrue(ss.md_html("x" * (ss.MAX_SOURCE + 1)).startswith("<pre>"))
 
     def test_raw_html_and_unsafe_urls_are_inert(self):
         out = ss.md_html('<script>alert(1)</script> [x](javascript:alert(1)) ![i](JavaScript:x) [r](../a.png)')
@@ -93,6 +114,7 @@ class Server(unittest.TestCase):
         for n in ("a.txt", "a.json", "a.csv", "a.log"):
             (root / "plain" / n).write_text("한글", encoding="utf-8")
         (root / ".private" / "notes.md").write_text("hidden")
+        (root / "plain" / "a.tar.gz").write_bytes(b"\x1f\x8b")
         (root / "site" / "index.html").write_text("<!doctype html><title>own page</title>")
         cls.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), lambda *a: ss.Handler(*a, root=str(root)))
         cls.port = cls.httpd.server_address[1]
@@ -175,9 +197,10 @@ class Server(unittest.TestCase):
         self.assertIn('href="?raw"', body)
 
     def test_raw_markdown_is_the_source(self):
-        code, body, headers = self.fetch("/plain/report.md?raw")
-        self.assertEqual((code, body), (200, self.REPORT))
-        self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
+        for query in ("raw", "raw=1", "x&raw"):
+            code, body, headers = self.fetch(f"/plain/report.md?{query}")
+            self.assertEqual((code, body), (200, self.REPORT), query)
+            self.assertEqual(headers["Content-Type"], "text/markdown; charset=utf-8")
 
     def test_text_files_declare_utf8(self):
         for name, kind in (("a.txt", "text/plain"), ("a.json", "application/json"), ("a.csv", "text/csv"),
@@ -187,6 +210,7 @@ class Server(unittest.TestCase):
             self.assertEqual(headers["Content-Type"], f"{kind}; charset=utf-8", name)
         self.assertEqual(self.fetch("/site/")[2]["Content-Type"], "text/html")
         self.assertEqual(self.fetch("/gal/y.jpg")[2]["Content-Type"], "image/jpeg")
+        self.assertEqual(self.fetch("/plain/a.tar.gz")[2]["Content-Type"], "application/gzip")
 
     def test_hidden_markdown_is_refused(self):
         self.assertEqual(self.get("/.private/notes.md")[0], 404)

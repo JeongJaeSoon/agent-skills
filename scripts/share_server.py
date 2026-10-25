@@ -18,7 +18,7 @@ of ~/.claude/agent-skills.json (see DEFAULTS); "label" lets an existing LaunchAg
 the plist it replaces is kept next to it as <name>.plist.bak-<time>.
 """
 import html, http.server, io, json, os, pathlib, plistlib, re, shutil, subprocess, sys, time
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 STATE_DIR = pathlib.Path(os.environ.get("SHARE_SERVER_STATE", "~/.local/state/agent-skills")).expanduser()
@@ -55,7 +55,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     server_version = "share-server"
     sys_version = ""
 
-    extensions_map = {".md": "text/markdown", ".log": "text/plain", ".jsonl": "text/plain"}
+    extensions_map = {**http.server.SimpleHTTPRequestHandler.extensions_map,
+                      ".md": "text/markdown", ".log": "text/plain", ".jsonl": "text/plain"}
 
     def __init__(self, *args, root, **kw):
         self.root = os.path.realpath(root)
@@ -79,7 +80,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
             return None
         if path.lower().endswith(".md") and os.path.isfile(path) and \
-                "raw" not in urlsplit(self.path).query.split("&"):
+                "raw" not in parse_qs(urlsplit(self.path).query, keep_blank_values=True):
             return self.markdown(path)
         return super().send_head()
 
@@ -218,15 +219,25 @@ LIGHTBOX = """
 # ---------------------------------------------------------------- markdown
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-HEADING = re.compile(r"^ {0,3}(#{1,6})(?:\s+(.*?))?(?:\s+#+)?\s*$")
+HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t](.*))?$")
 RULE = re.compile(r"^ {0,3}([-*_])(?:\s*\1){2,}\s*$")
 ITEM = re.compile(r"^( {0,3})([-*+]|\d{1,9}[.)])(\s+|$)")
-TABLE_SEP = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+TABLE_SEP = re.compile(r"\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?")
 SAFE_URL = re.compile(r"^(?:https?:|mailto:|[^:]*$)", re.I)
+# Past these the text is shown escaped but unformatted: the inline patterns are quadratic on adversarial input
+# and a deep nest would exhaust the stack.
+MAX_SOURCE, MAX_INLINE, MAX_DEPTH = 1 << 20, 4096, 16
 
 
 def md_html(text):
+    if len(text) > MAX_SOURCE:
+        return f"<pre>{html.escape(text)}</pre>"
     return blocks(text.replace("\r\n", "\n").replace("\t", "    ").split("\n"))
+
+
+def is_table(lines, i):
+    return "|" in lines[i] and i + 1 < len(lines) and "-" in lines[i + 1] and \
+        bool(TABLE_SEP.fullmatch(lines[i + 1].strip())) and len(cells(lines[i + 1])) == len(cells(lines[i]))
 
 
 def starts_block(line):
@@ -234,7 +245,9 @@ def starts_block(line):
                 or line.lstrip().startswith(">"))
 
 
-def blocks(lines, tight=False):
+def blocks(lines, tight=False, depth=0):
+    if depth > MAX_DEPTH:
+        return f"<p>{html.escape(chr(10).join(lines))}</p>"
     out, i = [], 0
     while i < len(lines):
         line = lines[i]
@@ -252,24 +265,26 @@ def blocks(lines, tight=False):
             out.append("<hr>")
             i += 1
         elif m := HEADING.match(line):
-            n = len(m.group(1))
-            out.append(f"<h{n}>{inline(m.group(2) or '')}</h{n}>")
+            n, title = len(m.group(1)), (m.group(2) or "").strip()
+            closed = title.rstrip("#")
+            if closed != title and (not closed or closed[-1] in " \t"):
+                title = closed.rstrip()
+            out.append(f"<h{n}>{inline(title)}</h{n}>")
             i += 1
         elif line.lstrip().startswith(">"):
             j = i
             while j < len(lines) and lines[j].strip() and (lines[j].lstrip().startswith(">") or j > i):
                 j += 1
             quoted = [re.sub(r"^\s*> ?", "", l) for l in lines[i:j]]
-            out.append(f"<blockquote>{blocks(quoted)}</blockquote>")
+            out.append(f"<blockquote>{blocks(quoted, depth=depth + 1)}</blockquote>")
             i = j
         elif ITEM.match(line):
-            i = listing(lines, i, out)
-        elif "|" in line and i + 1 < len(lines) and TABLE_SEP.match(lines[i + 1]) and "-" in lines[i + 1]:
+            i = listing(lines, i, out, depth)
+        elif is_table(lines, i):
             i = table(lines, i, out)
         else:
             j = i + 1
-            while j < len(lines) and lines[j].strip() and not starts_block(lines[j]) and \
-                    not ("|" in lines[j] and j + 1 < len(lines) and TABLE_SEP.match(lines[j + 1])):
+            while j < len(lines) and lines[j].strip() and not starts_block(lines[j]) and not is_table(lines, j):
                 j += 1
             para = inline("\n".join(l.lstrip() for l in lines[i:j]).rstrip())
             out.append(para if tight else f"<p>{para}</p>")
@@ -277,7 +292,7 @@ def blocks(lines, tight=False):
     return "\n".join(out)
 
 
-def listing(lines, i, out):
+def listing(lines, i, out, depth):
     first = ITEM.match(lines[i])
     ordered = first.group(2)[0].isdigit()
     items, loose = [], False
@@ -312,7 +327,7 @@ def listing(lines, i, out):
         if box:
             body = [body[0][box.end():]] + body[1:]
         check = f'<input type="checkbox" disabled{" checked" if box.group(1) != " " else ""}> ' if box else ""
-        lis.append(f"<li>{check}{blocks(body, tight=not loose)}</li>")
+        lis.append(f"<li>{check}{blocks(body, tight=not loose, depth=depth + 1)}</li>")
     out.append(f"<{tag}{attr}>{''.join(lis)}</{tag}>")
     return i
 
@@ -377,26 +392,35 @@ def inline(text, outer=None):
         return html.escape(url) if SAFE_URL.match(url) else "#"
 
     if outer is None:
+        if len(text) > MAX_INLINE:
+            return html.escape(text)
         text = text.replace("\x00", "")
         # One pass so a backslash escapes a backtick outside a code span but stays literal inside one.
         text = re.sub(r"\\([\\`*_{}\[\]()#+\-.!|~<>])|(`+)(.+?)\2",
                       lambda m: keep(html.escape(m.group(1)) if m.group(1) else
                                      f"<code>{html.escape(m.group(3).strip())}</code>"), text, flags=re.S)
     url = r"\(((?:[^()\s]|\([^()\s]*\))+)(?:\s+\"[^\"]*\")?\)"
-    text = re.sub(r"!\[([^\]]*)\]" + url,
+    text = re.sub(r"!\[([^\[\]]*)\]" + url,
                   lambda m: keep(f'<img src="{href(m.group(2))}" alt="{html.escape(m.group(1))}">'), text)
-    text = re.sub(r"\[([^\]]+)\]" + url,
+    text = re.sub(r"\[([^\[\]]+)\]" + url,
                   lambda m: keep(f'<a href="{href(m.group(2))}">{inline(m.group(1), stash)}</a>'), text)
-    text = re.sub(r"<(https?://[^>\s]+)>", lambda m: keep(f'<a href="{href(m.group(1))}">{html.escape(m.group(1))}</a>'),
-                  text)
-    text = re.sub(r"https?://[^\s<>\"']+[^\s<>\"'.,;:!?)\]]",
-                  lambda m: keep(f'<a href="{href(m.group(0))}">{html.escape(m.group(0))}</a>'), text)
+    if outer is None:  # link text gets no autolinks: no links inside links
+        text = re.sub(r"<(https?://[^>\s]+)>",
+                      lambda m: keep(f'<a href="{href(m.group(1))}">{html.escape(m.group(1))}</a>'), text)
+        text = re.sub(r"https?://[^\s<>\"']+[^\s<>\"'.,;:!?)\]]",
+                      lambda m: keep(f'<a href="{href(m.group(0))}">{html.escape(m.group(0))}</a>'), text)
     text = html.escape(text)
-    text = re.sub(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", r"<strong>\2</strong>", text)
-    text = re.sub(r"(?<![\w*])\*(?=\S)(.+?)(?<=\S)\*(?!\*)|(?<!\w)_(?=\S)(.+?)(?<=\S)_(?!\w)",
+    # A span never crosses the next delimiter, which keeps each pattern linear.
+    text = re.sub(r"\*\*(?=\S)((?:(?!\*\*).)+?)(?<=\S)\*\*|__(?=\S)((?:(?!__).)+?)(?<=\S)__",
+                  lambda m: f"<strong>{m.group(1) or m.group(2)}</strong>", text, flags=re.S)
+    text = re.sub(r"(?<![\w*])\*(?=\S)([^*]+?)(?<=\S)\*(?!\*)|(?<!\w)_(?=\S)([^_]+?)(?<=\S)_(?!\w)",
                   lambda m: f"<em>{m.group(1) or m.group(2)}</em>", text)
-    text = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<del>\1</del>", text)
-    text = re.sub(r"(?: {2,}|\\)\n", "<br>\n", text)
+    text = re.sub(r"~~(?=\S)((?:(?!~~).)+?)(?<=\S)~~", r"<del>\1</del>", text, flags=re.S)
+    text = re.sub(r"(?<=  )\n|\\\n", "<br>\n", text)
+    return resolve(text, stash)
+
+
+def resolve(text, stash):
     while "\x00" in text:
         text = re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], text)
     return text
