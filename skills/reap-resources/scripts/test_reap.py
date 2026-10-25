@@ -177,7 +177,7 @@ with tempfile.TemporaryDirectory() as tmp:
     git("worktree", "add", "-q", "--detach", str(wt), cwd=repo)
     os.utime(transcript, (time.time() - 7 * H,) * 2)
     plan, script = tmp / "plan.json", str(pathlib.Path(__file__).parent / "reap.py")
-    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(tmp)}
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(tmp), "AGENT_SKILLS_STATE": str(tmp / "state")}
     cli = lambda *a: subprocess.run([sys.executable, script, *a], env=env, capture_output=True, text=True, check=True).stdout
     out = cli("scan", "--kinds", "worktree", "--repo", str(repo), "--plan", str(plan))
     assert "정리 대상 1개" in out and wt.exists(), out
@@ -186,6 +186,8 @@ with tempfile.TemporaryDirectory() as tmp:
     plan.write_text(json.dumps(data))
     out = cli("reap", "--plan", str(plan))
     assert not wt.exists() and "건너뜀 worktree [repo] /nowhere" in out, out
+    log = [json.loads(x)["result"] for x in (tmp / "state" / "reap-log.jsonl").read_text().splitlines()]
+    assert log == ["삭제", "건너뜀: 더는 정리 대상이 아님"], log
 
     # One real reap: a broker tree whose cwd is gone and an orphan under a cache path, both reparented to 1.
     cache = tmp / "uv-cache"
