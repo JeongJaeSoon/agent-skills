@@ -18,6 +18,23 @@ assert p.judge({**OK, "disk_free_gb": 50}, cfg) == ("warn", ["disk_free_gb 50 �
 assert p.judge({**OK, "vm_pressure": 4}, cfg)[0] == "danger"
 assert p.judge({**OK, "containers": None, "swap_gb": None}, cfg) == ("ok", [])
 
+# Containers: a pod counts once with its pause container, kube-system not at all, always-on services apart.
+PS = ("stack\t\t\tstack-db-1\nstack\t\t\tstack-web-1\n\t\t\tlonely\nlf\t\t\tlf-web-1\nlf\t\t\tlf-db-1\n\t\t\twebui\n"
+      "\tpr-1\tu1\tk8s_POD_api-x_pr-1_u1_0\n\tpr-1\tu1\tk8s_api_api-x_pr-1_u1_0\n\tpr-1\tu1\tk8s_init_api-x_pr-1_u1_0\n"
+      "\tpr-1\tu2\tk8s_POD_db-y_pr-1_u2_0\n\tpr-1\tu2\tk8s_db_db-y_pr-1_u2_0\n"
+      "\tkube-system\tu3\tk8s_POD_coredns-z_kube-system_u3_0\n\tkube-system\tu3\tk8s_coredns_coredns-z_kube-system_u3_0\n"
+      "\tsvc\tu4\tk8s_POD_s_svc_u4_0\n\tsvc\tu4\tk8s_s_s_svc_u4_0\n\n")
+assert p.count_containers(PS) == (9, 0)
+assert p.count_containers(PS, ["lf", "webui", "svc"]) == (5, 4)
+def fake_ps(cmd, timeout=None):
+    assert cmd[:3] == ["docker", "ps", "--format"] and "io.kubernetes.pod.uid" in cmd[3], cmd
+    return PS
+m = p.measure(run=fake_ps, always_on=["lf"]) if p.shutil.which("docker") else None
+assert m is None or (m["containers"], m["always_on"]) == (7, 2), m
+assert p.summary({**OK, "always_on": 2}).endswith("컨테이너 10개(상시 2개 제외)")
+assert p.summary({**OK, "always_on": 0}).endswith("컨테이너 10개")
+assert p.config([("always_on", "lf,webui")])["always_on"] == ["lf", "webui"]
+
 assert p.swap_gb("total = 3072.00M  used = 1785.31M  free = 1286.69M  (encrypted)") == 1.74
 assert p.swap_gb("total = 0.00M  used = 2.50G  free = 0") == 2.5 and p.swap_gb("") is None
 assert p.mem_mb("406MiB ") == 406 and p.mem_mb("1.5GiB") == 1536 and p.mem_mb("--") == 0

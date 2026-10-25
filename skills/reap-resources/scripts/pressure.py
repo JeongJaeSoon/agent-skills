@@ -36,7 +36,10 @@ DEFAULTS = {
     "vm_pressure": [2, 4],  # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
     "swap_gb": [8, 16],
     "disk_free_gb": [50, 20],  # on the volume holding $HOME, at or below
-    "containers": [40, 80],  # running docker containers
+    "containers": [40, 80],  # running docker containers, a Kubernetes pod as one and kube-system not at all
+    # Compose projects, container names or Kubernetes namespaces that run all day (the user's own services): left out
+    # of `containers` and shown apart. A restart policy cannot tell them, since card stacks use unless-stopped too.
+    "always_on": [],
     # What reap may close with no one asking: finished cards' registered stacks, leftover process trees of dead
     # sessions, registered GUI apps of merged PRs, reclaimable worker terminals. Kinds reap does not know are dropped.
     "safe_kinds": ["orphan", "compose-stack", "gui-app", "orca-worker"],
@@ -62,7 +65,7 @@ def config(overrides=()):
         if key not in DEFAULTS:
             sys.exit(f"--set: unknown key {key}; known: {', '.join(DEFAULTS)}")
         default = DEFAULTS[key]
-        if key == "safe_kinds":
+        if key in ("safe_kinds", "always_on"):
             cfg[key] = value.split(",")
         elif isinstance(default, list):
             cfg[key] = [float(x) for x in value.split(",")]
@@ -90,7 +93,30 @@ def swap_gb(text):
     return round(float(m[1]) / {"K": 1 << 20, "M": 1 << 10, "G": 1}[m[2]], 2) if m else None
 
 
-def measure(docker=True, run=sh):
+CONTAINER_FORMAT = "\t".join(f'{{{{.Label "{k}"}}}}' for k in (
+    "com.docker.compose.project", "io.kubernetes.pod.namespace", "io.kubernetes.pod.uid")) + "\t{{.Names}}"
+
+
+def count_containers(ps, always_on=()):
+    """(counted, always on) from `docker ps --format CONTAINER_FORMAT`. A Kubernetes pod's containers, its pause
+    container among them, count once; kube-system is the cluster itself and counts as neither."""
+    counted, pods, kept = 0, set(), set()
+    for line in ps.splitlines():
+        if not line.strip():
+            continue
+        project, ns, uid, name = (line.split("\t") + ["", "", ""])[:4]
+        if any(x and x in always_on for x in (project, ns, name)):
+            kept.add(uid or name)
+        elif ns == "kube-system":
+            continue
+        elif ns or uid:
+            pods.add(uid or name)
+        else:
+            counted += 1
+    return counted + len(pods), len(kept)
+
+
+def measure(docker=True, run=sh, always_on=()):
     """Every metric this OS offers; a metric it cannot read is None and never raises a level."""
     cpus = os.cpu_count() or 1
     m = {"cpus": cpus, "load5": round(os.getloadavg()[1], 1)}
@@ -100,8 +126,8 @@ def measure(docker=True, run=sh):
     m["vm_pressure"] = int(pressure) if pressure and pressure.isdigit() else None
     m["swap_gb"] = swap_gb(sysctl("vm.swapusage"))
     m["disk_free_gb"] = round(shutil.disk_usage(pathlib.Path.home()).free / (1 << 30), 1)
-    out = run(["docker", "ps", "-q"], timeout=5) if docker and shutil.which("docker") else None
-    m["containers"] = len(out.split()) if out is not None else None
+    out = run(["docker", "ps", "--format", CONTAINER_FORMAT], timeout=5) if docker and shutil.which("docker") else None
+    m["containers"], m["always_on"] = count_containers(out, always_on) if out is not None else (None, None)
     return m
 
 
@@ -125,6 +151,8 @@ def summary(m):
                    ("disk_free_gb", "디스크 여유 {}GB"), ("containers", "컨테이너 {}개")):
         if m.get(k) is not None:
             parts.append(fmt.format(m[k]))
+    if m.get("always_on"):
+        parts[-1] += f"(상시 {m['always_on']}개 제외)"
     return ", ".join(parts)
 
 
@@ -472,7 +500,7 @@ def main(argv):
     cmd = argv[0] if argv else ""
     cfg = config(overrides(argv)) if cmd in ("check", "round") else None
     if cmd == "check":
-        m = measure()
+        m = measure(always_on=cfg["always_on"])
         level, why = judge(m, cfg)
         if "--json" in argv:
             print(json.dumps({"level": level, "why": why, "metrics": m}, ensure_ascii=False))
@@ -485,7 +513,7 @@ def main(argv):
         if not dry and not lock:
             return 0  # another round is running
         try:
-            return round_once(cfg, dry)
+            return round_once(cfg, dry, measure_fn=lambda: measure(always_on=cfg["always_on"]))
         except Exception as e:  # launchd reruns it; leave one line instead of a traceback per round
             if dry:
                 raise

@@ -23,6 +23,12 @@
 | `disk_free_gb`(`$HOME` 볼륨) | 264~277 | 50 이하 | 20 이하 | Docker 이미지 빌드 한 번에 수 GB를 쓴다. 20GB 아래면 macOS 업데이트와 swap 확장이 막힌다 |
 | `containers`(실행 중) | 56~59 | 40 | 80 | 카드 하나의 스택이 컨테이너 11~19개였다. 경고는 스택 약 3개, 위험은 약 6개다. 그때 59개에서 OrbStack VM이 CPU 413%를 썼다 |
 
+`containers`는 `docker ps`의 줄 수가 아니다. OrbStack k8s를 켜면 pod마다 pause 컨테이너(`k8s_POD_*`)가 하나씩 더 뜨고, `kube-system`(coredns·traefik svclb·local-path-provisioner)이 늘 돈다. 그래서 k8s 컨테이너는 pod 하나(`io.kubernetes.pod.uid`)를 1로 세고 `kube-system`은 세지 않는다. 레인 하나를 namespace에 올리면 pod 10개 안팎이라 compose 스택 하나(11~19개)와 같은 무게로 잡힌다. 2026-10-25 k8s를 상시 켠 뒤 `docker ps`는 51~52개였지만 그중 35개가 compose 라벨이 없는 k8s 컨테이너와 상시 컨테이너여서, 레인 스택이 없어도 경고선 40에 걸렸다.
+
+사용자가 늘 켜 두는 서비스(관측 스택, 채팅 UI 같은 것)는 `always_on`에 compose 프로젝트, 컨테이너 이름, k8s namespace로 적어 상한 계산에서 뺀다. 판정 줄에는 `컨테이너 N개(상시 M개 제외)`로 따로 보인다. restart policy로 고르지 않는 이유는 카드의 레인 스택도 `unless-stopped`를 쓰기 때문이다. 이름은 머신마다 다르므로 저장소 기본값은 빈 목록이다.
+
+상한 40·80은 그대로 둔다. 같은 머신(64GB, 18코어, OrbStack VM 15.66GiB)이고, 새로 잰 근거가 없다. 위 셈법으로 바꾼 뒤에도 경고선은 레인 스택 약 3개다.
+
 이 머신은 평소 load가 경고선 위에 있다. 그래서 경고 단계는 알리지 않고 정리만 한다. 정리한 것이 있을 때만 한 줄을 보내고, 같은 경고가 이어지면 10분(`rescan_minutes`)마다만 다시 스캔한다.
 
 hook은 swap과 디스크를 경고까지만 센다. 둘 다 몇 시간씩 높게 남아, 위험으로 세면 그동안 모든 무거운 시작이 막힌다.
@@ -30,7 +36,7 @@ hook은 swap과 디스크를 경고까지만 센다. 둘 다 몇 시간씩 높�
 다른 머신에서는 `~/.claude/agent-skills.json`의 `reap.pressure`에서 항목별 `[경고, 위험]`을 바꾼다.
 
 ```json
-{"reap": {"pressure": {"load_per_cpu": [1.0, 2.0], "containers": [20, 40], "notify_to": "run:<id>"}}}
+{"reap": {"pressure": {"load_per_cpu": [1.0, 2.0], "containers": [20, 40], "always_on": ["<compose-project>"], "notify_to": "run:<id>"}}}
 ```
 
 `notify_to`가 없으면 `reap.inbox_to`로 보내고, 둘 다 없으면 로그(`~/.local/state/agent-skills/pressure.log`)에만 남긴다. 터미널 handle은 터미널을 다시 열면 바뀌므로, 가능하면 run 주소(`run:<id>`)를 쓴다.
