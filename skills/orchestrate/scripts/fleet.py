@@ -443,8 +443,7 @@ def live_sessions(procs):
 def declared_roles(procs):
     """[(cwd, session name, "orchestrator" | "lead")] for each live Claude Code session that declared a role: the
     `ROLE:` line hooks/reorient.py recorded in roles/<session id>.json, else a `--name orchestrator` or `lead:<slug>`."""
-    base = pathlib.Path(os.environ["AGENT_SKILLS_STATE"]).expanduser() if os.environ.get("AGENT_SKILLS_STATE") \
-        else state_dir().parent
+    base = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()  # as reorient.py
     out = []
     for sid, s in live_sessions(procs).items():
         name = s.get("name") or ""
