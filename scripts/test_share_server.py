@@ -25,39 +25,68 @@ class Args(unittest.TestCase):
 
 
 class TextTag(unittest.TestCase):
-    def test_prints_the_head_of_a_text_file_on_one_line(self):
+    def run_tag(self, name, data):
         with tempfile.TemporaryDirectory() as d:
-            f = pathlib.Path(d) / "a.md"
-            f.write_bytes("# 제목\n\nzebra  fish\n".encode() + b"x" * 70000)
-            out = subprocess.run([sys.executable, str(ss.TEXT_TAG), str(f)], capture_output=True, text=True,
-                                 check=True).stdout
-        self.assertTrue(out.startswith("# 제목 zebra fish x"))
+            f = pathlib.Path(d) / name
+            f.write_bytes(data)
+            return subprocess.run([sys.executable, str(ss.TEXT_TAG), str(f)], capture_output=True, text=True,
+                                  check=True).stdout
+
+    def test_prints_the_head_of_a_text_file_on_one_line(self):
+        out = self.run_tag("a.md", "# 제목\n\nzebra  fish\n".encode() + "가".encode() * 30000)
+        self.assertTrue(out.startswith("# 제목 zebra fish 가"))
         self.assertEqual(out.count("\n"), 1)
-        self.assertLessEqual(len(out.encode()), 65536)
+        self.assertLessEqual(len(out.rstrip("\n").encode()), 4096)
+        self.assertNotIn("\ufffd", out)  # the cut never splits a character
+
+    def test_html_is_reduced_to_its_text(self):
+        out = self.run_tag("p.html", b"<style>.a{}</style><h1>Title</h1><script>var x=1</script><p>body text</p>")
+        self.assertEqual(out, "Title body text\n")
 
 
-class EnsureVenv(unittest.TestCase):
-    def test_reuses_a_venv_with_the_same_pins_and_rebuilds_otherwise(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(ss, "VENV", pathlib.Path(d) / "v"), \
-                mock.patch.object(ss.subprocess, "run", side_effect=lambda *a, **k: ss.VENV.mkdir(exist_ok=True)) as run:
-            ss.VENV.mkdir()
-            (ss.VENV / ".pins").write_text("\n".join(ss.PINS))
-            self.assertEqual(ss.ensure_venv(), ss.VENV / "bin" / "python")
-            run.assert_not_called()
-            (ss.VENV / ".pins").write_text("copyparty==0.1")
-            ss.ensure_venv()
+class Venv(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        p = mock.patch.object(ss, "VENVS", pathlib.Path(self.tmp.name))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def fake_build(self, cmd, **kw):
+        if cmd[1:3] == ["-m", "venv"]:
+            (pathlib.Path(cmd[3]) / "bin").mkdir(parents=True)
+            (pathlib.Path(cmd[3]) / "bin" / "python").touch()
+
+    def test_builds_once_per_pin_set_beside_older_ones(self):
+        old = ss.VENVS / "copyparty-old"
+        old.mkdir()
+        with mock.patch.object(ss.subprocess, "run", side_effect=self.fake_build) as run:
+            py = ss.ensure_venv()
+            self.assertEqual(py, ss.venv_dir() / "bin" / "python")
+            self.assertTrue(old.is_dir())  # a running server may still use it
             pip = run.call_args_list[-1].args[0]
             self.assertEqual(pip[-len(ss.PINS):], list(ss.PINS))
             self.assertIn(":all:", pip)
-            self.assertEqual((ss.VENV / ".pins").read_text(), "\n".join(ss.PINS))
+            run.reset_mock()
+            ss.ensure_venv()
+            run.assert_not_called()
+        ss.prune_venvs(ss.venv_dir())
+        self.assertEqual([d.name for d in ss.VENVS.iterdir()], [ss.venv_dir().name])
+
+    def test_a_venv_key_changes_with_pins(self):
+        with mock.patch.object(ss, "PINS", ("copyparty==0.1",)):
+            other = ss.venv_dir()
+        self.assertNotEqual(other, ss.venv_dir())
+
+    def test_launchd_serve_never_builds(self):
+        with mock.patch.object(ss.subprocess, "run") as run, mock.patch.object(ss.os, "execv") as execv, \
+                mock.patch("builtins.print"):
+            self.assertEqual(ss.serve(self.tmp.name, 13201, str(ss.VENVS / "copyparty-gone")), 1)
+        run.assert_not_called()
+        execv.assert_not_called()
 
 
-def venv_ready():
-    marker = ss.VENV / ".pins"
-    return marker.is_file() and marker.read_text() == "\n".join(ss.PINS)
-
-
-@unittest.skipUnless(venv_ready(), f"no copyparty venv at {ss.VENV}; run `share_server.py install` or serve once")
+@unittest.skipUnless(ss.ready(ss.venv_dir()), f"no copyparty venv at {ss.venv_dir()}; run `share_server.py serve` once")
 class Live(unittest.TestCase):
     UA = {"User-Agent": "Mozilla/5.0"}  # copyparty answers curl-like clients with plain text
 
@@ -74,7 +103,9 @@ class Live(unittest.TestCase):
         (root / "docs" / "note.md").write_text("# Note\n\nthe quick zebrafish\n")
         (root / "docs" / "plain.txt").write_text("한글 본문")
         (root / "docs" / "view.tsx").write_text("export {}")
-        (root / ".private").write_text("hidden")
+        (root / ".private").write_text("dot-content")
+        (root / ".git").mkdir()
+        (root / ".git" / "config").write_text("dot-content")
         (root / "out").symlink_to(outside)
         cls.root, cls.before = root, cls.snapshot(root)
         with socket.socket() as s:
@@ -82,7 +113,7 @@ class Live(unittest.TestCase):
             cls.port = s.getsockname()[1]
         with mock.patch.object(ss, "HIST", base / "hist"):
             args = ss.copyparty_args(str(root), cls.port)
-        cls.proc = subprocess.Popen([str(ss.VENV / "bin" / "python"), *args],
+        cls.proc = subprocess.Popen([str(ss.venv_dir() / "bin" / "python"), *args],
                                     env={**os.environ, "XDG_CONFIG_HOME": str(base / "state")},
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(100):
@@ -127,6 +158,19 @@ class Live(unittest.TestCase):
         self.assertIn("docs/note.md", self.search("tags like *zebrafish*"))
         self.assertIn("gal/x-390.png", self.search("name like *x-390*"))
         self.assertNotIn(".private", self.search("name like *private*"))
+
+    def test_hidden_paths_are_not_served(self):
+        for path in ("/.private", "/.git/config", "/.git/", "/.git/?ls", "/.git/?zip", "/%2egit/config",
+                     "/docs/../.git/config"):
+            code, body = self.request("GET", path)
+            self.assertEqual(code, 404, path)
+            self.assertNotIn("dot-content", body, path)
+        self.assertEqual(self.request("POST", "/.git/?srch", "{}", {"Content-Type": "application/json"})[0], 404)
+        form = {"Content-Type": "multipart/form-data; boundary=b"}
+        code, body = self.request("POST", "/?zip", '--b\r\nContent-Disposition: form-data; name="files"\r\n\r\n'
+                                  '.git/config\n.private\ndocs/note.md\r\n--b--\r\n', form)
+        self.assertNotIn("dot-content", body)
+        self.assertEqual(self.request("GET", "/.cpr/w/util.js")[0], 200)  # copyparty's own assets
 
     def test_listing_hides_dotfiles(self):
         code, body = self.request("GET", "/")
