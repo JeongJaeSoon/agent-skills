@@ -622,6 +622,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             out += ["", f"- ⏳ {len(items)}건 {rev} 대기 — 분야 {'·'.join(i['title'] for i in items)}"]
     if skipped:
         out += ["", skipped]
+    if reaped := reap_line(now):
+        out += ["", reaped]
     if moving or store["doing"]:
         items = moving + [f"{ICON['moving']} {d['title']} — {d['next']} · {d['owner']}" for d in store["doing"]]
         out += ["", "🔄 진행 중" if tg else "🔄 **진행 중**", ""] + [it if tg else f"- {it}" for it in items]
@@ -648,6 +650,16 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
+
+
+def reap_line(now):
+    """The last reap-hard pass, so a stopped cleanup shows in the report; None when it never ran here."""
+    try:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
+        import reap_hard
+    except ImportError:  # an install without the repo's scripts/
+        return None
+    return reap_hard.last_line(now.timestamp())
 
 
 def commit(scope, snapshot):

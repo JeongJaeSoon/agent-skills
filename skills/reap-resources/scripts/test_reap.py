@@ -27,6 +27,29 @@ got = {i["pid"]: i["target"] for i in reap.judge_orphans(rows, ["/cache/uv/"], 6
 assert got == {1: True, 3: True, 6: False}, got
 assert reap.judge_orphans(rows, [], 6) == []
 
+# A person's shell and what runs under it are never a target, however an orphan's tree reaches them; what an agent
+# started from that shell (a Claude session in between) still is.
+rows = {
+    60: row(60, "/cache/uv/terminal-host"),
+    61: row(61, "/usr/bin/login -flpq me /bin/zsh -l", ppid=60),
+    62: row(62, "-/bin/zsh -l", ppid=61),
+    63: row(63, "bash wait-loop.sh", ppid=62),
+    64: row(64, "sleep 30", ppid=63),
+    65: row(65, "claude --permission-mode auto", ppid=62),
+    66: row(66, "/bin/zsh -c npm run dev", ppid=65),
+    67: row(67, "node vite", ppid=66),
+    70: row(70, "/cache/uv/tmux-server"),
+    71: row(71, "zsh", ppid=70),
+    72: row(72, "python3 job.py", ppid=71),
+    80: row(80, "/cache/uv/bin/litellm"),
+    81: row(81, "/bin/sh -c worker", ppid=80),
+}
+rows[70]["cmd"] = "tmux new -s x"
+assert [p for p in rows if reap.human_owned(p, rows)] == [62, 63, 64, 71, 72]
+got = {i["pid"]: (i["target"], i["why"]) for i in reap.judge_orphans(rows, ["/cache/uv/"], 6)}
+assert got[60][0] is False and "사람이 띄운 셸" in got[60][1], got
+assert got[80] == (True, "ppid 1, 테스트 캐시 경로"), got
+
 # Load: every top consumer gets one class, and its CPU counts its whole tree.
 ME = 501
 rows = {
