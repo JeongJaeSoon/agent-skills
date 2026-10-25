@@ -53,6 +53,9 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             gets a keep reason and deadline in the reap ledger (reap-resources, compose-stack).
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
             the browser only once that prints held; `orch release browser` when done.
+            A check that needs a read a guard blocks (env inside a pod or container, a file that
+            holds secrets) is planned here as a script the human runs, with the log path the
+            worker reads afterwards.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
@@ -114,7 +117,11 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             way. A hook that blocked only the text of a command reading no protected file, and says
             to reword it: reword that text inside the same command and say so in the report. When
             the matched text names a file the command opens, the block is not text-only; a script
-            or another path is never a reword. A read-only command on files in
+            or another path is never a reword. A gate hook whose block names a condition to wait
+            for (machine load to clear) or the one form to use instead (a background shell or
+            Monitor for a foreground sleep loop) is followed: wait for that condition and run the
+            same command, or use that form, and say so in the report; any other substitute is
+            still a retry. A read-only command on files in
             your own worktree (no credential, no personal data) that the classifier refused as
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its

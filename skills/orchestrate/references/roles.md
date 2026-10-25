@@ -147,7 +147,11 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             way. A hook that blocked only the text of a command reading no protected file, and says
             to reword it: reword that text inside the same command and say so in the report. When
             the matched text names a file the command opens, the block is not text-only; a script
-            or another path is never a reword. A read-only command on files in
+            or another path is never a reword. A gate hook whose block names a condition to wait
+            for (machine load to clear) or the one form to use instead (a background shell or
+            Monitor for a foreground sleep loop) is followed: wait for that condition and run the
+            same command, or use that form, and say so in the report; any other substitute is
+            still a retry. A read-only command on files in
             your own worktree (no credential, no personal data) that the classifier refused as
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its
