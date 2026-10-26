@@ -38,7 +38,7 @@ older than reap.state_days and rotates sync.log past reap.log_max_kb. precheck s
 program and state-file at most once a day, writes janitor-plan.json
 to the state dir and exits 0 when there are targets, except: the set the last reap failed on, for a day; and a set already
 planned reap.plan_repeat times with no reap since, retried once a day, with one message to reap.inbox_to. precheck --load
-first exits 1 unless the 5-minute load is at reap.load_limit, the periodic janitor is not turned off, and no precheck ran
+first exits 1 unless the 5-minute load is at reap.load_limit, the periodic janitor is on, and no precheck ran
 within reap.load_cooldown_minutes (default 60). schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
 """
 import concurrent.futures, contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
@@ -1626,7 +1626,7 @@ def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, i
 
 def load_due(state_dir, cfg, now=None, load5=None, autos=None):
     """(due, why) for the load job: the 5-minute load is at reap.load_limit (default the CPU count), the periodic
-    janitor is not turned off (autos: `orca automations list`, read when the load is high; None when unreadable), and
+    janitor is registered and on (autos: `orca automations list`, read when the load is high; None when unreadable), and
     no janitor round of either job scanned within reap.load_cooldown_minutes."""
     now = now or time.time()
     load5 = os.getloadavg()[1] if load5 is None else load5
@@ -1638,8 +1638,8 @@ def load_due(state_dir, cfg, now=None, load5=None, autos=None):
     if not isinstance(autos, dict):
         return False, "orca automations list 를 읽지 못해 janitor 가 켜져 있는지 모름"
     janitor = next((a for a in autos.get("automations") or [] if a.get("name") == JANITOR_NAME), None)
-    if janitor and not janitor.get("enabled"):
-        return False, "janitor 가 꺼져 있음"
+    if not janitor or not janitor.get("enabled"):
+        return False, "janitor 가 꺼져 있거나 없음"
     v = cfg.get("load_cooldown_minutes")
     with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
         cooldown = float(LOAD_COOLDOWN_MINUTES if v is None else v) * 60

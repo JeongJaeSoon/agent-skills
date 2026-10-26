@@ -133,12 +133,13 @@ python3 "$R" schedule [--load]    # prints the `orca automations create` command
 with `--precheck-timeout 300`: Orca's default 60 seconds is shorter than a precheck that reads `gh` and git for dozens of cards.
 `schedule --load` builds the second job, `agent-skills janitor load`, on `27,57 * * * *` with `precheck --load` and the
 same prompt: a loaded machine is when finished cards cost the most. Its precheck reads only the load average and goes on
-to the full precheck when the 5-minute load is at `reap.load_limit` (default the CPU count), the periodic job is not
-turned off (an unreadable automation list counts as off), and no precheck of either job ran within
+to the full precheck when the 5-minute load is at `reap.load_limit` (default the CPU count), the periodic job is
+registered and on (removed, or an unreadable automation list, counts as off), and no precheck of either job ran within
 `reap.load_cooldown_minutes` (default 60). The cooldown holds back only the load job; the periodic one runs on its
 schedule. It needs no pressure-watch LaunchAgent: Orca runs it.
 `skills-sync setup` lists the two as `janitor` and `janitor-load`, `enable` brings a job whose trigger, precheck or
-timeout differs back to these values, and `disable janitor` turns both off.
+timeout differs back to these values, and `disable janitor` turns both off (`enable janitor` turns a registered load
+job back on).
 Every command it builds starts with `python3`, with `--state`/`--ledger` after the subcommand when
 those are off the default: a scheduled session can refuse a leading `env` or `VAR=` assignment.
 Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close the chrome-window

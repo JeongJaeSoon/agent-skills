@@ -642,8 +642,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [i["target"] for i in got] == [False], got
     got = shells_scan(shell_rows, now - 60)
     assert [(i["target"], i["why"]) for i in got] == [(False, "셸 터미널 출력이 30분 안에 있음")], got
-    # Unknown is not silent: no Orca terminal listed, an output time missing, or a list cut short.
-    for kw in ({"terminals": []}, {"terminals": [{"handle": "t1"}]}, {"truncated": True}):
+    # Unknown is not silent: no Orca terminal listed, an output time or handle missing, or a list cut short.
+    for kw in ({"terminals": []}, {"terminals": [{"handle": "t1"}]}, {"truncated": True},
+               {"terminals": [{"lastOutputAt": (now - 2 * H) * 1000}]}):
         got = shells_scan(shell_rows, now - 2 * H, **kw)
         assert [(i["target"], i["why"]) for i in got] == [(False, "pid 61 이 이 worktree 를 cwd 로 사용 중")], (kw, got)
     # A shell Terminal, iTerm, tmux or ssh opened is a person's: `orca terminal close` would not close it.
@@ -860,10 +861,9 @@ with tempfile.TemporaryDirectory() as tmp:
     on = {"automations": [{"name": reap.JANITOR_NAME, "enabled": True}]}
     assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=7.9) == (False, "load5 7.9 < 한계 8")
     assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=8.0, autos=on)[0], "no round on record: due"
-    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=8.0, autos={"automations": []})[0], "no periodic job: due"
-    # The janitor turned off (setup disable, or in the Orca app) stops the load job too.
-    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12,
-                         autos={"automations": [{"name": reap.JANITOR_NAME, "enabled": False}]}) == (False, "janitor 가 꺼져 있음")
+    # The janitor turned off or removed (setup disable, or in the Orca app) stops the load job too.
+    for autos in ({"automations": [{"name": reap.JANITOR_NAME, "enabled": False}]}, {"automations": []}):
+        assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12, autos=autos) == (False, "janitor 가 꺼져 있거나 없음")
     saved_oj = reap.orca_json
     reap.orca_json = lambda *a: None
     assert not reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12)[0], "an unreadable list reaps nothing"

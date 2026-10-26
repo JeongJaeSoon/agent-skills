@@ -122,7 +122,7 @@ class Janitor(OrcaJob):
     def create_args(self):
         return [], None
 
-    def enable(self, here):
+    def enable_job(self, here):
         a, err = self.find()
         if a is None:
             return 1, err
@@ -146,10 +146,19 @@ class Janitor(OrcaJob):
         return 0, "켬" + (f" (reap schedule 에 맞춘 필드: {', '.join(drift)})" if drift else "")
 
     def disable(self):
-        """The load job runs the same round, so turning the janitor off turns it off too."""
+        """The load job runs the same round, so turning the janitor off turns it off too, and on again with it."""
         code, msg = super().disable()
         load_code, load_msg = JanitorLoad().disable()
         return code | load_code, f"{msg} · janitor-load: {load_msg}"
+
+    def enable(self, here):
+        code, msg = self.enable_job(here)
+        load = JanitorLoad()
+        a, _ = load.find()
+        if code or not a or a.get("enabled"):
+            return code, msg
+        load_code, load_msg = load.enable_job(here)
+        return load_code, f"{msg} · janitor-load: {load_msg}"
 
 
 class JanitorLoad(Janitor):
@@ -157,16 +166,19 @@ class JanitorLoad(Janitor):
     job_name = reap.LOAD_NAME
     load = True
     what = ("부하 정리 라운드(Orca automation, 30분마다 load 만 확인). 5분 load 가 reap.load_limit(기본 CPU 수) 이상이고 "
-            "1시간 안에 정리 라운드가 없었을 때만 janitor 와 같은 라운드를 한 번 돈다")
+            "1시간 안에 정리 라운드가 없었을 때만 janitor 와 같은 라운드를 한 번 돈다. janitor 가 꺼져 있거나 없으면 돌지 않는다")
 
     def create_args(self):
-        """Follow the janitor: none while the user has it off (apply would turn reaping back on), and in the
-        workspace it was moved to."""
+        """Follow the janitor: none while the user has it off or removed (apply would turn reaping back on), and in
+        the workspace it was moved to."""
         j, _ = Janitor().find()
-        if j and not j.get("enabled"):
-            return [], "janitor 가 꺼져 있어 만들지 않음"
+        if not j or not j.get("enabled"):
+            return [], "janitor 가 꺼져 있거나 없어 만들지 않음"
         ws = ((j or {}).get("workspaceId") or "").partition("::")[2]
         return ["--load", *(["--workspace", f"path:{ws}"] if ws else [])], None
+
+    def enable(self, here):
+        return self.enable_job(here)
 
     def disable(self):
         return OrcaJob.disable(self)

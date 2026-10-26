@@ -34,6 +34,10 @@ class FakeOrca:
         if cmd[1:3] == ["automations", "list"]:
             out = json.dumps({"ok": True, "result": {"automations": self.autos}}) if self.autos is not None else ""
             return subprocess.CompletedProcess(cmd, 0 if self.autos is not None else 1, out, "boom")
+        if str(au.REAP) in cmd and self.autos is not None:
+            # A created job is listed from then on, as `apply` creating the janitor before janitor-load relies on.
+            self.autos.append({"id": f"new{len(self.autos)}", "enabled": True,
+                               "name": au.reap.LOAD_NAME if "--load" in cmd else au.JANITOR_NAME})
         return subprocess.CompletedProcess(cmd, 0, "created", "")
 
     def edits(self):
@@ -83,9 +87,10 @@ class JanitorLoad(Base):
     def test_absent_follows_the_janitor(self):
         """apply must not turn reaping back on for a user who turned the janitor off, and the load job runs where
         the janitor was moved to."""
-        fake = self.orca([janitor(enabled=False)])
-        code, msg = self.j.enable(False)
-        self.assertEqual((code, fake.schedules()), (0, []), msg)
+        for autos in ([janitor(enabled=False)], []):
+            fake = self.orca(autos)
+            code, msg = self.j.enable(False)
+            self.assertEqual((code, fake.schedules()), (0, []), msg)
         fake = self.orca([janitor(workspaceId="x::/w/runner")])
         self.assertEqual(self.j.enable(False)[0], 0)
         argv = fake.schedules()[0]
@@ -181,6 +186,18 @@ class Janitor(Base):
         self.assertTrue(all("--disabled" in e for e in fake.edits()))
         fake = self.orca([janitor(), load_job()])
         self.assertEqual(au.JanitorLoad().disable()[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
+
+    def test_enable_turns_a_disabled_load_job_back_on(self):
+        """disable then enable janitor leaves both as they were; apply never turns a disabled job on."""
+        fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J1", "J2"])
+        fake = self.orca([janitor(enabled=False)])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        self.assertEqual(([e[e.index("--id") + 1] for e in fake.edits()], fake.schedules()), (["J1"], []))
+        fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
+        self.assertEqual(au.JanitorLoad().enable(False)[0], 0)
         self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
 
 
