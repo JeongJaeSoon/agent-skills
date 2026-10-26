@@ -874,11 +874,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reap.load_due(s, {"load_limit": 8, "load_cooldown_minutes": 20}, now=1e6, load5=12, autos=on)[0]
     due, why = reap.load_due(s, {"load_limit": 8, "load_cooldown_minutes": None}, now=1e6, load5=12, autos=on)
     assert not due and "0h30m 전" in why, "null is the default cooldown, not a TypeError"
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        due, why = reap.load_due(s, {"load_limit": 8, "load_cooldown_minutes": "1h"}, now=1e6, load5=12, autos=on)
-    assert not due and "0h30m 전" in why, "a bad value falls back to the default cooldown, never to none"
-    assert "load_cooldown_minutes" in err.getvalue(), err.getvalue()
+    for bad in ("1h", "nan", "inf", -5):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            due, why = reap.load_due(s, {"load_limit": 8, "load_cooldown_minutes": bad}, now=1e6, load5=12, autos=on)
+        assert not due and "0h30m 전" in why, f"{bad!r} falls back to the default cooldown, never to none"
+        assert "load_cooldown_minutes" in err.getvalue(), err.getvalue()
     reap.stamp_round(s, now=1e6 - 61 * 60)
     assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12, autos=on)[0], "past the cooldown: due again"
     reap.stamp_round(s, now=1e6 + 10 * 60)

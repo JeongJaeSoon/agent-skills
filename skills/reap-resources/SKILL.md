@@ -241,6 +241,9 @@ python3 "$P" round                     # one round, what the LaunchAgent runs
 python3 "$P" install | uninstall | status   # macOS LaunchAgent, every `interval` seconds, from the main checkout
 ```
 
+`uninstall` leaves `<state>/pressure-disabled` so `skills-sync setup apply` keeps the job off; `install` removes it,
+and `status` shows it.
+
 Each metric has a `[warn, danger]` pair under `reap.pressure`: `load_per_cpu` (5-minute load / logical CPUs),
 `mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's own level, 2 warn, 4 critical),
 `swap_gb`, `disk_free_gb` (the volume holding `$HOME`, at or below), `containers` (running; a Kubernetes pod

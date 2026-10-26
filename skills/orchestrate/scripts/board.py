@@ -722,7 +722,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     def asked(who, keys):
         """` · 마지막 리마인드 rev-a 3h 전 (C0FAKE 스레드)`: what last went out to the people this waits on, if logged."""
-        found = [(a, w) for k in keys for w in who.split(", ") if (a := asks.get(((k or "").lower(), w.lower())))]
+        found = [(a, w) for k in keys for w in who.split(", ")
+                 if (a := asks.get(((k or "").lower(), w.strip().lstrip("@").lower())))]
         if not found:
             return ""
         (action, at, channel, thread), w = max(found, key=lambda f: f[0][1])

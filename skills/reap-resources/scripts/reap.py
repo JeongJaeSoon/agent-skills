@@ -1644,8 +1644,11 @@ def load_due(state_dir, cfg, now=None, load5=None, autos=None):
     try:
         cooldown = float(LOAD_COOLDOWN_MINUTES if v is None else v) * 60
     except (TypeError, ValueError):
+        cooldown = -1.0
+    if not 0 <= cooldown < float("inf"):  # nan fails both comparisons
         # A bad value must not drop the cooldown: that would run a round every 30 minutes under load.
-        print(f"reap.load_cooldown_minutes {v!r} 는 숫자가 아니라 기본 {LOAD_COOLDOWN_MINUTES}분을 쓴다", file=sys.stderr)
+        print(f"reap.load_cooldown_minutes {v!r} 는 0 이상의 유한한 숫자가 아니라 기본 {LOAD_COOLDOWN_MINUTES}분을 쓴다",
+              file=sys.stderr)
         cooldown = LOAD_COOLDOWN_MINUTES * 60
     with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
         last = json.loads((state_dir / "janitor-round.json").read_text())["t"]

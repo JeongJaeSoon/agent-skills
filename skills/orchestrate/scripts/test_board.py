@@ -280,6 +280,12 @@ assert "- rev-b · 리뷰 [#61](https://example.test/61)·#62 · 30분 전부터
 assert ("- rev-a · 리뷰 [#51](https://example.test/51)·#52·#53 · 30분 전부터 · 마지막 의뢰 rev-a 2h 전 → 설정·발송·로그"
         " · 다음: 10/13 09:30 의뢰") in asked.splitlines(), asked
 assert "- 다른 팀 · 30분 전부터 → 다른 팀 답변 대기 · 다음: 10/14 리마인드" in asked.splitlines(), asked
+# A request scheduled for later shows its post time, not an age.
+with sendlog.open("a") as f:
+    f.write(json.dumps({"pr": "acme/ops#61", "reviewer": "rev-b", "action": "remind", "source": "scheduled",
+                        "at": t - 60, "post_at": t + 18 * 3600, "channel": "C0FAKE"}) + "\n")
+code, asked, err = orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)
+assert code == 0 and "· 마지막 리마인드 rev-b 10-14 08:30 예약 (C0FAKE) → p61·p62" in asked, asked
 sendlog.unlink()
 assert orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)[1] == \
     orch("brief", "render", "--periodic", "--now", NOW)[1], "a missing log adds nothing"

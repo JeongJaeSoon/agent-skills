@@ -483,7 +483,8 @@ def disabled():
 
 def cmd_status():
     st = load_state()
-    print(f"LaunchAgent: {'loaded' if loaded() else 'not loaded'} ({PLIST}{'' if PLIST.exists() else ', absent'})")
+    print(f"LaunchAgent: {'loaded' if loaded() else 'not loaded'} ({PLIST}{'' if PLIST.exists() else ', absent'})"
+          + (f"; turned off by uninstall ({DISABLED}), so setup apply leaves it off" if disabled() else ""))
     if st:
         print(f"last round: {time.strftime('%Y-%m-%d %H:%M', time.localtime(st['t']))} "
               f"{LEVEL_KO.get(st.get('level'), '?')} · {summary(st['metrics'])}")
