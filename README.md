@@ -5,7 +5,7 @@ HITL과 HOTL을 함께 고려한 Claude Code 에이전트 스킬 모음.
 [![License: MIT](https://img.shields.io/github/license/JeongJaeSoon/agent-skills)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/JeongJaeSoon/agent-skills)](https://github.com/JeongJaeSoon/agent-skills/releases/latest)
 
-사람이 단계마다 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 둘 다 쓸 수 있게 만든 Claude Code 플러그인이다. 티켓 하나를 첫 수정부터 머지·완료 기록까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 38개와 hook으로 만든다. 사용자 설정 쓰기나 되돌릴 수 없는 행동은 늘 사람이 승인하고, 머지 같은 지점은 사람이 승인할지 맡길지를 설정으로 고른다([HITL과 HOTL](#hitl과-hotl)).
+사람이 단계마다 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 둘 다 쓸 수 있게 만든 Claude Code 플러그인이다. 티켓 하나를 첫 수정부터 머지·완료 기록까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 38개와 hook으로 만든다. Claude Code로 GitHub 저장소의 티켓 작업을 맡기려는 개발자를 위한 것이다. 사용자 설정 쓰기나 되돌릴 수 없는 행동은 늘 사람이 승인하고, 머지 같은 지점은 사람이 승인할지 맡길지를 설정으로 고른다([HITL과 HOTL](#hitl과-hotl)).
 
 ## 특징
 
@@ -13,7 +13,7 @@ HITL과 HOTL을 함께 고려한 Claude Code 에이전트 스킬 모음.
 - **여러 워커로 프로젝트 하나**: Orca 워커마다 티켓 하나, PR은 `orch land` 게이트를 통과해야 머지되고, 공유 파일을 고친 PR은 하나씩 들어간다.
 - **사람이 보는 곳**: 현황 보고(`brief`), 대시보드(`orch-dash`)의 결정·권한 창·받은편지함, 트래커와 노트.
 - **거부된 행동은 다시 하지 않는다**: 권한 창·auto mode 분류기·hook·사람이 거부한 행동은 형태를 바꿔 재시도하지 않고 보고한다.
-- **설정이 없으면 끄거나 묻는다**: 트래커(Linear·Jira), 노트(Obsidian·Markdown), 채팅 채널은 설정에서 읽고 추정하지 않는다.
+- **설정이 없으면 끄거나 묻는다**: 노트(Obsidian·Markdown), 회고 원장, 개인 폴더, 채팅 채널은 설정에 적힌 곳만 쓰고 추정하지 않는다. 트래커 어댑터(Linear·Jira)는 설정이 없으면 Linear다.
 
 ## 설치
 
@@ -24,9 +24,12 @@ Claude Code 세션 안에서:
 /plugin install agent-skills@jeongjaesoon
 ```
 
+설치 창이 응답 언어, 체크아웃 경로(기본 `~/src/agent-skills`), 개인 설정 저장소 URL을 묻는다. 모두 비워도 된다.
+
 1. 새 세션을 열면 `setup-pc`를 제안한다. 받아들이면 에이전트가 체크아웃을 clone하고 설정 파일별 diff를 보인다.
-2. diff를 읽고 에이전트가 건넨 `! python3 <체크아웃>/scripts/setup.py … --apply <해시>` 한 줄을 붙여 넣는다. 에이전트는 사용자 설정을 직접 쓰지 않는다.
-3. 동기화 작업과 정기 자동화를 켜는 권한 창을 승인하고, 세션을 재시작한다.
+2. `gh`가 로그인돼 있지 않으면 `! gh auth login`.
+3. diff를 읽고 에이전트가 건넨 `! python3 <체크아웃>/scripts/setup.py --settings-only … --apply <해시>` 한 줄을 붙여 넣는다. 에이전트는 사용자 설정을 직접 쓰지 않는다.
+4. 동기화 작업과 정기 자동화를 켜는 권한 창을 승인하고, 세션을 재시작한다.
 
 준비물(GitHub `gh` 로그인, 트래커, 노트, Orca·macOS가 필요한 기능), 셸에서 직접 설치, 갱신은 [docs/new-pc.md](docs/new-pc.md)와 [docs/operations.md](docs/operations.md#준비물)에 있다.
 
@@ -41,22 +44,22 @@ Claude Code 세션 안에서:
 
 ## HITL과 HOTL
 
-기본값이 어느 쪽인지와, 설정으로 바꾸는 법이다.
+지점마다 기본이 HITL인지 HOTL인지와, 설정으로 바꾸는 법이다.
 
 | 지점 | 기본 | 바꾸는 법 |
 |---|---|---|
 | 사용자 설정 적용(`setup-pc`, `tune-automode`) | HITL: 에이전트는 diff와 `!` 한 줄만 만들고 사람이 실행한다 | 없음 |
-| 권한 창, `setup.py --actions-only` | HITL: 사람이 승인한다(`guard.py`가 auto mode에서도 창을 띄운다) | 없음 |
+| `setup.py --actions-only`(동기화·자동화 켜기) | HITL: `guard.py`가 auto mode에서도 권한 창을 띄운다 | 없음 |
+| 그 밖의 권한 창, auto mode 거부 | HITL: 사람이 승인하거나, 거부되면 에이전트가 보고하고 멈춘다 | `tune-automode`가 만든 autoMode 규칙을 사람이 적용하면 그 부류는 묻지 않고 진행한다 |
 | 되돌릴 수 없는 행동(파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기) | HITL: 멈추고 묻는다 | 없음 |
 | `orchestrate` 머지 정책 | HOTL: `autonomous`, 워커가 `orch land`로 머지 | `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 푼다 |
-| `deliver-ticket` 혼자 도는 카드의 머지 | HOTL: 준비된 PR을 묻지 않고 머지 | hold를 걸거나 직접 보겠다고 하면 머지 전에 묻는다 |
-| `watch-prs` `ownergate`(봇 PR 승인) | HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 덮으면 회차가 실행한다 |
+| `deliver-ticket` 혼자 도는 카드의 머지 | HOTL: 준비된 PR을 묻지 않고 머지 | hold를 걸거나 직접 보겠다고 하면 머지 전에 묻는다. 계속 flaky한 체크, 되돌릴 수 없는 migration 같은 예외에서도 묻는다 |
+| `watch-prs` `ownergate`(봇 PR 승인) | 꺼짐. `prs.kinds`에 넣으면 HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 덮으면 회차가 실행한다(HOTL) |
 | `watch-prs` `ready_to_merge` | 꺼짐 | `prs.kinds`에 더하면 `merge_repos`의 내 PR 중 게이트를 모두 통과한 것을 머지한다(HOTL) |
-| `secure-fill` 비밀값 입력 | HITL: 매번 Touch ID 승인 | 허용 목록 항목을 `"approval": "none"`으로 두면 승인 없이 채운다 |
+| `secure-fill` 비밀값 입력 | HITL: 매번 Touch ID 승인 | 허용 목록 항목을 `"approval": "none"`으로 두면 Touch ID 없이 채운다(Keychain 확인은 남는다) |
 | `janitor`, `pressure-watch` | HOTL: 에이전트가 남긴 끝난 리소스를 정기적으로 정리한다 | `skills-sync setup disable <이름>` |
-| `brief`, 대시보드 | HOTL: 사람이 상태를 보고 결정·권한 창에 답하는 곳 | — |
 
-대시보드·`janitor`·watch 회차는 Orca를 전제로 한다. 세부는 [docs/operations.md](docs/operations.md#안전-경계).
+HOTL에서 사람이 보는 곳은 `brief`의 현황 보고와 대시보드의 결정·권한 창·받은편지함이다. 대시보드·`janitor`·watch 회차는 Orca를 전제로 한다. 세부는 [docs/operations.md](docs/operations.md#안전-경계).
 
 ## 스킬
 
@@ -81,7 +84,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 - [docs/automation.md](docs/automation.md): 어떤 일을 어떤 장치로 돌리나
 - [docs/configuration-migration.md](docs/configuration-migration.md): 설정 키와 전환
 - [docs/platform.md](docs/platform.md): 체크아웃 로드와 동기화 설계
-- 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR)(한국어·English·日本語)
+- 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR). 오른쪽 위에서 한국어·English·日本語를 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다
 
 ## 테스트
 

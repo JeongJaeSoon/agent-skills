@@ -58,6 +58,8 @@ dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한
 
 ## 갱신
 
+Claude Code 안에서는 `setup-pc`("agent-skills 업데이트해줘")가 갱신 dry run을 보이고 `!` 한 줄을 건넨다. 셸에서는 다음을 친다.
+
 ```bash
 git -C ~/.config/agent-skills/personal pull --ff-only   # 개인 설정 폴더가 있을 때만. setup.py도 동기화 작업도 이 폴더는 당기지 않는다
 python3 <체크아웃>/scripts/setup.py --update     # 지금 체크아웃과 개인 설정 폴더 기준으로 새로 생긴 값만 diff

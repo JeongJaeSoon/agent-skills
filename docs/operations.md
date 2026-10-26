@@ -1,6 +1,6 @@
 # 운영 안내
 
-README에서 옮긴 운영 설명이다. 설치 순서는 [new-pc.md](new-pc.md), 스킬별 세부는 [skills.md](skills.md)에 있다.
+용어, 준비물, 설치 보충, 정기 자동화, 사용 시나리오, 안전 경계와 hook, 스킬 고치기를 다룬다. 설치 순서는 [new-pc.md](new-pc.md), 스킬별 세부는 [skills.md](skills.md)에 있다.
 
 ## 이 문서에 나오는 말
 
