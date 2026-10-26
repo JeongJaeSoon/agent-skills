@@ -136,7 +136,7 @@ An illustrative report on request (the items are made up):
 
 ❓ **결정 필요** — 1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60%만 씀 · 답이 없으면 현행 유지
 
-🙋 **지금 오너가 할 일** — GitHub acme/web Environments → production → 배포 승인 (#40, 규칙상 사람만)
+🙋 **지금 오너가 할 일** — GitHub acme/web Environments → production → 대기 중인 배포 승인 (규칙상 사람만)
 
 ⏸️ **보류** — 10/20 → 캐시 TTL 다시 보기
 ```
