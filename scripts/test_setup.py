@@ -18,7 +18,8 @@ class Setup(unittest.TestCase):
         self.state = self.home / "state"
         self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.cfg),
                     "AGENT_SKILLS_STATE": str(self.state), "GH_CONFIG_DIR": str(self.home / "gh")}
-        self.env.pop("CLAUDE_SETTINGS", None)
+        for k in ("CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_CONFIG_DIR"):
+            self.env.pop(k, None)
 
     def run_setup(self, *args, ok=True):
         p = subprocess.run([sys.executable, str(SETUP), "--here", "--language", "Korean", *args],
@@ -147,7 +148,9 @@ class Setup(unittest.TestCase):
             "tracker": {"adapter": "jira", "rules_file": "tracker-rules.md"}, "notes": {"adapter": "markdown"}}))
         (self.cfg / "agent-skills.json").write_text(json.dumps({"notes": {"adapter": "obsidian"}}))
         before = self.snapshot()
-        self.assertIn('"review_request"', self.run_setup().stdout)
+        out = self.run_setup().stdout
+        self.assertIn('"review_request"', out)
+        self.assertIn("kept    notes.adapter = 'obsidian' (personal 'markdown')", out)
         self.assertEqual(self.snapshot(), before)
         self.run_setup("--apply", self.plan_hash())
         skills = json.loads((self.cfg / "agent-skills.json").read_text())
@@ -158,6 +161,15 @@ class Setup(unittest.TestCase):
         del skills["prs"]
         (self.cfg / "agent-skills.json").write_text(json.dumps(skills))
         self.assertIn("no change", self.run_setup().stdout)
+
+    def test_agent_skills_json_stays_where_the_skills_read_it_under_another_profile(self):
+        profile = self.home / "profile"
+        profile.mkdir()
+        self.env["CLAUDE_CONFIG_DIR"] = str(profile)
+        self.run_setup("--apply", self.plan_hash())
+        self.assertIn("env", json.loads((profile / "settings.json").read_text()))
+        self.assertIn("reflect", json.loads((self.cfg / "agent-skills.json").read_text()))
+        self.assertFalse((profile / "agent-skills.json").exists())
 
     def test_actions_only_takes_no_hash(self):
         p = self.run_setup("--actions-only", "--apply", "000000000000", ok=False)
@@ -187,7 +199,8 @@ class Steps(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
-        os.environ.pop("CLAUDE_SETTINGS", None)
+        for k in ("CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_CONFIG_DIR"):
+            os.environ.pop(k, None)
         spec = importlib.util.spec_from_file_location("setup_under_test", SETUP)
         self.setup = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.setup)

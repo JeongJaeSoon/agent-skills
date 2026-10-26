@@ -160,6 +160,12 @@ for cmd in ("sleep 5; cat /tmp/x", "for i in 1 2 3; do curl -fs x && break; slee
 SETUP = HERE.parent / "scripts" / "setup.py"
 assert bash(f"python3 {SETUP} --actions-only") == "ask"
 assert bash(f"python3 {SETUP} --actions-only --orca-run") == "ask"
+said = json.loads(subprocess.run(
+    [sys.executable, HERE / "guard.py"], capture_output=True, text=True, env={**os.environ, "HOME": HOME},
+    input=json.dumps({"tool_name": "Bash", "tool_input": {"command": f"python3 {SETUP} --actions-only"}, "cwd": HOME})).stdout)
+assert said == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                                       "permissionDecisionReason": said["hookSpecificOutput"]["permissionDecisionReason"]}}, said
+assert "writes no Claude settings" in said["hookSpecificOutput"]["permissionDecisionReason"], said
 for cmd in (f"python3 {SETUP} --settings-only --apply 0123456789ab", f"python3 {SETUP} --actions-only --apply x",
             f"python3 {SETUP} --actions-only; rm -rf /tmp/x", f"python3 {HOME}/scripts/setup.py --actions-only",
             "python3 scripts/setup.py --actions-only", f"bash -c 'python3 {SETUP} --actions-only'"):

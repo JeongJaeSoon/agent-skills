@@ -23,7 +23,8 @@ class Base(unittest.TestCase):
         self.tmp = pathlib.Path(tempfile.mkdtemp())
         self.cfg = self.tmp / "claude"
         self.cfg.mkdir()
-        env = {"CLAUDE_CONFIG_DIR": str(self.cfg), "AGENT_SKILLS_STATE": str(self.tmp / "state"),
+        env = {"CLAUDE_CONFIG_DIR": str(self.cfg), "AGENT_SKILLS_CONFIG": str(self.cfg / "agent-skills.json"),
+               "AGENT_SKILLS_STATE": str(self.tmp / "state"),
                "AGENT_SKILLS_CONFIG_DIR": str(self.tmp / "local"), "CLAUDE_SETTINGS": ""}
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()

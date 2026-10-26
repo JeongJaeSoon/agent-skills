@@ -24,8 +24,12 @@ not offered again (the record is in the agent-skills state dir).
 
 The personal folder ($AGENT_SKILLS_CONFIG_DIR/personal, default ~/.config/agent-skills/personal; setup-pc clones the
 user's private repo there) joins the plan when it exists: its agent-skills.json keys are added where missing, like
-the recommended items, and win over a recommended default. A relative tracker.rules_file points into that folder.
-Personal autoMode rules are not carried; each PC keeps its own.
+the recommended items, and win over a recommended default; a value already on this PC is kept and shown as a `kept`
+line. A relative tracker.rules_file points into that folder. Personal autoMode rules are not carried; each PC keeps
+its own.
+
+settings.json follows the Claude Code profile ($CLAUDE_CONFIG_DIR, as Claude Code reads it); agent-skills.json is
+one file per user ($AGENT_SKILLS_CONFIG, default ~/.claude/agent-skills.json, as every agent-skills script reads it).
 """
 import argparse, difflib, hashlib, json, locale, os, pathlib, shlex, shutil, subprocess, sys, tempfile, time
 
@@ -52,9 +56,15 @@ def paths():
     cfg = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser()
     state = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
     return {"settings": pathlib.Path(os.environ.get("CLAUDE_SETTINGS") or cfg / "settings.json").expanduser(),
-            "skills_json": cfg / "agent-skills.json", "state": state, "record": state / "setup-applied.json",
+            "skills_json": skills_json(), "state": state, "record": state / "setup-applied.json",
             "personal": pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG_DIR") or "~/.config/agent-skills").expanduser()
             / "personal"}
+
+
+def skills_json():
+    """Where every agent-skills script reads its config: one file per user, unlike settings.json, which follows the
+    Claude Code profile (CLAUDE_CONFIG_DIR)."""
+    return pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
 
 
 def sh(cmd, timeout=60):
@@ -180,12 +190,14 @@ def merge_settings(current, rec, skip, notes):
     return new, offered
 
 
-def merge_keys(current, rec, skip):
+def merge_keys(current, rec, skip, notes, personal):
     new, offered = json.loads(json.dumps(current)), set()
     for key, value in leaves(rec):
         offered.add(key)
         if dig(new, key) is None and key not in skip:
             put(new, key, value)
+        elif dig(new, key) not in (None, value):
+            notes.append(f"kept    {key} = {dig(new, key)!r} ({'personal' if key in personal else 'recommended'} {value!r})")
     return new, offered
 
 
@@ -199,7 +211,8 @@ def plan(args):
         rec = {"language": language, **rec}
     keys = fill(bundle.get("agent_skills_json") or {}, values)
     mine = p["personal"]
-    for key, value in leaves(read_json(mine / "agent-skills.json", {})):
+    personal = dict(leaves(read_json(mine / "agent-skills.json", {})))
+    for key, value in personal.items():
         if key == RULES_FILE and isinstance(value, str) and not pathlib.Path(value).expanduser().is_absolute():
             value = str(mine / value)  # the site rules Markdown lives in the personal repo next to this file
         put(keys, key, value)  # the user's own value wins over the recommended default
@@ -209,7 +222,7 @@ def plan(args):
     settings = read_json(p["settings"], {})
     new_settings, offered = merge_settings(settings, rec, skip, notes)
     skills_json = read_json(p["skills_json"], None)
-    new_skills, offered_keys = merge_keys(skills_json or {}, keys, skip)
+    new_skills, offered_keys = merge_keys(skills_json or {}, keys, skip, notes, personal)
     files = []
     if new_settings != settings:
         files.append((p["settings"], settings if p["settings"].exists() else None, new_settings))

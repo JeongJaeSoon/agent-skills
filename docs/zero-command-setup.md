@@ -31,9 +31,9 @@ Claude Code 2.1.310과 공식 문서(code.claude.com/docs, 2026-10-26 확인)에
 |---|---|---|---|
 | 플러그인 받기 | `claude plugin marketplace add`·`install` 또는 clone | 사람: 세션 안에서 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon` | 셸 `claude plugin install`은 `userConfig`를 묻지 않으므로 세션 안 설치를 쓴다 |
 | 언어·체크아웃 경로·개인 저장소 | `--language`를 치거나 손으로 옮김 | 설치 창(`userConfig`): `language`, `checkout`, `personal_repo`. 모두 비워도 된다 | Claude Code가 `pluginConfigs`에 쓴다. 에이전트의 쓰기가 아니다 |
-| 미설정 감지 | 사람이 `setup-pc`를 떠올림 | 플러그인 SessionStart hook(`hooks/onboard.py`): 이 프로필의 사용자 설정이 체크아웃을 로드하지 않으면(`env.CLAUDE_CODE_PLUGIN_DIRS`) `setup-pc`를 하라는 문맥을 넣는다 | 설치 뒤 새 세션 하나가 필요하다(사람). 상태 폴더는 Orca 프로필끼리 공유하므로 적용 기록으로는 판단하지 않는다 |
+| 미설정 감지 | 사람이 `setup-pc`를 떠올림 | 플러그인 SessionStart hook(`hooks/onboard.py`): 이 프로필의 사용자 설정이 체크아웃을 로드하지 않으면(`env.CLAUDE_CODE_PLUGIN_DIRS`) `setup-pc`를 하라는 문맥을 넣는다. 거절하면 `onboard.py --decline`으로 그 프로필을 기록해 다시 묻지 않는다 | 설치 뒤 새 세션 하나가 필요하다(사람). 상태 폴더는 Orca 프로필끼리 공유하므로 적용 기록으로는 판단하지 않고, 거절 기록은 프로필의 settings 경로로 나눈다 |
 | 체크아웃 clone | `git clone` | `setup-pc` 스킬(에이전트): `checkout`이 있으면 그 경로로 clone | 사용자 설정이 아닌 일반 파일 쓰기 |
-| 개인 설정 가져오기 | baseline export/check, 손 복사 | `setup-pc`(에이전트): `personal_repo`를 `~/.config/agent-skills/personal`로 clone·fast-forward. 반영은 아래 설정 줄의 diff에 들어간다 | 공개 저장소에는 넣지 않는다. 아래 "개인 설정의 출처" |
+| 개인 설정 가져오기 | baseline export/check, 손 복사 | `setup-pc`(에이전트): `personal_repo`를 `~/.config/agent-skills/personal`로 clone·fast-forward. URL의 인증 정보는 hook이 지우고, 인증은 `gh` 로그인으로 받는다. 반영은 아래 설정 줄의 diff에 들어간다 | 공개 저장소에는 넣지 않는다. 아래 "개인 설정의 출처" |
 | dry run과 diff | 사람이 `setup.py` 실행 | `setup-pc`(에이전트): `setup.py --settings-only`로 diff를 보이고 줄 하나를 건넨다 | dry run은 아무것도 쓰지 않는다 |
 | 사용자 설정 쓰기(`settings.json`, `agent-skills.json`) | `--apply <해시>`를 침 | 사람: 건네받은 `! … --settings-only --apply <해시>` 한 줄을 붙여 넣는다 | 분류기 경계. 남는 유일한 명령 줄 |
 | 동기화 작업·정기 자동화(janitor, pressure-watch, watch-prs, watch-mentions)·Orca Run | `--apply`가 같이 함, watch-*는 따로 `schedule --write` | `setup-pc`(에이전트)가 `setup.py --actions-only`를 실행하고, guard hook이 `ask`로 권한 창을 띄운다. 사람은 창에서 승인한다 | 사용자 설정을 쓰지 않는다. watch-*는 개인 설정에 `prs`·`mentions` 키가 있을 때만 켠다 |

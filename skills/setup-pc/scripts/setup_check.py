@@ -32,7 +32,7 @@ def paths():
     return {
         "cfg": cfg,
         "settings": pathlib.Path(os.environ.get("CLAUDE_SETTINGS") or cfg / "settings.json").expanduser(),
-        "skills_json": cfg / "agent-skills.json",
+        "skills_json": pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser(),
         "installed": cfg / "plugins" / "installed_plugins.json",
         "state": pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser(),
         "local": pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG_DIR") or "~/.config/agent-skills").expanduser(),

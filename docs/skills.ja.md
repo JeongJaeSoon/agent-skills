@@ -19,6 +19,7 @@
               resource steward が定期的に）
               secure-fill（ブラウザの認証欄に秘密の値を。エージェントは値を見ない）
               tune-automode（分類器の拒否を最小の autoMode ルールに。適用はユーザー）
+              setup-pc（新しい PC の設定・更新：dry run の diff → ユーザーの --apply 1 行）
 どこでも      use-tracker（チケット）· use-notes（ノート）
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
@@ -190,6 +191,13 @@
 - **内容:** 拒否カテゴリと拒否された行動から、その行動の種類だけを覆う最小の allow・soft_deny・environment ルールを作ります。ルールには行動の種類、安全になる条件、`Not covered:` を入れます。レビューチェックリスト（包括的な許可をしない、ユーザーが名指ししていない本番破壊系の操作を入れない、ユーザー本人のチャットだけを権限とみなす）を通したあと、`scripts/automode_rule.py emit` が diff を表示し、spec を埋め込んだ単体スクリプトをホーム配下に書きます。ユーザーが `! python3 <パス> --apply <spec ハッシュ>` で適用します。ハッシュはユーザーが見た diff の spec と一致する必要があります。スクリプトはタイムスタンプ付きバックアップ、冪等なマージ、JSON 検証を行い、戻すコマンドを出力します。エージェントは settings.json を編集せず、そのスクリプトを実行せず、待つあいだ拒否を回避しません。
 - **同梱:** `scripts/automode_rule.py`、テスト、`references/example-settings.json`。
 - **関係:** ツールパターンの権限（`permissions.allow`、hooks）は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「프로젝트 지속 승인」）をこのスキルで作ります。
+
+### setup-pc
+- **いつ:** agent-skills を別の PC に入れるとき、インストール済みの PC を最新にそろえるとき。「새 PC 세팅해줘」（新しい PC を設定して）、「다른 PC 에서도 똑같이 쓰게 해줘」（別の PC でも同じように使えるようにして）、「agent-skills 업데이트해줘」（agent-skills を更新して）、「플러그인 최신화」（プラグインを最新に）、"set up agent-skills on a new PC"、"update agent-skills"。
+- **新しい PC:** ユーザーはセッション内の `/plugin install`（インストール画面が応答言語・チェックアウトのパス・個人設定リポジトリを尋ねます）と新しいセッションを開くことだけをします。プラグインの SessionStart hook（`hooks/onboard.py`）が未設定の PC だと気づいてこのスキルを提案し、スキルがチェックアウトと個人設定リポジトリを clone してから、下の dry run と 1 行に進みます。設定ファイルを書かない手順（同期ジョブ、janitor・pressure-watch・watch-prs・watch-mentions の自動化、点検表）はスキルが `setup.py --actions-only` で実行し、guard hook が権限ダイアログを出します。設計は [zero-command-setup.md](zero-command-setup.md)。
+- **内容:** 入口はチェックアウトの `scripts/setup.py` です。dry run が設定ファイルごとの diff を見せ、スキルはユーザーが打つ `! python3 … --apply <ハッシュ>` の 1 行を渡します。その 1 行がバックアップ、足りない値だけを足す冪等なマージ（既存の値は上書きしない。有効なマーケットプレイス版を無効にすることだけが例外）、原子的な置き換え、読み直しての確認、ファイルごとの戻し行の出力を行います。入れる値はリポジトリの推奨デフォルト（`scripts/recommended-settings.json`）と、個人設定リポジトリの `agent-skills.json` とトラッカーのサイト規則だけです。社内名リスト・個人の指示・エージェント・autoMode ルールは移しません。一度提案した項目は記録し、ユーザーが消したルールは再提案しません。`--update` は新しく増えた推奨値だけを計画し、適用時にチェックアウトを fast-forward します。元の PC で `export` した基準ファイルと比べる `check --baseline` は任意です。スキルは設定ファイルを書かず、`--apply` も実行しません。
+- **同梱:** `scripts/setup_check.py`、テスト。リポジトリの `scripts/setup.py`、`scripts/recommended-settings.json`、`scripts/test_setup.py`、`hooks/onboard.py`。
+- **関係:** 適用後に止められた行動ひとつは `tune-automode`、バンドル外の `permissions`・hooks は `update-config`、自動化の中身は `reap-resources`、動いているセッションの reload は `skills-sync broadcast` が担当します。
 
 ## チャットとレビュー
 
@@ -541,7 +549,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **チケットの流れ:** `write-ticket`、`deliver-ticket`、`handoff-ticket`、`dispatch-card`、`end-session`。Orca のカードとトラッカーを前提にした、チケット一つの最初から最後までです。
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
-- **マシンの手入れ:** `reap-resources`、`tune-automode`。
+- **マシンの手入れ:** `reap-resources`、`tune-automode`、`setup-pc`。
 - **フック:** 権限の判定（`guard.py`）、圧縮後の再オリエンテーション（`reorient.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）。
 
 ### upstream との同期状況
