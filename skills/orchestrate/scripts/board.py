@@ -848,6 +848,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # unblocks to 지금 오너가 할 일, one another person unblocks to 다른 사람 대기, every other open row's to 진행 중 in
     # table order, a sub-task after its head row. Each row goes to one list, by its own status, not its children's.
     moving, held, turn, theirs, held_rows = [], [], [], [], {}
+    covered = {k for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"
+               for k in fleet.held_refs(l["title"], prs)}  # the PRs of the held items listed under 보류
     for sec in sections:
         head, head_out = None, False
         for l in (l for l in lines if l["sec"] == sec):
@@ -857,7 +859,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if st in (None, "done"):
                 continue
             if st == "held":
-                if l["key"] in held_by:  # its held item's line says it, with this row's name
+                if held_by.get(l["key"]) in covered:  # its held item's line says it, with this row's name
                     held_rows.setdefault(held_by[l["key"]], []).append(label(l))
                 else:
                     held.append(f"{l['next'] or '—'} → {label(l)}")

@@ -1025,7 +1025,8 @@ def pr_key(repo, number):
     return f"{repo}#{number}"
 
 
-# A bare #n is left out: "step #2" or a PR in another repository would read as a PR of the session's own.
+# A bare #n is left out: "step #2" or a PR in another repository would read as a PR of the session's own. Only
+# held_refs() reads one, and only when the number is a single known PR's.
 PR_REF_RE = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)|\b([\w.-]+/[\w.-]+)#(\d+)")
 BARE_REF_RE = re.compile(r"(?<![\w/#])#(\d+)\b")
 
