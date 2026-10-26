@@ -135,7 +135,7 @@ function fleetSidebar() {
 // on screen folds into Archived. st is null when the fleet collector is off.
 const ARCHIVE_MS = 3 * 86400e3;
 const FOLDS_KEY = "orch-dash:sb-folds";
-// id -> [label, open by default, phase whose dot marks it, what it holds]
+// id -> [label, open by default, phase whose colour marks its chevron, what it holds]
 const FOLDS = {
   needs: ["Needs you", true, "waiting", "Sessions with an inbox item, or waiting on a prompt"],
   running: ["Running", true, "working", "Sessions whose agent is working"],
@@ -151,7 +151,7 @@ function fold(id, n, body) {
   const [label, def, phase, title] = FOLDS[id], open = folds()[id] ?? (def || body.includes('aria-current="page"'));
   // data-was is what this render drew, so the toggle a re-render fires is not taken for a click.
   return `<li><details class="sb-fold" data-fold="${id}" data-was="${open ? 1 : ""}" ${open ? "open" : ""}><summary class="nav-item" title="${title}">
-    <span class="chev" aria-hidden="true"></span>${phase ? phaseDot({ phase }) : ""}<span class="sb-text">${label}</span><span class="count">${n}</span></summary>
+    <span class="chev ${phase ? `ph-${phase}` : ""}" aria-hidden="true"></span><span class="sb-text">${label}</span><span class="count">${n}</span></summary>
     <ul class="sb-list">${body}</ul></details></li>`;
 }
 
@@ -191,7 +191,7 @@ function navTree(st, programs) {
   for (const u of units) {
     const g = groups[Math.min(...u.members.map(([s]) => urgency(s)))];
     g.n += u.members.length;
-    g.html.push(...u.members.map(([s, d]) => row(s, d - u.d)));
+    g.html.push(...u.members.map(([s, d]) => row(s, d - u.d + 1)));
   }
   const out = [...top, ...groups.map((g, i) => g.n ? fold(FOLD_OF[i], g.n, g.html.join("")) : "")];
   if (old.length) out.push(fold("archived", old.length, old.map((p) => progRow(p, 1)).join("")));
