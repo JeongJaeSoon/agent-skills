@@ -6,15 +6,18 @@ list, or the owner's word. A text names a PR only by its full owner/repo#N (a ba
 and a card only by its slug-shaped name (two hyphenated words or more) standing alone in the text. Anything less
 certain is not closed: assess() calls it `check`, and the report shows it as 확인 필요 instead of 진행 중 or 보류.
 Nothing the owner or another person acts on is closed by the tick: a doing item waiting on a person or the owner's,
-a decision, a row the report lists as the owner's turn or another person's wait.
+a decision, an inbox item of a type the owner acts on (OWNER_TYPES: a command to run, a decision, a login...), a row
+the report lists as the owner's turn or another person's wait.
 
 One append-only file, <fleet state>/tidy.jsonl (0600), one JSON object a line:
   {"ev": "done" | "reopen", "id", "ts", "by": "auto" | "owner", "rule", "evidence", "label"}
 ids: doing:<k> later:<k> todo:<k> (k: a digest of the item's words, so rewording it makes a new item), row:<board row
 id>, card:<session id> (a fleet row), ext:<inbox key>, req:<request id>. The state of an id is its last line. A
-reopen keeps the evidence it undid, and the tick does not close that id again on the same evidence.
+reopen keeps the evidence it undid, and the tick does not close that id again on the same evidence. Reopening an
+ext: or req: id adds the inbox item again or opens the request again. Past fleet.ROTATE_BYTES the file moves to .1
+and each id's last line is carried into the new one ("carried": true), so no close or reopen is forgotten.
 """
-import contextlib, fcntl, re
+import contextlib, fcntl, json, re
 
 import fleet
 
@@ -22,6 +25,7 @@ POST_MERGE = re.compile(r"릴리스|배포|apply|deploy|release|rollout|롤아�
 MERGE_WORD = re.compile(r"머지|merge", re.I)
 SLUG = re.compile(r"[a-z0-9][a-z0-9._]*(?:-[a-z0-9._]+)+")
 CARD_KINDS = ("task", "standalone")
+OWNER_TYPES = fleet.STICKY_TYPES + ("decision",)
 STALE_H = 8  # a moving board row this long without a word, and nothing live to vouch for it, is 확인 필요
 
 
@@ -93,7 +97,7 @@ def assess(store, state, prs, me=None, now=None):
     out = {}
 
     def put(iid, verdict, rule, evidence, label):
-        out[iid] = {"verdict": verdict, "rule": rule, "evidence": fleet.mask(evidence, 200), "label": fleet.mask(label, 120)}
+        out[iid] = {"verdict": verdict, "rule": rule, "evidence": fleet.mask(evidence), "label": fleet.mask(label)}
 
     for d in store.get("doing") or []:
         if d.get("waiting") or board.is_owner(d.get("owner"), me):
@@ -132,6 +136,8 @@ def assess(store, state, prs, me=None, now=None):
                 c.get("task_title") or c.get("name") or c["id"])
     names = {c["id"] for c in cards.values()} | {s["id"] for s in (state or {}).get("sessions") or []}
     for it in fleet.external_items({}):
+        if it["type"] in OWNER_TYPES:
+            continue
         ev = refs_over(fleet.pr_refs(" ".join(filter(None, (it.get("title"), it.get("url"), it.get("command"))))), prs, closed_ok=True)
         if ev:
             put(it["key"], "done", "pr_over", ev, it["title"])
@@ -181,10 +187,58 @@ def locked():
         yield latest()
 
 
-def append(rows):
+def fits(row):
+    """Whether row stays under fleet.append_line's 4 KiB, with room for "carried" when the file rotates. One that does
+    not is left unwritten, never cut short."""
+    return len(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode()) < 4064
+
+
+def append(rows, have):
+    """Append rows; have is latest() under the lock, carried into the new file when this one rotates."""
+    was = path().exists()
     fleet.rotate(path())
+    if was and not path().exists():
+        for r in have.values():
+            fleet.append_line(path(), {**r, "carried": True})
     for r in rows:
         fleet.append_line(path(), r)
+
+
+def last_add(key):
+    """The inbox line that added key (without its ext: prefix), or None."""
+    return next((r for r in reversed(fleet.read_lines(fleet.state_dir() / "inbox-external.jsonl"))
+                 if r.get("op") == "add" and r.get("key") == key), None)
+
+
+def can_reopen(iid):
+    import owner_requests
+    if iid.startswith("ext:"):
+        return bool(last_add(iid[4:]))
+    if iid.startswith("req:"):
+        return iid[4:] in owner_requests.fold(owner_requests.read())
+    return True
+
+
+def revive(iid):
+    """Undo what closing iid did outside this ledger: the inbox item added again, the request opened again. Returns
+    the reason it cannot, or None."""
+    import owner_requests
+    if iid.startswith("ext:") and not any(i["key"] == iid for i in fleet.external_items({})):
+        if not (a := last_add(iid[4:])):
+            return "its inbox line is gone"
+        fleet.inbox_add(a["type"], a.get("title") or "", a.get("session"), a.get("url"), a.get("command"), key=a["key"],
+                        source=a.get("source") or "skill")
+    elif iid.startswith("req:"):
+        try:
+            owner_requests.reopen(iid[4:])
+        except ValueError as e:
+            return str(e)
+    return None
+
+
+def undone(cur, v):
+    """The owner reopened this id on the evidence v brings again."""
+    return bool(cur) and cur.get("ev") == "reopen" and cur.get("evidence") == v["evidence"]
 
 
 def write(ids, undo=False, why=None, can=None, now=None, by="owner"):
@@ -202,11 +256,17 @@ def write(ids, undo=False, why=None, can=None, now=None, by="owner"):
             elif not undo and iid not in (can or {}):
                 refused.append((iid, "no open board item, row or card by that id"))
             else:
-                rows.append({"ev": "reopen" if undo else "done", "id": iid, "ts": ts, "by": by,
-                             "rule": "manual", "evidence": cur.get("evidence") if undo else fleet.mask(why or "오너가 완료 처리", 200),
-                             "label": cur.get("label") if undo else fleet.mask((can or {}).get(iid), 120)})
-                written.append(iid)
-        append(rows)
+                row = {"ev": "reopen" if undo else "done", "id": iid, "ts": ts, "by": by,
+                       "rule": "manual", "evidence": cur.get("evidence") if undo else fleet.mask(why or "오너가 완료 처리"),
+                       "label": cur.get("label") if undo else fleet.mask((can or {}).get(iid))}
+                if not fits(row):
+                    refused.append((iid, "line over 4 KiB: shorten --why"))
+                elif undo and (why_not := revive(iid)):
+                    refused.append((iid, why_not))
+                else:
+                    rows.append(row)
+                    written.append(iid)
+        append(rows, have)
     return written, refused
 
 
@@ -223,17 +283,18 @@ def run(now=None, dry=False):
     prs = {k: v["detail"] for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
     found = {k: v for k, v in assess(store, state, prs, prs_file.get("me"), now).items() if v["verdict"] == "done"}
     with locked() as have:
+        found = {k: v for k, v in found.items() if not undone(have.get(k), v)}
         shut = {k for k, r in have.items() if r["ev"] == "done"} | set(found)
         marked = {k for k, r in (store.get("rows") or {}).items() if r.get("status") == "done"}
-        found |= requests_over({k[4:] for k in shut if k.startswith("row:")}, marked,
-                               {k[5:] for k in shut if k.startswith("card:")}, prs, cards_of(state))
+        found |= {k: v for k, v in requests_over({k[4:] for k in shut if k.startswith("row:")}, marked,
+                                                 {k[5:] for k in shut if k.startswith("card:")}, prs, cards_of(state)).items()
+                  if not undone(have.get(k), v)}
         ts, rows = fleet.iso(now), []
         for iid, v in found.items():
-            cur = have.get(iid) or {}
-            if cur.get("ev") == "done" or cur.get("ev") == "reopen" and cur.get("evidence") == v["evidence"]:
-                continue
-            rows.append({"ev": "done", "id": iid, "ts": ts, "by": "auto", "rule": v["rule"], "evidence": v["evidence"],
-                         "label": v["label"]})
+            row = {"ev": "done", "id": iid, "ts": ts, "by": "auto", "rule": v["rule"], "evidence": v["evidence"],
+                   "label": v["label"]}
+            if (have.get(iid) or {}).get("ev") != "done" and fits(row):
+                rows.append(row)
         if dry:
             return rows
         for r in list(rows):
@@ -244,7 +305,7 @@ def run(now=None, dry=False):
                     owner_requests.close(r["id"][4:], "done", "auto: " + r["evidence"])
                 except ValueError:  # the fleet tick closed it since the fold: not this ledger's close
                     rows.remove(r)
-        append(rows)
+        append(rows, have)
     return rows
 
 
@@ -252,4 +313,5 @@ def timeline(keep=200):
     """The tidy lines as timeline events, newest last."""
     return [{"at": r.get("ts"), "kind": f"tidy_{r['ev']}" + ("_auto" if r.get("by") == "auto" else ""),
              "text": f"{r.get('label') or r['id']} · {r.get('rule')}: {r.get('evidence') or ''}".strip(" :")}
-            for r in fleet.read_lines(path(), keep) if isinstance(r, dict) and r.get("ev") in ("done", "reopen")]
+            for r in fleet.read_lines(path(), keep) if isinstance(r, dict) and r.get("ev") in ("done", "reopen")
+            and not r.get("carried")]

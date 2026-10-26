@@ -823,7 +823,7 @@ function doneCards(b) {
   const open = (b.open || []).map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}<span class="grow ellipsis" title="${esc(o.label)}">${esc(o.label)}</span>
     ${o.check ? `<span class="acts muted ellipsis" title="${esc(o.check)}">check: ${esc(o.check)}</span>` : ""}${doneBtn(o.id)}</li>`).join("");
   const shut = (b.closed || []).map((c) => `<li class="is-acked">${tag(c.by === "auto" ? "auto" : "you", c.by === "auto" ? "accent" : "")}<span class="grow ellipsis" title="${esc(c.label || c.id)}">${esc(c.label || c.id)}</span>
-    <span class="acts muted ellipsis" title="${esc(c.evidence || "")}">${esc(c.rule || "")}: ${esc(c.evidence || "")} · ${relSpan(c.ts)}</span>${doneBtn(c.id, true)}</li>`).join("");
+    <span class="acts muted ellipsis" title="${esc(c.evidence || "")}">${esc(c.rule || "")}: ${esc(c.evidence || "")} · ${relSpan(c.ts)}</span>${c.reopen ? doneBtn(c.id, true) : ""}</li>`).join("");
   const note = F.doneError ? `<div class="ack-note">${tag("not closed", "warn", "alert")} ${esc(F.doneError)}</div>` : "";
   return `<div class="card"><div class="card-head"><h3>Open items</h3><span class="aside muted">${(b.open || []).length}</span></div>${note}
     <ul class="rows">${open || '<li class="muted">Nothing open.</li>'}</ul></div>`

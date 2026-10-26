@@ -1633,7 +1633,7 @@ def brief_report():
 def closed_recent(days=7):
     """What tidy.jsonl closed in the last days, newest first, for the page's Reopen buttons."""
     cut = iso(utcnow() - dt.timedelta(days=days))
-    return sorted(({"id": k, **r} for k, r in tidy.closed().items() if (r.get("ts") or "") >= cut),
+    return sorted(({"id": k, **r, "reopen": tidy.can_reopen(k)} for k, r in tidy.closed().items() if (r.get("ts") or "") >= cut),
                   key=lambda r: r.get("ts") or "", reverse=True)
 
 

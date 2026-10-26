@@ -98,7 +98,8 @@ board.later_add("다른 일", "acme/app#9 머지 뒤")
 board.later_add("열린 PR 뒤의 일", "acme/app#8 머지 뒤")
 board.later_add("모호한 일", "#9 머지 뒤")
 board.later_add("날짜 일", "목 10/30 09:00")
-board.set_todo(["acme/app#7 리뷰", "acme/app#8 리뷰", "회의 준비"])
+LONG_TODO = "acme/app#7 리뷰 " + "긴 설명 " * 30  # over the 120 characters a close used to keep, under the board's 200
+board.set_todo([LONG_TODO, "acme/app#8 리뷰", "회의 준비"])
 board.set_row("stale-row", title="오래된 일", repo="acme/app", status="moving", next="조사")
 board.set_row("fresh-row", title="새 일", repo="acme/app", status="moving", next="조사")
 board.set_row("card-dup", title="중복 카드 작업", repo="acme/app", status="moving", next="정리")
@@ -108,8 +109,13 @@ fleet.write_atomic(sd / "board.json", json.dumps(st))
 # Inbox items and the owner's requests.
 fleet.inbox_add("review", "acme/app#7 리뷰 요청", key="k-merged")
 fleet.inbox_add("review", "acme/app#8 리뷰 요청", key="k-open")
-fleet.inbox_add("question", "사라진 세션의 질문", session="s-gone", key="k-gone")
+fleet.inbox_add("notice", "사라진 세션의 알림", session="s-gone", key="k-gone")
 fleet.inbox_add("run_command", "명령 실행", session="s1", command="make deploy", key="k-cmd")
+# What the owner acts on stays whatever the PR or session: a command to run, a decision, a question.
+fleet.inbox_add("run_command", "권한 규칙 필요", session="s-gone", command="tune --apply", key="k-rule")
+fleet.inbox_add("run_command", "acme/app#7 뒤에 실행", session="s1", command="make deploy", key="k-after")
+fleet.inbox_add("decision", "배포 순서 결정", session="s-gone", key="k-decide")
+fleet.inbox_add("question", "사라진 세션의 질문", session="s-gone", key="k-ask")
 for text, link in (("로그인 끝나면 알려줘", "card:card-closed"), ("오래된 일 정리", "board:stale-row"),
                    ("열린 PR 봐줘", "acme/app#8"), ("릴리스 PR", "acme/app#1")):
     q, _ = owner_requests.add(text, "s-coord", "term_coord", now=now - dt.timedelta(hours=1))
@@ -132,7 +138,7 @@ assert got == want, {k: got.get(k) for k in set(got) | set(want) if got.get(k) !
 # Never: two cards named (no single one), a bare #N, a doing item waiting on a person or the owner's, an open PR,
 # a date trigger, a fresh row, a command item, a to-do line with no PR.
 for k in (doing[3], doing[4], doing[5], doing[6], doing[7], doing[8], later[2], later[3], later[4], todo[1], todo[2],
-          "row:fresh-row", "ext:k-open", "ext:k-cmd"):
+          "row:fresh-row", "ext:k-open", "ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"):
     assert k not in v, (k, v.get(k))
 
 # The brief before the tick: checks show as 확인 필요 in 진행 중, a quiet card follows its PR, a fired trigger leaves 보류.
@@ -163,6 +169,7 @@ rows = tidy.run(now=now)
 assert [r["id"] for r in rows] == [r["id"] for r in dry]
 assert {r["id"] for r in rows} == {doing[0], todo[0], "card:s4", "ext:k-merged", "ext:k-gone", "req:r1"}, rows
 assert all(r["by"] == "auto" and r["evidence"] for r in rows), rows
+assert next(r for r in rows if r["id"] == todo[0])["label"] == S["owner_todo"][0] and len(S["owner_todo"][0]) > 120, "a label is kept whole"
 assert tidy.run(now=now) == [], "a second tick finds nothing new"
 assert tidy.path().stat().st_mode & 0o777 == 0o600
 # Requests: one linked to a card closed here closes; a board row only checked, or an open PR, keeps its request open,
@@ -171,7 +178,8 @@ reqs = owner_requests.fold(owner_requests.read())
 assert [reqs[r]["status"] for r in ("r1", "r2", "r3", "r4")] == ["done", "open", "open", "open"], reqs
 assert reqs["r1"]["note"].startswith("auto: card:card-closed 정리됨"), reqs["r1"]
 # Inbox: the merged PR's and the gone session's items leave; the open PR's and the command item stay.
-assert {i["key"] for i in fleet.external_items({})} == {"ext:k-open", "ext:k-cmd"}
+OWNER_ITEMS = {"ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"}
+assert {i["key"] for i in fleet.external_items({})} == {"ext:k-open"} | OWNER_ITEMS
 b = brief()
 assert "로그인 개편 (card-done 카드)" not in b["text"] and "acme/app#7 리뷰" not in b["text"].split("🙋")[1], b["text"]
 assert "회의 준비" in b["text"] and "acme/app#8 리뷰" in b["text"]
@@ -191,6 +199,32 @@ assert tidy.run(now=now) == [], "the tick does not undo the owner's reopen"
 assert "| ⏸️ | 실험 정리 |" in brief()["text"]
 code, out, err = run("board", "reopen", "row:fresh-row")
 assert code == 1 and "not closed" in err, err
+
+# Reopen undoes the close outside the ledger too: the inbox item is back, the request open with its links.
+code, out, err = run("board", "reopen", "ext:k-gone", "req:r1")
+assert code == 0 and out == "reopened 2: ext:k-gone req:r1", (out, err)
+assert "ext:k-gone" in {i["key"] for i in fleet.external_items({})}
+r1 = owner_requests.fold(owner_requests.read())["r1"]
+assert r1["status"] == "open" and r1["links"] == ["card:card-closed"] and "note" not in r1, r1
+# A card the owner reopened is not over: the tick closes no request linked to it, old or new.
+q5, _ = owner_requests.add("실험 정리 다시 봐줘", "s-coord", "term_coord", now=now)
+owner_requests.close(q5["id"], "link", to="card:card-closed")
+assert tidy.run(now=now) == [], "nothing linked to a reopened card closes"
+reqs = owner_requests.fold(owner_requests.read())
+assert reqs["r1"]["status"] == reqs[q5["id"]]["status"] == "open", reqs
+# One that cannot be reopened is refused, writes nothing, and the page shows no Reopen for it.
+tidy.append([{"ev": "done", "id": i, "ts": fleet.iso(now), "by": "auto", "rule": "pr_over", "evidence": "x",
+              "label": "지워진 줄"} for i in ("ext:k-none", "req:r99")], tidy.latest())
+code, out, err = run("board", "reopen", "ext:k-none", "req:r99")
+assert code == 1 and "its inbox line is gone" in err and "no request r99" in err, err
+assert {"ext:k-none", "req:r99"} <= set(tidy.closed()) and not tidy.can_reopen("ext:k-none") and not tidy.can_reopen("req:r99")
+assert tidy.can_reopen("req:r1")
+
+# A --why is stored whole; one that would pass the 4 KiB line is refused, not cut.
+code, out, err = run("board", "done", todo[2], "--why", "가" * 1500)
+assert code == 1 and "line over 4 KiB" in err and todo[2] not in tidy.closed(), err
+code, out, err = run("board", "done", todo[2], "--why", "가" * 300)
+assert code == 0 and tidy.closed()[todo[2]]["evidence"] == "가" * 300, (out, err)
 
 # The dashboard's POST: token and same-origin guard, then the same board.close.
 import dash  # noqa: E402
@@ -221,5 +255,20 @@ assert code == 200 and out["written"] == [doing[1]], out
 with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/fleet/brief", timeout=30) as r:
     page = json.loads(r.read())
 assert doing[1] in {o["id"] for o in page["open"]} and {c["id"] for c in page["closed"]} >= {doing[0], "ext:k-merged"}, page["closed"]
+reopen = {c["id"]: c["reopen"] for c in page["closed"]}
+assert reopen["ext:k-none"] is reopen["req:r99"] is False and reopen[doing[0]] is True and reopen["ext:k-merged"] is True, reopen
 srv.shutdown()
+
+# Rotation: the ledger moves to .1 and every id's last line comes along, so closes and reopens hold.
+before = tidy.latest()
+fleet.ROTATE_BYTES = 1
+try:
+    assert tidy.run(now=now) == [], "a reopen still holds after the rotation"
+finally:
+    fleet.ROTATE_BYTES = 5 * 1024 * 1024
+assert tidy.path().with_name("tidy.jsonl.1").exists()
+assert {k: {**r, "carried": True} for k, r in before.items()} == tidy.latest()
+assert tidy.closed()[todo[2]]["by"] == "owner" and tidy.latest()["card:s4"]["ev"] == "reopen"
+assert tidy.timeline() == [], "carried lines are not new events"
+assert tidy.run(now=now) == []
 print("test_tidy: ok")

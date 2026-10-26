@@ -189,17 +189,17 @@ Where it shows: the Work toolbar and the Your requests card get `Ack all N` and 
 
 ### Closing what is over
 
-An ack hides a row that is already ✅. What is over but never turns ✅ by itself would otherwise stay listed: a doing item whose card's PR merged, a card with no agent left listed under 보류 as `세션 꺼짐`, a held item whose trigger already fired, a moving row nobody has touched in half a day, an inbox item about a PR that has merged. `scripts/tidy.py` closes these on evidence, and the owner closes the rest by hand. Every close goes to `tidy.jsonl` in the state directory (0600, append-only, `{ev: "done"|"reopen", id, ts, by: "auto"|"owner", rule, evidence, label}`; an id's state is its last line).
+An ack hides a row that is already ✅. What is over but never turns ✅ by itself would otherwise stay listed: a doing item whose card's PR merged, a card with no agent left listed under 보류 as `세션 꺼짐`, a held item whose trigger already fired, a moving row nobody has touched in half a day, an inbox item about a PR that has merged. `scripts/tidy.py` closes these on evidence, and the owner closes the rest by hand. Every close goes to `tidy.jsonl` in the state directory (0600, append-only, `{ev: "done"|"reopen", id, ts, by: "auto"|"owner", rule, evidence, label}`; an id's state is its last line). Labels and evidence are masked, never shortened; a `--why` that would push a line past 4 KiB is refused. Past 5 MB the file moves to `tidy.jsonl.1` and each id's last line is copied into the new file (`carried: true`, left off the timeline), so a close or reopen outlives the rotation.
 
 ```sh
 orch board open [--json]                     # what can be closed now, with the 확인 필요 reason where there is one
 orch board done row:lead-a card:<session> doing:<k> later:<k> todo:<k> [--why TEXT]
-orch board reopen doing:<k>                  # undo; the tick does not close it again on the same evidence
+orch board reopen doing:<k> ext:<key> req:<id> # undo; the tick does not close it again on the same evidence
 orch board tidy [--dry-run] [--json]         # one pass of what the collector runs after every tick
 orch board closed                            # every close with its rule and evidence
 ```
 
-Ids: `row:<board row>`, `card:<session id>` for a row built from a session, and `doing:`, `later:`, `todo:` with a digest of the item's words (rewording an item makes a new one). The CLI is the record; the Brief page's Open items card has a `Done` button per row, card and board item, and its Closed in the last 7 days card a `Reopen` per close, both through `POST /api/fleet/done` (same Host, Origin and token guard as acks). Only what `orch board open` lists can be closed; anything else is refused with the reason.
+Ids: `row:<board row>`, `card:<session id>` for a row built from a session, and `doing:`, `later:`, `todo:` with a digest of the item's words (rewording an item makes a new one). The CLI is the record; the Brief page's Open items card has a `Done` button per row, card and board item, and its Closed in the last 7 days card a `Reopen` per close that can be undone, both through `POST /api/fleet/done` (same Host, Origin and token guard as acks). Only what `orch board open` lists can be closed; anything else is refused with the reason. The tick also closes `ext:<inbox key>` and `req:<request id>`: reopening one adds the inbox item again or opens the request again with its links, and one whose inbox line or request is gone has no `Reopen`.
 
 The collector runs `tidy.run()` after each tick, so nobody has to ask. It closes only on evidence it can check, and a text names a PR only by its full `owner/repo#N` (a bare `#N` could be any repository's) and a card only by its hyphenated name standing alone in the text, one card at most:
 
@@ -208,12 +208,12 @@ The collector runs `tidy.run()` after each tick, so nobody has to ask. It closes
 | A doing item | every PR it names, or its card's PR, merged | the card still works, or its next step has a step after the merge (a release, a deploy, an apply) |
 | A card row (no agent, or its session off) | its PR closed unmerged | — |
 | An owner to-do line | every PR it names merged or closed | — |
-| An inbox item from `orch-dash inbox add` | every PR it names merged or closed, or its session is gone from Orca's list | — |
+| An inbox item from `orch-dash inbox add`, of a type the owner does not act on | every PR it names merged or closed, or its session is gone from Orca's list | — |
 | A request (`orch req`) with links | every link is over and one of them was closed here (a board row or card); the fleet tick's own request pass closes the rest | — |
 | A held item | never: a fired trigger means the work is due | its trigger says merge and every PR or card it names merged; it moves from 보류 to 진행 중 |
 | A moving board row | never | no word for 8 hours, no PR, and no card that has one or still works |
 
-What the owner or another person acts on is never closed by the tick: a doing item waiting on a person (`--waiting`) or the owner's, a decision, and a row whose status is the owner's turn or another person's wait. Anything less certain stays, marked 확인 필요 at most, since closing something still open costs more than listing something finished. A decision closes when it is answered and a Needs you item backed by a live condition (a prompt, mail, a gate, a PR) leaves when the condition clears. A `run_command` item stays until resolved: nothing here can tell that a command was run.
+What the owner or another person acts on is never closed by the tick: a doing item waiting on a person (`--waiting`) or the owner's, a decision, an added inbox item of type `approval`, `run_command`, `login`, `verify_failed`, `question` or `decision` (whatever its PR or session), and a row whose status is the owner's turn or another person's wait. Anything less certain stays, marked 확인 필요 at most, since closing something still open costs more than listing something finished. A decision closes when it is answered and a Needs you item backed by a live condition (a prompt, mail, a gate, a PR) leaves when the condition clears. A `run_command` item stays until resolved: nothing here can tell that a command was run.
 
 The report reads the same file and evidence. A closed item leaves 진행 중, 보류 and 지금 오너가 할 일; a closed row or card is ✅, so the ack and the done-row rules take it from there. A card with no agent and an open PR shows what the PR waits on (a requested reviewer under 다른 사람 대기, a draft or no reviewer as 확인 필요 `세션 꺼짐 · PR ✓`) instead of `⏸️ 세션 꺼짐`. A board row about a card (its id or title is the card's name) takes the card's PR, so the card is not listed a second time, and a doing item about a card that has a row is that row's line, with the doing item's next step when the card's says only `작업 중` or `턴 종료`. The collector keeps every PR the board, its items or the inbox names in `prs.json` after the search stops finding it, so such a row shows its state instead of `?`. Each close is a `tidy_done_auto` (or `tidy_done`, `tidy_reopen`) line on the timeline, naming the item, the rule and the evidence.
 
