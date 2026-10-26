@@ -106,6 +106,11 @@ class Install(Base):
         self.assertEqual(rows["체크아웃"]["status"], "warn")
         self.assertEqual(rows["자동 동기화"]["status"], "missing")
 
+    def test_inline_offline_still_has_freshness_row(self):
+        co = self.checkout()
+        rows = self.by_item(sc.check_install({"env": {sc.ENV_KEY: str(co)}}, {}, sc.paths(), fake_run({}), darwin=False))
+        self.assertEqual(rows["최신 여부"]["status"], "warn")
+
     def test_launchd_missing_on_darwin(self):
         rows = self.inline({"ok": True, "message": "ok", "at": "2026-01-01T11:59:00+0000"}, darwin=True, launchd_rc=113)
         self.assertEqual(rows["launchd 동기화 작업"]["status"], "missing")

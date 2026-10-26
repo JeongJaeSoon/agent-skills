@@ -163,12 +163,14 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
     if (where / ".git").is_file() or branch != "main":
         rows.append(row("warn", "체크아웃", f"{branch or '?'} 브랜치{' (worktree)' if (where / '.git').is_file() else ''}",
                         "세션이 읽는 체크아웃은 main 의 메인 체크아웃이어야 한다"))
-    if remote and head and head != remote:
+    if not remote:
+        rows.append(row("warn", "최신 여부", "origin main 을 읽지 못함 (네트워크)", "다시 실행"))
+    elif head and head != remote:
         rows.append(row("differs", "최신 여부", f"체크아웃 {head[:7]} · origin main {remote[:7]}",
                         "! skills-sync sync 뒤 skills-sync broadcast"))
-    elif remote:
+    else:
         rows.append(row("ok", "최신 여부", f"origin main {remote[:7]} 과 같음"))
-    sync = read_json(p["state"] / "sync.json", None)
+    sync =read_json(p["state"] / "sync.json", None)
     if not sync:
         rows.append(row("missing", "자동 동기화", "sync.json 없음 (한 번도 안 돎)", f"python3 {where}/scripts/bootstrap.py --write"))
     else:
