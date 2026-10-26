@@ -541,18 +541,22 @@ assert "| 작업 |" not in rok("brief", "render", "--periodic", "--now", NOW)
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](")), tg_req
 assert "📋 작업별 (prod: v1.7.1 · dev: v1.7.2)" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
-# A long stage name or evidence is cut to fit, and its whole text is listed under the table on the same screen.
+# A long stage name is cut to fit, and its whole text is listed under the table on the same screen.
 WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
 rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
-rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
 code, cut, err = orch_env(renv, *REQUEST)
 assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
-assert f"- [2] {WIDE_TITLE}" in cut.splitlines() and f"- [3] ⚠️ {WIDE_EVIDENCE}" in cut.splitlines(), cut
+assert any(l.startswith("- [") and l.endswith(f"] {WIDE_TITLE}") for l in cut.splitlines()), cut
 # The stage table's PR is a plain key, so a long one is cut and listed the same way.
 WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
 rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
 code, cut, err = orch_env(renv, *REQUEST)
 assert code == 0 and any(l.startswith("- [") and l.endswith(f"] {WIDE_PR}") for l in cut.splitlines()), (code, err, cut)
+# A stage cell is never cut: a table its stage cells make too wide overflows whole, and the render says so.
+rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
+code, cut, err = orch_env(renv, *REQUEST)
+assert code == 1 and "wider than 78" in err, (code, err)
+assert f"| {WIDE_TITLE} | acme/web#1234 | – | ⚠️ {WIDE_EVIDENCE} | – |" in cut.splitlines() and "\n- [" not in cut, cut
 
 # GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR
 # closed unmerged is ⏸️ PR 닫힘. A lead the board holds still shows its live cards whose PR no board row has, and a PR
