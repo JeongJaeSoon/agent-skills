@@ -1,5 +1,7 @@
 # agent-skills
 
+구조와 흐름, 사람이 끼어드는 지점을 한 장으로: [랜딩 페이지](https://jeongjaesoon.github.io/agent-skills/)(`docs/index.html`).
+
 Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬로 만든다. 일부 스킬은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔다.
 
 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d)(스킬별 언제·무엇, `docs/skills.md`에서 생성), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR)(흐름과 `orch` 착지 과정 그림).
