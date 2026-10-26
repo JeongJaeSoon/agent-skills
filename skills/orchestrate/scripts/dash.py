@@ -1473,8 +1473,11 @@ def pr_stats_loop():
 
 
 def code_files():
-    return (HERE / "dash.py", HERE / "prog.py", HERE / "fleet.py", HERE / "selfcheck.py", HERE / "skill_usage.py", HERE / "pr_stats.py",
-            *sorted(ASSETS.glob("*")))
+    # Every module the server may import, lazily too, from beside it and the two other places board.py and fleet.py
+    # reach: one left out would not restart it.
+    near = [*HERE.glob("*.py"), HERE.parents[1] / "brief" / "scripts" / "table_width.py",
+            *(HERE.parents[2] / "scripts" / n for n in ("sync.py", "reap_hard.py"))]
+    return (*sorted(f for f in near if f.exists() and not f.name.startswith("test_")), *sorted(ASSETS.glob("*")))
 
 
 def code_version():
@@ -1878,8 +1881,12 @@ def cmd_inbox(argv):
                               prog.opt(argv, "--command"), prog.opt(argv, "--key"))
     elif argv[:1] == ["resolve"] and prog.opt(argv, "--key"):
         row = fleet.inbox_resolve(prog.opt(argv, "--key"))
+    elif argv[:1] == ["list"]:
+        for i in fleet.external_items():
+            print(f"{i['at']}  {i['type']}  {i['key'][4:]}  {i['title']}")
+        return
     else:
-        sys.exit("usage: orch-dash inbox add --type T --title TEXT [...] | inbox resolve --key KEY")
+        sys.exit("usage: orch-dash inbox add --type T --title TEXT [...] | inbox resolve --key KEY | inbox list")
     print(json.dumps(row, ensure_ascii=False))
 
 

@@ -25,6 +25,12 @@ def label_match(line, label):
     return n >= 2 and line[:n].casefold() == label.casefold() and not (len(line) > n and line[n].isascii() and line[n].isalnum())
 
 
+# Orca types this into an idle composer, mid-sentence too; it is never the human's.
+# Only its own words: a looser tail once ate the human's sentence typed right after it.
+NUDGE = re.compile(r"You have \d+ orchestration messages?(?: waiting)?(?:\.?\s*Run (?:`[^`\n]*`|orca orchestration check"
+                   r"(?: --?[\w-]+(?: (?!-)[\w-]+)?)*))?\.?", re.I)
+
+
 def pick(prompt, mine):
     """(decision, answer) the prompt settles unambiguously, else (None, None)."""
     line = next((l.strip() for l in prompt.splitlines() if l.strip()), "")
@@ -45,7 +51,7 @@ def main():
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", handle):
         return
     event = json.load(sys.stdin)
-    prompt = event.get("prompt") if isinstance(event.get("prompt"), str) else ""
+    prompt = NUDGE.sub("", event.get("prompt") if isinstance(event.get("prompt"), str) else "")
     import fleet
     mine = {d["id"]: d for d in fleet.open_decisions() if d.get("handle") == handle}
     if not mine or not prompt.strip():

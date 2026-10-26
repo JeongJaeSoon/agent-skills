@@ -1430,4 +1430,55 @@ for stderr, want in (("boom\n  code: 'EACCES',\nNode.js v24.0.0\n", "code: 'EACC
     except fleet.SourceError as e:
         assert str(e) == want, (str(e), want)
 
+# An added inbox item nobody resolved leaves after EXTERNAL_KEEP_DAYS; `orch-dash inbox list` (now=None) still has it.
+# The server's code version covers every module it imports, so a change to any of them restarts it.
+with contextlib.ExitStack() as stack:
+    ext_state = pathlib.Path(stack.enter_context(tempfile.TemporaryDirectory()))
+    os.environ["ORCH_FLEET_STATE"], was = str(ext_state), os.environ["ORCH_FLEET_STATE"]
+    stack.callback(os.environ.__setitem__, "ORCH_FLEET_STATE", was)
+    fleet.inbox_add("login", "old", key="old")
+    fleet.inbox_add("login", "new", key="new")
+    rows = [json.loads(l) for l in (ext_state / "inbox-external.jsonl").read_text().splitlines()]
+    rows[0]["at"] = fleet.iso(fleet.utcnow() - dt.timedelta(days=fleet.EXTERNAL_KEEP_DAYS, minutes=1))
+    (ext_state / "inbox-external.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert [i["key"] for i in fleet.external_items(fleet.utcnow())] == ["ext:new"]
+    assert [i["key"] for i in fleet.external_items()] == ["ext:old", "ext:new"]
+
+# The tick settles the request ledger: a request whose PR merged closes, one whose PR closed unmerged stays open with
+# the link tagged. A ledger it cannot settle warns once on the timeline, not every tick; an added inbox item that
+# ages out is on the timeline once too.
+import owner_requests  # noqa: E402
+world.prs[43].update(state="CLOSED", mergeStateStatus="UNKNOWN")
+ids = []
+for text, to in (("merge acme/tools#6 once green", "acme/tools#6"), ("finish the setup guide", "acme/launchpad#43")):
+    ids.append(owner_requests.add(text, "s-coord", "term_coord", now=clock[0])[0]["id"])
+    owner_requests.close(ids[-1], "link", to=to)
+merged_id, closed_id = ids
+with (state_dir / "inbox-external.jsonl").open("a") as fh:
+    fh.write(json.dumps({"op": "add", "key": "stale-login", "type": "login", "title": "Log in again",
+                         "at": fleet.iso(clock[0] - dt.timedelta(days=fleet.EXTERNAL_KEEP_DAYS + 1))}) + "\n")
+st = f.tick(force=True)
+asked = owner_requests.fold(owner_requests.read())
+assert asked[merged_id]["status"] == "done" and "acme/tools#6 merged" in asked[merged_id]["note"], asked[merged_id]
+assert asked[closed_id]["status"] == "open"
+shown = {q["id"]: q for q in st["requests"]["items"]}
+assert merged_id not in shown and shown[closed_id]["closed"] == ["acme/launchpad#43"], shown.get(closed_id)
+assert any(e["kind"] == "request_done" and e["text"].startswith(merged_id) for e in f.events)
+assert "ext:stale-login" not in {i["key"] for i in st["items"]}
+real_reconcile = owner_requests.reconcile
+owner_requests.reconcile = lambda *a, **k: 1 / 0
+try:
+    for _ in range(3):
+        st = f.tick(force=True)
+finally:
+    owner_requests.reconcile = real_reconcile
+assert [e["kind"] for e in f.events].count("requests_error") == 1
+assert [e["kind"] for e in f.events].count("inbox_aged_out") == 1
+f.tick(force=True)
+assert "requests_error" not in f.mem
+
+import dash  # noqa: E402
+assert {"owner_requests.py", "board.py", "holds.py", "stages.py"} <= {f.name for f in dash.code_files()}
+assert not any(f.name.startswith("test_") for f in dash.code_files())
+
 print("test_fleet: ok")

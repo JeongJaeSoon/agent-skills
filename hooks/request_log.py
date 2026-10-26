@@ -12,8 +12,9 @@ on the same prompt at the same time and may be writing the record, so the prompt
 Not a human request, so not logged: harness rows starting with `<` (task notifications, command output; a
 `<pasted_content` block is the human's), a slash command as typed (`/brief`), an answer to a dashboard decision
 (`d3: yes`, which decision.py records), a card's relayed report (`[card-name] ...`; `[Image #1]` and
-`[Pasted text #1]` are the human's), the compaction preamble, Orca's "You have N orchestration message" nudge, a
-prompt that only declares a ROLE, and an empty prompt. Any error exits 0, so a prompt is never blocked.
+`[Pasted text #1]` are the human's), the compaction preamble, a prompt that only declares a ROLE, and an empty
+prompt. Orca's "You have N orchestration message(s). Run ..." nudge is cut out wherever Orca typed it, even mid-sentence,
+and what is left is judged and logged. Any error exits 0, so a prompt is never blocked.
 """
 import json, os, pathlib, re, sys
 
@@ -22,7 +23,6 @@ import decision, reorient  # noqa: E402  beside this file
 
 RELAY = re.compile(r"\[(?!Image #|Pasted text)[^\]\s]{1,80}\]")
 NOT_HUMAN = ("This session is being continued from a previous conversation",)
-NUDGE = re.compile(r"You have \d+ orchestration message", re.I)
 LISTED = 5
 
 
@@ -32,7 +32,7 @@ def human(prompt):
         return False
     if head.startswith("/") or head.startswith("<") and not head.startswith("<pasted_content"):
         return False
-    if RELAY.match(head) or head.startswith(NOT_HUMAN) or NUDGE.match(head):
+    if RELAY.match(head) or head.startswith(NOT_HUMAN):
         return False
     return bool(reorient.ROLE.sub("", head).strip())
 
@@ -55,20 +55,20 @@ def answers_decision(prompt, fleet):
 
 def main():
     event = json.load(sys.stdin)
-    prompt = event.get("prompt") if isinstance(event.get("prompt"), str) else ""
+    prompt = decision.NUDGE.sub("", event.get("prompt") if isinstance(event.get("prompt"), str) else "")
     if not human(prompt) or not role_of(event):
         return
     import owner_requests as req
     if answers_decision(prompt, req.fleet):
         return
-    row = req.add(reorient.ROLE.sub("", prompt), str(event.get("session_id")), os.environ.get("ORCA_TERMINAL_HANDLE"))
+    row, new = req.add(reorient.ROLE.sub("", prompt), str(event.get("session_id")), os.environ.get("ORCA_TERMINAL_HANDLE"))
     s = req.summary()
     # Ids only: the routing commands are in SKILL.md and `orch req list` has the text, so each prompt pays ~70 bytes.
-    text = f"Owner request {row['id']} logged"
+    text = f"Owner request {row['id']} logged" + ("" if new else " (same as before)")
     if s["open"] > 1:
         text += f" · {s['open']} open, oldest {req.ago(s['oldest_min'])}"
-    if stale := [q["id"] for q in s["unlinked"] if q["id"] != row["id"]][:LISTED]:
-        text += " · unlinked 30m+: " + " ".join(stale)
+    if stale := [q["id"] for q in s["unlinked"] if q["id"] != row["id"]]:
+        text += f" · unlinked 30m+: {len(stale)} (newest: {' '.join(stale[::-1][:LISTED])})"
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}},
                      ensure_ascii=False))
 
