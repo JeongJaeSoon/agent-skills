@@ -155,4 +155,15 @@ for cmd in (f"until grep -q '^exit=' {O}; do sleep 10; done; tail -3 {O}",
 for cmd in ("sleep 5; cat /tmp/x", "for i in 1 2 3; do curl -fs x && break; sleep 2; done", "for f in *.py; do python3 $f; done", "grep -rn 'sleep 5' skills",
             "echo 'until x; do sleep 1; done'", "git log --format=%s | grep -c 'do not sleep'"):
     assert bash(cmd) != "deny", cmd
+# Only the sleep-loop deny carries the gate marker the refused-act rule keys on.
+def reason(cmd):
+    env = {**os.environ, "HOME": HOME, "AGENT_SKILLS_STATE": f"{HOME}/state", "ORCA_TERMINAL_HANDLE": "term_me"}
+    out = subprocess.run([sys.executable, HERE / "guard.py"], input=json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": HOME, "session_id": "s0"}),
+        capture_output=True, text=True, env=env).stdout
+    return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-loop] ")
+assert "[gate:" not in reason(f"{CHECK} --terminal term_other --json")
 print("guard: all pass")
