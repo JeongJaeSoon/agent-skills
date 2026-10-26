@@ -109,6 +109,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `reap-resources` | 죽은 세션이 남긴 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. 에이전트가 만든 끝난 리소스와 명시적으로 설정한 개인 폴더의 기준 기간이 지난 항목은 3시간 주기 automation이 휴지통으로 정리한다. 닫힌 지 7일 지난 프로그램 상태는 `_archive/`로 보관하고(재개 노트가 있으면 남김), hook 세션 파일과 `sync.log`도 정리한다. `pressure.py`는 모델 없이 3분마다 load·메모리 압박·swap·디스크·컨테이너 수를 재고, 높으면 안전한 대상부터 정리해 오케스트레이터에 한 줄 알린다([docs/pressure.md](docs/pressure.md)) |
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
+| `setup-pc` | 다른 PC에 들이거나 설치된 PC를 최신으로 맞출 때. 도구·서명·로드 방식·`origin/main`과의 차이·동기화·정기 자동화·플러그인이 실을 수 없는 설정을 읽기만 해서 표 한 장으로 보이고, 원래 PC에서 뽑은 기준 파일과 비교한다. 고치는 줄은 `!`로 건네고 autoMode는 `tune-automode`, 권한은 `update-config`로 넘긴다 |
 
 **도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. 기본 off이고 `skills-sync setup enable preview-watch`로 켠다. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)). `share-server`(공유 폴더를 127.0.0.1에서 Caddy `file_server`로 읽기 전용 서빙한다. 최근 순 목록·Grid 썸네일, `.md` 렌더(`?raw`는 원문), 텍스트는 UTF-8. 숨김 경로는 404, 루트 밖 심볼릭 링크는 sandbox-exec로 막는다. 기본 off이고 `skills-sync setup enable share-server`로 켠다. [docs/share-server.md](docs/share-server.md)).
 
@@ -158,7 +159,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/setup-pc/scripts/test_setup_check.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 
