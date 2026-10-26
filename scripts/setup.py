@@ -23,8 +23,9 @@ marketplace copy of agent-skills is turned off; a recommended item applied once 
 not offered again (the record is in the agent-skills state dir).
 
 The personal folder ($AGENT_SKILLS_CONFIG_DIR/personal, default ~/.config/agent-skills/personal; setup-pc clones the
-user's private repo there) joins the plan when it exists: its agent-skills.json keys, automode.json rules and
-agents/*.md, each added only where missing, like the recommended items.
+user's private repo there) joins the plan when it exists: its agent-skills.json keys are added where missing, like
+the recommended items, and win over a recommended default. A relative tracker.rules_file points into that folder.
+Personal autoMode rules are not carried; each PC keeps its own.
 """
 import argparse, difflib, hashlib, json, locale, os, pathlib, shlex, shutil, subprocess, sys, tempfile, time
 
@@ -37,6 +38,7 @@ BUNDLE = HERE / "recommended-settings.json"
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
 MARKET_ID = "agent-skills@jeongjaesoon"
 SECTIONS = ("allow", "soft_deny", "environment")
+RULES_FILE = "tracker.rules_file"
 FAST_FORWARD = "skills-sync sync --no-broadcast (fast-forward this checkout; the plan is checked again after it)"
 LANGUAGES = {"ko": "Korean", "ja": "Japanese", "en": "English", "zh": "Chinese", "es": "Spanish", "fr": "French",
              "de": "German", "pt": "Portuguese"}
@@ -50,8 +52,7 @@ def paths():
     cfg = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser()
     state = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
     return {"settings": pathlib.Path(os.environ.get("CLAUDE_SETTINGS") or cfg / "settings.json").expanduser(),
-            "skills_json": cfg / "agent-skills.json", "agents": cfg / "agents", "state": state,
-            "record": state / "setup-applied.json",
+            "skills_json": cfg / "agent-skills.json", "state": state, "record": state / "setup-applied.json",
             "personal": pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG_DIR") or "~/.config/agent-skills").expanduser()
             / "personal"}
 
@@ -198,14 +199,9 @@ def plan(args):
         rec = {"language": language, **rec}
     keys = fill(bundle.get("agent_skills_json") or {}, values)
     mine = p["personal"]
-    rules = read_json(mine / "automode.json", {})
-    for name in SECTIONS:
-        add = rules.get(name) or []
-        if not isinstance(add, list) or not all(isinstance(r, str) for r in add):
-            raise Refused(f"{mine / 'automode.json'}: {name} is not a list of rule strings")
-        have = rec.setdefault("autoMode", {}).setdefault(name, [])
-        have += [r for r in add if r not in have]
     for key, value in leaves(read_json(mine / "agent-skills.json", {})):
+        if key == RULES_FILE and isinstance(value, str) and not pathlib.Path(value).expanduser().is_absolute():
+            value = str(mine / value)  # the site rules Markdown lives in the personal repo next to this file
         put(keys, key, value)  # the user's own value wins over the recommended default
     record = read_json(p["record"], {})
     skip = set(record.get("offered") or [])
@@ -219,10 +215,6 @@ def plan(args):
         files.append((p["settings"], settings if p["settings"].exists() else None, new_settings))
     if new_skills != (skills_json or {}):
         files.append((p["skills_json"], skills_json, new_skills))
-    for agent in sorted((mine / "agents").glob("*.md")):
-        offered_keys.add(f"agents\t{agent.name}")
-        if not (p["agents"] / agent.name).exists() and f"agents\t{agent.name}" not in skip:
-            files.append((p["agents"] / agent.name, None, agent.read_text()))
     all_offered = sorted(skip | offered | offered_keys)
     if files or all_offered != sorted(skip):
         files.append((p["record"], record or None, {"offered": all_offered}))
@@ -244,8 +236,7 @@ def plan(args):
 
 
 def text(d):
-    """A settings dict as JSON; an agent file's text as it is."""
-    return d if isinstance(d, str) else json.dumps(d, ensure_ascii=False, indent=2) + "\n"
+    return json.dumps(d, ensure_ascii=False, indent=2) + "\n"
 
 
 def digest(files, actions):
@@ -286,7 +277,7 @@ def write(path, data):
     if backup:
         shutil.copymode(backup, tmp)
     os.replace(tmp, real)
-    if real.read_text() != text(data):
+    if json.loads(real.read_text()) != data:
         undo = f"cp {shlex.quote(str(backup))} {shlex.quote(str(real))}" if backup else f"rm {shlex.quote(str(real))}"
         raise Refused(f"{real} did not read back as written; restore it: {undo}")
     return real, backup

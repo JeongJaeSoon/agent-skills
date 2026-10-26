@@ -28,5 +28,5 @@ assert run() is None, "bootstrap.py already loads a checkout"
 (CFG / "settings.json").unlink()
 STATE.mkdir()
 (STATE / "setup-applied.json").write_text("{}")
-assert run() is None, "setup.py recorded an apply"
+assert run() is not None, "another Orca profile's apply record does not set this profile up"
 print("onboard: all pass")

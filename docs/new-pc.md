@@ -17,11 +17,12 @@ Orca가 프로필마다 `CLAUDE_CONFIG_DIR`을 따로 쓰면 프로필마다 1~6
 
 ### 개인 설정 저장소
 
-private git 저장소 하나에 아래 파일을 둔다(모두 선택). 에이전트가 `~/.config/agent-skills/personal`로 clone하고 다음 dry run부터 diff에 넣는다. 있는 값과 파일은 덮지 않고, 권장 묶음처럼 한 번 제안한 항목은 지운 뒤 다시 제안하지 않는다. 동기화 폴더를 쓰려면 같은 형식의 폴더를 그 경로에 두면 된다.
+private git 저장소 하나에 `agent-skills.json`을 둔다. 에이전트가 `~/.config/agent-skills/personal`로 clone하고 다음 dry run부터 diff에 넣는다. 있는 값은 덮지 않고, 권장 묶음처럼 한 번 제안한 키는 지운 뒤 다시 제안하지 않는다. 동기화 폴더를 쓰려면 같은 형식의 폴더를 그 경로에 두면 된다.
 
 - `agent-skills.json`: `~/.claude/agent-skills.json`에 더할 키(`tracker`, `notes`, `prs`, `mentions` 등). 같은 키가 권장 기본값에도 있으면 이쪽이 이긴다.
-- `automode.json`: `{"allow": [...], "soft_deny": [...], "environment": [...]}`. 사용자 autoMode에 더할 규칙.
-- `agents/*.md`: `~/.claude/agents/`에 없는 것만 복사한다.
+- 트래커 사이트 규칙 Markdown: 같은 폴더에 두고 `tracker.rules_file`에 상대 경로로 적으면 그 폴더 기준 절대 경로로 들어간다.
+
+개인 에이전트와 개인 autoMode 규칙은 옮기지 않는다. 쓰기 agent는 플러그인에 있고, agent-skills에 필요한 autoMode 규칙은 저장소 기본값에 있다.
 
 `prs`·`mentions` 키가 들어오면 그다음 `--actions-only`가 watch-prs·watch-mentions automation을 만든다.
 
@@ -66,8 +67,8 @@ dry run은 여기서도 아무것도 쓰지 않고 fetch도 하지 않는다. fa
 저장소는 PC나 회사에 매인 것을 싣지 않는다. 개인 설정 저장소에 넣은 것만 따라오고, 나머지는 그 기능이 꺼지거나 처음 쓸 때 묻는다.
 
 - 사내 이름 목록(`~/.config/agent-skills/internal-names.txt`, 공개 저장소에 쓰는 PC만). 채팅 채널, 트래커 프로젝트, 노트 저장소 같은 `agent-skills.json`의 나머지 키는 개인 설정 저장소의 `agent-skills.json`으로 옮긴다. 키와 기본 동작은 각 스킬의 설정 절과 [configuration-migration.md](configuration-migration.md).
-- 조직 저장소를 신뢰 범위에 넣는 autoMode 문장. 묶음의 "사용자 저장소"는 `gh` 로그인 계정 아래만이다. 조직은 개인 설정 저장소의 `automode.json`이나 `tune-automode`로 더한다.
-- 개인 지침과 스킬(`~/.claude/CLAUDE.md`, `skills/`)과 자동 메모리. 개인 에이전트는 개인 설정 저장소의 `agents/`로 옮긴다. 어느 PC에서나 지켜야 할 작업 방식이 여기에만 있으면 `reflect`나 `write-skill`로 스킬에 올린다.
+- 조직 저장소를 신뢰 범위에 넣는 autoMode 문장. 묶음의 "사용자 저장소"는 `gh` 로그인 계정 아래만이다. 조직은 그 PC에서 `tune-automode`로 더한다. 개인 autoMode 규칙은 PC마다 둔다.
+- 개인 지침과 스킬·에이전트(`~/.claude/CLAUDE.md`, `skills/`, `agents/`)와 자동 메모리. 어느 PC에서나 지켜야 할 작업 방식이 여기에만 있으면 `reflect`나 `write-skill`로 스킬에 올린다.
 - `env`의 다른 값과 토큰. PC마다 다시 만든다.
 
 특정 PC와 똑같이 맞추고 싶으면 `setup-pc`의 "Compare with another PC"(원래 PC에서 `setup_check.py export`, 여기서 `check --baseline`)를 쓴다. 기본 경로는 아니다.

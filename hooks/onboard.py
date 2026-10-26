@@ -2,9 +2,10 @@
 """SessionStart (startup, clear) hook of the agent-skills plugin: on a PC where agent-skills was installed but never
 set up, tells the session to run setup-pc (docs/zero-command-setup.md).
 
-Set up means setup.py has recorded an apply ($AGENT_SKILLS_STATE/setup-applied.json) or the user settings already
-load a checkout (env.CLAUDE_CODE_PLUGIN_DIRS, from bootstrap.py). Neither: the session gets one paragraph with the
-values the human gave the install dialog (userConfig, as CLAUDE_PLUGIN_OPTION_*). AGENT_SKILLS_ONBOARD=0 silences it.
+Set up means this profile's user settings load a checkout (env.CLAUDE_CODE_PLUGIN_DIRS, which setup.py --apply and
+bootstrap.py write). The state dir is shared by every Orca profile, so its records do not count. Not set up: the
+session gets one paragraph with the values the human gave the install dialog (userConfig, as
+CLAUDE_PLUGIN_OPTION_*). AGENT_SKILLS_ONBOARD=0 silences it.
 """
 import json, os, pathlib, sys
 
@@ -15,11 +16,8 @@ OPTIONS = ("language", "checkout", "personal_repo")
 
 
 def set_up():
-    p = paths()
-    if p["record"].exists():
-        return True
     try:
-        return bool(json.loads(p["settings"].read_text()).get("env", {}).get(ENV_KEY))
+        return bool(json.loads(paths()["settings"].read_text()).get("env", {}).get(ENV_KEY))
     except (OSError, ValueError, AttributeError):
         return False
 

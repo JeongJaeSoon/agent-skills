@@ -63,7 +63,7 @@ claude plugin install agent-skills@jeongjaesoon
 
 ### 다른 PC에서 같은 방식으로 쓰려면
 
-일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 사용자 설정과 자동화는 위의 `setup.py`가 넣는다. 원래 PC에서 옮기는 것을 전제로 하지 않는다. 채널·트래커 같은 개인 설정과 개인 에이전트는 설치 창에 적은 개인 private 저장소에서만 가져오고, 사내 이름 목록과 개인 지침은 옮기지 않는다. 자세한 내용은 [docs/new-pc.md](docs/new-pc.md). Claude Code 안에서는 `setup-pc` 스킬("새 PC 세팅해줘")이 dry run을 보이고 `!` 한 줄을 건넨다.
+일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 사용자 설정과 자동화는 위의 `setup.py`가 넣는다. 원래 PC에서 옮기는 것을 전제로 하지 않는다. 채널·트래커 같은 개인 설정(`agent-skills.json`과 트래커 사이트 규칙)은 설치 창에 적은 개인 private 저장소에서만 가져오고, 사내 이름 목록, 개인 지침, 개인 autoMode 규칙은 옮기지 않는다. 자세한 내용은 [docs/new-pc.md](docs/new-pc.md). Claude Code 안에서는 `setup-pc` 스킬("새 PC 세팅해줘")이 dry run을 보이고 `!` 한 줄을 건넨다.
 
 ## 스킬 고치기
 

@@ -138,37 +138,26 @@ class Setup(unittest.TestCase):
         self.settings.write_text(json.dumps({"enabledPlugins": {"agent-skills@jeongjaesoon": True}}))
         self.assertIn("changed enabledPlugins.agent-skills@jeongjaesoon = false", self.run_setup().stdout)
 
-    def test_personal_folder_joins_the_plan_without_overwriting(self):
+    def test_personal_keys_join_the_plan_without_overwriting(self):
         mine = self.home / "personal"
-        (mine / "agents").mkdir(parents=True)
+        mine.mkdir()
         self.env["AGENT_SKILLS_CONFIG_DIR"] = str(self.home)
-        (mine / "agent-skills.json").write_text(json.dumps({"prs": {"kinds": ["review_request"]},
-                                                            "reap": {"user_folders": ["~/scratch"]}}))
-        (mine / "automode.json").write_text(json.dumps({"environment": ["my org's repositories are mine too"]}))
-        (mine / "agents" / "helper.md").write_text("---\nname: helper\n---\nmine\n")
-        (mine / "agents" / "kept.md").write_text("from the repo\n")
-        (self.cfg / "agents").mkdir()
-        (self.cfg / "agents" / "kept.md").write_text("already here\n")
+        (mine / "agent-skills.json").write_text(json.dumps({
+            "prs": {"kinds": ["review_request"]}, "reap": {"user_folders": ["~/scratch"]},
+            "tracker": {"adapter": "jira", "rules_file": "tracker-rules.md"}, "notes": {"adapter": "markdown"}}))
+        (self.cfg / "agent-skills.json").write_text(json.dumps({"notes": {"adapter": "obsidian"}}))
         before = self.snapshot()
-        out = self.run_setup().stdout
-        self.assertIn("helper.md (new file)", out)
-        self.assertNotIn("kept.md", out)
+        self.assertIn('"review_request"', self.run_setup().stdout)
         self.assertEqual(self.snapshot(), before)
         self.run_setup("--apply", self.plan_hash())
         skills = json.loads((self.cfg / "agent-skills.json").read_text())
         self.assertEqual(skills["prs"], {"kinds": ["review_request"]})
         self.assertEqual(skills["reap"]["user_folders"], ["~/scratch"])
-        self.assertIn("my org's repositories are mine too", json.loads(self.settings.read_text())["autoMode"]["environment"])
-        self.assertEqual((self.cfg / "agents" / "helper.md").read_text(), "---\nname: helper\n---\nmine\n")
-        self.assertEqual((self.cfg / "agents" / "kept.md").read_text(), "already here\n")
-        (self.cfg / "agents" / "helper.md").unlink()
+        self.assertEqual(skills["tracker"], {"adapter": "jira", "rules_file": str(mine / "tracker-rules.md")})
+        self.assertEqual(skills["notes"], {"adapter": "obsidian"})
+        del skills["prs"]
+        (self.cfg / "agent-skills.json").write_text(json.dumps(skills))
         self.assertIn("no change", self.run_setup().stdout)
-
-    def test_bad_personal_rules_are_refused(self):
-        (self.home / "personal").mkdir()
-        self.env["AGENT_SKILLS_CONFIG_DIR"] = str(self.home)
-        (self.home / "personal" / "automode.json").write_text('{"allow": "not a list"}')
-        self.assertIn("not a list of rule strings", self.run_setup(ok=False).stderr)
 
     def test_actions_only_takes_no_hash(self):
         p = self.run_setup("--actions-only", "--apply", "000000000000", ok=False)
