@@ -157,7 +157,9 @@ After the test suite and E2E check, push and open a PR with `gh pr create` in th
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
 with `orca linear attach --current --url <pr> --title "PR"` (outside an Orca card,
 `orca linear attach <ID> --url <pr>`). Move the ticket at each milestone as `use-tracker`
-"Milestones" says: its `PR:` line now, `review` when you request a review.
+"Milestones" says: its `PR:` line now, `review` when you request a review. A review request
+is not made until `gh pr view <n> --json reviewRequests,assignees` lists the reviewer:
+`gh pr edit --add-reviewer` can exit 0 without adding anyone.
 
 **The PR body is a briefing, not the lab notebook**: `## 왜`, `## 범위`, `## 트레이드오프`,
 `## 영향 범위`, and the required `## 검증`, within about 40 lines, titled

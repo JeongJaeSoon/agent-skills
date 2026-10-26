@@ -688,6 +688,13 @@ process.stdout.write(JSON.stringify(out));"""
     names = re.findall(r'<span class="sb-text">([^<]+)</span>', tree)
     assert names == ["root", "Needs you", "asks you", "Running", "lead one", "prog-l", "lead card idle", "lead card working",
                      "Idle", "idle one with a long name that the sidebar cuts", "idle two", "Offline", "gone lead"], names
+    # A group header is a depth-0 row whose chevron carries the phase colour; the rows under it start one step in.
+    depth = dict((n, int(d)) for d, n in re.findall(r'--d:(\d)".*?<span class="sb-text">([^<]+)</span>', tree, re.S))
+    assert depth == {"root": 0, "asks you": 1, "lead one": 1, "prog-l": 2, "lead card idle": 2, "lead card working": 2,
+                     "idle one with a long name that the sidebar cuts": 1, "idle two": 1, "gone lead": 1}, depth
+    heads = re.findall(r'<summary class="nav-item"[^>]*>(.*?)<span class="sb-text">', tree, re.S)
+    assert [re.search(r'class="chev ([^"]*)"', h).group(1).strip() for h in heads] == \
+        ["ph-waiting", "ph-working", "ph-idle", "ph-offline"] and not any("dot-s" in h or "pulse" in h for h in heads), heads
     assert 'title="idle one with a long name that the sidebar cuts · standalone · idle"' in tree, "the full name is the tooltip"
     assert '<span class="count">2</span>' in tree.split('data-fold="idle"')[1].split("</summary>")[0], "the idle fold counts its sessions"
     assert opened(got["current"])["idle"] == "open", "the fold holding the page's session opens"

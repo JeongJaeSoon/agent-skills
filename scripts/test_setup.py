@@ -280,6 +280,15 @@ class Bundle(unittest.TestCase):
             self.assertIn("Not covered", rule, rule[:60])
         self.assertIn("only the user's own chat messages count", rules[-1])
 
+    def test_no_review_merge_stays_narrow(self):
+        rule = next(r for r in json.loads(BUNDLE.read_text())["settings"]["autoMode"]["allow"]
+                    if r.startswith("No-review merge"))
+        for limit in ("at least one check that succeeded", "PR with no checks at all", "orchestrate program in any session",
+                      "A repository name alone never brings a PR into scope", "require no approving review"):
+            self.assertIn(limit, rule)
+        # CLEAN also follows a given approval, so it cannot stand for "no approval required".
+        self.assertNotIn("which means", rule)
+
     def test_allow_holds_no_unscoped_writes(self):
         allow = json.loads(BUNDLE.read_text())["settings"]["permissions"]["allow"]
         reads = {"ensure", "serve", "collect", "fleet", "skills", "prstats"}

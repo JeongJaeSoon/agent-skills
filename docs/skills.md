@@ -237,7 +237,7 @@
 - **내용:**
   - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → 기본값 linear 순서로 정한다.
   - 세션에서는 MCP(Linear는 `orca linear`)를 우선하고, 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, transition이다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
-  - 설정의 `tracker.delegate_agent`나 사용자 지시가 트래커 쓰기 담당 에이전트를 정하면 쓰기는 모두 그 에이전트에 맡기고, 읽기만 여기서 한다.
+  - 쓰기는 모두 담당 에이전트에 맡기고 읽기만 여기서 한다. 담당은 사용자 지시 → 설정의 `tracker.delegate_agent` → 플러그인 agent `agent-skills:task-tracker` 순서로 정하고, `"none"`이면 세션에서 직접 쓴다. `task-tracker`는 트래커 사이트 고유 규칙(프로젝트, 상태·전이 id, 라벨, 언어)을 `tracker.rules_file`이 가리키는 사용자 Markdown에서 매번 읽는다. 키가 있는데 파일이 없거나 읽지 못하면 추측하지 않고 멈춘다.
   - 값을 가리는 읽기 경로(`<PERSON>` 같은 개체 자리표시자나 `****`)에서 읽은 값은 데이터가 아니다. 판단·되쓰기 전에 가리지 않는 경로로 다시 읽고, 가려진 값을 필드에 되쓰지 않는다.
   - 상태 어휘는 triage, backlog, unstarted, started, completed, canceled다.
   - 완료 조건은 상위 티켓 본문(`✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`)에, 부모 없는 티켓은 인수 조건에 둔다. NOW로 분류한 발견만 티켓이 된다.
@@ -249,9 +249,9 @@
 - **언제:** 설계 문서, worklog, 프로그램 노트를 읽고 쓸 때. "노트에 기록해줘"도 여기로 온다.
 - **내용:**
   - `notes` 설정이나 사용자가 지정한 저장소의 obsidian 또는 markdown 어댑터를 쓴다. 개인 vault 기본값은 없다.
-  - 설정의 `notes.delegate_agent`나 사용자 지시가 노트 쓰기 담당 에이전트를 정하면 쓰기는 모두 그 에이전트에 맡긴다.
+  - 쓰기는 모두 담당 에이전트에 맡긴다. 담당은 사용자 지시 → 설정의 `notes.delegate_agent` → 플러그인 agent `agent-skills:notes-writer` 순서로 정하고, `"none"`이면 세션에서 직접 쓴다. `notes-writer`는 저장소의 규칙 파일을 매번 읽고(읽다 실패하면 멈춘다), 지금은 Obsidian vault와 Markdown 폴더만 다룬다. Confluence·GitHub wiki 어댑터는 나중 일이다(LATER).
   - 경로와 파일 이름은 선택한 저장소의 규칙이나 사용자의 지정을 따른다.
-  - 사용자가 선택한 도구와 허용된 접근 방식으로 현재 내용을 읽고 수정한다. 동기화 상태를 확인하며, 표시를 위한 별도 페이지 발행은 필수가 아니다.
+  - Obsidian vault는 사용자 지시가 정한 경로, 없으면 `notes.obsidian.access`(`mcp`·`cli`·`filesystem`)가 정한 한 가지 경로로만 읽고 쓴다. `mcp`면 연결된 Obsidian MCP의 vault 도구만 쓰고, vault 폴더에 셸 명령·파일 도구·Obsidian CLI를 쓰지 않는다. 동기화 서비스가 디스크 사본을 늦게 맞추는 vault를 위한 모드다. 둘 다 없으면 파일시스템으로 넘어가지 않고 멈추고 묻는다. 표시를 위한 별도 페이지 발행은 필수가 아니다.
 - **동봉:** `references/obsidian.md`, `references/markdown.md`.
 
 ## 글쓰기
@@ -383,8 +383,8 @@
 
 ### principles
 - **언제:** 설계, 리팩터, 검증, 위임 판단에 이름 붙은 원칙이 필요할 때.
-- **내용:** 원칙 24개의 인덱스다(Core, Architecture, Verification, Delegation, Meta). Delegation에는 이 저장소가 더한 한 줄 Stay Answerable(`orchestrate`의 즉답 원칙)이 있다. 적용할 원칙은 leaf 파일을 끝까지 읽는다. 예: 근본 원인 수정, 동작을 테스트, 빼고 나서 더하기, 사람을 기다리지 않기. 이 저장소가 더한 Work to an Exit Condition은 에픽·프로그램을 시작하거나 키우기 전에 완료 조건을 쓰고, 후속 발견을 NOW·LATER·DROP으로 나눠 NOW만 티켓으로 만들고, 진행을 "N/M 완료 조건 충족"으로 보고한다.
-- **동봉:** `references/principle-*.md` 24개.
+- **내용:** 원칙 25개의 인덱스다(Core, Architecture, Verification, Delegation, Meta). Delegation에는 이 저장소가 더한 한 줄 Stay Answerable(`orchestrate`의 즉답 원칙)이 있다. 적용할 원칙은 leaf 파일을 끝까지 읽는다. 예: 근본 원인 수정, 동작을 테스트, 빼고 나서 더하기, 사람을 기다리지 않기. 이 저장소가 더한 Work to an Exit Condition은 에픽·프로그램을 시작하거나 키우기 전에 완료 조건을 쓰고, 후속 발견을 NOW·LATER·DROP으로 나눠 NOW만 티켓으로 만들고, 진행을 "N/M 완료 조건 충족"으로 보고한다.
+- **동봉:** `references/principle-*.md` 25개와 측정 점검표 `references/benchmark-checklist.md`.
 
 ### recall
 - **언제:** "어디까지 했지", "X 작업 어디까지 했더라", "최근 작업 정리해줘", "이번 주에 뭐 했지", 'catch me up'. 앞선 세션이 건드린 일을 시작하거나 이어 가기 전.
@@ -505,9 +505,10 @@
     "adapter": "linear",
     "linear": {"workspace": null, "team": "ENG", "project": null,
                "templates": {"dev": "개발 티켓", "spike": "조사 티켓"}},
-    "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"}
+    "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"},
+    "rules_file": "~/.config/agent-skills/tracker-rules.md"
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}
 }
 ```
 
@@ -601,10 +602,10 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 | 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어, 문서·티켓·PR은 한국어. 문체는 `write-plainly`(한국어·영어) |
 
 ### 가져온 것
-pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 15개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
+pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전부와 나머지 중 16개를 가져왔다. 16개 가운데 benchmark-checklist는 스킬이 아니라 `principles`의 참조 파일로 넣었다. 고정 커밋은 `99b609a`(0.15.32)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
 
-- **거의 그대로 가져온 것:** 원칙 23개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
-  - 원칙은 pstack에서 스킬 23개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
+- **거의 그대로 가져온 것:** 원칙 24개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
+  - 원칙은 pstack에서 스킬 24개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
 - **고쳐서 가져온 것:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
   - 모델이 스스로 부를 수 있게 했다.
   - Cursor 전용 요소를 Claude Code 대응물로 바꿨다. 경로는 `.cursor/` → `.claude/`, 워커는 `generalPurpose`/클라우드 → `Agent`/Orca 워커, transcript는 `agent-transcripts` → `~/.claude/projects`.
@@ -625,6 +626,10 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 | no-comments | 주석 제거 | Cursor 전용 Comment Sicko 에이전트에 기댄다. 규칙은 `prune-comments`로 옮겼다. unslop과 technical-writing은 `write-plainly`로 합쳤다 |
 | typescript-best-practices | TS 규칙 | 범용 스킬이 아니다 |
 | setup-pstack, make-bot-ui, bro, automate-me, benny 자동화 | Cursor 모델 설정, Grok Bot 등 | Cursor나 Grok에 묶여 있다 |
+| correct | 같은 실수를 구조로 막는 절차 | `reflect`와 Encode Lessons in Structure 원칙이 같은 일을 한다. 막는 수단의 순서(구조, 타입, lint, 테스트, 문서)는 그 원칙에 접을지 다음 동기화 때 본다 |
+| in-your-own-words, sharpen, poteto-help | 사용자가 직접 치는 짧은 프롬프트, pstack 사용 안내 | 모델이 부르는 스킬로 만들 근거가 없다. poteto-help는 pstack 설치 안내다 |
+| ketchup, ketchup-video | 대화를 따라잡게 하는 보고 | `brief`가 결정 항목 규칙을 이미 옮겼다(upstream `978ca6e`). 그 뒤에 생긴 "대기 항목을 줄이지 않는다"와 그림 규칙은 `brief`를 고치는 다른 작업과 겹쳐 다음에 본다 |
+| statechart, create-formal-verification-skill, maintain-formal-verification-skill | TLA+ 모델과 상태 차트, 형식 검증 스킬 생성과 유지 | 파일이 많고 TLA+ 도구가 필요하다. 쓸 프로젝트가 생기면 다시 본다 |
 
 ### pstack에 없는 것
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
@@ -634,8 +639,8 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 - **hook:** 권한 결정(`guard.py`), 코디네이터 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
 
 ### upstream 동기화 상태
-- **pin 이후 커밋:** upstream `main`(0.15.5)은 pin 뒤로 두 커밋이 더 있다.
-  - #419: Opus 5.5에 필요 없는 지시 19개를 걷어냈다. 우리 `6eec9fa`와 방향이 같고, tdd와 reflect 리뷰어는 같은 곳을 고쳤다.
-  - #422: 모델 규칙을 읽는 방식을 통일했고, show-me-your-work에 run마다 `start` 행을 두게 했다.
-- **dry-run 결과:** `python3 scripts/pstack-sync.py --to origin/main`을 돌리면 원칙 4개와 interrogate 참조 3개는 깨끗하게 들어온다. tdd와 tooling-reviewer는 자동 병합된다. 고쳐서 가져온 9개 파일(interrogate, architect, swarm, reflect, how, why, show-me-your-work, 리뷰어 2개)은 충돌한다.
-- **충돌 성격:** 대부분 Cursor 모델 규칙 줄이라 우리 쪽을 유지하면 된다. `--write`는 충돌이 0일 때만 쓰므로 손으로 병합해야 한다.
+- **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.
+- **받은 것:** 대부분 지시를 줄인 커밋(#538, #571, #634)이다. 원문 그대로 가져온 파일은 upstream과 같게 맞췄다. 고쳐서 가져온 파일은 3-way 병합으로 문장 압축과 새 규칙을 받았다. 새 규칙은 show-me-your-work의 run별 `start` 행, create-verification-skill의 "준비됨은 쓸 수 있는 상태"와 대역 환경 검증의 한계, architect의 "다음 기여자는 에이전트" 기준, arena 후보가 기각한 안을 적는 규칙 들이다. 새 원칙 Explain the Number와 그 측정 점검표를 `principles`에 더했다.
+- **크게 줄어든 원칙 다섯 개:** encode-lessons-in-structure, laziness-protocol, guard-the-context-window, exhaust-the-design-space, migrate-callers-then-delete-legacy-apis는 upstream이 글이 없어도 에이전트가 따르는 절을 지워(#571, #634) 몇 줄만 남았다. 원문 그대로(verbatim) 가져오는 파일은 upstream을 바이트 단위로 따르는 것이 동기화 정책이라 그대로 받았다. 언제 적용하는지는 같은 파일의 frontmatter description이 여전히 말하고, 파일과 함께 읽힌다. reflect의 압축을 받지 않은 것은 고쳐서 가져온(adapted) 파일이고 병합 결과가 이 저장소의 절 구조를 덮었기 때문이다.
+- **받지 않은 것:** Cursor 모델 규칙 줄(`pstack-models.mdc`, 모델 slug, `generalPurpose`, `readonly`), 서브에이전트 effort를 poteto-mode에 맞추라는 줄(#613), reflect 본문 재구성. reflect는 이 저장소의 모드 구조를 그대로 둔다. 옮겨 쓴(derived) 파일의 upstream 변경(opening-a-pr의 PR 본문 절 구성, shipping의 착지 순서)은 반영하지 않았다.
+- **다음 동기화:** `python3 scripts/pstack-sync.py`(dry-run)로 시작한다. 고쳐서 가져온 파일은 대부분 충돌하니 손으로 병합한다. 충돌 없이 합쳐진 구간에도 Cursor 줄이 섞여 들어오므로 denylist 결과와 diff 전체를 읽는다.
