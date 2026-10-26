@@ -13,9 +13,11 @@ Claude Code 플러그인이다. 에이전트가 티켓 하나를 첫 수정부�
 이 문서에 나오는 말:
 
 - **Orca**: 여러 Claude Code 세션을 worktree별 터미널로 띄우는 멀티 에이전트 IDE(`orca` CLI). Orca에서 일 하나를 맡은 세션을 카드, 프로젝트 안에서 티켓 하나를 맡은 카드를 워커, 워커들을 이끄는 세션을 코디네이터라고 부른다.
-- **착지(land)**: 준비된 PR을 정해진 순서로 머지하는 것. 프로젝트 안에서는 `orch land`만 한다.
+- **착지(land)**: 검증된 PR을 `orch land`로 머지하는 것. 공유 파일을 고친 PR은 독점 레인에서 하나씩, 나머지는 준비되는 대로 들어간다.
 - **auto mode 분류기**: Claude Code의 auto permission mode에서 행동마다 허용·거부를 판정하는 모델. `autoMode` 규칙이 그 기준이다.
-- **`!` 한 줄**: Claude Code 입력칸에서 `!`로 시작하는 줄은 사람이 그 세션에서 셸 명령을 직접 실행한다. 일부 스킬은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔다.
+- **`!` 한 줄**: Claude Code 입력칸에서 `!`로 시작하는 줄은 사람이 그 세션에서 셸 명령을 직접 실행한다.
+
+일부 스킬은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔다.
 
 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d)(스킬별 언제·무엇, `docs/skills.md`에서 생성), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR)(흐름과 `orch` 착지 과정 그림). 두 페이지는 한국어·English·日本語를 오른쪽 위에서 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다.
 
@@ -67,7 +69,7 @@ python3 <체크아웃>/scripts/setup.py --apply <해시>  # 위가 출력한 줄
 
 dry run은 아무것도 쓰지 않는다. 해시는 계획 전체의 해시라서 그 사이에 무엇이 바뀌면 `--apply`가 거절한다. `--apply`는 `~/.claude/settings.json`과 `agent-skills.json`을 백업하고, 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, autoMode·`permissions.allow` 묶음, 최소 설정 키) 중 없는 것만 더한 뒤, 15분마다 도는 동기화 작업과 기본 on 정기 자동화를 켜고 `setup-pc` 점검 표를 낸다. 이미 있는 값은 덮지 않고(켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 다시 돌리면 바뀌는 것이 없다. 하는 일·옮기지 않는 것은 [docs/new-pc.md](docs/new-pc.md).
 
-새 설정은 새 세션부터 적용되므로 떠 있는 세션은 재시작한다. 설치 직후 그 세션에서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
+새 설정은 새 세션부터 적용되므로 떠 있는 세션은 재시작한다. 적용 전부터 떠 있던 세션에서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
 체크아웃 로드와 동기화만 원하면 `scripts/bootstrap.py`(dry run, `--write`)를 쓴다. 근거는 [docs/platform.md](docs/platform.md) §5.
 
