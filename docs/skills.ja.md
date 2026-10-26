@@ -19,9 +19,25 @@
               resource steward が定期的に）
               secure-fill（ブラウザの認証欄に秘密の値を。エージェントは値を見ない）
               tune-automode（分類器の拒否を最小の autoMode ルールに。適用はユーザー）
+チャット      shepherd-prs（レビュー依頼・レビュー待ち・マージ準備ができた自分の PR を定期の回で）
+              · watch-mentions
 どこでも      use-tracker（チケット）· use-notes（ノート）
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
+
+PR を受け持つスキルとマージする主体:
+
+| スキル | 受け持つ PR | マージ |
+|---|---|---|
+| deliver-ticket | このセッションが作業中の自分の PR: 作成、レビュー対応、マージ、リリース | セッションが §5 どおり（`gh pr merge`、スタックは merge-async） |
+| shepherd-prs | 定期の回が集めた待ち PR: 自分を指名したレビュー依頼、レビュー待ちの自分の PR（依頼・リマインド）、マージ準備ができた自分の PR | `merge_repos` のゲートをすべて通った自分の PR だけ |
+| orchestrate | プログラムのワーカーの PR | `orch land`、または人が承認した plain merge |
+| handoff-ticket · record-progress | PR を作らない。次のカードを決めるか、オープン・レビュー・マージを記録する | しない |
+
+- deliver-ticket ↔ shepherd-prs: 生きている worktree にブランチがチェックアウトされた PR はそのセッションがマージする。shepherd-prs は飛ばす。
+- orchestrate ↔ shepherd-prs: プログラム台帳にある PR は `orch land` がマージする。shepherd-prs は止まったプログラムの PR もマージせず、止まった後に戻るのはリマインドだけ。
+- orchestrate ↔ deliver-ticket: ワーカーは deliver-ticket で働くが、マージは §5 ではなく `orch land`。
+- handoff-ticket の「머지하고 다음 진행해줘」: マージは deliver-ticket、handoff-ticket はその後に次のカードを開くだけ。
 
 ## チケット1件
 
@@ -193,7 +209,7 @@
 
 ## チャットとレビュー
 
-### watch-prs
+### shepherd-prs (旧名 `watch-prs`)
 設定したリポジトリで個人へのレビュー依頼と自分の PR のレビュー待ちを集め、head ごとの台帳で重複を防ぎます。通知・リマインダー・自動マージ・bot 承認には設定とユーザー権限が必要です。プログラムの PR は `orchestrate` が担当します。
 
 ### watch-mentions

@@ -2,7 +2,7 @@
 
 A merged PR is not done in a repo that ships: the change has to run in the dev environment, behave
 as intended there, and leave clean logs. This file is the procedure, for a session finishing its
-own ticket and for a release worker that `watch-prs` started for merges it found (kind
+own ticket and for a release worker that `shepherd-prs` started for merges it found (kind
 `unreleased`).
 
 Production is never part of it. A production step runs only on the owner's instruction typed into
@@ -23,7 +23,7 @@ Each repo that ships declares its dev path in the `prs` config (`~/.claude/agent
 | `orca_repo` | Optional: the Orca repo selector for the release worker (default `name:<repo name>`) |
 | `lookback_days` | How far back merges count (default 2) |
 
-A worker started by `watch-prs` gets these values in its brief, with the PR list, each merge
+A worker started by `shepherd-prs` gets these values in its brief, with the PR list, each merge
 commit, and whether dev already contains it.
 
 ## Steps

@@ -68,7 +68,7 @@ def key(item):
 
 
 def pr_ref(value):
-    """owner/repo#N from that form or a PR URL; None for anything else. watch-prs matches on it."""
+    """owner/repo#N from that form or a PR URL; None for anything else. shepherd-prs matches on it."""
     m = PR_REF.match(str(value or "").strip())
     return f"{m[1]}#{m[2]}" if m else None
 

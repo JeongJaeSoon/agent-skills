@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bookkeeping for watch-prs: which pull requests need the owner, ranked, sent once per head.
+"""Bookkeeping for shepherd-prs: which pull requests need the owner, ranked, sent once per head.
 
 Usage:
   python3 prs.py precheck [--config PATH]
@@ -85,6 +85,7 @@ GH_RETRY_WAITS = (2, 4)
 # Seconds. A precheck makes about ten paged GraphQL reads of 2-10 s each, plus a retried 5xx: more than Orca's
 # default 60 s.
 PRECHECK_TIMEOUT = 180
+AUTOMATION_NAME = "agent-skills shepherd-prs"  # `schedule --edit` renames an automation registered under the old name
 SOURCES = ("sent", "scheduled", "found", "refused", "no_thread", "skipped")
 
 PR_FIELDS = """id number title url isDraft createdAt updatedAt mergedAt mergeCommit{oid} headRefOid additions deletions reviewDecision state
@@ -205,7 +206,7 @@ def gh_graphql(query, partial=False, **variables):
 
 
 class GitHub:
-    """The reads watch-prs needs. Tests replace it with a fake holding fixture nodes."""
+    """The reads shepherd-prs needs. Tests replace it with a fake holding fixture nodes."""
 
     def viewer(self):
         return gh_graphql("query{viewer{login}}")["viewer"]["login"]
@@ -466,7 +467,7 @@ def rule_draft(gate, prod):
         return f"{gate['name']}: 머지가 프로덕션 배포(또는 모름)라 회차가 할 규칙은 만들지 않는다. 소유자 몫으로 남는다."
     authors = ", ".join(gate.get("authors", []))
     repos = ", ".join(gate.get("repos", [])) or "any repository in scope"
-    return (f"allow: Scheduled watch-prs round approving {gate['name']} PRs: in a turn started by the watch-prs automation, "
+    return (f"allow: Scheduled shepherd-prs round approving {gate['name']} PRs: in a turn started by the shepherd-prs automation, "
             f"the agent may run the approval line `prs.py round` prints for that PR "
             f"(`gh api -X POST repos/<repo>/pulls/<n>/reviews -f event=APPROVE -f commit_id=<head sha>` behind a head "
             f"check) once, as a standalone command, on an open PR in {repos} whose author is the app {authors} and whose title matches "
@@ -1336,7 +1337,7 @@ PROMPT_STEPS = {
     "unreleased": (
         "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: worker-start 는 Run 에 묶인 "
         "코디네이터 터미널에서만 된다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
-        "\"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 코디네이터에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
+        "\"shepherd-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 코디네이터에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
         "이 회차는 워커를 띄우지도 배포하지도 않는다."),
 }
 # The ownergate step runs before the send: its results are appended to the message.
@@ -1392,15 +1393,15 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
                  + (" (예외는 `round` 가 낸 단계뿐이다)." if gate else "."))
     reads += (" 권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행동은 어떤 형태로도(재실행, 스크립트·다른 도구, 다른 세션) "
               "다시 시도하지 않고, 무엇을 하려던 것인지와 거부 종류, 정확한 명령을 보고한다.")
-    prompt = (f"watch-prs 회차다. `{run('plan --body')}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
-              f"아니면 {merge_step}{first}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
+    prompt = (f"shepherd-prs 회차다. `{run('plan --body')}` 를 한 번 실행한다. 출력이 비어 있으면 아무것도 보내지 않고 끝낸다. "
+              f"아니면 {merge_step}{first}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"shepherd-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
               + (steps + " " if steps else "")
               + f"코디네이터 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
     if edit:
-        return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
+        return ["orca", "automations", "edit", edit, "--name", AUTOMATION_NAME, "--trigger", cfg["cron"], "--precheck", run("precheck"),
                 "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
-    cmd = ["orca", "automations", "create", "--name", "agent-skills watch-prs", "--trigger", cfg["cron"],
+    cmd = ["orca", "automations", "create", "--name", AUTOMATION_NAME, "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
            "--precheck", run("precheck"), "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"]
     if cfg.get("timezone"):

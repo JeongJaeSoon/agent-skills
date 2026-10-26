@@ -204,7 +204,7 @@ for head_now, api_rc, want in (("h1", 0, 0), ("h9", 0, 1), ("h1", 1, 1)):
     rc = subprocess.run(["sh", "-c", g1["command"]], env={**os.environ, "PATH": f"{shim}:{os.environ['PATH']}"},
                         capture_output=True).returncode
     assert (rc != 0) == bool(want), (head_now, api_rc, rc)
-assert g1["diff"] == "파일 1개 ±10: members/a.json" and g1["rule_draft"].startswith("allow: Scheduled watch-prs round approving access PRs")
+assert g1["diff"] == "파일 1개 ±10: members/a.json" and g1["rule_draft"].startswith("allow: Scheduled shepherd-prs round approving access PRs")
 gtext = p.body(owner_only).splitlines()
 assert gtext[1].startswith("1. [소유자 승인] acme/access#1 [Auto] Add access for 1 user — @grant-bot · 2일 · 파일 1개 ±10") \
     and gtext[1].endswith("프로덕션 배포: 아니오 — https://github.com/acme/access/pull/1"), gtext[1]
@@ -230,16 +230,16 @@ got = p.compute(Fake([], gated=[prd, gated[0]]), two, {}, NOW)["new"]
 assert [(i["number"], i["gate"], i["prod"]) for i in got] == [(1, "access", True), (7, "prd", True)], got
 
 # An allow rule that starts with the gate's phrase moves the non-production item to the round; production stays.
-gate["allow_rule"] = "Scheduled watch-prs round approving access PRs"
-allow_rules.append("Scheduled watch-prs round approving access PRs: in a turn started by ...")
+gate["allow_rule"] = "Scheduled shepherd-prs round approving access PRs"
+allow_rules.append("Scheduled shepherd-prs round approving access PRs: in a turn started by ...")
 covered = p.compute(Fake([], gated=gated), gcfg, {}, NOW)
 assert [(i["number"], i["run_by"]) for i in covered["new"]] == [(1, "round"), (5, "owner")]
 assert p.body(covered).splitlines()[2] == "   규칙이 덮음, 이 회차가 실행: " + g1["command"]
-allow_rules[0] = "Other rule. Scheduled watch-prs round approving access PRs"
+allow_rules[0] = "Other rule. Scheduled shepherd-prs round approving access PRs"
 assert p.compute(Fake([], gated=gated), gcfg, {}, NOW)["new"][0]["run_by"] == "owner", "the phrase must open the rule"
 allow_rules.clear()
 assert p.compute(Fake([], gated=gated), gcfg, {}, NOW)["new"][0]["run_by"] == "owner", "a rule that went away covers nothing"
-allow_rules.append("Scheduled watch-prs round approving access PRs: in a turn started by ...")
+allow_rules.append("Scheduled shepherd-prs round approving access PRs: in a turn started by ...")
 assert p.compute(Fake([], gated=gated), {**gcfg, "ownergate": [{**gate, "allow_rule": "Scheduled"}]}, {}, NOW)["new"][0]["run_by"] \
     == "owner", "a phrase shorter than ALLOW_RULE_MIN covers nothing"
 
@@ -504,17 +504,17 @@ assert subprocess.run([sys.executable, script, "precheck", "--config", str(conf)
 assert subprocess.run([sys.executable, script, "precheck", "--config", str(tmp / "none.json")], env=env, capture_output=True).returncode == 2
 
 # schedule: prints the create command with the precheck wired in; --write is the only path that creates.
-line = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"),
+line = p.schedule_cmd(pathlib.Path("/repo/skills/shepherd-prs/scripts/prs.py"),
                      {**cfg, "inbox_to": "term_x", "timezone": "Asia/Tokyo"}, "path:/repo")
 assert line[:3] == ["orca", "automations", "create"]
 assert line[line.index("--trigger") + 1] == "*/30 * * * *"
 assert line[line.index("--timezone") + 1] == "Asia/Tokyo"
-assert line[line.index("--precheck") + 1] == "python3 /repo/skills/watch-prs/scripts/prs.py precheck"
+assert line[line.index("--precheck") + 1] == "python3 /repo/skills/shepherd-prs/scripts/prs.py precheck"
 assert line[line.index("--precheck-timeout") + 1] == "180", "Orca's default 60 s cuts a precheck with a retried 5xx off"
 prompt = line[line.index("--prompt") + 1]
 # The round commands are exactly precheck, plan --body and commit: an owner's allow rule names those forms.
-assert "`python3 /repo/skills/watch-prs/scripts/prs.py plan --body`" in prompt and "--to term_x" in prompt
-assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/watch-prs/scripts/prs.py commit`" in prompt
+assert "`python3 /repo/skills/shepherd-prs/scripts/prs.py plan --body`" in prompt and "--to term_x" in prompt
+assert "전송이 성공했을 때만 마지막에 `python3 /repo/skills/shepherd-prs/scripts/prs.py commit`" in prompt
 assert "dispatch" not in prompt and "--kinds" not in prompt, "review_request alone has no step after the message"
 # A scheduled session may refuse a command that starts with `env` or a `VAR=` assignment, so neither appears.
 no_env = lambda argv: "env " not in " ".join(argv) and not re.search(r"(^|[\s`])[A-Z_]{2,}=", " ".join(argv))
@@ -561,6 +561,7 @@ prompt = line[line.index("--prompt") + 1]
 assert line[:4] == ["orca", "automations", "edit", "auto1"] and no_env(line), line
 assert line[line.index("--precheck") + 1] == "python3 /r/prs.py precheck --state /s"
 assert "--precheck-timeout" in line, "--edit rewrites the timeout too"
+assert line[line.index("--name") + 1] == "agent-skills shepherd-prs", "--edit renames an automation still under the old name"
 assert "`python3 /r/prs.py actions --state /s`" in prompt and "`python3 /r/prs.py log --state /s --key <key>" in prompt, prompt
 # A state folder off the default goes in as a flag after the subcommand, not through the environment.
 # round and result as the prompt writes them: --state right after the subcommand, --config anywhere.
@@ -760,14 +761,14 @@ assert p.commit(mstate, mcfg, NOW) == 2
 assert p.compute(MergeFake([c[0] for c in cases.values()][:2]), mcfg, p.read_json(mstate / "ledger.json", {}), NOW)["new"] == []
 
 # A config that collects ready_to_merge schedules a round that merges; without it the round stays read-only.
-mline = p.schedule_cmd(pathlib.Path("/repo/skills/watch-prs/scripts/prs.py"), {**mcfg, "inbox_to": "term_x"}, "path:/repo")
+mline = p.schedule_cmd(pathlib.Path("/repo/skills/shepherd-prs/scripts/prs.py"), {**mcfg, "inbox_to": "term_x"}, "path:/repo")
 mprompt = mline[mline.index("--prompt") + 1]
 assert all(s in mprompt for s in ("merges", "verify", "gh pr merge", "--admin", "다시 시도하지 않", "commit")), mprompt
 ro = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**cfg, "inbox_to": "t"}, "path:/x")
 ro = ro[ro.index("--prompt") + 1]
 assert "merges" not in ro and "감지하고 넘기기만" in ro
 assert "코멘트·재요청도 하지 않는다" in mprompt
-assert no_env(mline) and "`python3 /repo/skills/watch-prs/scripts/prs.py merges`" in mprompt, mprompt
+assert no_env(mline) and "`python3 /repo/skills/shepherd-prs/scripts/prs.py merges`" in mprompt, mprompt
 # With review_wait too, merging still precedes the send and the actions step follows it.
 both = p.schedule_cmd(pathlib.Path("/x/prs.py"), {**mcfg, "kinds": ["ready_to_merge", "review_wait"], "inbox_to": "t"}, "path:/x")
 both = both[both.index("--prompt") + 1]

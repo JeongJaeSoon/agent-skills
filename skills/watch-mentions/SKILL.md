@@ -1,6 +1,6 @@
 ---
 name: watch-mentions
-description: "Use when the user wants chat that concerns them picked up as work — \"멘션 감시\", \"나한테 온 슬랙 정리해줘\", \"내가 말한 스레드에 새 답글 있어?\", \"watch my mentions\" — and for each round of the watch-mentions automation. Not for posting to Slack (slack-post) or for GitHub review requests (watch-prs)."
+description: "Use when the user wants chat that concerns them picked up as work — \"멘션 감시\", \"나한테 온 슬랙 정리해줘\", \"내가 말한 스레드에 새 답글 있어?\", \"watch my mentions\" — and for each round of the watch-mentions automation. Not for posting to Slack (slack-post) or for GitHub review requests (shepherd-prs)."
 ---
 
 # Watch mentions
@@ -32,7 +32,7 @@ to it would lose its items silently. `channels` empty means every public channel
 those. Other keys and defaults are in `scripts/mentions.py` (`DEFAULTS`). State lives in
 `~/.local/state/agent-skills/mentions/` (`--state <dir>` or `$AGENT_SKILLS_STATE` moves it): `cursor.json`,
 `lock.json`, and `seen.json`, which holds channel, ts, permalink, category and, for a review of a
-PR, `pr` (`owner/repo#N`) per item and never message text. `watch-prs` reads those `pr` rows to
+PR, `pr` (`owner/repo#N`) per item and never message text. `shepherd-prs` reads those `pr` rows to
 merge Slack review requests into its list; `annotate ITEMS.json` sets `pr` on rows already seen.
 
 ## Privacy boundary

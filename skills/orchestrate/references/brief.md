@@ -72,7 +72,7 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             `Monitor` until-loop on `gh pr checks` (deliver-ticket review-loop).
             A wait on a human review or another outside event reads the PR at most once every
             60 minutes, or not at all: end your turn or `ask`, and the notice comes through
-            watch-prs or the coordinator. GitHub's GraphQL limit (5000 points per hour) is shared
+            shepherd-prs or the coordinator. GitHub's GraphQL limit (5000 points per hour) is shared
             by every session using the same token. On a rate-limit error, retry nothing: wait
             until the reset time (the error's `retry-after`, else `gh api rate_limit`).
             Never merge any other way. (human-gate: stop at READY and report instead.)

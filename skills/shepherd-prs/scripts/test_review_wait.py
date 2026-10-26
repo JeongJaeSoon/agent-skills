@@ -281,7 +281,7 @@ after = p.compute(Fake, c, p.read_json(p.STATE / "ledger.json", {}), NOW + 60)
 assert {i["key"] for i in after["new"]} == {"acme/widgets#33@h33/request/bob", "acme/widgets#40@h40/request/bob"}, "the unlogged request is still due"
 
 # schedule: the prompt carries a kind's step only when that kind is configured; --edit keeps the automation id.
-script = pathlib.Path("/repo/skills/watch-prs/scripts/prs.py")
+script = pathlib.Path("/repo/skills/shepherd-prs/scripts/prs.py")
 with_wait = p.schedule_cmd(script, {**c, "inbox_to": "term_x"}, "path:/repo")
 prompt = with_wait[with_wait.index("--prompt") + 1]
 assert "actions" in prompt and "slack-post" in prompt and "--source refused" in prompt and "직접 하지 않는다" not in prompt

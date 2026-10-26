@@ -17,9 +17,24 @@
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
               setup-pc(새 PC 한 줄 설치·갱신: dry run diff → 사람의 --apply)
-채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 코디네이터에게 한 통으로)
+채팅       shepherd-prs(리뷰 요청·리뷰 대기·머지 준비된 내 PR 을 정기 회차로)
+              watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 코디네이터에게 한 통으로)
 어디서나    record-progress(언제 무엇을 남기나) → use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
+
+PR 을 맡는 스킬과 머지 주체:
+
+| 스킬 | 맡는 PR | 머지 |
+|---|---|---|
+| deliver-ticket | 이 세션이 작업 중인 내 PR: 작성, 리뷰 대응, 머지, 릴리스 | 세션이 §5 대로 (`gh pr merge`, 스택은 merge-async) |
+| shepherd-prs | 정기 회차가 모은 대기 PR: 나를 지명한 리뷰 요청, 리뷰를 기다리는 내 PR(의뢰·리마인드), 머지 준비가 된 내 PR | `merge_repos` 게이트를 모두 통과한 내 PR 만 |
+| orchestrate | 프로그램 워커의 PR | `orch land`, 또는 사람이 승인한 plain merge |
+| handoff-ticket · record-progress | PR 을 만들지 않는다. 다음 카드를 정하거나 열림·리뷰·머지를 기록한다 | 하지 않는다 |
+
+- deliver-ticket ↔ shepherd-prs: 살아 있는 worktree 에 브랜치가 체크아웃된 PR 은 그 세션이 머지한다. shepherd-prs 는 그 PR 을 건너뛴다.
+- orchestrate ↔ shepherd-prs: 프로그램 원장에 있는 PR 은 `orch land` 가 머지한다. shepherd-prs 는 멈춘 프로그램의 PR 도 머지하지 않고, 멈춘 뒤에는 리마인드만 돌아온다.
+- orchestrate ↔ deliver-ticket: 워커는 deliver-ticket 으로 일하지만 머지는 §5 대신 `orch land` 로 한다.
+- handoff-ticket 의 "머지하고 다음 진행해줘": 머지는 deliver-ticket 이 하고, handoff-ticket 은 그 뒤 다음 카드만 연다.
 
 ## 티켓 하나
 
@@ -216,7 +231,7 @@
 
 ## 채팅
 
-### watch-prs
+### shepherd-prs (옛 이름 `watch-prs`)
 - **언제:** 사용자를 지명한 리뷰 요청, 자신의 PR 리뷰 대기, GitHub 알림 감시를 요청할 때.
 - **하는 일:** 설정한 저장소와 head별 원장으로 중복 알림을 줄이고 리뷰 대기 항목을 분류한다. 외부 알림·리마인드·자동 머지·봇 승인은 해당 설정과 사용자 권한이 있을 때만 실행한다. 프로그램 PR 관리는 `orchestrate`, 실제 리뷰 작성은 별도 리뷰 도구를 쓴다.
 - **동봉:** `scripts/prs.py`, `scripts/notify.py`와 해당 테스트.
