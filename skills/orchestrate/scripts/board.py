@@ -15,6 +15,7 @@ same-reviewer fold, next steps under 진행 중 and 보류, bold for changed row
 import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys
 
 import fleet
+import acks
 import owner_requests
 import stages
 from stages import with_descendants
@@ -441,6 +442,24 @@ def refresh(now, limit_min):
     return " · ".join(out) or None
 
 
+def drop_acked(lines, prs, rows, have):
+    """(lines without the rows the owner acked, every ackable row as {id, label, at, acked}, the hidden keys).
+    Ackable is ✅, and for a head row every sub-task row under it too (acks.py): a closed PR's row is held, not done."""
+    done, hidden = [], set()
+    heads = [i for i, l in enumerate(lines) if l["depth"] == 0] + [len(lines)]
+    for a, b in zip(heads, heads[1:]):
+        group = lines[a:b]
+        for l, whole in [(group[0], group)] + [(l, [l]) for l in group[1:]]:
+            if not all(x["status"] == "done" for x in whole):
+                continue
+            aid, p, r = f"board:{l['key']}", prs.get(l["pr"]) or {}, rows.get(l["key"]) or {}
+            done.append({"id": aid, "label": l["name"], "at": p.get("merged_at") or p.get("closed_at") or r.get("reported_at"),
+                         "acked": aid in have})
+            if aid in have:
+                hidden |= {x["key"] for x in whole}
+    return [l for l in lines if l["key"] not in hidden], done, hidden
+
+
 def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False, periodic=True,
            decisions=(), insight=None, fresh=False):
     """The brief skill's report as text, with what the caller needs around it. periodic (§1 Periodic report) adds
@@ -449,8 +468,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     old. decisions are the model's own items (DECISION_FORM), numbered after the registered ones; insight goes after
     진행 중, so the report still ends on what the human acts on.
 
-    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "snapshot"}. snapshot is what commit() saves
-    for the next report to compare against."""
+    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "done", "snapshot"}. done is drop_acked()'s;
+    snapshot is what commit() saves for the next report to compare against."""
     now = now or fleet.utcnow()
     tg = channel == "telegram"
     sd = fleet.state_dir()
@@ -648,6 +667,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     kid_status += task_lines(f"{k}@{tsec[0]}", tsec, [t])
             lines[at]["status"] = worst(st, kid_status)
 
+    lines, done, hidden = drop_acked(lines, prs, rows, have := acks.acked())
+
     # A ✅ row merged (or marked done) over done_fold_h ago leaves the table for one count per section; the dashboard
     # keeps it. A head stays while any row under it stays, and a row with no time to judge by stays.
     def done_long_ago(l):
@@ -709,6 +730,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append(f"PR 상태 없음 {len(unknown)}")
     if stale_board:
         facts.append(f"오래된 board 행 {len(stale_board)} ({'' if len(stale_board) == 1 else '최대 '}{ago(max(stale_board))})")
+    if hidden:
+        facts.append(f"확인함으로 숨긴 행 {len(hidden)}")
     if collected:
         facts.append(collected)
     stage_t, stage_gone = stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state) if not periodic else (None, 0)
@@ -869,7 +892,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     todo = store["owner_todo"] + turn
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
-    if asked := owner_requests.line(owner_requests.summary(now)):
+    shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
+    if asked := owner_requests.line(owner_requests.summary(now, shown)):
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
     later = []
     for l in reversed(store["later"]):  # a held item written twice before later_add merged them: the newest wording
@@ -877,7 +901,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             later.insert(0, l)
     if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later])):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
-    return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok,
+    return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
 
 

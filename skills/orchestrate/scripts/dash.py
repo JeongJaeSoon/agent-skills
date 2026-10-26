@@ -25,6 +25,11 @@ Usage: orch-dash <command> [options]
   prstats [--out PATH]               one collect of my PR counts from GitHub search (pr_stats.py), prints a summary
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
+  ack <id>... | ack --done-before AGE [--kind req|stage|board]... | unack <id>... | acks [--all] [--json]
+                                     mark finished Work rows (stage:<row>), finished brief rows (board:<row>) and
+                                     your requests (r7) as checked, so the dashboard and the brief leave them out;
+                                     a row in progress, waiting or held is refused, and an
+                                     acked request stays open (orch req done closes it). AGE: 90m, 24h, 7d (see acks.py)
   adopt [--apply] [--undo all|<worktree>]
                                      show (or write, when config adopt.write_orca_parent is on) each session's
                                      Orca parent worktree; every write is logged and --undo restores it
@@ -33,7 +38,7 @@ Store: $PROGRAMS_HOME or ~/.claude/programs. The dashboard writes only under <sl
 Fleet state: $ORCH_FLEET_STATE or ~/.local/state/agent-skills/dashboard (see fleet.py). ORCH_FLEET=off disables it,
 ORCH_SKILLS=off disables only the skill usage collect, and ORCH_PR_STATS=off only the PR stats collect.
 """
-import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
+import concurrent.futures, datetime as dt, fcntl, hashlib, http.server, itertools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -45,6 +50,7 @@ import pr_stats  # noqa: E402
 import sent  # noqa: E402
 import stages  # noqa: E402
 import flow  # noqa: E402
+import acks  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1352,7 +1358,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_cached(f.read_bytes())
         if path == "/api/fleet/work":
             # Read on every poll, not folded into state.json: an `orch stage` write shows on the next poll, not the next collect.
-            return self.send_cached(json.dumps(stages.table(), ensure_ascii=False).encode())
+            return self.send_cached(json.dumps(acks.mark_stages(stages.table()), ensure_ascii=False).encode())
         if path in ("/api/fleet/flow", "/api/fleet/changes"):
             return self.send_cached(flow_report(path.rsplit("/", 1)[1]))
         if path == "/api/fleet/brief":
@@ -1384,6 +1390,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, b'{"error":"bad json"}')
         if path == "/api/fleet/dismiss" and isinstance(body.get("key"), str) and FLEET:
             fleet.dismiss(FLEET, body["key"])
+        elif path == "/api/fleet/ack" and isinstance(body.get("ids"), list) and all(isinstance(i, str) for i in body["ids"]):
+            written, refused = acks.write(body["ids"][:500], undo=body.get("undo") is True)
+            FLEET_WAKE.set()
+            return self.send(200, json.dumps({"written": written, "refused": refused}).encode())
         elif path == "/api/fleet/send" and isinstance(body.get("session"), str) and isinstance(body.get("text"), str):
             handle = body.get("handle") if isinstance(body.get("handle"), str) else None
             code, out = fleet.send(body["session"], body["text"], handle)
@@ -1612,7 +1622,7 @@ def brief_report():
         out = json.loads(r.stdout)
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
-    return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok")}
+    return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok", "done")}
 
 
 FLOW_CACHE, FLOW_TTL = {}, {"flow": 30, "changes": 60}
@@ -1890,12 +1900,44 @@ def cmd_inbox(argv):
     print(json.dumps(row, ensure_ascii=False))
 
 
+def cmd_ack(argv, undo=False):
+    ids, can = list(itertools.takewhile(lambda a: not a.startswith("--"), argv)), None
+    try:
+        if not undo and (age := prog.opt(argv, "--done-before")):
+            kinds = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--kind"] or acks.KINDS
+            old, found = acks.older_than(age, kinds)
+            can = None if ids else found  # ids named as well may be of another kind: write() looks them up
+            ids += old
+        elif not ids:
+            sys.exit("usage: orch-dash ack <id>... | ack --done-before AGE [--kind req|stage|board]... | unack <id>...")
+        written, refused = acks.write(ids, undo=undo, can=can)
+    except (ValueError, OSError) as e:
+        sys.exit(str(e))
+    print(f"{'unacked' if undo else 'acked'} {len(written)}" + (f": {' '.join(written)}" if written else ""))
+    for aid, why in refused:
+        print(f"refused {aid}: {why}", file=sys.stderr)
+    sys.exit(1 if refused else 0)
+
+
+def cmd_acks(argv):
+    have = acks.acked()
+    can = acks.ackable() if "--all" in argv else acks.ackable(kinds={acks.kind(k) for k in have})
+    rows = [{"id": k, "acked": have.get(k), **can.get(k, {"label": None, "at": None})}
+            for k in ({**can, **have} if "--all" in argv else have)]
+    if "--json" in argv:
+        return print(json.dumps(rows, ensure_ascii=False, indent=1))
+    for r in rows:
+        print(f"{r['id']}  {'acked ' + r['acked'] if r['acked'] else 'not acked'}  {r['label'] or '(gone)'}")
+    print(f"{len(have)} acked" + (f" · {len(set(can) - set(have))} more can be acked" if "--all" in argv else ""))
+
+
 def cmd_adopt(argv):
     sys.exit(fleet.adopt("--apply" in argv, prog.opt(argv, "--undo")))
 
 
 COMMANDS = {"collect": cmd_collect, "serve": cmd_serve, "ensure": cmd_ensure, "note": cmd_note, "demo": cmd_demo,
             "fleet": cmd_fleet, "skills": cmd_skills, "prstats": cmd_prstats, "inbox": cmd_inbox, "adopt": cmd_adopt,
+            "ack": cmd_ack, "unack": lambda argv: cmd_ack(argv, undo=True), "acks": cmd_acks,
             "install-agent": cmd_install_agent, "uninstall-agent": cmd_uninstall_agent}
 
 if __name__ == "__main__":

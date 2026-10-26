@@ -477,6 +477,10 @@ table.work td:nth-child(n+4) { min-width: 150px; max-width: 280px; }
 .legend .wmark { margin-right: 2px; }
 .nowrap { white-space: nowrap; }
 tr.is-done td { opacity: 0.5; }
+.chip.ack { height: 20px; padding: 0 8px; margin-left: var(--s1); font-size: 11px; vertical-align: 1px; }
+.chip.ack:disabled { opacity: 0.5; cursor: default; }
+li.is-acked > :not(.ack) { opacity: 0.5; }
+.ack-note { padding: var(--s1) var(--s3); font-size: 12px; }
 .wenv { margin-bottom: var(--s3); }
 .wenv .meta { display: flex; gap: var(--s3); align-items: center; font-size: var(--t-sm); }
 .wnext { margin: 0; padding-left: calc(var(--s4) + 1.2em); display: grid; gap: var(--s1); }

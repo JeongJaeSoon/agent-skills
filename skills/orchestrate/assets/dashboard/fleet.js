@@ -406,7 +406,7 @@ function fleetOverview(st) {
       ${kpi("Sessions", `${ss.length}`, phaseLegend(["working", "waiting", "idle"], n), { src: "orca" })}
       ${kpi("Needs you", `${items.length}${missed ? ` ${tag(`${missed} missed`, "bad", "alert")}` : ""}`, Object.entries(st.counts || {}).map(([t, c]) => `${itemMeta(t)[0]} ${c}`).join(" · ") || "inbox empty")}
       ${kpi("Open PRs", `${open.length}`, `${open.filter((p) => p.ci === "failure").length} CI failing · ${open.filter((p) => p.decision === "APPROVED").length} approved`, { src: "github" })}
-      ${kpi("Your requests", `${rq.open || 0}${(rq.unlinked || []).length ? ` ${tag(`${rq.unlinked.length} unlinked`, "warn", "alert")}` : ""}`, `${rq.open ? `oldest ${agoSpan(rq.items[0].ts)}` : "none open"}${rq.expired ? ` · ${rq.expired} expired` : ""}`)}
+      ${kpi("Your requests", `${rq.open || 0}${(rq.unlinked || []).length ? ` ${tag(`${rq.unlinked.length} unlinked`, "warn", "alert")}` : ""}`, `${rq.open ? `oldest ${agoSpan(rq.items.find((q) => !q.acked).ts)}` : "none open"}${rq.expired ? ` · ${rq.expired} expired` : ""}`)}
     </div>
     ${projectChips(st)}
     <div class="grid fill">
@@ -425,9 +425,36 @@ function fleetOverview(st) {
 function requestCard(st) {
   const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
   if (!(rq.items || []).length) return "";
-  const rows = rq.items.slice(0, 8).map((q) => `<li>${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow ellipsis" title="${esc(q.text)}">${esc(q.text)}</span>
-    <span class="acts muted">${q.links.length ? q.links.map((l) => esc(l) + ((q.closed || []).includes(l) ? ` ${tag("closed", "warn")}` : "")).join(", ") : "not linked"} · ${relSpan(q.ts)}</span></li>`).join("");
-  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code></span></div><ul class="rows">${rows}</ul></div>`;
+  const { shown, head } = ackSplit(rq.items.map((q) => ({ ...q, ack: q.acked ? "acked" : "ackable", key: `req:${q.id}` })), "open request");
+  const rows = shown.slice(0, 8).map((q) => `<li class="${q.acked ? "is-acked" : ""}">${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow ellipsis" title="${esc(q.text)}">${esc(q.text)}</span>
+    <span class="acts muted">${q.links.length ? q.links.map((l) => esc(l) + ((q.closed || []).includes(l) ? ` ${tag("closed", "warn")}` : "")).join(", ") : "not linked"} · ${relSpan(q.ts)}</span>${ackBtn(q)}</li>`).join("");
+  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code>${head}</span></div>
+    ${ackNote()}<ul class="rows">${rows || '<li class="muted">Every open request is acked.</li>'}</ul></div>`;
+}
+
+// Acks (acks.py, `orch-dash ack`): the owner's "checked, stop showing it" on finished rows and on their requests. The
+// server decides what may be acked; the page offers it only where the server listed it, and shows a refusal's reason.
+const ackBtn = (it) => !it.ack ? "" : `<button class="chip ack" type="button" data-ack="${esc(it.key)}"${it.ack === "acked" ? " data-undo" : ""}
+  title="${it.ack === "acked" ? "Show it again" : "Checked: hide it here and in the brief (orch-dash ack)"}">${it.ack === "acked" ? "Unack" : "Ack"}</button>`;
+// The items to draw (acked and hidden ones only while Show is on), and the Ack all / Show N acked controls.
+function ackSplit(items, what) {
+  const off = (it) => it.ack === "acked" || it.hidden, seen = items.filter(off).length;
+  const open = items.filter((it) => it.ack === "ackable" && !it.hidden).map((it) => it.key);
+  return { shown: items.filter((it) => F.showAcked || !off(it)), seen,
+    head: (open.length > 1 ? `<button class="chip ack" type="button" data-ack="${esc(open.join(" "))}" title="Ack every ${what} listed">Ack all ${open.length}</button>` : "")
+      + (seen ? `<button class="chip" type="button" data-ack-show aria-pressed="${!!F.showAcked}">Show ${seen} acked</button>` : "") };
+}
+const ackNote = () => F.ackError ? `<div class="ack-note">${tag("not acked", "warn", "alert")} ${esc(F.ackError)}</div>` : "";
+async function ackAction(t) {
+  t.disabled = true;
+  try {
+    const out = await fleetPost("/api/fleet/ack", { ids: t.dataset.ack.split(" "), undo: "undo" in t.dataset });
+    F.ackError = (out.refused || []).map(([id, why]) => `${id}: ${why}`).join(" · ") || null;
+    F.workEtag = F.briefEtag = null;
+    await Promise.all([pollWork(), pollBrief()]);  // the requests card follows fleetPost's own state refresh
+  } catch (err) { F.ackError = String(err.message || err); }
+  t.disabled = false;
+  renderView();
 }
 
 // One row per lead: its sessions, how many of them work, and the open PRs of the lead and those sessions.
@@ -779,7 +806,11 @@ function fleetBrief() {
     ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}${F.briefAt ? ` · updated ${relSpan(F.briefAt)}` : ""}</div>` : ""}</div>`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
   if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
-  return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>`;
+  const { shown, head } = ackSplit((b.done || []).map((d) => ({ ...d, key: d.id, ack: d.acked ? "acked" : "ackable" })), "finished row");
+  const finished = (b.done || []).length ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
+    ${ackNote()}<ul class="rows">${shown.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow ellipsis">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
+      || '<li class="muted">Every finished row is acked.</li>'}</ul></div>` : "";
+  return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>` + finished;
 }
 
 // The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
@@ -814,21 +845,22 @@ function workCell(c) {
 function fleetWork() {
   if (!F.work) pollWork();
   const w = F.work;
-  const headHtml = `<div class="view-head"><div><h2>Work</h2><p>Stages per work item, recorded with <span class="mono">orch stage</span>. The merge column fills from the PR list; the dev and prod columns are written by the coordinator, with evidence, when it checks them. Finished rows stay dimmed for 7 days.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Work</h2><p>Stages per work item, recorded with <span class="mono">orch stage</span>. The merge column fills from the PR list; the dev and prod columns are written by the coordinator, with evidence, when it checks them. Finished rows stay dimmed for 7 days; Ack hides one you have checked.</p></div>
     <div class="legend">${Object.values(WORK_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</div></div>`;
   if (!w) return headHtml + '<div class="loading">Loading…</div>';
   if (w.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(w.error)}</div></div>`;
-  const all = workShown(w), done = all.filter((r) => r.done_at && !r.group).length;
+  const { shown: all, seen, head } = ackSplit(workShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
+  const done = all.filter((r) => r.done_at && !r.group).length;
   const rows = F.workHideDone ? all.filter((r) => !r.done_at) : all;
   const byId = Object.fromEntries(all.map((r) => [r.id, r]));
   // A group's own rows sit flush under it; each level below them gets one └ step.
   const level = {};
   rows.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
   const body = rows.map((r) => {
-    if (r.group) return `<tr class="wgroup ${r.done_at ? "is-done" : ""}"><td colspan="6"><b>${esc(r.title)}</b></td></tr>`;
+    if (r.group) return `<tr class="wgroup ${r.done_at ? "is-done" : ""}"><td colspan="6"><b>${esc(r.title)}</b> ${ackBtn(r)}</td></tr>`;
     const lv = level[r.id];
     return `<tr class="${r.done_at ? "is-done" : ""}"><td class="wfeat">${r.parent ? "" : '<span class="muted">–</span>'}</td>
-      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">└ </span>' : ""}${esc(r.title)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""}</td>
+      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">└ </span>' : ""}${esc(r.title)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
       <td class="mono nowrap">${r.pr ? linkRefs(r.pr) : '<span class="muted">–</span>'}</td>
       ${["merge", "dev", "prod"].map((c) => `<td>${workCell((r.cells || {})[c])}</td>`).join("")}</tr>`;
   }).join("");
@@ -836,11 +868,16 @@ function fleetWork() {
   const envLine = ["prod", "dev"].filter((k) => env[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(env[k])}</span></span>`).join("");
   const toggle = done ? `<button class="chip" type="button" data-work-done aria-pressed="${!!F.workHideDone}">Hide ${done} done</button>` : "";
   const table = all.length ? `<div class="card table-wrap"><table class="work"><thead><tr><th>Feature/epic</th><th>Work</th><th>PR</th><th>PR merged</th><th>dev check</th><th>prod check</th></tr></thead><tbody>${body}</tbody></table></div>`
-    : '<div class="card"><div class="empty-chart">No work recorded. Add a row with <span class="mono">orch stage add</span>.</div></div>';
+    : `<div class="card"><div class="empty-chart">${seen ? "Every row is acked." : 'No work recorded. Add a row with <span class="mono">orch stage add</span>.'}</div></div>`;
   const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>Next</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n)}</li>`).join("")}</ol></div>` : "";
-  return headHtml + `<div class="toolbar wenv">${envLine ? `<div class="meta">${envLine}${env.at ? `<span class="muted">${relSpan(env.at)}</span>` : ""}</div>` : ""}${toggle}</div>` + table + next;
+  return headHtml + `<div class="toolbar wenv">${envLine ? `<div class="meta">${envLine}${env.at ? `<span class="muted">${relSpan(env.at)}</span>` : ""}</div>` : ""}${toggle}${head}</div>` + ackNote() + table + next;
 }
-document.addEventListener("click", (e) => { if (e.target.closest("[data-work-done]")) { F.workHideDone = !F.workHideDone; renderView(); } });
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-work-done]")) { F.workHideDone = !F.workHideDone; renderView(); }
+  if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
+  const ack = e.target.closest("[data-ack]");
+  if (ack) ackAction(ack);
+});
 
 // Orca automations (state.json automations). An enabled one is ▲ when its last run failed or its next run is 10 min
 // overdue: the scheduler stopped or the app was closed. A switched-off one is never a problem.
