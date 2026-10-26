@@ -30,6 +30,22 @@ def opt(name, default=None):
     return a[a.index(name) + 1] if name in a else default
 
 
+VALUED = ("--state", "--config", "--now", "--workspace", "--provider")
+
+
+def positional():
+    """The file argument after the subcommand, wherever the options sit around it."""
+    a, i = sys.argv[2:], 0
+    while i < len(a):
+        if a[i] in VALUED:
+            i += 2
+        elif a[i].startswith("--"):
+            i += 1
+        else:
+            return a[i]
+    return None
+
+
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
 STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser() / "mentions"
@@ -260,15 +276,15 @@ def main():
             sys.exit("plan: another run holds the lock")
         print(json.dumps(plan(cfg, STATE, now), ensure_ascii=False, indent=1))
     elif cmd == "ingest":
-        kept, dropped = ingest(read_json(sys.argv[2], None) or [], cfg, STATE)
+        kept, dropped = ingest(read_json(positional(), None) or [], cfg, STATE)
         print(json.dumps({"new": kept, "dropped": dropped}, ensure_ascii=False, indent=1))
     elif cmd == "bundle":
-        print(bundle(read_json(sys.argv[2], None) or [], cfg))
+        print(bundle(read_json(positional(), None) or [], cfg))
     elif cmd == "commit":
-        items = read_json(sys.argv[2], []) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else []
+        items = read_json(positional(), []) if positional() else []
         print(f"commit: {commit(items, cfg, STATE, now)} items marked seen")
     elif cmd == "annotate":
-        print(f"annotate: {annotate(read_json(sys.argv[2], None) or [], cfg, STATE, now)} rows given a PR")
+        print(f"annotate: {annotate(read_json(positional(), None) or [], cfg, STATE, now)} rows given a PR")
     elif cmd == "schedule":
         script = pathlib.Path(__file__).resolve()
         line = schedule_cmd(script, cfg, opt("--workspace") or f"path:{script.parents[3]}", opt("--provider", "claude"))

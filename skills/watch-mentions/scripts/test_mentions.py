@@ -157,4 +157,10 @@ conf.write_text(json.dumps({"mentions": {"user_id": ME, "inbox_to": "run:run_0FA
 flagged = state.parent / "flagged"
 assert run("plan", "--state", str(flagged)).returncode == 0
 assert (flagged / "mentions" / "lock.json").exists() and not (state / "lock.json").exists()
+# The flag may sit before the file argument: commit still reads the items and marks them seen.
+one = state.parent / "one.json"
+one.write_text(json.dumps([items[0]]))
+r = subprocess.run([sys.executable, S, "commit", "--state", str(flagged), str(one), "--config", str(conf)],
+                   env=env, capture_output=True, text=True)
+assert r.returncode == 0 and "1 items marked seen" in r.stdout, r
 print("ok")

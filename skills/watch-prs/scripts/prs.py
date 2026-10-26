@@ -158,6 +158,11 @@ def config(path=CONFIG):
         days = c.get("weekend_days", [])
         if not isinstance(days, list) or not all(isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in days):
             raise ConfigError(f"{where}: weekend_days must be a list of weekday numbers, Monday 0 to Sunday 6")
+        if len(set(days)) == 7:
+            raise ConfigError(f"{where}: weekend_days must leave at least one business day")
+        for k in ("night_hour", "morning_hour"):
+            if k in c and not (isinstance(c[k], int) and not isinstance(c[k], bool) and 0 <= c[k] <= 24):
+                raise ConfigError(f"{where}: {k} must be an hour from 0 to 24")
     return cfg
 
 

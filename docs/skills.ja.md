@@ -34,7 +34,7 @@ PR を受け持つスキルとマージする主体:
 | handoff-ticket · record-progress | PR を作らない。次のカードを決めるか、オープン・レビュー・マージを記録する | しない |
 
 - deliver-ticket ↔ watch-prs: 生きている worktree にブランチがチェックアウトされた PR はそのセッションがマージする。watch-prs は飛ばす。
-- orchestrate ↔ watch-prs: プログラム台帳にある PR は `orch land` がマージする。watch-prs は止まったプログラムの PR もマージせず、止まった後に戻るのはリマインドだけ。
+- orchestrate ↔ watch-prs: プログラム台帳にある PR は `orch land` がマージする。watch-prs は止まったプログラムの PR もマージせず、リマインドだけ送る。台帳に `stale_days` のあいだ記録がないプログラムは放棄されたとみなし、その PR は再び watch-prs のリマインド・マージの対象になる。
 - orchestrate ↔ deliver-ticket: ワーカーは deliver-ticket で働くが、マージは §5 ではなく `orch land`。
 - handoff-ticket の「머지하고 다음 진행해줘」（マージして次へ）: マージは deliver-ticket、handoff-ticket はその後に次のカードを開くだけ。
 

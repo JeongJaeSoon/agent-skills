@@ -31,7 +31,7 @@ PR 을 맡는 스킬과 머지 주체:
 | handoff-ticket · record-progress | PR 을 만들지 않는다. 다음 카드를 정하거나 열림·리뷰·머지를 기록한다 | 하지 않는다 |
 
 - deliver-ticket ↔ watch-prs: 살아 있는 worktree 에 브랜치가 체크아웃된 PR 은 그 세션이 머지한다. watch-prs 는 그 PR 을 건너뛴다.
-- orchestrate ↔ watch-prs: 프로그램 원장에 있는 PR 은 `orch land` 가 머지한다. watch-prs 는 멈춘 프로그램의 PR 도 머지하지 않고, 멈춘 뒤에는 리마인드만 돌아온다.
+- orchestrate ↔ watch-prs: 프로그램 원장에 있는 PR 은 `orch land` 가 머지한다. watch-prs 는 멈춘 프로그램의 PR 도 머지하지 않고 리마인드만 보낸다. 원장에 `stale_days` 동안 기록이 없는 프로그램은 버려진 것으로 보고, 그 PR 은 다시 watch-prs 의 리마인드·머지 대상이 된다.
 - orchestrate ↔ deliver-ticket: 워커는 deliver-ticket 으로 일하지만 머지는 §5 대신 `orch land` 로 한다.
 - handoff-ticket 의 "머지하고 다음 진행해줘": 머지는 deliver-ticket 이 하고, handoff-ticket 은 그 뒤 다음 카드만 연다.
 
