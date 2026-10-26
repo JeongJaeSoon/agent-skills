@@ -110,6 +110,19 @@ class Setup(unittest.TestCase):
         self.assertNotIn(dropped, s["autoMode"]["soft_deny"])
         self.assertNotIn("outputStyle", s)
 
+    def test_repository_rules_wait_for_a_gh_login(self):
+        out = self.run_setup().stdout
+        self.assertIn("gh: not logged in", out)
+        self.run_setup("--apply", self.plan_hash())
+        rules = json.loads(self.settings.read_text())["autoMode"]
+        self.assertFalse([r for r in rules["allow"] + rules["environment"] if "user's repositories" in r])
+        fake = self.home / "bin"
+        fake.mkdir()
+        (fake / "gh").write_text("#!/bin/sh\necho octocat\n")
+        (fake / "gh").chmod(0o755)
+        self.env["PATH"] = f"{fake}{os.pathsep}{self.env['PATH']}"
+        self.assertIn("github.com/octocat/*", self.run_setup().stdout)
+
     def test_plugin_dirs_pointing_elsewhere_is_refused(self):
         self.settings.write_text(json.dumps({"env": {"CLAUDE_CODE_PLUGIN_DIRS": "/somewhere/else"}}))
         p = self.run_setup(ok=False)

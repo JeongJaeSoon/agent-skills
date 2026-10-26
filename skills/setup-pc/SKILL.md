@@ -22,7 +22,7 @@ Installing the plugin brings the skills; it does not bring the user settings, th
 ## Setup: a new PC
 
 1. **Nothing installed yet?** The skill cannot fire. The human follows README "설치": clone, then the dry run and the `--apply` line it prints. Then a new session.
-2. **Ask the language** the human wants answers in (default: the system locale, which `setup.py` reads). Ask whether this session is the orchestrator's Orca terminal; if so, add `--orca-run`, which binds this terminal to a new Run when it has none.
+2. **`gh` logged in first.** The rules about the user's repositories are filled from the `gh` login and left out without it; if `gh auth status` fails, hand over `! gh auth login` before the dry run. **Ask the language** the human wants answers in (default: the system locale, which `setup.py` reads). Ask whether this session is the orchestrator's Orca terminal; if so, add `--orca-run`, which binds this terminal to a new Run when it has none.
 3. **Dry run** from the main checkout: `python3 <checkout>/scripts/setup.py --language <name> [--orca-run]`. It writes nothing. Show the diff as printed; do not paraphrase rules away. A `refused:` line (a worktree, a branch other than `main`, `CLAUDE_CODE_PLUGIN_DIRS` pointing at another checkout) is fixed first, by the human.
 4. **Hand over the one line** it printed: `! python3 <checkout>/scripts/setup.py … --apply <hash>`. What it does after that is in `docs/new-pc.md`; it ends with a rollback line per file and the check table. A hash that no longer matches means something changed since the diff: dry run again.
 5. **Read the table** it ended with. `missing`, `differs` and `warn` rows are left to do; each row's `next` goes to the human as a `!` line or to the owner above. `gh auth login` and git commit signing are the human's.
@@ -33,7 +33,7 @@ The human may refuse part of the bundle: they edit the rule out after applying (
 ## Update: an installed PC
 
 1. Run `python3 <checkout>/scripts/setup.py --update`. It fast-forwards the checkout (`skills-sync sync`; stops on a dirty or diverged checkout, `docs/platform.md` §3) and then plans only the recommended items this PC has not been offered before.
-2. Changes listed: hand over its `--apply` line as in setup step 4. `no change`: say so.
+2. An `--apply` line printed: hand it over as in setup step 4 (with `no change` on the files, it only reruns the sync and automation steps). None printed: say nothing changed.
 3. Running sessions: `skills-sync broadcast` sends `/reload-skills` or `/reload-plugins` to idle ones. This session reloads itself as `write-skill` §7 describes.
 4. A marketplace install instead of a checkout: `! claude plugin marketplace update jeongjaesoon`, `! claude plugin update agent-skills@jeongjaesoon`, then `/reload-plugins`. `setup.py` is for the checkout install.
 

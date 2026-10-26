@@ -76,6 +76,14 @@ def system_language():
     return None
 
 
+def gh_login():
+    if not shutil.which("gh"):
+        return ""
+    rc, out = sh(["gh", "auth", "status", "--active", "--hostname", "github.com", "--json", "hosts",
+                  "--jq", '.hosts["github.com"][] | select(.active) | .login'], timeout=15)
+    return out if rc == 0 and out and not any(c.isspace() for c in out) else ""
+
+
 def fill(value, values):
     """Placeholders filled in; None when one has no value, so the item is left out."""
     if isinstance(value, str):
@@ -169,8 +177,7 @@ def merge_keys(current, rec, skip):
 def plan(args):
     p = paths()
     bundle = json.loads(pathlib.Path(args.bundle or BUNDLE).read_text())
-    _, login = sh(["gh", "config", "get", "user", "-h", "github.com"], timeout=10) if shutil.which("gh") else (1, "")
-    values = {"checkout": str(REPO), "state": str(p["state"]), "gh_login": login if " " not in login else ""}
+    values = {"checkout": str(REPO), "state": str(p["state"]), "gh_login": gh_login()}
     rec = fill(bundle.get("settings") or {}, values)
     language = args.language or system_language()
     if language:
@@ -199,6 +206,9 @@ def plan(args):
         actions.append("setup-pc check")
     if not language:
         notes.append("language: no supported system locale; pass --language <name> to set it")
+    if not values["gh_login"]:
+        notes.append("gh: not logged in, so the rules about the user's repositories are left out; "
+                     "after `gh auth login`, `--update` offers them")
     return files, actions, notes
 
 
@@ -315,7 +325,8 @@ def main(argv):
             raise Refused(f"--apply {args.apply} does not match the current plan ({h}); review the diff again")
         show(files, actions, notes)
         if not files:
-            print("no change: the settings files already have everything recommended")
+            print("no change: the settings files already have everything recommended"
+                  + ("; the steps above still run" if actions else ""))
         if not args.apply:
             if files or actions:
                 print(f"\n(dry run; nothing written; plan hash {h})\nApply with:\n"
