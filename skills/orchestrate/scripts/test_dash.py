@@ -368,7 +368,7 @@ free = dash.spare({"next": "may spawn 3 more", "cap": 4, "in_flight": 1},
                    {"id": "t2", "status": "pending", "deps": ["t1"], "ticket": "X-2", "title": "X-2"},
                    {"id": "t3", "status": "pending", "deps": ["t2"], "ticket": "X-3", "title": "X-3"},
                    {"id": "t4", "status": "ready", "deps": [], "ticket": None, "title": "Land #12"}])
-assert free == {"slots": 3, "ready": ["X-2"]}, free  # a human-gate Land task is the coordinator's, not work to start
+assert free == {"slots": 3, "ready": ["X-2"]}, free  # a human-gate Land task is the lead's, not work to start
 
 # Transcript motion: a tool call, its result, the turn's end; a turn whose wake-up call succeeded is parked.
 def motion(rows, m=None):

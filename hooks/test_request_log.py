@@ -1,4 +1,4 @@
-"""request_log.py and owner_requests.py: a coordinator's human prompts become open requests, nothing else does.
+"""request_log.py and owner_requests.py: an orchestrator's or lead's human prompts become open requests, nothing else does.
 Run: python3 hooks/test_request_log.py"""
 import datetime as dt, json, os, pathlib, subprocess, sys, tempfile
 

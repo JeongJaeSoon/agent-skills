@@ -19,7 +19,7 @@ precheck asks GitHub (through `gh`) for the items and exits 0 when some are not 
 1 when nothing is new or a run still holds plan.json (younger than lock_minutes), and 2 when it
 could not ask (no config, `gh` failed). It uses no model and writes nothing.
 plan prints the same items as JSON and writes nothing. plan --body is the run's step: it prints the
-coordinator message (empty when nothing is new), keeps it in body.txt, and, when something is new,
+inbox_to message (empty when nothing is new), keeps it in body.txt, and, when something is new,
 writes the items to plan.json, which is also the run lock, and puts each ownergate step the owner has
 to run on the dashboard inbox (`orch-dash inbox add`, keyed by the ledger key). round prints the
 steps an allow rule lets the round run (key, tab, command) from plan.json; result records how one
@@ -33,7 +33,7 @@ merges prints the `gh pr merge` command for each ready_to_merge item in plan.jso
 them itself. verify then checks each is MERGED, waits for the merge commit's CI and rewrites body.txt.
 dispatch reads plan.json and prints one
 `orca orchestration worker-start` line per repo with due unreleased items, its brief kept in brief-<run>-<n>.txt;
-it runs nothing, and the round only forwards the lines: worker-start works only from the coordinator terminal bound
+it runs nothing, and the round only forwards the lines: worker-start works only from the orchestrator's or lead's terminal bound
 to the Run. schedule prints the
 `orca automations create` command (`edit <id>` with --edit), its steps built from the configured kinds, and
 runs it only with --write.
@@ -781,7 +781,7 @@ def program_prs(cfg, now, stopped=False):
     """{(repo, number): slug} for PRs a live orchestrate program drives; `orch wait` follows those, and a parked
     one is held on purpose. Live: not stopped (`stop` after the last `resume`) and a ledger event within
     stale_days, so an abandoned program's PRs come back to reminders. stopped=True keeps a stopped program's PRs:
-    a stop halts new workers, but the coordinator, or a human gate, still owns what it has."""
+    a stop halts new workers, but the orchestrator or lead, or a human gate, still owns what it has."""
     root = pathlib.Path(cfg["programs_dir"] or os.environ.get("PROGRAMS_HOME") or "~/.claude/programs").expanduser()
     out = {}
     for prog in root.glob("*/program.json"):
@@ -964,7 +964,7 @@ def decide(states, sendlog, now, cfg, authors=()):
 
 
 def notices(s, cfg):
-    """What the coordinator hears about once per head: states no Slack action covers."""
+    """What the orchestrator or lead hears about once per head: states no Slack action covers."""
     out = []
     if s["no_reviewer"]:
         out.append("리뷰어 없음")
@@ -999,7 +999,7 @@ def wait_item(pr, now, k, why):
 
 
 def collect_review_wait(gh, me, cfg, ledger, now):
-    """The owner's open PRs waiting on people: one notice per head for the coordinator, and the actions decide() finds
+    """The owner's open PRs waiting on people: one notice per head for the orchestrator or lead, and the actions decide() finds
     due. Actions carry once=False: the send-log, not the ledger, decides whether they were done."""
     programs = program_prs(cfg, now)
     items, excluded, states = [], [], {}
@@ -1285,8 +1285,8 @@ def release_brief(repo, items, cfg):
                  else f"dev({i['deployed_revision']}) 에 아직 없음") for i in items]
     lines += ["배포 선언:"] + [f"- {k}: {decl[k]}" for k in ("dev_release", "revision_cmd", "logs", "verify", "ticket") if decl.get(k)]
     lines += [f"승인: {cfg['release_approval']}" if cfg.get("release_approval")
-              else "승인: dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 코디네이터에게 묻는다.",
-              "사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 코디네이터에게 보고한다.",
+              else "승인: dev 배포 승인이 없다. 동기화를 기다리는 것 말고 배포가 필요하면 오케스트레이터나 리드에게 묻는다.",
+              "사람만: 프로덕션 배포, dev 밖의 환경, 되돌릴 수 없는 작업. 하지 않고 오케스트레이터나 리드에게 보고한다.",
               "권한 프롬프트·auto mode 분류기·hook·사람이 거부한 행위는 어떤 형태로도 다시 시도하지 않는다"
               "(재실행, 스크립트·다른 도구로 옮기기, 대상 이름 바꾸기, 서브에이전트나 다른 세션에 넘기기 모두 금지). "
               "무엇을 하려던 것인지, 거부 종류, 정확한 명령을 보고한다.",
@@ -1313,7 +1313,7 @@ def dispatch_cmds(plan, cfg):
     return cmds
 
 
-# A kind's own step in the automation prompt, between the coordinator send and commit; {run[sub]} is the prs.py
+# A kind's own step in the automation prompt, between the inbox_to send and commit; {run[sub]} is the prs.py
 # call for that subcommand. None: the message is the whole action. A kind missing here has no step, so schedule
 # refuses it and compute keeps its items out of plan.json and the ledger.
 # Steps run in this dict's order, not the config's: the unreleased step ends by gating commit, which deletes plan.json.
@@ -1335,15 +1335,15 @@ PROMPT_STEPS = {
         "thread 가 없으면 `gh pr comment <url> --body <본문>` 로 그 PR 에 달고 `--source sent` 로 기록한다(no_thread 로 남기지 않는다). "
         "prefix 가 있으면 본문을 그 문자열로 시작한다(그 봇은 그렇게 시작하는 코멘트에만 답한다). 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨·머지됨, 리뷰어의 slack id 없음 등)은 "
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
-        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. request 에 github 명령이 있으면 Slack 으로 보내거나 "
+        "`--source refused` 로 기록하고 거부 범주와 명령을 오케스트레이터나 리드에게 보낸다. request 에 github 명령이 있으면 Slack 으로 보내거나 "
         "예약하기 전에 그 명령을 단독으로 한 번 실행하고 `gh pr view <url> --json reviewRequests,assignees` 로 reviewer 와 assignee 가 "
         "붙었는지 확인한다(`--add-reviewer` 는 아무도 추가하지 않고 0 으로 끝날 수 있다). 거부되거나 붙지 않았으면 다시 시도하지 않고 "
-        "그 PR 과 명령을 코디네이터에게 보고하되, Slack 의뢰는 그대로 처리한다. "
+        "그 PR 과 명령을 오케스트레이터나 리드에게 보고하되, Slack 의뢰는 그대로 처리한다. "
         "이 단계의 GitHub 쓰기는 retrigger·remind_author 코멘트와 request 의 github 명령뿐이다."),
     "unreleased": (
         "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: worker-start 는 Run 에 묶인 "
-        "코디네이터 터미널에서만 된다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
-        "\"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 코디네이터에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
+        "오케스트레이터나 리드의 터미널에서만 된다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
+        "\"watch-prs: 릴리스 워커 <줄 수>건 시작 요청\" 으로 오케스트레이터나 리드에게 한 통 보낸다(줄이 없으면 건너뛴다). 그 전송이 성공했을 때만 commit 으로 간다. "
         "이 회차는 워커를 띄우지도 배포하지도 않는다."),
 }
 # The ownergate step runs before the send: its results are appended to the message.
@@ -1403,7 +1403,7 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
               f"아니면 {merge_step}{first}`orca orchestration send --to {shlex.quote(to)} --type status --subject \"watch-prs: <N>건\" "
               f"--body \"$(cat {shlex.quote(str(body_file))})\" --json` 로 한 통만 보낸다(N 은 본문 첫 줄의 건수). "
               + (steps + " " if steps else "")
-              + f"코디네이터 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
+              + f"inbox_to 전송이 성공했을 때만 마지막에 `{run('commit')}` 을 실행한다." + reads)
     if edit:
         return ["orca", "automations", "edit", edit, "--trigger", cfg["cron"], "--precheck", run("precheck"),
                 "--precheck-timeout", str(PRECHECK_TIMEOUT), "--prompt", prompt, "--json"] + (["--timezone", cfg["timezone"]] if cfg.get("timezone") else [])
@@ -1485,7 +1485,7 @@ def main():
         lines = []
         for n, line in enumerate(dispatch_cmds(plan, cfg)):
             i = line.index("--spec")
-            # Named by run: the coordinator may start the line after the next round has written its own briefs.
+            # Named by run: the orchestrator or lead may start the line after the next round has written its own briefs.
             brief = STATE / f"brief-{int(plan['run'])}-{n}.txt"
             brief.write_text(line[i + 1])
             lines.append(shlex.join(line[:i] + line[i + 2:]) + f' --spec "$(cat {shlex.quote(str(brief))})"')

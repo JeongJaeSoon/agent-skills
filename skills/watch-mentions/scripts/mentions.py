@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bookkeeping for watch-mentions: run lock, cursor, seen ledger, the coordinator message.
+"""Bookkeeping for watch-mentions: run lock, cursor, seen ledger, the inbox_to message.
 
 Usage:
   python3 mentions.py precheck
@@ -15,7 +15,7 @@ Slack is read by the agent through its Slack MCP tools; this script never talks 
 inbox checks that inbox_to still answers (exit 2 when it does not); precheck runs it too.
 plan takes the run lock and prints the searches to run. ingest drops what must not be reported
 (the owner's own messages, bots, non-public channels, excluded channels, anything seen before or older
-than the window). bundle renders the one coordinator message. commit marks the items seen,
+than the window). bundle renders the one inbox_to message. commit marks the items seen,
 moves the cursor to the run's start and releases the lock; with no file it only does the last two.
 annotate sets `pr` on rows already in the ledger (a backfill); it refuses while a run holds the lock
 and moves no cursor.

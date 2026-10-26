@@ -340,11 +340,11 @@ assert code == 0 and "#17" in out, out
 code, out = prog(env, "status", "t")
 assert "STALLED T-17 (ctx_1): turn ended 22 min ago" in out and "SPARE 2 slot(s)" in out and "ctx_9" in out, out
 
-# wait reads the coordinator's Run inbox: a worker of the Run (a standing role, say) is refused.
+# wait reads the lead's Run inbox: a worker of the Run (a standing role, say) is refused.
 st = json.loads((d / "state.json").read_text()); st["workers"] = [{"agentTerminalHandle": "term_role"}]
 (d / "state.json").write_text(json.dumps(st))
 code, out = prog(dict(env, ORCA_TERMINAL_HANDLE="term_role"), "wait", "t", "--rounds", "1")
-assert code == 1 and "coordinator's Run inbox" in out, out
+assert code == 1 and "lead's Run inbox" in out, out
 
 # A GitHub hiccup is a yield, not a refusal: on the merge call and on a read; the next pass lands.
 for call in ("pr merge", "pr view"):

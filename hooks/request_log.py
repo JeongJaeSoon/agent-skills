@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook of the agent-skills plugin: logs each human request an orchestrator or lead receives.
 
-In a long coordinator session the owner's small requests (check this, merge that, reply there) got lost when several
+In a long orchestrator or lead session the owner's small requests (check this, merge that, reply there) got lost when several
 arrived at once. Each human prompt of a session declared orchestrator or lead becomes an open item in the request
-ledger (skills/orchestrate/scripts/owner_requests.py) and the hook tells the coordinator its id and what is still open,
+ledger (skills/orchestrate/scripts/owner_requests.py) and the hook tells the orchestrator or lead its id and what is still open,
 so it can `orch req link|done|drop` it. Other sessions log nothing.
 
 The role is read as reorient.py reads it (agent_type, the prompt's own ROLE line, the role record). reorient.py runs

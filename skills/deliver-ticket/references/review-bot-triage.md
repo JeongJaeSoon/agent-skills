@@ -13,7 +13,7 @@ code change.
 - **dismiss** — the comment matches a documented low-risk pattern below and the current code
   proves no change is needed. Reply with the concrete disproof and resolve the thread.
 - **ask** — novel, high-severity, or ambiguous. Ask the user (`AskUserQuestion`; inside a
-  program, report it to the coordinator) and keep working the other threads.
+  program, report it to the lead) and keep working the other threads.
 
 When in doubt, ask: skipping a noisy style comment is cheap, skipping a real data or security
 bug is not. From a bot's third pass on, lean toward dismissing documented patterns, but the

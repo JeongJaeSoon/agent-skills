@@ -90,7 +90,7 @@ which head it was judged on.
 
 ## Judging them
 
-The judge is the lead or coordinator that owns the PR, or this session when no one is above it. It
+The judge is the orchestrator or lead that owns the PR, or this session when no one is above it. It
 is not the user: a PR does not wait for the user to look at screenshots. Start from the `ui-review`
 table for the same head, then judge each shot against:
 

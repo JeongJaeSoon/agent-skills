@@ -728,7 +728,7 @@ SILENT_MIN = 20
 
 
 def parked_tickets(events):
-    """Tickets the coordinator put on hold (`record parked --ticket`) and has not admitted since."""
+    """Tickets the lead put on hold (`record parked --ticket`) and has not admitted since."""
     last = {}
     for e in events:
         if e["ev"] in ("parked", "admitted") and e.get("ticket") and not e.get("pr"):
@@ -807,7 +807,7 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
 def spare(summary, tasks):
     """Free landing units under the cap and the Orca tasks whose deps are done. Slots are offered only when the
     next move (the rule `orch status` prints) is "may spawn N more"; otherwise its line says why not.
-    A human-gate `Land #N` task is the coordinator's, never a worker's, so it is not offered."""
+    A human-gate `Land #N` task is the lead's, never a worker's, so it is not offered."""
     if not (summary.get("next") or "").startswith("may spawn"):
         return {"slots": 0, "ready": [], "held": summary.get("next")}
     done = {t["id"] for t in tasks if t["status"] == "completed"}
@@ -853,7 +853,7 @@ def summarize(cfg, events, issues, workers, tnow, order, leftover=0):
         "ready_prs": [s["pr"] for s in ready], "human_wait_prs": [s["pr"] for s in human],
         "idle_waiting": [w["dispatch"] for w in live if w.get("activity") == "waiting"],
         "stale_workers": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w.get("stale")],
-        # Work that already landed or started on a ticket, or its close, is the coordinator's answer.
+        # Work that already landed or started on a ticket, or its close, is the lead's answer.
         "untriaged": [i["id"] for i in derived if not i.get("triage") and i.get("state_type") in prog.OPEN_STATES
                       and i["id"] not in acted],
         "next": nxt,

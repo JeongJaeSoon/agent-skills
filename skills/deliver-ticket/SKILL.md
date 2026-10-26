@@ -71,7 +71,7 @@ it, and never end a turn on "말씀 주시면 티켓으로 만들겠습니다":
   - DROP (speculative, not reproduced, already covered, out of scope) → one line with the
     reason in the worklog. No ticket.
 - Inside a program (the brief has a `PROGRAM:` line), file nothing: put each finding with
-  your proposed class in the `worker_done` body, and the coordinator classifies and files.
+  your proposed class in the `worker_done` body, and the lead classifies and files.
 
 Report "N/M 완료 조건 충족" for the parent when there is one, name every ticket you filed with
 the exit item it serves, and list the LATER and DROP lines. The user's review happens on the
@@ -219,8 +219,8 @@ way and keep the output.
 
 Getting there starts with the PR. Opening a PR does not start a separate babysit: you, the
 owner, follow it through until **all CI checks are green and all review threads are resolved**
-(`gh pr checks` / `gh pr view`). In a program the coordinator schedules any babysitting of the
-frontier; you still own your PR to landing, or to the REPORT that hands it to the coordinator.
+(`gh pr checks` / `gh pr view`). In a program the lead schedules any babysitting of the
+frontier; you still own your PR to landing, or to the REPORT that hands it to the lead.
 
 **The review loop** — conflicts, then review threads, then CI, one push per batch, the lowest
 PR of a stack first — is in [references/review-loop.md](references/review-loop.md), with how to
@@ -236,7 +236,7 @@ Then land it. How depends on where you run:
   Never `gh pr merge` or merge-async by hand there: that skips the order and the review gate.
   Under human-gate it refuses; report READY and stop. A human review that will outlast this
   session does not hold the session open either: say in the brief's REPORT that the PR waits on a
-  review, and the coordinator's wake lands it once it is ready. After landing, the brief's REPORT is the
+  review, and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence, and the session closes itself in that turn
   (`end-session` §7).
 - **A standalone card** merges its own verified PR unless the user set a hold. When the

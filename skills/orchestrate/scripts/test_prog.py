@@ -203,7 +203,7 @@ assert not any("worktree rm" in l for l in co({"dispatchId": "d3a", "outcome": "
 failed = co({"dispatchId": "d1", "outcome": "failed"})
 assert "--retry-of d1 --task t1 " in failed[0] and not any(l.strip().startswith("orca worktree rm") for l in failed), failed
 assert "not in `orca worktree list`" in co({"dispatchId": "d9", "outcome": "succeeded"})[0]
-# A worker that closed itself (end-session §7) removed its card before the coordinator read worker_done: release only.
+# A worker that closed itself (end-session §7) removed its card before the lead read worker_done: release only.
 gone = co({"dispatchId": "dg", "outcome": "succeeded"}, [{"dispatchId": "dg", "terminalState": "reclaimable", "resource": {"worktreeId": "wgone"}}])
 assert gone == ["CLOSE OUT dg: release it; its card is not in `orca worktree list`", "  orca orchestration worker-release --dispatch dg"], gone
 # One whose worktree rm the permission layer refused closed only its terminal (§7 fallback): the card is still offered.

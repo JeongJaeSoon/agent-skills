@@ -13,7 +13,7 @@
 |---|---|---|---|
 | `skills/create-verification-skill/SKILL.md` | `pstack/skills/create-verification-skill/SKILL.md` | adapted | 생성 위치 `.cursor/skills/` → `.claude/skills/`. Claude Code는 Bash 호출마다 새 셸이라 Launch가 PID·포트·실행 폴더를 상태 파일에 남기도록 한 줄 추가. 모델 호출 허용(`disable-model-invocation` 삭제): `deliver-ticket`·`orchestrate`가 verify 스킬이 없을 때 부른다. description에 그 조건과 한국어 트리거를 더함. 5절의 `/maintain-verification-skill`을 스킬 이름으로, `.claude/`를 무시하는 저장소 안내 한 문장 |
 | `skills/create-verification-skill/references/feature-map-example/*.md` | 같은 경로 | verbatim | — |
-| `skills/maintain-verification-skill/SKILL.md` | 같은 경로 | adapted | 대상 위치 `.cursor/skills/` → `.claude/skills/`. changed 결과 전 "모든 변경 파일 다시 읽기" 지시 삭제. 모델 호출 허용(`disable-model-invocation` 삭제): flow improver가 주 1회, 코디네이터가 stale 보고 때 부른다. description에 그 두 경우를 더함 |
+| `skills/maintain-verification-skill/SKILL.md` | 같은 경로 | adapted | 대상 위치 `.cursor/skills/` → `.claude/skills/`. changed 결과 전 "모든 변경 파일 다시 읽기" 지시 삭제. 모델 호출 허용(`disable-model-invocation` 삭제): flow improver가 주 1회, 리드가 stale 보고 때 부른다. description에 그 두 경우를 더함 |
 | `skills/interrogate/SKILL.md` | 같은 경로 | adapted | 사용 가능한 독립 리뷰어가 같은 rubric으로 검토. 의도가 모호하면 가정으로 표시. lead judgment 분류와 근거 요구 유지. 모델 계열·전용 플러그인 호출 요구 제거. |
 | `skills/interrogate/references/*.md` | 같은 경로 | verbatim | — |
 | `skills/show-me-your-work/SKILL.md` | 같은 경로 | adapted | Claude Code transcript 어댑터와 append-only 결정 기록 유지. 설치하지 않은 unslop 의존 제거. 모델 계열 대신 독립 리뷰와 증거 대조 사용. |

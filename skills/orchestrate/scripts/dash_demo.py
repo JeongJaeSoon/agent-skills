@@ -214,9 +214,9 @@ def alpha(now):
         _worker(now, "ctx_a1000003", "acme-103", "failed", "unknown", "sonnet", 26.5, "exited"),
     ]
     notes = [
-        {"ts": _ago(now, 20), "kind": "digest", "author": "coordinator",
+        {"ts": _ago(now, 20), "kind": "digest", "author": "orchestrator",
          "text": "main went red after #203 (login redirect loop); ACME-121 admitted as the fix and landed. Cap back to 2."},
-        {"ts": _ago(now, 4.9), "kind": "decision", "author": "coordinator",
+        {"ts": _ago(now, 4.9), "kind": "decision", "author": "orchestrator",
          "text": "ACME-125 admitted: ACME-106 cannot land without the per-environment secrets schema."},
         {"ts": _ago(now, 0.4), "kind": "risk", "author": "annotator",
          "text": "ACME-107 worker has shown 'waiting' for 40 min — likely a permission prompt; needs a human in its terminal."},
@@ -507,7 +507,7 @@ def seed_board():
     board.doing_add("결제 팀 API 답변 대기", "사람", "10/14 회신")
     board.later_add("v2.5 계획", "v2.4.0 prod 배포 뒤")
     board.set_todo(["acme/launchpad#43 리뷰"])
-    import owner_requests as req  # the owner's requests to the coordinator, as the request_log hook would log them
+    import owner_requests as req  # the owner's requests to the orchestrator, as the request_log hook would log them
     now = dt.datetime.now(dt.timezone.utc)
     for ago, text in ((95, "acme/launchpad#41 머지되면 알려줘"), (50, "설치 가이드 스크린샷 다시 확인해줘"),
                       (12, "결제 팀 답변 왔는지 봐줘"), (5, "릴리스 노트 초안 보여줘")):
@@ -557,7 +557,7 @@ class FakeFleetWorld:
             "worktreeId": wid, "displayName": name, "path": f"/work/{wid}", "repo": repo.split("/")[1], "branch": f"refs/heads/{branch}",
             "status": "active", "unread": False, "lastActivityAt": ms(h), "parentWorktreeId": None, "agents": list(agents), **kw}
         self.worktrees = [
-            wt("wt-coord", "coordinator", "acme/platform", "coordinator", 0.05,
+            wt("wt-coord", "orchestrator", "acme/platform", "orchestrator", 0.05,
                [agent("p-coord", "working", 0.3, toolName="Bash", toolInput="orca orchestration check --wait", prompt="Run the launchpad program.")]),
             wt("wt-login", "ACME-101 login flow", "acme/launchpad", "feat/login", 0.2,
                [agent("p-login", "done", 0.2, prompt="Implement ACME-101.", lastAssistantMessage="Implemented the login flow and opened #41.")]),
@@ -568,9 +568,9 @@ class FakeFleetWorld:
             wt("wt-scratch", "scratch", "acme/tools", "scratch", 1.5,
                [agent("p-scratch", "done", 1.5, prompt="Check the release script.",
                       lastAssistantMessage="The release script needs GitHub access.\nLogin required: run `gh auth login` in a terminal, then tell me.")],
-               # A card the coordinator made with `orca worktree create`: the brief in its comment names its report file.
+               # A card the orchestrator made with `orca worktree create`: the brief in its comment names its report file.
                comment=str(pathlib.Path(os.environ.get("ORCH_FLEET_STATE", "/nonexistent")).parent / "briefs" / "release-check.md")),
-            # A lead: a coordinator the root dispatched, with a Run of its own. One worker came through that Run,
+            # A lead: a session the root dispatched, with a Run of its own. One worker came through that Run,
             # one the lead made with `orca worktree create` (only Orca's parent ties it to the lead).
             wt("wt-lead", "billing lead", "acme/platform", "lead/billing", 0.15,
                [agent("p-lead", "working", 0.2, toolName="Bash", toolInput="orca orchestration check --wait", prompt="Drive the billing tickets.")]),
@@ -582,7 +582,7 @@ class FakeFleetWorld:
         ]
         term = lambda h, wid, title, agent=True: {"handle": h, "worktreeId": wid, "title": title, "agentIdentity": "claude" if agent else None,
                                                   "writable": True, "connected": True, "lastOutputAt": ms(0.1)}
-        self.terminals = [term("term_coord", "wt-coord", "◐ coordinator"), term("term_login", "wt-login", "✳ ACME-101"),
+        self.terminals = [term("term_coord", "wt-coord", "◐ orchestrator"), term("term_login", "wt-login", "✳ ACME-101"),
                           term("term_export", "wt-export", "◑ ACME-102"), term("term_docs", "wt-docs", "✳ ACME-103"),
                           term("term_scratch", "wt-scratch", "✳ scratch"), term("term_shell", "wt-scratch", "zsh", agent=False),
                           term("term_lead", "wt-lead", "◐ billing lead"), term("term_invoice", "wt-invoice", "◑ ACME-104"),
@@ -697,7 +697,7 @@ class FakeFleetWorld:
                 "gh run watch 1234 -R acme/app --exit-status", 3.1, 3.0, exit=1, seen=True,
                 summary='Background command "Wait for the release run" failed with exit code 1'),
         ]
-        # Sent instructions: three logged with `orch sent add`, one of them also seen in the coordinator's transcript,
+        # Sent instructions: three logged with `orch sent add`, one of them also seen in the orchestrator's transcript,
         # two more only in transcripts, and a line typed on the dashboard.
         brief = ("/goal ACME-102 의 CSV 내보내기를 끝내고 PR 을 낸다(머지 금지). CLOSE.\n\n"
                  "GOAL        ACME-102: 청구서 목록을 CSV 로 내보낸다.\nBACKGROUND  재무팀이 스프레드시트로 읽는다.\n"
@@ -726,7 +726,7 @@ class FakeFleetWorld:
                           "text": "npm publish 는 하지 말고 dry-run 결과만 보고해줘", "ok": True, "typed": True, "code": 200}
         self.prompt = {"v": 1, "id": "prompt-docs-1", "at": _ago(now, 0.5), "handle": "term_docs", "session_id": "demo-docs",
                        "cwd": "/work/wt-docs", "tool": "Bash", "input": {"command": "npm publish --dry-run"}}
-        # The coordinator waits on the human for one call it registered with `orch decide add`.
+        # The orchestrator waits on the human for one call it registered with `orch decide add`.
         self.decisions = {"next": 2, "decisions": {"d1": {
             "id": "d1", "title": "Which export format should ACME-102 ship first?", "handle": "term_coord",
             "body": "Finance reads the export in a spreadsheet; the API team wants JSON for the sync job.\n"

@@ -22,14 +22,14 @@ merged PRs do their own writing.
 ## Config
 
 `~/.claude/agent-skills.json` → `"prs"`. The key must exist (an empty object is enough); every field
-is optional. User-specific values (orgs, bot accounts, the coordinator's address) live here and
+is optional. User-specific values (orgs, bot accounts, the orchestrator's or lead's address) live here and
 never in this repo.
 
 ```json
 {"prs": {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
          "exclude_title_patterns": ["^chore: sync shared config"],
          "self_bots": ["<the user's own bot account>"], "ignore_bots": ["<bot whose PRs are never a review>"],
-         "inbox_to": "<orca address: run:<id> or a coordinator terminal handle>",
+         "inbox_to": "<orca address: run:<id> or the orchestrator's or lead's terminal handle>",
          "max_items": 10, "stale_days": 30, "cron": "*/30 * * * *", "timezone": "<IANA tz>",
          "kinds": ["review_request", "review_wait", "ready_to_merge", "unreleased", "ownergate"],
          "ownergate": [<gate>, ...],
@@ -100,7 +100,7 @@ reviewed by the user at its head. No ledger means GitHub only.
 Order: stale last; then the user as the only pending reviewer while the decision is
 `REVIEW_REQUIRED`; then a human author before a bot; then older first; then smaller diff first.
 Stale means no update for more than `stale_days`; such an item says "요청 해제 제안" so the
-coordinator can propose asking the author to withdraw the request. Each item carries repo#N,
+orchestrator or lead can propose asking the author to withdraw the request. Each item carries repo#N,
 title, author, age in days, diff size and the reasons it ranked where it did.
 
 Every item has a `kind`, and every kind in `KINDS` is collected. A new kind adds a collector to
@@ -165,9 +165,9 @@ Each PR gets its states from GitHub alone:
 
 | state | meaning | becomes |
 |---|---|---|
-| `no_reviewer` | review required, nobody requested or reviewing | coordinator notice |
+| `no_reviewer` | review required, nobody requested or reviewing | `inbox_to` notice |
 | `waiting` | a user reviewer requested and silent | `request`, later `remind` |
-| `unanswered` | an open thread whose last comment is someone else's, after the last push | coordinator notice |
+| `unanswered` | an open thread whose last comment is someone else's, after the last push | `inbox_to` notice |
 | `approval_stale` | an approval dismissed, or on an older head, while the decision is `REVIEW_REQUIRED` | `rerequest` |
 | `bot_stale` | a review bot's `CHANGES_REQUESTED` with none of its threads still open | `retrigger` |
 
@@ -258,7 +258,7 @@ nothing is merged.
 3. no one else is driving it: its head branch is not checked out in a live (unarchived) Orca
    worktree — a worker's, or a lead's or other card's — and its number is not in the ledger of a
    live orchestrate program (as for `review_wait`, except that a stopped program still holds its PRs: a
-   stop halts new workers, not the coordinator's or a human gate's hold). If Orca cannot be read, nothing is ready. A PR you want merged by the round lives
+   stop halts new workers, not a hold by the orchestrator, a lead or a human gate). If Orca cannot be read, nothing is ready. A PR you want merged by the round lives
    on a branch no worktree has checked out;
 4. its base is the default branch: a stacked child waits for its parent;
 5. no reviewer's latest non-comment review is CHANGES_REQUESTED or DISMISSED (an approval a retarget
@@ -307,9 +307,9 @@ whose brief (in `<state>/brief-<run>-<n>.txt`) holds the PRs and merge commits, 
 `release_approval` (without it the worker asks before any release), production and anything outside
 dev as human only, and the rule that a refused act is reported, never retried. The worker follows
 deliver-ticket's [post-merge-release.md](../deliver-ticket/references/post-merge-release.md). The
-round itself starts no worker and releases nothing: `worker-start` works only from the coordinator
+round itself starts no worker and releases nothing: `worker-start` works only from the orchestrator or lead
 terminal bound to the Run (from a scheduled round it fails `consumer_fenced`), so the round forwards
-the lines and the coordinator starts them.
+the lines and the orchestrator or lead starts them.
 
 ## Run
 
@@ -339,7 +339,7 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    ```
 
    From an Orca worker, omit `--to` and add the worker's `--from` and capability: the message goes
-   to its Run's coordinator.
+   to the orchestrator or lead bound to its Run.
 5. If `kinds` has `review_wait`, handle each line of `python3 "$P" actions` and record its outcome
    with `python3 "$P" log --key <key> --source <source> [--thread <channel>:<ts>] [--scheduled <id>] [--post-at <epoch>] [--at <epoch>]`.
    Slack actions follow the user's Slack-posting rules (read that skill first): a request is one
@@ -353,10 +353,10 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    starts with `prefix` when set, logged `sent` (it never searches for a thread or logs `no_thread`). An action already moot (approved
    or merged meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
    permission prompt, the classifier or a hook is logged `refused` and reported, never retried.
-6. Only after the coordinator send succeeded, `python3 "$P" dispatch` prints one command per repo with
+6. Only after the send to `inbox_to` succeeded, `python3 "$P" dispatch` prints one command per repo with
    unreleased items (nothing otherwise) and keeps them in `<state>/dispatch.txt`. Do not run them:
    send that file as one message (`--body "$(cat <state>/dispatch.txt)"`, so `$(cat …)` in the
-   lines is not expanded), and the coordinator starts each worker from its bound terminal.
+   lines is not expanded), and the orchestrator or lead starts each worker from its bound terminal.
 7. `python3 "$P" commit` records what `plan.json` held and removes it. Commit only after the send
    succeeded, and after step 6's message succeeded when it had lines: an uncommitted run is retried once its `plan.json` is older than `lock_minutes`, a
    committed one is never sent again. To retry a failed send sooner, send `<state>/body.txt` again

@@ -4,7 +4,8 @@
 
 ## 이 문서에 나오는 말
 
-- **Orca**: 여러 Claude Code 세션을 worktree별 터미널로 띄우는 멀티 에이전트 IDE(`orca` CLI). Orca에서 일 하나를 맡은 세션을 카드, 프로젝트 안에서 티켓 하나를 맡은 카드를 워커, 워커들을 이끄는 세션을 코디네이터라고 부른다.
+- **Orca**: 여러 Claude Code 세션을 worktree별 터미널로 띄우는 멀티 에이전트 IDE(`orca` CLI). Orca에서 일 하나를 맡은 세션을 카드, 프로젝트 안에서 티켓 하나를 맡은 카드를 워커라고 부른다.
+- **오케스트레이터·리드**: 워커 위의 층은 둘뿐이다. 오케스트레이터는 사람이 말을 거는 최상위 세션 하나로, 요청을 나누고 리드를 띄운다. 리드는 프로젝트 하나를 워커로 끝까지 끌고 가는 세션이다(예전 문서의 "프로그램 코디네이터"). Orca 문서와 출력의 "coordinator"는 Run에 묶인 세션을 가리키며, 여기서는 늘 오케스트레이터나 리드다. 이름·시작 명령·ROLE 줄 표는 [orchestrate의 Roles](../skills/orchestrate/SKILL.md#roles).
 - **착지(land)**: 검증된 PR을 `orch land`로 머지하는 것. 공유 파일을 고친 PR은 독점 레인에서 하나씩, 나머지는 준비되는 대로 들어간다.
 - **auto mode 분류기**: Claude Code의 auto permission mode에서 행동마다 허용·거부를 판정하는 모델. `autoMode` 규칙이 그 기준이다.
 - **`!` 한 줄**: Claude Code 입력칸에서 `!`로 시작하는 줄은 사람이 그 세션에서 셸 명령을 직접 실행한다.
@@ -79,7 +80,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 
 **3. 프로젝트 하나를 여러 워커로: 「PM 겸 오케스트레이터로 끝까지」 → `orchestrate`**
 
-코디네이터가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책 기본값은 `autonomous`(워커가 착지)다. `human-gate`로 정하면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `measure-delivery`가 후속 티켓 증가·재작업·토큰을 잰다.
+이렇게 부탁받은 세션은 이름과 달리 리드다(`ROLE: lead <slug>`). 리드가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책 기본값은 `autonomous`(워커가 착지)다. `human-gate`로 정하면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `measure-delivery`가 후속 티켓 증가·재작업·토큰을 잰다.
 
 **4. auto mode가 막았을 때: 「auto mode 가 막았어」, 「이거 허용되게 규칙 추가해줘」 → `tune-automode`**
 

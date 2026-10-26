@@ -1,11 +1,11 @@
 # Landing: parallel by default, exclusive where a merge can break what it does not touch
 
-Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No coordinator hands out merge slots.
+Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No lead hands out merge slots.
 
 This design replaced three that failed:
 
-- **A coordinator that granted each merge.** It became the slowest part of the system. Ready PRs waited on the coordinator's turn, not on CI.
-- **"Whoever is ready lands next."** A migration chain waited more than five hours while eleven newer, easier PRs landed ahead of it. The priority and dependency order existed only in the coordinator's head.
+- **A lead that granted each merge.** It became the slowest part of the system. Ready PRs waited on the lead's turn, not on CI.
+- **"Whoever is ready lands next."** A migration chain waited more than five hours while eleven newer, easier PRs landed ahead of it. The priority and dependency order existed only in the lead's head.
 - **One baton, strict up-to-date branches.** Every landing put every other PR behind, which meant a rebase and another 30–40 minute CI run each. Turning off "require branches to be up to date" while keeping the required checks made landings parallel.
 
 "CI green is not a verdict." A verdict holds across a rebase only while the patch-id is unchanged.
@@ -47,7 +47,7 @@ Proposals to serialize the normal lane for safety are rejected by default ("one 
 
 ## The land order
 
-`orch queue <slug>` prints the order and why each PR is not moving. `orch status` prints its first line. The order decides who takes the exclusive lane, and what the coordinator unsticks first.
+`orch queue <slug>` prints the order and why each PR is not moving. `orch status` prints its first line. The order decides who takes the exclusive lane, and what the lead unsticks first.
 
 1. **Class:** `main-fix` → `gate` → `urgent` → `normal`. `record reprioritized --pr N --class urgent` moves a PR.
 2. **Aging.** A PR that has waited `aging_hours` (default 2) ranks with urgent ones.
@@ -113,7 +113,7 @@ Main CI is every push-triggered run at the merge commit. Watch it with the lines
 - A PR that changes a file matching `visual_paths` (default `apps/web/*`, `*.css`, `*.stories.*`, `packages/ui/*`) needs at least one image that comment renders: markdown `![](https://…)` or `<img src="https://…">`, outside code blocks. Text saying screenshots were taken does not count. Only a person exempts a PR, with the label `no-visual-change`; `land` then prints the exemption. A worker never adds that label: `land` sees only that the label is there, not who added it. The first comment carrying the marker counts, the one `sticky-comment.sh` updates.
 - Every failed run (`failure`, `timed_out`, `startup_failure`) at one of the PR's commits needs a line in that comment naming the run id and what resolved it. A run re-run to green shows only its last attempt, and a run at a commit a rebase dropped is no longer the PR's, so neither is listed.
 
-## Main red: the guardian decides, the coordinator coordinates
+## Main red: the guardian decides, the lead coordinates
 
 A standing **main guardian** worker (`references/roles.md`) owns red main. It re-runs a failed main run once and reads the logs.
 
@@ -122,11 +122,11 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
   - **hotfix** when the cause is clear and small, and the fix verifies in about 30 minutes
   - **revert** otherwise
 
-  It never mechanically reverts a migration or a commit later PRs depend on. It lands the repair with `--class main-fix`, records `main_green`, and tells the culprit's card, the affected cards and the coordinator.
+  It never mechanically reverts a migration or a commit later PRs depend on. It lands the repair with `--class main-fix`, records `main_green`, and tells the culprit's card, the affected cards and the lead.
 
 With no guardian running, whoever is about to record `main_red` does its read first: re-run a failed run once, a run cancelled by a newer push is not red, and a deploy refused because another deploy was in progress gets one re-run before it counts. A red only in a deploy or advisory job is recorded as that in the digest and freezes nothing. When a fix landed outside `land` clears main, the ledger's `main_red` still stops every lane: record the fix with `orch landed <slug> --pr <fix>`, then `orch record <slug> main_green --pr <fix> --sha <its merge commit>` once main CI at that sha is green.
 
-## What the coordinator does
+## What the lead does
 
 - Declare start-after edges as Orca task deps when creating tasks; plan land-after chains as stacks from the start, with `orch dep`.
 - Read `status` on every drain:
@@ -140,7 +140,7 @@ With no guardian running, whoever is about to record `main_red` does its read fi
 
 ## human-gate
 
-Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `orch gate <slug> --pr N`, which creates an Orca decision gate on a coordinator-owned Task. The user resolves it in Orca. You then run `orch land <slug> --pr N`: it sees the resolution, records `approved`, and lands. No worker settles that `Land #N` Task, so `land` closes it: completed when the PR lands, failed when the user resolved the gate as hold or the PR was closed. Gating the PR again makes a new Task.
+Workers stop at READY. `land` refuses them with exit 1, and they report. You open the gate with `orch gate <slug> --pr N`, which creates an Orca decision gate on a lead-owned Task. The user resolves it in Orca. You then run `orch land <slug> --pr N`: it sees the resolution, records `approved`, and lands. No worker settles that `Land #N` Task, so `land` closes it: completed when the PR lands, failed when the user resolved the gate as hold or the PR was closed. Gating the PR again makes a new Task.
 
 ## Permissions
 
