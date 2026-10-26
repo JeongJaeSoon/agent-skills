@@ -1,45 +1,56 @@
 # 새 PC에서 같은 방식으로 쓰기
 
-agent-skills를 설치하면 일하는 방식은 그대로 따라온다. 보고 모양(`brief`), 라우팅과 위임, 받은편지함 대기 하나(`orchestrate`), 카드의 `/goal`·Approved·`CLOSE`(`dispatch-card`), 범위 안의 결정, 리뷰 의뢰 묶기(`watch-prs`), 완료 전 검증(`deliver-ticket`)이 그렇다. 스킬이 실을 수 없는 것은 셋이다. 사용자 설정, 저장소 밖의 고유값, 그 PC에만 쌓인 기록. 이 문서는 그 셋을 옮기는 순서다.
+일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 사용자 설정·최소 설정 키·정기 자동화는 `scripts/setup.py` 한 번으로 넣는다. 원래 PC에서 옮겨 오는 것을 전제로 하지 않고, 저장소가 가진 권장 기본값(`scripts/recommended-settings.json`)만 쓴다.
 
-## 1. 설치
+## 한 줄 실행
 
-README "설치"대로 clone 한 뒤 `bootstrap.py --write`를 돌린다. 하는 일과 실측 근거는 [platform.md](platform.md) §5에 있다. 그 전부터 떠 있던 세션은 재시작한다.
+```bash
+git clone https://github.com/JeongJaeSoon/agent-skills <체크아웃>
+python3 <체크아웃>/scripts/setup.py --language Korean     # 바뀔 내용: 파일별 diff, 마지막 줄에 --apply 줄
+python3 <체크아웃>/scripts/setup.py --language Korean --apply <해시>
+```
 
-## 2. 사용자 설정 (`~/.claude/settings.json`)
+dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한 것을 그대로 친다. 해시는 diff에 나온 계획 전체(쓸 파일 내용과 이어서 할 일)의 해시라서, 그 사이에 무엇이 바뀌면 거절하고 dry run을 다시 하라고 한다. 이미 설치한 PC에서 Claude Code를 쓰고 있다면 `setup-pc` 스킬("새 PC 세팅해줘")이 dry run을 돌려 diff를 보이고 `!` 한 줄을 건넨다.
 
-플러그인은 아래 값을 설정으로 실을 수 없다. 에이전트도 이 파일을 고치지 않는다(분류기가 자기수정으로 막는다). 사람이 직접 넣는다. 원래 PC와 무엇이 다른지는 `setup-pc`가 표로 보인다(5절).
+`--apply`가 하는 일:
 
-| 키 | 하는 일 | 없으면 | 옮기는 방법 |
-|---|---|---|---|
-| `language` | 답변 언어 | 보고는 그래도 사람이 쓰는 언어로 나온다(`brief`). 다른 답변은 모델 기본값을 따른다 | 원래 PC와 같은 값 |
-| `outputStyle` | 답변에 설명 블록(예: ★ Insight)을 붙이는 style | 블록이 없다. 보고 구조는 같다 | `/config`에서 같은 style을 고른다. 켜져 있으면 블록의 자리(진행 중 뒤, 결정 필요 앞)는 `brief`가 정한다 |
-| `autoMode` (`allow`, `soft_deny`, `environment`) | auto mode 분류기가 묻지 않고 허용하거나 막는 범위 | 기본 분류기만 돈다. 오케스트레이터의 머지, 받은편지함 명령, 카드 시작 같은 일상 작업이 확인 창이나 거부로 멈춘다 | 원래 PC의 규칙을 하나씩 옮긴다. 규칙 문장에 사내 이름이 있으면 그대로 둔다(로컬 파일이다). 새로 막힌 일은 `tune-automode`가 가장 작은 규칙과 적용 스크립트를 만든다. 처음부터 잡으려면 내장 `/auto-mode-setup` |
-| `permissions.allow` | 확인 없이 도는 명령 | 명령마다 확인 창이 뜬다 | 원래 PC의 목록을 옮긴다. 규칙은 단독 명령에만 맞는다. `&&`나 파이프로 이은 명령은 분류기로 넘어간다. 바꾸는 일은 `update-config` |
-| permission mode | 기본 모드(auto 등) | 시작 모드가 달라 확인 창 수가 달라진다 | 원래 PC와 같은 기본 모드 |
-| `env.CLAUDE_CODE_PLUGIN_DIRS` | 체크아웃을 플러그인으로 읽기 | — | `bootstrap.py`가 넣는다. 손으로 옮기지 않는다(경로가 PC마다 다르다) |
+1. `~/.claude/settings.json`, `~/.claude/agent-skills.json`을 각각 타임스탬프 백업한다.
+2. 없는 값만 더한다. 이미 있는 값은 덮지 않는다(`kept` 줄로 보인다).
+   - `env.CLAUDE_CODE_PLUGIN_DIRS`에 체크아웃 경로. 마켓플레이스 사본 `agent-skills@jeongjaesoon`이 켜져 있으면 끈다(둘 다 켜면 hook이 두 번 돈다).
+   - `language`(`--language`, 없으면 시스템 locale), `outputStyle`, `permissions.defaultMode`(`auto`).
+   - `permissions.allow` 묶음: PR 만들기·고치기·보기, `skills-sync status`·`broadcast`, `orch-dash`. `orca orchestration`과 `orch`는 플러그인 hook이 이미 허용한다.
+   - autoMode 규칙 묶음: 체크아웃 안 편집, 요청받은 로컬 정리, 사용자 저장소의 PR 작업, 사용자가 지시한 머지, 오케스트레이터의 워커 지시·받은편지함, 워커의 자기 작업 공간, janitor 회차, 그리고 "사용자 본인의 채팅만 지시로 친다". 막는 쪽은 기본 브랜치 force push와 요청받지 않은 프로덕션 단계. 규칙마다 `Not covered:`로 한계를 적는다. 체크아웃 경로와 `gh` 로그인 이름은 실행할 때 채운다.
+   - `agent-skills.json`: `reflect.skill_repository`(체크아웃), `reap.user_folders`(빈 배열 = 끔).
+3. 임시 파일에 써서 원자적으로 바꾸고, 다시 읽어 같은지 확인한 뒤 파일마다 되돌리는 `cp` 줄을 출력한다.
+4. 15분마다 `skills-sync sync`를 돌리는 launchd 작업을 설치하고(Linux면 crontab 줄을 출력), 한 번 동기화하고, 기본 on 정기 자동화를 켠다(`skills-sync setup apply`, README "정기 자동화").
+5. `--orca-run`을 주면 이 터미널에 묶인 Orca Run이 없을 때 하나 만든다. 오케스트레이터의 메일 알림은 Run에 묶인 터미널에만 뜬다(`orchestrate` references/top-level.md "Your Run").
+6. `setup-pc` 점검 표를 출력한다. `missing`·`differs`·`warn` 행이 남은 일이다(`gh auth login`, git 커밋 서명 등은 사람이 한다).
 
-`env`의 다른 값과 토큰은 PC마다 다시 만든다. 다른 PC에서 파일째 복사하지 않는다.
+다시 돌려도 이미 된 것은 건너뛴다. 묶음에서 빼고 싶은 규칙은 적용 뒤 지우면 된다. 한 번 제안한 항목은 `~/.local/state/agent-skills/setup-applied.json`에 남아 다시 제안하지 않는다. 새 설정은 새 세션부터 적용되므로 떠 있던 세션은 재시작한다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
-## 3. 저장소 밖의 고유값
+옵션: `--settings-only`(파일만 쓰고 launchd·동기화·자동화·점검은 건너뜀), `--update`(아래).
 
-스킬은 사람·채널·저장소·트래커 같은 고유값을 본문에 두지 않고, 실행할 때 아래에서 읽는다. 없으면 그 기능을 끄거나 멈추고 묻는다.
+## 갱신
 
-- `~/.claude/agent-skills.json`: 스킬별 키(`notes`, `tracker`, `prs`, `mentions`, `reap`, `reflect`, `orchestrate` 등). 키 목록과 기본 동작은 각 스킬의 설정 절과 [configuration-migration.md](configuration-migration.md)에 있다.
-- `~/.config/agent-skills/`: 목록과 비밀. 예를 들어 공개 저장소에 쓰기 전에 grep하는 사내 이름 목록은 `internal-names.txt`다(`write-skill` §4).
-- `skills-sync setup`: 정기 자동화(janitor 등)를 켠다. README "정기 자동화" 절.
+```bash
+python3 <체크아웃>/scripts/setup.py --update     # 체크아웃 fast-forward 뒤, 새로 생긴 권장값만 diff
+```
 
-## 4. 그 PC에만 있는 기록
+출력한 `--apply` 줄을 그대로 친다. 바뀔 것이 없으면 `no change`.
 
-- **개인 지침과 스킬**: `~/.claude/CLAUDE.md`, `~/.claude/skills/`, `~/.claude/agents/`는 git으로 동기화되지 않는다. 원래 PC에서 복사한다. 사내 채널이나 투고 규칙처럼 공개 저장소에 둘 수 없는 규칙이 여기에 있다.
-- **자동 메모리**: 프로젝트 경로별로 PC 안에 쌓여 옮겨지지 않는다. 어느 PC에서나 지켜야 할 작업 방식이 메모리에만 있으면, 다른 PC에서는 그 방식이 사라진다. 그런 규칙은 `reflect`나 `write-skill`로 스킬에 올리고, 고유값은 2·3절로 보낸다.
+## 옮기지 않는 것
 
-## 5. 확인
+PC나 회사에 매인 것은 옮기지 않는다. 없으면 그 기능은 꺼지거나 처음 쓸 때 묻는다.
 
-새 세션에서 아래를 본다.
+- 사내 이름 목록(`~/.config/agent-skills/internal-names.txt`, 공개 저장소에 쓰는 PC만), 채팅 채널, 트래커 프로젝트, 노트 저장소 같은 `agent-skills.json`의 나머지 키. 키와 기본 동작은 각 스킬의 설정 절과 [configuration-migration.md](configuration-migration.md).
+- 조직 저장소를 신뢰 범위에 넣는 autoMode 문장. 묶음의 "사용자 저장소"는 `gh` 로그인 계정 아래만이다. 조직은 `tune-automode`로 더한다.
+- 개인 지침과 스킬(`~/.claude/CLAUDE.md`, `skills/`, `agents/`)과 자동 메모리. 어느 PC에서나 지켜야 할 작업 방식이 여기에만 있으면 `reflect`나 `write-skill`로 스킬에 올린다.
+- `env`의 다른 값과 토큰. PC마다 다시 만든다.
 
-1. `/agent-skills:setup-pc`로 2~4절과 설치·동기화를 점검한다. 원래 PC에서 `setup_check.py export`로 뽑은 기준 파일이 있으면 `check --baseline`이 빠진 autoMode 규칙·`permissions.allow`·`agent-skills.json` 키·개인 파일을 짚는다. 스킬은 읽기만 하고 고치는 줄은 사람이 친다. 아무것도 설치되지 않았으면 clone한 체크아웃에서 `python3 skills/setup-pc/scripts/setup_check.py check`를 직접 돌린다.
-2. `claude plugin list`에 `agent-skills@inline`이 보이고 Path가 체크아웃이다. `command -v orch`가 체크아웃의 `bin/orch`를 가리킨다.
-3. 여러 항목에 걸친 상태 보고를 요청한다(`/agent-skills:brief`). 시각이 붙은 제목 줄, 완료 → 진행 중 → 결정 필요 → 지금 오너가 할 일 → 보류 순서로 나오고, 할 일이 없으면 `없음`으로 나오면 된다.
-4. 오케스트레이터나 리드를 쓰는 PC라면, 그 세션 터미널에서 `orca orchestration run-current --json`이 Run을 돌려주는지 본다. Orca의 `You have N orchestration message(s)` 알림은 Run에 묶인 터미널에만 들어온다(`orchestrate` references/top-level.md "Your Run"). `null`이면 그 절대로 `run-use`나 `run-create`를 한다. `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`이 켜져 있으면 Orca가 idle을 보지 못해 알림이 안 뜬다.
-5. 같은 PC에서 일상 작업(카드 시작, 받은편지함 대기, `orch land`)이 확인 창 없이 도는지 본다. 멈추면 2절의 `autoMode`와 `permissions.allow`를 다시 본다.
+특정 PC와 똑같이 맞추고 싶으면 `setup-pc`의 "Compare with another PC"(원래 PC에서 `setup_check.py export`, 여기서 `check --baseline`)를 쓴다. 기본 경로는 아니다.
+
+## 확인
+
+1. `setup.py --apply`가 끝에 낸 표(또는 `python3 skills/setup-pc/scripts/setup_check.py check`)에 `missing`·`differs`·`warn`이 없다.
+2. 새 세션에서 `claude plugin list`에 `agent-skills@inline`이 보이고 Path가 체크아웃이다. `command -v orch`가 체크아웃의 `bin/orch`다.
+3. 일상 작업(카드 시작, 받은편지함 대기, `orch land`)이 확인 창 없이 돈다. 하나가 막히면 `tune-automode`가 그 행동만 덮는 규칙을 만든다.
