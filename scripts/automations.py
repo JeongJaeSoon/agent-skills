@@ -152,10 +152,12 @@ class Janitor(OrcaJob):
         return code | load_code, f"{msg} · janitor-load: {load_msg}"
 
     def enable(self, here):
+        j, _ = self.find()
         code, msg = self.enable_job(here)
         load = JanitorLoad()
         a, _ = load.find()
-        if code or not a or a.get("enabled"):
+        # Only undoes `disable janitor`: a load job turned off alone under a running janitor stays off.
+        if code or not j or j.get("enabled") or not a or a.get("enabled"):
             return code, msg
         load_code, load_msg = load.enable_job(here)
         return load_code, f"{msg} · janitor-load: {load_msg}"

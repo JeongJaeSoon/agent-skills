@@ -18,7 +18,7 @@ skills-sync setup disable <이름>         # 끄기
 
 | 이름 | 기본 | 장치 | 켜기 | 끄기 |
 |---|---|---|---|---|
-| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). 꺼 둔 `janitor-load`가 등록돼 있으면 같이 켠다 | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
+| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). janitor가 꺼져 있었으면 꺼 둔 `janitor-load`도 같이 켠다(켜진 janitor 옆에 따로 끈 것은 그대로) | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `janitor-load` | on | Orca automation `agent-skills janitor load` | `janitor`와 같고, 만들 때는 `reap.py schedule --load --write`. `janitor`가 꺼져 있거나 없으면 만들지 않는다 | 이 job만 끈다 |
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
 | `pressure-watch` | on | LaunchAgent `io.github.jeongjaesoon.pressure-watch` | `pressure.py install`(3분마다 `round`) | `pressure.py uninstall` |

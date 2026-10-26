@@ -199,6 +199,10 @@ class Janitor(Base):
         fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
         self.assertEqual(au.JanitorLoad().enable(False)[0], 0)
         self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
+        # The refresh path on a running janitor leaves a load job the user turned off alone.
+        fake = self.orca([janitor(), load_job(enabled=False)])
+        self.assertEqual(self.j.enable(False), (0, "이미 켜져 있음"))
+        self.assertEqual(fake.edits(), [])
 
 
 class Preview(unittest.TestCase):

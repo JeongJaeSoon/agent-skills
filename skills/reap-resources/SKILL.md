@@ -138,8 +138,8 @@ registered and on (removed, or an unreadable automation list, counts as off), an
 `reap.load_cooldown_minutes` (default 60). The cooldown holds back only the load job; the periodic one runs on its
 schedule. It needs no pressure-watch LaunchAgent: Orca runs it.
 `skills-sync setup` lists the two as `janitor` and `janitor-load`, `enable` brings a job whose trigger, precheck or
-timeout differs back to these values, and `disable janitor` turns both off (`enable janitor` turns a registered load
-job back on).
+timeout differs back to these values, and `disable janitor` turns both off (`enable janitor` on a janitor that was off
+turns a registered load job back on too).
 Every command it builds starts with `python3`, with `--state`/`--ledger` after the subcommand when
 those are off the default: a scheduled session can refuse a leading `env` or `VAR=` assignment.
 Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close the chrome-window
