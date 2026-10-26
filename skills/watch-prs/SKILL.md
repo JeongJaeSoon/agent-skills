@@ -1,6 +1,6 @@
 ---
 name: watch-prs
-description: "Use when the user wants PRs waiting on them, or their own PRs waiting on reviewers, picked up as work — \"리뷰 요청 온 PR 정리해줘\", \"내 PR 리뷰 리마인드\", \"머지 가능한 내 PR 머지해줘\", \"내가 승인해야 할 봇 PR\", \"watch my PRs\", \"GitHub 알림 오면 깨워줘\" — and for each round of the watch-prs automation. Not for writing a review (code-flow:review-pr) or a program's own PRs (orchestrate)."
+description: "Use when the user wants PRs waiting on them, or their own PRs waiting on reviewers, picked up as work — \"리뷰 요청 온 PR 정리해줘\", \"내 PR 리뷰 리마인드\", \"머지 가능한 내 PR 머지해줘\", \"내가 승인해야 할 봇 PR\", \"watch my PRs\", \"GitHub 알림 오면 깨워줘\" — and for each round of the watch-prs automation. Not for writing the review itself, or for a program's own PRs (orchestrate)."
 ---
 
 # Watch PRs

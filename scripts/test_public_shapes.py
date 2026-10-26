@@ -8,8 +8,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 PLACEHOLDER_USERS = {"me", "you", "someone", "nobody", "user", "example", "a", "alice", "bob", "bench"}
 PLACEHOLDER_KEYS = {"ABC", "ACME", "ENG", "BILL", "XYZ", "PROJ", "FILL", "MARKER", "PR", "HANDOFF", "BUG",
-                    "UTF", "ISO", "Z0"}
+                    "UTF", "ISO", "Z0", "SHA"}
 PLACEHOLDER_TENANTS = {"x", "h", "example", "acme"}
+# Vendor-wide hosts, not a workspace: api.slack.com, hooks.slack.com and the like.
+VENDOR_HOSTS = {"api", "app", "hooks", "files"}
 
 HOME = re.compile(r"/(?:Users|home)/([A-Za-z][\w.-]*)")
 SLACK_ID = re.compile(r"\b[CDGUW][0-9][A-Z0-9]{7,}\b")
@@ -24,7 +26,7 @@ def hits(line):
     out += [f"Slack id {m}" for m in SLACK_ID.findall(line) if "FAKE" not in m and "EXAMPLE" not in m]
     out += [f"ticket key {m.group(0)}" for m in TICKET.finditer(line) if m.group(1) not in PLACEHOLDER_KEYS]
     out += [f"tenant host {m.group(0)}" for m in TENANT.finditer(line)
-            if (m.group(1) or m.group(2)) not in PLACEHOLDER_TENANTS]
+            if (m.group(1) or m.group(2)) not in PLACEHOLDER_TENANTS | VENDOR_HOSTS]
     out += [f"private host {m}" for m in PRIVATE_HOST.findall(line)]
     return out
 
@@ -50,7 +52,8 @@ for bad in ["/Users/jdoe/src", "/home/build/x", "C0" + "123ABCD45", "U9" + "ABCD
             "db.prod.internal"]:
     assert hits(bad), bad
 for ok in ["/Users/me/wt", "C0FAKE01", "ABC-1", "ACME-102", "UTF-8", "x.atlassian.net", "https://linear.app/acme/x/",
-           "example.slack.com", "<host>.ts.net", "settings.local", "U0FAKEUSER"]:
+           "example.slack.com", "<host>.ts.net", "settings.local", "U0FAKEUSER", "SHA-256",
+           "https://api.slack.com/methods", "hooks.slack.com/services"]:
     assert not hits(ok), (ok, hits(ok))
 
 found = scan()

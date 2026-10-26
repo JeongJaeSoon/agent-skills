@@ -9,8 +9,8 @@ Usage:
 A pass, in order (each later step sees what the earlier ones closed):
   card      an Orca worktree under `workspaces` whose branch PR (its own, never a fork's) is merged or closed and
             carried the worktree's HEAD, with no open PR on the branch; clean, untracked files included; nothing off
-            the remote unless the PR carried HEAD; every Orca terminal silent and its sessions' transcripts quiet
-            for `idle_minutes`; no process in it that a person started from their own shell; no live lead or orchestrator
+            the remote unless the PR carried HEAD; its sessions' transcripts quiet for `idle_minutes` and every
+            Orca terminal silent as long (a Claude terminal whose transcripts are known: 5 minutes); no process in it that a person started from their own shell; no live lead or orchestrator
             session in it (launch flags or ROLE record), however quiet; no child card left in Orca (a lead's). The whole verdict is taken again right before closing.
             -> `orca terminal close --worktree path:P --all`, ignored files to the trash, `orca worktree rm --run-hooks`
   stack     a compose project (containers compose created) whose working directories, every one absolute and labelled,
@@ -51,6 +51,7 @@ DEFAULTS = {
     "serve_ranges": [[4500, 4599], [32768, 60999]],
 }
 DEV_SERVERS = ("node", "bun", "deno", "vite")
+AGENT_BUSY_S = 5 * 60
 
 
 def config():
@@ -103,12 +104,14 @@ def protected_path(p, protect):
 
 # ---------------------------------------------------------------- judgements (pure)
 
-def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=(), coordinator=None):
+def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=(), coordinator=None,
+               busy=()):
     """(target, why). card: a row of `orca worktree list`; facts: reap.worktree_facts; pr: reap's PR state of
     facts["pr"]; terminals: the card's rows of `orca terminal list`, None when unreadable; quiet_s: seconds since
-    its transcripts last changed, None when it has none; people: pids in it a person started; holders: pids in it
+    its transcripts last changed, None when it has none, a reason when they cannot be read; people: pids in it a person started; holders: pids in it
     that are protected or listen on a protected port; children: the cards it made that still exist (a lead's);
-    coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds."""
+    coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds;
+    busy: shells a live Claude session in it is still running (a Bash call, a background shell, a Monitor)."""
     p = reap.real(card["path"])
     if card.get("isMainWorktree") or card.get("isPinned"):
         return False, "메인 체크아웃 또는 고정된 카드"
@@ -140,11 +143,20 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
         return False, f"보호 대상 프로세스가 이 카드에 있음(pid {holders[0]})"
     if people:
         return False, f"사람이 띄운 셸의 자식이 이 카드에 있음(pid {people[0]})"
+    if busy:
+        # A session waiting on its own background work is quiet without being done.
+        return False, f"Claude 세션이 셸을 돌리는 중(pid {busy[0]})"
     if terminals is None:
         return False, "터미널 목록을 읽지 못함"
-    loud = [t for t in terminals if now - (t.get("lastOutputAt") or 0) / 1000 < idle_s]
+    if isinstance(quiet_s, str):
+        return False, quiet_s
+    def window(t):
+        # An idle Claude screen still writes to its terminal about every 30 minutes with nothing new on it, so its
+        # quiet transcript decides; a working one redraws its spinner every second, which the short window catches.
+        return AGENT_BUSY_S if t.get("agentIdentity") == "claude" and quiet_s is not None else idle_s
+    loud = [t for t in terminals if now - (t.get("lastOutputAt") or 0) / 1000 < window(t)]
     if loud:
-        return False, f"터미널 {loud[0].get('handle')} 출력이 {int(idle_s // 60)}분 안에 있음"
+        return False, f"터미널 {loud[0].get('handle')} 출력이 {int(window(loud[0]) // 60)}분 안에 있음"
     if quiet_s is not None and quiet_s < idle_s:
         return False, f"세션 기록이 {int(quiet_s // 60)}분 전에 바뀜"
     return True, f"PR {facts['pr']} {pr['state'].lower()}, HEAD 가 PR 에 있음, 깨끗함, {int(idle_s // 60)}분 넘게 조용"
@@ -262,6 +274,15 @@ def people_in(path, rows, cwd_of):
     return sorted(p for p in pids if p in rows and reap.human_owned(p, rows) and not reap.human_shell(p, rows))
 
 
+def busy_in(path, rows, cwd_of):
+    """Shells that a live Claude session in path still runs: every Bash call, background shell and Monitor is a
+    shell child of the session. Other children (MCP servers, caffeinate) live as long as the session and say nothing."""
+    inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), path) and pid in rows]
+    claude = {pid for pid in inside if reap.is_claude(rows[pid]["cmd"])}
+    return sorted(q for q, r in rows.items() if r["ppid"] in claude
+                  and os.path.basename((r["cmd"].split() or [""])[0]).lstrip("-") in reap.SHELLS)
+
+
 def port_open(port):
     """Something accepts on the loopback port, whoever owns it: lsof sees only this user's sockets."""
     for host in ("127.0.0.1", "::1"):
@@ -287,6 +308,56 @@ def wt_path(wid):
     return (wid or "").split("::")[1] if "::" in (wid or "") else ""
 
 
+TAIL_BYTES = 256 * 1024
+
+
+def last_entry_time(path):
+    """Time of the newest entry with a timestamp in a transcript's tail. An idle Claude session appends untimed
+    metadata lines (`atis-latch`) about every 30 minutes, which move the file's mtime without any work; with no
+    timestamp in the tail, the mtime stands, which reads as recent and keeps the card. None when the file is gone;
+    Unreadable when it or its newest timestamp cannot be read, since an older entry would read as quieter."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+        mtime = os.stat(path).st_mtime
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        raise Unreadable(f"세션 기록 {path.name} 을 읽지 못함({type(e).__name__})") from e
+    for line in reversed(lines):
+        try:
+            ts = json.loads(line).get("timestamp")
+        except (ValueError, AttributeError):
+            continue  # the tail's cut first line, or a non-object line
+        if ts:
+            try:
+                return reap.parse_ts(ts)
+            except (ValueError, TypeError, AttributeError) as e:
+                raise Unreadable(f"세션 기록 {path.name} 의 시각 {str(ts)[:40]!r} 을 읽지 못함") from e
+    return mtime
+
+
+class Unreadable(Exception):
+    pass
+
+
+def transcript_quiet(projects_dir, now):
+    """reap.transcript_quiet, by the last timestamped entry instead of the file's mtime; a reason (str) when a
+    transcript cannot be read, which keeps the card."""
+    def quiet(cwd):
+        d = projects_dir / re.sub(r"[^A-Za-z0-9]", "-", cwd)
+        try:
+            times = [t for f in ((f for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)) if d.is_dir() else ())
+                     if (t := last_entry_time(f)) is not None]
+        except Unreadable as e:
+            return str(e)
+        except OSError as e:
+            return f"세션 기록 폴더를 읽지 못함({type(e).__name__})"
+        return now - max(times) if times else None
+    return quiet
+
+
 def read_machine(now):
     """What every card verdict reads once per pass; None for a part that could not be read."""
     cwd_pairs = reap.cwds(inodes=True)
@@ -294,8 +365,8 @@ def read_machine(now):
     return {"rows": reap.processes(), "cwd_pairs": cwd_pairs,
             "cwd_of": None if cwd_pairs is None else {p: c for p, (c, _) in cwd_pairs.items()},
             "listening": listening, "pr_state": reap.pr_reader(),
-            "quiet": reap.transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
-                                           / "projects", now)}
+            "quiet": transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
+                                      / "projects", now)}
 
 
 COORDINATOR_ARGV = re.compile(r"--agent[ =]agent-skills:(lead|orchestrator)\b|--name[ =]lead:")
@@ -359,7 +430,7 @@ def card_verdict(w, m, cfg, protect, now):
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
                          people_in(p, m["rows"], cwd_of), holders, children,
-                         coordinator_in(p, m["rows"], cwd_of, projects))
+                         coordinator_in(p, m["rows"], cwd_of, projects), busy_in(p, m["rows"], cwd_of))
     return ok, why, facts
 
 
