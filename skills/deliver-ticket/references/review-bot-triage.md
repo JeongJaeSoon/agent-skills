@@ -43,7 +43,6 @@ A pattern enters this file only after it has held on real threads. Shape:
 - Skip when: <conditions that must all be true>
 - Do not skip when: <risk boundaries>
 - Example signal: <phrases or code context that identify it>
-- Source: <PR or comment URL>
 ```
 
 `candidate` for one or two examples, `recurring` after several real dismissals, `strong` only

@@ -20,6 +20,7 @@ Identify what to review from context:
 - If the user points at specific files or a diff, use that.
 - If on a feature branch, run `git diff main...HEAD` (or the appropriate base branch) for the full changeset.
 - If the user's message references recent work, gather the relevant files.
+- If the target is a design, plan or decision rather than code, package that document and the code or constraints it rests on.
 
 Package the diff or file contents with any surrounding context files the reviewers need to understand the code.
 
@@ -34,7 +35,7 @@ same raw scope and rubric, not another reviewer's conclusions. Choose the number
 change's risk; no particular model or different model family is required. Record unavailable
 reviewers and incomplete coverage rather than claiming a pass.
 
-Read `references/reviewer-prompt.md` and fill in the same template for every reviewer with the stated intent, the diff or file contents, the rubric from `references/rubric.md`, and the code-quality lens from `references/code-quality-review.md`.
+Read `references/reviewer-prompt.md` and fill in the same template for every reviewer with the stated intent, the diff or file contents, the rubric from `references/rubric.md`, and the code-quality lens from `references/code-quality-review.md`. For a design, plan or decision, leave out the code-quality lens and add one line to the brief: the plan's premises are in scope, so reviewers may challenge the approach, not only its execution; the intent paragraph states the goal the plan serves.
 
 ## Step 4, Synthesize
 

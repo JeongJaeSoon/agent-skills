@@ -6,7 +6,7 @@ The flow improver and the resource steward serve every program on the machine, s
 
 | Role | Owns | Does not |
 |---|---|---|
-| Coordinator (this session) | Order, deps, briefs, triage, gates, the digest | Diagnose red main, run QA, rework the process, reap worktrees |
+| Coordinator (this session) | Order, deps, briefs, triage, gates, the digest, closing the cards it started | Diagnose red main, run QA, rework the process, sweep worktrees others left |
 | Main guardian | Red main: flake or defect, freeze, hotfix or revert, notify | Pick up tickets |
 | QA lead | Ticket verification, periodic E2E on main, design-vs-code audit | Fix what it finds (it files tickets) |
 | Flow improver | Folding lesson signals, the human's process feedback and the ledgers' unclaimed signals into the skills while programs run: batched, audited, pushed or proposed as a draft PR, then reloaded | Touch a running program's work, or change its contract (merge policy, predicate, the brief's required fields, landing rules) before that program's coordinator confirms |

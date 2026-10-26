@@ -67,9 +67,9 @@ still investigating. Record when one of these happened:
   in one message, one call each covering every ticket or note of the session, not one per
   ticket. Hand over the facts, absolute dates, `owner/repo#n` with its URL, each follow-up's
   class and the exit item it serves, and the commands and output that verified each claim; a
-  claim with no evidence is handed over marked as such. Never write a footer or model
-  attribution line into the text you hand over: the delegate adds one with the model it runs
-  on. Keep working while they run. A delegate
+  claim with no evidence is handed over marked as such. Leave any footer or model attribution
+  line out of the text you hand over: where the user's rules call for one, the delegate adds it,
+  naming the model it runs on. Keep working while they run. A delegate
   that comes back asking for facts gets them and runs again; one that stopped on configuration
   (the notes access mode unset, the vault tools missing, a rules file unreadable) is not re-run:
   report it to the user and ask.

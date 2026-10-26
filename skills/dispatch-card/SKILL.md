@@ -8,19 +8,13 @@ description: "Use when sending work to another repo, or a side branch of this on
 Pack what the new session needs to know into a brief, create the card in the target repo,
 confirm it started, come back to your own work.
 
-Triggers, all meaning this skill: "~ repo 에 작성하자", "~ repo 에 지시해줘", "orca 로 ~ 업무
-새로 지시해줘", "~ 에 위임하고 너는 손 떼", "위임해서 진행시키고 너는 ~ 진행해줘", "기존 작업
-하면서 ~ 도 진행해줘", "저쪽 repo 에서 하라고 해줘", "다른 repo 에 맡겨줘", "곁가지로 띄워줘";
-"dispatch", "dispatch to another repository", "cross-repo". "병렬로" alone is not a trigger (it usually
-means handoff or a sub-agent); only when paired with this session continuing. Not for
-"서브에이전트로" (Agent tool).
-
 ## 0. Dispatch or handoff — and is it even this skill
 
 The user's phrasing decides it. **"위임하고 너는 X 계속해"** — "~에 위임하고 너는 손 떼",
 "위임해서 진행시키고 너는 원래 작업 진행해줘", "기존 작업 하면서 ~도 진행해줘" — is dispatch:
 this session has its own work after the instruction. **"끝났으니 다음"** — "작업 끝나면 다음
-티켓", "남은 것 진행해줘" — is `handoff-ticket`.
+티켓", "남은 것 진행해줘" — is `handoff-ticket`. "병렬로" alone usually means handoff or a
+sub-agent; it is dispatch only when this session keeps working. "서브에이전트로" is the Agent tool.
 
 | | dispatch-card | handoff-ticket |
 |---|---|---|
@@ -66,9 +60,7 @@ notes store (`use-notes`; its rules file says where it goes), and a `--prompt` o
 `/goal <the goal and its done, one sentence>. 브리프: <note path>` plus a three-line summary.
 The `/goal` keeps the card working until the goal holds, and the first prompt is the only place
 an approval reaches it: the card's auto-mode classifier treats a later message from another
-session as not the human's, so a "사용자 승인" sent afterwards was refused for a rename, a
-workflow dispatch and a merge, while cards that started with `/goal` and these lines ran to the
-end. The brief has:
+session as not the human's, so an approval sent afterwards is refused. The brief has:
 
 - **Background** — what happened in repo A and why this work follows from it.
 - **Sources** — links, not summaries: repo, PR, commit, note paths the target session reads itself.
@@ -84,13 +76,13 @@ end. The brief has:
   submissions, and any irreversible or outward act not under Approved. The card puts these to
   the human in one batched message and keeps doing the rest.
 - **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만, 호출 전에
-  무엇을 왜 부르는지 보고하고, 모델은 그때 고른다". Never name a model in the brief: a brief that
-  said to use a small model for cheap checks had the card calling it over and over for nothing.
+  무엇을 왜 부르는지 보고하고, 모델은 그때 고른다". Never name a model in the brief: the card reads
+  a named model as an order and calls it whether or not the task needs it.
 - **Target repo rules** — one line: "그 repo의 CLAUDE.md와 스킬을 확인하고 적용하라". Never paste
   its CLAUDE.md or skills into the brief; that session reads them itself.
 - **Close** — one line: "`CLOSE`: 완료 기준을 채우고 결과를 적으면 `end-session` §8대로 같은 턴에
-  스스로 닫는다". Without it the card idles after its last report and nobody closes it: a card
-  whose PR merged stayed open 38 hours. `KEEP` instead only when this session will reuse the card.
+  스스로 닫는다". Without it the card idles after its last report and nobody closes it.
+  `KEEP` instead only when this session will reuse the card.
   The line goes in `--prompt` itself, written out, wherever the rest of the brief lives: the
   plugin's guard hook refuses an `orca worktree create --prompt` without `CLOSE` or `KEEP`.
 
@@ -99,14 +91,14 @@ A card that will run a project for this session through cards of its own (a lead
 carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE` and `PREDICATE` lines; the hook refuses a lead's prompt (a `MODE`
 line or a `<project>: lead` head) that lacks `MODE`, `ROLE`, `DELEGATE` or `PREDICATE`. The `ROLE` line binds the
 lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It stands
-in for `claude --agent agent-skills:lead`: `orca worktree create --agent` takes an Orca agent id, not CLI flags. A lead once briefed in a format of the coordinator's own, with none of these lines, reported done and
-waited for its next order for two days.
+in for `claude --agent agent-skills:lead`: `orca worktree create --agent` takes an Orca agent id, not CLI flags. Without these lines a lead reports done and waits for an order that never comes.
 
 Exceptions. A task that fits in three or four lines goes inline in `--prompt` after `/goal`, no
 note; the Approved and `CLOSE` lines still go in. Product backlog goes through `write-ticket`
 first and the prompt becomes `/goal <TICKET>`, with the Approved line after the ticket ID.
-Feedback the user gives on work a card is already doing is a new ticket and a new card, never
-an addition to the running card's brief. So is a wider approval: when a card stops on an act
+Feedback the user gives on work a card is already doing goes by §3's rule for a card already on
+the task: feedback that changes the work is a new ticket and a new card, never an addition to the
+running card's brief. So is a wider approval: when a card stops on an act
 its first prompt did not approve, start a new `/goal` card whose Approved line carries it; do
 not send the approval by message, and do not do the act yourself.
 
@@ -115,7 +107,7 @@ not send the approval by message, and do not do the act yourself.
 Same command and conventions as `handoff-ticket` §3. What differs:
 
 ```bash
-orca worktree ps                     # a card already on this task? report it, do not add another
+orca worktree ps                     # a card already on this task? the first rule below
 orca worktree create \
   --repo name:<repo> \
   --name "<target>-<topic>" \
@@ -139,10 +131,14 @@ python3 "<reap-resources dir>/scripts/reap.py" ledger add --kind orca-worktree -
 skills-sync close-setup "<result.worktree.path>"
 ```
 
-- A card already on the task that the new one replaces (the same PR, branch or ticket) is
-  superseded: in this turn, tell it to stop and close, and drop the questions it left waiting
-  (`orchestrate` "Stay answerable"). Left open, it waits on a question about work the new card
-  already did.
+- A card already on the task (the same PR, branch or ticket). If it only needs to be told
+  something, send that to it (`skills-sync nudge <handle> "<message>"`, logged with `orch sent
+  add`) and create no card. If the work needs a different implementation, ask it for a state
+  summary (done, left, branch and PR), put that summary in the new card's brief, and in the turn
+  you create the new card tell the old one `superseded by <new card>: stop and close by
+  end-session §8` and drop the questions it left waiting (`orchestrate` "Stay answerable").
+  Without the summary the new card redoes or undoes finished work; left open, the old card waits
+  on a question about work the new card already did.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
 - `--name` is `<target>-<topic>`, e.g. `blog-launch-post`. A ticket-backed card uses the
@@ -160,7 +156,7 @@ orca terminal read --terminal <handle> --screen
 
 Take the handle only from the `agentTerminalHandle` field of the create output, never from a
 loose `term_…` match: the brief can carry another handle (your own, in its REPORT line), and a
-later `/goal` or nudge sent to the first match landed on the sending session. Before any send,
+`/goal` or nudge sent to the first match lands on the sending session. Before any send,
 check that the handle is not your own (`$ORCA_TERMINAL_HANDLE`).
 
 Once. Read that the agent picked up the brief, report the worktree path, branch and handle, and

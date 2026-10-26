@@ -24,6 +24,20 @@ Anywhere    use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
 ```
 
+Which skill owns a PR, and who merges it:
+
+| Skill | PRs it owns | Merge |
+|---|---|---|
+| deliver-ticket | My PR this session is working: writing, review replies, merge, release | The session, per §5 (`gh pr merge`; a stack lands with merge-async) |
+| watch-prs | Waiting PRs a scheduled round collects: review requests naming me, my PRs waiting on review (requests, reminders), my PRs ready to merge | Only my PRs that pass every `merge_repos` gate |
+| orchestrate | A program worker's PRs | `orch land`, or a plain merge the human approved |
+| handoff-ticket · record-progress | Opens no PR: picks the next card, or records opened, reviewed and merged | Never |
+
+- deliver-ticket ↔ watch-prs: a PR whose branch is checked out in a live worktree is merged by that session; watch-prs skips it.
+- orchestrate ↔ watch-prs: a PR in a program ledger is merged by `orch land`; watch-prs does not merge it even after the program stops, when only its reminders come back.
+- orchestrate ↔ deliver-ticket: workers run deliver-ticket but merge with `orch land` instead of §5.
+- handoff-ticket's "머지하고 다음 진행해줘" (merge, then go on): deliver-ticket merges; handoff-ticket only opens the next card after.
+
 ## One ticket
 
 ### write-ticket

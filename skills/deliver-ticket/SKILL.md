@@ -123,8 +123,8 @@ belongs in the commit you just made; make a new one when it is separable. Never
 `git reset --hard` while uncommitted work exists — commit it or copy it aside first.
 
 A force-push to a PR branch (after a rebase or an amend), when one is permitted, keeps the old
-head recoverable: record the remote sha, create a local `backup/<branch>-<sha8>` at it (deleted
-once the PR merges), push with
+head recoverable: record the remote sha, create a local `backup/<branch>-<sha8>` at it (this session
+deletes it with `git branch -D` once the PR merges), push with
 `--force-with-lease=<branch>:<sha>`, then read the remote head back with `git ls-remote` and
 report the old and new sha and the backup branch.
 
@@ -247,15 +247,16 @@ Then land it. How depends on where you run:
   `git diff --name-only <CI base>..origin/main`: if it touches a contract or test premise this
   PR relies on, merge main in and let CI rerun. Do not rebase only because the branch is behind.
   Checks green but `mergeStateStatus` BLOCKED: before concluding a review is missing, look for a
-  required check whose run was cancelled (`gh run list --branch <head>`; concurrent events cancel
-  one another) and rerun it with `gh run rerun <id>`. Only in a repository whose branch
-  protection requires a review may an approved PR still waiting on checks get
-  `gh pr merge <n> --auto --match-head-commit <approved sha>`; before pushing a new head to it,
-  run `gh pr merge <n> --disable-auto` so that head does not land unreviewed. Elsewhere merge
-  by hand once it is ready.
+  required check whose run at the current head was cancelled (`gh run list --commit <head sha>`;
+  concurrent events cancel one another) and rerun it with `gh run rerun <id>`. Only in a
+  repository whose branch protection or ruleset requires a review may an approved PR still
+  waiting on checks get `gh pr merge <n> --auto --match-head-commit <approved sha>`; before
+  pushing a new head to it, run `gh pr merge <n> --disable-auto` so that head does not land
+  unreviewed. Once it has merged that way, read its CI logs all the same (§5, "A green check is not evidence"). Elsewhere merge by
+  hand once it is ready.
 
 ```bash
-gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; a stack lands from its top, see §5
+gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; not for a stack, which lands with merge-async (§5)
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 

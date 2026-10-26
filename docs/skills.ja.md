@@ -24,6 +24,20 @@
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
 
+PR を受け持つスキルとマージする主体:
+
+| スキル | 受け持つ PR | マージ |
+|---|---|---|
+| deliver-ticket | このセッションが作業中の自分の PR: 作成、レビュー対応、マージ、リリース | セッションが §5 どおり（`gh pr merge`、スタックは merge-async） |
+| watch-prs | 定期の回が集めた待ち PR: 自分を指名したレビュー依頼、レビュー待ちの自分の PR（依頼・リマインド）、マージ準備ができた自分の PR | `merge_repos` のゲートをすべて通った自分の PR だけ |
+| orchestrate | プログラムのワーカーの PR | `orch land`、または人が承認した plain merge |
+| handoff-ticket · record-progress | PR を作らない。次のカードを決めるか、オープン・レビュー・マージを記録する | しない |
+
+- deliver-ticket ↔ watch-prs: 生きている worktree にブランチがチェックアウトされた PR はそのセッションがマージする。watch-prs は飛ばす。
+- orchestrate ↔ watch-prs: プログラム台帳にある PR は `orch land` がマージする。watch-prs は止まったプログラムの PR もマージせず、止まった後に戻るのはリマインドだけ。
+- orchestrate ↔ deliver-ticket: ワーカーは deliver-ticket で働くが、マージは §5 ではなく `orch land`。
+- handoff-ticket の「머지하고 다음 진행해줘」（マージして次へ）: マージは deliver-ticket、handoff-ticket はその後に次のカードを開くだけ。
+
 ## チケット1件
 
 ### write-ticket
