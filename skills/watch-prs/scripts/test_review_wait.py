@@ -154,23 +154,61 @@ assert acts([newer], [row(W + "4", "bob", "rerequest", NOW, head="h4", source="s
 assert acts([one], [row(W + "10", "bob", "request", NOW - 3 * 86400, source="refused")], now=NOW + 3 * H) == []
 assert acts([stale4], [row(W + "4", "bob", "rerequest", NOW, head="old", source="refused")]) == []
 
-# Night and non-business days: Slack actions are scheduled for 09:00 on the next business day.
+# Night and non-business days: 09:00 on the next business day is when a business-hours round runs again.
 assert p.post_at(at(14, 20, 59), cfg) is None
 assert p.post_at(at(14, 21), cfg) == at(15, 9)
 assert p.post_at(at(15, 2), cfg) == at(15, 9), "after midnight, before 09:00: the same morning"
 assert p.post_at(at(16, 22), cfg) == at(20, 9), "Friday night skips the weekend and the holiday"
 assert p.post_at(at(17, 12), cfg) == at(20, 9)
-night = p.decide([one], [], at(14, 22), cfg)
+# after_hours: the default holds every Slack action for a business-hours round; schedule-all schedules it; send-now sends.
+assert cfg["after_hours"] == "schedule-certain-only" and p.decide([one], [], at(14, 22), cfg) == []
+assert acts([one], now=at(15, 9)) == [("request", W + "10", "bob")], "the held request is decided again in the morning"
+sched_all = {**cfg, "after_hours": "schedule-all"}
+night = p.decide([one], [], at(14, 22), sched_all)
 assert night[0]["post_at"] == at(15, 9) and night[0]["channel"] == "CFAKE"
+now_mode = p.decide([one], [], at(14, 22), {**cfg, "after_hours": "send-now"})
+assert [(a["action"], a["post_at"]) for a in now_mode] == [("request", None)]
 # While a scheduled request to a reviewer is pending, the next batch to them waits: it could not be merged into it.
 pending = [row(W + "10", "bob", "request", at(14, 22), source="scheduled", post_at=at(15, 9))]
 three = state(14, reqs=[u("bob")], events=[asked("bob", at(14, 20))])
-assert acts([one, three], pending, now=at(14, 23)) == []
+assert acts([one, three], pending, now=at(14, 23), c=sched_all) == []
 assert acts([one, three], pending, now=at(15, 9, 5)) == [("request", W + "14", "bob")]
 
 skipped_later = [row(W + "10", "bob", "request", at(14, 22), source="skipped", post_at=at(15, 9))]
 assert acts([one, three], skipped_later, now=at(15, 9, 5)) == [("request", W + "14", "bob")], \
     "a skipped row with post_at does not hold the reviewer's batch"
+
+# weekend_days replaces Saturday/Sunday; 2026-10-16 is a Friday and 2026-10-17 a Saturday.
+fri_sat = {**cfg, "weekend_days": [4, 5]}
+assert not p.business_day(dt.date(2026, 10, 16), fri_sat) and p.business_day(dt.date(2026, 10, 18), fri_sat)
+assert p.post_at(at(15, 22), fri_sat) == at(18, 9), "Thursday night skips Friday and Saturday"
+assert acts([one], now=at(16, 11), c=fri_sat) == [] and acts([one], now=at(18, 11), c=fri_sat) == [("request", W + "10", "bob")]
+
+# A request carries the reviewer+assignee edit unless assign_reviewers is off; other actions never do.
+r = p.decide([one], [], NOW + 2 * H, cfg)
+assert r[0]["github"] == "gh pr edit https://github.com/acme/widgets/pull/10 --add-reviewer bob --add-assignee bob", r
+assert p.decide([one], [], NOW + 2 * H, {**cfg, "assign_reviewers": False})[0]["github"] is None
+assert p.decide([one], [row(W + "10", "bob", "request", at(13, 10))], NOW, cfg)[0]["github"] is None, "a remind does not"
+
+# profiles: the first match overrides the top-level keys for that repo only; a match without a slash names an owner.
+prof = {**cfg, "profiles": [{"match": "acme/tool*", "after_hours": "send-now", "assign_reviewers": False},
+                            {"match": "acme", "night_hour": 23}]}
+assert p.repo_cfg(prof, "acme/tools")["after_hours"] == "send-now" and p.repo_cfg(prof, "acme/tools")["night_hour"] == 21
+assert p.repo_cfg(prof, "Acme/Widgets")["night_hour"] == 23 and p.repo_cfg(prof, "other/x") is prof
+tools = state(15, repo="acme/tools", reqs=[u("bob")], labels=["security"])
+late = {a["pr"]: a for a in p.decide([one, tools], [], at(14, 22), prof)}
+assert set(late) == {W + "10", "acme/tools#15"} and late["acme/tools#15"]["github"] is None, late
+assert late[W + "10"]["post_at"] is None and late["acme/tools#15"]["post_at"] is None, "21:00-23:00 is business hours for acme"
+assert p.decide([one, tools], [], at(14, 23, 30), prof)[0]["pr"] == "acme/tools#15", "acme/widgets holds after 23:00"
+for bad in ({"after_hours": "later"}, {"weekend_days": [7]}, {"weekend_days": "sat"}, {"profiles": [{"night_hour": 22}]},
+            {"profiles": [{"match": "acme/*", "kinds": ["review_wait"]}]}, {"profiles": [{"match": "acme", "after_hours": "x"}]}):
+    path = pathlib.Path(tempfile.mkdtemp()) / "c.json"
+    path.write_text(json.dumps({"prs": bad}))
+    try:
+        p.config(path)
+        raise AssertionError(bad)
+    except p.ConfigError:
+        pass
 
 # Channels: reviewer > repository > default.
 r = p.decide([state(20, reqs=[u("carol")], labels=["security"]), state(21, repo="acme/tools", reqs=[u("bob")], labels=["security"])],
@@ -375,6 +413,12 @@ run = lambda *a: subprocess.run([sys.executable, str(pathlib.Path(p.__file__)), 
                                 env={**os.environ, "AGENT_SKILLS_STATE": str(tmp)}, capture_output=True, text=True)
 lines = [json.loads(x) for x in run("actions").stdout.splitlines()]
 assert sorted(x["action"] for x in lines) == ["request", "request", "request", "retrigger"] and "post_at" in lines[0]
+assert all((x["github"] is not None) == (x["action"] == "request") for x in lines), lines
+conf.write_text(json.dumps({"prs": {"kinds": ["review_wait"], "profiles": [{"match": "acme/*", "after_hours": "send-now"}]}}))
+pol = json.loads(run("policy", "acme/widgets").stdout)
+assert pol["after_hours"] == "send-now" and pol["weekend_days"] == [5, 6] and pol["assign_reviewers"] is True, pol
+assert json.loads(run("policy", "other/x").stdout)["after_hours"] == "schedule-certain-only"
+conf.write_text(json.dumps({"prs": {"kinds": ["review_wait"]}}))
 out = run("log", "--key", k, "--source", "scheduled", "--scheduled", "Q9", "--post-at", str(at(15, 9)), "--thread", "CFAKE:7.7")
 assert out.returncode == 0, out
 assert p.read_jsonl(tmp / "prs" / "sendlog.jsonl")[0]["post_at"] == at(15, 9)

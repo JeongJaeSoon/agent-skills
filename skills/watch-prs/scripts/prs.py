@@ -12,6 +12,7 @@ Usage:
   python3 prs.py log --key KEY --source SOURCE [--thread CHANNEL:TS] [--scheduled ID] [--post-at EPOCH] [--at EPOCH]
   python3 prs.py commit [--config PATH]
   python3 prs.py dispatch [--config PATH]
+  python3 prs.py policy OWNER/REPO [--config PATH]
   python3 prs.py schedule [--workspace SELECTOR] [--provider claude] [--edit AUTOMATION_ID] [--write]
 
 precheck asks GitHub (through `gh`) for the items and exits 0 when some are not in the ledger yet,
@@ -26,7 +27,8 @@ went in body.txt, and a failed one goes to the owner. commit records what plan.j
 so the same (repo, number, headRefOid) is never sent twice. Only kinds with a PROMPT_STEPS entry become new
 (and so reach plan.json); items of other kinds are listed as uncovered and never recorded.
 actions prints the Slack and bot actions plan.json holds; log records one of them in the send-log
-(sendlog.jsonl), which is what decides them, not the ledger.
+(sendlog.jsonl), which is what decides them, not the ledger. policy prints one repository's resolved
+business-hours, after_hours and assign_reviewers values (profiles applied) for a request sent by hand.
 merges prints the `gh pr merge` command for each ready_to_merge item in plan.json; the round runs
 them itself. verify then checks each is MERGED, waits for the merge commit's CI and rewrites body.txt.
 dispatch reads plan.json and prints one
@@ -40,7 +42,7 @@ Config: ~/.claude/agent-skills.json → "prs" (see SKILL.md). State: <--state or
 Slack review requests come from watch-mentions' seen ledger (<state>/mentions/seen.json, rows of
 category review with a `pr`); a missing ledger means GitHub only.
 """
-import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time, zoneinfo
+import datetime as dt, fnmatch, json, os, pathlib, re, shlex, subprocess, sys, time, zoneinfo
 
 
 def opt(name, default=None):
@@ -68,11 +70,15 @@ DEFAULTS = {"kinds": ["review_request"], "orgs": [], "repos": [], "exclude_orgs"
             "deploy": {}, "dispatch_run": None, "worker_agent": "claude", "release_approval": None,
             "channel": None, "repo_channels": {}, "reviewers": {}, "review_bots": {}, "holidays": [],
             "urgent_labels": [], "batch_min": 2, "batch_wait_hours": 2, "night_hour": 21,
-            "morning_hour": 9, "programs_dir": None,
+            "morning_hour": 9, "weekend_days": [5, 6], "after_hours": "schedule-certain-only",
+            "assign_reviewers": True, "profiles": [], "programs_dir": None,
             "merge_repos": [], "merge_deny_repos": [], "merge_methods": ["squash", "merge", "rebase"],
             "hold_labels": ["hold", "do-not-merge", "wip"], "required_bots": [],
             "review_verdict_pattern": r"^\**(?:결론|verdict)(?:\**\s*[:：]|\s*[:：]\s*\**)\s*\**(pass|fail)\**\s*$",
             "ci_wait_minutes": 15, "must_pattern": r"\[MUST\]", "author_wake_prefix": {}}
+AFTER_HOURS = ("schedule-certain-only", "schedule-all", "send-now")
+# What a profile may set for its repos; anything else is per-account, not per-repo.
+PROFILE_KEYS = {"assign_reviewers", "after_hours", "weekend_days", "night_hour", "morning_hour", "holidays"}
 REFERENCE = pathlib.Path(__file__).resolve().parents[2] / "deliver-ticket/references/post-merge-release.md"
 EXIT_NEW, EXIT_NOTHING, EXIT_ERROR = 0, 1, 2
 GH_RETRY_WAITS = (2, 4)
@@ -138,7 +144,29 @@ def config(path=CONFIG):
             re.compile(x)
         except re.error as e:
             raise ConfigError(f"exclude_title_patterns: invalid regex {x!r}: {e}") from None
-    return {**DEFAULTS, **raw, "exclude_title_patterns": pats}
+    cfg = {**DEFAULTS, **raw, "exclude_title_patterns": pats}
+    profiles = cfg["profiles"]
+    if not isinstance(profiles, list) or not all(isinstance(x, dict) and isinstance(x.get("match"), str) for x in profiles):
+        raise ConfigError('profiles must be a list of objects, each with a "match" string')
+    for where, c in [("prs", cfg)] + [(f"profiles[{x['match']}]", x) for x in profiles]:
+        if where != "prs" and set(c) - PROFILE_KEYS - {"match"}:
+            raise ConfigError(f"{where}: only {', '.join(sorted(PROFILE_KEYS))} may be set per repo")
+        if "after_hours" in c and c["after_hours"] not in AFTER_HOURS:
+            raise ConfigError(f"{where}: after_hours must be one of {', '.join(AFTER_HOURS)}")
+        days = c.get("weekend_days", [])
+        if not isinstance(days, list) or not all(isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in days):
+            raise ConfigError(f"{where}: weekend_days must be a list of weekday numbers, Monday 0 to Sunday 6")
+    return cfg
+
+
+def repo_cfg(cfg, repo):
+    """cfg with the first profile matching repo applied. A match without a slash names an owner."""
+    repo = repo.lower()
+    for x in cfg.get("profiles") or []:
+        pat = x["match"].lower()
+        if fnmatch.fnmatchcase(repo if "/" in pat else repo.split("/")[0], pat):
+            return {**cfg, **{k: v for k, v in x.items() if k != "match"}}
+    return cfg
 
 
 def read_json(path, default):
@@ -708,7 +736,7 @@ def local(t, cfg):
 
 
 def business_day(d, cfg):
-    return d.weekday() < 5 and d.isoformat() not in cfg["holidays"]
+    return d.weekday() not in cfg["weekend_days"] and d.isoformat() not in cfg["holidays"]
 
 
 def next_business_day(d, cfg):
@@ -731,6 +759,15 @@ def post_at(now, cfg):
     early = business_day(l.date(), cfg) and l.hour < cfg["morning_hour"]
     day = l.date() if early else next_business_day(l.date(), cfg)
     return dt.datetime.combine(day, dt.time(cfg["morning_hour"], tzinfo=l.tzinfo)).timestamp()
+
+
+def slack_timing(now, cfg):
+    """(hold, post_at) for a Slack action now, under cfg's after_hours. The round cannot know a PR will still wait
+    by the next morning, so schedule-certain-only holds every after-hours action until a business-hours round."""
+    at = post_at(now, cfg)
+    if at is None or cfg["after_hours"] == "send-now":
+        return False, None
+    return cfg["after_hours"] == "schedule-certain-only", at
 
 
 def program_prs(cfg, now, stopped=False):
@@ -833,8 +870,11 @@ def review_bots(cfg):
 def wait_action(kind, s, who, cfg, at, thread=None, comment=None):
     person = cfg["reviewers"].get(who, {})
     slack = kind != "retrigger"
+    github = (shlex.join(["gh", "pr", "edit", s["url"], "--add-reviewer", who, "--add-assignee", who])
+              if kind == "request" and cfg["assign_reviewers"] else None)
     return {"action": kind, "pr": s["pr"], "head": s["head"], "reviewer": who, "url": s["url"], "title": s["title"],
             "slack_user": person.get("slack"), "thread": thread, "comment": comment, "post_at": at if slack else None,
+            "github": github,
             "channel": (person.get("channel") or cfg["repo_channels"].get(s["repo"]) or cfg["channel"]) if slack else None}
 
 
@@ -846,7 +886,8 @@ def author_action(s, cfg):
     wake = {bot_name(b): w for b, w in cfg["author_wake_prefix"].items()}.get(bot_name(s["author"]))
     return {"action": "remind_author", "pr": s["pr"], "head": s["head"], "reviewer": s["author"], "url": s["url"],
             "title": s["title"], "slack_user": who if thread else None, "thread": thread, "comment": None,
-            "prefix": None if thread else wake, "post_at": None, "channel": thread.split(":")[0] if thread else None}
+            "prefix": None if thread else wake, "post_at": None, "github": None,
+            "channel": thread.split(":")[0] if thread else None}
 
 
 def decide(states, sendlog, now, cfg, authors=()):
@@ -862,15 +903,19 @@ def decide(states, sendlog, now, cfg, authors=()):
                business hours only, since it may go out as a PR comment that cannot be scheduled.
     A refused row stops every action for that (PR, reviewer); a skipped row (the round judged it moot) stops
     only that action at that head. Unmapped reviewers get no action, only a notice.
-    Slack actions outside business hours carry post_at: the next business morning."""
-    at = post_at(now, cfg)
+    Business hours, after_hours and assign_reviewers are the PR's repo's (repo_cfg). Outside business hours a Slack
+    action is held for a business-hours round (schedule-certain-only), carries post_at, the next business morning
+    (schedule-all), or goes now (send-now). A request carries `github`, the reviewer+assignee edit, when
+    assign_reviewers is on."""
     acts, held, bots, by = [], {}, review_bots(cfg), {}
     for r in sendlog:
         by.setdefault((r["pr"], r["reviewer"]), []).append(r)
     scheduled = {r["reviewer"] for r in sendlog
                  if r["action"] == "request" and r["source"] == "scheduled" and (r.get("post_at") or 0) > now}
     for s in states:
-        for who in s["pending"] + s["stale_approvals"]:
+        c = repo_cfg(cfg, s["repo"])
+        hold, at = slack_timing(now, c)
+        for who in ([] if hold else s["pending"] + s["stale_approvals"]):
             mine = by.get((s["pr"], who), [])
             if not slack_id(who, cfg) or any(r["source"] == "refused" for r in mine):
                 continue
@@ -880,32 +925,34 @@ def decide(states, sendlog, now, cfg, authors=()):
             thread = next((r["thread"] for r in reversed(mine) if r.get("thread")), None)
             if who in s["stale_approvals"]:
                 if "rerequest" not in skip and not any(r["head"] == s["head"] for r in asks):
-                    acts.append(wait_action("rerequest", s, who, cfg, at, thread))
+                    acts.append(wait_action("rerequest", s, who, c, at, thread))
             elif not asks:
                 if "request" not in skip:
-                    held.setdefault(who, []).append(s)
+                    held.setdefault(who, []).append((s, c, at))
             else:
                 last = max(asks, key=lambda r: r["at"])
                 since = max(last["at"], last.get("post_at") or 0)
                 reminded = any(r["action"] == "remind" and r["at"] >= last["at"] for r in mine)
-                if "remind" not in skip and not reminded and now >= one_business_day_after(since, cfg):
-                    acts.append(wait_action("remind", s, who, cfg, at, thread))
+                if "remind" not in skip and not reminded and now >= one_business_day_after(since, c):
+                    acts.append(wait_action("remind", s, who, c, at, thread))
         for bot in s["bot_stale"]:
             comment = bots.get(bot_name(bot))
             if comment and not any(r["head"] == s["head"] or r["source"] == "refused" for r in by.get((s["pr"], bot), [])):
-                acts.append(wait_action("retrigger", s, bot, cfg, None, comment=comment))
+                acts.append(wait_action("retrigger", s, bot, c, None, comment=comment))
     for s in authors:
+        c = repo_cfg(cfg, s["repo"])
+        hold, at = slack_timing(now, c)
         rows = by.get((s["pr"], s["author"]), [])
-        if at is None and now >= one_business_day_after(s["since"], cfg) and not any(
+        if not hold and at is None and now >= one_business_day_after(s["since"], c) and not any(
                 r["source"] == "refused" or (r["action"] == "remind_author" and r["head"] == s["head"]) for r in rows):
-            acts.append(author_action(s, cfg))
+            acts.append(author_action(s, c))
     for who, waiting in held.items():
         if who in scheduled:
             continue
-        oldest = min(s["asked"][who] for s in waiting)
+        oldest = min(s["asked"][who] for s, _, _ in waiting)
         if (len(waiting) >= cfg["batch_min"] or now - oldest >= cfg["batch_wait_hours"] * 3600
-                or any(s["urgent"] for s in waiting)):
-            acts += [wait_action("request", s, who, cfg, at) for s in waiting]
+                or any(s["urgent"] for s, _, _ in waiting)):
+            acts += [wait_action("request", s, who, c, at) for s, c, at in waiting]
     return acts
 
 
@@ -1281,7 +1328,11 @@ PROMPT_STEPS = {
         "thread 가 없으면 `gh pr comment <url> --body <본문>` 로 그 PR 에 달고 `--source sent` 로 기록한다(no_thread 로 남기지 않는다). "
         "prefix 가 있으면 본문을 그 문자열로 시작한다(그 봇은 그렇게 시작하는 코멘트에만 답한다). 보내기 직전에 이미 필요 없어진 행동(그사이 승인됨·머지됨, 리뷰어의 slack id 없음 등)은 "
         "보내지 않고 `--source skipped` 로 기록한다. 어느 행동이든 권한·분류기·훅에 거부되면 다른 방법으로 다시 시도하지 않는다: "
-        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. 이 단계의 GitHub 쓰기는 retrigger·remind_author 코멘트뿐이다."),
+        "`--source refused` 로 기록하고 거부 범주와 명령을 코디네이터에게 보낸다. request 에 github 명령이 있으면 Slack 으로 보내거나 "
+        "예약하기 전에 그 명령을 단독으로 한 번 실행하고 `gh pr view <url> --json reviewRequests,assignees` 로 reviewer 와 assignee 가 "
+        "붙었는지 확인한다(`--add-reviewer` 는 아무도 추가하지 않고 0 으로 끝날 수 있다). 거부되거나 붙지 않았으면 다시 시도하지 않고 "
+        "그 PR 과 명령을 코디네이터에게 보고하되, Slack 의뢰는 그대로 처리한다. "
+        "이 단계의 GitHub 쓰기는 retrigger·remind_author 코멘트와 request 의 리뷰어·assignee 지정뿐이다."),
     "unreleased": (
         "보내기가 성공했을 때만 `{run[dispatch]}` 를 실행한다. 출력된 줄은 실행하지 않는다: worker-start 는 Run 에 묶인 "
         "코디네이터 터미널에서만 된다. 줄이 있으면 같은 줄이 담긴 {dispatch_file} 을 `--body \"$(cat {dispatch_file})\"` 로, 제목 "
@@ -1334,7 +1385,8 @@ def schedule_cmd(script, cfg, workspace, provider="claude", edit=None):
         reads = (" 이 회차는 머지 단계" + ("와 `round` 가 낸 승인" if gate else "") + " 밖에서 승인·리뷰·배포를 직접 하지 않는다."
                  + ("" if "review_wait" in cfg["kinds"] else " 코멘트·재요청도 하지 않는다."))
     elif "review_wait" in cfg["kinds"]:
-        reads = " GitHub 쓰기는 retrigger·remind_author 코멘트" + ("와 `round` 가 낸 승인" if gate else "") + "뿐이다."
+        reads = (" GitHub 쓰기는 retrigger·remind_author 코멘트, request 의 리뷰어·assignee 지정"
+                 + ("과 `round` 가 낸 승인" if gate else "") + "뿐이다.")
     else:
         reads = (" 이 회차는 감지하고 넘기기만 한다: 리뷰·코멘트·재요청·배포를 직접 하지 않는다"
                  + (" (예외는 `round` 가 낸 단계뿐이다)." if gate else "."))
@@ -1375,7 +1427,7 @@ def main():
         code, why = precheck(GitHub(), cfg, STATE, now)
         print(why, file=sys.stderr)
         sys.exit(code)
-    if cmd in ("plan", "merges", "verify", "actions", "log", "commit", "dispatch", "schedule") and cfg is None:
+    if cmd in ("plan", "merges", "verify", "actions", "log", "commit", "dispatch", "policy", "schedule") and cfg is None:
         sys.exit(f'{cmd}: set "prs" in {CONFIG}')
     if cmd == "plan" and "--body" not in sys.argv:
         print(json.dumps(compute(GitHub(), cfg, read_json(STATE / "ledger.json", {}), now), ensure_ascii=False, indent=1))
@@ -1406,7 +1458,14 @@ def main():
         for i in (read_json(STATE / "plan.json", None) or {"new": []})["new"]:
             if "action" in i:
                 print(json.dumps({k: i.get(k) for k in ("key", "action", "url", "title", "reviewer", "slack_user", "channel",
-                                                         "thread", "post_at", "comment", "prefix")}, ensure_ascii=False))
+                                                         "thread", "post_at", "comment", "prefix", "github")},
+                                 ensure_ascii=False))
+    elif cmd == "policy" and args:
+        # A request sent by hand reads the repo's resolved rules here instead of re-deriving them.
+        c = repo_cfg(cfg, args[0])
+        hold, at = slack_timing(now, c)
+        print(json.dumps({**{k: c[k] for k in sorted(PROFILE_KEYS)}, "repo": args[0], "business_hours": post_at(now, c) is None,
+                          "round_holds": hold, "post_at": at}, ensure_ascii=False))
     elif cmd == "log":
         num = lambda name: float(opt(name)) if opt(name) else None
         row = log(STATE, opt("--key"), opt("--source"), now, thread=opt("--thread"), scheduled=opt("--scheduled"),

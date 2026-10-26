@@ -66,7 +66,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
-| orca-worktree | in the ledger, made by an orchestration worker, or with `cli` lineage (a card whose PR was found only by branch name also waits until its sessions are quiet for `--hours`, never under 2, and stays while no transcript proves it: it may be a lead reusing an old merged branch's name); its PR (ledger link, else the branch's own PR, never a fork's) merged or closed, or, for a worker's card only, no PR (a failed `gh` lookup is not "no PR") and HEAD on `origin/HEAD` (end-session §4) with its sessions' transcripts quiet for `--hours`, never under 2 (a lead or a card opened by hand sits on the default branch with no PR too, so those wait for a PR); no changes, untracked files included, except an untracked `.agents/skills/<name>/` whose `.claude/skills/<name>` is tracked (Orca regenerates that copy; any other untracked file still keeps the card; `reap.regenerated_untracked: false` counts the copy as a change); nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it | an open PR, no PR on a card no worker made, no PR with HEAD off the default branch (or `origin/HEAD` unset), a pinned `cli` card, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | the regenerated copies, judged again first (a new untracked file fails the item), and its ignored files (`git ls-files --others --ignored --exclude-standard --directory`: `.env.local`, caches) to the trash, which `orca worktree rm` would delete for good; then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
+| orca-worktree | in the ledger, made by an orchestration worker, or with `cli` lineage; its PR merged or closed, or, for a worker's card only, no PR with HEAD on `origin/HEAD` and its sessions quiet for `--hours` (never under 2); and nothing in it would be lost: no changes (Orca's regenerated `.agents/skills` copy aside), nothing unpushed, no live worker turn or process. Exact conditions: [references/janitor-kinds.md](references/janitor-kinds.md) | an open PR, a no-PR card no worker made, a pinned `cli` card, changes, unpushed commits, a live turn or a process; skipped: the main checkout, worktrees outside `--repo`, a `retained` worker row | ignored files (and the regenerated copies, judged again) to the trash, then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
 | done-card | an orca-worktree with a merged or closed PR that would be a target but for the processes in it (a no-PR card idling at its prompt is as often a lead waiting on its workers, and a card is asked only once): no live worker turn, and its Claude session's transcripts quiet for `reap.done_card_hours` (default 2) | anything else that keeps an orca-worktree; the worker list unreadable; the session already asked once (a `done-card` ledger line), which is reported, not asked again | `skills-sync nudge` into the card's one Claude terminal: close by `end-session` §8 if nothing is left, else say what is. Never killed. A refused nudge (screen not idle) fails the item, so the next precheck holds it back a day |
 | orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
@@ -163,13 +163,13 @@ so a scan there can see fewer workers than the automation does. Any process in a
 it from removal, Orca's idle shell in an open card included: an orca-worktree becomes a target once its card's
 terminals are closed, and until then `orca-worker` reports the reclaimable terminal. A finished card
 whose Claude session sits at an empty prompt would stay forever that way, so `done-card` asks that
-session to close itself; a lead card whose PRs had merged once stayed open two days. Which device fits which job:
+session to close itself. Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
 
 ## Hard pass: reap-hard
 
-The janitor only sees what was registered and waits on a model and on the card's own session to close; finished
-cards stayed open for a day. `bin/reap-hard` is the backstop: fixed rules, no model, every Orca card under
+The janitor only sees what was registered and waits on a model and on the card's own session to close.
+`bin/reap-hard` is the backstop: fixed rules, no model, every Orca card under
 `~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
 
 ```bash
@@ -207,7 +207,7 @@ class when the load is at or above the limit:
 
 | Class | What | Action |
 |---|---|---|
-| ours-idle | a Claude session whose transcripts (its subagents' included) have been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it. Closing 8 idle sessions once took a load of 19.5 down to 11 |
+| ours-idle | a Claude session whose transcripts (its subagents' included) have been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it |
 | leftover | an `orphan` target of `scan` | `scan --plan`, then `reap --plan` |
 | ours-working | anything else of this user's, from any path: a live session, a benchmark, a test run, a container VM | leave it; stop new dispatches and queue heavy runs behind `orch heavy` |
 | system | another user's process | report it as not ours; never touch it |

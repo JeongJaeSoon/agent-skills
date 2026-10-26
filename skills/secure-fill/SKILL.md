@@ -55,7 +55,7 @@ description: "Use when a browser auth screen needs a secret (dev token, test pas
    security add-generic-password -s secure-fill -a dev-token -T "" -w
    ```
 
-   `-T ""`는 신뢰 앱 목록을 비운다. macOS 문서대로라면 이후 어떤 프로세스든 값을 읽을 때 Keychain이 확인 창을 띄운다. 에이전트가 이 도구를 거치지 않고 `security`로 직접 읽으려 해도 걸린다. 대신 채울 때마다 Touch ID와 Keychain 확인을 둘 다 거친다(`"approval": "none"` 항목은 Keychain 확인만). 데모에서는 이 동작을 확인하지 못했다(에이전트 세션의 셸 가드가 `find-generic-password -w` 실행을 막았다). 첫 사용 때 확인 창이 뜨는지 직접 본다. `-T ""`를 빼면 `security`가 신뢰 앱으로 들어가 같은 사용자의 어떤 프로세스든 묻지 않고 읽을 수 있다.
+   `-T ""`는 신뢰 앱 목록을 비운다. macOS 문서대로라면 이후 어떤 프로세스든 값을 읽을 때 Keychain이 확인 창을 띄운다. 에이전트가 이 도구를 거치지 않고 `security`로 직접 읽으려 해도 걸린다. 대신 채울 때마다 Touch ID와 Keychain 확인을 둘 다 거친다(`"approval": "none"` 항목은 Keychain 확인만). 이 동작은 아직 실측하지 않았으니 첫 사용 때 확인 창이 뜨는지 직접 본다. `-T ""`를 빼면 `security`가 신뢰 앱으로 들어가 같은 사용자의 어떤 프로세스든 묻지 않고 읽을 수 있다.
 
    확인 창에서는 **허용(Allow)**만 누른다. **항상 허용(Always Allow)**을 한 번 누르면 `/usr/bin/security`가 그 항목의 신뢰 목록에 영구히 들어가 이 층이 사라진다. 되돌리려면 항목을 지우고 다시 만든다.
 

@@ -10,9 +10,10 @@ team they belong to, and a CODEOWNERS auto-assignment. On a busy account the las
 first. Apps and bots also request reviewers themselves. This skill keeps only the personal requests
 a person made, ranks them, and hands them on once per head commit.
 
-It never writes a review of its own judgement, re-requests or labels. Its GitHub writes are a review bot's
-re-review trigger comment on the user's own PR and a reminder comment to an author who left the user's
-change request unanswered (`review_wait`, below); when `kinds` includes
+It never writes a review of its own judgement, re-requests or labels. Its GitHub writes, in the round
+and by hand alike, are: with `review_wait` (below), a review bot's re-review trigger comment on the
+user's own PR, a reminder comment to an author who left the user's change request unanswered, and,
+when `assign_reviewers` is on, the reviewer and assignee on a PR whose review it asks for; when `kinds` includes
 `ready_to_merge`, merging the user's own PRs that pass every gate in [Ready to merge](#ready-to-merge);
 and an `ownergate` approval that an autoMode allow rule names ([Owner gate](#owner-gate)). Slack
 requests and reminders go through the user's Slack-posting rules. The release workers it starts for
@@ -36,6 +37,9 @@ never in this repo.
          "reviewers": {"<github login>": {"slack": "<Slack user id>", "channel": "<optional override>"}},
          "review_bots": {"<bot login>": "<the bot's re-review trigger comment; its verdict lines also count for ready_to_merge>"},
          "holidays": ["<YYYY-MM-DD>"], "urgent_labels": ["<label>"],
+         "night_hour": 21, "morning_hour": 9, "weekend_days": [5, 6],
+         "after_hours": "schedule-certain-only | schedule-all | send-now", "assign_reviewers": true,
+         "profiles": [{"match": "acme/*", "after_hours": "send-now", "night_hour": 23}],
          "must_pattern": "<regex for a must-fix label; default \\[MUST\\]>",
          "author_wake_prefix": {"<bot login>": "<word a bot author answers to at the start of a comment>"},
          "deploy": {"<owner/repo>": {"dev_release": "auto-sync | <how main reaches dev>",
@@ -58,7 +62,15 @@ is never listed, reminded, merged or dispatched. Use it for a batch of PRs that 
 across many repositories, where `exclude_repos` would also hide that repository's real review
 requests. An invalid pattern fails every command with exit 2. Bot logins match with or without
 the `[bot]` suffix. `mentions_seen` overrides where the Slack side is read (default:
-`watch-mentions`' `seen.json` under the same state root). Other keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
+`watch-mentions`' `seen.json` under the same state root).
+
+Business hours run from `morning_hour` to `night_hour` on days that are neither in `weekend_days`
+(Monday 0 … Sunday 6) nor in `holidays`. `after_hours` and `assign_reviewers` are described under
+[`review_wait`](#own-prs-waiting-on-people-review_wait). `profiles` sets those six keys per
+repository: the first entry whose `match` (a glob on `owner/name`, or on the owner alone when it has
+no `/`) fits a PR's repository overrides the top-level values for it; any other key in a profile is
+a config error. `prs.py policy <owner/name>` prints the values that apply to one repository.
+Other keys and defaults are in `scripts/prs.py` (`DEFAULTS`). State lives in `~/.local/state/agent-skills/prs/`
 (`--state <dir>` or `$AGENT_SKILLS_STATE` moves it): `ledger.json` (key → delivery time, kind, PR node id; no PR text),
 `plan.json` (the run in progress, which doubles as the run lock) and `body.txt` (its message).
 
@@ -91,11 +103,9 @@ Stale means no update for more than `stale_days`; such an item says "요청 해�
 coordinator can propose asking the author to withdraw the request. Each item carries repo#N,
 title, author, age in days, diff size and the reasons it ranked where it did.
 
-Every item has a `kind`, and every kind in `KINDS` is collected. A new kind adds a collector to
-`COLLECTORS` (and, when its round must act, a step to `PROMPT_STEPS`) without changing the CLI.
-Listing an unknown kind in `kinds` is an error. When two collectors return the same head, the kind
-later in `KINDS` keeps it, and a head sent under an earlier kind comes back once under the later one,
-never the other way round.
+Every item has a `kind`; listing an unknown kind in `kinds` is an error. When two collectors return
+the same head, the kind later in `KINDS` keeps it, and a head sent under an earlier kind comes back
+once under the later one, never the other way round.
 
 ## Owner gate
 
@@ -163,17 +173,23 @@ Each PR gets its states from GitHub alone:
 
 - `request`: batched per reviewer; due when that reviewer has `batch_min` (2) waiting, the oldest
   waited `batch_wait_hours` (2), or one carries an `urgent_labels` label. One per PR per reviewer:
-  once a row exists, a new push on a still-waiting PR does not request again.
+  once a row exists, a new push on a still-waiting PR does not request again. With
+  `assign_reviewers` (default on) it carries `github`, a `gh pr edit` that sets that reviewer as
+  reviewer and assignee.
 - `remind`: one business day after the request (or after its scheduled post), once per request, as a
   reply in the request's thread, one per PR.
 - `rerequest`: a voided approval, once per head, in the earlier thread: the same reviewer hears about
   the same PR again only after a new push.
 - `retrigger`: the bot's `review_bots` comment, once per head, posted at any hour.
 - `remind_author`: see [Authors the user is waiting on](#authors-the-user-is-waiting-on).
-- Outside business hours (after `night_hour` 21, before `morning_hour` 9, weekends, `holidays`) a
-  Slack action carries `post_at`, the next business morning, and is scheduled instead of sent. While a
-  scheduled request to a reviewer is pending, their next batch waits: a scheduled message cannot be
-  edited, and two would arrive at once.
+- Outside business hours ([Config](#config)), `after_hours` decides. A scheduled message cannot be
+  edited, the chat tool may give no way to delete it, and an empty scheduled-message list does not
+  prove it is gone, so only an ask whose PR will surely still be waiting at the send time is
+  scheduled. The round cannot know that (a reviewer may approve overnight), so under the default,
+  `schedule-certain-only`, it holds every Slack action and `remind_author`, and the first round in
+  business hours decides them again. `schedule-all` gives each Slack action `post_at`, the next
+  business morning, to schedule instead of send; `send-now` sends at any hour. While a scheduled
+  request to a reviewer is pending, their next batch waits: two would arrive at once.
 - A reviewer not in `reviewers` (or without a `slack` id there) gets no Slack action, only a notice: who to ask is not delegated. The
   channel is the reviewer's, else `repo_channels`, else `channel`.
 
@@ -185,24 +201,24 @@ channel; `--at` is that message's time), `no_thread` (no thread to reply in, so 
 A `refused` row stops every later action for that PR and reviewer. A row appended by hand for a request sent outside the round
 (`pr`, `reviewer`, `head` and an ISO `date` or a `slack_ts`, no `action`) counts as a sent `request`.
 
-A request or reminder you send by hand, outside the round, keeps the round's rules:
+A request or reminder you send by hand, outside the round, keeps the round's rules, read for the
+PR's repository from `prs.py policy <owner/name>`:
 
 - Bundle per reviewer, by the same `batch_*` and business-hours rules, and list only the PRs the
   people it mentions are asked to review. A PR that is not theirs goes in your report, not in the
   message.
-- Request the reviewer on GitHub when you ask, then confirm with
-  `gh pr view <n> --json reviewRequests` that the request is there: `--add-reviewer` has exited 0
-  and added no one.
+- With `assign_reviewers` on, set the reviewer as reviewer and assignee on GitHub when you ask
+  (`gh pr edit <n> --add-reviewer <login> --add-assignee <login>`), then confirm with
+  `gh pr view <n> --json reviewRequests,assignees` that both are there: `--add-reviewer` can exit 0
+  without adding anyone.
 - A request posted as a reply in an existing thread, first or later, is not broadcast to the
   channel.
-- When the human tells you to send now, send now, even after hours. Leave out each PR whose request
-  or last ping went out under three hours ago, and each reviewer the human excludes, and say which
-  you left out.
-- Schedule only an ask whose PR will surely still be waiting at the send time. A scheduled message
-  cannot be edited, the chat tool may give no way to delete it, and an empty scheduled-message list
-  does not prove it is gone: one listed nowhere has still posted at its time. After hours, an ask
-  whose PR may not be waiting by then is decided again at the next business-hours start, and sent
-  then if the PR still waits.
+- After hours, `after_hours` applies as in the round, except that you may know a PR will still be
+  waiting at the send time and schedule that ask under `schedule-certain-only`; the rest wait for
+  the next business-hours start and go then if the PR still waits.
+- When the human tells you to send now, send now, even after hours and whatever `after_hours` says.
+  Leave out each PR whose request or last ping went out under three hours ago, and each reviewer the
+  human excludes, and say which you left out.
 - Log a row for each ask, as above, so the next round does not ask again.
 
 ### Authors the user is waiting on
@@ -217,7 +233,7 @@ approval or dismissal after it. The PR is due when:
   code: the PR goes back to the user as a re-review (`review_request`), never a reminder;
 - the author has not commented on the PR or in a review thread since the ask;
 - one business day has passed since the ask, and the round runs in business hours (a PR comment
-  cannot be scheduled).
+  cannot be scheduled) or `after_hours` is `send-now`.
 
 `remind_author` goes once per PR and head; its send-log row names the author as `reviewer`. Where it
 goes:
@@ -325,7 +341,9 @@ python3 "$P" plan --body    # prints the message, or nothing; keeps it in <state
    message per reviewer in the channel, unless the channel already has a request for that PR
    (`found`); a reminder or re-request is a thread reply only, never broadcast; with no thread known,
    search the channel for one, and with none found post nothing (`no_thread`). With `post_at`, schedule
-   for that time. `retrigger` is `gh pr comment <url> --body <comment>`. `remind_author` with a
+   for that time. A `request` with `github` runs that command on its own before the Slack send, then
+   checks `gh pr view <url> --json reviewRequests,assignees`; a refused or empty result is reported,
+   not retried, and the Slack request still goes. `retrigger` is `gh pr comment <url> --body <comment>`. `remind_author` with a
    `thread` is a reply there mentioning `slack_user`; without one it is `gh pr comment <url>` whose body
    starts with `prefix` when set, logged `sent` (it never searches for a thread or logs `no_thread`). An action already moot (approved
    or merged meanwhile, no Slack id for the reviewer) is logged `skipped`, not sent. An action refused by a
@@ -351,19 +369,12 @@ python3 "$P" schedule --write    # creates it
 python3 "$P" schedule --edit <id> --write   # rewrites an existing automation's trigger, prompt and precheck, keeping its id
 ```
 
-The prompt is built from `kinds`: each configured kind's `PROMPT_STEPS` entry (next to `COLLECTORS`
-in `prs.py`; `None` when the message is the whole action) adds its step, in `PROMPT_STEPS` order
-(`unreleased` last, since it gates `commit`), and `schedule` refuses a kind without an entry. Without
-`review_wait`, `ready_to_merge` or `ownergate` the prompt forbids GitHub writes, and it forbids every
-write the configured kinds do not need. `ready_to_merge`'s and `ownergate`'s entries are `None`
-because their steps run before the send: merges and `verify` first, then `round`/`result`
-(`PRE_SEND_STEP`), whose results are appended to the message. Every prompt ends with the rule that
-a refused act is reported, never retried. Items of a kind with no `PROMPT_STEPS` entry never
-reach `plan.json`, so they are neither sent nor recorded; the precheck output and the message list
-them as uncovered. The round's own commands are `precheck`, `plan --body` and `commit`, plus `merges`
-and `verify` with `ready_to_merge` and `round` and `result` with `ownergate`, so the
-prompt is fixed when it is made: after `kinds` changes, rerun `schedule --edit <id>` before the
-next round (check `orca automations list` first so other kinds' steps are not lost).
+`schedule` builds the round's prompt from `kinds` (each kind's step is in `prs.py` `PROMPT_STEPS`),
+refuses a kind that has no step, and forbids every GitHub write the configured kinds do not need.
+Items of a kind without a step are listed as uncovered and never sent or recorded. The prompt is
+fixed when it is made: after `kinds` changes, rerun `schedule --edit <id>` before the next round
+(check `orca automations list` first so other kinds' steps are not lost). The values of
+`after_hours`, `assign_reviewers` and `profiles` are read each round, so changing them needs no `--edit`.
 Every command starts with `python3`: a scheduled session can refuse a leading `env` or `VAR=`
 assignment as a command of its own, so a non-default state goes in as `--state`.
 
@@ -420,27 +431,10 @@ Orca inbox, so it runs beside orchestrate's one inbox wait, not instead of it.
 
 A notification passes when its reason is in `reasons`, its repository is in the `prs` scope
 (`orgs`, `repos`, `exclude_*`) and its title matches no `exclude_title_patterns` (its own list, not
-`prs.exclude_title_patterns`). Each item prints once:
-
-- `review_requested`, `assign` and `state_change` are keyed per thread (`<id>:<reason>`): every
-  re-request, reassignment or state change bumps the thread's `updated_at`, so a key on it would fire
-  the same notification again each time.
-- Other reasons are keyed `<id>@<updated_at>`, so a new comment on the same thread fires again.
-- With `personal_review_only` (default on), `review_requested` fires only when the user's login is in
-  `GET <pull>/requested_reviewers` → `users`; a request that reaches them through a team does not. A
-  team-only request is recorded per `updated_at`, so it is looked up again only after a re-request,
-  and fires once if the user is later asked by name. A lookup that fails skips only that item until
-  the next poll; a 404 records it as team-only, silently.
-- With `human_activity_only` (default on), `author` and `comment` fire only when the latest activity
-  comes from a person other than the user, so their own pushes and comments, CI and review bots stay
-  silent. The actor is the author of `subject.latest_comment_url`, or of the last entry on the last
-  page of `GET <pull>/reviews` when that URL is the PR itself (a review). No URL (a push) fires
-  nothing, nor does an actor who is the user, has `type: Bot` or a login ending in `[bot]`. A failed
-  lookup is retried next poll; a 404 (a deleted comment) records the item silently.
-  `mention` follows the same rule when `latest_comment_url` is a comment, so a bot that repeats the
-  user's handle on each event stays silent; a mention in a PR or issue body (no comment URL, or the
-  URL is the thread itself) always fires. The check sees who acted last, not who mentioned, so a bot
-  comment landing after a person's mention within one poll silences that mention.
+`prs.exclude_title_patterns`). Each item prints once. With the defaults, a review request fires only
+when it names the user, and `author`, `comment` and `mention` fire only when a person other than the
+user acted last. How each reason is keyed and looked up:
+[references/notify-filters.md](references/notify-filters.md).
 
 The first `watch` with no seen file records the current notifications and prints nothing, so the
 backlog does not fire; `notify.py seed` does the same on demand. Seen keys (no titles) go to
