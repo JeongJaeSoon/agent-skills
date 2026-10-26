@@ -72,6 +72,8 @@ h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
 .dim { color: var(--ink-2); }
 .eyebrow { font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* Text the page may not cut: it wraps instead, and a long path or id breaks anywhere. */
+.full { overflow-wrap: anywhere; min-width: 0; }
 /* One icon set: 16px in rows and controls, 12px next to 12px text, and the same 1.5px stroke at either size. */
 svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 svg.i > * { vector-effect: non-scaling-stroke; }
@@ -411,8 +413,8 @@ td.when { white-space: nowrap; }
 [data-sb="icons"] .nav-item.tree .badge { position: absolute; top: 1px; right: 6px; min-width: 14px; height: 14px; font-size: 9px; padding: 0 3px; }
 /* Two-line rows: the type icon sits on the title line, time and buttons on the row's centre. */
 .rows.items .ic { align-self: flex-start; height: 20px; }
-/* Each line is one 20px band; a mono run's taller metrics would otherwise stretch its line. */
-.rows.items .grow > .ellipsis { height: 20px; }
+/* Each line is one 20px band, wrapped lines too. */
+.rows.items .grow > .full { line-height: 20px; }
 .rows.items .sub { font-size: var(--t-sm); }
 .rows.items li[data-go] { cursor: pointer; }
 .rows.items li[data-go] input { cursor: auto; }
