@@ -29,7 +29,7 @@ COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행"]
-PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"))
+PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
 UNNAMED = "(프로젝트 미지정)"
 
 
@@ -288,11 +288,12 @@ PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료
 def fleet_rows(state, leads, board_rows):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the top-level coordinator dispatched
-    itself. Each card carries its newest PR; a card whose PR a board row already has is left to that row. Returns
+    itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
+    newest PR; a card whose PR a board row already has is left to that row. Returns
     (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board row."""
     state = state or {}
     sessions = state.get("sessions") or []
-    held = {l.get("handle") for l in leads.values()}
+    held = {l.get("handle"): name for name, l in leads.items()}
     on_board = {r.get("pr") for r in board_rows.values()} - {None}
     pr_of, under = {}, {}
     for p in state.get("prs") or []:  # newest first
@@ -322,13 +323,17 @@ def fleet_rows(state, leads, board_rows):
         return (s.get("phase") != "offline" or pr) and pr not in on_board
 
     for lead in sessions:
-        if lead.get("kind") != "orchestration" or held & {t.get("handle") for t in lead.get("terminals") or []}:
+        if lead.get("kind") != "orchestration":
+            continue
+        board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held), None)
+        if board_lead and board_lead not in board_rows:  # its rows were dropped from the board on purpose
             continue
         lid = f"fleet:{lead['id']}"
-        add(lid, lead, "lead", program=one_line(lead.get("name") or lid, 80))  # two leads in one repo: a section each
+        if not board_lead:
+            add(lid, lead, "lead", program=one_line(lead.get("name") or lid, 80))  # two leads in one repo: a section each
         for s in under.get(lead["id"], []):
             if shown(s):
-                add(f"{lid}/{s['id']}", s, "task", lid)
+                add(f"{lid}/{s['id']}", s, "task", board_lead or lid)
     kind = {s.get("id"): s.get("kind") for s in sessions}
     for s in sessions:
         # A card made with `orca worktree create` and no Run is standalone: it is work when it has a report file, a PR
@@ -352,13 +357,16 @@ def refresh(now, limit_min):
     try:
         f = fleet.Fleet()
         got = f.tick()
-        err = f.sources["orca"]["error"]
+        err, gh_err = f.sources["orca"]["error"], f.sources["github"]["error"]
     except Exception as e:  # a collector fault must not take the report down with it
-        got, err = None, f"{type(e).__name__}: {e}"
-    if got is not None and not err:
-        return None
-    age = f"{ago((now - at).total_seconds())} 기준" if at else "없음"
-    return f"세션 목록 {age} · 갱신 실패: {one_line(err, 60)}"
+        got, err, gh_err = None, f"{type(e).__name__}: {e}", None
+    out = []
+    if got is None or err:
+        age = f"{ago((now - at).total_seconds())} 기준" if at else "없음"
+        out.append(f"세션 목록 {age} · 갱신 실패: {one_line(err, 60)}")
+    if gh_err:
+        out.append(f"PR 목록 갱신 실패: {one_line(gh_err, 60)}")
+    return " · ".join(out) or None
 
 
 def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False, periodic=True,
@@ -408,14 +416,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     order = [k for k in store["order"] if k in rows]
     unnamed, unnamed_secs = set(unnamed_leads(rows)), set()
 
-    oldest_probe, changed, stale, stale_board, facts = None, [], [], [], []
+    oldest_probe, changed, stale, stale_board, facts, unknown = None, [], [], [], [], set()
 
     def derive(r):
         """(status, next, stale suffix) after the PR join and the session check."""
         status, nxt = r["status"], r.get("next") or ""
         p = prs.get(r.get("pr"))
-        if r["kind"] == "task" and p and (p.get("merged_at") or p.get("state") == "MERGED"):
-            status = "done"
+        # The row's own PR outranks what the board says of it: GitHub has moved on since the row was written.
+        if p and (p.get("merged_at") or p.get("state") == "MERGED"):
+            status, nxt = "done", ""
+        elif p and p.get("state") == "CLOSED":
+            status, nxt = "held", "PR 닫힘"
         lead = store["leads"].get(lead_of(r)["id"])
         if status == "moving" and live is not None and lead and not lead.get("closed_at") and lead["handle"] not in live:
             status, nxt = "blocked", "세션 없음"
@@ -433,6 +444,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         nonlocal oldest_probe
         p = prs.get(key)
         if not p:
+            unknown.add(key)
             return pr_num(key)
         probed = fleet.parse(p.get("probed_at"))
         # A merged or closed PR cannot change, and the collector probes it only once a day: its probe age means nothing.
@@ -446,7 +458,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         """The PR's state, and its merge target when that is not the section's base."""
         p = prs.get(key)
         if not p:
-            return ""
+            return "?"
         to = p.get("base")
         return pr_state(p) + (f"→{to}" if to and to != base else "")
 
@@ -588,6 +600,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append("변화 없음")
     if oldest_probe and (now - oldest_probe).total_seconds() > limits["pr_warn_min"] * 60:
         facts.append(f"PR 상태 {ago((now - oldest_probe).total_seconds())} 기준")
+    if unknown:
+        facts.append(f"PR 상태 없음 {len(unknown)}")
     if stale_board:
         facts.append(f"오래된 board 행 {len(stale_board)} ({'' if len(stale_board) == 1 else '최대 '}{ago(max(stale_board))})")
     if collected:

@@ -397,7 +397,7 @@ assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
     sess("runner", "standalone", "root", "idle", name="automations-runner")], "prs": []}))
 (tmp / "brief-last" / "top-level.json").unlink()
 carded = ok("brief", "render", "--periodic", "--now", NOW)
-assert "| 🔄 | 관측 카드 | #77 | — |" in carded and "- 🔄 관측 카드 — 리뷰 대기 · rev-a" in carded and "runner" not in carded, carded
+assert "| 🔄 | 관측 카드 | #77 ? | — |" in carded and "- 🔄 관측 카드 — 리뷰 대기 · rev-a" in carded and "runner" not in carded, carded
 
 # Open owner requests get one line with their count, the oldest's age and how many are left unlinked; none, no line.
 assert "📝" not in carded
@@ -496,5 +496,52 @@ rok("stage", "add", "wide", "--title", "아주 긴 이름의 작업으로 표의
 rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", "로그로만 확인하고 화면은 아직 보지 않음")
 code, _, err = orch_env(renv, *REQUEST)
 assert code == 1 and err == "a table is wider than 78 columns", (code, err)
+
+# GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR
+# closed unmerged is ⏸️ PR 닫힘. A lead the board holds still shows its live cards whose PR no board row has, and a PR
+# the PR list does not have says so instead of showing a bare number.
+mg = tmp / "merged"
+menv = {"ORCH_FLEET_STATE": str(mg / "dashboard"), "ORCH_BRIEF_LAST": str(mg / "brief-last")}
+
+
+def mok(*args):
+    code, out, err = orch_env(menv, *args)
+    assert code == 0, (args, out, err)
+    return out
+
+
+mok("board", "lead", "add", "L", "--handle", "term_0FAKEL", "--repo", "acme/web")
+mok("board", "set", "L/ph1", "--kind", "phase", "--status", "waiting", "--pr", "acme/web#45", "--next", "머지 대기")
+mok("board", "set", "L/ph1/t1", "--title", "하위", "--pr", "acme/web#46")
+mok("board", "set", "L/ph2", "--kind", "phase", "--status", "moving", "--pr", "acme/web#48", "--next", "리뷰 대응")
+(mg / "dashboard" / "prs.json").write_text(json.dumps({"prs": dict([
+    pr("acme/web#45", "MERGED", merged="2026-10-13T13:00:00Z"), pr("acme/web#46", "MERGED", merged="2026-10-13T13:00:00Z"),
+    pr("acme/web#48", "CLOSED")])}))
+(mg / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
+    sess("root", "orchestrator", None, "working"),
+    sess("lead", "orchestration", "root", "working", h="term_0FAKEL"),
+    sess("c9", "task", "lead", "working", task_title="ABC-9 라이브", gh_repo="acme/web", report={"pr": "acme/web#47"}),
+    sess("c8", "task", "lead", "working", task_title="ABC-8 보드에 있음", gh_repo="acme/web", report={"pr": "acme/web#46"})],
+    "prs": []}))
+merged = json.loads(mok("brief", "render", "--periodic", "--now", NOW, "--json"))
+text = merged["text"]
+assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
+assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
+assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | — |" in text and "- PR 닫힘 → L ph2" in text, text
+assert "| 🔄 | └ ABC-9 라이브 | #47 ? | — |" in text and "- └ 🔄 ABC-9 라이브 — 작업 중" in text, text
+assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
+
+
+class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old
+    sources = {"orca": {"error": None}, "github": {"error": "gh: API rate limit exceeded"}}
+
+    def tick(self):
+        return {}
+
+
+os.environ["ORCH_FLEET_STATE"] = str(tmp / "gh-down")
+board.fleet.Fleet = GhDown
+assert board.refresh(fleet.parse(NOW), 5) == "PR 목록 갱신 실패: gh: API rate limit exceeded"
+assert "PR 상태 없음 1" in merged["headline_facts"] and "PR: ? PR 상태 없음" in text, (merged["headline_facts"], text)
 
 print("ok")
