@@ -667,7 +667,10 @@ class FakeFleetWorld:
         self.automations = [
             {"id": "auto-janitor", "name": "janitor", "rrule": "17 */3 * * *", "timezone": "UTC", "enabled": True,
              "next_run_at": _ago(now, -19 / 60), "last_run_at": _ago(now, 41 / 60),
-             "recent": [{"status": s, "trigger": "scheduled", "at": _ago(now, (41 + 180 * i) / 60), "summary": "cleaned 3, kept 1"}
+             "recent": [{"status": s, "trigger": "scheduled", "at": _ago(now, (41 + 180 * i) / 60),
+                         "summary": "cleaned 3, kept 1" if i else "cleaned 3 merged worktrees (wt-docs, wt-api, wt-billing) and"
+                         " their idle terminals; kept wt-coord because its session still holds the browser lane and has an"
+                         " unanswered question in its inbox"}
                         for i, s in enumerate(["completed", "completed", "skipped_precheck", "completed", "completed", "completed"])]},
             {"id": "auto-sweep", "name": "pr-sweeper", "rrule": "*/30 9-18 * * 1-5", "timezone": "UTC", "enabled": True,
              "next_run_at": _ago(now, -12 / 60), "last_run_at": _ago(now, 18 / 60),
