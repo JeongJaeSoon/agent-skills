@@ -24,7 +24,7 @@ import reap  # noqa: E402
 import share_server as ss  # noqa: E402
 
 ORCA = os.environ.get("SKILLS_SETUP_ORCA", "orca")
-JANITOR_NAME = "agent-skills janitor"  # the --name reap.schedule_cmd creates
+JANITOR_NAME = reap.JANITOR_NAME
 CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 
 
@@ -58,20 +58,21 @@ def orca_automations():
         return None, f"orca automations list 실패: {(p.stderr or p.stdout).strip()[:200]}"
 
 
-def janitor_want(workspace):
+def janitor_want(workspace, load=False):
     """{field: value} reap's schedule would create, in the shape `orca automations list` reports. The workspace
     is not compared: a janitor moved to a runner worktree stays there."""
-    argv = reap.schedule_cmd(REAP, reap.STATE, workspace, "claude", reap.ledger_path(), reap.config().get("inbox_to"))
+    argv = reap.schedule_cmd(REAP, reap.STATE, workspace, "claude", reap.ledger_path(), reap.config().get("inbox_to"),
+                             load=load)
     arg = dict(zip(argv, argv[1:]))
     return {"trigger": arg["--trigger"], "precheck": arg["--precheck"],
             "precheck-timeout": int(arg["--precheck-timeout"]), "prompt": arg["--prompt"]}
 
 
-def janitor_drift(a):
+def janitor_drift(a, load=False):
     pre = a.get("precheck") or {}
     have = {"trigger": a.get("rrule"), "precheck": pre.get("command"),
             "precheck-timeout": pre.get("timeoutSeconds"), "prompt": a.get("prompt")}
-    want = janitor_want(f"path:{REPO}")
+    want = janitor_want(f"path:{REPO}", load)
     return {k: v for k, v in want.items() if have[k] != v}
 
 
@@ -101,7 +102,8 @@ class OrcaJob:
 class Janitor(OrcaJob):
     name = "janitor"
     job_name = JANITOR_NAME
-    what = ("정기 정리 라운드(Orca automation, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
+    load = False
+    what = ("3시간마다 정리 라운드(Orca automation, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
             "compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다")
 
     def status(self):
@@ -111,13 +113,16 @@ class Janitor(OrcaJob):
         if not a:
             return "absent", "등록 안 됨"
         # From a worktree every path differs from the job's; that is not drift.
-        drift = janitor_drift(a) if main_checkout() else {}
+        drift = janitor_drift(a, self.load) if main_checkout() else {}
         detail = f"{a.get('rrule')} · {(a.get('workspaceId') or '').partition('::')[2]}"
         if drift:
             detail += f" · reap schedule 과 다름: {', '.join(drift)} (enable 로 맞춤)"
         return ("on" if a.get("enabled") else "off"), detail
 
-    def enable(self, here):
+    def create_args(self):
+        return [], None
+
+    def enable_job(self, here):
         a, err = self.find()
         if a is None:
             return 1, err
@@ -126,9 +131,12 @@ class Janitor(OrcaJob):
             refusal = worktree_refusal()
             if refusal:
                 return 1, refusal
-            p = sh([sys.executable, str(REAP), "schedule", "--write"])
+            args, skip = self.create_args()
+            if skip:
+                return 0, skip
+            p = sh([sys.executable, str(REAP), "schedule", *args, "--write"])
             return p.returncode, (p.stdout + p.stderr).strip()
-        drift = janitor_drift(a) if main_checkout() else {}
+        drift = janitor_drift(a, self.load) if main_checkout() else {}
         if not drift and a.get("enabled"):
             return 0, "이미 켜져 있음"
         edit = [x for k, v in drift.items() for x in (f"--{k}", str(v))]
@@ -136,6 +144,46 @@ class Janitor(OrcaJob):
         if p.returncode:
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
         return 0, "켬" + (f" (reap schedule 에 맞춘 필드: {', '.join(drift)})" if drift else "")
+
+    def disable(self):
+        """The load job runs the same round, so turning the janitor off turns it off too, and on again with it."""
+        code, msg = super().disable()
+        load_code, load_msg = JanitorLoad().disable()
+        return code | load_code, f"{msg} · janitor-load: {load_msg}"
+
+    def enable(self, here):
+        j, _ = self.find()
+        code, msg = self.enable_job(here)
+        load = JanitorLoad()
+        a, _ = load.find()
+        # Only undoes `disable janitor`: a load job turned off alone under a running janitor stays off.
+        if code or not j or j.get("enabled") or not a or a.get("enabled"):
+            return code, msg
+        load_code, load_msg = load.enable_job(here)
+        return load_code, f"{msg} · janitor-load: {load_msg}"
+
+
+class JanitorLoad(Janitor):
+    name = "janitor-load"
+    job_name = reap.LOAD_NAME
+    load = True
+    what = ("부하 정리 라운드(Orca automation, 30분마다 load 만 확인). 5분 load 가 reap.load_limit(기본 CPU 수) 이상이고 "
+            "1시간 안에 정리 라운드가 없었을 때만 janitor 와 같은 라운드를 한 번 돈다. janitor 가 꺼져 있거나 없으면 돌지 않는다")
+
+    def create_args(self):
+        """Follow the janitor: none while the user has it off or removed (apply would turn reaping back on), and in
+        the workspace it was moved to."""
+        j, _ = Janitor().find()
+        if not j or not j.get("enabled"):
+            return [], "janitor 가 꺼져 있거나 없어 만들지 않음"
+        ws = ((j or {}).get("workspaceId") or "").partition("::")[2]
+        return ["--load", *(["--workspace", f"path:{ws}"] if ws else [])], None
+
+    def enable(self, here):
+        return self.enable_job(here)
+
+    def disable(self):
+        return OrcaJob.disable(self)
 
 
 # ---------------------------------------------------------------- preview-watch (LaunchAgent)
@@ -329,7 +377,7 @@ class Watch(OrcaJob):
         return p.returncode, (p.stdout + p.stderr).strip()[-300:]
 
 
-AUTOMATIONS = (Janitor(), PreviewWatch(), PressureWatch(), ShareServer(),
+AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(),
                Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 코디네이터에게 모아 보내는 Orca automation"),
                Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 코디네이터에게 모아 보내는 Orca automation"))
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원",

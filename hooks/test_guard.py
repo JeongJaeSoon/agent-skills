@@ -189,4 +189,17 @@ assert "writes no Claude settings" in reason(CLONE_SETUP, CLAUDE_PLUGIN_OPTION_C
 (pathlib.Path(HOME) / "src" / "agent-skills").symlink_to(CLONE)
 assert bash(CLONE_SETUP) == "ask"
 assert "writes no Claude settings" in reason(CLONE_SETUP), "the dialog's default, ~/src/agent-skills"
+
+
+# Only the sleep-loop deny carries the gate marker the refused-act rule keys on.
+def reason(cmd):
+    env = {**os.environ, "HOME": HOME, "AGENT_SKILLS_STATE": f"{HOME}/state", "ORCA_TERMINAL_HANDLE": "term_me"}
+    out = subprocess.run([sys.executable, HERE / "guard.py"], input=json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": HOME, "session_id": "s0"}),
+        capture_output=True, text=True, env=env).stdout
+    return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-loop] ")
+assert "[gate:" not in reason(f"{CHECK} --terminal term_other --json")
 print("guard: all pass")

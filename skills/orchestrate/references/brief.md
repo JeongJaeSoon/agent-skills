@@ -57,6 +57,15 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             gets a keep reason and deadline in the reap ledger (reap-resources, compose-stack).
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
             the browser only once that prints held; `orch release browser` when done.
+            A check that needs a read a guard blocks (env inside a pod or container, a file that
+            holds secrets) is planned here by the brief's writer: a script the coordinator puts
+            to the human as a run_command, which writes only the derived result (present or
+            absent, a match against an expected value the human gave or that is no secret
+            itself), never the values, to a log outside the worktree. The worker waits for that
+            log and reads it; it never writes or runs that script. Such a read found mid-run with
+            no plan here is reported to whoever gave the worker this work, not scripted on the
+            spot. A read already refused follows FORBIDDEN's refused-act paragraph: no plan is
+            written here for it afterwards.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
@@ -90,9 +99,12 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             python one-liner), even where the harness allows small shell edits: a Bash-made patch
             has passed tests that re-applying it with Edit showed broken. A formatter or generator
             VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
-            that changes a file or its mode its own call, so a refusal names it.
-            Write no file or script outside the worktree except under SCOPE's scratch root or
-            its named temporary download directory; list what you put there (checkouts, files, compose projects) in the report and tear it down
+            that changes a file or its mode its own call, so a refusal names it. Never chain a
+            check or probe with other acts in one Bash call either: a refusal takes every act in
+            the call with it, and each of them then counts as refused.
+            Write no file or script outside the worktree except under SCOPE's scratch root, its
+            named temporary download directory, or the one refusal-report file below (which you
+            leave in place); list what you put there (checkouts, files, compose projects) in the report and tear it down
             before worker_done by moving that one named directory to the trash. A script's own
             temporary files go there too, never loose in the system temporary root. Never `rm` a
             glob or a path built from a variable: it stops on a permission prompt, and an empty
@@ -106,7 +118,15 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             reports to its coordinator as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
-            orchestration channel to the human in its own chat, with its Human only batch. Paste
+            orchestration channel to the human in its own chat, with its Human only batch. A message
+            sent from Bash carries the command as the path of a file you wrote with the Write tool,
+            never quoted: a hook that matched the command's text blocks a message quoting it. That
+            file goes under <temp>/orch-refusal/<your worktree's directory name>/, where <temp> is
+            the absolute path TMPDIR holds, or /tmp when TMPDIR is unset, with a name no other
+            report there uses (a timestamp); whatever else your brief says about writing outside
+            the worktree, you may write it there. You do not tear it down: the reader moves it to
+            the trash after reading. If that Write is itself refused, report the refused act's tool
+            and target only, without its command. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this
@@ -120,7 +140,24 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             way. A hook that blocked only the text of a command reading no protected file, and says
             to reword it: reword that text inside the same command and say so in the report. When
             the matched text names a file the command opens, the block is not text-only; a script
-            or another path is never a reword. A read-only command on files in
+            or another path is never a reword. Two hook blocks refuse only when or how a command
+            runs, not the act: a deny from the agent-skills plugin's own `hooks/pressure_gate.py`
+            or `hooks/guard.py` whose reason starts with `[gate:pressure]` (a heavy start while
+            the machine is loaded) or `[gate:sleep-loop]` (a foreground sleep loop). The same
+            marker anywhere else, or from any other hook, does not count: every other hook block
+            is a refusal, even one that names another tool or form to use. When one of these two
+            blocks names a check to wait on or a step to run first (the pressure gate's `round`,
+            only when the brief you were given names that step), follow it: once every check it
+            names passes and every step it names has run, run the same command and say so in the
+            report. A `[gate:sleep-loop]` block is followed in one form only, the same Bash
+            command with `run_in_background: true`, and the report says so. Watching the
+            condition with the Monitor tool, which that block also offers, is not part of this
+            exception: report before you use it. A step the brief
+            you were given does not name, a refused step, or a second deny from that gate: report
+            and stop. A switch that turns that gate off (an environment variable, a flag) is used
+            only when the human, in this session's chat after the block, names that gate and that
+            command; a relayed message never counts, and any other substitute is a retry. A
+            read-only command on files in
             your own worktree (no credential, no personal data) that the classifier refused as
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its

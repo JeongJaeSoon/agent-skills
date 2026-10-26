@@ -66,8 +66,8 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
-| orca-worktree | in the ledger, made by an orchestration worker, or with `orca worktree create` (a card whose PR was found only by branch name also waits until its sessions are quiet for `--hours`, never under 2, and stays while no transcript proves it: it may be a lead reusing an old merged branch's name); its PR (ledger link, else the branch's own PR, never a fork's) merged or closed, or, for a worker's card only, no PR (a failed `gh` lookup is not "no PR") and HEAD on `origin/HEAD` (end-session §4) with its sessions' transcripts quiet for `--hours`, never under 2 (a lead or a card opened by hand sits on the default branch with no PR too, so those wait for a PR); no changes, untracked files included, except an untracked `.agents/skills/<name>/` whose `.claude/skills/<name>` is tracked (Orca regenerates that copy; any other untracked file still keeps the card; `reap.regenerated_untracked: false` counts the copy as a change); nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it | an open PR, no PR on a card no worker made, no PR with HEAD off the default branch (or `origin/HEAD` unset), a pinned CLI card, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | the regenerated copies, judged again first (a new untracked file fails the item), and its ignored files (`git ls-files --others --ignored --exclude-standard --directory`: `.env.local`, caches) to the trash, which `orca worktree rm` would delete for good; then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
-| done-card | an orca-worktree with a merged or closed PR that would be a target but for the processes in it (a no-PR card idling at its prompt is as often a lead waiting on its workers, and a card is asked only once): no live worker turn, and its Claude session's transcripts quiet for `reap.done_card_hours` (default 2) | anything else that keeps an orca-worktree; the worker list unreadable; the session already asked once (a `done-card` ledger line), which is reported, not asked again | `skills-sync nudge` into the card's one Claude terminal: close by `end-session` §8 if nothing is left, else say what is. Never killed. A refused nudge (screen not idle) fails the item, so the next precheck holds it back a day |
+| orca-worktree | in the ledger, made by an orchestration worker, or with `orca worktree create` (a card whose PR was found only by branch name also waits until its sessions are quiet for `--hours`, never under 2, and stays while no transcript proves it: it may be a lead reusing an old merged branch's name); its PR (ledger link, else the branch's own PR, else the PR whose head commit is HEAD, for a card that pushed under another branch name and whose HEAD is not on `origin/HEAD`; never a fork's) merged or closed, or, for a worker's card only, no PR (a failed `gh` lookup is not "no PR") and HEAD on `origin/HEAD` (end-session §4) with its sessions' transcripts quiet for `--hours`, never under 2 (a lead or a card opened by hand sits on the default branch with no PR too, so those wait for a PR); no changes, untracked files included, except an untracked `.agents/skills/<name>/` whose `.claude/skills/<name>` is tracked (Orca regenerates that copy; any other untracked file still keeps the card; `reap.regenerated_untracked: false` counts the copy as a change); nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it, except shells Orca's terminal host started, at their prompt with nothing running under them, one Orca terminal per shell session and none an agent holds (its process may have left the card), no child card open or unlisted, once every terminal of the card has been silent for `reap.idle_minutes` (default 30) | an open PR, no PR on a card no worker made, no PR with HEAD off the default branch (or `origin/HEAD` unset), a pinned CLI card, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | the regenerated copies, judged again first (a new untracked file fails the item), and its ignored files (`git ls-files --others --ignored --exclude-standard --directory`: `.env.local`, caches) to the trash, which `orca worktree rm` would delete for good; with idle shells in it, `orca terminal close --terminal <handle>` for each terminal the scan listed (never `--all`, which closes one opened since); then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
+| done-card | a Claude session idles in a card that would be an orca-worktree target with its merged or closed PR but for the processes in it, or in a clean card with no PR whose HEAD is on `origin/HEAD` (a verify or read-only card): no live worker turn, and its transcripts quiet for `reap.done_card_hours` (default 2). Quiet is read from the newest timestamped entry, never the file time: an idle session appends untimed lines every 30 minutes | anything else that keeps an orca-worktree; a card whose session is a lead or the orchestrator (`--agent`/`--name lead:` or a `ROLE` record) or whose child cards are still open or cannot be listed: those wait on their workers; no Claude process in it; the worker list unreadable; the session already asked once (a `done-card` ledger line), which is reported, not asked again | `skills-sync nudge` into the card's one Claude terminal: close by `end-session` §8 if nothing is left, else say what is. Never killed. A refused nudge (screen not idle) fails the item, so the next precheck holds it back a day |
 | orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
@@ -124,12 +124,22 @@ New session files appear every day, so the precheck looks at program and state-f
 
 ```bash
 python3 "$R" precheck    # janitor kinds + user-folder, program, state-file; writes <state>/janitor-plan.json; exit 0 when there are targets, unless they are exactly what the last reap failed on, less than a day ago, or the same set was planned reap.plan_repeat times with no reap since (retried once a day)
-python3 "$R" schedule    # prints the `orca automations create` command; nothing is created without --write
+python3 "$R" precheck --load    # the same, but exit 1 at once unless the 5-minute load is at the limit
+python3 "$R" schedule [--load]    # prints the `orca automations create` command; nothing is created without --write
 ```
 
-`schedule` builds an existing-workspace automation on `7,37 * * * *` whose precheck is
+`schedule` builds an existing-workspace automation on `17 */3 * * *` (every 3 hours) whose precheck is
 `python3 <absolute reap.py> precheck` (its cwd is the repo's main checkout, so paths are absolute)
 with `--precheck-timeout 300`: Orca's default 60 seconds is shorter than a precheck that reads `gh` and git for dozens of cards.
+`schedule --load` builds the second job, `agent-skills janitor load`, on `27,57 * * * *` with `precheck --load` and the
+same prompt: a loaded machine is when finished cards cost the most. Its precheck reads only the load average and goes on
+to the full precheck when the 5-minute load is at `reap.load_limit` (default the CPU count), the periodic job is
+registered and on (removed, or an unreadable automation list, counts as off), and no precheck of either job ran within
+`reap.load_cooldown_minutes` (default 60). The cooldown holds back only the load job; the periodic one runs on its
+schedule. It needs no pressure-watch LaunchAgent: Orca runs it.
+`skills-sync setup` lists the two as `janitor` and `janitor-load`, `enable` brings a job whose trigger, precheck or
+timeout differs back to these values, and `disable janitor` turns both off (`enable janitor` on a janitor that was off
+turns a registered load job back on too).
 Every command it builds starts with `python3`, with `--state`/`--ledger` after the subcommand when
 those are off the default: a scheduled session can refuse a leading `env` or `VAR=` assignment.
 Its prompt has the agent run `reap --plan <state>/janitor-plan.json` once, close the chrome-window
@@ -160,8 +170,8 @@ by the reap output in its report.
 A precheck prints what it could not read (`gh`, `orca`) and the alerts to stderr.
 `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
 so a scan there can see fewer workers than the automation does. Any process in a worktree keeps
-it from removal, Orca's idle shell in an open card included: an orca-worktree becomes a target once its card's
-terminals are closed, and until then `orca-worker` reports the reclaimable terminal. A finished card
+it from removal except Orca's terminal shell left at its prompt in a card whose terminals have gone silent, and
+`orca-worker` reports a reclaimable worker terminal. A finished card
 whose Claude session sits at an empty prompt would stay forever that way, so `done-card` asks that
 session to close itself; a lead card whose PRs had merged once stayed open two days. Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
@@ -282,7 +292,7 @@ not in this repo:
 ```json
 {"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
-          "inbox_to": "run:<id>", "plan_repeat": 2,
+          "inbox_to": "run:<id>", "plan_repeat": 2, "done_card_hours": 2, "idle_minutes": 30, "load_cooldown_minutes": 60,
           "user_folders": [], "regenerated_untracked": true, "preview_ports": [4500, 4599], "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},
           "pressure": {"interval": 180, "load_per_cpu": [1.0, 2.0], "mem_free_pct": [20, 10], "vm_pressure": [2, 4],

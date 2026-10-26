@@ -41,7 +41,8 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 
 | 이름 | 기본 | 장치 | 하는 일 |
 |---|---|---|---|
-| `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 정기적으로 정리한다. compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
+| `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 3시간마다 정리한다. compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
+| `janitor-load` | on | Orca automation(Orca 필요) | 30분마다 5분 load만 재고, CPU 수 이상이면 janitor와 같은 정리를 한 번 더 돈다(1시간 안에 돈 회차가 있거나 janitor가 꺼져 있으면 건너뜀) |
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
 | `pressure-watch` | on | macOS LaunchAgent | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([docs/pressure.md](docs/pressure.md)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |

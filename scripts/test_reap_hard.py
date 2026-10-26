@@ -130,7 +130,7 @@ assert rh.judge_serve(("--tcp", 45000, 45001), closed, {K(("--tcp", 45000, 45001
 # A lead or orchestrator session alive in the card keeps it, however long it has been quiet: by its launch flags, or
 # by a ROLE record of a session that wrote to this card's transcripts since the process started.
 START = "Mon Oct 26 00:00:00 2026"
-start_t = rh.lstart_epoch(START)
+start_t = rh.reap.lstart_epoch(START)
 lead_rows = {
     20: proc(20, "-/bin/zsh -l", ppid=0), 21: {**proc(21, "claude --agent agent-skills:lead --name lead:x", ppid=20), "start": START},
     30: proc(30, "-/bin/zsh -l", ppid=0), 31: {**proc(31, "claude --permission-mode auto", ppid=30), "start": START},
@@ -140,34 +140,34 @@ tdir = projects / "-ws-app-lead"
 tdir.mkdir(parents=True)
 roles.mkdir()
 cwd = {20: "/ws/app/lead", 21: "/ws/app/lead", 30: "/ws/app/done", 31: "/ws/app/done"}
-assert rh.coordinator_in("/ws/app/lead", lead_rows, cwd, projects, roles).endswith("--agent agent-skills:lead")
-assert rh.coordinator_in("/ws/app/done", lead_rows, cwd, projects, roles) is None
+assert rh.reap.coordinator_in("/ws/app/lead", lead_rows, cwd, projects, roles).endswith("--agent agent-skills:lead")
+assert rh.reap.coordinator_in("/ws/app/done", lead_rows, cwd, projects, roles) is None
 orch = {**lead_rows, 21: {**lead_rows[21], "cmd": "claude --permission-mode auto"}}
-assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
+assert rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
 (tdir / "sess-a.jsonl").write_text("{}")
 os.utime(tdir / "sess-a.jsonl", (start_t + 600, start_t + 600))
 for role, want in (("none", None), ("orchestrator", "세션 sess-a ROLE 선언"), ("lead", "세션 sess-a ROLE 선언")):
     (roles / "sess-a.json").write_text(json.dumps({"role": role}))
-    assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) == want, role
+    assert rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) == want, role
 os.utime(tdir / "sess-a.jsonl", (start_t - 3600, start_t - 3600))  # an older session of the card, not this process
-assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
+assert rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
 # A role record or a process row it cannot read keeps the card; only a missing record means "no role".
 os.utime(tdir / "sess-a.jsonl", (start_t + 600, start_t + 600))
 for bad in ("{broken", "[]"):
     (roles / "sess-a.json").write_text(bad)
-    assert "ROLE 기록을 읽지 못함" in rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles), bad
+    assert "ROLE 기록을 읽지 못함" in rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles), bad
 (roles / "sess-a.json").write_text(json.dumps({"role": "lead"}))
 (roles / "sess-a.json").chmod(0)
 try:
-    unreadable = rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles)
+    unreadable = rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles)
 finally:
     (roles / "sess-a.json").chmod(0o644)
 assert os.geteuid() == 0 or "ROLE 기록을 읽지 못함(PermissionError)" in unreadable, unreadable
 (roles / "sess-a.json").unlink()
-assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
-assert rh.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) == "pid 20 의 프로세스 행을 읽지 못함"
+assert rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
+assert rh.reap.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) == "pid 20 의 프로세스 행을 읽지 못함"
 no_claude = {20: lead_rows[20], 21: {**lead_rows[21], "cmd": "node vite"}}
-assert rh.coordinator_in("/ws/app/lead", no_claude, cwd, projects, roles) is None  # no live Claude: nothing to protect
+assert rh.reap.coordinator_in("/ws/app/lead", no_claude, cwd, projects, roles) is None  # no live Claude: nothing to protect
 # A session waiting on its own background work keeps its card: a shell child of a Claude in the card (a Bash call,
 # a background shell, a Monitor). An MCP server or caffeinate child lives as long as the session and doesn't count.
 busy_rows = {**lead_rows, 40: proc(40, "/bin/zsh -c source snapshot.sh && sleep 600", ppid=31),
@@ -196,13 +196,13 @@ t = qdir / "s1.jsonl"
 t.write_text('{"type":"user","timestamp":"2026-10-25T07:20:36.064Z"}\n' + '{"type":"atis-latch","atis":""}\n' * 3)
 os.utime(t, (NOW - 60, NOW - 60))
 last = rh.reap.parse_ts("2026-10-25T07:20:36.064Z")
-assert rh.last_entry_time(t) == last
+assert rh.reap.last_entry_time(t) == last
 assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle") == NOW - last
 (qdir / "s2.jsonl").write_text('{"type":"atis-latch"}\n')
 os.utime(qdir / "s2.jsonl", (NOW - 60, NOW - 60))
 assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle") == 60  # untimed only: the mtime keeps it
 assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/none") is None
-assert rh.last_entry_time(qdir / "gone.jsonl") is None
+assert rh.reap.last_entry_time(qdir / "gone.jsonl") is None
 # Anything it cannot read keeps the card: a newest timestamp that doesn't parse (never fall back to an older,
 # quieter entry), and a transcript it may not open.
 (qdir / "s2.jsonl").write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n{"type":"user","timestamp":"soon"}\n')
