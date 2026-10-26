@@ -4,9 +4,10 @@ set up, tells the session to run setup-pc (docs/zero-command-setup.md).
 
 Set up means this profile's user settings load a checkout (env.CLAUDE_CODE_PLUGIN_DIRS, which setup.py --apply and
 bootstrap.py write), or this session was started with that variable. The state dir is shared by every Orca profile, so
-its apply record does not count. A session with no one to answer stays quiet: Claude Code sets CLAUDE_CODE_ENTRYPOINT to
-sdk-cli under -p and to sdk-ts/sdk-py under the SDKs. Not set up: the session gets one paragraph with the values the human gave the install dialog (userConfig, as
-CLAUDE_PLUGIN_OPTION_*), credentials stripped from a URL. AGENT_SKILLS_ONBOARD=0 silences it everywhere;
+its apply record does not count. A session with no one to answer stays quiet: Claude Code (2.1.310) sets
+CLAUDE_CODE_ENTRYPOINT to sdk-cli under -p, even over a `cli` inherited from a parent session, and the SDKs set
+sdk-ts/sdk-py. Not set up: the session gets one paragraph with the values the human gave the install dialog
+(userConfig, as CLAUDE_PLUGIN_OPTION_*), credentials stripped from a URL. AGENT_SKILLS_ONBOARD=0 silences it everywhere;
 `onboard.py --decline`, which the session runs when the human says no, silences it for this profile only.
 """
 import json, os, pathlib, sys, urllib.parse
