@@ -19,7 +19,7 @@ dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한
    - `env.CLAUDE_CODE_PLUGIN_DIRS`에 체크아웃 경로.
    - `language`(`--language`, 없으면 시스템 locale), `outputStyle`, `permissions.defaultMode`(`auto`).
    - `permissions.allow` 묶음: PR 보기·checks, `skills-sync status`·`broadcast`, `orch-dash`의 조회·서버 하위 명령(`ensure`·`serve`·`collect`·`fleet`·`skills`·`prstats`). allow는 분류기를 건너뛰어 저장소 한정이 걸리지 않으므로, PR 만들기·고치기는 넣지 않고 아래 autoMode의 사용자 저장소 규칙이 맡는다. launchd 상주 설치(`install-agent`)와 받은편지함 쓰기(`inbox add`·`resolve`)도 넣지 않는다. `orca orchestration`과 `orch`는 플러그인 hook이 이미 허용한다.
-   - autoMode 규칙 묶음: 체크아웃 안 편집, 요청받은 로컬 정리, 사용자 저장소의 PR 작업, 사용자가 지시한 머지, 오케스트레이터의 워커 지시·받은편지함, 워커의 자기 작업 공간, janitor 회차, 저장소가 승인을 요구하지 않을 때 자기가 연 PR·번호로 지명된 PR의 머지와 그 앞의 별도 리뷰어·리뷰봇 지적 해제(통과한 체크가 하나 이상이고 실패·대기 없음, 오케스트레이션 프로그램의 PR 제외), 검증 증거 첨부, 로컬·개발 환경 VERIFY, 리드의 자기 카드 권한 창 응답, 그리고 "사용자 본인의 채팅만 지시로 친다". 막는 쪽은 기본 브랜치 force push와 요청받지 않은 프로덕션 단계. 규칙마다 `Not covered:`로 한계를 적는다. 체크아웃 경로와 `gh` 로그인 이름은 실행할 때 채운다.
+   - autoMode 규칙 묶음: 체크아웃 안 편집, 요청받은 로컬 정리, 사용자 저장소의 PR 작업, 사용자가 지시한 머지, 오케스트레이터의 워커 지시·받은편지함, 워커의 자기 작업 공간, janitor 회차, 저장소가 승인을 요구하지 않을 때 자기가 연 PR·번호로 지명된 PR의 머지(워커는 브리프 APPROVED가 머지를 허락할 때만)와 그 앞의 별도 리뷰어·리뷰봇 지적 해제(통과한 체크가 하나 이상이고 실패·대기 없음, 오케스트레이션 프로그램의 PR 제외), 검증 증거 첨부, 로컬·개발 환경 VERIFY, 리드의 자기 카드 권한 창 응답, 그리고 "사용자 본인의 채팅만 지시로 친다". 막는 쪽은 기본 브랜치 force push와 요청받지 않은 프로덕션 단계. 규칙마다 `Not covered:`로 한계를 적는다. 체크아웃 경로와 `gh` 로그인 이름은 실행할 때 채운다.
    - `agent-skills.json`: `reflect.skill_repository`(체크아웃), `reap.user_folders`(빈 배열 = 끔).
 3. 임시 파일에 써서 원자적으로 바꾸고, 다시 읽어 같은지 확인한 뒤 파일마다 되돌리는 `cp` 줄을 출력한다.
 4. 15분마다 `skills-sync sync`를 돌리는 launchd 작업을 설치하고(Linux면 crontab 줄을 출력), 한 번 동기화하고, 기본 on 정기 자동화를 켠다(`skills-sync setup apply`, README "정기 자동화").
