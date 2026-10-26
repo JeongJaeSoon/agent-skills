@@ -10,8 +10,8 @@ PROGRAM: <slug>
 
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
-            Scratch root: <none, or the one path outside the worktree it may write, e.g. a
-            directory a VM or container mounts>.
+            Scratch root: <the one path outside the worktree it may write: the files its refusal
+            reports carry (FORBIDDEN), and e.g. a directory a VM or container mounts>.
             Downloaded logs and artifacts go to <approved system temporary directory>, outside
             every git worktree. Resolve the platform temporary root (for example TMPDIR) and
             name a task-specific directory in this SCOPE; do not assume an unset variable is a path.
@@ -92,7 +92,7 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
             that changes a file or its mode its own call, so a refusal names it. Never chain a
             check or probe with other acts in one Bash call either: a refusal takes every act in
-            the call with it, and none of them may be tried again.
+            the call with it, and each of them then counts as refused.
             Write no file or script outside the worktree except under SCOPE's scratch root or
             its named temporary download directory; list what you put there (checkouts, files, compose projects) in the report and tear it down
             before worker_done by moving that one named directory to the trash. A script's own
