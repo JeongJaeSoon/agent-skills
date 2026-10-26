@@ -24,6 +24,8 @@ said = run(CLAUDE_PLUGIN_OPTION_PERSONAL_REPO="https://me:ghp_FAKE0000@git.examp
 assert "personal_repo=https://git.example.test/me/conf.git" in said and "ghp_FAKE" not in said, said
 said = run(CLAUDE_PLUGIN_OPTION_PERSONAL_REPO="git@git.example.test:me/conf.git")
 assert "personal_repo=git@git.example.test:me/conf.git" in said, said
+said = run(CLAUDE_PLUGIN_OPTION_PERSONAL_REPO="ssh://git:pw@git.example.test/me/conf.git")
+assert "personal_repo=ssh://git@git.example.test/me/conf.git" in said, said
 
 # A declined offer stays declined in this profile only; another profile is still asked.
 assert "--decline" in run()

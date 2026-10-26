@@ -44,6 +44,8 @@ def decline():
         have = json.loads(f.read_text())
     except (OSError, ValueError):
         have = []
+    if not isinstance(have, list):
+        have = []
     if profile() not in have:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(have + [profile()], indent=2) + "\n")
@@ -51,11 +53,14 @@ def decline():
 
 
 def strip_credentials(url):
-    """`https://user:token@host/x` → `https://host/x`: the paragraph lands in the transcript, the clone in .git/config."""
+    """`https://user:token@host/x` → `https://host/x`: the paragraph lands in the transcript, the clone in .git/config.
+    An ssh URL keeps its login user (`ssh://git@host/x`), losing only a password."""
     parts = urllib.parse.urlsplit(url)
-    if not parts.scheme or "@" not in parts.netloc:
+    if "@" not in parts.netloc:
         return url
-    return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+    user, _, host = parts.netloc.rpartition("@")
+    keep = "" if parts.scheme in ("http", "https") else user.partition(":")[0] + "@"
+    return urllib.parse.urlunsplit(parts._replace(netloc=keep + host))
 
 
 def message():

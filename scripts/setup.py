@@ -29,7 +29,7 @@ line. A relative tracker.rules_file points into that folder. Personal autoMode r
 its own.
 
 settings.json follows the Claude Code profile ($CLAUDE_CONFIG_DIR, as Claude Code reads it); agent-skills.json is
-one file per user ($AGENT_SKILLS_CONFIG, default ~/.claude/agent-skills.json, as every agent-skills script reads it).
+one file per user, ~/.claude/agent-skills.json, where the skills' scripts read it (skills_json_path).
 """
 import argparse, difflib, hashlib, json, locale, os, pathlib, shlex, shutil, subprocess, sys, tempfile, time
 
@@ -56,14 +56,15 @@ def paths():
     cfg = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser()
     state = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
     return {"settings": pathlib.Path(os.environ.get("CLAUDE_SETTINGS") or cfg / "settings.json").expanduser(),
-            "skills_json": skills_json(), "state": state, "record": state / "setup-applied.json",
+            "skills_json": skills_json_path(), "state": state, "record": state / "setup-applied.json",
             "personal": pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG_DIR") or "~/.config/agent-skills").expanduser()
             / "personal"}
 
 
-def skills_json():
-    """Where every agent-skills script reads its config: one file per user, unlike settings.json, which follows the
-    Claude Code profile (CLAUDE_CONFIG_DIR)."""
+def skills_json_path():
+    """The agent-skills config: one file per user, where the skills' scripts read it, unlike settings.json, which
+    follows the Claude Code profile (CLAUDE_CONFIG_DIR). AGENT_SKILLS_CONFIG moves it for setup, setup_check and
+    automations.py only; the other readers keep ~/.claude/agent-skills.json."""
     return pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
 
 
@@ -196,7 +197,7 @@ def merge_keys(current, rec, skip, notes, personal):
         offered.add(key)
         if dig(new, key) is None and key not in skip:
             put(new, key, value)
-        elif dig(new, key) not in (None, value):
+        elif key not in skip and dig(new, key) not in (None, value):
             notes.append(f"kept    {key} = {dig(new, key)!r} ({'personal' if key in personal else 'recommended'} {value!r})")
     return new, offered
 

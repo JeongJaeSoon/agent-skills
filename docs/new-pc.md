@@ -13,13 +13,13 @@
 5. 에이전트가 `setup.py --actions-only`를 실행하면 권한 창이 뜬다. 동기화 작업과 정기 자동화를 켜는 단계이고 Claude 설정은 쓰지 않는다. 승인한다.
 6. 세션을 재시작한다.
 
-Orca가 프로필마다 `CLAUDE_CONFIG_DIR`을 따로 쓰면 프로필마다 1~6을 한 번씩 한다. 프로필마다 따로인 것은 `settings.json`뿐이고, `agent-skills.json`은 모든 스크립트가 읽는 한 파일(`$AGENT_SKILLS_CONFIG`, 기본 `~/.claude/agent-skills.json`)이라 프로필끼리 같이 쓴다.
+Orca가 프로필마다 `CLAUDE_CONFIG_DIR`을 따로 쓰면 프로필마다 1~6을 한 번씩 한다. 프로필마다 따로인 것은 `settings.json`뿐이고, `agent-skills.json`은 스킬의 스크립트가 읽는 한 파일(`~/.claude/agent-skills.json`)이라 프로필끼리 같이 쓴다.
 
 2의 제안을 거절하면 에이전트가 `hooks/onboard.py --decline`을 돌려 그 프로필에서는 다시 묻지 않는다(기록은 `~/.local/state/agent-skills/onboard-declined.json`, 그 줄을 지우면 다시 묻는다). 모든 프로필에서 끄려면 `AGENT_SKILLS_ONBOARD=0`.
 
 ### 개인 설정 저장소
 
-private git 저장소 하나에 `agent-skills.json`을 둔다. 에이전트가 `~/.config/agent-skills/personal`로 clone하고 다음 dry run부터 diff에 넣는다. URL에 토큰을 넣지 않는다. 넣어도 hook이 지운 URL로 clone하고, 인증은 `gh` 로그인(`gh auth setup-git`)으로 받는다. 있는 값은 덮지 않고(이 PC의 값과 다르면 `kept` 줄로 보인다), 권장 묶음처럼 한 번 제안한 키는 지운 뒤 다시 제안하지 않는다. 동기화 폴더를 쓰려면 같은 형식의 폴더를 그 경로에 두면 된다.
+private git 저장소 하나에 `agent-skills.json`을 둔다. 에이전트가 `~/.config/agent-skills/personal`로 clone하고 다음 dry run부터 diff에 넣는다. URL에 토큰을 넣지 않는다. hook은 https URL의 인증 정보를 지운 URL로 clone하게 하지만, 설치 창에 넣은 값 그대로는 Claude Code의 `pluginConfigs`에 남는다. 인증은 `gh` 로그인(`gh auth setup-git`)으로 받는다. 있는 값은 덮지 않고(이 PC의 값과 다르면 `kept` 줄로 보인다), 권장 묶음처럼 한 번 제안한 키는 지운 뒤 다시 제안하지 않는다. 동기화 폴더를 쓰려면 같은 형식의 폴더를 그 경로에 두면 된다.
 
 - `agent-skills.json`: `~/.claude/agent-skills.json`에 더할 키(`tracker`, `notes`, `prs`, `mentions` 등). 같은 키가 권장 기본값에도 있으면 이쪽이 이긴다.
 - 트래커 사이트 규칙 Markdown: 같은 폴더에 두고 `tracker.rules_file`에 상대 경로로 적으면 그 폴더 기준 절대 경로로 들어간다.
@@ -71,7 +71,7 @@ dry run은 여기서도 아무것도 쓰지 않고 fetch도 하지 않는다. fa
 - 사내 이름 목록(`~/.config/agent-skills/internal-names.txt`, 공개 저장소에 쓰는 PC만). 채팅 채널, 트래커 프로젝트, 노트 저장소 같은 `agent-skills.json`의 나머지 키는 개인 설정 저장소의 `agent-skills.json`으로 옮긴다. 키와 기본 동작은 각 스킬의 설정 절과 [configuration-migration.md](configuration-migration.md).
 - 조직 저장소를 신뢰 범위에 넣는 autoMode 문장. 묶음의 "사용자 저장소"는 `gh` 로그인 계정 아래만이다. 조직은 그 PC에서 `tune-automode`로 더한다. 개인 autoMode 규칙은 PC마다 둔다.
 - 개인 지침과 스킬·에이전트(`~/.claude/CLAUDE.md`, `skills/`, `agents/`)와 자동 메모리. 어느 PC에서나 지켜야 할 작업 방식이 여기에만 있으면 `reflect`나 `write-skill`로 스킬에 올린다. 트래커·노트 쓰기 agent는 플러그인의 `task-tracker`·`notes-writer`가 기본이라 옮길 필요가 없다. 트래커 사이트 고유 규칙은 개인 설정 저장소에 두고 `tracker.rules_file`로 가리킨다(키를 두고 파일을 빠뜨리면 `task-tracker`가 쓰지 않고 멈춘다).
-- `notes.obsidian.access`(그 PC에서 vault에 닿는 경로). Obsidian vault를 쓰면 PC마다 적는다.
+- `notes.obsidian.access`(그 PC에서 vault에 닿는 경로). PC마다 달라서 개인 설정 저장소에 넣지 않고, Obsidian vault를 쓰는 PC마다 적는다.
 - `env`의 다른 값과 토큰. PC마다 다시 만든다.
 
 특정 PC와 똑같이 맞추고 싶으면 `setup-pc`의 "Compare with another PC"(원래 PC에서 `setup_check.py export`, 여기서 `check --baseline`)를 쓴다. 기본 경로는 아니다.
