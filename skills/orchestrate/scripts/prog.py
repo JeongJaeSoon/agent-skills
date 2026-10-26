@@ -2384,7 +2384,7 @@ def cmd_stage(argv):
 
 
 def cmd_board(argv):
-    import board
+    import board, tidy
     sub, rest = argv[0], argv[1:]
     rid = rest[0] if rest and not rest[0].startswith("--") else None
     try:
@@ -2427,7 +2427,6 @@ def cmd_board(argv):
             for o in items:
                 print(f"{o['id']}  {o['kind']}  {o['label']}" + (f"  (확인 필요: {o['check']})" if o["check"] else ""))
         elif sub == "tidy":
-            import tidy
             rows = tidy.run(dry="--dry-run" in rest)
             if "--json" in rest:
                 return print(json.dumps(rows, ensure_ascii=False, indent=1))
@@ -2435,7 +2434,6 @@ def cmd_board(argv):
                 print(f"{r['id']}  {r['rule']}: {r['evidence']}  ({r['label']})")
             print(f"{'would close' if '--dry-run' in rest else 'closed'} {len(rows)}")
         elif sub == "closed":
-            import tidy
             for k, r in tidy.closed().items():
                 print(f"{k}  {r['ts']}  {r.get('by')}  {r.get('rule')}: {r.get('evidence')}  ({r.get('label')})")
         else:

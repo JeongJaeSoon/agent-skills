@@ -1392,12 +1392,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(400, b'{"error":"bad json"}')
         if path == "/api/fleet/dismiss" and isinstance(body.get("key"), str) and FLEET:
             fleet.dismiss(FLEET, body["key"])
-        elif path == "/api/fleet/ack" and isinstance(body.get("ids"), list) and all(isinstance(i, str) for i in body["ids"]):
-            written, refused = acks.write(body["ids"][:500], undo=body.get("undo") is True)
-            FLEET_WAKE.set()
-            return self.send(200, json.dumps({"written": written, "refused": refused}).encode())
-        elif path == "/api/fleet/done" and isinstance(body.get("ids"), list) and all(isinstance(i, str) for i in body["ids"]):
-            written, refused = board.close(body["ids"][:500], undo=body.get("undo") is True)
+        elif (path in ("/api/fleet/ack", "/api/fleet/done") and isinstance(body.get("ids"), list)
+              and all(isinstance(i, str) for i in body["ids"])):
+            written, refused = (acks.write if path.endswith("ack") else board.close)(body["ids"][:500], undo=body.get("undo") is True)
             FLEET_WAKE.set()
             return self.send(200, json.dumps({"written": written, "refused": refused}).encode())
         elif path == "/api/fleet/send" and isinstance(body.get("session"), str) and isinstance(body.get("text"), str):
@@ -1638,7 +1635,6 @@ def closed_recent(days=7):
     cut = iso(utcnow() - dt.timedelta(days=days))
     return sorted(({"id": k, **r} for k, r in tidy.closed().items() if (r.get("ts") or "") >= cut),
                   key=lambda r: r.get("ts") or "", reverse=True)
-
 
 
 FLOW_CACHE, FLOW_TTL = {}, {"flow": 30, "changes": 60}

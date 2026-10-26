@@ -445,14 +445,15 @@ function ackSplit(items, what) {
       + (seen ? `<button class="chip" type="button" data-ack-show aria-pressed="${!!F.showAcked}">Show ${seen} acked</button>` : "") };
 }
 const ackNote = () => F.ackError ? `<div class="ack-note">${tag("not acked", "warn", "alert")} ${esc(F.ackError)}</div>` : "";
-async function ackAction(t) {
+// Ack and Done post the same way: the ids, undo, and the refusals shown under F[err].
+async function idsAction(t, url, ids, err) {
   t.disabled = true;
   try {
-    const out = await fleetPost("/api/fleet/ack", { ids: t.dataset.ack.split(" "), undo: "undo" in t.dataset });
-    F.ackError = (out.refused || []).map(([id, why]) => `${id}: ${why}`).join(" · ") || null;
+    const out = await fleetPost(url, { ids: ids.split(" "), undo: "undo" in t.dataset });
+    F[err] = (out.refused || []).map(([id, why]) => `${id}: ${why}`).join(" · ") || null;
     F.workEtag = F.briefEtag = null;
     await Promise.all([pollWork(), pollBrief()]);  // the requests card follows fleetPost's own state refresh
-  } catch (err) { F.ackError = String(err.message || err); }
+  } catch (e) { F[err] = String(e.message || e); }
   t.disabled = false;
   renderView();
 }
@@ -828,17 +829,6 @@ function doneCards(b) {
     <ul class="rows">${open || '<li class="muted">Nothing open.</li>'}</ul></div>`
     + (shut ? `<div class="card"><div class="card-head"><h3>Closed in the last 7 days</h3><span class="aside muted">${(b.closed || []).length}</span></div><ul class="rows">${shut}</ul></div>` : "");
 }
-async function doneAction(t) {
-  t.disabled = true;
-  try {
-    const out = await fleetPost("/api/fleet/done", { ids: t.dataset.done.split(" "), undo: "undo" in t.dataset });
-    F.doneError = (out.refused || []).map(([id, why]) => `${id}: ${why}`).join(" · ") || null;
-    F.briefEtag = null;
-    await pollBrief();
-  } catch (err) { F.doneError = String(err.message || err); }
-  t.disabled = false;
-  renderView();
-}
 
 // The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
 // written by the coordinator shows within one poll. The merge cell arrives already filled from the fleet PR list.
@@ -903,9 +893,9 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("[data-work-done]")) { F.workHideDone = !F.workHideDone; renderView(); }
   if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
   const ack = e.target.closest("[data-ack]");
-  if (ack) ackAction(ack);
+  if (ack) idsAction(ack, "/api/fleet/ack", ack.dataset.ack, "ackError");
   const done = e.target.closest("[data-done]");
-  if (done) doneAction(done);
+  if (done) idsAction(done, "/api/fleet/done", done.dataset.done, "doneError");
 });
 
 // Orca automations (state.json automations). An enabled one is ▲ when its last run failed or its next run is 10 min

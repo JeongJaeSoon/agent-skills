@@ -14,7 +14,7 @@ ids: doing:<k> later:<k> todo:<k> (k: a digest of the item's words, so rewording
 id>, card:<session id> (a fleet row), ext:<inbox key>, req:<request id>. The state of an id is its last line. A
 reopen keeps the evidence it undid, and the tick does not close that id again on the same evidence.
 """
-import fcntl, re
+import contextlib, fcntl, re
 
 import fleet
 
@@ -23,19 +23,15 @@ MERGE_WORD = re.compile(r"머지|merge", re.I)
 SLUG = re.compile(r"[a-z0-9][a-z0-9._]*(?:-[a-z0-9._]+)+")
 CARD_KINDS = ("task", "standalone")
 STALE_H = 8  # a moving board row this long without a word, and nothing live to vouch for it, is 확인 필요
-OWNER_NAMES = ("오너", "owner")
 
 
 def path():
     return fleet.state_dir() / "tidy.jsonl"
 
 
-def key(*parts):
-    return fleet.digest(*parts)[:8]
-
-
 def item_id(kind, item):
-    return f"{kind}:" + (key(item["title"], item["trigger"]) if kind == "later" else key(item["title"] if kind == "doing" else item))
+    parts = (item["title"], item["trigger"]) if kind == "later" else (item["title"],) if kind == "doing" else (item,)
+    return f"{kind}:{fleet.digest(*parts)[:8]}"
 
 
 def latest():
@@ -49,11 +45,6 @@ def latest():
 
 def closed():
     return {k: r for k, r in latest().items() if r["ev"] == "done"}
-
-
-def is_owner(who, me):
-    w = (who or "").strip().lstrip("@").lower()
-    return w in OWNER_NAMES or bool(me) and w == me.lower()
 
 
 # ---------------------------------------------------------------- evidence
@@ -75,15 +66,19 @@ def named(text, cards):
     return hits[0] if len(hits) == 1 else None
 
 
+def merged(p):
+    return p.get("state") == "MERGED" or bool(p.get("merged_at"))
+
+
 def pr_line(k, p):
-    return f"{k} " + ("머지 " + (p.get("merge_sha") or "")[:7] if p.get("state") == "MERGED" else "닫힘")
+    return f"{k} " + ("머지 " + (p.get("merge_sha") or "")[:7] if merged(p) else "닫힘")
 
 
 def refs_over(keys, prs, closed_ok=False):
     """The evidence that every PR in keys is merged (or closed, with closed_ok), else None. No keys: None."""
     keys = [k for k in dict.fromkeys(keys) if k]
     ps = [prs.get(k) or {} for k in keys]
-    if not keys or not all(p.get("state") == "MERGED" or closed_ok and p.get("state") == "CLOSED" for p in ps):
+    if not keys or not all(merged(p) or closed_ok and p.get("state") == "CLOSED" for p in ps):
         return None
     return " · ".join(pr_line(k, p).strip() for k, p in zip(keys, ps))
 
@@ -91,6 +86,7 @@ def refs_over(keys, prs, closed_ok=False):
 def assess(store, state, prs, me=None, now=None):
     """id -> {verdict: done | check, rule, evidence, label} for what the evidence settles now. state.json's sessions
     and PR list, prs.json's details (key -> detail), board.json's store."""
+    import board  # imports this module, so not at the top
     now = now or fleet.utcnow()
     cards = cards_of(state)
     live = {s["id"] for s in cards.values() if s.get("phase") in ("working", "waiting")}
@@ -100,7 +96,7 @@ def assess(store, state, prs, me=None, now=None):
         out[iid] = {"verdict": verdict, "rule": rule, "evidence": fleet.mask(evidence, 200), "label": fleet.mask(label, 120)}
 
     for d in store.get("doing") or []:
-        if d.get("waiting") or is_owner(d.get("owner"), me):
+        if d.get("waiting") or board.is_owner(d.get("owner"), me):
             continue
         text = f"{d['title']} {d.get('next') or ''}"
         card = named(text, cards)
@@ -156,15 +152,14 @@ def requests_over(rows_here, rows_marked, cards_done, prs, cards):
             continue
         ev, here = [], False
         for to in q["links"]:
-            to = (to or "").strip()
-            refs = fleet.pr_refs(to)
+            to, pr = (to or "").strip(), owner_requests.link_pr(to, prs)
             if to.startswith("board:") and to[6:] in rows_here | rows_marked:
                 ev.append(f"{to} 완료")
                 here |= to[6:] in rows_here
-            elif to.startswith("card:") and by_name.get(to[5:]) in cards_done:
+            elif by_name.get(owner_requests.card(to)) in cards_done:
                 ev.append(f"{to} 정리됨")
                 here = True
-            elif len(refs) == 1 and (e := refs_over(refs, prs)):
+            elif pr and (e := refs_over([pr[0]], prs)):
                 ev.append(e)
             else:
                 break
@@ -177,8 +172,16 @@ def requests_over(rows_here, rows_marked, cards_done, prs, cards):
 
 # ---------------------------------------------------------------- writes
 
-def append(rows):
+@contextlib.contextmanager
+def locked():
+    """The ledger's lock, yielding latest() as it stands under it."""
     path().parent.mkdir(parents=True, exist_ok=True)
+    with (path().parent / "tidy.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield latest()
+
+
+def append(rows):
     fleet.rotate(path())
     for r in rows:
         fleet.append_line(path(), r)
@@ -188,10 +191,7 @@ def write(ids, undo=False, why=None, can=None, now=None, by="owner"):
     """Close (or, with undo, reopen) each id. Returns (written, [(id, reason)]). can: id -> label of what may be
     closed now (board.render()'s open list); an id not in it, or already in the asked state, is not written."""
     ts, written, refused = fleet.iso(now or fleet.utcnow()), [], []
-    path().parent.mkdir(parents=True, exist_ok=True)
-    with (fleet.state_dir() / "tidy.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        have = latest()
+    with locked() as have:
         rows = []
         for iid in dict.fromkeys(ids):
             cur = have.get(iid) or {}
@@ -222,9 +222,7 @@ def run(now=None, dry=False):
     prs_file = fleet.read_json(sd / "prs.json", {}) or {}
     prs = {k: v["detail"] for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
     found = {k: v for k, v in assess(store, state, prs, prs_file.get("me"), now).items() if v["verdict"] == "done"}
-    with (sd / "tidy.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        have = latest()
+    with locked() as have:
         shut = {k for k, r in have.items() if r["ev"] == "done"} | set(found)
         marked = {k for k, r in (store.get("rows") or {}).items() if r.get("status") == "done"}
         found |= requests_over({k[4:] for k in shut if k.startswith("row:")}, marked,

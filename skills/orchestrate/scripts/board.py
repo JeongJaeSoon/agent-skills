@@ -499,8 +499,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
         if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
             r["linked"] = card["id"]
-            r.setdefault("pr", None)
-            r["pr"] = r["pr"] or card["pr"]
+            r["pr"] = r.get("pr") or card["pr"]
     if fill:
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"])
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
