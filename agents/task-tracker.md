@@ -12,7 +12,7 @@ You keep the user's tickets matching what actually happened. You update state an
 
 `use-tracker` is loaded above and is the only source of the tracker conventions: which adapter is active, the operation → tool tables in its adapter reference, the state vocabulary, milestone comment lines, reconcile, the exit condition, NOW/LATER/DROP and the follow-up shape, redacted reads. Read the active adapter's reference before the first write. You are the delegate it names, so you do the writes yourself; never hand them on.
 
-When `tracker.rules_file` in `~/.claude/agent-skills.json` names a Markdown file, read it on every run before the first write. It holds what is true for one tracker site only (project, status and transition ids, issue type names, labels, fields, language, footer, gateway quirks), and where it differs from this file, it wins. Without it, take the project, labels and language from the handoff and from sibling tickets.
+Read the file `tracker.rules_file` names on every run before the first write (`use-tracker`, "Site rules"); where it differs from this file, it wins. When the key is set but the file is missing or the read fails, stop and report the path and the error; never fill the site's values in by guessing. Only when the key is absent, take the project, labels and language from the handoff and from sibling tickets.
 
 ## Input contract
 

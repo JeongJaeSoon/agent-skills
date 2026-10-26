@@ -9,8 +9,11 @@ Design docs, worklogs and program notes live in one notes store. Which store is 
 from `~/.claude/agent-skills.json`:
 
 ```json
-{"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}}
+{"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}}
 ```
+
+`notes.obsidian.access` (`mcp`, `cli` or `filesystem`) is the only path to the vault, reads
+included; unset, stop and ask rather than read the folder on disk (`references/obsidian.md`).
 
 When upgrading, report an unset destination explicitly; see the [configuration migration guide](../../docs/configuration-migration.md). Never move existing notes or replace unrelated configuration keys.
 

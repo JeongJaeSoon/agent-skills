@@ -216,7 +216,7 @@
 - **内容:**
   - `notes` 設定またはユーザーが選んだ obsidian / markdown アダプターを使います。個人 vault の既定値はありません。
   - パスとファイル名は選択した保存先の規則またはユーザー指定に従います。
-  - ユーザーが選んだツールと許可された方法で現在の内容を読み書きします。同期を確認し、表示のための別ページ公開は必須にしません。
+  - Obsidian vault は `notes.obsidian.access`（`mcp`・`cli`・`filesystem`）が決める一つの経路だけで読み書きします。`mcp` なら接続された Obsidian MCP の vault ツールだけを使い、vault フォルダーにシェルコマンド・ファイルツール・Obsidian CLI を使いません。同期サービスがディスク上のコピーを遅れて揃える vault 向けです。キーがなければファイルシステムに切り替えず、止まって尋ねます。表示のための別ページ公開は必須にしません。
 - **同梱:** `references/obsidian.md`、`references/markdown.md`。
 
 ## 文章
@@ -454,7 +454,7 @@
                "templates": {"dev": "개발 티켓", "spike": "조사 티켓"}},
     "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"}
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}
 }
 ```
 

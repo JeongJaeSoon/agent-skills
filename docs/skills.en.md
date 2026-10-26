@@ -216,7 +216,7 @@ Monitors configured public channels for mentions and replies when requested. Use
 - **What it does:**
   - Uses the obsidian or markdown adapter selected in `notes` or by the user. There is no default personal vault.
   - Paths and filenames follow the selected store’s rules or the user’s destination.
-  - Reads and edits current content using the user-selected tools and permitted access method. Check synchronization; publishing another page is not required to show a note.
+  - An Obsidian vault is read and written through the one path `notes.obsidian.access` names (`mcp`, `cli` or `filesystem`). Under `mcp` only the connected Obsidian MCP vault tools are used, never a shell command, file tool or the Obsidian CLI on the vault folder; it is for vaults whose on-disk copy lags a sync service. With the key unset, it stops and asks instead of falling back to the filesystem. Publishing another page is not required to show a note.
 - **Bundled:** `references/obsidian.md`, `references/markdown.md`.
 
 ## Writing
@@ -454,7 +454,7 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
                "templates": {"dev": "개발 티켓", "spike": "조사 티켓"}},
     "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"}
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}
 }
 ```
 
