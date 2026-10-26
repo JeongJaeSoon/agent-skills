@@ -136,8 +136,7 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             orchestration channel to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool
             in your scratch directory, never quoted: a hook that matched the command's text blocks
-            a message quoting it. A report blocked that way goes once more with the path in place
-            of the quoted text, which is not a retry of the refused act. Paste
+            a message quoting it. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this
