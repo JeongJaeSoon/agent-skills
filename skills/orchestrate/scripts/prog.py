@@ -89,8 +89,8 @@ Usage: orch <command> <slug> [options]
                                      row (a feature or an epic) with no PR and no cells; --parent rows to it
   board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] | lead close <name>
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
-                 [--status moving|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
-  board drop <id> | doing add <title> --owner W --next E | doing drop <n> | later add <title> --trigger T [--due D]
+                 [--status moving|owner|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
+  board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D]
         | later drop <n> | todo [LINE]... | show
                                      no slug: the board the periodic report is rendered from (board.json beside
                                      stages.json), one row per lead, phase and sub-task. set changes only the
@@ -100,9 +100,15 @@ Usage: orch <command> <slug> [options]
                                      --program is the lead's project (epic, program): leads sharing a repository
                                      get one table each only when each has one; lead add and set warn until
                                      they do, and the report heads the rest (프로젝트 미지정)
+                                     A waiting row waits on a person: the PR's requested reviewers say who, else
+                                     --owner (오너, owner or the gh login is the owner; another name is someone
+                                     else); with neither the report marks it 확인 필요. --status owner is a row
+                                     only the owner unblocks.
                                      todo replaces the owner's to-do list (no lines clears it); doing lists work
-                                     that is moving but has no row (a wait on another team, an investigation),
-                                     later only work set aside on purpose, with the trigger that brings it back
+                                     that is moving but has no row (an investigation), --waiting when W is a
+                                     person it waits on (a reply from another team), --owner 오너 when it waits
+                                     on the owner; later only work set aside on purpose, with the trigger that
+                                     brings it back
   brief render [--periodic] [--scope top-level|PROGRAM] [--telegram] [--headline T] [--decision T]... [--insight T]
                [--skipped T] [--now ISO8601] [--commit] [--json] [--no-fill] [--no-refresh]
                                      the brief skill's report, on request or (--periodic) on a schedule, from the
@@ -2379,7 +2385,7 @@ def cmd_board(argv):
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
-            board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"))
+            board.doing_add(rest[1], opt(rest, "--owner"), opt(rest, "--next"), "--waiting" in rest)
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
@@ -2393,7 +2399,7 @@ def cmd_board(argv):
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] | lead close <name> | "
                      "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
-                     "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | doing add <title> --owner W --next E | doing drop <n> | later add <title> --trigger T [--due D] | "
+                     "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo [LINE]... | show")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
