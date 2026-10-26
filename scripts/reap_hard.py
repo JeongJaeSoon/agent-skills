@@ -104,12 +104,14 @@ def protected_path(p, protect):
 
 # ---------------------------------------------------------------- judgements (pure)
 
-def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=(), coordinator=None):
+def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people, holders, children=(), coordinator=None,
+               busy=()):
     """(target, why). card: a row of `orca worktree list`; facts: reap.worktree_facts; pr: reap's PR state of
     facts["pr"]; terminals: the card's rows of `orca terminal list`, None when unreadable; quiet_s: seconds since
     its transcripts last changed, None when it has none; people: pids in it a person started; holders: pids in it
     that are protected or listen on a protected port; children: the cards it made that still exist (a lead's);
-    coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds."""
+    coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds;
+    busy: shells a live Claude session in it is still running (a Bash call, a background shell, a Monitor)."""
     p = reap.real(card["path"])
     if card.get("isMainWorktree") or card.get("isPinned"):
         return False, "메인 체크아웃 또는 고정된 카드"
@@ -141,6 +143,9 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
         return False, f"보호 대상 프로세스가 이 카드에 있음(pid {holders[0]})"
     if people:
         return False, f"사람이 띄운 셸의 자식이 이 카드에 있음(pid {people[0]})"
+    if busy:
+        # A session waiting on its own background work is quiet without being done.
+        return False, f"Claude 세션이 셸을 돌리는 중(pid {busy[0]})"
     if terminals is None:
         return False, "터미널 목록을 읽지 못함"
     def window(t):
@@ -265,6 +270,15 @@ def people_in(path, rows, cwd_of):
     shells = [pid for pid in inside if reap.human_shell(pid, rows)]
     pids = inside | {q for s in shells for q in reap.tree(s, rows)}
     return sorted(p for p in pids if p in rows and reap.human_owned(p, rows) and not reap.human_shell(p, rows))
+
+
+def busy_in(path, rows, cwd_of):
+    """Shells that a live Claude session in path still runs: every Bash call, background shell and Monitor is a
+    shell child of the session. Other children (MCP servers, caffeinate) live as long as the session and say nothing."""
+    inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), path) and pid in rows]
+    claude = {pid for pid in inside if reap.is_claude(rows[pid]["cmd"])}
+    return sorted(q for q, r in rows.items() if r["ppid"] in claude
+                  and os.path.basename((r["cmd"].split() or [""])[0]).lstrip("-") in reap.SHELLS)
 
 
 def port_open(port):
@@ -396,7 +410,7 @@ def card_verdict(w, m, cfg, protect, now):
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
                          people_in(p, m["rows"], cwd_of), holders, children,
-                         coordinator_in(p, m["rows"], cwd_of, projects))
+                         coordinator_in(p, m["rows"], cwd_of, projects), busy_in(p, m["rows"], cwd_of))
     return ok, why, facts
 
 

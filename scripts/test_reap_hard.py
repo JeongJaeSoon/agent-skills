@@ -61,6 +61,7 @@ cases = {
     "t 출력이 30분 안에": card_says(terms=[{"handle": "t", "agentIdentity": "claude", "lastOutputAt": (NOW - 12 * M) * 1000}],
                                  quiet=None),
     "세션 기록이 10분 전": card_says(quiet=10 * M),
+    "셸을 돌리는 중(pid 40)": rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], [], None, [40]),
     "하위 카드 /ws/app/w1 가 남아 있음(리드)": rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P,
                                                      [], [], ["/ws/app/w1"]),
 }
@@ -167,6 +168,16 @@ assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
 assert rh.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) == "pid 20 의 프로세스 행을 읽지 못함"
 no_claude = {20: lead_rows[20], 21: {**lead_rows[21], "cmd": "node vite"}}
 assert rh.coordinator_in("/ws/app/lead", no_claude, cwd, projects, roles) is None  # no live Claude: nothing to protect
+# A session waiting on its own background work keeps its card: a shell child of a Claude in the card (a Bash call,
+# a background shell, a Monitor). An MCP server or caffeinate child lives as long as the session and doesn't count.
+busy_rows = {**lead_rows, 40: proc(40, "/bin/zsh -c source snapshot.sh && sleep 600", ppid=31),
+             41: proc(41, "caffeinate -i -t 300", ppid=31), 42: proc(42, "bun run --cwd plugin start", ppid=31),
+             43: proc(43, "/bin/zsh -c make", ppid=30)}
+assert rh.busy_in("/ws/app/done", busy_rows, cwd) == [40]
+assert rh.busy_in("/ws/app/done", {**busy_rows, 40: {**busy_rows[40], "ppid": 99}}, cwd) == []
+assert rh.busy_in("/ws/app/lead", busy_rows, cwd) == []  # pid 31 is another card's session
+assert rh.busy_in("/ws/app/done", {}, cwd) == []
+
 ok, why = rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], [], "pid 21 --agent agent-skills:lead")
 assert ok is False and why.startswith("리드·오케스트레이터 보호: pid 21"), why
 
