@@ -37,7 +37,8 @@ merge Slack review requests into its list; `annotate ITEMS.json` sets `pr` on ro
 
 ## Privacy boundary
 
-- Search with `slack_search_public` only. Never call `slack_search_public_and_private` or read a
+- Search with `slack_search_public` only (on another Slack server, its search that returns public
+  channels only). Never call `slack_search_public_and_private` or read a
   DM, a group DM or a private channel, unless `read_private` is `true` in the config. Only the user
   sets that, by editing the file; a run never changes it.
 - `ingest` drops any channel id that is not a public channel (`C…`) or that a result marks private.

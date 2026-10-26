@@ -73,7 +73,7 @@ Pick sources from the MCP tools present in this session's tool list. Each source
 | Long-form documents | Obsidian notes through the `use-notes` skill (design docs, worklogs) | `obsidian.md` |
 | Real-time team chat | Slack MCP | `slack.md` |
 
-Infrastructure observability, error tracking, and product analytics (Datadog, Sentry, a data warehouse) have no connection here. Don't spawn for them; list each in Sources Consulted as not searched for lack of access, so the gap stays visible. If an MCP for one of those categories is in the tool list, give it an investigator with the base prompt alone.
+When infrastructure observability, error tracking, or product analytics (Datadog, Sentry, a data warehouse) has no connection in this session, don't spawn for it; list each in Sources Consulted as not searched for lack of access, so the gap stays visible. If an MCP for one of those categories is in the tool list, give it an investigator with the base prompt alone.
 
 Google Calendar is not an evidence source. Use it only to narrow a date range (when a design review or incident call happened) and pass that range to the investigators.
 

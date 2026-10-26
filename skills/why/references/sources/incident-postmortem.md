@@ -9,6 +9,6 @@ Not a separate source, a **cross-cutting angle**. Incidents often motivate defen
 
 If you find an incident link, fetch the full postmortem. Postmortems typically have an "Action Items" section that ties directly to code changes. When multiple sources corroborate (an incident ID appears in a Linear ticket, which appears in a postmortem, which appears in a Slack thread that links to the target PR), the evidence is especially strong.
 
-Monitoring, error tracking, and analytics records (Datadog, Sentry, a data warehouse) are not reachable here. When an incident origin is plausible, list them under Gaps as unsearched, since they are where the runtime signal would be.
+Monitoring, error tracking, and analytics records (Datadog, Sentry, a data warehouse) may not be connected. When an incident origin is plausible and they are not, list them under Gaps as unsearched, since they are where the runtime signal would be.
 
 Worth spending time on when the code's defensive character makes an incident-driven origin plausible. Skip it for code that doesn't look defensive.

@@ -240,7 +240,7 @@ Then land it. How depends on where you run:
   PR relies on, merge main in and let CI rerun. Do not rebase only because the branch is behind.
 
 ```bash
-gh pr merge <n> --squash --delete-branch      # a stack lands from its top, see §5
+gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; a stack lands from its top, see §5
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 

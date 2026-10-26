@@ -49,6 +49,8 @@ gh pr view <n> --json title,body -q '.title+"\n"+.body' | grep -i -E -f ~/.confi
 
 `hits: 1` (grep found nothing) is the pass. Any hit is rewritten generically, then the grep runs again. Show the command and its output in the report.
 
+The list only finds names already on it. `scripts/test_public_shapes.py` (in the §5 loop) catches the shapes of a name not yet listed: a real home path, a Slack id, a ticket key, a SaaS tenant host. Neither catches the rest, so read the diff for it: a name for one setup's plugin or tool (add it to the list), narration of this machine's state ("this PC has…"), a private rule or one person's habit written as general, a quoted utterance, a one-letter ticket key.
+
 ## 5. Tests and validation (public repo)
 
 - The loop in README "테스트", then `bash scripts/pstack-sync-test.sh`.

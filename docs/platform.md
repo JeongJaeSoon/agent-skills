@@ -9,20 +9,20 @@
 5. 다른 PC 부트스트랩
 6. 오케스트레이션 스킬 개선(최상위 orchestrator 계층)
 
-모든 판단은 2026-09-25 이 PC(macOS, Claude Code 2.1.282, Orca CLI)에서 잰 결과를 근거로 한다. 잰 방법과 출력은 각 절의 "실측"에 적는다.
+모든 판단은 2026-09-25 PC 한 대(macOS, Claude Code 2.1.282, Orca CLI)에서 잰 결과를 근거로 한다. 잰 방법과 출력은 각 절의 "실측"에 적는다.
 
 ## 0. 바꾸기 전 상태 (2026-09-25 기록)
 
 | 항목 | 값 |
 |---|---|
-| `~/.claude/plugins/known_marketplaces.json` | `jeongjaesoon` 없음. 있는 것은 공식 마켓플레이스, `agent-guard`, 그 밖의 서드파티·사내 마켓플레이스(이 작업은 건드리지 않음) |
+| `~/.claude/plugins/known_marketplaces.json` | `jeongjaesoon` 없음. 있는 것은 공식 마켓플레이스, `agent-guard`, 그 밖의 서드파티 마켓플레이스(이 작업은 건드리지 않음) |
 | `~/.claude/plugins/installed_plugins.json` | `agent-skills@*` 없음 |
 | `~/.claude/settings.json` `enabledPlugins` | `agent-skills@*` 없음 |
 | `~/.claude/settings.json` `env.CLAUDE_CODE_PLUGIN_DIRS` | 없음 |
-| `~/.claude/skills/` | `slack-post`, `wrap-up`, `synced/`, `.trash/`만 있음. 옛 `install.py` symlink 없음 |
+| `~/.claude/skills/` | 개인 스킬 몇 개만 있음(symlink 아님). 옛 `install.py` symlink 없음 |
 | 로컬 체크아웃 | 예시 경로 `~/src/agent-skills` (main @ fe3b173, origin = GitHub HTTPS) |
 
-즉 이 PC에는 원격이든 로컬이든 agent-skills가 등록되어 있지 않았다. 되돌리기는 §7에 적는다.
+즉 측정한 PC에는 원격이든 로컬이든 agent-skills가 등록되어 있지 않았다. 되돌리기는 §7에 적는다.
 
 같은 날 사용자 요청으로 코디네이터가 먼저 로컬 마켓플레이스를 등록했다: `claude plugin marketplace add <체크아웃>`, `claude plugin install agent-skills@jeongjaesoon`(scope user). `installPath`는 `~/.claude/plugins/cache/jeongjaesoon/agent-skills/11a51e63a89c`로, §1의 실측과 같이 커밋 단위 복사본이다. 되돌리기: `claude plugin uninstall agent-skills@jeongjaesoon && claude plugin marketplace remove jeongjaesoon`.
 
@@ -72,7 +72,7 @@ $ CLAUDE_CONFIG_DIR=/tmp/cc-sbx claude plugin list      # settings.json 에 env 
 ### 결정
 
 - `~/.claude/settings.json`의 `env`에 `CLAUDE_CODE_PLUGIN_DIRS=<체크아웃 절대 경로>`를 넣는다. 체크아웃 위치는 PC마다 달라도 된다.
-- 마켓플레이스 설치는 끈다. 이 PC에는 코디네이터가 설치해 두었으므로, 부트스트랩이 `enabledPlugins`의 `agent-skills@jeongjaesoon`을 false로 둔다(두 번 로드 방지). 마켓플레이스 등록 자체는 남겨 두어도 해가 없다. `marketplace.json`은 남긴다. 이 저장소를 고치지 않고 쓰기만 하는 사람의 설치 경로이기 때문이다.
+- 마켓플레이스 설치는 끈다. 마켓플레이스로 이미 설치되어 있으면 부트스트랩이 `enabledPlugins`의 `agent-skills@jeongjaesoon`을 false로 둔다(두 번 로드 방지). 마켓플레이스 등록 자체는 남겨 두어도 해가 없다. `marketplace.json`은 남긴다. 이 저장소를 고치지 않고 쓰기만 하는 사람의 설치 경로이기 때문이다.
 - 이것은 settings 변경이다. 권한 설정(`permissions`)은 건드리지 않는다. 바꾸기 전 파일은 `settings.json.bak-<시각>`으로 백업한다.
 - 플러그인 이름은 `agent-skills@inline`이 된다. 스킬 이름(`agent-skills:<이름>`)과 `${CLAUDE_PLUGIN_ROOT}`는 같다. 저장소 안에 `@jeongjaesoon`을 전제한 코드는 없다(`grep`으로 확인, README와 `migrate.py`의 설치 안내만 있음).
 
@@ -115,7 +115,7 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 | 방식 | 장점 | 단점 | 판단 |
 |---|---|---|---|
-| launchd (`StartInterval`) | Claude 세션이 없어도 돈다. 다른 설정을 안 건드린다. 이 PC에서 이미 사용자 LaunchAgent 여러 개가 같은 방식으로 돈다 | macOS 전용 | **주 방식** |
+| launchd (`StartInterval`) | Claude 세션이 없어도 돈다. 다른 설정을 안 건드린다. 사용자 LaunchAgent 여러 개가 이미 같은 방식으로 돈다 | macOS 전용 | **주 방식** |
 | 플러그인 SessionStart hook | 세션을 열 때마다 최신이 된다. Linux에서도 된다 | 세션 시작을 늦추지 않으려면 백그라운드로 떼어야 한다. hook 추가는 승인 사항 | 선택 사항(아래) |
 | 스킬(지시가 있을 때) | 단순 | 사람이 잊으면 안 돈다 | 수동 경로로만 둔다 |
 
@@ -134,12 +134,12 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
    - 갈라졌으면(양쪽 다 > 0) 멈춘다. rebase·merge·force는 하지 않는다.
    - 뒤처지기만 했으면 `git merge --ff-only origin/main`.
    - 앞서기만 했으면 push 판정으로 간다.
-5. push: 올라갈 커밋마다 서명이 있어야 한다. `git log --format=%G?`가 `N`(서명 없음)이나 `B`(서명이 틀림)인 커밋이 하나라도 있으면 멈춘다. `G`·`U`만 허용하지 않는 이유: `allowedSignersFile`이 없는 새 PC에서는 서명이 있어도 `E`(검증 불가)가 나올 수 있다. 이 PC의 최근 커밋은 모두 `U` 또는 `G`였다. 통과하면 `git push origin main`(force 없음).
+5. push: 올라갈 커밋마다 서명이 있어야 한다. `git log --format=%G?`가 `N`(서명 없음)이나 `B`(서명이 틀림)인 커밋이 하나라도 있으면 멈춘다. `G`·`U`만 허용하지 않는 이유: `allowedSignersFile`이 없는 새 PC에서는 서명이 있어도 `E`(검증 불가)가 나올 수 있다. 측정한 PC의 최근 커밋은 모두 `U` 또는 `G`였다. 통과하면 `git push origin main`(force 없음).
 6. HEAD가 바뀌었으면 바뀐 경로로 reload 브로드캐스트를 정한다(§4).
 
 - **main 직접 push:** 이 저장소에는 branch protection과 ruleset이 없다(`gh api …/branches/main/protection` → 404 "Branch not protected", rulesets `[]`). 최근 main 커밋 15개는 모두 서명된 직접 커밋이고 PR은 2개뿐이다. 그래서 동기화는 main에 직접 push한다. 리뷰를 받고 싶은 큰 변경은 지금처럼 PR로 올리고, 동기화는 그 결과를 pull할 뿐이다.
 - **인증 대기로 멈추지 않기:** launchd에는 터미널이 없어서 인증을 물으면 영원히 기다린다. `GIT_TERMINAL_PROMPT=0`으로 돌리고, stdin을 닫고 새 세션으로 띄워 터미널에서 떼어 낸다. HTTPS origin이면 `git config --get-urlmatch credential.helper <url>`이 비어 있을 때 fetch 전에 멈춘다(`gh auth setup-git`이 쓰는 URL 한정 helper도 보인다). SSH origin이고 `core.sshCommand`가 없으면 `ssh -o BatchMode=yes`로 돌려 host key나 passphrase를 묻지 않게 한다. git 명령마다 시간 제한(60초)을 건다.
-- **서명과 1Password:** 동기화는 커밋을 만들지 않는다. 이 체크아웃은 `commit.gpgsign=true`, `gpg.format=ssh`라 1Password 에이전트가 꺼져 있으면 커밋 자체가 실패한다. 그래도 서명 없는 커밋이 끼어 있으면 5단계에서 멈추고 "서명 없는 커밋 <sha>: 1Password SSH 에이전트를 확인한 뒤 다시 서명"이라고 알린다.
+- **서명:** 동기화는 커밋을 만들지 않는다. 체크아웃이 `commit.gpgsign=true`, `gpg.format=ssh`이면 서명 에이전트(SSH agent 등)가 꺼져 있을 때 커밋 자체가 실패한다. 그래도 서명 없는 커밋이 끼어 있으면 5단계에서 멈추고 서명 에이전트를 확인한 뒤 다시 서명하라고 알린다.
 - **알림:** macOS 알림 센터(`osascript display notification`)와 상태 파일 `~/.local/state/agent-skills/sync.json`(마지막 결과, 멈춘 이유, 시각). 터미널에는 아무것도 쓰지 않는다. 입력 중인 세션에 알림이 끼어드는 문제를 만들지 않기 위해서다. 같은 이유로 멈춘 상태가 이어지면 다시 알리지 않고, 상태가 바뀔 때만 알린다. 대시보드는 이 파일을 읽어 인박스에 올릴 수 있다(`orchestrator-dashboard` 몫).
 - **동시 실행:** `~/.local/state/agent-skills/sync.lock`에 파일 잠금(`fcntl.flock`, macOS에는 `flock` 명령이 없다)을 건다. `sync`, `broadcast`, `nudge`가 같은 잠금을 쓰고 브로드캐스트가 끝날 때까지 쥐고 있다. 겹치면 두 브로드캐스트가 같은 세션에 두 번 치거나, 브로드캐스트 도중 `sync`가 새로 넣은 reload 대기 항목을 덮어쓴다.
 
@@ -274,7 +274,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
 |---|---|---|
 | 워커 기동 직후 Claude가 안 뜸 (3회) | `worker-start` 결과가 `turn_start_unobserved` 또는 `outcome_unknown`. 화면에는 셸 프롬프트와 `^[[200~You are working inside Orca…`가 남아 있었다 | 새 폴더 신뢰 창 위에 지시문이 붙여넣어지고 Enter가 눌렸다. 기본 선택인 "No, exit"가 골라져 Claude가 꺼졌고, 나머지 붙여넣기는 셸로 떨어졌다. `outcome_unknown`은 성공이 아니라 "확인 못 함"이다 |
 | 새 폴더 신뢰 창 | 신뢰 기록은 worktree 경로가 아니라 **원본 clone 경로**에 남는다(`~/.claude.json`). 상위 폴더가 신뢰되어 있어도 창이 떴다 | 한 번도 신뢰한 적 없는 저장소(처음 쓰는 저장소, 새 clone)의 첫 워커에서만 생긴다. 창이 그려진 직후 보낸 ↓ 키는 먹히지 않았고 20초 뒤에 다시 보내야 했다 |
-| 알림이 사용자 입력에 끼어듦 | Orca가 코디네이터 입력창에 `You have N orchestration message(s). Run orca orchestration check …`를 치고 Enter를 누른다. 이런 턴이 21번이었다. 한 번은 사용자가 치던 문장 중간에 붙어 함께 제출되었고, 사용자는 17분 뒤 전문을 다시 보냈다 | 신뢰 창 사고와 같은 구조다. "글자를 치고 Enter"가 입력 중인 문장이나 선택 창에 답해 버린다 |
+| 알림이 사용자 입력에 끼어듦 | Orca가 코디네이터 입력창에 `You have N orchestration message(s). Run orca orchestration check …`를 치고 Enter를 누른다. 이런 턴이 21번이었다. 한 번은 사용자가 치던 문장 중간에 붙어 함께 제출되어, 사용자가 전문을 다시 보내야 했다 | 신뢰 창 사고와 같은 구조다. "글자를 치고 Enter"가 입력 중인 문장이나 선택 창에 답해 버린다 |
 | 끝난 dispatch에 send 실패 | `Dispatch … is completed; its worker will never read that mailbox. Send to run:… instead, or start a new Dispatch` | 같은 줄 `&& echo`가 안 찍혔는데도 코디네이터는 다음으로 넘어갔다. 종료 코드를 보지 않았다 |
 | `terminal send --wait-submit` 거짓 실패 | "input was accepted but no turn start was observed"가 두 번 났지만, 화면에서는 이미 턴이 돌고 있었다 | 경고만 보고 다시 보내면 같은 지시가 두 번 들어간다 |
 | 분류기 거부 | 프로세스 kill(`Interfere With Workloads`), 답장 본문에 "kill"이라는 단어만 있어도 거부, 운영 배포 workflow(`Production Deploy`), 워커의 PR 머지(`Merge Without Review`), 워커 heartbeat가 3번 연속 막힌 뒤 확인 창에서 정지(`External System Writes`) | 본문을 파일로 빼서 `--body "$(cat <file>)"`로 보내자 통과했다. 배포와 kill은 사용자가 직접 하거나 명시적으로 허락한 뒤 통과했다 |
@@ -364,5 +364,5 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 | `settings.json` `env.CLAUDE_CODE_PLUGIN_DIRS` | 키를 지우거나 `settings.json.bak-<시각>`을 되돌린다. 떠 있는 세션은 재시작해야 빠진다. 되돌린 뒤에도 떠 있는 세션에 `/reload-plugins`를 치지 말고 재시작한다(§5) |
 | launchd 작업 | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` 뒤 plist 삭제 |
 | 상태 파일 | `~/.local/state/agent-skills/` 삭제 |
-| `enabledPlugins`의 `agent-skills@jeongjaesoon` | 부트스트랩이 출력한 원래 값으로 되돌린다 (이 PC는 원래 없었음) |
+| `enabledPlugins`의 `agent-skills@jeongjaesoon` | 부트스트랩이 출력한 원래 값으로 되돌린다 |
 | 원격 마켓플레이스로 돌아가기 | 위 넷을 되돌린 뒤 `claude plugin marketplace add JeongJaeSoon/agent-skills && claude plugin install agent-skills@jeongjaesoon` |
