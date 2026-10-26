@@ -16,7 +16,7 @@ Everything written is masked first (tokens, auth headers, *_TOKEN=...): prompts 
 The one exception is the `orch sent add` log (sent/, sent.py): it keeps the text as sent, owner-only (0600 in a 0700
 directory), and is masked when shown.
 """
-import collections, concurrent.futures, contextlib, datetime as dt, fcntl, hashlib, io, json, os, pathlib, re, shlex, subprocess, sys, tempfile, threading, time
+import collections, concurrent.futures, contextlib, datetime as dt, fcntl, glob, hashlib, io, json, os, pathlib, re, shlex, subprocess, sys, tempfile, threading, time
 
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
@@ -279,6 +279,18 @@ def claude_home():
     return pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
 
 
+# Orca starts each agent with a profile's own CLAUDE_CONFIG_DIR, and a session registers under that dir only.
+CLAUDE_HOMES = ("~/.claude", "~/Library/Application Support/orca/claude-profiles/*/home")
+
+
+def claude_homes():
+    """Config dirs whose sessions/ list live Claude Code sessions: ORCH_CLAUDE_HOMES (os.pathsep list, globs allowed)
+    when set, else this process's, ~/.claude and each Orca profile's."""
+    pats = os.environ.get("ORCH_CLAUDE_HOMES")
+    pats = pats.split(os.pathsep) if pats else [str(claude_home()), *CLAUDE_HOMES]
+    return list(dict.fromkeys(pathlib.Path(h) for pat in pats for h in sorted(glob.glob(os.path.expanduser(pat)))))
+
+
 def ps_table():
     """pid -> (ppid, start, command). UTC, the clock Claude Code writes a session's procStart in."""
     try:
@@ -429,14 +441,16 @@ def fetch_monitors(procs=None, now=None, warn=None):
 
 
 def live_sessions(procs):
-    """session id -> session record with its live "pids", for each live Claude Code session."""
+    """session id -> session record with its live "pids" and the config "home" it registered under, for each live
+    Claude Code session."""
     sessions = {}
-    for p in sorted((claude_home() / "sessions").glob("*.json")):
-        s = read_json(p, {}) or {}
-        proc = procs.get(s.get("pid"))
-        if s.get("sessionId") and s.get("cwd") and proc and proc[1] == " ".join(str(s.get("procStart")).split()):
-            # Resuming a session in a second terminal leaves two live processes writing one transcript.
-            sessions.setdefault(s["sessionId"], {**s, "pids": []})["pids"].append(s["pid"])
+    for home in claude_homes():
+        for p in sorted((home / "sessions").glob("*.json")):
+            s = read_json(p, {}) or {}
+            proc = procs.get(s.get("pid"))
+            if s.get("sessionId") and s.get("cwd") and proc and proc[1] == " ".join(str(s.get("procStart")).split()):
+                # Resuming a session in a second terminal leaves two live processes writing one transcript.
+                sessions.setdefault(s["sessionId"], {**s, "pids": [], "home": home})["pids"].append(s["pid"])
     return sessions
 
 
@@ -456,8 +470,9 @@ def declared_roles(procs):
 
 def live_transcripts(procs, warn):
     """(session id, session record with its live "pids", transcript path) for each live Claude Code session."""
-    home, out = claude_home(), []
+    out = []
     for sid, s in live_sessions(procs).items():
+        home = s["home"]
         path = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", s["cwd"]) / f"{sid}.jsonl"
         if not path.exists():  # a long cwd gets a shortened directory name
             path = next(iter(sorted((home / "projects").glob(f"*/{sid}.jsonl"))), path)

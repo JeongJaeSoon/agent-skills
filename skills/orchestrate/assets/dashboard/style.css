@@ -118,6 +118,7 @@ svg.i > * { vector-effect: non-scaling-stroke; }
 .sb-group + .sb-group { margin-top: var(--s4); }
 .sb-title { padding: 0 var(--s2) var(--s1); }
 .sb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s1); }
+.sb-sep { height: 1px; margin: 0 var(--s2); background: var(--line); }
 .nav-item {
   display: flex; align-items: center; gap: var(--s2); height: 28px; padding: 0 var(--s2); border-radius: var(--r-md);
   color: var(--ink-2); white-space: nowrap; position: relative; border: 0; background: none; cursor: pointer; width: 100%; text-align: left;

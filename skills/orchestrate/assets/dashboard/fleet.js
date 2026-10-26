@@ -3,22 +3,23 @@
 // Loaded before app.js and only called after it, so it may use app.js helpers ($, esc, icon, tag, relSpan, kpi, S...).
 // Everything comes from /api/fleet/state, written by fleet.py.
 
+// Three groups, a rule before each `sep`: the work in flight, what runs unattended, how the skills and PRs fare.
 const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
-  { id: "prs", label: "Pull requests", icon: "prs" },
-  { id: "work", label: "Work", icon: "flag" },
-  { id: "brief", label: "Brief", icon: "note" },
-  { id: "automations", label: "Automations", icon: "clock" },
-  { id: "monitors", label: "Monitors", icon: "activity" },
-  { id: "sent", label: "Sent", icon: "chat" },
-  { id: "skills", label: "Skills", icon: "spark" },
-  { id: "changes", label: "Skill changes", icon: "merge" },
-  { id: "flow", label: "Data flow", icon: "graph" },
-  { id: "stats", label: "PR stats", icon: "merge" },
-  { id: "graph", label: "Graph", icon: "graph" },
   { id: "sessions", label: "Sessions", icon: "workers" },
-  { id: "timeline", label: "Timeline", icon: "activity" },
+  { id: "work", label: "Work", icon: "flag" },
+  { id: "prs", label: "Pull requests", icon: "prs" },
+  { id: "brief", label: "Brief", icon: "note" },
+  { id: "sent", label: "Sent", icon: "chat" },
+  { id: "timeline", label: "Timeline", icon: "list" },
+  { id: "automations", label: "Automations", icon: "clock", sep: true },
+  { id: "monitors", label: "Monitors", icon: "activity" },
+  { id: "skills", label: "Skills", icon: "spark", sep: true },
+  { id: "changes", label: "Skill changes", icon: "merge" },
+  { id: "stats", label: "PR stats", icon: "chart" },
+  { id: "graph", label: "Graph", icon: "graph" },
+  { id: "flow", label: "Data flow", icon: "link" },
 ];
 
 // Freshness thresholds in seconds, [warn, stale], in the shape app.js SOURCE_META uses.
@@ -122,7 +123,7 @@ function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
     prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, work: workOpen() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
-  $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `<li><a class="nav-item" href="#/fleet/${s.id}"
+  $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
 }
