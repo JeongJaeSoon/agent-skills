@@ -16,6 +16,14 @@ def janitor(enabled=True, **over):
     return a
 
 
+LOAD = au.janitor_want(f"path:{au.REPO}", load=True)
+
+
+def load_job(enabled=True, **over):
+    return janitor(enabled, **{"id": "J2", "name": au.reap.LOAD_NAME, "rrule": LOAD["trigger"],
+                               "precheck": {"command": LOAD["precheck"], "timeoutSeconds": LOAD["precheck-timeout"]}, **over})
+
+
 class FakeOrca:
     """Stands in for `sh`: answers `orca automations list` from a list and records every other call."""
     def __init__(self, autos):
@@ -26,6 +34,10 @@ class FakeOrca:
         if cmd[1:3] == ["automations", "list"]:
             out = json.dumps({"ok": True, "result": {"automations": self.autos}}) if self.autos is not None else ""
             return subprocess.CompletedProcess(cmd, 0 if self.autos is not None else 1, out, "boom")
+        if str(au.REAP) in cmd and self.autos is not None:
+            # A created job is listed from then on, as `apply` creating the janitor before janitor-load relies on.
+            self.autos.append({"id": f"new{len(self.autos)}", "enabled": True,
+                               "name": au.reap.LOAD_NAME if "--load" in cmd else au.JANITOR_NAME})
         return subprocess.CompletedProcess(cmd, 0, "created", "")
 
     def edits(self):
@@ -44,6 +56,45 @@ class Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         return fake
+
+
+class JanitorLoad(Base):
+    """The load job is a second Orca automation: its own name, trigger and `precheck --load`, found and fixed apart."""
+    j = au.JanitorLoad()
+
+    def test_shape(self):
+        self.assertTrue(LOAD["precheck"].endswith("precheck --load"), LOAD["precheck"])
+        self.assertNotEqual(LOAD["trigger"], WANT["trigger"])
+        self.assertEqual(WANT["trigger"], "17 */3 * * *")
+
+    def test_status_finds_only_its_own_job(self):
+        self.orca([janitor()])
+        self.assertEqual(self.j.status()[0], "absent")
+        self.orca([janitor(), load_job()])
+        self.assertEqual(self.j.status(), ("on", f"{LOAD['trigger']} · {au.REPO}"))
+
+    def test_enable_fixes_its_own_drift(self):
+        fake = self.orca([janitor(), load_job(precheck={"command": WANT["precheck"], "timeoutSeconds": 300})])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        edit = fake.edits()[0]
+        self.assertEqual((edit[edit.index("--id") + 1], edit[edit.index("--precheck") + 1]), ("J2", LOAD["precheck"]))
+
+    def test_enable_absent_creates_with_load(self):
+        fake = self.orca([janitor()])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        self.assertIn("--load", fake.schedules()[0])
+
+    def test_absent_follows_the_janitor(self):
+        """apply must not turn reaping back on for a user who turned the janitor off, and the load job runs where
+        the janitor was moved to."""
+        for autos in ([janitor(enabled=False)], []):
+            fake = self.orca(autos)
+            code, msg = self.j.enable(False)
+            self.assertEqual((code, fake.schedules()), (0, []), msg)
+        fake = self.orca([janitor(workspaceId="x::/w/runner")])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        argv = fake.schedules()[0]
+        self.assertEqual(argv[argv.index("--workspace") + 1], "path:/w/runner")
 
 
 class JanitorName(unittest.TestCase):
@@ -124,8 +175,34 @@ class Janitor(Base):
         self.assertIn("--disabled", fake.edits()[0])
         for autos in ([janitor(enabled=False)], []):
             fake = self.orca(autos)
-            self.assertEqual(self.j.disable(), (0, "이미 꺼져 있음"))
+            self.assertEqual(self.j.disable(), (0, "이미 꺼져 있음 · janitor-load: 이미 꺼져 있음"))
             self.assertEqual(fake.edits(), [])
+
+    def test_disable_turns_the_load_job_off_too(self):
+        """Left on, the load job would go on reaping for a user who turned the janitor off."""
+        fake = self.orca([janitor(), load_job()])
+        self.assertEqual(self.j.disable()[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J1", "J2"])
+        self.assertTrue(all("--disabled" in e for e in fake.edits()))
+        fake = self.orca([janitor(), load_job()])
+        self.assertEqual(au.JanitorLoad().disable()[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
+
+    def test_enable_turns_a_disabled_load_job_back_on(self):
+        """disable then enable janitor leaves both as they were; apply never turns a disabled job on."""
+        fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J1", "J2"])
+        fake = self.orca([janitor(enabled=False)])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        self.assertEqual(([e[e.index("--id") + 1] for e in fake.edits()], fake.schedules()), (["J1"], []))
+        fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
+        self.assertEqual(au.JanitorLoad().enable(False)[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
+        # The refresh path on a running janitor leaves a load job the user turned off alone.
+        fake = self.orca([janitor(), load_job(enabled=False)])
+        self.assertEqual(self.j.enable(False), (0, "이미 켜져 있음"))
+        self.assertEqual(fake.edits(), [])
 
 
 class Preview(unittest.TestCase):
@@ -319,10 +396,10 @@ class Apply(Base):
             self.assertEqual(au.cmd_apply(False), 0)
         pv.assert_not_called()
         pr.assert_called_once()
-        self.assertEqual(len(fake.schedules()), 1)
+        self.assertEqual(["--load" in c for c in fake.schedules()], [False, True])
 
     def test_leaves_a_disabled_janitor_off(self):
-        fake = self.orca([janitor(enabled=False)])
+        fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
         with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual(fake.edits() + fake.schedules(), [])
@@ -374,7 +451,7 @@ class Watch(Base):
         self.assertIn("--disabled", fake.edits()[0])
 
     def test_apply_passes_an_unconfigured_one_by(self):
-        fake = self.orca([janitor()])
+        fake = self.orca([janitor(), load_job()])
         with mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual([c for c in fake.calls if "schedule" in c], [])
