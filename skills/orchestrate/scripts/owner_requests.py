@@ -11,6 +11,7 @@ past TTL_MIN expires: it stays open in the file and can still be closed, but no 
 One append-only file, <fleet state>/requests.jsonl (0600), one JSON object a line:
   {"ev": "open", "id": "r7", "ts", "session", "handle", "text"}   text masked and capped
   {"ev": "link", "id", "ts", "to"} | {"ev": "done", "id", "ts", "evidence"} | {"ev": "drop", "id", "ts", "reason"}
+  {"ev": "reopen", "id", "ts"}   a closed request open again, its links kept (the dashboard's Reopen, tidy.py)
 A request's state is the fold of its lines; a later link adds to the earlier ones. A row the fleet tick wrote
 carries "by": "auto".
 """
@@ -41,7 +42,7 @@ def _rows(f):
             row = json.loads(line)
         except ValueError:
             continue
-        if isinstance(row, dict) and isinstance(row.get("id"), str) and row.get("ev") in ("open", "link", "done", "drop"):
+        if isinstance(row, dict) and isinstance(row.get("id"), str) and row.get("ev") in ("open", "link", "done", "drop", "reopen"):
             out.append(row)
     return out
 
@@ -79,6 +80,9 @@ def fold(rows):
             q = out[r["id"]]
             if r["ev"] == "link":
                 q["links"].append(r.get("to"))
+            elif r["ev"] == "reopen":
+                q["status"] = "open"
+                q.pop("closed", None), q.pop("note", None)
             else:
                 q.update(status=r["ev"], closed=r.get("ts"), note=r.get("evidence") or r.get("reason"))
     return out
@@ -118,6 +122,18 @@ def close(rid, ev, note=None, to=None, now=None):
             row["evidence" if ev == "done" else "reason"] = fleet.mask(note, NOTE_MAX)
         return [row]
     return _append(make)[0]
+
+
+def reopen(rid, now=None):
+    """Open a closed request again. Refuses an unknown id; one already open is left as it is."""
+    t = now or fleet.utcnow()
+
+    def make(rows):
+        q = fold(rows).get(rid)
+        if not q:
+            raise ValueError(f"no request {rid}")
+        return [] if q["status"] == "open" else [{"ev": "reopen", "id": rid, "ts": fleet.iso(t)}]
+    return _append(make)
 
 
 def age_min(q, now):

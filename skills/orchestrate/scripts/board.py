@@ -18,6 +18,7 @@ import fleet
 import acks
 import owner_requests
 import stages
+import tidy
 from stages import with_descendants
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "brief" / "scripts"))
@@ -384,6 +385,7 @@ def fleet_rows(state, leads, board_rows):
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else s.get("task_title") or s.get("name")
         rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid, 80), "status": status, "next": one_line(nxt, 120),
+                     "session": s.get("id"),
                      # a lead's digest links its cards' PRs, which are the cards' rows
                      "pr": pr_of.get(s.get("id")) or (rep.get("pr") if kind != "lead" else None),
                      "reported_at": max(filter(None, (s.get("last_activity"), rep.get("at"))), default=None), "parent": parent,
@@ -418,6 +420,12 @@ def fleet_rows(state, leads, board_rows):
     return rows, order
 
 
+def item_of(r):
+    """The tidy id a row is closed by: its card for a fleet row, else the board row."""
+    return f"card:{r['session']}" if r.get("session") else f"row:{r['id']}"
+
+
+GENERIC_NEXT = {nxt for _, nxt in PHASE_ROW.values()} | {""}
 DECISION_FORM = "<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <default>"
 
 
@@ -486,6 +494,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     live = None if state is None else {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
+    shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
+    for rid, r in store["rows"].items():
+        # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
+        if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
+            r["linked"] = card["id"]
+            r["pr"] = r.get("pr") or card["pr"]
     if fill:
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"])
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
@@ -515,17 +529,28 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         """(status, next, stale suffix) after the PR join and the session check."""
         status, nxt = r["status"], r.get("next") or ""
         p = prs.get(r.get("pr"))
+        tid = item_of(r)
         # The row's own PR outranks what the board says of it: GitHub has moved on since the row was written.
-        if p and (p.get("merged_at") or p.get("state") == "MERGED"):
+        if p and (p.get("merged_at") or p.get("state") == "MERGED") or tid in shut:
             status, nxt = "done", ""
         elif p and p.get("state") == "CLOSED":
             status, nxt = "held", "PR 닫힘"
+        # A card with no agent left and its PR still open waits on what the PR waits on, not on the card.
+        quiet = r.get("session") and status == "held" and p and p.get("state") == "OPEN" and nxt
+        if quiet:
+            status = "check" if p.get("draft") else "waiting"
+            if p.get("draft"):
+                waits[r["id"]] = {"why": f"{quiet} · PR 초안"}
         lead = store["leads"].get(lead_of(r)["id"])
         if status == "moving" and live is not None and lead and not lead.get("closed_at") and lead["handle"] not in live:
             status, nxt = "blocked", "세션 없음"
         if status in ("waiting", "owner"):
             status, waits[r["id"]] = blocker(r, status, p, me)
             waits[r["id"]].setdefault("since", r.get("since") or (p or {}).get("created"))
+            if quiet and waits[r["id"]].get("why") == "누구 대기인지 기록 없음":
+                waits[r["id"]]["why"] = f"{quiet} · PR {pr_state(p)}"
+        if status == "moving" and (v := verdicts.get(tid)) and v["verdict"] == "check":
+            status, waits[r["id"]] = "check", {"why": v["evidence"]}
         suffix = ""
         at = fleet.parse(r.get("reported_at"))
         limit = (lead or {}).get("stale_after_min") or limits["row_min"]
@@ -686,6 +711,26 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     lines[:] = [l for i, l in enumerate(lines) if i not in gone]
     sections[:] = [s for s in sections if any(l["sec"] == s for l in lines) or any(b == s for b, _ in bullets)]
 
+    # A doing item about a card that has a row is that row: one line, with the doing item's next step when the card's
+    # own says no more than its session's phase.
+    card_line = {c: l for l in lines if (r := rows.get(l["key"])) and (c := r.get("session") or r.get("linked"))}
+    doing = []
+    for d in store["doing"]:
+        iid, card = tidy.item_id("doing", d), tidy.named(f"{d['title']} {d['next']}", cards)
+        if iid in shut:
+            continue
+        if (card and (l := card_line.get(card["id"])) and not d.get("waiting") and not is_owner(d["owner"], me)
+                and iid not in verdicts):
+            if l["own"] == "moving" and l["next"] in GENERIC_NEXT:
+                l["next"] = d["next"]
+            continue
+        doing.append((iid, d))
+    later = []
+    for l in reversed(store["later"]):  # a held item written twice before later_add merged them: the newest wording
+        if tidy.item_id("later", l) not in shut and not any(same_later(l, k) or work_key(l) == work_key(k) for k in later):
+            later.insert(0, l)
+    todos = [t for t in store["owner_todo"] if tidy.item_id("todo", t) not in shut]
+
     # A section's merge target is the base most of its PRs share; a row with another base names its own.
     bases = {}
     for sec in sections:
@@ -830,13 +875,18 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             theirs.append(theirs_item(rev, f"리뷰 {nums}", w["since"], w["unblocks"], "", [i["pr"] for i in items]))
         else:
             moving.append(f"{ICON[st]} {w['unblocks']} — 확인 필요: {w['why']}")
-    for d in store["doing"]:
+    for iid, d in doing:
         if is_owner(d["owner"], me):
             turn.append(turn_item(d["next"], "", d["title"]))
         elif d.get("waiting"):
             theirs.append(theirs_item(d["owner"], "", d.get("since"), d["title"], d["next"]))
+        elif (v := verdicts.get(iid)) and v["verdict"] == "check":
+            moving.append(f"{ICON['check']} {d['title']} — 확인 필요: {v['evidence']} · {d['owner']}")
         else:
             moving.append(f"{ICON['moving']} {d['title']} — {d['next']} · {d['owner']}")
+    for l in later:
+        if (v := verdicts.get(tidy.item_id("later", l))) and v["verdict"] == "check":
+            moving.append(f"{ICON['check']} {l['title']} — 확인 필요: {v['evidence']}")
 
     for sec in sections:
         repo, prog = sec
@@ -889,19 +939,26 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             items.append(text + (" (지난 보고와 동일)" if d["id"] in asked else ""))
         items += [f"{i}. {one_line(d, 400)}" for i, d in enumerate(own, len(decisions) + 1)]
         out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
-    todo = store["owner_todo"] + turn
+    todo = todos + turn
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
     shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
     if asked := owner_requests.line(owner_requests.summary(now, shown)):
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
-    later = []
-    for l in reversed(store["later"]):  # a held item written twice before later_add merged them: the newest wording
-        if not any(same_later(l, k) or work_key(l) == work_key(k) for k in later):
-            later.insert(0, l)
-    if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later])):
+    fired = {tidy.item_id("later", l) for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") == "check"}
+    if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later if tidy.item_id("later", l) not in fired])):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
+    opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
+              for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
+    opened += [{"id": i, "kind": "doing", "label": d["title"], "status": "moving"} for i, d in doing]
+    opened += [{"id": tidy.item_id("later", l), "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held"}
+               for l in later]
+    opened += [{"id": tidy.item_id("todo", t), "kind": "todo", "label": t, "status": "owner"} for t in todos]
+    for o in opened:
+        v = verdicts.get(o["id"]) or {}
+        o["check"] = v.get("evidence") if v.get("verdict") == "check" else None
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
+            "open": opened,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
 
 
@@ -913,6 +970,13 @@ def reap_line(now):
     except ImportError:  # an install without the repo's scripts/
         return None
     return reap_hard.last_line(now.timestamp())
+
+
+def close(ids, undo=False, why=None):
+    """Close board items, rows and cards (tidy.py), or reopen them: `orch board done|reopen` and the dashboard's
+    buttons. Only what the report lists as open now can be closed."""
+    can = None if undo else {o["id"]: o["label"] for o in render(fill=True)["open"]}
+    return tidy.write(ids, undo=undo, why=why, can=can)
 
 
 def commit(scope, snapshot):

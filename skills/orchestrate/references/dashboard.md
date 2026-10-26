@@ -102,13 +102,22 @@ A session's dot has one colour per phase on every screen (sidebar, Moving now, S
 | `approval` | A pending Orca decision gate, or a finished turn that ends asking for a decision |
 | `login`, `run_command`, `verify_failed`, `verify_ok` | A finished turn that ends asking you to log in, to run something yourself, or reports a verification that failed or passed |
 | `changes_requested`, `review_comment_received`, `ci_failed`, `approval_stale`, `ready_to_merge` | A PR owned by a session has a change request, unresolved review threads from a person (bots are left out unless `bots_in_inbox`), failing CI, only approvals on an older commit, or a current approval with passing CI |
-| `sync_stalled`, `reload_pending` | Skill sync reported failure or went quiet for two intervals, or a reload could not be sent to a session |
+| `sync_stalled`, `reload_pending` | Skill sync reported failure or went quiet for two intervals, or a reload the dashboard's retries could not send to an idle session (below) |
 | `selfcheck` | The dashboard's own state disagrees with a fresh read of Orca and GitHub (below) |
 | anything else | Added by the orchestrator with `orch-dash inbox add` |
 
+Needs you is sorted by rank, newest first within a rank (`NEEDS_RANK` in `scripts/fleet.py`):
+
+| Rank | Types |
+|---|---|
+| 0, only you can settle it | `decision`, `approval`, `permission`, `prompt`, `question`, `login`, `run_command` |
+| 1, a merge call waiting on you | `ready_to_merge` |
+| 2, the rest | every other type |
+| 3, held | a PR item whose PR a held board item (`orch board later`) names in its title by its full `owner/repo#N`. It shows `held` and the item's trigger, and returns to its own rank when the item is dropped or closed, when its `--due` or the date in its trigger (`M/D` or `YYYY-MM-DD`, optional `HH:MM`, local time) comes, or, with no date, when every PR its trigger names has merged |
+
 The turn-based types read only the last lines of the agent's final message that Orca already reports, with fixed patterns, so they are a hint, not a verdict. Items backed by a live condition (a waiting prompt, unanswered mail, an open decision, a pending gate, a PR's state) disappear when it clears; added items stay until dismissed or resolved, or for 7 days after they were added (`EXTERNAL_KEEP_DAYS` in `scripts/fleet.py`; an `inbox_aged_out` event on the timeline marks the day one leaves); `orch-dash inbox list` prints every unresolved one, older ones included. A turn-based item goes when its agent's pane gets a later prompt or starts a later turn (someone already replied there), when the same agent finishes a later turn (what it asked for was dealt with, or the new turn raises it again), when Orca no longer lists its worktree, when its session has had no agent to answer it for 10 minutes (counted only in reads that found some agent, as an empty read is more likely a bad one), or when every PR its message names (`owner/repo#n` or a PR URL; a bare `#n` may be a step number and names none) is merged or closed in the PR cache (a PR the cache does not know keeps it); each such close is an `item_resolved` event on the timeline naming the rule (`answered`, `superseded`, `session_gone`, `agent_gone`, `prs_closed`). A prompt in another pane of the same session does not close it. An `approval`, `question`, `login`, `run_command` or `verify_failed` item raised before the session's latest prompt is **missed**: the inbox pins it to the top with a red edge, because typing the next prompt usually means the question above it went unanswered.
 
-A session's **badge** is the number of Needs you items on it, the same list its session page shows. The badges plus the items that belong to no session (sync health, items added without a session) are exactly the Inbox count, and every item is a live condition (or an open turn-based item), so the two never disagree. Nothing local such as a "last opened" mark hides an item from the count: an item leaves only when what it points at settles, it is answered, or it is dismissed; the human never has to clear what reality already settled. A `reload_pending` item sits on the session of the terminal the reload could not reach, titled with that terminal; one for a terminal Orca no longer lists is dropped. skills-sync retries only every 15 minutes, so after each collect the dashboard sends the reload again itself, through skills-sync's own `broadcast --only` (same lock and idle checks), to each pending terminal whose session is idle, at most once every 2 minutes per terminal; once it lands, skills-sync takes it out of `reload-pending.json` and the item goes. Orca's own per-worktree unread flag is a yes/no without a count, so it is not used.
+A session's **badge** is the number of Needs you items on it, the same list its session page shows. The badges plus the items that belong to no session (sync health, items added without a session) are exactly the Inbox count, and every item is a live condition (or an open turn-based item), so the two never disagree. Nothing local such as a "last opened" mark hides an item from the count: an item leaves only when what it points at settles, it is answered, or it is dismissed; the human never has to clear what reality already settled. A reload skills-sync could not send is retried before it is yours. skills-sync retries only every 15 minutes, so after each collect the dashboard sends the reload again itself, through skills-sync's own `broadcast --only` (same lock and idle checks), to each pending terminal whose session is idle, at most once every 2 minutes per terminal. A terminal that stays busy is not retried and gets the reload once it is idle, so it is nobody's to fix. Only when an idle terminal refuses `reload_alert_tries` retries in a row (config, default 3; the count starts over when the collector starts) does the reload become a `reload_pending` item, on the session of the terminal it could not reach and titled with that terminal; one for a terminal Orca no longer lists is dropped. Once it lands, skills-sync takes it out of `reload-pending.json`, the item goes, and the timeline gets an `item_resolved` line (`reload_delivered`, or `reload_dropped` when the terminal is gone). Orca's own per-worktree unread flag is a yes/no without a count, so it is not used.
 
 ### Self-check
 
@@ -186,6 +195,36 @@ orch-dash acks [--all] [--json]                 # what is acked; --all adds what
 Only what is over can be acked, and the check is the server's, not the page's: a Work row with `done_at` whose rows below are done too, a brief row that is ✅ and, for a head row, every sub-task row under it. A row in progress, waiting on someone, held (a row whose PR closed unmerged is ⏸️ `PR 닫힘`) or asking for a decision is refused with the reason, and the rest of a batch still goes in (the command exits 1 when any id was refused). Requests are the owner's own, so every one still shown (open and not expired) can be acked. An ack hides, it does not close: an acked request is still open in `orch req list` and in the orchestrator's or lead's hook reply, an acked stage row is still in `stages.json` until its 7 days are up. Acking a request does not close it; `orch req done r7` (or `drop`) does. An ack holds only while what it hid is still over: a new open row under an acked group or head row shows it again, and it hides again once that row is done too.
 
 Where it shows: the Work toolbar and the Your requests card get `Ack all N` and `Show N acked`, each finished row and each request an `Ack` button (`Unack` while shown); acked rows under an acked group hide with it (`GET /api/fleet/work` marks each row with `ack`, one of `acked`, `ackable` or null, and `hidden`). The Brief page lists the report's finished rows in a Finished rows card with the same buttons. `orch brief render` leaves acked rows out of its tables (a repository left with no rows loses its table), says `확인함으로 숨긴 행 N` in the headline (acked rows leave before the 24 h fold, so `접음 완료 N` counts only rows not acked), counts only unacked requests in `📝 요청`, and its `--json` carries `done`: every ackable row with `id`, `label`, `at` and `acked`.
+
+### Closing what is over
+
+An ack hides a row that is already ✅. What is over but never turns ✅ by itself would otherwise stay listed: a doing item whose card's PR merged, a card with no agent left listed under 보류 as `세션 꺼짐`, a held item whose trigger already fired, a moving row nobody has touched in half a day, an inbox item about a PR that has merged. `scripts/tidy.py` closes these on evidence, and the owner closes the rest by hand. Every close goes to `tidy.jsonl` in the state directory (0600, append-only, `{ev: "done"|"reopen", id, ts, by: "auto"|"owner", rule, evidence, label}`; an id's state is its last line). Labels and evidence are masked, never shortened; a `--why` that would push a line past 4 KiB is refused. Past 5 MB the file moves to `tidy.jsonl.1` and each id's last line is copied into the new file (`carried: true`, left off the timeline), so a close or reopen outlives the rotation.
+
+```sh
+orch board open [--json]                     # what can be closed now, with the 확인 필요 reason where there is one
+orch board done row:lead-a card:<session> doing:<k> later:<k> todo:<k> [--why TEXT]
+orch board reopen doing:<k> ext:<key> req:<id> # undo; the tick does not close it again on the same evidence
+orch board tidy [--dry-run] [--json]         # one pass of what the collector runs after every tick
+orch board closed                            # every close with its rule and evidence
+```
+
+Ids: `row:<board row>`, `card:<session id>` for a row built from a session, and `doing:`, `later:`, `todo:` with a digest of the item's words (rewording an item makes a new one). The CLI is the record; the Brief page's Open items card has a `Done` button per row, card and board item, and its Closed in the last 7 days card a `Reopen` per close that can be undone, both through `POST /api/fleet/done` (same Host, Origin and token guard as acks). Only what `orch board open` lists can be closed; anything else is refused with the reason. The tick also closes `ext:<inbox key>` and `req:<request id>`: reopening one adds the inbox item again or opens the request again with its links, and one whose inbox line or request is gone has no `Reopen`.
+
+The collector runs `tidy.run()` after each tick, so nobody has to ask. It closes only on evidence it can check, and a text names a PR only by its full `owner/repo#N` (a bare `#N` could be any repository's) and a card only by its hyphenated name standing alone in the text, one card at most:
+
+| What | Closed when | Only marked 확인 필요 when |
+|---|---|---|
+| A doing item | every PR it names, or its card's PR, merged | the card still works, or its next step has a step after the merge (a release, a deploy, an apply) |
+| A card row (no agent, or its session off) | its PR closed unmerged | — |
+| An owner to-do line | every PR it names merged or closed | — |
+| An inbox item from `orch-dash inbox add`, of a type the owner does not act on | every PR it names merged or closed, or its session is gone from Orca's list | — |
+| A request (`orch req`) with links | every link is over and one of them was closed here (a board row or card); the fleet tick's own request pass closes the rest | — |
+| A held item | never: a fired trigger means the work is due | its trigger says merge and every PR or card it names merged; it moves from 보류 to 진행 중 |
+| A moving board row | never | no word for 8 hours, no PR, and no card that has one or still works |
+
+What the owner or another person acts on is never closed by the tick: a doing item waiting on a person (`--waiting`) or the owner's, a decision, an added inbox item of type `approval`, `run_command`, `login`, `verify_failed`, `question` or `decision` (whatever its PR or session), and a row whose status is the owner's turn or another person's wait. Anything less certain stays, marked 확인 필요 at most, since closing something still open costs more than listing something finished. A decision closes when it is answered and a Needs you item backed by a live condition (a prompt, mail, a gate, a PR) leaves when the condition clears. A `run_command` item stays until resolved: nothing here can tell that a command was run.
+
+The report reads the same file and evidence. A closed item leaves 진행 중, 보류 and 지금 오너가 할 일; a closed row or card is ✅, so the ack and the done-row rules take it from there. A card with no agent and an open PR shows what the PR waits on (a requested reviewer under 다른 사람 대기, a draft or no reviewer as 확인 필요 `세션 꺼짐 · PR ✓`) instead of `⏸️ 세션 꺼짐`. A board row about a card (its id or title is the card's name) takes the card's PR, so the card is not listed a second time, and a doing item about a card that has a row is that row's line, with the doing item's next step when the card's says only `작업 중` or `턴 종료`. The collector keeps every PR the board, its items or the inbox names in `prs.json` after the search stops finding it, so such a row shows its state instead of `?`. Each close is a `tidy_done_auto` (or `tidy_done`, `tidy_reopen`) line on the timeline, naming the item, the rule and the evidence.
 
 ### The stage table
 
@@ -279,7 +318,7 @@ The optional config is `$ORCH_FLEET_CONFIG` or `~/.config/agent-skills/dashboard
 
 ```json
 {"root_worktree": "<orca worktree id>", "adopt": {"write_orca_parent": false},
- "include_main_worktrees": false, "bots_in_inbox": false}
+ "include_main_worktrees": false, "bots_in_inbox": false, "reload_alert_tries": 3}
 ```
 
 Everything collected passes through one masking step before it is written or shown: GitHub, Slack, Anthropic, OpenAI and AWS token shapes, JWTs, `Authorization`/`Bearer` values, and `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_API_KEY`, `*_CUSTOM_HEADERS` assignments. No credential is read or stored: `gh` uses its own login. `ORCH_FLEET=off` turns the fleet collector off; `orch-dash demo` and the tests point `ORCH_FLEET_STATE` at a temporary directory and replay an invented machine.

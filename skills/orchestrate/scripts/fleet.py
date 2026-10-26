@@ -1023,6 +1023,16 @@ def pr_refs(text):
     return sorted({pr_key(m[1], m[2]) if m[1] else pr_key(m[3], m[4]) for m in PR_REF_RE.finditer(text or "")})
 
 
+def board_prs():
+    """The PR keys board.json's rows name, and every full owner/repo#N in its doing, later and owner_todo text and in
+    the external inbox."""
+    b = read_json(state_dir() / "board.json", {}) or {}
+    text = [f"{d.get('title')} {d.get('next')}" for d in b.get("doing") or []]
+    text += [f"{l.get('title')} {l.get('trigger')}" for l in b.get("later") or []] + list(b.get("owner_todo") or [])
+    text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({})]
+    return ({r.get("pr") for r in (b.get("rows") or {}).values() if isinstance(r, dict)} | set(pr_refs(" ".join(text)))) - {None}
+
+
 def pr_query(keys, body):
     parts = []
     for i, k in enumerate(keys):
@@ -1405,13 +1415,16 @@ class Fleet:
             except SourceError as e:
                 errors.append(f"search: {e}")
         live = {f"{s['gh_repo']}@{s['branch']}" for s in sessions.values()}
-        self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or not searched}
+        # A PR the board or the inbox names stays known after the search stops finding it, so a row about it shows
+        # its state, not "?", and tidy.py can close what it carried.
+        named = board_prs() - set(owner_of) - set(swept)
+        self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or k in named or not searched}
         self.branch_pr = {k: v for k, v in self.branch_pr.items() if k in live}
         # 3. Probe every PR whose tier says it is due, or that the search saw updated; 4. detail for the ones that
         # changed. An open page puts a session's PRs on the hot tier and opening it probes them at once; the rest of
         # mine (a hundred or more, 5 s per 25) keep their tier, which is there for CI moves that leave updatedAt alone.
         due = []
-        for k in list(owner_of) + [k for k in swept if k not in owner_of]:
+        for k in list(owner_of) + [k for k in swept if k not in owner_of] + sorted(named):
             sid, entry = owner_of.get(k), self.prs.get(k)
             det = (entry or {}).get("detail")
             # A detail read before "base" was collected is read again now, so a merged PR does not wait a day for it.
@@ -1660,14 +1673,31 @@ class Fleet:
                 self.event({"at": iso(now), "kind": "inbox_aged_out", "session": i.get("session"),
                             "text": mask(f"{i['title']} (added {EXTERNAL_KEEP_DAYS}+ days ago; orch-dash inbox list)", 200)})
         mem["external_aged"] = [i["key"] for i in aged]
-        items += kept + sync_items(now, terms) + list(self.checks)
+        syncs, tries = sync_items(now, terms), cfg.get("reload_alert_tries", RELOAD_ALERT_TRIES)
+        failed = {i["terminal"] for i in syncs if i["type"] == "reload_pending"}
+        for h in [h for h in RELOAD_FAILS if h not in failed]:
+            del RELOAD_FAILS[h]
+        for h, title in (mem.get("reload_shown") or {}).items():
+            if h not in failed:
+                self.event({"at": iso(now), "kind": "item_resolved", "session": (terms.get(h) or (None,))[0],
+                            "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
+        syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
+        mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
+        items += kept + syncs + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
         dismissed, raw_keys = mem.setdefault("dismissed", {}), {it["key"] for it in items}
         items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
                  for it in items if it["key"] not in dismissed]
+        import tidy
+        held = held_prs(read_json(state_dir() / "board.json", {}) or {}, tidy.closed(),
+                        {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}, now)
+        for i in items:
+            if i.get("source") == "github" and i.get("pr") in held:
+                i["held"] = held[i["pr"]]
         items.sort(key=lambda i: i.get("at") or "", reverse=True)
+        items.sort(key=needs_rank)
         # A session's badge counts exactly the Needs you items on it, so the badges and the inbox always agree:
         # the badges plus the items that belong to no session are the inbox. No local "seen" mark hides any.
         for i in items:
@@ -1688,7 +1718,7 @@ class Fleet:
         for store in (prompts, phases):
             for k in [k for k in store if k not in panes]:
                 del store[k]
-        timeline = list(self.events)
+        timeline = list(self.events) + tidy.timeline()
         timeline += [{"at": m.get("created_at"), "kind": f"mail_{m.get('type')}", "session": by_handle.get(m.get("from_handle")),
                       "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]
                      if m.get("type") != "heartbeat"]  # one every 5 min per worker: it would bury everything else
@@ -1825,6 +1855,54 @@ def sync_items(now, terms=None):
 
 RELOAD_RETRY_S = 120
 RELOAD_TRIED = {}  # handle -> monotonic time of the last retry
+RELOAD_FAILS = {}  # handle -> the dashboard's retries in a row the terminal refused, though idle
+RELOAD_ALERT_TRIES = 3  # config reload_alert_tries: refused this often, a reload needs a person. Until then it is
+# being retried (a busy terminal is not retried at all, and gets the reload once it is idle), not waiting on anyone
+
+# Needs you order, newest first within a rank: what only the owner can settle, then a merge call waiting on them, then
+# the rest; a PR item a held board item names is last, until the hold lifts.
+NEEDS_RANK = {"decision": 0, "approval": 0, "permission": 0, "prompt": 0, "question": 0, "login": 0, "run_command": 0,
+              "ready_to_merge": 1}
+HELD_RANK = 3
+DATE_RE = re.compile(r"(?<![\d.])(?:(\d{4})-)?(\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?(?![\d/])")
+
+
+def needs_rank(item):
+    return HELD_RANK if item.get("held") else NEEDS_RANK.get(item["type"], 2)
+
+
+def trigger_at(text, now):
+    """The moment a held item's words name, M/D or YYYY-MM-DD with an optional HH:MM in local time, or None. A M/D
+    half a year behind now is next year's."""
+    m = DATE_RE.search(text or "")
+    if not m:
+        return None
+    y, mo, d, h, mi = m.groups()
+    local = now.astimezone()
+    try:
+        t = local.replace(year=int(y) if y else local.year, month=int(mo), day=int(d), hour=int(h or 0),
+                          minute=int(mi or 0), second=0, microsecond=0)
+    except ValueError:
+        return None
+    return t.replace(year=t.year + 1) if not y and t < local - dt.timedelta(days=180) else t
+
+
+def held_prs(store, shut, prs, now):
+    """PR key -> the hold, for each PR a held board item's title names by its full key. The hold lifts when the item
+    is dropped or closed (tidy), when its --due or the date in its trigger comes, or, with no date, when every PR its
+    trigger names has merged."""
+    import tidy
+    out = {}
+    for l in store.get("later") or []:
+        if tidy.item_id("later", l) in shut:
+            continue
+        at = parse(l.get("due")) or trigger_at(l.get("due"), now) or trigger_at(l["trigger"], now)
+        at = at and (at if at.tzinfo else at.astimezone())  # a bare date is local time
+        if at and at <= now or not at and tidy.refs_over(pr_refs(l["trigger"]), prs):
+            continue
+        for k in pr_refs(l["title"]):
+            out.setdefault(k, l["trigger"] + (f" · {l['due']}" if l.get("due") else ""))
+    return out
 
 
 def retry_reloads(sync=None):
@@ -1844,6 +1922,9 @@ def retry_reloads(sync=None):
         with contextlib.redirect_stdout(io.StringIO()):
             if sync.broadcast(None, False, only=h) == 0:
                 done.append(h)
+                RELOAD_FAILS.pop(h, None)
+            else:
+                RELOAD_FAILS[h] = RELOAD_FAILS.get(h, 0) + 1
     return done
 
 

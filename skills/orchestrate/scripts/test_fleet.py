@@ -95,12 +95,46 @@ ss = {s["id"]: s for s in st["sessions"]}
 assert ss["wt-export"]["unread"] == 3 and not items(st, "ci_failed"), (ss["wt-export"], items(st, "ci_failed"))
 badges_agree(st)
 
+# Needs you order: what only the owner settles, then a merge call waiting on them, then the rest; newest first in each.
+ranks = [fleet.needs_rank(i) for i in items(st)]
+assert ranks == sorted(ranks) and ranks.count(0) == 5 and ranks.count(1) == 1, [(i["type"], r) for i, r in zip(items(st), ranks)]
+for r in set(ranks):
+    ats = [i.get("at") or "" for i in items(st) if fleet.needs_rank(i) == r]
+    assert ats == sorted(ats, reverse=True), (r, ats)
+assert [i["type"] for i in items(st)][5] == "ready_to_merge"
+# A PR a held board item names goes last, marked with the hold, until its date comes or the item leaves the board.
+board_path, ahead = state_dir / "board.json", (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
+
+
+def hold(trigger):
+    fleet.write_atomic(board_path, json.dumps({"doing": [], "owner_todo": [], "rows": {},
+                                               "later": [{"title": "acme/launchpad#42 마무리", "trigger": trigger}]}))
+    return f.tick(force=True)
+
+
+st = hold(f"{ahead} 이후")
+pr42 = [i for i in items(st) if i.get("pr") == "acme/launchpad#42"]
+assert pr42 and all(i["held"] == f"{ahead} 이후" for i in pr42) and items(st)[-len(pr42):] == pr42, [(i["type"], i.get("held")) for i in items(st)]
+assert not any(i.get("held") for i in items(st) if i.get("pr") != "acme/launchpad#42")
+st = hold((now - dt.timedelta(days=1)).astimezone().strftime("%m/%d") + " 이후")
+assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
+st = hold("acme/launchpad#41 머지 뒤")  # no date: held while the PR its trigger names is open
+assert all(i.get("held") for i in items(st) if i.get("pr") == "acme/launchpad#42")
+board_path.unlink()
+st = f.tick(force=True)
+assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
+assert fleet.trigger_at("2026-11-02 14:30", now).strftime("%Y-%m-%d %H:%M") == "2026-11-02 14:30"
+assert fleet.trigger_at("v1.2 배포 뒤", now) is None and fleet.trigger_at("acme/app#9 머지 뒤", now) is None
+
 # A reload skills-sync could not send sits on its terminal's session (and counts there), titled with the terminal;
 # one for a terminal Orca no longer lists is gone.
 pending_path = state_dir.parent / "reload-pending.json"
 fleet.write_atomic(pending_path, json.dumps({"since": "t1", "failed": {
     "term_login": {"reason": "composer holds a draft"}, "term_export": {"reason": "title shows the agent is busy"},
     "term_gone": {"reason": "x"}}}))
+st = f.tick(force=True)
+assert not items(st, "reload_pending"), "still being retried: not the owner's yet"
+fleet.RELOAD_FAILS.update(term_login=fleet.RELOAD_ALERT_TRIES, term_export=fleet.RELOAD_ALERT_TRIES)
 st = f.tick(force=True)
 assert sorted((i["session"], i["title"], i["detail"]) for i in items(st, "reload_pending")) == [
     ("wt-export", "Reload not sent: ◑ ACME-102", "title shows the agent is busy"),
@@ -134,6 +168,32 @@ assert [i["session"] for i in items(st, "reload_pending")] == ["wt-export"], ite
 fleet.RELOAD_TRIED.clear()
 pending_path.unlink()
 assert fleet.retry_reloads(fake) == [] and len(fake.calls) == 1
+st = f.tick(force=True)
+assert any(e["kind"] == "item_resolved" and e["text"] == "reload_delivered: Reload not sent: ◑ ACME-102" for e in st["timeline"])
+# A reload is the owner's only once the idle terminal refused the dashboard's retry reload_alert_tries times in a row,
+# and it leaves with a timeline line when it is delivered.
+class Refusing(FakeBroadcast):
+    def broadcast(self, kind, dry_run, only=None):
+        self.calls.append(only)
+        return 1
+
+
+fleet.write_atomic(pending_path, json.dumps({"since": "t2", "failed": {"term_login": {"reason": "prompt box not recognized"}}}))
+refusing = Refusing()
+for n in range(fleet.RELOAD_ALERT_TRIES):
+    assert not items(f.tick(force=True), "reload_pending"), n
+    fleet.RELOAD_TRIED.clear()
+    assert fleet.retry_reloads(refusing) == []
+assert refusing.calls == ["term_login"] * fleet.RELOAD_ALERT_TRIES
+st = f.tick(force=True)
+assert [i["session"] for i in items(st, "reload_pending")] == ["wt-login"], items(st, "reload_pending")
+delivered = lambda st: sum(e["kind"] == "item_resolved" and e["text"] == "reload_delivered: Reload not sent: ✳ ACME-101"  # noqa: E731
+                           for e in st["timeline"])
+n = delivered(st)
+pending_path.unlink()
+st = f.tick(force=True)
+assert not items(st, "reload_pending") and delivered(st) == n + 1
+assert delivered(f.tick(force=True)) == n + 1, "once"
 
 # A push after approval, and CI recovering, become PR events for the platform side and new inbox state.
 world.advance()
@@ -815,6 +875,15 @@ assert f.sources["github"]["ok"] is False
 del world.prs[8]
 f.graphql = counting
 assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "closed or gone from the search: off the page"
+# Unless the board names it: a row about a PR the search no longer finds still gets its state, not "?".
+world.prs[8] = dict(world.prs[7], number=8, state="CLOSED", url="https://github.com/acme/tools/pull/8")
+fleet.write_atomic(state_dir / "board.json", json.dumps({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}},
+                                                        "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]}))
+assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
+assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
+(state_dir / "board.json").unlink()
+del world.prs[8]
+assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "off the board: the search decides again"
 # Few GraphQL points left: the PR tick waits (up to 15 min) instead of spending them.
 f.rate, f.last["prs"] = 100, fleet.time.monotonic() - 100
 probed.clear()
@@ -827,7 +896,7 @@ f.graphql = real_gql
 # Items settled in reality leave on their own. A turn item goes once its pane gets a later prompt or starts a later
 # turn, once the same agent finishes a later turn, or once its worktree is gone.
 def resolved(st):
-    return {e["text"].split(":")[0] for e in st["timeline"] if e["kind"] == "item_resolved"}
+    return {e["text"].split(":")[0] for e in st["timeline"] if e["kind"] == "item_resolved"} - {"reload_delivered", "reload_dropped"}
 
 
 scratch = world.worktrees[4]["agents"][0]
