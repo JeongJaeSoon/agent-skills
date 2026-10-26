@@ -135,7 +135,7 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool
-            in your scratch directory, never quoted: a hook that matched the command's text blocks
+            outside your worktree, in the scratch or temporary directory your brief names, never quoted: a hook that matched the command's text blocks
             a message quoting it. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops

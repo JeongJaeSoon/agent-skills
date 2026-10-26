@@ -10,8 +10,8 @@ PROGRAM: <slug>
 
 GOAL        One sentence: the outcome, executable by someone with no access to this chat.
 SCOPE       Paths this unit may write and paths it may not. Its own worktree and branch.
-            Scratch root: <the one path outside the worktree it may write: the files its refusal
-            reports carry (FORBIDDEN), and e.g. a directory a VM or container mounts>.
+            Scratch root: <none, or the one path outside the worktree it may write, e.g. a
+            directory a VM or container mounts>.
             Downloaded logs and artifacts go to <approved system temporary directory>, outside
             every git worktree. Resolve the platform temporary root (for example TMPDIR) and
             name a task-specific directory in this SCOPE; do not assume an unset variable is a path.
@@ -110,7 +110,7 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool
-            in your scratch directory, never quoted: a hook that matched the command's text blocks
+            outside your worktree, in the scratch or temporary directory your brief names, never quoted: a hook that matched the command's text blocks
             a message quoting it. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
