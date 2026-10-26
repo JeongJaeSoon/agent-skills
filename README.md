@@ -76,6 +76,8 @@ HOTL에서 사람이 보는 곳은 `brief`의 현황 보고와 대시보드의 �
 | [글쓰기](docs/skills.md#글쓰기) | `brief`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
 | [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고. 원본 이름을 유지해 upstream을 따라간다 |
 
+여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 이름·시작 명령·`ROLE` 줄은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles), Orca의 "coordinator"와의 대응도 거기에 있다.
+
 pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔다.
 
 ## 문서

@@ -2,8 +2,8 @@
 """SessionStart (startup, resume, compact, fork) and UserPromptSubmit hook of the agent-skills plugin: tells an
 orchestrator or a lead what it runs.
 
-After an automatic compaction a coordinator kept draining its inbox but dropped a step it had run for hours
-(removing each landed card), and eight cards stayed open. A top-level coordinator never loaded orchestrate for days
+After an automatic compaction a lead kept draining its inbox but dropped a step it had run for hours
+(removing each landed card), and eight cards stayed open. An orchestrator never loaded orchestrate for days
 and answered progress questions by investigating on its own: it was judged by its terminal handle, which went stale
 when the session resumed in another terminal, and the one injection it did get was buried under the next request.
 

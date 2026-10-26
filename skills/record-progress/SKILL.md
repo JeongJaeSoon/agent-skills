@@ -77,7 +77,7 @@ still investigating. Record when one of these happened:
   decision, made under the user's chat rules.
 - **Inside a program or brief,** follow what it says the worker records. A worker still makes
   its milestone moves (`deliver-ticket`), files no follow-ups (they go in its `worker_done`),
-  and leaves Reconcile and epic upkeep to the coordinator.
+  and leaves Reconcile and epic upkeep to the lead.
 - **Once.** When the latest comment already says it, do not post it again; `deliver-ticket`
   may have recorded the milestone already.
 

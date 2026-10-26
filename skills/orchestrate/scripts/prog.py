@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Program bookkeeping for orchestrate: the numbers a coordinator decides from.
+"""Program bookkeeping for orchestrate: the numbers a lead decides from.
 
 Usage: orch <command> <slug> [options]
 
@@ -22,7 +22,7 @@ Usage: orch <command> <slug> [options]
   verdict <slug> --pr N --sha REVIEWED_HEAD --source WHO [--result pass|fail] [--note TEXT]
   gate <slug> --pr N [--parent TASK_ID]
                                      human-gate: open an Orca decision gate "land PR N?" on a
-                                     coordinator-owned landing Task; the user resolves it in Orca
+                                     lead-owned landing Task; the user resolves it in Orca
   dep <slug> --ticket A --after B[,C]
                                      A cannot land before B and C: a land-after edge (A stacked on
                                      B's branch), or one found after dispatch. Start-after edges are
@@ -42,7 +42,7 @@ Usage: orch <command> <slug> [options]
                                      landed, 2 yield (nothing to do yet), 3 act (fix, update or
                                      re-review now), 1 refused
   land-check <slug> --pr N [--main-fix]
-                                     readiness only, no merge (coordinator diagnostics)
+                                     readiness only, no merge (lead diagnostics)
   landed <slug> --pr N               record a merge made outside `land` and print the main-CI watch
   backfill <slug> --since ISO8601 [--dry-run]
                                      a program registered mid-flight: add the PRs merged from --since
@@ -56,7 +56,7 @@ Usage: orch <command> <slug> [options]
                                      config file in this worktree, goes to the reap ledger
                                      (compose-stack) so the janitor downs it once the card is done
   wait <slug> [--timeout-ms 540000] [--rounds 3]
-                                     coordinator only: block until the Run inbox holds actionable
+                                     lead only: block until the Run inbox holds actionable
                                      mail; acks heartbeat-only batches; never acks actionable ones
   inbox [--ack DELIVERY] [--wait] [--timeout-ms 3300000]
                                      no slug, a session without a program: ack the batch you handled,
@@ -75,7 +75,7 @@ Usage: orch <command> <slug> [options]
                                      "decision <id>: <label>" into this terminal once it is idle
   req list [--all] [--json] | link <id>... <WHERE> [--done [--evidence T]] | done <id>... --evidence T
   req drop <id>... --reason T
-                                     no slug: the owner's requests to this coordinator, logged by the
+                                     no slug: the owner's requests to this session, logged by the
                                      request_log hook from each human prompt of an orchestrator or lead.
                                      link says where they went (board row, card:<name>, owner/repo#N,
                                      ticket; nothing is written to the tracker), --done closes them too;
@@ -134,7 +134,7 @@ Usage: orch <command> <slug> [options]
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
                                      "pr_stale_min", "state_min", "done_fold_h", "stage_idle_d"}}. Exit 1 when a table is wider than 78 columns. Rows the
                                      board lacks come from the fleet's sessions (state.json): each lead the board
-                                     has no lead for, its cards and the coordinator's own cards, each with the
+                                     has no lead for, its cards and the rendering session's own cards, each with the
                                      last milestone of the report file its brief's REPORT line names. --no-fill
                                      renders the board alone
   sent add --to WHO (--text-file F | - | --text T) [--kind card|terminal|inbox|subagent|agent|slack|tracker|other]
@@ -529,7 +529,7 @@ def land_order(events, rows, cfg, when, stacks=None, deps=None):
     urgent, so nothing starves behind a stream of fresh, easy PRs. Within a class the PR that
     unblocks more open tickets goes first, then the one that has waited longest. Normal-lane PRs
     land in parallel as soon as they are ready; the order decides only who takes the exclusive
-    lane next and what the coordinator unsticks first.
+    lane next and what the lead unsticks first.
 
     A GitHub stack is one landing unit that lands from its top in one merge: a lower layer waits
     for the top while the top is not blocked, and the top is ready only when every open layer
@@ -829,7 +829,7 @@ GATE_TASK = "Land #"
 
 
 def close_gate_task(p, pr, status):
-    """No worker settles the coordinator-owned `Land #N` Task, so it would sit in `task-list --ready` for good:
+    """No worker settles the lead-owned `Land #N` Task, so it would sit in `task-list --ready` for good:
     completed when the PR lands, failed when the gate is held or the PR is closed. A new gate makes a new Task."""
     opened = [e for e in p.events() if e["ev"] == "gate_opened" and e.get("pr") == pr]
     if opened:
@@ -913,7 +913,7 @@ def stall_line(x):
 
 
 def new_stalls(pdir, renotify=dt.timedelta(minutes=30)):
-    """STALLED lines `orch wait` has not shown in the last 30 minutes. A coordinator that only loops `orch wait`
+    """STALLED lines `orch wait` has not shown in the last 30 minutes. A lead that only loops `orch wait`
     never reads `orch status`, so a stall shown only there went unseen for hours."""
     st = dash_state(pdir)
     if st is None:
@@ -1101,7 +1101,7 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order, leftover=0
 
     tickets_done is None when the tracker could not say: a current predicate_verified then decides Close.
     leftover counts released LANDED-BUT-OPEN cards; they go before spawning. While "may spawn 3 more" topped
-    them, a compacted coordinator left eight open.
+    them, a compacted lead left eight open.
     Returns (next line, share of the deadline used or None)."""
     used = None
     if cfg.get("deadline"):
@@ -1114,7 +1114,7 @@ def next_move(cfg, events, tnow, *, tickets_done, live, human, order, leftover=0
     gaps = sorted(parse_ts(b["ts"]) - parse_ts(a["ts"]) for a, b in zip(landed_recent, landed_recent[1:]))
     interval = gaps[len(gaps) // 2].total_seconds() / 60 if gaps else knob(cfg, "land_interval_minutes")
     backlog_h = len(order) * interval / 60
-    # A PR the coordinator put on hold waits on purpose; counting it would block spawning until someone closes it.
+    # A PR the lead put on hold waits on purpose; counting it would block spawning until someone closes it.
     stale = [e for e in order if e.get("age_h", 0) >= knob(cfg, "stale_hours") and not held_pr(events, e)]
     cap = cap_from(events, cfg.get("ceiling", 6))
     if stopped(events):
@@ -1147,7 +1147,7 @@ OWNED = {"approved": "land, gate", "gate_opened": "gate", "landed": "land, lande
          "lock_acquired": "land", "lock_released": "land", "dep": "dep", "config": "set"}
 
 
-# land_failed, main_red and failed verdicts are already in the ledger; a signal records what only the coordinator sees.
+# land_failed, main_red and failed verdicts are already in the ledger; a signal records what only the lead sees.
 SIGNAL_KINDS = ("human_correction", "brief_gap", "stall", "tooling")
 
 
@@ -1632,7 +1632,7 @@ def cmd_gate(argv):
                  f" (or: orca orchestration gate-resolve --id {gid} --resolution land|hold)")
     v = pr_view(p.cfg["repo"], pr)
     spec = (f"Land PR #{pr} ({v['url']}) with orch land once the user resolves the gate. "
-            "Coordinator-owned; no worker is dispatched for this Task.")
+            "Lead-owned; no worker is dispatched for this Task.")
     args = ["orchestration", "task-create", "--run", p.cfg["run"], "--spec", spec, "--task-title", f"{GATE_TASK}{pr}"]
     if opt(argv, "--parent"):
         args += ["--parent", opt(argv, "--parent")]
@@ -1695,7 +1695,7 @@ def cmd_backfill(argv):
     pending = [e for e in events if e["ev"] == "landed" and e.get("note") == "backfill" and e.get("sha") not in decided]
     rows = backfill_rows(cfg, merged, pending, events) if merged or pending else []
     if "--dry-run" in argv:
-        # The window is the coordinator's judgment: in a repo shared with other work, read what it holds.
+        # The window is the lead's judgment: in a repo shared with other work, read what it holds.
         for m in merged:
             print(f"  #{m['number']} {m['mergedAt']} {m['title']}")
     if rows:
@@ -1790,7 +1790,7 @@ def payload_of(m):
 
 
 def close_out(msgs, workers, worktrees):
-    """What to do with each worker_done's card, printed beside the message: after a compaction a coordinator kept
+    """What to do with each worker_done's card, printed beside the message: after a compaction a lead kept
     releasing workers but dropped `worktree rm`, and eight cards stayed open."""
     card = {w["dispatchId"]: (w.get("resource") or {}).get("worktreeId") for w in workers}
     task = {w["dispatchId"]: w.get("taskId") or "<task>" for w in workers}
@@ -1823,7 +1823,7 @@ def close_out(msgs, workers, worktrees):
 
 
 def taken_over(w):
-    """Orca's worker-release never closes a terminal someone typed into, a coordinator's `terminal send` included."""
+    """Orca's worker-release never closes a terminal someone typed into, an orchestrator's or lead's `terminal send` included."""
     return (w.get("terminalState") == "retained" and (w.get("resource") or {}).get("retainedReason") == "user_takeover"
             and w.get("workerState") in ("succeeded", "failed"))
 
@@ -2117,10 +2117,10 @@ def cmd_wait(argv):
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     workers = run_workers(run_id) if me else []
     if me and me in {w.get("agentTerminalHandle") for w in workers}:
-        sys.exit("orch wait reads and acks the coordinator's Run inbox, and this terminal is one of the Run's"
+        sys.exit("orch wait reads and acks the lead's Run inbox, and this terminal is one of the Run's"
                  " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
                  " background command such as `gh run watch <id>`.")
-    # STALLED comes from the collector; a coordinator that only loops `wait` would otherwise keep an old server.
+    # STALLED comes from the collector; a lead that only loops `wait` would otherwise keep an old server.
     if (line := ensure_dash()) and not line.startswith("dashboard: http"):
         print(line, flush=True)
     for i in range(rounds):
@@ -2213,7 +2213,7 @@ def cmd_inbox(argv):
 
 def next_moves(workers):
     """The move for each live worker after a wait that stayed empty, read from Orca's projection here so the
-    coordinator does not list the workers and work it out again."""
+    lead does not list the workers and work it out again."""
     out = []
     for w in workers:
         pj = w.get("projection") or {}

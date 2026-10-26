@@ -57,7 +57,7 @@ LEAD_HEAD = re.compile(r"""(?m)(?:^|--prompt[\s=]+)\s*["']?[\w.-]+:\s*lead\s*(?:
 LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
 # A whole line reorient.py records, the prompt's closing quote (or a transcript's `</command-args>`) allowed after it;
 # the template's unfilled `<slug>`, `ROLE: none`, trailing words and a `\n` escape the shell passes through literally
-# do not count. It also marks a lead, like MODE: a resumed coordinator's prompt carries only this line.
+# do not count. It also marks a lead, like MODE: a resumed lead's prompt carries only this line.
 LEAD_ROLE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)[ \t]*ROLE:?[ \t]+lead[ \t]+[\w.-]+[ \t]*(?:$|["']|</command-args>)""")
 # The orchestrate refused-act rule lets a session follow only a block carrying a gate marker.
 SLEEP_MARK = "[gate:sleep-loop]"

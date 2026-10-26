@@ -1,7 +1,7 @@
 """The board the brief skill's reports are rendered from: one row per lead, phase and sub-task, with its status,
 progress, next step and the time it was last confirmed, and the renderer that turns it into the report.
 
-The coordinator writes rows (`orch board set`) as reports come in; `orch brief render` (on request) and
+The orchestrator or lead writes rows (`orch board set`) as reports come in; `orch brief render` (on request) and
 `orch brief render --periodic` (on a schedule) read the board, the fleet collector's sessions and PR list
 (state.json, prs.json, collected again first when older than state_min), the open decisions and the last sent table
 (brief-last/<scope>.json) and print the report. The model passes only judgment: the headline sentence, decisions,
@@ -360,7 +360,7 @@ PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료
 
 def fleet_rows(state, leads, board_rows):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
-    session whose terminal no board lead holds, the cards under it, and the cards the top-level coordinator dispatched
+    session whose terminal no board lead holds, the cards under it, and the cards the orchestrator dispatched
     itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
     newest PR; a card whose PR a board row already has is left to that row. Returns
     (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board row."""

@@ -524,7 +524,7 @@ line = p.schedule_cmd(pathlib.Path("/r/prs.py"), {**rcfg, "inbox_to": "term_x"},
 prompt = line[line.index("--prompt") + 1]
 assert no_env(line), line
 assert re.search(r"보내기가 성공했을 때만 `python3 /r/prs.py dispatch` 를 실행한다", prompt), "a failed send must not dispatch"
-# A scheduled round cannot start a worker (consumer_fenced): it forwards the lines and the coordinator starts them.
+# A scheduled round cannot start a worker (consumer_fenced): it forwards the lines and the orchestrator or lead starts them.
 assert "출력된 줄은 실행하지 않는다" in prompt and "릴리스 워커 <줄 수>건 시작 요청" in prompt
 assert re.search(r'--body "\$\(cat \S*dispatch\.txt\)"', prompt), "lines go as a file so $(cat …) stays literal"
 assert prompt.index("dispatch") < prompt.index("prs.py commit` 을")

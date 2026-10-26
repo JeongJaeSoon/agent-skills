@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook of the agent-skills plugin: closes a dashboard decision the human answered in the terminal.
 
-A decision registered with `orch decide add` left the dashboard only when it was answered there or the coordinator ran
-`orch decide done`. Answered in the coordinator's own chat, it stayed open whenever the coordinator forgot to close it.
+A decision registered with `orch decide add` left the dashboard only when it was answered there or the orchestrator or lead ran
+`orch decide done`. Answered in the orchestrator's or lead's own chat, it stayed open whenever the orchestrator or lead forgot to close it.
 
 Only the terminal that registered a decision (its handle in decisions.json, from $ORCA_TERMINAL_HANDLE) acts on it, so
-a worker's prompt never closes the coordinator's decision. A prompt closes one only when it is unambiguous:
+a worker's prompt never closes the orchestrator's or lead's decision. A prompt closes one only when it is unambiguous:
   - it starts with the id: `decision d3: yes`, `d3: yes`, `d3 yes`; the rest of the first line is the answer, or
   - its first line starts with an option label (case-insensitive, not followed by a letter or digit, so "Yes" does
     not match "Yesterday") that exactly one open decision of this terminal has.

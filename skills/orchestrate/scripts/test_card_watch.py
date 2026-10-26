@@ -1,4 +1,4 @@
-"""card_watch.py: which screens wake the coordinator, and which do not twice. Run: python3 test_card_watch.py"""
+"""card_watch.py: which screens wake the orchestrator or lead, and which do not twice. Run: python3 test_card_watch.py"""
 import contextlib, io, pathlib, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import card_watch, prog

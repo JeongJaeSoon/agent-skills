@@ -35,7 +35,7 @@ assert "d3" not in text
 assert hook("Yesterday's run failed") and status(ship)["status"] == "open"   # "Yes" is not a word of its own there
 assert hook("d9 CSV") and status(fmt)["status"] == "open"                    # no such open decision of this terminal
 assert hook("d3 Yes") and status(other)["status"] == "open"                  # someone else's decision
-text = hook("CSV", handle="term_worker")  # a worker's prompt sees only its own decision and cannot close the coordinator's
+text = hook("CSV", handle="term_worker")  # a worker's prompt sees only its own decision and cannot close the orchestrator's or lead's
 assert "d3" in text and "d1" not in text and status(fmt)["status"] == "open", text
 assert hook("CSV", handle=None) is None and hook("", raw="not json") is None and hook("CSV", handle="../x") is None
 assert status(fmt)["status"] == "open"

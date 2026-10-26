@@ -380,8 +380,8 @@ class Watch(OrcaJob):
 
 
 AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(),
-               Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 코디네이터에게 모아 보내는 Orca automation"),
-               Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 코디네이터에게 모아 보내는 Orca automation"))
+               Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 오케스트레이터나 리드에게 모아 보내는 Orca automation"),
+               Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 오케스트레이터나 리드에게 모아 보내는 Orca automation"))
 LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원",
          "unconfigured": "꺼짐(설정 키 없음)"}
 

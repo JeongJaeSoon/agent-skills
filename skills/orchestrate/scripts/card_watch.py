@@ -12,7 +12,7 @@ Each round reads every agent terminal but this session's own and exits on a new 
 permission prompt, an interrupted turn, a full disk, an API retry loop, a `/goal` card with no output for
 --idle-min minutes, or free disk under --min-free-gb. A finding still on screen is not reported again, also
 across restarts (--state); once it clears, the next one is new. It never types into a terminal: what to
-answer is the coordinator's call. Exit 0 always; the output says why it ended (STUCK lines, QUIET or OK).
+answer is the call of the orchestrator or lead that started the card. Exit 0 always; the output says why it ended (STUCK lines, QUIET or OK).
 """
 import argparse, hashlib, json, os, pathlib, shutil, sys, tempfile, time
 

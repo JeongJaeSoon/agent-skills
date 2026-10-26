@@ -1,6 +1,6 @@
-"""The owner's requests to a coordinator, kept so none is lost when many arrive at once.
+"""The owner's requests to an orchestrator or lead, kept so none is lost when many arrive at once.
 
-hooks/request_log.py appends each human prompt an orchestrator or lead receives; the coordinator routes each one to
+hooks/request_log.py appends each human prompt an orchestrator or lead receives; that session routes each one to
 where the work happens (`link`) and closes it (`done` with evidence, or `drop` with a reason). Requests are the small,
 conversational ones (a check, a reply, a merge, a look at something): a request that grows into tracker-sized work is
 linked to its ticket and closed here, and nothing here writes to the tracker. The fleet tick settles the rest
@@ -168,7 +168,7 @@ def finished(to, prs, cards, seen, board_rows):
     """Evidence that a link's target is over, or a falsy value: a merged PR, a card whose worktree was seen live under
     that name and is gone now (cards, name -> worktree id, is None when the list cannot be trusted; a renamed card
     keeps its worktree, so it is not gone), a board row marked done. A PR closed unmerged is not over: the work it
-    carried did not land, so the coordinator decides. A link in any other form is never over either."""
+    carried did not land, so that session decides. A link in any other form is never over either."""
     to = (to or "").strip()
     if pr := link_pr(to, prs):
         return pr[1].get("state") == "MERGED" and f"{pr[0]} merged {pr[1].get('merged_at') or ''}".strip()

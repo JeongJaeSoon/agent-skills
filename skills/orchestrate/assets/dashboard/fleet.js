@@ -54,7 +54,7 @@ const ITEM = {
 };
 const itemMeta = (t) => ITEM[t] || [t, "", "dot"];
 // What a session's kind reads as on screen -> [label, tone, icon]. kind itself stays as fleet.py wrote it (sort, adopt).
-// A lead is a coordinator with a Run of its own under the root; a standalone it made with `orca worktree create` is its worker.
+// A lead is a session with a Run of its own under the root; a standalone it made with `orca worktree create` is its worker.
 function kindLabel(st, s) {
   if (s.kind === "orchestrator") return ["orchestrator", "accent", ""];
   if (s.kind === "orchestration") return ["lead", "accent", "workers"];
@@ -128,10 +128,10 @@ function fleetSidebar() {
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
 }
 
-// The sidebar's session tree. The coordinator sits on top with the programs that have no lead on screen. Everything
-// else hangs off it as units: a session the coordinator runs, with its program and the cards under it, so a lead keeps
+// The sidebar's session tree. The orchestrator sits on top with the programs that have no lead on screen. Everything
+// else hangs off it as units: a session the orchestrator runs, with its program and the cards under it, so a lead keeps
 // its children whatever their own phase. Its most urgent member puts a unit in a group: needs you (a badge or a
-// prompt), running, idle (folded), offline (folded). A program that is closed or ARCHIVE_MS quiet with no coordinator
+// prompt), running, idle (folded), offline (folded). A program that is closed or ARCHIVE_MS quiet with no orchestrator or lead
 // on screen folds into Archived. st is null when the fleet collector is off.
 const ARCHIVE_MS = 3 * 86400e3;
 const FOLDS_KEY = "orch-dash:sb-folds";
@@ -141,7 +141,7 @@ const FOLDS = {
   running: ["Running", true, "working", "Sessions whose agent is working"],
   idle: ["Idle", false, "idle", "Turn ended, or a terminal with no agent"],
   offline: ["Offline", false, "offline", "Leads with no live terminal"],
-  archived: ["Archived", false, "", "Closed programs, and programs quiet for 3 days with no coordinator on screen"],
+  archived: ["Archived", false, "", "Closed programs, and programs quiet for 3 days with no orchestrator or lead on screen"],
 };
 const folds = () => { try { return JSON.parse(store.get(FOLDS_KEY)) || {}; } catch (e) { return {}; } };
 const urgency = (s) => s.unread || s.phase === "waiting" ? 0 : s.phase === "working" ? 1 : s.phase === "idle" || s.phase === "open" ? 2 : 3;
@@ -284,8 +284,8 @@ async function promptAction(key, action) {
 }
 
 // A decision registered with `orch decide`: each option, or a typed answer, answers it on a second click. The server
-// records the answer and closes the decision first, then types "decision <id>: <answer>" into the coordinator's terminal
-// now if it is idle, or on a later collect once it is: a busy coordinator never makes the answer fail.
+// records the answer and closes the decision first, then types "decision <id>: <answer>" into the orchestrator's or lead's terminal
+// now if it is idle, or on a later collect once it is: a busy orchestrator or lead never makes the answer fail.
 function decisionActs(st, it) {
   const r = F.decide[it.key], armed = F.arm && F.arm.key === it.key ? F.arm.action : "", off = r && r.busy ? "disabled" : "";
   const opts = it.options || [];
@@ -294,8 +294,8 @@ function decisionActs(st, it) {
     `title="${esc(o.description || o.label)}${it.recommend === i + 1 ? " (recommended)" : ""}"`)).join("");
   const line = armed ? `decision ${it.decision}: ${armed === "text" ? (F.draft[it.key] || "").trim() : (opts[+armed.slice(4)] || {}).label}` : "";
   const msg = !r || r.busy ? "" : !r.ok ? `Not recorded: ${r.reason}.`
-    : r.delivered ? "Recorded and sent to the coordinator." : "Recorded; will relay to the coordinator when it is idle.";
-  const hint = `<div class="sub muted">Or answer in the coordinator's terminal: <span class="mono">${esc(it.decision)}: ${esc((opts[it.recommend - 1] || {}).label || "<answer>")}</span></div>`;
+    : r.delivered ? "Recorded and sent to the orchestrator or lead." : "Recorded; will relay to the orchestrator or lead when it is idle.";
+  const hint = `<div class="sub muted">Or answer in the orchestrator's or lead's terminal: <span class="mono">${esc(it.decision)}: ${esc((opts[it.recommend - 1] || {}).label || "<answer>")}</span></div>`;
   return `<div class="decision">${buttons ? `<div class="prompt-acts">${buttons}</div>` : ""}${hint}
     <div class="prompt-acts"><input id="decide-${esc(it.decision)}" data-decide-input="${esc(it.key)}" class="search" maxlength="1900" autocomplete="off"
         placeholder="Or type an answer" value="${esc(F.draft[it.key] || "")}" ${off}>${chip("text", `${icon("send")}${armed === "text" ? "Confirm send" : "Send"}`)}
@@ -419,9 +419,9 @@ function fleetOverview(st) {
     </div>`;
 }
 
-// The owner's open requests to a coordinator (orch req, hooks/request_log.py); one unlinked for 30 min is amber. The
+// The owner's open requests to an orchestrator or lead (orch req, hooks/request_log.py); one unlinked for 30 min is amber. The
 // fleet tick links and closes them (owner_requests.reconcile); one unlinked for 12 h has expired and is not listed. A PR
-// closed unmerged does not close its request, so its link is tagged for the coordinator.
+// closed unmerged does not close its request, so its link is tagged for the orchestrator or lead.
 function requestCard(st) {
   const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
   if (!(rq.items || []).length) return "";
@@ -814,7 +814,7 @@ function fleetBrief() {
 }
 
 // The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
-// written by the coordinator shows within one poll. The merge cell arrives already filled from the fleet PR list.
+// written by the orchestrator or lead shows within one poll. The merge cell arrives already filled from the fleet PR list.
 const WORK_MARK = { ok: ["✅", "good", "done · verified"], fail: ["❌", "bad", "not done · failed"], partial: ["⚠️", "warn", "partial · inferred"],
   checking: ["🔄", "accent", "checking"], na: ["–", "", "n/a"] };
 const WORK_DONE_KEEP = 7 * 86400e3;  // stages.py DONE_KEEP_S: a file nobody wrote to since can still hold older rows
@@ -845,7 +845,7 @@ function workCell(c) {
 function fleetWork() {
   if (!F.work) pollWork();
   const w = F.work;
-  const headHtml = `<div class="view-head"><div><h2>Work</h2><p>Stages per work item, recorded with <span class="mono">orch stage</span>. The merge column fills from the PR list; the dev and prod columns are written by the coordinator, with evidence, when it checks them. Finished rows stay dimmed for 7 days; Ack hides one you have checked.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Work</h2><p>Stages per work item, recorded with <span class="mono">orch stage</span>. The merge column fills from the PR list; the dev and prod columns are written by the orchestrator or lead, with evidence, when it checks them. Finished rows stay dimmed for 7 days; Ack hides one you have checked.</p></div>
     <div class="legend">${Object.values(WORK_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</div></div>`;
   if (!w) return headHtml + '<div class="loading">Loading…</div>';
   if (w.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(w.error)}</div></div>`;
@@ -1040,7 +1040,7 @@ function fleetSessions(st) {
       <td class="hide-md">${projBadge(s.project)}<span class="mono dim">${s.branch ? esc(s.branch) : ""}</span></td>
       <td>${pr ? link(pr.url, `#${esc(pr.number)}`) : ""}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
   }).join("");
-  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the coordinator whose run dispatched it, else under its Orca parent, else under the root. A lead is a coordinator with its own run; the sessions under it are its workers.</p></div>${phaseLegend()}</div>
+  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers.</p></div>${phaseLegend()}</div>
     ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${holdsCard(st)}`;
 }

@@ -28,7 +28,7 @@ def items(st, t=None):
     return [i for i in st["items"] if t is None or i["type"] == t]
 
 
-# Hierarchy: the newest Run's coordinator is the root; workers sit under it, sessions you opened sit under it too.
+# Hierarchy: the session bound to the newest Run is the root; workers sit under it, sessions you opened sit under it too.
 st = f.tick(force=True)
 ss = {s["id"]: s for s in st["sessions"]}
 assert st["root"] == "wt-coord", st["root"]
@@ -435,7 +435,7 @@ if shutil.which("node"):
     flat = {"key": "msg:t2", "type": "approval", "session": "wt-coord", "title": "Merge?", "detail": "one line", "at": ago(0.1)}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
-const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}};
+const st = {{sessions: [{{id: "wt-coord", name: "orchestrator", terminals: []}}]}};
 process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(flat)}].map((it) => itemRow(st, it)).join("\\n-----\\n"));"""
     html, turn_html, flat_html = subprocess.run(["node", "-e", "const vm = require('vm'); vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), "
                                          "{document: {addEventListener() {}}, process});"],
@@ -453,7 +453,7 @@ process.stdout.write([{json.dumps(hostile)}, {json.dumps(turn)}, {json.dumps(fla
     assert all('data-go="#/fleet/session/wt-coord"' in row for row in (html, turn_html, flat_html))
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
-const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}]}};
+const st = {{sessions: [{{id: "wt-coord", name: "orchestrator", terminals: []}}]}};
 const it = (session) => ({{key: "mail:m1", type: "question", session, title: "t", detail: "one line"}});
 const out = {{gone: itemRow(st, it("wt-gone")), none: itemRow(st, it(null)), own: itemRow(st, it("wt-coord"), {{showSession: false}})}};
 const matches = (el, sel) => sel.split(",").some((one) => one[0] === "[" ? one.slice(6, -1).replace(/-(\\w)/g, (_, c) => c.toUpperCase()) in el.dataset
@@ -582,7 +582,7 @@ process.stdout.write(JSON.stringify(out));"""
     js = f"""{helpers}
 {chr(10).join(take(n) for n in ("chips", "sorted", "th", "ago"))}
 {(assets / "fleet.js").read_text()}
-const st = {{prs: {json.dumps(rows)}, sessions: [{{id: "wt-coord", name: "coordinator", phase: "idle"}}], sources: {{github: {{updated_at: "{ago(0)}"}}}}}};
+const st = {{prs: {json.dumps(rows)}, sessions: [{{id: "wt-coord", name: "orchestrator", phase: "idle"}}], sources: {{github: {{updated_at: "{ago(0)}"}}}}}};
 var S = {{filters: {{}}, sort: {{}}, state: st}};
 const out = {{all: fleetPrs(st), routed: FLEET_SECTIONS.filter((s) => !FLEET_VIEWS[s.id]).map((s) => s.id), icons: FLEET_SECTIONS.map((s) => s.icon)}};
 S.filters.fleet_prs = "ci"; out.ci = fleetPrs(st);
@@ -928,7 +928,7 @@ finally:
     fleet.orca = real_orca
     fleet.RUN_CACHE.clear()
 
-# The tree's root is the top-level coordinator even when a program coordinator it dispatched runs a newer Run.
+# The tree's root is the orchestrator even when a lead it dispatched runs a newer Run.
 def tree(run_list, workers, wts, orca_parent=None, declared=(), paths=None):
     fast = {"worktrees": [{"worktreeId": w, "path": (paths or {}).get(w, f"/work/{w}"), "displayName": w, "agents": [],
                            "parentWorktreeId": (orca_parent or {}).get(w)} for w in wts],
@@ -947,7 +947,7 @@ assert got == {"top": ("orchestrator", None), "prog": ("orchestration", "top"), 
                "w2": ("task", "prog"), "solo": ("standalone", "top")}, got
 root_wt, got = tree([run("r-top", "top", "t1")], [worker("r-top", "w1", "completed")], ["top", "w1", "solo"])
 assert root_wt == "top" and got == {"top": ("orchestrator", None), "w1": ("task", "top"), "solo": ("standalone", "top")}, got
-# Two program coordinators that dispatched each other, under a top level: neither is left in a loop.
+# Two leads that dispatched each other, under the orchestrator: neither is left in a loop.
 root_wt, got = tree([run("r-top", "top", "t1"), run("r-a", "a", "t2"), run("r-b", "b", "t3")],
                     [worker("r-b", "a"), worker("r-a", "b")], ["top", "a", "b"])
 assert root_wt == "top" and got["top"] == ("orchestrator", None), got

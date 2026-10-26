@@ -83,7 +83,7 @@ for kept in ("청구 내보내기", "CSV 열", "설치 가이드"):
     assert kept in after["text"], (kept, after["text"])
 assert "확인함으로 숨긴 행 1" in after["text"] and "요청 1건 열림" in after["text"], after["text"]
 assert after["done"] == [{**before["done"][0], "acked": True}], after["done"]
-assert owner_requests.summary()["open"] == 2, "the coordinator's own count keeps an acked request"
+assert owner_requests.summary()["open"] == 2, "the orchestrator's or lead's own count keeps an acked request"
 code, out, _ = run("dash.py", "acks", "--json")
 assert {r["id"] for r in json.loads(out)} == {"board:lead-a", "req:r1"}, out
 

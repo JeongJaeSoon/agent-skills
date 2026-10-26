@@ -762,8 +762,8 @@ def build_sessions(fast, runs, cfg, declared=()):
     if not root and len(declared_top) == 1:
         root = declared_top[0]  # a top level without a Run of its own lost the root to a lead's newer Run
     if not root:
-        # A program coordinator started with worker-start opens a newer Run of its own, so the newest Run is not
-        # necessarily the top level: take the newest coordinator no other coordinator dispatched, never a declared lead.
+        # A lead started with worker-start opens a newer Run of its own, so the newest Run is not necessarily the
+        # orchestrator's: take the newest Run's coordinator that no other coordinator dispatched, never a declared lead.
         coords = [coord_of_run[r["id"]] for r in sorted(runs["runs"], key=lambda r: r.get("updated_at") or "", reverse=True)
                   if coord_of_run.get(r["id"]) in sessions and role_of.get(coord_of_run[r["id"]]) != "lead"]
         root = next((c for c in coords if not dispatcher(c)), coords[0] if coords else None)
@@ -1974,7 +1974,7 @@ def inbox_resolve(key):
     return row
 
 
-# ---------------------------------------------------------------- decisions the coordinator waits on the human for
+# ------------------------------------------------------- decisions the orchestrator or lead waits on the human for
 
 DECISION_BODY_MAX = 4000
 DECISION_ANSWER_MAX = 1900  # the page's answer box; "decision <id>: " plus this stays inside send()'s 2000
@@ -2078,9 +2078,9 @@ def relay_decision(did, sender=None, skip_working=False):
     state = read_json(state_dir() / "state.json", {}) or {}
     session, handle = decision_target(d, state)
     if not session:
-        return {"ok": False, "reason": "no coordinator session in the fleet state", "typed": False}
+        return {"ok": False, "reason": "no orchestrator or lead session in the fleet state", "typed": False}
     if skip_working and session.get("phase") == "working":
-        return {"ok": False, "reason": "the coordinator is working", "typed": False}
+        return {"ok": False, "reason": "the orchestrator or lead is working", "typed": False}
     _, out = send(session["id"], f"decision {did}: {d.get('answer')}", handle, sender)
     if out.get("typed"):
         def mark(store):

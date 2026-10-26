@@ -1,6 +1,6 @@
 # The brief
 
-The brief is the coordinator's product. A worker cannot see this session, its siblings or the program note. Everything it needs has to be in the spec. If you cannot fill a field, you have not scoped the unit yet, so do not spawn it.
+The brief is the product of the session that writes it, the orchestrator or a lead. A worker cannot see this session, its siblings or the program note. Everything it needs has to be in the spec. If you cannot fill a field, you have not scoped the unit yet, so do not spawn it.
 
 GOAL, SCOPE, FORBIDDEN and ACCEPTANCE below cover Orca's own Task-spec contract (Target, Change, Constraints, Ownership, Observable acceptance).
 
@@ -34,7 +34,7 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             `orca orchestration send --to dispatch:<id> --subject … --body …`, plus the exact
             --from and --dispatch-capability values from your Orca preamble (Orca ties the message
             to your Dispatch only through them; never rebuild them). Tell the
-            coordinator only what changes scope, order or the predicate. Read your own mail with
+            lead only what changes scope, order or the predicate. Read your own mail with
             `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
             or the same batch comes back. Blocked on a decision or an act you cannot take: `ask`,
             which waits for the answer (after a timeout, resume the same message ID). Never send
@@ -58,7 +58,7 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
             the browser only once that prints held; `orch release browser` when done.
             A check that needs a read a guard blocks (env inside a pod or container, a file that
-            holds secrets) is planned here by the brief's writer: a script the coordinator puts
+            holds secrets) is planned here by the brief's writer: a script the lead puts
             to the human as a run_command, which writes only the derived result (present or
             absent, a match against an expected value the human gave or that is no secret
             itself), never the values, to a log outside the worktree. The worker waits for that
@@ -70,7 +70,7 @@ TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome 
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
             or live:<feature>; never the implementer>. When this brief has you wait for the
-            coordinator's OK before landing, record the verdict and run `orch land` only after
+            lead's OK before landing, record the verdict and run `orch land` only after
             that OK names the same head. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
@@ -81,7 +81,7 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
             `Monitor` until-loop on `gh pr checks` (deliver-ticket review-loop).
             A wait on a human review or another outside event reads the PR at most once every
             60 minutes, or not at all: end your turn or `ask`, and the notice comes through
-            watch-prs or the coordinator. GitHub's GraphQL limit (5000 points per hour) is shared
+            watch-prs or the lead. GitHub's GraphQL limit (5000 points per hour) is shared
             by every session using the same token. On a rate-limit error, retry nothing: wait
             until the reset time (the error's `retry-after`, else `gh api rate_limit`).
             Never merge any other way. (human-gate: stop at READY and report instead.)
@@ -93,7 +93,7 @@ LAND        After review, record the verdict on the reviewed head: orch verdict 
 FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each finding in the
             worker_done body with a proposed class (NOW: a predicate item or a reproduced
             defect in what this program merged needs it; LATER: with a revisit trigger; DROP:
-            with the reason). The coordinator classifies and files the NOW ones. No force-push
+            with the reason). The lead classifies and files the NOW ones. No force-push
             to shared branches. Do not rebase only because the branch is behind; `land` says when.
             Edit files with the Edit and Write tools, never Bash (heredoc, `cat >`, `sed -i`, a
             python one-liner), even where the harness allows small shell edits: a Bash-made patch
@@ -116,7 +116,7 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             aimed at a renamed target, not handed to a subagent or another session. Report it in the
             same turn to whoever gave you this work, with what the act was for, the refusal's
             category (`no verdict` when the classifier gave none) and the exact command: a worker
-            reports to its coordinator as an orchestration message of type escalation (its terminal
+            reports to the orchestrator or lead that dispatched it, as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool,
@@ -134,7 +134,7 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             retry, nor is doing the act again after the human added a rule for it or approved it in
             the refused session's own chat. Nor is the restart of a unit whose subagent's Edit or
             Write got no verdict: the session that started that unit, never the refused one, takes
-            the whole unit back once (a coordinator restarts it as a new card, a worker does it in
+            the whole unit back once (the orchestrator or lead restarts it as a new card, a worker does it in
             its own session), and a second `no verdict` there goes to the human, reported the same
             way. If you are the refused one, stop that edit and report it; do not finish it another
             way. A hook that blocked only the text of a command reading no protected file, and says
@@ -178,11 +178,11 @@ REPORT      worker_done once, after landing and main CI (or at READY under human
             merge commit, review rounds and who reviewed, the PR body's review-scope line (deliver-ticket §3), the VERIFY output you actually saw,
             the main-CI run you read, and the findings with their proposed class. --outcome succeeded only
             when the ticket's acceptance criteria hold. Load end-session §7 before you send it:
-            worker_done is one of the closing calls §7 picks, and the coordinator may release
+            worker_done is one of the closing calls §7 picks, and the lead may release
             this terminal the moment it arrives.
 KEEP        <optional: the next task this worker's terminal or card is kept for>
 STANDING    <the program note's standing orders for workers, pasted verbatim, numbered; the
-            coordinator-only ones stay in the note>
+            lead-only ones stay in the note>
 ```
 
 ## Single worker
@@ -221,7 +221,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own; when to start one, and what the layer above does after, is `references/top-level.md` "Starting a lead". Its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. Without a DELEGATE line, a lead investigates and implements on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead) gets this brief in this format, never one of your own; when to start one, and what the layer above does after, is `references/top-level.md` "Starting a lead". Its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. Without a DELEGATE line, a lead investigates and implements on its own.
 
 ```
 <project>: lead
@@ -282,7 +282,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Set Base from `gh pr list --state open`, not memory: an open PR the unit needs, or one already doing its scope, is its base. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
 - **Bound the wait for an answer** (the end of PEERS, or WAITING). "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
 - An agent that will use a write tool whose host asks it to load a policy skill before the first write gets, in its brief or prompt, an instruction to load that skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
-- Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files, auto-memory lessons) comes back in the worker's message, and the coordinator writes it.
+- Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files, auto-memory lessons) comes back in the worker's message, and the session that wrote the brief writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.

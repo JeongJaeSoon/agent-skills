@@ -101,7 +101,7 @@ is theirs: `/exit` or `Ctrl+D`. One clause, not a paragraph.
 ## 7. An Orca worker closes itself when it settles
 
 A worker is a session Orca dispatched: its prompt carries an Orca preamble with a `worker_done`
-command. Nobody says "종료해줘" to it, and a coordinator that is not running `orch wait` never
+command. Nobody says "종료해줘" to it, and an orchestrator or lead that is not running `orch wait` never
 closes it, so the worker closes itself as the last step of its task. The preamble's "take no
 further actions after worker_done" still holds: only the closing calls follow `worker_done`, in
 the same turn, and nothing runs after them.
@@ -115,33 +115,33 @@ it), then pick the row:
 |---|---|
 | Outcome `succeeded`; `isMainWorktree: false` and §4's Remove row holds (clean tree apart from its build caches and regenerated copies, the work on `origin/main`, no open PR); no other agent terminal on the card; no `ask` or `orch decide` question waiting; the brief has no `KEEP` line | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca worktree rm --worktree current --json` (`--run-hooks` per §4). The card's terminals, the setup one included, go with it. |
 | The same, but `isMainWorktree: true` or another agent works on the card | The report text, `worker_done` as its own call, then, once its output shows `"ok": true`, `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`: only this session goes. |
-| Anything else: outcome `failed` (the coordinator retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
+| Anything else: outcome `failed` (the orchestrator or lead that dispatched it retries on this card), an open PR (READY under human-gate, a review still running), a `KEEP` line, a question waiting, a dirty tree | `worker_done` naming what holds the card, as its own call, then close the card's setup terminal with `skills-sync close-setup <card path>` in the background (it can wait up to 30 minutes; never chain it before `worker_done` with `;` or `&&`), and idle. Never `AskUserQuestion`: nobody sees it. |
 
 - **The close waits for the send.** Calls in one message run together, so a `worker_done` and a
   `worktree rm` sent side by side remove the card even when a hook refused the send, and the
   report never arrives. A send refused only on its body text is reworded in the same command;
-  after any other refusal the card and this session stay, idle, for the coordinator to find.
+  after any other refusal the card and this session stay, idle, for the orchestrator or lead above it to find.
 - **A refused `worktree rm`.** The host's permission layer (the auto-mode classifier, a hook),
   not Orca, often refuses `orca worktree rm` as irreversible. Do not run it again in any form:
   not in smaller pieces, not through another tool or a script, not through a subagent. Fall back
   to the second row and leave the card: `orca orchestration send --to run:<runId> --type status
   --subject "card left: worktree rm refused by permission layer" --body "<card path>"` (after
   `worker_done` a send without `--to` finds no Run), then
-  `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The coordinator's `CLOSE OUT`
+  `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The `CLOSE OUT` of the orchestrator or lead above it
   line removes the card, or puts it to the human.
-- **`KEEP`** is the brief's opt-out: the coordinator plans to reuse this terminal or card.
+- **`KEEP`** is the brief's opt-out: the orchestrator or lead above it plans to reuse this terminal or card.
 - **An open PR** keeps the worker only until it lands. A later wake (a review fix, a message)
   runs this table again and closes if the PR has merged or closed since. Nothing else wakes an
-  idle worker; the coordinator's `SETTLED` sweep is the backstop.
+  idle worker; the `SETTLED` sweep of the session above it is the backstop.
 - **`Rejected worker_done`** after someone typed into the terminal (Orca marks it taken over)
   still settles the task: write the report as text on screen and close by the table. A refusal
-  for a missing capability does not: the coordinator never got the report, so keep the card.
-- Inside a program the coordinator reconciles the tickets on `worker_done`, so §3's tracker
+  for a missing capability does not: the session above it never got the report, so keep the card.
+- Inside a program the lead reconciles the tickets on `worker_done`, so §3's tracker
   and worklog steps are its, not the worker's. §6's order holds.
 
 ## 8. A dispatched card closes itself when its brief is done
 
-A card started by another session with a brief (`dispatch-card`, a coordinator's `orca worktree
+A card started by another session with a brief (`dispatch-card`, an orchestrator's or lead's `orca worktree
 create`) has no `worker_done`, and its parent looks at it only when its PRs merge or the parent
 itself ends, which can be days later. Its brief's `CLOSE` line (`dispatch-card` §2) is the
 request to end: when the brief's done is reached, close in that same turn, without asking.

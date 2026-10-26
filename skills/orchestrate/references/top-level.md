@@ -1,13 +1,13 @@
 # Top-level orchestrator
 
-One session sits above everything the human runs in Claude Code and Orca: single-task sessions, and the coordinators of each program. The human talks to it. It routes, answers, and keeps the human's inbox honest. It writes no PR, however small, and its only task work is the acts in "Acts only the human's session may take" below (SKILL.md, "Stay answerable").
+One session sits above everything the human runs in Claude Code and Orca: single-task sessions, and the lead of each program (one per track). The human talks to it. It routes, answers, and keeps the human's inbox honest. It writes no PR, however small, and its only task work is the acts in "Acts only the human's session may take" below (SKILL.md, "Stay answerable").
 
 ```text
 orchestrator                      this session
   ├ task sessions 1..n            deliver-ticket, dispatch-card cards, sessions the human opened directly
-  ├ program 1 coordinators A..D   orchestrate in program mode (ledger, land, roles, dashboard)
-  ├ program 2 coordinator A
-  └ program 3 coordinators A, B
+  ├ program 1 leads A..D          orchestrate in program mode (ledger, land, roles, dashboard)
+  ├ program 2 lead A
+  └ program 3 leads A, B
 ```
 
 The human starts this session with `claude --agent agent-skills:orchestrator --name orchestrator`, or makes a running session the orchestrator by sending a prompt with the line `ROLE: orchestrator` (SKILL.md). From then on every prompt arrives with a one-line reminder to run this mode. A session in this mode that gets no such reminder asks the human to send that line. The name is how the human tells which session routes: a session not named `orchestrator` asks the human for `/rename orchestrator` and titles its own Orca tab (`orca terminal rename --terminal $ORCA_TERMINAL_HANDLE --title orchestrator`).
@@ -16,7 +16,7 @@ The roster, adoption of sessions the human opened by hand, and the inbox/timelin
 
 ## Your Run
 
-Bind this terminal to a Run. Orca types its notice ("Injected notices") only for a `run:<id>` or `dispatch:<id>` mailbox, and it maps a terminal to `run:<id>` only when that terminal's pane is the Run's bound coordinator. Mail to a bare `term_…` handle, or to a terminal with no Run, is stored and never typed in, so an idle orchestrator whose inbox wait has lapsed does not wake for it.
+Bind this terminal to a Run. Orca types its notice ("Injected notices") only for a `run:<id>` or `dispatch:<id>` mailbox, and it maps a terminal to `run:<id>` only when that terminal's pane is the Run's bound coordinator (Orca's word: here the orchestrator or a lead). Mail to a bare `term_…` handle, or to a terminal with no Run, is stored and never typed in, so an idle orchestrator whose inbox wait has lapsed does not wake for it.
 
 - When this session starts, and again after a restart, `claude --continue` in a new tab or a compaction, run `orca orchestration run-current --json` in this terminal. `run` null: bind with `orca orchestration run-use --id <run>` for the Run your earlier briefs report to, or `orca orchestration run-create --objective "orchestrator: <what you route>"` when there is none, then run `run-current` again to confirm.
 - Every brief you write names that Run as its report address (`--to run:<id>`, the PARENT line in `brief.md`), never your terminal handle: handles change on restart, and mail to one is never typed in.
@@ -32,19 +32,20 @@ Every request leaves your turn within one short tool call.
 | A quick lookup, a read across several repos, a review or verification of work already done, or delegation to an external tool (chat, tracker, notes) | A background subagent (`run_in_background`); you answer when it reports. For an external write, hand it the facts, not the finished text: a signature line or model name you prefill is wrong whenever the subagent runs on another model |
 | A change to one repo, or an investigation that must read one repo's code or config | A new Orca worker (`worker-start`) with a brief (`brief.md`, "Single worker"), or `dispatch-card` when it needs its own card |
 | More work for a session that already owns that topic | That session: `orca orchestration send --to dispatch:<id>` if it is a dispatch, otherwise the human's inbox ("send this to <session>"). Work only: an approval sent this way is refused as relayed, so wider scope is a new `/goal` card (`dispatch-card` §2) |
-| Anything for a project that has a lead (its program coordinator, or a card started to run it): a new request, a card or worker it needs, an investigation, a browser step | That lead, with `orca orchestration send --to run:<the lead's Run>` once its Run is on the board ("Starting a lead"); until then, held as that section's "After" says. Never start a worker or card for that project yourself, and never steer the lead's workers past it |
-| Work for a project with no lead that meets a condition in "Starting a lead" below | A new lead for that project, started as that section says |
+| Anything for a project that has a lead (a lead session, or a card started to run it): a new request, a card or worker it needs, an investigation, a browser step | That lead, with `orca orchestration send --to run:<the lead's Run>` once its Run is on the board ("Starting a lead"); until then, held as that section's "After" says. Never start a worker or card for that project yourself, and never steer the lead's workers past it |
+| Work for a project with no lead that meets rule 2 or 3 in "Starting a lead" below | A new lead for that project, started as that section says |
 | An instruction for every lead | Each lead, one send per lead, from you. Never "please forward" through one lead or card: the forwarding layer rewrites it into its own reading |
 
 Check the two lead rows first, in table order: a change or investigation for a led project is the lead's, not a worker you start. An investigation inside one repo is a worker, not a subagent: it reads a fresh checkout of that repo, shows on the roster while it runs, and can take the change that follows from what it finds.
 
 ## Starting a lead
 
-You start a lead yourself; the human does not have to ask for one. A lead owns one project: one repository and one topic, the outcome a request or a run of requests drives at (an epic, a feature, a migration). Work that arrives one request at a time never looks like a project when it arrives, so run this check before you start a worker or card for a project with no lead, and on every wake. Count your units in that project. A unit is one card or worker of yours with its open PRs, read from the fleet collector's `state.json` (the dashboard roster), not `worker-list`, which leaves out `/goal` cards; a PR no card of yours opened is not counted ("Sessions you did not start"). Reads beyond one short one go to a background subagent (SKILL.md, "Stay answerable"). Start a lead when any of these holds:
+You start a lead yourself; the human does not have to ask for one. A lead owns one project: one repository and one topic, the outcome a request or a run of requests drives at (an epic, a feature, a migration). Work that arrives one request at a time never looks like a project when it arrives, so run this check before you start a worker or card for a project with no lead, and on every wake. Count your units in that project. A unit is one card or worker of yours with its open PRs, read from the fleet collector's `state.json` (the dashboard roster), not `worker-list`, which leaves out `/goal` cards; a PR no card of yours opened is not counted ("Sessions you did not start"). Reads beyond one short one go to a background subagent (SKILL.md, "Stay answerable"). Which layer takes the work:
 
-- One request carries three or more tickets that must land together.
-- The project has three or more units, counting the one you are about to start.
-- PRs of two or more units must merge in a fixed order (one is based on another's branch, or waits for another to land). One card's own stack does not count.
+1. One PR with no merge order: no lead. You start a `/goal` card for it yourself (`dispatch-card` §2) and take its review and merge too.
+2. Two or more related PRs, or a merge order, deploy stages or a predicate to meet: a program (`orch init`) with a lead. A merge order means one PR is based on another's branch or waits for another to land; one card's own stack does not count.
+3. A single card that gains a related PR or an order: promote it then. Start a lead and hand it the card in progress, listed in its CONTEXT (below).
+4. A project that has a lead: its new requests go to that lead ("Routing"), and you start no card for it.
 
 How: one lead per project, as a `/goal` card (`dispatch-card`) with the Lead brief and its first-prompt lines (`brief.md`, "Lead"), not `worker-start`: Orca's nesting limit refuses a dispatched worker's own `worker-start` (`nested_worker_depth_exceeded`). Name the program with a slug for the repository and topic. Its PREDICATE is landing the open PRs in their order plus the new request; its CONTEXT lists each unit already on that work (dispatch id or card path, branch, PR and state) and the human's requests behind them, quoted. Several tracks: one lead per track, each with its own QA lead; a track of a couple of tickets, or one that depends on another, joins that track. Its REPORT line asks for its Run id in its first report to PARENT. Register it in the same turn (`orch board lead add <slug> --handle <its terminal> --repo <owner/name> --program <slug>`), run the same command again with `--run <its run>` when that first report arrives, and tell the human one line: which lead now owns which project and why.
 
@@ -105,7 +106,7 @@ When the human approves an act of the kind below together with the work, it goes
 
 ## Heartbeat and periodic report
 
-Between the human's messages you wake on mail, PR events, background tasks you started and dashboard decision answers. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2); a program coordinator or lead under `/goal` keeps its background `orch wait` instead of a heartbeat. A heartbeat is optional: when the inbox wait and an automation (the `watch-prs` round, for one) already wake you on every event that needs you and the human set no reporting schedule, skip it, since each wake re-reads the whole context even when nothing changed, and report when an event or the human asks. Without it, a lead that has gone silent is noticed only through `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens").
+Between the human's messages you wake on mail, PR events, background tasks you started and dashboard decision answers. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2); a lead under `/goal` keeps its background `orch wait` instead of a heartbeat. A heartbeat is optional: when the inbox wait and an automation (the `watch-prs` round, for one) already wake you on every event that needs you and the human set no reporting schedule, skip it, since each wake re-reads the whole context even when nothing changed, and report when an event or the human asks. Without it, a lead that has gone silent is noticed only through `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens").
 
 The cron prompt is the only context a wake gets, so it carries everything:
 
@@ -128,7 +129,7 @@ Before sending anything to a chat channel or thread, read the destination and ch
 
 ## Injected notices
 
-Orca types `You have N orchestration message(s). Run orca orchestration check …` into the idle composer of a Run-bound terminal ("Your Run") and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Your one inbox wait (SKILL.md Drain, "One inbox wait, always") is that wait: `orch inbox --wait` peeks with no `--types`, so it keeps the notice out of the human's typing. A program coordinator's `orch wait` passes `--types` and does not keep the notice out. It still runs no second wait: a coordinator or lead runs in its own card, where the human seldom types, and a second watcher on the same inbox is what once hid every `CLOSE OUT` line. It ends a turn that only carries the notice with no tool call. When the human talks to a program from this session, this session's own inbox wait keeps the notice out. A worker keeps no standing wait, and its brief bounds how long it waits for an answer (`brief.md`, WAITING). When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and leave the mailbox to the inbox wait.
+Orca types `You have N orchestration message(s). Run orca orchestration check …` into the idle composer of a Run-bound terminal ("Your Run") and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Your one inbox wait (SKILL.md Drain, "One inbox wait, always") is that wait: `orch inbox --wait` peeks with no `--types`, so it keeps the notice out of the human's typing. A lead's `orch wait` passes `--types` and does not keep the notice out. It still runs no second wait: a lead or lead runs in its own card, where the human seldom types, and a second watcher on the same inbox is what once hid every `CLOSE OUT` line. It ends a turn that only carries the notice with no tool call. When the human talks to a program from this session, this session's own inbox wait keeps the notice out. A worker keeps no standing wait, and its brief bounds how long it waits for an answer (`brief.md`, WAITING). When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and leave the mailbox to the inbox wait.
 
 ## PR events
 
@@ -139,9 +140,9 @@ The dashboard's collector watches the PRs of every session on the roster and app
 | Review comment or changes requested | A live Orca worker | `orca orchestration send --to dispatch:<id>` with the PR and thread links, "handle the review per `deliver-ticket` review loop". If its turn has ended, `skills-sync nudge <terminal> "run your orchestration check"`. A nudge that is refused (not idle, a dialog open) waits for the next event or the worker's own check; never retry in a loop |
 | 〃 | A worker that already finished (completed dispatch) | Start a new dispatch on its card for the review round; a completed dispatch never reads its mail |
 | 〃 | `owner_kind` is `human_session`: a session the human opened | Inbox only ("review comments on <PR>, in session <name>"). Never type into it |
-| `approved` with `checks: success` (the collector sends it only for the current head) | Any | A program's PR: nothing; its worker's `orch land` takes it, or its coordinator's `LAND` line once that worker is gone. A live session's PR: send it the event, and its `deliver-ticket` §6 merges. A finished session's PR: start a dispatch on its card to finish §6 from the merge. A session the human opened: an inbox item "ready to merge" with the PR link. You never merge |
+| `approved` with `checks: success` (the collector sends it only for the current head) | Any | A program's PR: nothing; its worker's `orch land` takes it, or its lead's `LAND` line once that worker is gone. A live session's PR: send it the event, and its `deliver-ticket` §6 merges. A finished session's PR: start a dispatch on its card to finish §6 from the merge. A session the human opened: an inbox item "ready to merge" with the PR link. You never merge |
 | `checks_failed` on a PR | A live worker | Same as a review comment: the worker classifies flake or defect (`deliver-ticket` review loop) |
-| Check failed on main | A program's main | That program's main guardian, through its coordinator |
+| Check failed on main | A program's main | That program's main guardian, through its lead |
 | Anything, owner unknown | — | Inbox, with the PR link and the event |
 
 - A PR of a unit you handed to a lead: its events go to that lead, whatever the table says for its owner ("Starting a lead", After).

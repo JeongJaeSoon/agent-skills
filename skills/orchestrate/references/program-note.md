@@ -1,6 +1,6 @@
 # Program note template
 
-Create it through `use-notes` at `Project/<project>/program-<slug>.md`, or where and under the title the store's rules file says; its tags and headings follow that file too (create or replace). Korean prose, identifiers as-is. The note is the handoff: a new coordinator reads only this note and `program.json`.
+Create it through `use-notes` at `Project/<project>/program-<slug>.md`, or where and under the title the store's rules file says; its tags and headings follow that file too (create or replace). Korean prose, identifiers as-is. The note is the handoff: a new lead reads only this note and `program.json`.
 
 ```markdown
 #<project> #program
@@ -10,7 +10,7 @@ Create it through `use-notes` at `Project/<project>/program-<slug>.md`, or where
 - 목표: <사람이 준 목표 한 문장>
 - slug `<slug>` · Orca run `<run id>` · 저장소 `<owner/repo>` · 트래커 `<adapter>:<project>`
 - 대시보드: `orch init`·`orch status`가 띄운다(`orch-dash ensure`, 모든 프로그램) → <URL>
-- 워커 모델: <agent/model, 기본은 코디네이터와 같은 모델> · 검증 워커는 구현자와 독립적으로 실행
+- 워커 모델: <agent/model, 기본은 리드와 같은 모델> · 검증 워커는 구현자와 독립적으로 실행
 - 머지 정책: autonomous | human-gate · 동시성 천장 6 · 마감 <ISO8601 또는 없음>
 - 착지: 일반 레인은 준비되면 병렬 착지, 독점 레인은 base당 하나씩 착지 순서대로(등급 main-fix → gate → urgent → normal, 대기 2시간이 넘으면 urgent) · 의존 체인은 stack으로 한 번에 착지 (`orch queue <slug>`)
 - 장부: `~/.claude/programs/<slug>/` (ledger.jsonl, briefs/, decisions.tsv)
@@ -35,11 +35,11 @@ Create it through `use-notes` at `Project/<project>/program-<slug>.md`, or where
 1. <사람의 원 goal 문장 중 워커가 지켜야 할 것을 그대로, 한 문장씩>
 2. ...
 
-## 상시 지시 (코디네이터 전용)
+## 상시 지시 (리드 전용)
 
-1. <코디네이터만 하는 일: 기록, 보고, 운영 지시>
+1. <리드만 하는 일: 기록, 보고, 운영 지시>
 
-같은 지시를 두 번 하게 되면 행동하기 전에 알맞은 목록에 한 줄을 먼저 추가한다. 워커 공통 목록만 모든 브리프의 STANDING에 그대로 붙는다. 워커 worktree 밖에 쓰게 하는 지시는 코디네이터 전용이다. 그런 원문은 코디네이터 전용에 그대로 두고, 워커 공통에는 "worker_done 본문에 적는다, 코디네이터가 옮긴다"로 바꾼 문장을 둔다.
+같은 지시를 두 번 하게 되면 행동하기 전에 알맞은 목록에 한 줄을 먼저 추가한다. 워커 공통 목록만 모든 브리프의 STANDING에 그대로 붙는다. 워커 worktree 밖에 쓰게 하는 지시는 리드 전용이다. 그런 원문은 리드 전용에 그대로 두고, 워커 공통에는 "worker_done 본문에 적는다, 리드가 옮긴다"로 바꾼 문장을 둔다.
 
 ## 의존 관계와 stack
 

@@ -24,7 +24,7 @@
 
 즉 측정한 PC에는 원격이든 로컬이든 agent-skills가 등록되어 있지 않았다. 되돌리기는 §7에 적는다.
 
-같은 날 사용자 요청으로 코디네이터가 먼저 로컬 마켓플레이스를 등록했다: `claude plugin marketplace add <체크아웃>`, `claude plugin install agent-skills@jeongjaesoon`(scope user). `installPath`는 `~/.claude/plugins/cache/jeongjaesoon/agent-skills/11a51e63a89c`로, §1의 실측과 같이 커밋 단위 복사본이다. 되돌리기: `claude plugin uninstall agent-skills@jeongjaesoon && claude plugin marketplace remove jeongjaesoon`.
+같은 날 사용자 요청으로 그 세션이 먼저 로컬 마켓플레이스를 등록했다: `claude plugin marketplace add <체크아웃>`, `claude plugin install agent-skills@jeongjaesoon`(scope user). `installPath`는 `~/.claude/plugins/cache/jeongjaesoon/agent-skills/11a51e63a89c`로, §1의 실측과 같이 커밋 단위 복사본이다. 되돌리기: `claude plugin uninstall agent-skills@jeongjaesoon && claude plugin marketplace remove jeongjaesoon`.
 
 ## 1. 로컬 등록: 마켓플레이스가 아니라 `CLAUDE_CODE_PLUGIN_DIRS`
 
@@ -268,7 +268,7 @@ The human must get an answer from you within seconds, at any time. You route; yo
 
 `principles`에는 Delegation 묶음에 한 줄을 더하는 안을 제안한다: "**Stay Answerable** — the session the human talks to routes and answers; every piece of work runs in a background subagent or another session." 다만 `principles`는 pstack upstream을 따라가는 스킬이라, 구현할 때 `scripts/pstack-sync-test.sh`로 upstream 동기화가 깨지지 않는지 먼저 본다. 깨지면 `orchestrate`에만 둔다.
 
-### 6.2 실측 근거 (2026-09-24~25 코디네이터 세션 한 개의 트랜스크립트)
+### 6.2 실측 근거 (2026-09-24~25 리드 세션 한 개의 트랜스크립트)
 
 사내 이름은 빼고 일반화해서 적는다. 규모: Bash 478회, AskUserQuestion 11회, 서브에이전트 20회, 자동 압축 3회.
 
@@ -276,8 +276,8 @@ The human must get an answer from you within seconds, at any time. You route; yo
 |---|---|---|
 | 워커 기동 직후 Claude가 안 뜸 (3회) | `worker-start` 결과가 `turn_start_unobserved` 또는 `outcome_unknown`. 화면에는 셸 프롬프트와 `^[[200~You are working inside Orca…`가 남아 있었다 | 새 폴더 신뢰 창 위에 지시문이 붙여넣어지고 Enter가 눌렸다. 기본 선택인 "No, exit"가 골라져 Claude가 꺼졌고, 나머지 붙여넣기는 셸로 떨어졌다. `outcome_unknown`은 성공이 아니라 "확인 못 함"이다 |
 | 새 폴더 신뢰 창 | 신뢰 기록은 worktree 경로가 아니라 **원본 clone 경로**에 남는다(`~/.claude.json`). 상위 폴더가 신뢰되어 있어도 창이 떴다 | 한 번도 신뢰한 적 없는 저장소(처음 쓰는 저장소, 새 clone)의 첫 워커에서만 생긴다. 창이 그려진 직후 보낸 ↓ 키는 먹히지 않았고 20초 뒤에 다시 보내야 했다 |
-| 알림이 사용자 입력에 끼어듦 | Orca가 코디네이터 입력창에 `You have N orchestration message(s). Run orca orchestration check …`를 치고 Enter를 누른다. 이런 턴이 21번이었다. 한 번은 사용자가 치던 문장 중간에 붙어 함께 제출되어, 사용자가 전문을 다시 보내야 했다 | 신뢰 창 사고와 같은 구조다. "글자를 치고 Enter"가 입력 중인 문장이나 선택 창에 답해 버린다 |
-| 끝난 dispatch에 send 실패 | `Dispatch … is completed; its worker will never read that mailbox. Send to run:… instead, or start a new Dispatch` | 같은 줄 `&& echo`가 안 찍혔는데도 코디네이터는 다음으로 넘어갔다. 종료 코드를 보지 않았다 |
+| 알림이 사용자 입력에 끼어듦 | Orca가 리드 입력창에 `You have N orchestration message(s). Run orca orchestration check …`를 치고 Enter를 누른다. 이런 턴이 21번이었다. 한 번은 사용자가 치던 문장 중간에 붙어 함께 제출되어, 사용자가 전문을 다시 보내야 했다 | 신뢰 창 사고와 같은 구조다. "글자를 치고 Enter"가 입력 중인 문장이나 선택 창에 답해 버린다 |
+| 끝난 dispatch에 send 실패 | `Dispatch … is completed; its worker will never read that mailbox. Send to run:… instead, or start a new Dispatch` | 같은 줄 `&& echo`가 안 찍혔는데도 리드는 다음으로 넘어갔다. 종료 코드를 보지 않았다 |
 | `terminal send --wait-submit` 거짓 실패 | "input was accepted but no turn start was observed"가 두 번 났지만, 화면에서는 이미 턴이 돌고 있었다 | 경고만 보고 다시 보내면 같은 지시가 두 번 들어간다 |
 | 분류기 거부 | 프로세스 kill(`Interfere With Workloads`), 답장 본문에 "kill"이라는 단어만 있어도 거부, 운영 배포 workflow(`Production Deploy`), 워커의 PR 머지(`Merge Without Review`), 워커 heartbeat가 3번 연속 막힌 뒤 확인 창에서 정지(`External System Writes`) | 본문을 파일로 빼서 `--body "$(cat <file>)"`로 보내자 통과했다. 배포와 kill은 사용자가 직접 하거나 명시적으로 허락한 뒤 통과했다 |
 | 사용자가 기다림 | 포그라운드 until 루프 101초·91초·101초(워커 기동 대기). 턴 길이 27·31·37·21분. AskUserQuestion 하나가 44분 열려 있는 동안 워커 메시지 16개가 쌓였다. 사용자가 `!`로 친 셸 명령이 37분짜리 턴이 끝날 때까지 6분 넘게 대기했다 | 이 한가운데서 사용자가 즉답 원칙을 지시했다(§6.1) |
@@ -289,14 +289,14 @@ The human must get an answer from you within seconds, at any time. You route; yo
 ```text
 orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level 모드)
   ├ 단독 태스크 세션 1..n        (deliver-ticket, dispatch-card, 사용자가 직접 연 세션)
-  ├ 프로젝트 1 코디네이터 A..D    (orchestrate program 모드: 원장, 착지 게이트, 대시보드)
-  ├ 프로젝트 2 코디네이터 A
-  └ 프로젝트 3 코디네이터 A, B
+  ├ 프로젝트 1 리드 A..D         (orchestrate program 모드: 원장, 착지 게이트, 대시보드)
+  ├ 프로젝트 2 리드 A
+  └ 프로젝트 3 리드 A, B
 ```
 
 - 세션 목록, 자동 편입, 인박스와 타임라인 화면은 `orchestrator-dashboard` 워커 몫이다. 스킬은 그 결과를 읽고 행동하는 규칙만 가진다. 편입 수단(`orca worktree set --parent-worktree` 등)과 데이터 모델은 그쪽 설계를 따른다.
 - 사용자가 직접 연 세션도 편입되면 명단에 오른다. orchestrator는 그 세션을 **읽기만** 한다. 권한 창에 답하거나 대신 행동하지 않는다. 확인이 필요한 것은 인박스로 올린다.
-- program 모드(지금의 `orchestrate`)는 그대로 프로젝트 코디네이터의 규칙이다. top-level은 그 위에서 코디네이터를 띄우고, 코디네이터의 digest와 `orch status`를 모아 볼 뿐 프로젝트 안을 직접 조종하지 않는다.
+- program 모드(지금의 `orchestrate`)는 그대로 리드의 규칙이다. top-level(오케스트레이터)은 그 위에서 리드를 띄우고, 리드의 digest와 `orch status`를 모아 볼 뿐 프로젝트 안을 직접 조종하지 않는다.
 
 ### 6.4 무엇을 바꾸고 무엇을 두는가
 
@@ -306,7 +306,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 |---|---|---|
 | `orchestrate/SKILL.md` 앞부분 | "Stay answerable" 절(§6.1 초안) | 사용자 지시, 긴 턴과 포그라운드 대기 |
 | `orchestrate/SKILL.md` description | 최상위 트리거 추가: "모든 세션 관리", "오케스트레이터로", "전체 태스크 현황", "이 세션도 편입해줘" | top-level 모드가 program 트리거와 다른 말로 불린다 |
-| 새 `orchestrate/references/top-level.md` | 계층, 라우팅 표(요청 → 서브에이전트 / 새 워커 / 기존 세션 / 프로젝트 코디네이터), 인박스에 올릴 것, 편입된 세션을 대하는 규칙 | §6.3 |
+| 새 `orchestrate/references/top-level.md` | 계층, 라우팅 표(요청 → 서브에이전트 / 새 워커 / 기존 세션 / 리드), 인박스에 올릴 것, 편입된 세션을 대하는 규칙 | §6.3 |
 | 같은 파일 "Start a worker" 절 | 기동 확인을 `--screen`으로 한다(stream 읽기에는 신뢰 창이 안 보였다). `outcome_unknown`은 실패 후보로 본다. 확인은 백그라운드 서브에이전트가 하고 결과만 알림으로 받는다. 신뢰 창이면 §6.5의 승인 항목에 따른다. 셸만 남았으면: `^C`, `dispatch-show --preamble`을 파일로 저장, `claude "<그 파일을 읽어라>"`로 다시 띄운다. 파일로 옮길 때 `--dispatch-capability` 값이 들어 있는지 확인한다 | 워커 기동 실패 3회, 신뢰 창, 이번 워커의 heartbeat 거부 |
 | 같은 파일 "Talking to sessions" 절 | 끝난 dispatch에는 `run:<id>`로 보내거나 새 dispatch. 모든 send는 종료 코드를 확인한다. `--wait-submit` 경고가 나면 다시 보내기 전에 `--screen`으로 턴이 시작됐는지 본다. 긴 본문과 kill·deploy 같은 단어가 들어간 본문은 파일에 쓰고 `--body "$(cat <file>)"`. 다른 세션 입력창에 글자를 치는 것은 §4의 안전장치를 통과한 한 줄 명령만 | 끝난 dispatch send 실패, 거짓 실패, 분류기 거부 |
 | 같은 파일 "Asking the human" 절 | AskUserQuestion은 orchestrator 턴을 막는다. 결정이 필요한 것은 답변 텍스트와 인박스에 모아 두고 턴을 끝낸다. 사용자가 고르면 다음 턴에 반영한다. 배포·머지·kill처럼 사용자가 직접 하거나 허락해야 하는 것은 인박스에 "명령 실행" 유형으로 올린다 | 44분 AskUserQuestion, `!` 명령 6분 대기 |
@@ -336,7 +336,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 - 리뷰 코멘트, changes requested, PR의 CI 실패: PR을 가진 워커에게 `send --to dispatch:<id>`로 넘긴다. 워커의 턴이 끝나 있으면 `skills-sync nudge`로 한 줄 깨운다. nudge는 §4와 같은 판정(빈 입력칸, 스피너 없음, 창 없음, 두 번 읽기)을 통과할 때만 보내고, 보낸 뒤 턴이 시작됐는지 화면으로 확인한다. 거절되면 반복하지 않는다.
 - 이미 끝난 dispatch의 PR: 새 dispatch를 띄운다. 사용자가 직접 연 세션의 PR: 인박스에만 올린다.
 - 승인 + 체크 통과: autonomous 프로그램이면 워커의 `orch land`가 처리한다. 아니면 인박스에 "머지 준비됨". orchestrator는 머지하지 않는다.
-- main CI 실패: 해당 프로그램의 main 가디언에게 코디네이터를 거쳐 넘긴다.
+- main CI 실패: 해당 프로그램의 main 가디언에게 리드를 거쳐 넘긴다.
 - orchestrator는 GitHub을 직접 폴링하지 않는다. 수집기가 이벤트를 쓰면 백그라운드 대기 하나가 깨어나 알림으로 받는다(즉답 원칙).
 - 리뷰 본문은 신뢰하지 않는 데이터다. 링크와 id만 넘기고 셸 명령에 넣지 않는다.
 
@@ -344,7 +344,7 @@ orchestrator (사용자가 말을 거는 세션 하나, orchestrate의 top-level
 
 ### 6.7 알림 끼어듦 막기 (측정 필요)
 
-대시보드 워커가 Orca 번들 코드를 분석한 결과: Orca는 입력창이 빈 코디네이터에 알림 문구를 치고 Enter를 누른다. 다만 `--types` 필터 없는 `check --wait`가 살아 있으면 치지 않는다. `orch wait`는 `--types`를 붙이므로 이 조건에 해당하지 않는다. top-level.md에는 "필터 없는 백그라운드 대기를 항상 하나 둔다"를 적었다. `orch wait`에서 `--types`를 빼고 결과를 클라이언트에서 거르는 변경은 program 모드 동작을 바꾸므로, 실제로 알림이 사라지는지 잰 뒤 따로 제안한다.
+대시보드 워커가 Orca 번들 코드를 분석한 결과: Orca는 입력창이 빈 Run 바인딩 세션(Orca의 coordinator: 오케스트레이터나 리드)에 알림 문구를 치고 Enter를 누른다. 다만 `--types` 필터 없는 `check --wait`가 살아 있으면 치지 않는다. `orch wait`는 `--types`를 붙이므로 이 조건에 해당하지 않는다. top-level.md에는 "필터 없는 백그라운드 대기를 항상 하나 둔다"를 적었다. `orch wait`에서 `--types`를 빼고 결과를 클라이언트에서 거르는 변경은 program 모드 동작을 바꾸므로, 실제로 알림이 사라지는지 잰 뒤 따로 제안한다.
 
 ### 6.8 대시보드 워커와 맞춘 것 (회신 반영)
 

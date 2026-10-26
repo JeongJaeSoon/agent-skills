@@ -385,7 +385,7 @@ solo = ok("brief", "render", "--periodic", "--now", NOW)
 assert "**acme/solo → main**\n\n- ⏳ 2건 rev-e 대기 — 분야 작업81·작업82" in solo, solo
 
 # --fill: a lead session nobody wrote to the board shows with its cards and their PRs, in the lead's section even when a
-# card works in another repo; a lead the board holds (by its terminal) keeps only its board rows; the coordinator's own
+# card works in another repo; a lead the board holds (by its terminal) keeps only its board rows; the orchestrator's own
 # card is a row of its own unless a board row already has its PR; an offline card with no PR is left out.
 sess = lambda sid, kind, parent, phase, h=None, **kw: {"id": sid, "kind": kind, "parent": parent, "phase": phase, "name": sid,
                                                       "gh_repo": "acme/fill", "last_activity": "2026-10-13T14:20:00Z",
@@ -438,7 +438,7 @@ rep = fleet.report_of(str(briefs / "a.md"))
 assert (rep["next"], rep["pr"]) == ("리뷰 대기 · rev-a", "acme/web#77"), rep
 assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
 
-# A standalone card of the coordinator's (orca worktree create, no Run) is a row once it has a report; a resident
+# A standalone card of the orchestrator's (orca worktree create, no Run) is a row once it has a report; a resident
 # standalone session with none (an automations runner) is not.
 (state / "state.json").write_text(json.dumps({"sessions": [
     sess("root", "orchestrator", None, "working"),

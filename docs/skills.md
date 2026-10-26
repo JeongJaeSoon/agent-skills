@@ -17,7 +17,7 @@
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
               setup-pc(새 PC 한 줄 설치·갱신: dry run diff → 사람의 --apply)
-채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 코디네이터에게 한 통으로)
+채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 오케스트레이터나 리드에게 한 통으로)
 어디서나    record-progress(언제 무엇을 남기나) → use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
 
@@ -95,7 +95,7 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** "핸드오프", "다음 작업으로 넘어가자", "남은 작업 있어?", "머지하고 다음 진행해줘", 그리고 티켓이 끝난 순간. "병렬로 진행"은 같은 저장소의 티켓 카드일 때만 해당하고, 서브에이전트나 곁가지 카드일 수 있으면 먼저 가린다. 이 세션이 계속 일해야 하면 `dispatch-card`를 쓴다.
 - **내용:**
   - 다음 할 일을 스스로 고른다. 자투리는 여기서 처리하고 독립된 일은 티켓으로 만든다. 다음 티켓은 우선순위, 의존, 파일 충돌로 순위를 매긴다. 물어도 되는 것은 "어느 티켓이 다음인가"뿐이다.
-  - 프로그램 워커(브리프에 `PROGRAM:` 줄이 있는 경우)는 worker_done을 보낸 뒤 코디네이터의 결정을 기다린다.
+  - 프로그램 워커(브리프에 `PROGRAM:` 줄이 있는 경우)는 worker_done을 보낸 뒤 리드의 결정을 기다린다.
   - 완료를 확인한 뒤 `orca worktree create --prompt "/goal <ID>. CLOSE: …"`로 새 카드를 띄운다. 병렬 요청이어도 카드는 티켓당 하나다.
   - `orca terminal wait`와 `read`로 시작을 확인하고 `end-session`으로 이 세션을 닫는다.
 - **관계:** `deliver-ticket` 다음 단계다. 끝은 반드시 `end-session`으로 맺는다.
@@ -120,7 +120,7 @@ PR 을 맡는 스킬과 머지 주체:
     - Orca 밖: `EndConversation`을 쓴다. 영구적인 동작이라 한 번 확인을 받는다.
   - 커밋하지 않은 변경은 사용자에게 묻고, `--force`는 쓰지 않는다. 프로그램 안팎의 Orca 워커는 사람에게 묻지 않는다.
   - Orca 워커는 일을 마치면 스스로 닫는다: `succeeded`이고, 트리가 깨끗하고, 작업이 `origin/main`에 있고, 열린 PR·대기 중인 질문·브리프의 `KEEP` 줄이 없으면 `worker_done` 다음 같은 턴에 카드를 지운다. 그 밖에는 셋업 터미널만 닫고 무엇이 붙잡고 있는지 보고한다. 권한 계층이 `worktree rm`을 거부하면 다시 시도하지 않고, 카드를 남긴다고 알린 뒤 자기 터미널만 닫는다.
-  - 브리프에 `CLOSE` 줄이 있는 카드(`dispatch-card`, 코디네이터가 `worktree create`로 띄운 카드)도 완료 기준을 채우면 같은 턴에 스스로 닫는다. 정리를 부모 세션에 넘기지 않는다.
+  - 브리프에 `CLOSE` 줄이 있는 카드(`dispatch-card`, 오케스트레이터나 리드가 `worktree create`로 띄운 카드)도 완료 기준을 채우면 같은 턴에 스스로 닫는다. 정리를 부모 세션에 넘기지 않는다.
   - 끝내기 전에 이 세션이 띄운 백그라운드 서브에이전트, 만든 git worktree, 띄운 자식 카드를 확인한다.
   - 보고를 먼저 쓰고 종료 명령을 마지막 도구 호출로 실행한다.
 - **관계:** 무엇을 어디에 남길지는 `record-progress`가 정한다.
@@ -141,23 +141,23 @@ PR 을 맡는 스킬과 머지 주체:
 ## 프로젝트 하나 (Orca 워커 여러 개)
 
 ### orchestrate
-- **언제:** 사용자가 말을 거는 최상위 orchestrator 세션일 때("오케스트레이터로", "모든 세션 관리해줘", "전체 태스크 현황"), 또는 한 세션이 Orca 워커 여러 개(대개 3개 이상)로 마일스톤을 끝까지 끌고 갈 때, "대시보드 갱신해줘", "전체 진행상황 몇 퍼센트", 다른 코디네이터가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
-- **내용:** 코디네이터는 코드가 아니라 프로그램을 소유한다. 매 세션 `orca skills get orchestration`부터 읽는다.
-  - **즉답 원칙(Stay answerable):** 턴 안에서는 라우팅, 몇 초짜리 확인, 사용자 응답만 한다. 조사·구현·검증·긴 대기·모니터링은 받자마자 백그라운드 서브에이전트나 Orca 워커에 넘기고, 포그라운드 루프·`sleep`·백그라운드 아닌 `check --wait`는 쓰지 않는다. 완료는 알림으로 받는다. 코디네이터는 작아도 PR을 직접 쓰지 않고 워커 카드에 맡기며, 자기가 띄운 카드·서브에이전트·worktree는 자기가 닫는다. 이 원칙은 top-level, 프로그램 코디네이터, 다른 세션이 띄운 리드 카드 모두에 적용된다. 리드가 있는 프로젝트의 일은 그 리드에게 보내고, 리드에게는 `references/brief.md`의 Lead 브리프(DELEGATE, PERMISSIONS 줄)를 준다.
-  - **top-level 모드** (`references/top-level.md`): 단독 태스크 세션과 프로젝트 코디네이터 위에 서는 세션. 요청 라우팅 표, 사용자가 연 세션은 읽기만, 워커 기동 확인은 `--screen`으로 백그라운드에서(신뢰·권한 요청은 사용자에게 전달하며 자동 수락하지 않는다), 끝난 dispatch에는 `run:`으로, 본문은 파일로, AskUserQuestion 대신 대시보드 인박스(`orch-dash inbox add`)와 결정 등록(`orch decide add`, 채팅으로 답을 받으면 바로 `done`), 필터 없는 백그라운드 `check --wait` 하나로 알림 끼어듦 막기, PR 리뷰 이벤트(`pr-events.jsonl`)에 대한 반응, 스킬이 바뀌면 `skills-sync broadcast`.
-  - **거부된 행동(Refused acts):** 권한 계층이 거부한 행동은 다른 세션이 대신 하지 않는다. 거부된 세션이 보고하고, 코디네이터가 `tune-automode`로 규칙 초안을 만들어 표준 문구와 함께 사용자에게 올린다. 규칙이 들어가면 거부됐던 세션이 한 번 다시 한다. 자기 worktree를 읽기만 하는 명령의 오탐은 Read·Grep 도구로 한 번 읽는다. 분류기가 판정 없이 오류를 낸 거부(`no verdict`)는 규칙 요청이 되지 않는다. 서브에이전트의 Edit·Write가 그렇게 막히면 그 단위를 띄운 세션이 단위 전체를 한 번 되가져가고(코디네이터는 새 카드로), 자기 worktree 읽기는 위의 Read·Grep 예외를 따르고, 두 번째 `no verdict`나 그 밖의 행동은 사용자에게 올린다.
+- **언제:** 사용자가 말을 거는 최상위 orchestrator 세션일 때("오케스트레이터로", "모든 세션 관리해줘", "전체 태스크 현황"), 또는 한 세션이 Orca 워커 여러 개(관련 PR 2개 이상, 또는 머지 순서·배포 단계·predicate가 있을 때)로 마일스톤을 끝까지 끌고 갈 때, "대시보드 갱신해줘", "전체 진행상황 몇 퍼센트", 다른 리드가 돌리던 프로그램을 이어받을 때, PR이 왜 안 움직이는지 물을 때.
+- **내용:** 워커 위의 층은 오케스트레이터(top-level 모드)와 리드(program 모드) 둘이고, 이름·시작 명령·ROLE 줄은 SKILL.md "Roles" 표에 있다. 둘 다 코드가 아니라 프로그램을 소유한다. 매 세션 `orca skills get orchestration`부터 읽는다.
+  - **즉답 원칙(Stay answerable):** 턴 안에서는 라우팅, 몇 초짜리 확인, 사용자 응답만 한다. 조사·구현·검증·긴 대기·모니터링은 받자마자 백그라운드 서브에이전트나 Orca 워커에 넘기고, 포그라운드 루프·`sleep`·백그라운드 아닌 `check --wait`는 쓰지 않는다. 완료는 알림으로 받는다. 오케스트레이터도 리드도 작아도 PR을 직접 쓰지 않고 워커 카드에 맡기며, 자기가 띄운 카드·서브에이전트·worktree는 자기가 닫는다. 이 원칙은 오케스트레이터와 모든 리드(다른 세션이 띄운 리드 카드 포함)에 적용된다. 리드가 있는 프로젝트의 일은 그 리드에게 보내고, 리드에게는 `references/brief.md`의 Lead 브리프(DELEGATE, PERMISSIONS 줄)를 준다.
+  - **top-level 모드** (`references/top-level.md`): 단독 태스크 세션과 리드 위에 서는 세션. 요청 라우팅 표, 사용자가 연 세션은 읽기만, 워커 기동 확인은 `--screen`으로 백그라운드에서(신뢰·권한 요청은 사용자에게 전달하며 자동 수락하지 않는다), 끝난 dispatch에는 `run:`으로, 본문은 파일로, AskUserQuestion 대신 대시보드 인박스(`orch-dash inbox add`)와 결정 등록(`orch decide add`, 채팅으로 답을 받으면 바로 `done`), 필터 없는 백그라운드 `check --wait` 하나로 알림 끼어듦 막기, PR 리뷰 이벤트(`pr-events.jsonl`)에 대한 반응, 스킬이 바뀌면 `skills-sync broadcast`.
+  - **거부된 행동(Refused acts):** 권한 계층이 거부한 행동은 다른 세션이 대신 하지 않는다. 거부된 세션이 보고하고, 오케스트레이터나 리드가 `tune-automode`로 규칙 초안을 만들어 표준 문구와 함께 사용자에게 올린다. 규칙이 들어가면 거부됐던 세션이 한 번 다시 한다. 자기 worktree를 읽기만 하는 명령의 오탐은 Read·Grep 도구로 한 번 읽는다. 분류기가 판정 없이 오류를 낸 거부(`no verdict`)는 규칙 요청이 되지 않는다. 서브에이전트의 Edit·Write가 그렇게 막히면 그 단위를 띄운 세션이 단위 전체를 한 번 되가져가고(오케스트레이터나 리드는 새 카드로), 자기 worktree 읽기는 위의 Read·Grep 예외를 따르고, 두 번째 `no verdict`나 그 밖의 행동은 사용자에게 올린다.
   - 아래 1~8은 **program 모드**다.
   1. **Frame:** 완료 조건(predicate)은 셀 수 있는 티켓 ID와 실제 산출물 검사로 정한다. 사람의 지시는 standing order로 그대로 옮긴다. 의존은 시작 순서(Orca task deps)와 착지 순서(GitHub stack, `orch dep`)로 나눈다. 이 저장소의 머지·배포에 대한 사용자 지속 승인이 `autoMode.allow` 규칙으로 있는지 확인하고, 없으면 `tune-automode`로 초안을 만들어 사용자에게 실행 줄을 건넨다. Run을 만들고 `orch init`으로 등록한다.
   - 실제 산출물을 검증할 기존 harness나 직접 검사를 선택한다. 반복 가능한 검증 스킬 생성은 합의한 범위에서 유용할 때만 한다.
   3. **Scale:** 상시 역할(프로그램마다 main 가디언과 QA 리드, 머신에 하나씩 flow improver와 resource steward)을 띄운다. 티켓 워커의 동시 실행 상한은 1에서 시작해 main green 착지마다 1씩 늘고(기본 ceiling 6), red면 반으로 준다.
-  4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다. 제품이 아니라 일하는 방식이 틀어졌으면(사람의 교정, 브리프가 답했어야 할 질문, 과정 탓의 정체, 스킬·스크립트 결함) `orch record <slug> signal`로 한 줄만 남기고 분석은 Close로 미룬다. Run에 없는 `/goal` 카드를 띄운 세션은 그 옆에 `orch watch-cards`도 하나 돌려, 확인 프롬프트·질문·API 재시도·디스크 부족에 멈춘 카드를 알림으로 받는다(답은 코디네이터가 화면을 읽고 정한다).
-  5. **Triage:** predicate가 완료 조건이다. 워커는 발견을 제안 분류와 함께 보고만 하고, 코디네이터가 NOW(predicate를 막거나 재현된 결함, 티켓 등록 후 admitted), LATER(프로그램 노트 `보류`, 티켓 없음), DROP(이유 한 줄)으로 나눈다. NOW 티켓은 parent가 아닌 related로 잇는다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
+  4. **Drain:** `orch wait`를 백그라운드로 하나만 돌린다. worker_done이 오면 같은 턴에 `CLOSE OUT`을 처리한다. 매번 `orch status`로 끝내고 STALLED, SPARE, LEDGER GAP, LANDED-BUT-OPEN 줄에 대응한다. 제품이 아니라 일하는 방식이 틀어졌으면(사람의 교정, 브리프가 답했어야 할 질문, 과정 탓의 정체, 스킬·스크립트 결함) `orch record <slug> signal`로 한 줄만 남기고 분석은 Close로 미룬다. Run에 없는 `/goal` 카드를 띄운 세션은 그 옆에 `orch watch-cards`도 하나 돌려, 확인 프롬프트·질문·API 재시도·디스크 부족에 멈춘 카드를 알림으로 받는다(답은 리드가 화면을 읽고 정한다).
+  5. **Triage:** predicate가 완료 조건이다. 워커는 발견을 제안 분류와 함께 보고만 하고, 리드가 NOW(predicate를 막거나 재현된 결함, 티켓 등록 후 admitted), LATER(프로그램 노트 `보류`, 티켓 없음), DROP(이유 한 줄)으로 나눈다. NOW 티켓은 parent가 아닌 related로 잇는다. Orca 기본은 parent지만, 그러면 집계와 단계 막대가 원래 티켓의 계획된 일로 센다.
   6. **Land:** 워커가 `orch land`로 직접 착지한다. 일반 PR은 병렬로 머지되고, migration·CI·Dockerfile·compose 같은 공유 파일은 독점 레인에서 base당 하나씩 머지된다.
   7. **main 검증:** red가 되면 가디언이 flake 여부부터 보고 hotfix나 revert를 고르며, 그동안은 main 수정만 착지한다. QA 리드는 티켓 검증, 주기적 E2E, 설계 정합성 감사를 맡는다.
   8. **Close:** 새 main에서 최종 확인을 하고 `record predicate_verified`로 기록한다. 이어서 역할을 풀고 `measure-delivery`를 돌린 뒤 `reflect`를 프로그램 모드로 돌린다. `worker-list --terminal-state reclaimable`이 빌 때까지는 끝내지 않는다.
   - human-gate의 "Land #N" Task는 `orch land`가 착지 때 completed로, 보류나 PR 닫힘 때 failed로 닫는다. 보류로 결정된 PR은 `orch land`가 머지하지 않는다.
   - 턴을 끝낸 워커에게는 내용을 `orchestration send --to dispatch:<id>`로 보내고, 터미널에는 "orchestration check를 돌려라" 한 줄만 보낸다. 터미널이 없는 워커는 Orca의 복구 절차를 따른다.
-  - 상시 역할의 평상시 보고는 `--type status`로 보낸다. escalation은 코디네이터가 나서야 할 때만 쓴다.
+  - 상시 역할의 평상시 보고는 `--type status`로 보낸다. escalation은 리드가 나서야 할 때만 쓴다.
   - Orca 기본 규칙과 일부러 다르게 하는 것(동시 실행 상한 1부터, 워커 모델 기본값, 티켓마다 worktree, 백그라운드 `orch wait`, 긴 `worker_done`, `terminal send` 한 줄 넛지)은 SKILL.md 표에 이유와 함께 있다.
   - 머지 정책은 autonomous(기본)와 human-gate 두 가지다. 사람에게는 대시보드와 요약만 보낸다.
   - 이어받을 때는 프로그램 노트 → `run-use` → `orch set`(노트의 정책을 원장에 맞춤) → `orch status` 순서로 한다.
@@ -238,11 +238,11 @@ PR 을 맡는 스킬과 머지 주체:
 
 ### watch-mentions
 - **언제:** "멘션 감시", "나한테 온 슬랙 정리해줘", "내가 말한 스레드에 새 답글 있어?", 그리고 watch-mentions Orca automation의 회차마다.
-- **내용:** 공개 채널에서 사용자 멘션, 멘션 없는 이름 언급, 사용자가 말한 스레드의 새 답글을 찾는다. `scripts/mentions.py`가 실행 잠금, 커서, 이미 보고한 항목의 원장(채널·ts·permalink·분류만, 본문 없음)을 맡고, 본인 발언·비공개 채널·제외 채널·이미 보고한 것을 거른다. 에이전트가 새 항목을 리뷰 의뢰·작업 의뢰·질문·결정 공유·잡담으로 나누고 한 줄 요약과 permalink를 붙여 코디네이터에게 한 통으로 보낸다. 작업 의뢰는 중복 티켓을 먼저 찾고 기표 초안을 만든다. 실제 기표는 설정의 `file_tickets`가 켜져 있고 중복이 없을 때만 한다. Slack에는 아무것도 쓰지 않는다.
+- **내용:** 공개 채널에서 사용자 멘션, 멘션 없는 이름 언급, 사용자가 말한 스레드의 새 답글을 찾는다. `scripts/mentions.py`가 실행 잠금, 커서, 이미 보고한 항목의 원장(채널·ts·permalink·분류만, 본문 없음)을 맡고, 본인 발언·비공개 채널·제외 채널·이미 보고한 것을 거른다. 에이전트가 새 항목을 리뷰 의뢰·작업 의뢰·질문·결정 공유·잡담으로 나누고 한 줄 요약과 permalink를 붙여 오케스트레이터나 리드에게 한 통으로 보낸다. 작업 의뢰는 중복 티켓을 먼저 찾고 기표 초안을 만든다. 실제 기표는 설정의 `file_tickets`가 켜져 있고 중복이 없을 때만 한다. Slack에는 아무것도 쓰지 않는다.
   - **비공개 경계:** `slack_search_public`(또는 연결된 Slack 서버의 공개 채널 전용 검색)만 쓴다. 비공개 채널과 DM은 사용자가 설정에서 `read_private`를 켜야만 읽는다.
   - **정기 실행:** `schedule`이 평일 09:00–20:40, 20분 간격 Orca automation 등록 명령을 출력한다. precheck는 모델 없이 설정 누락과 실행 중 잠금만 거른다. Slack은 MCP로만 닿아 precheck가 새 메시지 수를 셀 수 없으므로, 새 항목이 없는 회차는 ingest 뒤 아무것도 보내지 않고 끝난다([automation.md](automation.md)).
 - **동봉:** `scripts/mentions.py`, 테스트 파일.
-- **관계:** 기표와 중복 검색은 `use-tracker`, 받는 쪽은 `orchestrate`의 코디네이터 인박스. Slack에 쓰는 일은 하지 않는다.
+- **관계:** 기표와 중복 검색은 `use-tracker`, 받는 쪽은 `orchestrate`의 오케스트레이터나 리드 인박스. Slack에 쓰는 일은 하지 않는다.
 
 ## 어댑터
 
@@ -465,7 +465,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 기능마다 소스를 읽고, 모든 기능을 실제로 구동해 기능 지도와 대조한다.
   - 문제는 문서 drift, 하니스 결함, 제품 결함으로 나눈다. 제품 결함은 보고만 한다.
   - 결과는 clean, changed(증명된 수정만 PR 하나), blocked 중 하나다.
-  - flow improver가 일주일에 한 번 돌리고, verify 스킬이 기능을 못 다루거나 잘못 설명했다는 보고(`deliver-ticket`, QA lead)가 오면 코디네이터가 워커에 맡긴다.
+  - flow improver가 일주일에 한 번 돌리고, verify 스킬이 기능을 못 다루거나 잘못 설명했다는 보고(`deliver-ticket`, QA lead)가 오면 리드가 워커에 맡긴다.
 
 ## 명령
 
@@ -487,8 +487,8 @@ PR 을 맡는 스킬과 머지 주체:
 | `landed` | 밖에서 한 머지를 기록 |
 | `backfill` | 등록 전에 머지된 PR과 main CI를 원장에 넣는다 |
 | `heavy` | 무거운 명령(compose, 이미지 빌드)을 머신 전체 2슬롯으로 제한해 실행 |
-| `wait` | 코디네이터 전용. 처리할 메시지가 올 때까지 기다리고 `CLOSE OUT` 줄을 낸다 |
-| `decide` | 코디네이터가 사용자 결정을 기다리는 일을 등록(`add`)·조회(`list`)·닫기(`done`, `drop`). 대시보드 Needs you에 선택지 버튼과 함께 뜨고, 버튼은 답을 기록해 결정을 닫은 뒤 `decision <id>: <답>` 한 줄을 코디네이터 터미널에 보낸다. 코디네이터가 바쁘면 한가해질 때 보낸다 |
+| `wait` | 리드 전용. 처리할 메시지가 올 때까지 기다리고 `CLOSE OUT` 줄을 낸다 |
+| `decide` | 오케스트레이터나 리드가 사용자 결정을 기다리는 일을 등록(`add`)·조회(`list`)·닫기(`done`, `drop`). 대시보드 Needs you에 선택지 버튼과 함께 뜨고, 버튼은 답을 기록해 결정을 닫은 뒤 `decision <id>: <답>` 한 줄을 오케스트레이터나 리드 터미널에 보낸다. 오케스트레이터나 리드가 바쁘면 한가해질 때 보낸다 |
 
 ### `orch-dash` (대시보드)
 - **실행 방식:** `orch init`과 `orch status`가 `orch-dash ensure`를 불러 알아서 띄운다. 서버는 저장소당 하나이고, 더 새 코드가 설치되면 교체된다.
@@ -554,7 +554,7 @@ PR 을 맡는 스킬과 머지 주체:
 
 Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도구는 세지도 막지도 않는다. 거부 사유는 위임 경로(Agent, `orca worktree create`, 리드에게 `orca orchestration send`, `orch …`)를 알려 준다. `ROLE: none`이면 그 세션에서, `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`이면 모든 세션에서 꺼진다. 설정은 `~/.claude/agent-skills.json`의 `orchestrator_guard`(`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
 
-### 코디네이터 재정렬
+### 오케스트레이터·리드 재정렬
 `hooks/onboard.py`(SessionStart `startup|clear`). 이 프로필의 사용자 설정(`env.CLAUDE_CODE_PLUGIN_DIRS`, Orca 프로필마다 따로 본다)도 세션의 같은 환경 변수도 체크아웃을 로드하지 않을 때만, 설치 창의 값과 함께 `setup-pc`를 제안하라는 문단을 넣는다. `-p` 세션(`CLAUDE_CODE_ENTRYPOINT`가 `sdk-cli`)에는 넣지 않는다. Agent SDK 세션(`sdk-ts`·`sdk-py`)은 사람이 입력하는 GUI 일 수도 있어 넣고, 첫 요청이 브리프·자동화 프롬프트면 무시하라고 문단이 말한다. URL의 인증 정보는 지우고 넣는다. 사람이 거절하면 에이전트가 `onboard.py --decline`을 돌려 그 프로필에서는 다시 묻지 않는다. `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다.
 
 `hooks/reorient.py`(SessionStart `startup|resume|compact|fork`, UserPromptSubmit). 역할을 선언한 세션에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않고, 외부 명령도 부르지 않는다. 오케스트레이터의 세션 이름(`session_title`)이 `orchestrator`가 아니면 SessionStart 안내 끝에 사람에게 `/rename orchestrator`를 청하고 자기 Orca 탭 이름을 바꾸라(`orca terminal rename`)는 줄을 붙인다.
@@ -573,7 +573,7 @@ Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도�
 예전의 터미널 handle 판정(`orchestrate.top_level_handles`, Run의 `coordinator_handle`)과 그 캐시(`<state>/reorient/`)는 없앴다. 남은 캐시 파일은 reap state-file이 7일 뒤 정리한다. `/reload-plugins`로 hook을 받은 기존 세션은 SessionStart를 다시 거치지 않으므로, 다음 프롬프트부터 받는다.
 
 ### 결정 자동 닫기
-`hooks/decision.py`(UserPromptSubmit). `orch decide add`로 결정을 등록한 터미널(`$ORCA_TERMINAL_HANDLE`)에 사람이 친 프롬프트만 본다. 첫 줄이 id로 시작하거나(`d3 허락`, `decision d3: 허락`) 그 터미널의 열린 결정 가운데 하나에만 있는 선택지 이름으로 시작하면 그 결정을 답과 함께 done으로 닫고 코디네이터에게 알린다. 애매하면 닫지 않고 열린 결정 목록을 알림으로만 넣는다. 다른 터미널(워커)의 입력으로는 닫지 않고, 오류는 모두 exit 0이다. 이미 떠 있던 세션은 `/reload-plugins`나 재시작 뒤부터 적용된다.
+`hooks/decision.py`(UserPromptSubmit). `orch decide add`로 결정을 등록한 터미널(`$ORCA_TERMINAL_HANDLE`)에 사람이 친 프롬프트만 본다. 첫 줄이 id로 시작하거나(`d3 허락`, `decision d3: 허락`) 그 터미널의 열린 결정 가운데 하나에만 있는 선택지 이름으로 시작하면 그 결정을 답과 함께 done으로 닫고 오케스트레이터나 리드에게 알린다. 애매하면 닫지 않고 열린 결정 목록을 알림으로만 넣는다. 다른 터미널(워커)의 입력으로는 닫지 않고, 오류는 모두 exit 0이다. 이미 떠 있던 세션은 `/reload-plugins`나 재시작 뒤부터 적용된다.
 
 ### 권한 창 기록
 `hooks/permission.py`(PermissionRequest). 권한 창이 뜰 때 도구 이름과 가린 인자를 `$ORCA_TERMINAL_HANDLE`별로 대시보드 상태 디렉터리의 `prompts/`에 적는다. 결정은 내리지 않아서 권한 흐름은 그대로다. 대시보드는 그 터미널 화면에 같은 요청의 권한 창이 떠 있을 때만 인박스 항목에 승인·거부·터미널 열기 버튼을 붙인다. 사람이 누르면 보내기 직전에 화면을 다시 읽어 확인하고, 한 번만 허용하는 `Yes`나 `No`의 번호 하나만 누른다. "다시 묻지 않기", "항상 허용", "auto mode로 전환"처럼 규칙을 저장하거나 모드를 바꾸는 선택지는 고르지 않는다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`.
@@ -650,7 +650,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 코디네이터 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
+- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
 
 ### upstream 동기화 상태
 - **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.
