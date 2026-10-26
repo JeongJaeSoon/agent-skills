@@ -10,7 +10,7 @@ HITL과 HOTL을 함께 고려한 Claude Code 에이전트 스킬 모음.
 ## 특징
 
 - **티켓 하나를 끝까지**: 계획, 테스트, 작성자 외 독립 리뷰, PR, CI 확인, 머지, 완료 기준별 근거를 단 티켓 닫기까지.
-- **여러 워커로 프로젝트 하나**: Orca 워커마다 티켓 하나, PR은 `orch land` 게이트를 통과해야 머지되고, 공유 파일을 고친 PR은 하나씩 들어간다.
+- **여러 워커로 프로젝트 하나**: Orca 워커마다 티켓 하나, PR은 `orch land` 게이트를 통과하거나 사람이 승인한 일반 머지로만 들어가고, 공유 파일을 고친 PR은 하나씩 들어간다.
 - **사람이 보는 곳**: 현황 보고(`brief`), 대시보드(`orch-dash`)의 결정·권한 창·받은편지함, 트래커와 노트.
 - **거부된 행동은 다시 하지 않는다**: 권한 창·auto mode 분류기·hook·사람이 거부한 행동은 형태를 바꿔 재시도하지 않고 보고한다.
 - **설정이 없으면 끄거나 묻는다**: 노트(Obsidian·Markdown), 회고 원장, 개인 폴더, 채팅 채널은 설정에 적힌 곳만 쓰고 추정하지 않는다. 트래커 어댑터(Linear·Jira)는 설정이 없으면 Linear다.
@@ -38,7 +38,7 @@ Claude Code 세션 안에서:
 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다.
 
 - 「이 티켓 끝내줘」(티켓 키 `ABC-1`과 함께) → `deliver-ticket`이 계획부터 머지·티켓 닫기까지 한다.
-- 「현황 보고해줘」 → `brief`가 완료·진행·결정 필요·사람만 할 일로 나눠 보고한다. `/brief`는 Claude Code 내장 명령이라 직접 부를 때는 `/agent-skills:brief`.
+- 「현황 보고해줘」 → `brief`가 진행 중, 다른 사람 대기, 결정 필요, 지금 오너가 할 일, 보류로 나눠 보고한다. `/brief`는 Claude Code 내장 명령이라 직접 부를 때는 `/agent-skills:brief`.
 
 시나리오 다섯 개는 [docs/operations.md](docs/operations.md#사용-시나리오).
 
@@ -53,9 +53,9 @@ Claude Code 세션 안에서:
 | 그 밖의 권한 창 | HITL: 사람이 승인한다 | 사람이 `permissions.allow` 항목(`update-config`)을 더하면 그 명령은 묻지 않고 진행한다 |
 | auto mode 분류기의 거부 | HITL: 에이전트가 보고하고 멈춘다 | `tune-automode`가 만든 autoMode 규칙을 사람이 적용하면 그 부류는 진행한다. 판정 없는 거부(`no verdict`)는 규칙으로 바뀌지 않는다 |
 | 되돌릴 수 없는 행동(파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기) | HITL: 멈추고 묻는다 | 없음 |
-| `orchestrate` 머지 정책 | HOTL: `autonomous`, 워커가 `orch land`로 머지 | `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 푼다 |
-| `deliver-ticket` 혼자 도는 카드의 머지 | HOTL: 준비된 PR을 묻지 않고 머지 | hold를 걸거나 직접 보겠다고 하면 머지 전에 묻는다. 계속 flaky한 체크, 되돌릴 수 없는 migration 같은 예외에서도 묻는다 |
-| `watch-prs` `ownergate`(봇 PR 승인) | 꺼짐. `prs.kinds`에 넣으면 HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 덮으면 회차가 실행한다(HOTL) |
+| `orchestrate` 머지 정책 | HOTL: `autonomous`, 워커가 `orch land`로 머지(그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때. 없으면 묻는다) | `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 푼다 |
+| `deliver-ticket` 혼자 도는 카드의 머지 | HOTL: 준비된 PR을 묻지 않고 머지(그 머지를 허용하는 autoMode 규칙이 있을 때. 없으면 묻는다) | hold를 걸거나 직접 보겠다고 하면 머지 전에 묻는다. 계속 flaky한 체크, 되돌릴 수 없는 migration 같은 예외에서도 묻는다 |
+| `watch-prs` `ownergate`(봇 PR 승인) | 꺼짐. `prs.kinds`에 넣고 `prs.ownergate`에 게이트 항목을 적으면 HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 덮으면 회차가 실행한다(HOTL) |
 | `watch-prs` `ready_to_merge` | 꺼짐 | `prs.kinds`에 더하면 `merge_repos`의 내 PR 중 게이트를 모두 통과한 것을 머지한다(HOTL) |
 | `secure-fill` 비밀값 입력 | HITL: 매번 Touch ID 승인 | 허용 목록 항목을 `"approval": "none"`으로 두면 Touch ID 없이 채운다(`-T ""`로 만든 항목이면 Keychain 확인은 남는다) |
 | `janitor`, `pressure-watch` | HOTL: 에이전트가 남긴 끝난 리소스를 정기적으로 정리한다 | `skills-sync setup disable <이름>` |
