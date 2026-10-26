@@ -1673,14 +1673,15 @@ class Fleet:
                 self.event({"at": iso(now), "kind": "inbox_aged_out", "session": i.get("session"),
                             "text": mask(f"{i['title']} (added {EXTERNAL_KEEP_DAYS}+ days ago; orch-dash inbox list)", 200)})
         mem["external_aged"] = [i["key"] for i in aged]
-        syncs, wait = sync_items(now, terms), cfg.get("reload_alert_min", RELOAD_ALERT_MIN) * 60
+        syncs, tries = sync_items(now, terms), cfg.get("reload_alert_tries", RELOAD_ALERT_TRIES)
         failed = {i["terminal"] for i in syncs if i["type"] == "reload_pending"}
+        for h in [h for h in RELOAD_FAILS if h not in failed]:
+            del RELOAD_FAILS[h]
         for h, title in (mem.get("reload_shown") or {}).items():
             if h not in failed:
                 self.event({"at": iso(now), "kind": "item_resolved", "session": (terms.get(h) or (None,))[0],
                             "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
-        syncs = [i for i in syncs if i["type"] != "reload_pending" or not parse(i["at"])
-                 or (now - parse(i["at"])).total_seconds() >= wait]
+        syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
         mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
         items += kept + syncs + list(self.checks)
         for it in sticky.values():
@@ -1854,8 +1855,9 @@ def sync_items(now, terms=None):
 
 RELOAD_RETRY_S = 120
 RELOAD_TRIED = {}  # handle -> monotonic time of the last retry
-RELOAD_ALERT_MIN = 45  # config reload_alert_min: a reload still not sent this long after skills-sync's first try,
-# three of its rounds and the dashboard's own retries, needs a person; younger, it is being retried, not waiting on one
+RELOAD_FAILS = {}  # handle -> the dashboard's retries in a row the terminal refused, though idle
+RELOAD_ALERT_TRIES = 3  # config reload_alert_tries: refused this often, a reload needs a person. Until then it is
+# being retried (a busy terminal is not retried at all, and gets the reload once it is idle), not waiting on anyone
 
 # Needs you order, newest first within a rank: what only the owner can settle, then a merge call waiting on them, then
 # the rest; a PR item a held board item names is last, until the hold lifts.
@@ -1920,6 +1922,9 @@ def retry_reloads(sync=None):
         with contextlib.redirect_stdout(io.StringIO()):
             if sync.broadcast(None, False, only=h) == 0:
                 done.append(h)
+                RELOAD_FAILS.pop(h, None)
+            else:
+                RELOAD_FAILS[h] = RELOAD_FAILS.get(h, 0) + 1
     return done
 
 

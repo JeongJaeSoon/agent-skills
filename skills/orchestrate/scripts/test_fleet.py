@@ -133,6 +133,9 @@ fleet.write_atomic(pending_path, json.dumps({"since": "t1", "failed": {
     "term_login": {"reason": "composer holds a draft"}, "term_export": {"reason": "title shows the agent is busy"},
     "term_gone": {"reason": "x"}}}))
 st = f.tick(force=True)
+assert not items(st, "reload_pending"), "still being retried: not the owner's yet"
+fleet.RELOAD_FAILS.update(term_login=fleet.RELOAD_ALERT_TRIES, term_export=fleet.RELOAD_ALERT_TRIES)
+st = f.tick(force=True)
 assert sorted((i["session"], i["title"], i["detail"]) for i in items(st, "reload_pending")) == [
     ("wt-export", "Reload not sent: ◑ ACME-102", "title shows the agent is busy"),
     ("wt-login", "Reload not sent: ✳ ACME-101", "composer holds a draft")], items(st, "reload_pending")
@@ -167,14 +170,21 @@ pending_path.unlink()
 assert fleet.retry_reloads(fake) == [] and len(fake.calls) == 1
 st = f.tick(force=True)
 assert any(e["kind"] == "item_resolved" and e["text"] == "reload_delivered: Reload not sent: ◑ ACME-102" for e in st["timeline"])
-# A reload still being retried is not the owner's yet: it shows once reload_alert_min has passed since the first try,
-# and leaves with a timeline line when it is delivered.
-fleet.write_atomic(pending_path, json.dumps({"since": fleet.iso(clock[0] - dt.timedelta(minutes=5)), "failed": {
-    "term_login": {"reason": "composer holds a draft"}}}))
-st = f.tick(force=True)
-assert not items(st, "reload_pending"), items(st, "reload_pending")
-fleet.write_atomic(pending_path, json.dumps({"since": fleet.iso(clock[0] - dt.timedelta(minutes=fleet.RELOAD_ALERT_MIN)), "failed": {
-    "term_login": {"reason": "composer holds a draft"}}}))
+# A reload is the owner's only once the idle terminal refused the dashboard's retry reload_alert_tries times in a row,
+# and it leaves with a timeline line when it is delivered.
+class Refusing(FakeBroadcast):
+    def broadcast(self, kind, dry_run, only=None):
+        self.calls.append(only)
+        return 1
+
+
+fleet.write_atomic(pending_path, json.dumps({"since": "t2", "failed": {"term_login": {"reason": "prompt box not recognized"}}}))
+refusing = Refusing()
+for n in range(fleet.RELOAD_ALERT_TRIES):
+    assert not items(f.tick(force=True), "reload_pending"), n
+    fleet.RELOAD_TRIED.clear()
+    assert fleet.retry_reloads(refusing) == []
+assert refusing.calls == ["term_login"] * fleet.RELOAD_ALERT_TRIES
 st = f.tick(force=True)
 assert [i["session"] for i in items(st, "reload_pending")] == ["wt-login"], items(st, "reload_pending")
 delivered = lambda st: sum(e["kind"] == "item_resolved" and e["text"] == "reload_delivered: Reload not sent: ✳ ACME-101"  # noqa: E731
