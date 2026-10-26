@@ -12,7 +12,7 @@ Installing the plugin brings the skills; it does not bring the user settings, th
 - Write `~/.claude/settings.json`, `~/.claude/agent-skills.json` or anything else under `~/.claude`, by any tool, and never run `setup.py --apply`, `bootstrap.py --write` or `gh auth login`. Those are the human's `!` lines. The auto-mode classifier refuses an agent's edit to its own settings, and the human reading the diff is what authorizes the bundled rules.
 - Run any setup step other than `python3 <checkout>/scripts/setup.py --actions-only [--orca-run]`, which the plugin's guard hook turns into a permission dialog. A dialog the human declines or a classifier denial is reported with the line for the human, never retried in another form.
 - Edit the personal repo's files. It is the user's; this skill only clones it and fast-forwards it.
-- Carry one PC's or one company's values: internal name lists, a personal `CLAUDE.md`, personal skills, agents or autoMode rules, and chat channels, tracker projects or notes paths from anywhere but the personal repo (step 4). Without them each feature keeps its default (off, or asks on first use).
+- Carry internal name lists, a personal `CLAUDE.md`, or personal skills, agents or autoMode rules, from any source. Chat channels, tracker projects and notes paths come only from the personal repo (step 4). Without them each feature keeps its default (off, or asks on first use).
 
 | Change after setup | Owner |
 |---|---|
