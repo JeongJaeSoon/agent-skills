@@ -239,7 +239,11 @@ Then land it. How depends on where you run:
   review, and the lead's wake lands it once it is ready. After landing, the brief's REPORT is the
   end: `worker_done` with the evidence, and the session closes itself in that turn
   (`end-session` §7).
-- **A standalone card** merges its own verified PR unless the user set a hold. When the
+- **A standalone card** merges its own verified PR unless the user set a hold. Under auto
+  mode that merge runs unasked only when the user's `autoMode.allow` has a rule for this
+  repository's merges (`orchestrate` Frame, "Check the permission chain"); without one the
+  classifier asks or refuses, and a refusal is reported, not retried in another form
+  (`orchestrate` `references/brief.md` FORBIDDEN). When the
   ticket, the brief or the project's standing orders name a merge procedure (a merge queue,
   a landing order, an exclusive lane), follow that procedure instead of merging at will.
   Otherwise merge when the PR is ready at its current head — CI green (read the log), review

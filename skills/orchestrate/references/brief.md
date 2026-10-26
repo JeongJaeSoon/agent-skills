@@ -205,8 +205,8 @@ APPROVED    The acts the human already approved for this unit, with their words 
             them, decide with the recommended default and report what you chose; do not ask.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED. Ask for these together, once.
-MODEL CALLS Another model (a subagent or an API) only when the task needs it; say which and
-            why before the call, and pick the model then.
+MODEL CALLS Another model (a subagent or an API) only when the task needs it; pick the model
+            then, and list each call with its reason in REPORT.
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
             Waiting on a review or another outside event: the program brief's LAND sentences from
             "A wait on a human review" through "rate_limit`).", pasted verbatim.
