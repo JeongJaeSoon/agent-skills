@@ -229,6 +229,7 @@ HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document subm
             unavailable, report that routing gap in the current task.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
+            Your first report to PARENT names your Run id, once your terminal is bound to it.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
 ```
 
