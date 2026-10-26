@@ -1857,6 +1857,7 @@ def cmd_demo(argv):
         return
     world = dash_demo.FakeFleetWorld(utcnow(), crowd=int(prog.opt(argv, "--crowd", "0")))
     world.seed_sent()
+    world.seed_timeline()
     if "--live" in argv:
         threading.Thread(target=dash_demo.live, args=(root, 20, world), daemon=True).start()
     serve("127.0.0.1", int(prog.opt(argv, "--port", "4780")), 20, make_fleet=world.fleet)

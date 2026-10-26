@@ -788,6 +788,49 @@ class FakeFleetWorld:
                 sent.add(**{**row, "now": fleet.parse(row["now"])})
             fleet.append_line(fleet.state_dir() / "sends.jsonl", self.dash_send)
 
+    def seed_timeline(self):
+        """A few days of invented timeline events, in the shape Fleet.event() writes, so the demo's timeline has one
+        of each kind and runs long enough to fold. Written once, before the first Fleet reads events.jsonl."""
+        import fleet
+        path = fleet.state_dir() / "events.jsonl"
+        if path.exists():
+            return
+        pr = lambda n, repo="acme/launchpad": {"pr": f"{repo}#{n}", "url": f"https://github.com/{repo}/pull/{n}"}
+        rows = [
+            (0.05, "mail_worker_done", "wt-invoice", "ACME-104 invoice PDF: PR open, tests pass", {}),
+            (0.1, "pr_checks_failed", "wt-export", "#42 feat: billing export", pr(42)),
+            (0.15, "item_question", "wt-export", "CSV or JSON for the export?", {}),
+            (0.2, "prompt", "wt-login", "Rebase on main and rerun the login tests", {}),
+            (0.3, "pr_approved", "wt-login", "#41 feat: login flow · reviewer-a", {**pr(41), "actor": "reviewer-a"}),
+            (0.4, "request_link", "wt-coord", "r3: lead-login/export", {}),
+            (0.5, "pr_review_comment", "wt-docs", "#43 docs: setup guide · reviewer-b", {**pr(43), "actor": "reviewer-b"}),
+            (0.7, "turn_done", "wt-docs", "Setup guide drafted; screenshots still to add.", {}),
+            (0.9, "item_resolved", "wt-docs", "answered: Which port should the guide use?", {}),
+            (1.0, "pr_head_pushed", "wt-login", "#41 feat: login flow", pr(41)),
+            (1.1, "pr_approval_stale", "wt-login", "#41 feat: login flow", pr(41)),
+            (1.3, "mail_escalation", "wt-tax", "Blocked: the tax table fixture is missing", {}),
+            (1.5, "item_login", "wt-scratch", "The release script needs GitHub access.", {}),
+            (1.8, "pr_review_requested", "wt-invoice", "#44 feat: invoice PDF · reviewer-a", {**pr(44), "actor": "reviewer-a"}),
+            (2.0, "dash_cleaned", None, "Removed 3 stale worktree entries from the sidebar", {}),
+            (2.5, "pr_merged", "wt-scratch", "#6 fix: cache key collision", pr(6, "acme/tools")),
+            (2.6, "request_done", "wt-coord", "r4: 초안 공유함", {}),
+            (3.0, "item_decision", "wt-coord", "Ship the export behind a flag, or wait for the schema change?", {}),
+            (26, "pr_checks_recovered", "wt-export", "#42 feat: billing export", pr(42)),
+            (27, "item_verify_ok", "wt-invoice", "PDF renders in the preview; check the totals row.", {}),
+            (28, "request_drop", "wt-coord", "r2: superseded by r3", {}),
+            (29, "inbox_aged_out", "wt-old", "Approval: Merge the cache spike?", {}),
+            (30, "pr_closed", "wt-old", "#5 spike: cache warmup", pr(5, "acme/tools")),
+            (31, "requests_error", None, "ValueError('ledger row without an id')", {}),
+            (32, "item_verify_failed", "wt-tax", "Rate table test fails for the reduced rate.", {}),
+            (33, "pr_changes_requested", "wt-tax", "#40 feat: tax rates · reviewer-b", {**pr(40), "actor": "reviewer-b"}),
+            (34, "mail_question", "wt-tax", "Round per line or per invoice?", {}),
+        ]
+        for i in range(36):  # older, routine work: prompts and finished turns, enough to need "Show more"
+            rows.append((50 + i * 1.5, "turn_done" if i % 2 else "prompt", ("wt-login", "wt-export", "wt-docs")[i % 3],
+                         f"Step {36 - i} of the setup checklist" if i % 2 else f"Continue with step {36 - i}", {}))
+        for h, kind, session, text, extra in sorted(rows, key=lambda r: r[0], reverse=True):  # oldest first, as the collector appends
+            fleet.append_line(path, {"at": _ago(self.now, h), "kind": kind, "session": session, "text": text, **extra})
+
     def fleet(self, clock=None):
         """A fleet.Fleet wired to this world (ORCH_FLEET_STATE must already point at a scratch directory)."""
         import fleet
