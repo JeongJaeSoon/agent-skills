@@ -39,6 +39,11 @@ def card_says(c=card, f=facts, pr=merged, terms=quiet_terms, quiet=40 * M, peopl
 assert card_says()[0] is True, card_says()
 assert card_says(pr={"state": "CLOSED", "headRefOid": "abc"})[0] is True
 assert card_says(quiet=None)[0] is True  # a card no Claude session ran in: the terminals decide
+# An idle Claude screen writes to its terminal every ~30 minutes with nothing new: with its transcript quiet, a write
+# 12 minutes ago is not work. A Codex or plain shell terminal still needs the full 30 minutes.
+idle_claude = [{"handle": "term_1", "agentIdentity": "claude", "lastOutputAt": (NOW - 12 * M) * 1000}]
+assert card_says(terms=idle_claude)[0] is True, card_says(terms=idle_claude)
+assert card_says(terms=[{**idle_claude[0], "agentIdentity": "codex"}])[0] is False
 cases = {
     "메인 체크아웃 또는 고정된 카드": card_says(c={**card, "isPinned": True}),
     "보호 목록의 경로": card_says(c={"path": "/x/lead"}),
@@ -52,6 +57,9 @@ cases = {
     "사람이 띄운 셸의 자식": card_says(people=[8]),
     "터미널 목록을 읽지 못함": card_says(terms=None),
     "출력이 30분 안에": card_says(terms=[{"handle": "t", "lastOutputAt": (NOW - 5 * M) * 1000}]),
+    "출력이 5분 안에": card_says(terms=[{"handle": "t", "agentIdentity": "claude", "lastOutputAt": (NOW - 2 * M) * 1000}]),
+    "t 출력이 30분 안에": card_says(terms=[{"handle": "t", "agentIdentity": "claude", "lastOutputAt": (NOW - 12 * M) * 1000}],
+                                 quiet=None),
     "세션 기록이 10분 전": card_says(quiet=10 * M),
     "하위 카드 /ws/app/w1 가 남아 있음(리드)": rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P,
                                                      [], [], ["/ws/app/w1"]),
@@ -168,6 +176,22 @@ rh.run_pass = lambda *a, **k: ran.append(a)
 with contextlib.redirect_stderr(io.StringIO()):
     assert rh.main([]) == 2 and ran == []
 rh.run_pass = real_pass
+
+# Transcript quiet comes from the last timestamped entry: the untimed lines an idle session appends keep the mtime
+# fresh without any work. With no timestamp in the tail, the mtime stands (reads as recent, keeps the card).
+qdir = tmp / "qprojects" / "-ws-app-idle"
+qdir.mkdir(parents=True)
+t = qdir / "s1.jsonl"
+t.write_text('{"type":"user","timestamp":"2026-10-25T07:20:36.064Z"}\n' + '{"type":"atis-latch","atis":""}\n' * 3)
+os.utime(t, (NOW - 60, NOW - 60))
+last = rh.reap.parse_ts("2026-10-25T07:20:36.064Z")
+assert rh.last_entry_time(t) == last
+assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle") == NOW - last
+(qdir / "s2.jsonl").write_text('{"type":"atis-latch"}\n')
+os.utime(qdir / "s2.jsonl", (NOW - 60, NOW - 60))
+assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle") == 60  # untimed only: the mtime keeps it
+assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/none") is None
+assert rh.last_entry_time(qdir / "gone.jsonl") is None
 
 # card_dir: only <root>/<repo>/<card>.
 assert rh.card_dir("/ws/app/done/web/src", "/ws") == "/ws/app/done"

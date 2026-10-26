@@ -19,12 +19,14 @@ reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부�
 
 | 대상 | 닫는 조건 | 동작 |
 |---|---|---|
-| 카드 | 그 브랜치의 자기 PR(포크 제외)이 MERGED/CLOSED이고 PR head가 worktree HEAD와 같다. 열린 PR이 없다. 변경 없음(추적 안 되는 파일 포함). 모든 Orca 터미널 출력과 세션 기록이 `idle_minutes`(30분) 넘게 조용하다. 사람이 띄운 프로세스가 없다 | `orca terminal close --worktree path:P --all`, ignored 파일은 휴지통, `orca worktree rm --run-hooks` |
+| 카드 | 그 브랜치의 자기 PR(포크 제외)이 MERGED/CLOSED이고 PR head가 worktree HEAD와 같다. 열린 PR이 없다. 변경 없음(추적 안 되는 파일 포함). 세션 기록이 `idle_minutes`(30분) 넘게 조용하고, Orca 터미널 출력도 그만큼 없다. 세션 기록이 있는 Claude 터미널은 출력 기준이 5분이다. 사람이 띄운 프로세스가 없다 | `orca terminal close --worktree path:P --all`, ignored 파일은 휴지통, `orca worktree rm --run-hooks` |
 | 스택 | compose가 만든 컨테이너의 작업 폴더(`com.docker.compose.project.working_dir`)가 모두 없거나 이번 회차에 닫은 카드다 | `docker compose -p P down`. `-v`·prune·볼륨·이미지 삭제는 하지 않는다 |
 | 리스너 | ppid 1인 node·bun·deno·vite가 TCP LISTEN 중이고, `idle_minutes`보다 오래됐고, cwd가 지워졌거나 cwd의 카드가 없다 | 그 pid에만 SIGTERM. pid와 시작 시각을 다시 확인한다 |
 | serve | `tailscale serve` 항목의 로컬 포트가 미리보기 범위(`serve_ranges`, 기본 4500–4599·32768–60999)에 있고 두 회차 연속 리스너가 없다 | `tailscale serve --https=<port> off`(또는 `--tcp`) |
 
 PR head와 HEAD가 같아야 한다는 조건은 리드가 머지된 브랜치 이름을 다시 쓰는 경우를 거른다. PR이 없는 카드는 닫지 않는다. 리드, 조사 카드, 막 만든 카드도 PR이 없기 때문이다. 카드 안에 살아 있는 Claude 세션이 리드나 오케스트레이터면, 얼마나 조용했든 닫지 않는다. 리드는 inbox를 기다리며 몇 시간씩 조용한 것이 정상이기 때문이다. 판별 근거는 둘 중 하나다. `--agent agent-skills:lead|orchestrator`(또는 `--name lead:<slug>`)로 시작했거나, 그 프로세스가 시작된 뒤 이 카드의 세션 기록을 쓴 세션이 `ROLE: lead|orchestrator`를 선언했다(reorient hook의 `roles/<session>.json`). 판별에 필요한 것을 못 읽어도 남긴다. 예를 들어 카드 안 프로세스의 행이 없거나, role 기록이 손상됐거나 권한이 없는 경우다. role 기록 파일이 아예 없는 경우만 "역할 없음"으로 본다. Orca에 하위 카드가 남아 있는 카드(리드)도 닫지 않는다.
+
+idle 상태의 Claude 화면은 새 내용이 없어도 약 30분마다 터미널에 출력한다. 그래서 Claude 터미널은 세션 기록으로 조용한지를 보고, 터미널 출력은 일하는 중인지만 가린다. 일하는 Claude는 스피너 때문에 초 단위로 출력하므로 5분 창으로 충분하다. 세션 기록을 모르거나 Claude가 아닌 터미널은 출력 30분 기준을 그대로 쓴다. idle 세션은 시각 없는 줄도 세션 기록에 덧붙여 파일 수정 시각을 바꾼다. 그래서 세션 기록이 조용한지는 끝부분 256KB에서 가장 최근의 `timestamp`로 본다. 시각이 있는 줄이 없으면 수정 시각을 쓴다.
 
 카드는 닫기 직전에 판정을 처음부터 다시 한다. 스캔 뒤 PR이 다시 열렸거나, 세션이 움직였거나, 사람이 명령을 띄웠으면 남긴다. 스택과 리스너는 실제로 닫힌 카드만 "없어진 카드"로 친다. 그래서 건너뛰거나 실패한 카드의 스택은 내리지 않는다. 스택은 작업 폴더 라벨이 없는 컨테이너가 하나라도 있거나, 라벨이 상대 경로이거나, 보호 경로 아래에 있으면 남긴다. serve는 `공개 포트 → 로컬 포트` 짝이 두 회차 연속 그대로이고 그 로컬 포트에 연결이 안 될 때만 끈다. 연결 확인은 소유자와 상관없이 실제로 접속해 본다. 끄기 직전에 설정과 연결을 다시 확인한다.
 
