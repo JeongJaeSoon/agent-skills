@@ -1,6 +1,6 @@
 ---
 name: watch-prs
-description: "Use when the user wants PRs waiting on them, or their own PRs waiting on reviewers, picked up as work — \"리뷰 요청 온 PR 정리해줘\", \"내 PR 리뷰 리마인드\", \"머지 가능한 내 PR 머지해줘\", \"내가 승인해야 할 봇 PR\", \"watch my PRs\", \"GitHub 알림 오면 깨워줘\" — and for each round of the watch-prs automation. Not for writing a review (code-flow:review-pr) or a program's own PRs (orchestrate)."
+description: "Use when the user wants PRs waiting on them, or their own PRs waiting on reviewers, picked up as work — \"리뷰 요청 온 PR 정리해줘\", \"내 PR 리뷰 리마인드\", \"머지 가능한 내 PR 머지해줘\", \"내가 승인해야 할 봇 PR\", \"watch my PRs\", \"GitHub 알림 오면 깨워줘\" — and for each round of the watch-prs automation. Not for writing the review itself, or for a program's own PRs (orchestrate)."
 ---
 
 # Watch PRs
@@ -184,6 +184,26 @@ channel; `--at` is that message's time), `no_thread` (no thread to reply in, so 
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
 A `refused` row stops every later action for that PR and reviewer. A row appended by hand for a request sent outside the round
 (`pr`, `reviewer`, `head` and an ISO `date` or a `slack_ts`, no `action`) counts as a sent `request`.
+
+A request or reminder you send by hand, outside the round, keeps the round's rules:
+
+- Bundle per reviewer, by the same `batch_*` and business-hours rules, and list only the PRs the
+  people it mentions are asked to review. A PR that is not theirs goes in your report, not in the
+  message.
+- Request the reviewer on GitHub when you ask, then confirm with
+  `gh pr view <n> --json reviewRequests` that the request is there: `--add-reviewer` has exited 0
+  and added no one.
+- A request posted as a reply in an existing thread, first or later, is not broadcast to the
+  channel.
+- When the human tells you to send now, send now, even after hours. Leave out each PR whose request
+  or last ping went out under three hours ago, and each reviewer the human excludes, and say which
+  you left out.
+- Schedule only an ask whose PR will surely still be waiting at the send time. A scheduled message
+  cannot be edited, the chat tool may give no way to delete it, and an empty scheduled-message list
+  does not prove it is gone: one listed nowhere has still posted at its time. After hours, an ask
+  whose PR may not be waiting by then is decided again at the next business-hours start, and sent
+  then if the PR still waits.
+- Log a row for each ask, as above, so the next round does not ask again.
 
 ### Authors the user is waiting on
 

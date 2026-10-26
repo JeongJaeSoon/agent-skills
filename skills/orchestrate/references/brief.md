@@ -48,8 +48,12 @@ ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a pa
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
             through `orch heavy <slug> -- <command>`, which caps them machine-wide.
-            Once verification is done, down the stacks you started in the same turn
-            (`docker compose -p <project> down`, never `-v`); a stack that has to stay
+            Once verification is done, down the stacks you started in the same turn, with the
+            verify skill's own teardown when VERIFY names one (the app may start containers and
+            networks outside compose that `compose down` leaves), else `docker compose -p
+            <project> down`; either way keep volumes (never `-v`). Teardown runs bare, never
+            through `orch heavy`: the load gate refuses it exactly when the machine needs it.
+            A stack that has to stay
             gets a keep reason and deadline in the reap ledger (reap-resources, compose-stack).
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
             the browser only once that prints held; `orch release browser` when done.
@@ -59,7 +63,9 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
-            or live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            or live:<feature>; never the implementer>. When this brief has you wait for the
+            coordinator's OK before landing, record the verdict and run `orch land` only after
+            that OK names the same head. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
@@ -240,7 +246,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless, unrelated to the ticket. Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Set Base from `gh pr list --state open`, not memory: an open PR the unit needs, or one already doing its scope, is its base. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
 - **Bound the wait for an answer** (the end of PEERS, or WAITING). A worker that kept re-arming an hour-long `check --wait` after its question waited 18 hours. "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
-- An agent that will use a write tool guarded by a first-write confirmation hook gets, in its brief or prompt, an instruction to invoke that policy skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
+- An agent that will use a write tool whose host asks it to load a policy skill before the first write gets, in its brief or prompt, an instruction to load that skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
 - Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files, auto-memory lessons) comes back in the worker's message, and the coordinator writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.

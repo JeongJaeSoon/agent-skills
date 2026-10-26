@@ -14,7 +14,7 @@ import board  # noqa: E402
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
 state = tmp / "dashboard"
 env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
-       "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "TZ": "UTC"}
+       "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC"}
 T0 = "2026-10-13T14:00:00Z"
 NOW = "2026-10-13T14:30:00Z"
 
@@ -31,16 +31,45 @@ def ok(*args):
 
 
 def stamp(at=T0, **older):
-    """Every row confirmed at `at`, except the ids given, confirmed at their own time."""
+    """Every row confirmed at `at`, except the ids given, confirmed at their own time; a wait started then too."""
     p = state / "board.json"
     b = json.loads(p.read_text())
     for k, r in b["rows"].items():
         r["reported_at"] = older.get(k, at)
+        if "since" in r:
+            r["since"] = r["reported_at"]
+    for d in b["doing"]:
+        if "since" in d:
+            d["since"] = at
     p.write_text(json.dumps(b, ensure_ascii=False))
 
 
-assert orch("brief", "render", "--periodic")[1].startswith("board 에도 fleet 에도 리드·카드 없음")
-assert orch("brief", "render", "--periodic", "--no-fill")[1] == "board 에 행 없음"
+def orch_env(extra, *args):
+    r = subprocess.run([sys.executable, str(HERE / "prog.py"), *args], capture_output=True, text=True, env={**env, **extra})
+    return r.returncode, r.stdout.rstrip("\n"), r.stderr.strip()
+
+
+# Nothing to show is still a report: the headline says so and 오너가 할 일 is there, so no report is made by hand.
+assert ok("brief", "render", "--periodic", "--now", NOW) == "**14:30 · 리드·카드 행 없음**\n\n🙋 **지금 오너가 할 일** — 없음"
+# The time is the system clock's, in the session's time zone; the model never writes it.
+for tz in ("UTC", "Asia/Tokyo"):
+    import datetime as dt, time
+    before = dt.datetime.now().astimezone(__import__("zoneinfo").ZoneInfo(tz))
+    code, out, _ = orch_env({"TZ": tz}, "brief", "render", "--no-refresh")
+    after = dt.datetime.now().astimezone(__import__("zoneinfo").ZoneInfo(tz))
+    assert code == 0 and out.splitlines()[0] in (f"**{before:%H:%M} · 리드·카드 행 없음**", f"**{after:%H:%M} · 리드·카드 행 없음**"), out
+# With no state.json, or one older than state_min, the render collects the fleet itself; when it cannot (no orca on
+# PATH), it renders from the old files and the headline says how old they are.
+code, out, _ = orch_env({"PATH": str(tmp / "no-bin")}, "brief", "render")
+assert code == 0 and out.splitlines()[0].endswith(" · 리드·카드 행 없음 · 세션 목록 없음 · 갱신 실패: orca not found**"), out
+state.mkdir(parents=True, exist_ok=True)
+(state / "state.json").write_text(json.dumps({"generated_at": "2000-01-01T00:00:00Z", "sessions": []}))
+code, out, _ = orch_env({"PATH": str(tmp / "no-bin")}, "brief", "render")
+assert code == 0 and "· 세션 목록 " in out and "일 전 기준 · 갱신 실패: orca not found**" in out.splitlines()[0], out
+(state / "state.json").unlink()
+# The model's decisions keep the form: a question with its recommendation, numbered after the registered ones.
+code, _, err = orch("brief", "render", "--now", NOW, "--decision", "캐시를 지울까")
+assert code == 1 and err.startswith("--decision is one line: <question>"), err
 
 # Refusals say what is missing.
 assert orch("board", "set", "x/y", "--title", "고아")[2] == "no row x to be the parent; add it first"
@@ -67,26 +96,29 @@ ok("board", "set", "search/ph4", "--kind", "phase", "--title", "ph4 · ph5", "--
 # Lead 2: no phases, so the lead is the row. Three PRs wait only on rev-a: one folded row, and the lead row stays.
 ok("board", "lead", "add", "notify", "--handle", "term_0FAKE2", "--repo", "acme/web")
 # Its PRs go to feature/notify, and the lead's own PR lands that branch on main: the one row naming its own base.
+# The lead row waits on the owner (--owner 오너): it goes to 지금 오너가 할 일, the rev-a fold to 다른 사람 대기.
 ok("board", "set", "notify", "--title", "알림 정리", "--program", "알림 정리", "--status", "waiting", "--progress", "3/4",
-   "--next", "리뷰 · 사람", "--pr", "acme/web#50")
+   "--next", "충돌 해소 승인", "--owner", "오너", "--pr", "acme/web#50")
 for n, t in (("51", "설정"), ("52", "발송"), ("53", "로그")):
     ok("board", "set", f"notify/p{n}", "--title", t, "--pr", f"acme/web#{n}", "--status", "waiting", "--progress", "3/4",
        "--next", "10/13 09:30 의뢰")
 ok("board", "set", "notify/p54", "--title", "문구 다듬기와 길이 정리", "--pr", "acme/web#54", "--progress", "2/4",
    "--next", "CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커")
-# Lead 3: two PRs on one reviewer fit the name cell. Lead 4: its terminal is gone and it last reported 3 hours ago.
+# Lead 3: two PRs on one reviewer fit the name cell; the lead row waits on a person nobody named, so it is 확인 필요.
+# Lead 4: its terminal is gone and it last reported 3 hours ago.
 ok("board", "lead", "add", "triage", "--handle", "term_0FAKE3", "--repo", "acme/ops")
 ok("board", "set", "triage", "--title", "분류", "--status", "waiting", "--next", "리뷰 · 사람")
 ok("board", "set", "triage/p61", "--pr", "acme/ops#61", "--status", "waiting")
 ok("board", "set", "triage/p62", "--pr", "acme/ops#62", "--status", "waiting")
 ok("board", "lead", "add", "ghost", "--handle", "term_0FAKE4", "--repo", "acme/ops")
 ok("board", "set", "ghost", "--title", "정리 작업", "--progress", "1/3", "--next", "구현 · 워커")
-# Two PRs with no lead, waiting on the same person: a bullet under the section's table.
+# Two PRs with no lead, both asking the owner for review: a bullet under the section's table, and one owner item.
 ok("board", "set", "loose-70", "--kind", "task", "--repo", "acme/ops", "--title", "로그", "--pr", "acme/ops#70")
 ok("board", "set", "loose-71", "--kind", "task", "--repo", "acme/ops", "--title", "대시보드", "--pr", "acme/ops#71")
-# Moving work with no row of its own goes on the 진행 중 list after the rows' next steps; only work set aside on purpose
-# goes on 보류, after the held rows' conditions. The same held item added twice in other words stays one item.
-ok("board", "doing", "add", "다른 팀 답변 대기", "--owner", "사람", "--next", "10/14 회신")
+# Moving work with no row of its own goes on the 진행 중 list after the rows' next steps; a wait on another person's
+# reply (--waiting) goes on 다른 사람 대기; only work set aside on purpose goes on 보류, after the held rows'
+# conditions. The same held item added twice in other words stays one item.
+ok("board", "doing", "add", "다른 팀 답변 대기", "--owner", "다른 팀", "--next", "10/14 리마인드", "--waiting")
 ok("board", "doing", "add", "로그 누락 조사", "--owner", "워커", "--next", "원인 보고")
 ok("board", "later", "add", "prod 배포 창", "--trigger", "10/16")
 ok("board", "later", "add", "캐시 TTL 다시 보기", "--trigger", "10/20")
@@ -106,7 +138,7 @@ def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026
         "reviewers": [{"login": r, "requested": True, "state": None, "team": False} for r in reviewers]}}
 
 
-(state / "prs.json").write_text(json.dumps({"prs": dict([
+(state / "prs.json").write_text(json.dumps({"me": "octo-owner", "prs": dict([
     # A merged PR is probed once a day (fleet TIER_EVERY "done"): its old probe neither ages the headline nor gets ⚠️.
     pr("acme/web#40", "MERGED", merged="2026-10-01T03:00:00Z", probed="2026-10-12T17:00:00Z"), pr("acme/web#42", "MERGED", merged="2026-10-13T13:00:00Z"),
     pr("acme/web#45", ci="failure", reviewers=["rev-a"], merge_state="CLEAN", decision=None),
@@ -114,7 +146,7 @@ def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026
     *(pr(f"acme/web#{n}", reviewers=["rev-a"], base="feature/notify") for n in (51, 52, 53)),
     pr("acme/web#54", ci="failure", base="feature/notify"), pr("acme/ops#88", probed="2026-10-13T11:00:00Z", ci="pending"),
     pr("acme/ops#61", reviewers=["rev-b"]), pr("acme/ops#62", reviewers=["rev-b"]),
-    pr("acme/ops#70", reviewers=["rev-c"]), pr("acme/ops#71", reviewers=["rev-c"]),
+    pr("acme/ops#70", reviewers=["octo-owner"]), pr("acme/ops#71", reviewers=["octo-owner"]),
 ])}))
 (state / "state.json").write_text(json.dumps({"sessions": [
     {"id": s, "terminals": [{"handle": h}]} for s, h in (("s1", "term_0FAKE1"), ("s2", "term_0FAKE2"), ("s3", "term_0FAKE3"))]}))
@@ -131,9 +163,9 @@ if "--print" in sys.argv:
     sys.exit()
 
 GOLDEN = """\
-**14:30 · 바뀐 행 1 · PR 상태 3h 전 기준**
+**14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)**
 
-🔄 진행 · ⏳ 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
+🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
 
 PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머지 sha
 
@@ -158,13 +190,13 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 | ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — |
 | 🔴 | 정리 작업 | — | ███░░░░░ 1/3 |
 
-- ⏳ 2건 rev-c 대기 — 분야 로그·대시보드
+- 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
 **acme/web — 알림 정리 → feature/notify**
 
 | | 리드/Phase | PR | 진행 |
 |---|---|---|---|
-| ⏳ | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 |
+| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 |
 | 🔄 | └ 문구 다듬기와 길이 정리 | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 |
 | ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 |
 
@@ -177,18 +209,24 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 - └ 🔄 정렬 — CI 재실행 · 워커
 - 검색 개선
 - └ 🔄 재색인 — 권한 · 결정 1
-- ⏳ 분류 — 리뷰 · 사람
-- └ ⏳ rev-b 대기 — 리뷰 · rev-b
+- ❔ 분류 — 확인 필요: 누구 대기인지 기록 없음
 - 🔴 정리 작업 — 세션 없음 · 3h 전
-- ⏳ 알림 정리 — 리뷰 · 사람
+- 알림 정리
 - └ 🔄 문구 다듬기와 길이 정리 — CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
-- └ ⏳ rev-a 대기 — 10/13 09:30 의뢰
-- 🔄 다른 팀 답변 대기 — 10/14 회신 · 사람
 - 🔄 로그 누락 조사 — 원인 보고 · 워커
+
+⏳ **다른 사람 대기**
+
+- rev-b · 리뷰 [#61](https://example.test/61)·#62 · 30분 전부터 → p61·p62
+- rev-a · 리뷰 [#51](https://example.test/51)·#52·#53 · 30분 전부터 → 설정·발송·로그 · 다음: 10/13 09:30 의뢰
+- 다른 팀 · 30분 전부터 → 다른 팀 답변 대기 · 다음: 10/14 리마인드
 
 ❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
 
-🙋 **지금 오너가 할 일** — 없음
+🙋 **지금 오너가 할 일**
+
+- 충돌 해소 승인 · [#50](https://example.test/50) → 알림 정리
+- 리뷰 · #70·#71 → 로그·대시보드
 
 ⏸️ **보류**
 
@@ -198,7 +236,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 code, first, err = FIRST
 assert code == 0, err
-assert first.splitlines()[0] == "**14:30 · 지난 보고 없음, 굵게 없음 · PR 상태 3h 전 기준**", first.splitlines()[0]
+assert first.splitlines()[0] == "**14:30 · 지난 보고 없음, 굵게 없음 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)**", first.splitlines()[0]
 assert "**" not in "\n".join(l for l in first.splitlines() if l.startswith("| ")), "no saved table, so no row is bold"
 assert "(지난 보고와 동일)" not in first
 code, second, err = SECOND
@@ -216,15 +254,16 @@ assert not any(m in tg for m in ("**", "|", "](")), tg
 assert "✅ ph2 #42 42c0ffe (바뀜) — ████████ 8/8" in tg.splitlines(), tg
 assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4" in tg.splitlines(), tg
 assert "└ 🔄 문구 다듬기와 길이 정리 — CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
-assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "⏳ 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4" in tg.splitlines(), tg
-assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
-assert "🔄 다른 팀 답변 대기 — 10/14 회신 · 사람" in tg.splitlines(), tg
+assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "🙋 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4" in tg.splitlines(), tg
+assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)"
+assert "⏳ 다른 사람 대기\n\nrev-b · 리뷰 #61·#62 · 30분 전부터 → p61·p62\n" in tg, tg
+assert "🙋 지금 오너가 할 일\n\n충돌 해소 승인 · #50 → 알림 정리\n리뷰 · #70·#71 → 로그·대시보드\n" in tg, tg
 assert tg.endswith("⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5\n10/16 → prod 배포 창\n10/20 → 캐시 TTL을 다시 보기"), tg
 
 # --json carries what a dashboard or the model needs beside the text.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--headline", "ph2 머지"))
 # The model's headline replaces the change count only: the staleness facts stay.
-assert out["text"].startswith("**14:30 · ph2 머지 · PR 상태 3h 전 기준**"), out["text"].splitlines()[0]
+assert out["text"].startswith("**14:30 · ph2 머지 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)**"), out["text"].splitlines()[0]
 assert out["changed"] == ["search/ph2"], out["changed"]
 assert out["stale"] == ["ghost"] and out["width_ok"] is True
 
@@ -332,15 +371,15 @@ fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" 
              or "c2" in l or "c4" in l]
 assert fill_rows == [
     "**acme/fill — 정산 리드 → main**",
-    "| ⏳ | 정산 리드 | — | — |",
+    "| 🙋 | 정산 리드 | — | — |",
     "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — |",
-    "| ⏳ | └ c2 | — | — |",
+    "| 🙋 | └ c2 | — | — |",
     "**acme/fill**",
     "| 🔄 | c4 | — | — |",
-    "- ⏳ 정산 리드 — 턴 종료",
+    "- 🔄 정산 리드 — 턴 종료",
     "- └ 🔄 FILL-1 영수증 — 작업 중",
-    "- └ ⏳ c2 — 확인 대기 · 사람",
-    "- 🔄 c4 — 작업 중 · 3h 전"], filled
+    "- 🔄 c4 — 작업 중 · 3h 전",
+    "- 확인 대기 → c2"], filled
 assert "held" not in filled and "c3" not in filled and "c5" not in filled, filled
 # The last committed report never had fleet rows (it ran without --fill): they are not bold as new on every poll.
 (tmp / "brief-last" / "top-level.json").write_text(json.dumps({"ts": T0, "rows": {}}))
@@ -373,7 +412,7 @@ assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
     sess("runner", "standalone", "root", "idle", name="automations-runner")], "prs": []}))
 (tmp / "brief-last" / "top-level.json").unlink()
 carded = ok("brief", "render", "--periodic", "--now", NOW)
-assert "| 🔄 | 관측 카드 | #77 | — |" in carded and "- 🔄 관측 카드 — 리뷰 대기 · rev-a" in carded and "runner" not in carded, carded
+assert "| 🔄 | 관측 카드 | #77 ? | — |" in carded and "- 🔄 관측 카드 — 리뷰 대기 · rev-a" in carded and "runner" not in carded, carded
 
 # Open owner requests get one line with their count, the oldest's age and how many are left unlinked; none, no line.
 assert "📝" not in carded
@@ -392,5 +431,185 @@ b["later"] += [{"title": "콘솔 시안 대비 main에서 누락된 절차 확�
 (state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
 held = ok("brief", "render", "--periodic", "--now", NOW)
 assert held.count("#9 land 뒤") == 1 and "- #9 land 뒤 → 콘솔 시안 대비 main 누락 절차만 확인" in held.splitlines(), held
+
+# A report on request: no board at all, only the fleet's sessions and the stage table. The live card is a row, the stage
+# table goes first, the model's insight comes after 진행 중 and its decision is numbered after the registered one.
+req = tmp / "req"
+renv = {"ORCH_FLEET_STATE": str(req / "dashboard"), "ORCH_BRIEF_LAST": str(req / "brief-last")}
+
+
+def rok(*args):
+    code, out, err = orch_env(renv, *args)
+    assert code == 0, (args, out, err)
+    return out
+
+
+rok("stage", "add", "login", "--title", "로그인 개선", "--pr", "acme/web#40")
+rok("stage", "set", "login", "--col", "dev", "--mark", "ok", "--evidence", "v1.7.2")
+rok("stage", "set", "login", "--col", "prod", "--mark", "checking", "--by", "QA")
+rok("stage", "env", "--prod", "v1.7.1", "--dev", "v1.7.2")
+rok("stage", "next", "v1.7.2 prod 배포 (사람, 미정)")
+rok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
+(req / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
+    sess("root", "orchestrator", None, "working"),
+    sess("c7", "task", "root", "working", task_title="ABC-1 정렬", gh_repo="acme/web",
+         report={"next": "CI 통과 → 리뷰 의뢰 · 워커", "pr": "acme/web#45"})],
+    "prs": [{"key": "acme/web#40", "state": "MERGED", "merged_at": "2026-10-12T03:00:00Z"}]}))
+(req / "dashboard" / "prs.json").write_text(json.dumps({"prs": dict([pr("acme/web#45", ci="pending")])}))
+REQUEST = ["brief", "render", "--now", NOW, "--headline", "정렬 PR CI 중, 유료 플랜 하나만 정해 주세요",
+           "--insight", "★ 정렬은 CI 가 끝나면 리뷰로 간다",
+           "--decision", "검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지"]
+REQUEST_GOLDEN = """\
+**14:30 · 정렬 PR CI 중, 유료 플랜 하나만 정해 주세요**
+
+prod: v1.7.1 · dev: v1.7.2
+✅ 완료·확인 · ❌ 미완료·실패 · ⚠️ 일부·추정 · 🔄 확인 중 · 해당 없음
+
+| 작업 | feature·대표 PR | PR 머지 | dev 확인 | prod 확인 |
+|---|---|---|---|---|
+| 로그인 개선 | acme/web#40 | ✅ 10/12 | ✅ v1.7.2 | 🔄 (QA) |
+
+다음 순서
+1. v1.7.2 prod 배포 (사람, 미정)
+
+🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)
+
+PR: ❗ 사람이 풀 것 · CI… CI 진행
+
+**acme/web → main**
+
+| | 리드/Phase | PR | 진행 |
+|---|---|---|---|
+| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | — |
+
+🔄 **진행 중**
+
+- 🔄 ABC-1 정렬 — CI 통과 → 리뷰 의뢰 · 워커
+
+★ 정렬은 CI 가 끝나면 리뷰로 간다
+
+❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음
+
+2. 검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지
+
+🙋 **지금 오너가 할 일** — 없음"""
+request = rok(*REQUEST)
+if "--print" in sys.argv:
+    print(request)
+if request != REQUEST_GOLDEN:
+    import difflib
+    sys.exit("\n".join(difflib.unified_diff(REQUEST_GOLDEN.splitlines(), request.splitlines(), "golden", "rendered", lineterm="")))
+for start, rows in table_width.tables(request):
+    assert table_width.table_width(rows) <= 78, (start, table_width.table_width(rows))
+# The periodic form of the same fleet has no stage table; Telegram has no markdown and keeps the stage table's lines.
+assert "| 작업 |" not in rok("brief", "render", "--periodic", "--now", NOW)
+tg_req = rok(*REQUEST, "--telegram")
+assert not any(m in tg_req for m in ("**", "|", "](")), tg_req
+assert "📋 작업별 (prod: v1.7.1 · dev: v1.7.2)" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
+# A stage table wider than 78 columns is reported like any other.
+rok("stage", "add", "wide", "--title", "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "--pr", "acme/web#1234")
+rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", "로그로만 확인하고 화면은 아직 보지 않음")
+code, _, err = orch_env(renv, *REQUEST)
+assert code == 1 and err == "a table is wider than 78 columns", (code, err)
+
+# GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR
+# closed unmerged is ⏸️ PR 닫힘. A lead the board holds still shows its live cards whose PR no board row has, and a PR
+# the PR list does not have says so instead of showing a bare number.
+mg = tmp / "merged"
+menv = {"ORCH_FLEET_STATE": str(mg / "dashboard"), "ORCH_BRIEF_LAST": str(mg / "brief-last")}
+
+
+def mok(*args):
+    code, out, err = orch_env(menv, *args)
+    assert code == 0, (args, out, err)
+    return out
+
+
+mok("board", "lead", "add", "L", "--handle", "term_0FAKEL", "--repo", "acme/web")
+mok("board", "set", "L/ph1", "--kind", "phase", "--status", "waiting", "--pr", "acme/web#45", "--next", "머지 대기")
+mok("board", "set", "L/ph1/t1", "--title", "하위", "--pr", "acme/web#46")
+mok("board", "set", "L/ph2", "--kind", "phase", "--status", "moving", "--pr", "acme/web#48", "--next", "리뷰 대응")
+(mg / "dashboard" / "prs.json").write_text(json.dumps({"prs": dict([
+    pr("acme/web#45", "MERGED", merged="2026-10-13T13:00:00Z"), pr("acme/web#46", "MERGED", merged="2026-10-13T13:00:00Z"),
+    pr("acme/web#48", "CLOSED")])}))
+(mg / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
+    sess("root", "orchestrator", None, "working"),
+    sess("lead", "orchestration", "root", "working", h="term_0FAKEL"),
+    sess("c9", "task", "lead", "working", task_title="ABC-9 라이브", gh_repo="acme/web", report={"pr": "acme/web#47"}),
+    sess("c8", "task", "lead", "working", task_title="ABC-8 보드에 있음", gh_repo="acme/web", report={"pr": "acme/web#46"})],
+    "prs": []}))
+merged = json.loads(mok("brief", "render", "--periodic", "--now", NOW, "--json"))
+text = merged["text"]
+assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
+assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
+assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | — |" in text and "- PR 닫힘 → L ph2" in text, text
+assert "| 🔄 | └ ABC-9 라이브 | #47 ? | — |" in text and "- └ 🔄 ABC-9 라이브 — 작업 중" in text, text
+assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
+
+
+class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old
+    sources = {"orca": {"error": None}, "github": {"error": "gh: API rate limit exceeded"}}
+
+    def tick(self):
+        return {}
+
+
+os.environ["ORCH_FLEET_STATE"] = str(tmp / "gh-down")
+board.fleet.Fleet = GhDown
+assert board.refresh(fleet.parse(NOW), 5) == "PR 목록 갱신 실패: gh: API rate limit exceeded"
+assert "PR 상태 없음 1" in merged["headline_facts"] and "PR: ? PR 상태 없음" in text, (merged["headline_facts"], text)
+
+# Who a wait is on: the owner (🙋, 지금 오너가 할 일) or another person (⏳, 다른 사람 대기), each item in one list
+# only. A review the owner was asked for, a review someone else was asked for, another team's reply, a decision, and
+# a row that says nothing of who it waits on (❔, 진행 중 with 확인 필요: no guess).
+wd = tmp / "who"
+wenv = {"ORCH_FLEET_STATE": str(wd / "dashboard"), "ORCH_BRIEF_LAST": str(wd / "brief-last")}
+
+
+def wok(*args):
+    code, out, err = orch_env(wenv, *args)
+    assert code == 0, (args, out, err)
+    return out
+
+
+def section(text, head):
+    """The item lines under a section heading, or [] when the report has no such section."""
+    blocks = text.split("\n\n")
+    return blocks[blocks.index(head) + 1].splitlines() if head in blocks else []
+
+
+wok("board", "lead", "add", "W", "--handle", "term_0FAKEW", "--repo", "acme/web")
+wok("board", "set", "W/mine", "--title", "내 리뷰", "--pr", "acme/web#91", "--status", "waiting")
+wok("board", "set", "W/theirs", "--title", "남 리뷰", "--pr", "acme/web#92", "--status", "waiting")
+wok("board", "set", "W/reply", "--title", "디자인 답변", "--status", "waiting", "--owner", "디자인팀", "--next", "10/15 리마인드")
+wok("board", "set", "W/ask", "--title", "누구 대기", "--status", "waiting")
+wok("decide", "add", "--title", "캐시 정책", "--option", "TTL 1h", "--option", "TTL 1d", "--recommend", "1")
+(wd / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
+    sess("lw", "orchestration", "root", "working", h="term_0FAKEW")]}))
+who_prs = {"me": "octo-owner", "prs": dict([pr("acme/web#91", reviewers=["octo-owner"]), pr("acme/web#92", reviewers=["rev-x"])])}
+(wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
+stamp_dir, state = state, wd / "dashboard"
+stamp()
+state = stamp_dir
+text = wok("brief", "render", "--periodic", "--now", NOW)
+mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "🔄 **진행 중**")
+assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | — |" in text, text
+assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | — |" in text, text
+assert "| ⏳ | └ reply 디자인 답변 | — | — |" in text and "| ❔ | └ ask 누구 대기 | — | — |" in text, text
+assert mine == ["- 리뷰 · [#91](https://example.test/91) → 내 리뷰"], mine
+assert theirs == ["- rev-x · 리뷰 [#92](https://example.test/92) · 30분 전부터 → 남 리뷰",
+                  "- 디자인팀 · 30분 전부터 → reply 디자인 답변 · 다음: 10/15 리마인드"], theirs
+assert "- └ ❔ ask 누구 대기 — 확인 필요: 누구 대기인지 기록 없음" in moving, moving
+assert not any(w in l for l in mine + moving for w in ("남 리뷰", "디자인 답변")), (mine, moving)
+assert not any(w in l for l in theirs + moving for w in ("내 리뷰", "캐시 정책")) and "누구 대기" not in "".join(mine + theirs)
+assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in text and "캐시 정책" not in "".join(mine), text
+# Without the owner's gh login a requested review could be anyone's: 확인 필요, not someone else's.
+del who_prs["me"]
+(wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
+text = wok("brief", "render", "--periodic", "--now", NOW)
+assert "- └ ❔ 내 리뷰 — 확인 필요: 오너 login 모름" in text and "→ 내 리뷰" not in text, text
+# A waiting row on the owner by name, a check status nobody may set, and 🙋 as a status shorthand.
+assert board.is_owner("오너", None) and board.is_owner("@Octo-Owner", "octo-owner") and not board.is_owner("rev-x", "octo-owner")
+assert board.status_of("🙋") == "owner" and orch("board", "set", "search", "--status", "check")[2].startswith("--status is one of")
 
 print("ok")

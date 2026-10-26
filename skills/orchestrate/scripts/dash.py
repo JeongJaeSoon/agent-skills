@@ -1598,10 +1598,11 @@ def brief_report():
     """The periodic report exactly as `orch brief render` prints it: the renderer is the one implementation of
     the table rules, so the page shows its output and never builds a second copy. Run per request (well under a
     second) so a `orch board set` shows on the next poll. A lead or card that never wrote to the board still shows,
-    from its session and its report file."""
+    from its session and its report file. --no-refresh: this server's collector is what keeps state.json fresh, and a
+    collect per poll while its orca source is down would hit the timeout on every one."""
     try:
-        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json"],
-                           capture_output=True, text=True, timeout=30)
+        r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--json",
+                            "--no-refresh"], capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return {"message": "orch brief render timed out after 30 s"}
     try:
@@ -1730,7 +1731,7 @@ def launchd_path():
 def agent_spec(port):
     env = {"PATH": launchd_path()}
     env.update({k: os.environ[k] for k in ("PROGRAMS_HOME", "ORCH_DASH_LABEL", "ORCH_FLEET", "ORCH_FLEET_STATE",
-                                           "ORCH_SKILLS", "ORCH_PR_STATS") if k in os.environ})
+                                           "ORCH_SKILLS", "ORCH_PR_STATS", "ORCH_CLAUDE_HOMES") if k in os.environ})
     return {"Label": agent_label(),
             "ProgramArguments": ["/usr/bin/env", "python3", str(HERE / "dash.py"), "serve", "--port", str(port)],
             "EnvironmentVariables": env, "WorkingDirectory": str(home()), "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,

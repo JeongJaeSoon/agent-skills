@@ -54,7 +54,7 @@ page can pass every rule and still not work.
 5. **Report** with the screen, in the PR's sticky comment or next to the mockup link:
 
    ```markdown
-   ### UI 리뷰 (head `abc1234`, 1280·390, 기준 화면: /agents)
+   ### UI 리뷰 (head `abc1234`, 1280·390, 기준 화면: /projects)
    | 규칙 | 판정 | 근거 |
    |---|---|---|
    | row-height | PASS | |

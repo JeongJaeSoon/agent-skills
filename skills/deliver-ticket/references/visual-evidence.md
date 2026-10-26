@@ -14,8 +14,8 @@ and laid out the same way on every card, and a verdict from the lead. This file 
 ## Taking the shots
 
 Use the project's verification skill or harness when it reaches the screen (a `verify-*` skill,
-its fixture and its login). Otherwise drive the running app with `ego-browser`, which already holds
-the browser's sign-ins:
+its fixture and its login). Otherwise drive the running app with `ego-browser` (a CLI that runs a script in the user's
+own browser; `$EGO_BROWSER` points at it), which already holds the browser's sign-ins:
 
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" capture --url http://127.0.0.1:5173/settings \

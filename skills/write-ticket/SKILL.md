@@ -73,7 +73,7 @@ that style on the conditional sections above.
 - **Title**: start with a verb, name the outcome. Not "대시보드 수정" but
   "대시보드 메트릭 로딩 실패 시 fallback 노출". The list view shows nothing else.
 - **Language**: `tracker.<adapter>.language` in the config, else the user's own rule for that
-  tracker, else Korean, for the title and the body. Code identifiers, logs, error messages, and
+  tracker, else the language the user writes in, for the title and the body. Code identifiers, logs, error messages, and
   commands stay verbatim.
   Write the prose per `write-plainly`.
 - **Acceptance criteria must be checkable**, each with how to check it. "잘 동작한다" has no

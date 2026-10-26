@@ -222,7 +222,7 @@ Monitors configured public channels for mentions and replies when requested. Use
 ## Writing
 
 ### brief
-Reports completed work, current work, decisions and human-only steps with evidence. Uses the requested channel format; periodic program reports come from `orch brief render --periodic`.
+Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed; the model passes only the headline sentence, decisions and an insight block.
 
 ### map-features
 - **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is `how`.
@@ -349,7 +349,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - Session mode reads this session's transcript. Program mode reads an evidence bundle: the ledger's `signal` entries, merge failures, main reds, failed verdicts, decision records, and the `measure-delivery` results. There are three reviewers (judgment, tooling, divergent thinking).
   - A synthesizer sorts the learnings into Accepted / Rejected / Backlog. Every one of them gets a line in the learnings ledger (`reflect.ledger` in the notes store). For each learning, the ledger records the signal, evidence pointers, how often it happened, what was fixed, the change (PR or commit), the verification numbers a script produced, and whether it recurred later.
   - A skill changes only after two or more distinct cases (reproduced security or data defects are the exception). A single occurrence stays a candidate until it happens again.
-  - Session mode applies changes after the user approves. Program mode has no human around, so it fixes and verifies in a worktree, opens a single draft PR, and leaves an approval request in the digest. A human does the merge. Description changes are checked for triggering with `trigger-probe.sh`; body and script changes are checked for behavior with tests that exercise the changed path or by reproducing the case. Without any verification it records `none`.
+  - Session mode applies changes after the user approves. Program mode has no human around, so it fixes and verifies in a worktree, opens a single draft PR, and leaves an approval request in the digest. A human does the merge. Description changes are checked for triggering with `claude plugin eval`; body and script changes are checked for behavior with tests that exercise the changed path or by reproducing the case. Without any verification it records `none`.
   - Before calling the reviewers, it checks for each signal whether the current HEAD already fixed it, and marks it (changes since `skills_commit` in `program.json`). `signal` entries in other programs' ledgers count toward the occurrence count too. A fix that changes a command or flag also updates every copy of it across `skills/`.
   - It runs at every Close, even for a program with no signals and no failures, and records whether the applied learnings held up in this program (`held through`, deduplicated by program slug).
   - It never proposes changes to the permission hook, the `orch land` gate, tests and graders, or reflect itself; those go to Backlog.

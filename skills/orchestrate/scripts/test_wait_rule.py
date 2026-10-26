@@ -34,7 +34,7 @@ assert "`MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE` and `PREDICATE` lines" 
 assert re.search(r"^ROLE: lead <slug>$", lead, re.M), "Lead brief template lost its ROLE line"
 
 for name in ("SKILL.md", "brief.md"):
-    assert "first-write confirmation hook" in texts[name], f"{name}: lost the policy-skill-before-first-write rule"
+    assert "load a policy skill before the first write" in texts[name], f"{name}: lost the policy-skill-before-first-write rule"
 assert "takes the lead's own terminal input" in skill, "SKILL.md lost who answers a lead's permission dialog"
 assert "HUMAN ONLY  Permission dialogs," not in brief, "brief.md HUMAN ONLY still gives every permission dialog to the human"
 

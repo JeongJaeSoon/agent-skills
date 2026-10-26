@@ -20,8 +20,8 @@ the ending is `EndConversation`, which has its own rule (§5).
 | "종료하면 돼?", "종료해도 될까?" | is anything left undone? | Answer that. No prompt, no command. |
 | "세션 정리", "카드 정리", "종료해줘" | end this session | Continue to §2. |
 
-This user says 정리 for the record and 종료 for the end, and often says 정리 first and 종료
-several turns later. Do not collapse them.
+Users often ask for the record first (정리) and for the end (종료) several turns later. Do not
+collapse them.
 
 ## 2. Ask Orca what this session is
 
