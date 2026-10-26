@@ -8,18 +8,32 @@ Claude Code 플러그인이다. 에이전트가 티켓 하나를 첫 수정부�
 - 사람에게 돌아오는 것: 되돌릴 수 없는 행동과 사람 몫의 행동(파괴적 migration, 공유 브랜치 force push, 바깥으로 보내기, 프로덕션 배포, 사람의 리뷰 승인), 그리고 권한 계층이 거부한 행동. 거부된 행동은 어떤 형태로도 다시 하지 않고 보고한다.
 - 사람이 보는 곳: `brief`의 현황 보고(완료·진행·결정·사람만), 대시보드(`orch-dash`)의 결정·권한 창·받은편지함, 트래커 상태와 노트.
 
-근거와 세부는 아래 [안전 경계](#안전-경계)에 있다. 일부 스킬은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔다.
+근거와 세부는 아래 [안전 경계](#안전-경계)에 있다.
+
+이 문서에 나오는 말:
+
+- **Orca**: 여러 Claude Code 세션을 worktree별 터미널로 띄우는 멀티 에이전트 IDE(`orca` CLI). Orca에서 일 하나를 맡은 세션을 카드, 프로젝트 안에서 티켓 하나를 맡은 카드를 워커, 워커들을 이끄는 세션을 코디네이터라고 부른다.
+- **착지(land)**: 준비된 PR을 정해진 순서로 머지하는 것. 프로젝트 안에서는 `orch land`만 한다.
+- **auto mode 분류기**: Claude Code의 auto permission mode에서 행동마다 허용·거부를 판정하는 모델. `autoMode` 규칙이 그 기준이다.
+- **`!` 한 줄**: Claude Code 입력칸에서 `!`로 시작하는 줄은 사람이 그 세션에서 셸 명령을 직접 실행한다. 일부 스킬은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔다.
 
 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d)(스킬별 언제·무엇, `docs/skills.md`에서 생성), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR)(흐름과 `orch` 착지 과정 그림). 두 페이지는 한국어·English·日本語를 오른쪽 위에서 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다.
 
 ## 도입 절차
 
+설치 경로는 셋이다. 처음이면 첫 번째를 고른다.
+
+- [새 PC: 설치와 승인 창으로](#새-pc-설치와-승인-창으로): Claude Code 안에서 설치하고, 에이전트가 체크아웃·권장 설정·정기 자동화까지 준비한다. 사람은 `!` 한 줄과 권한 창 승인만 한다.
+- [셸에서 직접](#셸에서-직접): 같은 결과를 셸에서 `setup.py`로 만든다.
+- 마켓플레이스 설치본만: 스킬과 hook은 돌지만 권장 autoMode 규칙·정기 자동화·실시간 반영은 없다. [셸에서 직접](#셸에서-직접) 끝에 있다.
+
 ### 준비물
 
 - Claude Code와 GitHub(`gh` 로그인).
-- 티켓 트래커: Linear 또는 Jira 어댑터(`use-tracker`). 노트: Obsidian vault 또는 일반 Markdown 폴더(`use-notes`). 둘 다 설정하지 않으면 그 기능은 쓰지 않고 멈추거나 묻는다([설정 전환 안내](docs/configuration-migration.md)).
-- Orca(멀티 에이전트 IDE, `orca` CLI): `orchestrate`, `handoff-ticket`, `dispatch-card`, Orca automation(janitor 등)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다.
-- macOS: 동기화 작업과 `pressure-watch`·`preview-watch`는 launchd를 쓴다. Linux에서는 `setup.py`가 crontab 줄을 출력한다. 다른 OS의 대안은 [docs/automation.md](docs/automation.md#처음-설치할-때).
+- 티켓 트래커: Linear 또는 Jira 어댑터(`use-tracker`). `tracker.adapter`가 없으면 Linear다.
+- 노트: Obsidian vault 또는 일반 Markdown 폴더(`use-notes`). 설정하지 않으면 노트를 쓰지 않고 멈추거나 묻는다([설정 전환 안내](docs/configuration-migration.md)).
+- Orca: `orchestrate`, `handoff-ticket`, `dispatch-card`, Orca automation(`janitor`, `watch-prs`·`watch-mentions` 회차)이 쓴다. `deliver-ticket`은 Orca 카드 밖에서도 돈다. 스킬마다 Orca를 어디에 쓰는지는 [스킬 카탈로그](docs/skills.md)의 그 스킬 절에 있다.
+- macOS: 동기화 작업과 `pressure-watch`·`preview-watch`·`share-server`·`reap-hard`는 launchd를 쓴다. Linux에서는 `setup.py`가 crontab 줄을 출력한다. 다른 OS의 대안은 [docs/automation.md](docs/automation.md#처음-설치할-때).
 - 독립 리뷰와 브라우저 검증은 사용 가능한 리뷰어와 브라우저 자동화 도구로 한다. 특정 모델이나 별도 모델 플러그인은 필요하지 않다.
 
 ### 새 PC: 설치와 승인 창으로
@@ -37,7 +51,7 @@ Orca가 프로필마다 `CLAUDE_CONFIG_DIR`을 따로 쓰면 프로필마다 1~6
 
 **개인 설정 저장소**: private git 저장소 하나에 `agent-skills.json`(트래커·노트·채팅 같은 개인 키)과 트래커 사이트 규칙 Markdown을 두면 `setup-pc`가 `~/.config/agent-skills/personal`로 clone해 diff에 넣는다. URL에 토큰을 넣지 않는다. 인증은 `gh` 로그인으로 받는다. 형식과 옮기지 않는 것(사내 이름 목록, 개인 지침, 개인 autoMode 규칙, 토큰)은 [docs/new-pc.md](docs/new-pc.md#개인-설정-저장소).
 
-**확인**: `setup.py --apply`가 끝에 낸 점검 표(또는 `python3 skills/setup-pc/scripts/setup_check.py check`)에 `missing`·`differs`·`warn`이 없고, 새 세션의 `claude plugin list`에 `agent-skills@inline`이 체크아웃 경로로 보이면 된다.
+**확인**: `setup.py --apply`가 끝에 낸 점검 표(또는 `python3 skills/setup-pc/scripts/setup_check.py check`)에 `missing`·`differs`·`warn`이 없고, 새 세션의 `claude plugin list`에 `agent-skills@inline`이 체크아웃 경로로 보이면 된다. `@inline`은 `CLAUDE_CODE_PLUGIN_DIRS`로 체크아웃을 직접 읽는다는 뜻이고, 이때 마켓플레이스 사본 `agent-skills@jeongjaesoon`은 `setup.py`가 꺼 둔다(둘 다 켜면 hook이 두 번 돈다).
 
 ### 셸에서 직접
 
@@ -53,11 +67,11 @@ python3 <체크아웃>/scripts/setup.py --apply <해시>  # 위가 출력한 줄
 
 dry run은 아무것도 쓰지 않는다. 해시는 계획 전체의 해시라서 그 사이에 무엇이 바뀌면 `--apply`가 거절한다. `--apply`는 `~/.claude/settings.json`과 `agent-skills.json`을 백업하고, 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, autoMode·`permissions.allow` 묶음, 최소 설정 키) 중 없는 것만 더한 뒤, 15분마다 도는 동기화 작업과 기본 on 정기 자동화를 켜고 `setup-pc` 점검 표를 낸다. 이미 있는 값은 덮지 않고(켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 다시 돌리면 바뀌는 것이 없다. 하는 일·옮기지 않는 것은 [docs/new-pc.md](docs/new-pc.md).
 
-새 설정은 새 세션부터 적용되므로 떠 있는 세션은 재시작한다. 거기서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
+새 설정은 새 세션부터 적용되므로 떠 있는 세션은 재시작한다. 설치 직후 그 세션에서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
 체크아웃 로드와 동기화만 원하면 `scripts/bootstrap.py`(dry run, `--write`)를 쓴다. 근거는 [docs/platform.md](docs/platform.md) §5.
 
-고치지 않고 쓰기만 하는 PC는 마켓플레이스 설치본만으로도 된다. 설치본은 커밋 단위 복사본이다.
+고치지 않고 쓰기만 하는 PC는 마켓플레이스 설치본만으로도 스킬과 hook이 돈다. 설치본은 커밋 단위 복사본이라 갱신하기 전까지 그대로다. 권장 설정과 정기 자동화가 필요해지면 `setup-pc`("새 PC 세팅해줘")를 부른다.
 
 ```bash
 claude plugin marketplace add JeongJaeSoon/agent-skills
@@ -94,6 +108,7 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 | `janitor-load` | on | Orca automation(Orca 필요) | 30분마다 5분 load만 재고, CPU 수 이상이면 janitor와 같은 정리를 한 번 더 돈다(1시간 안에 돈 회차가 있거나 janitor가 꺼져 있으면 건너뜀) |
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
 | `pressure-watch` | on | macOS LaunchAgent | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([docs/pressure.md](docs/pressure.md)) |
+| `share-server` | off | macOS LaunchAgent | 공유 폴더를 127.0.0.1에서 Caddy로 읽기 전용 서빙한다. tailnet 공개는 하지 않는다([docs/share-server.md](docs/share-server.md)) |
 | `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 | `watch-mentions` | on(`mentions` 키가 있을 때) | Orca automation | `watch-mentions` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 
@@ -106,11 +121,11 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 
 ## 사용 시나리오
 
-스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 아래 따옴표 안은 각 스킬 description에 있는 트리거 문구다.
+스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 내장 명령이나 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. `/brief`는 Claude Code 내장 명령이라 `/agent-skills:brief`로 부른다. 아래 따옴표 안은 각 스킬 description에 있는 트리거 문구다.
 
 **1. 티켓 하나를 끝까지: 「이 티켓 끝내줘」, 「머지까지 진행해줘」 → `deliver-ticket`**
 
-에이전트가 계획, 테스트, 작성자 외 독립 리뷰, PR, CI 확인, 머지, 머지 뒤 남은 일(릴리스·배포 확인)까지 한다. 완료는 PR이 아니라 티켓의 완료 기준을 모두 채운 것이고, 기준마다 근거를 달아 티켓을 닫는다. 혼자 도는 카드는 준비된 PR을 묻지 않고 머지한다. 사람이 hold를 걸었거나 직접 보겠다고 했거나, 계속 flaky한 체크·되돌릴 수 없는 migration 같은 예외 상황이면 머지 전에 묻는다.
+티켓 키(예: `ABC-1`)나 내용을 함께 건넨다. 에이전트가 계획, 테스트, 작성자 외 독립 리뷰, PR, CI 확인, 머지, 머지 뒤 남은 일(릴리스·배포 확인)까지 한다. 완료는 PR이 아니라 티켓의 완료 기준을 모두 채운 것이고, 기준마다 근거를 달아 티켓을 닫는다. 혼자 도는 카드는 준비된 PR을 묻지 않고 머지한다. 사람이 hold를 걸었거나 직접 보겠다고 했거나, 계속 flaky한 체크·되돌릴 수 없는 migration 같은 예외 상황이면 머지 전에 묻는다.
 
 **2. 지금 어디까지 왔는지: 「현황 보고해줘」, 「브리핑해줘」 → `brief`**
 
@@ -118,7 +133,7 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 
 **3. 프로젝트 하나를 여러 워커로: 「PM 겸 오케스트레이터로 끝까지」 → `orchestrate`**
 
-코디네이터가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책이 `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `measure-delivery`가 후속 티켓 증가·재작업·토큰을 잰다.
+코디네이터가 티켓마다 Orca 워커를 띄우고, 워커는 `deliver-ticket`으로 일한 뒤 자기 PR을 `orch land`로 착지시킨다. migration·CI 설정 같은 공유 파일은 독점 레인에서 하나씩 머지된다. 사람은 `orch-dash serve` 대시보드에서 목표·완료 조건·착지 순서·워커·토큰을 보고, 결정과 권한 창에 거기서 답한다. 머지 정책 기본값은 `autonomous`(워커가 착지)다. `human-gate`로 정하면 워커는 READY에서 멈추고 사람이 게이트를 풀어야 착지한다. 끝나면 `measure-delivery`가 후속 티켓 증가·재작업·토큰을 잰다.
 
 **4. auto mode가 막았을 때: 「auto mode 가 막았어」, 「이거 허용되게 규칙 추가해줘」 → `tune-automode`**
 
@@ -126,7 +141,7 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 
 **5. 나를 기다리는 PR: 「리뷰 요청 온 PR 정리해줘」, 「내 PR 리뷰 리마인드」 → `watch-prs`**
 
-나를 직접 지명한 리뷰 요청을 우선순위대로 한 통으로 모으고, 내 PR 중 리뷰를 기다리는 것은 리마인드로 바꾼다. 머지 허용 목록(`merge_repos`)을 설정하면 그 저장소의 내 PR 중 모든 게이트를 통과한 것을 머지한다. 내 계정만 할 수 있는 봇 PR 승인은 링크·diff 요약·`!` 실행 줄과 함께 사람에게 넘긴다. `agent-skills.json`에 `prs` 키가 있어야 돈다.
+`agent-skills.json`에 `prs` 키가 있어야 돈다. 기본(`prs.kinds`가 `["review_request"]`)은 나를 직접 지명한 리뷰 요청만 우선순위대로 한 통으로 모은다. `prs.kinds`에 더한 것만 더 한다: `review_wait`는 리뷰를 기다리는 내 PR의 리마인드, `ready_to_merge`는 머지 허용 목록(`merge_repos`) 저장소의 내 PR 중 모든 게이트를 통과한 것의 머지, `ownergate`는 내 계정만 할 수 있는 봇 PR 승인을 링크·diff 요약·`!` 실행 줄과 함께 사람에게 넘기기다.
 
 ## 기능 지도
 
@@ -142,7 +157,7 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 | [글쓰기](docs/skills.md#글쓰기) | `brief`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
 | [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고. 원본 이름을 유지해 upstream을 따라간다 |
 
-명령은 `bin/`에 있다: `orch`(프로그램 원장과 착지 게이트), `orch-dash`(대시보드), `skills-sync`(동기화와 reload 브로드캐스트), `secure-fill`, 그리고 LaunchAgent 도구 `preview-watch`·`share-server`·`reap-hard`(문서: [preview-watch](docs/preview-watch.md), [share-server](docs/share-server.md), [reap-hard](docs/reap-hard.md)). 대시보드 페이지 구성은 `skills/orchestrate/references/dashboard.md`.
+명령은 `bin/`에 있다: `orch`(프로그램 원장과 착지 게이트), `orch-dash`(대시보드), `skills-sync`(동기화와 reload 브로드캐스트), `secure-fill`, 그리고 LaunchAgent 도구 `preview-watch`(열린 링크는 `preview-links`)·`share-server`·`reap-hard`(문서: [preview-watch](docs/preview-watch.md), [share-server](docs/share-server.md), [reap-hard](docs/reap-hard.md)). 대시보드 페이지 구성은 `skills/orchestrate/references/dashboard.md`.
 
 pstack upstream은 이렇게 따라간다. 출처와 수정 내용은 `vendor/pstack/NOTICE.md`, 고정 커밋은 `vendor/pstack/manifest.json`.
 
