@@ -138,10 +138,11 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             sent from Bash carries the command as the path of a file you wrote with the Write tool,
             never quoted: a hook that matched the command's text blocks a message quoting it. That
             file goes under <temp>/orch-refusal/<your worktree's directory name>/, where <temp> is
-            the absolute path TMPDIR holds, or /tmp when TMPDIR is unset; whatever else your brief
-            says about writing outside the worktree, you may write there. You do not tear it down:
-            the reader moves it to the trash after reading. If that Write is itself refused, report
-            the tool and the target only, without the command. Paste
+            the absolute path TMPDIR holds, or /tmp when TMPDIR is unset, with a name no other
+            report there uses (a timestamp); whatever else your brief says about writing outside
+            the worktree, you may write it there. You do not tear it down: the reader moves it to
+            the trash after reading. If that Write is itself refused, report the refused act's tool
+            and target only, without its command. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this
