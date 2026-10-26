@@ -410,6 +410,10 @@ assert reap.cli_cards({"worktrees": [card("/w/cli", "cli")], "truncated": True})
 assert reap.cli_cards({"worktrees": [card("/w/pin", "cli", isPinned=True), card("/w/far", "cli", hostId="ssh-1"),
                                      {"lineage": {"origin": "cli", "parentWorktreeId": "r::/r"}}]}) == set()
 assert reap.cli_cards(["not", "a", "dict"]) is None
+# `--no-parent` leaves lineage null; Orca still records the CLI as the creator.
+nop = lambda path, **kw: {"path": path, "isMainWorktree": False, "lineage": None, "cliProvenance": {"kind": "created-by-cli"}, **kw}
+assert reap.cli_cards({"worktrees": [nop("/w/nop"), nop("/w/pin", isPinned=True), nop("/w/far", hostId="ssh-1"),
+                                     nop("/r", isMainWorktree=True), {"path": "/w/app", "lineage": None, "cliProvenance": None}]}) == {"/w/nop"}
 
 # Only worktrees a worker made count; a retained row (context-only dispatch, user takeover) marks the user's.
 ws = [{"dispatchId": "d1", "terminalState": "released", "resource": {"worktreeId": "r::/w/made"}},
@@ -474,6 +478,18 @@ with tempfile.TemporaryDirectory() as tmp:
     reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
     got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, quiet=lambda p: 7 * 3600)
     assert [(i["target"], i["why"]) for i in got] == [(True, "PR acme/app#2 merged (CLI 로 만든 카드)")], got
+    # A `--no-parent` card is a CLI card too: its merged PR makes it a target, and a session holding it is asked to close.
+    reap.orca_json = lambda *a: {"worktrees": [nop(wt)]}
+    got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, quiet=lambda p: 7 * 3600)
+    assert [(i["target"], i["why"]) for i in got] == [(True, "PR acme/app#2 merged (CLI 로 만든 카드)")], got
+    reap.cwds = lambda: {77: wt}
+    reap.worktree_facts = lambda path, pr, live, cwd_of, **kw: {"main": False, "repo": "/r", **ok, "turn": live, "users": [77],
+                                                                "live": live or "pid 77 이 이 worktree 를 cwd 로 사용 중"}
+    got = reap.janitor_scan({"orca-worktree", "done-card"}, [], [], [], PRS.get, quiet=lambda p: 7 * 3600)
+    assert [(i["kind"], i["target"]) for i in got] == [("orca-worktree", False), ("done-card", True)], got
+    reap.cwds = lambda: {}
+    reap.worktree_facts = lambda path, pr, live, cwd_of, **kw: {"main": False, "repo": "/r", **ok, "live": live}
+    reap.orca_json = lambda *a: {"worktrees": [card(wt, "cli")]}
     # Known only by lineage, it may be a lead whose branch name an old merged PR used: it waits for quiet too.
     got = reap.janitor_scan({"orca-worktree"}, [], [], [], PRS.get, quiet=lambda p: 3600)
     assert [(i["target"], i["why"]) for i in got] == [(False, "PR acme/app#2 merged, 세션이 1h0m 만 조용")], got
