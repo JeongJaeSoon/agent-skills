@@ -73,7 +73,8 @@ skills-sync setup disable <이름>         # 끄기
   경로와 `git -C`를 쓴다.
 - precheck가 `schedule`을 실행한 셸의 환경 변수를 물려받는다고 가정하지 않는다. 상태 폴더 같은 경로는 명령의 플래그로
   넘기고, 명령은 `python3`로 시작한다. 회차의 세션은 `env`나 `NAME=value` 접두를 별도 명령으로 보고 거부할 수 있다
-  (reap.py `schedule`은 기본값과 다른 상태 폴더와 ledger만 `--state`, `--ledger`로 붙인다).
+  (reap.py `schedule`은 기본값과 다른 상태 폴더와 ledger만 `--state`, `--ledger`로 붙이고, mentions.py `schedule`도
+  기본값과 다른 상태 폴더만 `--state`로 붙인다).
 - `orca automations run`(수동 실행)은 precheck를 건너뛴다. precheck가 맞게 거르는지는 스크립트를 직접 돌려서
   exit code로 확인한다. 지난 결과를 기억하는 precheck라면 직접 돌린 회차도 기억되므로, 검증할 때는 상태
   폴더를 따로 둔다(reap.py는 `--state`).
