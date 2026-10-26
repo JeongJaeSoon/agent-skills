@@ -72,7 +72,7 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {} };
+const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, tlShow: {}, tlOpen: new Set() };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 function fleetSection(section, arg) {
@@ -322,15 +322,58 @@ function itemList(st, items, opts) {
   return `<ul class="rows items">${pinned.map((it) => itemRow(st, it, opts)).join("") || `<li class="empty">${icon("check")}Nothing waiting on you.</li>`}</ul>`;
 }
 
-function timelineList(st, rows) {
-  const ss = byId(st);
-  let day = "";
-  return `<ul class="rows feed">${rows.map((e) => {
-    const d = e.at ? dayLabel(e.at) : "", head = d !== day ? `<li class="day eyebrow">${esc((day = d))}</li>` : "";
-    const s = ss[e.session], tone = /fail|changes|ci_/.test(e.kind) ? "bad" : /approved|done|ok/.test(e.kind) ? "good" : /mail|prompt/.test(e.kind) ? "accent" : "";
-    return `${head}<li class="ev note ${tone ? "tone-" + tone : ""}"><span class="tm">${e.at ? hhmm(e.at) : ""}</span>
-      <span class="tx"><span class="mono muted">${esc(e.kind)}</span> ${esc(e.text || "")}${s ? `<a class="by" href="${sessionHref(s.id)}">${esc(s.name)}</a>` : ""}</span></li>`;
-  }).join("") || '<li class="muted">No events yet.</li>'}</ul>`;
+// A timeline event's state picks its rail icon and colour (.tl-<state> in style.css). Each state has its own shape,
+// so colour is not the only cue. A kind not named here (one the collector adds later) reads as info.
+function eventState(kind) {
+  if (/fail|error|escalation|changes_requested/.test(kind)) return "bad";
+  if (/^(pr_merged|pr_approved|pr_checks_recovered|request_done|turn_done|item_verify_ok|mail_worker_done)$/.test(kind)) return "done";
+  if (kind === "item_resolved") return "info";
+  if (/^(item_|mail_(question|ask|decision))|^pr_(review_comment|approval_stale)$/.test(kind)) return "wait";
+  if (/^(prompt|pr_head_pushed|pr_review_requested|request_link|mail_)/.test(kind)) return "active";
+  return "info";
+}
+const TL_STATE = { done: "Done", active: "In progress", wait: "Waiting on you", bad: "Problem", info: "Info" };
+const TL_TONE = { done: "tone-good", active: "tone-accent", wait: "tone-warn", bad: "tone-bad", info: "" };
+const TL_LABEL = {
+  prompt: "Prompt sent", turn_done: "Turn finished", item_resolved: "Inbox item closed", inbox_aged_out: "Inbox item aged out",
+  pr_approved: "Approved", pr_changes_requested: "Changes requested", pr_review_comment: "Review comment",
+  pr_review_requested: "Review requested", pr_head_pushed: "New commit", pr_approval_stale: "Approval on old commit",
+  pr_checks_failed: "CI failed", pr_checks_recovered: "CI recovered", pr_merged: "Merged", pr_closed: "Closed unmerged",
+  request_link: "Request linked", request_done: "Request done", request_drop: "Request dropped", requests_error: "Request ledger error",
+  mail_worker_done: "Worker done", mail_escalation: "Escalation", mail_question: "Worker question",
+};
+const eventLabel = (kind) => TL_LABEL[kind] || (kind.startsWith("item_") && ITEM[kind.slice(5)] ? ITEM[kind.slice(5)][0]
+  : kind.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()));
+const TL_ICON = {
+  done: '<circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.2l2.1 2.1 4.3-4.4" fill="none" stroke="var(--panel)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  active: '<circle cx="8" cy="8" r="7" fill="currentColor"/><g fill="var(--panel)"><circle cx="4.9" cy="8" r="1.15"/><circle cx="8" cy="8" r="1.15"/><circle cx="11.1" cy="8" r="1.15"/></g>',
+  wait: '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="2.4" fill="currentColor"/>',
+  bad: '<circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M8 4.4v4.4" stroke="var(--panel)" stroke-width="1.9" stroke-linecap="round"/><circle cx="8" cy="11.4" r="1.1" fill="var(--panel)"/>',
+  info: '<circle cx="8" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+};
+const TL_STEP = 50;
+
+// Newest first, one group per day. `fold` names the list so "Show more" survives a redraw; `here` is the session
+// whose page this is (its rows have nowhere else to go).
+function timelineList(st, rows, { fold = null, here = null } = {}) {
+  const ss = byId(st), today = dayLabel(Date.now()), yesterday = dayLabel(Date.now() - 864e5);
+  const shown = fold ? rows.slice(0, F.tlShow[fold] || TL_STEP) : rows;
+  let day = null;
+  const out = shown.map((e) => {
+    const d = e.at ? dayLabel(e.at) : "";
+    const head = d !== day ? `<li class="tl-day eyebrow">${esc((day = d) === today ? "Today" : d === yesterday ? "Yesterday" : d || "Undated")}</li>` : "";
+    const kind = e.kind || "event", state = eventState(kind), id = `${e.at}|${kind}|${e.session}`;
+    const other = ss[e.session] && e.session !== here ? ss[e.session] : null;
+    return `${head}<li class="tl-ev tl-${state} ${TL_TONE[state]}" ${other ? `data-go="${sessionHref(other.id)}"` : ""}>
+      <span class="tl-tm" title="${esc(e.at ? new Date(e.at).toLocaleString() : "")}">${e.at ? hhmm(e.at) : ""}</span>
+      <span class="tl-rail"><svg viewBox="0 0 16 16" role="img"><title>${TL_STATE[state]}</title>${TL_ICON[state]}</svg></span>
+      <div class="tl-body"><div class="tl-title">${esc(eventLabel(kind))}${other ? `<a class="tl-by" href="${sessionHref(other.id)}">${esc(other.name)}</a>` : ""}</div>
+        ${e.text ? `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(e.text)}</div>` : ""}</div>
+      ${e.pr && safeUrl(e.url) ? link(e.url, `${esc(e.pr)} ${icon("arrow")}`, "tl-end mono") : ""}</li>`;
+  }).join("");
+  const more = rows.length - shown.length;
+  return `<ul class="tl">${out || '<li class="tl-none muted">No events yet.</li>'}${more > 0
+    ? `<li class="tl-more"><button class="chip" data-tl-more="${esc(fold)}">Show ${more > TL_STEP ? `${TL_STEP} more · ${more} hidden` : `${more} more`}</button></li>` : ""}</ul>`;
 }
 
 // The graph redraws every poll: a team (the server serves no avatar for one) or an avatar that failed once is not
@@ -1055,7 +1098,7 @@ function fleetSession(st) {
       ${a.state === "working" && a.tool ? `<div class="kv"><span class="eyebrow">now</span><div class="mono">${esc(a.tool)} ${esc(a.detail || "")}</div></div>` : ""}
       ${a.last ? `<div class="kv"><span class="eyebrow">last reply</span><div class="pre">${esc(a.last)}</div></div>` : ""}</li>`).join("");
   const items = (st.items || []).filter((i) => i.session === s.id);
-  const tl = (st.timeline || []).filter((e) => e.session === s.id).slice(0, 30);
+  const tl = (st.timeline || []).filter((e) => e.session === s.id);
   return `<div class="view-head"><div><h2>${phaseDot(s)} ${esc(s.name)}</h2>
       <p>${kindTag(st, s)} ${esc(s.phase)}${parent ? ` · under <a class="link" href="${sessionHref(parent.id)}">${esc(parent.name)}</a>` : ""}
       ${s.task_title ? ` · task: ${esc(s.task_title)}` : ""} · ${projBadge(s.project)}<span class="mono">${s.branch ? esc(s.branch) : ""}</span></p></div></div>
@@ -1064,13 +1107,13 @@ function fleetSession(st) {
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside">${items.length}</span></div>${itemList(st, items, { showSession: false })}</div>
       <div class="card"><div class="card-head"><h3>Agents</h3><span class="aside">${(s.agents || []).length}</span></div><ul class="rows agents">${agents || '<li class="muted">No agent in this worktree.</li>'}</ul></div>
       <div class="card wide" data-src="github"><div class="card-head"><h3>Pull requests</h3></div>${relGraph(st, s.id)}</div>
-      <div class="card wide"><div class="card-head"><h3>Timeline</h3></div>${timelineList(st, tl)}</div>
+      <div class="card wide"><div class="card-head"><h3>Timeline</h3></div>${timelineList(st, tl, { fold: `session:${s.id}`, here: s.id })}</div>
     </div>`;
 }
 
 function fleetTimeline(st) {
   return `<div class="view-head"><div><h2>Timeline</h2><p>Prompts, finished turns, PR review and CI changes, and orchestration mail, newest first.</p></div></div>
-    <div class="card">${timelineList(st, st.timeline || [])}</div>`;
+    <div class="card">${timelineList(st, st.timeline || [], { fold: "all" })}</div>`;
 }
 
 const agentTerms = (s) => (s.terminals || []).filter((t) => t.agent && t.connected && t.writable);
@@ -1210,7 +1253,17 @@ document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
   if (key) F.draft[key] = e.target.value.replace(/[\r\n]+/g, " ");
 });
+// A clipped description opens in place and closes again; one that already fits has nothing to open.
+function tlToggle(desc) {
+  const id = desc.dataset.tlOpen, open = !F.tlOpen.has(id);
+  if (open && desc.scrollHeight <= desc.clientHeight + 1) return false;
+  if (open) F.tlOpen.add(id); else F.tlOpen.delete(id);
+  desc.classList.toggle("open", open); desc.setAttribute("aria-expanded", String(open));
+  return true;
+}
+
 document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.dataset?.tlOpen != null) { e.preventDefault(); tlToggle(e.target); return; }
   if (e.key !== "Enter" || e.isComposing) return;
   if (e.target.id === "chat-input") { e.preventDefault(); chatAction("ask"); } else if (e.target.dataset.decideInput) { e.preventDefault(); decideAction(e.target.dataset.decideInput, "text"); }
 });
@@ -1221,6 +1274,10 @@ document.addEventListener("click", async (e) => {
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const decide = e.target.closest("[data-decide]");
   if (decide) { decideAction(decide.dataset.key, decide.dataset.decide); return; }
+  const more = e.target.closest("[data-tl-more]");
+  if (more) { const k = more.dataset.tlMore; F.tlShow[k] = (F.tlShow[k] || TL_STEP) + TL_STEP; renderView(); return; }
+  const desc = e.target.closest("[data-tl-open]");
+  if (desc && !String(getSelection()) && tlToggle(desc)) return;
   // A click on the row opens its session; its own controls, links and a text selection keep theirs.
   const go = e.target.closest("[data-go]");
   if (go && !e.target.closest("a,button,input,textarea,select") && !String(getSelection())) { location.hash = go.dataset.go; return; }

@@ -604,6 +604,60 @@ process.stdout.write(JSON.stringify(out));"""
     assert (num(got["ci"]), num(got["review"]), num(got["mergeable"])) == (["2"], ["2"], []), got
     assert "Updated" in page and "data-rel" in page
 
+    # Timeline: every kind the collector writes reads as one state (its rail icon), an unknown kind as info.
+    states = {
+        "done": ["pr_merged", "pr_approved", "pr_checks_recovered", "request_done", "turn_done", "item_verify_ok", "mail_worker_done"],
+        "active": ["prompt", "pr_head_pushed", "pr_review_requested", "request_link", "mail_status"],
+        "wait": ["item_approval", "item_question", "item_decision", "item_run_command", "item_login", "mail_question",
+                 "pr_review_comment", "pr_approval_stale"],
+        "bad": ["pr_checks_failed", "pr_changes_requested", "item_verify_failed", "requests_error", "mail_escalation"],
+        "info": ["item_resolved", "inbox_aged_out", "request_drop", "pr_closed", "some_new_kind"],
+    }
+    events = [{"at": ago(n / 600), "kind": "turn_done", "session": "wt-coord", "text": f"ev{n}"} for n in range(60)]
+    events[0] = {"at": ago(0), "kind": "pr_checks_failed", "session": "wt-coord", "pr": "acme/app#1", "url": "javascript:alert(1)",
+                 "text": "<img src=x onerror=alert(1)>"}
+    events[1] = {"at": ago(0.01), "kind": "pr_merged", "session": None, "pr": "acme/app#2", "url": "https://github.com/acme/app/pull/2", "text": "#2"}
+    dates = "\n".join(take(n) for n in ("hhmm", "shortDate", "dayLabel"))
+    js = f"""{dates}
+{helpers}
+{(assets / "fleet.js").read_text()}
+const st = {{sessions: [{{id: "wt-coord", name: "coordinator", terminals: []}}], timeline: {json.dumps(events)}}};
+const kinds = {json.dumps(states)};
+const out = {{states: Object.fromEntries(Object.entries(kinds).map(([k, ks]) => [k, ks.filter((x) => eventState(x) !== k)])),
+  page: timelineList(st, st.timeline, {{fold: "all"}}), own: timelineList(st, st.timeline.slice(0, 3), {{here: "wt-coord"}}),
+  short: timelineList(st, st.timeline.slice(0, 3))}};
+handlers.click({{target: {{closest: (sel) => sel === "[data-tl-more]" ? {{dataset: {{tlMore: "all"}}}} : null}}}});
+out.more = timelineList(st, st.timeline, {{fold: "all"}});
+const past = {json.dumps({"at": ago(50), "kind": "turn_done", "session": "wt-coord", "text": "old"})};
+out.past = timelineList(st, [past]); out.pastTm = hhmm(past.at); out.pastDate = shortDate(past.at);
+const desc = (scrollHeight) => {{ const el = {{dataset: {{tlOpen: "d" + scrollHeight}}, scrollHeight, clientHeight: 20, attrs: {{}}, cls: [],
+  classList: {{toggle: (c, on) => {{ el.cls = on ? [c] : []; }}}}, setAttribute: (k, v) => {{ el.attrs[k] = v; }},
+  closest: (sel) => sel === "[data-tl-open]" ? el : null}}; return el; }};
+const clipped = desc(40), fits = desc(20);
+handlers.click({{target: clipped}}); out.opened = [F.tlOpen.has("d40"), clipped.attrs["aria-expanded"], clipped.cls];
+F.tlOpen.add(`${{past.at}}|turn_done|wt-coord`); out.openRow = timelineList(st, [past]);
+handlers.keydown({{key: " ", target: clipped, preventDefault() {{}}}}); out.closed = [F.tlOpen.has("d40"), clipped.attrs["aria-expanded"], clipped.cls];
+handlers.keydown({{key: "Enter", target: clipped, preventDefault() {{}}}}); out.reopened = F.tlOpen.has("d40");
+handlers.click({{target: fits}}); out.fits = [F.tlOpen.has("d20"), fits.attrs["aria-expanded"] ?? null];
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert got["states"] == {k: [] for k in states}, got["states"]
+    page = got["page"]
+    assert "<img" not in page and 'href="javascript' not in page and "&lt;img" in page, page
+    assert 'href="https://github.com/acme/app/pull/2"' in page and "acme/app#1" not in page, "a PR link only with a safe URL"
+    assert page.count('class="tl-ev ') == 50 and 'data-tl-more="all"' in page and "Show 10 more" in page, "50 shown, the rest behind a button"
+    assert got["more"].count('class="tl-ev ') == 60 and "data-tl-more" not in got["more"], "the button shows the rest"
+    assert "Today" in page and page.count("tl-day") == 1 and "tl-bad" in page and "tl-done" in page
+    assert "data-tl-more" not in got["short"] and got["short"].count('data-go="#/fleet/session/wt-coord"') == 2, got["short"]
+    assert "data-go" not in got["own"] and "tl-by" not in got["own"], "on its own session page a row goes nowhere"
+    # A row under an earlier day's head still shows its time; the head already names the day.
+    assert f'>{got["pastTm"]}</span>' in got["past"] and f'>{got["pastDate"]}</span>' not in got["past"], got["past"]
+    # A clipped description is a keyboard control that opens and closes; one that fits does not open.
+    assert 'role="button" tabindex="0" aria-expanded="false"' in got["past"], got["past"]
+    assert 'aria-expanded="true"' in got["openRow"] and 'tl-desc open' in got["openRow"], got["openRow"]
+    assert got["opened"] == [True, "true", ["open"]] and got["closed"] == [False, "false", []] and got["reopened"], got
+    assert got["fits"] == [False, None], got["fits"]
+
     # The overview card keeps 8 rows, and missed items are picked first even when they come last.
     rows = [{"key": f"k{n}", "type": "reload_pending", "session": "wt-coord", "title": f"row{n}", "missed": n >= 15} for n in range(17)]
     js = f"""{helpers}
