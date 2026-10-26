@@ -39,6 +39,11 @@ def card_says(c=card, f=facts, pr=merged, terms=quiet_terms, quiet=40 * M, peopl
 assert card_says()[0] is True, card_says()
 assert card_says(pr={"state": "CLOSED", "headRefOid": "abc"})[0] is True
 assert card_says(quiet=None)[0] is True  # a card no Claude session ran in: the terminals decide
+# An idle Claude screen writes to its terminal every ~30 minutes with nothing new: with its transcript quiet, a write
+# 12 minutes ago is not work. A Codex or plain shell terminal still needs the full 30 minutes.
+idle_claude = [{"handle": "term_1", "agentIdentity": "claude", "lastOutputAt": (NOW - 12 * M) * 1000}]
+assert card_says(terms=idle_claude)[0] is True, card_says(terms=idle_claude)
+assert card_says(terms=[{**idle_claude[0], "agentIdentity": "codex"}])[0] is False
 cases = {
     "메인 체크아웃 또는 고정된 카드": card_says(c={**card, "isPinned": True}),
     "보호 목록의 경로": card_says(c={"path": "/x/lead"}),
@@ -52,7 +57,11 @@ cases = {
     "사람이 띄운 셸의 자식": card_says(people=[8]),
     "터미널 목록을 읽지 못함": card_says(terms=None),
     "출력이 30분 안에": card_says(terms=[{"handle": "t", "lastOutputAt": (NOW - 5 * M) * 1000}]),
+    "출력이 5분 안에": card_says(terms=[{"handle": "t", "agentIdentity": "claude", "lastOutputAt": (NOW - 2 * M) * 1000}]),
+    "t 출력이 30분 안에": card_says(terms=[{"handle": "t", "agentIdentity": "claude", "lastOutputAt": (NOW - 12 * M) * 1000}],
+                                 quiet=None),
     "세션 기록이 10분 전": card_says(quiet=10 * M),
+    "셸을 돌리는 중(pid 40)": rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], [], None, [40]),
     "하위 카드 /ws/app/w1 가 남아 있음(리드)": rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P,
                                                      [], [], ["/ws/app/w1"]),
 }
@@ -159,6 +168,16 @@ assert rh.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
 assert rh.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) == "pid 20 의 프로세스 행을 읽지 못함"
 no_claude = {20: lead_rows[20], 21: {**lead_rows[21], "cmd": "node vite"}}
 assert rh.coordinator_in("/ws/app/lead", no_claude, cwd, projects, roles) is None  # no live Claude: nothing to protect
+# A session waiting on its own background work keeps its card: a shell child of a Claude in the card (a Bash call,
+# a background shell, a Monitor). An MCP server or caffeinate child lives as long as the session and doesn't count.
+busy_rows = {**lead_rows, 40: proc(40, "/bin/zsh -c source snapshot.sh && sleep 600", ppid=31),
+             41: proc(41, "caffeinate -i -t 300", ppid=31), 42: proc(42, "bun run --cwd plugin start", ppid=31),
+             43: proc(43, "/bin/zsh -c make", ppid=30)}
+assert rh.busy_in("/ws/app/done", busy_rows, cwd) == [40]
+assert rh.busy_in("/ws/app/done", {**busy_rows, 40: {**busy_rows[40], "ppid": 99}}, cwd) == []
+assert rh.busy_in("/ws/app/lead", busy_rows, cwd) == []  # pid 31 is another card's session
+assert rh.busy_in("/ws/app/done", {}, cwd) == []
+
 ok, why = rh.judge_card(card, facts, merged, quiet_terms, 40 * M, NOW, 30 * M, P, [], [], [], "pid 21 --agent agent-skills:lead")
 assert ok is False and why.startswith("리드·오케스트레이터 보호: pid 21"), why
 
@@ -168,6 +187,35 @@ rh.run_pass = lambda *a, **k: ran.append(a)
 with contextlib.redirect_stderr(io.StringIO()):
     assert rh.main([]) == 2 and ran == []
 rh.run_pass = real_pass
+
+# Transcript quiet comes from the last timestamped entry: the untimed lines an idle session appends keep the mtime
+# fresh without any work. With no timestamp in the tail, the mtime stands (reads as recent, keeps the card).
+qdir = tmp / "qprojects" / "-ws-app-idle"
+qdir.mkdir(parents=True)
+t = qdir / "s1.jsonl"
+t.write_text('{"type":"user","timestamp":"2026-10-25T07:20:36.064Z"}\n' + '{"type":"atis-latch","atis":""}\n' * 3)
+os.utime(t, (NOW - 60, NOW - 60))
+last = rh.reap.parse_ts("2026-10-25T07:20:36.064Z")
+assert rh.last_entry_time(t) == last
+assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle") == NOW - last
+(qdir / "s2.jsonl").write_text('{"type":"atis-latch"}\n')
+os.utime(qdir / "s2.jsonl", (NOW - 60, NOW - 60))
+assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle") == 60  # untimed only: the mtime keeps it
+assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/none") is None
+assert rh.last_entry_time(qdir / "gone.jsonl") is None
+# Anything it cannot read keeps the card: a newest timestamp that doesn't parse (never fall back to an older,
+# quieter entry), and a transcript it may not open.
+(qdir / "s2.jsonl").write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n{"type":"user","timestamp":"soon"}\n')
+why = rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle")
+assert isinstance(why, str) and "시각 'soon' 을 읽지 못함" in why, why
+(qdir / "s2.jsonl").write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n')
+(qdir / "s2.jsonl").chmod(0)
+try:
+    why = rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle")
+finally:
+    (qdir / "s2.jsonl").chmod(0o644)
+assert os.geteuid() == 0 or why == "세션 기록 s2.jsonl 을 읽지 못함(PermissionError)", why
+assert card_says(quiet="세션 기록 s2.jsonl 을 읽지 못함(PermissionError)") == (False, "세션 기록 s2.jsonl 을 읽지 못함(PermissionError)")
 
 # card_dir: only <root>/<repo>/<card>.
 assert rh.card_dir("/ws/app/done/web/src", "/ws") == "/ws/app/done"

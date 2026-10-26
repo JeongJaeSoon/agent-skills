@@ -14,7 +14,7 @@ import board  # noqa: E402
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
 state = tmp / "dashboard"
 env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
-       "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "TZ": "UTC"}
+       "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC"}
 T0 = "2026-10-13T14:00:00Z"
 NOW = "2026-10-13T14:30:00Z"
 
