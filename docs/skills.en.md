@@ -209,6 +209,7 @@ Monitors configured public channels for mentions and replies when requested. Use
   - The state vocabulary is triage, backlog, unstarted, started, completed, canceled.
   - The follow-up format is a `follow-up` label, a first line of `파생: <ID> · 원인: <분류>` (derived from: <ID> · cause: <category>), and a related relation.
   - Ticket bodies are treated as untrusted data.
+  - Every write goes to a delegate agent; reads stay in the session. The delegate is the user's instructions, else `tracker.delegate_agent` in the config, else the plugin agent `agent-skills:task-tracker`; `"none"` writes in the session. `task-tracker` reads the site's own rules (project, status and transition ids, labels, language) on every run from the Markdown file `tracker.rules_file` names, and stops instead of guessing when the key is set but the file is missing or unreadable.
 - **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear and Jira, with a fixture mode), `references/linear.md`, `references/jira.md`.
 
 ### use-notes (formerly `use-obsidian`)
@@ -216,7 +217,8 @@ Monitors configured public channels for mentions and replies when requested. Use
 - **What it does:**
   - Uses the obsidian or markdown adapter selected in `notes` or by the user. There is no default personal vault.
   - Paths and filenames follow the selected store’s rules or the user’s destination.
-  - Reads and edits current content using the user-selected tools and permitted access method. Check synchronization; publishing another page is not required to show a note.
+  - Every write goes to a delegate agent: the user's instructions, else `notes.delegate_agent` in the config, else the plugin agent `agent-skills:notes-writer`; `"none"` writes in the session. `notes-writer` reads the store's rules file on every run and stops when that read fails.
+  - An Obsidian vault is read and written through one path: the one the user's instructions name, else `notes.obsidian.access` (`mcp`, `cli` or `filesystem`). Under `mcp` only the connected Obsidian MCP vault tools are used, never a shell command, file tool or the Obsidian CLI on the vault folder; it is for vaults whose on-disk copy lags a sync service. With neither, it stops and asks instead of falling back to the filesystem. Publishing another page is not required to show a note.
 - **Bundled:** `references/obsidian.md`, `references/markdown.md`.
 
 ## Writing
@@ -452,9 +454,10 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
     "adapter": "linear",
     "linear": {"workspace": null, "team": "ENG", "project": null,
                "templates": {"dev": "개발 티켓", "spike": "조사 티켓"}},
-    "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"}
+    "jira": {"base_url": "https://…", "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN", "issue_type": "Task"},
+    "rules_file": "~/.config/agent-skills/tracker-rules.md"
   },
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}
 }
 ```
 

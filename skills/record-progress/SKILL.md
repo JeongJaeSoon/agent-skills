@@ -61,13 +61,16 @@ still investigating. Record when one of these happened:
 - **Epic upkeep is part of the job** outside a program. A ticket with no parent that belongs under an epic gets
   one; an epic whose exit condition is met gets closed, even with deferred lines left. List
   each change in the report so it can be undone.
-- **In the background.** When the user's instructions or the config name a delegate agent for
-  the tracker or the notes store (`tracker.delegate_agent`, `notes.delegate_agent`), start both
+- **In the background.** When a delegate agent writes to the tracker or the notes store
+  (`use-tracker`, `use-notes`: `agent-skills:task-tracker` and `agent-skills:notes-writer` unless
+  `tracker.delegate_agent`, `notes.delegate_agent` or the user's instructions say otherwise), start both
   in one message, one call each covering every ticket or note of the session, not one per
   ticket. Hand over the facts, absolute dates, `owner/repo#n` with its URL, each follow-up's
   class and the exit item it serves, and the commands and output that verified each claim; a
   claim with no evidence is handed over marked as such. Keep working while they run. A delegate
-  that comes back asking for facts gets them and runs again.
+  that comes back asking for facts gets them and runs again; one that stopped on configuration
+  (the notes access mode unset, the vault tools missing, a rules file unreadable) is not re-run:
+  report it to the user and ask.
 - **Announcing is separate.** Recording never posts to chat. Telling the team is its own
   decision, made under the user's chat rules.
 - **Inside a program or brief,** follow what it says the worker records. A worker still makes
