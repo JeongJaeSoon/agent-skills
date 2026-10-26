@@ -11,13 +11,15 @@ Gather first, then format. The facts come from where they live: `orch status` an
 
 ## 1. Sections
 
-In this order, each left out when empty:
+Every report opens with a headline: bold, led by the time, one sentence with the conclusion the human most needs (`**14:30 · 검색 개선 머지, 남은 건 리뷰 1건**`). Then the sections in this order, each left out when empty except Only you:
 
 1. **Done** — each item with its evidence: merge sha, check result, test count, or the PR link. An item with no real output behind it is not done; it goes under In progress with what is missing.
 2. **In progress** — what is moving, who or what moves it, and the next event (CI running, review requested, worker on step N).
-3. **Decision needed** — numbered across the whole report. Each item: the question in one line, the options, and one recommendation with its reason, and what happens if the human does not answer. Only decisions outside the approved scope reach the human (`orchestrate` "What reaches the human"); decide the rest and report them under Done. Inside a program, a decision registered with `orch decide add` keeps its id beside the number (`1. (d3) …`), so an answer by either closes it.
-4. **Only you** — what the human alone can do: a permission dialog, a login, a payment, an approval a ruleset requires from a person. Say where and what to press or run.
+3. **Decision needed** — numbered across the whole report. Each item: the question in one line, the options, one recommendation with its reason, and what happens if the human does not answer. Only a choice outside the scope the human approved goes here: their budget, a permission they hold, another team's scope, or an irreversible or outward act the approval does not cover (`orchestrate` "What reaches the human"). Inside that scope, take the recommended default, act, and report it under Done: merging an approved PR, picking a reviewer, closing a stale draft, a setting or a design option. A decision is a choice; an action only a person can perform is Only you, and one topic goes in one of the two. Inside a program, a decision registered with `orch decide add` keeps its id beside the number (`1. (d3) …`), so an answer by either closes it.
+4. **Only you** — what the human alone can do: a permission dialog, a login, a payment, an approval a ruleset requires from a person. Say where and what to press or run. Always there: with nothing for the human, `없음` and when the next one appears, so the human sees there is nothing for them.
 5. **Held** — work set aside on purpose that nobody is moving now, each item with the condition that brings it back (a merge, a date, a decision). An item waiting on a reply, under investigation or being fixed is In progress, with who moves it and the next event.
+
+A block the human's settings or another skill add to the reply (an output style's insight box, a summary) goes after In progress and before Decision needed, so the report ends on what the human acts on. In a periodic report sent from `orch brief render`, it goes after the printed output, never inside it.
 
 When the report covers several work items (tickets, tracks, a program's predicate items), each In progress item carries three fields:
 
@@ -60,11 +62,11 @@ Where `orch` is installed (orchestrate), the report is the output of `orch brief
 8. `🙋 **지금 오너가 할 일**`, one line: what to run, press or log in to, and where; or `없음` and when the next one appears.
 9. `⏸️ **보류**`, a list under the lead line, one `<condition> → <work>` item each: the ⏸️ rows (their next stage is the condition), then the work set aside with `orch board later add <work> --trigger <condition>`. Held as §1 defines it. One piece of work appears once: adding an item with the same condition and a reworded title replaces the old one.
 
-Items 6, 7 and 9 are left out when empty; item 8 is always there, so the human sees there is nothing for them.
+Items 6, 7 and 9 are left out when empty; item 8 is always there (§1 Only you).
 
 A row that changed since the last report (status, progress, next or PR state), or that it did not have, has its name in bold (after the `└` on a sub-task row). Bold is the only mark: a symbol beside the status icon reads as part of the status. The last report is `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`), each row keyed so the next report can match it, with its status, progress, next and PR state; save it after sending. With no saved table, send it with no row in bold and say so in the headline. On Telegram, which has no bold, each row is one line with its PR and state after the name (`✅ ph2 #42 9f8e7d6 — …`), a sub-task line starts with `└`, and a changed row has `(바뀜)` after its name.
 
-Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer. If nothing is left for the human, say so in one line; never invent an item.
+Call each PR, branch or worker by a name the human already knows, not a label made up during the work. No preamble and no closing offer, and never an invented item.
 
 ## 2. Channel
 
@@ -98,7 +100,7 @@ An illustrative shape (the items are made up):
 - acme/web#43 리뷰 대기, CI 실행 중 · 리뷰어 B · 다음: CI 결과
 
 ❓ 결정 필요
-1. 캐시 TTL: 5분 / 1시간 → 추천 1시간 (조회 대부분이 같은 세션 안)
+1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천 현행 유지 (무료 한도의 60%만 씀)
 
 🙋 사람만
 - GitHub에서 배포 승인 버튼
@@ -109,11 +111,35 @@ An illustrative shape (the items are made up):
 
 ### Terminal
 
-- Markdown tables where items share columns (item, state, evidence). Per-item progress is one table: item, progress, done so far, left; or the stage table (§1) when the items ship through PRs and deploys; a periodic report has one table per repository or program (below).
+- Markdown tables where items share columns (item, state, evidence). In progress with several items is one table, `| 작업 | 상태 | 다음 |`: 상태 is what is done so far, with its evidence; 다음 is the next event and who moves it. A `진행` column (§1 Progress) goes after 작업 only when the items have a basis for one, and a child item is a row under its parent, named `ㄴ <name>` as in the stage table. Items that ship through PRs and deploys take the stage table (§1) instead; a periodic report has one table per repository or program (below).
 - A table fits in 78 columns as Claude Code draws it (an 80-column terminal less the 2-column gutter in front of each reply line), or it wraps and the columns break apart. Count Hangul and emoji as two columns each, and add three per column for borders and padding. In the periodic table no cell is cut and nothing goes to a footnote: the next step is not a column (§1 items 6 and 9), and a table wider than 78 anyway overflows and the render reports it. In other tables, detail that does not fit goes in a one-line footnote under the table (`¹ …`), not in the cell. `python3 scripts/table_width.py < draft.md` (in this skill's directory) prints each table's width.
-- In progress, Decision needed, Only you and Held each start with a bold lead and take one line per item, the first item on the lead line and each further item below it after a blank line: `❓ **결정 필요** — 1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 …`, `🙋 **지금 오너가 할 일** — …`, `🔄 **진행 중** — 할 일 · 담당 · 다음: 이벤트`, `⏸️ **보류** — 조건 → 할 일`; a periodic report takes the forms in §1 Periodic report, where 진행 중 and 보류 are lists under their lead line. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
+- Decision needed, Only you and Held, and In progress when it is not a table, each start with a bold lead and take one line per item, the first item on the lead line and each further item below it after a blank line: `❓ **결정 필요** — 1. 질문: 선택지 → 추천: X — 이유 · 답이 없으면 …`, `🙋 **지금 오너가 할 일** — …`, `🔄 **진행 중** — 할 일 · 담당 · 다음: 이벤트`, `⏸️ **보류** — 조건 → 할 일`; a periodic report takes the forms in §1 Periodic report, where 진행 중 and 보류 are lists under their lead line. Leave a blank line between lines that must stay separate; markdown joins adjacent lines.
 - `file:line` for code, `owner/repo#123` for PRs and issues, so both are clickable.
 - The same sections and the same numbering of decisions.
+
+An illustrative report on request (the items are made up):
+
+```markdown
+**14:45 · 검색 개선 PR 생성, 유료 플랜 하나만 정해 주세요**
+
+✅ **완료**
+
+- [acme/web#42](https://example.test/42) 생성 (head a1b2c3d, 테스트 38/38 통과)
+
+🔄 **진행 중**
+
+| 작업 | 상태 | 다음 |
+|---|---|---|
+| 검색 개선 | #42 CI 실행 중 | CI 통과 → 리뷰 의뢰 · 에이전트 |
+| ㄴ 정렬 | 워커가 구현 중 | PR 생성 · 워커 |
+| 재색인 | 리뷰어 B 대기 | 승인 → 머지 · B |
+
+❓ **결정 필요** — 1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60%만 씀 · 답이 없으면 현행 유지
+
+🙋 **지금 오너가 할 일** — GitHub acme/web Environments → production → 대기 중인 배포 승인 (규칙상 사람만)
+
+⏸️ **보류** — 10/20 → 캐시 TTL 다시 보기
+```
 
 An illustrative periodic report (the items are made up):
 
@@ -164,7 +190,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 - ⏳ 재색인 — 권한 · 결정 1
 - 🔄 다른 팀 API 답변 대기 — 10/14 회신 · 사람
 
-❓ **결정 필요** — 1. 재색인 권한: 서비스 계정 / 개인 토큰 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
+❓ **결정 필요** — 1. 재색인 권한(오너가 가진 권한): 서비스 계정 발급 / 개인 토큰 → 추천: 서비스 계정 — 만료 없음 (지난 보고와 동일)
 
 🙋 **지금 오너가 할 일** — 없음 · 10/13 09:30 리뷰 의뢰 뒤 승인 1건이 생김
 

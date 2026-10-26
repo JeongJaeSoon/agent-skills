@@ -60,6 +60,10 @@ claude plugin install agent-skills@jeongjaesoon
 
 예전 `scripts/install.py`(symlink와 settings 병합)로 설치했다면, 그 설치로 시작한 프로그램이 모두 끝난 뒤 `python3 scripts/migrate.py`(바뀔 내용 보기), `--write`(symlink·옛 규칙·옛 hook 제거 뒤 `bootstrap.py --write`) 순서로 옮긴다.
 
+### 다른 PC에서 같은 방식으로 쓰려면
+
+일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 것은 따로 옮긴다. 사용자 설정(`language`, `outputStyle`, `autoMode`, `permissions`), 저장소 밖의 고유값, 개인 지침과 자동 메모리가 그렇다. 순서와 확인 방법은 [docs/new-pc.md](docs/new-pc.md).
+
 ## 스킬 고치기
 
 - 고치는 곳은 worktree 브랜치다. 메인 체크아웃은 세션들이 직접 읽으므로 fast-forward로만 바꾼다. 메인 체크아웃에 커밋 안 한 변경이 있으면 자동 동기화가 멈춘다.
