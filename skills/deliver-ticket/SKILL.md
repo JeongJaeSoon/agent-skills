@@ -250,8 +250,9 @@ Then land it. How depends on where you run:
   required check whose run was cancelled (`gh run list --branch <head>`; concurrent events cancel
   one another) and rerun it with `gh run rerun <id>`. Only in a repository whose branch
   protection requires a review may an approved PR still waiting on checks get
-  `gh pr merge <n> --auto --match-head-commit <approved sha>`, so a head pushed after the
-  approval does not land unreviewed; elsewhere merge by hand once it is ready.
+  `gh pr merge <n> --auto --match-head-commit <approved sha>`; before pushing a new head to it,
+  run `gh pr merge <n> --disable-auto` so that head does not land unreviewed. Elsewhere merge
+  by hand once it is ready.
 
 ```bash
 gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; a stack lands from its top, see §5
