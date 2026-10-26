@@ -44,7 +44,7 @@ PC나 회사에 매인 것은 옮기지 않는다. 없으면 그 기능은 꺼�
 
 - 사내 이름 목록(`~/.config/agent-skills/internal-names.txt`, 공개 저장소에 쓰는 PC만), 채팅 채널, 트래커 프로젝트, 노트 저장소 같은 `agent-skills.json`의 나머지 키. 키와 기본 동작은 각 스킬의 설정 절과 [configuration-migration.md](configuration-migration.md).
 - 조직 저장소를 신뢰 범위에 넣는 autoMode 문장. 묶음의 "사용자 저장소"는 `gh` 로그인 계정 아래만이다. 조직은 `tune-automode`로 더한다.
-- 개인 지침과 스킬(`~/.claude/CLAUDE.md`, `skills/`, `agents/`)과 자동 메모리. 어느 PC에서나 지켜야 할 작업 방식이 여기에만 있으면 `reflect`나 `write-skill`로 스킬에 올린다.
+- 개인 지침과 스킬(`~/.claude/CLAUDE.md`, `skills/`, `agents/`)과 자동 메모리. 어느 PC에서나 지켜야 할 작업 방식이 여기에만 있으면 `reflect`나 `write-skill`로 스킬에 올린다. 트래커·노트 쓰기 agent는 플러그인의 `task-tracker`·`notes-writer`가 기본이라 옮길 필요가 없고, 트래커 사이트 고유 규칙만 `tracker.rules_file`이 가리키는 파일로 옮긴다.
 - `env`의 다른 값과 토큰. PC마다 다시 만든다.
 
 특정 PC와 똑같이 맞추고 싶으면 `setup-pc`의 "Compare with another PC"(원래 PC에서 `setup_check.py export`, 여기서 `check --baseline`)를 쓴다. 기본 경로는 아니다.
