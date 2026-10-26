@@ -72,7 +72,7 @@ claude plugin install agent-skills@jeongjaesoon
 - description이나 트리거 문구를 바꿨으면 Claude Code 내장 `claude plugin eval`로 고치기 전 체크아웃과 나란히 발동을 본다. 케이스는 `evals/<스킬>/`에 있다. `prompt.md`에는 사용자가 칠 문장을 넣고, `graders/`는 그 스킬이 떴는지(`tool_used`, `tool: Skill`)와 헷갈리기 쉬운 이웃 스킬이 뜨지 않았는지(`min: 0`, `max: 0`)를 본다. Skill grader는 플러그인 없는 비교 arm을 같이 돌면 점수에서 빠지므로 모두 `arm: both`를 단다. 사용자 설정·다른 플러그인·메모리 없이 격리된 홈에서 읽기 도구만으로 돌기 때문에 다른 곳을 건드리지 않고, 스킬 사용 횟수도 올리지 않는다. 케이스 하나에 0.15달러 안팎이 든다. 바꾼 스킬의 케이스가 없으면, 그 스킬이 떠야 할 문장 하나와 이웃 스킬을 가르는 grader 하나로 케이스를 더한다.
 
 ```bash
-claude plugin eval <체크아웃> --ablation none --no-publish --trust-plugin --max-cost-usd 3   # 전체, 케이스마다 3회
+claude plugin eval <체크아웃> --ablation none --no-publish --trust-plugin --max-cost-usd 5   # 전체, 케이스마다 3회
 claude plugin eval <체크아웃> --case recall --runs 1 --ablation none --no-publish --trust-plugin
 ```
 
