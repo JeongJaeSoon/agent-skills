@@ -2,11 +2,11 @@
 
 Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No coordinator hands out merge slots.
 
-This design replaced three that failed on a real program (2026-09-23/24):
+This design replaced three that failed on a real program:
 
 - **A coordinator that granted each merge.** It became the slowest part of the system. Ready PRs waited on the coordinator's turn, not on CI.
 - **"Whoever is ready lands next."** A migration chain waited more than five hours while eleven newer, easier PRs landed ahead of it. The priority and dependency order existed only in the coordinator's head.
-- **One baton, strict up-to-date branches.** Every landing put every other PR behind, which meant a rebase and another 30–40 minute CI run each. The user's verdict: "동시에 여러 pr 을 빠르게 머지하면서도 적절히 안정적으로… 1개씩 확인하고 머지하는건 너무 별로야". They turned off "require branches to be up to date" and kept the required checks. Landings went parallel.
+- **One baton, strict up-to-date branches.** Every landing put every other PR behind, which meant a rebase and another 30–40 minute CI run each. The user rejected one-at-a-time landing as too slow and asked for parallel merges that stay reasonably stable. They turned off "require branches to be up to date" and kept the required checks. Landings went parallel.
 
 "CI green is not a verdict." A verdict holds across a rebase only while the patch-id is unchanged.
 

@@ -13,7 +13,7 @@ Slack is frequently where the *real* decisions got made, especially for smaller 
 
 ## How to search it
 
-Use the Slack MCP: search with `slack_search_public_and_private` (or `slack_search_public`), read whole threads with `slack_read_thread`, and narrow channels with `slack_search_channels`. If authentication fails, stop and report the gap.
+Use the Slack MCP (the names below are one server's; use the connected server's equivalents): search with `slack_search_public_and_private` (or `slack_search_public`), read whole threads with `slack_read_thread`, and narrow channels with `slack_search_channels`. If authentication fails, stop and report the gap.
 
 1. **Author-bounded search.** Messages from the PR author around the PR merge date. Limits scope dramatically and often hits gold.
 2. **Keyword search for the feature name and key symbols.** Include misspellings and casual phrasings.

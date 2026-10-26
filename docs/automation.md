@@ -97,10 +97,10 @@ skills-sync setup disable <이름>         # 끄기
 ## 정기 정리(janitor)
 
 `skills/reap-resources`의 `reap.py`가 맡는다. 에이전트가 만든 것(ledger에 올린 것과 Orca 오케스트레이션
-워커가 만든 worktree)과 `~/Downloads`·`~/Desktop`에서 7일 넘게 안 바뀐 항목을 정리한다. automation의 에이전트는
+워커가 만든 worktree)과, `reap.user_folders`에 지정한 폴더에서 7일 넘게 안 바뀐 항목을 정리한다. automation의 에이전트는
 `reap --plan`을 한 번 돌려 대상을 닫거나 휴지통으로 옮기고, 무엇을 했는지 보고한다. 도구는 영구 삭제도
 휴지통 비우기도 하지 않지만, OS 설정(Finder의 "30일 후 휴지통에서 항목 제거")이 켜져 있으면 휴지통으로 옮긴 것은
-30일 뒤 지워진다. scan과 precheck는 이 설정을 `## 경보`로 알리고, 그동안 `~/Downloads`·`~/Desktop` 항목은
+30일 뒤 지워진다. scan과 precheck는 이 설정을 `## 경보`로 알리고, 그동안 지정한 개인 폴더 항목은
 `$AGENT_SKILLS_TRASH`(일반 폴더)를 주지 않는 한 옮기지 않고 남긴다. reap이 거부되면 회차는 우회하지 않고 거부된
 명령을 `reap.inbox_to`로 보낸다.
 

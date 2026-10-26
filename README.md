@@ -14,20 +14,17 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 
 이 저장소를 고쳐 가며 쓰는 PC는 체크아웃을 Claude Code가 직접 읽게 한다. 스킬을 고치면 떠 있는 세션에도 reload 한 번으로 반영되고, 원격 변경은 15분마다 자동으로 받는다. 설계와 실측 근거는 [docs/platform.md](docs/platform.md).
 
-체크아웃은 어느 경로에 두어도 된다. `bootstrap.py`는 자기 파일 위치로 체크아웃 경로를 정한다. 아래 `<체크아웃>`은 clone한 경로로 바꾼다(예시: `~/src/agent-skills`).
+체크아웃은 어느 경로에 두어도 된다. 스크립트는 자기 파일 위치로 체크아웃 경로를 정한다. 아래 `<체크아웃>`은 clone한 경로로 바꾼다(예시: `~/src/agent-skills`).
 
 ```bash
 git clone https://github.com/JeongJaeSoon/agent-skills <체크아웃>
-python3 <체크아웃>/scripts/bootstrap.py           # 바뀔 내용 보기
-python3 <체크아웃>/scripts/bootstrap.py --write   # 적용
+python3 <체크아웃>/scripts/setup.py                 # 바뀔 내용: 파일별 diff 와 마지막의 --apply 줄
+python3 <체크아웃>/scripts/setup.py --apply <해시>  # 위가 출력한 줄 그대로
 ```
 
-`bootstrap.py --write`가 하는 일:
+`setup.py --apply`는 `~/.claude/settings.json`과 `agent-skills.json`을 백업하고, 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, autoMode·`permissions.allow` 묶음, 최소 설정 키) 중 없는 것만 더한 뒤, 15분마다 도는 동기화 작업과 기본 on 정기 자동화를 켜고 `setup-pc` 점검 표를 낸다. 이미 있는 값은 덮지 않고(켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 다시 돌리면 바뀌는 것이 없다. 하는 일·옮기지 않는 것·갱신(`--update`)은 [docs/new-pc.md](docs/new-pc.md). 새 설정은 새 세션부터 적용되므로 떠 있는 세션은 재시작한다. 거기서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
-- `~/.claude/settings.json`을 백업하고, `env` 블록의 `CLAUDE_CODE_PLUGIN_DIRS`에 체크아웃 경로를 넣는다. 마켓플레이스로 설치한 `agent-skills@jeongjaesoon`이 켜져 있으면 끈다. 둘 다 켜면 hook이 두 번 돈다.
-- macOS면 launchd 작업(`io.github.jeongjaesoon.agent-skills-sync`)을 설치해 15분마다와 로그인 때 `skills-sync sync`를 돌린다. Linux면 crontab 한 줄을 출력한다.
-- 끝에 `skills-sync setup apply`를 돌려 기본으로 켜는 정기 자동화를 켠다. 아래 "정기 자동화" 절.
-- 이미 된 단계는 건너뛰므로 다시 돌려도 된다. 새 설정은 새 세션부터 적용된다. 떠 있는 세션은 재시작한다. 거기서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
+체크아웃 로드와 동기화만 원하면 `scripts/bootstrap.py`(dry run, `--write`)를 쓴다. 설계와 실측 근거는 [docs/platform.md](docs/platform.md) §5.
 
 ### 정기 자동화
 
@@ -35,7 +32,7 @@ python3 <체크아웃>/scripts/bootstrap.py --write   # 적용
 
 ```bash
 skills-sync setup                        # 목록: 이름, 지금 상태, 기본값, 하는 일
-skills-sync setup apply                  # 기본 on 중 한 번도 설정하지 않은 것만 켠다(bootstrap --write 가 부른다)
+skills-sync setup apply                  # 기본 on 중 한 번도 설정하지 않은 것만 켠다(setup.py --apply 와 bootstrap --write 가 부른다)
 skills-sync setup enable preview-watch   # 하나 켜기
 skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌려도 꺼진 채로 남는다
 ```
@@ -60,16 +57,23 @@ claude plugin install agent-skills@jeongjaesoon
 
 예전 `scripts/install.py`(symlink와 settings 병합)로 설치했다면, 그 설치로 시작한 프로그램이 모두 끝난 뒤 `python3 scripts/migrate.py`(바뀔 내용 보기), `--write`(symlink·옛 규칙·옛 hook 제거 뒤 `bootstrap.py --write`) 순서로 옮긴다.
 
+### 다른 PC에서 같은 방식으로 쓰려면
+
+일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 사용자 설정과 자동화는 위의 `setup.py` 한 줄이 넣는다. 원래 PC에서 옮기는 것을 전제로 하지 않고, PC·회사에 매인 값(사내 이름 목록, 채널, 트래커, 개인 지침)은 옮기지 않는다. 자세한 내용은 [docs/new-pc.md](docs/new-pc.md). Claude Code 안에서는 `setup-pc` 스킬("새 PC 세팅해줘")이 dry run을 보이고 `!` 한 줄을 건넨다.
+
 ## 스킬 고치기
 
 - 고치는 곳은 worktree 브랜치다. 메인 체크아웃은 세션들이 직접 읽으므로 fast-forward로만 바꾼다. 메인 체크아웃에 커밋 안 한 변경이 있으면 자동 동기화가 멈춘다.
 - worktree의 스킬로 세션 하나를 띄워 보려면 `claude --settings '{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"<worktree 절대 경로>"}}'`. `--plugin-dir`을 더하면 메인 체크아웃과 두 벌이 함께 올라온다.
 - 메인 체크아웃에 들어간 뒤에는 `skills-sync sync`(push까지)와 `skills-sync broadcast`를 돌린다. 브로드캐스트는 `SKILL.md`가 바뀌었으면 `/reload-skills`, hook 연결(`hooks/hooks.json`)이나 manifest가 바뀌었으면 `/reload-plugins`를, 빈 입력칸에서 쉬고 있는 세션에만 보낸다. 권한 창이나 질문 창이 뜬 세션에 Enter가 가면 그 창에 답해 버리기 때문이다. 못 보낸 세션은 남겨 두었다가 다음 동기화 때 다시 시도한다.
-- description이나 트리거 문구를 바꿨으면 고치기 전 체크아웃과 나란히 `scripts/trigger-probe.sh`를 돌려 발동이 달라졌는지 본다. 임시 저장소에서 헤드리스 세션을 띄우고 쓰기·셸·MCP 호출은 모두 거부하므로 다른 곳을 건드리지 않는다. 한 번에 0.2달러 안팎이 든다.
+- description이나 트리거 문구를 바꿨으면 Claude Code 내장 `claude plugin eval`로 고치기 전 체크아웃과 나란히 발동을 본다. 케이스는 `evals/<스킬>/`에 있다. `prompt.md`에는 사용자가 칠 문장을 넣고, `graders/`는 그 스킬이 떴는지(`tool_used`, `tool: Skill`)와 헷갈리기 쉬운 이웃 스킬이 뜨지 않았는지(`min: 0`, `max: 0`)를 본다. Skill grader는 플러그인 없는 비교 arm을 같이 돌면 점수에서 빠지므로 모두 `arm: both`를 단다. 사용자 설정·다른 플러그인·메모리 없이 격리된 홈에서 읽기 도구만으로 돌기 때문에 다른 곳을 건드리지 않고, 스킬 사용 횟수도 올리지 않는다. 케이스 하나에 0.15달러 안팎이 든다. 바꾼 스킬의 케이스가 없으면, 그 스킬이 떠야 할 문장 하나와 이웃 스킬을 가르는 grader 하나로 케이스를 더한다.
 
 ```bash
-bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행해줘" 3 [복사할 저장소]
+claude plugin eval <체크아웃> --ablation none --no-publish --trust-plugin --max-cost-usd 5   # 전체, 케이스마다 3회
+claude plugin eval <체크아웃> --case recall --runs 1 --ablation none --no-publish --trust-plugin
 ```
+
+`--no-publish`를 빼면 claude.ai 계정에서는 보고서가 artifact로 게시된다. `--trust-plugin`은 터미널 없이 돌 때 첫 실행의 신뢰 확인을 대신한다. 결과는 `evals/results/`(git 제외)에 남는다.
 
 트래커는 설정된 어댑터를 사용한다(기존 기본값 Linear). 노트는 `~/.claude/agent-skills.json`의 `notes` 설정이나 사용자가 명시한 목적지가 있어야 쓴다. `reflect.ledger`·`reflect.skill_repository`로 회고 위치와 편집할 원본을 지정하고, `reap.user_folders`에 명시한 개인 폴더만 정리한다. 설정이 없으면 개인 vault나 폴더를 추정하지 않는다. **업그레이드 전에 [설정 전환 안내](docs/configuration-migration.md)를 확인한다.** 기존 노트·회고·개인 폴더 정리는 명시 설정이 필요하며, 성과 보고 시간대 기본값은 UTC로 바뀌었다. 기존 설정 파일을 통째로 덮어쓰거나 원장을 옮기지 않는다.
 
@@ -105,6 +109,7 @@ bash scripts/trigger-probe.sh <체크아웃> "남은 작업들 병렬로 진행�
 | `reap-resources` | 죽은 세션이 남긴 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. 에이전트가 만든 끝난 리소스와 명시적으로 설정한 개인 폴더의 기준 기간이 지난 항목은 3시간 주기 automation이 휴지통으로 정리한다. 닫힌 지 7일 지난 프로그램 상태는 `_archive/`로 보관하고(재개 노트가 있으면 남김), hook 세션 파일과 `sync.log`도 정리한다. `pressure.py`는 모델 없이 3분마다 load·메모리 압박·swap·디스크·컨테이너 수를 재고, 높으면 안전한 대상부터 정리해 오케스트레이터에 한 줄 알린다([docs/pressure.md](docs/pressure.md)) |
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
+| `setup-pc` | 다른 PC에 들이거나 설치된 PC를 최신으로 맞출 때. `scripts/setup.py`의 dry run으로 설정 파일별 diff를 보이고, 사람이 칠 `--apply <해시>` 한 줄을 건넨다. 그 한 줄이 권장 설정·최소 설정 키·동기화·정기 자동화를 넣고 점검 표를 낸다. 갱신은 `--update`. 원래 PC의 기준 파일과 비교하는 점검은 선택 |
 
 **도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. 기본 off이고 `skills-sync setup enable preview-watch`로 켠다. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)). `share-server`(공유 폴더를 127.0.0.1에서 Caddy `file_server`로 읽기 전용 서빙한다. 최근 순 목록·Grid 썸네일, `.md` 렌더(`?raw`는 원문), 텍스트는 UTF-8. 숨김 경로는 404, 루트 밖 심볼릭 링크는 sandbox-exec로 막는다. 기본 off이고 `skills-sync setup enable share-server`로 켠다. [docs/share-server.md](docs/share-server.md)).
 
@@ -154,7 +159,7 @@ orch-panel mod는 제거됐다. 설치해 두었다면 `claude plugin uninstall 
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 

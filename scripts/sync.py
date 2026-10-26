@@ -89,7 +89,7 @@ def pull_or_push():
         for line in git("log", "--format=%G? %h", f"origin/{BRANCH}..{BRANCH}").splitlines():
             mark, sha = line.split()
             if mark in ("N", "B"):
-                raise Stop(f"commit {sha} is not signed ({mark}); check the 1Password SSH agent and re-sign it")
+                raise Stop(f"commit {sha} is not signed ({mark}); check your commit-signing agent and re-sign it")
         git("push", "--quiet", "origin", BRANCH, env=remote_env)
         return f"pushed {ahead} commit(s)", []
     return "up to date", []

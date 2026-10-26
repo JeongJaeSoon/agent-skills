@@ -1,32 +1,39 @@
-"""The board the brief skill's periodic report is rendered from: one row per lead, phase and sub-task, with its status,
+"""The board the brief skill's reports are rendered from: one row per lead, phase and sub-task, with its status,
 progress, next step and the time it was last confirmed, and the renderer that turns it into the report.
 
-The coordinator writes rows (`orch board set`) as reports come in; `orch brief render --periodic` reads the board, the
-fleet collector's PR list (prs.json), the open decisions and the last sent table (brief-last/<scope>.json) and prints
-the report. PR state is never stored here: the renderer joins it from prs.json each time, so the two cannot disagree.
+The coordinator writes rows (`orch board set`) as reports come in; `orch brief render` (on request) and
+`orch brief render --periodic` (on a schedule) read the board, the fleet collector's sessions and PR list
+(state.json, prs.json, collected again first when older than state_min), the open decisions and the last sent table
+(brief-last/<scope>.json) and print the report. The model passes only judgment: the headline sentence, decisions,
+an insight block. The time, rows, bars and sections are the renderer's. PR state is never stored here: the renderer joins it from prs.json each time, so the two cannot disagree.
 Nothing is hidden for being old: a row past its staleness limit shows its age, a PR list probed long ago says so.
 
-render() is the one implementation of the brief skill's periodic report rules (sections, sub-task rows, the
+render() is the one implementation of the brief skill's report rules (sections, sub-task rows, the
 same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
 """
 import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys
 
 import fleet
 import owner_requests
+import stages
 from stages import with_descendants
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "brief" / "scripts"))
 import table_width  # noqa: E402
 
 KINDS = ("lead", "phase", "task")
-ICON = {"moving": "🔄", "waiting": "⏳", "held": "⏸️", "blocked": "🔴", "done": "✅"}
-ALIASES = {v: k for k, v in ICON.items()} | {"⏸": "held"}  # VS16 dropped, as some keyboards and pastes do
-WORST = ("blocked", "waiting", "held", "moving")
+# owner: only the owner can unblock it. waiting: another person's review or reply. check: a row waiting on a person
+# with nothing that says who, which the renderer derives and nobody sets.
+ICON = {"moving": "🔄", "owner": "🙋", "waiting": "⏳", "check": "❔", "held": "⏸️", "blocked": "🔴", "done": "✅"}
+ALIASES = {v: k for k, v in ICON.items() if k != "check"} | {"⏸": "held"}  # VS16 dropped, as some keyboards and pastes do
+# The owner's turn outranks another person's: the head row shows what the owner can unblock now.
+WORST = ("blocked", "owner", "waiting", "check", "held", "moving")
+OWNER_NAMES = ("오너", "owner")
 COLS = 78
-LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120}  # overridden by the dashboard config's "board" key
+LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행"]
-PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"))
+PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
 UNNAMED = "(프로젝트 미지정)"
 
 
@@ -68,8 +75,8 @@ def one_line(text, limit):
 
 def status_of(text):
     s = ALIASES.get((text or "").strip(), (text or "").strip().lower())
-    if s not in ICON:
-        raise ValueError(f"--status is one of {', '.join(ICON)} (or {' '.join(ICON.values())})")
+    if s not in ICON or s == "check":
+        raise ValueError(f"--status is one of {', '.join(s for s in ICON if s != 'check')} (or {' '.join(ALIASES)})")
     return s
 
 
@@ -123,6 +130,7 @@ def put(store, rid, fields):
         row = {"id": rid, "kind": kind, "title": rid.rsplit("/", 1)[-1], "parent": parent, "status": "moving", "next": ""}
         rows[rid] = row
         store["order"].append(rid)
+    was = (row.get("status"), row.get("owner"))
     for k, v in fields.items():
         if v is None or k == "parent" and v == row.get("parent"):
             continue
@@ -137,6 +145,10 @@ def put(store, rid, fields):
     if row.get("progress") is None:
         row.pop("progress", None)
     row.update(source="coordinator", reported_at=fleet.iso(fleet.utcnow()))
+    if row["status"] not in ("waiting", "owner"):
+        row.pop("since", None)
+    elif "since" not in row or was != (row["status"], row.get("owner")):
+        row["since"] = row["reported_at"]
     if row["status"] == "done":
         row.setdefault("done_at", row["reported_at"])
     else:
@@ -175,10 +187,12 @@ def drop(rid):
     return change(go)
 
 
-def doing_add(title, owner, next_):
+def doing_add(title, owner, next_, waiting=False):
+    """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it."""
     if not all((x or "").strip() for x in (title, owner, next_)):
         raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
-    item = {"title": one_line(title, 120), "owner": one_line(owner, 40), "next": one_line(next_, 60)}
+    item = {"title": one_line(title, 120), "owner": one_line(owner, 40), "next": one_line(next_, 60),
+            **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {})}
     return change(lambda store: store["doing"].append(item))
 
 
@@ -234,6 +248,30 @@ def waits_on(p):
     return pending[0]["login"]
 
 
+def is_owner(who, me):
+    w = (who or "").strip().lstrip("@").lower()
+    return w in OWNER_NAMES or bool(me) and w == me.lower()
+
+
+def blocker(r, status, p, me):
+    """Whom a row waiting on a person waits on: (status, detail). The PR's requested reviewers decide first, then the
+    row's --owner; with neither, "check": the report asks rather than guesses."""
+    if status == "owner":
+        return "owner", {}
+    if p and p.get("state") == "OPEN":
+        if p.get("decision") == "CHANGES_REQUESTED":
+            return "check", {"why": "수정요청 받음"}
+        asked = [x["login"] for x in p.get("reviewers") or [] if x.get("requested") and not x.get("bot")]
+        if asked and not me:  # prs.json has no viewer login: a request to the owner looks like anyone's
+            return "check", {"why": "오너 login 모름"}
+        if asked:
+            return (("owner", {"what": "리뷰"}) if any(is_owner(a, me) for a in asked)
+                    else ("waiting", {"who": ", ".join(asked), "what": "리뷰"}))
+    if r.get("owner"):
+        return ("owner", {}) if is_owner(r["owner"], me) else ("waiting", {"who": r["owner"]})
+    return "check", {"why": "누구 대기인지 기록 없음"}
+
+
 def pr_state(p):
     """A PR's state in a few short tokens: the merge sha once merged, else what stands between it and the merge."""
     if p.get("merged_at") or p.get("state") == "MERGED":
@@ -278,18 +316,19 @@ def pr_num(key):
 
 
 # A session's phase (fleet.py phase_of) read as a board status and next step.
-PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료"), "waiting": ("waiting", "확인 대기 · 사람"),
+PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료"), "waiting": ("owner", "확인 대기"),
              "open": ("held", "에이전트 없음"), "offline": ("held", "세션 꺼짐")}
 
 
 def fleet_rows(state, leads, board_rows):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the top-level coordinator dispatched
-    itself. Each card carries its newest PR; a card whose PR a board row already has is left to that row. Returns
+    itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
+    newest PR; a card whose PR a board row already has is left to that row. Returns
     (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board row."""
     state = state or {}
     sessions = state.get("sessions") or []
-    held = {l.get("handle") for l in leads.values()}
+    held = {l.get("handle"): name for name, l in leads.items()}
     on_board = {r.get("pr") for r in board_rows.values()} - {None}
     pr_of, under = {}, {}
     for p in state.get("prs") or []:  # newest first
@@ -319,13 +358,17 @@ def fleet_rows(state, leads, board_rows):
         return (s.get("phase") != "offline" or pr) and pr not in on_board
 
     for lead in sessions:
-        if lead.get("kind") != "orchestration" or held & {t.get("handle") for t in lead.get("terminals") or []}:
+        if lead.get("kind") != "orchestration":
+            continue
+        board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held), None)
+        if board_lead and board_lead not in board_rows:  # its rows were dropped from the board on purpose
             continue
         lid = f"fleet:{lead['id']}"
-        add(lid, lead, "lead", program=one_line(lead.get("name") or lid, 80))  # two leads in one repo: a section each
+        if not board_lead:
+            add(lid, lead, "lead", program=one_line(lead.get("name") or lid, 80))  # two leads in one repo: a section each
         for s in under.get(lead["id"], []):
             if shown(s):
-                add(f"{lid}/{s['id']}", s, "task", lid)
+                add(f"{lid}/{s['id']}", s, "task", board_lead or lid)
     kind = {s.get("id"): s.get("kind") for s in sessions}
     for s in sessions:
         # A card made with `orca worktree create` and no Run is standalone: it is work when it has a report file, a PR
@@ -337,19 +380,52 @@ def fleet_rows(state, leads, board_rows):
     return rows, order
 
 
-def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False):
-    """The periodic report (brief skill §1 Periodic report items 1–8) as text, with what the caller needs around it.
-    fill adds fleet_rows() for the leads and cards the board does not have.
+DECISION_FORM = "<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <default>"
 
-    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "snapshot"}; text is "" when the board has no
-    rows in scope. snapshot is what commit() saves for the next report to compare against."""
+
+def refresh(now, limit_min):
+    """Collect the fleet again when state.json is older than limit_min: with no dashboard server running nothing else
+    rewrites it, and a report read from it lists yesterday's cards. Returns a headline fact when it stays old."""
+    at = fleet.parse((fleet.read_json(fleet.state_dir() / "state.json", None) or {}).get("generated_at"))
+    if at and (now - at).total_seconds() <= limit_min * 60:
+        return None
+    try:
+        f = fleet.Fleet()
+        got = f.tick()
+        err, gh_err = f.sources["orca"]["error"], f.sources["github"]["error"]
+    except Exception as e:  # a collector fault must not take the report down with it
+        got, err, gh_err = None, f"{type(e).__name__}: {e}", None
+    out = []
+    if got is None or err:
+        age = f"{ago((now - at).total_seconds())} 기준" if at else "없음"
+        out.append(f"세션 목록 {age} · 갱신 실패: {one_line(err, 60)}")
+    if gh_err:
+        out.append(f"PR 목록 갱신 실패: {one_line(gh_err, 60)}")
+    return " · ".join(out) or None
+
+
+def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False, periodic=True,
+           decisions=(), insight=None, fresh=False):
+    """The brief skill's report as text, with what the caller needs around it. periodic (§1 Periodic report) adds
+    the skipped actions and the reap line; on request (periodic=False) the stage table goes first. fill adds
+    fleet_rows() for the leads and cards the board does not have; fresh collects the fleet again when its files are
+    old. decisions are the model's own items (DECISION_FORM), numbered after the registered ones; insight goes after
+    진행 중, so the report still ends on what the human acts on.
+
+    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "snapshot"}. snapshot is what commit() saves
+    for the next report to compare against."""
     now = now or fleet.utcnow()
     tg = channel == "telegram"
     sd = fleet.state_dir()
-    store = read()
     limits = {**LIMITS, **(fleet.config().get("board") or {})}
-    prs = {k: {**v["detail"], "probed_at": v.get("probed_at")}
-           for k, v in ((fleet.read_json(sd / "prs.json", {}) or {}).get("prs") or {}).items() if v.get("detail")}
+    for d in decisions:
+        if "→ 추천:" not in d:
+            raise ValueError(f"--decision is one line: {DECISION_FORM}")
+    collected = refresh(now, limits["state_min"]) if fresh else None
+    store = read()
+    prs_file = fleet.read_json(sd / "prs.json", {}) or {}
+    me = prs_file.get("me")
+    prs = {k: {**v["detail"], "probed_at": v.get("probed_at")} for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
     state = fleet.read_json(sd / "state.json", None)
     live = None if state is None else {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
     last = fleet.read_json(last_path(scope), None)
@@ -374,33 +450,41 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if scope != "top-level":
         rows = {k: r for k, r in rows.items() if up(r, "program") == scope}
     order = [k for k in store["order"] if k in rows]
-    if not order:
-        return {"text": "", "headline_facts": [], "changed": [], "stale": [], "width_ok": True, "snapshot": None}
     unnamed, unnamed_secs = set(unnamed_leads(rows)), set()
 
-    oldest_probe, changed, stale, facts = None, [], [], []
+    oldest_probe, changed, stale, stale_board, facts, unknown = None, [], [], [], [], set()
+    waits = {}  # row id -> blocker()'s detail, for the rows waiting on a person
 
     def derive(r):
         """(status, next, stale suffix) after the PR join and the session check."""
         status, nxt = r["status"], r.get("next") or ""
         p = prs.get(r.get("pr"))
-        if r["kind"] == "task" and p and (p.get("merged_at") or p.get("state") == "MERGED"):
-            status = "done"
+        # The row's own PR outranks what the board says of it: GitHub has moved on since the row was written.
+        if p and (p.get("merged_at") or p.get("state") == "MERGED"):
+            status, nxt = "done", ""
+        elif p and p.get("state") == "CLOSED":
+            status, nxt = "held", "PR 닫힘"
         lead = store["leads"].get(lead_of(r)["id"])
         if status == "moving" and live is not None and lead and not lead.get("closed_at") and lead["handle"] not in live:
             status, nxt = "blocked", "세션 없음"
+        if status in ("waiting", "owner"):
+            status, waits[r["id"]] = blocker(r, status, p, me)
+            waits[r["id"]].setdefault("since", r.get("since") or (p or {}).get("created"))
         suffix = ""
         at = fleet.parse(r.get("reported_at"))
         limit = (lead or {}).get("stale_after_min") or limits["row_min"]
         if status != "done" and at and (now - at).total_seconds() > limit * 60:
             suffix = f" · {ago((now - at).total_seconds())}"
             stale.append(r["id"])
+            if not r["id"].startswith("fleet:"):  # a fleet row's age is its session's quiet, not a record left behind
+                stale_board.append((now - at).total_seconds())
         return status, nxt, suffix
 
     def pr_text(key):
         nonlocal oldest_probe
         p = prs.get(key)
         if not p:
+            unknown.add(key)
             return pr_num(key)
         probed = fleet.parse(p.get("probed_at"))
         # A merged or closed PR cannot change, and the collector probes it only once a day: its probe age means nothing.
@@ -414,7 +498,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         """The PR's state, and its merge target when that is not the section's base."""
         p = prs.get(key)
         if not p:
-            return ""
+            return "?"
         to = p.get("base")
         return pr_state(p) + (f"→{to}" if to and to != base else "")
 
@@ -435,8 +519,18 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
     def line(key, sec, depth, status, name, pr, progress, nxt, suffix="", fold=None):
         """pr: the row's PR key; fold: the PR keys of a same-reviewer row."""
-        lines.append({"key": key, "sec": sec, "depth": depth, "status": status, "name": name, "pr": pr,
+        lines.append({"key": key, "sec": sec, "depth": depth, "status": status, "own": status, "name": name, "pr": pr,
                       "progress": progress, "next": nxt, "suffix": suffix, "fold": fold})
+
+    def reviewer_wait(rev, ts):
+        """(status, name) of the rows folded on one reviewer, with their detail in waits."""
+        since = min(filter(None, (t.get("since") or (prs.get(t.get("pr")) or {}).get("created") for t in ts)), default=None)
+        unblocks = "·".join(t["title"] for t in ts)
+        if not me:
+            return "check", f"{rev} 대기", {"why": "오너 login 모름", "since": since, "unblocks": unblocks}
+        if is_owner(rev, me):
+            return "owner", "오너 리뷰", {"what": "리뷰", "since": since, "unblocks": unblocks}
+        return "waiting", f"{rev} 대기", {"who": rev, "what": "리뷰", "since": since, "unblocks": unblocks}
 
     def task_lines(head, sec, tasks):
         out = []
@@ -463,9 +557,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             ts = [rows[i] for i in ids]
             progs = {tuple(t.get("progress") or ()) for t in ts}
             nexts = {t.get("next") or "" for t in ts}
-            line(f"{head}/~{rev}", sec, 1, "waiting", f"{rev} 대기", None,
+            st, name, waits[f"{head}/~{rev}"] = reviewer_wait(rev, ts)
+            line(f"{head}/~{rev}", sec, 1, st, name, None,
                  bar(ts[0].get("progress")) if len(progs) == 1 else "—",
-                 nexts.pop() if len(nexts) == 1 and "" not in nexts else f"리뷰 · {rev}", fold=[t["pr"] for t in ts])
+                 nexts.pop() if len(nexts) == 1 else "", fold=[t["pr"] for t in ts])
         return statuses
 
     def head_of(t):
@@ -546,7 +641,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if (not l["key"].startswith("fleet:") if prev is None
                 else any(prev.get(f) != v for f, v in snap[l["key"]].items() if f in prev)):
             changed.append(l["key"])
-    if last_rows is None:
+    if not lines:
+        facts.append("리드·카드 행 없음")
+    elif last_rows is None:
         facts.append("지난 보고 없음, 굵게 없음")
     elif changed:
         facts.append(f"바뀐 행 {len(changed)}")
@@ -554,43 +651,97 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append("변화 없음")
     if oldest_probe and (now - oldest_probe).total_seconds() > limits["pr_warn_min"] * 60:
         facts.append(f"PR 상태 {ago((now - oldest_probe).total_seconds())} 기준")
+    if unknown:
+        facts.append(f"PR 상태 없음 {len(unknown)}")
+    if stale_board:
+        facts.append(f"오래된 board 행 {len(stale_board)} ({'' if len(stale_board) == 1 else '최대 '}{ago(max(stale_board))})")
+    if collected:
+        facts.append(collected)
 
     used = {l["status"] for l in lines}
-    legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸️ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
-                                                         if s in used) + "막대=단계(추정)")
+    legend = ("🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · "
+              + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"), ("check", "확인 필요")) if s in used)
+              + "막대=단계(추정)")
     states = " ".join(l["pr_state"] for l in lines if not l["fold"])
     pr_legend = [f"{m} {w}" for m, w in PR_LEGEND if m in states]
     if re.search(r"(?<![\w/])[0-9a-f]{7}(?![\w/])", states):
         pr_legend.append("7자리=머지 sha")
     local = now.astimezone()
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
-    out = [head if tg else f"**{head}**", "", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
-    many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
+    out = [head if tg else f"**{head}**"]
     width_ok = True
+    if not periodic and (st := stages.table())["rows"]:
+        stage = stages.render_telegram(st) if tg else stages.render_md(st)
+        out += ["", stage]
+        width_ok &= all(table_width.table_width(t) <= COLS for _, t in table_width.tables(stage))
+    if lines:
+        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
+    many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
 
     def label(l):
         """A phase is named with its lead outside the table, where no section heading says whose it is."""
         r = rows.get(l["key"])
         return f"{lead_of(r)['title']} {l['name']}" if r and r["kind"] == "phase" else l["name"]
 
-    # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, every other
-    # open row's to 진행 중 in table order, a sub-task after its head row.
-    moving, held = [], []
+    def since(at):
+        at = fleet.parse(at)
+        return f" · {ago((now - at).total_seconds())}부터" if at else ""
+
+    def turn_item(what, where, unblocks):
+        return f"{what}{f' · {where}' if where else ''} → {unblocks}"
+
+    def theirs_item(who, what, at, unblocks, nxt):
+        return f"{who}{f' · {what}' if what else ''}{since(at)} → {unblocks}{f' · 다음: {nxt}' if nxt else ''}"
+
+    # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, one the owner
+    # unblocks to 지금 오너가 할 일, one another person unblocks to 다른 사람 대기, every other open row's to 진행 중 in
+    # table order, a sub-task after its head row. Each row goes to one list, by its own status, not its children's.
+    moving, held, turn, theirs = [], [], [], []
     for sec in sections:
         head, head_out = None, False
         for l in (l for l in lines if l["sec"] == sec):
             if l["depth"] == 0:
                 head, head_out = l, False
-            if l["status"] in (None, "done"):
+            st, w = l["own"], waits.get(l["key"]) or {}
+            if st in (None, "done"):
                 continue
-            if l["status"] == "held":
+            if st == "held":
                 held.append(f"{l['next'] or '—'} → {label(l)}")
                 continue
+            where = l["cell"].split(" ")[0] if l["pr"] else l["cell"]
+            if st == "owner":
+                turn.append(turn_item(w.get("what") or l["next"] or "응답", where, w.get("unblocks") or label(l)))
+                continue
+            if st == "waiting":
+                theirs.append(theirs_item(w["who"], f"{w['what']} {where}".strip() if w.get("what") else "", w.get("since"),
+                                          w.get("unblocks") or label(l), l["next"]))
+                continue
             if l["depth"] and not head_out:
-                moving.append(" ".join(([ICON[head["status"]]] if head["status"] else []) + [label(head)]))
+                # a head that waits on a person is an item of its own list: here it only names the sub-tasks' group
+                moving.append(" ".join(([ICON[head["own"]]] if head["own"] not in (None, "owner", "waiting") else [])
+                                       + [label(head)]))
                 head_out = True
-            moving.append(("└ " if l["depth"] else "") + f"{ICON[l['status']]} {label(l)} — {(l['next'] or '—') + l['suffix']}")
+            nxt = f"확인 필요: {w['why']}" if st == "check" else l["next"] or "—"
+            moving.append(("└ " if l["depth"] else "") + f"{ICON[st]} {label(l)} — {nxt + l['suffix']}")
             head_out = head_out or not l["depth"]
+    bullet_of = {}
+    for (bsec, rev), items in bullets.items():
+        st, name, w = reviewer_wait(rev, items)
+        nums = "·".join(pr_num(i["pr"]) for i in items)
+        bullet_of[(bsec, rev)] = f"{ICON[st]} {len(items)}건 {name}"
+        if st == "owner":
+            turn.append(turn_item("리뷰", nums, w["unblocks"]))
+        elif st == "waiting":
+            theirs.append(theirs_item(rev, f"리뷰 {nums}", w["since"], w["unblocks"], ""))
+        else:
+            moving.append(f"{ICON[st]} {w['unblocks']} — 확인 필요: {w['why']}")
+    for d in store["doing"]:
+        if is_owner(d["owner"], me):
+            turn.append(turn_item(d["next"], "", d["title"]))
+        elif d.get("waiting"):
+            theirs.append(theirs_item(d["owner"], "", d.get("since"), d["title"], d["next"]))
+        else:
+            moving.append(f"{ICON['moving']} {d['title']} — {d['next']} · {d['owner']}")
 
     for sec in sections:
         repo, prog = sec
@@ -619,27 +770,31 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         for (bsec, rev), items in bullets.items():
             if bsec != sec:
                 continue
-            out += ["", f"- ⏳ {len(items)}건 {rev} 대기 — 분야 {'·'.join(i['title'] for i in items)}"]
-    if skipped:
+            out += ["", f"- {bullet_of[(bsec, rev)]} — 분야 {'·'.join(i['title'] for i in items)}"]
+    if periodic and skipped:
         out += ["", skipped]
-    if reaped := reap_line(now):
+    if periodic and (reaped := reap_line(now)):
         out += ["", reaped]
-    if moving or store["doing"]:
-        items = moving + [f"{ICON['moving']} {d['title']} — {d['next']} · {d['owner']}" for d in store["doing"]]
-        out += ["", "🔄 진행 중" if tg else "🔄 **진행 중**", ""] + [it if tg else f"- {it}" for it in items]
-    decisions = fleet.open_decisions()
+    if moving:
+        out += ["", "🔄 진행 중" if tg else "🔄 **진행 중**", ""] + [it if tg else f"- {it}" for it in moving]
+    if theirs:
+        out += ["", "⏳ 다른 사람 대기" if tg else "⏳ **다른 사람 대기**", ""] + [it if tg else f"- {it}" for it in theirs]
+    if insight:
+        out += ["", insight.strip()]
+    own, decisions = list(decisions), fleet.open_decisions()
     asked = set((last or {}).get("decisions") or []) if last_rows is not None else set()
-    if decisions:
+    if decisions or own:
         items = []
         for i, d in enumerate(decisions, 1):
             rec = d.get("recommend") and d["options"][d["recommend"] - 1]
             text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
                     if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
             items.append(text + (" (지난 보고와 동일)" if d["id"] in asked else ""))
+        items += [f"{i}. {one_line(d, 400)}" for i, d in enumerate(own, len(decisions) + 1)]
         out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
-    todo = store["owner_todo"]
-    out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + " — " + (todo[0] if todo else "없음")]
-    out += [x for it in todo[1:] for x in ("", it)]
+    todo = store["owner_todo"] + turn
+    out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
+    out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
     if asked := owner_requests.line(owner_requests.summary(now)):
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
     later = []

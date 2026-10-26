@@ -67,7 +67,7 @@ gh pr list --head "$(git branch --show-current)" --state open --json number,url
 
 | State | Action |
 |---|---|
-| No tracked changes; the branch's work is on `origin/main` (its PR merged, which decides after a squash merge; with no PR, `git diff origin/main...HEAD` empty); no open PR; ticket completed or no ticket | **Remove**: move untracked build caches (`__pycache__`, `.pytest_cache`, `node_modules/.cache`) and regenerated skill copies (an untracked `.agents/skills/<name>/` whose `.claude/skills/<name>` is tracked: Orca rebuilds it) to the trash with `/usr/bin/trash` first, since `orca worktree rm` refuses any untracked file, then `orca worktree rm --worktree current --json` |
+| No tracked changes; the branch's work is on `origin/main` (its PR merged, which decides after a squash merge; with no PR, `git diff origin/main...HEAD` empty); no open PR; ticket completed or no ticket | **Remove**: move untracked build caches (`__pycache__`, `.pytest_cache`, `node_modules/.cache`) and regenerated skill copies (an untracked `.agents/skills/<name>/` whose `.claude/skills/<name>` is tracked: Orca rebuilds it) to the trash first, the way `reap-resources` does (`/usr/bin/trash` on macOS, else its fallback), since `orca worktree rm` refuses any untracked file, then `orca worktree rm --worktree current --json` |
 | A criterion still open, PR still open, or the user said to hold | **Keep the worktree.** Close its terminals with `orca terminal close --worktree current --all --json` only if the user wants this agent stopped — that is not Sleep, the terminals do not come back. If the work resumes later, leave them alone and say Sleep is theirs from the app. |
 | Tracked changes, untracked files that are neither build caches nor regenerated copies, unpushed commits with no merged PR, or an unexpected state | **Stop and ask** with `AskUserQuestion`: show the exact `git status` / `git log` lines and offer commit-and-push, discard, or keep |
 
@@ -88,7 +88,7 @@ channel — the Orca ones kill the process, `EndConversation` seals the conversa
 you planned to say afterwards is never delivered. Never end a turn promising to clean
 up "next turn", and never write anything after `EndConversation`.
 
-The report says, in Korean: what this session delivered, where the record lives (worklog,
+The report says, in the language the user writes in: what this session delivered, where the record lives (worklog,
 ticket, PR), what the user should still check themselves — or plainly that nothing is left,
 never an invented item — and which command is about to run. Write it per `write-plainly`. Its
 layout follows the `brief` skill, which leaves these items and the Korean in place. When the user
@@ -158,7 +158,7 @@ the parent to decide. Then run §3 and pick by §4's table on real output:
 | §4's Remove row holds (a document-only card with no commits passes: `git diff origin/main...HEAD` is empty) | The report text, then `orca worktree rm --worktree current --json` (`--run-hooks` per §4) |
 | `isMainWorktree: true`, or another agent works on the card | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json` |
 | A `superseded by <card>` message from the session that started this card | Stop the work and push nothing more. The report names what is uncommitted or unpushed, then close by the rows above; where §4 would keep the worktree, only `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. A question you left waiting is withdrawn |
-| The brief's deliverable is the open PR itself (its `CLOSE` line says to close once the PR is up and reported; merge and review are not this card's) | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The worktree stays for the PR (§4); a review round starts a new card on it. When the `reap-resources` janitor is scheduled, it removes the card once the PR merges and the card is clean (it sees cards made with `orca worktree create --parent-worktree` or in its ledger), so nobody comes back for it |
+| The brief's deliverable is the open PR itself (its `CLOSE` line says to close once the PR is up and reported; merge and review are not this card's) | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The worktree stays for the PR (§4); a review round starts a new card on it. When the `reap-resources` janitor is scheduled, it removes the card once the PR merges and the card is clean (it sees any card made with `orca worktree create` or in its ledger), so nobody comes back for it |
 | A question waiting on the human, an open PR, a dirty tree, or a `KEEP` line | Stay. Say in the report and the note what holds the card. A later wake (a review fix, a message) runs this table again; otherwise the parent's check closes it |
 
 A refused `worktree rm` is not retried in any form (§7); close only this terminal and say in the

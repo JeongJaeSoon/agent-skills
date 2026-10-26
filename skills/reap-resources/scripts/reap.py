@@ -25,7 +25,7 @@ Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [..
 Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack;
 `--kinds janitor`) cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
---parent-worktree (lineage origin cli), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
+(cliProvenance created-by-cli, with or without --parent-worktree), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
 through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
@@ -882,14 +882,16 @@ NO_PR_MIN_HOURS = 2
 
 
 def cli_cards(res):
-    """Real paths of worktrees an agent made with `orca worktree create --parent-worktree` (Orca records origin "cli";
-    the app's own New Worktree records "manual"). None when the list is unreadable or truncated."""
+    """Real paths of worktrees an agent made with `orca worktree create`. Orca records cliProvenance "created-by-cli"
+    with or without --parent-worktree (lineage origin "cli" only with it); the app's own New Worktree records neither.
+    None when the list is unreadable or truncated."""
     if not isinstance(res, dict) or res.get("truncated"):
         return None
     return {real(w["path"]) for w in res.get("worktrees") or []
             if w.get("path") and not w.get("isMainWorktree") and not w.get("isPinned")
             and w.get("hostId", "local") == "local"
-            and (w.get("lineage") or {}).get("origin") == "cli" and (w.get("lineage") or {}).get("parentWorktreeId")}
+            and ((w.get("cliProvenance") or {}).get("kind") == "created-by-cli"
+                 or ((w.get("lineage") or {}).get("origin") == "cli" and (w.get("lineage") or {}).get("parentWorktreeId")))}
 
 
 def orca_json(*args):

@@ -132,7 +132,9 @@ Before pushing, run **both**:
   caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, browser automation for UI
   and web flows (logged-in sites included), IDE diagnostics
   for type and lint. Once the check is done, down the compose stacks you started in the same turn,
-  `docker compose -p <project> down` without `-v` so their volumes stay. A stack that has to stay gets its
+  with the project verify skill's own teardown when it has one (the app may start containers outside
+  compose), else `docker compose -p <project> down`; either way keep volumes (never `-v`). Teardown runs
+  bare, never through `orch heavy`, whose load gate would refuse it under load. A stack that has to stay gets its
   reason and deadline: `reap.py ledger add --kind compose-stack --id <project> --keep "<reason>" --until <ISO time>`
   (reap-resources); `orch heavy` registers its stacks, so the janitor downs a forgotten one after the PR closes
 - a change with no runtime behavior (docs, comments): validate links and run documented
@@ -238,7 +240,7 @@ Then land it. How depends on where you run:
   PR relies on, merge main in and let CI rerun. Do not rebase only because the branch is behind.
 
 ```bash
-gh pr merge <n> --squash --delete-branch      # a stack lands from its top, see §5
+gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; a stack lands from its top, see §5
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 

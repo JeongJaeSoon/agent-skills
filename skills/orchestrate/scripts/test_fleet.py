@@ -11,6 +11,8 @@ root = pathlib.Path(tempfile.mkdtemp(prefix="test-fleet-"))
 os.environ.update(dash_demo.build(root))
 import fleet  # noqa: E402  after the env points the state directory at root
 
+fleet.CLAUDE_HOMES = ()  # only the CLAUDE_CONFIG_DIR a block points at, never this machine's sessions
+
 fetch_runs = fleet.fetch_runs  # later swapped for the fake world's
 
 state_dir = pathlib.Path(os.environ["ORCH_FLEET_STATE"])
@@ -582,7 +584,7 @@ process.stdout.write(JSON.stringify(out));"""
 {(assets / "fleet.js").read_text()}
 const st = {{prs: {json.dumps(rows)}, sessions: [{{id: "wt-coord", name: "coordinator", phase: "idle"}}], sources: {{github: {{updated_at: "{ago(0)}"}}}}}};
 var S = {{filters: {{}}, sort: {{}}, state: st}};
-const out = {{all: fleetPrs(st), routed: FLEET_SECTIONS.filter((s) => !FLEET_VIEWS[s.id]).map((s) => s.id)}};
+const out = {{all: fleetPrs(st), routed: FLEET_SECTIONS.filter((s) => !FLEET_VIEWS[s.id]).map((s) => s.id), icons: FLEET_SECTIONS.map((s) => s.icon)}};
 S.filters.fleet_prs = "ci"; out.ci = fleetPrs(st);
 S.filters.fleet_prs = "review"; out.review = fleetPrs(st);
 S.filters.fleet_prs = "mergeable"; S.filters.fleet_prs_repo = "acme/tools"; out.mergeable = fleetPrs(st);
@@ -590,6 +592,8 @@ process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     page = got["all"]
     assert got["routed"] == [], f"sidebar sections without a view: {got['routed']}"
+    drawn = set(re.findall(r"^  (\w+): '", (assets / "app.js").read_text(), re.M))
+    assert len(set(got["icons"])) == len(got["icons"]) and set(got["icons"]) <= drawn, ("one icon per section", got["icons"])
     for raw in ("<script", "<b>me", 'href="javascript'):
         assert raw not in page, (raw, page)
     assert page.index("<h3 class=\"mono\">acme/app</h3>") < page.index("<h3 class=\"mono\">acme/tools</h3>"), page
@@ -684,6 +688,13 @@ process.stdout.write(JSON.stringify(out));"""
     names = re.findall(r'<span class="sb-text">([^<]+)</span>', tree)
     assert names == ["root", "Needs you", "asks you", "Running", "lead one", "prog-l", "lead card idle", "lead card working",
                      "Idle", "idle one with a long name that the sidebar cuts", "idle two", "Offline", "gone lead"], names
+    # A group header is a depth-0 row whose chevron carries the phase colour; the rows under it start one step in.
+    depth = dict((n, int(d)) for d, n in re.findall(r'--d:(\d)".*?<span class="sb-text">([^<]+)</span>', tree, re.S))
+    assert depth == {"root": 0, "asks you": 1, "lead one": 1, "prog-l": 2, "lead card idle": 2, "lead card working": 2,
+                     "idle one with a long name that the sidebar cuts": 1, "idle two": 1, "gone lead": 1}, depth
+    heads = re.findall(r'<summary class="nav-item"[^>]*>(.*?)<span class="sb-text">', tree, re.S)
+    assert [re.search(r'class="chev ([^"]*)"', h).group(1).strip() for h in heads] == \
+        ["ph-waiting", "ph-working", "ph-idle", "ph-offline"] and not any("dot-s" in h or "pulse" in h for h in heads), heads
     assert 'title="idle one with a long name that the sidebar cuts · standalone · idle"' in tree, "the full name is the tooltip"
     assert '<span class="count">2</span>' in tree.split('data-fold="idle"')[1].split("</summary>")[0], "the idle fold counts its sessions"
     assert opened(got["current"])["idle"] == "open", "the fold holding the page's session opens"
@@ -997,6 +1008,24 @@ finally:
     for k, v in saved.items():
         os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 assert got == [("/a", "🔥 top", "orchestrator"), ("/b", "lead:ops", "lead")], got
+
+# A launcher that gives each profile its own config dir registers the session there only: every home is read.
+profile = root / "profiles" / "p1" / "home"
+(profile / "sessions").mkdir(parents=True)
+(profile / "sessions" / "6.json").write_text(json.dumps({"pid": 6, "sessionId": "s-orca", "name": "orchestrator",
+                                                         "cwd": "/f", "procStart": "Mon"}))
+procs = {p: (0, "Mon", "claude") for p in (1, 2, 6)}
+fleet.CLAUDE_HOMES = (str(root / "profiles" / "*" / "home"),)
+os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+try:
+    got = fleet.live_sessions(procs)
+    assert sorted(got) == ["s-lead", "s-orca", "s-top"] and got["s-orca"]["home"] == profile, got
+    os.environ["ORCH_CLAUDE_HOMES"] = str(profile)  # when set, it alone names the dirs
+    assert sorted(fleet.live_sessions(procs)) == ["s-orca"]
+finally:
+    fleet.CLAUDE_HOMES = ()
+    for k in ("ORCH_CLAUDE_HOMES", "CLAUDE_CONFIG_DIR"):
+        os.environ.pop(k, None)
 
 # A session's last activity is the later of Orca's worktree time and its agents' own: the worktree time stands still
 # while an agent in it works.
