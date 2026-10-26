@@ -15,6 +15,11 @@ def paragraph(name):
 
 
 brief = paragraph("brief.md")
+assert "/orch-refusal/" in brief, "refused-act paragraph lost the report file's fixed path"
+assert "/orch-refusal/" in (refs / "../SKILL.md").read_text(), "SKILL.md lost the report file's fixed path"
+# The guardian brief has no refused-act paragraph, so its outside-the-worktree exception names the path itself.
+guardian = re.search(r"you write nothing outside your worktree except (.*?)\.\n", (refs / "roles.md").read_text(), re.S)
+assert guardian and "/orch-refusal/" in guardian[1] and "Write" in guardian[1], "guardian brief lost the refusal-report path"
 assert paragraph("roles.md") == brief, "roles.md's refused-act paragraph differs from brief.md's"
 assert 'from "An act refused" through "run it again."' in brief, "paste boundary no longer names the paragraph's ends"
 for name in ("../SKILL.md", "top-level.md"):

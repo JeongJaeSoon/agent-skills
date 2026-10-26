@@ -90,9 +90,12 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             python one-liner), even where the harness allows small shell edits: a Bash-made patch
             has passed tests that re-applying it with Edit showed broken. A formatter or generator
             VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
-            that changes a file or its mode its own call, so a refusal names it.
-            Write no file or script outside the worktree except under SCOPE's scratch root or
-            its named temporary download directory; list what you put there (checkouts, files, compose projects) in the report and tear it down
+            that changes a file or its mode its own call, so a refusal names it. Never chain a
+            check or probe with other acts in one Bash call either: a refusal takes every act in
+            the call with it, and each of them then counts as refused.
+            Write no file or script outside the worktree except under SCOPE's scratch root, its
+            named temporary download directory, or the one refusal-report file below (which you
+            leave in place); list what you put there (checkouts, files, compose projects) in the report and tear it down
             before worker_done by moving that one named directory to the trash. A script's own
             temporary files go there too, never loose in the system temporary root. Never `rm` a
             glob or a path built from a variable: it stops on a permission prompt, and an empty
@@ -106,7 +109,15 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             reports to its coordinator as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
-            orchestration channel to the human in its own chat, with its Human only batch. Paste
+            orchestration channel to the human in its own chat, with its Human only batch. A message
+            sent from Bash carries the command as the path of a file you wrote with the Write tool,
+            never quoted: a hook that matched the command's text blocks a message quoting it. That
+            file goes under <temp>/orch-refusal/<your worktree's directory name>/, where <temp> is
+            the absolute path TMPDIR holds, or /tmp when TMPDIR is unset, with a name no other
+            report there uses (a timestamp); whatever else your brief says about writing outside
+            the worktree, you may write it there. You do not tear it down: the reader moves it to
+            the trash after reading. If that Write is itself refused, report the refused act's tool
+            and target only, without its command. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this
