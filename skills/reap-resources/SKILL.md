@@ -1,6 +1,6 @@
 ---
 name: reap-resources
-description: "Use when the machine is slow or cluttered with what finished sessions and agents left behind — \"방치 리소스 정리해줘\", \"죽은 프로세스 정리\", \"메모리·CPU 누가 먹고 있어\", \"janitor\" — and for the resource steward's and janitor's rounds. Inventories first, reaps only listed targets, files go to the trash."
+description: "Use when the machine is slow or cluttered with what finished sessions and agents left behind — \"방치 리소스 정리해줘\", \"죽은 프로세스 정리\", \"메모리·CPU 누가 먹고 있어\", \"끝낸 orca 세션·worktree 정리해줘\", \"janitor\" — and for the resource steward's and janitor's rounds. Inventories first, reaps only listed targets, files go to the trash."
 ---
 
 # Reap resources
@@ -171,15 +171,19 @@ A precheck prints what it could not read (`gh`, `orca`) and the alerts to stderr
 `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
 so a scan there can see fewer workers than the automation does. Any process in a worktree keeps
 it from removal except Orca's terminal shell left at its prompt in a card whose terminals have gone silent, and
-`orca-worker` reports a reclaimable worker terminal. A finished card
+`orca-worker` reports a reclaimable worker terminal. Limit: those shells are matched to the card's Orca terminals by
+count, not by identity, so a silent shell of another card's terminal that `cd`-ed into this card passes as one of
+this card's, and the reap closes this card's handles while that shell stays. A finished card
 whose Claude session sits at an empty prompt would stay forever that way, so `done-card` asks that
-session to close itself; a lead card whose PRs had merged once stayed open two days. Which device fits which job:
+session to close itself; a lead card whose PRs had merged once stayed open two days. `done-card` and reap-hard
+are sweeps for cards that neither closed themselves nor were closed by the session that started them
+(`end-session` §8, "Who closes a finished card"). Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
 
 ## Hard pass: reap-hard
 
 The janitor only sees what was registered and waits on a model and on the card's own session to close; finished
-cards stayed open for a day. `bin/reap-hard` is the backstop: fixed rules, no model, every Orca card under
+cards stayed open for a day. `bin/reap-hard` is the last sweep: fixed rules, no model, every Orca card under
 `~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
 
 ```bash

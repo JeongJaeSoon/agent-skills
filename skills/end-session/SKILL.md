@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"끝낸 orca 세션·worktree 정리해줘\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Not bare \"정리해줘\"/\"마무리해줘\": that is record-progress."
+description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Not bare \"정리해줘\"/\"마무리해줘\": that is record-progress."
 ---
 
 # Ending the session
@@ -150,7 +150,7 @@ plan.
 
 Done means the brief's deliverable is complete and recorded where the brief says (its PRs
 merged, the note's `## 결과` written), and nothing waits on an answer: no question you asked,
-no open PR. Follow-up ideas are not a reason to stay: write them in the report and the note for
+no open PR, unless the open PR is the deliverable itself (the row below that says so). Follow-up ideas are not a reason to stay: write them in the report and the note for
 the parent to decide. Then run §3 and pick by §4's table on real output:
 
 | State | The turn's last calls |
@@ -163,6 +163,13 @@ the parent to decide. Then run §3 and pick by §4's table on real output:
 
 A refused `worktree rm` is not retried in any form (§7); close only this terminal and say in the
 note that the card is left for the parent or the human.
+
+**Who closes a finished card.** This is the one rule; other skills link here. The card itself
+closes first, in the turn its work is done: a worker by §7, a dispatched card by §8. The backstop
+is the session that started it, in the wake that card's report or `worker_done` arrives
+(`orchestrate`, "What you started, you close"). The `reap-resources` janitor's `done-card` nudge
+and `reap-hard` are sweeps for cards both missed, hours later. Nobody plans on them, and a card
+or its parent never waits for them.
 
 ## Common mistakes
 
