@@ -8,7 +8,7 @@ README "설치"대로 clone 한 뒤 `bootstrap.py --write`를 돌린다. 하는 
 
 ## 2. 사용자 설정 (`~/.claude/settings.json`)
 
-플러그인은 아래 값을 설정으로 실을 수 없다. 에이전트도 이 파일을 고치지 않는다(분류기가 자기수정으로 막는다). 사람이 직접 넣는다.
+플러그인은 아래 값을 설정으로 실을 수 없다. 에이전트도 이 파일을 고치지 않는다(분류기가 자기수정으로 막는다). 사람이 직접 넣는다. 원래 PC와 무엇이 다른지는 `setup-pc`가 표로 보인다(5절).
 
 | 키 | 하는 일 | 없으면 | 옮기는 방법 |
 |---|---|---|---|
@@ -36,8 +36,9 @@ README "설치"대로 clone 한 뒤 `bootstrap.py --write`를 돌린다. 하는 
 
 ## 5. 확인
 
-새 세션에서 아래 셋을 본다.
+새 세션에서 아래를 본다.
 
-1. `claude plugin list`에 `agent-skills@inline`이 보이고 Path가 체크아웃이다. `command -v orch`가 체크아웃의 `bin/orch`를 가리킨다.
-2. 여러 항목에 걸친 상태 보고를 요청한다(`/agent-skills:brief`). 시각이 붙은 제목 줄, 완료 → 진행 중 → 결정 필요 → 지금 오너가 할 일 → 보류 순서로 나오고, 할 일이 없으면 `없음`으로 나오면 된다.
-3. 오케스트레이터나 리드를 쓰는 PC라면, 일상 작업(카드 시작, 받은편지함 대기, `orch land`)이 확인 창 없이 도는지 본다. 멈추면 2절의 `autoMode`와 `permissions.allow`를 다시 본다.
+1. `/agent-skills:setup-pc`로 2~4절과 설치·동기화를 점검한다. 원래 PC에서 `setup_check.py export`로 뽑은 기준 파일이 있으면 `check --baseline`이 빠진 autoMode 규칙·`permissions.allow`·`agent-skills.json` 키·개인 파일을 짚는다. 스킬은 읽기만 하고 고치는 줄은 사람이 친다. 아무것도 설치되지 않았으면 clone한 체크아웃에서 `python3 skills/setup-pc/scripts/setup_check.py check`를 직접 돌린다.
+2. `claude plugin list`에 `agent-skills@inline`이 보이고 Path가 체크아웃이다. `command -v orch`가 체크아웃의 `bin/orch`를 가리킨다.
+3. 여러 항목에 걸친 상태 보고를 요청한다(`/agent-skills:brief`). 시각이 붙은 제목 줄, 완료 → 진행 중 → 결정 필요 → 지금 오너가 할 일 → 보류 순서로 나오고, 할 일이 없으면 `없음`으로 나오면 된다.
+4. 오케스트레이터나 리드를 쓰는 PC라면, 일상 작업(카드 시작, 받은편지함 대기, `orch land`)이 확인 창 없이 도는지 본다. 멈추면 2절의 `autoMode`와 `permissions.allow`를 다시 본다.
