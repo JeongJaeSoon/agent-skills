@@ -203,7 +203,9 @@ DELEGATE    You do not investigate, implement, verify or drive a browser yoursel
 PREDICATE   The countable done condition, and what is out of scope.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
-            route them down to your own workers, never to another session's.
+            route them down to your own workers, never to another session's. Units the
+            layer above started before you (listed in CONTEXT) stay in its Run: send what
+            you want from one of them to PARENT, which passes it on verbatim.
 PARENT      The Run of the session writing this brief, as `orca orchestration send --to
             run:<its run id>`. Reports and the HUMAN ONLY batch go there. A send to it
             that fails is the routing gap HUMAN ONLY names; never guess another address.
