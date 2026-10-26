@@ -26,7 +26,9 @@ def label_match(line, label):
 
 
 # Orca types this into an idle composer, mid-sentence too; it is never the human's.
-NUDGE = re.compile(r"You have \d+ orchestration messages?(?:\.?\s*Run `[^`\n]*`\.?|[^\n.]*\.?)", re.I)
+# Only its own words: a looser tail once ate the human's sentence typed right after it.
+NUDGE = re.compile(r"You have \d+ orchestration messages?(?: waiting)?(?:\.?\s*Run (?:`[^`\n]*`|orca orchestration check"
+                   r"(?: --?[\w-]+(?: (?!-)[\w-]+)?)*))?\.?", re.I)
 
 
 def pick(prompt, mine):

@@ -1652,7 +1652,15 @@ class Fleet:
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
         # Skill-side items and sync state.
         terms = {t["handle"]: (s["id"], t["title"]) for s in sessions.values() for t in s["terminals"]}
-        items += external_items(now) + sync_items(now, terms) + list(self.checks)
+        added, kept = external_items(), external_items(now)
+        aged = [i for i in added if i not in kept]
+        told = set(mem.get("external_aged") or ())
+        for i in aged:
+            if i["key"] not in told:
+                self.event({"at": iso(now), "kind": "inbox_aged_out", "session": i.get("session"),
+                            "text": mask(f"{i['title']} (added {EXTERNAL_KEEP_DAYS}+ days ago; orch-dash inbox list)", 200)})
+        mem["external_aged"] = [i["key"] for i in aged]
+        items += kept + sync_items(now, terms) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -1694,16 +1702,20 @@ class Fleet:
         except (OSError, ValueError):
             held = []
         import board, owner_requests
-        asked = owner_requests.fold(owner_requests.read())
+        asked, by_key = owner_requests.fold(owner_requests.read()), {p["key"]: p for p in prs}
         try:
-            if rows := owner_requests.reconcile(asked, now, {p["key"]: p for p in prs}, sessions, board.read()["rows"],
-                                                by_handle, mem.setdefault("request_cards", {}), self.sources["orca"]["ok"]):
+            if rows := owner_requests.reconcile(asked, now, by_key, sessions, board.read()["rows"], by_handle,
+                                                mem.setdefault("request_cards", {}), mem.setdefault("request_gone", {}),
+                                                self.sources["orca"]["ok"]):
                 written, asked = owner_requests.apply(rows)
                 for r in written:
                     self.event({"at": iso(now), "kind": f"request_{r['ev']}", "session": by_handle.get(asked[r["id"]].get("handle")),
                                 "text": mask(f"{r['id']}: {r.get('to') or r.get('evidence') or r.get('reason')}", 200)})
+            mem.pop("requests_error", None)
         except Exception as e:  # a ledger it cannot settle must not take the dashboard down with it
-            self.event({"at": iso(now), "kind": "requests_error", "text": mask(repr(e), 200)})
+            if mem.get("requests_error") != (err := mask(repr(e), 200)):  # once, not every tick it keeps failing
+                mem["requests_error"] = err
+                self.event({"at": iso(now), "kind": "requests_error", "text": err})
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),
@@ -1712,8 +1724,10 @@ class Fleet:
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
                 "requests": {**owner_requests.summary(now, asked),
-                             "items": [{**q, "session": by_handle.get(q.get("handle"))} for q in asked.values()
-                                       if owner_requests.visible(q, now)]},
+                             "items": [{**q, "session": by_handle.get(q.get("handle")),
+                                        "closed": [to for to in q["links"] if (pr := owner_requests.link_pr(to, by_key))
+                                                   and pr[1].get("state") == "CLOSED"]}
+                                       for q in asked.values() if owner_requests.visible(q, now)]},
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 

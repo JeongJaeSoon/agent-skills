@@ -1443,6 +1443,40 @@ with contextlib.ExitStack() as stack:
     (ext_state / "inbox-external.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert [i["key"] for i in fleet.external_items(fleet.utcnow())] == ["ext:new"]
     assert [i["key"] for i in fleet.external_items()] == ["ext:old", "ext:new"]
+
+# The tick settles the request ledger: a request whose PR merged closes, one whose PR closed unmerged stays open with
+# the link tagged. A ledger it cannot settle warns once on the timeline, not every tick; an added inbox item that
+# ages out is on the timeline once too.
+import owner_requests  # noqa: E402
+world.prs[43].update(state="CLOSED", mergeStateStatus="UNKNOWN")
+ids = []
+for text, to in (("merge acme/tools#6 once green", "acme/tools#6"), ("finish the setup guide", "acme/launchpad#43")):
+    ids.append(owner_requests.add(text, "s-coord", "term_coord", now=clock[0])[0]["id"])
+    owner_requests.close(ids[-1], "link", to=to)
+merged_id, closed_id = ids
+with (state_dir / "inbox-external.jsonl").open("a") as fh:
+    fh.write(json.dumps({"op": "add", "key": "stale-login", "type": "login", "title": "Log in again",
+                         "at": fleet.iso(clock[0] - dt.timedelta(days=fleet.EXTERNAL_KEEP_DAYS + 1))}) + "\n")
+st = f.tick(force=True)
+asked = owner_requests.fold(owner_requests.read())
+assert asked[merged_id]["status"] == "done" and "acme/tools#6 merged" in asked[merged_id]["note"], asked[merged_id]
+assert asked[closed_id]["status"] == "open"
+shown = {q["id"]: q for q in st["requests"]["items"]}
+assert merged_id not in shown and shown[closed_id]["closed"] == ["acme/launchpad#43"], shown.get(closed_id)
+assert any(e["kind"] == "request_done" and e["text"].startswith(merged_id) for e in f.events)
+assert "ext:stale-login" not in {i["key"] for i in st["items"]}
+real_reconcile = owner_requests.reconcile
+owner_requests.reconcile = lambda *a, **k: 1 / 0
+try:
+    for _ in range(3):
+        st = f.tick(force=True)
+finally:
+    owner_requests.reconcile = real_reconcile
+assert [e["kind"] for e in f.events].count("requests_error") == 1
+assert [e["kind"] for e in f.events].count("inbox_aged_out") == 1
+f.tick(force=True)
+assert "requests_error" not in f.mem
+
 import dash  # noqa: E402
 assert {"owner_requests.py", "board.py", "holds.py", "stages.py"} <= {f.name for f in dash.code_files()}
 assert not any(f.name.startswith("test_") for f in dash.code_files())

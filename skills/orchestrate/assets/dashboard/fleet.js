@@ -420,12 +420,13 @@ function fleetOverview(st) {
 }
 
 // The owner's open requests to a coordinator (orch req, hooks/request_log.py); one unlinked for 30 min is amber. The
-// fleet tick links and closes them (owner_requests.reconcile); one unlinked for 12 h has expired and is not listed.
+// fleet tick links and closes them (owner_requests.reconcile); one unlinked for 12 h has expired and is not listed. A PR
+// closed unmerged does not close its request, so its link is tagged for the coordinator.
 function requestCard(st) {
   const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
   if (!(rq.items || []).length) return "";
   const rows = rq.items.slice(0, 8).map((q) => `<li>${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow ellipsis" title="${esc(q.text)}">${esc(q.text)}</span>
-    <span class="acts muted">${q.links.length ? esc(q.links.join(", ")) : "not linked"} · ${relSpan(q.ts)}</span></li>`).join("");
+    <span class="acts muted">${q.links.length ? q.links.map((l) => esc(l) + ((q.closed || []).includes(l) ? ` ${tag("closed", "warn")}` : "")).join(", ") : "not linked"} · ${relSpan(q.ts)}</span></li>`).join("");
   return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code></span></div><ul class="rows">${rows}</ul></div>`;
 }
 

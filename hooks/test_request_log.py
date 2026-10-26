@@ -105,6 +105,8 @@ assert hook("clean up the cards that are idle").startswith("Owner request r15 lo
 text = hook("clean up the cards that are idle", agent_type="agent-skills:lead", session="s-agent")  # another session's
 assert text.startswith("Owner request r16 logged") and "same" not in text, text
 assert len(opened()) == 16
+text = hook("You have 1 orchestration message review the open cards")  # no period: the human's words stay
+assert text.startswith("Owner request r17 logged") and opened()[-1] == "review the open cards", opened()[-1]
 
 # An unlinked request past TTL_MIN expires: out of the counts, still closable. A linked one never expires.
 os.environ["ORCH_FLEET_STATE"] = str(TMP / "recon")
@@ -127,7 +129,7 @@ s = req.summary(late, q)
 assert s["open"] == 2 and s["expired"] == 4 and [u["id"] for u in s["unlinked"]] == [], s
 
 # reconcile: a merged PR closes its request; a card the session started in the window is linked, and done once it is
-# seen live then gone; an unlinked request whose terminal is gone is dropped; a free-form link blocks auto-done.
+# seen live then gone; an unlinked request whose terminal stays gone is dropped; a free-form link blocks auto-done.
 sessions = {"c": {"id": "c", "name": "coord", "parent": None, "created": at(-999)},
             "w": {"id": "w", "name": "card-x", "parent": "c", "created": at(42)}}
 prs = {"acme/app#1": {"key": "acme/app#1", "state": "MERGED", "merged_at": at(50), "session": "w"},
@@ -135,41 +137,69 @@ prs = {"acme/app#1": {"key": "acme/app#1", "state": "MERGED", "merged_at": at(50
 board_rows = {"lead-a": {"id": "lead-a", "status": "moving", "by": "term_c", "created_at": at(122), "parent": None},
               "lead-a/t1": {"id": "lead-a/t1", "status": "moving", "by": "term_c", "created_at": at(123), "parent": "lead-a"},
               "other": {"id": "other", "status": "done", "by": "term_other", "created_at": at(122)}}
-by_handle, seen = {"term_c": "c"}, {}
+by_handle, seen, missing = {"term_c": "c"}, {}, {}
 now = T0 + dt.timedelta(minutes=240)
-rows = req.reconcile(req.fold(req.read()), now, prs, sessions, board_rows, by_handle, seen, True)
+rows = req.reconcile(req.fold(req.read()), now, prs, sessions, board_rows, by_handle, seen, missing, True)
 got = {(r["ev"], r["id"], r.get("to")) for r in rows}
-assert got == {("done", "r1", None), ("link", "r2", "card:card-x"), ("drop", "r3", None),
+assert got == {("done", "r1", None), ("link", "r2", "card:card-x"),
                ("link", "r4", "acme/app#2"), ("link", "r4", "board:lead-a")}, got
+assert missing == {"term_gone": {"since": iso(now), "at": iso(now), "reads": 1}}, missing
+# A terminal one read lacks is not gone yet: it is dropped once reads GONE_MIN apart keep lacking it, and one seen
+# again in between starts over.
+later = now + dt.timedelta(minutes=req.GONE_MIN)
+again = dict(missing)
+assert all(r["ev"] != "drop" for r in req.reconcile(req.fold(req.read()), now, prs, sessions, board_rows, by_handle, {}, again, True))
+back = {**by_handle, "term_gone": "c"}
+m2 = dict(missing)
+req.reconcile(req.fold(req.read()), later, prs, sessions, board_rows, back, {}, m2, True)
+assert m2 == {}, m2
+drop = [r for r in req.reconcile(req.fold(req.read()), later, prs, sessions, board_rows, by_handle, {}, missing, True)
+        if r["ev"] == "drop"]
+assert [r["id"] for r in drop] == ["r3"] and missing["term_gone"]["reads"] == 2, (drop, missing)
+rows += drop
 assert all(r["by"] == "auto" for r in rows) and "acme/app#1 merged" in next(r for r in rows if r["ev"] == "done")["evidence"]
 assert seen == {"card-x": {"id": "w", "at": iso(now)}}  # lead-a/t1 rides on lead-a, made just before it by the same terminal
 # Two requests in the window before a card: the turn answered both, so the card is linked to neither.
-two = {"x1": {"id": "x1", "ts": at(300), "handle": "term_c", "status": "open", "links": []},
-       "x2": {"id": "x2", "ts": at(305), "handle": "term_c", "status": "open", "links": []}}
+two = {"x1": {"id": "x1", "ts": at(300), "text": "look at the login flow", "handle": "term_c", "status": "open", "links": []},
+       "x2": {"id": "x2", "ts": at(305), "text": "and the export too", "handle": "term_c", "status": "open", "links": []}}
 both = {**sessions, "y": {"id": "y", "name": "card-y", "parent": "c", "created": at(310)}}
-assert req.reconcile(two, now, {}, both, {}, by_handle, {}, True) == []
+assert req.reconcile(two, now, {}, both, {}, by_handle, {}, {}, True) == []
+# An acknowledgement or a short question asks for no card: it is never linked and leaves the other one alone.
+for chat in ("고마워", "ok!", "왜 그래?", "Thank you."):
+    assert req.chatty(chat), chat
+assert not req.chatty("카드 만들어줘") and not req.chatty("acme/app#3 merge 해줘")
+two["x1"]["text"], two["x2"]["text"] = "카드 만들어줘", "확인했어"
+assert [(r["id"], r["to"]) for r in req.reconcile(two, now, {}, both, {}, by_handle, {}, {}, True)] == [("x1", "card:card-y")]
+two["x1"]["text"] = "이건 왜 이래?"
+assert req.reconcile(two, now, {}, both, {}, by_handle, {}, {}, True) == []
 del two["x1"]
-assert [r["to"] for r in req.reconcile(two, now, {}, both, {}, by_handle, {}, True)] == ["card:card-y"]
+two["x2"]["text"] = "make a card"
+assert [r["to"] for r in req.reconcile(two, now, {}, both, {}, by_handle, {}, {}, True)] == ["card:card-y"]
 assert req.apply(rows)[0] == rows and req.apply(rows)[0] == []  # the second pass finds them all overtaken
 q = req.fold(req.read())
 assert q["r1"]["status"] == "done" and q["r3"]["status"] == "drop" and q["r2"]["links"] == ["card:card-x"]
 
 # A failed Orca read closes nothing card- or terminal-based, and a card never seen live is not taken as gone.
 gone = {"c": sessions["c"]}
-assert req.reconcile(q, now, prs, gone, board_rows, by_handle, seen, False) == []
-assert req.reconcile(q, now, prs, {}, board_rows, by_handle, seen, True) == []
-assert req.reconcile(q, now, prs, gone, board_rows, by_handle, {}, True) == []
+assert req.reconcile(q, now, prs, gone, board_rows, by_handle, seen, {}, False) == []
+assert req.reconcile(q, now, prs, {}, board_rows, by_handle, seen, {}, True) == []
+assert req.reconcile(q, now, prs, gone, board_rows, by_handle, {}, {}, True) == []
 renamed = {**gone, "w": {**sessions["w"], "name": "card-x-renamed"}}  # same worktree, new name: not gone
-assert [(r["ev"], r.get("to")) for r in req.reconcile(q, now, prs, renamed, board_rows, by_handle, dict(seen), True)] \
+assert [(r["ev"], r.get("to")) for r in req.reconcile(q, now, prs, renamed, board_rows, by_handle, dict(seen), {}, True)] \
     == [("link", "card:card-x-renamed")]  # linked again under its new name, and not done
-rows = req.reconcile(q, now, prs, gone, board_rows, by_handle, seen, True)
+rows = req.reconcile(q, now, prs, gone, board_rows, by_handle, seen, {}, True)
 assert [(r["ev"], r["id"]) for r in rows] == [("done", "r2")] and "card:card-x removed" in rows[0]["evidence"], rows
 req.apply(rows)
-# r4 closes only once every link is over: the PR merged and the board row done.
-prs["acme/app#2"]["state"] = "MERGED"
-assert req.reconcile(req.fold(req.read()), now, prs, gone, board_rows, by_handle, seen, True) == []
+# r4 closes only once every link is over: the PR merged and the board row done. A PR closed unmerged is not over.
 board_rows["lead-a"]["status"] = "done"
-rows = req.reconcile(req.fold(req.read()), now, prs, gone, board_rows, by_handle, seen, True)
+prs["acme/app#2"]["state"] = "CLOSED"
+assert req.reconcile(req.fold(req.read()), now, prs, gone, board_rows, by_handle, seen, {}, True) == []
+assert not req.finished("https://github.com/acme/app/pull/2", prs, None, {}, {})
+prs["acme/app#2"]["state"] = "MERGED"
+board_rows["lead-a"]["status"] = "moving"
+assert req.reconcile(req.fold(req.read()), now, prs, gone, board_rows, by_handle, seen, {}, True) == []
+board_rows["lead-a"]["status"] = "done"
+rows = req.reconcile(req.fold(req.read()), now, prs, gone, board_rows, by_handle, seen, {}, True)
 assert [(r["ev"], r["id"]) for r in rows] == [("done", "r4")], rows
 assert seen == {}  # no open request links a card any more
 
