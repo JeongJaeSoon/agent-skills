@@ -548,10 +548,11 @@ rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", W
 code, cut, err = orch_env(renv, *REQUEST)
 assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
 assert f"- [2] {WIDE_TITLE}" in cut.splitlines() and f"- [3] ⚠️ {WIDE_EVIDENCE}" in cut.splitlines(), cut
-# One the PR cell alone makes too wide is not cut at all, and is reported like any other.
-rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", "acme/a-very-long-repository-name-for-the-table#123456")
-code, _, err = orch_env(renv, *REQUEST)
-assert code == 1 and err == "a table is wider than 78 columns", (code, err)
+# The stage table's PR is a plain key, so a long one is cut and listed the same way.
+WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
+rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
+code, cut, err = orch_env(renv, *REQUEST)
+assert code == 0 and any(l.startswith("- [") and l.endswith(f"] {WIDE_PR}") for l in cut.splitlines()), (code, err, cut)
 
 # GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR
 # closed unmerged is ⏸️ PR 닫힘. A lead the board holds still shows its live cards whose PR no board row has, and a PR

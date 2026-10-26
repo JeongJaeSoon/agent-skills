@@ -71,7 +71,7 @@ def fit(rows, cols, cuttable, floor=10, deco=None):
         out, plain, notes = [list(rows[0])], [], []
         for i, r in enumerate(rows[1:], 1):
             row = list(r)
-            for c in cap:
+            for c in sorted(cap):  # marks numbered left to right
                 if text_width(row[c]) > cap[c]:
                     notes.append(row[c])
                     mark = f"…[{len(notes)}]"

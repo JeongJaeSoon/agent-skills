@@ -281,8 +281,8 @@ def render_md(t):
         if r.get("done_at"):
             name += " (끝남)"
         body.append([name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS])
-    # A name or a cell's evidence is cut to fit, never the PR, and its whole text goes in the numbered list under it.
-    rows, notes = table_width.fit([header] + body, COLS, (0, 2, 3, 4),
+    # Any cell may be cut to fit (the PR column is a plain key here, not a link), its whole text in the list under it.
+    rows, notes = table_width.fit([header] + body, COLS, (0, 1, 2, 3, 4),
                                   deco=lambda i, c, x: f"**{x}**" if c == 0 and t["rows"][i - 1].get("group") else x)
     lines += ["| " + " | ".join(x.replace("|", "\\|") for x in row) + " |" for row in rows[1:]]
     lines += [""] + [f"- [{n}] {x}" for n, x in enumerate(notes, 1)] if notes else []
