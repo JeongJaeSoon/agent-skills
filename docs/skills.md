@@ -188,7 +188,7 @@
   - **user-folder:** `reap.user_folders`에 명시한 폴더만 정리한다. 설정이 없으면 끈다. 기간·열린 파일·다운로드 중 파일 검사와 휴지통 보관은 유지한다.
   - **program:** `~/.claude/programs`(`PROGRAMS_HOME`)에서 닫힌 프로그램(최종 확인 `predicate_verified` 뒤에 착지·predicate 변경·admitted 후속이 없는 것) 중 기록(대시보드 캐시를 뺀 ledger·decisions·reflect 등)이 7일(`reap.program_days`) 넘게 안 바뀐 것을 `_archive/`로 옮긴다. 지우지 않는다. 이름에 `resume`이나 `handoff`가 든 재개 노트가 있으면 닫혔어도 남긴다.
   - **state-file:** reorient hook의 세션 파일(`<state>/reorient/*.json`) 중 7일(`reap.state_days`) 지난 것을 한 폴더로 묶어 휴지통으로, 512KB(`reap.log_max_kb`)를 넘은 `sync.log`는 `sync.log.1`로 회전한다(이전 `.1`은 휴지통). program과 함께 정기 실행에서 하루 한 번만 본다.
-  - **정기 실행:** `precheck`는 대상이 있으면 exit 0이고, 지난 `reap`이 실패한 대상과 똑같으면 하루 동안 건너뛴다. 3시간 주기 Orca automation의 precheck로 쓰고, `schedule`은 그 등록 명령을 출력만 한다([automation.md](automation.md)).
+  - **정기 실행:** `precheck`는 대상이 있으면 exit 0이고, 지난 `reap`이 실패한 대상과 똑같으면 하루 동안 건너뛴다. 3시간 주기 Orca automation의 precheck로 쓰고, PC 부하가 높으면 `precheck --load` job이 그 사이에 한 번 더 돈다. `schedule`은 그 등록 명령을 출력만 한다([automation.md](automation.md)).
   - **pressure:** `scripts/pressure.py`가 모델 없이 3분마다(LaunchAgent) load·메모리 압박·swap·디스크·실행 중 컨테이너를 잰다. 경고면 안전 종류(`orphan`, `compose-stack`, `gui-app`, `orca-worker`)만 `reap --plan`으로 정리하고 정리한 것이 있을 때 오케스트레이터에 한 줄 보낸다. 터미널이 살아 있는 카드 안의 대상은 남긴다. 위험인데 정리할 것이 없으면 상위 소비자(프로세스·compose 프로젝트와 그 카드)를 알리고 멈춘다. 남의 것은 종료하지 않는다. 임계값과 근거는 [pressure.md](pressure.md).
   - `pkill`, `docker system prune`, `--force`는 쓰지 않는다. 누적 수치(고아 프로세스, dangling volume, 정리할 브랜치·worktree)가 설정의 임계를 넘으면 `경보`로 표시한다.
 - **동봉:** `scripts/reap.py`, `scripts/pressure.py`, 테스트 파일.

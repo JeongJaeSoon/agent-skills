@@ -16,6 +16,14 @@ def janitor(enabled=True, **over):
     return a
 
 
+LOAD = au.janitor_want(f"path:{au.REPO}", load=True)
+
+
+def load_job(enabled=True, **over):
+    return janitor(enabled, **{"id": "J2", "name": au.reap.LOAD_NAME, "rrule": LOAD["trigger"],
+                               "precheck": {"command": LOAD["precheck"], "timeoutSeconds": LOAD["precheck-timeout"]}, **over})
+
+
 class FakeOrca:
     """Stands in for `sh`: answers `orca automations list` from a list and records every other call."""
     def __init__(self, autos):
@@ -43,6 +51,33 @@ class Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         return fake
+
+
+class JanitorLoad(Base):
+    """The load job is a second Orca automation: its own name, trigger and `precheck --load`, found and fixed apart."""
+    j = au.JanitorLoad()
+
+    def test_shape(self):
+        self.assertTrue(LOAD["precheck"].endswith("precheck --load"), LOAD["precheck"])
+        self.assertNotEqual(LOAD["trigger"], WANT["trigger"])
+        self.assertEqual(WANT["trigger"], "17 */3 * * *")
+
+    def test_status_finds_only_its_own_job(self):
+        self.orca([janitor()])
+        self.assertEqual(self.j.status()[0], "absent")
+        self.orca([janitor(), load_job()])
+        self.assertEqual(self.j.status(), ("on", f"{LOAD['trigger']} · {au.REPO}"))
+
+    def test_enable_fixes_its_own_drift(self):
+        fake = self.orca([janitor(), load_job(precheck={"command": WANT["precheck"], "timeoutSeconds": 300})])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        edit = fake.edits()[0]
+        self.assertEqual((edit[edit.index("--id") + 1], edit[edit.index("--precheck") + 1]), ("J2", LOAD["precheck"]))
+
+    def test_enable_absent_creates_with_load(self):
+        fake = self.orca([janitor()])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        self.assertIn("--load", fake.schedules()[0])
 
 
 class JanitorName(unittest.TestCase):
@@ -318,10 +353,10 @@ class Apply(Base):
             self.assertEqual(au.cmd_apply(False), 0)
         pv.assert_not_called()
         pr.assert_called_once()
-        self.assertEqual(len(fake.schedules()), 1)
+        self.assertEqual(["--load" in c for c in fake.schedules()], [False, True])
 
     def test_leaves_a_disabled_janitor_off(self):
-        fake = self.orca([janitor(enabled=False)])
+        fake = self.orca([janitor(enabled=False), load_job(enabled=False)])
         with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual(fake.edits() + fake.schedules(), [])

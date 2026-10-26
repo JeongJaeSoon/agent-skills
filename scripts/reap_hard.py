@@ -308,54 +308,9 @@ def wt_path(wid):
     return (wid or "").split("::")[1] if "::" in (wid or "") else ""
 
 
-TAIL_BYTES = 256 * 1024
-
-
-def last_entry_time(path):
-    """Time of the newest entry with a timestamp in a transcript's tail. An idle Claude session appends untimed
-    metadata lines (`atis-latch`) about every 30 minutes, which move the file's mtime without any work; with no
-    timestamp in the tail, the mtime stands, which reads as recent and keeps the card. None when the file is gone;
-    Unreadable when it or its newest timestamp cannot be read, since an older entry would read as quieter."""
-    try:
-        with open(path, "rb") as f:
-            f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
-            lines = f.read().decode("utf-8", "replace").splitlines()
-        mtime = os.stat(path).st_mtime
-    except FileNotFoundError:
-        return None
-    except OSError as e:
-        raise Unreadable(f"세션 기록 {path.name} 을 읽지 못함({type(e).__name__})") from e
-    for line in reversed(lines):
-        try:
-            ts = json.loads(line).get("timestamp")
-        except (ValueError, AttributeError):
-            continue  # the tail's cut first line, or a non-object line
-        if ts:
-            try:
-                return reap.parse_ts(ts)
-            except (ValueError, TypeError, AttributeError) as e:
-                raise Unreadable(f"세션 기록 {path.name} 의 시각 {str(ts)[:40]!r} 을 읽지 못함") from e
-    return mtime
-
-
-class Unreadable(Exception):
-    pass
-
-
 def transcript_quiet(projects_dir, now):
-    """reap.transcript_quiet, by the last timestamped entry instead of the file's mtime; a reason (str) when a
-    transcript cannot be read, which keeps the card."""
-    def quiet(cwd):
-        d = projects_dir / re.sub(r"[^A-Za-z0-9]", "-", cwd)
-        try:
-            times = [t for f in ((f for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)) if d.is_dir() else ())
-                     if (t := last_entry_time(f)) is not None]
-        except Unreadable as e:
-            return str(e)
-        except OSError as e:
-            return f"세션 기록 폴더를 읽지 못함({type(e).__name__})"
-        return now - max(times) if times else None
-    return quiet
+    """reap.transcript_quiet with a reason (str) when a transcript cannot be read, which keeps the card."""
+    return reap.transcript_quiet(projects_dir, now, reasons=True)
 
 
 def read_machine(now):
@@ -367,50 +322,6 @@ def read_machine(now):
             "listening": listening, "pr_state": reap.pr_reader(),
             "quiet": transcript_quiet(pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
                                       / "projects", now)}
-
-
-COORDINATOR_ARGV = re.compile(r"--agent[ =]agent-skills:(lead|orchestrator)\b|--name[ =]lead:")
-COORDINATOR_ROLES = ("lead", "orchestrator")
-ROLES = STATE_DIR / "roles"
-
-
-def lstart_epoch(s):
-    try:
-        return time.mktime(time.strptime(s, "%a %b %d %H:%M:%S %Y"))
-    except (ValueError, TypeError):
-        return None
-
-
-def coordinator_in(path, rows, cwd_of, projects, roles=ROLES):
-    """Why a live Claude session in path is a lead or the orchestrator, or None: started with `--agent
-    agent-skills:lead|orchestrator` (or `--name lead:<slug>`), or a session of this card that has written to its
-    transcript since that process started declared `ROLE: lead|orchestrator` (the reorient hook's record).
-    Anything it cannot read is an answer too: a reason that keeps the card, never None."""
-    inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), path)]
-    if missing := [pid for pid in inside if pid not in rows]:
-        return f"pid {missing[0]} 의 프로세스 행을 읽지 못함"
-    live = [pid for pid in inside if reap.is_claude(rows[pid]["cmd"])]
-    for pid in live:
-        if m := COORDINATOR_ARGV.search(rows[pid]["cmd"]):
-            return f"pid {pid} {m.group(0)}"
-    starts = [t for t in (lstart_epoch(rows[pid]["start"]) for pid in live) if t is not None]
-    if not live:
-        return None
-    if not starts:
-        return "claude 시작 시각을 읽지 못함"
-    d = pathlib.Path(projects) / re.sub(r"[^A-Za-z0-9]", "-", path)
-    for f in d.glob("*.jsonl") if d.is_dir() else ():
-        try:
-            if f.stat().st_mtime < min(starts) - 60:
-                continue
-            role = json.loads((pathlib.Path(roles) / f"{f.stem}.json").read_text()).get("role")
-        except FileNotFoundError:
-            continue  # a transcript gone mid-scan, or a session that never declared a role
-        except (OSError, ValueError, AttributeError) as e:
-            return f"세션 {f.stem[:8]} 의 ROLE 기록을 읽지 못함({type(e).__name__})"
-        if role in COORDINATOR_ROLES:
-            return f"세션 {f.stem[:8]} ROLE 선언"
-    return None
 
 
 def card_verdict(w, m, cfg, protect, now):
@@ -430,7 +341,7 @@ def card_verdict(w, m, cfg, protect, now):
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
                          people_in(p, m["rows"], cwd_of), holders, children,
-                         coordinator_in(p, m["rows"], cwd_of, projects), busy_in(p, m["rows"], cwd_of))
+                         reap.coordinator_in(p, m["rows"], cwd_of, projects), busy_in(p, m["rows"], cwd_of))
     return ok, why, facts
 
 
