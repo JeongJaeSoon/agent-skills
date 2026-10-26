@@ -23,4 +23,4 @@ A changed head requires review of the changed diff and fresh relevant checks.
 For the optional orchestration ledger, use `independent-review`, `review:<reviewer>`,
 `verifier:<reviewer>` or `live:<feature>` as applicable. The source describes the evidence,
 not proof of independence by itself. Never record the implementer's own opinion as an
-independent verdict. Existing ledger source strings remain historical input and are not rewritten.
+independent verdict.

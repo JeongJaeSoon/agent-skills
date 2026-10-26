@@ -146,7 +146,6 @@ When a person points out a UI problem that no rule covers, or one a rule should 
    `~/.config/agent-skills/ui-review/evidence.md`, outside the repo. A measurable rule gets a check in `scripts/measure.js` and a failing
    case in `scripts/testdata/fail.html`, so the test proves it fires.
 3. A rule for one product (its tokens, a layout decision) goes to that product's repo, or to
-   `~/.config/agent-skills/ui-review/rules.md` when it is the user's own. Read that file, when it
-   exists, with this one at step 1 of the procedure.
+   `~/.config/agent-skills/ui-review/rules.md` when it is the user's own.
 4. A rule that kept missing a real problem gets its threshold or its judged set changed, not an
    exception.

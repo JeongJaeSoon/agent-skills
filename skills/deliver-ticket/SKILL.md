@@ -101,13 +101,14 @@ verdict. **Trivial** means all of these: about 20 changed lines or fewer, no aut
 migration, concurrency, CI or public-contract change, and a test that covers it. A trivial
 change may use a focused independent review of the diff and relevant tests (record
 `subagent-review` when that is the source). Non-trivial changes need the full independent
-review evidence contract. Use available review tools appropriate
-to the scope; their command names and models are not requirements of this skill.
+review evidence contract. When a command listed above is unavailable, another reviewer
+covering the same scope stands in.
 Follow [references/independent-review.md](references/independent-review.md) for the evidence
 contract and unavailable-review handling.
 
-Sort every finding the way `interrogate`'s `references/lead-judgment.md` does — Act on,
-Consider, Noted, Dismissed — and re-run until a pass comes back with no Act-on finding. That
+Sort every finding into `interrogate`'s buckets (its SKILL.md, filtered per
+`references/lead-judgment.md`) — Act on, Consider, Noted, Dismissed — and re-run until a pass
+comes back with no Act-on finding. That
 verdict, not your own reading of the diff, is what closes the review. **Five rounds is the cap**
 unless the ticket or the program's standing orders set another. The cap bounds rounds, never
 fixes: an Act-on finding from the last round is still fixed, and one more pass reviews only
@@ -124,7 +125,7 @@ belongs in the commit you just made; make a new one when it is separable. Never
 
 ## 5. Ship
 
-Before pushing, run **both**:
+Before pushing, run the test suite **and** the check that fits the change:
 
 - the test suite
 - an E2E check against a running system (a local compose stack, image build or E2E run goes
@@ -146,8 +147,7 @@ Before pushing, run **both**:
 Use the repository's existing verification skill or harness when it fits the affected
 surface. If none exists, run the appropriate direct checks and retain their evidence.
 Create or maintain a reusable verification skill only when requested or useful within the
-agreed scope; its absence does not block otherwise adequate verification. This changes the
-packaging of verification, never its required coverage or evidence. An existing verification
+agreed scope; its absence does not block otherwise adequate verification. An existing verification
 skill or harness that cannot drive the changed feature or describes it incorrectly must be
 reported as `verify skill stale: <feature>` (or `verification harness stale: <feature>`).
 Repair it within scope or report the unresolved gap and use direct checks that prove the same
@@ -190,10 +190,8 @@ whose comment lacks either.
 **A green check is not evidence.** Confirm from logs that the step actually ran
 (`gh run view <id> --log`) — a skipped step, a rate-limited reviewer, and a real pass all
 look identical in the checks list. Read a failed run with `gh run view <id> --log-failed`
-first. Download logs and artifacts into an explicitly scoped system temporary directory,
-outside git worktrees (`gh run download -D <temporary-directory>`). A standalone card also
-resolves the platform temporary root and names its task-specific download directory before
-use; never expand an unset temporary-root variable into an absolute destination.
+first. Download logs and artifacts into a named temporary directory outside every git
+worktree (`gh run download -D <dir>`); never build that path from a variable that may be unset.
 
 **Report each check as VERIFIED, NOT VERIFIED or INCONCLUSIVE** — in 검증, the sticky comment
 and the completion comment. Inconclusive, or a pass on the wrong surface, is not a pass; name
@@ -240,7 +238,7 @@ Then land it. How depends on where you run:
   PR relies on, merge main in and let CI rerun. Do not rebase only because the branch is behind.
 
 ```bash
-gh pr merge <n> --squash --delete-branch      # the merge method the repo allows; a stack lands from its top, see §5
+gh pr merge <n> --squash --delete-branch      # not for a stack: it lands with merge-async, see §5
 gh pr view <n> --json state,mergeCommit       # confirm MERGED and record the commit
 ```
 

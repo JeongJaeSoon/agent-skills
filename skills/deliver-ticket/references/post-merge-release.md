@@ -47,7 +47,9 @@ commit, and whether dev already contains it.
 5. **Read the logs for the window.** From the go-live time to now, read the declared `logs` for the
    changed paths: errors, warnings, the new log lines the PR added. Quote the lines you read and
    the query or filter that produced them. "No errors" without the query is not evidence.
-6. **Post the evidence** on each PR as one sticky comment (`sticky-comment.sh`, SKILL.md §5): the dev
+6. **Post the evidence** on each PR as one sticky comment under its own marker, so it does not
+   replace the test results:
+   `bash "${CLAUDE_SKILL_DIR}/scripts/sticky-comment.sh" <pr> <body-file> '<!-- dev-release -->'`. The dev
    revision and when it went live, how it got there (release run link, or sync), the verify steps
    and their output, the log query and lines, and anything not checked with the reason.
 7. **Tracker.** Comment on the ticket with the sticky comment link and move it to done only when

@@ -27,7 +27,8 @@ page can pass every rule and still not work.
    every rule here: read its spacing scale, control heights and colors, and turn them into flags
    (`--grid`, `--allow`). Pick an existing screen of the same kind (a list for a list, a settings
    page for a settings page) as the baseline. No design system and no existing screen: the
-   defaults in rules.md apply, and say so in the result.
+   defaults in rules.md apply, and say so in the result. Read `~/.config/agent-skills/ui-review/rules.md`
+   too when it exists; the user's own rules there apply alongside rules.md.
 2. **Measure** each screen and each state the change touches (empty, error, many rows, long
    text), at 1280 and 390:
 
