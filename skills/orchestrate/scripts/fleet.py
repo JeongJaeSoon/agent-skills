@@ -1743,9 +1743,10 @@ class Fleet:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
         except (OSError, ValueError):
             held = []
-        import acks, board, owner_requests
+        import acks, board, jobs, owner_requests
         asked, by_key, have = owner_requests.fold(owner_requests.read()), {p["key"]: p for p in prs}, acks.acked()
         try:
+            written = []
             if rows := owner_requests.reconcile(asked, now, by_key, sessions, board.read()["rows"], by_handle,
                                                 mem.setdefault("request_cards", {}), mem.setdefault("request_gone", {}),
                                                 self.sources["orca"]["ok"]):
@@ -1753,11 +1754,12 @@ class Fleet:
                 for r in written:
                     self.event({"at": iso(now), "kind": f"request_{r['ev']}", "session": by_handle.get(asked[r["id"]].get("handle")),
                                 "text": mask(f"{r['id']}: {r.get('to') or r.get('evidence') or r.get('reason')}", 200)})
-            mem.pop("requests_error", None)
+            n = collections.Counter(r["ev"] for r in written)
+            jobs.record("requests-reconcile", n=len(written), now=now,
+                        result=f"linked {n['link']} · done {n['done']} · dropped {n['drop']}")
         except Exception as e:  # a ledger it cannot settle must not take the dashboard down with it
-            if mem.get("requests_error") != (err := mask(repr(e), 200)):  # once, not every tick it keeps failing
-                mem["requests_error"] = err
-                self.event({"at": iso(now), "kind": "requests_error", "text": err})
+            # one timeline line, not one every tick it keeps failing
+            jobs.record("requests-reconcile", error=repr(e), event=self.event, kind="requests_error", now=now)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),

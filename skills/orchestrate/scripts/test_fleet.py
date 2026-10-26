@@ -536,6 +536,7 @@ process.stdout.write(JSON.stringify(out));"""
 
     # Automations and shared resources render escaped; an overdue or failed automation is flagged and counted.
     js = f"""{helpers}
+{take("hhmm")}
 {(assets / "fleet.js").read_text()}
 const old = new Date(Date.now() - 3 * 3600e3).toISOString(), soon = new Date(Date.now() + 600e3).toISOString();
 const st = {{sessions: [{{id: "wt-coord", name: "<b>coord</b>", phase: "idle"}}], sources: {{automations: {{ok: true}}}},
@@ -546,6 +547,14 @@ const st = {{sessions: [{{id: "wt-coord", name: "<b>coord</b>", phase: "idle"}}]
                 {{id: "a4", name: "off", rrule: "x", enabled: false, next_run_at: old, recent: [{{status: "failed", at: old}}]}}],
   holds: [{{kind: "resource", resource: "browser", by: "term_coord", session: "wt-coord", note: "<i>login</i>", at: old}},
           {{kind: "lane", resource: "acme/app@main", by: "#7", note: null, at: soon}}]}};
+F.jobsAt = Date.now();  // as /api/fleet/jobs answered it a moment ago
+F.jobs = {{jobs: [{{key: "tidy", name: "Self-clean", cadence: "after each fleet collect", runs_in: "orch-dash",
+                   record: {{at: old, ok: true, n: 0, result: "closed 0", acted_at: old, acted_n: 3, next_at: soon}}}},
+                 {{key: "pr-stats", name: "PR stats", cadence: "every 6h", runs_in: "orch-dash",
+                   record: {{at: old, ok: false, error: "<b>HTTP 502</b> " + "x".repeat(400), failed_at: old, warned_at: old, next_at: null}}}},
+                 {{key: "skill-usage", name: "Skill usage", cadence: "every 15m", runs_in: "orch-dash", record: null}},
+                 {{key: "reap-hard", name: "reap-hard", cadence: null, runs_in: "launchd", record: null, error: "<b>ValueError</b>('bad interval')"}}],
+          rules: [{{name: "Inbox item expiry", rule: "7 days <i>after</i>", applied: "each fleet collect"}}]}};
 process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsCard(st), troubled: autoTroubled(st).map((a) => a.name)}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     for raw in ("<script", "<img", "<i>", "<b>coord"):
@@ -555,6 +564,14 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     assert "past its run time" in got["autos"] and "toned tone-bad" in got["autos"], "an overdue run is flagged and its next-run cell toned"
     assert got["autos"].count('class="run tone-good"') == 2 and 'class="run "' in got["autos"], "a completed and a skipped block"
     assert got["holds"].index("browser") < got["holds"].index("acme/app@main") and "landing lane" in got["holds"], got["holds"]
+    # orch-dash's own jobs under them: a record as written, a failure whole with its link to the timeline, no record said.
+    jobs_html = got["autos"][got["autos"].index("orch-dash jobs"):]
+    assert "closed 0" in jobs_html and "3 · " in jobs_html, jobs_html
+    assert "▲ failed" in jobs_html and "x" * 400 in jobs_html and 'href="#/fleet/timeline"' in jobs_html and "Timeline warning" in jobs_html
+    assert "<b>HTTP" not in jobs_html and "<i>after" not in jobs_html, "job text is escaped"
+    assert 'data-tl-open="job|pr-stats"' in jobs_html and 'aria-expanded="false"' in jobs_html, "a long error opens in place"
+    assert "not read" in jobs_html and "&lt;b&gt;ValueError" in jobs_html, "a row it could not read says why, the rest still show"
+    assert jobs_html.count("no record") == 1 and "Rules applied on read" in jobs_html and "Inbox item expiry" in jobs_html
 
     # Monitors render escaped; every one not running is flagged and counted, a dead one with its exit code.
     js = f"""{helpers}
@@ -689,6 +706,7 @@ const out = {{states: Object.fromEntries(Object.entries(kinds).map(([k, ks]) => 
 handlers.click({{target: {{closest: (sel) => sel === "[data-tl-more]" ? {{dataset: {{tlMore: "all"}}}} : null}}}});
 out.more = timelineList(st, st.timeline, {{fold: "all"}});
 const past = {json.dumps({"at": ago(50), "kind": "turn_done", "session": "wt-coord", "text": "old"})};
+out.job = timelineList(st, [{{at: past.at, kind: "job_failed", session: null, job: "pr-stats", text: "pr-stats: boom…"}}]);
 out.past = timelineList(st, [past]); out.pastTm = hhmm(past.at); out.pastDate = shortDate(past.at);
 const desc = (scrollHeight) => {{ const el = {{dataset: {{tlOpen: "d" + scrollHeight}}, scrollHeight, clientHeight: 20, attrs: {{}}, cls: [],
   classList: {{toggle: (c, on) => {{ el.cls = on ? [c] : []; }}}}, setAttribute: (k, v) => {{ el.attrs[k] = v; }},
@@ -717,6 +735,8 @@ process.stdout.write(JSON.stringify(out));"""
     assert 'aria-expanded="true"' in got["openRow"] and 'tl-desc open' in got["openRow"], got["openRow"]
     assert got["opened"] == [True, "true", ["open"]] and got["closed"] == [False, "false", []] and got["reopened"], got
     assert got["fits"] == [False, None], got["fits"]
+    # A job's warning line is cut to fit; it links to the Automations row that holds the whole error.
+    assert "tl-bad" in got["job"] and 'href="#/fleet/automations"' in got["job"] and "Full error" in got["job"], got["job"]
 
     # The overview card keeps 8 rows, and missed items are picked first even when they come last.
     rows = [{"key": f"k{n}", "type": "reload_pending", "session": "wt-coord", "title": f"row{n}", "missed": n >= 15} for n in range(17)]
@@ -1588,6 +1608,16 @@ shown = {q["id"]: q for q in st["requests"]["items"]}
 assert merged_id not in shown and shown[closed_id]["closed"] == ["acme/launchpad#43"], shown.get(closed_id)
 assert any(e["kind"] == "request_done" and e["text"].startswith(merged_id) for e in f.events)
 assert "ext:stale-login" not in {i["key"] for i in st["items"]}
+# Reopened by the owner, a request whose links are all over stays open: only a link made after the reopen closes it.
+owner_requests.reopen(merged_id)
+f.tick(force=True)
+assert owner_requests.fold(owner_requests.read())[merged_id]["status"] == "open"
+owner_requests.close(merged_id, "link", to="acme/tools#6")
+f.tick(force=True)
+asked = owner_requests.fold(owner_requests.read())
+assert asked[merged_id]["status"] == "done" and owner_requests.live_links(asked[merged_id]) == ["acme/tools#6"], asked[merged_id]
+import jobs  # noqa: E402
+assert jobs.records()["requests-reconcile"]["ok"] and jobs.records()["requests-reconcile"]["acted_n"] == 1
 real_reconcile = owner_requests.reconcile
 owner_requests.reconcile = lambda *a, **k: 1 / 0
 try:
@@ -1597,8 +1627,25 @@ finally:
     owner_requests.reconcile = real_reconcile
 assert [e["kind"] for e in f.events].count("requests_error") == 1
 assert [e["kind"] for e in f.events].count("inbox_aged_out") == 1
+rec = jobs.records()["requests-reconcile"]
+assert not rec["ok"] and "ZeroDivisionError" in rec["error"], rec
+assert rec["warned_at"] == next(e["at"] for e in f.events if e["kind"] == "requests_error")
 f.tick(force=True)
-assert "requests_error" not in f.mem
+assert jobs.records()["requests-reconcile"]["ok"]
+# A reconcile error with jobs.json unwritable stays inside the tick: it returns, and the write failure goes to stderr.
+import contextlib, io  # noqa: E402
+saved = jobs.path().read_text()
+jobs.path().unlink()
+jobs.path().mkdir()
+owner_requests.reconcile, err = (lambda *a, **k: 1 / 0), io.StringIO()
+try:
+    with contextlib.redirect_stderr(err):
+        st = f.tick(force=True)
+finally:
+    owner_requests.reconcile = real_reconcile
+    jobs.path().rmdir()
+    jobs.path().write_text(saved)
+assert isinstance(st, dict) and "jobs.json" in err.getvalue(), err.getvalue()
 
 import dash  # noqa: E402
 assert {"owner_requests.py", "board.py", "holds.py", "stages.py"} <= {f.name for f in dash.code_files()}

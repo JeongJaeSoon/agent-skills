@@ -354,6 +354,8 @@ const TL_ICON = {
   info: '<circle cx="8" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
 };
 const TL_STEP = 50;
+// Two lines until clicked (tlToggle), then the whole text.
+const expandable = (id, text) => `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(text)}</div>`;
 
 // Newest first, one group per day. `fold` names the list so "Show more" survives a redraw; `here` is the session
 // whose page this is (its rows have nowhere else to go).
@@ -370,8 +372,9 @@ function timelineList(st, rows, { fold = null, here = null } = {}) {
       <span class="tl-tm" title="${esc(e.at ? new Date(e.at).toLocaleString() : "")}">${e.at ? hhmm(e.at) : ""}</span>
       <span class="tl-rail"><svg viewBox="0 0 16 16" role="img"><title>${TL_STATE[state]}</title>${TL_ICON[state]}</svg></span>
       <div class="tl-body"><div class="tl-title">${esc(eventLabel(kind))}${other ? `<a class="tl-by" href="${sessionHref(other.id)}">${esc(other.name)}</a>` : ""}</div>
-        ${e.text ? `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(e.text)}</div>` : ""}</div>
-      ${e.pr && safeUrl(e.url) ? link(e.url, `${esc(e.pr)} ${icon("arrow")}`, "tl-end mono") : ""}</li>`;
+        ${e.text ? expandable(id, e.text) : ""}</div>
+      ${e.pr && safeUrl(e.url) ? link(e.url, `${esc(e.pr)} ${icon("arrow")}`, "tl-end mono") : ""}
+      ${e.job ? `<a class="tl-end" href="#/fleet/automations" title="The line is cut to fit; the job's row has the whole error">Full error ${icon("arrow")}</a>` : ""}</li>`;
   }).join("");
   const more = rows.length - shown.length;
   return `<ul class="tl">${out || '<li class="tl-none muted">No events yet.</li>'}${more > 0
@@ -695,7 +698,7 @@ function fleetSkills() {
 }
 
 // Data flow and skill changes come from /api/fleet/flow and /api/fleet/changes (flow.py), each cached by the server.
-async function pollJson(key, url, keepMs) {
+async function pollJson(key, url, keepMs, view = key) {
   const at = F[key + "At"] || 0;
   if (F[key + "Busy"] || (F[key] && Date.now() - at < (F[key].error ? 5e3 : keepMs))) return;
   F[key + "Busy"] = true;
@@ -704,7 +707,7 @@ async function pollJson(key, url, keepMs) {
     F[key] = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
   } catch (e) { F[key] = { error: String(e.message || e) }; }
   F[key + "At"] = Date.now(); F[key + "Busy"] = false;
-  if (S.section === key) renderView();
+  if (S.section === view) renderView();
 }
 const isoOf = (sec) => sec ? new Date(sec * 1000).toISOString() : null;
 const bytes = (n) => n == null ? "" : n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`;
@@ -962,7 +965,7 @@ function fleetAutomations(st) {
   const autos = st.automations || [], src = (st.sources || {}).automations || {};
   const legend = [AUTO_RUN.completed, AUTO_RUN.failed, AUTO_RUN.running, AUTO_RUN.skipped]
     .map(([g, tone, l]) => `<span><span class="run ${tone ? "tone-" + tone : ""}">${g}</span>${l}</span>`).join("");
-  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>Each Orca automation with its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. CronCreate jobs inside sessions and launchd jobs are not collected.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Automations</h2><p>Each Orca automation with its cadence, next and last run, and its last 6 results (oldest on the left). A last run that failed, or a run 10 minutes past its time, gets a ▲. The janitor and its precheck are Orca automations, so they are here once registered. Below it, the jobs orch-dash runs on its own and the rules it applies as it reads. CronCreate jobs inside sessions are not collected, and of launchd jobs only the two that keep a record.</p></div>
     <div class="legend">${legend}</div></div>`;
   const failed = src.ok === false ? `<div class="card"><div class="empty-chart">${tag("collection failed", "warn", "alert")} Could not read the Orca automation list: ${esc(src.error || "")}. Below is from ${rel(src.updated_at)}.</div></div>` : "";
   const rows = autos.map((a) => {
@@ -974,7 +977,35 @@ function fleetAutomations(st) {
   }).join("");
   const table = autos.length ? `<div class="card table-wrap" data-src="automations"><table class="autos"><thead><tr><th>Name</th><th>Cadence</th><th>Next</th><th>Last</th><th>Last 6</th><th>Last result</th></tr></thead><tbody>${rows}</tbody></table></div>`
     : '<div class="card"><div class="empty-chart">No Orca automations registered.</div></div>';
-  return headHtml + failed + table;
+  return headHtml + failed + table + internalJobs();
+}
+
+// orch-dash's own jobs (/api/fleet/jobs, jobs.py): each row is the record the job wrote when it last ran, read on every
+// poll, so a fleet tick that keeps failing still shows here. A job with no record says so; nothing here is estimated.
+function internalJobs() {
+  pollJson("jobs", "/api/fleet/jobs", 10e3, "automations");
+  const rep = F.jobs;
+  if (!rep) return '<div class="card"><div class="empty-chart">Loading orch-dash jobs…</div></div>';
+  if (rep.error) return `<div class="card"><div class="empty-chart">${tag("not loaded", "warn", "alert")} Could not read orch-dash's jobs: ${esc(rep.error)}</div></div>`;
+  const rows = rep.jobs.map((j) => {
+    const r = j.record;
+    if (j.error) return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td>
+      <td colspan="4">${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;
+    if (!r) return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td>
+      <td colspan="4">${tag("no record", "", "")} <span class="muted">It has not recorded a run in this store.</span></td></tr>`;
+    const warned = r.warned_at ? ` <a href="#/fleet/timeline" title="The timeline line written when it started failing">Timeline warning ${esc(hhmm(r.warned_at))} ${icon("arrow")}</a>` : "";
+    const res = r.ok ? `${esc(r.result || "ran")}${warned ? `<div class="muted">last failure ${relSpan(r.failed_at)}${warned}</div>` : ""}`
+      : `${tag("▲ failed", "bad", "")}${expandable(`job|${j.key}`, r.error)}<div class="muted">failing since ${relSpan(r.failed_at)}${warned}</div>`;
+    const acted = r.acted_at ? `${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}` : '<span class="muted">–</span>';
+    const next = r.next_at ? relSpan(r.next_at) : '<span class="muted">with the next fleet collect</span>';
+    return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td><td class="nowrap">${relSpan(r.at)}</td>
+      <td>${res}</td><td class="nowrap">${acted}</td><td class="nowrap">${next}</td></tr>`;
+  }).join("");
+  const rules = rep.rules.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.rule)}</td><td class="nowrap muted">${esc(r.applied)}</td></tr>`).join("");
+  return `<div class="card table-wrap"><div class="card-head"><h3>orch-dash jobs</h3><span class="aside">${rep.jobs.length}</span></div>
+      <table class="jobs"><thead><tr><th>Name</th><th>Cadence</th><th>Last run</th><th>Result</th><th>Last acted</th><th>Next by</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="card table-wrap"><div class="card-head"><h3>Rules applied on read</h3><span class="aside">no run of their own</span></div>
+      <table class="jobs"><thead><tr><th>Name</th><th>Rule</th><th>Applied</th></tr></thead><tbody>${rules}</tbody></table></div>`;
 }
 
 // Background watches of the live Claude Code sessions (state.json monitors, fleet.py fetch_monitors): a Bash run in the

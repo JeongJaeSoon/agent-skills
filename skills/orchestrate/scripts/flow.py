@@ -45,7 +45,7 @@ PRODUCERS = {
     "human": "you · config",
 }
 CONSUMERS = {
-    "page": "dashboard · Overview, Inbox, PRs, Sessions, Graph, Timeline",
+    "page": "dashboard · Overview, Inbox, PRs, Sessions, Graph, Timeline, Automations",
     "brief": "orch brief render · Brief page with its stage table, /brief",
     "skillspage": "dashboard · Skills",
     "statspage": "dashboard · PR stats",
@@ -67,6 +67,7 @@ STORES = [
     ("events", "events.jsonl", "dash", ["fleet"], ["fleet"], None, "phase changes; the timeline reads its tail"),
     ("prevents", "pr-events.jsonl", "dash", ["fleet"], ["fleet"], None, "review and CI changes per PR"),
     ("memory", "memory.json", "dash", ["fleet"], ["fleet"], 300, "prompt hashes, last states, sticky inbox"),
+    ("jobs", "jobs.json", "dash", ["fleet", "skills", "prstats"], ["page"], 300, "each orch-dash job's last run, written as it runs"),
     ("avatars", "avatars", "dash", ["fleet"], ["page"], None, None),
     ("prompts", "prompts", "dash", ["permission"], ["fleet"], None, "one file per pending permission prompt"),
     ("decisions", "decisions.json", "dash", ["orch"], ["fleet", "brief"], None, "`orch decide` records"),

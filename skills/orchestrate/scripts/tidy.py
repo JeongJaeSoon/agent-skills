@@ -154,10 +154,10 @@ def requests_over(rows_here, rows_marked, cards_done, prs, cards):
     by_name = {c.get("name"): c["id"] for c in cards.values()}
     out = {}
     for q in owner_requests.fold(owner_requests.read()).values():
-        if q["status"] != "open" or not q["links"]:
+        if q["status"] != "open" or not owner_requests.live_links(q):
             continue
         ev, here = [], False
-        for to in q["links"]:
+        for to in owner_requests.live_links(q):
             to, pr = (to or "").strip(), owner_requests.link_pr(to, prs)
             if to.startswith("board:") and to[6:] in rows_here | rows_marked:
                 ev.append(f"{to} 완료")

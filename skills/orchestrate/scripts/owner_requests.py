@@ -13,7 +13,8 @@ One append-only file, <fleet state>/requests.jsonl (0600), one JSON object a lin
   {"ev": "link", "id", "ts", "to"} | {"ev": "done", "id", "ts", "evidence"} | {"ev": "drop", "id", "ts", "reason"}
   {"ev": "reopen", "id", "ts"}   a closed request open again, its links kept (the dashboard's Reopen, tidy.py)
 A request's state is the fold of its lines; a later link adds to the earlier ones. A row the fleet tick wrote
-carries "by": "auto".
+carries "by": "auto". A reopened request is closed again only on links made after the reopen (live_links): the ones
+before it were all over already, and the owner reopened it anyway.
 """
 import collections, datetime as dt, fcntl, json, os, re
 
@@ -81,7 +82,7 @@ def fold(rows):
             if r["ev"] == "link":
                 q["links"].append(r.get("to"))
             elif r["ev"] == "reopen":
-                q["status"] = "open"
+                q.update(status="open", live_from=len(q["links"]))
                 q.pop("closed", None), q.pop("note", None)
             else:
                 q.update(status=r["ev"], closed=r.get("ts"), note=r.get("evidence") or r.get("reason"))
@@ -134,6 +135,11 @@ def reopen(rid, now=None):
             raise ValueError(f"no request {rid}")
         return [] if q["status"] == "open" else [{"ev": "reopen", "id": rid, "ts": fleet.iso(t)}]
     return _append(make)
+
+
+def live_links(q):
+    """The links a close is judged on: since the last reopen, or all of them."""
+    return q["links"][q.get("live_from", 0):]
 
 
 def age_min(q, now):
@@ -245,7 +251,7 @@ def reconcile(requests, now, prs, sessions, board_rows, by_handle, seen, missing
     for q in requests.values():
         if q["status"] != "open":
             continue
-        links = q["links"] + new_links[q["id"]]
+        links, ever = live_links(q) + new_links[q["id"]], q["links"] + new_links[q["id"]]
         for name in filter(None, map(card, links)):
             if cards is not None and name in cards:
                 seen[name] = {"id": cards[name], "at": stamp}
@@ -253,7 +259,7 @@ def reconcile(requests, now, prs, sessions, board_rows, by_handle, seen, missing
         if links and all(over):
             out.append({"ev": "done", "id": q["id"], "ts": stamp, "by": "auto",
                         "evidence": fleet.mask("auto: " + "; ".join(over), NOTE_MAX)})
-        elif not links and cards is not None and (h := q.get("handle")) and h not in by_handle:
+        elif not ever and cards is not None and (h := q.get("handle")) and h not in by_handle:
             m = missing.setdefault(h, {"since": stamp, "at": None, "reads": 0})
             if m["at"] != stamp:  # one read however many of its requests are open
                 m.update(at=stamp, reads=m["reads"] + 1)
