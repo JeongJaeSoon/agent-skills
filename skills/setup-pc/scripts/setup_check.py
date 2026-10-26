@@ -18,6 +18,7 @@ MARKET = "jeongjaesoon"
 MARKET_ID = f"agent-skills@{MARKET}"
 LABEL = "io.github.jeongjaesoon.agent-skills-sync"  # bootstrap.py's launchd job
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
+TITLE_OFF = "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"  # Orca reads Claude's idle state from the terminal title
 TOOLS = ("git", "python3", "claude", "gh", "orca")
 # The agent-skills.json keys whose absence turns a feature off (docs/configuration-migration.md).
 CONFIG_KEYS = ("tracker.adapter", "notes.adapter", "reflect.ledger", "reflect.skill_repository", "reap.user_folders")
@@ -218,6 +219,27 @@ def check_automations(run=run):
     return rows or [row("ok", "정기 자동화", "기본 on 전부 켜짐")]
 
 
+def check_orca(settings, run=run, environ=os.environ):
+    """The conditions for Orca to type its 'You have N orchestration message(s)' notice into this session
+    (orchestrate references/top-level.md, "Your Run")."""
+    rows = []
+    title_off = environ.get(TITLE_OFF) or (settings.get("env") or {}).get(TITLE_OFF)
+    if title_off and title_off not in ("0", "false"):
+        rows.append(row("warn", "터미널 제목", f"{TITLE_OFF}={title_off} (Orca 가 idle 을 못 봐 알림이 안 뜬다)",
+                        f"update-config 로 env 의 {TITLE_OFF} 제거"))
+    if not environ.get("ORCA_TERMINAL_HANDLE"):
+        return rows + [row("info", "Orca Run 바인딩", "Orca 터미널 밖 (알림 없음)", "오케스트레이터는 Orca 터미널에서 띄운다")]
+    rc, out = run(["orca", "orchestration", "run-current", "--json"])
+    try:
+        bound = (json.loads(out).get("result") or {}).get("run")
+    except ValueError:
+        return rows + [row("warn", "Orca Run 바인딩", f"run-current 를 읽지 못함 (rc {rc})", "! orca orchestration run-current --json")]
+    if bound:
+        return rows + [row("ok", "Orca Run 바인딩", f"이 터미널 → {bound.get('id')}")]
+    return rows + [row("info", "Orca Run 바인딩", "이 터미널에 묶인 Run 없음 (Run 메일 알림이 안 뜬다)",
+                       "오케스트레이터 세션이면 orchestrate top-level 'Your Run' 대로 run-use 또는 run-create")]
+
+
 def check_settings(settings, base):
     rows = []
     perms = settings.get("permissions") or {}
@@ -285,6 +307,8 @@ def check(base=None):
     rows = check_tools(run) + check_install(settings, read_json(p["installed"], {}), p, run)
     if install_mode(settings, {})[0] in ("inline", "both"):
         rows += check_automations(run)
+    if shutil.which("orca"):
+        rows += check_orca(settings, run)
     return rows + check_settings(settings, base) + check_config(p, base)
 
 

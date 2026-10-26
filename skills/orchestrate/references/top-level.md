@@ -14,6 +14,14 @@ The human starts this session with `claude --agent agent-skills:orchestrator --n
 
 The roster, adoption of sessions the human opened by hand, and the inbox/timeline screen belong to the orchestrator dashboard. This file covers what the orchestrator does with them.
 
+## Your Run
+
+Bind this terminal to a Run. Orca types its notice ("Injected notices") only for a `run:<id>` or `dispatch:<id>` mailbox, and it maps a terminal to `run:<id>` only when that terminal's pane is the Run's bound coordinator. Mail to a bare `term_…` handle, or to a terminal with no Run, is stored and never typed in, so an idle orchestrator whose inbox wait has lapsed does not wake for it.
+
+- When this session starts, and again after a restart, `claude --continue` in a new tab or a compaction, run `orca orchestration run-current --json` in this terminal. `run` null: bind with `orca orchestration run-use --id <run>` for the Run your earlier briefs report to, or `orca orchestration run-create --objective "orchestrator: <what you route>"` when there is none, then run `run-current` again to confirm.
+- Every brief you write names that Run as its report address (`--to run:<id>`, the PARENT line in `brief.md`), never your terminal handle: handles change on restart, and mail to one is never typed in.
+- `run-list` and `run-show` print the handle the Run was bound with, which goes stale while the binding holds. Read the binding only with `run-current` from the terminal itself.
+
 ## Routing
 
 Every request leaves your turn within one short tool call.
@@ -104,7 +112,7 @@ Before sending anything to a chat channel or thread, read the destination and ch
 
 ## Injected notices
 
-Orca types `You have N orchestration message(s). Run orca orchestration check …` into an idle composer and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Your one inbox wait (SKILL.md Drain, "One inbox wait, always") is that wait: `orch inbox --wait` peeks with no `--types`, so it keeps the notice out of the human's typing. A program coordinator's `orch wait` passes `--types` and does not keep the notice out. It still runs no second wait: a coordinator or lead runs in its own card, where the human seldom types, and a second watcher on the same inbox is what once hid every `CLOSE OUT` line. It ends a turn that only carries the notice with no tool call. When the human talks to a program from this session, this session's own inbox wait keeps the notice out. A worker keeps no standing wait, and its brief bounds how long it waits for an answer (`brief.md`, WAITING). When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and leave the mailbox to the inbox wait.
+Orca types `You have N orchestration message(s). Run orca orchestration check …` into the idle composer of a Run-bound terminal ("Your Run") and presses Enter, even mid-sentence, unless a `check --wait` with no `--types` filter is live for your terminal. Your one inbox wait (SKILL.md Drain, "One inbox wait, always") is that wait: `orch inbox --wait` peeks with no `--types`, so it keeps the notice out of the human's typing. A program coordinator's `orch wait` passes `--types` and does not keep the notice out. It still runs no second wait: a coordinator or lead runs in its own card, where the human seldom types, and a second watcher on the same inbox is what once hid every `CLOSE OUT` line. It ends a turn that only carries the notice with no tool call. When the human talks to a program from this session, this session's own inbox wait keeps the notice out. A worker keeps no standing wait, and its brief bounds how long it waits for an answer (`brief.md`, WAITING). When a human message ends with that notice, the text before it is the human's and may be cut off. Answer what is there, say in one line where it was cut, and leave the mailbox to the inbox wait.
 
 ## PR events
 

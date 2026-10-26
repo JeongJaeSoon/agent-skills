@@ -170,6 +170,31 @@ SETTINGS = {
 }
 
 
+class Orca(Base):
+    CURRENT = ("orca", "orchestration", "run-current")
+
+    def test_outside_orca_is_info(self):
+        rows = sc.check_orca({}, fake_run({}), environ={})
+        self.assertEqual([(r["item"], r["status"]) for r in rows], [("Orca Run 바인딩", "info")])
+
+    def test_bound_terminal_is_ok(self):
+        out = json.dumps({"ok": True, "result": {"run": {"id": "run_fake"}}})
+        rows = sc.check_orca({}, fake_run({self.CURRENT: (0, out)}), environ={"ORCA_TERMINAL_HANDLE": "term_x"})
+        self.assertEqual(rows[0]["status"], "ok")
+        self.assertIn("run_fake", rows[0]["have"])
+
+    def test_unbound_terminal_points_to_binding(self):
+        out = json.dumps({"ok": True, "result": {"run": None}})
+        rows = sc.check_orca({}, fake_run({self.CURRENT: (0, out)}), environ={"ORCA_TERMINAL_HANDLE": "term_x"})
+        self.assertEqual(rows[0]["status"], "info")
+        self.assertIn("run-use", rows[0]["next"])
+
+    def test_title_disabled_warns_from_settings_env(self):
+        rows = sc.check_orca({"env": {sc.TITLE_OFF: "1"}}, fake_run({}), environ={})
+        self.assertEqual(rows[0]["status"], "warn")
+        self.assertEqual(sc.check_orca({"env": {sc.TITLE_OFF: "0"}}, fake_run({}), environ={})[0]["status"], "info")
+
+
 class Baseline(Base):
     def setUp(self):
         super().setUp()
