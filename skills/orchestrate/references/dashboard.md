@@ -209,7 +209,7 @@ The collector runs `tidy.run()` after each tick, so nobody has to ask. It closes
 | A card row (no agent, or its session off) | its PR closed unmerged | — |
 | An owner to-do line | every PR it names merged or closed | — |
 | An inbox item from `orch-dash inbox add` | every PR it names merged or closed, or its session is gone from Orca's list | — |
-| A request (`orch req`) with links | every link is over: a board row done or closed here, a card closed here, a PR merged | — |
+| A request (`orch req`) with links | every link is over and one of them was closed here (a board row or card); the fleet tick's own request pass closes the rest | — |
 | A held item | never: a fired trigger means the work is due | its trigger says merge and every PR or card it names merged; it moves from 보류 to 진행 중 |
 | A moving board row | never | no word for 8 hours, no PR, and no card that has one or still works |
 
