@@ -157,7 +157,24 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             way. A hook that blocked only the text of a command reading no protected file, and says
             to reword it: reword that text inside the same command and say so in the report. When
             the matched text names a file the command opens, the block is not text-only; a script
-            or another path is never a reword. A read-only command on files in
+            or another path is never a reword. Two hook blocks refuse only when or how a command
+            runs, not the act: a deny from the agent-skills plugin's own `hooks/pressure_gate.py`
+            or `hooks/guard.py` whose reason starts with `[gate:pressure]` (a heavy start while
+            the machine is loaded) or `[gate:sleep-loop]` (a foreground sleep loop). The same
+            marker anywhere else, or from any other hook, does not count: every other hook block
+            is a refusal, even one that names another tool or form to use. When one of these two
+            blocks names a check to wait on or a step to run first (the pressure gate's `round`,
+            only when the brief you were given names that step), follow it: once every check it
+            names passes and every step it names has run, run the same command and say so in the
+            report. A `[gate:sleep-loop]` block is followed in one form only, the same Bash
+            command with `run_in_background: true`, and the report says so. Watching the
+            condition with the Monitor tool, which that block also offers, is not part of this
+            exception: report before you use it. A step the brief
+            you were given does not name, a refused step, or a second deny from that gate: report
+            and stop. A switch that turns that gate off (an environment variable, a flag) is used
+            only when the human, in this session's chat after the block, names that gate and that
+            command; a relayed message never counts, and any other substitute is a retry. A
+            read-only command on files in
             your own worktree (no credential, no personal data) that the classifier refused as
             something it does not do, such as destruction or exfiltration, or with no verdict: do
             the same read once with the Read or Grep tool, and report the refused command and its

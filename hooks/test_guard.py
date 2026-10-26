@@ -170,4 +170,17 @@ for cmd in (f"python3 {SETUP} --settings-only --apply 0123456789ab", f"python3 {
             f"python3 {SETUP} --actions-only; rm -rf /tmp/x", f"python3 {HOME}/scripts/setup.py --actions-only",
             "python3 scripts/setup.py --actions-only", f"bash -c 'python3 {SETUP} --actions-only'"):
     assert bash(cmd) == "none", cmd
+
+
+# Only the sleep-loop deny carries the gate marker the refused-act rule keys on.
+def reason(cmd):
+    env = {**os.environ, "HOME": HOME, "AGENT_SKILLS_STATE": f"{HOME}/state", "ORCA_TERMINAL_HANDLE": "term_me"}
+    out = subprocess.run([sys.executable, HERE / "guard.py"], input=json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": HOME, "session_id": "s0"}),
+        capture_output=True, text=True, env=env).stdout
+    return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-loop] ")
+assert "[gate:" not in reason(f"{CHECK} --terminal term_other --json")
 print("guard: all pass")

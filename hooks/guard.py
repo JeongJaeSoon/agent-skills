@@ -58,6 +58,8 @@ LEAD_LINES = ("MODE", "DELEGATE", "PREDICATE")
 # the template's unfilled `<slug>`, `ROLE: none`, trailing words and a `\n` escape the shell passes through literally
 # do not count. It also marks a lead, like MODE: a resumed coordinator's prompt carries only this line.
 LEAD_ROLE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)[ \t]*ROLE:?[ \t]+lead[ \t]+[\w.-]+[ \t]*(?:$|["']|</command-args>)""")
+# The orchestrate refused-act rule lets a session follow only a block carrying a gate marker.
+SLEEP_MARK = "[gate:sleep-loop]"
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
@@ -128,7 +130,7 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None):
     loop = None if background else SLEEP_LOOP.search(cmd)
     # A short retry loop (sleep 1-4) is left alone; polling loops seen in practice slept 5 to 30 s.
     if loop and (loop[1] == "$" or int(loop[1]) >= 5):
-        return decide("deny", "Waiting is fine; only this foreground form is refused. A foreground sleep loop "
+        return decide("deny", f"{SLEEP_MARK} Waiting is fine; only this foreground form is refused. A foreground sleep loop "
                               "blocks this session until it ends. Run the same command with run_in_background: true and end your turn (its completion notice wakes you), or watch "
                               "the condition with the Monitor tool. A call already running in the background wakes "
                               "you by itself: do not poll its output file.")
