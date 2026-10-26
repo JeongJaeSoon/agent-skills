@@ -41,7 +41,10 @@ class Chrome:
         self.from_chrome, from_chrome_w = os.pipe()
         args = [binary, "--headless=new", "--remote-debugging-pipe", f"--user-data-dir={self.profile}",
                 "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--hide-scrollbars",
-                "--disable-extensions", "--mute-audio", "about:blank"]
+                "--disable-extensions", "--mute-audio",
+                # Without it a fresh profile reaches for the macOS keychain, and a caller with a
+                # temporary HOME gets a "Keychain Not Found" dialog on every launch.
+                "--use-mock-keychain", "about:blank"]
         # The shell moves the pipe ends to the fd numbers Chrome expects, then execs it (same PID).
         self.proc = subprocess.Popen(["/bin/sh", "-c", f'exec "$@" 3<&{to_chrome_r} 4>&{from_chrome_w}', "sh", *args],
                                      pass_fds=(to_chrome_r, from_chrome_w), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
