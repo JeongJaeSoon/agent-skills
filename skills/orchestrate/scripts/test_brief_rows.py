@@ -48,6 +48,10 @@ PRS = dict([
     # One number in two repositories: a bare #182 is neither.
     ("acme/flows#182", pr("acme/flows#182", reviewers=[TEAM])),
     ("acme/app#182", pr("acme/app#182", state="MERGED", merged_at=ago(48))),
+    # Held by name like #633, but its card is stopped at a prompt.
+    ("acme/plugins#640", pr("acme/plugins#640", draft=True, decision="CHANGES_REQUESTED", reviewers=[BOT_CR, TEAM])),
+    # Held by name, on a board row whose wait nobody recorded.
+    ("acme/api#641", pr("acme/api#641", decision="CHANGES_REQUESTED")),
 ])
 SESSIONS = [{**card("s-root", "root", "working", "acme/app"), "kind": "orchestrator", "parent": None},
             card("s1", "plugins-reference", "offline", "acme/app"),
@@ -55,9 +59,10 @@ SESSIONS = [{**card("s-root", "root", "working", "acme/app"), "kind": "orchestra
             card("s3", "headless-skill", "open", "acme/plugins"),
             card("s4", "shared-files-fix", "open", "acme/plugins"),
             card("s5", "eval-migrate", "offline", "acme/plugins"),
-            card("s6", "flows-revert", "offline", "acme/flows")]
+            card("s6", "flows-revert", "offline", "acme/flows"),
+            card("s7", "prompt-stopped", "waiting", "acme/plugins")]
 OWNER_OF = {"acme/app#363": "s1", "acme/api#550": "s2", "acme/plugins#633": "s3", "acme/plugins#630": "s4",
-            "acme/plugins#631": "s5", "acme/flows#182": "s6"}
+            "acme/plugins#631": "s5", "acme/flows#182": "s6", "acme/plugins#640": "s7"}
 sd.mkdir(parents=True, exist_ok=True)
 fleet.write_atomic(sd / "prs.json", json.dumps({"prs": PRS, "me": "owner-me"}))
 fleet.write_atomic(sd / "state.json", json.dumps({"generated_at": fleet.iso(now), "sessions": SESSIONS, "prs": [
@@ -65,6 +70,9 @@ fleet.write_atomic(sd / "state.json", json.dumps({"generated_at": fleet.iso(now)
 soon = f"{(now + dt.timedelta(days=3)):%-m/%-d}"
 board.later_add("#633 ready 화 + 리뷰 재요청", f"{soon} prod 전환 확인 후")
 board.later_add("#182 다시 보기", "flows 정리 뒤")
+board.later_add("#640 다시 보기", f"{soon} 리뷰 뒤")
+board.later_add("#641 다시 보기", f"{soon} 배포 뒤")
+board.set_row("api-cr", title="api-cr", repo="acme/api", status="waiting", pr="acme/api#641", next="수정 반영")
 
 
 def brief():
@@ -102,7 +110,15 @@ assert f"{soon} prod 전환 확인 후 → #633 ready 화 + 리뷰 재요청 (he
 assert not any("headless-skill" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # ...and Needs you demotes the PR on the same rule.
 holds = fleet.held_prs(fleet.read_json(sd / "board.json"), tidy.closed(), {k: v["detail"] for k, v in PRS.items()}, now)
-assert holds == {"acme/plugins#633": f"{soon} prod 전환 확인 후"}, holds  # #182 is two PRs, so it holds neither
+assert holds == {"acme/plugins#633": f"{soon} prod 전환 확인 후", "acme/plugins#640": f"{soon} 리뷰 뒤",
+                 "acme/api#641": f"{soon} 배포 뒤"}, holds  # #182 is two PRs, so it holds neither
+# acme/plugins#640: a held item names it, but its card is stopped at a prompt only the owner answers: 🙋, not ⏸️.
+assert rows["prompt-stopped"] == "owner", rows
+assert any(t.startswith("확인 대기 · [#640]") and t.endswith("→ prompt-stopped") for t in turn), turn
+assert f"{soon} 리뷰 뒤 → #640 다시 보기" in held, held
+# acme/api#641: the row would be ❔ (수정요청 받음), so its held item holds it, under one 보류 line.
+assert rows["api-cr"] == "held" and f"{soon} 배포 뒤 → #641 다시 보기 (api-cr)" in held, held
+assert not any("api-cr" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # Waiting on a review: the next step is whose review, not the card's session.
 assert "team:app-dev · 리뷰 [#630](https://example.test/630) · 12h 전부터 → shared-files-fix · 다음: team:app-dev 리뷰 대기" in theirs, theirs
 assert ("rev-h, team:app-dev · 리뷰 [#631](https://example.test/631) · 12h 전부터 → eval-migrate · 다음: rev-h, team:app-dev 리뷰 대기"

@@ -49,15 +49,14 @@ assert code == 0, md
 lines = md.splitlines()
 assert lines[0] == "prod: v1.7.2 · dev: v1.8.0" and lines[1].startswith("✅ 완료·확인"), lines[:2]
 rows = [l for l in lines if l.startswith("| ") and not l.startswith("| 작업")]
-# Over 78 columns the widest cells are cut, never the PR, and their whole text is listed under the table.
-assert rows == [
-    "| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 확인 …[1] |",
+# Only a name or PR is cut, never a stage cell: these names are short, so the table overflows 78 whole, no list under it.
+assert rows[:3] == [
+    "| 검색 개선 | acme/web#42 | ✅ 10/2 | ✅ v1.8.0 | 🔄 확인 중 (QA 리드) |",
     "| ㄴ 인덱스 재구축 | acme/ops#88 | ✅ 10/2 | – | 해당 없음 |",
     "| ㄴ 정렬 버그 | acme/web#45 | ❌ CI 실패 | ⚠️ a\\|b | – |",
-    "| 로그인 개선 | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token…[2] |",
 ], rows
-notes = lines[lines.index(rows[-1]) + 1:][:3]
-assert notes[:2] == ["", "- [1] 🔄 확인 중 (QA 리드)"] and notes[2].startswith("- [2] ✅ token="), notes
+assert rows[3].startswith("| 로그인 개선 | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token=") and "…[" not in md, md
+assert not any(l.startswith("- [") for l in lines), lines
 assert lines[-2:] == ["1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "2. v1.8.0 prod 배포 (사람, 미정)"], lines[-2:]
 
 code, tg, _ = orch("show", "--telegram")

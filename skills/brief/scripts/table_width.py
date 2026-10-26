@@ -62,32 +62,36 @@ def cut(text, width):
 def fit(rows, cols, cuttable, floor=10, deco=None):
     """rows (the header first) with the longest cells of the cuttable columns cut until the table fits in cols, the
     widest column first and none below floor. A cut cell is its head and `…[n]`, and notes[n - 1] is its whole text
-    for the numbered list under the table, so the cut words stay on the same screen. deco(row, column, text) dresses
-    a body cell after the cut (a bold, a └), so a mark never lands inside the markup. Returns (rows, notes). When no
-    cut gets it into cols, nothing is cut: the table overflows whole, for the width check to report."""
+    for the numbered list under the table, so the cut words stay on the same screen. A cell over its cap by less than
+    its mark's width stays whole: the cut would save fewer columns than the mark costs to read. deco(row, column, text)
+    dresses a body cell after the cut (a bold, a └), so a mark never lands inside the markup. Returns (rows, notes).
+    When no cut gets it into cols, nothing is cut: the table overflows whole, for the width check to report."""
     deco = deco or (lambda i, c, s: s)
-    cap, first = {}, None
+    cap, first, spent = {}, None, set()
     while True:
         out, plain, notes = [list(rows[0])], [], []
         for i, r in enumerate(rows[1:], 1):
             row = list(r)
             for c in sorted(cap):  # marks numbered left to right
-                if text_width(row[c]) > cap[c]:
+                mark = f"…[{len(notes) + 1}]"
+                if text_width(row[c]) - cap[c] >= text_width(mark):
                     notes.append(row[c])
-                    mark = f"…[{len(notes)}]"
                     row[c] = cut(row[c], cap[c] - text_width(mark)) + mark
             plain.append(row)
             out.append([deco(i, c, s) for c, s in enumerate(row)])
         over = table_width(out) - cols
         wide = {c: max(text_width(r[c]) for r in plain) for c in cuttable} if plain else {}
-        wide = {c: w for c, w in wide.items() if w > floor}
+        wide = {c: w for c, w in wide.items() if w > floor and c not in spent}
         first = first or (out, notes)
         if over <= 0:
             return out, notes
         if not wide:
             return first
         c = max(wide, key=wide.get)
-        cap[c] = max(floor, wide[c] - over)
+        # A cell left whole keeps the column wide, so the cap only goes down, to floor at the least.
+        if cap.get(c) == (new := max(floor, min(wide[c] - over, cap.get(c, wide[c]) - 1))):
+            spent.add(c)
+        cap[c] = new
 
 
 def main():

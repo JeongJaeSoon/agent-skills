@@ -538,9 +538,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             status, nxt = "done", ""
         elif p and p.get("state") == "CLOSED":
             status, nxt = "held", "PR 닫힘"
-        # A held item naming the row's open PR is the row's hold, the same one that demotes the PR in Needs you.
-        elif p and status not in ("moving", "blocked") and (hold := holds.get(r.get("pr"))):
-            status, nxt, held_by[r["id"]] = "held", hold, r["pr"]
+        # A held item naming the row's open PR is the row's hold, the same one that demotes the PR in Needs you. It
+        # folds a row that is held or ❔ already; one the owner or another person can move now keeps its list.
+        hold = p and p.get("state") == "OPEN" and holds.get(r.get("pr"))
+
+        def fold():
+            nonlocal status, nxt
+            status, nxt, held_by[r["id"]] = "held", hold if nxt in GENERIC_NEXT or nxt == hold else f"{hold} · {nxt}", r["pr"]
+            waits.pop(r["id"], None)
+
+        if hold and status == "held":
+            fold()
         # A card with no agent left and its PR still open waits on what the PR waits on, not on the card. A draft
         # nobody holds is the owner's to make ready or to hold.
         quiet = r.get("session") and status == "held" and r["id"] not in held_by and p and p.get("state") == "OPEN" and nxt
@@ -560,6 +568,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 waits[r["id"]]["why"] = f"{quiet} · PR {pr_state(p)}"
             if status == "waiting" and waits[r["id"]].get("what") == "리뷰" and nxt and nxt in GENERIC_NEXT:
                 nxt = f"{waits[r['id']]['who']} 리뷰 대기"  # what it waits on is the next event, not the card's session
+            if status == "check" and hold:
+                fold()
         if status == "moving" and (v := verdicts.get(tid)) and v["verdict"] == "check":
             status, waits[r["id"]] = "check", {"why": v["evidence"]}
         suffix = ""

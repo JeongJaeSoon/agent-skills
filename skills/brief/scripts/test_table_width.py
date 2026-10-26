@@ -6,7 +6,7 @@ import pathlib, re, subprocess, sys
 
 HERE = pathlib.Path(__file__).parent
 sys.path.insert(0, str(HERE))
-from table_width import table_width, tables, text_width
+from table_width import fit, table_width, tables, text_width
 
 assert text_width("검색 개선") == 9
 assert text_width("⚠️ 로그만") == 9
@@ -86,6 +86,17 @@ assert folded, "no reviewer row in the example"
 for rows, k in folded:
     assert len(re.findall(r"#\d+", rows[k][2])) >= 2, rows[k]
     assert subtask_runs(rows[:k])[0] == 0 and any(not is_sub(r) for r in rows[1:k]), ("reviewer row without its lead", rows)
+
+# A cut saves at least its mark's width: 3 columns over, a 4-column …[1] would leave a 1-column head's worth, so the
+# name is cut deeper, and a cell over its cap by less than its mark stays whole.
+assert fit([["a", "b"], ["x" * 15, "y"]], 20, (0,)) == ([["a", "b"], ["x" * 7 + "…[1]", "y"]], ["x" * 15]), \
+    fit([["a", "b"], ["x" * 15, "y"]], 20, (0,))
+assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 12, "y"]], 21, (0,))[0][1:] == [["x" * 7 + "…[1]", "y"], ["z" * 12, "y"]]
+out, notes = fit([["a", "b"], ["x" * 15, "y"], ["z" * 14, "y"]], 20, (0,))
+assert out[1:] == [["x" * 6 + "…[1]", "y"], ["z" * 6 + "…[2]", "y"]] and len(notes) == 2, out
+# Near the floor no cut saves a mark's width: the loop ends, and the table overflows whole.
+assert fit([["a", "b"], ["x" * 15, "y"], ["z" * 13, "y"]], 20, (0,))[1] == []
+assert fit([["a", "b"], ["x" * 12, "y" * 60]], 40, (0,)) == ([["a", "b"], ["x" * 12, "y" * 60]], [])
 
 wide = "| " + "가" * 40 + " | b |\n|---|---|\n"
 r = subprocess.run([sys.executable, str(HERE / "table_width.py"), "--cols", "78"], input=wide, capture_output=True, text=True)
