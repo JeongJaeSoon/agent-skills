@@ -354,6 +354,8 @@ const TL_ICON = {
   info: '<circle cx="8" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
 };
 const TL_STEP = 50;
+// Two lines until clicked (tlToggle), then the whole text.
+const expandable = (id, text) => `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(text)}</div>`;
 
 // Newest first, one group per day. `fold` names the list so "Show more" survives a redraw; `here` is the session
 // whose page this is (its rows have nowhere else to go).
@@ -370,8 +372,9 @@ function timelineList(st, rows, { fold = null, here = null } = {}) {
       <span class="tl-tm" title="${esc(e.at ? new Date(e.at).toLocaleString() : "")}">${e.at ? hhmm(e.at) : ""}</span>
       <span class="tl-rail"><svg viewBox="0 0 16 16" role="img"><title>${TL_STATE[state]}</title>${TL_ICON[state]}</svg></span>
       <div class="tl-body"><div class="tl-title">${esc(eventLabel(kind))}${other ? `<a class="tl-by" href="${sessionHref(other.id)}">${esc(other.name)}</a>` : ""}</div>
-        ${e.text ? `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(e.text)}</div>` : ""}</div>
-      ${e.pr && safeUrl(e.url) ? link(e.url, `${esc(e.pr)} ${icon("arrow")}`, "tl-end mono") : ""}</li>`;
+        ${e.text ? expandable(id, e.text) : ""}</div>
+      ${e.pr && safeUrl(e.url) ? link(e.url, `${esc(e.pr)} ${icon("arrow")}`, "tl-end mono") : ""}
+      ${e.job ? `<a class="tl-end" href="#/fleet/automations" title="The line is cut to fit; the job's row has the whole error">Full error ${icon("arrow")}</a>` : ""}</li>`;
   }).join("");
   const more = rows.length - shown.length;
   return `<ul class="tl">${out || '<li class="tl-none muted">No events yet.</li>'}${more > 0
@@ -986,11 +989,13 @@ function internalJobs() {
   if (rep.error) return `<div class="card"><div class="empty-chart">${tag("not loaded", "warn", "alert")} Could not read orch-dash's jobs: ${esc(rep.error)}</div></div>`;
   const rows = rep.jobs.map((j) => {
     const r = j.record;
+    if (j.error) return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td>
+      <td colspan="4">${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;
     if (!r) return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td>
       <td colspan="4">${tag("no record", "", "")} <span class="muted">It has not recorded a run in this store.</span></td></tr>`;
     const warned = r.warned_at ? ` <a href="#/fleet/timeline" title="The timeline line written when it started failing">Timeline warning ${esc(hhmm(r.warned_at))} ${icon("arrow")}</a>` : "";
     const res = r.ok ? `${esc(r.result || "ran")}${warned ? `<div class="muted">last failure ${relSpan(r.failed_at)}${warned}</div>` : ""}`
-      : `${tag("▲ failed", "bad", "")} ${esc(r.error)}<div class="muted">failing since ${relSpan(r.failed_at)}${warned}</div>`;
+      : `${tag("▲ failed", "bad", "")}${expandable(`job|${j.key}`, r.error)}<div class="muted">failing since ${relSpan(r.failed_at)}${warned}</div>`;
     const acted = r.acted_at ? `${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}` : '<span class="muted">–</span>';
     const next = r.next_at ? relSpan(r.next_at) : '<span class="muted">with the next fleet collect</span>';
     return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td><td class="nowrap">${relSpan(r.at)}</td>

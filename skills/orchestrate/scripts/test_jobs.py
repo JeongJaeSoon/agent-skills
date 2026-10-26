@@ -28,8 +28,9 @@ assert not events
 for i in range(3):
     rec = jobs.record("tidy", error="OSError('disk full')", next_in=60, event=events.append, now=now + dt.timedelta(minutes=2 + i))
 assert [e["kind"] for e in events] == ["job_failed"], events
-assert events[0] == {"at": "2026-10-27T09:02:00Z", "kind": "job_failed", "session": None, "text": "tidy: OSError('disk full')"}
-assert not rec["ok"] and rec["failed_at"] == rec["warned_at"] == "2026-10-27T09:02:00Z" 
+assert events[0] == {"at": "2026-10-27T09:02:00Z", "kind": "job_failed", "session": None, "job": "tidy",
+                     "text": "tidy: OSError('disk full')"}
+assert not rec["ok"] and rec["failed_at"] == rec["warned_at"] == "2026-10-27T09:02:00Z"
 rec = jobs.record("tidy", error="ValueError('bad row')", next_in=60, event=events.append, now=now + dt.timedelta(minutes=6))
 assert len(events) == 2 and rec["warned_at"] == "2026-10-27T09:06:00Z"
 # Back to fine: the error clears, the last warning stays findable, and a failure after that warns again.
@@ -43,7 +44,7 @@ assert events[-1]["kind"] == "requests_error" and "ghp_" not in events[-1]["text
 # An error too long for one timeline line is cut there only; the record keeps it whole.
 long = "x" * 5000
 jobs.record("pr-stats", error=long, event=events.append, now=now)
-assert len(events[-1]["text"]) == jobs.EVENT_TEXT_MAX and jobs.records()["pr-stats"]["error"] == long
+assert events[-1]["text"].endswith("…") and len(events[-1]["text"].encode()) <= jobs.EVENT_TEXT_BYTES + 3 and jobs.records()["pr-stats"]["error"] == long
 fleet.append_line(fleet.state_dir() / "events.jsonl", events[-1])  # and it fits under append_line's 4 KiB
 
 # The snapshot: every registered job, a record exactly as written, None for one that never ran.
@@ -70,7 +71,7 @@ sys.path.insert(0, str(HERE.parents[1] / "scripts"))
 import reap_hard  # noqa: E402
 assert reap_hard.LAST.parent == root
 reap_hard.LAST.unlink()  # the demo's pass
-reap ={j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["reap-hard"]
+reap = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["reap-hard"]
 assert reap["record"] is None and reap["cadence"] == f"every {reap_hard.config()['interval'] // 60}m"
 t = time.time()
 reap_hard.write_last({"t": t, "at": "x", "acted": 3, "skipped": 0, "failed": 1, "kept": 4, "notes": ["/private/path"], "dark": []})
@@ -89,5 +90,53 @@ assert keys == ["fleet-tick", "requests-reconcile", "tidy", "relay", "selfcheck"
 src = (HERE / "dash.py").read_text() + (HERE / "fleet.py").read_text()
 assert all(f'jobs.record("{k}"' in src for k in keys), [k for k in keys if f'jobs.record("{k}"' not in src]
 assert "/api/fleet/jobs" in (HERE.parent / "assets" / "dashboard" / "fleet.js").read_text()
+
+# A reap-hard whose config cannot be read is an error on its own row; the rest of the page still loads.
+real_config = reap_hard.config
+reap_hard.config = lambda: (_ for _ in ()).throw(ValueError("bad interval"))
+by = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}
+reap_hard.config = real_config
+assert by["reap-hard"]["record"] is None and "bad interval" in by["reap-hard"]["error"], by["reap-hard"]
+assert by["tidy"]["record"] == jobs.records()["tidy"] and "error" not in by["tidy"] and "error" not in by["skills-sync"]
+
+# A long error in any script stays under append_line's 4 KiB (it counts bytes, not characters); the record keeps it whole.
+wide = "가" * 3000
+jobs.record("relay", error=wide, event=events.append, now=now)
+fleet.append_line(fleet.state_dir() / "events.jsonl", events[-1])
+assert events[-1]["job"] == "relay" and jobs.records()["relay"]["error"] == wide
+
+# A record that cannot be written, or a warning line that cannot be, is reported and swallowed: the job that ran must
+# not stop because its bookkeeping did.
+import contextlib, io, threading  # noqa: E402
+saved = jobs.path().read_text()
+jobs.path().unlink()
+jobs.path().mkdir()  # the gate's repro: IsADirectoryError on every write
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    rec = jobs.record("tidy", error="OSError('x')", event=events.append, now=now)
+    jobs.record("tidy", error="OSError('y')", event=lambda row: (_ for _ in ()).throw(ValueError("event line over 4 KiB")), now=now)
+assert not rec["ok"] and "jobs.json" in err.getvalue() and "event line over 4 KiB" in err.getvalue(), err.getvalue()
+
+# The fleet loop keeps ticking with jobs.json unwritable; before, the second record() inside an except killed the thread.
+class Ticker:
+    n = 0
+    def tick(self, force=False, viewed=False):
+        Ticker.n += 1
+        raise RuntimeError("tick fails, so the except block records too")
+    def event(self, row):
+        pass
+dash.FLEET, dash.tidy.run, dash.fleet.relay_decisions, dash.fleet.retry_reloads = Ticker(), list, list, list
+dash.CHECK.due = lambda: False
+with contextlib.redirect_stderr(io.StringIO()):
+    loop = threading.Thread(target=dash.fleet_loop, daemon=True)
+    loop.start()
+    for _ in range(50):
+        if Ticker.n >= 3:
+            break
+        dash.FLEET_WAKE.set()
+        time.sleep(0.05)
+    assert loop.is_alive() and Ticker.n >= 3, Ticker.n
+jobs.path().rmdir()
+jobs.path().write_text(saved)
 
 print("test_jobs: ok")

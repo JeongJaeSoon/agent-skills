@@ -13,7 +13,8 @@ import contextlib, datetime as dt, fcntl, json, pathlib, sys
 
 import fleet
 
-EVENT_TEXT_MAX = 3000  # fleet.append_line refuses a line over 4 KiB; the record keeps the whole error
+LAST = {}  # key -> the error its last run recorded, in this process
+EVENT_TEXT_BYTES = 3500  # fleet.append_line refuses a line over 4 KiB; the record keeps the whole error
 
 
 def path():
@@ -33,25 +34,43 @@ def records():
     return got if isinstance(got, dict) else {}
 
 
+def line_text(text):
+    """text cut to fit a timeline line, measured as append_line writes it: JSON-escaped UTF-8 bytes."""
+    cut = text
+    while len(json.dumps(cut, ensure_ascii=False).encode()) > EVENT_TEXT_BYTES:
+        cut = cut[:len(cut) * 9 // 10]
+    return cut if cut == text else cut + "…"
+
+
 def record(key, n=None, result=None, error=None, next_in=None, event=None, kind="job_failed", now=None):
     """Write key's run: n counted, result in words, error (None: it ran fine), next_in seconds to its next run.
-    event(row) is the fleet's Fleet.event; it gets the warning line. Returns the record."""
+    event(row) is the fleet's Fleet.event; it gets the warning line. Returns the record.
+    Never raises: a record or warning line it cannot write goes to stderr, and the job that called it carries on."""
     now = now or fleet.utcnow()
     stamp, error = fleet.iso(now), fleet.mask(error)
-    with locked():
-        recs = records()
-        prev = recs.get(key) or {}
-        rec = {**prev, "at": stamp, "ok": error is None, "n": n, "result": fleet.mask(result), "error": error,
-               "next_at": fleet.iso(now + dt.timedelta(seconds=next_in)) if next_in is not None else None}
-        if n:
-            rec.update(acted_at=stamp, acted_n=n)
-        if error is not None and prev.get("error") != error:
-            rec["failed_at"] = stamp
-            if event:
-                event({"at": stamp, "kind": kind, "session": None, "text": fleet.mask(f"{key}: {error}", EVENT_TEXT_MAX)})
-                rec["warned_at"] = stamp
-        recs[key] = rec
-        fleet.write_atomic(path(), json.dumps(recs, ensure_ascii=False))
+    rec = {}
+    try:
+        with locked():
+            recs = records()
+            prev = recs.get(key) or {}
+            rec = {**prev, "at": stamp, "ok": error is None, "n": n, "result": fleet.mask(result), "error": error,
+                   "next_at": fleet.iso(now + dt.timedelta(seconds=next_in)) if next_in is not None else None}
+            if n:
+                rec.update(acted_at=stamp, acted_n=n)
+            # LAST covers a file it cannot read back: without it every failing run would warn again
+            if error is not None and error not in (prev.get("error"), LAST.get(key)):
+                rec["failed_at"] = stamp
+                if event:
+                    try:
+                        event({"at": stamp, "kind": kind, "session": None, "job": key, "text": line_text(f"{key}: {error}")})
+                        rec["warned_at"] = stamp
+                    except Exception as e:
+                        print(f"jobs: could not write {key}'s timeline warning: {e!r}", file=sys.stderr, flush=True)
+            LAST[key] = error
+            recs[key] = rec
+            fleet.write_atomic(path(), json.dumps(recs, ensure_ascii=False))
+    except Exception as e:
+        print(f"jobs: could not record {key} in {path()}: {e!r}", file=sys.stderr, flush=True)
     return rec
 
 
@@ -113,4 +132,9 @@ def snapshot(registry):
     recs = records()
     jobs = [{"key": k, "name": name, "cadence": cadence, "runs_in": "orch-dash", "record": recs.get(k)}
             for k, name, cadence in registry]
-    return {"jobs": jobs + [sync_job(), reap_hard_job()], "rules": rules()}  # no timestamp: the page's ETag holds while nothing ran
+    for key, read in (("skills-sync", sync_job), ("reap-hard", reap_hard_job)):
+        try:
+            jobs.append(read())
+        except Exception as e:  # one unreadable record is that row's error, not the page's
+            jobs.append({"key": key, "name": key, "cadence": None, "runs_in": "launchd", "record": None, "error": fleet.mask(repr(e))})
+    return {"jobs": jobs, "rules": rules()}  # no timestamp: the page's ETag holds while nothing ran
