@@ -213,6 +213,8 @@ README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 �
 
 ## 5. 다른 PC 부트스트랩
 
+새 PC는 `scripts/setup.py` 한 줄로 이 절의 일과 권장 사용자 설정을 함께 넣는다([new-pc.md](new-pc.md)). 이 절은 그 안에서 체크아웃을 로드하고 동기화하는 부분, 곧 `bootstrap.py`만 따로 돌릴 때의 동작이다.
+
 ```bash
 git clone https://github.com/JeongJaeSoon/agent-skills <체크아웃>   # 경로는 어디든 된다(예시: ~/src/agent-skills)
 python3 <체크아웃>/scripts/bootstrap.py           # 바뀔 내용만 보여 준다

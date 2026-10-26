@@ -16,7 +16,7 @@
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
-              setup-pc(새 PC 설치·설치된 PC 갱신 점검, 고치는 줄은 사람이)
+              setup-pc(새 PC 한 줄 설치·갱신: dry run diff → 사람의 --apply)
 채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 코디네이터에게 한 통으로)
 어디서나    record-progress(언제 무엇을 남기나) → use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
@@ -210,9 +210,9 @@
 
 ### setup-pc
 - **언제:** agent-skills를 다른 PC에 들일 때, 설치된 PC를 최신으로 맞출 때. "새 PC 세팅해줘", "다른 PC 에서도 똑같이 쓰게 해줘", "agent-skills 업데이트해줘", "플러그인 최신화", "set up agent-skills on a new PC", "update agent-skills".
-- **내용:** `scripts/setup_check.py check`가 읽기만 해서 표 한 장을 낸다. 도구(`git`·`python3`·`claude`·`gh`·`orca`), `gh` 로그인, git 커밋 서명, 로드 방식(체크아웃·마켓플레이스·둘 다·없음), `origin/main`과의 차이(`git ls-remote`, fetch 안 함), 마지막 `skills-sync` 결과와 launchd 작업, 기본 on 정기 자동화, `language`·`outputStyle`·`permissions.defaultMode`·autoMode 규칙·`permissions.allow`, 기능을 켜는 `agent-skills.json` 키, `internal-names.txt`, 개인 지침·스킬·에이전트. 원래 PC에서 `export`로 뽑은 기준 파일(`env` 값과 자격 증명 모양 규칙은 빼고, `agent-skills.json`은 키 이름만)을 `--baseline`으로 넘기면 차이를 보인다. setup 모드는 빠진 것마다 사람이 칠 `!` 줄을, update 모드는 마켓플레이스 사본이면 `claude plugin marketplace update`·`plugin update`·`/reload-plugins`를, 체크아웃이면 `skills-sync sync`·`broadcast`를 건넨다. 설정 파일은 어떤 도구로도 쓰지 않는다.
-- **동봉:** `scripts/setup_check.py`, 테스트 파일.
-- **관계:** 빠진 autoMode 규칙은 `automode-spec`이 spec을 만들고 사용자가 고른 것만 `tune-automode`의 emit으로 넘긴다. `permissions`·hooks는 `update-config`, 정기 자동화가 하는 일은 `reap-resources`, 떠 있는 세션 reload는 `skills-sync broadcast`가 맡는다. 처음 설치 자체는 README "설치"의 `bootstrap.py`와 마켓플레이스 명령이다.
+- **내용:** 입구는 체크아웃의 `scripts/setup.py`다. 스킬이 언어와 Orca Run 바인딩 여부를 묻고 dry run을 돌려 설정 파일별 diff를 보인 뒤, 사람이 칠 `! python3 … --apply <해시>` 한 줄을 건넨다. 그 한 줄이 백업, 없는 값만 더하는 멱등 병합(이미 있는 값은 덮지 않음, 켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 원자적 교체, 다시 읽어 확인, 파일별 되돌리는 줄 출력을 하고, 이어서 launchd 동기화 작업·동기화·기본 on 정기 자동화를 켜고 `scripts/setup_check.py check` 표를 낸다. 넣는 값은 저장소의 권장 기본값(`scripts/recommended-settings.json`)뿐이다: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, 일반화한 autoMode 묶음, 조회·대시보드 서버만 담은 `permissions.allow` 묶음, `agent-skills.json` 최소 키. 사내 이름 목록·채널·트래커·노트 경로·개인 지침은 옮기지 않는다. 한 번 제안한 항목은 기록해 두어, 사람이 지운 규칙은 다시 제안하지 않는다. update 모드는 `--update`(dry run은 fetch도 하지 않고 새로 생긴 권장값만 보이고, `--apply` 줄이 fast-forward한 뒤 계획을 다시 맞춰 본다). 원래 PC에서 `export`로 뽑은 기준 파일과 비교하는 `check --baseline`은 선택이다. 설정 파일은 어떤 도구로도 쓰지 않고 `--apply`도 실행하지 않는다.
+- **동봉:** `scripts/setup_check.py`, 테스트 파일. 저장소의 `scripts/setup.py`, `scripts/recommended-settings.json`, `scripts/test_setup.py`.
+- **관계:** 적용 뒤 막힌 행동 하나는 `tune-automode`, 묶음 밖의 `permissions`·hooks는 `update-config`, 정기 자동화가 하는 일은 `reap-resources`, 떠 있는 세션 reload는 `skills-sync broadcast`가 맡는다. 체크아웃 로드만 하는 `bootstrap.py`는 그대로 있고 `setup.py`가 그 launchd 작업을 다시 쓴다.
 
 ## 채팅
 
