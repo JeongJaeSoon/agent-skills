@@ -946,6 +946,7 @@ shutil.rmtree(prog_dir)
 # table its rows, not the tick: prs.json is still written and the error is kept once.
 for program, row in [({"repo": "acme/tools", "created_at": fleet.iso(clock[0])},
                       {"ts": "2026-10-27T02:00:00", "ev": "landed", "pr": 8}), ([], None)]:
+    f.mem.pop("stage_auto_error", None)
     prog_dir.mkdir(parents=True)
     (prog_dir / "program.json").write_text(json.dumps(program))
     (prog_dir / "ledger.jsonl").write_text(json.dumps(row) + "\n" if row else "")
