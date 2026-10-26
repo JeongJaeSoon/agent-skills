@@ -628,6 +628,17 @@ const out = {{states: Object.fromEntries(Object.entries(kinds).map(([k, ks]) => 
   short: timelineList(st, st.timeline.slice(0, 3))}};
 handlers.click({{target: {{closest: (sel) => sel === "[data-tl-more]" ? {{dataset: {{tlMore: "all"}}}} : null}}}});
 out.more = timelineList(st, st.timeline, {{fold: "all"}});
+const past = {json.dumps({"at": ago(50), "kind": "turn_done", "session": "wt-coord", "text": "old"})};
+out.past = timelineList(st, [past]); out.pastTm = hhmm(past.at); out.pastDate = shortDate(past.at);
+const desc = (scrollHeight) => {{ const el = {{dataset: {{tlOpen: "d" + scrollHeight}}, scrollHeight, clientHeight: 20, attrs: {{}}, cls: [],
+  classList: {{toggle: (c, on) => {{ el.cls = on ? [c] : []; }}}}, setAttribute: (k, v) => {{ el.attrs[k] = v; }},
+  closest: (sel) => sel === "[data-tl-open]" ? el : null}}; return el; }};
+const clipped = desc(40), fits = desc(20);
+handlers.click({{target: clipped}}); out.opened = [F.tlOpen.has("d40"), clipped.attrs["aria-expanded"], clipped.cls];
+F.tlOpen.add(`${{past.at}}|turn_done|wt-coord`); out.openRow = timelineList(st, [past]);
+handlers.keydown({{key: " ", target: clipped, preventDefault() {{}}}}); out.closed = [F.tlOpen.has("d40"), clipped.attrs["aria-expanded"], clipped.cls];
+handlers.keydown({{key: "Enter", target: clipped, preventDefault() {{}}}}); out.reopened = F.tlOpen.has("d40");
+handlers.click({{target: fits}}); out.fits = [F.tlOpen.has("d20"), fits.attrs["aria-expanded"] ?? null];
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     assert got["states"] == {k: [] for k in states}, got["states"]
@@ -639,6 +650,13 @@ process.stdout.write(JSON.stringify(out));"""
     assert "Today" in page and page.count("tl-day") == 1 and "tl-bad" in page and "tl-done" in page
     assert "data-tl-more" not in got["short"] and got["short"].count('data-go="#/fleet/session/wt-coord"') == 2, got["short"]
     assert "data-go" not in got["own"] and "tl-by" not in got["own"], "on its own session page a row goes nowhere"
+    # A row under an earlier day's head still shows its time; the head already names the day.
+    assert f'>{got["pastTm"]}</span>' in got["past"] and f'>{got["pastDate"]}</span>' not in got["past"], got["past"]
+    # A clipped description is a keyboard control that opens and closes; one that fits does not open.
+    assert 'role="button" tabindex="0" aria-expanded="false"' in got["past"], got["past"]
+    assert 'aria-expanded="true"' in got["openRow"] and 'tl-desc open' in got["openRow"], got["openRow"]
+    assert got["opened"] == [True, "true", ["open"]] and got["closed"] == [False, "false", []] and got["reopened"], got
+    assert got["fits"] == [False, None], got["fits"]
 
     # The overview card keeps 8 rows, and missed items are picked first even when they come last.
     rows = [{"key": f"k{n}", "type": "reload_pending", "session": "wt-coord", "title": f"row{n}", "missed": n >= 15} for n in range(17)]

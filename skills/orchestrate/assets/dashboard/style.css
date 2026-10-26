@@ -350,6 +350,7 @@ th.num .th-sort { justify-content: flex-end; }
 .tl-desc { color: var(--ink-2); font-size: var(--t-sm); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .tl-desc.open { display: block; }
+.tl-desc:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tl-end { padding-top: var(--s2); line-height: 18px; font-size: var(--t-sm); white-space: nowrap; color: var(--accent-ink); display: inline-flex; align-items: flex-start; gap: var(--s1); }
 .tl-end svg.i { width: 12px; height: 12px; margin-top: var(--s1); }
 @media (max-width: 600px) {

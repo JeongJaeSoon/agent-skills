@@ -365,10 +365,10 @@ function timelineList(st, rows, { fold = null, here = null } = {}) {
     const kind = e.kind || "event", state = eventState(kind), id = `${e.at}|${kind}|${e.session}`;
     const other = ss[e.session] && e.session !== here ? ss[e.session] : null;
     return `${head}<li class="tl-ev tl-${state} ${TL_TONE[state]}" ${other ? `data-go="${sessionHref(other.id)}"` : ""}>
-      <span class="tl-tm" title="${esc(e.at ? new Date(e.at).toLocaleString() : "")}">${e.at ? (d === today ? hhmm(e.at) : shortDate(e.at)) : ""}</span>
+      <span class="tl-tm" title="${esc(e.at ? new Date(e.at).toLocaleString() : "")}">${e.at ? hhmm(e.at) : ""}</span>
       <span class="tl-rail"><svg viewBox="0 0 16 16" role="img"><title>${TL_STATE[state]}</title>${TL_ICON[state]}</svg></span>
       <div class="tl-body"><div class="tl-title">${esc(eventLabel(kind))}${other ? `<a class="tl-by" href="${sessionHref(other.id)}">${esc(other.name)}</a>` : ""}</div>
-        ${e.text ? `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}">${esc(e.text)}</div>` : ""}</div>
+        ${e.text ? `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(e.text)}</div>` : ""}</div>
       ${e.pr && safeUrl(e.url) ? link(e.url, `${esc(e.pr)} ${icon("arrow")}`, "tl-end mono") : ""}</li>`;
   }).join("");
   const more = rows.length - shown.length;
@@ -1253,7 +1253,17 @@ document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;
   if (key) F.draft[key] = e.target.value.replace(/[\r\n]+/g, " ");
 });
+// A clipped description opens in place and closes again; one that already fits has nothing to open.
+function tlToggle(desc) {
+  const id = desc.dataset.tlOpen, open = !F.tlOpen.has(id);
+  if (open && desc.scrollHeight <= desc.clientHeight + 1) return false;
+  if (open) F.tlOpen.add(id); else F.tlOpen.delete(id);
+  desc.classList.toggle("open", open); desc.setAttribute("aria-expanded", String(open));
+  return true;
+}
+
 document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.dataset?.tlOpen != null) { e.preventDefault(); tlToggle(e.target); return; }
   if (e.key !== "Enter" || e.isComposing) return;
   if (e.target.id === "chat-input") { e.preventDefault(); chatAction("ask"); } else if (e.target.dataset.decideInput) { e.preventDefault(); decideAction(e.target.dataset.decideInput, "text"); }
 });
@@ -1266,11 +1276,8 @@ document.addEventListener("click", async (e) => {
   if (decide) { decideAction(decide.dataset.key, decide.dataset.decide); return; }
   const more = e.target.closest("[data-tl-more]");
   if (more) { const k = more.dataset.tlMore; F.tlShow[k] = (F.tlShow[k] || TL_STEP) + TL_STEP; renderView(); return; }
-  // A clipped description opens in place instead of following its row.
   const desc = e.target.closest("[data-tl-open]");
-  if (desc && desc.scrollHeight > desc.clientHeight + 1 && !String(getSelection())) {
-    F.tlOpen.add(desc.dataset.tlOpen); desc.classList.add("open"); return;
-  }
+  if (desc && !String(getSelection()) && tlToggle(desc)) return;
   // A click on the row opens its session; its own controls, links and a text selection keep theirs.
   const go = e.target.closest("[data-go]");
   if (go && !e.target.closest("a,button,input,textarea,select") && !String(getSelection())) { location.hash = go.dataset.go; return; }
