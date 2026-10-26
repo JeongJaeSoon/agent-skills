@@ -710,5 +710,15 @@ s["rows"]["live"] = {"id": "live", "title": "확인 중", "created_at": "2026-10
 sp.write_text(json.dumps(s, ensure_ascii=False))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
 assert "| 확인 중 | – | – | – | – |" in rq and "1. 다음 배포" in rq and "멈춤" not in rq, rq
+# A row quiet since it was added whose PR just merged has dev to check next: the merge counts as a change.
+s["order"].append("merged")
+s["rows"]["merged"] = {"id": "merged", "title": "막 머지", "pr": "acme/web#9", "created_at": "2026-10-01T00:00:00Z", "cells": {}}
+sp.write_text(json.dumps(s, ensure_ascii=False))
+(fd / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [],
+                                                         "prs": [{"key": "acme/web#9", "state": "MERGED", "merged_at": "2026-10-12T00:00:00Z"}]}))
+rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
+assert "| 막 머지 | acme/web#9 | ✅ 10/12 | – | – |" in rq and "멈춤" not in rq, rq
+# Telegram keeps the section's fold line.
+assert "✅ 그 전 완료 1건 (대시보드)" in fok("brief", "render", "--periodic", "--now", NOW, "--telegram").splitlines()
 
 print("ok")

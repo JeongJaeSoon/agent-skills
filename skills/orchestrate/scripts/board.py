@@ -709,7 +709,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append(f"오래된 board 행 {len(stale_board)} ({'' if len(stale_board) == 1 else '최대 '}{ago(max(stale_board))})")
     if collected:
         facts.append(collected)
-    stage_t, stage_gone = stages.current(stages.table(), now, limits["stage_idle_d"] * 86400) if not periodic else (None, 0)
+    stage_t, stage_gone = stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state) if not periodic else (None, 0)
     if sum(folded.values()) or stage_gone:
         facts.append("접음 " + ", ".join(f"{w} {n}" for w, n in (("완료", sum(folded.values())), ("단계표", stage_gone)) if n)
                      + " (대시보드)")

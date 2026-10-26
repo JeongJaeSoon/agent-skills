@@ -168,18 +168,20 @@ def table(state=None):
     return {"rows": out, "env": store["env"], "next": store["next"]}
 
 
-def current(t, now, idle_s):
+def current(t, now, idle_s, state=None):
     """table() without the rows the report has no use for: finished (`done`, or every column ✅ or 해당 없음) or
-    unchanged for idle_s. A row stays while a row under it stays, and with no time to judge by. Returns (table, how
-    many work rows left); with no row left, 다음 순서 goes too. The dashboard reads table() whole."""
+    unchanged for idle_s, its PR's merge in state's PR list counting as a change. A row stays while a row under it
+    stays, and with no time to judge by. Returns (table, how many work rows left); with no row left, 다음 순서 goes
+    too. The dashboard reads table() whole."""
     rows = {r["id"]: r for r in t["rows"]}
+    merged = {p.get("key"): p.get("merged_at") for p in (state or {}).get("prs") or []}
 
     def live(r):
         if r.get("group") or r.get("done_at"):
             return False
         if all((r["cells"].get(c) or {}).get("mark") in ("ok", "na") for c in COLUMNS):
             return False
-        times = [fleet.parse(x) for x in [r.get("created_at")] + [c.get("at") for c in r["cells"].values()]]
+        times = [fleet.parse(x) for x in [r.get("created_at"), merged.get(r.get("pr"))] + [c.get("at") for c in r["cells"].values()]]
         last = max(filter(None, times), default=None)
         return not last or (now - last).total_seconds() <= idle_s
     keep = set()
