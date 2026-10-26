@@ -124,8 +124,10 @@ Usage: orch <command> <slug> [options]
                                      min shows its age (board rows past it are counted in the headline), an open
                                      PR probed over 30 min ago is in the headline,
                                      over 120 min marks it ⚠️ (merged and closed PRs do not age), a lead whose terminal left the fleet turns 🔴;
+                                     a ✅ row merged over 24 h ago folds into its section's count, a stage row
+                                     finished or 7 days unchanged leaves the stage table;
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
-                                     "pr_stale_min", "state_min"}}. Exit 1 when a table is wider than 78 columns. Rows the
+                                     "pr_stale_min", "state_min", "done_fold_h", "stage_idle_d"}}. Exit 1 when a table is wider than 78 columns. Rows the
                                      board lacks come from the fleet's sessions (state.json): each lead the board
                                      has no lead for, its cards and the coordinator's own cards, each with the
                                      last milestone of the report file its brief's REPORT line names. --no-fill
