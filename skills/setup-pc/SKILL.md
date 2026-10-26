@@ -5,7 +5,7 @@ description: "Use when agent-skills goes onto another PC or an installed PC need
 
 # Set up or update agent-skills on a PC
 
-Installing the plugin brings the skills; it does not bring the user settings, the values kept outside the repo, or the personal files of the PC the user came from. This skill checks all of it with one read-only script, shows one table, and hands every change to the human or to the skill that owns it.
+Installing the plugin brings the skills; it does not bring the user settings, the values kept outside the repo, or the personal files of the PC the user came from. This skill checks all of it with one read-only script, shows one table, and hands every change to the human or to the skill that owns it. What each setting does and what goes wrong without it is in `docs/new-pc.md` (`${CLAUDE_SKILL_DIR}/../../docs/new-pc.md`); this skill does not repeat it.
 
 ## What this skill never does
 

@@ -62,7 +62,7 @@ claude plugin install agent-skills@jeongjaesoon
 
 ### 다른 PC에서 같은 방식으로 쓰려면
 
-일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 것은 따로 옮긴다. 사용자 설정(`language`, `outputStyle`, `autoMode`, `permissions`), 저장소 밖의 고유값, 개인 지침과 자동 메모리가 그렇다. 순서와 확인 방법은 [docs/new-pc.md](docs/new-pc.md).
+일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 것은 따로 옮긴다. 사용자 설정(`language`, `outputStyle`, `autoMode`, `permissions`), 저장소 밖의 고유값, 개인 지침과 자동 메모리가 그렇다. 순서와 확인 방법은 [docs/new-pc.md](docs/new-pc.md), 점검과 갱신은 `setup-pc` 스킬이다.
 
 ## 스킬 고치기
 
