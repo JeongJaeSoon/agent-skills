@@ -218,8 +218,7 @@ PR's repository from `prs.py policy <owner/name>`:
   or last ping went out under three hours ago, and each reviewer the human excludes, and say which
   you left out.
 - Schedule only an ask whose PR will surely still be waiting at the send time, even where
-  `after_hours` is `schedule-all`: that is the one rule a hand-sent ask does not take from the
-  round. A scheduled message cannot be edited, the chat tool may give no way to delete it, and an
+  `after_hours` is `schedule-all`: unlike the round, a hand-sent ask is never scheduled on a guess. A scheduled message cannot be edited, the chat tool may give no way to delete it, and an
   empty scheduled-message list does not prove it is gone: one listed nowhere has still posted at
   its time. After hours, an ask whose PR may not be waiting by then is decided again at the next
   business-hours start, and sent then if the PR still waits; with `send-now`, it goes now.

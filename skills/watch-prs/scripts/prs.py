@@ -160,9 +160,9 @@ def config(path=CONFIG):
             raise ConfigError(f"{where}: weekend_days must be a list of weekday numbers, Monday 0 to Sunday 6")
         if len(set(days)) == 7:
             raise ConfigError(f"{where}: weekend_days must leave at least one business day")
-        for k in ("night_hour", "morning_hour"):
-            if k in c and not (isinstance(c[k], int) and not isinstance(c[k], bool) and 0 <= c[k] <= 24):
-                raise ConfigError(f"{where}: {k} must be an hour from 0 to 24")
+        for k, top in (("night_hour", 24), ("morning_hour", 23)):
+            if k in c and not (isinstance(c[k], int) and not isinstance(c[k], bool) and 0 <= c[k] <= top):
+                raise ConfigError(f"{where}: {k} must be an hour from 0 to {top}")
     return cfg
 
 

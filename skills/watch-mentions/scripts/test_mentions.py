@@ -163,4 +163,6 @@ one.write_text(json.dumps([items[0]]))
 r = subprocess.run([sys.executable, S, "commit", "--state", str(flagged), str(one), "--config", str(conf)],
                    env=env, capture_output=True, text=True)
 assert r.returncode == 0 and "1 items marked seen" in r.stdout, r
+r = run("ingest", "--state", str(flagged))
+assert r.returncode != 0 and "file argument is required" in r.stderr, r
 print("ok")

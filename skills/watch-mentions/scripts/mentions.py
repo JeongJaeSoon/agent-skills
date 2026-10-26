@@ -33,7 +33,7 @@ def opt(name, default=None):
 VALUED = ("--state", "--config", "--now", "--workspace", "--provider")
 
 
-def positional():
+def positional(required=True):
     """The file argument after the subcommand, wherever the options sit around it."""
     a, i = sys.argv[2:], 0
     while i < len(a):
@@ -43,6 +43,8 @@ def positional():
             i += 1
         else:
             return a[i]
+    if required:
+        sys.exit(f"{sys.argv[1]}: a JSON file argument is required")
     return None
 
 
@@ -281,7 +283,8 @@ def main():
     elif cmd == "bundle":
         print(bundle(read_json(positional(), None) or [], cfg))
     elif cmd == "commit":
-        items = read_json(positional(), []) if positional() else []
+        path = positional(required=False)
+        items = read_json(path, []) if path else []
         print(f"commit: {commit(items, cfg, STATE, now)} items marked seen")
     elif cmd == "annotate":
         print(f"annotate: {annotate(read_json(positional(), None) or [], cfg, STATE, now)} rows given a PR")

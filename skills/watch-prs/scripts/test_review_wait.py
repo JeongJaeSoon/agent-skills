@@ -205,7 +205,7 @@ assert p.decide([one], [], at(14, 23, 30), prof)[0]["post_at"] == at(15, 9), "ac
 for bad in ({"after_hours": "later"}, {"weekend_days": [7]}, {"weekend_days": "sat"}, {"assign_reviewers": "yes"},
             {"profiles": [{"night_hour": 22}]}, {"profiles": [{"match": "acme/*", "kinds": ["review_wait"]}]},
             {"profiles": [{"match": "acme", "after_hours": "x"}]}, {"weekend_days": list(range(7))},
-            {"profiles": [{"match": "acme", "night_hour": "23"}]}, {"morning_hour": 25}):
+            {"profiles": [{"match": "acme", "night_hour": "23"}]}, {"morning_hour": 24}):
     path = pathlib.Path(tempfile.mkdtemp()) / "c.json"
     path.write_text(json.dumps({"prs": bad}))
     try:
