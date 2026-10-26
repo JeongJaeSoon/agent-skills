@@ -12,6 +12,8 @@ Options:
   --language NAME   `language` when it is unset (default: from the system locale)
   --settings-only   only the files: no launchd job, sync, automations, Orca or check
   --orca-run        bind this terminal to a new Orca Run when it has none (`run-create`)
+  --actions-only    only the steps after the files: launchd job, sync, automations, Orca and check. Writes no
+                    settings and takes no HASH: the agent runs it, and the plugin's guard hook asks the human first
   --bundle FILE     another recommended-settings file (tests)
   --here            allow a worktree checkout; implies --settings-only (tests)
 
@@ -19,6 +21,15 @@ HASH is printed with the diff and covers every planned write and action, so anyt
 review no longer matches. Merging adds only what is missing and never overwrites a value, except that an enabled
 marketplace copy of agent-skills is turned off; a recommended item applied once and later removed by the user is
 not offered again (the record is in the agent-skills state dir).
+
+The personal folder ($AGENT_SKILLS_CONFIG_DIR/personal, default ~/.config/agent-skills/personal; setup-pc clones the
+user's private repo there) joins the plan when it exists: its agent-skills.json keys are added where missing, like
+the recommended items, and win over a recommended default; a value already on this PC is kept and shown as a `kept`
+line. A relative tracker.rules_file points into that folder. Personal autoMode rules are not carried; each PC keeps
+its own.
+
+settings.json follows the Claude Code profile ($CLAUDE_CONFIG_DIR, as Claude Code reads it); agent-skills.json is
+one file per user, ~/.claude/agent-skills.json, where the skills' scripts read it (skills_json_path).
 """
 import argparse, difflib, hashlib, json, locale, os, pathlib, shlex, shutil, subprocess, sys, tempfile, time
 
@@ -31,6 +42,7 @@ BUNDLE = HERE / "recommended-settings.json"
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
 MARKET_ID = "agent-skills@jeongjaesoon"
 SECTIONS = ("allow", "soft_deny", "environment")
+RULES_FILE = "tracker.rules_file"
 FAST_FORWARD = "skills-sync sync --no-broadcast (fast-forward this checkout; the plan is checked again after it)"
 LANGUAGES = {"ko": "Korean", "ja": "Japanese", "en": "English", "zh": "Chinese", "es": "Spanish", "fr": "French",
              "de": "German", "pt": "Portuguese"}
@@ -44,7 +56,16 @@ def paths():
     cfg = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser()
     state = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
     return {"settings": pathlib.Path(os.environ.get("CLAUDE_SETTINGS") or cfg / "settings.json").expanduser(),
-            "skills_json": cfg / "agent-skills.json", "state": state, "record": state / "setup-applied.json"}
+            "skills_json": skills_json_path(), "state": state, "record": state / "setup-applied.json",
+            "personal": pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG_DIR") or "~/.config/agent-skills").expanduser()
+            / "personal"}
+
+
+def skills_json_path():
+    """The agent-skills config: one file per user, where the skills' scripts read it, unlike settings.json, which
+    follows the Claude Code profile (CLAUDE_CONFIG_DIR). AGENT_SKILLS_CONFIG moves it for setup, setup_check and
+    automations.py only; the other readers keep ~/.claude/agent-skills.json."""
+    return pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
 
 
 def sh(cmd, timeout=60):
@@ -170,12 +191,14 @@ def merge_settings(current, rec, skip, notes):
     return new, offered
 
 
-def merge_keys(current, rec, skip):
+def merge_keys(current, rec, skip, notes, personal):
     new, offered = json.loads(json.dumps(current)), set()
     for key, value in leaves(rec):
         offered.add(key)
         if dig(new, key) is None and key not in skip:
             put(new, key, value)
+        elif key not in skip and dig(new, key) not in (None, value):
+            notes.append(f"kept    {key} = {dig(new, key)!r} ({'personal' if key in personal else 'recommended'} {value!r})")
     return new, offered
 
 
@@ -187,13 +210,20 @@ def plan(args):
     language = args.language or system_language()
     if language:
         rec = {"language": language, **rec}
+    keys = fill(bundle.get("agent_skills_json") or {}, values)
+    mine = p["personal"]
+    personal = dict(leaves(read_json(mine / "agent-skills.json", {})))
+    for key, value in personal.items():
+        if key == RULES_FILE and isinstance(value, str) and not pathlib.Path(value).expanduser().is_absolute():
+            value = str(mine / value)  # the site rules Markdown lives in the personal repo next to this file
+        put(keys, key, value)  # the user's own value wins over the recommended default
     record = read_json(p["record"], {})
     skip = set(record.get("offered") or [])
     notes = []
     settings = read_json(p["settings"], {})
     new_settings, offered = merge_settings(settings, rec, skip, notes)
     skills_json = read_json(p["skills_json"], None)
-    new_skills, offered_keys = merge_keys(skills_json or {}, fill(bundle.get("agent_skills_json") or {}, values), skip)
+    new_skills, offered_keys = merge_keys(skills_json or {}, keys, skip, notes, personal)
     files = []
     if new_settings != settings:
         files.append((p["settings"], settings if p["settings"].exists() else None, new_settings))
@@ -327,12 +357,20 @@ def main(argv):
     ap.add_argument("--language")
     ap.add_argument("--settings-only", action="store_true")
     ap.add_argument("--orca-run", action="store_true")
+    ap.add_argument("--actions-only", action="store_true")
     ap.add_argument("--bundle", type=pathlib.Path)
     ap.add_argument("--here", action="store_true")
     args = ap.parse_args(argv)
+    if args.actions_only and (args.apply or args.settings_only or args.update or args.here):
+        ap.error("--actions-only takes none of --apply, --settings-only, --update, --here")
     args.settings_only = args.settings_only or args.here
     try:
         preflight(args)
+        if args.actions_only:
+            failed = run_actions(args)
+            if failed:
+                raise Refused(f"these steps failed: {', '.join(failed)}; fix the cause, then run it again")
+            return 0
         if args.update and args.apply:
             sys.stdout.flush()
             if subprocess.run([sys.executable, str(HERE / "sync.py"), "sync", "--no-broadcast"]).returncode:

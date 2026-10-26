@@ -23,7 +23,8 @@ class Base(unittest.TestCase):
         self.tmp = pathlib.Path(tempfile.mkdtemp())
         self.cfg = self.tmp / "claude"
         self.cfg.mkdir()
-        env = {"CLAUDE_CONFIG_DIR": str(self.cfg), "AGENT_SKILLS_STATE": str(self.tmp / "state"),
+        env = {"CLAUDE_CONFIG_DIR": str(self.cfg), "AGENT_SKILLS_CONFIG": str(self.cfg / "agent-skills.json"),
+               "AGENT_SKILLS_STATE": str(self.tmp / "state"),
                "AGENT_SKILLS_CONFIG_DIR": str(self.tmp / "local"), "CLAUDE_SETTINGS": ""}
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
@@ -146,10 +147,12 @@ class Automations(Base):
     def test_user_disabled_and_unsupported_are_not_missing(self):
         out = json.dumps([{"name": "janitor", "default": "on", "state": "off", "detail": "x"},
                           {"name": "pressure-watch", "default": "on", "state": "unsupported", "detail": "macOS"},
-                          {"name": "share-server", "default": "off", "state": "unsupported", "detail": "macOS"}])
+                          {"name": "share-server", "default": "off", "state": "unsupported", "detail": "macOS"},
+                          {"name": "watch-prs", "default": "on", "state": "unconfigured", "detail": "no key"}])
         rows = sc.check_automations(lambda cmd, timeout=0: (0, out))
         self.assertEqual([(r["status"], r["have"]) for r in rows],
-                         [("disabled", "사용자가 끔: janitor"), ("unsupported", "이 OS 미지원: pressure-watch")])
+                         [("disabled", "사용자가 끔: janitor"), ("info", "설정 키가 없어 꺼 둠: watch-prs"),
+                          ("unsupported", "이 OS 미지원: pressure-watch")])
         self.assertIn("남은 것 0개", sc.table(rows))
 
     def test_unknown_state_warns(self):
