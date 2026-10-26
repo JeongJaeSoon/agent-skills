@@ -1353,8 +1353,8 @@ class Fleet:
 
     def stage_rows(self):
         """The stage table's generated rows, from this state and the program ledgers (stage_auto.py)."""
-        import stage_auto  # beside this file; it imports this module
         try:
+            import stage_auto  # beside this file; it imports this module
             stage_auto.refresh(self.state)
             self.mem.pop("stage_auto_error", None)
         except Exception as e:  # a ledger it cannot read must not take the dashboard down with it

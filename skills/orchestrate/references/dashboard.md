@@ -182,7 +182,7 @@ orch req drop r9 --reason "a remark, nothing asked"
 
 ### Acks: hiding what you have checked
 
-Without it, finished rows and requests only pile up: a ✅ row stays in the brief and the Work table, and the requests card keeps every open request, long after the owner has looked at them. An ack is the owner's "checked, stop showing it". `scripts/acks.py` keeps them in `acks.jsonl` in the state directory (0600, append-only, `{ev: "ack"|"unack", id, ts}`; the set is the fold of its lines), and the CLI is the record: the orchestrator or lead runs it, and the page's buttons call the same function through `POST /api/fleet/ack` (same Host, Origin and token guard as the send box).
+Without it, finished rows and requests only pile up: a ✅ row stays in the brief's stage table, and the requests card keeps every open request, long after the owner has looked at them. An ack is the owner's "checked, stop showing it". `scripts/acks.py` keeps them in `acks.jsonl` in the state directory (0600, append-only, `{ev: "ack"|"unack", id, ts}`; the set is the fold of its lines), and the CLI is the record: the orchestrator or lead runs it, and the page's buttons call the same function through `POST /api/fleet/ack` (same Host, Origin and token guard as the send box).
 
 ```sh
 orch-dash ack stage:release board:lead-a r7     # a stage row, a brief row, a request (rN is req:rN)

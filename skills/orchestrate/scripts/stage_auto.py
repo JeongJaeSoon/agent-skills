@@ -22,7 +22,7 @@ and leave after the stage table's 7 days, like any finished row. `_`-prefixed di
 
 Written to stages-auto.json beside stages.json, never into it: stages.json holds only what a person recorded.
 """
-import datetime as dt, json, re
+import datetime as dt, json, os, pathlib, re
 
 import fleet, prog
 
@@ -57,10 +57,16 @@ def ledger_row(line):
     return e if isinstance(e, dict) and isinstance(e.get("ev"), str) else None
 
 
-def load_programs():
-    """[(program.json, ledger events)] for every program directory."""
+def programs_home():
+    """Read per call, not prog.HOME: `dash.py demo` points PROGRAMS_HOME at its invented store after prog is imported."""
+    return pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
+
+
+def load_programs(only=None):
+    """[(program.json, ledger events)] for every program directory, or for the one named `only`."""
     out = []
-    for f in sorted(prog.HOME.glob("*/program.json")):
+    home = programs_home()
+    for f in [home / only / "program.json"] if only else sorted(home.glob("*/program.json")):
         if f.parent.name.startswith("_"):
             continue
         try:
@@ -80,14 +86,24 @@ def ticket_of(title):
     return word if prog.TICKET_ID.fullmatch(word) else None
 
 
+def recent(cfg, events, now):
+    """The program's last ledger event (its creation without one), or None when that is older than ACTIVE_S."""
+    last = max(filter(None, (fleet.parse(e.get("ts")) for e in events)), default=fleet.parse(cfg.get("created_at")))
+    return last if last and (now - last).total_seconds() <= ACTIVE_S else None
+
+
+def active(cfg, events, now):
+    """What build counts as active: moved in the last ACTIVE_S, not finished, not stopped."""
+    return bool(recent(cfg, events, now)) and not prog.final_check_at(events) and not prog.stopped(events)
+
+
 def build(programs, state, now):
     """(rows, order, programs summary) from [(program.json, events)] and the fleet state (sessions, tasks, prs)."""
     prs = {p.get("key"): p for p in state.get("prs") or []}
     rows, order, summary = {}, [], {}
     for cfg, events in programs:
         slug, repo, run = cfg["slug"], cfg.get("repo"), cfg.get("run")
-        last = max(filter(None, (fleet.parse(e.get("ts")) for e in events)), default=fleet.parse(cfg.get("created_at")))
-        if not last or (now - last).total_seconds() > ACTIVE_S:
+        if not (last := recent(cfg, events, now)):
             continue
         done_at, created = prog.final_check_at(events), cfg.get("created_at") or fleet.iso(last)
         tickets = list(dict.fromkeys(cfg.get("predicate") or []))
@@ -169,7 +185,9 @@ def warning(slug=None, now=None):
     now, hours = now or fleet.utcnow(), warn_hours()
     auto = read()
     if slug and slug not in auto["programs"]:
-        if not (prog.HOME / slug / "program.json").exists():
+        # Not in the last tick's summary: quiet for ACTIVE_S, stopped or finished (no warning), or newer than that tick.
+        own = load_programs(slug)
+        if not own or not active(*own[0], now):
             return ""
         progs = {slug: {"active": True, "rows": 0}}
     else:

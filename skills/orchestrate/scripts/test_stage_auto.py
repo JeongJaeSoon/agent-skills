@@ -108,6 +108,11 @@ refs = stages.table({"prs": state["prs"]})["refs"]
 assert refs["acme/app#12"] == "https://github.com/acme/app/pull/12" and refs["acme/app#13"] == "https://github.com/acme/app/pull/13"
 assert refs["acme/infra#7"] == "https://github.com/acme/infra/issues/7", refs
 
+# PROGRAMS_HOME is read per call: `dash.py demo` sets it after prog is imported, and must not show this PC's programs.
+os.environ["PROGRAMS_HOME"] = str(tmp / "elsewhere")
+assert stage_auto.load_programs() == [] and stage_auto.load_programs("alpha") == []
+os.environ["PROGRAMS_HOME"] = env["PROGRAMS_HOME"]
+
 # Acks: a finished generated row can be acked like a recorded one.
 import acks  # noqa: E402
 assert "stage:beta" in acks.ackable(now, {"stage"}) and "stage:alpha" not in acks.ackable(now, {"stage"})
@@ -125,8 +130,15 @@ assert "not refreshed in 6 h" in stage_auto.warning("alpha", later) and "orch-da
 assert stage_auto.warning("alpha", later) == "", "stage_warn_h moves the line"
 (tmp / "config.json").write_text("{}")
 assert stage_auto.warning("nope", now) == "", "no such program"
-# A lead whose program the tick skipped (no work in 7 days) and a tick that never ran.
-assert stage_auto.warning("gamma", now) == "Stage table: no stage row for active program gamma."
+# A program the tick skips is active by the same rule: quiet for 7 days or stopped and aged out is not warned about,
+# one created after the last tick is.
+assert stage_auto.warning("gamma", now) == "", "no ledger event in 7 days"
+program("zeta", {"repo": "acme/z", "created_at": ago(400), "predicate": ["Z-1"]},
+        [{"ts": ago(200), "ev": "spawned", "ticket": "Z-1"}, {"ts": ago(190), "ev": "stop"}])
+assert stage_auto.warning("zeta", now) == "", "stopped, then aged out"
+program("eta", {"repo": "acme/e", "created_at": ago(0), "predicate": ["E-1"]}, [{"ts": ago(0), "ev": "config"}])
+assert stage_auto.warning("eta", now) == "Stage table: no stage row for active program eta.", "newer than the tick"
+# A tick that never ran.
 stage_auto.path().unlink()
 assert "not refreshed" in stage_auto.warning("alpha", now)
 
