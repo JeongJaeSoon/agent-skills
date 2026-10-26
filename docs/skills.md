@@ -31,7 +31,7 @@
   - 골격은 설정의 트래커 템플릿(`tracker.<adapter>.templates`)을 먼저 쓰고, 없으면 동봉 템플릿을 쓴다. 템플릿을 읽다 실패하면 멈춘다.
   - `🛠 구현 힌트`에는 실제로 열어 본 경로만 적는다.
   - 제목은 동사로 시작하고, 수용 기준에는 확인 방법을 붙이고, `🚫 범위 밖`은 반드시 적는다.
-  - 제목과 본문의 언어는 설정의 `tracker.<adapter>.language`, 없으면 그 트래커에 대한 사용자 규칙, 그것도 없으면 한국어다.
+  - 제목과 본문의 언어는 설정의 `tracker.<adapter>.language`, 없으면 그 트래커에 대한 사용자 규칙, 그것도 없으면 사용자가 쓰는 언어다.
   - 의존은 트래커 relation으로 걸고, 1티켓 = 1PR로 나눈다. 서로 의존하는 PR은 GitHub stack으로 계획한다.
   - 초안 전체를 한 번 보여 주고 승인받은 뒤 등록한다. 사용자 지시가 묻지 않고 등록하라고 하면, 그리고 섞인 요청과 세션이 스스로 올리는 NOW follow-up은 먼저 등록하고 URL을 보여 준다. 상위 티켓 본문은 `✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`를 갖는다.
 - **동봉:** `references/templates.md`(개발 티켓과 조사 티켓 골격).
@@ -224,7 +224,7 @@
 ### watch-mentions
 - **언제:** "멘션 감시", "나한테 온 슬랙 정리해줘", "내가 말한 스레드에 새 답글 있어?", 그리고 watch-mentions Orca automation의 회차마다.
 - **내용:** 공개 채널에서 사용자 멘션, 멘션 없는 이름 언급, 사용자가 말한 스레드의 새 답글을 찾는다. `scripts/mentions.py`가 실행 잠금, 커서, 이미 보고한 항목의 원장(채널·ts·permalink·분류만, 본문 없음)을 맡고, 본인 발언·비공개 채널·제외 채널·이미 보고한 것을 거른다. 에이전트가 새 항목을 리뷰 의뢰·작업 의뢰·질문·결정 공유·잡담으로 나누고 한 줄 요약과 permalink를 붙여 코디네이터에게 한 통으로 보낸다. 작업 의뢰는 중복 티켓을 먼저 찾고 기표 초안을 만든다. 실제 기표는 설정의 `file_tickets`가 켜져 있고 중복이 없을 때만 한다. Slack에는 아무것도 쓰지 않는다.
-  - **비공개 경계:** `slack_search_public`만 쓴다. 비공개 채널과 DM은 사용자가 설정에서 `read_private`를 켜야만 읽는다.
+  - **비공개 경계:** `slack_search_public`(또는 연결된 Slack 서버의 공개 채널 전용 검색)만 쓴다. 비공개 채널과 DM은 사용자가 설정에서 `read_private`를 켜야만 읽는다.
   - **정기 실행:** `schedule`이 평일 09:00–20:40, 20분 간격 Orca automation 등록 명령을 출력한다. precheck는 모델 없이 설정 누락과 실행 중 잠금만 거른다. Slack은 MCP로만 닿아 precheck가 새 메시지 수를 셀 수 없으므로, 새 항목이 없는 회차는 ingest 뒤 아무것도 보내지 않고 끝난다([automation.md](automation.md)).
 - **동봉:** `scripts/mentions.py`, 테스트 파일.
 - **관계:** 기표와 중복 검색은 `use-tracker`, 받는 쪽은 `orchestrate`의 코디네이터 인박스. Slack에 쓰는 일은 하지 않는다.
@@ -237,7 +237,7 @@
   - 트래커는 프로그램 설정 → `~/.claude/agent-skills.json` → 기본값 linear 순서로 정한다.
   - 세션에서는 MCP(Linear는 `orca linear`)를 우선하고, 스크립트는 항상 `tracker.py`를 쓴다. `tracker.py` 명령은 list, get, children, create, label, comment, transition이다. transition은 현재 상태를 먼저 읽어 이미 그 단계이거나 더 나아간 티켓은 바꾸지 않는다. `--to review`는 설정의 `tracker.<adapter>.review_status`가 있으면 그 이름의 상태로, 없으면 In Review로, 그것도 없으면 이름에 review가 든 유일한 started 상태로 옮긴다.
   - 설정의 `tracker.delegate_agent`나 사용자 지시가 트래커 쓰기 담당 에이전트를 정하면 쓰기는 모두 그 에이전트에 맡기고, 읽기만 여기서 한다.
-  - 값을 가리는 읽기 경로(`<PERSON>`, `****` 같은 토큰)에서 읽은 값은 데이터가 아니다. 판단·되쓰기 전에 가리지 않는 경로로 다시 읽고, 가려진 값을 필드에 되쓰지 않는다.
+  - 값을 가리는 읽기 경로(`<PERSON>` 같은 개체 자리표시자나 `****`)에서 읽은 값은 데이터가 아니다. 판단·되쓰기 전에 가리지 않는 경로로 다시 읽고, 가려진 값을 필드에 되쓰지 않는다.
   - 상태 어휘는 triage, backlog, unstarted, started, completed, canceled다.
   - 완료 조건은 상위 티켓 본문(`✅ 완료 조건`, `🚫 범위 밖`, `⏸️ 보류`)에, 부모 없는 티켓은 인수 조건에 둔다. NOW로 분류한 발견만 티켓이 된다.
   - follow-up 형식은 `follow-up` 라벨, 첫 줄 `파생: <ID> · 원인: <분류>`, 둘째 줄 `완료 조건: <항목>`, related relation이다.
@@ -367,7 +367,7 @@
 - **내용:**
   - 한 줄이나 한 커밋에 대한 질문은 git blame → 커밋 → PR만으로 답하는 narrow mode로 끝내고, 찾지 않은 출처를 밝힌다.
   - 그 밖에는 출처마다 조사자를 하나씩 병렬로 띄운다(git·`gh`, Linear/Jira, Notion, Google Drive, Obsidian, Slack). 조사자는 자기 출처만 파고 다른 출처의 단서는 적어만 둔다. 빈 결과도 발견으로 남긴다.
-  - Datadog, Sentry, warehouse는 연결이 없어 "접근 없음"으로 기록한다. Calendar는 날짜 범위를 좁힐 때만 쓴다.
+  - Datadog, Sentry, warehouse처럼 세션에 연결이 없는 출처는 "접근 없음"으로 기록한다. Calendar는 날짜 범위를 좁힐 때만 쓴다.
   - 종합은 Direct / Supported / Inferred / Speculative / Unknown 다섯 단계로 나누고 인용을 단다. 코드를 그 코드의 의도에 대한 근거로 쓰지 않고, 질문에 섞인 가설은 후보로만 다룬다.
   - 답은 What We Found, Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted 순서다. 코드를 바꾸려는 질문이면 Preserve / Change / Avoid / Risk를 붙인다.
 - **동봉:** `epistemics.md`(확신도 기준), `investigator-prompt.md`, `synthesizer-prompt.md`, `source-playbook.md`, `sources/`(code-archaeology, linear, notion, google-drive, obsidian, slack, incident-postmortem).
