@@ -20,6 +20,6 @@ assert 'from "An act refused" through "run it again."' in brief, "paste boundary
 for name in ("../SKILL.md", "top-level.md"):
     text = (refs / name).read_text()
     assert "no-verdict restart" in text, f"{name}: exception list lost the no-verdict restart"
-    assert "a gate's own named wait or form" in text, f"{name}: exception list lost the gate's named wait or form"
+    assert "a gate's named wait, step or form" in text, f"{name}: exception list lost the gate's named wait, step or form"
 
 print("test_refusal_copies: ok")
