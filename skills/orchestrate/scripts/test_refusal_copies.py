@@ -18,6 +18,8 @@ brief = paragraph("brief.md")
 assert paragraph("roles.md") == brief, "roles.md's refused-act paragraph differs from brief.md's"
 assert 'from "An act refused" through "run it again."' in brief, "paste boundary no longer names the paragraph's ends"
 for name in ("../SKILL.md", "top-level.md"):
-    assert "no-verdict restart" in (refs / name).read_text(), f"{name}: exception list lost the no-verdict restart"
+    text = (refs / name).read_text()
+    assert "no-verdict restart" in text, f"{name}: exception list lost the no-verdict restart"
+    assert "a gate's own named wait or form" in text, f"{name}: exception list lost the gate's named wait or form"
 
 print("test_refusal_copies: ok")
