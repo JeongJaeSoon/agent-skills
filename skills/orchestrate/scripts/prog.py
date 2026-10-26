@@ -103,15 +103,23 @@ Usage: orch <command> <slug> [options]
                                      todo replaces the owner's to-do list (no lines clears it); doing lists work
                                      that is moving but has no row (a wait on another team, an investigation),
                                      later only work set aside on purpose, with the trigger that brings it back
-  brief render --periodic [--scope top-level|PROGRAM] [--telegram] [--headline T] [--skipped T] [--now ISO8601]
-               [--commit] [--json] [--no-fill]
-                                     the brief skill's periodic report items 1-9 from the board, prs.json, open
-                                     decisions and brief-last/<scope>.json (bold = changed since it). --commit
+  brief render [--periodic] [--scope top-level|PROGRAM] [--telegram] [--headline T] [--decision T]... [--insight T]
+               [--skipped T] [--now ISO8601] [--commit] [--json] [--no-fill] [--no-refresh]
+                                     the brief skill's report, on request or (--periodic) on a schedule, from the
+                                     board, the fleet's sessions, prs.json, open decisions and brief-last/<scope>.json
+                                     (bold = changed since it). The time is the system clock's in the local time
+                                     zone. On request the stage table (stages.json) goes first; --periodic adds
+                                     --skipped and the last reap. The model gives only --headline (a sentence),
+                                     --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면 Y",
+                                     numbered after the registered ones) and --insight (after 진행 중). state.json
+                                     older than 5 min ("state_min") is collected again first unless --now or
+                                     --no-refresh; a failed collect is in the headline with the files' age. --commit
                                      saves this table as the last one (after sending). Staleness: a row past 90
-                                     min shows its age, an open PR probed over 30 min ago is in the headline,
+                                     min shows its age (board rows past it are counted in the headline), an open
+                                     PR probed over 30 min ago is in the headline,
                                      over 120 min marks it ⚠️ (merged and closed PRs do not age), a lead whose terminal left the fleet turns 🔴;
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
-                                     "pr_stale_min"}}. Exit 1 when a table is wider than 78 columns. Rows the
+                                     "pr_stale_min", "state_min"}}. Exit 1 when a table is wider than 78 columns. Rows the
                                      board lacks come from the fleet's sessions (state.json): each lead the board
                                      has no lead for, its cards and the coordinator's own cards, each with the
                                      last milestone of the report file its brief's REPORT line names. --no-fill
@@ -2395,17 +2403,21 @@ def cmd_board(argv):
 
 def cmd_brief(argv):
     import board
-    if argv[:1] != ["render"] or "--periodic" not in argv:
-        sys.exit("usage: orch brief render --periodic [--scope S] [--telegram] [--headline T] [--skipped T] [--now ISO8601] "
-                 "[--commit] [--json] [--no-fill]")
+    if argv[:1] != ["render"]:
+        sys.exit("usage: orch brief render [--periodic] [--scope S] [--telegram] [--headline T] [--decision T]... "
+                 "[--insight T] [--skipped T] [--now ISO8601] [--commit] [--json] [--no-fill] [--no-refresh]")
     now = opt(argv, "--now")
     scope = opt(argv, "--scope", "top-level")
     fill = "--no-fill" not in argv  # --fill, the old opt-in, is now the default and still accepted
-    out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
-                       opt(argv, "--headline"), opt(argv, "--skipped"), fill)
-    if not out["text"]:
-        print("board 에도 fleet 에도 리드·카드 없음: 표는 brief 스킬대로 손으로 만든다" if fill else "board 에 행 없음")
-        return
+    try:
+        out = board.render(scope, "telegram" if "--telegram" in argv else "terminal", now and fleet_parse(now),
+                           opt(argv, "--headline"), opt(argv, "--skipped"), fill, periodic="--periodic" in argv,
+                           decisions=[argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--decision"],
+                           insight=opt(argv, "--insight"),
+                           # --now replays a past moment, so the fleet as it is now does not belong in it
+                           fresh=not now and "--no-refresh" not in argv)
+    except ValueError as e:
+        sys.exit(str(e))
     print(json.dumps(out, ensure_ascii=False, indent=1) if "--json" in argv else out["text"])
     if "--commit" in argv:
         board.commit(scope, out["snapshot"])
