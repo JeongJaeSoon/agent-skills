@@ -1364,10 +1364,14 @@ class Fleet:
             import stage_auto  # beside this file; it imports this module
             stage_auto.refresh(self.state)
             self.mem.pop("stage_auto_error", None)
-        except Exception as e:  # a ledger it cannot read must not take the dashboard down with it
-            if self.mem.get("stage_auto_error") != (err := mask(repr(e), 200)):
-                self.mem["stage_auto_error"] = err
-                self.event({"at": iso(utcnow()), "kind": "stage_auto_error", "text": err})
+        except Exception as e:
+            self.stage_auto_failed(e)
+
+    def stage_auto_failed(self, e):
+        """A program file it cannot read must not take the dashboard down with it: kept once, as the stage table's."""
+        if self.mem.get("stage_auto_error") != (err := mask(repr(e), 200)):
+            self.mem["stage_auto_error"] = err
+            self.event({"at": iso(utcnow()), "kind": "stage_auto_error", "text": err})
 
     def refresh_prs(self, sessions, cfg, force=False, viewed=False, now_due=()):
         now = self.now()
@@ -1437,7 +1441,12 @@ class Fleet:
         # A PR the board or the inbox names stays known after the search stops finding it, so a row about it shows
         # its state, not "?", and tidy.py can close what it carried.
         # So does a PR a program's ledger names: the stage table reads its branch and merge commit from here.
-        named = (board_prs() | program_prs(now)) - set(owner_of) - set(swept)
+        try:
+            ledger_prs = program_prs(now)
+        except Exception as e:
+            ledger_prs = set()
+            self.stage_auto_failed(e)
+        named = (board_prs() | ledger_prs) - set(owner_of) - set(swept)
         self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or k in named or not searched}
         self.branch_pr = {k: v for k, v in self.branch_pr.items() if k in live}
         # 3. Probe every PR whose tier says it is due, or that the search saw updated; 4. detail for the ones that

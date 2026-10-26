@@ -761,7 +761,8 @@ process.stdout.write(JSON.stringify(out));"""
     assert got["eight"].count(">req") == 8 and "Show all 12" in got["eight"] and long in got["eight"], got["eight"][:400]
     assert got["all"].count(">req") == 12 and "Show 8" in got["all"] and "ellipsis" not in got["all"]
 
-    # The stage table opens on open rows: finished ones, and a heading with none open under it, wait behind Show N done.
+    # The stage table opens on open rows: finished ones, and a heading with none open under it, wait behind Show N done,
+    # N being the rows it reveals.
     stage = {"rows": [{"id": "g1", "title": "live group", "group": True}, {"id": "g1/a", "parent": "g1", "title": "open row", "cells": {}},
                       {"id": "g1/b", "parent": "g1", "title": "finished row", "cells": {}, "done_at": fleet.iso(now)},
                       {"id": "g2", "title": "past group", "group": True, "done_at": fleet.iso(now)},
@@ -773,7 +774,7 @@ const out = {{open: stageSection({json.dumps(stage)})}};
 F.stageShowDone = true; out.all = stageSection({json.dumps(stage)});
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    assert "open row" in got["open"] and "live group" in got["open"] and "Show 2 done" in got["open"], got["open"]
+    assert "open row" in got["open"] and "live group" in got["open"] and "Show 3 done" in got["open"], got["open"]
     assert not any(t in got["open"] for t in ("finished row", "past group", "past row")), got["open"]
     assert all(t in got["all"] for t in ("finished row", "past group", "past row")), got["all"]
 
@@ -941,6 +942,20 @@ prog_dir.mkdir(parents=True)
 assert fleet.program_prs(clock[0]) == {"acme/tools#8"}
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
 shutil.rmtree(prog_dir)
+# A program file it cannot read (a ledger ts without a zone, a program.json that is not an object) costs the stage
+# table its rows, not the tick: prs.json is still written and the error is kept once.
+for program, row in [({"repo": "acme/tools", "created_at": fleet.iso(clock[0])},
+                      {"ts": "2026-10-27T02:00:00", "ev": "landed", "pr": 8}), ([], None)]:
+    prog_dir.mkdir(parents=True)
+    (prog_dir / "program.json").write_text(json.dumps(program))
+    (prog_dir / "ledger.jsonl").write_text(json.dumps(row) + "\n" if row else "")
+    world.prs[7].update(updatedAt=fleet.iso(clock[0] + dt.timedelta(seconds=100)),
+                        title=f"chore: pin node {program and 'naive' or 'list'}")
+    pr_tick(viewed=True)
+    saved = json.loads((state_dir / "prs.json").read_text())["prs"]
+    assert any(d.get("detail", {}).get("title") == world.prs[7]["title"] for d in saved.values()), "prs.json moved"
+    assert "stage_auto_error" in f.mem, f.mem
+    shutil.rmtree(prog_dir)
 # A detail read before the branch was collected (a probe signature without it) is read again, not left a day.
 k43 = next(k for k in f.prs if k.endswith("#43"))
 assert f.prs[k43]["detail"]["state"] == "MERGED"

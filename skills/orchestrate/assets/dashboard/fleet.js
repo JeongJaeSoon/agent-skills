@@ -906,12 +906,12 @@ function stageSection(w) {
   const refs = w.refs || {};
   const legend = `<span class="legend">${Object.values(STAGE_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</span>`;
   const { shown: all, seen, head } = ackSplit(stageShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
-  const done = all.filter((r) => r.done_at && !r.group).length;
   // Open rows first: finished ones wait behind "Show N done", and a heading with no open row under it goes with them.
   const byId = Object.fromEntries(all.map((r) => [r.id, r]));
   const open = all.filter((r) => !r.group && !r.done_at), lit = new Set();
   open.forEach((r) => { for (let p = byId[r.parent]; p && !lit.has(p.id); p = byId[p.parent]) lit.add(p.id); });
-  const rows = F.stageShowDone ? all : all.filter((r) => lit.has(r.id) || (!r.group && !r.done_at));
+  const collapsed = all.filter((r) => lit.has(r.id) || (!r.group && !r.done_at));
+  const rows = F.stageShowDone ? all : collapsed, done = all.length - collapsed.length;  // the headings it reveals count
   // A group's own rows sit flush under it; each level below them gets one └ step.
   const level = {};
   rows.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
