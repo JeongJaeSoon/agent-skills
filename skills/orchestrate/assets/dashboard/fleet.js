@@ -135,7 +135,7 @@ function fleetSidebar() {
 // on screen folds into Archived. st is null when the fleet collector is off.
 const ARCHIVE_MS = 3 * 86400e3;
 const FOLDS_KEY = "orch-dash:sb-folds";
-// id -> [label, open by default, phase whose dot marks it, what it holds]
+// id -> [label, open by default, phase whose colour marks its chevron, what it holds]
 const FOLDS = {
   needs: ["Needs you", true, "waiting", "Sessions with an inbox item, or waiting on a prompt"],
   running: ["Running", true, "working", "Sessions whose agent is working"],
