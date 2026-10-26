@@ -105,7 +105,7 @@ When the human approves an act of the kind below together with the work, it goes
 
 ## Heartbeat and periodic report
 
-Between the human's messages you wake on mail, PR events, background tasks you started and dashboard decision answers. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2); a program coordinator or lead under `/goal` keeps its background `orch wait` instead of a heartbeat.
+Between the human's messages you wake on mail, PR events, background tasks you started and dashboard decision answers. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2); a program coordinator or lead under `/goal` keeps its background `orch wait` instead of a heartbeat. A heartbeat is optional: when the inbox wait and an automation (the `watch-prs` round, for one) already wake you on every event that needs you, skip it, since each wake re-reads the whole context even when nothing changed, and report when an event or the human asks.
 
 The cron prompt is the only context a wake gets, so it carries everything:
 
@@ -120,7 +120,7 @@ Schedule rules:
 - Pick a minute off :00 and :30 (`7 * * * *`, not `0 * * * *`). A recurring job fires up to 10% of its period late (at most 15 minutes); choose the interval with that slack in mind.
 - A recurring job expires 7 days after it is created: it fires once more, then is gone. Write the expiry date into the prompt, on the last day before it create the replacement, then `CronDelete` the old one, and tell the human about the limit when you first create it.
 - When the standing instruction changes, create a new job with the new prompt, then `CronDelete` the old one. Keep one heartbeat per session; `CronList` shows what is live.
-- The heartbeat does not replace the one inbox wait (SKILL.md Drain, "One inbox wait, always"); keep both, and on every wake check first that the wait and `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens") are alive.
+- A heartbeat, when you keep one, does not replace the one inbox wait (SKILL.md Drain, "One inbox wait, always"); on every wake check first that the wait and `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens") are alive.
 
 ## Messages to a chat
 

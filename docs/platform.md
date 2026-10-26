@@ -107,6 +107,8 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 `/reload-plugins`는 다른 플러그인의 MCP 서버까지 다시 붙인다(출력의 "6 plugin MCP servers"). 그래서 스킬만 바뀐 경우에는 가벼운 `/reload-skills`를 쓴다.
 
+MCP 서버 하나가 끊겼을 때는 재인증이 아니라 `/mcp`에서 그 서버의 Reconnect를 먼저 한다. 같은 서버 URL을 쓰는 세션들은 저장된 토큰 하나를 같이 쓰므로, 한 세션에서 재인증하면 그 토큰이 지워져 다른 세션들도 함께 끊긴다. 토큰 갱신이 실제로 실패했을 때(갱신 뒤에도 401)만 한 세션에서 한 번 재인증하고, 나머지 세션은 Reconnect한다.
+
 편집은 지금처럼 worktree 브랜치에서 한다. 로드되는 것은 메인 체크아웃이므로, worktree의 변경은 메인 체크아웃에 fast-forward되는 순간 반영 대상이 된다. 메인 체크아웃을 직접 고치면 그 즉시 대상이 되지만, 그동안 자동 pull은 멈춘다(§3).
 
 ## 3. 자동 pull/push
