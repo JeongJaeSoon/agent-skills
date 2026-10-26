@@ -6,7 +6,8 @@ The coordinator writes rows (`orch board set`) as reports come in; `orch brief r
 (state.json, prs.json, collected again first when older than state_min), the open decisions and the last sent table
 (brief-last/<scope>.json) and print the report. The model passes only judgment: the headline sentence, decisions,
 an insight block. The time, rows, bars and sections are the renderer's. PR state is never stored here: the renderer joins it from prs.json each time, so the two cannot disagree.
-Nothing is hidden for being old: a row past its staleness limit shows its age, a PR list probed long ago says so.
+Nothing open is hidden for being old: a row past its staleness limit shows its age, a PR list probed long ago says so.
+Only finished work folds: a ✅ row a day after its merge, a stage row finished or a week unchanged (the dashboard keeps both).
 
 render() is the one implementation of the brief skill's report rules (sections, sub-task rows, the
 same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
@@ -30,7 +31,7 @@ ALIASES = {v: k for k, v in ICON.items() if k != "check"} | {"⏸": "held"}  # V
 WORST = ("blocked", "owner", "waiting", "check", "held", "moving")
 OWNER_NAMES = ("오너", "owner")
 COLS = 78
-LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5}  # overridden by the dashboard config's "board" key
+LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
@@ -210,6 +211,12 @@ def doing_drop(n):
 def same_later(a, b):
     """One held item written twice: the same trigger and a title reworded rather than another piece of work."""
     return a["trigger"] == b["trigger"] and difflib.SequenceMatcher(None, a["title"], b["title"]).ratio() >= 0.6
+
+
+def work_key(title):
+    """A held item's work with its asides gone (a bracketed note, a dash and what follows), to catch one written twice."""
+    title = re.sub(r"\([^)]*\)|（[^）]*）", " ", title.casefold()).split(" — ")[0]
+    return " ".join(re.sub(r"[^\w#/.-]+", " ", title).split())
 
 
 def later_add(title, trigger, due=None):
@@ -639,6 +646,23 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     kid_status += task_lines(f"{k}@{tsec[0]}", tsec, [t])
             lines[at]["status"] = worst(st, kid_status)
 
+    # A ✅ row merged (or marked done) over done_fold_h ago leaves the table for one count per section; the dashboard
+    # keeps it. A head stays while any row under it stays, and a row with no time to judge by stays.
+    def done_long_ago(l):
+        r = rows.get(l["key"]) or {}
+        at = fleet.parse((prs.get(r.get("pr")) or {}).get("merged_at") or r.get("done_at") or r.get("reported_at"))
+        return l["status"] == "done" and at and (now - at).total_seconds() > limits["done_fold_h"] * 3600
+    gone, folded = set(), {}
+    for i in reversed(range(len(lines))):
+        l = lines[i]
+        kids = [j for j in range(i + 1, len(lines)) if lines[j]["sec"] == l["sec"]]
+        kids = kids[:next((n for n, j in enumerate(kids) if lines[j]["depth"] == 0), len(kids))] if not l["depth"] else []
+        if all(j in gone for j in kids) and (done_long_ago(l) or l["status"] is None and kids):
+            gone.add(i)
+            folded[l["sec"]] = folded.get(l["sec"], 0) + (l["status"] is not None)
+    lines[:] = [l for i, l in enumerate(lines) if i not in gone]
+    sections[:] = [s for s in sections if any(l["sec"] == s for l in lines) or any(b == s for b, _ in bullets)]
+
     # A section's merge target is the base most of its PRs share; a row with another base names its own.
     bases = {}
     for sec in sections:
@@ -685,6 +709,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append(f"오래된 board 행 {len(stale_board)} ({'' if len(stale_board) == 1 else '최대 '}{ago(max(stale_board))})")
     if collected:
         facts.append(collected)
+    stage_t, stage_gone = stages.current(stages.table(), now, limits["stage_idle_d"] * 86400) if not periodic else (None, 0)
+    if sum(folded.values()) or stage_gone:
+        facts.append("접음 " + ", ".join(f"{w} {n}" for w, n in (("완료", sum(folded.values())), ("단계표", stage_gone)) if n)
+                     + " (대시보드)")
 
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · "
@@ -698,8 +726,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**"]
     width_ok = True
-    if not periodic and (st := stages.table())["rows"]:
-        stage = stages.render_telegram(st) if tg else stages.render_md(st)
+    if stage_t and stage_t["rows"]:
+        stage = stages.render_telegram(stage_t) if tg else stages.render_md(stage_t)
         out += ["", stage]
         width_ok &= all(table_width.table_width(t) <= COLS for _, t in table_width.tables(stage))
     if lines:
@@ -809,6 +837,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
+        if folded.get(sec):
+            out += ["", f"{ICON['done']} 그 전 완료 {folded[sec]}건 (대시보드)"]
         for (bsec, rev), items in bullets.items():
             if bsec != sec:
                 continue
@@ -841,7 +871,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
     later = []
     for l in reversed(store["later"]):  # a held item written twice before later_add merged them: the newest wording
-        if not any(same_later(l, k) for k in later):
+        if not any(same_later(l, k) or work_key(l["title"]) == work_key(k["title"]) for k in later):
             later.insert(0, l)
     if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later])):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
