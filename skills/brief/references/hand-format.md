@@ -50,7 +50,7 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
    Under each lead or phase row, one row per sub-task it owns (each card, worker and open PR), named `└ <short name>` with its PR in the PR column, or `└ <identifier> <short name>` without one (`└ 설정`, `└ w2 발송`, `└ ABC-1 색인`), filling the same four columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, except in the reviewer row of item 4. A merged sub-task stays, ✅, until its lead is done. A row with sub-task rows takes the worst of their statuses (🔴, 🙋, ⏳, ❔, ⏸️, 🔄; ✅ only when the lead is done). A sub-task in another repository goes in that repository's section, under a row with only the lead's name and `—` in status and progress. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
 4. When two or more of a lead's PRs wait only on the same reviewer, they fold into one sub-task row under that lead, `└ <reviewer> 대기` (`└ 오너 리뷰` when the reviewer is the owner) with `#a·#b·#c` in its PR cell, a PR with another base keeping its `→main`, and the lead row stays. PRs with no lead fold into a bullet under the table, `⏳ N건 <reviewer> 대기 — 분야 a·b·c` (`🙋 N건 오너 리뷰 — …`). A PR returns to its own row when anything else happens to it.
 5. After the last section, one line naming the periodic actions this round did not take and why (`21:00 이후라 Slack 미전송 · 머지 가능 PR 없음`). Left out when it took them all.
-6. `🔄 **진행 중**`, a list under the lead line, one item per open row of the tables in their order, held rows and rows waiting on a person aside: `<status> <name> — <next stage> · <who>`, a phase named with its lead (`검색 개선 ph3`), a sub-task as `└ …` after its head row (the head named alone when it is done). A ❔ row reads `❔ <name> — 확인 필요: <what is missing>`. Then the moving work with no row of its own (an investigation; `orch board doing add <title> --owner W --next E`) in the same form. A done row has no item: its PR cell is the evidence.
+6. `🔄 **진행 중**`, a list under the lead line, one item per open row of the tables in their order, held rows and rows waiting on a person aside: `<status> <name> — <next stage> · <who>`, a phase named with its lead (`검색 개선 ph3`), a sub-task as `└ …` after its head row (the head named alone when it is done or waits on a person). A ❔ row reads `❔ <name> — 확인 필요: <what is missing>`. Then the moving work with no row of its own (an investigation; `orch board doing add <title> --owner W --next E`) in the same form. A done row has no item: its PR cell is the evidence.
 
    Then `⏳ **다른 사람 대기**`, a list under the lead line, one item per ⏳ row, folded reviewer and `--waiting` work: `<who> · <what> · <age>부터 → <work> · 다음: <next step>` (`rev-b · 리뷰 #61·#62 · 3h 전부터 → 분류`).
 7. `❓ **결정 필요**`, numbered as §1 says, each item one line: `1. <question> → 추천: X — <reason>`. An open decision is asked again in the same words, with `(지난 보고와 동일)` and its `orch decide` id when it has one, until the human answers it.
@@ -177,7 +177,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 - 🔄 검색 개선 ph3 — 하위 2건 · 워커
 - └ 🔄 정렬 — CI 대기 · 워커
 - └ 🔄 w2 색인 — PR 작성 · 워커
-- 🙋 알림 정리
+- 알림 정리
 - └ 🔄 문구 — CI 재실행 · 워커
 - 🔄 재색인 — 권한 · 결정 1
 

@@ -76,7 +76,7 @@ def one_line(text, limit):
 def status_of(text):
     s = ALIASES.get((text or "").strip(), (text or "").strip().lower())
     if s not in ICON or s == "check":
-        raise ValueError(f"--status is one of {', '.join(ALIASES.values())} (or {' '.join(ALIASES)})")
+        raise ValueError(f"--status is one of {', '.join(s for s in ICON if s != 'check')} (or {' '.join(ALIASES)})")
     return s
 
 
@@ -717,7 +717,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                                           w.get("unblocks") or label(l), l["next"]))
                 continue
             if l["depth"] and not head_out:
-                moving.append(" ".join(([ICON[head["own"]]] if head["own"] else []) + [label(head)]))
+                # a head that waits on a person is an item of its own list: here it only names the sub-tasks' group
+                moving.append(" ".join(([ICON[head["own"]]] if head["own"] not in (None, "owner", "waiting") else [])
+                                       + [label(head)]))
                 head_out = True
             nxt = f"확인 필요: {w['why']}" if st == "check" else l["next"] or "—"
             moving.append(("└ " if l["depth"] else "") + f"{ICON[st]} {label(l)} — {nxt + l['suffix']}")
