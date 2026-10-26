@@ -22,7 +22,7 @@ python3 <체크아웃>/scripts/setup.py                 # 바뀔 내용: 파일�
 python3 <체크아웃>/scripts/setup.py --apply <해시>  # 위가 출력한 줄 그대로
 ```
 
-`setup.py --apply`는 `~/.claude/settings.json`과 `agent-skills.json`을 백업하고, 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, autoMode·`permissions.allow` 묶음, 최소 설정 키) 중 없는 것만 더한 뒤, 15분마다 도는 동기화 작업과 기본 on 정기 자동화를 켜고 `setup-pc` 점검 표를 낸다. 이미 있는 값은 덮지 않고, 다시 돌리면 바뀌는 것이 없다. 하는 일·옮기지 않는 것·갱신(`--update`)은 [docs/new-pc.md](docs/new-pc.md). 새 설정은 새 세션부터 적용되므로 떠 있는 세션은 재시작한다. 거기서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
+`setup.py --apply`는 `~/.claude/settings.json`과 `agent-skills.json`을 백업하고, 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, autoMode·`permissions.allow` 묶음, 최소 설정 키) 중 없는 것만 더한 뒤, 15분마다 도는 동기화 작업과 기본 on 정기 자동화를 켜고 `setup-pc` 점검 표를 낸다. 이미 있는 값은 덮지 않고(켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 다시 돌리면 바뀌는 것이 없다. 하는 일·옮기지 않는 것·갱신(`--update`)은 [docs/new-pc.md](docs/new-pc.md). 새 설정은 새 세션부터 적용되므로 떠 있는 세션은 재시작한다. 거기서 `/reload-plugins`를 치면 마켓플레이스 사본만 빠지고 체크아웃은 붙지 않아, 재시작할 때까지 agent-skills가 통째로 없다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
 체크아웃 로드와 동기화만 원하면 `scripts/bootstrap.py`(dry run, `--write`)를 쓴다. 설계와 실측 근거는 [docs/platform.md](docs/platform.md) §5.
 

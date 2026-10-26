@@ -1,17 +1,20 @@
 {
-  "_about": "Recommended defaults that scripts/setup.py merges into a new PC. Generic only: no company, team, repo, channel or host names. {checkout}, {state} and {gh_login} are filled in at run time; a rule whose placeholder has no value is left out. Existing values are never overwritten.",
+  "_about": "Recommended defaults that scripts/setup.py merges into a new PC. Generic only: no company, team, repo, channel or host names. {checkout}, {state} and {gh_login} are filled in at run time; a rule whose placeholder has no value is left out. Existing values are never overwritten, except that an enabled marketplace copy of agent-skills is turned off. permissions.allow skips the classifier, so it holds only reads and the dashboard server; writes such as gh pr create/edit go through autoMode rules that name their scope.",
   "settings": {
     "outputStyle": "Explanatory",
     "permissions": {
       "defaultMode": "auto",
       "allow": [
-        "Bash(gh pr create:*)",
-        "Bash(gh pr edit:*)",
         "Bash(gh pr view:*)",
         "Bash(gh pr checks:*)",
         "Bash(skills-sync status)",
         "Bash(skills-sync broadcast:*)",
-        "Bash(orch-dash:*)"
+        "Bash(orch-dash ensure:*)",
+        "Bash(orch-dash serve:*)",
+        "Bash(orch-dash collect:*)",
+        "Bash(orch-dash fleet:*)",
+        "Bash(orch-dash skills:*)",
+        "Bash(orch-dash prstats:*)"
       ]
     },
     "autoMode": {

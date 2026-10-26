@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """scripts/setup.py against a throwaway HOME. Every --apply here writes only under a temp dir."""
-import json, os, pathlib, re, shutil, subprocess, sys, tempfile, unittest
+import contextlib, importlib.util, io, json, os, pathlib, re, shutil, subprocess, sys, tempfile, types, unittest
+from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 SETUP = HERE / "setup.py"
@@ -133,6 +134,99 @@ class Setup(unittest.TestCase):
         self.run_setup("--apply", self.plan_hash())
         self.assertIs(json.loads(self.settings.read_text())["enabledPlugins"]["agent-skills@jeongjaesoon"], False)
 
+    def test_marketplace_change_is_shown(self):
+        self.settings.write_text(json.dumps({"enabledPlugins": {"agent-skills@jeongjaesoon": True}}))
+        self.assertIn("changed enabledPlugins.agent-skills@jeongjaesoon = false", self.run_setup().stdout)
+
+    def test_a_failed_write_prints_rollback_for_the_files_already_written(self):
+        self.settings.write_text('{"theme": "dark"}')
+        h = self.plan_hash()
+        self.state.mkdir()
+        self.state.chmod(0o500)  # the record, written last, cannot be created
+        self.addCleanup(self.state.chmod, 0o700)
+        p = self.run_setup("--apply", h, ok=False)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("writing", p.stderr)
+        self.assertRegex(p.stdout, r"rollback:\n  cp \S+ \S+settings\.json\n  rm \S+agent-skills\.json")
+
+
+class Steps(unittest.TestCase):
+    """setup.py in-process with subprocess.run and bootstrap stubbed, so no test runs the real sync."""
+
+    def setUp(self):
+        self.home = pathlib.Path(tempfile.mkdtemp(prefix="setup-test-"))
+        self.addCleanup(shutil.rmtree, self.home)
+        self.cfg = self.home / ".claude"
+        env = {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.cfg), "AGENT_SKILLS_STATE": str(self.home / "state")}
+        patcher = mock.patch.dict(os.environ, env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("CLAUDE_SETTINGS", None)
+        spec = importlib.util.spec_from_file_location("setup_under_test", SETUP)
+        self.setup = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.setup)
+        self.calls, self.fail = [], set()
+        self.bootstrap = types.SimpleNamespace(scheduler=lambda write: None)
+        for p in (mock.patch.object(self.setup.subprocess, "run", self.fake_run),
+                  mock.patch.object(self.setup, "preflight", lambda args: None),
+                  mock.patch.dict(sys.modules, {"bootstrap": self.bootstrap})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def fake_run(self, cmd, **kw):
+        script = pathlib.Path(cmd[1]).name if len(cmd) > 1 else cmd[0]
+        self.calls.append((script, (self.cfg / "settings.json").exists()))
+        return subprocess.CompletedProcess(cmd, 1 if script in self.fail else 0, "", "")
+
+    def main(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = self.setup.main(["--language", "Korean", *args])
+        return rc, out.getvalue(), err.getvalue()
+
+    def plan_hash(self, *args):
+        rc, out, _ = self.main(*args)
+        self.assertEqual(rc, 0, out)
+        return re.search(r"--apply ([0-9a-f]{12})$", out.strip())[1]
+
+    def scripts(self):
+        return [s for s, _ in self.calls if s.endswith(".py")]
+
+    def test_update_dry_run_does_not_sync(self):
+        rc, out, _ = self.main("--update")
+        self.assertEqual(rc, 0)
+        self.assertIn("first   skills-sync sync", out)
+        self.assertNotIn("sync.py", self.scripts())
+        self.assertFalse(self.cfg.exists())
+
+    def test_update_apply_syncs_once_before_writing(self):
+        h = self.plan_hash("--update")
+        rc, out, err = self.main("--update", "--apply", h)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual([s for s in self.scripts() if s == "sync.py"], ["sync.py"])
+        self.assertIn(("sync.py", False), self.calls)
+        self.assertTrue((self.cfg / "settings.json").exists())
+
+    def test_update_apply_stops_when_sync_fails(self):
+        h = self.plan_hash("--update")
+        self.fail.add("sync.py")
+        rc, _, err = self.main("--update", "--apply", h)
+        self.assertEqual(rc, 1)
+        self.assertIn("skills-sync sync failed", err)
+        self.assertFalse(self.cfg.exists())
+
+    def test_a_failed_step_is_reported_instead_of_done(self):
+        def scheduler(write):
+            sys.exit("launchctl bootstrap failed")
+        self.bootstrap.scheduler = scheduler
+        self.fail.add("automations.py")
+        rc, out, err = self.main("--apply", self.plan_hash())
+        self.assertEqual(rc, 1)
+        self.assertNotIn("done.", out)
+        self.assertIn("launchd sync job (launchctl bootstrap failed)", err)
+        self.assertIn("skills-sync setup apply", err)
+        self.assertIn("setup_check.py", self.scripts())
+
 
 class Bundle(unittest.TestCase):
     def test_has_no_internal_names(self):
@@ -149,6 +243,14 @@ class Bundle(unittest.TestCase):
         for rule in rules[:-1]:
             self.assertIn("Not covered", rule, rule[:60])
         self.assertIn("only the user's own chat messages count", rules[-1])
+
+    def test_allow_holds_no_unscoped_writes(self):
+        allow = json.loads(BUNDLE.read_text())["settings"]["permissions"]["allow"]
+        reads = {"ensure", "serve", "collect", "fleet", "skills", "prstats"}
+        for rule in allow:
+            self.assertNotRegex(rule, r"^Bash\(gh pr (create|edit)\b", rule)
+            if rule.startswith("Bash(orch-dash"):
+                self.assertIn(rule.removeprefix("Bash(orch-dash ").split(":")[0], reads, rule)
 
 
 if __name__ == "__main__":

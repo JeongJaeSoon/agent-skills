@@ -7,7 +7,8 @@ Usage:
   python3 scripts/setup.py [options] --apply HASH   back up, merge, replace atomically, read back, then
                                                     sync, automations and setup-pc's check table
 Options:
-  --update          fast-forward this checkout first (`skills-sync sync`), then the same plan
+  --update          with --apply, fast-forward this checkout first (`skills-sync sync`) and check the plan again;
+                    the dry run only lists that step
   --language NAME   `language` when it is unset (default: from the system locale)
   --settings-only   only the files: no launchd job, sync, automations, Orca or check
   --orca-run        bind this terminal to a new Orca Run when it has none (`run-create`)
@@ -15,8 +16,9 @@ Options:
   --here            allow a worktree checkout; implies --settings-only (tests)
 
 HASH is printed with the diff and covers every planned write and action, so anything that changed since the
-review no longer matches. Merging adds only what is missing and never overwrites a value; a recommended item
-applied once and later removed by the user is not offered again (the record is in the agent-skills state dir).
+review no longer matches. Merging adds only what is missing and never overwrites a value, except that an enabled
+marketplace copy of agent-skills is turned off; a recommended item applied once and later removed by the user is
+not offered again (the record is in the agent-skills state dir).
 """
 import argparse, difflib, hashlib, json, locale, os, pathlib, shlex, shutil, subprocess, sys, tempfile, time
 
@@ -29,6 +31,7 @@ BUNDLE = HERE / "recommended-settings.json"
 ENV_KEY = "CLAUDE_CODE_PLUGIN_DIRS"
 MARKET_ID = "agent-skills@jeongjaesoon"
 SECTIONS = ("allow", "soft_deny", "environment")
+FAST_FORWARD = "skills-sync sync --no-broadcast (fast-forward this checkout; the plan is checked again after it)"
 LANGUAGES = {"ko": "Korean", "ja": "Japanese", "en": "English", "zh": "Chinese", "es": "Spanish", "fr": "French",
              "de": "German", "pt": "Portuguese"}
 
@@ -136,6 +139,8 @@ def merge_settings(current, rec, skip, notes):
     if (new.get("enabledPlugins") or {}).get(MARKET_ID):
         # Loaded from both the marketplace copy and the checkout, every hook would run twice.
         new["enabledPlugins"][MARKET_ID] = False
+        notes.append(f"changed enabledPlugins.{MARKET_ID} = false (the one existing value setup changes: "
+                     "with the checkout loaded too, every hook would run twice)")
     for key, value in leaves({k: v for k, v in rec.items() if k != "autoMode"}):
         if isinstance(value, list):
             items = [x for x in value if f"{key}\t{x}" not in skip]
@@ -197,10 +202,12 @@ def plan(args):
     all_offered = sorted(skip | offered | offered_keys)
     if files or all_offered != sorted(skip):
         files.append((p["record"], record or None, {"offered": all_offered}))
-    actions = []
+    actions = [FAST_FORWARD] if args.update else []
     if not args.settings_only:
-        actions = ["launchd sync job (bootstrap.py)" if sys.platform == "darwin" else "cron line to add by hand",
-                   "skills-sync sync --no-broadcast", "skills-sync setup apply"]
+        actions.append("launchd sync job (bootstrap.py)" if sys.platform == "darwin" else "cron line to add by hand")
+        if not args.update:
+            actions.append("skills-sync sync --no-broadcast")
+        actions.append("skills-sync setup apply")
         if args.orca_run:
             actions.append("orca orchestration run-create, if this terminal has no Run")
         actions.append("setup-pc check")
@@ -224,6 +231,8 @@ def digest(files, actions):
 def show(files, actions, notes):
     for note in notes:
         print(note)
+    if FAST_FORWARD in actions:
+        print(f"first   {FAST_FORWARD}")
     for path, old, new in files:
         if path == paths()["record"]:
             print(f"record  {path} ({len(new['offered'])} recommended items, so a removed one is not offered again)")
@@ -232,7 +241,8 @@ def show(files, actions, notes):
         label = str(path) if old is not None else f"{path} (new file)"
         print("".join(difflib.unified_diff(before, text(new).splitlines(True), label, label)), end="")
     for action in actions:
-        print(f"then    {action}")
+        if action != FAST_FORWARD:
+            print(f"then    {action}")
 
 
 def write(path, data):
@@ -258,17 +268,25 @@ def write(path, data):
 
 
 def run_actions(args):
+    """Names of the steps that failed."""
     sys.path.insert(0, str(HERE))
     import bootstrap
+    failed = []
     sys.stdout.flush()
-    bootstrap.scheduler(True)
-    sys.stdout.flush()
-    subprocess.run([sys.executable, str(HERE / "sync.py"), "sync", "--no-broadcast"])
-    subprocess.run([sys.executable, str(HERE / "automations.py"), "apply"])
+    try:
+        bootstrap.scheduler(True)
+    except SystemExit as e:
+        failed.append(f"launchd sync job ({e})")
+    steps = [] if args.update else [("skills-sync sync", "sync.py", "sync", "--no-broadcast")]
+    for name, script, *rest in steps + [("skills-sync setup apply", "automations.py", "apply")]:
+        sys.stdout.flush()
+        if subprocess.run([sys.executable, str(HERE / script), *rest]).returncode:
+            failed.append(name)
     if args.orca_run:
         orca_run()
     sys.stdout.flush()
     subprocess.run([sys.executable, str(REPO / "skills" / "setup-pc" / "scripts" / "setup_check.py"), "check"])
+    return failed
 
 
 def orca_run():
@@ -315,14 +333,15 @@ def main(argv):
     args.settings_only = args.settings_only or args.here
     try:
         preflight(args)
-        if args.update:
+        if args.update and args.apply:
             sys.stdout.flush()
             if subprocess.run([sys.executable, str(HERE / "sync.py"), "sync", "--no-broadcast"]).returncode:
                 raise Refused("skills-sync sync failed; `skills-sync status` shows why")
         files, actions, notes = plan(args)
         h = digest(files, actions)
         if args.apply and args.apply != h:
-            raise Refused(f"--apply {args.apply} does not match the current plan ({h}); review the diff again")
+            moved = "the fast-forward brought a different plan; " if args.update else ""
+            raise Refused(f"--apply {args.apply} does not match the current plan ({h}); {moved}review the diff again")
         show(files, actions, notes)
         if not files:
             print("no change: the settings files already have everything recommended"
@@ -334,14 +353,21 @@ def main(argv):
             return 0
         print()
         undo = []
-        for path, _, new in files:
-            real, backup = write(path, new)
-            print(f"written {real}" + (f"   (backup {backup})" if backup else ""))
-            undo.append(f"cp {shlex.quote(str(backup))} {shlex.quote(str(real))}" if backup else f"rm {shlex.quote(str(real))}")
-        if undo:
-            print("rollback:\n" + "\n".join(f"  {u}" for u in undo))
-        if not args.settings_only:
-            run_actions(args)
+        try:
+            for path, _, new in files:
+                try:
+                    real, backup = write(path, new)
+                except OSError as e:
+                    raise Refused(f"writing {path} failed ({e})")
+                print(f"written {real}" + (f"   (backup {backup})" if backup else ""))
+                undo.append(f"cp {shlex.quote(str(backup))} {shlex.quote(str(real))}" if backup else f"rm {shlex.quote(str(real))}")
+        finally:
+            if undo:
+                print("rollback:\n" + "\n".join(f"  {u}" for u in undo))
+        failed = run_actions(args) if not args.settings_only else []
+        if failed:
+            raise Refused(f"the settings files are written, but these steps failed: {', '.join(failed)}; "
+                          "fix the cause, then dry run again")
         print(f"done. New sessions load {REPO}; restart the ones already running.")
     except Refused as e:
         print(f"refused: {e}", file=sys.stderr)

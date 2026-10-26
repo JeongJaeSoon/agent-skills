@@ -1,6 +1,6 @@
 ---
 name: setup-pc
-description: "Use when agent-skills goes onto another PC or an installed PC needs bringing up to date — \"새 PC 세팅해줘\", \"다른 PC 에서도 똑같이 쓰게 해줘\", \"agent-skills 설치 점검\", \"agent-skills 업데이트해줘\", \"플러그인 최신화\", \"set up agent-skills on a new PC\", \"update agent-skills\". Checks tools, install, sync and the settings a plugin cannot carry, read-only, and hands each fix to the human as a `!` line. A single auto-mode denial is tune-automode."
+description: "Use when agent-skills goes onto another PC or an installed PC needs bringing up to date — \"새 PC 세팅해줘\", \"다른 PC 에서도 똑같이 쓰게 해줘\", \"agent-skills 설치 점검\", \"agent-skills 업데이트해줘\", \"플러그인 최신화\", \"set up agent-skills on a new PC\", \"update agent-skills\". Dry-runs `scripts/setup.py` (a diff per file, nothing written) and hands the human its one `--apply <hash>` line, which writes the settings and turns on sync; the check alone is read-only. A single auto-mode denial is tune-automode."
 ---
 
 # Set up or update agent-skills on a PC
@@ -32,8 +32,8 @@ The human may refuse part of the bundle: they edit the rule out after applying (
 
 ## Update: an installed PC
 
-1. Run `python3 <checkout>/scripts/setup.py --update`. It fast-forwards the checkout (`skills-sync sync`; stops on a dirty or diverged checkout, `docs/platform.md` §3) and then plans only the recommended items this PC has not been offered before.
-2. An `--apply` line printed: hand it over as in setup step 4 (with `no change` on the files, it only reruns the sync and automation steps). None printed: say nothing changed.
+1. Dry run `python3 <checkout>/scripts/setup.py --update`. Like any dry run it writes and fetches nothing: it plans the recommended items this PC has not been offered before from the checkout as it is, and lists the fast-forward as the `first` step.
+2. Hand over the `--apply` line as in setup step 4. It fast-forwards the checkout first (`skills-sync sync`; stops on a dirty or diverged checkout, `docs/platform.md` §3), then checks the plan again; a release that brought new recommendations makes the hash no longer match, so the human dry runs again (the checkout is already fast-forwarded by then). With `no change` on the files, the line only runs the fast-forward and the launchd and automation steps.
 3. Running sessions: `skills-sync broadcast` sends `/reload-skills` or `/reload-plugins` to idle ones. This session reloads itself as `write-skill` §7 describes.
 4. A marketplace install instead of a checkout: `! claude plugin marketplace update jeongjaesoon`, `! claude plugin update agent-skills@jeongjaesoon`, then `/reload-plugins`. `setup.py` is for the checkout install.
 

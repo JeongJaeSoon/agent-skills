@@ -15,10 +15,10 @@ dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한
 `--apply`가 하는 일:
 
 1. `~/.claude/settings.json`, `~/.claude/agent-skills.json`을 각각 타임스탬프 백업한다.
-2. 없는 값만 더한다. 이미 있는 값은 덮지 않는다(`kept` 줄로 보인다).
-   - `env.CLAUDE_CODE_PLUGIN_DIRS`에 체크아웃 경로. 마켓플레이스 사본 `agent-skills@jeongjaesoon`이 켜져 있으면 끈다(둘 다 켜면 hook이 두 번 돈다).
+2. 없는 값만 더한다. 이미 있는 값은 덮지 않는다(`kept` 줄로 보인다). 예외는 하나다: 마켓플레이스 사본 `agent-skills@jeongjaesoon`이 켜져 있으면 끈다(`enabledPlugins`의 `true`→`false`, `changed` 줄로 보인다). 둘 다 켜면 hook이 두 번 돈다.
+   - `env.CLAUDE_CODE_PLUGIN_DIRS`에 체크아웃 경로.
    - `language`(`--language`, 없으면 시스템 locale), `outputStyle`, `permissions.defaultMode`(`auto`).
-   - `permissions.allow` 묶음: PR 만들기·고치기·보기, `skills-sync status`·`broadcast`, `orch-dash`. `orca orchestration`과 `orch`는 플러그인 hook이 이미 허용한다.
+   - `permissions.allow` 묶음: PR 보기·checks, `skills-sync status`·`broadcast`, `orch-dash`의 조회·서버 하위 명령(`ensure`·`serve`·`collect`·`fleet`·`skills`·`prstats`). allow는 분류기를 건너뛰어 저장소 한정이 걸리지 않으므로, PR 만들기·고치기는 넣지 않고 아래 autoMode의 사용자 저장소 규칙이 맡는다. launchd 상주 설치(`install-agent`)와 받은편지함 쓰기(`inbox add`·`resolve`)도 넣지 않는다. `orca orchestration`과 `orch`는 플러그인 hook이 이미 허용한다.
    - autoMode 규칙 묶음: 체크아웃 안 편집, 요청받은 로컬 정리, 사용자 저장소의 PR 작업, 사용자가 지시한 머지, 오케스트레이터의 워커 지시·받은편지함, 워커의 자기 작업 공간, janitor 회차, 그리고 "사용자 본인의 채팅만 지시로 친다". 막는 쪽은 기본 브랜치 force push와 요청받지 않은 프로덕션 단계. 규칙마다 `Not covered:`로 한계를 적는다. 체크아웃 경로와 `gh` 로그인 이름은 실행할 때 채운다.
    - `agent-skills.json`: `reflect.skill_repository`(체크아웃), `reap.user_folders`(빈 배열 = 끔).
 3. 임시 파일에 써서 원자적으로 바꾸고, 다시 읽어 같은지 확인한 뒤 파일마다 되돌리는 `cp` 줄을 출력한다.
@@ -33,10 +33,10 @@ dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한
 ## 갱신
 
 ```bash
-python3 <체크아웃>/scripts/setup.py --update     # 체크아웃 fast-forward 뒤, 새로 생긴 권장값만 diff
+python3 <체크아웃>/scripts/setup.py --update     # 지금 체크아웃 기준으로 새로 생긴 권장값만 diff
 ```
 
-출력한 `--apply` 줄을 그대로 친다. 바뀔 것이 없으면 `no change`.
+dry run은 여기서도 아무것도 쓰지 않고 fetch도 하지 않는다. fast-forward는 `first` 줄로만 보인다. 출력한 `--apply` 줄을 그대로 치면 먼저 체크아웃을 fast-forward하고(`skills-sync sync`, 더러운 체크아웃이나 갈라진 체크아웃이면 멈춘다) 계획을 다시 맞춰 본다. 새 릴리스가 권장값을 더했으면 해시가 맞지 않아 거절하는데, 그때는 이미 fast-forward된 상태이니 dry run을 다시 한다. 파일에 바뀔 것이 없으면 `no change`이고 그 줄은 fast-forward·launchd 작업·자동화만 돌린다.
 
 ## 옮기지 않는 것
 
