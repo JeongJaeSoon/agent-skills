@@ -21,8 +21,6 @@ Skip when the work is trivial, off-topic, or already covered by an existing skil
 
 ## The lessons ledger
 
-When upgrading, report an unset ledger explicitly and point to the [configuration migration guide](../../docs/configuration-migration.md). Existing files are not migrated automatically.
-
 Use `reflect.ledger` in the skill configuration or an explicit path supplied for this task.
 Keep private evidence outside public repositories. If no destination is configured, report
 findings in the current task; do not invent a shared note location. Existing ledgers stay at
@@ -77,13 +75,13 @@ For each candidate, find the first JSONL line with `"type":"user"` and check tha
 
 ### 2. Spawn three reviewers in parallel
 
-One message, three reviewers launched together. Claude reviewers use the `Agent` tool with `subagent_type: "general-purpose"` and an explicit `model`, not the read-only `Explore`/`Plan` agents: reviewers need MCP access for context lookups (tickets, chat threads, observability traces referenced in the transcript), and the read-only agents lack it. The templates already forbid edits.
+One message, three reviewers launched together. Each reviewer is an `Agent` call with `subagent_type: "general-purpose"`, not the read-only `Explore`/`Plan` agents: reviewers need MCP access for context lookups (tickets, chat threads, observability traces referenced in the transcript), and the read-only agents lack it. The templates already forbid edits.
 
 | Lens | Runner | Prompt template |
 |---|---|---|
-| Judgment | Independent read-only reviewer using available tools | `references/judgment-reviewer.md` |
-| Tooling | Independent read-only reviewer using available tools | `references/tooling-reviewer.md` |
-| Divergent | Independent read-only reviewer using available tools | `references/divergent-reviewer.md` |
+| Judgment | Independent reviewer; the template forbids edits | `references/judgment-reviewer.md` |
+| Tooling | Independent reviewer; the template forbids edits | `references/tooling-reviewer.md` |
+| Divergent | Independent reviewer; the template forbids edits | `references/divergent-reviewer.md` |
 
 Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in their final response.
 

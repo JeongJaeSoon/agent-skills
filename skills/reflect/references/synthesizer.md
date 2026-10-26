@@ -53,4 +53,4 @@ For each rejected finding:
 
 ## Backlog
 
-For each item, describe the pattern, what was hit, and the suggested mechanism. The parent files each to the team's tracker.
+For each item, describe the pattern, what was hit, and the suggested mechanism. The parent files it to the tracker when its workflow authorizes tracker writes, and otherwise lists it as a proposed follow-up.

@@ -12,7 +12,7 @@ from `~/.claude/agent-skills.json`:
 {"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}}
 ```
 
-When upgrading, report an unset destination explicitly; see the [configuration migration guide](../../docs/configuration-migration.md). Never move existing notes or replace unrelated configuration keys.
+Never move existing notes or replace unrelated configuration keys ([configuration migration guide](../../docs/configuration-migration.md)).
 
 No `notes` configuration: use an explicit destination supplied by the user; otherwise keep
 the result in the current task and ask for a destination before any external write. A program may override it in its `program.json`
