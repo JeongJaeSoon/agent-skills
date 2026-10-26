@@ -244,8 +244,8 @@ function itemRow(st, it, { showSession = true } = {}) {
   // Outside its own session page a row opens that session; an item with no live session has nowhere to go.
   const go = showSession && s ? `data-go="${sessionHref(s.id)}"` : "";
   return `<li class="item ${it.missed ? "is-missed" : ""}" ${go}><span class="ic tone-${tone}">${icon(ic)}</span>
-    <div class="grow"><div class="ellipsis"><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
-      <div class="sub muted ellipsis">${projBadge(it.project)}${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}${it.held ? ` · ${tag("held", "")} ${esc(it.held)}` : ""}
+    <div class="grow"><div class="full"><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
+      <div class="sub muted full">${projBadge(it.project)}${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}${it.held ? ` · ${tag("held", "")} ${esc(it.held)}` : ""}
       ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
       ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : ""}</div>
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
@@ -474,9 +474,11 @@ function requestCard(st) {
   const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
   if (!(rq.items || []).length) return "";
   const { shown, head } = ackSplit(rq.items.map((q) => ({ ...q, ack: q.acked ? "acked" : "ackable", key: `req:${q.id}` })), "open request");
-  const rows = shown.slice(0, 8).map((q) => `<li class="${q.acked ? "is-acked" : ""}">${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow ellipsis" title="${esc(q.text)}">${esc(q.text)}</span>
+  // Eight until Show all, each request's text whole.
+  const more = shown.length > 8 ? `<button class="chip" type="button" data-req-all aria-pressed="${!!F.reqShowAll}">${F.reqShowAll ? "Show 8" : `Show all ${shown.length}`}</button>` : "";
+  const rows = (F.reqShowAll ? shown : shown.slice(0, 8)).map((q) => `<li class="${q.acked ? "is-acked" : ""}">${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow full">${esc(q.text)}</span>
     <span class="acts muted">${q.links.length ? q.links.map((l) => esc(l) + ((q.closed || []).includes(l) ? ` ${tag("closed", "warn")}` : "")).join(", ") : "not linked"} · ${relSpan(q.ts)}</span>${ackBtn(q)}</li>`).join("");
-  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code>${head}</span></div>
+  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code>${head}${more}</span></div>
     ${ackNote()}<ul class="rows">${rows || '<li class="muted">Every open request is acked.</li>'}</ul></div>`;
 }
 
@@ -899,14 +901,17 @@ function stageCell(c, refs) {
 }
 function stageSection(w) {
   if (!w) return "";
-  const cardHead = `<div class="card-head"><h3>Stages</h3></div><p class="card-body muted">One row per predicate item and worker card of each program, generated every tick: merge from the merge sha; dev and prod only from <span class="mono">orch stage set</span>. Finished rows stay dimmed for 7 days.</p>`;
+  const cardHead = `<div class="card-head"><h3>Stages</h3></div><p class="card-body muted">One row per predicate item and worker card of each program, generated every tick: merge from the merge sha; dev and prod only from <span class="mono">orch stage set</span>. Finished rows stay for 7 days, dimmed, behind Show N done.</p>`;
   if (w.error) return `<div class="card">${cardHead}<div class="empty-chart">${esc(w.error)}</div></div>`;
   const refs = w.refs || {};
   const legend = `<span class="legend">${Object.values(STAGE_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</span>`;
   const { shown: all, seen, head } = ackSplit(stageShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
   const done = all.filter((r) => r.done_at && !r.group).length;
-  const rows = F.stageHideDone ? all.filter((r) => !r.done_at) : all;
+  // Open rows first: finished ones wait behind "Show N done", and a heading with no open row under it goes with them.
   const byId = Object.fromEntries(all.map((r) => [r.id, r]));
+  const open = all.filter((r) => !r.group && !r.done_at), lit = new Set();
+  open.forEach((r) => { for (let p = byId[r.parent]; p && !lit.has(p.id); p = byId[p.parent]) lit.add(p.id); });
+  const rows = F.stageShowDone ? all : all.filter((r) => lit.has(r.id) || (!r.group && !r.done_at));
   // A group's own rows sit flush under it; each level below them gets one └ step.
   const level = {};
   rows.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
@@ -917,17 +922,18 @@ function stageSection(w) {
       <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
       <td class="mono nowrap">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
       ${["merge", "dev", "prod"].map((c) => `<td>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
-  }).join("");
+  }).join("") || `<tr><td colspan="6" class="muted">Every row is done: Show ${done} done lists them.</td></tr>`;
   const where = w.env || {};
   const whereLine = ["prod", "dev"].filter((k) => where[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(where[k])}</span></span>`).join("");
-  const toggle = done ? `<button class="chip" type="button" data-stage-done aria-pressed="${!!F.stageHideDone}">Hide ${done} done</button>` : "";
+  const toggle = done ? `<button class="chip" type="button" data-stage-done aria-pressed="${!!F.stageShowDone}">Show ${done} done</button>` : "";
   const table = all.length ? `<div class="table-wrap"><table class="work"><thead><tr><th>Feature/epic</th><th>Work</th><th>PR</th><th>PR merged</th><th>dev check</th><th>prod check</th></tr></thead><tbody>${body}</tbody></table></div>`
     : `<div class="empty-chart">${seen ? "Every row is acked." : 'No stage rows: no program had ledger activity in 7 days. <span class="mono">orch stage add</span> records work outside a program.'}</div>`;
   const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>Next</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n, refs)}</li>`).join("")}</ol></div>` : "";
   return `<div class="card">${cardHead}<div class="toolbar wenv">${legend}${whereLine ? `<div class="meta">${whereLine}${where.at ? `<span class="muted">${relSpan(where.at)}</span>` : ""}</div>` : ""}${toggle}${head}</div>${table}</div>` + next;
 }
 document.addEventListener("click", (e) => {
-  if (e.target.closest("[data-stage-done]")) { F.stageHideDone = !F.stageHideDone; renderView(); }
+  if (e.target.closest("[data-stage-done]")) { F.stageShowDone = !F.stageShowDone; renderView(); }
+  if (e.target.closest("[data-req-all]")) { F.reqShowAll = !F.reqShowAll; renderView(); }
   if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
   const ack = e.target.closest("[data-ack]");
   if (ack) idsAction(ack, "/api/fleet/ack", ack.dataset.ack, "ackError");

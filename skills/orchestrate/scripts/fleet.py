@@ -1033,6 +1033,13 @@ def board_prs():
     return ({r.get("pr") for r in (b.get("rows") or {}).values() if isinstance(r, dict)} | set(pr_refs(" ".join(text)))) - {None}
 
 
+def program_prs(now):
+    """The PR keys named in the ledgers of the programs the stage table shows (stage_auto.py)."""
+    import stage_auto  # beside this file; it imports this module
+    return {pr_key(cfg["repo"], e["pr"]) for cfg, events in stage_auto.load_programs()
+            if cfg.get("repo") and stage_auto.recent(cfg, events, now) for e in events if e.get("pr") is not None}
+
+
 def pr_query(keys, body):
     parts = []
     for i, k in enumerate(keys):
@@ -1089,7 +1096,7 @@ def coderabbit(pr):
 
 def probe_sig(pr):
     return [pr.get("state"), pr.get("updatedAt"), pr.get("headRefOid"), rollup(pr), pr.get("mergeStateStatus"),
-            coderabbit(pr), pr.get("isDraft"), pr.get("reviewDecision"), pr.get("baseRefName")]
+            coderabbit(pr), pr.get("isDraft"), pr.get("reviewDecision"), pr.get("baseRefName"), pr.get("headRefName")]
 
 
 def is_bot(author):
@@ -1429,7 +1436,8 @@ class Fleet:
         live = {f"{s['gh_repo']}@{s['branch']}" for s in sessions.values()}
         # A PR the board or the inbox names stays known after the search stops finding it, so a row about it shows
         # its state, not "?", and tidy.py can close what it carried.
-        named = board_prs() - set(owner_of) - set(swept)
+        # So does a PR a program's ledger names: the stage table reads its branch and merge commit from here.
+        named = (board_prs() | program_prs(now)) - set(owner_of) - set(swept)
         self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or k in named or not searched}
         self.branch_pr = {k: v for k, v in self.branch_pr.items() if k in live}
         # 3. Probe every PR whose tier says it is due, or that the search saw updated; 4. detail for the ones that
@@ -1439,8 +1447,9 @@ class Fleet:
         for k in list(owner_of) + [k for k in swept if k not in owner_of] + sorted(named):
             sid, entry = owner_of.get(k), self.prs.get(k)
             det = (entry or {}).get("detail")
-            # A detail read before "base" was collected is read again now, so a merged PR does not wait a day for it.
-            if det and "base" in det and k not in now_due and swept.get(k, det["updated"]) == det["updated"]:
+            # A detail read before "base" or "branch" was collected is read again now, so a merged PR does not wait a
+            # day for it.
+            if det and "base" in det and "branch" in det and k not in now_due and swept.get(k, det["updated"]) == det["updated"]:
                 t = tier(det, sessions.get(sid, {}).get("phase"), now)
                 last = parse(entry.get("probed_at"))
                 every = TIER_EVERY["hot"] if (viewed or force) and sid and t != "done" else TIER_EVERY[t]

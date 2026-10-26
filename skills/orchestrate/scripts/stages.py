@@ -4,7 +4,7 @@ and prod check, each cell a mark and the evidence behind it.
 Most rows are generated: each fleet tick derives a program's rows from its ledger, its Run's cards and GitHub
 (stage_auto.py, stages-auto.json). The orchestrator or lead writes a cell where it verified it (`orch stage set`), a
 generated row's id included, and that manual cell wins over the generated one; it adds a row (`orch stage add`) for
-work outside any program. The next report and the dashboard read the same record instead of each rebuilding it. What
+work outside any program. A recorded row with a generated row's PR is folded into that row when the table is read. The next report and the dashboard read the same record instead of each rebuilding it. What
 a person recorded lives in the fleet state directory (stages.json, beside state.json), not a program's ledger: work
 outside any program needs a row too. The merge cell of a recorded row with a PR is never written: it is read from the
 fleet collector's PR list each time the table is shown. A group row (`--group`) is only a heading for
@@ -153,15 +153,31 @@ def merge_cell(pr, prs):
 
 def merged(store, made):
     """Generated rows with the recorded ones over them: a recorded cell replaces the generated cell of its column, a
-    recorded row of the same id its fields. An overlay whose generated row is gone has nothing to sit on."""
+    recorded row of the same id its fields. A recorded row with a generated row's PR is the same work: it folds into that
+    row, its title and cells over the generated ones, and the rows under it move along; a recorded group left with no
+    row of its own goes. An overlay whose generated row is gone has nothing to sit on."""
     rows = dict(made["rows"])
+    by_pr = {r["pr"]: k for k, r in rows.items() if r.get("pr")}
+    into = {}
     for k, r in store["rows"].items():
         if k in rows:
             rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")},
                        "cells": {**rows[k].get("cells", {}), **r.get("cells", {})}}
+        elif (on := not r.get("group") and by_pr.get(r.get("pr"))):
+            into[k] = on
+            rows[on] = {**rows[on], **{f: v for f, v in r.items() if v and f in ("title", "done_at")},
+                        "cells": {**rows[on].get("cells", {}), **r.get("cells", {})}}
         elif not r.get("overlay"):
             rows[k] = r
-    return rows, made["order"] + [k for k in store["order"] if k not in made["rows"]]
+    for k, r in rows.items():
+        if r.get("parent") in into:
+            rows[k] = {**r, "parent": into[r["parent"]]}
+    kids = {}
+    for k, r in store["rows"].items():
+        kids.setdefault(r.get("parent"), set()).add(k)
+    gone = {k for k in kids if (store["rows"].get(k) or {}).get("group") and k not in made["rows"] and kids[k] <= set(into)}
+    rows = {k: r for k, r in rows.items() if k not in gone}
+    return rows, made["order"] + [k for k in store["order"] if k in rows and k not in made["rows"]]
 
 
 def table(state=None):

@@ -746,6 +746,36 @@ const S = {{filters: {{}}}};
 process.stdout.write(itemList({{sessions: []}}, {json.dumps(rows)}, {{limit: 8}}));"""
     card = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
     assert card.count("<li class=\"item") == 8 and __import__("re").findall(r">row(\d+)<", card)[:3] == ["15", "16", "0"], card
+    # Nothing in an item or a request is cut: the text wraps, and the request card reaches every request on the page.
+    assert "ellipsis" not in card and "row0" in card, card
+    long = "x" * 400
+    reqs = {"open": 12, "items": [{"id": f"r{n}", "text": f"req{n} {long}", "ts": fleet.iso(now), "links": [], "acked": False} for n in range(12)]}
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+const st = {{requests: {json.dumps(reqs)}}};
+const out = {{eight: requestCard(st)}};
+F.reqShowAll = true; out.all = requestCard(st);
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert got["eight"].count(">req") == 8 and "Show all 12" in got["eight"] and long in got["eight"], got["eight"][:400]
+    assert got["all"].count(">req") == 12 and "Show 8" in got["all"] and "ellipsis" not in got["all"]
+
+    # The stage table opens on open rows: finished ones, and a heading with none open under it, wait behind Show N done.
+    stage = {"rows": [{"id": "g1", "title": "live group", "group": True}, {"id": "g1/a", "parent": "g1", "title": "open row", "cells": {}},
+                      {"id": "g1/b", "parent": "g1", "title": "finished row", "cells": {}, "done_at": fleet.iso(now)},
+                      {"id": "g2", "title": "past group", "group": True, "done_at": fleet.iso(now)},
+                      {"id": "g2/a", "parent": "g2", "title": "past row", "cells": {}, "done_at": fleet.iso(now)}], "refs": {}}
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+const out = {{open: stageSection({json.dumps(stage)})}};
+F.stageShowDone = true; out.all = stageSection({json.dumps(stage)});
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert "open row" in got["open"] and "live group" in got["open"] and "Show 2 done" in got["open"], got["open"]
+    assert not any(t in got["open"] for t in ("finished row", "past group", "past row")), got["open"]
+    assert all(t in got["all"] for t in ("finished row", "past group", "past row")), got["all"]
 
     # Kind reads as a role: the lead says "lead", a session under it says "worker" whether its Run or Orca's parent put it
     # there, a standalone under the root stays "standalone". The overview's lead card counts the lead's sessions and PRs.
@@ -841,6 +871,7 @@ else:
 # not working) waits for its tier with no page open, is probed every PR tick while a page is open, and at once when
 # its session's phase changes. A full read that fails is retried at the next probe instead of being forgotten.
 probed, real_gql, fail_detail = [], f.graphql, [False]
+os.environ["PROGRAMS_HOME"] = str(root / "no-programs")  # the demo ledgers' PRs are not in this world's GitHub
 
 
 def counting(q):
@@ -902,6 +933,20 @@ fleet.write_atomic(state_dir / "board.json", json.dumps({"rows": {"x": {"id": "x
 assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
 (state_dir / "board.json").unlink()
+# Nor while a program's ledger names it: the stage table reads a landed PR's branch from here once its card is gone.
+prog_dir = root / "no-programs" / "p1"
+prog_dir.mkdir(parents=True)
+(prog_dir / "program.json").write_text(json.dumps({"repo": "acme/tools", "created_at": fleet.iso(clock[0])}))
+(prog_dir / "ledger.jsonl").write_text(json.dumps({"ts": fleet.iso(clock[0]), "ev": "landed", "pr": 8, "sha": "8" * 40}) + "\n")
+assert fleet.program_prs(clock[0]) == {"acme/tools#8"}
+assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
+shutil.rmtree(prog_dir)
+# A detail read before the branch was collected (a probe signature without it) is read again, not left a day.
+k43 = next(k for k in f.prs if k.endswith("#43"))
+assert f.prs[k43]["detail"]["state"] == "MERGED"
+f.prs[k43]["detail"].pop("branch"), f.prs[k43]["probe"].pop()
+pr_tick()
+assert "branch" in f.prs[k43]["detail"], "a merged PR waits a day for its tier otherwise"
 del world.prs[8]
 assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "off the board: the search decides again"
 # Few GraphQL points left: the PR tick waits (up to 15 min) instead of spending them.

@@ -7,7 +7,10 @@ Rows of a program (~/.claude/programs/<slug>/):
 - one row `<slug>/<ticket>` per worker card of the program's Run (`run`) whose ticket is not a predicate item, the
   ticket read from the card title's first word (`role-terms: …`, `ABC-12 …`); a card with none is `<slug>/<task id>`.
 A row's PR is the one the ledger names for its ticket (`ready`, `landed`, … with `ticket`), else one the fleet
-collector saw a worker session of that ticket own. With several, an open one is shown before a merged one.
+collector saw a worker session of that ticket own, else one whose branch is named after the ticket. With several, an
+open one is shown before a merged one. Cards and sessions are archived once the work lands, so a landed row's
+evidence is the ledger and GitHub: the collector keeps every PR a program's ledger names (fleet.program_prs), with
+its branch, after the search stops finding it.
 
 Cells, each from evidence or left empty, never inferred:
 - merge: ✅ with the 7-character merge sha, from a ledger `landed` event's sha (a fold onto another PR's branch,

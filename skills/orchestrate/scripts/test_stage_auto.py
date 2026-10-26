@@ -54,7 +54,8 @@ state = {
             {"key": "acme/app#13", "repo": "acme/app", "state": "OPEN", "branch": "dev/A-3", "created": ago(6)},
             {"key": "acme/app#14", "repo": "acme/app", "state": "OPEN", "session": "s-fix", "created": ago(3)},
             {"key": "acme/app#3", "repo": "acme/app", "state": "MERGED", "merge_sha": "d" * 40, "branch": "dev/A-4",
-             "created": ago(500)}],  # a branch of the same name from before the program: not its PR
+             "created": ago(500)},  # a branch of the same name from before the program: not its PR
+            {"key": "acme/web#4", "repo": "acme/web", "state": "OPEN", "created": ago(2)}],
 }
 rows = stage_auto.refresh(state, now)
 by = lambda rid: rows[rid]  # noqa: E731
@@ -82,7 +83,7 @@ assert {k: (v["active"], v["rows"]) for k, v in progs.items()} == {"alpha": (Tru
 
 # The table: generated rows, then recorded ones. A recorded cell on a generated row's id wins over the generated one;
 # a generated row's merge is evidence or nothing, never the PR's state (A-3's open PR stays empty).
-stages.add("solo", "outside any program", pr="acme/app#13")
+stages.add("solo", "outside any program", pr="acme/web#4")
 stages.set_cell("alpha/A-1", "merge", "partial", "reverted on main, re-landing", by="lead")
 stages.set_cell("alpha/A-1", "dev", "ok", "v1.4.0 on staging")
 try:
@@ -164,5 +165,46 @@ assert prompt("ROLE: none") == "ROLE cleared: this session no longer gets the or
 # A torn last line or a row without a string ev is skipped, not the whole program.
 assert [stage_auto.ledger_row(l) for l in ['{"ev": "landed", "pr', '[1]', '{"ev": 3}', '', '{"ev": "stop"}']] \
     == [None, None, None, None, {"ev": "stop"}]
+
+# Evidence outlives the cards: once a program's cards are archived (no task, no session), a ledger `landed` with no
+# ticket still fills merge, the PR found by its branch in the collector's list (which keeps every PR a program's
+# ledger names, fleet.program_prs).
+omega = ({"slug": "omega", "repo": "acme/app", "run": "run_o", "created_at": ago(30), "predicate": ["O-1", "O-2"]}, [
+    {"ts": ago(29), "ev": "spawned", "ticket": "O-1", "note": "ctx_0o"},
+    {"ts": ago(20), "ev": "verdict", "pr": 21, "sha": "e" * 40, "result": "pass"},
+    {"ts": ago(19), "ev": "landed", "pr": 21, "sha": "9" * 40}])
+archived = {"tasks": [], "sessions": [], "prs": [
+    {"key": "acme/app#21", "repo": "acme/app", "state": "MERGED", "merge_sha": "9" * 40, "branch": "dev/O-1", "created": ago(25)}]}
+got, order, _ = stage_auto.build([omega], archived, now)
+assert got["omega/O-1"]["pr"] == "acme/app#21" and got["omega/O-1"]["cells"]["merge"] == {
+    "mark": "ok", "evidence": "9999999", "at": ago(19), "auto": True, "from": "ledger landed"}, got["omega/O-1"]
+assert got["omega/O-2"]["pr"] is None and got["omega/O-2"]["cells"] == {}, "no evidence, no cell"
+# Without the PR in the list the row has no PR to hang the landing on, and stays empty rather than guessed.
+got, _, _ = stage_auto.build([omega], {"prs": []}, now)
+assert got["omega/O-1"]["pr"] is None and got["omega/O-1"]["cells"] == {}
+program("omega", omega[0], omega[1])
+assert {"acme/app#21"} <= fleet.program_prs(now) and "acme/old#" not in " ".join(fleet.program_prs(now)), "gamma is quiet"
+
+# One row per piece of work: a recorded row with a generated row's PR folds into it. Its cells win where it has them,
+# the generated ones fill the rest; a recorded group whose every row folded goes, one with a row left stays.
+stage_auto.refresh(archived | {"tasks": state["tasks"], "sessions": state["sessions"], "prs": state["prs"] + archived["prs"]}, now)
+stages.add("hand", "omega by hand", group=True)
+stages.add("hand-o1", "O-1 written up", pr="acme/app#21", parent="hand")
+stages.add("hand-note", "a note under O-1", parent="hand-o1")
+stages.set_cell("hand-o1", "dev", "ok", "v2 on staging")
+stages.add("hand2", "mixed", group=True)
+stages.add("hand2-o1", "O-1 again", pr="acme/app#21", parent="hand2")
+stages.add("hand2-x", "outside any program", parent="hand2")
+t = stages.table({"prs": state["prs"] + archived["prs"]})
+got = {r["id"]: r for r in t["rows"]}
+assert "hand" not in got and "hand-o1" not in got and "hand2-o1" not in got, list(got)
+assert "hand2" in got and "hand2-x" in got
+o1 = got["omega/O-1"]
+assert o1["cells"]["merge"]["evidence"] == "9999999" and o1["cells"]["dev"]["evidence"] == "v2 on staging", o1["cells"]
+assert o1["parent"] == "omega" and got["hand-note"]["parent"] == "omega/O-1" and got["hand-note"]["depth"] == 2
+ids = [r["id"] for r in t["rows"]]
+assert ids.index("hand-note") == ids.index("omega/O-1") + 1, ids
+stages.set_cell("hand-o1", "merge", "partial", "reverted")
+assert {r["id"]: r for r in stages.table({"prs": []})["rows"]}["omega/O-1"]["cells"]["merge"]["mark"] == "partial"
 
 print("test_stage_auto: ok")
