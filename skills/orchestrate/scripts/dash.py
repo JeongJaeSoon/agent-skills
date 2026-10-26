@@ -1731,7 +1731,7 @@ def launchd_path():
 def agent_spec(port):
     env = {"PATH": launchd_path()}
     env.update({k: os.environ[k] for k in ("PROGRAMS_HOME", "ORCH_DASH_LABEL", "ORCH_FLEET", "ORCH_FLEET_STATE",
-                                           "ORCH_SKILLS", "ORCH_PR_STATS") if k in os.environ})
+                                           "ORCH_SKILLS", "ORCH_PR_STATS", "ORCH_CLAUDE_HOMES") if k in os.environ})
     return {"Label": agent_label(),
             "ProgramArguments": ["/usr/bin/env", "python3", str(HERE / "dash.py"), "serve", "--port", str(port)],
             "EnvironmentVariables": env, "WorkingDirectory": str(home()), "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30,
