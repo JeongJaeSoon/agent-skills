@@ -213,10 +213,10 @@ def same_later(a, b):
     return a["trigger"] == b["trigger"] and difflib.SequenceMatcher(None, a["title"], b["title"]).ratio() >= 0.6
 
 
-def work_key(title):
-    """A held item's work with its asides gone (a bracketed note, a dash and what follows), to catch one written twice."""
-    title = re.sub(r"\([^)]*\)|（[^）]*）", " ", title.casefold()).split(" — ")[0]
-    return " ".join(re.sub(r"[^\w#/.-]+", " ", title).split())
+def work_key(item):
+    """A held item's words and trigger, case and spacing aside, to catch one written twice. Its asides (a bracketed
+    PR, a dash and a stage) stay in: they are what tells two held items apart."""
+    return tuple(" ".join((item.get(f) or "").casefold().split()) for f in ("title", "trigger"))
 
 
 def later_add(title, trigger, due=None):
@@ -650,7 +650,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # keeps it. A head stays while any row under it stays, and a row with no time to judge by stays.
     def done_long_ago(l):
         r = rows.get(l["key"]) or {}
-        at = fleet.parse((prs.get(r.get("pr")) or {}).get("merged_at") or r.get("done_at") or r.get("reported_at"))
+        at = fleet.parse((prs.get(l["pr"]) or {}).get("merged_at") or r.get("done_at") or r.get("reported_at"))
         return l["status"] == "done" and at and (now - at).total_seconds() > limits["done_fold_h"] * 3600
     gone, folded = set(), {}
     for i in reversed(range(len(lines))):
@@ -871,7 +871,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
     later = []
     for l in reversed(store["later"]):  # a held item written twice before later_add merged them: the newest wording
-        if not any(same_later(l, k) or work_key(l["title"]) == work_key(k["title"]) for k in later):
+        if not any(same_later(l, k) or work_key(l) == work_key(k) for k in later):
             later.insert(0, l)
     if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later])):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]

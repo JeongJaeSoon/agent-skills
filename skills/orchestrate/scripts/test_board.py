@@ -670,29 +670,38 @@ fok("board", "set", "G/t", "--title", "끝난 일", "--pr", "acme/old#3")
 fok("board", "lead", "add", "H", "--handle", "term_0FAKEH", "--repo", "acme/mid")
 fok("board", "set", "H", "--status", "done")
 fok("board", "set", "H/t", "--title", "막 끝난 일", "--pr", "acme/mid#4")
-fok("board", "later", "add", "rollout 카드 재기동(브리프 x.md)", "--trigger", "B2 머지")
-fok("board", "later", "add", "rollout 카드 재기동 — 확인 즉시", "--trigger", "B2 머지 + 호환 테스트")
 stamp_dir, state = state, fd / "dashboard"
 stamp()
 b = json.loads((state / "board.json").read_text())
+b["later"] += [{"title": "rollout 카드 재기동", "trigger": "B2 머지"}, {"title": "Rollout  카드 재기동", "trigger": "b2 머지"},
+               {"title": "배포 확인 (acme/app#1)", "trigger": "v1 태그"}, {"title": "배포 확인 (acme/app#2)", "trigger": "다음 분기"},
+               {"title": "A 머지 — dev 확인", "trigger": "dev 배포"}, {"title": "A 머지 — prod 확인", "trigger": "prod 배포"}]
 for k in ("G", "H"):
     b["rows"][k]["done_at"] = "2026-10-10T00:00:00Z"
 (state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
 state = stamp_dir
 (fd / "dashboard" / "prs.json").write_text(json.dumps({"prs": dict([
     pr("acme/web#1", "MERGED", merged="2026-10-11T00:00:00Z"), pr("acme/web#2", "MERGED", merged="2026-10-13T12:00:00Z"),
-    pr("acme/old#3", "MERGED", merged="2026-10-09T00:00:00Z"), pr("acme/mid#4", "MERGED", merged="2026-10-13T13:00:00Z")])}))
-folded = json.loads(fok("brief", "render", "--periodic", "--now", NOW, "--json"))
+    pr("acme/old#3", "MERGED", merged="2026-10-09T00:00:00Z"), pr("acme/mid#4", "MERGED", merged="2026-10-13T13:00:00Z"),
+    pr("acme/web#5", "MERGED", merged="2026-10-11T00:00:00Z")])}))
+# A card the board lacks, read from the fleet, folds the same way once its PR merged a day ago.
+(fd / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "prs": [], "sessions": [
+    sess("root", "orchestrator", None, "working"), sess("lf", "orchestration", "root", "working", h="term_0FAKEF"),
+    sess("cardF", "task", "root", "offline", gh_repo="acme/web", task_title="카드 옛 완료", report={"pr": "acme/web#5"})]}))
+folded =json.loads(fok("brief", "render", "--periodic", "--now", NOW, "--json"))
 text = folded["text"]
-assert "옛 완료" not in text and "acme/old" not in text and "끝난 일" not in text.replace("막 끝난 일", ""), text
+assert "옛 완료" not in text and "#5" not in text and "acme/old" not in text and "끝난 일" not in text.replace("막 끝난 일", ""), text
 assert "| ✅ | └ 새 완료 | [#2](https://example.test/2) 02c0ffe | — |" in text, text
 assert all(f"| {i} | └ {t} |" in text for i, t in (("🔄", "run 진행"), ("⏳", "wait 대기"), ("⏸️", "hold 보류 행"))), text
 assert "| ✅ | H | — | — |" in text and "| ✅ | └ 막 끝난 일 |" in text, text
-# acme/web counts its one old row; acme/old (G and its sub-task) is gone whole and counts only in the headline.
-assert text.count("✅ 그 전 완료 1건 (대시보드)") == 1 and "접음 완료 3 (대시보드)" in folded["headline_facts"], text
+# acme/web counts its old row and card; acme/old (G and its sub-task) is gone whole and counts only in the headline.
+assert text.count("✅ 그 전 완료 2건 (대시보드)") == 1 and "접음 완료 4 (대시보드)" in folded["headline_facts"], text
 assert "F/old" not in folded["snapshot"]["rows"] and "G/t" not in folded["snapshot"]["rows"]
-# Held items whose work reads the same once the asides are gone are one line, the newest wording.
-assert section(text, "⏸️ **보류**") == ["- 다음 분기 → hold 보류 행", "- B2 머지 + 호환 테스트 → rollout 카드 재기동 — 확인 즉시"], text
+# A held item written twice, case and spacing aside, is one line in its newest wording; two that differ only in an
+# aside (a PR, a stage) are two items and both stay.
+assert section(text, "⏸️ **보류**") == ["- 다음 분기 → hold 보류 행", "- b2 머지 → Rollout  카드 재기동",
+                                       "- v1 태그 → 배포 확인 (acme/app#1)", "- 다음 분기 → 배포 확인 (acme/app#2)",
+                                       "- dev 배포 → A 머지 — dev 확인", "- prod 배포 → A 머지 — prod 확인"], text
 
 # The stage table drops a finished row and one a week unchanged; with none left, 다음 순서 goes with it.
 sp = fd / "dashboard" / "stages.json"
@@ -701,7 +710,7 @@ sp.write_text(json.dumps({"order": ["done", "all", "idle"], "next": ["다음 배
     "all": {"id": "all", "title": "모두 확인", "created_at": "2026-10-13T10:00:00Z", "cells": {
         c: {"mark": m, "evidence": "v1", "at": "2026-10-13T10:00:00Z"} for c, m in (("merge", "ok"), ("dev", "ok"), ("prod", "na"))}},
     "idle": {"id": "idle", "title": "멈춤", "created_at": "2026-10-01T00:00:00Z",
-             "cells": {"dev": {"mark": "checking", "at": "2026-10-05T00:00:00Z"}}}}}, ensure_ascii=False))
+             "cells": {"merge": {"mark": "ok", "evidence": "10/5", "at": "2026-10-05T00:00:00Z"}}}}}, ensure_ascii=False))
 rq = fok("brief", "render", "--now", NOW, "--json")
 assert "| 작업 |" not in rq and "다음 배포" not in rq and "단계표 3" in json.loads(rq)["headline_facts"][-1], rq
 s = json.loads(sp.read_text())
@@ -710,6 +719,14 @@ s["rows"]["live"] = {"id": "live", "title": "확인 중", "created_at": "2026-10
 sp.write_text(json.dumps(s, ensure_ascii=False))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
 assert "| 확인 중 | – | – | – | – |" in rq and "1. 다음 배포" in rq and "멈춤" not in rq, rq
+# A row with a ❌, ⚠️ or 🔄 cell is stuck, not finished: it stays however long it has been quiet.
+for m in ("fail", "partial", "checking"):
+    s["order"].append(m)
+    s["rows"][m] = {"id": m, "title": f"막힘 {m}", "created_at": "2026-10-01T00:00:00Z",
+                    "cells": {"merge": {"mark": "ok", "at": "2026-10-05T00:00:00Z"}, "dev": {"mark": m, "at": "2026-10-05T00:00:00Z"}}}
+sp.write_text(json.dumps(s, ensure_ascii=False))
+rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
+assert all(f"막힘 {m}" in rq for m in ("fail", "partial", "checking")) and "멈춤" not in rq, rq
 # A row quiet since it was added whose PR just merged has dev to check next: the merge counts as a change.
 s["order"].append("merged")
 s["rows"]["merged"] = {"id": "merged", "title": "막 머지", "pr": "acme/web#9", "created_at": "2026-10-01T00:00:00Z", "cells": {}}
