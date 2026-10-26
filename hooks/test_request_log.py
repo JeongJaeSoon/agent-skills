@@ -150,7 +150,7 @@ both = {**sessions, "y": {"id": "y", "name": "card-y", "parent": "c", "created":
 assert req.reconcile(two, now, {}, both, {}, by_handle, {}, True) == []
 del two["x1"]
 assert [r["to"] for r in req.reconcile(two, now, {}, both, {}, by_handle, {}, True)] == ["card:card-y"]
-assert req.apply(rows) == rows and req.apply(rows) == []  # the second pass finds them all overtaken
+assert req.apply(rows)[0] == rows and req.apply(rows)[0] == []  # the second pass finds them all overtaken
 q = req.fold(req.read())
 assert q["r1"]["status"] == "done" and q["r3"]["status"] == "drop" and q["r2"]["links"] == ["card:card-x"]
 

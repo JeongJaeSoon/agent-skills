@@ -1473,8 +1473,11 @@ def pr_stats_loop():
 
 
 def code_files():
-    # Every module the server may import, lazily too (owner_requests, board, holds...): one left out would not restart it.
-    return (*sorted(f for f in HERE.glob("*.py") if not f.name.startswith("test_")), *sorted(ASSETS.glob("*")))
+    # Every module the server may import, lazily too, from beside it and the two other places board.py and fleet.py
+    # reach: one left out would not restart it.
+    near = [*HERE.glob("*.py"), HERE.parents[1] / "brief" / "scripts" / "table_width.py",
+            *(HERE.parents[2] / "scripts" / n for n in ("sync.py", "reap_hard.py"))]
+    return (*sorted(f for f in near if f.exists() and not f.name.startswith("test_")), *sorted(ASSETS.glob("*")))
 
 
 def code_version():

@@ -52,6 +52,7 @@ d5 = fleet.decision_add("Two with the same label", options=["Retry"], handle="te
 d6 = fleet.decision_add("Another", options=["Retry"], handle="term_coord")["id"]
 assert "orch decide done" in hook("Retry") and status(d5)["status"] == status(d6)["status"] == "open"  # ambiguous
 assert hook("d6 Retry") and status(d6)["status"] == "done" and status(d5)["status"] == "open"
-assert hook("d5:skip it") and status(d5)["answer"] == "skip it"
+assert hook("You have 1 orchestration message. Run `orca orchestration check --run run_0FAKE`.\nd5:skip it") \
+    and status(d5)["answer"] == "skip it"  # Orca's nudge typed ahead of the answer is cut out
 assert hook("anything") is None  # this terminal has nothing open: no context at all
 print("test_decision: ok")

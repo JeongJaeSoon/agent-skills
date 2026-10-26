@@ -23,7 +23,6 @@ import decision, reorient  # noqa: E402  beside this file
 
 RELAY = re.compile(r"\[(?!Image #|Pasted text)[^\]\s]{1,80}\]")
 NOT_HUMAN = ("This session is being continued from a previous conversation",)
-NUDGE = re.compile(r"You have \d+ orchestration messages?(?:\.?\s*Run `[^`\n]*`\.?|[^\n.]*\.?)", re.I)
 LISTED = 5
 
 
@@ -56,16 +55,16 @@ def answers_decision(prompt, fleet):
 
 def main():
     event = json.load(sys.stdin)
-    prompt = NUDGE.sub("", event.get("prompt") if isinstance(event.get("prompt"), str) else "")
+    prompt = decision.NUDGE.sub("", event.get("prompt") if isinstance(event.get("prompt"), str) else "")
     if not human(prompt) or not role_of(event):
         return
     import owner_requests as req
     if answers_decision(prompt, req.fleet):
         return
-    row = req.add(reorient.ROLE.sub("", prompt), str(event.get("session_id")), os.environ.get("ORCA_TERMINAL_HANDLE"))
+    row, new = req.add(reorient.ROLE.sub("", prompt), str(event.get("session_id")), os.environ.get("ORCA_TERMINAL_HANDLE"))
     s = req.summary()
     # Ids only: the routing commands are in SKILL.md and `orch req list` has the text, so each prompt pays ~70 bytes.
-    text = f"Owner request {row['id']} logged" + (" (same as before)" if row.get("ev") != "open" else "")
+    text = f"Owner request {row['id']} logged" + ("" if new else " (same as before)")
     if s["open"] > 1:
         text += f" · {s['open']} open, oldest {req.ago(s['oldest_min'])}"
     if stale := [q["id"] for q in s["unlinked"] if q["id"] != row["id"]]:

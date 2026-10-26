@@ -1698,8 +1698,10 @@ class Fleet:
         try:
             if rows := owner_requests.reconcile(asked, now, {p["key"]: p for p in prs}, sessions, board.read()["rows"],
                                                 by_handle, mem.setdefault("request_cards", {}), self.sources["orca"]["ok"]):
-                owner_requests.apply(rows)
-                asked = owner_requests.fold(owner_requests.read())
+                written, asked = owner_requests.apply(rows)
+                for r in written:
+                    self.event({"at": iso(now), "kind": f"request_{r['ev']}", "session": by_handle.get(asked[r["id"]].get("handle")),
+                                "text": mask(f"{r['id']}: {r.get('to') or r.get('evidence') or r.get('reason')}", 200)})
         except (OSError, ValueError) as e:
             self.event({"at": iso(now), "kind": "requests_error", "text": mask(str(e), 200)})
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
@@ -1711,7 +1713,7 @@ class Fleet:
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
                 "requests": {**owner_requests.summary(now, asked),
                              "items": [{**q, "session": by_handle.get(q.get("handle"))} for q in asked.values()
-                                       if q["status"] == "open" and not owner_requests.expired(q, now)]},
+                                       if owner_requests.visible(q, now)]},
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 

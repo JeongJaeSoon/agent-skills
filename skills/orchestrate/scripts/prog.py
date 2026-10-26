@@ -2515,7 +2515,7 @@ def cmd_req(argv):
         if sub == "list":
             now = req.fleet.utcnow()
             qs = [q for q in req.fold(req.read()).values()
-                  if "--all" in rest or q["status"] == "open" and not req.expired(q, now)]
+                  if "--all" in rest or req.visible(q, now)]
             if "--json" in rest:
                 print(json.dumps(qs, ensure_ascii=False, indent=1))
                 return
