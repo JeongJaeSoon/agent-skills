@@ -53,6 +53,7 @@ import flow  # noqa: E402
 import acks  # noqa: E402
 import tidy  # noqa: E402
 import board  # noqa: E402
+import jobs  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1358,6 +1359,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not f.exists():
                 return self.send(503, b'{"error":"first PR stats collect has not finished"}')
             return self.send_cached(f.read_bytes())
+        if path == "/api/fleet/jobs":
+            # Read on every poll, not folded into state.json: a tick that fails never rewrites state.json.
+            return self.send_cached(json.dumps(jobs.snapshot(JOBS), ensure_ascii=False).encode())
         if path in ("/api/fleet/flow", "/api/fleet/changes"):
             return self.send_cached(flow_report(path.rsplit("/", 1)[1]))
         if path == "/api/fleet/brief":
@@ -1420,6 +1424,10 @@ FLEET_VIEW_S, FLEET_IDLE_EVERY = 300, 60  # poll Orca every 10 s only while a pa
 CHECK = selfcheck.SelfCheck()
 
 
+def fleet_wait():
+    return fleet.ORCA_EVERY if time.monotonic() - FLEET_VIEWED[0] < FLEET_VIEW_S else FLEET_IDLE_EVERY
+
+
 def fleet_loop():
     while True:
         try:
@@ -1428,22 +1436,44 @@ def fleet_loop():
             errs = [f"{k}: {v['error']}" for k, v in ((st or {}).get("sources") or {}).items() if v.get("error")]
             if errs:
                 log("fleet: " + " | ".join(errs))
-            for did in fleet.relay_decisions():
-                log(f"fleet: relayed the answer to {did}")
-            for h in fleet.retry_reloads():
-                log(f"fleet: reloaded {h}")
-            for r in tidy.run():
-                log(f"fleet: tidy closed {r['id']} ({r['rule']}: {r['evidence']})")
+            # A source that failed is the sources panel's; the tick itself ran.
+            jobs.record("fleet-tick", result=f"Needs you {len((st or {}).get('items') or [])}"
+                        + (f" · source errors: {' | '.join(errs)}" if errs else ""), next_in=fleet_wait(), event=FLEET.event)
         except Exception as e:  # keep serving; the next tick retries
             log(f"fleet: tick failed: {e!r}")
+            jobs.record("fleet-tick", error=repr(e), next_in=fleet_wait(), event=FLEET.event)
         try:
-            if CHECK.due() and CHECK.run(FLEET):
-                FLEET.checks = CHECK.items
-                FLEET_WAKE.set()  # tick again now, so the page shows the items without waiting a full interval
+            relayed, reloaded = fleet.relay_decisions(), fleet.retry_reloads()
+            for did in relayed:
+                log(f"fleet: relayed the answer to {did}")
+            for h in reloaded:
+                log(f"fleet: reloaded {h}")
+            jobs.record("relay", n=len(relayed) + len(reloaded), result=f"answers relayed {len(relayed)} · reloads sent {len(reloaded)}",
+                        next_in=fleet_wait(), event=FLEET.event)
+        except Exception as e:
+            log(f"fleet: relay failed: {e!r}")
+            jobs.record("relay", error=repr(e), next_in=fleet_wait(), event=FLEET.event)
+        try:
+            closed = tidy.run()
+            for r in closed:
+                log(f"fleet: tidy closed {r['id']} ({r['rule']}: {r['evidence']})")
+            jobs.record("tidy", n=len(closed), result=f"closed {len(closed)}", next_in=fleet_wait(), event=FLEET.event)
+        except Exception as e:
+            log(f"fleet: tidy failed: {e!r}")
+            jobs.record("tidy", error=repr(e), next_in=fleet_wait(), event=FLEET.event)
+        try:
+            if CHECK.due():
+                was = CHECK.last
+                if CHECK.run(FLEET):
+                    FLEET.checks = CHECK.items
+                    FLEET_WAKE.set()  # tick again now, so the page shows the items without waiting a full interval
+                if CHECK.last != was:  # it read; without a state yet it did not
+                    jobs.record("selfcheck", n=len(CHECK.items), result=f"Needs you items {len(CHECK.items)}",
+                                next_in=selfcheck.GRACE_S if CHECK.seen - CHECK.confirmed else selfcheck.EVERY, event=FLEET.event)
         except Exception as e:
             log(f"fleet: self-check failed: {e!r}")
-        viewed = time.monotonic() - FLEET_VIEWED[0] < FLEET_VIEW_S
-        FLEET_WAKE.wait(fleet.ORCA_EVERY if viewed else FLEET_IDLE_EVERY)
+            jobs.record("selfcheck", error=repr(e), next_in=selfcheck.EVERY, event=FLEET.event)
+        FLEET_WAKE.wait(fleet_wait())
         FLEET_WAKE.clear()
 
 
@@ -1459,8 +1489,11 @@ def skills_loop():
                 added = (rep.get("signals") or {}).get("added")
                 if added:
                     log(f"skills: {added} new usage signal(s) in {skill_usage.signals_path()}")
+                jobs.record("skill-usage", n=added or 0, result=f"new usage signals {added or 0}", next_in=SKILLS_EVERY,
+                            event=FLEET.event)
         except Exception as e:
             log(f"skills: collect failed: {e!r}")
+            jobs.record("skill-usage", error=repr(e), next_in=SKILLS_EVERY, event=FLEET.event)
         time.sleep(60)
 
 
@@ -1477,11 +1510,25 @@ def pr_stats_loop():
             try:
                 pr_stats.refresh()
                 due = time.time() + PR_STATS_EVERY
+                jobs.record("pr-stats", result="counts refreshed", next_in=PR_STATS_EVERY, event=FLEET.event)
             except Exception as e:
                 log(f"pr stats: collect failed: {e!r}")
                 pr_stats.record_error(e)
                 due = time.time() + PR_STATS_RETRY
+                jobs.record("pr-stats", error=repr(e), next_in=PR_STATS_RETRY, event=FLEET.event)
         time.sleep(60)
+
+
+# orch-dash's own jobs, as the Automations page lists them: (jobs.record key, name, cadence).
+JOBS = (
+    ("fleet-tick", "Fleet collect · Needs you", f"every {fleet.ORCA_EVERY}s while a page is open, else {FLEET_IDLE_EVERY}s"),
+    ("requests-reconcile", "Owner requests reconcile", "each fleet collect"),
+    ("tidy", "Self-clean (tidy)", "after each fleet collect"),
+    ("relay", "Decision relay · reload retry", "after each fleet collect"),
+    ("selfcheck", "Self-check", f"every {selfcheck.EVERY // 60}m, {selfcheck.GRACE_S}s while a finding waits for its second read"),
+    ("skill-usage", "Skill usage collect", f"every {SKILLS_EVERY // 60}m"),
+    ("pr-stats", "PR stats collect", f"every {PR_STATS_EVERY // 3600}h, {PR_STATS_RETRY // 3600}h after a failure"),
+)
 
 
 def code_files():
@@ -1880,6 +1927,7 @@ def cmd_demo(argv):
     world = dash_demo.FakeFleetWorld(utcnow(), crowd=int(prog.opt(argv, "--crowd", "0")))
     world.seed_sent()
     world.seed_timeline()
+    world.seed_jobs()
     if "--live" in argv:
         threading.Thread(target=dash_demo.live, args=(root, 20, world), daemon=True).start()
     serve("127.0.0.1", int(prog.opt(argv, "--port", "4780")), 20, make_fleet=world.fleet)

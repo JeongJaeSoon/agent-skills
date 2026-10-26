@@ -477,6 +477,9 @@ def build(root, now=None):
         ("end-session", "misses", "add the phrase it missed to the description", 30, 42),
         ("reflect", "slash_only", "say when it fires on its own", 200, 41))))
     (root / "sync.json").write_text(json.dumps({"at": _ago(now, 0.2), "ok": True, "interval": 900, "message": "up to date"}))
+    t = now.timestamp() - 7 * 60  # reap-hard's last pass, as scripts/reap_hard.py writes it
+    (root / "reap-hard-last.json").write_text(json.dumps({"t": t, "at": _ago(now, 7 / 60), "run": "demo", "dry_run": False, "acted": 2,
+                                                          "skipped": 0, "failed": 0, "kept": 5, "notes": [], "dark": []}))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
@@ -830,6 +833,17 @@ class FakeFleetWorld:
                          f"Step {36 - i} of the setup checklist" if i % 2 else f"Continue with step {36 - i}", {}))
         for h, kind, session, text, extra in sorted(rows, key=lambda r: r[0], reverse=True):  # oldest first, as the collector appends
             fleet.append_line(path, {"at": _ago(self.now, h), "kind": kind, "session": session, "text": text, **extra})
+
+    def seed_jobs(self):
+        """A PR stats collect failing for an hour, with the timeline line its first failure wrote. The demo turns that
+        loop and the skill usage one off, so this record stays and skill usage shows no record. Written once."""
+        import fleet, jobs
+        if jobs.records():
+            return
+        events, err = fleet.state_dir() / "events.jsonl", "SourceError('gh: HTTP 502 from api.github.com')"
+        for h, e in ((2.2, None), (1.0, err), (0.5, err)):
+            jobs.record("pr-stats", result=None if e else "counts refreshed", error=e, next_in=3600,
+                        event=lambda row: fleet.append_line(events, row), now=self.now - dt.timedelta(hours=h))
 
     def fleet(self, clock=None):
         """A fleet.Fleet wired to this world (ORCH_FLEET_STATE must already point at a scratch directory)."""
