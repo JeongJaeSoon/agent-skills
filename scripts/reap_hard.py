@@ -108,7 +108,7 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
                busy=()):
     """(target, why). card: a row of `orca worktree list`; facts: reap.worktree_facts; pr: reap's PR state of
     facts["pr"]; terminals: the card's rows of `orca terminal list`, None when unreadable; quiet_s: seconds since
-    its transcripts last changed, None when it has none; people: pids in it a person started; holders: pids in it
+    its transcripts last changed, None when it has none, a reason when they cannot be read; people: pids in it a person started; holders: pids in it
     that are protected or listen on a protected port; children: the cards it made that still exist (a lead's);
     coordinator: why a live Claude session in it is a lead or the orchestrator, which keeps it whatever else holds;
     busy: shells a live Claude session in it is still running (a Bash call, a background shell, a Monitor)."""
@@ -148,6 +148,8 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
         return False, f"Claude 세션이 셸을 돌리는 중(pid {busy[0]})"
     if terminals is None:
         return False, "터미널 목록을 읽지 못함"
+    if isinstance(quiet_s, str):
+        return False, quiet_s
     def window(t):
         # An idle Claude screen still writes to its terminal about every 30 minutes with nothing new on it, so its
         # quiet transcript decides; a working one redraws its spinner every second, which the short window catches.
@@ -312,7 +314,8 @@ TAIL_BYTES = 256 * 1024
 def last_entry_time(path):
     """Time of the newest entry with a timestamp in a transcript's tail. An idle Claude session appends untimed
     metadata lines (`atis-latch`) about every 30 minutes, which move the file's mtime without any work; with no
-    timestamp in the tail, the mtime stands, which reads as recent and keeps the card."""
+    timestamp in the tail, the mtime stands, which reads as recent and keeps the card. None when the file is gone;
+    Unreadable when it or its newest timestamp cannot be read, since an older entry would read as quieter."""
     try:
         with open(path, "rb") as f:
             f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
@@ -320,20 +323,37 @@ def last_entry_time(path):
         mtime = os.stat(path).st_mtime
     except FileNotFoundError:
         return None
+    except OSError as e:
+        raise Unreadable(f"세션 기록 {path.name} 을 읽지 못함({type(e).__name__})") from e
     for line in reversed(lines):
-        with contextlib.suppress(ValueError, AttributeError, TypeError):
+        try:
             ts = json.loads(line).get("timestamp")
-            if ts:
+        except (ValueError, AttributeError):
+            continue  # the tail's cut first line, or a non-object line
+        if ts:
+            try:
                 return reap.parse_ts(ts)
+            except (ValueError, TypeError, AttributeError) as e:
+                raise Unreadable(f"세션 기록 {path.name} 의 시각 {str(ts)[:40]!r} 을 읽지 못함") from e
     return mtime
 
 
+class Unreadable(Exception):
+    pass
+
+
 def transcript_quiet(projects_dir, now):
-    """reap.transcript_quiet, by the last timestamped entry instead of the file's mtime."""
+    """reap.transcript_quiet, by the last timestamped entry instead of the file's mtime; a reason (str) when a
+    transcript cannot be read, which keeps the card."""
     def quiet(cwd):
         d = projects_dir / re.sub(r"[^A-Za-z0-9]", "-", cwd)
-        times = [t for f in ((f for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)) if d.is_dir() else ())
-                 if (t := last_entry_time(f)) is not None]
+        try:
+            times = [t for f in ((f for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)) if d.is_dir() else ())
+                     if (t := last_entry_time(f)) is not None]
+        except Unreadable as e:
+            return str(e)
+        except OSError as e:
+            return f"세션 기록 폴더를 읽지 못함({type(e).__name__})"
         return now - max(times) if times else None
     return quiet
 

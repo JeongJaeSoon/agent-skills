@@ -203,6 +203,19 @@ os.utime(qdir / "s2.jsonl", (NOW - 60, NOW - 60))
 assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle") == 60  # untimed only: the mtime keeps it
 assert rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/none") is None
 assert rh.last_entry_time(qdir / "gone.jsonl") is None
+# Anything it cannot read keeps the card: a newest timestamp that doesn't parse (never fall back to an older,
+# quieter entry), and a transcript it may not open.
+(qdir / "s2.jsonl").write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n{"type":"user","timestamp":"soon"}\n')
+why = rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle")
+assert isinstance(why, str) and "시각 'soon' 을 읽지 못함" in why, why
+(qdir / "s2.jsonl").write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n')
+(qdir / "s2.jsonl").chmod(0)
+try:
+    why = rh.transcript_quiet(tmp / "qprojects", NOW)("/ws/app/idle")
+finally:
+    (qdir / "s2.jsonl").chmod(0o644)
+assert os.geteuid() == 0 or why == "세션 기록 s2.jsonl 을 읽지 못함(PermissionError)", why
+assert card_says(quiet="세션 기록 s2.jsonl 을 읽지 못함(PermissionError)") == (False, "세션 기록 s2.jsonl 을 읽지 못함(PermissionError)")
 
 # card_dir: only <root>/<repo>/<card>.
 assert rh.card_dir("/ws/app/done/web/src", "/ws") == "/ws/app/done"
