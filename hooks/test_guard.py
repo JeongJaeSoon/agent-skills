@@ -7,7 +7,7 @@ CHECK = "orca orchestration check"
 HOME = tempfile.mkdtemp()  # no user skills unless a case adds one
 
 
-def run(tool, tool_input, own, transcript=None, agent=None, session="s0", **extra):
+def run(tool, tool_input, own, transcript=None, agent=None, session="s0", field="permissionDecision", **extra):
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT" and not k.startswith("CLAUDE_PLUGIN_OPTION_")}
     env.update(extra)
     env["AGENT_SKILLS_STATE"] = f"{HOME}/state"
@@ -17,11 +17,15 @@ def run(tool, tool_input, own, transcript=None, agent=None, session="s0", **extr
         {"tool_name": tool, "tool_input": tool_input, "cwd": HOME, "transcript_path": transcript, "agent_type": agent,
          "session_id": session}),
         capture_output=True, text=True, env=env).stdout
-    return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out.strip() else "none"
+    return json.loads(out)["hookSpecificOutput"][field] if out.strip() else "none"
 
 
 def bash(cmd, own="term_me", transcript=None, agent=None, session="s0", **extra):
     return run("Bash", {"command": cmd}, own, transcript, agent, session, **extra)
+
+
+def reason(cmd, **extra):
+    return run("Bash", {"command": cmd}, "term_me", field="permissionDecisionReason", **extra)
 
 
 def skill(name):
@@ -171,13 +175,18 @@ for cmd in (f"python3 {SETUP} --settings-only --apply 0123456789ab", f"python3 {
             f"python3 {SETUP} --actions-only; rm -rf /tmp/x", f"python3 {HOME}/scripts/setup.py --actions-only",
             "python3 scripts/setup.py --actions-only", f"bash -c 'python3 {SETUP} --actions-only'"):
     assert bash(cmd) == "none", cmd
-# Another clone's setup.py is not this plugin's: no decision, unless the install dialog named it as the checkout.
+# Another clone's setup.py still asks, but the dialog vouches for what it does only when the install dialog named it.
 CLONE = pathlib.Path(HOME) / "clone"
 (CLONE / "skills" / "setup-pc").mkdir(parents=True)
 (CLONE / "scripts").mkdir()
-assert bash(f"python3 {CLONE}/scripts/setup.py --actions-only") == "none"
-assert bash(f"python3 {CLONE}/scripts/setup.py --actions-only", CLAUDE_PLUGIN_OPTION_CHECKOUT=str(CLONE)) == "ask"
+CLONE_SETUP = f"python3 {CLONE}/scripts/setup.py --actions-only"
+assert bash(CLONE_SETUP) == "ask"
+said = reason(CLONE_SETUP)
+assert "writes no Claude settings" not in said and f"{CLONE}/scripts/setup.py" in said and "may do anything" in said, said
+assert bash(CLONE_SETUP, CLAUDE_PLUGIN_OPTION_CHECKOUT=str(CLONE)) == "ask"
+assert "writes no Claude settings" in reason(CLONE_SETUP, CLAUDE_PLUGIN_OPTION_CHECKOUT=str(CLONE))
 (pathlib.Path(HOME) / "src").mkdir()
 (pathlib.Path(HOME) / "src" / "agent-skills").symlink_to(CLONE)
-assert bash(f"python3 {CLONE}/scripts/setup.py --actions-only") == "ask", "the dialog's default, ~/src/agent-skills"
+assert bash(CLONE_SETUP) == "ask"
+assert "writes no Claude settings" in reason(CLONE_SETUP), "the dialog's default, ~/src/agent-skills"
 print("guard: all pass")

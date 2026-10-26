@@ -22,8 +22,9 @@ assert "agent-skills:setup-pc" in said and "language=Korean" in said and "person
 assert "values from the plugin's install dialog: none" in run().lower()
 assert run(AGENT_SKILLS_ONBOARD="0") is None
 assert "automation round" in run(CLAUDE_CODE_ENTRYPOINT="cli"), "an interactive session is asked"
-for entry in ("sdk-cli", "sdk-ts", "sdk-py"):
-    assert run(CLAUDE_CODE_ENTRYPOINT=entry) is None, f"{entry}: no one is there to answer"
+assert run(CLAUDE_CODE_ENTRYPOINT="sdk-cli") is None, "-p: no one is there to answer"
+for entry in ("sdk-ts", "sdk-py"):
+    assert run(CLAUDE_CODE_ENTRYPOINT=entry) is not None, f"{entry}: may be a GUI someone types into"
 assert run(CLAUDE_CODE_PLUGIN_DIRS="/x/agent-skills") is None, "a launcher's env loads a checkout"
 assert run(CLAUDE_CODE_PLUGIN_DIRS=" ") is not None, "a blank value loads nothing"
 said = run(CLAUDE_PLUGIN_OPTION_PERSONAL_REPO="https://me:ghp_FAKE0000@git.example.test/me/conf.git")

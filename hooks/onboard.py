@@ -4,9 +4,9 @@ set up, tells the session to run setup-pc (docs/zero-command-setup.md).
 
 Set up means this profile's user settings load a checkout (env.CLAUDE_CODE_PLUGIN_DIRS, which setup.py --apply and
 bootstrap.py write), or this session was started with that variable. The state dir is shared by every Orca profile, so
-its apply record does not count. A session with no one to answer stays quiet: Claude Code (2.1.310) sets
-CLAUDE_CODE_ENTRYPOINT to sdk-cli under -p, even over a `cli` inherited from a parent session, and the SDKs set
-sdk-ts/sdk-py. Not set up: the session gets one paragraph with the values the human gave the install dialog
+its apply record does not count. A -p session stays quiet: Claude Code (2.1.310) sets CLAUDE_CODE_ENTRYPOINT to
+sdk-cli under -p, even over a `cli` inherited from a parent session. The SDKs' sdk-ts/sdk-py are not checked: they also
+mark a GUI a person types into, and an unattended SDK run is told by the paragraph to ignore it. Not set up: the session gets one paragraph with the values the human gave the install dialog
 (userConfig, as CLAUDE_PLUGIN_OPTION_*), credentials stripped from a URL. AGENT_SKILLS_ONBOARD=0 silences it everywhere;
 `onboard.py --decline`, which the session runs when the human says no, silences it for this profile only.
 """
@@ -85,8 +85,8 @@ def main(argv):
     if argv == ["--decline"]:
         decline()
         return 0
-    unattended = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk-")
-    if os.environ.get("AGENT_SKILLS_ONBOARD") == "0" or unattended or set_up() or declined():
+    print_mode = os.environ.get("CLAUDE_CODE_ENTRYPOINT") == "sdk-cli"
+    if os.environ.get("AGENT_SKILLS_ONBOARD") == "0" or print_mode or set_up() or declined():
         return 0
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": message()}}))
     return 0
