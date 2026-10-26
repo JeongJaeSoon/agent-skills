@@ -170,8 +170,18 @@ class Janitor(Base):
         self.assertIn("--disabled", fake.edits()[0])
         for autos in ([janitor(enabled=False)], []):
             fake = self.orca(autos)
-            self.assertEqual(self.j.disable(), (0, "이미 꺼져 있음"))
+            self.assertEqual(self.j.disable(), (0, "이미 꺼져 있음 · janitor-load: 이미 꺼져 있음"))
             self.assertEqual(fake.edits(), [])
+
+    def test_disable_turns_the_load_job_off_too(self):
+        """Left on, the load job would go on reaping for a user who turned the janitor off."""
+        fake = self.orca([janitor(), load_job()])
+        self.assertEqual(self.j.disable()[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J1", "J2"])
+        self.assertTrue(all("--disabled" in e for e in fake.edits()))
+        fake = self.orca([janitor(), load_job()])
+        self.assertEqual(au.JanitorLoad().disable()[0], 0)
+        self.assertEqual([e[e.index("--id") + 1] for e in fake.edits()], ["J2"])
 
 
 class Preview(unittest.TestCase):

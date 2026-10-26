@@ -104,6 +104,9 @@ with tempfile.TemporaryDirectory() as tmp:
     sub.unlink()
     os.utime(main, (now - 60, now - 60))
     assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") == now - reap.parse_ts("2026-10-25T07:20:36Z")
+    main.write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n{"type":"x","timestamp":"2026-10-24T07:20:36Z"}\n')
+    assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") == now - reap.parse_ts("2026-10-25T07:20:36Z"), \
+        "an older time appended last does not make the session quieter"
     main.write_text('{"type":"user","timestamp":"soon"}\n')
     assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") is None, "an unreadable time is unknown, not quiet"
     assert reap.transcript_quiet(pathlib.Path(tmp), now, reasons=True)("/w/my_repo.x").endswith("을 읽지 못함")
@@ -628,6 +631,15 @@ with tempfile.TemporaryDirectory() as tmp:
                                  quiet=lambda p: 7 * H, now=now)
     got = shells_scan(shell_rows, now - 2 * H)
     assert [(i["kind"], i["target"], i.get("shells")) for i in got] == [("orca-worktree", True, [61, 62])], got
+    assert got[0]["terminals"] == ["t1"] and "orca terminal close --terminal t1 --json" in got[0]["how"], got
+    # An agent's terminal whose process moved out of the card, next to the idle shell: `--all` closed it with the card.
+    quiet_ms = (now - 2 * H) * 1000
+    for extra in ({"handle": "t2", "lastOutputAt": quiet_ms, "agentIdentity": "claude"},
+                  {"handle": "t2", "lastOutputAt": quiet_ms}):
+        got = shells_scan(shell_rows, now - 2 * H, terminals=[{"handle": "t1", "lastOutputAt": quiet_ms}, extra])
+        assert [(i["target"], i["why"]) for i in got] == [(False, "pid 61 이 이 worktree 를 cwd 로 사용 중")], (extra, got)
+    got = shells_scan(shell_rows, now - 2 * H, terminals=[{"handle": "t1", "lastOutputAt": quiet_ms, "agentIdentity": "codex"}])
+    assert [i["target"] for i in got] == [False], got
     got = shells_scan(shell_rows, now - 60)
     assert [(i["target"], i["why"]) for i in got] == [(False, "셸 터미널 출력이 30분 안에 있음")], got
     # Unknown is not silent: no Orca terminal listed, an output time missing, or a list cut short.
@@ -821,13 +833,19 @@ with tempfile.TemporaryDirectory() as tmp:
     reap.run = lambda cmd, cwd=None, check=True: calls.append(cmd) or "" if cmd[0] == "orca" else real_run(cmd, cwd, check)
     os.environ["AGENT_SKILLS_TRASH"] = str(t / "trash2")
     try:
-        item = reap.judge_orca_worktree(str(wt), "ledger", {"pr": "acme/app#2", "head": "x", "shells": [61, 62]}, PRS.get)
+        shells = {"pr": "acme/app#2", "head": "x", "shells": [61, 62], "terminals": ["t1", "t2"]}
+        item = reap.judge_orca_worktree(str(wt), "ledger", shells, PRS.get)
         assert item["target"] and "셸 2개는 터미널째 닫음" in item["why"] and "terminal close" in item["how"][-2], item
         reap.act(item, [])
+        # A lead's shell waits at its prompt while its workers run.
+        for kids in ({"children": ["/w/child"]}, {"children_unread": True}):
+            assert not reap.judge_orca_worktree(str(wt), "ledger", {**shells, **kids}, PRS.get)["target"], kids
     finally:
         reap.run = real_run
         del os.environ["AGENT_SKILLS_TRASH"]
-    assert [c[:3] for c in calls] == [["orca", "terminal", "close"], ["orca", "worktree", "rm"]], calls
+    # Only the listed terminals: one opened since the scan is not closed with them.
+    assert [c[:4] for c in calls] == [["orca", "terminal", "close", "--terminal"]] * 2 + [["orca", "worktree", "rm", "--worktree"]], calls
+    assert [c[4] for c in calls[:2]] == ["t1", "t2"], calls
 argv = reap.schedule_cmd("/abs/reap.py", pathlib.Path("/s"), "path:/repo", ledger=pathlib.Path("/l/ledger.jsonl"))
 assert argv[:3] == ["orca", "automations", "create"] and "--write" not in argv
 assert argv[argv.index("--workspace-mode") + 1] == "existing" and argv[argv.index("--trigger") + 1] == "17 */3 * * *"
@@ -839,14 +857,27 @@ same = reap.schedule_cmd("/abs/reap.py", reap.STATE_HOME, "path:/repo")
 assert load[load.index("--prompt") + 1] == same[same.index("--prompt") + 1]
 with tempfile.TemporaryDirectory() as tmp:
     s = pathlib.Path(tmp)
+    on = {"automations": [{"name": reap.JANITOR_NAME, "enabled": True}]}
     assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=7.9) == (False, "load5 7.9 < 한계 8")
-    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=8.0)[0], "no round on record: due"
+    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=8.0, autos=on)[0], "no round on record: due"
+    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=8.0, autos={"automations": []})[0], "no periodic job: due"
+    # The janitor turned off (setup disable, or in the Orca app) stops the load job too.
+    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12,
+                         autos={"automations": [{"name": reap.JANITOR_NAME, "enabled": False}]}) == (False, "janitor 가 꺼져 있음")
+    saved_oj = reap.orca_json
+    reap.orca_json = lambda *a: None
+    assert not reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12)[0], "an unreadable list reaps nothing"
+    reap.orca_json = saved_oj
     reap.stamp_round(s, now=1e6 - 30 * 60)
-    due, why = reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12)
+    due, why = reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12, autos=on)
     assert not due and "0h30m 전" in why, why
-    assert reap.load_due(s, {"load_limit": 8, "load_cooldown_minutes": 20}, now=1e6, load5=12)[0]
+    assert reap.load_due(s, {"load_limit": 8, "load_cooldown_minutes": 20}, now=1e6, load5=12, autos=on)[0]
+    due, why = reap.load_due(s, {"load_limit": 8, "load_cooldown_minutes": None}, now=1e6, load5=12, autos=on)
+    assert not due and "0h30m 전" in why, "null is the default cooldown, not a TypeError"
     reap.stamp_round(s, now=1e6 - 61 * 60)
-    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12)[0], "past the cooldown: due again"
+    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12, autos=on)[0], "past the cooldown: due again"
+    reap.stamp_round(s, now=1e6 + 10 * 60)
+    assert reap.load_due(s, {"load_limit": 8}, now=1e6, load5=12, autos=on)[0], "a stamp from the future holds nothing off"
 # The automation does not inherit the shell that ran schedule, so a state or ledger off the default goes in as flags,
 # never an `env` or `VAR=` prefix, which a scheduled session may refuse as a command of its own.
 assert argv[argv.index("--precheck") + 1] == "python3 /abs/reap.py precheck --state /s --ledger /l/ledger.jsonl"

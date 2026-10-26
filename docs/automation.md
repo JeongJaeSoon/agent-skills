@@ -18,8 +18,8 @@ skills-sync setup disable <이름>         # 끄기
 
 | 이름 | 기본 | 장치 | 켜기 | 끄기 |
 |---|---|---|---|---|
-| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로) | `orca automations edit --disabled`. 등록은 남겨 `apply`가 다시 켜지 않는다 |
-| `janitor-load` | on | Orca automation `agent-skills janitor load` | `janitor`와 같고, 만들 때는 `reap.py schedule --load --write` | `janitor`와 같다 |
+| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로) | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
+| `janitor-load` | on | Orca automation `agent-skills janitor load` | `janitor`와 같고, 만들 때는 `reap.py schedule --load --write` | 이 job만 끈다 |
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
 | `pressure-watch` | on | LaunchAgent `io.github.jeongjaesoon.pressure-watch` | `pressure.py install`(3분마다 `round`) | `pressure.py uninstall` |
 | `share-server` | off | LaunchAgent(라벨은 설정 `share-server.label`, 기본 `io.github.jeongjaesoon.share-server`) | `share_server.py install`(KeepAlive로 `serve`, 그 안에서 sandbox-exec 아래 caddy. caddy가 없으면 `brew install caddy`부터. 같은 라벨의 다른 plist는 백업 후 교체) | `share_server.py uninstall` |
@@ -116,4 +116,4 @@ python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다
 ```
 
-주기는 3시간(`17 */3 * * *`)이다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load`)가 같은 회차를 한 번 더 돈다. janitor를 꺼 둔 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 같은 계획이 reap 없이 쌓이면 모델을 깨우지 않는 규칙(`reap.plan_repeat`)은 두 job이 함께 쓴다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
+주기는 3시간(`17 */3 * * *`)이다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load`)가 같은 회차를 한 번 더 돈다. janitor를 꺼 둔 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 janitor가 꺼져 있지 않고(Orca 앱에서 끈 것도, automation 목록을 못 읽은 것도 꺼짐으로 본다) 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 쿨다운은 부하 job만 멈추고, 3시간 job은 늘 제 시각에 돈다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 같은 계획이 reap 없이 쌓이면 모델을 깨우지 않는 규칙(`reap.plan_repeat`)은 두 job이 함께 쓴다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).

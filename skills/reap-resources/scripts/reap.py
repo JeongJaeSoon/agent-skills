@@ -38,8 +38,8 @@ older than reap.state_days and rotates sync.log past reap.log_max_kb. precheck s
 program and state-file at most once a day, writes janitor-plan.json
 to the state dir and exits 0 when there are targets, except: the set the last reap failed on, for a day; and a set already
 planned reap.plan_repeat times with no reap since, retried once a day, with one message to reap.inbox_to. precheck --load
-first exits 1 unless the 5-minute load is at reap.load_limit and no precheck ran within reap.load_cooldown_minutes
-(default 60). schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
+first exits 1 unless the 5-minute load is at reap.load_limit, the periodic janitor is not turned off, and no precheck ran
+within reap.load_cooldown_minutes (default 60). schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
 """
 import concurrent.futures, contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
 
@@ -756,14 +756,18 @@ def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
         base["how"].insert(0, "다시 판정한 뒤 재생성 사본 " + " ".join(shlex.quote(c) for c in facts["regenerated"]) + " 을 휴지통으로")
     shells = ""
     if facts.get("shells"):
-        base["shells"] = facts["shells"]
-        base["how"].insert(-1, f"orca terminal close --worktree {shlex.quote('path:' + path)} --all --json")
+        base["shells"], base["terminals"] = facts["shells"], facts.get("terminals") or []
+        for h in base["terminals"]:
+            base["how"].insert(-1, f"orca terminal close --terminal {shlex.quote(h)} --json")
         shells = f", 프롬프트에 멈춘 셸 {len(facts['shells'])}개는 터미널째 닫음"
     ref = facts.get("pr")
     s = pr_state(ref) if ref else None
     idle = facts.get("idle")
     if facts.get("live"):
         why = facts["live"]
+    elif facts.get("shells") and (facts.get("children") or facts.get("children_unread")):
+        # done-card's guard: a lead's shell idles at its prompt while its workers run.
+        why = "자식 카드가 열려 있음" if facts.get("children") else "자식 카드 목록을 읽지 못함"
     elif not ref and facts.get("pr_unread"):
         why = "브랜치의 PR 을 읽지 못함(gh)"
     elif not ref and facts.get("landed") is None:
@@ -900,14 +904,16 @@ def shell_sessions(pids, rows):
 
 
 def terminals_silent(path, now, window, sessions):
-    """No Orca terminal of the card wrote output for window seconds. None when that is unknown: the list unreadable
-    or cut short, an output time missing, or fewer Orca terminals than shell sessions (Terminal, tmux or ssh holds one
-    that `orca terminal close` would not close)."""
+    """The handles of the card's Orca terminals when none wrote output for window seconds; False when one did. None
+    when that is unknown: the list unreadable or cut short, an output time or handle missing, a terminal an agent
+    holds (its process may have moved out of the card), or Orca terminals not one per shell session (Terminal, tmux
+    or ssh holds one that `orca terminal close` would not close, or a terminal runs something that is not a shell)."""
     res = orca_json("terminal", "list", "--worktree", f"path:{path}")
     terms = res.get("terminals") if isinstance(res, dict) and not res.get("truncated") else None
-    if not terms or len(terms) < sessions or any(not t.get("lastOutputAt") for t in terms):
+    if (not terms or len(terms) != sessions
+            or any(not t.get("lastOutputAt") or not t.get("handle") or t.get("agentIdentity") for t in terms)):
         return None
-    return all(now - t["lastOutputAt"] / 1000 >= window for t in terms)
+    return all(now - t["lastOutputAt"] / 1000 >= window for t in terms) and [t["handle"] for t in terms]
 
 
 def regenerated_copies(path, git=run):
@@ -1241,7 +1247,7 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
                     silent = terminals_silent(path, now or time.time(), shell_idle_s,
                                               len(shell_sessions(facts["users"], rows)))
                     if silent:
-                        facts.update(shells=facts["users"], users=[], live=None)
+                        facts.update(shells=facts["users"], terminals=silent, users=[], live=None)
                     elif silent is False:
                         facts["live"] = f"셸 터미널 출력이 {int(shell_idle_s // 60)}분 안에 있음"
                 else:
@@ -1618,18 +1624,28 @@ def schedule_cmd(script, state_dir, workspace, provider="claude", ledger=None, i
             "--prompt", schedule_prompt(script, state_dir, ledger, inbox), "--json"]
 
 
-def load_due(state_dir, cfg, now=None, load5=None):
-    """(due, why) for the load job: the 5-minute load is at reap.load_limit (default the CPU count) and no janitor
-    round of either job scanned within reap.load_cooldown_minutes."""
+def load_due(state_dir, cfg, now=None, load5=None, autos=None):
+    """(due, why) for the load job: the 5-minute load is at reap.load_limit (default the CPU count), the periodic
+    janitor is not turned off (autos: `orca automations list`, read when the load is high; None when unreadable), and
+    no janitor round of either job scanned within reap.load_cooldown_minutes."""
     now = now or time.time()
     load5 = os.getloadavg()[1] if load5 is None else load5
     limit = float(cfg.get("load_limit") or os.cpu_count() or 1)
     if load5 < limit:
         return False, f"load5 {load5:.1f} < 한계 {limit:g}"
-    cooldown = float(cfg.get("load_cooldown_minutes", LOAD_COOLDOWN_MINUTES)) * 60
+    if autos is None:
+        autos = orca_json("automations", "list")
+    if not isinstance(autos, dict):
+        return False, "orca automations list 를 읽지 못해 janitor 가 켜져 있는지 모름"
+    janitor = next((a for a in autos.get("automations") or [] if a.get("name") == JANITOR_NAME), None)
+    if janitor and not janitor.get("enabled"):
+        return False, "janitor 가 꺼져 있음"
+    v = cfg.get("load_cooldown_minutes")
     with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+        cooldown = float(LOAD_COOLDOWN_MINUTES if v is None else v) * 60
         last = json.loads((state_dir / "janitor-round.json").read_text())["t"]
-        if now - last < cooldown:
+        # A stamp from the future (a clock set back) does not hold the job off.
+        if 0 <= now - last < cooldown:
             return False, f"load5 {load5:.1f} ≥ 한계 {limit:g} 이나 지난 회차가 {age(now - last)} 전"
     return True, f"load5 {load5:.1f} ≥ 한계 {limit:g}"
 
@@ -1716,17 +1732,19 @@ def last_entry_time(path):
         return None
     except OSError as e:
         raise Unreadable(f"세션 기록 {path.name} 을 읽지 못함({type(e).__name__})") from e
-    for line in reversed(lines):
+    times = []
+    for line in lines:
         try:
             ts = json.loads(line).get("timestamp")
         except (ValueError, AttributeError):
             continue  # the tail's cut first line, or a non-object line
         if ts:
             try:
-                return parse_ts(ts)
+                times.append(parse_ts(ts))
             except (ValueError, TypeError, AttributeError) as e:
                 raise Unreadable(f"세션 기록 {path.name} 의 시각 {str(ts)[:40]!r} 을 읽지 못함") from e
-    return mtime
+    # A line appended later can carry an older time; the last line's would read the session as quieter.
+    return max(times, default=mtime)
 
 
 def transcript_quiet(projects_dir, now, reasons=False):
@@ -1937,8 +1955,8 @@ def act(item, notes):
         ignored = [os.path.join(p, x.rstrip("/")) for x in out.split("\0") if x]
         if ignored:
             trash(*ignored)
-        if item.get("shells"):
-            run(["orca", "terminal", "close", "--worktree", f"path:{p}", "--all", "--json"])
+        for h in item.get("terminals") or []:
+            run(["orca", "terminal", "close", "--terminal", h, "--json"])
         run(["orca", "worktree", "rm", "--worktree", f"path:{p}", "--run-hooks", "--json"])
         return (f"재생성 사본 {len(copies)}개, " if copies else "") + \
             f"ignored 항목 {len(ignored)}개는 휴지통으로, " + ("셸 터미널을 닫고 " if item.get("shells") else "") + \

@@ -145,6 +145,12 @@ class Janitor(OrcaJob):
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
         return 0, "켬" + (f" (reap schedule 에 맞춘 필드: {', '.join(drift)})" if drift else "")
 
+    def disable(self):
+        """The load job runs the same round, so turning the janitor off turns it off too."""
+        code, msg = super().disable()
+        load_code, load_msg = JanitorLoad().disable()
+        return code | load_code, f"{msg} · janitor-load: {load_msg}"
+
 
 class JanitorLoad(Janitor):
     name = "janitor-load"
@@ -161,6 +167,9 @@ class JanitorLoad(Janitor):
             return [], "janitor 가 꺼져 있어 만들지 않음"
         ws = ((j or {}).get("workspaceId") or "").partition("::")[2]
         return ["--load", *(["--workspace", f"path:{ws}"] if ws else [])], None
+
+    def disable(self):
+        return OrcaJob.disable(self)
 
 
 # ---------------------------------------------------------------- preview-watch (LaunchAgent)
