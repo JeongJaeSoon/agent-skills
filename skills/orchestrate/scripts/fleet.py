@@ -1023,6 +1023,16 @@ def pr_refs(text):
     return sorted({pr_key(m[1], m[2]) if m[1] else pr_key(m[3], m[4]) for m in PR_REF_RE.finditer(text or "")})
 
 
+def board_prs():
+    """The PR keys board.json's rows name, and every full owner/repo#N in its doing, later and owner_todo text and in
+    the external inbox."""
+    b = read_json(state_dir() / "board.json", {}) or {}
+    text = [f"{d.get('title')} {d.get('next')}" for d in b.get("doing") or []]
+    text += [f"{l.get('title')} {l.get('trigger')}" for l in b.get("later") or []] + list(b.get("owner_todo") or [])
+    text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({})]
+    return ({r.get("pr") for r in (b.get("rows") or {}).values() if isinstance(r, dict)} | set(pr_refs(" ".join(text)))) - {None}
+
+
 def pr_query(keys, body):
     parts = []
     for i, k in enumerate(keys):
@@ -1405,13 +1415,16 @@ class Fleet:
             except SourceError as e:
                 errors.append(f"search: {e}")
         live = {f"{s['gh_repo']}@{s['branch']}" for s in sessions.values()}
-        self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or not searched}
+        # A PR the board or the inbox names stays known after the search stops finding it, so a row about it shows
+        # its state, not "?", and tidy.py can close what it carried.
+        named = board_prs() - set(owner_of) - set(swept)
+        self.prs = {k: v for k, v in self.prs.items() if k in owner_of or k in swept or k in named or not searched}
         self.branch_pr = {k: v for k, v in self.branch_pr.items() if k in live}
         # 3. Probe every PR whose tier says it is due, or that the search saw updated; 4. detail for the ones that
         # changed. An open page puts a session's PRs on the hot tier and opening it probes them at once; the rest of
         # mine (a hundred or more, 5 s per 25) keep their tier, which is there for CI moves that leave updatedAt alone.
         due = []
-        for k in list(owner_of) + [k for k in swept if k not in owner_of]:
+        for k in list(owner_of) + [k for k in swept if k not in owner_of] + sorted(named):
             sid, entry = owner_of.get(k), self.prs.get(k)
             det = (entry or {}).get("detail")
             # A detail read before "base" was collected is read again now, so a merged PR does not wait a day for it.
@@ -1688,7 +1701,8 @@ class Fleet:
         for store in (prompts, phases):
             for k in [k for k in store if k not in panes]:
                 del store[k]
-        timeline = list(self.events)
+        import tidy
+        timeline = list(self.events) + tidy.timeline()
         timeline += [{"at": m.get("created_at"), "kind": f"mail_{m.get('type')}", "session": by_handle.get(m.get("from_handle")),
                       "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]
                      if m.get("type") != "heartbeat"]  # one every 5 min per worker: it would bury everything else

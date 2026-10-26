@@ -51,6 +51,8 @@ import sent  # noqa: E402
 import stages  # noqa: E402
 import flow  # noqa: E402
 import acks  # noqa: E402
+import tidy  # noqa: E402
+import board  # noqa: E402
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -1394,6 +1396,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             written, refused = acks.write(body["ids"][:500], undo=body.get("undo") is True)
             FLEET_WAKE.set()
             return self.send(200, json.dumps({"written": written, "refused": refused}).encode())
+        elif path == "/api/fleet/done" and isinstance(body.get("ids"), list) and all(isinstance(i, str) for i in body["ids"]):
+            written, refused = board.close(body["ids"][:500], undo=body.get("undo") is True)
+            FLEET_WAKE.set()
+            return self.send(200, json.dumps({"written": written, "refused": refused}).encode())
         elif path == "/api/fleet/send" and isinstance(body.get("session"), str) and isinstance(body.get("text"), str):
             handle = body.get("handle") if isinstance(body.get("handle"), str) else None
             code, out = fleet.send(body["session"], body["text"], handle)
@@ -1432,6 +1438,8 @@ def fleet_loop():
                 log(f"fleet: relayed the answer to {did}")
             for h in fleet.retry_reloads():
                 log(f"fleet: reloaded {h}")
+            for r in tidy.run():
+                log(f"fleet: tidy closed {r['id']} ({r['rule']}: {r['evidence']})")
         except Exception as e:  # keep serving; the next tick retries
             log(f"fleet: tick failed: {e!r}")
         try:
@@ -1622,7 +1630,15 @@ def brief_report():
         out = json.loads(r.stdout)
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
-    return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok", "done")}
+    return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok", "done", "open")} | {"closed": closed_recent()}
+
+
+def closed_recent(days=7):
+    """What tidy.jsonl closed in the last days, newest first, for the page's Reopen buttons."""
+    cut = iso(utcnow() - dt.timedelta(days=days))
+    return sorted(({"id": k, **r} for k, r in tidy.closed().items() if (r.get("ts") or "") >= cut),
+                  key=lambda r: r.get("ts") or "", reverse=True)
+
 
 
 FLOW_CACHE, FLOW_TTL = {}, {"flow": 30, "changes": 60}

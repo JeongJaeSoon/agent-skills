@@ -97,6 +97,13 @@ Usage: orch <command> <slug> [options]
                  [--status moving|owner|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
   board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D]
         | later drop <n> | todo [LINE]... | show
+  board open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | tidy [--dry-run] [--json] | closed
+                                     close what is over (tidy.py): open lists what can be closed now (a row,
+                                     card:<session>, doing:/later:/todo:<k>); done closes it, reopen undoes it.
+                                     tidy is one pass of what the dashboard's collector runs after each tick:
+                                     it closes on evidence only (a merged or closed PR, a session gone) and
+                                     marks what it cannot settle 확인 필요; closed lists every close with its
+                                     evidence. The dashboard's Done and Reopen buttons call the same function.
                                      no slug: the board the periodic report is rendered from (board.json beside
                                      stages.json), one row per lead, phase and sub-task. set changes only the
                                      fields given and stamps reported_at; an id a/b hangs off a. A row without
@@ -2403,11 +2410,40 @@ def cmd_board(argv):
             board.set_todo(rest)
         elif sub == "show":
             print(json.dumps(board.read(), ensure_ascii=False, indent=1))
+        elif sub in ("done", "reopen") and rid:
+            ids = [a for a in rest if not a.startswith("--") and a != opt(rest, "--why")]
+            written, refused = board.close(ids, undo=sub == "reopen", why=opt(rest, "--why"))
+            if "--json" in rest:
+                print(json.dumps({"written": written, "refused": refused}, ensure_ascii=False))
+            else:
+                print(f"{'closed' if sub == 'done' else 'reopened'} {len(written)}" + (f": {' '.join(written)}" if written else ""))
+                for i, why in refused:
+                    print(f"refused {i}: {why}", file=sys.stderr)
+            sys.exit(1 if refused else 0)
+        elif sub == "open":
+            items = board.render(fill=True)["open"]
+            if "--json" in rest:
+                return print(json.dumps(items, ensure_ascii=False, indent=1))
+            for o in items:
+                print(f"{o['id']}  {o['kind']}  {o['label']}" + (f"  (확인 필요: {o['check']})" if o["check"] else ""))
+        elif sub == "tidy":
+            import tidy
+            rows = tidy.run(dry="--dry-run" in rest)
+            if "--json" in rest:
+                return print(json.dumps(rows, ensure_ascii=False, indent=1))
+            for r in rows:
+                print(f"{r['id']}  {r['rule']}: {r['evidence']}  ({r['label']})")
+            print(f"{'would close' if '--dry-run' in rest else 'closed'} {len(rows)}")
+        elif sub == "closed":
+            import tidy
+            for k, r in tidy.closed().items():
+                print(f"{k}  {r['ts']}  {r.get('by')}  {r.get('rule')}: {r.get('evidence')}  ({r.get('label')})")
         else:
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] | lead close <name> | "
                      "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
                      "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
-                     "later drop <n> | todo [LINE]... | show")
+                     "later drop <n> | todo [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
+                     "tidy [--dry-run] [--json] | closed")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
     if sub in ("lead", "set") and (warning := board.unnamed_warning()):

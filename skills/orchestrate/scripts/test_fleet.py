@@ -761,6 +761,15 @@ assert f.sources["github"]["ok"] is False
 del world.prs[8]
 f.graphql = counting
 assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "closed or gone from the search: off the page"
+# Unless the board names it: a row about a PR the search no longer finds still gets its state, not "?".
+world.prs[8] = dict(world.prs[7], number=8, state="CLOSED", url="https://github.com/acme/tools/pull/8")
+fleet.write_atomic(state_dir / "board.json", json.dumps({"rows": {"x": {"id": "x", "pr": "acme/tools#8"}},
+                                                        "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]}))
+assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
+assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
+(state_dir / "board.json").unlink()
+del world.prs[8]
+assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}, "off the board: the search decides again"
 # Few GraphQL points left: the PR tick waits (up to 15 min) instead of spending them.
 f.rate, f.last["prs"] = 100, fleet.time.monotonic() - 100
 probed.clear()

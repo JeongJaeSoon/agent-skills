@@ -810,7 +810,34 @@ function fleetBrief() {
   const finished = (b.done || []).length ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
     ${ackNote()}<ul class="rows">${shown.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow ellipsis">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
       || '<li class="muted">Every finished row is acked.</li>'}</ul></div>` : "";
-  return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>` + finished;
+  return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>` + finished + doneCards(b);
+}
+
+// Done (tidy.py, `orch board done`): close a row, card or board item that is over, or reopen one. The collector closes
+// on evidence by itself after each tick; what it could not settle is marked "check". The server decides what may close.
+const DONE_KIND = { row: "row", doing: "in progress", later: "held", todo: "your to-do" };
+const doneBtn = (id, undo) => `<button class="chip ack" type="button" data-done="${esc(id)}"${undo ? " data-undo" : ""}
+  title="${undo ? "Reopen: show it again (orch board reopen)" : "Done: close it here and in the brief (orch board done)"}">${undo ? "Reopen" : "Done"}</button>`;
+function doneCards(b) {
+  const open = (b.open || []).map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}<span class="grow ellipsis" title="${esc(o.label)}">${esc(o.label)}</span>
+    ${o.check ? `<span class="acts muted ellipsis" title="${esc(o.check)}">check: ${esc(o.check)}</span>` : ""}${doneBtn(o.id)}</li>`).join("");
+  const shut = (b.closed || []).map((c) => `<li class="is-acked">${tag(c.by === "auto" ? "auto" : "you", c.by === "auto" ? "accent" : "")}<span class="grow ellipsis" title="${esc(c.label || c.id)}">${esc(c.label || c.id)}</span>
+    <span class="acts muted ellipsis" title="${esc(c.evidence || "")}">${esc(c.rule || "")}: ${esc(c.evidence || "")} · ${relSpan(c.ts)}</span>${doneBtn(c.id, true)}</li>`).join("");
+  const note = F.doneError ? `<div class="ack-note">${tag("not closed", "warn", "alert")} ${esc(F.doneError)}</div>` : "";
+  return `<div class="card"><div class="card-head"><h3>Open items</h3><span class="aside muted">${(b.open || []).length}</span></div>${note}
+    <ul class="rows">${open || '<li class="muted">Nothing open.</li>'}</ul></div>`
+    + (shut ? `<div class="card"><div class="card-head"><h3>Closed in the last 7 days</h3><span class="aside muted">${(b.closed || []).length}</span></div><ul class="rows">${shut}</ul></div>` : "");
+}
+async function doneAction(t) {
+  t.disabled = true;
+  try {
+    const out = await fleetPost("/api/fleet/done", { ids: t.dataset.done.split(" "), undo: "undo" in t.dataset });
+    F.doneError = (out.refused || []).map(([id, why]) => `${id}: ${why}`).join(" · ") || null;
+    F.briefEtag = null;
+    await pollBrief();
+  } catch (err) { F.doneError = String(err.message || err); }
+  t.disabled = false;
+  renderView();
 }
 
 // The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
@@ -877,6 +904,8 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
   const ack = e.target.closest("[data-ack]");
   if (ack) ackAction(ack);
+  const done = e.target.closest("[data-done]");
+  if (done) doneAction(done);
 });
 
 // Orca automations (state.json automations). An enabled one is ▲ when its last run failed or its next run is 10 min
