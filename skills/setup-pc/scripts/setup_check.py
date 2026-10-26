@@ -210,6 +210,8 @@ def check_automations(run=run):
         rows.append(row("missing", "정기 자동화", f"기본 on 인데 설정 안 됨: {names('absent')}", "메인 체크아웃에서 ! skills-sync setup apply"))
     if "off" in by:
         rows.append(row("disabled", "정기 자동화", f"사용자가 끔: {names('off')}", "다시 켜려면 ! skills-sync setup enable <이름>"))
+    if "unconfigured" in by:
+        rows.append(row("info", "정기 자동화", f"설정 키가 없어 꺼 둠: {names('unconfigured')}", "개인 설정을 넣으면 다음 setup 이 켠다"))
     if "unsupported" in by:
         rows.append(row("unsupported", "정기 자동화", f"이 OS 미지원: {names('unsupported')}", "! skills-sync setup enable <이름> 이 이 OS 에서 대신 돌릴 명령을 알려 준다"))
     rest = sum(by.values(), [])

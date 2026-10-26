@@ -5,5 +5,23 @@
   "homepage": "https://github.com/JeongJaeSoon/agent-skills",
   "repository": "https://github.com/JeongJaeSoon/agent-skills",
   "license": "MIT",
-  "keywords": ["pstack", "orca", "linear", "orchestration", "code-review"]
+  "keywords": ["pstack", "orca", "linear", "orchestration", "code-review"],
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "응답 언어",
+      "description": "settings.json 의 language 로 제안할 값(예: Korean). 비우면 시스템 locale"
+    },
+    "checkout": {
+      "type": "string",
+      "title": "체크아웃 경로",
+      "description": "setup-pc 가 이 저장소를 clone 해 세션이 실시간으로 읽게 할 경로",
+      "default": "~/src/agent-skills"
+    },
+    "personal_repo": {
+      "type": "string",
+      "title": "개인 설정 저장소",
+      "description": "agent-skills.json 개인 키, agents/*.md, automode.json 을 담은 private git 저장소 URL. 비우면 가져오지 않는다"
+    }
+  }
 }

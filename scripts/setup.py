@@ -12,6 +12,8 @@ Options:
   --language NAME   `language` when it is unset (default: from the system locale)
   --settings-only   only the files: no launchd job, sync, automations, Orca or check
   --orca-run        bind this terminal to a new Orca Run when it has none (`run-create`)
+  --actions-only    only the steps after the files: launchd job, sync, automations, Orca and check. Writes no
+                    settings and takes no HASH: the agent runs it, and the plugin's guard hook asks the human first
   --bundle FILE     another recommended-settings file (tests)
   --here            allow a worktree checkout; implies --settings-only (tests)
 
@@ -19,6 +21,10 @@ HASH is printed with the diff and covers every planned write and action, so anyt
 review no longer matches. Merging adds only what is missing and never overwrites a value, except that an enabled
 marketplace copy of agent-skills is turned off; a recommended item applied once and later removed by the user is
 not offered again (the record is in the agent-skills state dir).
+
+The personal folder ($AGENT_SKILLS_CONFIG_DIR/personal, default ~/.config/agent-skills/personal; setup-pc clones the
+user's private repo there) joins the plan when it exists: its agent-skills.json keys, automode.json rules and
+agents/*.md, each added only where missing, like the recommended items.
 """
 import argparse, difflib, hashlib, json, locale, os, pathlib, shlex, shutil, subprocess, sys, tempfile, time
 
@@ -44,7 +50,10 @@ def paths():
     cfg = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser()
     state = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
     return {"settings": pathlib.Path(os.environ.get("CLAUDE_SETTINGS") or cfg / "settings.json").expanduser(),
-            "skills_json": cfg / "agent-skills.json", "state": state, "record": state / "setup-applied.json"}
+            "skills_json": cfg / "agent-skills.json", "agents": cfg / "agents", "state": state,
+            "record": state / "setup-applied.json",
+            "personal": pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG_DIR") or "~/.config/agent-skills").expanduser()
+            / "personal"}
 
 
 def sh(cmd, timeout=60):
@@ -187,18 +196,33 @@ def plan(args):
     language = args.language or system_language()
     if language:
         rec = {"language": language, **rec}
+    keys = fill(bundle.get("agent_skills_json") or {}, values)
+    mine = p["personal"]
+    rules = read_json(mine / "automode.json", {})
+    for name in SECTIONS:
+        add = rules.get(name) or []
+        if not isinstance(add, list) or not all(isinstance(r, str) for r in add):
+            raise Refused(f"{mine / 'automode.json'}: {name} is not a list of rule strings")
+        have = rec.setdefault("autoMode", {}).setdefault(name, [])
+        have += [r for r in add if r not in have]
+    for key, value in leaves(read_json(mine / "agent-skills.json", {})):
+        put(keys, key, value)  # the user's own value wins over the recommended default
     record = read_json(p["record"], {})
     skip = set(record.get("offered") or [])
     notes = []
     settings = read_json(p["settings"], {})
     new_settings, offered = merge_settings(settings, rec, skip, notes)
     skills_json = read_json(p["skills_json"], None)
-    new_skills, offered_keys = merge_keys(skills_json or {}, fill(bundle.get("agent_skills_json") or {}, values), skip)
+    new_skills, offered_keys = merge_keys(skills_json or {}, keys, skip)
     files = []
     if new_settings != settings:
         files.append((p["settings"], settings if p["settings"].exists() else None, new_settings))
     if new_skills != (skills_json or {}):
         files.append((p["skills_json"], skills_json, new_skills))
+    for agent in sorted((mine / "agents").glob("*.md")):
+        offered_keys.add(f"agents\t{agent.name}")
+        if not (p["agents"] / agent.name).exists() and f"agents\t{agent.name}" not in skip:
+            files.append((p["agents"] / agent.name, None, agent.read_text()))
     all_offered = sorted(skip | offered | offered_keys)
     if files or all_offered != sorted(skip):
         files.append((p["record"], record or None, {"offered": all_offered}))
@@ -220,7 +244,8 @@ def plan(args):
 
 
 def text(d):
-    return json.dumps(d, ensure_ascii=False, indent=2) + "\n"
+    """A settings dict as JSON; an agent file's text as it is."""
+    return d if isinstance(d, str) else json.dumps(d, ensure_ascii=False, indent=2) + "\n"
 
 
 def digest(files, actions):
@@ -261,7 +286,7 @@ def write(path, data):
     if backup:
         shutil.copymode(backup, tmp)
     os.replace(tmp, real)
-    if json.loads(real.read_text()) != data:
+    if real.read_text() != text(data):
         undo = f"cp {shlex.quote(str(backup))} {shlex.quote(str(real))}" if backup else f"rm {shlex.quote(str(real))}"
         raise Refused(f"{real} did not read back as written; restore it: {undo}")
     return real, backup
@@ -327,12 +352,20 @@ def main(argv):
     ap.add_argument("--language")
     ap.add_argument("--settings-only", action="store_true")
     ap.add_argument("--orca-run", action="store_true")
+    ap.add_argument("--actions-only", action="store_true")
     ap.add_argument("--bundle", type=pathlib.Path)
     ap.add_argument("--here", action="store_true")
     args = ap.parse_args(argv)
+    if args.actions_only and (args.apply or args.settings_only or args.update or args.here):
+        ap.error("--actions-only takes none of --apply, --settings-only, --update, --here")
     args.settings_only = args.settings_only or args.here
     try:
         preflight(args)
+        if args.actions_only:
+            failed = run_actions(args)
+            if failed:
+                raise Refused(f"these steps failed: {', '.join(failed)}; fix the cause, then run it again")
+            return 0
         if args.update and args.apply:
             sys.stdout.flush()
             if subprocess.run([sys.executable, str(HERE / "sync.py"), "sync", "--no-broadcast"]).returncode:

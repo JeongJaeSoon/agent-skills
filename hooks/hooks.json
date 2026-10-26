@@ -36,6 +36,10 @@
       {
         "matcher": "startup|resume|compact|fork",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/reorient.py\"", "timeout": 10 }]
+      },
+      {
+        "matcher": "startup|clear",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/onboard.py\"", "timeout": 5 }]
       }
     ],
     "Stop": [

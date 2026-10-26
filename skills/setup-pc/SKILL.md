@@ -5,12 +5,14 @@ description: "Use when agent-skills goes onto another PC or an installed PC need
 
 # Set up or update agent-skills on a PC
 
-Installing the plugin brings the skills; it does not bring the user settings, the minimal `agent-skills.json` keys or the automations. `scripts/setup.py` in the checkout (`${CLAUDE_SKILL_DIR}/../../scripts/setup.py`) does all of it in one run from the repo's recommended defaults (`scripts/recommended-settings.json`): a dry run shows a diff per file and prints one `--apply <hash>` line, and the human runs that line. What each setting does is in `docs/new-pc.md`; this skill does not repeat it.
+Installing the plugin brings the skills; it does not bring the user settings, the minimal `agent-skills.json` keys, the user's personal config or the automations. `scripts/setup.py` in the checkout (`${CLAUDE_SKILL_DIR}/../../scripts/setup.py`) does it from the repo's recommended defaults (`scripts/recommended-settings.json`) and the user's personal folder, in two halves: the files, which a dry run shows as a diff and the human applies with one `--apply <hash>` line, and the steps that write no Claude settings (`--actions-only`), which this skill runs behind a permission dialog. What each setting does is in `docs/new-pc.md`, and why the line is split there in `docs/zero-command-setup.md`; this skill does not repeat them.
 
 ## What this skill never does
 
-- Write `~/.claude/settings.json`, `~/.claude/agent-skills.json` or anything else under `~/.claude`, by any tool, and never run `setup.py --apply`, `bootstrap.py --write`, `skills-sync setup apply` or `gh auth login`. Those are the human's `!` lines. The auto-mode classifier refuses an agent's edit to its own settings, and the human reading the diff is what authorizes the bundled rules.
-- Carry one PC's or one company's values: internal name lists, chat channels, tracker projects, notes paths, a personal `CLAUDE.md`, personal skills or agents. Without them each feature keeps its default (off, or asks on first use).
+- Write `~/.claude/settings.json`, `~/.claude/agent-skills.json` or anything else under `~/.claude`, by any tool, and never run `setup.py --apply`, `bootstrap.py --write` or `gh auth login`. Those are the human's `!` lines. The auto-mode classifier refuses an agent's edit to its own settings, and the human reading the diff is what authorizes the bundled rules.
+- Run any setup step other than `python3 <checkout>/scripts/setup.py --actions-only [--orca-run]`, which the plugin's guard hook turns into a permission dialog. A dialog the human declines or a classifier denial is reported with the line for the human, never retried in another form.
+- Edit the personal repo's files. It is the user's; this skill only clones it and fast-forwards it.
+- Carry one PC's or one company's values from anywhere but the user's personal repo (step 4): internal name lists, chat channels, tracker projects, notes paths, a personal `CLAUDE.md`, personal skills or agents. Without them each feature keeps its default (off, or asks on first use).
 
 | Change after setup | Owner |
 |---|---|
@@ -21,12 +23,17 @@ Installing the plugin brings the skills; it does not bring the user settings, th
 
 ## Setup: a new PC
 
-1. **Nothing installed yet?** The skill cannot fire. The human follows README "설치": clone, then the dry run and the `--apply` line it prints. Then a new session.
-2. **`gh` logged in first.** The rules about the user's repositories are filled from the `gh` login and left out without it; if `gh auth status` fails, hand over `! gh auth login` before the dry run. **Ask the language** the human wants answers in (default: the system locale, which `setup.py` reads). Ask whether this session is the orchestrator's Orca terminal; if so, add `--orca-run`, which binds this terminal to a new Run when it has none.
-3. **Dry run** from the main checkout: `python3 <checkout>/scripts/setup.py --language <name> [--orca-run]`. It writes nothing. Show the diff as printed; do not paraphrase rules away. A `refused:` line (a worktree, a branch other than `main`, `CLAUDE_CODE_PLUGIN_DIRS` pointing at another checkout) is fixed first, by the human.
-4. **Hand over the one line** it printed: `! python3 <checkout>/scripts/setup.py … --apply <hash>`. What it does after that is in `docs/new-pc.md`; it ends with a rollback line per file and the check table. A hash that no longer matches means something changed since the diff: dry run again.
-5. **Read the table** it ended with. `missing`, `differs` and `warn` rows are left to do; each row's `next` goes to the human as a `!` line or to the owner above. `gh auth login` and git commit signing are the human's.
-6. **New session.** `CLAUDE_CODE_PLUGIN_DIRS` and the settings are read at start, so sessions running before the apply are restarted, not reloaded.
+The plugin's SessionStart hook (`hooks/onboard.py`) starts this on a PC that was never set up: its paragraph carries the values the human gave the install dialog (`language`, `checkout`, `personal_repo`).
+
+1. **Nothing installed yet?** The skill cannot fire. The human installs from inside a session, `/plugin marketplace add JeongJaeSoon/agent-skills` then `/plugin install agent-skills@jeongjaesoon`, so the install dialog asks for those values (the shell's `claude plugin install` never asks), and opens a new session.
+2. **`gh` logged in first.** The rules about the user's repositories and the personal repo need it; if `gh auth status` fails, hand over `! gh auth login` and wait. **Language**: the install dialog's value, else ask (default: the system locale, which `setup.py` reads). Ask whether this session is the orchestrator's Orca terminal; if so, step 7 adds `--orca-run`, which binds this terminal to a new Run when it has none.
+3. **The checkout.** At the `checkout` path (default `~/src/agent-skills`, expanded to an absolute path), clone `https://github.com/JeongJaeSoon/agent-skills` when nothing is there. An existing checkout is used as it is; a `refused:` line in step 5 says what the human fixes first.
+4. **The personal folder.** With a `personal_repo`, `git clone <url> ~/.config/agent-skills/personal`, or `git -C ~/.config/agent-skills/personal pull --ff-only` when it is there. Its format (`agent-skills.json`, `automode.json`, `agents/*.md`, all optional) is in `docs/zero-command-setup.md`. Without one, skip this step: each personal feature keeps its default.
+5. **Dry run** from the checkout: `python3 <checkout>/scripts/setup.py --settings-only --language <name>`. It writes nothing. Show the diff as printed; do not paraphrase rules away. A `refused:` line (a worktree, a branch other than `main`, `CLAUDE_CODE_PLUGIN_DIRS` pointing at another checkout, a malformed personal file) is fixed first, by the human.
+6. **Hand over the one line** it printed: `! python3 <checkout>/scripts/setup.py … --apply <hash>`. It ends with a rollback line per file. A hash that no longer matches means something changed since the diff: dry run again.
+7. **The steps**, once step 6 is applied: run `python3 <checkout>/scripts/setup.py --actions-only [--orca-run]` as one standalone command with the absolute path. The guard hook shows the human a dialog naming what it does: the sync job, the default-on automations (watch-prs and watch-mentions only when the personal `prs` and `mentions` keys are in, which step 6 put there), Orca, then the check table.
+8. **Read the table** it ended with. `missing`, `differs` and `warn` rows are left to do; each row's `next` goes to the human as a `!` line or to the owner above. `gh auth login` and git commit signing are the human's.
+9. **New session.** `CLAUDE_CODE_PLUGIN_DIRS` and the settings are read at start, so sessions running before the apply are restarted, not reloaded.
 
 The human may refuse part of the bundle: they edit the rule out after applying (the rollback line restores the old file), and later runs do not offer it again.
 
