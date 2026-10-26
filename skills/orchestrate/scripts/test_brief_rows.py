@@ -124,6 +124,13 @@ assert st["later"][-1]["title"] == " ".join(LONG.split()) and st["later"][-1]["t
 assert st["doing"][-1]["next"].endswith("금: 전환") and st["rows"]["long"]["title"] == st["rows"]["long"]["next"] == " ".join(LONG.split())
 row = next(r for r in stages.table()["rows"] if r["id"] == "long")
 assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()), row
+# The table cuts the long name to fit 78 columns, and the whole name is listed right under it; the API keeps it whole.
+b = brief()
+lines = b["text"].splitlines()
+cut = next(l for l in lines if l.startswith("| 🔄 | acme/app#877"))
+assert cut.endswith("…[1] | — | — |") and f"- [1] {' '.join(LONG.split())}" in lines, b["text"]
+assert lines.index(f"- [1] {' '.join(LONG.split())}") - lines.index(cut) <= 3, b["text"]
+assert b["width_ok"] and {o["label"] for o in b["open"]} >= {" ".join(LONG.split())}, b["open"]
 # Orca cuts a task's name to a head and "...": the spec's first line is the whole of it, and nothing else replaces it.
 assert fleet.task_name({"display_name": "role-terms: 용어 정리 — card (202...", "spec": "role-terms: 용어 정리 — card (2026-10-27)\n\n본문"}) \
     == "role-terms: 용어 정리 — card (2026-10-27)"

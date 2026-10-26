@@ -10,9 +10,14 @@ outside any program needs a row too. The merge cell of a recorded row with a PR 
 fleet collector's PR list each time the table is shown. A group row (`--group`) is only a heading for
 the rows under it, a feature or an epic: it has no PR and no cells.
 """
-import datetime as dt, fcntl, json, re
+import datetime as dt, fcntl, json, pathlib, re, sys
 
 import fleet, stage_auto
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "brief" / "scripts"))
+import table_width  # noqa: E402
+
+COLS = 78
 
 MARKS = ("ok", "fail", "partial", "checking", "na")
 ALIASES = {"✅": "ok", "❌": "fail", "⚠️": "partial", "⚠": "partial", "🔄": "checking", "해당없음": "na", "해당 없음": "na"}
@@ -264,18 +269,23 @@ def env_line(env):
 def render_md(t):
     if not t["rows"]:
         return ""
-    lines = [l for l in (env_line(t["env"]), LEGEND) if l] + [
-        "", "| 작업 | feature·대표 PR | PR 머지 | dev 확인 | prod 확인 |", "|---|---|---|---|---|"]
+    header = ["작업", "feature·대표 PR", "PR 머지", "dev 확인", "prod 확인"]
+    lines = [l for l in (env_line(t["env"]), LEGEND) if l] + ["", "| " + " | ".join(header) + " |", "|---|---|---|---|---|"]
     groups = {r["id"] for r in t["rows"] if r.get("group")}
+    body = []
     for r in t["rows"]:
         if r.get("group"):
-            lines.append("| **" + r["title"].replace("|", "\\|") + "** |  |  |  |  |")
+            body.append([r["title"], "", "", "", ""])
             continue
         name = f"ㄴ {r['title']}" if r.get("parent") not in (None, *groups) else r["title"]
         if r.get("done_at"):
             name += " (끝남)"
-        cols = [name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS]
-        lines.append("| " + " | ".join(x.replace("|", "\\|") for x in cols) + " |")
+        body.append([name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS])
+    # A name or a cell's evidence is cut to fit, never the PR, and its whole text goes in the numbered list under it.
+    rows, notes = table_width.fit([header] + body, COLS, (0, 2, 3, 4),
+                                  deco=lambda i, c, x: f"**{x}**" if c == 0 and t["rows"][i - 1].get("group") else x)
+    lines += ["| " + " | ".join(x.replace("|", "\\|") for x in row) + " |" for row in rows[1:]]
+    lines += [""] + [f"- [{n}] {x}" for n, x in enumerate(notes, 1)] if notes else []
     if t["next"]:
         lines += ["", "다음 순서"] + [f"{i}. {n}" for i, n in enumerate(t["next"], 1)]
     return "\n".join(lines)

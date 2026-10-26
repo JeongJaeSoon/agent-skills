@@ -918,14 +918,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     continue
                 out.append(("└ " if l["depth"] else "") + f"{ICON[l['status']]} {name} — {l['progress']}")
         elif mine:  # a section of folded bullets only has no table
-            table = [HEADER]
-            for l in mine:
-                name = ("└ " if l["depth"] else "") + (f"**{l['name']}**" if l["key"] in changed else l["name"])
-                table.append([ICON.get(l["status"], "—"), name, l["cell"] or "—", l["progress"]])
-            # Nothing is cut to fit: a table too wide overflows, and the render reports it.
+            def dress(i, c, s):
+                l = mine[i - 1]
+                return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
+            # Only a name is cut to fit, and its whole text goes in the numbered list under the table. A table the
+            # other cells alone make too wide overflows, and the render reports it.
+            table, notes = table_width.fit([HEADER] + [[ICON.get(l["status"], "—"), l["name"], l["cell"] or "—", l["progress"]]
+                                                       for l in mine], COLS, (1,), deco=dress)
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
+            out += [""] + [f"- [{n}] {t}" for n, t in enumerate(notes, 1)] if notes else []
         if folded.get(sec):
             out += ["", f"{ICON['done']} 그 전 완료 {folded[sec]}건 (대시보드)"]
         for (bsec, rev), items in bullets.items():

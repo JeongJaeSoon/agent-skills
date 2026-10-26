@@ -354,8 +354,8 @@ ok("board", "set", "cart/ph1", "--kind", "phase")
 ok("board", "set", "promo/ph1", "--kind", "phase")
 assert "**acme/shop — (프로젝트 미지정)**" in ok("brief", "render", "--periodic", "--now", NOW)
 
-# No cell is cut and nothing goes to a footnote: a long PR state, a folded row's bases and a long progress show whole, and
-# a table that then passes 78 columns overflows and the render reports it.
+# Only a name is ever cut, and only when that gets the table into 78 columns: a long PR state, a folded row's bases and
+# a long progress show whole, and a table they alone make too wide overflows uncut and the render reports it.
 ok("board", "lead", "add", "wide", "--handle", "term_0FAKE9", "--repo", "acme/wide", "--program", "넓은 표")
 ok("board", "set", "wide", "--title", "긴 이름의 리드 작업", "--progress", "100/100", "--pr", "acme/wide#1201",
    "--next", "다음 단계 설명이 아주 길게 이어짐")
@@ -541,9 +541,15 @@ assert "| 작업 |" not in rok("brief", "render", "--periodic", "--now", NOW)
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](")), tg_req
 assert "📋 작업별 (prod: v1.7.1 · dev: v1.7.2)" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
-# A stage table wider than 78 columns is reported like any other.
-rok("stage", "add", "wide", "--title", "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "--pr", "acme/web#1234")
-rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", "로그로만 확인하고 화면은 아직 보지 않음")
+# A long stage name or evidence is cut to fit, and its whole text is listed under the table on the same screen.
+WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
+rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
+rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
+code, cut, err = orch_env(renv, *REQUEST)
+assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
+assert f"- [2] {WIDE_TITLE}" in cut.splitlines() and f"- [3] ⚠️ {WIDE_EVIDENCE}" in cut.splitlines(), cut
+# One the PR cell alone makes too wide is not cut at all, and is reported like any other.
+rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", "acme/a-very-long-repository-name-for-the-table#123456")
 code, _, err = orch_env(renv, *REQUEST)
 assert code == 1 and err == "a table is wider than 78 columns", (code, err)
 
