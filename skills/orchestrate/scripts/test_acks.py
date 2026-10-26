@@ -122,5 +122,39 @@ assert marks == {"g": ("acked", True), "g1": ("ackable", True), "w": (None, Fals
 code, out = post({"ids": ["stage:g"], "undo": True})
 assert code == 200 and out["written"] == ["stage:g"], out
 assert post({"ids": "stage:g"})[0] == 404, "ids is a list"
+def work():
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/fleet/work", timeout=10) as r:
+        return {row["id"]: (row["ack"], row["hidden"]) for row in json.loads(r.read())["rows"]}
+
+
+# An ack holds only while what it hid is over: a new open row under an acked group shows the group again.
+assert post({"ids": ["stage:g"]})[1]["written"] == ["stage:g"]
+stages.add("g2", "롤백 스크립트", parent="g")
+assert "stage:g" not in acks.ackable(kinds={"stage"})
+marks = work()
+assert marks["g"] == ("acked", False) and marks["g2"] == (None, False) and marks["g1"] == ("ackable", False), marks
+stages.finish("g2")
+assert work()["g2"] == ("ackable", True)
+
+# A held row, and a row whose PR closed unmerged (the board makes it ⏸️ PR 닫힘), are not over: refused.
+board.lead_add("lead-d", "term_0FAKE4", "acme/app")
+board.set_row("lead-d", title="닫힌 실험", status="done", pr="acme/app#9", next="—")
+board.lead_add("lead-e", "term_0FAKE5", "acme/app")
+board.set_row("lead-e", title="보류한 일", status="held", next="다음 분기")
+(tmp / "dashboard" / "prs.json").write_text(json.dumps({"prs": {"acme/app#9": {"probed_at": fleet.iso(now), "detail": {
+    "key": "acme/app#9", "url": "https://example.test/9", "state": "CLOSED", "merged_at": None, "draft": False}}}}))
+assert "PR 닫힘" in brief()["text"]
+code, out = post({"ids": ["board:lead-d", "board:lead-e"]})
+assert code == 200 and out["written"] == [] and [i for i, _ in out["refused"]] == ["board:lead-d", "board:lead-e"], out
+
+# A forged Host is refused even with the right token: a rebinding DNS name cannot reach the write.
+req = urllib.request.Request(f"http://127.0.0.1:{port}/api/fleet/ack", json.dumps({"ids": ["r1"]}).encode(),
+                             {"Content-Type": "application/json", "X-Dash-Token": post.__defaults__[0],
+                              "Host": "evil.example.test"})
+try:
+    urllib.request.urlopen(req, timeout=10)
+    raise AssertionError("a forged Host was let through")
+except urllib.error.HTTPError as e:
+    assert e.code == 403, e.code
 srv.shutdown()
 print("test_acks: ok")

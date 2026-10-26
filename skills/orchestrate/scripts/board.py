@@ -444,13 +444,13 @@ def refresh(now, limit_min):
 
 def drop_acked(lines, prs, rows, have):
     """(lines without the rows the owner acked, every ackable row as {id, label, at, acked}, the hidden keys).
-    Ackable is finished: ✅ or its PR closed, and for a head row every sub-task row under it too (acks.py)."""
+    Ackable is ✅, and for a head row every sub-task row under it too (acks.py): a closed PR's row is held, not done."""
     done, hidden = [], set()
     heads = [i for i, l in enumerate(lines) if l["depth"] == 0] + [len(lines)]
     for a, b in zip(heads, heads[1:]):
         group = lines[a:b]
         for l, whole in [(group[0], group)] + [(l, [l]) for l in group[1:]]:
-            if not all(x["status"] == "done" or (prs.get(x["pr"]) or {}).get("state") == "CLOSED" for x in whole):
+            if not all(x["status"] == "done" for x in whole):
                 continue
             aid, p, r = f"board:{l['key']}", prs.get(l["pr"]) or {}, rows.get(l["key"]) or {}
             done.append({"id": aid, "label": l["name"], "at": p.get("merged_at") or p.get("closed_at") or r.get("reported_at"),

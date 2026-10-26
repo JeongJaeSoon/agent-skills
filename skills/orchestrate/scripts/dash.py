@@ -28,7 +28,8 @@ Usage: orch-dash <command> [options]
   ack <id>... | ack --done-before AGE [--kind req|stage|board]... | unack <id>... | acks [--all] [--json]
                                      mark finished Work rows (stage:<row>), finished brief rows (board:<row>) and
                                      your requests (r7) as checked, so the dashboard and the brief leave them out;
-                                     a row in progress, waiting or held is refused. AGE: 90m, 24h, 7d (see acks.py)
+                                     a row in progress, waiting or held is refused, and an
+                                     acked request stays open (orch req done closes it). AGE: 90m, 24h, 7d (see acks.py)
   adopt [--apply] [--undo all|<worktree>]
                                      show (or write, when config adopt.write_orca_parent is on) each session's
                                      Orca parent worktree; every write is logged and --undo restores it

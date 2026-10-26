@@ -2,8 +2,8 @@
 requests. `orch-dash ack` writes here and the dashboard's buttons call the same functions, so the CLI is the record.
 
 An ack is the owner's view, not the work's state: an acked request is still open for `orch req`, an acked stage row
-is still in stages.json. Only what is over can be acked (a Work row with `done_at`, a brief row that is ✅ or whose
-PR is closed, and every one of its sub-task rows too); a row in progress, waiting on someone or held is refused, so
+is still in stages.json. Only what is over can be acked (a Work row with `done_at`, a brief row that is ✅, and
+every one of its sub-task rows too); a row in progress, waiting on someone or held (a closed PR's row too) is refused, so
 acking never hides what still needs someone. Requests are the owner's own and can all be acked.
 
 One append-only file, <fleet state>/acks.jsonl (0600), one JSON object a line:
@@ -50,12 +50,13 @@ def stage_done(rows):
 
 
 def mark_stages(table):
-    """The Work table with each row's `ack`: "acked", "ackable" or None, and `hidden` when it or a row above it is acked."""
+    """The Work table with each row's `ack`: "acked", "ackable" or None, and `hidden` when it or a row above it is acked
+    and still done."""
     rows = {r["id"]: r for r in table["rows"]}
     have, can = acked(), stage_done(rows)
 
     def hidden(r):
-        return r is not None and (f"stage:{r['id']}" in have or hidden(rows.get(r.get("parent"))))
+        return r is not None and ((aid := f"stage:{r['id']}") in have and aid in can or hidden(rows.get(r.get("parent"))))
     for r in table["rows"]:
         aid = f"stage:{r['id']}"
         r.update(ack="acked" if aid in have else "ackable" if aid in can else None, hidden=hidden(r))
