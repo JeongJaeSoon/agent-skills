@@ -178,7 +178,7 @@ Each PR gets its states from GitHub alone:
   channel is the reviewer's, else `repo_channels`, else `channel`.
 
 The send-log (`<state>/sendlog.jsonl`: pr, reviewer, head, action, source, at, post_at, thread,
-scheduled id) is what decides actions; the ledger does not record them (`once: false`), so an action
+scheduled id, channel) is what decides actions, and what `brief`'s ⏳ line reads for the last request or reminder; the ledger does not record them (`once: false`), so an action
 that failed to send stays due. `source` is `sent`, `scheduled`, `found` (someone already asked in the
 channel; `--at` is that message's time), `no_thread` (no thread to reply in, so nothing was posted),
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.

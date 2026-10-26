@@ -229,7 +229,9 @@ p.write_json(p.STATE / "plan.json", plan)
 k = "acme/widgets#39@h39/request/bob"
 rowed = p.log(p.STATE, k, "found", NOW, thread="CFAKE:5.5", at=NOW - 600)
 assert rowed == {"pr": W + "39", "reviewer": "bob", "head": "h39", "action": "request", "source": "found", "at": NOW - 600,
-                 "post_at": None, "thread": "CFAKE:5.5", "scheduled": None}
+                 "post_at": None, "thread": "CFAKE:5.5", "scheduled": None,
+                 "channel": next(i for i in plan["new"] if i["key"] == k)["channel"]}
+assert rowed["channel"], "the brief's ⏳ line reads where the request went from this field"
 p.log(p.STATE, "acme/widgets#38@h38/retrigger/rabbit", "sent", NOW)
 for bad in (("nope", "sent"), (k, "maybe")):
     try:
