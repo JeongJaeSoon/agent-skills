@@ -1702,8 +1702,8 @@ class Fleet:
                 for r in written:
                     self.event({"at": iso(now), "kind": f"request_{r['ev']}", "session": by_handle.get(asked[r["id"]].get("handle")),
                                 "text": mask(f"{r['id']}: {r.get('to') or r.get('evidence') or r.get('reason')}", 200)})
-        except (OSError, ValueError) as e:
-            self.event({"at": iso(now), "kind": "requests_error", "text": mask(str(e), 200)})
+        except Exception as e:  # a ledger it cannot settle must not take the dashboard down with it
+            self.event({"at": iso(now), "kind": "requests_error", "text": mask(repr(e), 200)})
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),

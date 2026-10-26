@@ -147,16 +147,18 @@ def card(to):
 
 
 def finished(to, prs, cards, seen, board_rows):
-    """Evidence that a link's target is over, or a falsy value: a merged or closed PR, a card seen live before and gone
-    now (cards is None when the card list cannot be trusted), a board row marked done. A link in any other form is
-    never over, so a request with one is left to the coordinator."""
+    """Evidence that a link's target is over, or a falsy value: a merged or closed PR, a card whose worktree was seen
+    live under that name and is gone now (cards, name -> worktree id, is None when the list cannot be trusted; a
+    renamed card keeps its worktree, so it is not gone), a board row marked done. A link in any other form is never
+    over, so a request with one is left to the coordinator."""
     to = (to or "").strip()
     refs = fleet.pr_refs(to)
     if len(refs) == 1 and not fleet.PR_REF_RE.sub("", to).removeprefix("https://").strip("/ "):  # the link is the PR
         p = prs.get(refs[0]) or {}
         return p.get("state") in ("MERGED", "CLOSED") and f"{refs[0]} {p['state'].lower()} {p.get('merged_at') or ''}".strip()
     if name := card(to):
-        return cards is not None and name in seen and name not in cards and f"{to} removed (last seen {seen[name]})"
+        return (cards is not None and name in seen and seen[name]["id"] not in cards.values()
+                and f"{to} removed (last seen {seen[name]['at']})")
     row = board_rows.get(to.removeprefix("board:")) or {}
     return row.get("status") == "done" and f"board:{row['id']} done {row.get('done_at') or ''}".strip()
 
@@ -168,12 +170,12 @@ def reconcile(requests, now, prs, sessions, board_rows, by_handle, seen, orca_ok
     A card, board row or PR is linked only when exactly one request from its maker's terminal came in the
     LINK_WINDOW_MIN before it was made: a turn that answered two prompts cannot say which one the card was for.
     prs is key -> {state, merged_at, created, session}; sessions are the fleet's (id -> id, name, parent, created);
-    board_rows is board.json's rows; by_handle maps each live terminal to its session. seen (card name -> last time
-    it was live) is updated in place and keeps only cards some open request links to. Nothing card- or
+    board_rows is board.json's rows; by_handle maps each live terminal to its session. seen (card name -> its
+    worktree id and the last time it was live) is updated in place and keeps only cards some open request links to. Nothing card- or
     terminal-based happens unless the Orca read just succeeded and listed sessions, so one failed read closes nothing.
     """
     stamp, out = fleet.iso(now), []
-    cards = {s["name"] for s in sessions.values()} if orca_ok and sessions else None
+    cards = {s["name"]: s["id"] for s in sessions.values()} if orca_ok and sessions else None
     window = dt.timedelta(minutes=LINK_WINDOW_MIN)
 
     def start_of(at):
@@ -209,7 +211,7 @@ def reconcile(requests, now, prs, sessions, board_rows, by_handle, seen, orca_ok
         links = q["links"] + new_links[q["id"]]
         for name in filter(None, map(card, links)):
             if cards is not None and name in cards:
-                seen[name] = stamp
+                seen[name] = {"id": cards[name], "at": stamp}
         over = [finished(to, prs, cards, seen, board_rows) for to in links]
         if links and all(over):
             out.append({"ev": "done", "id": q["id"], "ts": stamp, "by": "auto",

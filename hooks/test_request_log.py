@@ -142,7 +142,7 @@ got = {(r["ev"], r["id"], r.get("to")) for r in rows}
 assert got == {("done", "r1", None), ("link", "r2", "card:card-x"), ("drop", "r3", None),
                ("link", "r4", "acme/app#2"), ("link", "r4", "board:lead-a")}, got
 assert all(r["by"] == "auto" for r in rows) and "acme/app#1 merged" in next(r for r in rows if r["ev"] == "done")["evidence"]
-assert seen == {"card-x": iso(now)}  # lead-a/t1 rides on lead-a, made just before it by the same terminal
+assert seen == {"card-x": {"id": "w", "at": iso(now)}}  # lead-a/t1 rides on lead-a, made just before it by the same terminal
 # Two requests in the window before a card: the turn answered both, so the card is linked to neither.
 two = {"x1": {"id": "x1", "ts": at(300), "handle": "term_c", "status": "open", "links": []},
        "x2": {"id": "x2", "ts": at(305), "handle": "term_c", "status": "open", "links": []}}
@@ -159,6 +159,9 @@ gone = {"c": sessions["c"]}
 assert req.reconcile(q, now, prs, gone, board_rows, by_handle, seen, False) == []
 assert req.reconcile(q, now, prs, {}, board_rows, by_handle, seen, True) == []
 assert req.reconcile(q, now, prs, gone, board_rows, by_handle, {}, True) == []
+renamed = {**gone, "w": {**sessions["w"], "name": "card-x-renamed"}}  # same worktree, new name: not gone
+assert [(r["ev"], r.get("to")) for r in req.reconcile(q, now, prs, renamed, board_rows, by_handle, dict(seen), True)] \
+    == [("link", "card:card-x-renamed")]  # linked again under its new name, and not done
 rows = req.reconcile(q, now, prs, gone, board_rows, by_handle, seen, True)
 assert [(r["ev"], r["id"]) for r in rows] == [("done", "r2")] and "card:card-x removed" in rows[0]["evidence"], rows
 req.apply(rows)
