@@ -34,7 +34,7 @@ their current path and retain their IDs and history. A new ledger uses this tabl
 
 - **ID** `L-<n>`, never reused. **Source** the program slug or session. **Kind** a signal kind (`human_correction`, `brief_gap`, `stall`, `tooling`), `land_failed`, `main_red`, `verdict_fail`, `review` for a finding the reviewers drew from the whole record rather than one signal, or `usage` for a skill the usage collector flagged (Source `skill-usage`, Learning `<skill>: <flag>`). **Evidence** pointers only (message ID, PR comment URL, transcript path and line), never copied text; a program-ledger row with no `evidence` field is pointed to as `<slug>:<ev>:<ts>:<pr or sha>`, in every mode, so the same row is never counted twice.
 - **Status** is `candidate`, then `proposed` (a draft PR exists), or in standing mode `waiting (standing PR)` for an Accepted row until step 5 opens its PR, then `applied` (merged) or `rejected (<reason>)`; `backlog (<ticket>)` for a finding filed to the tracker for the human; `retired` once its target is gone or it stopped being true.
-- **Verification** holds only what a script, CI or `measure-delivery` printed (trigger-probe counts before and after, test names). A reviewer's opinion is not verification.
+- **Verification** holds only what a script, CI or `measure-delivery` printed (`claude plugin eval` scores before and after, test names). A reviewer's opinion is not verification.
 - **Outcome** is filled by later programs: `recurred (<source>)`, or `held through <n> programs (<slug>, ...)` listing each program counted, so no program counts twice.
 - A change to a row edits that row in place and appends one dated line to `## History` (`2026-09-25 L-4 candidate to proposed: <PR URL>`), so the history survives.
 
@@ -104,8 +104,8 @@ Write every Accepted, Backlog and Rejected finding to the lessons ledger. A find
 **Program and standing mode** run with nobody to approve, so they propose instead of applying:
 1. Make the Accepted edits in one worktree branch of the configured source checkout (routing below). An edit that changes a command, flag or term greps all of `skills/` and changes every copy in the same branch.
 2. Verify each against the change it makes, and record the printed result in Verification.
-   - A description change: `bash scripts/trigger-probe.sh` on the old and the new checkout, at least 3 runs each, with one prompt that should fire the skill and one that should not.
-   - A body or script change: `claude plugin validate <checkout>` and a check of the changed path itself: a test under the skill that fails without the change, or the incident replayed with the tools it needs in a scratch copy of the repo, with the asserted result. `trigger-probe.sh` denies writes and shell commands and reports only which skills fired, so it verifies triggering, never behavior.
+   - A description change: `claude plugin eval <checkout> --case <skill> --ablation none --no-publish` on the old and the new checkout (3 runs each by default), with a case under `evals/<skill>/` whose prompt should fire the skill and a grader for a neighbouring skill that should not; add the case if it is missing.
+   - A body or script change: `claude plugin validate <checkout>` and a check of the changed path itself: a test under the skill that fails without the change, or the incident replayed with the tools it needs in a scratch copy of the repo, with the asserted result. The trigger cases grant only read tools and grade only which skills fired, so they verify triggering, never behavior.
    - With no such check, write `Verification: none` in the row and the PR body.
 3. Open at most one draft PR (`gh pr create --draft`) titled with the lesson IDs, body per `write-plainly`. Never merge it. Standing mode opens it from a branch `reflect/standing-<UTC timestamp>`.
 4. Mark the rows `proposed`, and put one line per lesson plus the PR link in the program digest for approval (standing mode: in the round's report).
