@@ -110,4 +110,23 @@ assert ("rev-h, team:app-dev · 리뷰 [#631](https://example.test/631) · 12h �
 assert any(t.startswith("team:app-dev · 리뷰 [#182]") and t.endswith("다음: team:app-dev 리뷰 대기") for t in theirs), theirs
 assert not any(w in t for t in theirs for w in ("세션 꺼짐", "에이전트 없음")), theirs
 assert "#182 다시 보기" in "\n".join(held) and rows["flows-revert"] == "waiting", (held, rows)
+
+# Nothing is cut where it is written: a long title, next step, held item or stage evidence is kept whole.
+import stages  # noqa: E402
+LONG = "acme/app#877 머지 + 배포 (오너 지시: 리뷰 두 팀 승인 확인 뒤, 제목의 보류 표시를 떼고 아침에 머지) " * 3
+board.later_add(LONG, "목 아침 " * 20)
+board.doing_add(LONG, "lead", "수: 머지·릴리스 / 목: 실측 / 금: 전환 " * 4)
+board.set_row("long", title=LONG, repo="acme/app", status="moving", next=LONG)
+stages.add("long", title=LONG)
+stages.set_cell("long", "prod", "partial", evidence=LONG)
+st = fleet.read_json(sd / "board.json")
+assert st["later"][-1]["title"] == " ".join(LONG.split()) and st["later"][-1]["trigger"] == " ".join(("목 아침 " * 20).split())
+assert st["doing"][-1]["next"].endswith("금: 전환") and st["rows"]["long"]["title"] == st["rows"]["long"]["next"] == " ".join(LONG.split())
+row = next(r for r in stages.table()["rows"] if r["id"] == "long")
+assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()), row
+# Orca cuts a task's name to a head and "...": the spec's first line is the whole of it, and nothing else replaces it.
+assert fleet.task_name({"display_name": "role-terms: 용어 정리 — card (202...", "spec": "role-terms: 용어 정리 — card (2026-10-27)\n\n본문"}) \
+    == "role-terms: 용어 정리 — card (2026-10-27)"
+assert fleet.task_name({"display_name": "짧은 이름...", "spec": "다른 첫 줄\n본문"}) == "짧은 이름..."
+assert fleet.task_name({"task_title": "온전한 이름", "spec": "온전한 이름 그리고 더"}) == "온전한 이름"
 print("test_brief_rows: ok")

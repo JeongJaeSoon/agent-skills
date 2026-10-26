@@ -76,7 +76,7 @@ def add(rid, title, pr=None, parent=None, group=False):
         if above and not rows.get(above, {}).get("group"):
             raise ValueError(f"{parent} is a child row; a child hangs off a top-level row or a group's row")
         row = rows.get(rid) or {"id": rid, "cells": {}, "created_at": fleet.iso(fleet.utcnow())}
-        row.update(title=fleet.mask(" ".join(title.split()), 120), pr=pr or row.get("pr"), parent=parent or row.get("parent"))
+        row.update(title=fleet.mask(" ".join(title.split())), pr=pr or row.get("pr"), parent=parent or row.get("parent"))
         if group or row.get("group"):
             if row["pr"] or row["parent"] or row["cells"]:
                 raise ValueError(f"a group row ({rid}) is a top-level heading: no --pr, no --parent, no cells")
@@ -92,7 +92,7 @@ def set_cell(rid, col, mark, evidence=None, by=None):
     if col not in COLUMNS:
         raise ValueError(f"--col is one of {', '.join(COLUMNS)}")
     mark = mark_of(mark)
-    evidence = fleet.mask(" ".join((evidence or "").split()), 160) or None
+    evidence = fleet.mask(" ".join((evidence or "").split())) or None
     # The brief skill: a cell with no evidence is not ✅.
     if mark == "ok" and not evidence:
         raise ValueError("✅ needs --evidence (a version, a time, a count)")
@@ -107,21 +107,21 @@ def set_cell(rid, col, mark, evidence=None, by=None):
             raise ValueError(f"no row {rid}; add it first with `orch stage add {rid} --title …`")
         if row.get("group"):
             raise ValueError(f"{rid} is a group row; it has no cells, set them on the rows under it")
-        row["cells"][col] = {"mark": mark, "evidence": evidence, "by": fleet.mask(by, 40), "at": fleet.iso(fleet.utcnow())}
+        row["cells"][col] = {"mark": mark, "evidence": evidence, "by": fleet.mask(by), "at": fleet.iso(fleet.utcnow())}
         return row
     return change(go)
 
 
 def set_env(prod=None, dev=None):
     def go(store):
-        store["env"] = {**store["env"], **{k: fleet.mask(v, 40) for k, v in (("prod", prod), ("dev", dev)) if v},
+        store["env"] = {**store["env"], **{k: fleet.mask(v) for k, v in (("prod", prod), ("dev", dev)) if v},
                         "at": fleet.iso(fleet.utcnow())}
         return store["env"]
     return change(go)
 
 
 def set_next(lines):
-    return change(lambda store: store.update(next=[fleet.mask(" ".join(l.split()), 200) for l in lines if l.strip()]))
+    return change(lambda store: store.update(next=[fleet.mask(" ".join(l.split())) for l in lines if l.strip()]))
 
 
 def finish(rid, drop=False):

@@ -75,7 +75,7 @@ def change(fn):
         return out
 
 
-def one_line(text, limit):
+def one_line(text, limit=None):
     return fleet.mask(" ".join((text or "").split()), limit)
 
 
@@ -149,7 +149,7 @@ def put(store, rid, fields):
         if k == "kind" and v not in KINDS:
             raise ValueError(f"--kind is one of {', '.join(KINDS)}")
         row[k] = (status_of(v) if k == "status" else progress_of(v) if k == "progress" else
-                  one_line(v, 120) if k in ("title", "next") else one_line(v, 60) if isinstance(v, str) else v)
+                  one_line(v) if isinstance(v, str) else v)
     if row.get("progress") is None:
         row.pop("progress", None)
     row.update(source="coordinator", reported_at=fleet.iso(fleet.utcnow()))
@@ -199,7 +199,7 @@ def doing_add(title, owner, next_, waiting=False):
     """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it."""
     if not all((x or "").strip() for x in (title, owner, next_)):
         raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
-    item = {"title": one_line(title, 120), "owner": one_line(owner, 40), "next": one_line(next_, 60),
+    item = {"title": one_line(title), "owner": one_line(owner), "next": one_line(next_),
             **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {})}
     return change(lambda store: store["doing"].append(item))
 
@@ -227,7 +227,7 @@ def later_add(title, trigger, due=None):
     """Add a held item, or reword the one it repeats."""
     if not (title or "").strip() or not (trigger or "").strip():
         raise ValueError("board later add needs a title and --trigger (what brings it back)")
-    item = {"title": one_line(title, 120), "trigger": one_line(trigger, 60), **({"due": due} if due else {})}
+    item = {"title": one_line(title), "trigger": one_line(trigger), **({"due": due} if due else {})}
 
     def go(store):
         old = next((i for i, l in enumerate(store["later"]) if same_later(l, item)), None)
@@ -247,7 +247,7 @@ def later_drop(n):
 
 
 def set_todo(lines):
-    return change(lambda store: store.update(owner_todo=[one_line(l, 200) for l in lines if l.strip()]))
+    return change(lambda store: store.update(owner_todo=[one_line(l) for l in lines if l.strip()]))
 
 
 # ---------------------------------------------------------------- render
@@ -386,7 +386,7 @@ def fleet_rows(state, leads, board_rows):
             nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else s.get("task_title") or s.get("name")
-        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid, 80), "status": status, "next": one_line(nxt, 120),
+        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": status, "next": one_line(nxt),
                      "session": s.get("id"),
                      # a lead's digest links its cards' PRs, which are the cards' rows
                      "pr": pr_of.get(s.get("id")) or (rep.get("pr") if kind != "lead" else None),
@@ -407,7 +407,7 @@ def fleet_rows(state, leads, board_rows):
             continue
         lid = f"fleet:{lead['id']}"
         if not board_lead:
-            add(lid, lead, "lead", program=one_line(lead.get("name") or lid, 80))  # two leads in one repo: a section each
+            add(lid, lead, "lead", program=one_line(lead.get("name") or lid))  # two leads in one repo: a section each
         for s in under.get(lead["id"], []):
             if shown(s):
                 add(f"{lid}/{s['id']}", s, "task", board_lead or lid)
@@ -446,9 +446,9 @@ def refresh(now, limit_min):
     out = []
     if got is None or err:
         age = f"{ago((now - at).total_seconds())} 기준" if at else "없음"
-        out.append(f"세션 목록 {age} · 갱신 실패: {one_line(err, 60)}")
+        out.append(f"세션 목록 {age} · 갱신 실패: {one_line(err)}")
     if gh_err:
-        out.append(f"PR 목록 갱신 실패: {one_line(gh_err, 60)}")
+        out.append(f"PR 목록 갱신 실패: {one_line(gh_err)}")
     return " · ".join(out) or None
 
 
@@ -951,14 +951,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
                     if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
             items.append(text + (" (지난 보고와 동일)" if d["id"] in asked else ""))
-        items += [f"{i}. {one_line(d, 400)}" for i, d in enumerate(own, len(decisions) + 1)]
+        items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
         out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
     todo = todos + turn
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
     shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
     if asked := owner_requests.line(owner_requests.summary(now, shown)):
-        out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
+        out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked + (" · 목록: orch req list" if tg else " · 목록: `orch req list`")]
     fired = {tidy.item_id("later", l) for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") == "check"}
     def held_line(l):
         names = [n for k in fleet.held_refs(l["title"], prs) for n in held_rows.get(k, [])]

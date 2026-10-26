@@ -456,7 +456,8 @@ assert "📝" not in carded
     {"ev": "open", "id": "r3", "ts": "2026-10-13T13:00:00Z", "text": "reply to the reviewer"},
     {"ev": "done", "id": "r3", "ts": "2026-10-13T13:10:00Z", "evidence": "replied"}]))
 asked = ok("brief", "render", "--periodic", "--now", NOW)
-assert "📝 **요청** — 요청 2건 열림 · 가장 오래된 것 1h00m · 미연결 30분+ 1건" in asked, asked
+# The counts come with the command that lists them, so the line reaches the whole list.
+assert "📝 **요청** — 요청 2건 열림 · 가장 오래된 것 1h00m · 미연결 30분+ 1건 · 목록: `orch req list`" in asked, asked
 
 # A held item stored twice before later add merged them renders once, in its newest words.
 b = json.loads((state / "board.json").read_text())

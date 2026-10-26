@@ -773,7 +773,7 @@ def build_sessions(fast, runs, cfg, declared=()):
         if w:
             t = tasks.get(w.get("taskId")) or {}
             s.update(run=w.get("runId"), dispatch=w.get("dispatchId"), dispatch_status=w.get("dispatchStatus"),
-                     task_title=mask(t.get("display_name") or t.get("task_title"), 160),
+                     task_title=task_name(t),
                      dispatch_live=by_wt[sid][1], terminal=w.get("agentTerminalHandle"))
         if sid == root:
             s["kind"] = "orchestrator"
@@ -896,6 +896,16 @@ def classify(text):
         if rx.search(tail):
             return kind
     return "fyi"
+
+
+def task_name(t):
+    """An Orca task's name. Orca cuts display_name and task_title to a head and "...": the spec's first line, which
+    that head starts, is the whole name."""
+    name = t.get("display_name") or t.get("task_title")
+    head = next((l.strip() for l in (t.get("spec") or "").splitlines() if l.strip()), "")
+    if name and name.endswith("...") and head.startswith(name[:-3].rstrip()):
+        name = head
+    return mask(name)
 
 
 def first_line(text, limit=160):
@@ -1791,7 +1801,7 @@ class Fleet:
             jobs.record("requests-reconcile", error=repr(e), event=self.event, kind="requests_error", now=now)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
-                "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),
+                "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": task_name(t),
                            "project": task_project.get(t["id"]),
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
