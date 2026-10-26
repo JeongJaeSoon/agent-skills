@@ -4,7 +4,7 @@ requests. `orch-dash ack` writes here and the dashboard's buttons call the same 
 An ack is the owner's view, not the work's state: an acked request is still open for `orch req`, an acked stage row
 is still in stages.json. Only what is over can be acked (a Work row with `done_at`, a brief row that is ✅, and
 every one of its sub-task rows too); a row in progress, waiting on someone or held (a closed PR's row too) is refused, so
-acking never hides what still needs someone. Requests are the owner's own and can all be acked.
+acking never hides what still needs someone. Requests are the owner's own: every one still shown (open, not expired) can be acked.
 
 One append-only file, <fleet state>/acks.jsonl (0600), one JSON object a line:
   {"ev": "ack" | "unack", "id": "req:r7" | "stage:<row id>" | "board:<brief row key>", "ts"}
@@ -70,7 +70,8 @@ def ackable(now=None, kinds=KINDS):
     out = {}
     if "req" in kinds:
         out.update({f"req:{q['id']}": {"label": q["text"], "at": q.get("ts")}
-                    for q in owner_requests.fold(owner_requests.read()).values() if q["status"] == "open"})
+                    for q in owner_requests.fold(owner_requests.read()).values()
+                    if owner_requests.visible(q, now or fleet.utcnow())})
     if "stage" in kinds:
         out.update(stage_done(stages.read()["rows"]))
     if "board" in kinds:

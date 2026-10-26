@@ -42,7 +42,7 @@ board.set_row("lead-b", title="청구 내보내기", status="done", next="—")
 board.set_row("lead-b/t", title="CSV 열", status="moving", next="CI · 워커")
 board.lead_add("lead-c", "term_0FAKE3", "acme/web")
 board.set_row("lead-c", title="설치 가이드", status="moving", next="리뷰 반영")
-for ago, text in ((3000, "릴리스 노트 봐줘"), (30, "acme/app#1 머지되면 알려줘")):
+for ago, text in ((600, "릴리스 노트 봐줘"), (30, "acme/app#1 머지되면 알려줘")):
     owner_requests.add(text, "s-demo", "term_0FAKE0", now=now - dt.timedelta(minutes=ago))
 
 can = acks.ackable()
@@ -62,7 +62,7 @@ assert code == 1 and out == "unacked 1: stage:g" and "refused stage:g1: not acke
 assert set(acks.acked()) == {"req:r2"}
 
 # --done-before: only what finished (a request: was asked) before the cutoff, per kind.
-code, out, err = run("dash.py", "ack", "--done-before", "24h", "--kind", "req")
+code, out, err = run("dash.py", "ack", "--done-before", "6h", "--kind", "req")
 assert code == 0 and out == "acked 1: req:r1", (out, err)  # r2 is 30 min old and acked already
 code, out, err = run("dash.py", "ack", "--done-before", "24h")
 assert code == 0 and out == "acked 0", (out, err)  # every row finished just now
