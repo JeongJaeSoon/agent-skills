@@ -19,24 +19,26 @@ than the window). bundle renders the one coordinator message. commit marks the i
 moves the cursor to the run's start and releases the lock; with no file it only does the last two.
 annotate sets `pr` on rows already in the ledger (a backfill); it refuses while a run holds the lock
 and moves no cursor.
-Config: ~/.claude/agent-skills.json → "mentions" (see SKILL.md). State: $AGENT_SKILLS_STATE/mentions
+Config: ~/.claude/agent-skills.json → "mentions" (see SKILL.md). State: <--state or $AGENT_SKILLS_STATE>/mentions
 (default ~/.local/state/agent-skills/mentions). The ledger holds ids, categories and PR refs, never message text.
 """
 import datetime as dt, json, os, pathlib, re, shlex, subprocess, sys, time
 
+
+def opt(name, default=None):
+    a = sys.argv
+    return a[a.index(name) + 1] if name in a else default
+
+
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
-STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "mentions"
+STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
+STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser() / "mentions"
 CATEGORIES = {"review": "리뷰 의뢰", "work": "작업 의뢰", "question": "질문", "decision": "결정·공유", "chat": "잡담"}
 KINDS = ("mention", "name", "thread")
 PR_REF = re.compile(r"^(?:https?://[^/]+/)?([\w.-]+/[\w.-]+)(?:#|/pull/)(\d+)(?:[/?#].*)?$")
 DEFAULTS = {"names": [], "channels": [], "exclude_channels": [], "read_private": False, "lookback_hours": 24,
             "thread_lookback_days": 7, "max_threads": 30, "overlap_minutes": 10, "lock_minutes": 60,
             "keep_days": 30, "summary_chars": 120, "cron": "*/20 9-20 * * 1-5", "timezone": None, "inbox_to": None}
-
-
-def opt(name, default=None):
-    a = sys.argv
-    return a[a.index(name) + 1] if name in a else default
 
 
 def config(path=CONFIG):
@@ -222,14 +224,18 @@ def runner_hint(checkout):
             "orca automations edit --id <id> --workspace path:<runner>")
 
 
-def schedule_cmd(script, cfg, workspace, provider="claude"):
-    prompt = (f"watch-mentions 회차다. watch-mentions 스킬의 Run 절차를 따른다: python3 {script} plan 으로 시작해 "
-              "공개 채널만 검색하고, 새 항목이 없으면 commit 만 하고 아무것도 보내지 않는다.")
+def schedule_cmd(script, cfg, workspace, provider="claude", state=None):
+    """A scheduled round's command starts with python3: a session may refuse an `env` or `VAR=` prefix as its own
+    command. A non-default state goes in as --state after the subcommand, on the precheck and the prompt alike."""
+    state = STATE.parent if state is None else pathlib.Path(state)
+    flags = [] if state == STATE_HOME else ["--state", str(state)]
+    run = lambda sub: shlex.join(["python3", str(script), sub, *flags])
+    prompt = (f"watch-mentions 회차다. watch-mentions 스킬의 Run 절차를 따른다: {run('plan')} 으로 시작해 "
+              "공개 채널만 검색하고, 새 항목이 없으면 commit 만 하고 아무것도 보내지 않는다. "
+              + (f"이 회차의 mentions.py 명령에는 모두 --state {shlex.quote(str(state))} 를 붙인다." if flags else ""))
     cmd = ["orca", "automations", "create", "--name", "agent-skills watch-mentions", "--trigger", cfg["cron"],
            "--provider", provider, "--workspace-mode", "existing", "--workspace", workspace,
-           "--precheck", " ".join(["env", f"AGENT_SKILLS_STATE={shlex.quote(str(STATE.parent))}",
-                                   "python3", shlex.quote(str(script)), "precheck"]),
-           "--prompt", prompt, "--json"]
+           "--precheck", run("precheck"), "--prompt", prompt.rstrip(), "--json"]
     if cfg.get("timezone"):
         cmd[cmd.index("--provider"):cmd.index("--provider")] = ["--timezone", cfg["timezone"]]
     return cmd

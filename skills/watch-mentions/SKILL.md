@@ -30,7 +30,7 @@ never in this repo.
 also works but goes stale when that terminal restarts or the machine reboots, and a round that sent
 to it would lose its items silently. `channels` empty means every public channel; otherwise only
 those. Other keys and defaults are in `scripts/mentions.py` (`DEFAULTS`). State lives in
-`~/.local/state/agent-skills/mentions/` (`$AGENT_SKILLS_STATE` moves it): `cursor.json`,
+`~/.local/state/agent-skills/mentions/` (`--state <dir>` or `$AGENT_SKILLS_STATE` moves it): `cursor.json`,
 `lock.json`, and `seen.json`, which holds channel, ts, permalink, category and, for a review of a
 PR, `pr` (`owner/repo#N`) per item and never message text. `watch-prs` reads those `pr` rows to
 merge Slack review requests into its list; `annotate ITEMS.json` sets `pr` on rows already seen.
@@ -119,7 +119,8 @@ unset or dead (the same check as `inbox`). A `skipped_precheck` round carrying t
 signal: nothing can be sent, so the fix is the config value. It cannot tell whether anything new
 arrived, because Slack is reachable only through the agent's MCP tools; a run with nothing new
 ends at step 2 having sent nothing. `orca automations run` skips the precheck, so test the precheck by running it
-directly with `AGENT_SKILLS_STATE` pointing at a scratch folder. Devices and their trade-offs, and
+directly with `--state` pointing at a scratch folder; `schedule --state <dir>` puts a non-default
+state on the precheck and the prompt alike. Devices and their trade-offs, and
 the runner worktree whose settings pick the run's model (`schedule --workspace path:<runner>`):
 [docs/automation.md](../../docs/automation.md).
 
