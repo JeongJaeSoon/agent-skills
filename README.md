@@ -60,15 +60,9 @@ claude plugin install agent-skills@jeongjaesoon
 
 예전 `scripts/install.py`(symlink와 settings 병합)로 설치했다면, 그 설치로 시작한 프로그램이 모두 끝난 뒤 `python3 scripts/migrate.py`(바뀔 내용 보기), `--write`(symlink·옛 규칙·옛 hook 제거 뒤 `bootstrap.py --write`) 순서로 옮긴다.
 
-### 다른 PC에서 같은 모양으로 쓰려면
+### 다른 PC에서 같은 방식으로 쓰려면
 
-보고의 구조(제목 줄, 완료 → 진행 중 → 결정 필요 → 지금 오너가 할 일 → 보류, 결정의 추천과 기본값)는 `brief` 스킬이 정하므로 설치만으로 같아진다. 설정이나 PC에 따라 달라지는 것은 아래 셋이다.
-
-| 무엇 | 어디서 정해지나 | 맞추는 방법 |
-|---|---|---|
-| 답변 언어 | `~/.claude/settings.json`의 `language` | 보고는 설정이 없어도 사람이 쓰는 언어로 쓴다(`brief`). 다른 답변까지 맞추려면 같은 값을 넣는다 |
-| 설명 블록(★ Insight 같은 것) | output style(`outputStyle`, `/config`) | 스킬이 켜지 않는다. 쓰려면 같은 style을 고른다. 켜져 있으면 `brief`가 보고 안의 자리(진행 중 뒤, 결정 필요 앞)를 정한다 |
-| 자동 메모리 | PC·프로젝트마다 따로 쌓인다 | 옮겨지지 않는다. 어느 PC에서나 지켜야 할 작업 방식은 스킬로 올리고, 사람·채널·저장소 같은 고유값은 `~/.claude/agent-skills.json`과 `~/.config/agent-skills/`에, 개인 규약은 `~/.claude/CLAUDE.md`에 둔다 |
+일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 것은 따로 옮긴다. 사용자 설정(`language`, `outputStyle`, `autoMode`, `permissions`), 저장소 밖의 고유값, 개인 지침과 자동 메모리가 그렇다. 순서와 확인 방법은 [docs/new-pc.md](docs/new-pc.md).
 
 ## 스킬 고치기
 
