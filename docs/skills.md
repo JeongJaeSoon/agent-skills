@@ -304,7 +304,7 @@
 - **내용:**
   - 대상부터 고른다. 공개 저장소는 worktree 브랜치에서 고치고 사내 이름을 넣지 않는다. 개인 파일은 git이 없으므로 `~/.claude` 밖에 백업한 뒤 그 자리에서 고치고, 사내 이름을 써도 된다.
   - 새 스킬이나 열 줄이 넘는 절을 더하기 전에 기존 스킬을 목록과 grep으로 훑어 들어갈 집을 찾는다. 집이 없고 되풀이되는 필요일 때만 새 스킬을 만든다.
-  - 고친 뒤에는 순서대로: `claude-api`의 `prompt-audit`을 바뀐 파일에 돌려 반영, 로컬 목록으로 사내 이름 grep 0건(공개 저장소), README 테스트와 `claude plugin validate`, 카탈로그와 `translated-from`, description을 바꿨으면 `trigger-probe.sh`, 서명 커밋, 메인 체크아웃 fast-forward와 push.
+  - 고친 뒤에는 순서대로: `claude-api`의 `prompt-audit`을 바뀐 파일에 돌려 반영, 로컬 목록으로 사내 이름 grep 0건(공개 저장소), README 테스트와 `claude plugin validate`, 카탈로그와 `translated-from`, description을 바꿨으면 `claude plugin eval`, 서명 커밋, 메인 체크아웃 fast-forward와 push.
   - 재사용하는 스킬에는 회사·팀·채널·사람·티켓 키·사내 저장소나 서비스 이름, 한 프로젝트에만 맞는 사실을 넣지 않는다. 변경은 끝낼 때 바로 커밋·push한다(다른 PC는 `skills-sync sync`로 받는다).
   - 로드되는 체크아웃에 들어간 뒤 `skills-sync broadcast --skills`(SKILL.md·참조 파일) 또는 `--plugins`(hook·manifest)를 돌린다. 빈 입력칸에서 쉬는 세션에만 `orca terminal send`로 리로드를 보내고, 작업 중인 세션은 쉴 때까지 대기로 남긴다. `orca terminal send`로 직접 보내지 않는다(권한 창이 Enter를 답으로 받는다). 세션은 자기 입력칸에 칠 수 없으므로 보고 끝에서 사용자에게 이 세션의 리로드를 청한다.
 - **관계:** `reflect`, `orchestrate`의 flow improver 브리프가 가리킨다. 새 스킬 초안과 description 조정은 `skill-creator`에 맡기고, 그 뒤 단계는 이 스킬이 맡는다.
@@ -401,7 +401,7 @@
   - 세션 모드는 이 세션의 transcript를, 프로그램 모드는 원장의 `signal`·머지 실패·main red·실패 판정과 결정 기록, `measure-delivery` 결과를 묶은 증거 묶음을 읽는다. 리뷰어는 셋(판단, 도구 사용, 다른 관점)이다.
   - 종합자가 배운 점을 Accepted / Rejected / Backlog로 나눈다. 모두 교훈 장부(노트 저장소의 `reflect.ledger`)에 한 줄씩 남는다. 장부는 교훈마다 신호, 근거 포인터, 발생 횟수, 고친 대상, 변경(PR·커밋), 스크립트가 낸 검증 수치, 이후 재발 여부를 적는다.
   - 스킬을 바꾸는 건 서로 다른 사례가 두 번 이상일 때만이다(재현된 보안·데이터 결함은 예외). 한 번뿐이면 후보로 남겨 두고 다음 발생을 기다린다.
-  - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다. description 변경은 `trigger-probe.sh`로 발동을, 본문·스크립트 변경은 바뀐 경로를 도는 테스트나 사례 재현으로 동작을 확인한다. 검증이 없으면 `none`으로 적는다.
+  - 세션 모드는 사용자 승인 뒤 반영한다. 프로그램 모드는 사람이 없으므로 worktree에서 고치고 검증한 뒤 draft PR 하나만 열고, digest에 승인 요청을 남긴다. 머지는 사람이 한다. description 변경은 `claude plugin eval`로 발동을, 본문·스크립트 변경은 바뀐 경로를 도는 테스트나 사례 재현으로 동작을 확인한다. 검증이 없으면 `none`으로 적는다.
   - 리뷰어를 부르기 전에 신호마다 지금 HEAD가 이미 고쳤는지 확인해 표시한다(`program.json`의 `skills_commit`부터 바뀐 것). 다른 프로그램 원장의 `signal`도 발생 횟수에 센다. 명령·플래그를 바꾸는 수정은 `skills/` 전체의 사본을 같이 고친다.
   - 신호도 실패도 없는 프로그램에서도 Close마다 돌아, 적용된 교훈이 이번 프로그램에서 버텼는지(`held through`, 프로그램 slug로 중복 없이) 기록한다.
   - 권한 hook, `orch land` 게이트, 테스트와 채점기, reflect 자신은 고치자고 제안하지 않고 Backlog로 보낸다.

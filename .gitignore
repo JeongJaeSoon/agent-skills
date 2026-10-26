@@ -14,3 +14,6 @@ plans/
 .DS_Store
 skill-catalog.html
 
+
+# claude plugin eval output
+evals/results/
