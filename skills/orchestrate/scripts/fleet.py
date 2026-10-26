@@ -1701,8 +1701,8 @@ class Fleet:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
         except (OSError, ValueError):
             held = []
-        import board, owner_requests
-        asked, by_key = owner_requests.fold(owner_requests.read()), {p["key"]: p for p in prs}
+        import acks, board, owner_requests
+        asked, by_key, have = owner_requests.fold(owner_requests.read()), {p["key"]: p for p in prs}, acks.acked()
         try:
             if rows := owner_requests.reconcile(asked, now, by_key, sessions, board.read()["rows"], by_handle,
                                                 mem.setdefault("request_cards", {}), mem.setdefault("request_gone", {}),
@@ -1723,8 +1723,8 @@ class Fleet:
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
-                "requests": {**owner_requests.summary(now, asked),
-                             "items": [{**q, "session": by_handle.get(q.get("handle")),
+                "requests": {**owner_requests.summary(now, {k: q for k, q in asked.items() if f"req:{k}" not in have}),
+                             "items": [{**q, "session": by_handle.get(q.get("handle")), "acked": f"req:{q['id']}" in have,
                                         "closed": [to for to in q["links"] if (pr := owner_requests.link_pr(to, by_key))
                                                    and pr[1].get("state") == "CLOSED"]}
                                        for q in asked.values() if owner_requests.visible(q, now)]},
