@@ -119,10 +119,9 @@ relationships — and take **one** approval for the batch.
   list, not by a ticket.
 
 A follow-up is marked as one so growth after the initial design can be counted
-(`measure-delivery`, `orchestrate`). Use `use-tracker`'s follow-up format: the `follow-up`
-label next to its type, first body line
-`파생: <originating ticket> · 원인: <리뷰 지적 | 계약 불일치 | QA | 스펙 공백 | 구현 한계 | 기타>`,
-then `완료 조건: <the exit item it serves>`, and a related relation to the originating ticket (blocked-by when it truly blocks).
+(`measure-delivery`, `orchestrate`). Shape it exactly as `use-tracker` "Follow-up (derived)
+tickets" says: label, first body lines, relation and parent; add blocked-by only when it truly
+blocks.
 
 Then file each ticket through `use-tracker`: assignee me, the type label, the filled body. The
 team and project come from the program or the originating ticket, else from

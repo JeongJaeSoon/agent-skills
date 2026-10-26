@@ -2,11 +2,11 @@
 
 Development, review, CI and landing all run in parallel. Each worker lands its own PR through `orch land` the moment it is ready, whether or not the PR is behind its base. Only changes that can break a merge they do not textually touch take the **exclusive lane** and land one at a time on the latest base. No coordinator hands out merge slots.
 
-This design replaced three that failed on a real program:
+This design replaced three that failed:
 
 - **A coordinator that granted each merge.** It became the slowest part of the system. Ready PRs waited on the coordinator's turn, not on CI.
 - **"Whoever is ready lands next."** A migration chain waited more than five hours while eleven newer, easier PRs landed ahead of it. The priority and dependency order existed only in the coordinator's head.
-- **One baton, strict up-to-date branches.** Every landing put every other PR behind, which meant a rebase and another 30–40 minute CI run each. The user rejected one-at-a-time landing as too slow and asked for parallel merges that stay reasonably stable. They turned off "require branches to be up to date" and kept the required checks. Landings went parallel.
+- **One baton, strict up-to-date branches.** Every landing put every other PR behind, which meant a rebase and another 30–40 minute CI run each. Turning off "require branches to be up to date" while keeping the required checks made landings parallel.
 
 "CI green is not a verdict." A verdict holds across a rebase only while the patch-id is unchanged.
 
@@ -106,7 +106,7 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
 
-Main CI is every push-triggered run at the merge commit. Watch it with the lines `land` prints (`gh run list --commit <sha>`, then `gh run watch <id> --exit-status` for each run id), and record `main_green` or `main_red` only after every one has completed. A run cancelled by a newer push is no result. The "CI runs" ids `land` prints are the PR's runs, never main's. A watcher script of your own that parses run text has recorded red over three green runs (a workflow name with a space shifted the columns); when one gives a false signal, fix or delete it in the same wake and record from the per-run conclusions.
+Main CI is every push-triggered run at the merge commit. Watch it with the lines `land` prints (`gh run list --commit <sha>`, then `gh run watch <id> --exit-status` for each run id), and record `main_green` or `main_red` only after every one has completed. A run cancelled by a newer push is no result. The "CI runs" ids `land` prints are the PR's runs, never main's. A watcher script of your own that parses run text can record red over green runs (a workflow name with a space shifts the columns); when one gives a false signal, fix or delete it in the same wake and record from the per-run conclusions.
 
 `land` and `land-check` also read the PR's sticky `<!-- test-results -->` comment (`deliver-ticket` §5):
 
@@ -136,7 +136,7 @@ With no guardian running, whoever is about to record `main_red` does its read fi
 - A landing backlog over `max_backlog_hours` means **stop starting, start finishing**.
 - Merges you did not make: `land` records a PR that was merged outside it.
 - Tune a program in `program.json` under `"landing"`: `aging_hours`, `stale_hours`, `max_backlog_hours`, `land_interval_minutes` (only the backlog estimate before two landings exist, never a pacing limit), `exclusive_stale_minutes`, `exclusive_paths`, `visual_paths` (`orch set <slug> visual_paths a/*,b/*`), `heavy_slots`.
-- Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it. A shared JSON file overwritten in place was once left empty mid-write.
+- Shared state is append-only (`ledger.jsonl`) or replaced whole: write a temp file and rename it, since a shared JSON file overwritten in place can be read empty mid-write.
 
 ## human-gate
 

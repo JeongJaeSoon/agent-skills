@@ -21,6 +21,20 @@
 어디서나    record-progress(언제 무엇을 남기나) → use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
 ```
 
+PR 을 맡는 스킬과 머지 주체:
+
+| 스킬 | 맡는 PR | 머지 |
+|---|---|---|
+| deliver-ticket | 이 세션이 작업 중인 내 PR: 작성, 리뷰 대응, 머지, 릴리스 | 세션이 §5 대로 (`gh pr merge`, 스택은 merge-async) |
+| watch-prs | 정기 회차가 모은 대기 PR: 나를 지명한 리뷰 요청, 리뷰를 기다리는 내 PR(의뢰·리마인드), 머지 준비가 된 내 PR | `merge_repos` 게이트를 모두 통과한 내 PR 만 |
+| orchestrate | 프로그램 워커의 PR | `orch land`, 또는 사람이 승인한 plain merge |
+| handoff-ticket · record-progress | PR 을 만들지 않는다. 다음 카드를 정하거나 열림·리뷰·머지를 기록한다 | 하지 않는다 |
+
+- deliver-ticket ↔ watch-prs: 살아 있는 worktree 에 브랜치가 체크아웃된 PR 은 그 세션이 머지한다. watch-prs 는 그 PR 을 건너뛴다.
+- orchestrate ↔ watch-prs: 프로그램 원장에 있는 PR 은 `orch land` 가 머지한다. watch-prs 는 멈춘 프로그램의 PR 도 머지하지 않고 리마인드만 보낸다. 원장에 `stale_days` 동안 기록이 없는 프로그램은 버려진 것으로 보고, 그 PR 은 다시 watch-prs 의 리마인드·머지 대상이 된다.
+- orchestrate ↔ deliver-ticket: 워커는 deliver-ticket 으로 일하지만 머지는 §5 대신 `orch land` 로 한다.
+- handoff-ticket 의 "머지하고 다음 진행해줘": 머지는 deliver-ticket 이 하고, handoff-ticket 은 그 뒤 다음 카드만 연다.
+
 ## 티켓 하나
 
 ### write-ticket
@@ -394,7 +408,7 @@
   - 세션이 많으면 haiku 서브에이전트가 나눠 읽고 세션마다 목표, 결정, 남은 일, 막힌 곳, 산출물을 돌려준다. 원문은 서브에이전트 안에 둔다.
   - 주제가 기능·파일·버그를 가리키면 `why`의 출처 조사, worklog(`use-notes`), 티켓(`use-tracker`)도 함께 본다. 되돌린 수정과 계속 보고되는 증상이 여기서 나온다.
   - PR·브랜치·티켓·카드는 `git`, `gh`, 트래커, `orca worktree list`로 지금 상태를 확인한다.
-  - 답은 요약 5줄 이하, 스레드마다 상태 태그(`[merged #N]`, `[open PR #N]`, `[in flight <branch>]` 등), 반복된 문제 5개 이하, 다음 할 일 하나다.
+  - 답은 짧은 요약, 스레드마다 상태 태그(`[merged #N]`, `[open PR #N]`, `[in flight <branch>]` 등), 반복된 문제, 다음 할 일 하나다.
 
 ### reflect
 - **언제:** "reflect", "스킬에 반영해줘", "스킬이 왜 안 떴어", "이 세션 돌아보고 스킬 개선해줘", "개선 이력 보여줘". `orchestrate`의 Close에서 프로그램 모드로, `end-session`에서 사람이 일하는 방식을 고쳐 준 세션이면 세션 모드로 자동 호출된다.

@@ -1,5 +1,5 @@
 """Rules of mentions.py: precheck, inbox check, plan window, ingest filters, bundle, commit. Run: python3 test_mentions.py"""
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, shlex, subprocess, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import mentions as m
 
@@ -117,11 +117,19 @@ m.commit([], cfg, state, NOW + 40 * 86400)
 assert json.loads((state / "seen.json").read_text()) == {}
 
 # schedule: precheck with absolute path and the state dir, timezone when set, nothing created without --write.
-line = m.schedule_cmd(pathlib.Path("/abs/skills/watch-mentions/scripts/mentions.py"), {**cfg, "timezone": "Asia/Seoul"}, "path:/abs")
+line = m.schedule_cmd(pathlib.Path("/abs/skills/watch-mentions/scripts/mentions.py"), {**cfg, "timezone": "Asia/Seoul"}, "path:/abs",
+                      state=m.STATE_HOME)
 assert line[:3] == ["orca", "automations", "create"] and "--write" not in line
 pre = line[line.index("--precheck") + 1]
-assert pre.startswith("env AGENT_SKILLS_STATE=") and pre.endswith("/abs/skills/watch-mentions/scripts/mentions.py precheck")
+assert pre == "python3 /abs/skills/watch-mentions/scripts/mentions.py precheck", pre
+assert "python3 /abs/skills/watch-mentions/scripts/mentions.py plan " in line[line.index("--prompt") + 1]
 assert line[line.index("--timezone") + 1] == "Asia/Seoul" and line[line.index("--trigger") + 1] == "*/20 9-20 * * 1-5"
+# A non-default state rides as --state on the precheck and every command of the prompt, never as an env prefix.
+off = m.schedule_cmd(pathlib.Path("/abs/mentions.py"), cfg, "path:/abs", state="/scratch dir")
+assert off[off.index("--precheck") + 1] == "python3 /abs/mentions.py precheck --state '/scratch dir'"
+prompt = off[off.index("--prompt") + 1]
+assert "python3 /abs/mentions.py plan --state '/scratch dir'" in prompt and "--state '/scratch dir'" in prompt.split("plan")[-1]
+assert "env " not in shlex.join(off) and "AGENT_SKILLS_STATE" not in shlex.join(off)
 hint = m.runner_hint(pathlib.Path("/abs dir"))
 assert "--repo 'path:/abs dir'" in hint and "--no-parent" in hint and "settings.local.json" in hint, hint
 
@@ -144,4 +152,17 @@ conf.write_text(json.dumps({"mentions": {"user_id": ME}}))
 r = run("inbox")
 assert r.returncode == 2 and "inbox_to" in r.stderr, r
 assert run("precheck").returncode == 2
+# --state wins over $AGENT_SKILLS_STATE: the lock lands in the flag's folder.
+conf.write_text(json.dumps({"mentions": {"user_id": ME, "inbox_to": "run:run_0FAKE"}}))
+flagged = state.parent / "flagged"
+assert run("plan", "--state", str(flagged)).returncode == 0
+assert (flagged / "mentions" / "lock.json").exists() and not (state / "lock.json").exists()
+# The flag may sit before the file argument: commit still reads the items and marks them seen.
+one = state.parent / "one.json"
+one.write_text(json.dumps([items[0]]))
+r = subprocess.run([sys.executable, S, "commit", "--state", str(flagged), str(one), "--config", str(conf)],
+                   env=env, capture_output=True, text=True)
+assert r.returncode == 0 and "1 items marked seen" in r.stdout, r
+r = run("ingest", "--state", str(flagged))
+assert r.returncode != 0 and "file argument is required" in r.stderr, r
 print("ok")

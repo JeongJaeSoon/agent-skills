@@ -36,7 +36,9 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" capture --url http://127.0.0.1:51
 - A shot taken by hand with a headless browser runs under a time limit (`timeout 40`, or
   `perl -e 'alarm 40; exec @ARGV' <browser> …` where `timeout` is missing) with its own
   `--user-data-dir`: on a page that keeps polling, the browser can write the file and never
-  exit, and the session waits on it. Stop only the processes that use that directory.
+  exit, and the session waits on it. Stop only the processes that use that directory, by the PIDs
+  you read for it (`pgrep -f -- '--user-data-dir=<dir>'`, then `kill <pid>`), never with a
+  `pkill` pattern.
 - Put the evidence directory outside the worktree (a scratchpad or temporary directory), never in
   the repo, and register it once it is on the PR: `reap.py ledger add --kind evidence --path <dir>
   --pr owner/repo#N` (`reap-resources` "Janitor").

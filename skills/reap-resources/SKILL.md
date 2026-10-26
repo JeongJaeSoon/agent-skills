@@ -66,7 +66,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
-| orca-worktree | in the ledger, made by an orchestration worker, or with `orca worktree create` (a card whose PR was found only by branch name also waits until its sessions are quiet for `--hours`, never under 2, and stays while no transcript proves it: it may be a lead reusing an old merged branch's name); its PR (ledger link, else the branch's own PR, else the PR whose head commit is HEAD, for a card that pushed under another branch name and whose HEAD is not on `origin/HEAD`; never a fork's) merged or closed, or, for a worker's card only, no PR (a failed `gh` lookup is not "no PR") and HEAD on `origin/HEAD` (end-session §4) with its sessions' transcripts quiet for `--hours`, never under 2 (a lead or a card opened by hand sits on the default branch with no PR too, so those wait for a PR); no changes, untracked files included, except an untracked `.agents/skills/<name>/` whose `.claude/skills/<name>` is tracked (Orca regenerates that copy; any other untracked file still keeps the card; `reap.regenerated_untracked: false` counts the copy as a change); nothing unpushed unless the PR carried HEAD; no live worker turn and no process with its cwd in it, except shells Orca's terminal host started, at their prompt with nothing running under them, one Orca terminal per shell session and none an agent holds (its process may have left the card), no child card open or unlisted, once every terminal of the card has been silent for `reap.idle_minutes` (default 30) | an open PR, no PR on a card no worker made, no PR with HEAD off the default branch (or `origin/HEAD` unset), a pinned CLI card, changes, unpushed commits, a live turn or a process in it; skipped: the main checkout, worktrees outside `--repo`, and any worktree with a `retained` worker row (a context-only dispatch or a card the user took over) | the regenerated copies, judged again first (a new untracked file fails the item), and its ignored files (`git ls-files --others --ignored --exclude-standard --directory`: `.env.local`, caches) to the trash, which `orca worktree rm` would delete for good; with idle shells in it, `orca terminal close --terminal <handle>` for each terminal the scan listed (never `--all`, which closes one opened since); then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
+| orca-worktree | in the ledger, made by an orchestration worker, or with `orca worktree create`; its PR merged or closed, or, for a worker's card only, no PR with HEAD on `origin/HEAD` and its sessions quiet for `--hours` (never under 2); and nothing in it would be lost: no changes (Orca's regenerated `.agents/skills` copy aside), nothing unpushed, no live worker turn, and no process but Orca's own idle shells, silent for `reap.idle_minutes`. Exact conditions: [references/janitor-kinds.md](references/janitor-kinds.md) | an open PR, a no-PR card no worker made, a pinned CLI card, changes, unpushed commits, a live turn or a process; skipped: the main checkout, worktrees outside `--repo`, a `retained` worker row | ignored files (and the regenerated copies, judged again) to the trash, the idle shells' terminals closed one by one, then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
 | done-card | a Claude session idles in a card that would be an orca-worktree target with its merged or closed PR but for the processes in it, or in a clean card with no PR whose HEAD is on `origin/HEAD` (a verify or read-only card): no live worker turn, and its transcripts quiet for `reap.done_card_hours` (default 2). Quiet is read from the newest timestamped entry, never the file time: an idle session appends untimed lines every 30 minutes | anything else that keeps an orca-worktree; a card whose session is a lead or the orchestrator (`--agent`/`--name lead:` or a `ROLE` record) or whose child cards are still open or cannot be listed: those wait on their workers; no Claude process in it; the worker list unreadable; the session already asked once (a `done-card` ledger line), which is reported, not asked again | `skills-sync nudge` into the card's one Claude terminal: close by `end-session` §8 if nothing is left, else say what is. Never killed. A refused nudge (screen not idle) fails the item, so the next precheck holds it back a day |
 | orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
@@ -175,15 +175,15 @@ it from removal except Orca's terminal shell left at its prompt in a card whose 
 count, not by identity, so a silent shell of another card's terminal that `cd`-ed into this card passes as one of
 this card's, and the reap closes this card's handles while that shell stays. A finished card
 whose Claude session sits at an empty prompt would stay forever that way, so `done-card` asks that
-session to close itself; a lead card whose PRs had merged once stayed open two days. `done-card` and reap-hard
+session to close itself. `done-card` and reap-hard
 are sweeps for cards that neither closed themselves nor were closed by the session that started them
 (`end-session` §8, "Who closes a finished card"). Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
 
 ## Hard pass: reap-hard
 
-The janitor only sees what was registered and waits on a model and on the card's own session to close; finished
-cards stayed open for a day. `bin/reap-hard` is the last sweep: fixed rules, no model, every Orca card under
+The janitor only sees what was registered and waits on a model and on the card's own session to close.
+`bin/reap-hard` is the last sweep: fixed rules, no model, every Orca card under
 `~/orca/workspaces` whatever made it, run by a LaunchAgent every 15 minutes.
 
 ```bash
@@ -221,7 +221,7 @@ class when the load is at or above the limit:
 
 | Class | What | Action |
 |---|---|---|
-| ours-idle | a Claude session whose transcripts (its subagents' included) have been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it. Closing 8 idle sessions once took a load of 19.5 down to 11 |
+| ours-idle | a Claude session whose transcripts (its subagents' included) have been quiet for `reap.idle_minutes` (default 30) and whose children use under 25% CPU (a background benchmark keeps a session working) | ask it whether work is left and to close itself if none; never kill it |
 | leftover | an `orphan` target of `scan` | `scan --plan`, then `reap --plan` |
 | ours-working | anything else of this user's, from any path: a live session, a benchmark, a test run, a container VM | leave it; stop new dispatches and queue heavy runs behind `orch heavy` |
 | system | another user's process | report it as not ours; never touch it |

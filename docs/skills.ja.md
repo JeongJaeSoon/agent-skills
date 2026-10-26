@@ -24,6 +24,20 @@
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
 
+PR を受け持つスキルとマージする主体:
+
+| スキル | 受け持つ PR | マージ |
+|---|---|---|
+| deliver-ticket | このセッションが作業中の自分の PR: 作成、レビュー対応、マージ、リリース | セッションが §5 どおり（`gh pr merge`、スタックは merge-async） |
+| watch-prs | 定期の回が集めた待ち PR: 自分を指名したレビュー依頼、レビュー待ちの自分の PR（依頼・リマインド）、マージ準備ができた自分の PR | `merge_repos` のゲートをすべて通った自分の PR だけ |
+| orchestrate | プログラムのワーカーの PR | `orch land`、または人が承認した plain merge |
+| handoff-ticket · record-progress | PR を作らない。次のカードを決めるか、オープン・レビュー・マージを記録する | しない |
+
+- deliver-ticket ↔ watch-prs: 生きている worktree にブランチがチェックアウトされた PR はそのセッションがマージする。watch-prs は飛ばす。
+- orchestrate ↔ watch-prs: プログラム台帳にある PR は `orch land` がマージする。watch-prs は止まったプログラムの PR もマージせず、リマインドだけ送る。台帳に `stale_days` のあいだ記録がないプログラムは放棄されたとみなし、その PR は再び watch-prs のリマインド・マージの対象になる。
+- orchestrate ↔ deliver-ticket: ワーカーは deliver-ticket で働くが、マージは §5 ではなく `orch land`。
+- handoff-ticket の「머지하고 다음 진행해줘」（マージして次へ）: マージは deliver-ticket、handoff-ticket はその後に次のカードを開くだけ。
+
 ## チケット1件
 
 ### write-ticket
@@ -351,7 +365,7 @@
   - セッションが多いときは haiku のサブエージェントが分担して読み、セッションごとに目標、決定、残りの作業、詰まった点、成果物を返します。原文はサブエージェントの中にとどめます。
   - テーマが機能・ファイル・バグを指すなら、`why` の出典調査、worklog（`use-notes`）、チケット（`use-tracker`）も合わせて見ます。巻き戻した修正や、繰り返し報告される症状はここから出てきます。
   - PR・ブランチ・チケット・カードの今の状態は、`git`、`gh`、トラッカー、`orca worktree list` で確かめます。
-  - 答えは、要約5行以内、スレッドごとの状態タグ（`[merged #N]`、`[open PR #N]`、`[in flight <branch>]` など）、繰り返された問題5個以内、次にやること一つです。
+  - 答えは、短い要約、スレッドごとの状態タグ（`[merged #N]`、`[open PR #N]`、`[in flight <branch>]` など）、繰り返された問題、次にやること一つです。
 
 ### reflect
 - **使う場面:** 「reflect」、「스킬에 반영해줘」（スキルに反映して）、「스킬이 왜 안 떴어」（スキルはなぜ発動しなかったの?）、「이 세션 돌아보고 스킬 개선해줘」（このセッションを振り返ってスキルを改善して）、「개선 이력 보여줘」（改善の履歴を見せて）。`orchestrate` の Close からはプログラムモードで、人が作業の進め方を直したセッションなら `end-session` からセッションモードで、自動的に呼ばれます。
