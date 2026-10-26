@@ -150,9 +150,11 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             only when the brief you were given names that step), follow it: once every check it
             names passes and every step it names has run, run the same command and say so in the
             report. A `[gate:sleep-loop]` block is followed in one form only, the same Bash
-            command with `run_in_background: true`, and the report says so. Watching the
+            command with `run_in_background: true`, and the report says so. Watching its
             condition with the Monitor tool, which that block also offers, is not part of this
-            exception: report before you use it. A step the brief
+            exception: report it, and use Monitor only when the one you report to says so.
+            Waiting on the pressure gate's `check` with Monitor, as its block says, is following
+            that block. A step the brief
             you were given does not name, a refused step, or a second deny from that gate: report
             and stop. A switch that turns that gate off (an environment variable, a flag) is used
             only when the human, in this session's chat after the block, names that gate and that

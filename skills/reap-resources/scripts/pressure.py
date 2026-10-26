@@ -27,6 +27,8 @@ PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
 STATE_FILE = reap.STATE / "pressure.json"
 PLAN = reap.STATE / "pressure-plan.json"
 LOG = reap.STATE / "pressure.log"
+# Left by uninstall so `skills-sync setup apply` keeps a job the user turned off off; install removes it.
+DISABLED = reap.STATE / "pressure-disabled"
 
 # Defaults measured on an 18-core, 64 GB Apple Silicon machine (docs/pressure.md has the numbers behind them).
 DEFAULTS = {
@@ -458,6 +460,7 @@ def cmd_install(here_ok):
     for _ in range(5):  # bootstrap right after bootout can fail with error 5 until the old job is gone
         p = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST)], capture_output=True, text=True)
         if p.returncode == 0:
+            DISABLED.unlink(missing_ok=True)
             print(f"wrote {PLIST} and loaded {agent_target()} (every {config()['interval']}s)")
             return 0
         time.sleep(1)
@@ -468,13 +471,20 @@ def cmd_install(here_ok):
 def cmd_uninstall():
     subprocess.run(["launchctl", "bootout", agent_target()], capture_output=True)
     PLIST.unlink(missing_ok=True)
+    reap.STATE.mkdir(parents=True, exist_ok=True)
+    DISABLED.touch()
     print(f"removed {agent_target()}")
     return 0
 
 
+def disabled():
+    return DISABLED.exists()
+
+
 def cmd_status():
     st = load_state()
-    print(f"LaunchAgent: {'loaded' if loaded() else 'not loaded'} ({PLIST}{'' if PLIST.exists() else ', absent'})")
+    print(f"LaunchAgent: {'loaded' if loaded() else 'not loaded'} ({PLIST}{'' if PLIST.exists() else ', absent'})"
+          + (f"; turned off by uninstall ({DISABLED}), so setup apply leaves it off" if disabled() else ""))
     if st:
         print(f"last round: {time.strftime('%Y-%m-%d %H:%M', time.localtime(st['t']))} "
               f"{LEVEL_KO.get(st.get('level'), '?')} · {summary(st['metrics'])}")

@@ -13,6 +13,8 @@ janitor automation(`reap.py precheck`)은 당시 30분마다 돌았지만(지금
 
 reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부를 묻지 않고 `~/orca/workspaces` 아래 Orca 카드 전부를 같은 규칙으로 보고, 세션에게 묻지 않고 직접 닫는다. 마지막 실행 시각은 정기 보고(`orch brief`)에 나온다.
 
+끝난 카드를 닫는 1차 주체는 카드 자신이고 백스톱은 그 카드를 띄운 세션이다. reap-hard는 둘 다 놓친 카드를 거두는 마지막 정리이고, 누구도 이것을 계획으로 삼지 않는다(`end-session` §8 "Who closes a finished card").
+
 ## 규칙
 
 한 회차는 아래 순서로 돈다. 뒤 단계는 앞 단계에서 닫은 것을 반영해 판정한다.
@@ -56,6 +58,8 @@ bin/reap-hard run             # 한 회차(인자 없이 부르면 usage만 출�
 bin/reap-hard last            # 마지막 회차 한 줄
 bin/reap-hard install         # 메인 체크아웃에서. status, uninstall
 ```
+
+- `skills-sync setup` 목록에는 없다. 보호 목록 파일을 쓴 사람이 `install`로 직접 건다. `apply`가 새 PC에서 묻지 않고 카드를 지우는 정리를 켜지 않게 하려는 것이다([automation.md](automation.md#처음-설치할-때)).
 
 - 동작한 것(또는 dry-run에서 동작했을 것)과 실패는 `~/.local/state/agent-skills/reap-hard.jsonl`에 한 줄씩 남는다. 회차 요약은 `reap-hard-last.json`에 남고, `orch brief`가 이 파일을 읽어 `🧹 reap-hard 14:07(3분 전) 닫음 2 · 실패 0 · 남김 41`처럼 보여 준다. 주기의 세 배가 지나도록 새 회차가 없으면 경고를 붙인다.
 - 같은 시각에 회차가 겹치면 뒤에 시작한 쪽이 바로 끝난다.

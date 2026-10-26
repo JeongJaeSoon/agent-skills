@@ -23,6 +23,8 @@ ASSIGN = re.compile(r"[A-Za-z_]\w*=")
 SEPARATORS = set("();&|\n")
 # The orchestrate refused-act rule lets a session follow only a block carrying this marker.
 MARK = "[gate:pressure]"
+# The hook's name after the marker: the model sees only the reason text, not which hook wrote it.
+SOURCE = "(agent-skills hooks/pressure_gate.py)"
 
 
 def segments(cmd):
@@ -97,11 +99,11 @@ def gate(cmd, metrics, state, cfg, now=None, judge=None):
     if level == "warn" and fresh:
         return None
     if level == "warn":
-        return ("deny", f"{MARK} PC 사용량 경고({', '.join(why)})라 `{what}` 전에 안전 대상부터 정리한다: `{py} round` 를 "
+        return ("deny", f"{MARK} {SOURCE} PC 사용량 경고({', '.join(why)})라 `{what}` 전에 안전 대상부터 정리한다: `{py} round` 를 "
                         "한 번 실행하고 같은 명령을 다시 시도한다. 그 회차는 끝난 카드의 스택·고아 프로세스처럼 reap 목록에 오른 것만 "
                         "정리하고, 경고만 남으면 이 hook 은 다음 시도를 통과시킨다.")
     first = "" if fresh else f"`{py} round` 를 먼저 한 번 실행한다(안전 대상을 정리하고, 없으면 최대 소비자를 보고한다). "
-    return ("deny", f"{MARK} PC 사용량 위험({', '.join(why)})이라 `{what}` 를 지금 시작하지 않는다. {first}위험이 이어지면 Monitor 로 "
+    return ("deny", f"{MARK} {SOURCE} PC 사용량 위험({', '.join(why)})이라 `{what}` 를 지금 시작하지 않는다. {first}위험이 이어지면 Monitor 로 "
                     f"`{py} check` 가 0(정상) 또는 1(경고)로 끝날 때까지 기다린 뒤 다시 시도한다(foreground sleep 루프 금지). "
                     "남의 카드·프로세스는 종료하지 않는다. 사용자가 지금 실행하라고 했을 때만 명령 앞에 "
                     "AGENT_SKILLS_PRESSURE_GATE=0 을 붙인다.")

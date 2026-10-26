@@ -47,8 +47,9 @@ assert gate("docker compose up", {**OK, "swap_gb": 30}, scan_t=10000.0 - 60) == 
 assert gate("docker compose up", {**OK, "disk_free_gb": 5}) == "deny"
 reason = g.gate("orch heavy x -- make", DANGER, {}, cfg, now=1.0, judge=pressure.judge)[1]
 assert "pressure.py round" in reason and "Monitor" in reason and "종료하지 않는다" in reason, reason
-assert reason.startswith("[gate:pressure] "), reason
-assert g.gate("docker compose up -d", WARN, {}, cfg, now=1.0, judge=pressure.judge)[1].startswith("[gate:pressure] ")
+assert reason.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) "), reason
+assert g.gate("docker compose up -d", WARN, {}, cfg, now=1.0, judge=pressure.judge)[1].startswith(
+    "[gate:pressure] (agent-skills hooks/pressure_gate.py) ")
 assert "round" not in g.gate("orch heavy x -- make", DANGER, {"scan_t": 1.0}, cfg, now=2.0, judge=pressure.judge)[1] \
     .split("Monitor")[0], "a fresh sweep does not ask for another round"
 

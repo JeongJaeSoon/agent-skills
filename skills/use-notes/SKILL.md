@@ -1,6 +1,6 @@
 ---
 name: use-notes
-description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, \"정본\", a project note path, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown)."
+description: "Use whenever working docs are read or written — \"노트에 기록해줘\", \"설계안을 노트에\", design docs, worklogs, program notes, \"정본\", a project note path, or showing such a doc to the user. Routes to the configured notes store (Obsidian vault or plain Markdown). What to record, and when, is record-progress's."
 ---
 
 # Working notes

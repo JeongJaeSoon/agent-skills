@@ -262,6 +262,8 @@ class PressureWatch:
             return "unsupported", "macOS LaunchAgent 전용"
         spec, loaded = pressure.plist_spec(), pressure.loaded()
         if spec is None and not loaded:
+            if pressure.disabled():
+                return "off", f"disable 로 끔 ({pressure.DISABLED}, enable 로 다시 켬)"
             return "absent", "등록 안 됨"
         if not loaded:
             return "off", f"{pressure.PLIST} 는 있으나 로드 안 됨 (enable 로 다시 로드)"
@@ -285,9 +287,9 @@ class PressureWatch:
     def disable(self):
         if sys.platform != "darwin":
             return 0, "macOS LaunchAgent 전용(이 OS 에는 등록된 것이 없다)"
-        if pressure.plist_spec() is None and not pressure.loaded():
+        if pressure.plist_spec() is None and not pressure.loaded() and pressure.disabled():
             return 0, "이미 꺼져 있음"
-        return pressure.cmd_uninstall(), "끔"
+        return pressure.cmd_uninstall(), "끔 (표지를 남겨 apply 가 다시 켜지 않는다)"
 
 
 # ---------------------------------------------------------------- share-server (LaunchAgent)

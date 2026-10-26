@@ -14,7 +14,8 @@ import board  # noqa: E402
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
 state = tmp / "dashboard"
 env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
-       "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC"}
+       "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC",
+       "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
 T0 = "2026-10-13T14:00:00Z"
 NOW = "2026-10-13T14:30:00Z"
 
@@ -257,6 +258,37 @@ assert "└ 🔄 문구 다듬기와 길이 정리 — CI 재실행 뒤 리뷰 �
 assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "🙋 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4" in tg.splitlines(), tg
 assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)"
 assert "⏳ 다른 사람 대기\n\nrev-b · 리뷰 #61·#62 · 30분 전부터 → p61·p62\n" in tg, tg
+
+# With the brief's send-log key, a ⏳ item says what last went out to its reviewer, when and where; rows that did not
+# go out (refused, skipped) and other reviewers' rows do not count. Without the key or the log, nothing is added.
+sendlog = tmp / "sendlog.jsonl"
+t = board.fleet.parse(NOW).timestamp()
+sendlog.write_text("\n".join(json.dumps(r) for r in (
+    {"pr": "acme/ops#61", "reviewer": "rev-b", "action": "request", "source": "sent", "at": t - 3 * 3600, "channel": "C0FAKE"},
+    {"pr": "acme/ops#62", "reviewer": "rev-b", "action": "remind", "source": "sent", "at": t - 3600, "channel": "C0FAKE",
+     "thread": "C0FAKE:1.2"},
+    {"pr": "acme/ops#62", "reviewer": "rev-b", "action": "remind", "source": "refused", "at": t - 60},
+    {"pr": "acme/web#51", "reviewer": "rev-a", "date": "2026-10-13T12:30:00Z"},
+    {"pr": "acme/web#52", "reviewer": "rev-z", "action": "request", "source": "sent", "at": t - 60},
+    "not json")) + "\n")
+skills_cfg = tmp / "agent-skills.json"
+skills_cfg.write_text(json.dumps({"brief": {"sendlog": str(sendlog)}}))
+code, asked, err = orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)
+assert code == 0, err
+assert "- rev-b · 리뷰 [#61](https://example.test/61)·#62 · 30분 전부터 · 마지막 리마인드 rev-b 1h 전 (C0FAKE 스레드) → p61·p62" \
+    in asked.splitlines(), asked
+assert ("- rev-a · 리뷰 [#51](https://example.test/51)·#52·#53 · 30분 전부터 · 마지막 의뢰 rev-a 2h 전 → 설정·발송·로그"
+        " · 다음: 10/13 09:30 의뢰") in asked.splitlines(), asked
+assert "- 다른 팀 · 30분 전부터 → 다른 팀 답변 대기 · 다음: 10/14 리마인드" in asked.splitlines(), asked
+# A request scheduled for later shows its post time, not an age.
+with sendlog.open("a") as f:
+    f.write(json.dumps({"pr": "acme/ops#61", "reviewer": "rev-b", "action": "remind", "source": "scheduled",
+                        "at": t - 60, "post_at": t + 18 * 3600, "channel": "C0FAKE"}) + "\n")
+code, asked, err = orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)
+assert code == 0 and "· 마지막 리마인드 rev-b 10-14 08:30 예약 (C0FAKE) → p61·p62" in asked, asked
+sendlog.unlink()
+assert orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)[1] == \
+    orch("brief", "render", "--periodic", "--now", NOW)[1], "a missing log adds nothing"
 assert "🙋 지금 오너가 할 일\n\n충돌 해소 승인 · #50 → 알림 정리\n리뷰 · #70·#71 → 로그·대시보드\n" in tg, tg
 assert tg.endswith("⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5\n10/16 → prod 배포 창\n10/20 → 캐시 TTL을 다시 보기"), tg
 
