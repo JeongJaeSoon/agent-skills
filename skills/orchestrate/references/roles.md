@@ -44,8 +44,9 @@ ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --fai
                hotfix|revert, PR>". Use --type escalation only when a red main needs the coordinator
                to act because you cannot repair it yourself: Orca keeps escalation for work that is
                blocked, and it wakes the coordinator. The coordinator appends that line to
-               guardian-log.tsv; you write nothing outside your worktree except a refusal report
-               (FORBIDDEN).
+               guardian-log.tsv; you write nothing outside your worktree except one refusal-report
+               file under `<TMPDIR or /tmp>/orch-refusal/<worktree dir>/`, written with the Write
+               tool.
             Every send copies the exact --from and --dispatch-capability values from your Orca
             preamble; Orca ties a message to your Dispatch only through them, so never rebuild them.
 FORBIDDEN   Feature work. Force-push. Disabling or skipping checks.
