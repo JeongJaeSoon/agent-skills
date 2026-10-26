@@ -330,8 +330,8 @@
 
 ### principles
 - **使う場面:** 設計、リファクタリング、検証、委任の判断に、名前の付いた原則が必要なとき。
-- **内容:** 原則23個の索引です（Core、Architecture、Verification、Delegation、Meta）。Delegation にはこのリポジトリが足した一行 Stay Answerable（`orchestrate` の即答の原則）があります。適用する原則は leaf ファイルを最後まで読みます。例: 根本原因を直す、振る舞いをテストする、足す前に削る、人を待たない。
-- **同梱:** `references/principle-*.md` 23個。
+- **内容:** 原則25個の索引です（Core、Architecture、Verification、Delegation、Meta）。Delegation にはこのリポジトリが足した一行 Stay Answerable（`orchestrate` の即答の原則）があります。適用する原則は leaf ファイルを最後まで読みます。例: 根本原因を直す、振る舞いをテストする、足す前に削る、人を待たない。
+- **同梱:** `references/principle-*.md` 25個と、測定のチェックリスト `references/benchmark-checklist.md`。
 
 ### recall
 - **使う場面:** 「어디까지 했지」（どこまでやったっけ）、「X 작업 어디까지 했더라」（X の作業はどこまでだったっけ）、「최근 작업 정리해줘」（最近の作業をまとめて）、「이번 주에 뭐 했지」（今週は何をしたっけ）、'catch me up'。前のセッションが手を付けた仕事を始めたり、続けたりする前。
@@ -505,10 +505,10 @@
 | 言語 | 英語、unslop の文体ルール | スキル本文は英語、文書・チケット・PR は韓国語。文体は `write-plainly`（韓国語・英語） |
 
 ### 持ってきたもの
-pstack のスキル47個（原則23個と、その他24個）のうち、原則23個すべてと、その他のうち15個を持ってきました。固定したコミットは `b42effe`（0.15.3）で、ファイルの一覧は `vendor/pstack/manifest.json` にあります。
+pstack のスキル58個（原則24個と、その他34個）のうち、原則24個すべてと、その他のうち16個を持ってきました。16個のうち benchmark-checklist はスキルではなく `principles` の参照ファイルとして入れました。固定したコミットは `99b609a`（0.15.32）で、ファイルの一覧は `vendor/pstack/manifest.json` にあります。
 
-- **ほぼそのまま持ってきたもの:** 原則23個、レビュー・探索のプロンプト、設計の red flag、機能マップの例。
-  - 原則は pstack では23個のスキルに分かれていましたが、ここでは `principles` スキル一つの参照ファイルにまとめました。索引（`principles/SKILL.md`）はここで新しく書きました。
+- **ほぼそのまま持ってきたもの:** 原則24個、レビュー・探索のプロンプト、設計の red flag、機能マップの例。
+  - 原則は pstack では24個のスキルに分かれていましたが、ここでは `principles` スキル一つの参照ファイルにまとめました。索引（`principles/SKILL.md`）はここで新しく書きました。
 - **直して持ってきたもの:** architect、arena、blast-radius、figure-it-out、how、why、interrogate、recall、reflect、show-me-your-work、swarm、tdd、teach、create-verification-skill、maintain-verification-skill。共通して行ったことは4つです。
   - モデルが自分で呼べるようにしました。
   - Cursor 専用の要素を、Claude Code での対応物に置き換えました。パスは `.cursor/` → `.claude/`、ワーカーは `generalPurpose`/クラウド → `Agent`/Orca ワーカー、transcript は `agent-transcripts` → `~/.claude/projects` です。
@@ -529,6 +529,10 @@ pstack のスキル47個（原則23個と、その他24個）のうち、原則2
 | no-comments | コメントの削除 | Cursor 専用の Comment Sicko エージェントに頼っている。ルールは `prune-comments` に移した。unslop と technical-writing は `write-plainly` に統合した |
 | typescript-best-practices | TS のルール | 汎用のスキルではない |
 | setup-pstack、make-bot-ui、bro、automate-me、benny の自動化 | Cursor のモデル設定、Grok Bot など | Cursor や Grok に縛られている |
+| correct | 同じ間違いを構造で防ぐ手順 | `reflect` と Encode Lessons in Structure の原則が同じ役割を持っています。防ぐ手段の順序（構造、型、lint、テスト、ドキュメント）をその原則に入れるかは、次の同期で見ます |
+| in-your-own-words、sharpen、poteto-help | ユーザーが直接打つ短いプロンプトと、pstack の使い方案内 | モデルが呼ぶスキルにする根拠がありません。poteto-help は pstack のセットアップ案内です |
+| ketchup、ketchup-video | 会話に追いつくための報告 | `brief` が決定項目のルールをすでに移しています（upstream `978ca6e`）。その後に増えた「待ち項目を削らない」と図のルールは、`brief` を直す別の作業と重なるので後で見ます |
+| statechart、create-formal-verification-skill、maintain-formal-verification-skill | TLA+ モデルの状態図と、形式検証スキルの作成・保守 | ファイルが多く、TLA+ のツールが必要です。使うプロジェクトができたら見直します |
 
 ### pstack にないもの
 - **チケットの流れ:** `write-ticket`、`deliver-ticket`、`handoff-ticket`、`dispatch-card`、`end-session`。Orca のカードとトラッカーを前提にした、チケット一つの最初から最後までです。
@@ -538,8 +542,7 @@ pstack のスキル47個（原則23個と、その他24個）のうち、原則2
 - **フック:** 権限の判定（`guard.py`）、圧縮後の再オリエンテーション（`reorient.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）。
 
 ### upstream との同期状況
-- **pin 以降のコミット:** upstream の `main`（0.15.5）は、pin より2コミット先に進んでいます。
-  - #419: Opus 5.5 には不要な指示19個を取り除きました。こちらの `6eec9fa` と方向が同じで、tdd と reflect のレビュアーは同じ箇所を直しています。
-  - #422: モデルルールの読み方を統一し、show-me-your-work で run ごとに `start` 行を置くようにしました。
-- **dry-run の結果:** `python3 scripts/pstack-sync.py --to origin/main` を実行すると、原則4個と interrogate の参照3個はきれいに入ります。tdd と tooling-reviewer は自動でマージされます。直して持ってきた9ファイル（interrogate、architect、swarm、reflect、how、why、show-me-your-work、レビュアー2つ）は衝突します。
-- **衝突の性質:** ほとんどが Cursor のモデルルールの行なので、こちら側を残せば済みます。`--write` は衝突が0のときだけ書き込むので、手でマージする必要があります。
+- **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。
+- **取り込んだもの:** ほとんどは指示を減らすコミット（#538、#571、#634）です。そのまま持ってきたファイルは upstream と同じにしました。直して持ってきたファイルには、3-way マージで短くなった文と新しいルールを取り込みました。新しいルールは、show-me-your-work の run ごとの `start` 行、create-verification-skill の「準備完了は使える状態」と代わりの環境で確かめたときの限界、architect の「次の貢献者はエージェント」という基準、arena の候補が退けた案を書くルールなどです。新しい原則 Explain the Number とその測定チェックリストを `principles` に加えました。
+- **取り込まなかったもの:** Cursor のモデルルールの行（`pstack-models.mdc`、モデルの slug、`generalPurpose`、`readonly`）、サブエージェントの effort を poteto-mode に合わせる行（#613）、reflect 本文の組み直し。reflect はこのリポジトリのモード構成のままです。移して書いた（derived）ファイルの元になった upstream の変更（opening-a-pr の PR 本文の節、shipping の着地順）は反映していません。
+- **次の同期:** `python3 scripts/pstack-sync.py`（dry-run）から始めます。直して持ってきたファイルはほとんど衝突するので手でマージします。衝突なくマージされた部分にも Cursor の行が混ざるので、denylist の結果と diff 全体を読みます。
