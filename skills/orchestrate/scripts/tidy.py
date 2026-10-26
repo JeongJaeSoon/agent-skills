@@ -156,7 +156,7 @@ def requests_over(rows_here, rows_marked, cards_done, prs, cards):
             if to.startswith("board:") and to[6:] in rows_here | rows_marked:
                 ev.append(f"{to} 완료")
                 here |= to[6:] in rows_here
-            elif by_name.get(owner_requests.card(to)) in cards_done:
+            elif (c := owner_requests.card(to)) and by_name.get(c) in cards_done:
                 ev.append(f"{to} 정리됨")
                 here = True
             elif pr and (e := refs_over([pr[0]], prs)):
