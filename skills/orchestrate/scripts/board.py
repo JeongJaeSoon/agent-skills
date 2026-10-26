@@ -75,7 +75,7 @@ def change(fn):
         return out
 
 
-def one_line(text, limit):
+def one_line(text, limit=None):
     return fleet.mask(" ".join((text or "").split()), limit)
 
 
@@ -149,7 +149,7 @@ def put(store, rid, fields):
         if k == "kind" and v not in KINDS:
             raise ValueError(f"--kind is one of {', '.join(KINDS)}")
         row[k] = (status_of(v) if k == "status" else progress_of(v) if k == "progress" else
-                  one_line(v, 120) if k in ("title", "next") else one_line(v, 60) if isinstance(v, str) else v)
+                  one_line(v) if isinstance(v, str) else v)
     if row.get("progress") is None:
         row.pop("progress", None)
     row.update(source="coordinator", reported_at=fleet.iso(fleet.utcnow()))
@@ -199,7 +199,7 @@ def doing_add(title, owner, next_, waiting=False):
     """waiting: owner is a person this work waits on (a reply, a review), not the agent moving it."""
     if not all((x or "").strip() for x in (title, owner, next_)):
         raise ValueError("board doing add needs a title, --owner (who moves it) and --next (the next event)")
-    item = {"title": one_line(title, 120), "owner": one_line(owner, 40), "next": one_line(next_, 60),
+    item = {"title": one_line(title), "owner": one_line(owner), "next": one_line(next_),
             **({"waiting": True, "since": fleet.iso(fleet.utcnow())} if waiting else {})}
     return change(lambda store: store["doing"].append(item))
 
@@ -227,7 +227,7 @@ def later_add(title, trigger, due=None):
     """Add a held item, or reword the one it repeats."""
     if not (title or "").strip() or not (trigger or "").strip():
         raise ValueError("board later add needs a title and --trigger (what brings it back)")
-    item = {"title": one_line(title, 120), "trigger": one_line(trigger, 60), **({"due": due} if due else {})}
+    item = {"title": one_line(title), "trigger": one_line(trigger), **({"due": due} if due else {})}
 
     def go(store):
         old = next((i for i, l in enumerate(store["later"]) if same_later(l, item)), None)
@@ -247,7 +247,7 @@ def later_drop(n):
 
 
 def set_todo(lines):
-    return change(lambda store: store.update(owner_todo=[one_line(l, 200) for l in lines if l.strip()]))
+    return change(lambda store: store.update(owner_todo=[one_line(l) for l in lines if l.strip()]))
 
 
 # ---------------------------------------------------------------- render
@@ -308,6 +308,8 @@ def blocker(r, status, p, me):
                     else ("waiting", {"who": ", ".join(asked), "what": "리뷰"}))
     if r.get("owner"):
         return ("owner", {}) if is_owner(r["owner"], me) else ("waiting", {"who": r["owner"]})
+    if p and p.get("state") == "OPEN" and not p.get("draft") and p.get("decision") == "REVIEW_REQUIRED":
+        return "owner", {"what": "리뷰 요청"}  # GitHub asks for a review and nobody has been asked
     return "check", {"why": "누구 대기인지 기록 없음"}
 
 
@@ -384,7 +386,7 @@ def fleet_rows(state, leads, board_rows):
             nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else s.get("task_title") or s.get("name")
-        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid, 80), "status": status, "next": one_line(nxt, 120),
+        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": status, "next": one_line(nxt),
                      "session": s.get("id"),
                      # a lead's digest links its cards' PRs, which are the cards' rows
                      "pr": pr_of.get(s.get("id")) or (rep.get("pr") if kind != "lead" else None),
@@ -405,7 +407,7 @@ def fleet_rows(state, leads, board_rows):
             continue
         lid = f"fleet:{lead['id']}"
         if not board_lead:
-            add(lid, lead, "lead", program=one_line(lead.get("name") or lid, 80))  # two leads in one repo: a section each
+            add(lid, lead, "lead", program=one_line(lead.get("name") or lid))  # two leads in one repo: a section each
         for s in under.get(lead["id"], []):
             if shown(s):
                 add(f"{lid}/{s['id']}", s, "task", board_lead or lid)
@@ -444,9 +446,9 @@ def refresh(now, limit_min):
     out = []
     if got is None or err:
         age = f"{ago((now - at).total_seconds())} 기준" if at else "없음"
-        out.append(f"세션 목록 {age} · 갱신 실패: {one_line(err, 60)}")
+        out.append(f"세션 목록 {age} · 갱신 실패: {one_line(err)}")
     if gh_err:
-        out.append(f"PR 목록 갱신 실패: {one_line(gh_err, 60)}")
+        out.append(f"PR 목록 갱신 실패: {one_line(gh_err)}")
     return " · ".join(out) or None
 
 
@@ -495,6 +497,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
+    holds, held_by = fleet.held_prs(store, shut, prs, now), {}  # held_by: row id -> the PR a held item covers
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
         if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
@@ -535,20 +538,38 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             status, nxt = "done", ""
         elif p and p.get("state") == "CLOSED":
             status, nxt = "held", "PR 닫힘"
-        # A card with no agent left and its PR still open waits on what the PR waits on, not on the card.
-        quiet = r.get("session") and status == "held" and p and p.get("state") == "OPEN" and nxt
+        # A held item naming the row's open PR is the row's hold, the same one that demotes the PR in Needs you. It
+        # folds a row that is held or ❔ already; one the owner or another person can move now keeps its list.
+        hold = p and p.get("state") == "OPEN" and holds.get(r.get("pr"))
+
+        def fold():
+            nonlocal status, nxt
+            status, nxt, held_by[r["id"]] = "held", hold if nxt in GENERIC_NEXT or nxt == hold else f"{hold} · {nxt}", r["pr"]
+            waits.pop(r["id"], None)
+
+        if hold and status == "held":
+            fold()
+        # A card with no agent left and its PR still open waits on what the PR waits on, not on the card. A draft
+        # nobody holds is the owner's to make ready or to hold.
+        quiet = r.get("session") and status == "held" and r["id"] not in held_by and p and p.get("state") == "OPEN" and nxt
         if quiet:
-            status = "check" if p.get("draft") else "waiting"
+            status = "owner" if p.get("draft") else "waiting"
             if p.get("draft"):
-                waits[r["id"]] = {"why": f"{quiet} · PR 초안"}
+                waits[r["id"]] = {"what": f"초안 — ready 로 만들지 정하기 (카드 {quiet}; 보류라면 "
+                                          f"`orch board later add \"<할 일> {r['pr']}\" --trigger <날짜>` 로 ⏸️)",
+                                  "since": r.get("since") or p.get("created")}
         lead = store["leads"].get(lead_of(r)["id"])
         if status == "moving" and live is not None and lead and not lead.get("closed_at") and lead["handle"] not in live:
             status, nxt = "blocked", "세션 없음"
-        if status in ("waiting", "owner"):
+        if status in ("waiting", "owner") and r["id"] not in waits:
             status, waits[r["id"]] = blocker(r, status, p, me)
             waits[r["id"]].setdefault("since", r.get("since") or (p or {}).get("created"))
             if quiet and waits[r["id"]].get("why") == "누구 대기인지 기록 없음":
                 waits[r["id"]]["why"] = f"{quiet} · PR {pr_state(p)}"
+            if status == "waiting" and waits[r["id"]].get("what") == "리뷰" and nxt and nxt in GENERIC_NEXT:
+                nxt = f"{waits[r['id']]['who']} 리뷰 대기"  # what it waits on is the next event, not the card's session
+            if status == "check" and hold:
+                fold()
         if status == "moving" and (v := verdicts.get(tid)) and v["verdict"] == "check":
             status, waits[r["id"]] = "check", {"why": v["evidence"]}
         suffix = ""
@@ -836,7 +857,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, one the owner
     # unblocks to 지금 오너가 할 일, one another person unblocks to 다른 사람 대기, every other open row's to 진행 중 in
     # table order, a sub-task after its head row. Each row goes to one list, by its own status, not its children's.
-    moving, held, turn, theirs = [], [], [], []
+    moving, held, turn, theirs, held_rows = [], [], [], [], {}
+    covered = {k for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"
+               for k in fleet.held_refs(l["title"], prs)}  # the PRs of the held items listed under 보류
     for sec in sections:
         head, head_out = None, False
         for l in (l for l in lines if l["sec"] == sec):
@@ -846,7 +869,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if st in (None, "done"):
                 continue
             if st == "held":
-                held.append(f"{l['next'] or '—'} → {label(l)}")
+                if held_by.get(l["key"]) in covered:  # its held item's line says it, with this row's name
+                    held_rows.setdefault(held_by[l["key"]], []).append(label(l))
+                else:
+                    held.append(f"{l['next'] or '—'} → {label(l)}")
                 continue
             where = l["cell"].split(" ")[0] if l["pr"] else l["cell"]
             if st == "owner":
@@ -904,14 +930,17 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     continue
                 out.append(("└ " if l["depth"] else "") + f"{ICON[l['status']]} {name} — {l['progress']}")
         elif mine:  # a section of folded bullets only has no table
-            table = [HEADER]
-            for l in mine:
-                name = ("└ " if l["depth"] else "") + (f"**{l['name']}**" if l["key"] in changed else l["name"])
-                table.append([ICON.get(l["status"], "—"), name, l["cell"] or "—", l["progress"]])
-            # Nothing is cut to fit: a table too wide overflows, and the render reports it.
+            def dress(i, c, s):
+                l = mine[i - 1]
+                return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
+            # Only a name is cut to fit, and its whole text goes in the numbered list under the table. A table the
+            # other cells alone make too wide overflows, and the render reports it.
+            table, notes = table_width.fit([HEADER] + [[ICON.get(l["status"], "—"), l["name"], l["cell"] or "—", l["progress"]]
+                                                       for l in mine], COLS, (1,), deco=dress)
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
+            out += [""] + [f"- [{n}] {t}" for n, t in enumerate(notes, 1)] if notes else []
         if folded.get(sec):
             out += ["", f"{ICON['done']} 그 전 완료 {folded[sec]}건 (대시보드)"]
         for (bsec, rev), items in bullets.items():
@@ -937,16 +966,19 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
                     if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
             items.append(text + (" (지난 보고와 동일)" if d["id"] in asked else ""))
-        items += [f"{i}. {one_line(d, 400)}" for i, d in enumerate(own, len(decisions) + 1)]
+        items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
         out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
     todo = todos + turn
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
     shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
     if asked := owner_requests.line(owner_requests.summary(now, shown)):
-        out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
+        out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked + (" · 목록: orch req list" if tg else " · 목록: `orch req list`")]
     fired = {tidy.item_id("later", l) for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") == "check"}
-    if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later if tidy.item_id("later", l) not in fired])):
+    def held_line(l):
+        names = [n for k in fleet.held_refs(l["title"], prs) for n in held_rows.get(k, [])]
+        return f"{l['trigger']} → {l['title']}" + (f" ({'·'.join(names)})" if names else "")
+    if held := list(dict.fromkeys(held + [held_line(l) for l in later if tidy.item_id("later", l) not in fired])):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
     opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]

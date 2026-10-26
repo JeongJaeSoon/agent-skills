@@ -164,7 +164,7 @@ def summary(now=None, requests=None):
     open_ = [q for q in all_open if visible(q, now)]
     stale = [q for q in open_ if not q["links"] and age_min(q, now) >= UNLINKED_MIN]
     return {"open": len(open_), "oldest_min": max([age_min(q, now) for q in open_] or [0]),
-            "unlinked": [{"id": q["id"], "age_min": age_min(q, now), "text": q["text"][:80]} for q in stale],
+            "unlinked": [{"id": q["id"], "age_min": age_min(q, now), "text": q["text"]} for q in stale],
             "expired": len(all_open) - len(open_)}
 
 

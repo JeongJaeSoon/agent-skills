@@ -354,8 +354,8 @@ ok("board", "set", "cart/ph1", "--kind", "phase")
 ok("board", "set", "promo/ph1", "--kind", "phase")
 assert "**acme/shop — (프로젝트 미지정)**" in ok("brief", "render", "--periodic", "--now", NOW)
 
-# No cell is cut and nothing goes to a footnote: a long PR state, a folded row's bases and a long progress show whole, and
-# a table that then passes 78 columns overflows and the render reports it.
+# Only a name is ever cut, and only when that gets the table into 78 columns: a long PR state, a folded row's bases and
+# a long progress show whole, and a table they alone make too wide overflows uncut and the render reports it.
 ok("board", "lead", "add", "wide", "--handle", "term_0FAKE9", "--repo", "acme/wide", "--program", "넓은 표")
 ok("board", "set", "wide", "--title", "긴 이름의 리드 작업", "--progress", "100/100", "--pr", "acme/wide#1201",
    "--next", "다음 단계 설명이 아주 길게 이어짐")
@@ -456,7 +456,8 @@ assert "📝" not in carded
     {"ev": "open", "id": "r3", "ts": "2026-10-13T13:00:00Z", "text": "reply to the reviewer"},
     {"ev": "done", "id": "r3", "ts": "2026-10-13T13:10:00Z", "evidence": "replied"}]))
 asked = ok("brief", "render", "--periodic", "--now", NOW)
-assert "📝 **요청** — 요청 2건 열림 · 가장 오래된 것 1h00m · 미연결 30분+ 1건" in asked, asked
+# The counts come with the command that lists them, so the line reaches the whole list.
+assert "📝 **요청** — 요청 2건 열림 · 가장 오래된 것 1h00m · 미연결 30분+ 1건 · 목록: `orch req list`" in asked, asked
 
 # A held item stored twice before later add merged them renders once, in its newest words.
 b = json.loads((state / "board.json").read_text())
@@ -540,11 +541,22 @@ assert "| 작업 |" not in rok("brief", "render", "--periodic", "--now", NOW)
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](")), tg_req
 assert "📋 작업별 (prod: v1.7.1 · dev: v1.7.2)" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
-# A stage table wider than 78 columns is reported like any other.
-rok("stage", "add", "wide", "--title", "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "--pr", "acme/web#1234")
-rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", "로그로만 확인하고 화면은 아직 보지 않음")
-code, _, err = orch_env(renv, *REQUEST)
-assert code == 1 and err == "a table is wider than 78 columns", (code, err)
+# A long stage name is cut to fit, and its whole text is listed under the table on the same screen.
+WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
+rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
+code, cut, err = orch_env(renv, *REQUEST)
+assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
+assert any(l.startswith("- [") and l.endswith(f"] {WIDE_TITLE}") for l in cut.splitlines()), cut
+# The stage table's PR is a plain key, so a long one is cut and listed the same way.
+WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
+rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
+code, cut, err = orch_env(renv, *REQUEST)
+assert code == 0 and any(l.startswith("- [") and l.endswith(f"] {WIDE_PR}") for l in cut.splitlines()), (code, err, cut)
+# A stage cell is never cut: a table its stage cells make too wide overflows whole, and the render says so.
+rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
+code, cut, err = orch_env(renv, *REQUEST)
+assert code == 1 and "wider than 78" in err, (code, err)
+assert f"| {WIDE_TITLE} | acme/web#1234 | – | ⚠️ {WIDE_EVIDENCE} | – |" in cut.splitlines() and "\n- [" not in cut, cut
 
 # GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR
 # closed unmerged is ⏸️ PR 닫힘. A lead the board holds still shows its live cards whose PR no board row has, and a PR
