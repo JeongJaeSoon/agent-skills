@@ -75,9 +75,10 @@ session as not the human's, so an approval sent afterwards is refused. The brief
 - **Human only** — what stays the human's: permission dialogs, logins, payments, document
   submissions, and any irreversible or outward act not under Approved. The card puts these to
   the human in one batched message and keeps doing the rest.
-- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만, 호출 전에
-  무엇을 왜 부르는지 보고하고, 모델은 그때 고른다". Never name a model in the brief: the card reads
-  a named model as an order and calls it whether or not the task needs it.
+- **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 하고, 모델은 그때
+  고른다. 무엇을 왜 불렀는지는 마지막 보고에 적는다". Never name a model in the brief: the card reads
+  a named model as an order and calls it whether or not the task needs it. The calls go in the
+  final report because nobody reads an unattended card's chat before a call.
 - **Target repo rules** — one line: "그 repo의 CLAUDE.md와 스킬을 확인하고 적용하라". Never paste
   its CLAUDE.md or skills into the brief; that session reads them itself.
 - **Close** — one line: "`CLOSE`: 완료 기준을 채우고 결과를 적으면 `end-session` §8대로 같은 턴에
