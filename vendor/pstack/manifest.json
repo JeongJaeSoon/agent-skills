@@ -48,7 +48,7 @@
     {
       "upstream": "skills/interrogate/references/code-quality-review.md",
       "local": "skills/interrogate/references/code-quality-review.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/interrogate/references/lead-judgment.md",
@@ -178,7 +178,7 @@
     {
       "upstream": "skills/principle-type-system-discipline/SKILL.md",
       "local": "skills/principles/references/principle-type-system-discipline.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/architect/SKILL.md",
@@ -198,7 +198,7 @@
     {
       "upstream": "skills/architect/references/runner-prompt.md",
       "local": "skills/architect/references/runner-prompt.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/tdd/SKILL.md",
