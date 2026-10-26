@@ -79,6 +79,17 @@ class JanitorLoad(Base):
         self.assertEqual(self.j.enable(False)[0], 0)
         self.assertIn("--load", fake.schedules()[0])
 
+    def test_absent_follows_the_janitor(self):
+        """apply must not turn reaping back on for a user who turned the janitor off, and the load job runs where
+        the janitor was moved to."""
+        fake = self.orca([janitor(enabled=False)])
+        code, msg = self.j.enable(False)
+        self.assertEqual((code, fake.schedules()), (0, []), msg)
+        fake = self.orca([janitor(workspaceId="x::/w/runner")])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        argv = fake.schedules()[0]
+        self.assertEqual(argv[argv.index("--workspace") + 1], "path:/w/runner")
+
 
 class JanitorName(unittest.TestCase):
     def test_matches_what_reap_creates(self):

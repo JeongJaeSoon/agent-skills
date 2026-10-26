@@ -102,6 +102,9 @@ class Janitor:
             detail += f" · reap schedule 과 다름: {', '.join(drift)} (enable 로 맞춤)"
         return ("on" if a.get("enabled") else "off"), detail
 
+    def create_args(self):
+        return [], None
+
     def enable(self, here):
         a, err = self.find()
         if a is None:
@@ -111,7 +114,10 @@ class Janitor:
             refusal = worktree_refusal()
             if refusal:
                 return 1, refusal
-            p = sh([sys.executable, str(REAP), "schedule", *(["--load"] if self.load else []), "--write"])
+            args, skip = self.create_args()
+            if skip:
+                return 0, skip
+            p = sh([sys.executable, str(REAP), "schedule", *args, "--write"])
             return p.returncode, (p.stdout + p.stderr).strip()
         drift = janitor_drift(a, self.load) if main_checkout() else {}
         if not drift and a.get("enabled"):
@@ -140,6 +146,15 @@ class JanitorLoad(Janitor):
     load = True
     what = ("부하 정리 라운드(Orca automation, 30분마다 load 만 확인). 5분 load 가 reap.load_limit(기본 CPU 수) 이상이고 "
             "1시간 안에 정리 라운드가 없었을 때만 janitor 와 같은 라운드를 한 번 돈다")
+
+    def create_args(self):
+        """Follow the janitor: none while the user has it off (apply would turn reaping back on), and in the
+        workspace it was moved to."""
+        j, _ = Janitor().find()
+        if j and not j.get("enabled"):
+            return [], "janitor 가 꺼져 있어 만들지 않음"
+        ws = ((j or {}).get("workspaceId") or "").partition("::")[2]
+        return ["--load", *(["--workspace", f"path:{ws}"] if ws else [])], None
 
 
 # ---------------------------------------------------------------- preview-watch (LaunchAgent)
