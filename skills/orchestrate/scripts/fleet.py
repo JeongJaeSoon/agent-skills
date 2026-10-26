@@ -719,7 +719,7 @@ def build_sessions(fast, runs, cfg, declared=()):
             "status": w.get("status"), "orca_unread": bool(w.get("unread")), "comment": mask(w.get("comment"), 200),
             # Orca's worktree time does not move while an agent in it works, so the agents' own times count too.
             "last_activity": max(filter(None, [ms_iso(w.get("lastActivityAt"))] + [a["updated"] for a in agents]), default=None),
-            "orca_parent": w.get("parentWorktreeId"),
+            "orca_parent": w.get("parentWorktreeId"), "created": ms_iso(w.get("createdAt")),
             "linked_pr": w.get("linkedPR"), "agents": agents, "terminals": terms,
             "phase": phase_of(agents, terms), "kind": "task", "parent": None, "run": None, "dispatch": None,
             "dispatch_status": None, "task_title": None}
@@ -1652,7 +1652,7 @@ class Fleet:
                 items.append({**it, "key": f"pr:{k}:{it['type']}", "session": sid, "at": det["updated"], "source": "github"})
         # Skill-side items and sync state.
         terms = {t["handle"]: (s["id"], t["title"]) for s in sessions.values() for t in s["terminals"]}
-        items += external_items(sticky) + sync_items(now, terms) + list(self.checks)
+        items += external_items(now) + sync_items(now, terms) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -1693,8 +1693,15 @@ class Fleet:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
         except (OSError, ValueError):
             held = []
-        import owner_requests
+        import board, owner_requests
         asked = owner_requests.fold(owner_requests.read())
+        try:
+            if rows := owner_requests.reconcile(asked, now, {p["key"]: p for p in prs}, sessions, board.read()["rows"],
+                                                by_handle, mem.setdefault("request_cards", {}), self.sources["orca"]["ok"]):
+                owner_requests.apply(rows)
+                asked = owner_requests.fold(owner_requests.read())
+        except (OSError, ValueError) as e:
+            self.event({"at": iso(now), "kind": "requests_error", "text": mask(str(e), 200)})
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": mask(t.get("display_name") or t.get("task_title"), 160),
@@ -1703,7 +1710,8 @@ class Fleet:
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
                 "requests": {**owner_requests.summary(now, asked),
-                             "items": [{**q, "session": by_handle.get(q.get("handle"))} for q in asked.values() if q["status"] == "open"]},
+                             "items": [{**q, "session": by_handle.get(q.get("handle"))} for q in asked.values()
+                                       if q["status"] == "open" and not owner_requests.expired(q, now)]},
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 
@@ -1758,8 +1766,12 @@ def decision_items(by_handle, root):
     return out
 
 
-def external_items(sticky):
-    """Items the orchestrator skill added with `orch-dash inbox add` (or by appending the same line)."""
+EXTERNAL_KEEP_DAYS = 7  # an added item nobody resolved leaves the inbox this long after it was added
+
+
+def external_items(now=None):
+    """Items the orchestrator skill added with `orch-dash inbox add` (or by appending the same line), less resolved
+    ones and, given now, those added more than EXTERNAL_KEEP_DAYS before it."""
     items = {}
     for row in read_lines(state_dir() / "inbox-external.jsonl"):
         key = f"ext:{row.get('key')}"
@@ -1769,7 +1781,8 @@ def external_items(sticky):
             items[key] = {"key": key, "type": row["type"], "session": row.get("session"), "title": mask(row.get("title"), 200),
                           "url": row.get("url"), "command": mask(row.get("command"), 500), "at": row.get("at"),
                           "source": row.get("source") or "skill"}
-    return list(items.values())
+    cutoff = iso(now - dt.timedelta(days=EXTERNAL_KEEP_DAYS)) if now else ""
+    return [i for i in items.values() if (i["at"] or "") >= cutoff]
 
 
 def sync_items(now, terms=None):

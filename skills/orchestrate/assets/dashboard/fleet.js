@@ -406,7 +406,7 @@ function fleetOverview(st) {
       ${kpi("Sessions", `${ss.length}`, phaseLegend(["working", "waiting", "idle"], n), { src: "orca" })}
       ${kpi("Needs you", `${items.length}${missed ? ` ${tag(`${missed} missed`, "bad", "alert")}` : ""}`, Object.entries(st.counts || {}).map(([t, c]) => `${itemMeta(t)[0]} ${c}`).join(" · ") || "inbox empty")}
       ${kpi("Open PRs", `${open.length}`, `${open.filter((p) => p.ci === "failure").length} CI failing · ${open.filter((p) => p.decision === "APPROVED").length} approved`, { src: "github" })}
-      ${kpi("Your requests", `${rq.open || 0}${(rq.unlinked || []).length ? ` ${tag(`${rq.unlinked.length} unlinked`, "warn", "alert")}` : ""}`, rq.open ? `oldest ${agoSpan(rq.items[0].ts)}` : "none open")}
+      ${kpi("Your requests", `${rq.open || 0}${(rq.unlinked || []).length ? ` ${tag(`${rq.unlinked.length} unlinked`, "warn", "alert")}` : ""}`, `${rq.open ? `oldest ${agoSpan(rq.items[0].ts)}` : "none open"}${rq.expired ? ` · ${rq.expired} expired` : ""}`)}
     </div>
     ${projectChips(st)}
     <div class="grid fill">
@@ -419,13 +419,14 @@ function fleetOverview(st) {
     </div>`;
 }
 
-// The owner's open requests to a coordinator (orch req, hooks/request_log.py); one unlinked for 30 min is amber.
+// The owner's open requests to a coordinator (orch req, hooks/request_log.py); one unlinked for 30 min is amber. The
+// fleet tick links and closes them (owner_requests.reconcile); one unlinked for 12 h has expired and is not listed.
 function requestCard(st) {
   const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
   if (!(rq.items || []).length) return "";
   const rows = rq.items.slice(0, 8).map((q) => `<li>${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow ellipsis" title="${esc(q.text)}">${esc(q.text)}</span>
     <span class="acts muted">${q.links.length ? esc(q.links.join(", ")) : "not linked"} · ${relSpan(q.ts)}</span></li>`).join("");
-  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open · <code>orch req list</code></span></div><ul class="rows">${rows}</ul></div>`;
+  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code></span></div><ul class="rows">${rows}</ul></div>`;
 }
 
 // One row per lead: its sessions, how many of them work, and the open PRs of the lead and those sessions.

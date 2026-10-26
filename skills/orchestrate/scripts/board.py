@@ -130,7 +130,9 @@ def put(store, rid, fields):
             raise ValueError(f"a top-level {kind} row needs --repo")
         if not parent and not fields.get("repo"):
             raise ValueError(f"a lead row ({rid}) needs --repo")
-        row = {"id": rid, "kind": kind, "title": rid.rsplit("/", 1)[-1], "parent": parent, "status": "moving", "next": ""}
+        # created_at and by let the fleet tick link the row to the owner request that terminal was answering.
+        row = {"id": rid, "kind": kind, "title": rid.rsplit("/", 1)[-1], "parent": parent, "status": "moving", "next": "",
+               "created_at": fleet.iso(fleet.utcnow()), "by": os.environ.get("ORCA_TERMINAL_HANDLE")}
         rows[rid] = row
         store["order"].append(rid)
     was = (row.get("status"), row.get("owner"))

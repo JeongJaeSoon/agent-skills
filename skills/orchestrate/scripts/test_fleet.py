@@ -1430,4 +1430,21 @@ for stderr, want in (("boom\n  code: 'EACCES',\nNode.js v24.0.0\n", "code: 'EACC
     except fleet.SourceError as e:
         assert str(e) == want, (str(e), want)
 
+# An added inbox item nobody resolved leaves after EXTERNAL_KEEP_DAYS; `orch-dash inbox list` (now=None) still has it.
+# The server's code version covers every module it imports, so a change to any of them restarts it.
+with contextlib.ExitStack() as stack:
+    ext_state = pathlib.Path(stack.enter_context(tempfile.TemporaryDirectory()))
+    os.environ["ORCH_FLEET_STATE"], was = str(ext_state), os.environ["ORCH_FLEET_STATE"]
+    stack.callback(os.environ.__setitem__, "ORCH_FLEET_STATE", was)
+    fleet.inbox_add("login", "old", key="old")
+    fleet.inbox_add("login", "new", key="new")
+    rows = [json.loads(l) for l in (ext_state / "inbox-external.jsonl").read_text().splitlines()]
+    rows[0]["at"] = fleet.iso(fleet.utcnow() - dt.timedelta(days=fleet.EXTERNAL_KEEP_DAYS, minutes=1))
+    (ext_state / "inbox-external.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert [i["key"] for i in fleet.external_items(fleet.utcnow())] == ["ext:new"]
+    assert [i["key"] for i in fleet.external_items()] == ["ext:old", "ext:new"]
+import dash  # noqa: E402
+assert {"owner_requests.py", "board.py", "holds.py", "stages.py"} <= {f.name for f in dash.code_files()}
+assert not any(f.name.startswith("test_") for f in dash.code_files())
+
 print("test_fleet: ok")
