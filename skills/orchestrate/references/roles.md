@@ -44,7 +44,8 @@ ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --fai
                hotfix|revert, PR>". Use --type escalation only when a red main needs the coordinator
                to act because you cannot repair it yourself: Orca keeps escalation for work that is
                blocked, and it wakes the coordinator. The coordinator appends that line to
-               guardian-log.tsv; you write nothing outside your worktree.
+               guardian-log.tsv; you write nothing outside your worktree except a refusal report
+               (FORBIDDEN).
             Every send copies the exact --from and --dispatch-capability values from your Orca
             preamble; Orca ties a message to your Dispatch only through them, so never rebuild them.
 FORBIDDEN   Feature work. Force-push. Disabling or skipping checks.
@@ -134,9 +135,13 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             reports to its coordinator as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. A message
-            sent from Bash carries the command as the path of a file you wrote with the Write tool
-            outside your worktree, in the scratch or temporary directory your brief names, never quoted: a hook that matched the command's text blocks
-            a message quoting it. Paste
+            sent from Bash carries the command as the path of a file you wrote with the Write tool,
+            never quoted: a hook that matched the command's text blocks a message quoting it. That
+            file goes under <temp>/orch-refusal/<your worktree's directory name>/, where <temp> is
+            the absolute path TMPDIR holds, or /tmp when TMPDIR is unset; whatever else your brief
+            says about writing outside the worktree, you may write there. You do not tear it down:
+            the reader moves it to the trash after reading. If that Write is itself refused, report
+            the tool and the target only, without the command. Paste
             this paragraph, from "An act refused" through "run it again.", verbatim into every
             subagent prompt you write, including tracker and notes delegates: a summary drops
             the forms it lists. Taking the path this

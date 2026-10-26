@@ -15,6 +15,8 @@ def paragraph(name):
 
 
 brief = paragraph("brief.md")
+assert "/orch-refusal/" in brief, "refused-act paragraph lost the report file's fixed path"
+assert "/orch-refusal/" in (refs / "../SKILL.md").read_text(), "SKILL.md lost the report file's fixed path"
 assert paragraph("roles.md") == brief, "roles.md's refused-act paragraph differs from brief.md's"
 assert 'from "An act refused" through "run it again."' in brief, "paste boundary no longer names the paragraph's ends"
 for name in ("../SKILL.md", "top-level.md"):
