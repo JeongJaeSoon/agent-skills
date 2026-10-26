@@ -48,15 +48,21 @@ ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a pa
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
             plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
             through `orch heavy <slug> -- <command>`, which caps them machine-wide.
-            Once verification is done, down the stacks you started in the same turn
-            (`docker compose -p <project> down`, never `-v`); a stack that has to stay
+            Once verification is done, down the stacks you started in the same turn, with the
+            verify skill's own teardown when VERIFY names one (the app may start containers and
+            networks outside compose that `compose down` leaves), else `docker compose -p
+            <project> down`; either way keep volumes (never `-v`). Teardown runs bare, never
+            through `orch heavy`: the load gate refuses it exactly when the machine needs it.
+            A stack that has to stay
             gets a keep reason and deadline in the reap ledger (reap-resources, compose-stack).
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
             the browser only once that prints held; `orch release browser` when done.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
-            or live:<feature>; never the implementer>. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
+            or live:<feature>; never the implementer>. When this brief has you wait for the
+            coordinator's OK before landing, record the verdict and run `orch land` only after
+            that OK names the same head. Then the one-minute self-check: `git diff --name-only <CI base>..origin/main`; if any
             of it touches a contract or test premise this PR relies on, merge main in and let CI
             rerun. Then orch land <slug> --pr <N>
             --ticket <ID> --wait-minutes 50 as a Bash call with run_in_background: true (not
