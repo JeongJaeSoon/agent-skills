@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"끝낸 orca 세션·worktree 정리해줘\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Not bare \"정리해줘\"/\"마무리해줘\": that is record-progress."
+description: "Use when the user asks to end, close or archive this session, card or worktree — \"종료해줘\", \"세션 종료해줘\", \"현재 세션 정리해줘\", \"아카이브해줘\", \"머지하고 종료하자\", \"end this session\" — when handoff-ticket says this session should go, when an Orca worker is about to send worker_done, or when a card's brief says to close itself. Not bare \"정리해줘\"/\"마무리해줘\": that is record-progress."
 ---
 
 # Ending the session
@@ -150,7 +150,7 @@ plan.
 
 Done means the brief's deliverable is complete and recorded where the brief says (its PRs
 merged, the note's `## 결과` written), and nothing waits on an answer: no question you asked,
-no open PR. Follow-up ideas are not a reason to stay: write them in the report and the note for
+no open PR, unless the open PR is the deliverable itself (the row below that says so). Follow-up ideas are not a reason to stay: write them in the report and the note for
 the parent to decide. Then run §3 and pick by §4's table on real output:
 
 | State | The turn's last calls |
@@ -158,11 +158,18 @@ the parent to decide. Then run §3 and pick by §4's table on real output:
 | §4's Remove row holds (a document-only card with no commits passes: `git diff origin/main...HEAD` is empty) | The report text, then `orca worktree rm --worktree current --json` (`--run-hooks` per §4) |
 | `isMainWorktree: true`, or another agent works on the card | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json` |
 | A `superseded by <card>` message from the session that started this card | Stop the work and push nothing more. The report names what is uncommitted or unpushed, then close by the rows above; where §4 would keep the worktree, only `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. A question you left waiting is withdrawn |
-| The brief's deliverable is the open PR itself (its `CLOSE` line says to close once the PR is up and reported; merge and review are not this card's) | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The worktree stays for the PR (§4); a review round starts a new card on it. When the `reap-resources` janitor is scheduled, it removes the card once the PR merges and the card is clean (it sees any card made with `orca worktree create` or in its ledger), so nobody comes back for it |
-| A question waiting on the human, an open PR, a dirty tree, or a `KEEP` line | Stay. Say in the report and the note what holds the card. A later wake (a review fix, a message) runs this table again; otherwise the parent's check closes it |
+| The brief's deliverable is the open PR itself (its `CLOSE` line says to close once the PR is up and reported; merge and review are not this card's) | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The worktree stays for the PR (§4); a review round starts a new card on it. Once the PR merges, the session that started this card removes the worktree, the backstop in "Who closes a finished card" below; the janitor's sweep catches it only if that is missed |
+| A question waiting on the human, an open PR that is not the deliverable, a dirty tree, or a `KEEP` line | Stay. Say in the report and the note what holds the card. A later wake (a review fix, a message) runs this table again; otherwise the parent's check closes it |
 
 A refused `worktree rm` is not retried in any form (§7); close only this terminal and say in the
 note that the card is left for the parent or the human.
+
+**Who closes a finished card.** This is the one rule; other skills link here. The card itself
+closes first, in the turn its work is done: a worker by §7, a dispatched card by §8. The backstop
+is the session that started it, in the wake that card's report or `worker_done` arrives
+(`orchestrate`, "What you started, you close"). The `reap-resources` janitor's `done-card` nudge
+and `reap-hard` are sweeps for cards both missed, hours later. Nobody plans on them, and a card
+or its parent never waits for them.
 
 ## Common mistakes
 

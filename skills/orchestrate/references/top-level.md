@@ -32,7 +32,7 @@ Every request leaves your turn within one short tool call.
 | A quick lookup, a read across several repos, a review or verification of work already done, or delegation to an external tool (chat, tracker, notes) | A background subagent (`run_in_background`); you answer when it reports. For an external write, hand it the facts, not the finished text: a signature line or model name you prefill is wrong whenever the subagent runs on another model |
 | A change to one repo, or an investigation that must read one repo's code or config | A new Orca worker (`worker-start`) with a brief (`brief.md`, "Single worker"), or `dispatch-card` when it needs its own card |
 | More work for a session that already owns that topic | That session: `orca orchestration send --to dispatch:<id>` if it is a dispatch, otherwise the human's inbox ("send this to <session>"). Work only: an approval sent this way is refused as relayed, so wider scope is a new `/goal` card (`dispatch-card` §2) |
-| Anything for a project that has a lead (its program coordinator, or a card started to run it): a new request, a card or worker it needs, an investigation, a browser step | That lead, sent the way the "More work for a session" row sends it. Never start a worker or card for that project yourself, and never steer the lead's workers past it |
+| Anything for a project that has a lead (its program coordinator, or a card started to run it): a new request, a card or worker it needs, an investigation, a browser step | That lead, with `orca orchestration send --to run:<the lead's Run>` once its Run is on the board ("Starting a lead"); until then, held as that section's "After" says. Never start a worker or card for that project yourself, and never steer the lead's workers past it |
 | Work for a project with no lead that meets a condition in "Starting a lead" below | A new lead for that project, started as that section says |
 | An instruction for every lead | Each lead, one send per lead, from you. Never "please forward" through one lead or card: the forwarding layer rewrites it into its own reading |
 
@@ -50,7 +50,7 @@ How: one lead per project, as a `/goal` card (`dispatch-card`) with the Lead bri
 
 After: the project is the lead's ("Routing", the lead row). The units in its CONTEXT stay in your Run, so their mail, release and close stay with you, while their work is the lead's to direct:
 
-- A report, a question or a PR event from one of them goes to the lead verbatim, labelled with the unit it came from (`orca orchestration send --to run:<the lead's Run>`), and you do not act on it. Until the lead's Run is on the board, hold them and send them together once it is. A decision one of them already put before the human stays where it is; the human's answer goes to the lead the same way, as direction only: an approval reaches a unit only in a new `/goal` card's APPROVED line (SKILL.md, the stuck-card rule).
+- A report, a question or a PR event from one of them goes to the lead verbatim, labelled with the unit it came from (`orca orchestration send --to run:<the lead's Run>`), and you do not act on it. Until the lead's Run is on the board, hold them and send them together once it is. Hold each in a file under your state directory and put one `orch board doing add "<lead> 에 보낼 메일 N건" --owner <lead> --next "Run 등록 뒤 전달"` item on the board, so a restart neither loses nor forgets them. A decision one of them already put before the human stays where it is; the human's answer goes to the lead the same way, as direction only: an approval reaches a unit only in a new `/goal` card's APPROVED line (SKILL.md, the stuck-card rule).
 - What the lead wants from one of them comes to you as one message, and you pass it on verbatim: `orca orchestration send --to dispatch:<id>` for a dispatch, `skills-sync nudge <handle> "<the message>"` logged with `orch sent add` for a `/goal` card.
 - You close one once the lead says it is done with it.
 
@@ -105,7 +105,7 @@ When the human approves an act of the kind below together with the work, it goes
 
 ## Heartbeat and periodic report
 
-Between the human's messages you wake on mail, PR events, background tasks you started and dashboard decision answers. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2); a program coordinator or lead under `/goal` keeps its background `orch wait` instead of a heartbeat.
+Between the human's messages you wake on mail, PR events, background tasks you started and dashboard decision answers. A heartbeat is a session-only recurring job (`CronCreate`) that wakes you on a schedule to keep the work moving and report it. Jobs fire only while your session is idle, so the session that owns one never runs under `/goal`: the Stop hook would keep its turn from ending and every wake would queue behind it. Cards you start still begin with `/goal` (`dispatch-card` §2); a program coordinator or lead under `/goal` keeps its background `orch wait` instead of a heartbeat. A heartbeat is optional: when the inbox wait and an automation (the `watch-prs` round, for one) already wake you on every event that needs you and the human set no reporting schedule, skip it, since each wake re-reads the whole context even when nothing changed, and report when an event or the human asks. Without it, a lead that has gone silent is noticed only through `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens").
 
 The cron prompt is the only context a wake gets, so it carries everything:
 
@@ -120,7 +120,7 @@ Schedule rules:
 - Pick a minute off :00 and :30 (`7 * * * *`, not `0 * * * *`). A recurring job fires up to 10% of its period late (at most 15 minutes); choose the interval with that slack in mind.
 - A recurring job expires 7 days after it is created: it fires once more, then is gone. Write the expiry date into the prompt, on the last day before it create the replacement, then `CronDelete` the old one, and tell the human about the limit when you first create it.
 - When the standing instruction changes, create a new job with the new prompt, then `CronDelete` the old one. Keep one heartbeat per session; `CronList` shows what is live.
-- The heartbeat does not replace the one inbox wait (SKILL.md Drain, "One inbox wait, always"); keep both, and on every wake check first that the wait and `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens") are alive.
+- A heartbeat, when you keep one, does not replace the one inbox wait (SKILL.md Drain, "One inbox wait, always"); on every wake check first that the wait and `orch watch-cards` (SKILL.md Drain, "Watch the cards' screens") are alive.
 
 ## Messages to a chat
 

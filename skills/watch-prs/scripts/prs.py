@@ -985,7 +985,7 @@ def log(state, k, source, now, **fields):
         raise SystemExit(f"log: source must be one of {', '.join(SOURCES)}")
     row = {"pr": act["pr"], "reviewer": act["reviewer"], "head": act["head"], "action": act["action"],
            "source": source, "at": fields.get("at") or now, "post_at": fields.get("post_at"),
-           "thread": fields.get("thread"), "scheduled": fields.get("scheduled")}
+           "thread": fields.get("thread"), "scheduled": fields.get("scheduled"), "channel": act.get("channel")}
     state.mkdir(parents=True, exist_ok=True)
     with (state / "sendlog.jsonl").open("a") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")

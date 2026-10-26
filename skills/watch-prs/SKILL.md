@@ -178,7 +178,7 @@ Each PR gets its states from GitHub alone:
   channel is the reviewer's, else `repo_channels`, else `channel`.
 
 The send-log (`<state>/sendlog.jsonl`: pr, reviewer, head, action, source, at, post_at, thread,
-scheduled id) is what decides actions; the ledger does not record them (`once: false`), so an action
+scheduled id, channel) is what decides actions, and what `brief`'s ⏳ line reads for the last request or reminder; the ledger does not record them (`once: false`), so an action
 that failed to send stays due. `source` is `sent`, `scheduled`, `found` (someone already asked in the
 channel; `--at` is that message's time), `no_thread` (no thread to reply in, so nothing was posted),
 `skipped` (moot by the time of sending: that action at that head is not offered again) or `refused`.
@@ -262,7 +262,9 @@ nothing is merged.
     allowed one is used.
 
 A ready item carries `gh pr merge <N> -R <owner/name> --<method> --match-head-commit <head>`. The
-round never adds `--admin` or `--auto` and never approves. `merges` records each head in the ledger
+round never adds `--admin` or `--auto` and never approves: it merges only what is ready now, and
+arming auto-merge on a PR still in progress is the PR owner's call (`deliver-ticket` §6).
+`merges` records each head in the ledger
 before printing its command, so a refused or failed merge is never retried at that head, even when
 the round stops before `verify` or `commit`; a second `merges` prints nothing for it. Kinds share the
 ledger key shape, and an entry counts for its kind and every earlier kind in `KINDS`, so a PR this

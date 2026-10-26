@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, pathlib, subprocess, sys, unittest
+import contextlib, io, json, pathlib, subprocess, sys, tempfile, unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -284,10 +284,11 @@ class Preview(unittest.TestCase):
 class Pressure(unittest.TestCase):
     p = au.PressureWatch()
 
-    def patch(self, loaded, spec, main=True, rc=0):
+    def patch(self, loaded, spec, main=True, rc=0, disabled=False):
         self.install, self.uninstall = mock.Mock(return_value=rc), mock.Mock(return_value=rc)
         for p in (mock.patch.object(au.pressure, "loaded", return_value=loaded),
                   mock.patch.object(au.pressure, "plist_spec", return_value=spec),
+                  mock.patch.object(au.pressure, "disabled", return_value=disabled),
                   mock.patch.object(au, "main_checkout", return_value=main),
                   mock.patch.object(au.sys, "platform", "darwin"),
                   mock.patch.object(au.pressure, "cmd_install", self.install),
@@ -310,8 +311,14 @@ class Pressure(unittest.TestCase):
         self.assertEqual(self.p.status()[0], "off")
         self.patch(True, {"ProgramArguments": ["python3", "/elsewhere/pressure.py", "round"]})
         self.assertIn("/elsewhere/pressure.py", self.p.status()[1])
+        # Turned off with disable: off, which apply leaves alone, not absent, which apply turns on.
+        self.patch(False, None, disabled=True)
+        self.assertEqual(self.p.status()[0], "off")
 
     def test_enable(self):
+        self.patch(False, None, disabled=True)
+        self.assertEqual(self.p.enable(False), (0, "켬"))
+        self.install.assert_called_once()
         self.patch(True, self.current())
         self.assertEqual(self.p.enable(False), (0, "이미 켜져 있음"))
         self.patch(False, None, main=False)
@@ -324,11 +331,35 @@ class Pressure(unittest.TestCase):
         self.assertEqual(self.p.enable(False), (1, "실패 (위 출력)"))
 
     def test_disable(self):
-        self.patch(False, None)
+        self.patch(False, None, disabled=True)
         self.assertEqual(self.p.disable(), (0, "이미 꺼져 있음"))
-        self.patch(True, self.current())
-        self.assertEqual(self.p.disable(), (0, "끔"))
+        self.uninstall.assert_not_called()
+        # Never set up: disable still leaves the marker, so a later apply does not turn it on.
+        self.patch(False, None)
+        self.assertEqual(self.p.disable()[0], 0)
         self.uninstall.assert_called_once()
+        self.patch(True, self.current())
+        self.assertEqual(self.p.disable()[0], 0)
+        self.uninstall.assert_called_once()
+
+    def test_marker_round_trip(self):
+        """uninstall leaves the marker and install clears it, so `pressure.py` by hand and setup agree."""
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(au.pressure.reap, "STATE", pathlib.Path(d)), \
+                mock.patch.object(au.pressure, "DISABLED", pathlib.Path(d) / "pressure-disabled"), \
+                mock.patch.object(au.pressure, "PLIST", pathlib.Path(d) / "agent.plist"), \
+                mock.patch.object(au.pressure, "HERE", pathlib.Path(d) / "a" / "b" / "c"), \
+                mock.patch.object(au.pressure.sys, "platform", "darwin"), \
+                mock.patch.object(au.pressure, "config", return_value={"interval": 180}), \
+                mock.patch.object(au.pressure.subprocess, "run",
+                                  return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            (pathlib.Path(d) / ".git").mkdir()
+            self.assertFalse(au.pressure.disabled())
+            self.assertEqual(au.pressure.cmd_uninstall(), 0)
+            self.assertTrue(au.pressure.disabled())
+            self.assertEqual(au.pressure.cmd_install(False), 0)
+            self.assertFalse(au.pressure.disabled())
 
 
 class Share(unittest.TestCase):
@@ -403,6 +434,18 @@ class Apply(Base):
         with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")):
             self.assertEqual(au.cmd_apply(False), 0)
         self.assertEqual(fake.edits() + fake.schedules(), [])
+
+    def test_leaves_a_disabled_pressure_watch_off(self):
+        self.orca([janitor(), load_job()])
+        with mock.patch.object(au.PreviewWatch, "status", return_value=("on", "")), \
+                mock.patch.object(au.pressure, "loaded", return_value=False), \
+                mock.patch.object(au.pressure, "plist_spec", return_value=None), \
+                mock.patch.object(au.pressure, "disabled", return_value=True), \
+                mock.patch.object(au.sys, "platform", "darwin"), \
+                mock.patch.object(au.PressureWatch, "status", au.PressureWatch.status), \
+                mock.patch.object(au.PressureWatch, "enable") as pr:
+            self.assertEqual(au.cmd_apply(False), 0)
+        pr.assert_not_called()
 
     def test_unknown_janitor_fails(self):
         self.orca(None)

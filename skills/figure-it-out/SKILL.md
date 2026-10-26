@@ -24,7 +24,7 @@ Write the framing and its tradeoffs where the human reads it: the ticket's plan 
 Decompose into atomic, independently landable units. Sequence the riskiest unknown first. Scaffold and verification come before features (the **foundational-thinking** principle skill).
 
 - Build the verification harness before the work, with the baseline captured from the pre-change state, so each check reads as "old value vs new value".
-- For a one-way-door design decision, run the **architect** skill (it runs **arena**). Skip it for mechanical work whose shape is already concrete. A second arena over a settled design is over-engineering (the **laziness-protocol** principle skill).
+- For a one-way-door design decision, run the **architect** skill (it runs **arena**). Skip it for mechanical work whose shape is already concrete. A second arena over a settled design is over-engineering.
 - Decide what fans out. Parallelize only across seams, and give each worker its own worktree or branch (the **separate-before-serializing-shared-state** principle skill). Don't over-fan. When the units are separate tickets that should run on parallel cards, hand the program to **orchestrate** instead.
 - Write the phase list into the plan from Phase A. That list is what the human reviews.
 

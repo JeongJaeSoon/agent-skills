@@ -200,6 +200,6 @@ def reason(cmd):
     return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-loop] ")
+assert reason(f"while [ ! -s {O} ]; do sleep 5; done").startswith("[gate:sleep-loop] (agent-skills hooks/guard.py) ")
 assert "[gate:" not in reason(f"{CHECK} --terminal term_other --json")
 print("guard: all pass")

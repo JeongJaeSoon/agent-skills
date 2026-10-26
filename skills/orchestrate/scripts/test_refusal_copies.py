@@ -33,6 +33,11 @@ for hook in ("`hooks/pressure_gate.py`", "`hooks/guard.py`"):
 assert "the same Bash command with `run_in_background: true`" in brief, "gate exception lost its one form"
 assert "The form keeps the act" not in brief, "gate exception reopened the form to other wrappers"
 assert "Monitor tool, which that block also offers, is not part of this exception" in brief, "gate exception no longer excludes Monitor"
+assert "use Monitor only when the one you report to says so" in brief, "Monitor exclusion no longer says when it may be used"
+assert "report before you use it" not in brief, "Monitor exclusion is back to the wording that left the wait open"
+assert "Waiting on the pressure gate's `check` with Monitor" in brief, "Monitor exclusion reaches the pressure gate's own wait"
+assert "the form to run in" not in brief, "gate exception reopened the form to run in"
+assert "from any other hook, does not count" in brief, "gate exception no longer ties the markers to the two hooks only"
 assert 'MARK = "[gate:pressure]"' in (hooks / "pressure_gate.py").read_text(), "pressure_gate.py lost its marker"
 assert 'SLEEP_MARK = "[gate:sleep-loop]"' in (hooks / "guard.py").read_text(), "guard.py lost its sleep-loop marker"
 

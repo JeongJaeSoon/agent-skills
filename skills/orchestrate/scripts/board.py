@@ -35,6 +35,9 @@ DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then l
 HEADER = ["", "리드/Phase", "PR", "진행"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
 UNNAMED = "(프로젝트 미지정)"
+SKILLS_CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
+ASK_WORD = {"request": "의뢰", "remind": "리마인드", "rerequest": "재요청"}
+ASK_GONE = ("sent", "scheduled", "found")  # send-log sources where the message went out, or was already there
 
 
 def path():
@@ -246,6 +249,31 @@ def waits_on(p):
     if len(pending) != 1 or pending[0].get("team") or pending[0].get("bot"):
         return None
     return pending[0]["login"]
+
+
+def last_asks():
+    """{(pr, reviewer): (action, at, channel, thread)} of the newest review request or reminder that went out, lower-cased
+    keys. Read from the send-log agent-skills.json → "brief" → "sendlog" names (watch-prs writes one); {} without the
+    key or the file. A row written by hand has no action, and a `date` or `slack_ts` for its time: a request."""
+    try:
+        lines = pathlib.Path(json.loads(SKILLS_CONFIG.read_text())["brief"]["sendlog"]).expanduser().read_text().splitlines()
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    out = {}
+    for line in lines:
+        try:
+            r = json.loads(line)
+            action = r.get("action", "request")
+            if action not in ASK_WORD or r.get("source", "sent") not in ASK_GONE:
+                continue
+            at = r.get("post_at") or r.get("at")
+            at = float(at if at is not None else r["slack_ts"] if r.get("slack_ts") else fleet.parse(r["date"]).timestamp())
+            k = (r["pr"].lower(), r["reviewer"].lower())
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if k not in out or at >= out[k][1]:
+            out[k] = (action, at, r.get("channel"), r.get("thread"))
+    return out
 
 
 def is_owner(who, me):
@@ -690,8 +718,22 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     def turn_item(what, where, unblocks):
         return f"{what}{f' · {where}' if where else ''} → {unblocks}"
 
-    def theirs_item(who, what, at, unblocks, nxt):
-        return f"{who}{f' · {what}' if what else ''}{since(at)} → {unblocks}{f' · 다음: {nxt}' if nxt else ''}"
+    asks = last_asks()
+
+    def asked(who, keys):
+        """` · 마지막 리마인드 rev-a 3h 전 (C0FAKE 스레드)`: what last went out to the people this waits on, if logged."""
+        found = [(a, w) for k in keys for w in who.split(", ")
+                 if (a := asks.get(((k or "").lower(), w.strip().lstrip("@").lower())))]
+        if not found:
+            return ""
+        (action, at, channel, thread), w = max(found, key=lambda f: f[0][1])
+        when = ago(now.timestamp() - at) if at <= now.timestamp() else f"{dt.datetime.fromtimestamp(at).astimezone():%m-%d %H:%M} 예약"
+        where = " ".join(filter(None, (channel, thread and "스레드")))
+        return f" · 마지막 {ASK_WORD[action]} {w} {when}{f' ({where})' if where else ''}"
+
+    def theirs_item(who, what, at, unblocks, nxt, keys=()):
+        return (f"{who}{f' · {what}' if what else ''}{since(at)}{asked(who, keys)} → {unblocks}"
+                f"{f' · 다음: {nxt}' if nxt else ''}")
 
     # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, one the owner
     # unblocks to 지금 오너가 할 일, one another person unblocks to 다른 사람 대기, every other open row's to 진행 중 in
@@ -714,7 +756,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 continue
             if st == "waiting":
                 theirs.append(theirs_item(w["who"], f"{w['what']} {where}".strip() if w.get("what") else "", w.get("since"),
-                                          w.get("unblocks") or label(l), l["next"]))
+                                          w.get("unblocks") or label(l), l["next"], l["fold"] or [l["pr"]]))
                 continue
             if l["depth"] and not head_out:
                 # a head that waits on a person is an item of its own list: here it only names the sub-tasks' group
@@ -732,7 +774,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if st == "owner":
             turn.append(turn_item("리뷰", nums, w["unblocks"]))
         elif st == "waiting":
-            theirs.append(theirs_item(rev, f"리뷰 {nums}", w["since"], w["unblocks"], ""))
+            theirs.append(theirs_item(rev, f"리뷰 {nums}", w["since"], w["unblocks"], "", [i["pr"] for i in items]))
         else:
             moving.append(f"{ICON[st]} {w['unblocks']} — 확인 필요: {w['why']}")
     for d in store["doing"]:
