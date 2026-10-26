@@ -3,12 +3,6 @@
 The path for a session the user asks to end. §3, §4 and §6 are in `SKILL.md`; the section
 numbers are shared, so "§4" below is that file's §4.
 
-Triggers, all meaning this skill: "종료해줘", "세션 종료해줘", "대화 종료해줘", "이제 종료하자",
-"끝내줘", "그만하자", "여기서 마치자"; "세션 정리해줘", "이 세션 닫아줘", "카드 정리해줘",
-"worktree 정리해줘"; "end this session", "close this session", "end the conversation".
-**Bare "정리해줘" / "마무리해줘" with no object is not this skill** — the object decides:
-세션·카드·worktree 정리 ends it, 정리 alone does not.
-
 Ending is yours to do. The user asked; do not ask back unless the state is off-script (§4) or
 the ending is `EndConversation`, which has its own rule (§5).
 

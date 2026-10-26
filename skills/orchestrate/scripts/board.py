@@ -338,7 +338,7 @@ def fleet_rows(state, leads, board_rows):
 
 
 def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False):
-    """The periodic report (brief skill §1 Periodic report items 1–8) as text, with what the caller needs around it.
+    """The periodic report (brief skill references/periodic-by-hand.md items 1–9) as text, with what the caller needs around it.
     fill adds fleet_rows() for the leads and cards the board does not have.
 
     Returns {"text", "headline_facts", "changed", "stale", "width_ok", "snapshot"}; text is "" when the board has no

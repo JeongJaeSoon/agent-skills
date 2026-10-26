@@ -5,15 +5,12 @@ description: "Use when handing the next ticket to a fresh Orca worktree card —
 
 # Orca handoff
 
-Finish here, start each follow-up ticket in its own worktree card, never in this one.
+Finish here, and start each follow-up ticket that stands on its own in its own worktree card
+(§0 "Who runs it" keeps a small defect in what this session just shipped here).
 `orca worktree create` is the only way work leaves this session. Ticket operations go through
 `use-tracker`; the worklog goes through `use-notes`.
 
-Triggers, all meaning this skill: "핸드오프", "핸드오프해줘", "핸드오프해서 진행해줘"; "다음 티켓",
-"다음 작업", "다음 개발 아이템" (진행해줘·제안해줘·정해줘·확인해줄래); "남은 것 진행해줘",
-"나머지 진행해줘"; "새 세션", "새 worktree 세션", "새 카드 띄워줘", "새세션 실행하고 /goal";
-"병렬 세션 실행"; "handoff", "handoff to next session". In this setup a handoff always means an
-Orca worktree card — no other dispatch mechanism. "병렬로 진행" and "동시에 진행" mean this skill
+A handoff always means an Orca worktree card — no other dispatch mechanism. "병렬로 진행" and "동시에 진행" mean this skill
 only when they name same-repo ticket cards; they can also mean sub-agents or work dispatched
 while this session continues (dispatch-card), so settle which before creating cards.
 
@@ -130,7 +127,7 @@ agent picked up `/goal` before reporting success. Report the worktree path, bran
 
 ## 5. Close this session
 
-Only after step 4 is verified. **REQUIRED SUB-SKILL:** read and follow the `end-session`
+Only after step 4 is verified. Read and follow the `end-session`
 skill for the state check, the command and the order inside
 the final turn. Which ending applies comes from `orca worktree current`, never from an
 assumption that this session is a card — `isMainWorktree: true` rules out `worktree rm`.

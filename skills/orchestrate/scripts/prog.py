@@ -105,8 +105,9 @@ Usage: orch <command> <slug> [options]
                                      later only work set aside on purpose, with the trigger that brings it back
   brief render --periodic [--scope top-level|PROGRAM] [--telegram] [--headline T] [--skipped T] [--now ISO8601]
                [--commit] [--json] [--no-fill]
-                                     the brief skill's periodic report items 1-9 from the board, prs.json, open
-                                     decisions and brief-last/<scope>.json (bold = changed since it). --commit
+                                     the brief skill's periodic report (references/periodic-by-hand.md items 1-9)
+                                     from the board, prs.json, open decisions and brief-last/<scope>.json
+                                     (bold = changed since it). --commit
                                      saves this table as the last one (after sending). Staleness: a row past 90
                                      min shows its age, an open PR probed over 30 min ago is in the headline,
                                      over 120 min marks it ⚠️ (merged and closed PRs do not age), a lead whose terminal left the fleet turns 🔴;
