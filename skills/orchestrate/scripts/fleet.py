@@ -1017,10 +1017,21 @@ def pr_key(repo, number):
 
 # A bare #n is left out: "step #2" or a PR in another repository would read as a PR of the session's own.
 PR_REF_RE = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)|\b([\w.-]+/[\w.-]+)#(\d+)")
+BARE_REF_RE = re.compile(r"(?<![\w/#])#(\d+)\b")
 
 
 def pr_refs(text):
     return sorted({pr_key(m[1], m[2]) if m[1] else pr_key(m[3], m[4]) for m in PR_REF_RE.finditer(text or "")})
+
+
+def held_refs(text, prs):
+    """pr_refs(), plus each bare #n that exactly one PR in prs has as its number. Only for what a hold covers: a
+    bare #n never lifts a hold, as a wrong match there would close work early."""
+    by_n = {}
+    for k in prs:
+        by_n.setdefault(k.rsplit("#", 1)[-1], []).append(k)
+    bare = {by_n[n][0] for n in BARE_REF_RE.findall(PR_REF_RE.sub("", text or "")) if len(by_n.get(n, ())) == 1}
+    return sorted(set(pr_refs(text)) | bare)
 
 
 def board_prs():
@@ -1920,7 +1931,7 @@ def trigger_at(text, now):
 
 
 def held_prs(store, shut, prs, now):
-    """PR key -> the hold, for each PR a held board item's title names by its full key. The hold lifts when the item
+    """PR key -> the hold, for each PR a held board item's title names (held_refs). The hold lifts when the item
     is dropped or closed (tidy), when its --due or the date in its trigger comes, or, with no date, when every PR its
     trigger names has merged."""
     import tidy
@@ -1932,7 +1943,7 @@ def held_prs(store, shut, prs, now):
         at = at and (at if at.tzinfo else at.astimezone())  # a bare date is local time
         if at and at <= now or not at and tidy.refs_over(pr_refs(l["trigger"]), prs):
             continue
-        for k in pr_refs(l["title"]):
+        for k in held_refs(l["title"], prs):
             out.setdefault(k, l["trigger"] + (f" · {l['due']}" if l.get("due") else ""))
     return out
 

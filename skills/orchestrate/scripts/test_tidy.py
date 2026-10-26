@@ -148,7 +148,9 @@ assert any("결제 릴리스 (card-release 카드) — 확인 필요: acme/app#2
 assert any("다음 일 시작 — 확인 필요: 조건 충족: acme/app#1 머지 abc1234" in m for m in moving), moving
 assert any("오래된 일 — 확인 필요: 12h 갱신 없음" in m for m in moving), moving
 assert any("설정 화면 — 확인 필요: 세션 꺼짐 · PR ✓" in m for m in moving), moving
-assert any("초안 작업 — 확인 필요: 에이전트 없음 · PR 초안" in m for m in moving), moving
+# A draft nobody holds is the owner's: make it ready, or write the hold that turns it ⏸️.
+assert not any("초안 작업" in m for m in moving) and any(t.startswith("초안 — ready 로 만들지 정하기 (카드 에이전트 없음; 보류라면 ")
+                                                      and t.endswith(" → 초안 작업") for t in section(b["text"], "🙋")), b["text"]
 assert any(t.startswith("rev-a · 리뷰") and "청구 화면" in t for t in theirs), theirs  # was ⏸️ 세션 꺼짐, now the PR's wait
 assert not any("다음 일 시작" in h or "다른 일" in h for h in held), held
 assert any("열린 PR 뒤의 일" in h for h in held) and any("모호한 일" in h for h in held), held

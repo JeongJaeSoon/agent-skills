@@ -308,6 +308,8 @@ def blocker(r, status, p, me):
                     else ("waiting", {"who": ", ".join(asked), "what": "리뷰"}))
     if r.get("owner"):
         return ("owner", {}) if is_owner(r["owner"], me) else ("waiting", {"who": r["owner"]})
+    if p and p.get("state") == "OPEN" and not p.get("draft") and p.get("decision") == "REVIEW_REQUIRED":
+        return "owner", {"what": "리뷰 요청"}  # GitHub asks for a review and nobody has been asked
     return "check", {"why": "누구 대기인지 기록 없음"}
 
 
@@ -495,6 +497,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
+    holds, held_by = fleet.held_prs(store, shut, prs, now), {}  # held_by: row id -> the PR a held item covers
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
         if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
@@ -535,20 +538,28 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             status, nxt = "done", ""
         elif p and p.get("state") == "CLOSED":
             status, nxt = "held", "PR 닫힘"
-        # A card with no agent left and its PR still open waits on what the PR waits on, not on the card.
-        quiet = r.get("session") and status == "held" and p and p.get("state") == "OPEN" and nxt
+        # A held item naming the row's open PR is the row's hold, the same one that demotes the PR in Needs you.
+        elif p and status not in ("moving", "blocked") and (hold := holds.get(r.get("pr"))):
+            status, nxt, held_by[r["id"]] = "held", hold, r["pr"]
+        # A card with no agent left and its PR still open waits on what the PR waits on, not on the card. A draft
+        # nobody holds is the owner's to make ready or to hold.
+        quiet = r.get("session") and status == "held" and r["id"] not in held_by and p and p.get("state") == "OPEN" and nxt
         if quiet:
-            status = "check" if p.get("draft") else "waiting"
+            status = "owner" if p.get("draft") else "waiting"
             if p.get("draft"):
-                waits[r["id"]] = {"why": f"{quiet} · PR 초안"}
+                waits[r["id"]] = {"what": f"초안 — ready 로 만들지 정하기 (카드 {quiet}; 보류라면 "
+                                          f"`orch board later add \"<할 일> {r['pr']}\" --trigger <날짜>` 로 ⏸️)",
+                                  "since": r.get("since") or p.get("created")}
         lead = store["leads"].get(lead_of(r)["id"])
         if status == "moving" and live is not None and lead and not lead.get("closed_at") and lead["handle"] not in live:
             status, nxt = "blocked", "세션 없음"
-        if status in ("waiting", "owner"):
+        if status in ("waiting", "owner") and r["id"] not in waits:
             status, waits[r["id"]] = blocker(r, status, p, me)
             waits[r["id"]].setdefault("since", r.get("since") or (p or {}).get("created"))
             if quiet and waits[r["id"]].get("why") == "누구 대기인지 기록 없음":
                 waits[r["id"]]["why"] = f"{quiet} · PR {pr_state(p)}"
+            if status == "waiting" and waits[r["id"]].get("what") == "리뷰" and nxt and nxt in GENERIC_NEXT:
+                nxt = f"{waits[r['id']]['who']} 리뷰 대기"  # what it waits on is the next event, not the card's session
         if status == "moving" and (v := verdicts.get(tid)) and v["verdict"] == "check":
             status, waits[r["id"]] = "check", {"why": v["evidence"]}
         suffix = ""
@@ -836,7 +847,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, one the owner
     # unblocks to 지금 오너가 할 일, one another person unblocks to 다른 사람 대기, every other open row's to 진행 중 in
     # table order, a sub-task after its head row. Each row goes to one list, by its own status, not its children's.
-    moving, held, turn, theirs = [], [], [], []
+    moving, held, turn, theirs, held_rows = [], [], [], [], {}
     for sec in sections:
         head, head_out = None, False
         for l in (l for l in lines if l["sec"] == sec):
@@ -846,7 +857,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if st in (None, "done"):
                 continue
             if st == "held":
-                held.append(f"{l['next'] or '—'} → {label(l)}")
+                if l["key"] in held_by:  # its held item's line says it, with this row's name
+                    held_rows.setdefault(held_by[l["key"]], []).append(label(l))
+                else:
+                    held.append(f"{l['next'] or '—'} → {label(l)}")
                 continue
             where = l["cell"].split(" ")[0] if l["pr"] else l["cell"]
             if st == "owner":
@@ -946,7 +960,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if asked := owner_requests.line(owner_requests.summary(now, shown)):
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked]
     fired = {tidy.item_id("later", l) for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") == "check"}
-    if held := list(dict.fromkeys(held + [f"{l['trigger']} → {l['title']}" for l in later if tidy.item_id("later", l) not in fired])):
+    def held_line(l):
+        names = [n for k in fleet.held_refs(l["title"], prs) for n in held_rows.get(k, [])]
+        return f"{l['trigger']} → {l['title']}" + (f" ({'·'.join(names)})" if names else "")
+    if held := list(dict.fromkeys(held + [held_line(l) for l in later if tidy.item_id("later", l) not in fired])):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
     opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
