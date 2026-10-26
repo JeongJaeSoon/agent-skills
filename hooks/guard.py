@@ -27,7 +27,8 @@ Allow, so workers never stall on a prompt hours after they loaded a skill:
   set and init, which can change a program's merge policy, and backfill, which rewrites the ledger
 
 Ask: `python3 <checkout>/scripts/setup.py --actions-only`, the setup steps that write no Claude settings (setup-pc).
-`ask` shows the human a permission dialog even in auto mode, so these persistent jobs start only on a click.
+The dialog says what they do only when <checkout> is this plugin's root or the install dialog's `checkout`;
+another clone's setup.py still gets `ask`, with a sentence that promises nothing. `ask` shows the human a permission dialog even in auto mode, so these persistent jobs start only on a click.
 
 An allow here skips the auto mode classifier, so it covers only one simple command whose words bash passes
 as written: outside quotes, plain characters only (no operators, redirections, substitutions, expansions or
@@ -169,17 +170,26 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None):
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
     if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
-    if setup_actions(words):
-        return decide("ask", SETUP_ASK)
+    reason = setup_actions(words)
+    if reason:
+        return decide("ask", reason)
 
 
 def setup_actions(words):
-    """`python3 <agent-skills checkout>/scripts/setup.py --actions-only [--orca-run]`."""
+    """The dialog's reason for `python3 <agent-skills checkout>/scripts/setup.py --actions-only [--orca-run]`, else None."""
     if words[0] != "python3" or set(words[2:]) - {"--orca-run"} != {"--actions-only"}:
-        return False
+        return None
     script = pathlib.Path(words[1])
-    return (script.is_absolute() and script.name == "setup.py" and script.parent.name == "scripts"
-            and (script.parents[1] / "skills" / "setup-pc").is_dir())
+    if not (script.is_absolute() and script.name == "setup.py" and script.parent.name == "scripts"
+            and (script.parents[1] / "skills" / "setup-pc").is_dir()):
+        return None
+    # SETUP_ASK vouches for the code, so only for the plugin running this hook or the checkout the install dialog
+    # named (setup-pc step 3, same default).
+    named = os.environ.get("CLAUDE_PLUGIN_OPTION_CHECKOUT", "").strip() or "~/src/agent-skills"
+    if script.parents[1].resolve() in {ROOT.resolve(), pathlib.Path(named).expanduser().resolve()}:
+        return SETUP_ASK
+    return (f"{PLUGIN} setup: runs `{script}`, which is not this plugin's checkout or the one the install dialog named; "
+            "it may do anything.")
 
 
 def main():

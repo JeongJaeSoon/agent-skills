@@ -550,7 +550,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting after compaction (`reorient.py`), and recording permission prompts for the dashboard to answer (`permission.py`), and closing decisions answered in the terminal (`decision.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting after compaction (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), and recording permission prompts for the dashboard to answer (`permission.py`), and closing decisions answered in the terminal (`decision.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.

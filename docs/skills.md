@@ -541,7 +541,7 @@
 Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도구는 세지도 막지도 않는다. 거부 사유는 위임 경로(Agent, `orca worktree create`, 리드에게 `orca orchestration send`, `orch …`)를 알려 준다. `ROLE: none`이면 그 세션에서, `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`이면 모든 세션에서 꺼진다. 설정은 `~/.claude/agent-skills.json`의 `orchestrator_guard`(`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
 
 ### 코디네이터 재정렬
-`hooks/onboard.py`(SessionStart `startup|clear`). 이 프로필의 사용자 설정이 체크아웃을 로드하지 않을 때만(`env.CLAUDE_CODE_PLUGIN_DIRS`, Orca 프로필마다 따로 본다), 설치 창의 값과 함께 `setup-pc`를 제안하라는 문단을 넣는다. URL의 인증 정보는 지우고 넣는다. 사람이 거절하면 에이전트가 `onboard.py --decline`을 돌려 그 프로필에서는 다시 묻지 않는다. `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다.
+`hooks/onboard.py`(SessionStart `startup|clear`). 이 프로필의 사용자 설정(`env.CLAUDE_CODE_PLUGIN_DIRS`, Orca 프로필마다 따로 본다)도 세션의 같은 환경 변수도 체크아웃을 로드하지 않을 때만, 설치 창의 값과 함께 `setup-pc`를 제안하라는 문단을 넣는다. `-p` 세션(`CLAUDE_CODE_ENTRYPOINT`가 `sdk-cli`)에는 넣지 않는다. Agent SDK 세션(`sdk-ts`·`sdk-py`)은 사람이 입력하는 GUI 일 수도 있어 넣고, 첫 요청이 브리프·자동화 프롬프트면 무시하라고 문단이 말한다. URL의 인증 정보는 지우고 넣는다. 사람이 거절하면 에이전트가 `onboard.py --decline`을 돌려 그 프로필에서는 다시 묻지 않는다. `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다.
 
 `hooks/reorient.py`(SessionStart `startup|resume|compact|fork`, UserPromptSubmit). 역할을 선언한 세션에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않고, 외부 명령도 부르지 않는다. 오케스트레이터의 세션 이름(`session_title`)이 `orchestrator`가 아니면 SessionStart 안내 끝에 사람에게 `/rename orchestrator`를 청하고 자기 Orca 탭 이름을 바꾸라(`orca terminal rename`)는 줄을 붙인다.
 

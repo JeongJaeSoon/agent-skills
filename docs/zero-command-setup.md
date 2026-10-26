@@ -31,7 +31,7 @@ Claude Code 2.1.310과 공식 문서(code.claude.com/docs, 2026-10-26 확인)에
 |---|---|---|---|
 | 플러그인 받기 | `claude plugin marketplace add`·`install` 또는 clone | 사람: 세션 안에서 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon` | 셸 `claude plugin install`은 `userConfig`를 묻지 않으므로 세션 안 설치를 쓴다 |
 | 언어·체크아웃 경로·개인 저장소 | `--language`를 치거나 손으로 옮김 | 설치 창(`userConfig`): `language`, `checkout`, `personal_repo`. 모두 비워도 된다 | Claude Code가 `pluginConfigs`에 쓴다. 에이전트의 쓰기가 아니다 |
-| 미설정 감지 | 사람이 `setup-pc`를 떠올림 | 플러그인 SessionStart hook(`hooks/onboard.py`): 이 프로필의 사용자 설정이 체크아웃을 로드하지 않으면(`env.CLAUDE_CODE_PLUGIN_DIRS`) `setup-pc`를 하라는 문맥을 넣는다. 거절하면 `onboard.py --decline`으로 그 프로필을 기록해 다시 묻지 않는다 | 설치 뒤 새 세션 하나가 필요하다(사람). 상태 폴더는 Orca 프로필끼리 공유하므로 적용 기록으로는 판단하지 않고, 거절 기록은 프로필의 settings 경로로 나눈다 |
+| 미설정 감지 | 사람이 `setup-pc`를 떠올림 | 플러그인 SessionStart hook(`hooks/onboard.py`): 이 프로필의 사용자 설정도 세션의 환경 변수도 체크아웃을 로드하지 않으면(`CLAUDE_CODE_PLUGIN_DIRS`) `setup-pc`를 하라는 문맥을 넣는다. `-p` 세션(`CLAUDE_CODE_ENTRYPOINT`가 `sdk-cli`)에서는 넣지 않는다. Agent SDK 세션(`sdk-ts`·`sdk-py`)은 사람이 입력하는 GUI 일 수도 있어 넣고, 첫 요청이 브리프·자동화 프롬프트인 세션은 문맥 안의 지시로 무시한다. 거절하면 `onboard.py --decline`으로 그 프로필을 기록해 다시 묻지 않는다 | 설치 뒤 새 세션 하나가 필요하다(사람). 상태 폴더는 Orca 프로필끼리 공유하므로 적용 기록으로는 판단하지 않고, 거절 기록은 프로필의 settings 경로로 나눈다 |
 | 체크아웃 clone | `git clone` | `setup-pc` 스킬(에이전트): `checkout`이 있으면 그 경로로 clone | 사용자 설정이 아닌 일반 파일 쓰기 |
 | 개인 설정 가져오기 | baseline export/check, 손 복사 | `setup-pc`(에이전트): `personal_repo`를 `~/.config/agent-skills/personal`로 clone·fast-forward. URL의 인증 정보는 hook이 지우고, 인증은 `gh` 로그인으로 받는다. 반영은 아래 설정 줄의 diff에 들어간다 | 공개 저장소에는 넣지 않는다. 아래 "개인 설정의 출처" |
 | dry run과 diff | 사람이 `setup.py` 실행 | `setup-pc`(에이전트): `setup.py --settings-only`로 diff를 보이고 줄 하나를 건넨다 | dry run은 아무것도 쓰지 않는다 |
@@ -41,7 +41,7 @@ Claude Code 2.1.310과 공식 문서(code.claude.com/docs, 2026-10-26 확인)에
 | 세션 재시작 | 사람 | 사람 | `CLAUDE_CODE_PLUGIN_DIRS`와 설정은 기동할 때만 읽힌다 |
 | 점검 표 | 사람이 `setup_check.py check` | `setup-pc`(에이전트), `--actions-only`의 마지막 단계 | 읽기 전용 |
 
-Orca가 프로필마다 `CLAUDE_CONFIG_DIR`을 따로 쓰면 프로필마다 설치·설치 창·설정 줄을 한 번씩 한다. `setup.py`는 `CLAUDE_CONFIG_DIR`을 따른다.
+Orca가 프로필마다 `CLAUDE_CONFIG_DIR`을 따로 쓰면 프로필마다 설치·설치 창·설정 줄을 한 번씩 한다. `setup.py`는 `settings.json`에서만 `CLAUDE_CONFIG_DIR`을 따른다. `agent-skills.json`은 스킬의 스크립트가 읽는 한 파일(`~/.claude/agent-skills.json`)이라 프로필끼리 같이 쓴다.
 
 ### 남는 사람 행동
 
@@ -75,7 +75,7 @@ tracker-rules.md    # 이름은 자유. agent-skills.json 의 tracker.rules_file
 
 ## 이미 설치한 PC의 갱신
 
-같은 코드 경로를 탄다. `setup.py --update`의 dry run이 새 권장값과 개인 저장소에 새로 생긴 키를 diff에 넣고, 사람은 같은 `--apply` 줄을 친다. `--actions-only`도 그대로 쓴다. SessionStart hook은 이미 체크아웃을 로드하는 PC에서는 아무것도 넣지 않는다.
+같은 코드 경로를 탄다. `setup-pc`가 먼저 개인 설정 폴더를 `git pull --ff-only`로 당긴다(폴더가 있을 때만. `setup.py`도 15분 동기화 작업도 체크아웃만 다루고 이 폴더는 당기지 않는다). 이어서 `setup.py --update`의 dry run이 새 권장값과 개인 저장소에 새로 생긴 키를 diff에 넣고, 사람은 같은 `--apply` 줄을 친다. 당기기가 dry run 앞인 것은 dry run이 그 폴더를 읽어 해시를 만들기 때문이다. `--actions-only`도 그대로 쓴다. SessionStart hook은 이미 체크아웃을 로드하는 세션에서는 아무것도 넣지 않는다.
 
 ## 고르지 않은 것
 

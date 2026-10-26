@@ -7,7 +7,8 @@ Usage:
   setup_check.py automode-spec --baseline FILE      print a tune-automode spec adding the baseline's missing rules
 
 It never writes a file. Every "next" is a line for the human to run or a skill to hand the change to.
-Paths follow CLAUDE_CONFIG_DIR (default ~/.claude), CLAUDE_SETTINGS, AGENT_SKILLS_STATE and
+settings.json follows CLAUDE_CONFIG_DIR (default ~/.claude) and CLAUDE_SETTINGS; agent-skills.json is
+~/.claude/agent-skills.json in every profile, moved only by AGENT_SKILLS_CONFIG. Also AGENT_SKILLS_STATE and
 AGENT_SKILLS_CONFIG_DIR (default ~/.config/agent-skills).
 """
 import datetime, json, os, pathlib, re, shutil, subprocess, sys
