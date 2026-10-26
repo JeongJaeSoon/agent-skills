@@ -541,7 +541,7 @@ process.stdout.write(JSON.stringify(out));"""
 const old = new Date(Date.now() - 3 * 3600e3).toISOString(), soon = new Date(Date.now() + 600e3).toISOString();
 const st = {{sessions: [{{id: "wt-coord", name: "<b>coord</b>", phase: "idle"}}], sources: {{automations: {{ok: true}}}},
   automations: [{{id: "a1", name: "<script>x</script>", rrule: "17 */3 * * *", enabled: true, next_run_at: soon, last_run_at: old,
-                  recent: [{{status: "completed", at: old, summary: "<img src=x>"}}, {{status: "skipped_precheck", at: old}}]}},
+                  recent: [{{status: "completed", at: old, summary: "<img src=x> " + "lastsum ".repeat(60) + "END"}}, {{status: "skipped_precheck", at: old}}]}},
                 {{id: "a2", name: "late", rrule: "0 9 * * *", enabled: true, next_run_at: old, recent: []}},
                 {{id: "a3", name: "broken", rrule: "*/20 * * * *", enabled: true, next_run_at: soon, recent: [{{status: "failed", at: old}}]}},
                 {{id: "a4", name: "off", rrule: "x", enabled: false, next_run_at: old, recent: [{{status: "failed", at: old}}]}}],
@@ -564,6 +564,9 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     assert "past its run time" in got["autos"] and "toned tone-bad" in got["autos"], "an overdue run is flagged and its next-run cell toned"
     assert got["autos"].count('class="run tone-good"') == 2 and 'class="run "' in got["autos"], "a completed and a skipped block"
     assert got["holds"].index("browser") < got["holds"].index("acme/app@main") and "landing lane" in got["holds"], got["holds"]
+    # A long last result wraps whole in its cell instead of being cut with an ellipsis.
+    autos_html = got["autos"][:got["autos"].index("orch-dash jobs")]
+    assert "lastsum " * 60 + "END" in autos_html and "ellipsis" not in autos_html, autos_html
     # orch-dash's own jobs under them: a record as written, a failure whole with its link to the timeline, no record said.
     jobs_html = got["autos"][got["autos"].index("orch-dash jobs"):]
     assert "closed 0" in jobs_html and "3 · " in jobs_html, jobs_html

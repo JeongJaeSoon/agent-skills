@@ -979,7 +979,7 @@ function fleetAutomations(st) {
     return `<tr class="${a.enabled ? "" : "is-done"}"><td><b>${esc(a.name)}</b>${a.enabled ? "" : ` ${tag("off")}`}${issue ? ` ${tag(`▲ ${issue}`, "bad", "")}` : ""}</td>
       <td class="nowrap">${esc(cadence(a.rrule))}</td><td class="nowrap ${issue === AUTO_OVERDUE ? "toned tone-bad" : ""}">${a.enabled ? relSpan(a.next_run_at) : '<span class="muted">–</span>'}</td>
       <td class="nowrap muted">${a.last_run_at ? relSpan(a.last_run_at) : "–"}</td><td class="runs nowrap">${[...(a.recent || [])].reverse().map(runBlock).join("")}</td>
-      <td class="dim"><span class="ellipsis" style="display:block">${last ? esc(last.summary || last.status || "") : '<span class="muted">no runs yet</span>'}</span></td></tr>`;
+      <td class="dim"><span class="full">${last ? esc(last.summary || last.status || "") : '<span class="muted">no runs yet</span>'}</span></td></tr>`;
   }).join("");
   const table = autos.length ? `<div class="card table-wrap" data-src="automations"><table class="autos"><thead><tr><th>Name</th><th>Cadence</th><th>Next</th><th>Last</th><th>Last 6</th><th>Last result</th></tr></thead><tbody>${rows}</tbody></table></div>`
     : '<div class="card"><div class="empty-chart">No Orca automations registered.</div></div>';
