@@ -9,7 +9,8 @@ CFG.mkdir()
 
 
 def run(*args, **env):
-    base = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_PLUGIN_OPTION_", "AGENT_SKILLS_", "CLAUDE_SETTINGS"))}
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_PLUGIN_OPTION_", "AGENT_SKILLS_", "CLAUDE_SETTINGS"))
+            and k not in ("CLAUDE_CODE_PLUGIN_DIRS", "CLAUDE_CODE_ENTRYPOINT")}
     base.update({"HOME": str(HOME), "CLAUDE_CONFIG_DIR": str(CFG), "AGENT_SKILLS_STATE": str(STATE), **env})
     out = subprocess.run([sys.executable, HERE / "onboard.py", *args], input=json.dumps({"source": "startup"}),
                          capture_output=True, text=True, env=base).stdout
@@ -20,6 +21,11 @@ said = run(CLAUDE_PLUGIN_OPTION_LANGUAGE="Korean", CLAUDE_PLUGIN_OPTION_PERSONAL
 assert "agent-skills:setup-pc" in said and "language=Korean" in said and "personal_repo" not in said, said
 assert "values from the plugin's install dialog: none" in run().lower()
 assert run(AGENT_SKILLS_ONBOARD="0") is None
+assert "automation round" in run(CLAUDE_CODE_ENTRYPOINT="cli"), "an interactive session is asked"
+for entry in ("sdk-cli", "sdk-ts", "sdk-py"):
+    assert run(CLAUDE_CODE_ENTRYPOINT=entry) is None, f"{entry}: no one is there to answer"
+assert run(CLAUDE_CODE_PLUGIN_DIRS="/x/agent-skills") is None, "a launcher's env loads a checkout"
+assert run(CLAUDE_CODE_PLUGIN_DIRS=" ") is not None, "a blank value loads nothing"
 said = run(CLAUDE_PLUGIN_OPTION_PERSONAL_REPO="https://me:ghp_FAKE0000@git.example.test/me/conf.git")
 assert "personal_repo=https://git.example.test/me/conf.git" in said and "ghp_FAKE" not in said, said
 said = run(CLAUDE_PLUGIN_OPTION_PERSONAL_REPO="git@git.example.test:me/conf.git")

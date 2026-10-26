@@ -7,8 +7,9 @@ CHECK = "orca orchestration check"
 HOME = tempfile.mkdtemp()  # no user skills unless a case adds one
 
 
-def run(tool, tool_input, own, transcript=None, agent=None, session="s0"):
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT"}
+def run(tool, tool_input, own, transcript=None, agent=None, session="s0", **extra):
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PLUGIN_ROOT" and not k.startswith("CLAUDE_PLUGIN_OPTION_")}
+    env.update(extra)
     env["AGENT_SKILLS_STATE"] = f"{HOME}/state"
     env["ORCA_TERMINAL_HANDLE"] = own
     env["HOME"] = HOME
@@ -19,8 +20,8 @@ def run(tool, tool_input, own, transcript=None, agent=None, session="s0"):
     return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out.strip() else "none"
 
 
-def bash(cmd, own="term_me", transcript=None, agent=None, session="s0"):
-    return run("Bash", {"command": cmd}, own, transcript, agent, session)
+def bash(cmd, own="term_me", transcript=None, agent=None, session="s0", **extra):
+    return run("Bash", {"command": cmd}, own, transcript, agent, session, **extra)
 
 
 def skill(name):
@@ -170,4 +171,13 @@ for cmd in (f"python3 {SETUP} --settings-only --apply 0123456789ab", f"python3 {
             f"python3 {SETUP} --actions-only; rm -rf /tmp/x", f"python3 {HOME}/scripts/setup.py --actions-only",
             "python3 scripts/setup.py --actions-only", f"bash -c 'python3 {SETUP} --actions-only'"):
     assert bash(cmd) == "none", cmd
+# Another clone's setup.py is not this plugin's: no decision, unless the install dialog named it as the checkout.
+CLONE = pathlib.Path(HOME) / "clone"
+(CLONE / "skills" / "setup-pc").mkdir(parents=True)
+(CLONE / "scripts").mkdir()
+assert bash(f"python3 {CLONE}/scripts/setup.py --actions-only") == "none"
+assert bash(f"python3 {CLONE}/scripts/setup.py --actions-only", CLAUDE_PLUGIN_OPTION_CHECKOUT=str(CLONE)) == "ask"
+(pathlib.Path(HOME) / "src").mkdir()
+(pathlib.Path(HOME) / "src" / "agent-skills").symlink_to(CLONE)
+assert bash(f"python3 {CLONE}/scripts/setup.py --actions-only") == "ask", "the dialog's default, ~/src/agent-skills"
 print("guard: all pass")

@@ -550,7 +550,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、圧縮後の再オリエンテーション（`reorient.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）。
+- **フック:** 権限の判定（`guard.py`）、圧縮後の再オリエンテーション（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。

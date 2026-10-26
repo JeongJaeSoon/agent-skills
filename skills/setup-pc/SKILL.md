@@ -39,8 +39,9 @@ The human may refuse part of the bundle: they edit the rule out after applying (
 
 ## Update: an installed PC
 
-1. Dry run `python3 <checkout>/scripts/setup.py --update`. Like any dry run it writes and fetches nothing: it plans the recommended items this PC has not been offered before from the checkout as it is, and lists the fast-forward as the `first` step.
-2. Hand over the `--apply` line as in setup step 6. It fast-forwards the checkout first (`skills-sync sync`; stops on a dirty or diverged checkout, `docs/platform.md` §3), then checks the plan again; a release that brought new recommendations makes the hash no longer match, so the human dry runs again (the checkout is already fast-forwarded by then). With `no change` on the files, the line only runs the fast-forward and the launchd and automation steps.
+1. **The personal folder**, when `~/.config/agent-skills/personal` is there: `git -C ~/.config/agent-skills/personal pull --ff-only`, before the dry run, which reads it and hashes the plan. Neither `setup.py` nor the sync job pulls it, so skipping this step leaves new personal keys out.
+2. Dry run `python3 <checkout>/scripts/setup.py --update`. Like any dry run it writes and fetches nothing: it plans the recommended items this PC has not been offered before from the checkout as it is, and the personal keys not offered before, and lists the fast-forward as the `first` step.
+3. Hand over the `--apply` line as in setup step 6. It fast-forwards the checkout first (`skills-sync sync`; stops on a dirty or diverged checkout, `docs/platform.md` §3), then checks the plan again; a release that brought new recommendations makes the hash no longer match, so the human dry runs again (the checkout is already fast-forwarded by then). With `no change` on the files, the line only runs the fast-forward and the launchd and automation steps.
 3. Running sessions: `skills-sync broadcast` sends `/reload-skills` or `/reload-plugins` to idle ones. This session reloads itself as `write-skill` §7 describes.
 4. A marketplace install instead of a checkout: `! claude plugin marketplace update jeongjaesoon`, `! claude plugin update agent-skills@jeongjaesoon`, then `/reload-plugins`. `setup.py` is for the checkout install.
 

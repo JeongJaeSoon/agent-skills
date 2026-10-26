@@ -26,7 +26,8 @@ Allow, so workers never stall on a prompt hours after they loaded a skill:
 - `orch <subcommand>` (the program ledger and the landing gate), except heavy, which runs any command,
   set and init, which can change a program's merge policy, and backfill, which rewrites the ledger
 
-Ask: `python3 <checkout>/scripts/setup.py --actions-only`, the setup steps that write no Claude settings (setup-pc).
+Ask: `python3 <checkout>/scripts/setup.py --actions-only`, the setup steps that write no Claude settings (setup-pc),
+where <checkout> is this plugin's root or the install dialog's `checkout`.
 `ask` shows the human a permission dialog even in auto mode, so these persistent jobs start only on a click.
 
 An allow here skips the auto mode classifier, so it covers only one simple command whose words bash passes
@@ -176,8 +177,13 @@ def setup_actions(words):
     if words[0] != "python3" or set(words[2:]) - {"--orca-run"} != {"--actions-only"}:
         return False
     script = pathlib.Path(words[1])
-    return (script.is_absolute() and script.name == "setup.py" and script.parent.name == "scripts"
-            and (script.parents[1] / "skills" / "setup-pc").is_dir())
+    if not (script.is_absolute() and script.name == "setup.py" and script.parent.name == "scripts"
+            and (script.parents[1] / "skills" / "setup-pc").is_dir()):
+        return False
+    # The plugin running this hook, or the checkout the install dialog named (setup-pc step 3, same default):
+    # another clone's setup.py may say anything.
+    named = os.environ.get("CLAUDE_PLUGIN_OPTION_CHECKOUT", "").strip() or "~/src/agent-skills"
+    return script.parents[1].resolve() in {ROOT.resolve(), pathlib.Path(named).expanduser().resolve()}
 
 
 def main():
