@@ -544,9 +544,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert reap.janitor_scan({"orca-worktree"}, [], [e("orca-worktree", wt, pr="acme/app#2")], [], PRS.get) == []
     reap.orca_json = lambda *a: listing[a[0]] if a[0] == "worktree" else None
     notes = []
-    # Unreadable, the list only costs that defense: the card is still judged by the usual rules, with a note.
-    got = reap.janitor_scan({"orca-worktree"}, [], [], notes, PRS.get, quiet=lambda p: 7 * 3600)
-    assert [i["name"] for i in got] == [wt] and "orca automations list" in notes[0], (got, notes)
+    # Unreadable, the list keeps every card that round: an automation's worktree would look like a finished one.
+    got = reap.janitor_scan({"orca-worktree", "done-card"}, [], [], notes, PRS.get, quiet=lambda p: 7 * 3600)
+    assert [(i["kind"], i["target"], i["why"]) for i in got] == [("orca-worktree", False, "automation 목록을 읽지 못함")] \
+        and "orca automations list" in notes[0], (got, notes)
 assert reap.automation_workspaces({"automations": [{"workspaceId": "r::/w/run"}, {"workspaceId": None}, {}]}) == {"/w/run"}
 assert reap.automation_workspaces({"worktrees": []}) == set() and reap.automation_workspaces(None) is None
 reap.orca_workers, reap.worktree_facts, reap.cwds, reap.shutil.which, reap.orca_json = saved
@@ -828,6 +829,13 @@ with tempfile.TemporaryDirectory() as tmp:
     out = cli("reap", "--plan", str(tmp / "state" / "janitor-plan.json")).stdout
     assert "tmpdir" in out and "휴지통으로 옮김" in out and not d.exists() and (tmp / "trash" / "build").is_dir(), out
     assert cli("precheck", "--kinds", "tmpdir").returncode == 1
+    # A manual kind written into the janitor plan is refused there: the round's rule covers only the scheduled kinds.
+    jplan = tmp / "state" / "janitor-plan.json"
+    plan = json.loads(jplan.read_text())
+    plan["items"] = [{"kind": "branch", "key": "branch:/r:feature", "repo": "/r", "name": "feature", "tip": "x", "target": True}]
+    jplan.write_text(json.dumps(plan))
+    out = cli("reap", "--plan", str(jplan)).stdout
+    assert "건너뜀 branch:/r:feature: janitor 계획에 들어갈 수 없는 종류" in out, out
     shot = tmp / "shot.png"
     shot.write_bytes(b"x")
     assert cli("ledger", "add", "--kind", "evidence", "--path", str(shot), "--pr", "acme/app#1").returncode == 0

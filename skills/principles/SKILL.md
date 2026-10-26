@@ -36,6 +36,7 @@ Each principle lives in its own file under `references/`. Read the leaf file in 
 - **Sequence Work into Verifiable Units** (`references/principle-sequence-verifiable-units.md`). Multi-step work and how commits and PRs stack.
 - **Test Behavior, Not Implementation** (`references/principle-test-behavior-not-implementation.md`). Writing, changing, or keeping a test.
 - **Fix Root Causes** (`references/principle-fix-root-causes.md`). Debugging: trace each symptom to its root cause and fix the pattern there, not the instance.
+- **Explain the Number** (`references/principle-explain-the-number.md`). Before trusting, reporting, or acting on a measured speedup, regression, latency, or eval result. For a perf number, also follow `references/benchmark-checklist.md`.
 
 **Delegation**
 

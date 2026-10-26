@@ -13,7 +13,8 @@ Usage:
   python3 reap.py schedule [--load] [--workspace SELECTOR] [--provider claude] [--write]
 
 scan only reads. reap re-scans and acts only on the plan's targets that are still targets with the
-same identity (pid and start time, branch tip), so nothing outside the list is touched.
+same identity (pid and start time, branch tip), so nothing outside the list is touched. On a plan named janitor-plan.json
+it acts only on the scheduled kinds.
 load only reads: the top CPU consumers, each classed ours-idle, ours-working, leftover or system, with the
 action for its class.
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
@@ -1226,6 +1227,8 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
             if workers is None and not facts["live"]:
                 # Without the list, a user's takeover and a live turn look the same as a finished worker.
                 facts["live"] = "워커 목록을 읽지 못함"
+            if runners is None and not facts["live"]:
+                facts["live"] = "automation 목록을 읽지 못함"
             source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
             facts["worker_card"] = path in made
             facts["children"] = kids.get(path) or []
@@ -1236,7 +1239,7 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
             if "orca-worktree" in kinds:
                 # `--hours 0` must not let a card that just went quiet go.
                 items.append(judge_orca_worktree(path, source, facts, pr_state, max(hours, NO_PR_MIN_HOURS) * 3600))
-            if "done-card" in kinds and workers is not None and (d := judge_done_card(path, source, facts, pr_state, quiet, done_idle_s,
+            if "done-card" in kinds and workers is not None and runners is not None and (d := judge_done_card(path, source, facts, pr_state, quiet, done_idle_s,
                                                               asked.get(path))):
                 items.append(d)
     return items
@@ -1936,8 +1939,13 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     cfg = config()
     if cmd == "reap":
-        plan = json.loads(pathlib.Path(opt("--plan") or sys.exit("reap needs --plan PLAN.json")).read_text())
+        path = pathlib.Path(opt("--plan") or sys.exit("reap needs --plan PLAN.json"))
+        plan = json.loads(path.read_text())
         wanted = {i["key"]: i for i in plan["items"] if i["target"]}
+        # The janitor round's autoMode rule covers only the scheduled kinds; a manual kind in that plan was put there by hand.
+        if path.name == "janitor-plan.json":
+            for key in [k for k, i in wanted.items() if i["kind"] not in SCHEDULED]:
+                print(f"- 건너뜀 {wanted.pop(key)['key']}: janitor 계획에 들어갈 수 없는 종류")
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []
