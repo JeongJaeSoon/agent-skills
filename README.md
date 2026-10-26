@@ -50,13 +50,14 @@ Claude Code 세션 안에서:
 |---|---|---|
 | 사용자 설정 적용(`setup-pc`, `tune-automode`) | HITL: 에이전트는 diff와 `!` 한 줄만 만들고 사람이 실행한다 | 없음 |
 | `setup.py --actions-only`(동기화·자동화 켜기) | HITL: `guard.py`가 auto mode에서도 권한 창을 띄운다 | 없음 |
-| 그 밖의 권한 창, auto mode 거부 | HITL: 사람이 승인하거나, 거부되면 에이전트가 보고하고 멈춘다 | `tune-automode`가 만든 autoMode 규칙을 사람이 적용하면 그 부류는 묻지 않고 진행한다 |
+| 그 밖의 권한 창 | HITL: 사람이 승인한다 | 사람이 `permissions.allow` 항목(`update-config`)을 더하면 그 명령은 묻지 않고 진행한다 |
+| auto mode 분류기의 거부 | HITL: 에이전트가 보고하고 멈춘다 | `tune-automode`가 만든 autoMode 규칙을 사람이 적용하면 그 부류는 진행한다. 판정 없는 거부(`no verdict`)는 규칙으로 바뀌지 않는다 |
 | 되돌릴 수 없는 행동(파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기) | HITL: 멈추고 묻는다 | 없음 |
 | `orchestrate` 머지 정책 | HOTL: `autonomous`, 워커가 `orch land`로 머지 | `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 푼다 |
 | `deliver-ticket` 혼자 도는 카드의 머지 | HOTL: 준비된 PR을 묻지 않고 머지 | hold를 걸거나 직접 보겠다고 하면 머지 전에 묻는다. 계속 flaky한 체크, 되돌릴 수 없는 migration 같은 예외에서도 묻는다 |
 | `watch-prs` `ownergate`(봇 PR 승인) | 꺼짐. `prs.kinds`에 넣으면 HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 덮으면 회차가 실행한다(HOTL) |
 | `watch-prs` `ready_to_merge` | 꺼짐 | `prs.kinds`에 더하면 `merge_repos`의 내 PR 중 게이트를 모두 통과한 것을 머지한다(HOTL) |
-| `secure-fill` 비밀값 입력 | HITL: 매번 Touch ID 승인 | 허용 목록 항목을 `"approval": "none"`으로 두면 Touch ID 없이 채운다(Keychain 확인은 남는다) |
+| `secure-fill` 비밀값 입력 | HITL: 매번 Touch ID 승인 | 허용 목록 항목을 `"approval": "none"`으로 두면 Touch ID 없이 채운다(`-T ""`로 만든 항목이면 Keychain 확인은 남는다) |
 | `janitor`, `pressure-watch` | HOTL: 에이전트가 남긴 끝난 리소스를 정기적으로 정리한다 | `skills-sync setup disable <이름>` |
 
 HOTL에서 사람이 보는 곳은 `brief`의 현황 보고와 대시보드의 결정·권한 창·받은편지함이다. 대시보드·`janitor`·watch 회차는 Orca를 전제로 한다. 세부는 [docs/operations.md](docs/operations.md#안전-경계).
@@ -84,7 +85,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 - [docs/automation.md](docs/automation.md): 어떤 일을 어떤 장치로 돌리나
 - [docs/configuration-migration.md](docs/configuration-migration.md): 설정 키와 전환
 - [docs/platform.md](docs/platform.md): 체크아웃 로드와 동기화 설계
-- 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR). 오른쪽 위에서 한국어·English·日本語를 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다
+- 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR). 오른쪽 위에서 한국어·English·日本語를 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다.
 
 ## 테스트
 
