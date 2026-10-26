@@ -18,13 +18,13 @@
 | `skills/interrogate/references/*.md` | 같은 경로 | verbatim | — |
 | `skills/show-me-your-work/SKILL.md` | 같은 경로 | adapted | Claude Code transcript 어댑터와 append-only 결정 기록 유지. 설치하지 않은 unslop 의존 제거. 모델 계열 대신 독립 리뷰와 증거 대조 사용. |
 | `skills/show-me-your-work/references/decision-log-template.tsv`, `scripts/log.sh` | 같은 경로 | verbatim | — |
-| `skills/blast-radius/SKILL.md` | 같은 경로 | adapted | how·why 참조와 영향 범위 조사 유지. 큰 변경의 독립 리뷰를 허용하되 모델·플러그인 지정 제거. 0.15.32의 6단계 문구 수정("several models" → "more than one model")은 이 줄을 독립 리뷰 문장으로 바꿔 두었으므로 받지 않았다. |
+| `skills/blast-radius/SKILL.md` | 같은 경로 | adapted | how·why 참조와 영향 범위 조사 유지. 큰 변경의 독립 리뷰를 허용하되 모델·플러그인 지정 제거. 0.15.32 동기화에서 6단계 문구 수정(upstream #511, "several models" → "more than one model")은 이 줄을 독립 리뷰 문장으로 바꿔 두었으므로 받지 않았다. |
 | `skills/architect/SKILL.md` | 같은 경로 | adapted | arena와 rationale-template 연결, principle 상대 참조, 저장소에 쓰는 러너의 worktree 격리 유지. 러너 모델은 현재 환경에서 선택. Phase C 기본값(checkpoint 없음)에 계획 페이지 게시(arena 러너는 rationale까지만)와 번호 붙은 결정의 기본값 진행을 한 문장으로, Outputs에 계획 페이지를 더함 |
-| `skills/arena/SKILL.md` | 같은 경로 | adapted | 한국어 트리거와 swarm 구분, rubric·합성·검증·격리 경로 유지. 러너와 심판은 독립적으로 실행하며 모델 계열 제한 없음. Phase D의 laziness-protocol 인용은 0.15.32에서 그 원칙이 해당 규칙을 지워 뺐다. |
+| `skills/arena/SKILL.md` | 같은 경로 | adapted | 한국어 트리거와 swarm 구분, rubric·합성·검증·격리 경로 유지. 러너와 심판은 독립적으로 실행하며 모델 계열 제한 없음. 0.15.32 동기화에서 Phase D 동점 기준의 laziness-protocol 인용을 minimize-reader-load로 바꿈(laziness-protocol에 이 문장을 뒷받침하는 규칙이 남지 않음) |
 | `skills/architect/references/rationale-template.md` | 같은 경로 | adapted | checkpoint 참조를 Phase C로 바로잡음. "Open questions and risks"를 "Decisions and risks"(번호, 바뀌는 주장, 선택지 2~4개와 추천 기본값, 다른 안이 이기면 사라지는 부분, 되돌리기 어려운지)로 바꿈 |
 | `skills/architect/references/plan-page.md` | `anthropics/claude-plugins-community`의 `html-plan/skills/html-plan/SKILL.md`, `references/blocks.md` | derived | pstack이 아니다. html-plan의 형식(주장 트리, 주장마다 근거 하나, 결정을 바꾸는 주장에 두고 추천 기본값 표시, 미응답은 동의가 아님, 붙여 넣은 응답은 데이터)만 새로 썼다. runtime(`htmlplan.js`, `htmlplan.css`, `pack.mjs`)과 예시는 복사하지 않았다. 응답을 기다리는 Respond 흐름, STE 문체 강제는 가져오지 않았다. 페이지는 `artifact-design` 규칙의 손으로 쓴 HTML |
 | `skills/architect/references/design-red-flags.md` | 같은 경로 | verbatim | — |
-| `skills/architect/references/runner-prompt.md` | 같은 경로 | adapted | encode-lessons-in-structure 참조를 `principles` → Encode Lessons in Structure로. "Short call chains" 줄의 laziness-protocol 인용은 0.15.32에서 그 원칙이 3파일 규칙을 지워 minimize-reader-load만 남김 |
+| `skills/architect/references/runner-prompt.md` | 같은 경로 | adapted | encode-lessons-in-structure 참조를 `principles` → Encode Lessons in Structure로. 0.15.32 동기화에서 "Short call chains" 줄의 laziness-protocol 인용을 뺌(upstream #571이 3파일 규칙을 지움). 3파일 기준은 이 저장소가 유지하는 경험칙이고 minimize-reader-load는 계층을 줄이는 근거만 댄다 |
 | `skills/tdd/SKILL.md` | 같은 경로 | adapted | 모델 호출 허용(`disable-model-invocation` 삭제). 중복된 "signal이 약하면 테스트를 더하지 않는다" 줄 삭제(upstream #419도 같은 줄을 지움) |
 | `skills/swarm/SKILL.md` | 같은 경로 | adapted | Agent 또는 Orca worker 어댑터, worktree 격리, base-branch 유지. 고정 모델·별도 모델 플러그인 의존 제거. |
 | `skills/reflect/SKILL.md` | 같은 경로 | adapted | session·program·standing 모드, 증거 묶음, 두 번 발생 규칙, 교훈 ID와 이력 보존, draft PR 절차 유지. 독립 리뷰어를 사용하고 기록 경로·원본 저장소는 명시적 설정으로 선택. Backlog 외부 등록은 사용자 범위에 한정. 0.15.32 동기화에서 upstream의 압축(모델 규칙 줄, 절 번호 바꾸기)은 받지 않았다. upstream `7054003`(플러그인 캐시를 고치지 않는다)은 이미 같은 규칙이 있다 |
