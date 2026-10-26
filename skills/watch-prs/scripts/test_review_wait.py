@@ -172,6 +172,47 @@ skipped_later = [row(W + "10", "bob", "request", at(14, 22), source="skipped", p
 assert acts([one, three], skipped_later, now=at(15, 9, 5)) == [("request", W + "14", "bob")], \
     "a skipped row with post_at does not hold the reviewer's batch"
 
+# after_hours: the default schedules (above); schedule-certain-only holds every Slack action for a business-hours
+# round; send-now sends at any hour.
+assert cfg["after_hours"] == "schedule-all"
+certain = {**cfg, "after_hours": "schedule-certain-only"}
+assert p.decide([one], [], at(14, 22), certain) == []
+assert acts([one], now=at(15, 9), c=certain) == [("request", W + "10", "bob")], "the held request is decided again in the morning"
+assert [(a["action"], a["post_at"]) for a in p.decide([one], [], at(14, 22), {**cfg, "after_hours": "send-now"})] == [("request", None)]
+
+# weekend_days replaces Saturday/Sunday; 2026-10-16 is a Friday.
+fri_sat = {**cfg, "weekend_days": [4, 5]}
+assert not p.business_day(dt.date(2026, 10, 16), fri_sat) and p.business_day(dt.date(2026, 10, 18), fri_sat)
+assert p.post_at(at(15, 22), fri_sat) == at(18, 9), "Thursday night skips Friday and Saturday"
+
+# A request carries the reviewer+assignee edit only with assign_reviewers on; other actions never do.
+assert p.decide([one], [], NOW + 2 * H, cfg)[0]["github"] is None, "off by default"
+on = {**cfg, "assign_reviewers": True}
+r = p.decide([one], [], NOW + 2 * H, on)
+assert r[0]["github"] == "gh pr edit https://github.com/acme/widgets/pull/10 --add-reviewer bob --add-assignee bob", r
+assert p.decide([one], [row(W + "10", "bob", "request", at(13, 10))], NOW, on)[0]["github"] is None, "a remind does not"
+
+# profiles: the first match overrides the top-level keys for that repo only; a match without a slash names an owner.
+prof = {**cfg, "profiles": [{"match": "acme/tool*", "after_hours": "send-now", "assign_reviewers": True},
+                            {"match": "acme", "night_hour": 23}]}
+assert p.repo_cfg(prof, "acme/tools")["after_hours"] == "send-now" and p.repo_cfg(prof, "acme/tools")["night_hour"] == 21
+assert p.repo_cfg(prof, "Acme/Widgets")["night_hour"] == 23 and p.repo_cfg(prof, "other/x") is prof
+tools = state(15, repo="acme/tools", reqs=[u("bob")], labels=["security"])
+late = {a["pr"]: a for a in p.decide([one, tools], [], at(14, 22), prof)}
+assert set(late) == {W + "10", "acme/tools#15"} and late["acme/tools#15"]["github"], late
+assert late[W + "10"]["post_at"] is None and late["acme/tools#15"]["post_at"] is None, "21:00-23:00 is business hours for acme"
+assert p.decide([one], [], at(14, 23, 30), prof)[0]["post_at"] == at(15, 9), "acme/widgets schedules after 23:00"
+for bad in ({"after_hours": "later"}, {"weekend_days": [7]}, {"weekend_days": "sat"}, {"assign_reviewers": "yes"},
+            {"profiles": [{"night_hour": 22}]}, {"profiles": [{"match": "acme/*", "kinds": ["review_wait"]}]},
+            {"profiles": [{"match": "acme", "after_hours": "x"}]}):
+    path = pathlib.Path(tempfile.mkdtemp()) / "c.json"
+    path.write_text(json.dumps({"prs": bad}))
+    try:
+        p.config(path)
+        raise AssertionError(bad)
+    except p.ConfigError:
+        pass
+
 # Channels: reviewer > repository > default.
 r = p.decide([state(20, reqs=[u("carol")], labels=["security"]), state(21, repo="acme/tools", reqs=[u("bob")], labels=["security"])],
              [], NOW, cfg)
@@ -377,6 +418,12 @@ run = lambda *a: subprocess.run([sys.executable, str(pathlib.Path(p.__file__)), 
                                 env={**os.environ, "AGENT_SKILLS_STATE": str(tmp)}, capture_output=True, text=True)
 lines = [json.loads(x) for x in run("actions").stdout.splitlines()]
 assert sorted(x["action"] for x in lines) == ["request", "request", "request", "retrigger"] and "post_at" in lines[0]
+assert all("github" in x for x in lines), lines
+conf.write_text(json.dumps({"prs": {"kinds": ["review_wait"], "profiles": [{"match": "acme/*", "after_hours": "send-now"}]}}))
+pol = json.loads(run("policy", "acme/widgets").stdout)
+assert pol["after_hours"] == "send-now" and pol["weekend_days"] == [5, 6] and pol["assign_reviewers"] is False, pol
+assert json.loads(run("policy", "other/x").stdout)["after_hours"] == "schedule-all"
+conf.write_text(json.dumps({"prs": {"kinds": ["review_wait"]}}))
 out = run("log", "--key", k, "--source", "scheduled", "--scheduled", "Q9", "--post-at", str(at(15, 9)), "--thread", "CFAKE:7.7")
 assert out.returncode == 0, out
 assert p.read_jsonl(tmp / "prs" / "sendlog.jsonl")[0]["post_at"] == at(15, 9)
