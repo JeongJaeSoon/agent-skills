@@ -23,6 +23,11 @@ assert 'from "An act refused" through "run it again."' in brief, "paste boundary
 # The gate exception keys on the markers the two hooks put first in their deny reasons.
 for mark in MARKS:
     assert f"`{mark}`" in brief, f"refused-act paragraph no longer names {mark}"
+for hook in ("`hooks/pressure_gate.py`", "`hooks/guard.py`"):
+    assert hook in brief, f"refused-act paragraph no longer ties the markers to {hook}"
+assert "the same Bash command with `run_in_background: true`" in brief, "gate exception lost its one form"
+assert "The form keeps the act" not in brief, "gate exception reopened the form to other wrappers"
+assert "Monitor tool, which that block also offers, is not part of this exception" in brief, "gate exception no longer excludes Monitor"
 assert 'MARK = "[gate:pressure]"' in (hooks / "pressure_gate.py").read_text(), "pressure_gate.py lost its marker"
 assert 'SLEEP_MARK = "[gate:sleep-loop]"' in (hooks / "guard.py").read_text(), "guard.py lost its sleep-loop marker"
 
