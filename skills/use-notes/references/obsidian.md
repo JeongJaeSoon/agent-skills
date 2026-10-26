@@ -2,8 +2,17 @@
 
 Select the vault explicitly with `notes.obsidian.vault` or the user's request. No personal
 vault is assumed. Use the connected vault tools, local Obsidian CLI, or filesystem access
-that the user selected and the environment permits. Confirm which copy is authoritative
-when synchronization could lag; do not assume one tool is always fresher.
+that the user selected and the environment permits; when the user's instructions allow one
+path only (for example, vault tools only), reads go through it too. Confirm which copy is
+authoritative when synchronization could lag; do not assume one tool is always fresher.
+
+With Obsidian Sync on:
+
+- A file written to the vault folder behind the app's back may be deleted when the app next
+  starts, because Sync removes files missing from its index. Write through the app's tools.
+- A path Sync already deleted is deleted again when re-created. Use a new filename.
+- The Obsidian CLI has no in-place edit, and a create that overwrites a large note can hang.
+  Patch with an edit tool rather than rewriting the note whole.
 
 Read the vault's instructions before a write. Inspect the current note before editing,
 check that a create path is unused, and preserve unrelated content. With connected tools,
