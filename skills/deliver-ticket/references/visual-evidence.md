@@ -33,6 +33,10 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/shots.py" capture --url http://127.0.0.1:51
   viewport. Fix the overflow, or record why it is intended.
 - Beyond the default view, shoot each state the change touches: empty, loading, error, signed out,
   long text, many rows. A state the shot cannot reach goes under "not covered".
+- A shot taken by hand with a headless browser runs under a time limit (`timeout 40`, or
+  `perl -e 'alarm 40; exec @ARGV' <browser> …` where `timeout` is missing) with its own
+  `--user-data-dir`: on a page that keeps polling, the browser can write the file and never
+  exit, and the session waits on it. Stop only the processes that use that directory.
 - Put the evidence directory outside the worktree (a scratchpad or temporary directory), never in
   the repo, and register it once it is on the PR: `reap.py ledger add --kind evidence --path <dir>
   --pr owner/repo#N` (`reap-resources` "Janitor").
