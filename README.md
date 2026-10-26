@@ -36,7 +36,7 @@ python3 <체크아웃>/scripts/setup.py --apply <해시>  # 위가 출력한 줄
 skills-sync setup                        # 목록: 이름, 지금 상태, 기본값, 하는 일
 skills-sync setup apply                  # 기본 on 중 한 번도 설정하지 않은 것만 켠다(setup.py --apply 와 bootstrap --write 가 부른다)
 skills-sync setup enable preview-watch   # 하나 켜기
-skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌려도 꺼진 채로 남는다
+skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply 를 다시 돌려도 꺼진 채로 남는다
 ```
 
 | 이름 | 기본 | 장치 | 하는 일 |

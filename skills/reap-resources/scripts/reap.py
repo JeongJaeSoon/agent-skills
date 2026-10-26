@@ -1641,8 +1641,13 @@ def load_due(state_dir, cfg, now=None, load5=None, autos=None):
     if not janitor or not janitor.get("enabled"):
         return False, "janitor 가 꺼져 있거나 없음"
     v = cfg.get("load_cooldown_minutes")
-    with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+    try:
         cooldown = float(LOAD_COOLDOWN_MINUTES if v is None else v) * 60
+    except (TypeError, ValueError):
+        # A bad value must not drop the cooldown: that would run a round every 30 minutes under load.
+        print(f"reap.load_cooldown_minutes {v!r} 는 숫자가 아니라 기본 {LOAD_COOLDOWN_MINUTES}분을 쓴다", file=sys.stderr)
+        cooldown = LOAD_COOLDOWN_MINUTES * 60
+    with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
         last = json.loads((state_dir / "janitor-round.json").read_text())["t"]
         # A stamp from the future (a clock set back) does not hold the job off.
         if 0 <= now - last < cooldown:

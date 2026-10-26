@@ -5,7 +5,9 @@
 
 ## 처음 설치할 때
 
-`skills-sync setup`(`scripts/automations.py`)이 이 저장소가 거는 정기 자동화의 유일한 입구다. 자동화마다
+`skills-sync setup`(`scripts/automations.py`)이 이 저장소가 거는 정기 자동화의 입구다. 예외는 `reap-hard` 하나다.
+묻지 않고 카드를 지우는 정리라 보호 목록 파일을 먼저 써야 하므로, `apply`가 닿지 않게 목록 밖에 두고
+`bin/reap-hard install`로 따로 건다([reap-hard.md](reap-hard.md)). 자동화마다
 기본값이 있고, `apply`는 기본 on 중 한 번도 설정하지 않은 것만 켠다. `bootstrap.py --write`가 마지막에 `apply`를
 부르므로, 처음 설치한 사람은 따로 할 일이 없다. 바꾸고 싶으면 아래 명령을 메인 체크아웃에서 돌린다.
 
@@ -18,10 +20,10 @@ skills-sync setup disable <이름>         # 끄기
 
 | 이름 | 기본 | 장치 | 켜기 | 끄기 |
 |---|---|---|---|---|
-| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). janitor가 꺼져 있었으면 꺼 둔 `janitor-load`도 같이 켠다(켜진 janitor 옆에 따로 끈 것은 그대로) | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
+| `janitor` | on | Orca automation `agent-skills janitor` | 없으면 `reap.py schedule --write`로 만든다. 있으면 trigger·precheck·precheck timeout·prompt 중 `reap.py schedule`과 다른 것만 `orca automations edit`로 맞추고 켠다. workspace는 건드리지 않는다(runner worktree로 옮긴 것은 그대로). janitor가 꺼져 있었으면 꺼 둔 `janitor-load`도 같이 켠다(켜진 janitor 옆에 따로 끈 것은 그대로). 새로 만들 때는 `janitor-load`를 만들지 않는다. `enable janitor-load`나 `apply`가 만든다 | `orca automations edit --disabled`로 `janitor-load`까지 끈다. 등록은 남겨 `apply`가 다시 켜지 않는다 |
 | `janitor-load` | on | Orca automation `agent-skills janitor load` | `janitor`와 같고, 만들 때는 `reap.py schedule --load --write`. `janitor`가 꺼져 있거나 없으면 만들지 않는다 | 이 job만 끈다 |
 | `preview-watch` | off | LaunchAgent `io.github.jeongjaesoon.preview-watch` | tailscale CLI가 없으면 거부한다. 있으면 `preview_watch.py install` | `preview_watch.py uninstall`(watcher가 연 serve 항목도 닫는다) |
-| `pressure-watch` | on | LaunchAgent `io.github.jeongjaesoon.pressure-watch` | `pressure.py install`(3분마다 `round`) | `pressure.py uninstall` |
+| `pressure-watch` | on | LaunchAgent `io.github.jeongjaesoon.pressure-watch` | `pressure.py install`(3분마다 `round`). 끈 표지를 지운다 | `pressure.py uninstall`. LaunchAgent는 지우고 상태 폴더에 끈 표지(`pressure-disabled`)를 남겨, 상태는 "꺼짐"이고 `apply`가 다시 켜지 않는다 |
 | `share-server` | off | LaunchAgent(라벨은 설정 `share-server.label`, 기본 `io.github.jeongjaesoon.share-server`) | `share_server.py install`(KeepAlive로 `serve`, 그 안에서 sandbox-exec 아래 caddy. caddy가 없으면 `brew install caddy`부터. 같은 라벨의 다른 plist는 백업 후 교체) | `share_server.py uninstall` |
 | `watch-prs` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-prs` | `agent-skills.json`에 `prs` 키가 없으면 상태는 "꺼짐(설정 키 없음)"이고 `apply`가 건너뛴다. 있으면 `prs.py schedule --write`로 만든다. 이미 등록돼 있으면 키와 상관없이 켜기만 한다. worktree에서는 거부한다 | `orca automations edit --disabled`. 등록은 남긴다 |
 | `watch-mentions` | on(설정 키가 있을 때) | Orca automation `agent-skills watch-mentions` | `watch-prs`와 같다. 키는 `mentions`, 만드는 명령은 `mentions.py schedule --write` | `orca automations edit --disabled`. 등록은 남긴다 |
