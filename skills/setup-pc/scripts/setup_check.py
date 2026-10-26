@@ -186,6 +186,9 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
         rc, _ = run(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"])
         if rc:
             rows.append(row("missing", "launchd 동기화 작업", "로드 안 됨", f"python3 {where}/scripts/bootstrap.py --write"))
+    else:
+        rows.append(row("unsupported", "launchd 동기화 작업", f"macOS 전용 ({sys.platform})",
+                        f"cron 에 손으로: */15 * * * * python3 {where}/scripts/sync.py sync"))
     return rows
 
 
@@ -195,10 +198,24 @@ def check_automations(run=run):
         items = json.loads(out)
     except ValueError:
         return [row("warn", "정기 자동화", f"상태를 읽지 못함 (rc {rc})", "! skills-sync setup")]
-    off = [a["name"] for a in items if a.get("default") == "on" and a.get("state") != "on"]
-    if off:
-        return [row("missing", "정기 자동화", f"기본 on 인데 꺼짐: {', '.join(off)}", "메인 체크아웃에서 ! skills-sync setup apply")]
-    return [row("ok", "정기 자동화", "기본 on 전부 켜짐")]
+    # States are automations.py's. "off" is registered but turned off, which `apply` treats as the user's choice.
+    by = {}
+    for a in items:
+        if a.get("default") == "on" and a.get("state") != "on":
+            by.setdefault(a.get("state"), []).append(a)
+    names = lambda state: ", ".join(a["name"] for a in by.pop(state, []))
+    rows = []
+    if "absent" in by:
+        rows.append(row("missing", "정기 자동화", f"기본 on 인데 설정 안 됨: {names('absent')}", "메인 체크아웃에서 ! skills-sync setup apply"))
+    if "off" in by:
+        rows.append(row("disabled", "정기 자동화", f"사용자가 끔: {names('off')}", "다시 켜려면 ! skills-sync setup enable <이름>"))
+    if "unsupported" in by:
+        rows.append(row("unsupported", "정기 자동화", f"이 OS 미지원: {names('unsupported')}", "! skills-sync setup enable <이름> 이 이 OS 에서 대신 돌릴 명령을 알려 준다"))
+    rest = sum(by.values(), [])
+    if rest:
+        rows.append(row("warn", "정기 자동화", "상태 확인 불가: " + "; ".join(f"{a['name']} ({a.get('detail')})" for a in rest),
+                        "! skills-sync setup status"))
+    return rows or [row("ok", "정기 자동화", "기본 on 전부 켜짐")]
 
 
 def check_settings(settings, base):

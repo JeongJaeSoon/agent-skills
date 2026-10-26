@@ -209,7 +209,7 @@
 - **관계:** 도구 패턴 권한(`permissions.allow`, hooks)은 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
 
 ### setup-pc
-- **언제:** agent-skills를 다른 PC에 들일 때, 설치된 PC를 최신으로 맞출 때. "새 PC 세팅해줘", "다른 PC 에서도 똑같이 쓰게 해줘", "agent-skills 업데이트해줘", "플러그인 최신화".
+- **언제:** agent-skills를 다른 PC에 들일 때, 설치된 PC를 최신으로 맞출 때. "새 PC 세팅해줘", "다른 PC 에서도 똑같이 쓰게 해줘", "agent-skills 업데이트해줘", "플러그인 최신화", "set up agent-skills on a new PC", "update agent-skills".
 - **내용:** `scripts/setup_check.py check`가 읽기만 해서 표 한 장을 낸다. 도구(`git`·`python3`·`claude`·`gh`·`orca`), `gh` 로그인, git 커밋 서명, 로드 방식(체크아웃·마켓플레이스·둘 다·없음), `origin/main`과의 차이(`git ls-remote`, fetch 안 함), 마지막 `skills-sync` 결과와 launchd 작업, 기본 on 정기 자동화, `language`·`outputStyle`·`permissions.defaultMode`·autoMode 규칙·`permissions.allow`, 기능을 켜는 `agent-skills.json` 키, `internal-names.txt`, 개인 지침·스킬·에이전트. 원래 PC에서 `export`로 뽑은 기준 파일(`env` 값과 자격 증명 모양 규칙은 빼고, `agent-skills.json`은 키 이름만)을 `--baseline`으로 넘기면 차이를 보인다. setup 모드는 빠진 것마다 사람이 칠 `!` 줄을, update 모드는 마켓플레이스 사본이면 `claude plugin marketplace update`·`plugin update`·`/reload-plugins`를, 체크아웃이면 `skills-sync sync`·`broadcast`를 건넨다. 설정 파일은 어떤 도구로도 쓰지 않는다.
 - **동봉:** `scripts/setup_check.py`, 테스트 파일.
 - **관계:** 빠진 autoMode 규칙은 `automode-spec`이 spec을 만들고 사용자가 고른 것만 `tune-automode`의 emit으로 넘긴다. `permissions`·hooks는 `update-config`, 정기 자동화가 하는 일은 `reap-resources`, 떠 있는 세션 reload는 `skills-sync broadcast`가 맡는다. 처음 설치 자체는 README "설치"의 `bootstrap.py`와 마켓플레이스 명령이다.
