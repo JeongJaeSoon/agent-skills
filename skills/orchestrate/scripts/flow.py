@@ -46,8 +46,7 @@ PRODUCERS = {
 }
 CONSUMERS = {
     "page": "dashboard · Overview, Inbox, PRs, Sessions, Graph, Timeline",
-    "brief": "orch brief render · Brief panel, /brief",
-    "work": "dashboard · Work",
+    "brief": "orch brief render · Brief page with its stage table, /brief",
     "skillspage": "dashboard · Skills",
     "statspage": "dashboard · PR stats",
     "sentpage": "dashboard · Sent",
@@ -75,7 +74,9 @@ STORES = [
     ("sends", "sends.jsonl", "dash", ["fleet"], ["fleet"], None, "text sent from the page"),
     ("sent", "sent", "dash", ["orch"], ["sentpage"], None, "`orch sent` log"),
     ("board", "board.json", "dash", ["orch"], ["brief"], None, "only what cannot be derived: " + BRIEF_RULE),
-    ("stages", "stages.json", "dash", ["orch"], ["work"], None, "`orch stage` per worktree"),
+    ("stages", "stages.json", "dash", ["orch"], ["brief"], None, "`orch stage` cells and rows outside a program; win over stages-auto"),
+    ("stagesauto", "stages-auto.json", "dash", ["fleet"], ["brief", "reorient"], 300,
+     "stage rows per program, from its ledger, Run cards and PRs, each tick"),
     ("skillsj", "skills.json", "dash", ["skills"], ["skillspage"], 3600, "usage per skill from transcripts"),
     ("skillcache", "skill-usage-cache.json", "dash", ["skills"], ["skills"], 3600, "per-transcript counts, by size+mtime"),
     ("prstats", "pr-stats.json", "dash", ["prstats"], ["statspage"], 86400, None),

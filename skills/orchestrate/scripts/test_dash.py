@@ -276,20 +276,21 @@ assert "리드·카드 행 없음" in br["text"].splitlines()[0], br
 dash_demo.seed_board()
 br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
 assert "| 🔴 | 로그인 개편 | #41 ? |" in br["text"] and br["width_ok"] is True and "snapshot" not in br, br
-# The work page reads stages.json on each poll: rows nest under their group with a depth, and a write shows at once.
-r = urllib.request.urlopen(f"{base}/api/fleet/work")
-wk, etag = json.loads(r.read()), r.headers["ETag"]
-assert [(x["id"], x["depth"], bool(x.get("group"))) for x in wk["rows"][:4]] == [
-    ("login-revamp", 0, True), ("login", 1, False), ("redirect", 2, False), ("export", 1, False)], wk["rows"]
+# The Brief carries the stage table, read on each poll: rows nest under their group with a depth, and a write shows
+# at once. The Work page and its endpoint are gone.
+wk = br["stages"]
+recorded = [(x["id"], x["depth"], bool(x.get("group"))) for x in wk["rows"] if x.get("source") != "auto"]
+assert recorded[:4] == [("login-revamp", 0, True), ("login", 1, False), ("redirect", 2, False), ("export", 1, False)], wk["rows"]
 assert wk["env"]["prod"] and wk["next"], wk
+assert wk["refs"]["acme/launchpad#41"] == "https://github.com/acme/launchpad/pull/41", wk["refs"]
 try:
-    urllib.request.urlopen(urllib.request.Request(f"{base}/api/fleet/work", headers={"If-None-Match": etag}))
-    raise AssertionError("an unchanged table was sent again")
+    urllib.request.urlopen(f"{base}/api/fleet/work")
+    raise AssertionError("the Work endpoint still answers")
 except urllib.error.HTTPError as e:
-    assert e.code == 304, e.code
+    assert e.code == 404, e.code
 import stages
 stages.set_cell("docs", "dev", "ok", "v2.4.0-rc1")
-wk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/work").read())
+wk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())["stages"]
 assert next(x for x in wk["rows"] if x["id"] == "docs")["cells"]["dev"]["mark"] == "ok", wk["rows"]
 # The sent page clamps its window to 1..30 days, and a failure comes back as the page's error, not a dead request.
 sent_api = lambda q: json.loads(urllib.request.urlopen(f"{base}/api/fleet/sent{q}").read())

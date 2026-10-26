@@ -321,12 +321,16 @@ def main_state(events):
     return "green" if order[-1] in result else "pending"
 
 
-def final_check_current(events):
-    """A predicate_verified counts only if nothing it covered changed after it: no landing, no predicate edit,
-    no newly admitted follow-up."""
+def final_check_at(events):
+    """When the current predicate_verified was recorded, or None. It counts only if nothing it covered changed after
+    it: no landing, no predicate edit, no newly admitted follow-up."""
     since = max((i for i, e in enumerate(events) if e["ev"] == "landed" or (e["ev"] == "admitted" and e.get("ticket"))
                  or (e["ev"] == "config" and (e.get("note") or "").startswith("predicate="))), default=-1)
-    return any(e["ev"] == "predicate_verified" for e in events[since + 1:])
+    return next((e.get("ts") or "" for e in reversed(events[since + 1:]) if e["ev"] == "predicate_verified"), None)
+
+
+def final_check_current(events):
+    return final_check_at(events) is not None
 
 
 def pr_state(events):

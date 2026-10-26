@@ -115,16 +115,16 @@ assert post({"ids": ["stage:g"]}, token="wrong")[0] == 403
 assert post({"ids": ["stage:g"]}, origin="http://evil.example.test")[0] == 403
 code, out = post({"ids": ["stage:g", "stage:open"]})
 assert code == 200 and out == {"written": ["stage:g"], "refused": [["stage:open", acks.why_not("stage:open")]]}, out
-with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/fleet/work", timeout=10) as r:
-    marks = {row["id"]: (row["ack"], row["hidden"]) for row in json.loads(r.read())["rows"]}
+with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/fleet/brief", timeout=30) as r:
+    marks = {row["id"]: (row["ack"], row["hidden"]) for row in json.loads(r.read())["stages"]["rows"]}
 assert marks == {"g": ("acked", True), "g1": ("ackable", True), "w": (None, False), "w1": (None, False),
                  "open": (None, False)}, marks  # a row under an acked group hides with it
 code, out = post({"ids": ["stage:g"], "undo": True})
 assert code == 200 and out["written"] == ["stage:g"], out
 assert post({"ids": "stage:g"})[0] == 404, "ids is a list"
 def work():
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/fleet/work", timeout=10) as r:
-        return {row["id"]: (row["ack"], row["hidden"]) for row in json.loads(r.read())["rows"]}
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/fleet/brief", timeout=30) as r:
+        return {row["id"]: (row["ack"], row["hidden"]) for row in json.loads(r.read())["stages"]["rows"]}
 
 
 # An ack holds only while what it hid is over: a new open row under an acked group shows the group again.
