@@ -12,9 +12,6 @@ from `~/.claude/agent-skills.json`:
 {"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}}
 ```
 
-`notes.obsidian.access` (`mcp`, `cli` or `filesystem`) is the only path to the vault, reads
-included; unset, stop and ask rather than read the folder on disk (`references/obsidian.md`).
-
 When upgrading, report an unset destination explicitly; see the [configuration migration guide](../../docs/configuration-migration.md). Never move existing notes or replace unrelated configuration keys.
 
 No `notes` configuration: use an explicit destination supplied by the user; otherwise keep
@@ -23,7 +20,9 @@ the result in the current task and ask for a destination before any external wri
 
 Read the adapter's reference before the first read or write in a session:
 
-- `obsidian` → `references/obsidian.md`
+- `obsidian` → `references/obsidian.md`. The path the user's instructions name, else
+  `notes.obsidian.access` (`mcp`, `cli` or `filesystem`), is the only path to the vault, reads
+  included; with neither, stop and ask rather than read the folder on disk.
 - `markdown` → `references/markdown.md`
 
 ## The store's rules file comes first

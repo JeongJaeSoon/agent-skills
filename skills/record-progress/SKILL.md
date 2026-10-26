@@ -68,7 +68,9 @@ still investigating. Record when one of these happened:
   ticket. Hand over the facts, absolute dates, `owner/repo#n` with its URL, each follow-up's
   class and the exit item it serves, and the commands and output that verified each claim; a
   claim with no evidence is handed over marked as such. Keep working while they run. A delegate
-  that comes back asking for facts gets them and runs again.
+  that comes back asking for facts gets them and runs again; one that stopped on configuration
+  (the notes access mode unset, the vault tools missing, a rules file unreadable) is not re-run:
+  report it to the user and ask.
 - **Announcing is separate.** Recording never posts to chat. Telling the team is its own
   decision, made under the user's chat rules.
 - **Inside a program or brief,** follow what it says the worker records. A worker still makes

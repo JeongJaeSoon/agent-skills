@@ -11,7 +11,7 @@ These are the author's own working notes, often the only place a rejected approa
 
 ## How to search it
 
-Read the `use-notes` skill and its active adapter's reference first. It names the store and the tools that read it, and the user's rules may fix one path (for example, the connected vault tools only). The steps below name the Obsidian tools; use the adapter's equivalents otherwise.
+Read the `use-notes` skill and its active adapter's reference first. It names the store and the one access path to it (the user's instructions, else `notes.obsidian.access`). The steps below name the vault tools of the `mcp` path; under `cli` or `filesystem`, use that path's equivalent.
 
 1. **Search with `vault_search`** for the ticket ID, feature name, key symbols, PR number, and error strings.
 2. **Read the project folder.** Once a hit lands in `Project/<project>/`, read that project's design doc and worklogs in full with `vault_read` or `vault_batch_read`. The decision is usually in a dated worklog entry, not the doc's summary.

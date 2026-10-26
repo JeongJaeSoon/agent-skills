@@ -5,19 +5,21 @@ vault is assumed.
 
 ## Access mode
 
-`notes.obsidian.access` names the one path to the vault, for reads as well as writes:
+The path the user's own instructions name, else `notes.obsidian.access`, is the one path to
+the vault, for reads as well as writes. Nothing else touches the vault:
 
-| Value | Path | Never on the vault |
-|---|---|---|
-| `mcp` | The connected Obsidian MCP server's vault tools | Bash (`cat`, `ls`, `grep`, `find`), Read, Write, Edit, Grep, Glob, the Obsidian CLI |
-| `cli` | The local Obsidian CLI | File tools and shell commands on the vault folder |
-| `filesystem` | File tools on the vault folder | — |
+| Value | Path |
+|---|---|
+| `mcp` | The connected Obsidian MCP server's vault tools. No shell command (`cat`, `ls`, `grep`, `find`), file tool (Read, Write, Edit, Grep, Glob) or Obsidian CLI on the vault folder |
+| `cli` | The local Obsidian CLI |
+| `filesystem` | File tools on the vault folder |
 
 `mcp` exists for vaults kept by a sync service: the folder on disk lags the running app, so a
 read taken from it mid-sync is stale, and a file written there can be deleted when the app
 next syncs. Under `mcp` there is no fallback: when the vault tools are not connected, stop and
-report it. The key unset (with `adapter: obsidian`): stop and ask which mode the vault uses;
-never fall back to the filesystem. Under `cli` or `filesystem`, confirm which copy is
+report it. Neither the instructions nor the key name a path (with `adapter: obsidian`): stop
+and ask which one the vault uses; never fall back to the filesystem. A delegate returns this
+stop to its caller, which asks the user. Under `cli` or `filesystem`, confirm which copy is
 authoritative when synchronization could lag.
 
 The mode is an instruction, not a tool restriction: the plugin's `notes-writer` keeps the
