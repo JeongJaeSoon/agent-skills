@@ -2,8 +2,8 @@
   "remote": "https://github.com/cursor/plugins.git",
   "remote_slug": "cursor/plugins",
   "upstream_root": "pstack",
-  "upstream_version": "0.15.3",
-  "pin": "b42effe0aa50f59c693d7e2924714e015e00bf7c",
+  "upstream_version": "0.15.32",
+  "pin": "99b609a72323b70204eab407c622f436e858e112",
   "files": [
     {
       "upstream": "skills/create-verification-skill/SKILL.md",
@@ -178,7 +178,7 @@
     {
       "upstream": "skills/principle-type-system-discipline/SKILL.md",
       "local": "skills/principles/references/principle-type-system-discipline.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/architect/SKILL.md",
@@ -198,7 +198,7 @@
     {
       "upstream": "skills/architect/references/runner-prompt.md",
       "local": "skills/architect/references/runner-prompt.md",
-      "mode": "verbatim"
+      "mode": "adapted"
     },
     {
       "upstream": "skills/tdd/SKILL.md",
@@ -328,6 +328,16 @@
     {
       "upstream": "skills/teach/SKILL.md",
       "local": "skills/teach/SKILL.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/principle-explain-the-number/SKILL.md",
+      "local": "skills/principles/references/principle-explain-the-number.md",
+      "mode": "adapted"
+    },
+    {
+      "upstream": "skills/benchmark-checklist/SKILL.md",
+      "local": "skills/principles/references/benchmark-checklist.md",
       "mode": "adapted"
     }
   ]

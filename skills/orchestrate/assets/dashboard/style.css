@@ -354,9 +354,11 @@ th.num .th-sort { justify-content: flex-end; }
 .nav-item.tree .kids { flex: none; font-size: var(--t-xs); color: var(--ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
 .sb-fold > summary { list-style: none; }
 .sb-fold > summary::-webkit-details-marker { display: none; }
-.sb-fold .chev { width: 18px; flex: none; display: grid; place-items: center; color: var(--ink-3); }
-.sb-fold .chev::before { content: ""; border: 4px solid transparent; border-left: 6px solid currentColor; margin-left: 4px; transition: transform .12s; }
-.sb-fold[open] .chev::before { transform: rotate(90deg) translateX(2px); }
+/* The chevron takes the column a row's phase dot takes and carries the group's phase colour, so the label sits where
+   a depth-0 name does and the rows under it read one step in. */
+.sb-fold .chev { width: 8px; flex: none; display: grid; place-items: center; color: var(--tone, var(--ink-3)); }
+.sb-fold .chev::before { content: ""; border: 4px solid transparent; border-left: 6px solid currentColor; border-right-width: 0; transition: transform .12s; }
+.sb-fold[open] .chev::before { transform: rotate(90deg); }
 .sb-fold > .sb-list { margin-top: var(--s1); }
 .nav-item.tree .sb-text { flex: 1; min-width: 0; }
 /* Every row keeps the badge column, so names cut off at one edge whether or not a badge shows. */
@@ -373,7 +375,6 @@ td.when { white-space: nowrap; }
   font-size: var(--t-xs); font-weight: 600; color: #fff; background: var(--bad); flex: none; }
 .badge.missed { box-shadow: 0 0 0 2px var(--bad-wash); }
 [data-sb="icons"] .nav-item.tree { margin-left: 0; width: 100%; }
-[data-sb="icons"] .sb-fold:not([data-fold="archived"]) .chev { display: none; }
 [data-sb="icons"] .nav-item.tree .slot { display: contents; }
 [data-sb="icons"] .nav-item.tree .badge { position: absolute; top: 1px; right: 6px; min-width: 14px; height: 14px; font-size: 9px; padding: 0 3px; }
 /* Two-line rows: the type icon sits on the title line, time and buttons on the row's centre. */
