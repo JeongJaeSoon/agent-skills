@@ -35,7 +35,8 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             --from and --dispatch-capability values from your Orca preamble (Orca ties the message
             to your Dispatch only through them; never rebuild them). Tell the
             lead only what changes scope, order or the predicate. Read your own mail with
-            `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
+            `check --terminal $ORCA_TERMINAL_HANDLE` (that variable, never a handle read from the
+            environment or pasted into the brief) and ack each delivery (`--ack <deliveryId>`),
             or the same batch comes back. Blocked on a decision or an act you cannot take: `ask`,
             which waits for the answer (after a timeout, resume the same message ID). Never send
             a status and end your turn: waking an idle agent on mail is best-effort. After two
@@ -56,7 +57,10 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             A stack that has to stay
             gets a keep reason and deadline in the reap ledger (reap-resources, compose-stack).
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
-            the browser only once that prints held; `orch release browser` when done.
+            the browser only once that prints held; `orch release browser` when done. Your own
+            Orca handle, to tell whether a holder it names is you, is `$ORCA_TERMINAL_HANDLE`
+            written as that variable in the command; never list or grep the environment for it
+            (the guard blocks that), and never ask the lead for it.
             A check that needs a read a guard blocks (env inside a pod or container, a file that
             holds secrets) is planned here by the brief's writer: a script the lead puts
             to the human as a run_command, which writes only the derived result (present or
@@ -117,7 +121,9 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             same turn to whoever gave you this work, with what the act was for, the refusal's
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             reports to the orchestrator or lead that dispatched it, as an orchestration message of type escalation (its terminal
-            is not read), a subagent to the session that started it, in its result; a card with no
+            is not read), or of type status with the subject `<card> <ticket> REFUSED` when its Orca
+            preamble gives no --dispatch-capability (Orca refuses escalation from a sender that holds
+            no Dispatch, as a card started by dispatch-card does), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool,
             never quoted: a hook that matched the command's text blocks a message quoting it. That

@@ -135,7 +135,9 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             same turn to whoever gave you this work, with what the act was for, the refusal's
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             reports to the orchestrator or lead that dispatched it, as an orchestration message of type escalation (its terminal
-            is not read), a subagent to the session that started it, in its result; a card with no
+            is not read), or of type status with the subject `<card> <ticket> REFUSED` when its Orca
+            preamble gives no --dispatch-capability (Orca refuses escalation from a sender that holds
+            no Dispatch, as a card started by dispatch-card does), a subagent to the session that started it, in its result; a card with no
             orchestration channel to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool,
             never quoted: a hook that matched the command's text blocks a message quoting it. That
