@@ -8,8 +8,10 @@
 | 기능 | 설정이 없을 때 | 기존 동작을 계속 쓰려면 |
 |---|---|---|
 | 노트 | 목적지 미설정을 보고하고 결과를 현재 작업에 보관. 사용자가 목적지를 지정하기 전에는 외부 쓰기 없음 | `notes.adapter`와 해당 어댑터의 기존 목적지 설정 |
+| Obsidian 접근 경로 | 사용자 지시에도 `notes.obsidian.access`에도 경로가 없으면 vault를 읽거나 쓰지 않고 멈추고 묻는다. 디스크의 vault 폴더로 넘어가지 않는다 | vault 도구(MCP)로만 다루던 vault는 `"mcp"`, Obsidian CLI는 `"cli"`, 폴더를 직접 다루던 vault는 `"filesystem"` |
 | 회고 | `reflect.ledger` 미설정을 보고하고 현재 작업에만 결과 표시 | 기존 원장의 경로를 그대로 지정. 편집할 원본 저장소는 `reflect.skill_repository` 지정 |
 | 개인 폴더 정리 | `user_folders` 미설정 메모와 함께 건너뜀 | 승인한 폴더만 `reap.user_folders` 배열에 지정. 빈 배열이면 끔 |
+| 트래커·노트 쓰기 위임 | 플러그인 agent `agent-skills:task-tracker`·`agent-skills:notes-writer`가 쓴다. 트래커 사이트 고유 규칙은 `tracker.rules_file`의 Markdown에서 읽는다. 키가 없으면 넘겨받은 사실과 형제 티켓을 따르고, 키가 있는데 파일을 못 읽으면 멈춘다 | 직접 만든 agent를 계속 쓰려면 `tracker.delegate_agent`·`notes.delegate_agent`에 그 이름을, 세션에서 직접 쓰려면 `"none"`을 지정 |
 | 성과 보고 | 시간대 기본값 UTC (`+00:00`) | 이전 `+09:00` 기준의 시간 표시·집계를 유지하려면 매 실행에 `--tz +09:00` 명시 |
 
 예를 들어 기존 Obsidian 목적지와 원장을 계속 쓸 때 필요한 키의 형태는 다음과 같다.
@@ -17,7 +19,7 @@
 
 ```json
 {
-  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<기존 vault 이름>"}},
+  "notes": {"adapter": "obsidian", "obsidian": {"vault": "<기존 vault 이름>", "access": "mcp"}},
   "reflect": {
     "ledger": "<기존 원장 경로>",
     "skill_repository": "<스킬 원본 체크아웃 절대 경로>"
