@@ -26,6 +26,9 @@ Allow, so workers never stall on a prompt hours after they loaded a skill:
 - `orch <subcommand>` (the program ledger and the landing gate), except heavy, which runs any command,
   set and init, which can change a program's merge policy, and backfill, which rewrites the ledger
 
+Ask: `python3 <checkout>/scripts/setup.py --actions-only`, the setup steps that write no Claude settings (setup-pc).
+`ask` shows the human a permission dialog even in auto mode, so these persistent jobs start only on a click.
+
 An allow here skips the auto mode classifier, so it covers only one simple command whose words bash passes
 as written: outside quotes, plain characters only (no operators, redirections, substitutions, expansions or
 variables other than $ORCA_TERMINAL_HANDLE), so the allowed prefix cannot carry another command or verb. Everything else gets no decision and takes the normal permission flow.
@@ -58,6 +61,8 @@ LEAD_ROLE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)[ \t]*ROLE:?[ \t]+lead[ 
 SLEEP_LOOP = re.compile(r"(?:^|[;&|(\s])(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+(\$|\d+)")
 ORCA_ASK = {"reset", "worker-abandon", "gate-resolve"}
 ORCH_ASK = {"heavy", "set", "init", "backfill"}
+SETUP_ASK = (f"{PLUGIN} setup: install the 15-minute sync job, turn on the default-on automations (janitor, pressure-watch, "
+             "and watch-prs/watch-mentions when their keys are set) and print the check table. It writes no Claude settings.")
 
 
 def decide(decision, reason):
@@ -162,6 +167,17 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None):
         return decide("allow", f"{PLUGIN}: orca orchestration {words[2]}")
     if words[0] == "orch" and len(words) > 1 and words[1] not in ORCH_ASK and words[1][:1].isalpha():
         return decide("allow", f"{PLUGIN}: orch {words[1]} (the program ledger and landing gate)")
+    if setup_actions(words):
+        return decide("ask", SETUP_ASK)
+
+
+def setup_actions(words):
+    """`python3 <agent-skills checkout>/scripts/setup.py --actions-only [--orca-run]`."""
+    if words[0] != "python3" or set(words[2:]) - {"--orca-run"} != {"--actions-only"}:
+        return False
+    script = pathlib.Path(words[1])
+    return (script.is_absolute() and script.name == "setup.py" and script.parent.name == "scripts"
+            and (script.parents[1] / "skills" / "setup-pc").is_dir())
 
 
 def main():

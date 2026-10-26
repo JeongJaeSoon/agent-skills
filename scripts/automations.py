@@ -25,6 +25,7 @@ import share_server as ss  # noqa: E402
 
 ORCA = os.environ.get("SKILLS_SETUP_ORCA", "orca")
 JANITOR_NAME = reap.JANITOR_NAME
+CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 
 
 def sh(cmd):
@@ -75,19 +76,35 @@ def janitor_drift(a, load=False):
     return {k: v for k, v in want.items() if have[k] != v}
 
 
-class Janitor:
-    name = "janitor"
-    job_name = JANITOR_NAME
-    load = False
+class OrcaJob:
+    """An Orca automation found by its name; disabling keeps it registered so `apply` leaves it off."""
     default = True
-    what = ("3시간마다 정리 라운드(Orca automation, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
-            "compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다")
+    job_name = ""
 
     def find(self):
         autos, err = orca_automations()
         if autos is None:
             return None, err
         return next((a for a in autos if a.get("name") == self.job_name), {}), None
+
+    def disable(self):
+        a, err = self.find()
+        if a is None:
+            return 1, err
+        if not a or not a.get("enabled"):
+            return 0, "이미 꺼져 있음"
+        p = sh([ORCA, "automations", "edit", "--id", a["id"], "--disabled", "--json"])
+        if p.returncode:
+            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
+        return 0, "끔 (등록은 남겨 두어 apply 가 다시 켜지 않는다)"
+
+
+class Janitor(OrcaJob):
+    name = "janitor"
+    job_name = JANITOR_NAME
+    load = False
+    what = ("3시간마다 정리 라운드(Orca automation, reap-resources). 에이전트가 만든 끝난 리소스만 닫거나 휴지통으로 옮긴다. "
+            "compose 는 down 까지이고 -v·prune·볼륨/이미지 삭제는 하지 않는다")
 
     def status(self):
         a, err = self.find()
@@ -127,17 +144,6 @@ class Janitor:
         if p.returncode:
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
         return 0, "켬" + (f" (reap schedule 에 맞춘 필드: {', '.join(drift)})" if drift else "")
-
-    def disable(self):
-        a, err = self.find()
-        if a is None:
-            return 1, err
-        if not a or not a.get("enabled"):
-            return 0, "이미 꺼져 있음"
-        p = sh([ORCA, "automations", "edit", "--id", a["id"], "--disabled", "--json"])
-        if p.returncode:
-            return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"
-        return 0, "끔 (등록은 남겨 두어 apply 가 다시 켜지 않는다)"
 
 
 class JanitorLoad(Janitor):
@@ -303,8 +309,56 @@ class ShareServer:
         return ss.cmd_uninstall(), "끔"
 
 
-AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer())
-LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원"}
+# ---------------------------------------------------------------- watch-prs, watch-mentions (Orca automation)
+
+class Watch(OrcaJob):
+    """A watch skill's Orca automation (`<skill>/scripts/<key>.py schedule --write`). It needs the skill's key in
+    agent-skills.json, so a PC without the personal config reports `unconfigured` and `apply` passes it by."""
+
+    def __init__(self, name, what):
+        self.name, self.job_name, self.key = name, f"agent-skills {name}", name.removeprefix("watch-")
+        self.script = REPO / "skills" / name / "scripts" / f"{self.key}.py"
+        self.what = f"{what}. agent-skills.json 의 \"{self.key}\" 키가 있을 때만 켠다"
+
+    def configured(self):
+        try:
+            return bool(json.loads(CONFIG.read_text()).get(self.key))
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    def status(self):
+        a, err = self.find()
+        if a is None:
+            return "unknown", err
+        if a:
+            return ("on" if a.get("enabled") else "off"), f"{a.get('rrule')}"
+        if not self.configured():
+            return "unconfigured", f"agent-skills.json 에 \"{self.key}\" 키가 없음"
+        return "absent", "등록 안 됨"
+
+    def enable(self, here):
+        a, err = self.find()
+        if a is None:
+            return 1, err
+        if a:
+            if a.get("enabled"):
+                return 0, "이미 켜져 있음"
+            p = sh([ORCA, "automations", "edit", "--id", a["id"], "--enabled", "--json"])
+            return (1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}") if p.returncode else (0, "켬")
+        if not self.configured():
+            return 1, f"agent-skills.json 에 \"{self.key}\" 키가 없어 켜지 않는다({self.name} 스킬의 설정 절)"
+        refusal = worktree_refusal()
+        if refusal:
+            return 1, refusal
+        p = sh([sys.executable, str(self.script), "schedule", "--write"])
+        return p.returncode, (p.stdout + p.stderr).strip()[-300:]
+
+
+AUTOMATIONS = (Janitor(), JanitorLoad(), PreviewWatch(), PressureWatch(), ShareServer(),
+               Watch("watch-prs", "나를 지명한 리뷰 요청과 내 PR 의 리뷰 대기를 코디네이터에게 모아 보내는 Orca automation"),
+               Watch("watch-mentions", "공개 채널의 멘션·참여 스레드 답글을 코디네이터에게 모아 보내는 Orca automation"))
+LABEL = {"on": "켜짐", "off": "꺼짐", "absent": "꺼짐(미설정)", "unknown": "확인 불가", "unsupported": "미지원",
+         "unconfigured": "꺼짐(설정 키 없음)"}
 
 
 def rows():

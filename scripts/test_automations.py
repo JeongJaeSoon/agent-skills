@@ -44,10 +44,11 @@ class FakeOrca:
 
 
 class Base(unittest.TestCase):
-    def orca(self, autos, main=True):
+    def orca(self, autos, main=True, configured=False):
         fake = FakeOrca(autos)
         for p in (mock.patch.object(au, "sh", fake), mock.patch.object(au.shutil, "which", return_value="/x/orca"),
-                  mock.patch.object(au, "main_checkout", return_value=main)):
+                  mock.patch.object(au, "main_checkout", return_value=main),
+                  mock.patch.object(au.Watch, "configured", return_value=configured)):
             p.start()
             self.addCleanup(p.stop)
         return fake
@@ -376,6 +377,53 @@ class Apply(Base):
         self.orca(None)
         with mock.patch.object(au.PreviewWatch, "status", return_value=("absent", "")):
             self.assertEqual(au.cmd_apply(False), 1)
+
+
+class Watch(Base):
+    w = next(a for a in au.AUTOMATIONS if a.name == "watch-prs")
+
+    def watch(self, enabled=True):
+        return {"id": "W1", "name": "agent-skills watch-prs", "enabled": enabled, "rrule": "*/30 * * * *"}
+
+    def test_status(self):
+        self.orca([])
+        self.assertEqual(self.w.status()[0], "unconfigured")
+        self.orca([], configured=True)
+        self.assertEqual(self.w.status()[0], "absent")
+        self.orca([self.watch()])
+        self.assertEqual(self.w.status()[0], "on")
+        self.orca([self.watch(enabled=False)])
+        self.assertEqual(self.w.status()[0], "off")
+
+    def test_enable_needs_the_config_key(self):
+        fake = self.orca([])
+        code, msg = self.w.enable(False)
+        self.assertEqual(code, 1)
+        self.assertIn('"prs"', msg)
+        self.assertEqual([c for c in fake.calls if "schedule" in c], [])
+
+    def test_enable_creates_through_the_skill_schedule(self):
+        fake = self.orca([], configured=True)
+        self.assertEqual(self.w.enable(False)[0], 0)
+        (call,) = [c for c in fake.calls if "schedule" in c]
+        self.assertEqual(pathlib.Path(call[1]).name, "prs.py")
+        self.assertEqual(call[-2:], ["schedule", "--write"])
+        fake = self.orca([], main=False, configured=True)
+        self.assertIn("worktree", self.w.enable(False)[1])
+
+    def test_enable_turns_a_disabled_one_on_and_disable_keeps_it(self):
+        fake = self.orca([self.watch(enabled=False)])
+        self.assertEqual(self.w.enable(False), (0, "켬"))
+        self.assertIn("--enabled", fake.edits()[0])
+        fake = self.orca([self.watch()])
+        self.assertEqual(self.w.disable()[0], 0)
+        self.assertIn("--disabled", fake.edits()[0])
+
+    def test_apply_passes_an_unconfigured_one_by(self):
+        fake = self.orca([janitor(), load_job()])
+        with mock.patch.object(au.PressureWatch, "status", return_value=("on", "")):
+            self.assertEqual(au.cmd_apply(False), 0)
+        self.assertEqual([c for c in fake.calls if "schedule" in c], [])
 
 
 class Cli(Base):

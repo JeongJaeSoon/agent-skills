@@ -19,6 +19,7 @@ Machine     reap-resources (clears processes, Docker leftovers and branches that
               left; the resource steward runs it on a schedule)
             secure-fill (a secret into a browser auth field without the agent seeing the value)
             tune-automode (a classifier denial into the smallest autoMode rule; the user applies it)
+            setup-pc (set up or update a PC: dry-run diff → the human's --apply line)
 Anywhere    use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
 ```
@@ -190,6 +191,13 @@ Records verified milestones in the configured tracker or notes store within the 
 - **What it does:** From the denial category and the denied action, it drafts the smallest allow, soft_deny or environment rule that covers that action class. A rule carries the action class, the conditions that make it safe, and `Not covered:`. After a review checklist (no blanket allows, no production-destructive verbs the user did not name, only the user's own chat counts as authorization), `scripts/automode_rule.py emit` shows the diff and writes a standalone script with the spec embedded under the home directory. The user applies it with `! python3 <path> --apply <spec hash>`; the hash must match the spec whose diff the user saw. The script takes a timestamped backup, merges idempotently, validates the JSON and prints the rollback command. The agent never edits settings.json, never runs that script, and never works around the denial while waiting.
 - **Ships with:** `scripts/automode_rule.py`, its tests, `references/example-settings.json`.
 - **Related:** Tool-pattern permissions (`permissions.allow`, hooks) belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`. `orchestrate`'s Frame and Refused acts use this skill for a repo's standing merge and deploy rules ("프로젝트 지속 승인").
+
+### setup-pc
+- **When:** agent-skills goes onto another PC, or an installed PC needs bringing up to date. "새 PC 세팅해줘" (set up a new PC), "다른 PC 에서도 똑같이 쓰게 해줘" (make another PC work the same way), "agent-skills 업데이트해줘" (update agent-skills), "플러그인 최신화" (bring the plugin up to date), "set up agent-skills on a new PC", "update agent-skills".
+- **New PC:** The human only runs `/plugin install` inside a session (its install dialog asks for the answer language, the checkout path and a personal config repo) and opens a new session. The plugin's SessionStart hook (`hooks/onboard.py`) notices a PC that was never set up and offers this skill; the skill clones the checkout and the personal repo, then goes on to the dry run and the one line below. The steps that write no settings file (the sync job, the janitor, pressure-watch, watch-prs and watch-mentions automations, the check table) the skill runs as `setup.py --actions-only`, and the guard hook shows a permission dialog for it. Design: [zero-command-setup.md](zero-command-setup.md).
+- **What it does:** The entry point is the checkout's `scripts/setup.py`. A dry run shows a diff per settings file, and the skill hands the human one `! python3 … --apply <hash>` line. That line takes a backup, merges idempotently (adds only what is missing, never overwrites a value, except that it turns off an enabled marketplace copy), replaces atomically, reads back and prints a rollback line per file. The values come from the repo's recommended defaults (`scripts/recommended-settings.json`) and the personal repo's `agent-skills.json` and tracker site rules; internal name lists, personal instructions, agents and autoMode rules are never carried. An item offered once is recorded, so a rule the human removed is not offered again. `--update` plans only new recommendations and fast-forwards the checkout when applied. `check --baseline` against a file exported on the old PC is optional. The skill never writes a settings file and never runs `--apply`.
+- **Ships with:** `scripts/setup_check.py`, its tests. In the repo: `scripts/setup.py`, `scripts/recommended-settings.json`, `scripts/test_setup.py`, `hooks/onboard.py`.
+- **Related:** A single action blocked after setup goes to `tune-automode`; `permissions` and hooks outside the bundle to `update-config`; what the automations do to `reap-resources`; reloading running sessions to `skills-sync broadcast`.
 
 ## Chat and reviews
 
@@ -541,7 +549,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
-- **Machine upkeep:** `reap-resources`, `tune-automode`.
+- **Machine upkeep:** `reap-resources`, `tune-automode`, `setup-pc`.
 - **Hooks:** permission decisions (`guard.py`), re-orienting after compaction (`reorient.py`), and recording permission prompts for the dashboard to answer (`permission.py`), and closing decisions answered in the terminal (`decision.py`).
 
 ### Upstream sync status
