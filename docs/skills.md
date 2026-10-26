@@ -210,7 +210,8 @@
 
 ### setup-pc
 - **언제:** agent-skills를 다른 PC에 들일 때, 설치된 PC를 최신으로 맞출 때. "새 PC 세팅해줘", "다른 PC 에서도 똑같이 쓰게 해줘", "agent-skills 업데이트해줘", "플러그인 최신화", "set up agent-skills on a new PC", "update agent-skills".
-- **내용:** 입구는 체크아웃의 `scripts/setup.py`다. 스킬이 언어와 Orca Run 바인딩 여부를 묻고 dry run을 돌려 설정 파일별 diff를 보인 뒤, 사람이 칠 `! python3 … --apply <해시>` 한 줄을 건넨다. 그 한 줄이 백업, 없는 값만 더하는 멱등 병합(이미 있는 값은 덮지 않음, 켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 원자적 교체, 다시 읽어 확인, 파일별 되돌리는 줄 출력을 하고, 이어서 launchd 동기화 작업·동기화·기본 on 정기 자동화를 켜고 `scripts/setup_check.py check` 표를 낸다. 넣는 값은 저장소의 권장 기본값(`scripts/recommended-settings.json`)뿐이다: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, 일반화한 autoMode 묶음, 조회·대시보드 서버만 담은 `permissions.allow` 묶음, `agent-skills.json` 최소 키. 사내 이름 목록·채널·트래커·노트 경로·개인 지침은 옮기지 않는다. 한 번 제안한 항목은 기록해 두어, 사람이 지운 규칙은 다시 제안하지 않는다. update 모드는 `--update`(dry run은 fetch도 하지 않고 새로 생긴 권장값만 보이고, `--apply` 줄이 fast-forward한 뒤 계획을 다시 맞춰 본다). 원래 PC에서 `export`로 뽑은 기준 파일과 비교하는 `check --baseline`은 선택이다. 설정 파일은 어떤 도구로도 쓰지 않고 `--apply`도 실행하지 않는다.
+- **새 PC:** 사람은 세션 안에서 `/plugin install`(설치 창이 언어·체크아웃 경로·개인 설정 저장소를 묻는다)과 새 세션만 한다. 플러그인의 SessionStart hook(`hooks/onboard.py`)이 설정되지 않은 PC임을 알아채고 이 스킬을 제안하고, 스킬이 체크아웃과 개인 설정 저장소를 clone한 뒤 아래 dry run과 한 줄로 간다. 설정 파일을 쓰지 않는 단계(동기화 작업, janitor·pressure-watch·watch-prs·watch-mentions 자동화, 점검 표)는 스킬이 `setup.py --actions-only`로 돌리고 guard hook이 권한 창을 띄운다. 설계는 [zero-command-setup.md](zero-command-setup.md).
+- **내용:** 입구는 체크아웃의 `scripts/setup.py`다. 스킬이 언어와 Orca Run 바인딩 여부를 묻고 dry run을 돌려 설정 파일별 diff를 보인 뒤, 사람이 칠 `! python3 … --apply <해시>` 한 줄을 건넨다. 그 한 줄이 백업, 없는 값만 더하는 멱등 병합(이미 있는 값은 덮지 않음, 켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 원자적 교체, 다시 읽어 확인, 파일별 되돌리는 줄 출력을 하고, 이어서 launchd 동기화 작업·동기화·기본 on 정기 자동화를 켜고 `scripts/setup_check.py check` 표를 낸다. 넣는 값은 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, 일반화한 autoMode 묶음, 조회·대시보드 서버만 담은 `permissions.allow` 묶음, `agent-skills.json` 최소 키)과 개인 설정 저장소의 `agent-skills.json`·트래커 사이트 규칙뿐이다. 사내 이름 목록·개인 지침·에이전트·autoMode 규칙은 옮기지 않는다. 한 번 제안한 항목은 기록해 두어, 사람이 지운 규칙은 다시 제안하지 않는다. update 모드는 `--update`(dry run은 fetch도 하지 않고 새로 생긴 권장값만 보이고, `--apply` 줄이 fast-forward한 뒤 계획을 다시 맞춰 본다). 원래 PC에서 `export`로 뽑은 기준 파일과 비교하는 `check --baseline`은 선택이다. 설정 파일은 어떤 도구로도 쓰지 않고 `--apply`도 실행하지 않는다.
 - **동봉:** `scripts/setup_check.py`, 테스트 파일. 저장소의 `scripts/setup.py`, `scripts/recommended-settings.json`, `scripts/test_setup.py`.
 - **관계:** 적용 뒤 막힌 행동 하나는 `tune-automode`, 묶음 밖의 `permissions`·hooks는 `update-config`, 정기 자동화가 하는 일은 `reap-resources`, 떠 있는 세션 reload는 `skills-sync broadcast`가 맡는다. 체크아웃 로드만 하는 `bootstrap.py`는 그대로 있고 `setup.py`가 그 launchd 작업을 다시 쓴다.
 
@@ -382,8 +383,8 @@
 
 ### principles
 - **언제:** 설계, 리팩터, 검증, 위임 판단에 이름 붙은 원칙이 필요할 때.
-- **내용:** 원칙 24개의 인덱스다(Core, Architecture, Verification, Delegation, Meta). Delegation에는 이 저장소가 더한 한 줄 Stay Answerable(`orchestrate`의 즉답 원칙)이 있다. 적용할 원칙은 leaf 파일을 끝까지 읽는다. 예: 근본 원인 수정, 동작을 테스트, 빼고 나서 더하기, 사람을 기다리지 않기. 이 저장소가 더한 Work to an Exit Condition은 에픽·프로그램을 시작하거나 키우기 전에 완료 조건을 쓰고, 후속 발견을 NOW·LATER·DROP으로 나눠 NOW만 티켓으로 만들고, 진행을 "N/M 완료 조건 충족"으로 보고한다.
-- **동봉:** `references/principle-*.md` 24개.
+- **내용:** 원칙 25개의 인덱스다(Core, Architecture, Verification, Delegation, Meta). Delegation에는 이 저장소가 더한 한 줄 Stay Answerable(`orchestrate`의 즉답 원칙)이 있다. 적용할 원칙은 leaf 파일을 끝까지 읽는다. 예: 근본 원인 수정, 동작을 테스트, 빼고 나서 더하기, 사람을 기다리지 않기. 이 저장소가 더한 Work to an Exit Condition은 에픽·프로그램을 시작하거나 키우기 전에 완료 조건을 쓰고, 후속 발견을 NOW·LATER·DROP으로 나눠 NOW만 티켓으로 만들고, 진행을 "N/M 완료 조건 충족"으로 보고한다.
+- **동봉:** `references/principle-*.md` 25개와 측정 점검표 `references/benchmark-checklist.md`.
 
 ### recall
 - **언제:** "어디까지 했지", "X 작업 어디까지 했더라", "최근 작업 정리해줘", "이번 주에 뭐 했지", 'catch me up'. 앞선 세션이 건드린 일을 시작하거나 이어 가기 전.
@@ -523,6 +524,7 @@
 | 허용 | `orch <명령>`. 임의 명령을 실행하는 `heavy`, 머지 정책을 바꿀 수 있는 `set`·`init`, 원장을 다시 쓰는 `backfill`은 제외 |
 | 거부 | 다른 터미널의 Orca 메일함을 읽는 `check`/`inbox --terminal <남의 handle>`. 같은 명령 안에서 `$ORCA_TERMINAL_HANDLE`을 다시 바인딩하는 경우도 포함 |
 | 거부 | `run_in_background` 없이 5초 이상 sleep으로 폴링하는 루프(`until`/`while`/`for … do … sleep N`). 배경 호출은 끝나면 알림으로 세션을 깨우므로 그 출력 파일을 폴링하지 않는다. 조건을 지켜봐야 하면 `Monitor` |
+| 묻기 | `python3 <체크아웃 절대 경로>/scripts/setup.py --actions-only [--orca-run]`. Claude 설정은 쓰지 않고 동기화 작업·정기 자동화를 켜는 단계라, auto mode에서도 사람에게 권한 창을 띄운다 |
 
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
@@ -539,6 +541,8 @@
 Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도구는 세지도 막지도 않는다. 거부 사유는 위임 경로(Agent, `orca worktree create`, 리드에게 `orca orchestration send`, `orch …`)를 알려 준다. `ROLE: none`이면 그 세션에서, `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`이면 모든 세션에서 꺼진다. 설정은 `~/.claude/agent-skills.json`의 `orchestrator_guard`(`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
 
 ### 코디네이터 재정렬
+`hooks/onboard.py`(SessionStart `startup|clear`). 이 프로필의 사용자 설정이 체크아웃을 로드하지 않을 때만(`env.CLAUDE_CODE_PLUGIN_DIRS`, Orca 프로필마다 따로 본다), 설치 창의 값과 함께 `setup-pc`를 제안하라는 문단을 넣는다. URL의 인증 정보는 지우고 넣는다. 사람이 거절하면 에이전트가 `onboard.py --decline`을 돌려 그 프로필에서는 다시 묻지 않는다. `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다.
+
 `hooks/reorient.py`(SessionStart `startup|resume|compact|fork`, UserPromptSubmit). 역할을 선언한 세션에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않고, 외부 명령도 부르지 않는다. 오케스트레이터의 세션 이름(`session_title`)이 `orchestrator`가 아니면 SessionStart 안내 끝에 사람에게 `/rename orchestrator`를 청하고 자기 Orca 탭 이름을 바꾸라(`orca terminal rename`)는 줄을 붙인다.
 
 역할은 터미널로 추측하지 않고 선언으로 정한다. 판정 순서는 다음과 같다.
@@ -598,10 +602,10 @@ Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. �
 | 언어 | 영어, unslop 문체 규칙 | 스킬 본문은 영어, 문서·티켓·PR은 한국어. 문체는 `write-plainly`(한국어·영어) |
 
 ### 가져온 것
-pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전부와 나머지 중 15개를 가져왔다. 고정 커밋은 `b42effe`(0.15.3)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
+pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전부와 나머지 중 16개를 가져왔다. 16개 가운데 benchmark-checklist는 스킬이 아니라 `principles`의 참조 파일로 넣었다. 고정 커밋은 `99b609a`(0.15.32)이고 파일 목록은 `vendor/pstack/manifest.json`에 있다.
 
-- **거의 그대로 가져온 것:** 원칙 23개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
-  - 원칙은 pstack에서 스킬 23개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
+- **거의 그대로 가져온 것:** 원칙 24개, 리뷰·탐색 프롬프트, 설계 red flag, 기능 지도 예시.
+  - 원칙은 pstack에서 스킬 24개로 나뉘어 있던 것을 `principles` 스킬 하나의 참조 파일로 묶었다. 인덱스(`principles/SKILL.md`)는 여기서 새로 썼다.
 - **고쳐서 가져온 것:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill. 공통으로 한 일은 네 가지다.
   - 모델이 스스로 부를 수 있게 했다.
   - Cursor 전용 요소를 Claude Code 대응물로 바꿨다. 경로는 `.cursor/` → `.claude/`, 워커는 `generalPurpose`/클라우드 → `Agent`/Orca 워커, transcript는 `agent-transcripts` → `~/.claude/projects`.
@@ -622,17 +626,21 @@ pstack 스킬 47개(원칙 23개와 나머지 24개) 가운데 원칙 23개 전�
 | no-comments | 주석 제거 | Cursor 전용 Comment Sicko 에이전트에 기댄다. 규칙은 `prune-comments`로 옮겼다. unslop과 technical-writing은 `write-plainly`로 합쳤다 |
 | typescript-best-practices | TS 규칙 | 범용 스킬이 아니다 |
 | setup-pstack, make-bot-ui, bro, automate-me, benny 자동화 | Cursor 모델 설정, Grok Bot 등 | Cursor나 Grok에 묶여 있다 |
+| correct | 같은 실수를 구조로 막는 절차 | `reflect`와 Encode Lessons in Structure 원칙이 같은 일을 한다. 막는 수단의 순서(구조, 타입, lint, 테스트, 문서)는 그 원칙에 접을지 다음 동기화 때 본다 |
+| in-your-own-words, sharpen, poteto-help | 사용자가 직접 치는 짧은 프롬프트, pstack 사용 안내 | 모델이 부르는 스킬로 만들 근거가 없다. poteto-help는 pstack 설치 안내다 |
+| ketchup, ketchup-video | 대화를 따라잡게 하는 보고 | `brief`가 결정 항목 규칙을 이미 옮겼다(upstream `978ca6e`). 그 뒤에 생긴 "대기 항목을 줄이지 않는다"와 그림 규칙은 `brief`를 고치는 다른 작업과 겹쳐 다음에 본다 |
+| statechart, create-formal-verification-skill, maintain-formal-verification-skill | TLA+ 모델과 상태 차트, 형식 검증 스킬 생성과 유지 | 파일이 많고 TLA+ 도구가 필요하다. 쓸 프로젝트가 생기면 다시 본다 |
 
 ### pstack에 없는 것
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 코디네이터 재정렬(`reorient.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
+- **hook:** 권한 결정(`guard.py`), 코디네이터 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
 
 ### upstream 동기화 상태
-- **pin 이후 커밋:** upstream `main`(0.15.5)은 pin 뒤로 두 커밋이 더 있다.
-  - #419: Opus 5.5에 필요 없는 지시 19개를 걷어냈다. 우리 `6eec9fa`와 방향이 같고, tdd와 reflect 리뷰어는 같은 곳을 고쳤다.
-  - #422: 모델 규칙을 읽는 방식을 통일했고, show-me-your-work에 run마다 `start` 행을 두게 했다.
-- **dry-run 결과:** `python3 scripts/pstack-sync.py --to origin/main`을 돌리면 원칙 4개와 interrogate 참조 3개는 깨끗하게 들어온다. tdd와 tooling-reviewer는 자동 병합된다. 고쳐서 가져온 9개 파일(interrogate, architect, swarm, reflect, how, why, show-me-your-work, 리뷰어 2개)은 충돌한다.
-- **충돌 성격:** 대부분 Cursor 모델 규칙 줄이라 우리 쪽을 유지하면 된다. `--write`는 충돌이 0일 때만 쓰므로 손으로 병합해야 한다.
+- **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.
+- **받은 것:** 대부분 지시를 줄인 커밋(#538, #571, #634)이다. 원문 그대로 가져온 파일은 upstream과 같게 맞췄다. 고쳐서 가져온 파일은 3-way 병합으로 문장 압축과 새 규칙을 받았다. 새 규칙은 show-me-your-work의 run별 `start` 행, create-verification-skill의 "준비됨은 쓸 수 있는 상태"와 대역 환경 검증의 한계, architect의 "다음 기여자는 에이전트" 기준, arena 후보가 기각한 안을 적는 규칙 들이다. 새 원칙 Explain the Number와 그 측정 점검표를 `principles`에 더했다.
+- **크게 줄어든 원칙 다섯 개:** encode-lessons-in-structure, laziness-protocol, guard-the-context-window, exhaust-the-design-space, migrate-callers-then-delete-legacy-apis는 upstream이 글이 없어도 에이전트가 따르는 절을 지워(#571, #634) 몇 줄만 남았다. 원문 그대로(verbatim) 가져오는 파일은 upstream을 바이트 단위로 따르는 것이 동기화 정책이라 그대로 받았다. 언제 적용하는지는 같은 파일의 frontmatter description이 여전히 말하고, 파일과 함께 읽힌다. reflect의 압축을 받지 않은 것은 고쳐서 가져온(adapted) 파일이고 병합 결과가 이 저장소의 절 구조를 덮었기 때문이다.
+- **받지 않은 것:** Cursor 모델 규칙 줄(`pstack-models.mdc`, 모델 slug, `generalPurpose`, `readonly`), 서브에이전트 effort를 poteto-mode에 맞추라는 줄(#613), reflect 본문 재구성. reflect는 이 저장소의 모드 구조를 그대로 둔다. 옮겨 쓴(derived) 파일의 upstream 변경(opening-a-pr의 PR 본문 절 구성, shipping의 착지 순서)은 반영하지 않았다.
+- **다음 동기화:** `python3 scripts/pstack-sync.py`(dry-run)로 시작한다. 고쳐서 가져온 파일은 대부분 충돌하니 손으로 병합한다. 충돌 없이 합쳐진 구간에도 Cursor 줄이 섞여 들어오므로 denylist 결과와 diff 전체를 읽는다.

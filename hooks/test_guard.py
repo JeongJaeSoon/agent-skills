@@ -155,6 +155,23 @@ for cmd in (f"until grep -q '^exit=' {O}; do sleep 10; done; tail -3 {O}",
 for cmd in ("sleep 5; cat /tmp/x", "for i in 1 2 3; do curl -fs x && break; sleep 2; done", "for f in *.py; do python3 $f; done", "grep -rn 'sleep 5' skills",
             "echo 'until x; do sleep 1; done'", "git log --format=%s | grep -c 'do not sleep'"):
     assert bash(cmd) != "deny", cmd
+
+# setup.py's steps that write no settings go to a permission dialog; anything else about setup.py gets no decision.
+SETUP = HERE.parent / "scripts" / "setup.py"
+assert bash(f"python3 {SETUP} --actions-only") == "ask"
+assert bash(f"python3 {SETUP} --actions-only --orca-run") == "ask"
+said = json.loads(subprocess.run(
+    [sys.executable, HERE / "guard.py"], capture_output=True, text=True, env={**os.environ, "HOME": HOME},
+    input=json.dumps({"tool_name": "Bash", "tool_input": {"command": f"python3 {SETUP} --actions-only"}, "cwd": HOME})).stdout)
+assert said == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                                       "permissionDecisionReason": said["hookSpecificOutput"]["permissionDecisionReason"]}}, said
+assert "writes no Claude settings" in said["hookSpecificOutput"]["permissionDecisionReason"], said
+for cmd in (f"python3 {SETUP} --settings-only --apply 0123456789ab", f"python3 {SETUP} --actions-only --apply x",
+            f"python3 {SETUP} --actions-only; rm -rf /tmp/x", f"python3 {HOME}/scripts/setup.py --actions-only",
+            "python3 scripts/setup.py --actions-only", f"bash -c 'python3 {SETUP} --actions-only'"):
+    assert bash(cmd) == "none", cmd
+
+
 # Only the sleep-loop deny carries the gate marker the refused-act rule keys on.
 def reason(cmd):
     env = {**os.environ, "HOME": HOME, "AGENT_SKILLS_STATE": f"{HOME}/state", "ORCA_TERMINAL_HANDLE": "term_me"}

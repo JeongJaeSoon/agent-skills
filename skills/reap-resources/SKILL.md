@@ -139,7 +139,7 @@ Run `schedule` from the checkout that loads the skills, never a card's worktree:
 that path. The run's model is whatever Claude Code settings its `--workspace` checkout has; without
 `--workspace`, `schedule` also prints how to make a dedicated runner worktree for that
 ([docs/automation.md](../../docs/automation.md)). The janitor never lists the worktree an Orca
-automation runs in (`orca automations list`); when that list is unreadable, scan says so in a note.
+automation runs in (`orca automations list`); when that list is unreadable, scan says so in a note and keeps every Orca worktree that round.
 `orca automations run` skips the precheck, so test it by running it directly, with
 `--state` pointing at a scratch folder: a `reap` records what it failed on, and the next
 scheduled precheck would skip that set for a day. A run marked completed is not a cleanup: judge it

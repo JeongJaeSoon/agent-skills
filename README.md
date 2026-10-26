@@ -12,7 +12,9 @@ Claude Code 개인 스킬 저장소. 티켓 하나를 끝까지 끌고 가는 �
 
 ## 설치
 
-이 저장소를 고쳐 가며 쓰는 PC는 체크아웃을 Claude Code가 직접 읽게 한다. 스킬을 고치면 떠 있는 세션에도 reload 한 번으로 반영되고, 원격 변경은 15분마다 자동으로 받는다. 설계와 실측 근거는 [docs/platform.md](docs/platform.md).
+새 PC는 Claude Code 세션 안에서 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon`을 하고 새 세션을 열면 된다. 플러그인이 설정되지 않은 PC임을 알아채고 `setup-pc`를 제안하고, 받아들이면 체크아웃·개인 설정 저장소 clone, diff, 동기화·자동화(권한 창)까지 에이전트가 한다. 사람이 치는 셸 명령은 Claude 설정을 쓰는 `!` 한 줄뿐이다. 순서는 [docs/new-pc.md](docs/new-pc.md), 그 한 줄이 남는 이유는 [docs/zero-command-setup.md](docs/zero-command-setup.md).
+
+셸에서 직접 할 때. 이 저장소를 고쳐 가며 쓰는 PC는 체크아웃을 Claude Code가 직접 읽게 한다. 스킬을 고치면 떠 있는 세션에도 reload 한 번으로 반영되고, 원격 변경은 15분마다 자동으로 받는다. 설계와 실측 근거는 [docs/platform.md](docs/platform.md).
 
 체크아웃은 어느 경로에 두어도 된다. 스크립트는 자기 파일 위치로 체크아웃 경로를 정한다. 아래 `<체크아웃>`은 clone한 경로로 바꾼다(예시: `~/src/agent-skills`).
 
@@ -42,6 +44,8 @@ skills-sync setup disable janitor        # 하나 끄기. apply 를 다시 돌�
 | `janitor` | on | Orca automation(Orca 필요) | 에이전트가 만든 끝난 리소스를 정기적으로 정리한다. compose는 down까지만, `-v`·prune·볼륨/이미지 삭제는 하지 않는다 |
 | `preview-watch` | off | macOS LaunchAgent | loopback 웹페이지를 tailnet HTTPS로 자동 공개한다. tailscale CLI가 없으면 켜지 않는다 |
 | `pressure-watch` | on | macOS LaunchAgent | 3분마다 PC 사용량을 재고, 높으면 reap이 올린 안전한 대상만 정리해 알린다. 아무것도 종료하지 않는다([docs/pressure.md](docs/pressure.md)) |
+| `watch-prs` | on(`prs` 키가 있을 때) | Orca automation | `watch-prs` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
+| `watch-mentions` | on(`mentions` 키가 있을 때) | Orca automation | `watch-mentions` 스킬의 회차. 설정 키가 없으면 켜지 않는다 |
 
 자세한 동작과 다른 OS의 대안은 [docs/automation.md](docs/automation.md#처음-설치할-때).
 
@@ -59,7 +63,7 @@ claude plugin install agent-skills@jeongjaesoon
 
 ### 다른 PC에서 같은 방식으로 쓰려면
 
-일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 사용자 설정과 자동화는 위의 `setup.py` 한 줄이 넣는다. 원래 PC에서 옮기는 것을 전제로 하지 않고, PC·회사에 매인 값(사내 이름 목록, 채널, 트래커, 개인 지침)은 옮기지 않는다. 자세한 내용은 [docs/new-pc.md](docs/new-pc.md). Claude Code 안에서는 `setup-pc` 스킬("새 PC 세팅해줘")이 dry run을 보이고 `!` 한 줄을 건넨다.
+일하는 방식(보고 모양, 위임, 결정, 리뷰 의뢰, 검증)은 스킬이 정하므로 설치만으로 따라온다. 스킬이 실을 수 없는 사용자 설정과 자동화는 위의 `setup.py`가 넣는다. 원래 PC에서 옮기는 것을 전제로 하지 않는다. 채널·트래커 같은 개인 설정(`agent-skills.json`과 트래커 사이트 규칙)은 설치 창에 적은 개인 private 저장소에서만 가져오고, 사내 이름 목록, 개인 지침, 개인 autoMode 규칙은 옮기지 않는다. 자세한 내용은 [docs/new-pc.md](docs/new-pc.md). Claude Code 안에서는 `setup-pc` 스킬("새 PC 세팅해줘")이 dry run을 보이고 `!` 한 줄을 건넨다.
 
 ## 스킬 고치기
 
@@ -109,7 +113,7 @@ claude plugin eval <체크아웃> --case recall --runs 1 --ablation none --no-pu
 | `reap-resources` | 죽은 세션이 남긴 고아 테스트 프로세스, Docker 잔여물, 머지된 브랜치를 점검하고 목록에 올린 것만 정리할 때. 에이전트가 만든 끝난 리소스와 명시적으로 설정한 개인 폴더의 기준 기간이 지난 항목은 3시간 주기 automation이 휴지통으로 정리한다. 닫힌 지 7일 지난 프로그램 상태는 `_archive/`로 보관하고(재개 노트가 있으면 남김), hook 세션 파일과 `sync.log`도 정리한다. `pressure.py`는 모델 없이 3분마다 load·메모리 압박·swap·디스크·컨테이너 수를 재고, 높으면 안전한 대상부터 정리해 오케스트레이터에 한 줄 알린다([docs/pressure.md](docs/pressure.md)) |
 | `secure-fill` | 브라우저 인증 화면에 개발용 토큰 같은 비밀값을 넣을 때. 소유자가 매번 Touch ID로 승인하고(항목별로 승인 없이 채우게 둘 수 있다), 값은 에이전트를 거치지 않고 Keychain에서 페이지로 간다 |
 | `tune-automode` | auto mode 분류기 거부 하나를 그 행동 부류만 덮는 가장 작은 autoMode 규칙으로 바꿀 때. diff와 적용 스크립트를 만들고, 적용은 사용자가 `! python3 <경로> --apply <spec 해시>`로 한다 |
-| `setup-pc` | 다른 PC에 들이거나 설치된 PC를 최신으로 맞출 때. `scripts/setup.py`의 dry run으로 설정 파일별 diff를 보이고, 사람이 칠 `--apply <해시>` 한 줄을 건넨다. 그 한 줄이 권장 설정·최소 설정 키·동기화·정기 자동화를 넣고 점검 표를 낸다. 갱신은 `--update`. 원래 PC의 기준 파일과 비교하는 점검은 선택 |
+| `setup-pc` | 다른 PC에 들이거나 설치된 PC를 최신으로 맞출 때. 설치 뒤 첫 세션에 플러그인 hook이 제안한다. 체크아웃·개인 설정 저장소를 clone하고, `scripts/setup.py`의 dry run으로 설정 파일별 diff를 보여 사람이 칠 `--apply <해시>` 한 줄을 건넨다. 동기화·정기 자동화와 점검 표는 `--actions-only`로 권한 창 뒤에서 직접 돌린다. 갱신은 `--update`. 원래 PC의 기준 파일과 비교하는 점검은 선택 |
 
 **도구**: `preview-watch`(loopback에서 뜬 웹페이지(`GET /`가 HTML 문서)를 tailnet HTTPS로 자동으로 열고 내려가면 자기가 연 항목만 닫는 LaunchAgent. API·DB는 열지 않는다. 모델 없이 15초마다 `lsof` 한 번, 판정은 포트·프로세스별로 캐시. 기본 off이고 `skills-sync setup enable preview-watch`로 켠다. `bin/preview-links`로 열린 링크를 본다. [docs/preview-watch.md](docs/preview-watch.md)). `share-server`(공유 폴더를 127.0.0.1에서 Caddy `file_server`로 읽기 전용 서빙한다. 최근 순 목록·Grid 썸네일, `.md` 렌더(`?raw`는 원문), 텍스트는 UTF-8. 숨김 경로는 404, 루트 밖 심볼릭 링크는 sandbox-exec로 막는다. 기본 off이고 `skills-sync setup enable share-server`로 켠다. [docs/share-server.md](docs/share-server.md)).
 
@@ -136,11 +140,12 @@ python3 scripts/pstack-sync.py --write    # 충돌이 없을 때만 반영하고
 
 | hook | 언제 | 하는 일 |
 |---|---|---|
-| `guard.py` | Bash·Skill 호출 전 | 이 플러그인 스킬과 `orch`·`orca orchestration` 명령 허용, 남의 메일함 읽기·sleep 폴링 거부 |
+| `guard.py` | Bash·Skill 호출 전 | 이 플러그인 스킬과 `orch`·`orca orchestration` 명령 허용, 남의 메일함 읽기·sleep 폴링 거부, `setup.py --actions-only`는 권한 창 |
 | `orchestrator_guard.py` | 모든 도구 호출 전 | 최상위 오케스트레이터 본인 스레드에서만 브라우저·채팅 전송·웹 도구, 상태 디렉터리 밖 편집, `tail`로 파이프한 배경 감시자, 턴당 네 번째 직접 작업 호출을 거부하고 위임 경로를 알린다. `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`으로 끈다 |
 | `pressure_gate.py` | Bash 호출 전 | `orch heavy`·`docker compose up`·`orca worktree create`를 PC 사용량이 위험이거나, 경고인데 최근 15분 안에 정리 회차가 없으면 거부하고 정리·대기 방법을 알린다. `AGENT_SKILLS_PRESSURE_GATE=0`으로 끈다 |
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |
+| `onboard.py` | 세션 시작 | 설정되지 않은 PC에서 `setup-pc`를 제안한다. 거절하면 그 프로필에서는 다시 묻지 않고(`onboard.py --decline`), `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다 |
 | `reorient.py` | 세션 시작, 프롬프트 | `--agent agent-skills:orchestrator`·`lead`나 `ROLE:` 줄로 선언한 세션에 다시 읽을 규칙과 매 프롬프트 한 줄을 넣는다 |
 | `decision.py` | 프롬프트 | 터미널에서 답한 대시보드 결정을 닫는다 |
 | `permission.py` | 권한 창 | 대시보드에서 답할 수 있게 권한 창을 기록한다 |

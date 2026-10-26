@@ -26,6 +26,10 @@ The mode is an instruction, not a tool restriction: the plugin's `notes-writer` 
 file tools a `markdown` store needs. A user who wants the harness to enforce `mcp` points
 `notes.delegate_agent` at their own agent whose `tools:` lists only the vault tools.
 
+With Obsidian Sync on, a path Sync already deleted is deleted again when re-created: use a new
+filename. The Obsidian CLI has no in-place edit, and a create that overwrites a large note can
+hang: patch with an edit tool rather than rewriting the note whole.
+
 ## Operations
 
 Read the vault's instructions before a write. Inspect the current note before editing,

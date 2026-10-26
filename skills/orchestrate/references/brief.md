@@ -204,7 +204,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own, and its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. A lead whose brief had no DELEGATE line investigated and implemented on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead, or sub-coordinator) gets this brief in this format, never one of your own; when to start one, and what the layer above does after, is `references/top-level.md` "Starting a lead". Its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. A lead whose brief had no DELEGATE line investigated and implemented on its own.
 
 ```
 <project>: lead
@@ -225,7 +225,9 @@ DELEGATE    You do not investigate, implement, verify or drive a browser yoursel
 PREDICATE   The countable done condition, and what is out of scope.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
-            route them down to your own workers, never to another session's.
+            route them down to your own workers, never to another session's. Units the
+            layer above started before you (listed in CONTEXT) stay in its Run: send what
+            you want from one of them to PARENT, which passes it on verbatim.
 PARENT      The Run of the session writing this brief, as `orca orchestration send --to
             run:<its run id>`. Reports and the HUMAN ONLY batch go there. A send to it
             that fails is the routing gap HUMAN ONLY names; never guess another address.
@@ -249,6 +251,7 @@ HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document subm
             unavailable, report that routing gap in the current task.
 MODEL CALLS As in "Single worker"; no model is named here.
 REPORT      Digest lines appended to this brief's note at each milestone and when the predicate holds.
+            Your first report to PARENT names your Run id, once your terminal is bound to it.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §8.
 ```
 

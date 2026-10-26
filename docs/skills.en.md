@@ -19,6 +19,7 @@ Machine     reap-resources (clears processes, Docker leftovers and branches that
               left; the resource steward runs it on a schedule)
             secure-fill (a secret into a browser auth field without the agent seeing the value)
             tune-automode (a classifier denial into the smallest autoMode rule; the user applies it)
+            setup-pc (set up or update a PC: dry-run diff → the human's --apply line)
 Anywhere    use-tracker (tickets) · use-notes (notes)
               · pstack skills (design · review · verification · retrospective)
 ```
@@ -191,6 +192,13 @@ Records verified milestones in the configured tracker or notes store within the 
 - **Ships with:** `scripts/automode_rule.py`, its tests, `references/example-settings.json`.
 - **Related:** Tool-pattern permissions (`permissions.allow`, hooks) belong to the built-in `update-config`; a first draft for a whole project belongs to the built-in `/auto-mode-setup`. `orchestrate`'s Frame and Refused acts use this skill for a repo's standing merge and deploy rules ("프로젝트 지속 승인").
 
+### setup-pc
+- **When:** agent-skills goes onto another PC, or an installed PC needs bringing up to date. "새 PC 세팅해줘" (set up a new PC), "다른 PC 에서도 똑같이 쓰게 해줘" (make another PC work the same way), "agent-skills 업데이트해줘" (update agent-skills), "플러그인 최신화" (bring the plugin up to date), "set up agent-skills on a new PC", "update agent-skills".
+- **New PC:** The human only runs `/plugin install` inside a session (its install dialog asks for the answer language, the checkout path and a personal config repo) and opens a new session. The plugin's SessionStart hook (`hooks/onboard.py`) notices a PC that was never set up and offers this skill; the skill clones the checkout and the personal repo, then goes on to the dry run and the one line below. The steps that write no settings file (the sync job, the janitor, pressure-watch, watch-prs and watch-mentions automations, the check table) the skill runs as `setup.py --actions-only`, and the guard hook shows a permission dialog for it. Design: [zero-command-setup.md](zero-command-setup.md).
+- **What it does:** The entry point is the checkout's `scripts/setup.py`. A dry run shows a diff per settings file, and the skill hands the human one `! python3 … --apply <hash>` line. That line takes a backup, merges idempotently (adds only what is missing, never overwrites a value, except that it turns off an enabled marketplace copy), replaces atomically, reads back and prints a rollback line per file. The values come from the repo's recommended defaults (`scripts/recommended-settings.json`) and the personal repo's `agent-skills.json` and tracker site rules; internal name lists, personal instructions, agents and autoMode rules are never carried. An item offered once is recorded, so a rule the human removed is not offered again. `--update` plans only new recommendations and fast-forwards the checkout when applied. `check --baseline` against a file exported on the old PC is optional. The skill never writes a settings file and never runs `--apply`.
+- **Ships with:** `scripts/setup_check.py`, its tests. In the repo: `scripts/setup.py`, `scripts/recommended-settings.json`, `scripts/test_setup.py`, `hooks/onboard.py`.
+- **Related:** A single action blocked after setup goes to `tune-automode`; `permissions` and hooks outside the bundle to `update-config`; what the automations do to `reap-resources`; reloading running sessions to `skills-sync broadcast`.
+
 ## Chat and reviews
 
 ### watch-prs
@@ -332,8 +340,8 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 
 ### principles
 - **When:** A design, refactor, verification or delegation decision needs a named principle.
-- **What it does:** An index of 23 principles (Core, Architecture, Verification, Delegation, Meta). Delegation also carries one line this repo added, Stay Answerable (the `orchestrate` rule). For a principle that applies, it reads the leaf file in full. Examples: fix the root cause, test behavior, subtract before adding, don't wait for humans.
-- **Bundled:** 23 files, `references/principle-*.md`.
+- **What it does:** An index of 25 principles (Core, Architecture, Verification, Delegation, Meta). Delegation also carries one line this repo added, Stay Answerable (the `orchestrate` rule). For a principle that applies, it reads the leaf file in full. Examples: fix the root cause, test behavior, subtract before adding, don't wait for humans.
+- **Bundled:** 25 files, `references/principle-*.md`, and the measurement checklist `references/benchmark-checklist.md`.
 
 ### recall
 - **When:** "어디까지 했지" (where did I leave off?), "X 작업 어디까지 했더라" (how far did I get with X?), "최근 작업 정리해줘" (sum up my recent work), "이번 주에 뭐 했지" (what did I do this week?), 'catch me up'. Also before starting or resuming work that an earlier session touched.
@@ -508,10 +516,10 @@ Allow is given only to a single command with no shell operators, redirections, s
 | Language | English, with the unslop style rules | Skill text in English; docs, tickets and PRs in Korean. Style follows `write-plainly` (Korean and English) |
 
 ### What we took
-Of pstack's 47 skills (23 principles and 24 others), we took all 23 principles and 15 of the others. The pinned commit is `b42effe` (0.15.3), and the file list is in `vendor/pstack/manifest.json`.
+Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles and 16 of the others. One of the 16, benchmark-checklist, went in as a reference file of `principles`, not as a skill. The pinned commit is `99b609a` (0.15.32), and the file list is in `vendor/pstack/manifest.json`.
 
-- **Taken almost unchanged:** the 23 principles, the review and exploration prompts, the design red flags, and the feature map example.
-  - In pstack the principles were 23 separate skills; here they are bundled as reference files of a single `principles` skill. The index (`principles/SKILL.md`) was written fresh here.
+- **Taken almost unchanged:** the 24 principles, the review and exploration prompts, the design red flags, and the feature map example.
+  - In pstack the principles were 24 separate skills; here they are bundled as reference files of a single `principles` skill. The index (`principles/SKILL.md`) was written fresh here.
 - **Taken with changes:** architect, arena, blast-radius, figure-it-out, how, why, interrogate, recall, reflect, show-me-your-work, swarm, tdd, teach, create-verification-skill, maintain-verification-skill. Four changes apply to all of them.
   - The model can invoke them on its own.
   - Cursor-specific pieces were replaced with their Claude Code equivalents: paths `.cursor/` → `.claude/`, workers `generalPurpose`/cloud → `Agent`/Orca workers, transcripts `agent-transcripts` → `~/.claude/projects`.
@@ -532,17 +540,21 @@ Of pstack's 47 skills (23 principles and 24 others), we took all 23 principles a
 | no-comments | Removes comments | Depends on Cursor's Comment Sicko agent. Its rules moved to `prune-comments`. unslop and technical-writing were merged into `write-plainly` |
 | typescript-best-practices | TypeScript rules | Not a general-purpose skill |
 | setup-pstack, make-bot-ui, bro, automate-me, benny automation | Cursor model settings, Grok Bot, and so on | Tied to Cursor or Grok |
+| correct | A procedure that makes repeated mistakes impossible through structure | `reflect` and the Encode Lessons in Structure principle do the same job. Whether to fold its order of enforcement (structure, types, lint, tests, docs) into that principle is for the next sync |
+| in-your-own-words, sharpen, poteto-help | Short prompts the user types, and pstack usage help | No case for making them model-invoked skills. poteto-help is pstack setup help |
+| ketchup, ketchup-video | A catch-up report on the conversation | `brief` already took its decision-item rules (upstream `978ca6e`). The later rules (never cut waiting items, visuals) overlap other work on `brief` and wait for a later pass |
+| statechart, create-formal-verification-skill, maintain-formal-verification-skill | TLA+ models drawn as state charts, and creating and maintaining formal verification skills | Many files and a TLA+ toolchain. Revisit when a project needs it |
 
 ### Not in pstack
 - **Ticket flow:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. One ticket from start to finish, built around Orca cards and a tracker.
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
-- **Machine upkeep:** `reap-resources`, `tune-automode`.
+- **Machine upkeep:** `reap-resources`, `tune-automode`, `setup-pc`.
 - **Hooks:** permission decisions (`guard.py`), re-orienting after compaction (`reorient.py`), and recording permission prompts for the dashboard to answer (`permission.py`), and closing decisions answered in the terminal (`decision.py`).
 
 ### Upstream sync status
-- **Commits since the pin:** upstream `main` (0.15.5) is two commits ahead of the pin.
-  - #419: Removed 19 instructions that Opus 5.5 doesn't need. It goes the same way as our `6eec9fa`, and the tdd and reflect reviewers were changed in the same places.
-  - #422: Unified how model rules are read, and made show-me-your-work write a `start` row for each run.
-- **Dry-run result:** Running `python3 scripts/pstack-sync.py --to origin/main` brings in 4 principles and 3 interrogate references cleanly. tdd and tooling-reviewer merge automatically. The 9 files we changed (interrogate, architect, swarm, reflect, how, why, show-me-your-work, and two reviewers) conflict.
-- **What the conflicts are:** Mostly Cursor model-rule lines, so keeping our side is fine. `--write` only writes when there are zero conflicts, so these have to be merged by hand.
+- **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.
+- **What came in:** Mostly commits that cut instructions (#538, #571, #634). Files taken verbatim now match upstream. Adapted files took the tighter wording and the new rules through a three-way merge: a `start` row per run in show-me-your-work, "ready means usable" and the limits of proving in a stand-in for create-verification-skill, "the next contributor is an agent" in architect, and arena candidates recording the alternatives they rejected. The new Explain the Number principle and its measurement checklist went into `principles`.
+- **Five principles that shrank:** encode-lessons-in-structure, laziness-protocol, guard-the-context-window, exhaust-the-design-space and migrate-callers-then-delete-legacy-apis are down to a few lines, because upstream cut sections the agent follows without the text (#571, #634). Verbatim files follow upstream byte for byte by sync policy, so we took them as they are. Each file's frontmatter description still says when to apply it, and is read along with the file. reflect's compression stayed out because reflect is adapted and the merge overwrote this repo's section structure.
+- **What stayed out:** Cursor model-rule lines (`pstack-models.mdc`, model slugs, `generalPurpose`, `readonly`), the line that sets subagent effort per poteto-mode (#613), and the restructured reflect body. reflect keeps this repo's modes. Upstream changes behind derived files (the PR body sections in opening-a-pr, the landing order in shipping) were not taken.
+- **Next sync:** Start with `python3 scripts/pstack-sync.py` (dry run). Most adapted files conflict and are merged by hand. Cursor lines also slip into regions that merge cleanly, so read the denylist column and the whole diff.

@@ -18,7 +18,8 @@ class Setup(unittest.TestCase):
         self.state = self.home / "state"
         self.env = {**os.environ, "HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.cfg),
                     "AGENT_SKILLS_STATE": str(self.state), "GH_CONFIG_DIR": str(self.home / "gh")}
-        self.env.pop("CLAUDE_SETTINGS", None)
+        for k in ("CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_CONFIG_DIR"):
+            self.env.pop(k, None)
 
     def run_setup(self, *args, ok=True):
         p = subprocess.run([sys.executable, str(SETUP), "--here", "--language", "Korean", *args],
@@ -138,6 +139,43 @@ class Setup(unittest.TestCase):
         self.settings.write_text(json.dumps({"enabledPlugins": {"agent-skills@jeongjaesoon": True}}))
         self.assertIn("changed enabledPlugins.agent-skills@jeongjaesoon = false", self.run_setup().stdout)
 
+    def test_personal_keys_join_the_plan_without_overwriting(self):
+        mine = self.home / "personal"
+        mine.mkdir()
+        self.env["AGENT_SKILLS_CONFIG_DIR"] = str(self.home)
+        (mine / "agent-skills.json").write_text(json.dumps({
+            "prs": {"kinds": ["review_request"]}, "reap": {"user_folders": ["~/scratch"]},
+            "tracker": {"adapter": "jira", "rules_file": "tracker-rules.md"}, "notes": {"adapter": "markdown"}}))
+        (self.cfg / "agent-skills.json").write_text(json.dumps({"notes": {"adapter": "obsidian"}}))
+        before = self.snapshot()
+        out = self.run_setup().stdout
+        self.assertIn('"review_request"', out)
+        self.assertIn("kept    notes.adapter = 'obsidian' (personal 'markdown')", out)
+        self.assertEqual(self.snapshot(), before)
+        self.run_setup("--apply", self.plan_hash())
+        skills = json.loads((self.cfg / "agent-skills.json").read_text())
+        self.assertEqual(skills["prs"], {"kinds": ["review_request"]})
+        self.assertEqual(skills["reap"]["user_folders"], ["~/scratch"])
+        self.assertEqual(skills["tracker"], {"adapter": "jira", "rules_file": str(mine / "tracker-rules.md")})
+        self.assertEqual(skills["notes"], {"adapter": "obsidian"})
+        del skills["prs"]
+        (self.cfg / "agent-skills.json").write_text(json.dumps(skills))
+        self.assertIn("no change", self.run_setup().stdout)
+
+    def test_agent_skills_json_stays_where_the_skills_read_it_under_another_profile(self):
+        profile = self.home / "profile"
+        profile.mkdir()
+        self.env["CLAUDE_CONFIG_DIR"] = str(profile)
+        self.run_setup("--apply", self.plan_hash())
+        self.assertIn("env", json.loads((profile / "settings.json").read_text()))
+        self.assertIn("reflect", json.loads((self.cfg / "agent-skills.json").read_text()))
+        self.assertFalse((profile / "agent-skills.json").exists())
+
+    def test_actions_only_takes_no_hash(self):
+        p = self.run_setup("--actions-only", "--apply", "000000000000", ok=False)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("--actions-only takes none of", p.stderr)
+
     def test_a_failed_write_prints_rollback_for_the_files_already_written(self):
         self.settings.write_text('{"theme": "dark"}')
         h = self.plan_hash()
@@ -161,7 +199,8 @@ class Steps(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
-        os.environ.pop("CLAUDE_SETTINGS", None)
+        for k in ("CLAUDE_SETTINGS", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_CONFIG_DIR"):
+            os.environ.pop(k, None)
         spec = importlib.util.spec_from_file_location("setup_under_test", SETUP)
         self.setup = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.setup)
@@ -227,6 +266,16 @@ class Steps(unittest.TestCase):
         self.assertIn("skills-sync setup apply", err)
         self.assertIn("setup_check.py", self.scripts())
 
+    def test_actions_only_writes_no_settings(self):
+        rc, out, err = self.main("--actions-only")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.scripts(), ["sync.py", "automations.py", "setup_check.py"])
+        self.assertFalse(self.cfg.exists())
+        self.fail.add("automations.py")
+        rc, _, err = self.main("--actions-only")
+        self.assertEqual(rc, 1)
+        self.assertIn("these steps failed: skills-sync setup apply", err)
+
 
 class Bundle(unittest.TestCase):
     def test_has_no_internal_names(self):
@@ -243,6 +292,15 @@ class Bundle(unittest.TestCase):
         for rule in rules[:-1]:
             self.assertIn("Not covered", rule, rule[:60])
         self.assertIn("only the user's own chat messages count", rules[-1])
+
+    def test_no_review_merge_stays_narrow(self):
+        rule = next(r for r in json.loads(BUNDLE.read_text())["settings"]["autoMode"]["allow"]
+                    if r.startswith("No-review merge"))
+        for limit in ("at least one check that succeeded", "PR with no checks at all", "orchestrate program in any session",
+                      "A repository name alone never brings a PR into scope", "require no approving review"):
+            self.assertIn(limit, rule)
+        # CLEAN also follows a given approval, so it cannot stand for "no approval required".
+        self.assertNotIn("which means", rule)
 
     def test_allow_holds_no_unscoped_writes(self):
         allow = json.loads(BUNDLE.read_text())["settings"]["permissions"]["allow"]
