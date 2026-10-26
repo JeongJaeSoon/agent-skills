@@ -9,7 +9,7 @@ Design docs, worklogs and program notes live in one notes store. Which store is 
 from `~/.claude/agent-skills.json`:
 
 ```json
-{"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>"}, "markdown": {"root": "~/notes"}}}
+{"notes": {"adapter": "obsidian", "obsidian": {"vault": "<vault>", "access": "mcp"}, "markdown": {"root": "~/notes"}}}
 ```
 
 When upgrading, report an unset destination explicitly; see the [configuration migration guide](../../docs/configuration-migration.md). Never move existing notes or replace unrelated configuration keys.
@@ -20,7 +20,9 @@ the result in the current task and ask for a destination before any external wri
 
 Read the adapter's reference before the first read or write in a session:
 
-- `obsidian` → `references/obsidian.md`
+- `obsidian` → `references/obsidian.md`. The path the user's instructions name, else
+  `notes.obsidian.access` (`mcp`, `cli` or `filesystem`), is the only path to the vault, reads
+  included; with neither, stop and ask rather than read the folder on disk.
 - `markdown` → `references/markdown.md`
 
 ## The store's rules file comes first
@@ -43,8 +45,9 @@ What it most often catches, because skill text reads like plain Markdown:
   note with no link in or out is lost.
 - An appended section goes above a section the rules keep last (references).
 
-When `notes.delegate_agent` is set in the config, or the user's own instructions name an agent
-for writes to the store, hand every write to that agent with the facts. Reads stay here. The
+Hand every write to the store to the agent the user's own instructions name, else
+`notes.delegate_agent` in the config, else `agent-skills:notes-writer`, with the facts. Reads
+stay here. `"none"` writes in this session; so does the delegate itself. The
 agent reads the rules file itself on every run; a copy of the rules pasted into its definition
 goes stale.
 
