@@ -13,7 +13,8 @@ Usage:
   python3 reap.py schedule [--workspace SELECTOR] [--provider claude] [--write]
 
 scan only reads. reap re-scans and acts only on the plan's targets that are still targets with the
-same identity (pid and start time, branch tip), so nothing outside the list is touched.
+same identity (pid and start time, branch tip), so nothing outside the list is touched. On <state>/janitor-plan.json it
+acts only on the scheduled kinds.
 load only reads: the top CPU consumers, each classed ours-idle, ours-working, leftover or system, with the
 action for its class.
 --repo: repos for the branch and worktree kinds. Default: every repo in `orca repo list`, else
@@ -1770,8 +1771,13 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     cfg = config()
     if cmd == "reap":
-        plan = json.loads(pathlib.Path(opt("--plan") or sys.exit("reap needs --plan PLAN.json")).read_text())
+        path = pathlib.Path(opt("--plan") or sys.exit("reap needs --plan PLAN.json"))
+        plan = json.loads(path.read_text())
         wanted = {i["key"]: i for i in plan["items"] if i["target"]}
+        # The janitor round's autoMode rule covers only the scheduled kinds; a manual kind in that plan was put there by hand.
+        if real(path) == real(STATE / "janitor-plan.json"):
+            for key in [k for k, i in wanted.items() if i["kind"] not in SCHEDULED]:
+                print(f"- 건너뜀 {label(wanted.pop(key))}: janitor 계획에 들어갈 수 없는 종류")
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []

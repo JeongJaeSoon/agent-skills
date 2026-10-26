@@ -730,6 +730,13 @@ with tempfile.TemporaryDirectory() as tmp:
     out = cli("reap", "--plan", str(tmp / "state" / "janitor-plan.json")).stdout
     assert "tmpdir" in out and "휴지통으로 옮김" in out and not d.exists() and (tmp / "trash" / "build").is_dir(), out
     assert cli("precheck", "--kinds", "tmpdir").returncode == 1
+    # A manual kind written into the janitor plan is refused there: the round's rule covers only the scheduled kinds.
+    jplan = tmp / "state" / "janitor-plan.json"
+    plan = json.loads(jplan.read_text())
+    plan["items"] = [{"kind": "branch", "key": "branch:/r:feature", "repo": "/r", "name": "feature", "tip": "x", "target": True}]
+    jplan.write_text(json.dumps(plan))
+    out = cli("reap", "--plan", str(jplan)).stdout
+    assert "건너뜀 branch [r] feature: janitor 계획에 들어갈 수 없는 종류" in out, out
     shot = tmp / "shot.png"
     shot.write_bytes(b"x")
     assert cli("ledger", "add", "--kind", "evidence", "--path", str(shot), "--pr", "acme/app#1").returncode == 0
