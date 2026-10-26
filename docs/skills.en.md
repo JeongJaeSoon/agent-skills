@@ -222,7 +222,7 @@ Monitors configured public channels for mentions and replies when requested. Use
 ## Writing
 
 ### brief
-Reports completed work, current work, decisions and human-only steps with evidence. Uses the requested channel format; periodic program reports come from `orch brief render --periodic`.
+Reports completed work, current work, decisions and human-only steps with evidence. Every report, on request or periodic (`--periodic`), is `orch brief render`'s output sent as printed; the model passes only the headline sentence, decisions and an insight block.
 
 ### map-features
 - **When:** People need a map of what a product does today: a PRD, a roadmap, onboarding, a status doc. "feature map 만들어줘" (make a feature map), "기능 지도 그려줘" (draw a feature map), "지금 뭐가 구현돼 있는지 정리해줘" (list what is built now). A map that a verify skill uses to drive features is `create-verification-skill`; how one subsystem works is `how`.

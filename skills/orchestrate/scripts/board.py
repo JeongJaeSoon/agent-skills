@@ -1,18 +1,21 @@
-"""The board the brief skill's periodic report is rendered from: one row per lead, phase and sub-task, with its status,
+"""The board the brief skill's reports are rendered from: one row per lead, phase and sub-task, with its status,
 progress, next step and the time it was last confirmed, and the renderer that turns it into the report.
 
-The coordinator writes rows (`orch board set`) as reports come in; `orch brief render --periodic` reads the board, the
-fleet collector's PR list (prs.json), the open decisions and the last sent table (brief-last/<scope>.json) and prints
-the report. PR state is never stored here: the renderer joins it from prs.json each time, so the two cannot disagree.
+The coordinator writes rows (`orch board set`) as reports come in; `orch brief render` (on request) and
+`orch brief render --periodic` (on a schedule) read the board, the fleet collector's sessions and PR list
+(state.json, prs.json, collected again first when older than state_min), the open decisions and the last sent table
+(brief-last/<scope>.json) and print the report. The model passes only judgment: the headline sentence, decisions,
+an insight block. The time, rows, bars and sections are the renderer's. PR state is never stored here: the renderer joins it from prs.json each time, so the two cannot disagree.
 Nothing is hidden for being old: a row past its staleness limit shows its age, a PR list probed long ago says so.
 
-render() is the one implementation of the brief skill's periodic report rules (sections, sub-task rows, the
+render() is the one implementation of the brief skill's report rules (sections, sub-task rows, the
 same-reviewer fold, next steps under 진행 중 and 보류, bold for changed rows); test_board.py pins its output.
 """
 import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys
 
 import fleet
 import owner_requests
+import stages
 from stages import with_descendants
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "brief" / "scripts"))
@@ -23,7 +26,7 @@ ICON = {"moving": "🔄", "waiting": "⏳", "held": "⏸️", "blocked": "🔴",
 ALIASES = {v: k for k, v in ICON.items()} | {"⏸": "held"}  # VS16 dropped, as some keyboards and pastes do
 WORST = ("blocked", "waiting", "held", "moving")
 COLS = 78
-LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120}  # overridden by the dashboard config's "board" key
+LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"))
@@ -337,17 +340,46 @@ def fleet_rows(state, leads, board_rows):
     return rows, order
 
 
-def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False):
-    """The periodic report (brief skill §1 Periodic report items 1–8) as text, with what the caller needs around it.
-    fill adds fleet_rows() for the leads and cards the board does not have.
+DECISION_FORM = "<question>: <options> → 추천: <X> — <reason> · 답이 없으면 <default>"
 
-    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "snapshot"}; text is "" when the board has no
-    rows in scope. snapshot is what commit() saves for the next report to compare against."""
+
+def refresh(now, limit_min):
+    """Collect the fleet again when state.json is older than limit_min: with no dashboard server running nothing else
+    rewrites it, and a report read from it lists yesterday's cards. Returns a headline fact when it stays old."""
+    at = fleet.parse((fleet.read_json(fleet.state_dir() / "state.json", None) or {}).get("generated_at"))
+    if at and (now - at).total_seconds() <= limit_min * 60:
+        return None
+    try:
+        f = fleet.Fleet()
+        got = f.tick()
+        err = f.sources["orca"]["error"]
+    except Exception as e:  # a collector fault must not take the report down with it
+        got, err = None, f"{type(e).__name__}: {e}"
+    if got is not None and not err:
+        return None
+    age = f"{ago((now - at).total_seconds())} 기준" if at else "없음"
+    return f"세션 목록 {age} · 갱신 실패: {one_line(err, 60)}"
+
+
+def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False, periodic=True,
+           decisions=(), insight=None, fresh=False):
+    """The brief skill's report as text, with what the caller needs around it. periodic (§1 Periodic report) adds
+    the skipped actions and the reap line; on request (periodic=False) the stage table goes first. fill adds
+    fleet_rows() for the leads and cards the board does not have; fresh collects the fleet again when its files are
+    old. decisions are the model's own items (DECISION_FORM), numbered after the registered ones; insight goes after
+    진행 중, so the report still ends on what the human acts on.
+
+    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "snapshot"}. snapshot is what commit() saves
+    for the next report to compare against."""
     now = now or fleet.utcnow()
     tg = channel == "telegram"
     sd = fleet.state_dir()
-    store = read()
     limits = {**LIMITS, **(fleet.config().get("board") or {})}
+    for d in decisions:
+        if "→ 추천:" not in d:
+            raise ValueError(f"--decision is one line: {DECISION_FORM}")
+    collected = refresh(now, limits["state_min"]) if fresh else None
+    store = read()
     prs = {k: {**v["detail"], "probed_at": v.get("probed_at")}
            for k, v in ((fleet.read_json(sd / "prs.json", {}) or {}).get("prs") or {}).items() if v.get("detail")}
     state = fleet.read_json(sd / "state.json", None)
@@ -374,11 +406,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if scope != "top-level":
         rows = {k: r for k, r in rows.items() if up(r, "program") == scope}
     order = [k for k in store["order"] if k in rows]
-    if not order:
-        return {"text": "", "headline_facts": [], "changed": [], "stale": [], "width_ok": True, "snapshot": None}
     unnamed, unnamed_secs = set(unnamed_leads(rows)), set()
 
-    oldest_probe, changed, stale, facts = None, [], [], []
+    oldest_probe, changed, stale, stale_board, facts = None, [], [], [], []
 
     def derive(r):
         """(status, next, stale suffix) after the PR join and the session check."""
@@ -395,6 +425,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if status != "done" and at and (now - at).total_seconds() > limit * 60:
             suffix = f" · {ago((now - at).total_seconds())}"
             stale.append(r["id"])
+            if not r["id"].startswith("fleet:"):  # a fleet row's age is its session's quiet, not a record left behind
+                stale_board.append((now - at).total_seconds())
         return status, nxt, suffix
 
     def pr_text(key):
@@ -546,7 +578,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if (not l["key"].startswith("fleet:") if prev is None
                 else any(prev.get(f) != v for f, v in snap[l["key"]].items() if f in prev)):
             changed.append(l["key"])
-    if last_rows is None:
+    if not lines:
+        facts.append("리드·카드 행 없음")
+    elif last_rows is None:
         facts.append("지난 보고 없음, 굵게 없음")
     elif changed:
         facts.append(f"바뀐 행 {len(changed)}")
@@ -554,6 +588,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append("변화 없음")
     if oldest_probe and (now - oldest_probe).total_seconds() > limits["pr_warn_min"] * 60:
         facts.append(f"PR 상태 {ago((now - oldest_probe).total_seconds())} 기준")
+    if stale_board:
+        facts.append(f"오래된 board 행 {len(stale_board)} ({'' if len(stale_board) == 1 else '최대 '}{ago(max(stale_board))})")
+    if collected:
+        facts.append(collected)
 
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · ⏳ 사람 대기 · ⏸️ 보류 · " + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"))
@@ -564,9 +602,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         pr_legend.append("7자리=머지 sha")
     local = now.astimezone()
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
-    out = [head if tg else f"**{head}**", "", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
-    many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
+    out = [head if tg else f"**{head}**"]
     width_ok = True
+    if not periodic and (st := stages.table())["rows"]:
+        stage = stages.render_telegram(st) if tg else stages.render_md(st)
+        out += ["", stage]
+        width_ok &= all(table_width.table_width(t) <= COLS for _, t in table_width.tables(stage))
+    if lines:
+        out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
+    many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
 
     def label(l):
         """A phase is named with its lead outside the table, where no section heading says whose it is."""
@@ -620,22 +664,25 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if bsec != sec:
                 continue
             out += ["", f"- ⏳ {len(items)}건 {rev} 대기 — 분야 {'·'.join(i['title'] for i in items)}"]
-    if skipped:
+    if periodic and skipped:
         out += ["", skipped]
-    if reaped := reap_line(now):
+    if periodic and (reaped := reap_line(now)):
         out += ["", reaped]
     if moving or store["doing"]:
         items = moving + [f"{ICON['moving']} {d['title']} — {d['next']} · {d['owner']}" for d in store["doing"]]
         out += ["", "🔄 진행 중" if tg else "🔄 **진행 중**", ""] + [it if tg else f"- {it}" for it in items]
-    decisions = fleet.open_decisions()
+    if insight:
+        out += ["", insight.strip()]
+    own, decisions = list(decisions), fleet.open_decisions()
     asked = set((last or {}).get("decisions") or []) if last_rows is not None else set()
-    if decisions:
+    if decisions or own:
         items = []
         for i, d in enumerate(decisions, 1):
             rec = d.get("recommend") and d["options"][d["recommend"] - 1]
             text = (f"{i}. ({d['id']}) {d['title']}" + (f" → 추천: {rec['label']}" + (f" — {rec['description']}" if rec["description"] else "")
                     if rec else " — 선택지: " + " / ".join(o["label"] for o in d["options"]) if d["options"] else ""))
             items.append(text + (" (지난 보고와 동일)" if d["id"] in asked else ""))
+        items += [f"{i}. {one_line(d, 400)}" for i, d in enumerate(own, len(decisions) + 1)]
         out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
     todo = store["owner_todo"]
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + " — " + (todo[0] if todo else "없음")]

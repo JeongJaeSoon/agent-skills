@@ -270,9 +270,9 @@ assert next(s for s in fl["stores"] if s["id"] == "skillsj")["exists"] and "erro
 assert urllib.request.urlopen(f"{base}/api/fleet/flow").read() == dash.FLOW_CACHE["flow"][1]
 chg = json.loads(urllib.request.urlopen(f"{base}/api/fleet/changes").read())
 assert any(r["status"] == "proposed" and r["skills"] == ["end-session"] for r in chg["rows"]), chg.get("error")
-# The brief page passes the renderer's output through: its own words for an empty board, the report once rows exist.
+# The brief page passes the renderer's output through: a headline saying there are no rows, the report once rows exist.
 br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
-assert "text" not in br and "board" in br["message"], br
+assert "리드·카드 행 없음" in br["text"].splitlines()[0], br
 dash_demo.seed_board()
 br = json.loads(urllib.request.urlopen(f"{base}/api/fleet/brief").read())
 assert "| 🔴 | 로그인 개편 | #41 |" in br["text"] and br["width_ok"] is True and "snapshot" not in br, br

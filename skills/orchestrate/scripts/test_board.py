@@ -39,8 +39,32 @@ def stamp(at=T0, **older):
     p.write_text(json.dumps(b, ensure_ascii=False))
 
 
-assert orch("brief", "render", "--periodic")[1].startswith("board 에도 fleet 에도 리드·카드 없음")
-assert orch("brief", "render", "--periodic", "--no-fill")[1] == "board 에 행 없음"
+def orch_env(extra, *args):
+    r = subprocess.run([sys.executable, str(HERE / "prog.py"), *args], capture_output=True, text=True, env={**env, **extra})
+    return r.returncode, r.stdout.rstrip("\n"), r.stderr.strip()
+
+
+# Nothing to show is still a report: the headline says so and 오너가 할 일 is there, so no report is made by hand.
+assert ok("brief", "render", "--periodic", "--now", NOW) == "**14:30 · 리드·카드 행 없음**\n\n🙋 **지금 오너가 할 일** — 없음"
+# The time is the system clock's, in the session's time zone; the model never writes it.
+for tz in ("UTC", "Asia/Tokyo"):
+    import datetime as dt, time
+    before = dt.datetime.now().astimezone(__import__("zoneinfo").ZoneInfo(tz))
+    code, out, _ = orch_env({"TZ": tz}, "brief", "render", "--no-refresh")
+    after = dt.datetime.now().astimezone(__import__("zoneinfo").ZoneInfo(tz))
+    assert code == 0 and out.splitlines()[0] in (f"**{before:%H:%M} · 리드·카드 행 없음**", f"**{after:%H:%M} · 리드·카드 행 없음**"), out
+# With no state.json, or one older than state_min, the render collects the fleet itself; when it cannot (no orca on
+# PATH), it renders from the old files and the headline says how old they are.
+code, out, _ = orch_env({"PATH": str(tmp / "no-bin")}, "brief", "render")
+assert code == 0 and out.splitlines()[0].endswith(" · 리드·카드 행 없음 · 세션 목록 없음 · 갱신 실패: orca not found**"), out
+state.mkdir(parents=True, exist_ok=True)
+(state / "state.json").write_text(json.dumps({"generated_at": "2000-01-01T00:00:00Z", "sessions": []}))
+code, out, _ = orch_env({"PATH": str(tmp / "no-bin")}, "brief", "render")
+assert code == 0 and "· 세션 목록 " in out and "일 전 기준 · 갱신 실패: orca not found**" in out.splitlines()[0], out
+(state / "state.json").unlink()
+# The model's decisions keep the form: a question with its recommendation, numbered after the registered ones.
+code, _, err = orch("brief", "render", "--now", NOW, "--decision", "캐시를 지울까")
+assert code == 1 and err.startswith("--decision is one line: <question>"), err
 
 # Refusals say what is missing.
 assert orch("board", "set", "x/y", "--title", "고아")[2] == "no row x to be the parent; add it first"
@@ -131,7 +155,7 @@ if "--print" in sys.argv:
     sys.exit()
 
 GOLDEN = """\
-**14:30 · 바뀐 행 1 · PR 상태 3h 전 기준**
+**14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)**
 
 🔄 진행 · ⏳ 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
 
@@ -198,7 +222,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 code, first, err = FIRST
 assert code == 0, err
-assert first.splitlines()[0] == "**14:30 · 지난 보고 없음, 굵게 없음 · PR 상태 3h 전 기준**", first.splitlines()[0]
+assert first.splitlines()[0] == "**14:30 · 지난 보고 없음, 굵게 없음 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)**", first.splitlines()[0]
 assert "**" not in "\n".join(l for l in first.splitlines() if l.startswith("| ")), "no saved table, so no row is bold"
 assert "(지난 보고와 동일)" not in first
 code, second, err = SECOND
@@ -217,14 +241,14 @@ assert "✅ ph2 #42 42c0ffe (바뀜) — ████████ 8/8" in tg.spl
 assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4" in tg.splitlines(), tg
 assert "└ 🔄 문구 다듬기와 길이 정리 — CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
 assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "⏳ 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4" in tg.splitlines(), tg
-assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준"
+assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)"
 assert "🔄 다른 팀 답변 대기 — 10/14 회신 · 사람" in tg.splitlines(), tg
 assert tg.endswith("⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5\n10/16 → prod 배포 창\n10/20 → 캐시 TTL을 다시 보기"), tg
 
 # --json carries what a dashboard or the model needs beside the text.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--headline", "ph2 머지"))
 # The model's headline replaces the change count only: the staleness facts stay.
-assert out["text"].startswith("**14:30 · ph2 머지 · PR 상태 3h 전 기준**"), out["text"].splitlines()[0]
+assert out["text"].startswith("**14:30 · ph2 머지 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전)**"), out["text"].splitlines()[0]
 assert out["changed"] == ["search/ph2"], out["changed"]
 assert out["stale"] == ["ghost"] and out["width_ok"] is True
 
@@ -392,5 +416,85 @@ b["later"] += [{"title": "콘솔 시안 대비 main에서 누락된 절차 확�
 (state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
 held = ok("brief", "render", "--periodic", "--now", NOW)
 assert held.count("#9 land 뒤") == 1 and "- #9 land 뒤 → 콘솔 시안 대비 main 누락 절차만 확인" in held.splitlines(), held
+
+# A report on request: no board at all, only the fleet's sessions and the stage table. The live card is a row, the stage
+# table goes first, the model's insight comes after 진행 중 and its decision is numbered after the registered one.
+req = tmp / "req"
+renv = {"ORCH_FLEET_STATE": str(req / "dashboard"), "ORCH_BRIEF_LAST": str(req / "brief-last")}
+
+
+def rok(*args):
+    code, out, err = orch_env(renv, *args)
+    assert code == 0, (args, out, err)
+    return out
+
+
+rok("stage", "add", "login", "--title", "로그인 개선", "--pr", "acme/web#40")
+rok("stage", "set", "login", "--col", "dev", "--mark", "ok", "--evidence", "v1.7.2")
+rok("stage", "set", "login", "--col", "prod", "--mark", "checking", "--by", "QA")
+rok("stage", "env", "--prod", "v1.7.1", "--dev", "v1.7.2")
+rok("stage", "next", "v1.7.2 prod 배포 (사람, 미정)")
+rok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
+(req / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
+    sess("root", "orchestrator", None, "working"),
+    sess("c7", "task", "root", "working", task_title="ABC-1 정렬", gh_repo="acme/web",
+         report={"next": "CI 통과 → 리뷰 의뢰 · 워커", "pr": "acme/web#45"})],
+    "prs": [{"key": "acme/web#40", "state": "MERGED", "merged_at": "2026-10-12T03:00:00Z"}]}))
+(req / "dashboard" / "prs.json").write_text(json.dumps({"prs": dict([pr("acme/web#45", ci="pending")])}))
+REQUEST = ["brief", "render", "--now", NOW, "--headline", "정렬 PR CI 중, 유료 플랜 하나만 정해 주세요",
+           "--insight", "★ 정렬은 CI 가 끝나면 리뷰로 간다",
+           "--decision", "검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지"]
+REQUEST_GOLDEN = """\
+**14:30 · 정렬 PR CI 중, 유료 플랜 하나만 정해 주세요**
+
+prod: v1.7.1 · dev: v1.7.2
+✅ 완료·확인 · ❌ 미완료·실패 · ⚠️ 일부·추정 · 🔄 확인 중 · 해당 없음
+
+| 작업 | feature·대표 PR | PR 머지 | dev 확인 | prod 확인 |
+|---|---|---|---|---|
+| 로그인 개선 | acme/web#40 | ✅ 10/12 | ✅ v1.7.2 | 🔄 (QA) |
+
+다음 순서
+1. v1.7.2 prod 배포 (사람, 미정)
+
+🔄 진행 · ⏳ 사람 대기 · ⏸️ 보류 · 막대=단계(추정)
+
+PR: ❗ 사람이 풀 것 · CI… CI 진행
+
+**acme/web → main**
+
+| | 리드/Phase | PR | 진행 |
+|---|---|---|---|
+| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | — |
+
+🔄 **진행 중**
+
+- 🔄 ABC-1 정렬 — CI 통과 → 리뷰 의뢰 · 워커
+
+★ 정렬은 CI 가 끝나면 리뷰로 간다
+
+❓ **결정 필요** — 1. (d1) 재색인 권한 → 추천: 서비스 계정 — 만료 없음
+
+2. 검색 API 유료 플랜(월 $50): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60% · 답이 없으면 현행 유지
+
+🙋 **지금 오너가 할 일** — 없음"""
+request = rok(*REQUEST)
+if "--print" in sys.argv:
+    print(request)
+if request != REQUEST_GOLDEN:
+    import difflib
+    sys.exit("\n".join(difflib.unified_diff(REQUEST_GOLDEN.splitlines(), request.splitlines(), "golden", "rendered", lineterm="")))
+for start, rows in table_width.tables(request):
+    assert table_width.table_width(rows) <= 78, (start, table_width.table_width(rows))
+# The periodic form of the same fleet has no stage table; Telegram has no markdown and keeps the stage table's lines.
+assert "| 작업 |" not in rok("brief", "render", "--periodic", "--now", NOW)
+tg_req = rok(*REQUEST, "--telegram")
+assert not any(m in tg_req for m in ("**", "|", "](")), tg_req
+assert "📋 작업별 (prod: v1.7.1 · dev: v1.7.2)" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
+# A stage table wider than 78 columns is reported like any other.
+rok("stage", "add", "wide", "--title", "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "--pr", "acme/web#1234")
+rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", "로그로만 확인하고 화면은 아직 보지 않음")
+code, _, err = orch_env(renv, *REQUEST)
+assert code == 1 and err == "a table is wider than 78 columns", (code, err)
 
 print("ok")
