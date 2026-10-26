@@ -26,7 +26,7 @@ Usage: orch-dash <command> [options]
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
   ack <id>... | ack --done-before AGE [--kind req|stage|board]... | unack <id>... | acks [--all] [--json]
-                                     mark finished Work rows (stage:<row>), finished brief rows (board:<row>) and
+                                     mark finished stage rows (stage:<row>), finished brief rows (board:<row>) and
                                      your requests (r7) as checked, so the dashboard and the brief leave them out;
                                      a row in progress, waiting or held is refused, and an
                                      acked request stays open (orch req done closes it). AGE: 90m, 24h, 7d (see acks.py)
@@ -1358,15 +1358,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not f.exists():
                 return self.send(503, b'{"error":"first PR stats collect has not finished"}')
             return self.send_cached(f.read_bytes())
-        if path == "/api/fleet/work":
-            # Read on every poll, not folded into state.json: an `orch stage` write shows on the next poll, not the next collect.
-            return self.send_cached(json.dumps(acks.mark_stages(stages.table()), ensure_ascii=False).encode())
         if path in ("/api/fleet/flow", "/api/fleet/changes"):
             return self.send_cached(flow_report(path.rsplit("/", 1)[1]))
         if path == "/api/fleet/brief":
             return self.send_cached(json.dumps(brief_report(), ensure_ascii=False).encode())
         if path == "/api/fleet/sent":
-            # The `orch sent` log is read on every poll, like work: a send shows on the next poll, not the next collect.
+            # The `orch sent` log is read on every poll, like the brief: a send shows on the next poll, not the next collect.
             days = re.search(r"[?&]days=(\d{1,2})\b", self.path)
             try:
                 body = sent.page(FLEET.sent if FLEET else [], max(1, min(int(days.group(1)), sent.DAYS_MAX)) if days else 1)
@@ -1613,6 +1610,10 @@ def cmd_serve(argv):
 
 
 def brief_report():
+    return periodic_report() | {"stages": stage_report()}
+
+
+def periodic_report():
     """The periodic report exactly as `orch brief render` prints it: the renderer is the one implementation of
     the table rules, so the page shows its output and never builds a second copy. Run per request (well under a
     second) so a `orch board set` shows on the next poll. A lead or card that never wrote to the board still shows,
@@ -1635,6 +1636,15 @@ def closed_recent(days=7):
     cut = iso(utcnow() - dt.timedelta(days=days))
     return sorted(({"id": k, **r, "reopen": tidy.can_reopen(k)} for k, r in tidy.closed().items() if (r.get("ts") or "") >= cut),
                   key=lambda r: r.get("ts") or "", reverse=True)
+
+
+def stage_report():
+    """The stage table whole, generated rows and recorded ones, for the Brief page: the periodic text leaves it out.
+    Read per request, so an `orch stage set` shows on the next poll."""
+    try:
+        return acks.mark_stages(stages.table())
+    except (OSError, ValueError) as e:
+        return {"error": f"stages: {type(e).__name__}: {e}"}
 
 
 FLOW_CACHE, FLOW_TTL = {}, {"flow": 30, "changes": 60}

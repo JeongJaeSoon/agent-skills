@@ -18,7 +18,8 @@ ORCH, LEAD = "agent-skills:orchestrator", "agent-skills:lead"
 def hook(event="UserPromptSubmit", session="s1", prompt="hi", source="startup", agent=None, title=None,
          handle="term_me"):
     env = {"PATH": f"{TMP / 'bin'}:/usr/bin:/bin", "HOME": str(TMP / "home"), "AGENT_SKILLS_STATE": str(TMP / "state"),
-           "PROGRAMS_HOME": str(TMP / "programs"), "ORCA_TERMINAL_HANDLE": handle}
+           "PROGRAMS_HOME": str(TMP / "programs"), "ORCA_TERMINAL_HANDLE": handle,
+           "ORCH_FLEET_STATE": str(TMP / "fleet"), "ORCH_FLEET_CONFIG": str(TMP / "none.json")}
     payload = {"hook_event_name": event, "session_id": session}
     if event == "SessionStart":
         payload["source"] = source

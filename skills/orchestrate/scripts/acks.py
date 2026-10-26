@@ -1,8 +1,8 @@
-"""What the owner has checked and no longer needs on screen: finished Work rows, finished brief rows, and their own
+"""What the owner has checked and no longer needs on screen: finished stage rows, finished brief rows, and their own
 requests. `orch-dash ack` writes here and the dashboard's buttons call the same functions, so the CLI is the record.
 
 An ack is the owner's view, not the work's state: an acked request is still open for `orch req`, an acked stage row
-is still in stages.json. Only what is over can be acked (a Work row with `done_at`, a brief row that is ✅, and
+is still in the stage table. Only what is over can be acked (a stage row with `done_at`, a brief row that is ✅, and
 every one of its sub-task rows too); a row in progress, waiting on someone or held (a closed PR's row too) is refused, so
 acking never hides what still needs someone. Requests are the owner's own: every one still shown (open, not expired) can be acked.
 
@@ -39,7 +39,7 @@ def kind(aid):
 
 
 def stage_done(rows):
-    """stage:<id> -> {label, at} for the ackable Work rows: done, with every row under them done too."""
+    """stage:<id> -> {label, at} for the ackable stage rows: done, with every row under them done too."""
     import stages
     out = {}
     for k, r in rows.items():
@@ -50,7 +50,7 @@ def stage_done(rows):
 
 
 def mark_stages(table):
-    """The Work table with each row's `ack`: "acked", "ackable" or None, and `hidden` when it or a row above it is acked
+    """The stage table with each row's `ack`: "acked", "ackable" or None, and `hidden` when it or a row above it is acked
     and still done."""
     rows = {r["id"]: r for r in table["rows"]}
     have, can = acked(), stage_done(rows)
@@ -73,7 +73,7 @@ def ackable(now=None, kinds=KINDS):
                     for q in owner_requests.fold(owner_requests.read()).values()
                     if owner_requests.visible(q, now or fleet.utcnow())})
     if "stage" in kinds:
-        out.update(stage_done(stages.read()["rows"]))
+        out.update(stage_done({r["id"]: r for r in stages.table()["rows"]}))
     if "board" in kinds:
         try:
             done = board.render(now=now, fill=True)["done"]

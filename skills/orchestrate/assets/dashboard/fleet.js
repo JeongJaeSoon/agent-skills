@@ -8,7 +8,6 @@ const FLEET_SECTIONS = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "inbox", label: "Inbox", icon: "inbox" },
   { id: "sessions", label: "Sessions", icon: "workers" },
-  { id: "work", label: "Work", icon: "flag" },
   { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "brief", label: "Brief", icon: "note" },
   { id: "sent", label: "Sent", icon: "chat" },
@@ -75,8 +74,11 @@ const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, tlShow: {}, tlOpen: new Set() };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
+// The Work page's stage table moved into the Brief: an old #/fleet/work link opens the Brief.
+const MOVED = { work: "brief" };
 function fleetSection(section, arg) {
   F.sessionId = section === "session" && arg ? arg : null;
+  section = MOVED[section] || section;
   return F.sessionId ? "session" : FLEET_SECTIONS.some((s) => s.id === section) ? section : "overview";
 }
 const BY_ID = new WeakMap();  // one map per state, not one per rendered row
@@ -122,7 +124,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, work: workOpen() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, brief: stageOpen() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -494,8 +496,8 @@ async function idsAction(t, url, ids, err) {
   try {
     const out = await fleetPost(url, { ids: ids.split(" "), undo: "undo" in t.dataset });
     F[err] = (out.refused || []).map(([id, why]) => `${id}: ${why}`).join(" · ") || null;
-    F.workEtag = F.briefEtag = null;
-    await Promise.all([pollWork(), pollBrief()]);  // the requests card follows fleetPost's own state refresh
+    F.briefEtag = null;
+    await pollBrief();  // the requests card follows fleetPost's own state refresh
   } catch (e) { F[err] = String(e.message || e); }
   t.disabled = false;
   renderView();
@@ -816,6 +818,7 @@ async function pollBrief() {
       F.brief = r.ok ? await r.json() : { message: `HTTP ${r.status}` };
       F.briefEtag = r.ok ? r.headers.get("ETag") : null;
       if (isFleet() && S.section === "brief") renderView();
+      if (isFleet()) fleetSidebar();
     }
   } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
   F.briefBusy = false;
@@ -846,15 +849,16 @@ function briefHtml(text) {
 function fleetBrief() {
   if (!F.brief) pollBrief();
   const b = F.brief;
-  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report as <span class="mono">orch brief render --periodic</span> builds it from the board, the sessions, the PR list and open decisions. A lead or card with no board rows shows from its session, with the next step from the report file its brief names; rows written with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The stage table, then the periodic report as <span class="mono">orch brief render --periodic</span> builds it from the board, the sessions, the PR list and open decisions. A lead or card with no board rows shows from its session, with the next step from the report file its brief names; rows written with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
     ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}${F.briefAt ? ` · updated ${relSpan(F.briefAt)}` : ""}</div>` : ""}</div>`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
-  if (!b.text) return headHtml + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
+  const stage = stageSection(b.stages);
+  if (!b.text) return headHtml + ackNote() + stage + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
   const { shown, head } = ackSplit((b.done || []).map((d) => ({ ...d, key: d.id, ack: d.acked ? "acked" : "ackable" })), "finished row");
   const finished = (b.done || []).length ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
-    ${ackNote()}<ul class="rows">${shown.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow ellipsis">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
+    <ul class="rows">${shown.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow ellipsis">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
       || '<li class="muted">Every finished row is acked.</li>'}</ul></div>` : "";
-  return headHtml + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>` + finished + doneCards(b);
+  return headHtml + ackNote() + stage + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>` + finished + doneCards(b);
 }
 
 // Done (tidy.py, `orch board done`): close a row, card or board item that is over, or reopen one. The collector closes
@@ -873,45 +877,32 @@ function doneCards(b) {
     + (shut ? `<div class="card"><div class="card-head"><h3>Closed in the last 7 days</h3><span class="aside muted">${(b.closed || []).length}</span></div><ul class="rows">${shut}</ul></div>` : "");
 }
 
-// The `orch stage` table (stages.json, via /api/fleet/work): read on every poll while the page is open, so a cell
-// written by the orchestrator or lead shows within one poll. The merge cell arrives already filled from the fleet PR list.
-const WORK_MARK = { ok: ["✅", "good", "done · verified"], fail: ["❌", "bad", "not done · failed"], partial: ["⚠️", "warn", "partial · inferred"],
+// The stage table (stages.py table(): rows the fleet tick generates per program, with `orch stage` cells over them),
+// part of /api/fleet/brief, so a cell written by the orchestrator or lead shows within one poll. Every cell arrives filled.
+const STAGE_MARK = { ok: ["✅", "good", "done · verified"], fail: ["❌", "bad", "not done · failed"], partial: ["⚠️", "warn", "partial · inferred"],
   checking: ["🔄", "accent", "checking"], na: ["–", "", "n/a"] };
-const WORK_DONE_KEEP = 7 * 86400e3;  // stages.py DONE_KEEP_S: a file nobody wrote to since can still hold older rows
-const workShown = (w) => (w.rows || []).filter((r) => !r.done_at || Date.now() - ms(r.done_at) < WORK_DONE_KEEP);
-const workOpen = () => F.work && !F.work.error ? workShown(F.work).filter((r) => !r.group && !r.done_at).length : 0;
-async function pollWork() {
-  if (F.workBusy) return;
-  F.workBusy = true;
-  try {
-    const r = await fetch("/api/fleet/work", { cache: "no-store", headers: F.workEtag ? { "If-None-Match": F.workEtag } : {} });
-    if (r.status !== 304) {
-      F.work = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
-      F.workEtag = r.ok ? r.headers.get("ETag") : null;
-      if (isFleet() && S.section === "work") renderView();
-      if (isFleet()) fleetSidebar();
-    }
-  } catch (e) { F.work = { error: String(e.message || e) }; F.workEtag = null; }
-  F.workBusy = false;
-}
-// owner/repo#N becomes a link; esc() runs first and the pattern holds no markup characters.
-const linkRefs = (text) => esc(text).replace(/\b([\w.-]+\/[\w.-]+)#(\d+)\b/g, (m, repo, n) => link(`https://github.com/${repo}/pull/${n}`, m));
-function workCell(c) {
+const STAGE_DONE_KEEP = 7 * 86400e3;  // stages.py DONE_KEEP_S: a file nobody wrote to since can still hold older rows
+const stageShown = (w) => (w.rows || []).filter((r) => !r.done_at || Date.now() - ms(r.done_at) < STAGE_DONE_KEEP);
+const stageOpen = () => { const w = (F.brief || {}).stages; return w && !w.error ? stageShown(w).filter((r) => !r.group && !r.done_at).length : 0; };
+// owner/repo#N becomes a link to the URL the server resolved (refs: /pull/ for a known PR, else /issues/, which GitHub
+// redirects for a PR); esc() runs first and the pattern holds no markup characters.
+const linkRefs = (text, refs = {}) => esc(text).replace(/\b([\w.-]+\/[\w.-]+)#(\d+)\b/g,
+  (m, repo, n) => link(refs[m] || `https://github.com/${repo}/issues/${n}`, m));
+function stageCell(c, refs) {
   if (!c) return "";
-  const [mark, tone, label] = WORK_MARK[c.mark] || [c.mark, "", c.mark];
-  const text = [c.evidence && linkRefs(c.evidence), c.by && `<span class="muted">(${esc(c.by)})</span>`].filter(Boolean).join(" ");
-  return `<div class="wcell ${tone ? "tone-" + tone : ""}" title="${esc(label)}"><span class="wmark">${mark}</span>${text ? `<span class="wtext">${text}</span>` : ""}</div>`;
+  const [mark, tone, label] = STAGE_MARK[c.mark] || [c.mark, "", c.mark];
+  const text = [c.evidence && linkRefs(c.evidence, refs), c.by && `<span class="muted">(${esc(c.by)})</span>`].filter(Boolean).join(" ");
+  return `<div class="wcell ${tone ? "tone-" + tone : ""}" title="${esc(c.from ? `${label} · ${c.from}` : label)}"><span class="wmark">${mark}</span>${text ? `<span class="wtext">${text}</span>` : ""}</div>`;
 }
-function fleetWork() {
-  if (!F.work) pollWork();
-  const w = F.work;
-  const headHtml = `<div class="view-head"><div><h2>Work</h2><p>Stages per work item, recorded with <span class="mono">orch stage</span>. The merge column fills from the PR list; the dev and prod columns are written by the orchestrator or lead, with evidence, when it checks them. Finished rows stay dimmed for 7 days; Ack hides one you have checked.</p></div>
-    <div class="legend">${Object.values(WORK_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</div></div>`;
-  if (!w) return headHtml + '<div class="loading">Loading…</div>';
-  if (w.error) return headHtml + `<div class="card"><div class="empty-chart">${esc(w.error)}</div></div>`;
-  const { shown: all, seen, head } = ackSplit(workShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
+function stageSection(w) {
+  if (!w) return "";
+  const cardHead = `<div class="card-head"><h3>Stages</h3></div><p class="card-body muted">One row per predicate item and worker card of each program, generated every tick: merge from the merge sha; dev and prod only from <span class="mono">orch stage set</span>. Finished rows stay dimmed for 7 days.</p>`;
+  if (w.error) return `<div class="card">${cardHead}<div class="empty-chart">${esc(w.error)}</div></div>`;
+  const refs = w.refs || {};
+  const legend = `<span class="legend">${Object.values(STAGE_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</span>`;
+  const { shown: all, seen, head } = ackSplit(stageShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
   const done = all.filter((r) => r.done_at && !r.group).length;
-  const rows = F.workHideDone ? all.filter((r) => !r.done_at) : all;
+  const rows = F.stageHideDone ? all.filter((r) => !r.done_at) : all;
   const byId = Object.fromEntries(all.map((r) => [r.id, r]));
   // A group's own rows sit flush under it; each level below them gets one └ step.
   const level = {};
@@ -920,20 +911,20 @@ function fleetWork() {
     if (r.group) return `<tr class="wgroup ${r.done_at ? "is-done" : ""}"><td colspan="6"><b>${esc(r.title)}</b> ${ackBtn(r)}</td></tr>`;
     const lv = level[r.id];
     return `<tr class="${r.done_at ? "is-done" : ""}"><td class="wfeat">${r.parent ? "" : '<span class="muted">–</span>'}</td>
-      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">└ </span>' : ""}${esc(r.title)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
-      <td class="mono nowrap">${r.pr ? linkRefs(r.pr) : '<span class="muted">–</span>'}</td>
-      ${["merge", "dev", "prod"].map((c) => `<td>${workCell((r.cells || {})[c])}</td>`).join("")}</tr>`;
+      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
+      <td class="mono nowrap">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
+      ${["merge", "dev", "prod"].map((c) => `<td>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
   }).join("");
-  const { env = {} } = w;
-  const envLine = ["prod", "dev"].filter((k) => env[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(env[k])}</span></span>`).join("");
-  const toggle = done ? `<button class="chip" type="button" data-work-done aria-pressed="${!!F.workHideDone}">Hide ${done} done</button>` : "";
-  const table = all.length ? `<div class="card table-wrap"><table class="work"><thead><tr><th>Feature/epic</th><th>Work</th><th>PR</th><th>PR merged</th><th>dev check</th><th>prod check</th></tr></thead><tbody>${body}</tbody></table></div>`
-    : `<div class="card"><div class="empty-chart">${seen ? "Every row is acked." : 'No work recorded. Add a row with <span class="mono">orch stage add</span>.'}</div></div>`;
-  const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>Next</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n)}</li>`).join("")}</ol></div>` : "";
-  return headHtml + `<div class="toolbar wenv">${envLine ? `<div class="meta">${envLine}${env.at ? `<span class="muted">${relSpan(env.at)}</span>` : ""}</div>` : ""}${toggle}${head}</div>` + ackNote() + table + next;
+  const where = w.env || {};
+  const whereLine = ["prod", "dev"].filter((k) => where[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(where[k])}</span></span>`).join("");
+  const toggle = done ? `<button class="chip" type="button" data-stage-done aria-pressed="${!!F.stageHideDone}">Hide ${done} done</button>` : "";
+  const table = all.length ? `<div class="table-wrap"><table class="work"><thead><tr><th>Feature/epic</th><th>Work</th><th>PR</th><th>PR merged</th><th>dev check</th><th>prod check</th></tr></thead><tbody>${body}</tbody></table></div>`
+    : `<div class="empty-chart">${seen ? "Every row is acked." : 'No stage rows: no program had ledger activity in 7 days. <span class="mono">orch stage add</span> records work outside a program.'}</div>`;
+  const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>Next</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n, refs)}</li>`).join("")}</ol></div>` : "";
+  return `<div class="card">${cardHead}<div class="toolbar wenv">${legend}${whereLine ? `<div class="meta">${whereLine}${where.at ? `<span class="muted">${relSpan(where.at)}</span>` : ""}</div>` : ""}${toggle}${head}</div>${table}</div>` + next;
 }
 document.addEventListener("click", (e) => {
-  if (e.target.closest("[data-work-done]")) { F.workHideDone = !F.workHideDone; renderView(); }
+  if (e.target.closest("[data-stage-done]")) { F.stageHideDone = !F.stageHideDone; renderView(); }
   if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
   const ack = e.target.closest("[data-ack]");
   if (ack) idsAction(ack, "/api/fleet/ack", ack.dataset.ack, "ackError");
@@ -1266,7 +1257,7 @@ function fleetStats() {
     <div class="grid">${card("Weekday × hour", "", punch)}
     ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
 }
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, work: fleetWork, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

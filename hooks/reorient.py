@@ -20,6 +20,11 @@ A declared session gets the long paragraph at SessionStart and one line on every
 title is not `orchestrator` is also told at SessionStart how to name it; a role visible in session lists is how the
 human tells which session routes. Prompts run no external
 command, so the hook stays fast.
+
+On a prompt the line also carries one stage-table warning when the table is not keeping up with an active program
+(the lead's own, or any for the orchestrator): no work row, or rows the fleet tick has not rewritten in the dashboard
+config's `board.stage_warn_h` hours (stage_auto.warning). The Brief's stage table sat empty for weeks once while every
+row waited on a hand-written `orch stage add`.
 """
 import json, os, pathlib, re, sys
 
@@ -91,6 +96,18 @@ def role_line(entry):
             "browser work go one layer down; status reports go through agent-skills:brief.")
 
 
+def stage_warning(entry):
+    """stage_auto.warning for this role, "" when there is nothing to say or it cannot tell."""
+    if entry["role"] == "lead" and not entry.get("slug"):
+        return ""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "scripts"))
+    try:
+        import stage_auto
+        return stage_auto.warning(entry.get("slug"))
+    except Exception:  # the reminder still goes out without it
+        return ""
+
+
 def declared(session):
     try:
         return json.loads((ROLES / f"{session}.json").read_text())
@@ -156,6 +173,8 @@ def main():
             text = role_long(entry, False) + " `ROLE: none` in a prompt clears the role."
         elif entry:
             text = role_line(entry)
+        if text and entry and (warn := stage_warning(entry)):
+            text += " " + warn
     elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork"):
         if entry := resolve(event, declared(session)):
             text = role_long(entry, event.get("source") == "compact")

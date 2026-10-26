@@ -999,7 +999,7 @@ def read_screen(handle):
 # The probe carries everything the PR page shows except reviewers and threads, and its signature covers the fields
 # that change without moving updatedAt (merge state after a base push, CodeRabbit's status).
 PROBE = ("number state isDraft updatedAt createdAt mergedAt headRefOid url title mergeStateStatus reviewDecision"
-         " baseRefName mergeCommit{oid}"
+         " baseRefName headRefName mergeCommit{oid}"
          " author{login} commits(last:1){nodes{commit{statusCheckRollup{state}"
          ' status{context(name:"CodeRabbit"){state description}}}}}')
 DETAIL = PROBE + (
@@ -1134,7 +1134,7 @@ def shape_pr(repo, pr, me):
             "title": mask(pr.get("title"), 200), "state": pr.get("state"), "draft": bool(pr.get("isDraft")),
             "updated": pr.get("updatedAt"), "head": head, "ci": rollup(pr), "decision": pr.get("reviewDecision"),
             "created": pr.get("createdAt"), "merged_at": pr.get("mergedAt"), "merge_state": pr.get("mergeStateStatus"),
-            "base": pr.get("baseRefName"), "merge_sha": (pr.get("mergeCommit") or {}).get("oid"),
+            "base": pr.get("baseRefName"), "merge_sha": (pr.get("mergeCommit") or {}).get("oid"), "branch": pr.get("headRefName"),
             "coderabbit": coderabbit(pr),
             "author": (pr.get("author") or {}).get("login"), "reviewers": sorted(reviewers.values(), key=lambda r: r["login"]),
             "threads": threads, "reviews": [{"id": n.get("id"), "state": n.get("state"), "at": n.get("submittedAt"),
@@ -1348,7 +1348,19 @@ class Fleet:
             self.save(**{"state.json": json.dumps(self.state, ensure_ascii=False),
                          "prs.json": json.dumps({"prs": self.prs, "branch_pr": self.branch_pr, "me": self.me}),
                          "memory.json": json.dumps(self.mem, ensure_ascii=False)})
+            self.stage_rows()
             return self.state
+
+    def stage_rows(self):
+        """The stage table's generated rows, from this state and the program ledgers (stage_auto.py)."""
+        try:
+            import stage_auto  # beside this file; it imports this module
+            stage_auto.refresh(self.state)
+            self.mem.pop("stage_auto_error", None)
+        except Exception as e:  # a ledger it cannot read must not take the dashboard down with it
+            if self.mem.get("stage_auto_error") != (err := mask(repr(e), 200)):
+                self.mem["stage_auto_error"] = err
+                self.event({"at": iso(utcnow()), "kind": "stage_auto_error", "text": err})
 
     def refresh_prs(self, sessions, cfg, force=False, viewed=False, now_due=()):
         now = self.now()
@@ -1657,7 +1669,7 @@ class Fleet:
                 continue
             prs.append({f: det.get(f) for f in ("key", "repo", "number", "url", "title", "state", "draft", "author", "ci",
                                                 "decision", "merge_state", "coderabbit", "reviewers", "created", "updated",
-                                                "merged_at")}
+                                                "merged_at", "merge_sha", "branch")}
                        | {"session": sid, "unresolved": sum(not t["resolved"] for t in det["threads"])})
             if not sid:
                 continue

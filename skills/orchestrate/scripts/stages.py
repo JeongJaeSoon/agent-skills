@@ -1,15 +1,18 @@
-"""The stage table the brief skill reports and the dashboard's Work page draws: one row per work item, its PR merge, dev check
+"""The stage table the brief skill reports and the dashboard's Brief page draws: one row per work item, its PR merge, dev check
 and prod check, each cell a mark and the evidence behind it.
 
-The orchestrator or lead writes a cell where it verified it (`orch stage set`), so the next report and the dashboard read the same
-record instead of each rebuilding it. It lives in the fleet state directory (stages.json, beside state.json), not a
-program's ledger: work outside any program needs a row too. The merge cell of a row with a PR is never written: it is
-read from the fleet collector's PR list each time the table is shown. A group row (`--group`) is only a heading for
+Most rows are generated: each fleet tick derives a program's rows from its ledger, its Run's cards and GitHub
+(stage_auto.py, stages-auto.json). The orchestrator or lead writes a cell where it verified it (`orch stage set`), a
+generated row's id included, and that manual cell wins over the generated one; it adds a row (`orch stage add`) for
+work outside any program. The next report and the dashboard read the same record instead of each rebuilding it. What
+a person recorded lives in the fleet state directory (stages.json, beside state.json), not a program's ledger: work
+outside any program needs a row too. The merge cell of a recorded row with a PR is never written: it is read from the
+fleet collector's PR list each time the table is shown. A group row (`--group`) is only a heading for
 the rows under it, a feature or an epic: it has no PR and no cells.
 """
-import datetime as dt, fcntl, json
+import datetime as dt, fcntl, json, re
 
-import fleet
+import fleet, stage_auto
 
 MARKS = ("ok", "fail", "partial", "checking", "na")
 ALIASES = {"✅": "ok", "❌": "fail", "⚠️": "partial", "⚠": "partial", "🔄": "checking", "해당없음": "na", "해당 없음": "na"}
@@ -96,6 +99,10 @@ def set_cell(rid, col, mark, evidence=None, by=None):
 
     def go(store):
         row = store["rows"].get(rid)
+        made = stage_auto.read()["rows"].get(rid)
+        if not row and made and not made.get("group"):
+            # Cells only, over a generated row: its title, PR and place stay the tick's.
+            row = store["rows"][rid] = {"id": rid, "cells": {}, "overlay": True, "created_at": fleet.iso(fleet.utcnow())}
         if not row:
             raise ValueError(f"no row {rid}; add it first with `orch stage add {rid} --title …`")
         if row.get("group"):
@@ -144,28 +151,56 @@ def merge_cell(pr, prs):
     return {"mark": "fail", "evidence": why, "auto": True}
 
 
+def merged(store, made):
+    """Generated rows with the recorded ones over them: a recorded cell replaces the generated cell of its column, a
+    recorded row of the same id its fields. An overlay whose generated row is gone has nothing to sit on."""
+    rows = dict(made["rows"])
+    for k, r in store["rows"].items():
+        if k in rows:
+            rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")},
+                       "cells": {**rows[k].get("cells", {}), **r.get("cells", {})}}
+        elif not r.get("overlay"):
+            rows[k] = r
+    return rows, made["order"] + [k for k in store["order"] if k not in made["rows"]]
+
+
 def table(state=None):
-    """Rows in display order (each row followed by the rows under it, `depth` levels down), merge cells filled from
-    the PR list."""
+    """Rows in display order (each row followed by the rows under it, `depth` levels down), a recorded row's merge
+    cell filled from the PR list, and `refs`: each owner/repo#N the rows name -> its URL."""
     store = read()
     state = fleet.read_json(fleet.state_dir() / "state.json", {}) if state is None else state
     prs = {p.get("key"): p for p in (state or {}).get("prs") or []}
+    all_rows, order = merged(store, stage_auto.read())
     rows = []
 
     def walk(parent, depth):
-        for k in store["order"]:
-            if k in store["rows"] and store["rows"][k].get("parent") == parent:
-                rows.append({**store["rows"][k], "depth": depth})
+        for k in order:
+            if k in all_rows and all_rows[k].get("parent") == parent:
+                rows.append({**all_rows[k], "depth": depth})
                 walk(k, depth + 1)
     walk(None, 0)
     out = []
     for r in rows:
         cells = dict(r.get("cells") or {})
-        auto = merge_cell(r.get("pr"), prs) if r.get("pr") else None
+        # A generated row's merge cell is evidence or nothing; a recorded row's says what holds its PR.
+        auto = merge_cell(r.get("pr"), prs) if r.get("pr") and r.get("source") != "auto" else None
         if auto:
             cells["merge"] = auto
         out.append({**r, "cells": cells})
-    return {"rows": out, "env": store["env"], "next": store["next"]}
+    return {"rows": out, "env": store["env"], "next": store["next"], "refs": ref_urls(out, store["next"], prs)}
+
+
+REF = re.compile(r"\b([\w.-]+/[\w.-]+)#(\d+)\b")
+
+
+def ref_urls(rows, nxt, prs):
+    """owner/repo#N -> /pull/N for a PR (in the collector's list, or a row's PR), else /issues/N: GitHub redirects
+    an /issues/ URL of a PR to the PR, never the other way."""
+    known = set(prs) | {r["pr"] for r in rows if r.get("pr")}
+    texts = [r.get(f) or "" for r in rows for f in ("pr", "title")] + list(nxt) + [
+        c.get("evidence") or "" for r in rows for c in r["cells"].values()]
+    return {f"{m[1]}#{m[2]}": f"https://github.com/{m[1]}/{'pull' if f'{m[1]}#{m[2]}' in known else 'issues'}/{m[2]}"
+            for t in texts for m in REF.finditer(t)}
 
 
 def current(t, now, idle_s, state=None):
@@ -184,7 +219,7 @@ def current(t, now, idle_s, state=None):
             return True
         if marks <= {"ok", "na"}:
             return False
-        times = [fleet.parse(x) for x in [r.get("created_at"), merged.get(r.get("pr"))] + [c.get("at") for c in r["cells"].values()]]
+        times = [fleet.parse(x) for x in [r.get("created_at"), r.get("at"), merged.get(r.get("pr"))] + [c.get("at") for c in r["cells"].values()]]
         last = max(filter(None, times), default=None)
         return not last or (now - last).total_seconds() <= idle_s
     keep = set()
