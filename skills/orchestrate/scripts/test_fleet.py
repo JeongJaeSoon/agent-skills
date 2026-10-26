@@ -95,6 +95,37 @@ ss = {s["id"]: s for s in st["sessions"]}
 assert ss["wt-export"]["unread"] == 3 and not items(st, "ci_failed"), (ss["wt-export"], items(st, "ci_failed"))
 badges_agree(st)
 
+# Needs you order: what only the owner settles, then a merge call waiting on them, then the rest; newest first in each.
+ranks = [fleet.needs_rank(i) for i in items(st)]
+assert ranks == sorted(ranks) and ranks.count(0) == 5 and ranks.count(1) == 1, [(i["type"], r) for i, r in zip(items(st), ranks)]
+for r in set(ranks):
+    ats = [i.get("at") or "" for i in items(st) if fleet.needs_rank(i) == r]
+    assert ats == sorted(ats, reverse=True), (r, ats)
+assert [i["type"] for i in items(st)][5] == "ready_to_merge"
+# A PR a held board item names goes last, marked with the hold, until its date comes or the item leaves the board.
+board_path, ahead = state_dir / "board.json", (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
+
+
+def hold(trigger):
+    fleet.write_atomic(board_path, json.dumps({"doing": [], "owner_todo": [], "rows": {},
+                                               "later": [{"title": "acme/launchpad#42 마무리", "trigger": trigger}]}))
+    return f.tick(force=True)
+
+
+st = hold(f"{ahead} 이후")
+pr42 = [i for i in items(st) if i.get("pr") == "acme/launchpad#42"]
+assert pr42 and all(i["held"] == f"{ahead} 이후" for i in pr42) and items(st)[-len(pr42):] == pr42, [(i["type"], i.get("held")) for i in items(st)]
+assert not any(i.get("held") for i in items(st) if i.get("pr") != "acme/launchpad#42")
+st = hold((now - dt.timedelta(days=1)).astimezone().strftime("%m/%d") + " 이후")
+assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
+st = hold("acme/launchpad#41 머지 뒤")  # no date: held while the PR its trigger names is open
+assert all(i.get("held") for i in items(st) if i.get("pr") == "acme/launchpad#42")
+board_path.unlink()
+st = f.tick(force=True)
+assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
+assert fleet.trigger_at("2026-11-02 14:30", now).strftime("%Y-%m-%d %H:%M") == "2026-11-02 14:30"
+assert fleet.trigger_at("v1.2 배포 뒤", now) is None and fleet.trigger_at("acme/app#9 머지 뒤", now) is None
+
 # A reload skills-sync could not send sits on its terminal's session (and counts there), titled with the terminal;
 # one for a terminal Orca no longer lists is gone.
 pending_path = state_dir.parent / "reload-pending.json"
@@ -134,6 +165,25 @@ assert [i["session"] for i in items(st, "reload_pending")] == ["wt-export"], ite
 fleet.RELOAD_TRIED.clear()
 pending_path.unlink()
 assert fleet.retry_reloads(fake) == [] and len(fake.calls) == 1
+st = f.tick(force=True)
+assert any(e["kind"] == "item_resolved" and e["text"] == "reload_delivered: Reload not sent: ◑ ACME-102" for e in st["timeline"])
+# A reload still being retried is not the owner's yet: it shows once reload_alert_min has passed since the first try,
+# and leaves with a timeline line when it is delivered.
+fleet.write_atomic(pending_path, json.dumps({"since": fleet.iso(clock[0] - dt.timedelta(minutes=5)), "failed": {
+    "term_login": {"reason": "composer holds a draft"}}}))
+st = f.tick(force=True)
+assert not items(st, "reload_pending"), items(st, "reload_pending")
+fleet.write_atomic(pending_path, json.dumps({"since": fleet.iso(clock[0] - dt.timedelta(minutes=fleet.RELOAD_ALERT_MIN)), "failed": {
+    "term_login": {"reason": "composer holds a draft"}}}))
+st = f.tick(force=True)
+assert [i["session"] for i in items(st, "reload_pending")] == ["wt-login"], items(st, "reload_pending")
+delivered = lambda st: sum(e["kind"] == "item_resolved" and e["text"] == "reload_delivered: Reload not sent: ✳ ACME-101"  # noqa: E731
+                           for e in st["timeline"])
+n = delivered(st)
+pending_path.unlink()
+st = f.tick(force=True)
+assert not items(st, "reload_pending") and delivered(st) == n + 1
+assert delivered(f.tick(force=True)) == n + 1, "once"
 
 # A push after approval, and CI recovering, become PR events for the platform side and new inbox state.
 world.advance()
@@ -782,7 +832,7 @@ f.graphql = real_gql
 # Items settled in reality leave on their own. A turn item goes once its pane gets a later prompt or starts a later
 # turn, once the same agent finishes a later turn, or once its worktree is gone.
 def resolved(st):
-    return {e["text"].split(":")[0] for e in st["timeline"] if e["kind"] == "item_resolved"}
+    return {e["text"].split(":")[0] for e in st["timeline"] if e["kind"] == "item_resolved"} - {"reload_delivered", "reload_dropped"}
 
 
 scratch = world.worktrees[4]["agents"][0]

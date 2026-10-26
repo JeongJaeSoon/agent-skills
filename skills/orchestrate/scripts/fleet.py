@@ -1673,14 +1673,30 @@ class Fleet:
                 self.event({"at": iso(now), "kind": "inbox_aged_out", "session": i.get("session"),
                             "text": mask(f"{i['title']} (added {EXTERNAL_KEEP_DAYS}+ days ago; orch-dash inbox list)", 200)})
         mem["external_aged"] = [i["key"] for i in aged]
-        items += kept + sync_items(now, terms) + list(self.checks)
+        syncs, wait = sync_items(now, terms), cfg.get("reload_alert_min", RELOAD_ALERT_MIN) * 60
+        failed = {i["terminal"] for i in syncs if i["type"] == "reload_pending"}
+        for h, title in (mem.get("reload_shown") or {}).items():
+            if h not in failed:
+                self.event({"at": iso(now), "kind": "item_resolved", "session": (terms.get(h) or (None,))[0],
+                            "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
+        syncs = [i for i in syncs if i["type"] != "reload_pending" or not parse(i["at"])
+                 or (now - parse(i["at"])).total_seconds() >= wait]
+        mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
+        items += kept + syncs + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
         dismissed, raw_keys = mem.setdefault("dismissed", {}), {it["key"] for it in items}
         items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
                  for it in items if it["key"] not in dismissed]
+        import tidy
+        held = held_prs(read_json(state_dir() / "board.json", {}) or {}, tidy.closed(),
+                        {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}, now)
+        for i in items:
+            if i.get("source") == "github" and i.get("pr") in held:
+                i["held"] = held[i["pr"]]
         items.sort(key=lambda i: i.get("at") or "", reverse=True)
+        items.sort(key=needs_rank)
         # A session's badge counts exactly the Needs you items on it, so the badges and the inbox always agree:
         # the badges plus the items that belong to no session are the inbox. No local "seen" mark hides any.
         for i in items:
@@ -1701,7 +1717,6 @@ class Fleet:
         for store in (prompts, phases):
             for k in [k for k in store if k not in panes]:
                 del store[k]
-        import tidy
         timeline = list(self.events) + tidy.timeline()
         timeline += [{"at": m.get("created_at"), "kind": f"mail_{m.get('type')}", "session": by_handle.get(m.get("from_handle")),
                       "text": mask(m.get("subject"), 160), "read": bool(m.get("read"))} for m in self.fast["messages"]
@@ -1839,6 +1854,53 @@ def sync_items(now, terms=None):
 
 RELOAD_RETRY_S = 120
 RELOAD_TRIED = {}  # handle -> monotonic time of the last retry
+RELOAD_ALERT_MIN = 45  # config reload_alert_min: a reload still not sent this long after skills-sync's first try,
+# three of its rounds and the dashboard's own retries, needs a person; younger, it is being retried, not waiting on one
+
+# Needs you order, newest first within a rank: what only the owner can settle, then a merge call waiting on them, then
+# the rest; a PR item a held board item names is last, until the hold lifts.
+NEEDS_RANK = {"decision": 0, "approval": 0, "permission": 0, "prompt": 0, "question": 0, "login": 0, "run_command": 0,
+              "ready_to_merge": 1}
+HELD_RANK = 3
+DATE_RE = re.compile(r"(?<![\d.])(?:(\d{4})-)?(\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?(?![\d/])")
+
+
+def needs_rank(item):
+    return HELD_RANK if item.get("held") else NEEDS_RANK.get(item["type"], 2)
+
+
+def trigger_at(text, now):
+    """The moment a held item's words name, M/D or YYYY-MM-DD with an optional HH:MM in local time, or None. A M/D
+    half a year behind now is next year's."""
+    m = DATE_RE.search(text or "")
+    if not m:
+        return None
+    y, mo, d, h, mi = m.groups()
+    local = now.astimezone()
+    try:
+        t = local.replace(year=int(y) if y else local.year, month=int(mo), day=int(d), hour=int(h or 0),
+                          minute=int(mi or 0), second=0, microsecond=0)
+    except ValueError:
+        return None
+    return t.replace(year=t.year + 1) if not y and t < local - dt.timedelta(days=180) else t
+
+
+def held_prs(store, shut, prs, now):
+    """PR key -> the hold, for each PR a held board item's title names by its full key. The hold lifts when the item
+    is dropped or closed (tidy), when its --due or the date in its trigger comes, or, with no date, when every PR its
+    trigger names has merged."""
+    import tidy
+    out = {}
+    for l in store.get("later") or []:
+        if tidy.item_id("later", l) in shut:
+            continue
+        at = parse(l.get("due")) or trigger_at(l.get("due"), now) or trigger_at(l["trigger"], now)
+        at = at and (at if at.tzinfo else at.astimezone())  # a bare date is local time
+        if at and at <= now or not at and tidy.refs_over(pr_refs(l["trigger"]), prs):
+            continue
+        for k in pr_refs(l["title"]):
+            out.setdefault(k, l["trigger"] + (f" · {l['due']}" if l.get("due") else ""))
+    return out
 
 
 def retry_reloads(sync=None):
