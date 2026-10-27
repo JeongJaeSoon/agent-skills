@@ -145,8 +145,9 @@ def plan(cfg, state, now):
     scope = " ".join(f"in:<#{c}>" for c in cfg["channels"])
     after = f"after:{day_before(oldest)}"
     # The day filter alone returns up to two days of hits each round. The search tool's `after` takes whole Unix seconds,
-    # inclusive; flooring keeps every hit at or after oldest, and a server that ignores it falls back to the day filter.
-    since = str(int(oldest))
+    # inclusive; one second below the floor still keeps every hit at or after oldest on a server that compares exclusively,
+    # ingest makes the exact cut, and a server that ignores `after` falls back to the day filter.
+    since = str(int(oldest) - 1)
     searches = [{"kind": "mention", "keywords": [f"<@{uid}>"], "filters": f"{after} {scope}".strip(), "after": since}]
     searches += [{"kind": "name", "keywords": [n], "filters": f"{after} -from:<@{uid}> {scope}".strip(), "after": since}
                  for n in cfg["names"]]
