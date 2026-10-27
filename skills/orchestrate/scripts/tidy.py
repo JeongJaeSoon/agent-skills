@@ -11,7 +11,7 @@ the report lists as the owner's turn or another person's wait.
 
 One append-only file, <fleet state>/tidy.jsonl (0600), one JSON object a line:
   {"ev": "done" | "reopen", "id", "ts", "by": "auto" | "owner", "rule", "evidence", "label"}
-ids: doing:<k> later:<k> todo:<k> (k: a digest of the item's words, so rewording it makes a new item), row:<board row
+ids: doing:<k> later:<k> do:<k> (a to-do) todo:<k> (the owner's now-list) (k: a digest of the item's words, so rewording it makes a new item), row:<board row
 id>, card:<session id> (a fleet row), ext:<inbox key>, req:<request id>. The state of an id is its last line. A
 reopen keeps the evidence it undid, and the tick does not close that id again on the same evidence. Reopening an
 ext: or req: id adds the inbox item again or opens the request again. Past fleet.ROTATE_BYTES the file moves to .1
@@ -34,7 +34,8 @@ def path():
 
 
 def item_id(kind, item):
-    parts = (item["title"], item["trigger"]) if kind == "later" else (item["title"],) if kind == "doing" else (item,)
+    parts = ((item["title"], item["trigger"]) if kind == "later" else (item["title"], item.get("due") or "", item.get("after") or "")
+             if kind == "do" else (item["title"],) if kind == "doing" else (item,))
     return f"{kind}:{fleet.digest(*parts)[:8]}"
 
 
@@ -87,6 +88,15 @@ def refs_over(keys, prs, closed_ok=False):
     return " · ".join(pr_line(k, p).strip() for k, p in zip(keys, ps))
 
 
+def trigger_met(text, cards, prs):
+    """The evidence that a held item's trigger (a to-do's --after) is met, else None: it says merge, and every PR it
+    names, or the PR of the card it names, has merged."""
+    if not MERGE_WORD.search(text):
+        return None
+    card = named(text, cards)
+    return refs_over(fleet.pr_refs(text) + [card and card["pr"]], prs)
+
+
 def assess(store, state, prs, me=None, now=None):
     """id -> {verdict: done | check, rule, evidence, label} for what the evidence settles now. state.json's sessions
     and PR list, prs.json's details (key -> detail), board.json's store."""
@@ -114,10 +124,7 @@ def assess(store, state, prs, me=None, now=None):
         else:
             put(item_id("doing", d), "done", "pr_merged", ev + (f" (카드 {card['name']})" if card else ""), d["title"])
     for l in store.get("later") or []:
-        if not MERGE_WORD.search(l["trigger"]):
-            continue
-        card = named(l["trigger"], cards)
-        if ev := refs_over(fleet.pr_refs(l["trigger"]) + [card and card["pr"]], prs):
+        if ev := trigger_met(l["trigger"], cards, prs):
             put(item_id("later", l), "check", "trigger_met", f"조건 충족: {ev}", l["title"])
     for t in store.get("owner_todo") or []:
         if ev := refs_over(fleet.pr_refs(t), prs, closed_ok=True):
