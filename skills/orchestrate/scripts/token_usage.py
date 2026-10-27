@@ -412,7 +412,7 @@ def refresh(days=7):
     """collect() then report(), written to tokens.json for the dashboard and the brief (board.token_line)."""
     cache = collect()
     rep = report(cache, days)
-    fleet.write_atomic(out_path(), json.dumps(rep, ensure_ascii=False))
+    fleet.write_atomic(out_path(), json.dumps(rep))  # ASCII: read back under any locale
     return rep
 
 

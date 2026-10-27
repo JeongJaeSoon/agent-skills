@@ -87,7 +87,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 - [docs/automation.md](docs/automation.md): 어떤 일을 어떤 장치로 돌리나
 - [docs/configuration-migration.md](docs/configuration-migration.md): 설정 키와 전환
 - [docs/platform.md](docs/platform.md): 체크아웃 로드와 동기화 설계
-- [docs/token-usage.md](docs/token-usage.md): 이 플러그인이 컨텍스트에 넣는 토큰을 정적으로 재기(`python3 scripts/skill_tokens.py static`)
+- [docs/token-usage.md](docs/token-usage.md): 이 플러그인이 컨텍스트에 넣는 토큰을 정적으로 재기(`python3 scripts/skill_tokens.py static`)와 transcript에서 실제로 쓴 토큰을 기능별로 재기(`python3 scripts/skill_tokens.py usage`, 대시보드 Tokens)
 - 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR). 오른쪽 위에서 한국어·English·日本語를 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다.
 
 ## 테스트

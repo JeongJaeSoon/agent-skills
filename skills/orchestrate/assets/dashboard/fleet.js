@@ -17,7 +17,7 @@ const FLEET_SECTIONS = [
   { id: "monitors", label: "Monitors", icon: "activity" },
   { id: "skills", label: "Skills", icon: "spark", sep: true },
   { id: "changes", label: "Skill changes", icon: "merge" },
-  { id: "tokens", label: "Tokens", icon: "activity" },
+  { id: "tokens", label: "Tokens", icon: "coins" },
   { id: "stats", label: "PR stats", icon: "chart" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "flow", label: "Data flow", icon: "link" },
@@ -711,7 +711,7 @@ function fleetSkills() {
 
 // Token use comes from /api/fleet/tokens (token_usage.py), refreshed by the server every 15 minutes.
 const tokN = (n) => n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${Math.round(n)}`;
-const tokTrend = (t) => t == null ? '<span class="muted">new</span>' : `<span class="${t >= 0.5 ? "tone-bad" : t <= -0.3 ? "tone-good" : "dim"}">${t >= 0 ? "+" : ""}${Math.round(t * 100)}%</span>`;
+const tokTrend = (t) => t == null ? '<span class="muted">new</span>' : `<span class="${t >= 0.5 ? "toned tone-bad" : t <= -0.3 ? "toned tone-good" : "dim"}">${t >= 0 ? "+" : ""}${Math.round(t * 100)}%</span>`;
 function tokTable(rows, label, hot) {
   const body = rows.slice(0, 12).map((r) => `<tr><td class="mono">${hot.has(r.key) ? tag("hot", "bad", "") + " " : ""}${esc(r.key)}</td>
     <td class="num">${tokN(r.weighted)}</td><td class="num hide-sm dim">${tokN(r.tokens)}</td><td class="num">${(r.share * 100).toFixed(1)}%</td><td class="num">${tokTrend(r.trend)}</td></tr>`).join("");
@@ -734,7 +734,7 @@ function fleetTokens() {
     ${kpi("Unclassified", `${(rep.unclassified.who * 100).toFixed(1)}%`, `origin unknown ${(rep.unclassified.origin * 100).toFixed(1)}%`)}</div>`;
   const warn = rep.warnings.map((w) => `<li>${tag(w.kind, "bad", "")} <span class="mono">${esc(w.text)}</span>${w.static ? ` <span class="muted">static: ${esc(w.static.skill)} listing ${w.static.listing_tokens} tokens a turn, SKILL.md ${w.static.skill_md_tokens.toLocaleString()} a load</span>` : ""}</li>`).join("");
   const autos = rep.automations.map((a) => `<tr><td class="mono">${hot.has(a.key) ? tag("hot", "bad", "") + " " : ""}${esc(a.key)}</td><td class="num">${a.rounds}</td>
-    <td class="num ${a.empty_recent >= a.recent / 2 && a.recent ? "tone-warn" : "dim"}">${a.empty_recent}/${a.recent}</td><td class="num">${tokN(a.weighted_per_round)}</td></tr>`).join("");
+    <td class="num ${a.empty_recent >= a.recent / 2 && a.recent ? "toned tone-warn" : "dim"}">${a.empty_recent}/${a.recent}</td><td class="num">${tokN(a.weighted_per_round)}</td></tr>`).join("");
   const hooks = rep.hooks.map((h) => `<tr><td class="mono">${esc(h.name)}</td><td class="num">${h.count}</td><td class="num">${h.tokens.toLocaleString()}</td></tr>`).join("");
   return head + kpis + (warn ? `<div class="card"><div class="card-head"><h3>Using the most</h3><span class="aside">${rep.warnings.length}</span></div><ul class="rows">${warn}</ul></div>` : "")
     + `<div class="grid">${tokTable(rep.who, "Who", hot)}${tokTable(rep.skill, "Skill in effect", hot)}</div>

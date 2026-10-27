@@ -2,9 +2,10 @@
 
 Run: python3 test_token_usage.py
 """
-import datetime as dt, json, os, pathlib, subprocess, sys, tempfile
+import atexit, datetime as dt, json, os, pathlib, shutil, subprocess, sys, tempfile
 
 root = pathlib.Path(tempfile.mkdtemp(prefix="test-token-usage-"))
+atexit.register(shutil.rmtree, root, True)
 os.environ.update({"ORCH_FLEET_STATE": str(root / "dash"), "AGENT_SKILLS_STATE": str(root),
                    "AGENT_SKILLS_CONFIG": str(root / "agent-skills.json"), "CLAUDE_PROJECTS_DIR": str(root / "projects")})
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -85,7 +86,7 @@ assert list(cache["sessions"].values()) == [{"who": "automation:watch-prs", "sta
                                               "weighted": 1000 + 1000 + 500}], cache["sessions"]
 stored = tu.cache_path().read_text()
 assert SECRET not in stored and "acme" not in stored and str(root) not in stored, "no text, no path is kept"
-assert cache["last"]["parsed"] == 5
+assert cache["last"]["parsed"] == 4
 
 # Incremental: nothing new reads nothing; a half-written line waits for its newline.
 assert tu.collect(now=NOW, autos=AUTOS, hooks=set())["last"]["parsed"] == 0

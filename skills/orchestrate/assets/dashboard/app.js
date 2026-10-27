@@ -47,6 +47,7 @@ const ICON = {
   chart: '<path d="M2.5 13.5h11M4.5 11V8M8 11V3.5M11.5 11V6"/>',
   list: '<path d="M6 4h7.5M6 8h7.5M6 12h7.5"/><circle cx="3" cy="4" r=".9"/><circle cx="3" cy="8" r=".9"/><circle cx="3" cy="12" r=".9"/>',
   yield: '<path d="M13.5 8H3M6.5 4.5 3 8l3.5 3.5"/>',
+  coins: '<ellipse cx="8" cy="4.5" rx="5" ry="2"/><path d="M3 4.5V8c0 1.1 2.2 2 5 2s5-.9 5-2V4.5M3 8v3.5c0 1.1 2.2 2 5 2s5-.9 5-2V8"/>',
   inbox: '<path d="M1.8 9.2 3.6 3h8.8l1.8 6.2v3.8H1.8Z"/><path d="M1.8 9.2h3.4l.9 1.8h3.8l.9-1.8h3.4"/>',
   chat: '<path d="M2.2 3h11.6v7.6H7.4L4.2 13.4v-2.8H2.2Z"/>',
   copy: '<rect x="5.2" y="5.2" width="8.6" height="8.6" rx="1.4"/><path d="M10.8 5.2V3.6a1.4 1.4 0 0 0-1.4-1.4H3.6a1.4 1.4 0 0 0-1.4 1.4v5.8a1.4 1.4 0 0 0 1.4 1.4h1.6"/>',
