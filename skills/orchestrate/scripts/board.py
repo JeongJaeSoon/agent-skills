@@ -65,6 +65,8 @@ def change(fn):
     with (fleet.state_dir() / "board.lock").open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         store = read()
+        for t in store["todo"]:  # a to-do from before the stamp: its M/D reads against this write
+            t.setdefault("added", fleet.iso(fleet.utcnow()))
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
         gone = {k for k, r in store["rows"].items() if not r.get("parent") and (r.get("done_at") or "9") < cutoff}
@@ -247,9 +249,18 @@ def later_drop(n):
     return change(go)
 
 
-def check_due(due):
-    if due and not fleet.due_at(due, None, fleet.utcnow()):
+def moment(due, now):
+    """--due as the ISO8601 moment it names now, or None. A to-do keeps this, not the words: `10/1` read again next
+    year would name next year's."""
+    at = fleet.due_at(due, None, now)
+    return at and at.isoformat()
+
+
+def check_due(due, now):
+    at = due and moment(due, now)
+    if due and not at:
         raise ValueError("--due is YYYY-MM-DD[ HH:MM], M/D[ HH:MM] or ISO8601")
+    return at
 
 
 def todo_add(title, due=None, after=None, who=None):
@@ -258,9 +269,10 @@ def todo_add(title, due=None, after=None, who=None):
     if not (title or "").strip() or not ((due or "").strip() or (after or "").strip()) or not (who or "").strip():
         raise ValueError("board todo add needs a title, --due D or --after C (when it starts) and --who W (who does it);"
                          " work with no when is `board doing add` or `board later add`")
-    check_due(due)
-    item = {"title": one_line(title), "who": one_line(who), **({"due": one_line(due)} if due else {}),
-            **({"after": one_line(after)} if after else {})}
+    now = fleet.utcnow()
+    due = check_due(due, now)
+    item = {"title": one_line(title), "who": one_line(who), **({"due": due} if due else {}),
+            **({"after": one_line(after)} if after else {}), "added": fleet.iso(now)}
 
     def go(store):
         same = (i for i, t in enumerate(store["todo"]) if (t.get("due"), t.get("after")) == (item.get("due"), item.get("after"))
@@ -285,15 +297,16 @@ def todo_from_later(n, due=None, who=None):
     """Move held item n to the to-do list: its trigger becomes --after, its --due carries over unless due is given."""
     if not (who or "").strip():
         raise ValueError("board todo from-later needs --who W (who does it)")
-    check_due(due)
+    now = fleet.utcnow()
+    due = check_due(due, now)
 
     def go(store):
         if not 1 <= n <= len(store["later"]):
             raise ValueError(f"no later item {n}; there are {len(store['later'])}")
         l = store["later"].pop(n - 1)
-        due_ = due or l.get("due")
-        store["todo"].append({"title": l["title"], "who": one_line(who), **({"due": one_line(due_)} if due_ else {}),
-                              "after": l["trigger"]})
+        due_ = due or l.get("due") and (moment(l["due"], now) or one_line(l["due"]))
+        store["todo"].append({"title": l["title"], "who": one_line(who), **({"due": due_} if due_ else {}),
+                              "after": l["trigger"], "added": fleet.iso(now)})
     return change(go)
 
 
@@ -306,16 +319,17 @@ WEEKDAY = "월화수목금토일"
 
 def todo_when(t, now):
     """When a to-do starts, as the report says it: its --due as a local date (and time, unless midnight), its --after."""
-    at = fleet.due_at(t.get("due"), None, now)
+    at = fleet.todo_dates(t, now)[0]
     at = at and at.astimezone()
     due = at and f"{at.month}/{at.day}({WEEKDAY[at.weekday()]})" + (f" {at:%H:%M}" if (at.hour, at.minute) != (0, 0) else "")
     return " · ".join(x for x in (due, t.get("after")) if x)
 
 
 def todo_arrived(t, now, cards, prs):
-    """Its date has come (--due, or a date in --after), or its --after is met by the held-item rule (tidy.trigger_met)."""
-    at = fleet.due_at(t.get("due"), t.get("after"), now)
-    return bool(at and at <= now or not at and t.get("after") and tidy.trigger_met(t["after"], cards, prs))
+    """Whichever comes first: its --due, the date in its --after, or, with no date there, its --after met by the
+    held-item rule (tidy.trigger_met)."""
+    due, on = fleet.todo_dates(t, now)
+    return bool(any(x and x <= now for x in (due, on)) or not on and t.get("after") and tidy.trigger_met(t["after"], cards, prs))
 
 
 # ---------------------------------------------------------------- render
@@ -825,7 +839,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     planned = [(tidy.item_id("do", t), t, todo_when(t, now)) for t in store["todo"] if tidy.item_id("do", t) not in shut]
     arrived = [p for p in planned if todo_arrived(p[1], now, cards, prs)]
     upcoming = sorted((p for p in planned if p not in arrived),
-                      key=lambda p: (fleet.due_at(p[1].get("due"), p[1].get("after"), now) or dt.datetime.max.replace(tzinfo=dt.timezone.utc)))
+                      key=lambda p: min(filter(None, fleet.todo_dates(p[1], now)), default=dt.datetime.max.replace(tzinfo=dt.timezone.utc)))
 
     # A section's merge target is the base most of its PRs share; a row with another base names its own.
     bases = {}

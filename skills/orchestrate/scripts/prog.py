@@ -2428,9 +2428,9 @@ def cmd_board(argv):
             board.later_drop(int(rest[1]))
         elif sub == "todo" and rest[:1] == ["add"] and len(rest) > 1:
             board.todo_add(rest[1], opt(rest, "--due"), opt(rest, "--after"), opt(rest, "--who"))
-        elif sub == "todo" and rest[:1] == ["drop"] and len(rest) > 1:
+        elif sub == "todo" and rest[:1] == ["drop"] and "".join(rest[1:2]).isdigit():
             board.todo_drop(int(rest[1]))
-        elif sub == "todo" and rest[:1] == ["from-later"] and len(rest) > 1:
+        elif sub == "todo" and rest[:1] == ["from-later"] and "".join(rest[1:2]).isdigit():
             board.todo_from_later(int(rest[1]), opt(rest, "--due"), opt(rest, "--who"))
         elif sub == "todo":
             # It replaced the owner's list before the to-do list took the name: an old line must not overwrite it.

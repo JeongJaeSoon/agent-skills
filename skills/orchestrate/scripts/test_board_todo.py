@@ -3,7 +3,7 @@
 
 Run: python3 test_board_todo.py
 """
-import json, os, pathlib, subprocess, sys, tempfile
+import datetime as dt, json, os, pathlib, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).parent
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-todo-"))
@@ -78,7 +78,8 @@ assert orch("board", "todo", "from-later", "9", "--who", "오너")[2] == "no lat
 ok("board", "todo", "from-later", "2", "--who", "writer")
 s = store()
 assert [l["title"] for l in s["later"]] == ["캐시 TTL 다시 보기"]
-assert s["todo"][-1] == {"title": "릴리스 노트 정리", "who": "writer", "due": "2026-11-03", "after": "v2 출시 뒤"}, s["todo"]
+moved = {k: v for k, v in s["todo"][-1].items() if k != "added"}
+assert moved == {"title": "릴리스 노트 정리", "who": "writer", "due": "2026-11-03T00:00:00+00:00", "after": "v2 출시 뒤"}, s["todo"]
 
 state.mkdir(parents=True, exist_ok=True)
 (state / "state.json").write_text(json.dumps({"generated_at": BEFORE, "sessions": []}))
@@ -123,5 +124,37 @@ ok("board", "reopen", first)
 assert "⏰ acme/app#1 머지·배포" in render(AFTER)
 ok("board", "todo", "drop", "1")
 assert [t["title"] for t in store()["todo"]] == ["acme/app#2 ready로 전환", "릴리스 노트 정리"]
+
+# A M/D is kept as the moment it named when added: read again in January, last October's dates stay come. The date in
+# --after reads against when the to-do was added, and one written before the stamp gets it on the next write.
+fleet.utcnow = lambda: dt.datetime(2026, 10, 28, 1, tzinfo=dt.timezone.utc)
+board.todo_add("분기 정산", due="10/1", who="writer")
+board.todo_add("회고 정리", due="10/29", who="writer")
+board.todo_add("감사 대응", after="10/27 이후", who="writer")
+assert [t["due"] for t in store()["todo"] if t["title"] in ("분기 정산", "회고 정리")] == ["2026-10-01T00:00:00+00:00",
+                                                                                   "2026-10-29T00:00:00+00:00"]
+legacy = store()
+legacy["todo"].append({"title": "옛 할 일", "who": "writer", "due": "10/1"})
+(state / "board.json").write_text(json.dumps(legacy, ensure_ascii=False))
+board.change(lambda s: None)
+assert store()["todo"][-1]["added"] == "2026-10-28T01:00:00Z", store()["todo"]
+JAN = "2027-01-10T00:00:00Z"
+out = render(JAN)
+doing = "\n".join(section(out, "🔄 **진행 중**"))
+assert all(f"⏰ {w}" in doing for w in ("분기 정산", "회고 정리", "감사 대응", "옛 할 일")), out
+assert "📅 **할 일**" not in out, out
+
+# --due and --after: whichever comes first. A later --due does not wait out a merged --after, and a passed --due does
+# not wait for an --after still open; Needs you lifts the PR hold on the same rule.
+board.todo_add("acme/app#1 핫픽스 배포", due="2027-03-01", after="acme/app#5 머지 후", who="writer")
+board.todo_add("acme/app#2 롤백 확인", due="10/27", after="acme/app#9 머지 후", who="writer")
+out = render(AFTER)
+doing = "\n".join(section(out, "🔄 **진행 중**"))
+assert "⏰ acme/app#1 핫픽스 배포" in doing and "⏰ acme/app#2 롤백 확인" in doing, out
+assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()
+write_prs(merged5=False)
+assert "acme/app#1 핫픽스 배포" in "\n".join(section(render(BEFORE), "📅 **할 일**"))
+
+assert orch("board", "todo", "drop", "abc")[2].startswith("board todo is the to-do list now: todo add")
 
 print("ok")

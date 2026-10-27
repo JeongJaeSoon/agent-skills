@@ -1956,6 +1956,13 @@ def due_at(due, text, now):
     return at and (at if at.tzinfo else at.astimezone())  # a bare date is local time
 
 
+def todo_dates(t, now):
+    """A to-do's (--due, the date in --after) as moments, each None without one. A M/D reads against when the to-do
+    was added, not now: read against now, one that came last year comes again next year."""
+    base = parse(t.get("added")) or now
+    return due_at(t.get("due"), None, base), trigger_at(t.get("after"), base)
+
+
 def held_prs(store, shut, prs, now):
     """PR key -> the hold, for each PR a held board item or a to-do names in its title (held_refs). The hold lifts
     when the item is dropped or closed (tidy), when its --due or the date in its trigger (a to-do's --after) comes,
@@ -1967,9 +1974,14 @@ def held_prs(store, shut, prs, now):
     for kind, l, trigger in items:
         if tidy.item_id(kind, l) in shut:
             continue
-        at = due_at(l.get("due"), trigger, now)
-        if at and at <= now or not at and tidy.refs_over(pr_refs(trigger), prs):
-            continue
+        if kind == "do":  # whichever comes first, as board.todo_arrived reads it
+            due, on = todo_dates(l, now)
+            if any(x and x <= now for x in (due, on)) or not on and tidy.refs_over(pr_refs(trigger), prs):
+                continue
+        else:
+            at = due_at(l.get("due"), trigger, now)
+            if at and at <= now or not at and tidy.refs_over(pr_refs(trigger), prs):
+                continue
         for k in held_refs(l["title"], prs):
             out.setdefault(k, " · ".join(x for x in (trigger, l.get("due")) if x))
     return out
