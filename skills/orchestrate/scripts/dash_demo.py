@@ -536,6 +536,12 @@ def seed_board():
     req.close("r1", "link", to="lead-login")
     req.close("r3", "link", to="lead-login/export")
     req.close("r4", "done", note="초안 공유함")
+    # A pasted prompt with a long link list: the case where the links once squeezed the text into one column.
+    req.add('<pasted_content id="4e37"> /goal launchpad 대시보드의 결제 내역 화면에서 금액 칸이 좁게 눌려 한 글자씩 줄바꿈되는 문제를 고쳐 PR을 머지까지 낸다. '
+            '증거: 오너 캡처, 1440·390 light·dark 전후 비교 </pasted_content id="4e37">', "s-demo", "term_0FAKE0",
+            now=now - dt.timedelta(minutes=3))
+    for to in ("program:launchpad-ga card:wt-payments-layout-fix", "ACME-904", "ACME-921"):
+        req.close("r5", "link", to=to)
 
 
 def live(root, period=20, world=None):
