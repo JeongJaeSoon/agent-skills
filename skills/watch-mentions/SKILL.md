@@ -53,9 +53,9 @@ M="${CLAUDE_SKILL_DIR}/scripts/mentions.py"
 python3 "$M" plan > <scratchpad>/plan.json     # takes the run lock; prints oldest and the searches
 ```
 
-1. **Search.** Run each `searches` entry with `slack_search_public` (`keywords`, `filters`,
-   `sort: timestamp`, `include_context: false`), following `cursor` while results are newer than
-   `oldest`. For the `thread` entry, collect the distinct `(channel id, thread_ts)` pairs from the
+1. **Search.** Run each `searches` entry with `slack_search_public` (`keywords`, `filters`, the
+   entry's `after` when it has one, `sort: timestamp`, `include_context: false`), following `cursor`
+   while results are newer than `oldest`. For the `thread` entry, collect the distinct `(channel id, thread_ts)` pairs from the
    permalinks, following `cursor` until there are `max_threads` (newest first), and read each with
    `slack_read_thread`, `oldest` from the plan and the `detailed` format (the concise one has no
    per-reply ts). A busy user fills a page of 20 hits with a handful of threads.
