@@ -215,16 +215,27 @@ def named(prefix, segs):
         yield from level
 
 
-def tree(top, chain=()):
-    """top and everything under it, hidden entries and symlinked directories included; a directory loop is refused."""
+def tree(top, chain=(), seen=None):
+    """top and everything under it, hidden entries and symlinked directories included; a directory loop is refused.
+    A directory reached again through another link is yielded but not entered twice: links that share targets would
+    otherwise walk every path through them, exponential in how many levels of them there are."""
     yield top
     if not os.path.isdir(top):
         return
     real = os.path.realpath(top)
     if real in chain:
         raise Refused(f"{top}: a symlink loop back to {real}")
-    for n in sorted(os.listdir(top)):
-        yield from tree(os.path.join(top, n), (*chain, real))
+    seen = set() if seen is None else seen
+    if real in seen:
+        return
+    seen.add(real)
+    try:
+        names = sorted(os.listdir(top))
+    except OSError as e:
+        raise Refused(f"cannot list {top} ({e.strerror}), so what is under it is unchecked; make it readable "
+                      f"or leave it out of the rule")
+    for n in names:
+        yield from tree(os.path.join(top, n), (*chain, real), seen)
 
 
 def check_keys(keys):

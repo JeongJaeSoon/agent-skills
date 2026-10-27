@@ -68,8 +68,9 @@ def ms_iso(v):
 
 
 def parse(s):
+    # Before 3.11 fromisoformat takes neither `Z` nor skills-sync's `+0900`.
     try:
-        return dt.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        return dt.datetime.fromisoformat(re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", str(s).replace("Z", "+00:00")))
     except ValueError:
         return None
 

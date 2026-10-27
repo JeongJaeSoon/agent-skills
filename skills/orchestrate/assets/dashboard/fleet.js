@@ -875,8 +875,8 @@ function sectionTable(name, items) {
     <tbody>${rows.map((r) => `<tr>${(marked ? r : r.slice(1)).map((c, i) => `<td${marked && !i ? ' class="bmark"' : ""}>${briefInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 // tableRows (the reply's table_rows): per repository table, per row, the id its Ack or Done posts. A table whose row
-// count differs gets no buttons rather than a button on the wrong row.
-function briefHtml(text, tableRows = []) {
+// count differs gets no buttons rather than a button on the wrong row. placed collects the Ack ids that did get one.
+function briefHtml(text, tableRows = [], placed = new Set()) {
   const out = [], lines = text.split("\n");
   let i = 0, t = 0;
   const blank = () => { while (i < lines.length && !lines[i].trim()) i++; };
@@ -895,6 +895,7 @@ function briefHtml(text, tableRows = []) {
       // A repository table (`| | name | PR | progress |`) gets one shared set of column widths; a cell too long for its
       // column scrolls sideways within itself instead of being cut.
       const repo = head.length === 4 && !head[0], acts = repo && tableRows[t++], btns = acts && acts.length === body.length ? acts : null;
+      (btns || []).forEach((x) => x.ack && placed.add(x.ack));
       const act = (x) => `<td class="bact" data-row-label="${esc(x.label || "")}">${x.ack ? ackBtn({ ack: "ackable", key: x.ack }) : x.done ? doneBtn(x.done) : ""}</td>`;
       out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr"><col class="bprog">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
         <thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}${btns ? "<th></th>" : ""}</tr></thead>
@@ -923,14 +924,15 @@ function fleetBrief() {
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
   const stage = b.stages ? `<a class="card stage-link" href="#/fleet/stages">${icon("flag")}<b>Stages</b><span class="muted">${stageOpen()} in progress</span>${icon("arrow")}</a>` : "";
   if (!b.text) return headHtml + ackNote() + stage + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
-  // A row with its Ack in the table is not listed again: the card keeps the acked rows and those folded out of the table.
-  const inTable = new Set((b.table_rows || []).flat().map((x) => x.ack));
+  // A row with its Ack in the table is not listed again: the card keeps the acked rows, those folded out of the table
+  // and those of a table that got no buttons.
+  const inTable = new Set(), report = briefHtml(b.text, b.table_rows, inTable);
   const { shown, head } = ackSplit((b.done || []).map((d) => ({ ...d, key: d.id, ack: d.acked ? "acked" : "ackable" })), "finished row");
   const rest = shown.filter((d) => !inTable.has(d.id));
   const finished = rest.length || head ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
     <ul class="rows">${rest.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow full">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
       || '<li class="muted">Every finished row is in the table above or acked.</li>'}</ul></div>` : "";
-  return headHtml + ackNote() + undoNote() + stage + `<div class="card"><div class="brief card-body">${briefHtml(b.text, b.table_rows)}</div></div>` + finished + doneCards(b);
+  return headHtml + ackNote() + undoNote() + stage + `<div class="card"><div class="brief card-body">${report}</div></div>` + finished + doneCards(b);
 }
 
 // Done (tidy.py, `orch board done`): close a row, card or board item that is over, or reopen one. The collector closes
