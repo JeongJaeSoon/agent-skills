@@ -10,6 +10,7 @@ const FLEET_SECTIONS = [
   { id: "sessions", label: "Sessions", icon: "workers" },
   { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "brief", label: "Brief", icon: "note" },
+  { id: "stages", label: "Stages", icon: "flag" },
   { id: "sent", label: "Sent", icon: "chat" },
   { id: "timeline", label: "Timeline", icon: "list" },
   { id: "automations", label: "Automations", icon: "clock", sep: true },
@@ -71,11 +72,11 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, tlShow: {}, tlOpen: new Set() };
+const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, tlShow: {}, tlOpen: new Set(), stageFold: new Set(), jobOpen: new Set() };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
-// The Work page's stage table moved into the Brief: an old #/fleet/work link opens the Brief.
-const MOVED = { work: "brief" };
+// The Work page's stage table is the Stages page now: an old #/fleet/work link opens it.
+const MOVED = { work: "stages" };
 function fleetSection(section, arg) {
   F.sessionId = section === "session" && arg ? arg : null;
   section = MOVED[section] || section;
@@ -124,7 +125,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, brief: stageOpen() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -813,6 +814,7 @@ function fleetChanges() {
 
 // The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
 // while this view is open. The renderer owns rows, order, icons and bold; this only turns its Markdown into HTML.
+const BRIEF_FED = ["brief", "stages"];  // the Stages page reads the same answer's `stages`
 async function pollBrief() {
   if (F.briefBusy) return;
   F.briefBusy = true;
@@ -822,7 +824,7 @@ async function pollBrief() {
     if (r.status !== 304) {
       F.brief = r.ok ? await r.json() : { message: `HTTP ${r.status}` };
       F.briefEtag = r.ok ? r.headers.get("ETag") : null;
-      if (isFleet() && S.section === "brief") renderView();
+      if (isFleet() && BRIEF_FED.includes(S.section)) renderView();
       if (isFleet()) fleetSidebar();
     }
   } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
@@ -854,14 +856,14 @@ function briefHtml(text) {
 function fleetBrief() {
   if (!F.brief) pollBrief();
   const b = F.brief;
-  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The stage table, then the periodic report as <span class="mono">orch brief render --periodic</span> builds it from the board, the sessions, the PR list and open decisions. A lead or card with no board rows shows from its session, with the next step from the report file its brief names; rows written with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
+  const headHtml = `<div class="view-head"><div><h2>Brief</h2><p>The periodic report as <span class="mono">orch brief render --periodic</span> builds it from the board, the sessions, the PR list and open decisions. A lead or card with no board rows shows from its session, with the next step from the report file its brief names; rows written with <span class="mono">orch board set</span> replace those. Bold rows changed since the last report sent.</p></div>
     ${b && b.text ? `<div class="aside muted">${(b.changed || []).length} changed · ${(b.stale || []).length} stale${b.width_ok === false ? ` · ${tag("over 78 columns", "warn", "")}` : ""}${F.briefAt ? ` · updated ${relSpan(F.briefAt)}` : ""}</div>` : ""}</div>`;
   if (!b) return headHtml + '<div class="loading">Loading…</div>';
-  const stage = stageSection(b.stages);
+  const stage = b.stages ? `<a class="card stage-link" href="#/fleet/stages">${icon("flag")}<b>Stages</b><span class="muted">${stageOpen()} in progress</span>${icon("arrow")}</a>` : "";
   if (!b.text) return headHtml + ackNote() + stage + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
   const { shown, head } = ackSplit((b.done || []).map((d) => ({ ...d, key: d.id, ack: d.acked ? "acked" : "ackable" })), "finished row");
   const finished = (b.done || []).length ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
-    <ul class="rows">${shown.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow ellipsis">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
+    <ul class="rows">${shown.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow full">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
       || '<li class="muted">Every finished row is acked.</li>'}</ul></div>` : "";
   return headHtml + ackNote() + stage + `<div class="card"><div class="brief card-body">${briefHtml(b.text)}</div></div>` + finished + doneCards(b);
 }
@@ -872,10 +874,10 @@ const DONE_KIND = { row: "row", doing: "in progress", later: "held", todo: "your
 const doneBtn = (id, undo) => `<button class="chip ack" type="button" data-done="${esc(id)}"${undo ? " data-undo" : ""}
   title="${undo ? "Reopen: show it again (orch board reopen)" : "Done: close it here and in the brief (orch board done)"}">${undo ? "Reopen" : "Done"}</button>`;
 function doneCards(b) {
-  const open = (b.open || []).map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}<span class="grow ellipsis" title="${esc(o.label)}">${esc(o.label)}</span>
-    ${o.check ? `<span class="acts muted ellipsis" title="${esc(o.check)}">check: ${esc(o.check)}</span>` : ""}${doneBtn(o.id)}</li>`).join("");
-  const shut = (b.closed || []).map((c) => `<li class="is-acked">${tag(c.by === "auto" ? "auto" : "you", c.by === "auto" ? "accent" : "")}<span class="grow ellipsis" title="${esc(c.label || c.id)}">${esc(c.label || c.id)}</span>
-    <span class="acts muted ellipsis" title="${esc(c.evidence || "")}">${esc(c.rule || "")}: ${esc(c.evidence || "")} · ${relSpan(c.ts)}</span>${c.reopen ? doneBtn(c.id, true) : ""}</li>`).join("");
+  const open = (b.open || []).map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}<span class="grow full" title="${esc(o.label)}">${esc(o.label)}</span>
+    ${o.check ? `<span class="acts muted full" title="${esc(o.check)}">check: ${esc(o.check)}</span>` : ""}${doneBtn(o.id)}</li>`).join("");
+  const shut = (b.closed || []).map((c) => `<li class="is-acked">${tag(c.by === "auto" ? "auto" : "you", c.by === "auto" ? "accent" : "")}<span class="grow full" title="${esc(c.label || c.id)}">${esc(c.label || c.id)}</span>
+    <span class="acts muted full" title="${esc(c.evidence || "")}">${esc(c.rule || "")}: ${esc(c.evidence || "")} · ${relSpan(c.ts)}</span>${c.reopen ? doneBtn(c.id, true) : ""}</li>`).join("");
   const note = F.doneError ? `<div class="ack-note">${tag("not closed", "warn", "alert")} ${esc(F.doneError)}</div>` : "";
   return `<div class="card"><div class="card-head"><h3>Open items</h3><span class="aside muted">${(b.open || []).length}</span></div>${note}
     <ul class="rows">${open || '<li class="muted">Nothing open.</li>'}</ul></div>`
@@ -899,40 +901,64 @@ function stageCell(c, refs) {
   const text = [c.evidence && linkRefs(c.evidence, refs), c.by && `<span class="muted">(${esc(c.by)})</span>`].filter(Boolean).join(" ");
   return `<div class="wcell ${tone ? "tone-" + tone : ""}" title="${esc(c.from ? `${label} · ${c.from}` : label)}"><span class="wmark">${mark}</span>${text ? `<span class="wtext">${text}</span>` : ""}</div>`;
 }
+// Each program (a group row, or a top-level row of its own) is a block: its open rows always, its finished rows behind
+// its own "▸ N finished" toggle (F.stageFold), so a finished program reads as one line instead of a hundred.
+const STAGE_COLS = [["Work", ""], ["PR", ""], ["Merged", "merge"], ["dev check", "dev"], ["prod check", "prod"]];
 function stageSection(w) {
   if (!w) return "";
-  const cardHead = `<div class="card-head"><h3>Stages</h3></div><p class="card-body muted">One row per predicate item and worker card of each program, generated every tick: merge from the merge sha; dev and prod only from <span class="mono">orch stage set</span>. Finished rows stay for 7 days, dimmed, behind Show N done.</p>`;
-  if (w.error) return `<div class="card">${cardHead}<div class="empty-chart">${esc(w.error)}</div></div>`;
+  if (w.error) return `<div class="card"><div class="empty-chart">${esc(w.error)}</div></div>`;
   const refs = w.refs || {};
   const legend = `<span class="legend">${Object.values(STAGE_MARK).map(([m, tone, l]) => `<span><span class="wmark">${m}</span>${l}</span>`).join("")}</span>`;
-  const { shown: all, seen, head } = ackSplit(stageShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
-  // Open rows first: finished ones wait behind "Show N done", and a heading with no open row under it goes with them.
+  const { shown: all, seen } = ackSplit(stageShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
   const byId = Object.fromEntries(all.map((r) => [r.id, r]));
-  const open = all.filter((r) => !r.group && !r.done_at), lit = new Set();
-  open.forEach((r) => { for (let p = byId[r.parent]; p && !lit.has(p.id); p = byId[p.parent]) lit.add(p.id); });
-  const collapsed = all.filter((r) => lit.has(r.id) || (!r.group && !r.done_at));
-  const rows = F.stageShowDone ? all : collapsed, done = all.length - collapsed.length;  // the headings it reveals count
+  const topOf = (r) => { let g = r; while (g.parent && byId[g.parent]) g = byId[g.parent]; return g.id; };
+  // A finished row with an open row under it stays open, as its heading does.
+  const lit = new Set();
+  all.filter((r) => !r.group && !r.done_at).forEach((r) => { for (let p = r; p && !lit.has(p.id); p = byId[p.parent]) lit.add(p.id); });
   // A group's own rows sit flush under it; each level below them gets one └ step.
   const level = {};
-  rows.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
-  const body = rows.map((r) => {
-    if (r.group) return `<tr class="wgroup ${r.done_at ? "is-done" : ""}"><td colspan="6"><b>${esc(r.title)}</b> ${ackBtn(r)}</td></tr>`;
-    const lv = level[r.id];
-    return `<tr class="${r.done_at ? "is-done" : ""}"><td class="wfeat">${r.parent ? "" : '<span class="muted">–</span>'}</td>
-      <td class="wtitle" style="--lv:${lv}">${lv ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
-      <td class="mono nowrap">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
-      ${["merge", "dev", "prod"].map((c) => `<td>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
-  }).join("") || `<tr><td colspan="6" class="muted">Every row is done: Show ${done} done lists them.</td></tr>`;
-  const where = w.env || {};
-  const whereLine = ["prod", "dev"].filter((k) => where[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(where[k])}</span></span>`).join("");
-  const toggle = done ? `<button class="chip" type="button" data-stage-done aria-pressed="${!!F.stageShowDone}">Show ${done} done</button>` : "";
-  const table = all.length ? `<div class="table-wrap"><table class="work"><thead><tr><th>Feature/epic</th><th>Work</th><th>PR</th><th>PR merged</th><th>dev check</th><th>prod check</th></tr></thead><tbody>${body}</tbody></table></div>`
+  all.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
+  const row = (r) => `<tr class="${r.done_at ? "is-done" : ""}">
+      <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
+      <td class="mono wpr" data-label="PR">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
+      ${STAGE_COLS.slice(2).map(([l, c]) => `<td data-label="${l}">${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
+  const blocks = {};
+  all.forEach((r) => (blocks[topOf(r)] ||= []).push(r));
+  const html = Object.entries(blocks).map(([id, members]) => {
+    const g = byId[id], work = members.filter((r) => !r.group);
+    const done = work.filter((r) => !lit.has(r.id)), open = work.length - done.length, unfolded = F.stageFold.has(id);
+    const ackable = done.filter((r) => r.ack === "ackable" && !r.hidden).map((r) => r.key);
+    const fold = done.length ? `<button class="chip" type="button" data-stage-fold="${esc(id)}" aria-expanded="${unfolded}">${unfolded ? "▾" : "▸"} ${done.length} finished</button>`
+      + (unfolded && ackable.length > 1 ? `<button class="chip ack" type="button" data-ack="${esc(ackable.join(" "))}" title="Ack every finished row of this program">Ack all ${ackable.length}</button>` : "") : "";
+    const head = g.group ? `<tr class="wgroup ${open ? "" : "is-done"}"><td colspan="5"><div class="wghead"><b>${esc(g.title)}</b>
+        <span class="muted">${open} open</span>${fold}${ackBtn(g)}</div></td></tr>`
+      : !open ? `<tr class="wgroup is-done"><td colspan="5"><div class="wghead"><b>${linkRefs(g.title, refs)}</b>${fold}</div></td></tr>` : "";
+    const shown = members.filter((r) => !r.group && (lit.has(r.id) || unfolded));
+    return { open, html: head + shown.map(row).join("") };
+  });
+  const body = [...html.filter((b) => b.open), ...html.filter((b) => !b.open)].map((b) => b.html).join("");
+  const where = w.env || {}, envFresh = where.at && Date.now() - ms(where.at) < STAGE_DONE_KEEP;
+  const envText = ["prod", "dev"].filter((k) => where[k]).map((k) => `<span><b>${k}</b> <span class="mono">${esc(where[k])}</span></span>`).join("");
+  // An env nobody re-recorded for a week is not where things stand: it folds away, still there to open.
+  const env = !envText ? "" : envFresh ? `<div class="meta">${envText}<span class="muted">${relSpan(where.at)}</span></div>`
+    : `<details class="meta"><summary class="muted">env recorded ${where.at ? relSpan(where.at) : "at an unknown time"}</summary>${envText}</details>`;
+  const acked = seen ? `<button class="chip" type="button" data-ack-show aria-pressed="${!!F.showAcked}">Show ${seen} acked</button>` : "";
+  const table = all.length ? `<div class="table-wrap"><table class="work"><colgroup><col class="c-work"><col class="c-pr"><col><col><col></colgroup>
+      <thead><tr>${STAGE_COLS.map(([l]) => `<th>${l}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`
     : `<div class="empty-chart">${seen ? "Every row is acked." : 'No stage rows: no program had ledger activity in 7 days. <span class="mono">orch stage add</span> records work outside a program.'}</div>`;
   const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>Next</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n, refs)}</li>`).join("")}</ol></div>` : "";
-  return `<div class="card">${cardHead}<div class="toolbar wenv">${legend}${whereLine ? `<div class="meta">${whereLine}${where.at ? `<span class="muted">${relSpan(where.at)}</span>` : ""}</div>` : ""}${toggle}${head}</div>${table}</div>` + next;
+  return `<div class="card"><div class="toolbar wenv">${legend}${env}${acked}</div>${table}</div>` + next;
+}
+function fleetStages() {
+  if (!F.brief) pollBrief();
+  const head = `<div class="view-head"><div><h2>Stages</h2><p>One row per predicate item and worker card of each program, generated every tick: merge from the merge sha; dev and prod only from <span class="mono">orch stage set</span>. A program's finished rows stay for 7 days behind its own ▸ N finished.</p></div></div>`;
+  return head + (F.brief ? ackNote() + stageSection(F.brief.stages) : '<div class="loading">Loading…</div>');
 }
 document.addEventListener("click", (e) => {
-  if (e.target.closest("[data-stage-done]")) { F.stageShowDone = !F.stageShowDone; renderView(); }
+  const fold = e.target.closest("[data-stage-fold]");
+  if (fold) { const id = fold.dataset.stageFold; F.stageFold.has(id) ? F.stageFold.delete(id) : F.stageFold.add(id); renderView(); }
+  const job = e.target.closest("[data-job-open]");
+  if (job) { const id = job.dataset.jobOpen; F.jobOpen.has(id) ? F.jobOpen.delete(id) : F.jobOpen.add(id); renderView(); }
   if (e.target.closest("[data-req-all]")) { F.reqShowAll = !F.reqShowAll; renderView(); }
   if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
   const ack = e.target.closest("[data-ack]");
@@ -993,23 +1019,32 @@ function internalJobs() {
   const rep = F.jobs;
   if (!rep) return '<div class="card"><div class="empty-chart">Loading orch-dash jobs…</div></div>';
   if (rep.error) return `<div class="card"><div class="empty-chart">${tag("not loaded", "warn", "alert")} Could not read orch-dash's jobs: ${esc(rep.error)}</div></div>`;
-  const rows = rep.jobs.map((j) => {
-    const r = j.record;
-    if (j.error) return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td>
-      <td colspan="4">${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;
-    if (!r) return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td>
-      <td colspan="4">${tag("no record", "", "")} <span class="muted">It has not recorded a run in this store.</span></td></tr>`;
+  // A job whose `group` names another runs inside that job's tick: it folds into that row, which opens to one line each.
+  const riders = (j) => rep.jobs.filter((k) => k.group === j.key);
+  const line = (j, sub) => {
+    const r = j.record, kids = sub ? [] : riders(j), open = F.jobOpen.has(j.key);
+    const toggle = kids.length ? ` <button class="chip" type="button" data-job-open="${esc(j.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${kids.length} more</button>` : "";
+    const name = `<td class="${sub ? "jsub" : ""}"><b>${esc(j.name)}</b> <span class="src">${esc(j.runs_in)}</span>${toggle}</td>`;
+    const every = `<td class="nowrap" title="${esc(j.cadence || "")}">${esc(j.every || (j.group ? "each tick" : "?"))}</td>`;
+    if (j.error) return `<tr>${name}${every}<td colspan="3">${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;
+    if (!r) return `<tr class="is-done">${name}${every}<td colspan="3" class="muted">no record · ${esc(j.why || "It has not recorded a run in this store.")}</td></tr>`;
     const warned = r.warned_at ? ` <a href="#/fleet/timeline" title="The timeline line written when it started failing">Timeline warning ${esc(hhmm(r.warned_at))} ${icon("arrow")}</a>` : "";
-    const res = r.ok ? `${esc(r.result || "ran")}${warned ? `<div class="muted">last failure ${relSpan(r.failed_at)}${warned}</div>` : ""}`
+    // A count of 0 is "no change", its words kept on hover; only a run that changed something stands out.
+    const said = r.n === 0 ? `<span class="muted" title="${esc(r.result || "")}">no change</span>` : r.n > 0 ? `<b>${esc(r.result || "ran")}</b>` : esc(r.result || "ran");
+    const busy = kids.filter((k) => k.error || (k.record && (!k.record.ok || k.record.n > 0)));
+    const sum = !kids.length ? "" : `<div class="jsum">${busy.length ? busy.map((k) => `${esc(k.name)}: ${k.error || !k.record.ok ? tag("▲ failed", "bad", "") : `<b>${esc(k.record.result || "ran")}</b>`}`).join(" · ")
+      : `<span class="muted">${kids.length} more: no change</span>`}</div>`;
+    const res = r.ok ? `${said}${warned ? `<div class="muted">last failure ${relSpan(r.failed_at)}${warned}</div>` : ""}`
       : `${tag("▲ failed", "bad", "")}${expandable(`job|${j.key}`, r.error)}<div class="muted">failing since ${relSpan(r.failed_at)}${warned}</div>`;
-    const acted = r.acted_at ? `${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}` : '<span class="muted">–</span>';
-    const next = r.next_at ? relSpan(r.next_at) : '<span class="muted">with the next fleet collect</span>';
-    return `<tr><td><b>${esc(j.name)}</b> ${tag(j.runs_in)}</td><td>${esc(j.cadence || "?")}</td><td class="nowrap">${relSpan(r.at)}</td>
-      <td>${res}</td><td class="nowrap">${acted}</td><td class="nowrap">${next}</td></tr>`;
-  }).join("");
+    const acted = r.acted_at ? `<div class="muted">last acted: ${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}</div>` : "";
+    const next = r.next_at ? relSpan(r.next_at) : `<span class="muted">${j.group ? "with the next tick" : "–"}</span>`;
+    return `<tr>${name}${every}<td class="nowrap">${relSpan(r.at)}</td><td>${res}${acted}${sum}</td><td class="nowrap">${next}</td></tr>`
+      + (open ? kids.map((k) => line(k, true)).join("") : "");
+  };
+  const rows = rep.jobs.filter((j) => !j.group || !rep.jobs.some((k) => k.key === j.group)).map((j) => line(j, false)).join("");
   const rules = rep.rules.map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${esc(r.rule)}</td><td class="nowrap muted">${esc(r.applied)}</td></tr>`).join("");
   return `<div class="card table-wrap"><div class="card-head"><h3>orch-dash jobs</h3><span class="aside">${rep.jobs.length}</span></div>
-      <table class="jobs"><thead><tr><th>Name</th><th>Cadence</th><th>Last run</th><th>Result</th><th>Last acted</th><th>Next by</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <table class="jobs"><thead><tr><th>Name</th><th>Every</th><th>Last run</th><th>Result</th><th>Next</th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="card table-wrap"><div class="card-head"><h3>Rules applied on read</h3><span class="aside">no run of their own</span></div>
       <table class="jobs"><thead><tr><th>Name</th><th>Rule</th><th>Applied</th></tr></thead><tbody>${rules}</tbody></table></div>`;
 }
@@ -1294,7 +1329,7 @@ function fleetStats() {
     <div class="grid">${card("Weekday × hour", "", punch)}
     ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
 }
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

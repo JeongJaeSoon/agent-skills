@@ -575,6 +575,29 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     assert 'data-tl-open="job|pr-stats"' in jobs_html and 'aria-expanded="false"' in jobs_html, "a long error opens in place"
     assert "not read" in jobs_html and "&lt;b&gt;ValueError" in jobs_html, "a row it could not read says why, the rest still show"
     assert jobs_html.count("no record") == 1 and "Rules applied on read" in jobs_html and "Inbox item expiry" in jobs_html
+    assert "no change" in jobs_html and "last acted: 3" in jobs_html, "a run that counted 0 says no change, its last change kept"
+
+    # Jobs riding on the fleet tick fold into its row: closed, one summary; opened, a line each with its own result.
+    tick = {"at": fleet.iso(now), "ok": True, "n": None, "result": "Needs you 4", "next_at": fleet.iso(now)}
+    js = f"""{helpers}
+{take("hhmm")}
+{(assets / "fleet.js").read_text()}
+F.jobsAt = Date.now(); const old = new Date(Date.now() - 3 * 3600e3).toISOString();
+F.jobs = {{jobs: [{{key: "fleet-tick", name: "Fleet tick", every: "10s", cadence: "every 10s while a page is open", runs_in: "orch-dash", group: null, record: {json.dumps(tick)}}},
+                 {{key: "tidy", name: "Self-clean", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
+                   record: {{at: old, ok: true, n: 0, result: "closed 0", next_at: null}}}},
+                 {{key: "relay", name: "Relay", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
+                   record: {{at: old, ok: true, n: 2, result: "answers relayed 2", next_at: null}}}},
+                 {{key: "reap-hard", name: "reap-hard", every: "10m", cadence: "every 10m", runs_in: "launchd", record: null, why: "agent not installed"}}],
+          rules: []}};
+const out = {{closed: internalJobs()}};
+F.jobOpen.add("fleet-tick"); out.open = internalJobs();
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert got["closed"].count("<tr") == 4 and "▸ 2 more" in got["closed"] and "Relay: <b>answers relayed 2</b>" in got["closed"], got["closed"]
+    assert ">10s<" in got["closed"] and "Self-clean</b>" not in got["closed"], got["closed"]
+    assert got["open"].count("<tr") == 6 and 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
+    assert "no record · agent not installed" in got["closed"] and 'class="is-done"' in got["closed"], got["closed"]
 
     # Monitors render escaped; every one not running is flagged and counted, a dead one with its exit code.
     js = f"""{helpers}
@@ -764,22 +787,39 @@ process.stdout.write(JSON.stringify(out));"""
     assert got["eight"].count(">req") == 8 and "Show all 12" in got["eight"] and long in got["eight"], got["eight"][:400]
     assert got["all"].count(">req") == 12 and "Show 8" in got["all"] and "ellipsis" not in got["all"]
 
-    # The stage table opens on open rows: finished ones, and a heading with none open under it, wait behind Show N done,
-    # N being the rows it reveals.
-    stage = {"rows": [{"id": "g1", "title": "live group", "group": True}, {"id": "g1/a", "parent": "g1", "title": "open row", "cells": {}},
-                      {"id": "g1/b", "parent": "g1", "title": "finished row", "cells": {}, "done_at": fleet.iso(now)},
-                      {"id": "g2", "title": "past group", "group": True, "done_at": fleet.iso(now)},
-                      {"id": "g2/a", "parent": "g2", "title": "past row", "cells": {}, "done_at": fleet.iso(now)}], "refs": {}}
+    # The stage table opens on open rows. Each program's finished rows wait behind its own "▸ N finished", and a program
+    # with none open is one dimmed heading line after the open ones; Ack all sits inside an opened program, not on top.
+    stage = {"rows": [{"id": "g2", "title": "past group", "group": True, "done_at": fleet.iso(now)},
+                      {"id": "g2/a", "parent": "g2", "title": "past row", "cells": {}, "done_at": fleet.iso(now), "ack": "ackable"},
+                      {"id": "g2/b", "parent": "g2", "title": "past row two", "cells": {}, "done_at": fleet.iso(now), "ack": "ackable"},
+                      {"id": "g1", "title": "live group", "group": True}, {"id": "g1/a", "parent": "g1", "title": "open row", "cells": {}},
+                      {"id": "g1/b", "parent": "g1", "title": "finished row", "cells": {}, "done_at": fleet.iso(now)}],
+             "refs": {}, "env": {"prod": "v9.9.9", "at": fleet.iso(now - dt.timedelta(days=17))}}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const S = {{filters: {{}}}};
 const out = {{open: stageSection({json.dumps(stage)})}};
-F.stageShowDone = true; out.all = stageSection({json.dumps(stage)});
+F.stageFold.add("g1"); F.stageFold.add("g2"); out.all = stageSection({json.dumps(stage)});
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    assert "open row" in got["open"] and "live group" in got["open"] and "Show 3 done" in got["open"], got["open"]
-    assert not any(t in got["open"] for t in ("finished row", "past group", "past row")), got["open"]
-    assert all(t in got["all"] for t in ("finished row", "past group", "past row")), got["all"]
+    assert "open row" in got["open"] and "live group" in got["open"] and "past group" in got["open"], got["open"]
+    assert got["open"].index("live group") < got["open"].index("past group"), "a program with open rows comes first"
+    assert "▸ 1 finished" in got["open"] and "▸ 2 finished" in got["open"] and "Ack all" not in got["open"], got["open"]
+    assert not any(t in got["open"] for t in ("finished row", "past row")), got["open"]
+    assert all(t in got["all"] for t in ("finished row", "past row", "past row two")) and "Ack all 2" in got["all"], got["all"]
+    assert "Feature/epic" not in got["open"] and got["open"].count("<th>") == 5, "no always-empty first column"
+    # An env line nobody re-recorded for 7 days folds into a closed details, still readable when opened.
+    assert "<details class=\"meta\">" in got["open"] and "v9.9.9" in got["open"], got["open"]
+
+    # The Brief points at the Stages page in one line; an old #/fleet/work link opens Stages.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+F.brief = {{text: "x", stages: {json.dumps(stage)}, done: [], open: [], closed: []}};
+process.stdout.write(JSON.stringify({{brief: fleetBrief(), stages: fleetStages(), moved: fleetSection("work")}}));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert 'href="#/fleet/stages"' in got["brief"] and "1 in progress" in got["brief"] and "open row" not in got["brief"], got["brief"]
+    assert "open row" in got["stages"] and got["moved"] == "stages", got
 
     # Kind reads as a role: the lead says "lead", a session under it says "worker" whether its Run or Orca's parent put it
     # there, a standalone under the root stays "standalone". The overview's lead card counts the lead's sessions and PRs.

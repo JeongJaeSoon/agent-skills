@@ -74,12 +74,20 @@ def record(key, n=None, result=None, error=None, next_in=None, event=None, kind=
     return rec
 
 
+def short(seconds):
+    """10s, 5m, 6h: the page's cadence column."""
+    for unit, n in (("h", 3600), ("m", 60)):
+        if seconds >= n and seconds % n == 0:
+            return f"{seconds // n}{unit}"
+    return f"{seconds}s"
+
+
 def sync_job():
     """skills-sync (scripts/sync.py under launchd) writes sync.json each pass."""
     s = fleet.read_json(fleet.state_dir().parent / "sync.json")
     every = (s or {}).get("interval") or 900
-    job = {"key": "skills-sync", "name": "Skills sync", "cadence": f"every {every // 60}m", "runs_in": "launchd",
-           "record": None}
+    job = {"key": "skills-sync", "name": "Skills sync", "every": short(every), "cadence": f"every {every // 60}m",
+           "runs_in": "launchd", "record": None}
     if isinstance(s, dict) and (at := fleet.parse(s.get("at"))) and at.tzinfo:
         at = at.astimezone(dt.timezone.utc)  # sync.py writes local time with its offset
         ok, msg = s.get("ok") is not False, fleet.mask(s.get("message"))
@@ -90,7 +98,8 @@ def sync_job():
 
 def reap_hard_job():
     """reap-hard (scripts/reap_hard.py under launchd) writes its last pass; read through it, as board.reap_line does."""
-    job = {"key": "reap-hard", "name": "reap-hard", "cadence": None, "runs_in": "launchd", "record": None}
+    job = {"key": "reap-hard", "name": "reap-hard", "every": None, "cadence": None, "runs_in": "launchd", "record": None,
+           "why": "No reap_hard.py beside this install (it ships with the repository's scripts/)."}
     try:
         if (scripts := str(pathlib.Path(__file__).resolve().parents[3] / "scripts")) not in sys.path:  # each poll
             sys.path.insert(0, scripts)
@@ -98,7 +107,8 @@ def reap_hard_job():
     except ImportError:  # an install without the repo's scripts/
         return job
     every = reap_hard.config()["interval"]
-    job["cadence"] = f"every {every // 60}m"
+    job.update(every=short(every), cadence=f"every {every // 60}m",
+               why="No pass recorded in this store: its launchd agent is not installed here, or has not finished a pass yet.")
     s = reap_hard.read_last()
     if isinstance(s, dict) and isinstance(s.get("t"), (int, float)):
         at = dt.datetime.fromtimestamp(s["t"], dt.timezone.utc)
@@ -128,13 +138,15 @@ def rules():
 
 
 def snapshot(registry):
-    """The Automations page's jobs and rules. registry: (key, name, cadence) for each of orch-dash's own jobs."""
+    """The Automations page's jobs and rules. registry: (key, name, every, cadence, group) for each of orch-dash's own
+    jobs, group the key of the job whose run this one rides on (dash.JOBS)."""
     recs = records()
-    jobs = [{"key": k, "name": name, "cadence": cadence, "runs_in": "orch-dash", "record": recs.get(k)}
-            for k, name, cadence in registry]
+    jobs = [{"key": k, "name": name, "every": every, "cadence": cadence, "group": group, "runs_in": "orch-dash",
+             "record": recs.get(k)} for k, name, every, cadence, group in registry]
     for key, read in (("skills-sync", sync_job), ("reap-hard", reap_hard_job)):
         try:
             jobs.append(read())
         except Exception as e:  # one unreadable record is that row's error, not the page's
-            jobs.append({"key": key, "name": key, "cadence": None, "runs_in": "launchd", "record": None, "error": fleet.mask(repr(e))})
+            jobs.append({"key": key, "name": key, "every": None, "cadence": None, "runs_in": "launchd", "record": None,
+                         "error": fleet.mask(repr(e))})
     return {"jobs": jobs, "rules": rules()}  # no timestamp: the page's ETag holds while nothing ran

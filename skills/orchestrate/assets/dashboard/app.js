@@ -1076,7 +1076,7 @@ document.addEventListener("input", (e) => { if (e.target.id === "issue-search") 
 addEventListener("hashchange", route);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollState(); });
 setInterval(pollState, POLL_MS);
-setInterval(() => { if (isFleet() && S.section === "brief" && !document.hidden) pollBrief(); }, POLL_MS);
+setInterval(() => { if (isFleet() && BRIEF_FED.includes(S.section) && !document.hidden) pollBrief(); }, POLL_MS);
 setInterval(() => { if (isFleet() && S.section === "sent" && !document.hidden) pollSent(); }, POLL_MS);
 setInterval(pollPrograms, PROGRAMS_MS);
 setInterval(pollHealth, PROGRAMS_MS);

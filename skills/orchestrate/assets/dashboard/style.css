@@ -500,13 +500,35 @@ td.when { white-space: nowrap; }
 .mix .m-slash { background: var(--warn, #d9922e); }
 
 /* work: the `orch stage` table */
-table.work td { vertical-align: top; }
-table.work td:nth-child(n+4) { min-width: 150px; max-width: 280px; }
-.wgroup td { background: var(--panel-2); padding-top: var(--s3); }
-.wtitle { padding-left: calc(var(--s3) + var(--lv, 0) * 1.4em); min-width: 160px; }
+/* Fixed columns so the table fits its card: every cell wraps, none is cut and none pushes the table sideways. */
+table.work { table-layout: fixed; }
+table.work col.c-work { width: 32%; }
+table.work col.c-pr { width: 17%; }
+table.work th:first-child, table.work td:first-child { padding-left: var(--s4); }
+table.work td { vertical-align: top; overflow-wrap: anywhere; }
+.wgroup td { background: var(--panel-2); }
+.wghead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); }
+.wtitle { padding-left: calc(var(--s4) + var(--lv, 0) * 1.4em) !important; }
+.wpr { font-size: var(--t-sm); }
 .wcell { display: flex; gap: var(--s1); align-items: baseline; }
 .wcell .wmark { flex: none; }
-.wcell .wtext { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.wcell .wtext { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); font-size: var(--t-sm); line-height: 1.45; }
+.stage-link { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4); color: var(--ink); text-decoration: none; }
+.stage-link:hover { background: var(--panel-2); }
+.stage-link svg.i:last-child { margin-left: auto; color: var(--ink-3); }
+/* Under 640px each stage row is a block: its title, then one labelled line per cell. */
+@media (max-width: 640px) {
+  table.work, table.work tbody, table.work tr, table.work td { display: block; width: auto; }
+  table.work thead, table.work colgroup { display: none; }
+  table.work tr:not(.wgroup) { border-bottom: 1px solid var(--line); padding: var(--s2) 0; }
+  table.work tr:not(.wgroup) td { border: 0; padding: 2px var(--s4); }
+  table.work td[data-label]:not(.wtitle)::before { content: attr(data-label); display: inline-block; min-width: 6.5em; color: var(--ink-3); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.04em; }
+  table.work td[data-label]:not(.wtitle) { display: flex; gap: var(--s2); align-items: baseline; }
+}
+table.jobs .src { font-size: 10.5px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 0 4px; vertical-align: 1px; }
+table.jobs td.jsub { padding-left: calc(var(--s3) + 1.4em); }
+table.jobs .jsum { margin-top: 2px; font-size: var(--t-sm); }
+.rows .acts.full { white-space: normal; flex: 0 1 45%; }
 .wcell.tone-bad .wtext, .wcell.tone-warn .wtext { color: var(--tone); }
 .legend .wmark { margin-right: 2px; }
 .nowrap { white-space: nowrap; }
@@ -515,8 +537,11 @@ tr.is-done td { opacity: 0.5; }
 .chip.ack:disabled { opacity: 0.5; cursor: default; }
 li.is-acked > :not(.ack) { opacity: 0.5; }
 .ack-note { padding: var(--s1) var(--s3); font-size: 12px; }
-.wenv { margin-bottom: var(--s3); }
+.wenv { padding: var(--s3) var(--s4); justify-content: flex-start; gap: var(--s2) var(--s4); }
 .wenv .meta { display: flex; gap: var(--s3); align-items: center; font-size: var(--t-sm); }
+.wenv details.meta { display: block; }
+.wenv details.meta > summary { cursor: pointer; }
+.wenv details[open].meta > span { margin-right: var(--s3); }
 .wnext { margin: 0; padding-left: calc(var(--s4) + 1.2em); display: grid; gap: var(--s1); }
 .brief p { margin: 0 0 var(--s3); }
 .brief .table-wrap { margin: 0 0 var(--s4); }
