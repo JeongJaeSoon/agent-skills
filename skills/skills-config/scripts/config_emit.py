@@ -206,13 +206,28 @@ def memory_rule(rule, path):
 
 # Not glob: before 3.11 it skips hidden names, and include_hidden is 3.11+, while the run line's python3 may be 3.9.
 def named(prefix, segs):
-    """Every path prefix + segs[:k] names today, k = 1..len(segs); a "*" segment matches hidden entries too."""
+    """Every path prefix + segs[:k] names today, k = 1..len(segs); a "*" segment matches hidden entries too.
+    A directory that cannot be searched is refused: taken as empty, what is under it would go unchecked."""
+    def under(d, seg):
+        try:
+            if seg == "*":
+                return sorted(os.listdir(d)) if os.path.isdir(d) else []
+            os.lstat(os.path.join(d, seg))
+            return [seg]
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as e:
+            raise unlisted(d, e)
+
     level = [prefix.rstrip("/")]
     for seg in segs:
-        level = [os.path.join(d, n) for d in level
-                 for n in (sorted(os.listdir(d)) if seg == "*" and os.path.isdir(d) else
-                           [seg] if seg != "*" and os.path.lexists(os.path.join(d, seg)) else [])]
+        level = [os.path.join(d, n) for d in level for n in under(d, seg)]
         yield from level
+
+
+def unlisted(d, e):
+    return Refused(f"cannot list {d} ({e.strerror}), so what is under it is unchecked; make it readable "
+                   f"or leave it out of the rule")
 
 
 def tree(top, chain=(), seen=None):
@@ -232,8 +247,7 @@ def tree(top, chain=(), seen=None):
     try:
         names = sorted(os.listdir(top))
     except OSError as e:
-        raise Refused(f"cannot list {top} ({e.strerror}), so what is under it is unchecked; make it readable "
-                      f"or leave it out of the rule")
+        raise unlisted(top, e)
     for n in names:
         yield from tree(os.path.join(top, n), (*chain, real), seen)
 

@@ -236,6 +236,39 @@ class PermissionsTest(Base):
         self.assertNotIn("Traceback", r.stderr)
         self.assertFalse(out.exists())
 
+    def test_unreadable_project_dir_refused_not_skipped(self):
+        """Inside a mode-0 projects/<x>/, memory/ cannot be stat'ed; taken as absent, its link to hooks/ went unchecked."""
+        (self.claude / "hooks").mkdir()
+        locked = self.claude / "projects" / "locked"
+        locked.mkdir(parents=True)
+        (locked / "memory").symlink_to(self.claude / "hooks")
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        pythons = [sys.executable] + [p for p in ("/usr/bin/python3",) if os.path.exists(p)]
+        for python in pythons:
+            for rule in ("Edit(~/.claude/projects/*/memory/**)", "Edit(~/.claude/projects/locked/memory/**)"):
+                self.write_spec({"settings": ["home"], "permissions": {"add": [rule]}})
+                out = self.home / "out" / "change.py"
+                r = subprocess.run([python, "-I", str(SCRIPT), "emit", "--spec", str(self.spec), "--out", str(out)],
+                                   capture_output=True, text=True, env=self.env)
+                self.assertEqual(r.returncode, 1, (python, rule, r.stderr))
+                self.assertIn(f"refused: cannot list {locked} (Permission denied)", r.stderr, (python, rule))
+                self.assertNotIn("Traceback", r.stderr, (python, rule))
+                self.assertFalse(out.exists(), (python, rule))
+        projects = self.claude / "projects"
+        locked.chmod(0o700)
+        projects.chmod(0)
+        self.addCleanup(projects.chmod, 0o700)
+        for python in pythons:
+            self.write_spec({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/*/memory/**)"]}})
+            out = self.home / "out" / "change.py"
+            r = subprocess.run([python, "-I", str(SCRIPT), "emit", "--spec", str(self.spec), "--out", str(out)],
+                               capture_output=True, text=True, env=self.env)
+            self.assertEqual(r.returncode, 1, (python, r.stderr))
+            self.assertIn(f"refused: cannot list {projects} (Permission denied)", r.stderr, python)
+            self.assertNotIn("Traceback", r.stderr, python)
+            self.assertFalse(out.exists(), python)
+
     def test_symlinked_profile_home_is_not_a_config_dir(self):
         (self.claude / "hooks" / "projects" / "x" / "memory").mkdir(parents=True)
         (self.claude / "projects").mkdir()
