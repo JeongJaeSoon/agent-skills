@@ -1748,8 +1748,7 @@ class Fleet:
         for i in items:
             if i.get("source") == "github" and i.get("pr") in held:
                 i["held"] = held[i["pr"]]
-        items.sort(key=lambda i: i.get("at") or "", reverse=True)
-        items.sort(key=needs_rank)
+        items.sort(key=needs_order)
         # A session's badge counts exactly the Needs you items on it, so the badges and the inbox always agree:
         # the badges plus the items that belong to no session are the inbox. No local "seen" mark hides any.
         for i in items:
@@ -1923,6 +1922,12 @@ DATE_RE = re.compile(r"(?<![\d.])(?:(\d{4})-)?(\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,
 
 def needs_rank(item):
     return HELD_RANK if item.get("held") else NEEDS_RANK.get(item["type"], 2)
+
+
+def needs_order(item):
+    """Rank, then newest first by the moment, not the string: skills-sync writes `+0900` where the rest write `Z`."""
+    at = parse(item.get("at")) if item.get("at") else None
+    return needs_rank(item), -(at.timestamp() if at else 0)
 
 
 def trigger_at(text, now):

@@ -103,6 +103,10 @@ for r in set(ranks):
     ats = [i.get("at") or "" for i in items(st) if fleet.needs_rank(i) == r]
     assert ats == sorted(ats, reverse=True), (r, ats)
 assert [i["type"] for i in items(st)][5] == "ready_to_merge"
+# Newest first by the moment, not the text: skills-sync's `+0900` 15:31 is 06:31Z, older than a `Z` 10:00.
+mixed = [{"type": "reload_pending", "at": "2026-10-27T15:31:21+0900"}, {"type": "sync_stalled", "at": "2026-10-27T10:00:00Z"},
+         {"type": "custom", "at": None}, {"type": "decision", "at": "2026-10-26T00:00:00Z"}]
+assert [i["type"] for i in sorted(mixed, key=fleet.needs_order)] == ["decision", "sync_stalled", "reload_pending", "custom"]
 # A PR a held board item names goes last, marked with the hold, until its date comes or the item leaves the board.
 board_path, ahead = state_dir / "board.json", (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
 
@@ -874,6 +878,27 @@ process.stdout.write(briefHtml({json.dumps(text)}));"""
     assert '<td class="bmark">🔴</td><td>└ child card</td><td>턴 종료</td>' in page, page
     assert '<span class="mono">orch req list</span>' in page and "<td>acme/app#9 머지 + 배포</td>" in page, page
     assert "❔" not in page and page.count('class="qmark"') == 2, "❔ is drawn as a toned mark, not the pale emoji"
+
+    # Each repository row gets the button its table_rows entry names, at the right end; a table whose row count differs
+    # from its entry gets none. The Finished rows card leaves out a row whose Ack is already in the table.
+    two = "\n".join(["| | 리드/Phase | PR | 진행 |", "|---|---|---|---|", "| ✅ | done lead | — | — |", "| 🔴 | stuck lead | — | — |",
+                     "| 🔄 | busy lead | — | — |", "", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|", "| ⏳ | other | — | — |"])
+    rows = [[{"label": "done lead", "ack": "board:a", "done": None}, {"label": "stuck lead", "ack": None, "done": "row:b"},
+             {"label": "busy lead", "ack": None, "done": None}], []]
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+F.brief = {{text: {json.dumps(two)}, table_rows: {json.dumps(rows)}, done: [{{id: "board:a", label: "done lead", acked: false}},
+  {{id: "board:old", label: "folded lead", acked: false}}], open: [], closed: []}};
+F.undo = {{attr: "ack", ids: "board:z", label: "<i>gone</i>"}};
+process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
+    page = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)["page"]
+    first, second = page.split('<div class="table-wrap">')[1:3]
+    assert first.count('<td class="bact"') == 3 and 'data-ack="board:a"' in first and 'data-done="row:b"' in first, first
+    assert 'data-row-label="stuck lead"' in first and '<col class="bact">' in first and "bact" not in second, (first, second)
+    finished = page.split("<h3>Finished rows</h3>")[1].split("<h3>")[0]
+    assert "folded lead" in finished and "done lead" not in finished and "Ack all 2" in finished, finished
+    assert 'Acked <b>&lt;i&gt;gone&lt;/i&gt;</b>' in page and 'data-ack="board:z" data-undo' in page, page
 
     # Kind reads as a role: the lead says "lead", a session under it says "worker" whether its Run or Orca's parent put it
     # there, a standalone under the root stays "standalone". The overview's lead card counts the lead's sessions and PRs.

@@ -74,6 +74,15 @@ assert code == 0 and out == "unacked 2: req:r1 req:r2", (out, err)
 # The brief: an acked ✅ row leaves the table, every open row stays, and the requests line counts only unacked ones.
 before = brief()
 assert {d["id"] for d in before["done"]} == {"board:lead-a"}, before["done"]
+# table_rows places the page's buttons: one list per repository table, one entry per row, in the text's order. Ack only
+# on a row the server would ack, Done only on 🙋 ❔ 🔴 rows; 🔄 ⏳ ⏸️ get none.
+flat = {x["label"]: (x["ack"], x["done"]) for t in before["table_rows"] for x in t}
+assert flat == {"릴리스 도구": ("board:lead-a", None), "청구 내보내기": (None, None), "t CSV 열": (None, None),
+                "설치 가이드": (None, None)}, before["table_rows"]
+assert len(before["table_rows"]) == sum(1 for line in before["text"].splitlines() if line == "| | 리드/Phase | PR | 진행 |")
+board.set_row("lead-c", status="blocked", next="세션 없음")
+assert {x["label"]: x["done"] for t in brief()["table_rows"] for x in t}["설치 가이드"] == "row:lead-c"
+board.set_row("lead-c", status="moving", next="리뷰 반영")
 assert "릴리스 도구" in before["text"] and "요청 2건 열림" in before["text"], before["text"]
 code, out, err = run("dash.py", "ack", "board:lead-a", "r1")
 assert code == 0, err
@@ -83,6 +92,7 @@ for kept in ("청구 내보내기", "CSV 열", "설치 가이드"):
     assert kept in after["text"], (kept, after["text"])
 assert "확인함으로 숨긴 행 1" in after["text"] and "요청 1건 열림" in after["text"], after["text"]
 assert after["done"] == [{**before["done"][0], "acked": True}], after["done"]
+assert "릴리스 도구" not in {x["label"] for t in after["table_rows"] for x in t}, after["table_rows"]
 assert owner_requests.summary()["open"] == 2, "the orchestrator's or lead's own count keeps an acked request"
 code, out, _ = run("dash.py", "acks", "--json")
 assert {r["id"] for r in json.loads(out)} == {"board:lead-a", "req:r1"}, out
@@ -94,6 +104,7 @@ assert [json.loads(line)["ev"] for line in f.read_text().splitlines()] == ["ack"
 
 # The dashboard's POST: token and same-origin guard as every other write, then the same acks.write.
 import dash  # noqa: E402
+assert dash.periodic_report()["table_rows"] == brief()["table_rows"], "the page gets the button ids"
 import http.server, threading, urllib.request, urllib.error  # noqa: E402
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
 port = srv.server_address[1]
