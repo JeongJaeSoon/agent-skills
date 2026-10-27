@@ -92,7 +92,7 @@ assert "📅" not in out and "할 일 3건 · 보류 큐 1건 · `orch board tod
 assert section(out, "🙋 **지금 오너가 할 일**") == ["- acme/app#3 리뷰"], out
 assert "⏰" not in out and "머지·배포" not in out, out
 tg = render(BEFORE, "--telegram")
-assert "할 일 3건 · 보류 큐 1건 · orch board todo list · orch req list" in tg.splitlines(), tg
+assert "할 일 3건 · 보류 큐 1건 · orch board todo list --telegram · orch req list" in tg.splitlines(), tg
 # A held row whose PR a to-do names stays in 보류 under the to-do's date: the list it once folded into is gone.
 ok("board", "set", "deploy", "--repo", "acme/app", "--title", "배포 리드", "--status", "held", "--pr", "acme/app#1")
 assert "- 10/30(금) 09:00 → 배포 리드" in section(render(BEFORE), "⏸️ **보류**"), render(BEFORE)
@@ -109,7 +109,7 @@ assert "| ▶ 1 | 캐시 TTL 다시 보기 | 11월 QA 다음 회차 | — |" in 
 (tmp / "programs").mkdir()
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4999}))
 assert "할 일 3건 · 보류 큐 1건 · http://127.0.0.1:4999/#/fleet/todo" in render(BEFORE).splitlines()
-assert "할 일 3건 · 보류 큐 1건 · orch board todo list · orch req list" in render(BEFORE, "--telegram").splitlines()
+assert "할 일 3건 · 보류 큐 1건 · orch board todo list --telegram · orch req list" in render(BEFORE, "--telegram").splitlines()
 (tmp / "programs" / ".dash.json").unlink()
 # The page reads each to-do's parts from the render's open items: dated ones carry their first date as `at`.
 rendered = json.loads(render(BEFORE, "--json"))
@@ -203,5 +203,39 @@ import table_width  # noqa: E402
 assert all(table_width.text_width(l) <= 78 for l in listed.splitlines() if l.startswith("|")), listed
 
 assert orch("board", "todo", "drop", "abc")[2].startswith("board todo is the to-do list now: todo add")
+
+# An --after that only repeats the --due's date (with or without its weekday) says it once; other words stay.
+base = {"due": "2026-10-30T09:00:00+00:00", "added": "2026-10-27T00:00:00Z"}
+assert fleet.todo_parts({**base, "after": "금 10/30 09:00"}, now) == ("10/30(금) 09:00", None)
+assert fleet.todo_when({**base, "after": "목요일 10/30 09:00"}, now) == "10/30(금) 09:00"
+assert fleet.todo_parts({**base, "after": "10/30 09:00 이후 검증"}, now) == ("10/30(금) 09:00", "이후 검증")
+assert fleet.todo_parts({**base, "after": "10/31 09:00"}, now) == ("10/30(금) 09:00", "10/31 09:00")
+board.todo_add("노트 리뷰", due="2027-06-01 09:00", after="화 6/1 09:00", who="writer")
+page = {o["title"]: o for o in json.loads(ok("board", "todo", "list", "--now", BEFORE, "--no-refresh", "--json")) if o["kind"] == "do"}
+assert {k: page["노트 리뷰"][k] for k in ("when", "date", "cond")} == {"when": "6/1(화) 09:00", "date": "6/1(화) 09:00", "cond": None}, page["노트 리뷰"]
+assert page["acme/app#2 배포 노트"]["date"] is None and page["acme/app#2 배포 노트"]["cond"] == "acme/app#5", page
+
+# The list counts as the report's pointer line does: its captions leave out the come to-dos and the held items whose
+# trigger tidy found met, which stay in the table, ❔ on their number. The numbers are the queue's from 1 with closed
+# items left out, and they are what later move, drop and todo from-later take.
+ok("board", "later", "add", "acme/app#2 후속 정리", "--trigger", "acme/app#5 머지 뒤")
+ok("board", "later", "add", "문서 이미지 교체", "--trigger", "디자인 확정 뒤")
+listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
+due_n = sum(o["due"] for o in page.values())
+assert f"**📅 할 일 {len(page) - due_n}건 · ⏰ 도래 {due_n}**" in listed.splitlines(), listed
+assert "**⏸️ 보류 큐 2건 · ▶ 다음 차례 · ❔ 확인 필요 1**" in listed.splitlines() and "| ❔2 | acme/app#2 후속 정리 |" in listed, listed
+assert f"할 일 {len(page) - due_n}건 · 보류 큐 2건 · `orch board todo list` · `orch req list`" in render(BEFORE).splitlines()
+held = {o["title"]: o["id"] for o in json.loads(ok("board", "open", "--json")) if o["kind"] == "later"}
+ok("board", "done", held["캐시 TTL 다시 보기"])
+listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
+assert "| ▶ ❔1 | acme/app#2 후속 정리 |" in listed and "| 2 | 문서 이미지 교체 |" in listed, listed
+ok("board", "later", "move", "2", "--to", "1")
+listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
+assert "| ▶ 1 | 문서 이미지 교체 |" in listed and "| ❔2 | acme/app#2 후속 정리 |" in listed, listed
+assert orch("board", "later", "move", "3", "--to", "1")[2] == "no later item 3; there are 2"
+ok("board", "later", "add", "릴리스 공지", "--trigger", "v3 뒤", "--at", "2")
+assert [l["title"] for l in store()["later"]] == ["캐시 TTL 다시 보기", "문서 이미지 교체", "릴리스 공지", "acme/app#2 후속 정리"], store()
+ok("board", "later", "drop", "3")
+assert [l["title"] for l in store()["later"]] == ["캐시 TTL 다시 보기", "문서 이미지 교체", "릴리스 공지"], store()
 
 print("ok")

@@ -1986,12 +1986,25 @@ def todo_start(t, now):
 WEEKDAY = "월화수목금토일"
 
 
-def todo_when(t, now):
-    """When a to-do starts, as the report says it: its --due as a local date (and time, unless midnight), its --after."""
-    at = todo_dates(t, now)[0]
+def todo_parts(t, now):
+    """A to-do's (date, condition) as the report says them: its --due as a local date (and time, unless midnight), and
+    its --after without a date that only repeats the --due (with its weekday), None when nothing else is left."""
+    at, on = todo_dates(t, now)
     at = at and at.astimezone()
     due = at and f"{at.month}/{at.day}({WEEKDAY[at.weekday()]})" + (f" {at:%H:%M}" if (at.hour, at.minute) != (0, 0) else "")
-    return " · ".join(x for x in (due, t.get("after")) if x)
+    after = t.get("after") or ""
+    if at and on and f"{on.astimezone():%m%d%H%M}" == f"{at:%m%d%H%M}":  # an M/D's year is a guess
+        m = DATE_RE.search(after)
+        day = f"[{WEEKDAY}]"
+        after = (re.sub(rf"(?:{day}(?:요일)?\s*)?$", "", after[:m.start()].rstrip())
+                 + re.sub(rf"^\s*\({day}\)", "", after[m.end():]))
+        after = after if re.search(r"\w", after) else ""
+    return due, after.strip() or None
+
+
+def todo_when(t, now):
+    """When a to-do starts, as the report says it: its date, then its condition (todo_parts)."""
+    return " · ".join(x for x in todo_parts(t, now) if x)
 
 
 def held_prs(store, shut, prs, now, cards=None):

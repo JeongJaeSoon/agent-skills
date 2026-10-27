@@ -20,7 +20,7 @@ When the report covers several work items (tickets, tracks, a program's predicat
 - **Done so far** — only what was verified, with the evidence Done asks for.
 - **Left** — the next stage, who moves it (an agent or a person), and when it is expected; "미정" when no time is fixed. A step that is the human's also goes under Only you.
 
-The report carries no stage table (merge / dev / prod per item), even when the items ship through PRs and deploys: that table is the `stage` skill's. When the stage record has rows, one line right under the headline points to it, as the renderer writes it: `단계표 N행 (접음 M) · <where>`. N and M are the rows `orch stage show` prints and the count on its `접음` line (`(접음 M)` left out at 0). `<where>` is the dashboard's Stages URL when its server is running on this machine, else `` `orch stage show` ``; on Telegram always `orch stage show --telegram`, since the dashboard listens on 127.0.0.1 only. With no rows, no line. The to-dos, the held queue and the owner's requests are not listed either: one line under that one, `할 일 N건 · 보류 큐 K건 · 요청 M건 열림 · <where>`, counts the to-dos whose date or condition has not come (promises: `orch board todo add`), the held queue (work set aside with no date, in turn: `orch board later add`) and the requests still open and not acked (`orch req list`), each part left out at 0 and the line when all are. `<where>` is the dashboard's To-do URL (its Overview has the requests) while the server runs, else `` `orch board todo list` · `orch req list` ``; on Telegram always `orch board todo list · orch req list`. The headline does not repeat these counts.
+The report carries no stage table (merge / dev / prod per item), even when the items ship through PRs and deploys: that table is the `stage` skill's. When the stage record has rows, one line right under the headline points to it, as the renderer writes it: `단계표 N행 (접음 M) · <where>`. N and M are the rows `orch stage show` prints and the count on its `접음` line (`(접음 M)` left out at 0). `<where>` is the dashboard's Stages URL when its server is running on this machine, else `` `orch stage show` ``; on Telegram always `orch stage show --telegram`, since the dashboard listens on 127.0.0.1 only. With no rows, no line. The to-dos, the held queue and the owner's requests are not listed either: one line under that one, `할 일 N건 · 보류 큐 K건 · 요청 M건 열림 · <where>`, counts the to-dos whose date or condition has not come (promises: `orch board todo add`), the held queue (work set aside with no date, in turn: `orch board later add`) and the requests still open and not acked (`orch req list`), each part left out at 0 and the line when all are. `<where>` is the dashboard's To-do URL (its Overview has the requests) while the server runs, else `` `orch board todo list` · `orch req list` ``; on Telegram always `orch board todo list --telegram · orch req list`. The headline does not repeat these counts.
 
 ### Periodic report
 
@@ -73,7 +73,7 @@ An illustrative shape (the items are made up):
 ```text
 단계표 3행 (접음 1) · orch stage show --telegram
 
-보류 큐 1건 · orch board todo list · orch req list
+보류 큐 1건 · orch board todo list --telegram · orch req list
 
 ✅ 완료
 - acme/web#42 머지 (a1b2c3d, CI 통과 38/38)

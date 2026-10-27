@@ -564,6 +564,26 @@ li.is-acked > :not(.ack) { opacity: 0.5; }
 .brief-table .slide { white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
 .brief-table.bsec td { vertical-align: top; overflow-wrap: anywhere; }
 .brief .bhead { font-size: var(--t-md); margin: var(--s4) 0 var(--s2); }
+/* To-do: fixed narrow columns so the work gets the width; it shows two lines, its condition one, until clicked. */
+table.todo { table-layout: fixed; min-width: 560px; }
+table.todo td { vertical-align: top; }
+table.todo col.bmark { width: 2.75em; }
+table.todo col.c-when { width: 11.5em; }
+table.todo col.c-n { width: 4em; }
+table.todo col.c-who { width: 9.5em; }
+table.todo col.bact { width: 5.5em; }
+table.todo td.bmark { text-align: center; }
+table.todo td.bact { text-align: right; white-space: nowrap; }
+table.todo .todo-when { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+table.todo .todo-come { color: var(--warn); font-weight: 600; }
+table.todo tr.is-late .todo-come { color: var(--bad); }
+table.todo tr.is-late td:first-child { box-shadow: inset 2px 0 0 var(--bad); }
+table.todo .todo-n { white-space: nowrap; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+table.todo .todo-next { color: var(--accent-ink); font-weight: 600; }
+table.todo .todo-text { color: var(--ink); font-size: inherit; line-height: 20px; }
+table.todo .todo-sub { margin-top: 2px; color: var(--ink-3); -webkit-line-clamp: 1; }
+table.todo .todo-who { display: inline-block; max-width: 100%; padding: 0 var(--s2); border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--panel-2); font-size: var(--t-sm); line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
 .qmark { display: inline-grid; place-items: center; width: 1.15em; height: 1.15em; border-radius: 50%; background: var(--warn); color: var(--bg);
   font-size: 0.85em; font-weight: 700; line-height: 1; vertical-align: 0.05em; }
 
