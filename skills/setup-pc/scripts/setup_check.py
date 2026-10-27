@@ -263,7 +263,7 @@ def check_settings(settings, base):
                     else row("ok", "autoMode", count))
         lack = sorted(set(base.get("permissions_allow") or []) - set(perms.get("allow") or []))
         rows.append(row("differs", "permissions.allow", f"기준보다 {len(lack)}개 없음: {', '.join(lack[:3])}{' …' if len(lack) > 3 else ''}",
-                        "update-config 로 추가") if lack else row("ok", "permissions.allow", f"{len(perms.get('allow') or [])}개"))
+                        "skills-config 로 추가") if lack else row("ok", "permissions.allow", f"{len(perms.get('allow') or [])}개"))
     else:
         rows.append(row("ok" if any(rules.values()) else "info", "autoMode", count if any(rules.values()) else "사용자 규칙 없음 (기본 분류기만)",
                         "" if any(rules.values()) else "막히는 일이 생기면 tune-automode, 처음부터는 /auto-mode-setup"))

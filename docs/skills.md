@@ -16,6 +16,7 @@
 머신 하나   reap-resources(죽은 세션이 남긴 프로세스·Docker·브랜치 정리, resource steward가 주기로)
               secure-fill(브라우저 인증 칸에 비밀값을, 에이전트가 값을 보지 않고)
               tune-automode(분류기 거부를 가장 작은 autoMode 규칙으로, 적용은 사용자가)
+              skills-config(agent-skills.json 키·permissions.allow 변경: emit → 사람의 --apply)
               setup-pc(새 PC 한 줄 설치·갱신: dry run diff → 사람의 --apply)
 채팅       watch-mentions(공개 채널의 멘션·이름 언급·참여 스레드 새 답글을 오케스트레이터나 리드에게 한 통으로)
 어디서나    record-progress(언제 무엇을 남기나) → use-tracker(티켓) · use-notes(노트) · pstack 스킬(설계·검토·검증·회고)
@@ -220,14 +221,20 @@ PR 을 맡는 스킬과 머지 주체:
 - **언제:** auto mode 분류기가 행동을 거부했고 사용자가 그런 행동을 앞으로 허용하고 싶을 때, 또는 auto mode가 에이전트에게 허용하는 범위를 바꾸려 할 때. "auto mode 가 막았어", "이거 허용되게 규칙 추가해줘".
 - **내용:** 거부 카테고리와 거부된 행동에서 그 행동 부류만 덮는 가장 작은 allow·soft_deny·environment 규칙을 만든다. 규칙에는 행동 부류, 안전한 조건, `Not covered:`가 들어간다. 검토 체크리스트(포괄 허용 금지, 사용자가 말하지 않은 프로덕션 파괴 동사 금지, 사용자 본인 채팅만 권한)를 통과시킨 뒤 `scripts/automode_rule.py emit`이 diff를 보여 주고 spec을 박은 독립 스크립트를 홈 아래에 쓴다. 사용자가 `! python3 <경로> --apply <spec 해시>`로 적용한다. 해시는 사용자가 본 diff의 spec과 맞아야 한다. 스크립트는 타임스탬프 백업, 멱등 병합, JSON 검증을 하고 되돌리는 명령을 출력한다. 에이전트는 settings.json을 고치지 않고, 그 스크립트를 실행하지 않고, 기다리는 동안 거부를 우회하지 않는다.
 - **동봉:** `scripts/automode_rule.py`, 테스트 파일, `references/example-settings.json`.
-- **관계:** 도구 패턴 권한(`permissions.allow`, hooks)은 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
+- **관계:** 사용자 설정의 `permissions.allow`와 `agent-skills.json` 키는 `skills-config`(autoMode 규칙을 함께 넣을 때 이 스킬의 엔진을 공유), 프로젝트 설정과 hooks는 내장 `update-config`, 프로젝트 전체 초안은 내장 `/auto-mode-setup`이 맡는다. `orchestrate`의 Frame과 Refused acts가 저장소 머지·배포의 지속 승인 규칙("프로젝트 지속 승인")을 이 스킬로 만든다.
+
+### skills-config
+- **언제:** `~/.claude/agent-skills.json`의 값을 바꾸거나, 사용자 `settings.json`의 `permissions.allow`에 규칙을 넣고 빼려 할 때. "agent-skills 설정 바꿔줘", "allow 규칙 추가해줘".
+- **내용:** spec 하나(`agent_skills.set`·`unset`, `permissions.add`·`remove`, `autoMode`, 대상 `settings`)를 `scripts/config_emit.py emit`이 검사하고 파일별 diff를 보인 뒤, spec을 박은 독립 스크립트를 설정 디렉터리 밖에 쓴다. 사용자가 `! echo '<sha256>  <경로>' | shasum -a 256 -c - && python3 -I <경로> --apply <해시 앞 12자>`로 적용한다. 해시는 스크립트 파일 전체(박힌 spec과 코드)를 덮고, `shasum`이 Python보다 먼저 검사하므로 emit 뒤에 고친 파일은 그 줄로는 실행되지 않으며, `-I`라서 스크립트 옆이나 작업 디렉터리에 심은 모듈도 읽지 않는다. 키는 해당 스킬 Config 절과 스크립트 `DEFAULTS`로 검사하고(문서에 없는 키는 spec의 `allow_unknown`에 이름을 적어야 통과), `permissions.add`는 허용 목록 방식으로 두 모양만 받는다. 하나는 설정 디렉터리의 memory 디렉터리 안을 가리키는 `Edit`·`Write`·`Read`·`MultiEdit`·`NotebookEdit` 규칙(`~/.claude/projects/<이름>/memory/…`, `$CLAUDE_CONFIG_DIR/projects/<이름>/memory/…`, Orca 프로필 `claude-profiles/<이름>/home` 아래의 같은 `projects/<이름>/memory/…`; `<이름>`은 리터럴 하나나 `*`, memory 뒤는 `**`·`*.md`·파일 이름 하나)이고, 그 경로와 memory 아래가 실경로로도 어느 설정 디렉터리의 같은 모양(`projects/<이름>/memory/…`) 안이어야 하고, 그 밖(예: `hooks/`)을 가리키는 심링크가 있으면 emit과 `--apply`에서 거부한다(Orca 프로필의 `projects/` → `~/.claude/projects` 링크는 통과). 다른 하나는 정확한 MCP 도구 이름(`mcp__server__tool`, `__`로 나눠 정확히 세 부분)이다. 그 밖의 규칙은 `Bash`를 포함해 모두 이 스킬의 범위 밖이다. 셸 명령이나 임의 경로에 대한 금지 목록은 재검증 때마다 뚫려 닫히지 않았으므로, 사람이 검토해 직접 또는 `update-config`로 넣는다. 범위를 넓힐 때는 허용 목록에 모양을 하나씩 테스트와 함께 더한다. `remove`는 좁히기만 하므로 문자열 확인만 한다. `settings`로 `$CLAUDE_CONFIG_DIR`과 `~/.claude`의 settings.json을 둘 다 고를 수 있다. 스크립트는 모든 파일을 먼저 검사하고, 파일마다 `.bak-skills-config-<시각>` 백업, 멱등 병합, 원자적 교체, 다시 읽어 확인, 되돌리는 줄 출력을 한다.
+- **동봉:** `scripts/config_emit.py`, 테스트 파일.
+- **관계:** autoMode 규칙 문구는 `tune-automode`가 만들고, 이 스킬은 그 spec을 `automode_rule.py`의 병합 그대로 같은 스크립트에 싣는다. 프로젝트 설정과 hooks는 내장 `update-config`, 새 PC는 `setup-pc`.
 
 ### setup-pc
 - **언제:** agent-skills를 다른 PC에 들일 때, 설치된 PC를 최신으로 맞출 때. "새 PC 세팅해줘", "다른 PC 에서도 똑같이 쓰게 해줘", "agent-skills 업데이트해줘", "플러그인 최신화", "set up agent-skills on a new PC", "update agent-skills".
 - **새 PC:** 사람은 세션 안에서 `/plugin install`(설치 창이 언어·체크아웃 경로·개인 설정 저장소를 묻는다)과 새 세션만 한다. 플러그인의 SessionStart hook(`hooks/onboard.py`)이 설정되지 않은 PC임을 알아채고 이 스킬을 제안하고, 스킬이 체크아웃과 개인 설정 저장소를 clone한 뒤 아래 dry run과 한 줄로 간다. 설정 파일을 쓰지 않는 단계(동기화 작업, janitor·pressure-watch·watch-prs·watch-mentions 자동화, 점검 표)는 스킬이 `setup.py --actions-only`로 돌리고 guard hook이 권한 창을 띄운다. 설계는 [zero-command-setup.md](zero-command-setup.md).
 - **내용:** 입구는 체크아웃의 `scripts/setup.py`다. 스킬이 언어와 Orca Run 바인딩 여부를 묻고 dry run을 돌려 설정 파일별 diff를 보인 뒤, 사람이 칠 `! python3 … --apply <해시>` 한 줄을 건넨다. 그 한 줄이 백업, 없는 값만 더하는 멱등 병합(이미 있는 값은 덮지 않음, 켜져 있는 마켓플레이스 사본을 끄는 것만 예외), 원자적 교체, 다시 읽어 확인, 파일별 되돌리는 줄 출력을 하고, 이어서 launchd 동기화 작업·동기화·기본 on 정기 자동화를 켜고 `scripts/setup_check.py check` 표를 낸다. 넣는 값은 저장소의 권장 기본값(`scripts/recommended-settings.json`: 체크아웃 로드, `language`·`outputStyle`·기본 permission mode, 일반화한 autoMode 묶음, 조회·대시보드 서버만 담은 `permissions.allow` 묶음, `agent-skills.json` 최소 키)과 개인 설정 저장소의 `agent-skills.json`·트래커 사이트 규칙뿐이다. 사내 이름 목록·개인 지침·에이전트·autoMode 규칙은 옮기지 않는다. 한 번 제안한 항목은 기록해 두어, 사람이 지운 규칙은 다시 제안하지 않는다. update 모드는 `--update`(dry run은 fetch도 하지 않고 새로 생긴 권장값만 보이고, `--apply` 줄이 fast-forward한 뒤 계획을 다시 맞춰 본다). 원래 PC에서 `export`로 뽑은 기준 파일과 비교하는 `check --baseline`은 선택이다. 설정 파일은 어떤 도구로도 쓰지 않고 `--apply`도 실행하지 않는다.
 - **동봉:** `scripts/setup_check.py`, 테스트 파일. 저장소의 `scripts/setup.py`, `scripts/recommended-settings.json`, `scripts/test_setup.py`.
-- **관계:** 적용 뒤 막힌 행동 하나는 `tune-automode`, 묶음 밖의 `permissions`·hooks는 `update-config`, 정기 자동화가 하는 일은 `reap-resources`, 떠 있는 세션 reload는 `skills-sync broadcast`가 맡는다. 체크아웃 로드만 하는 `bootstrap.py`는 그대로 있고 `setup.py`가 그 launchd 작업을 다시 쓴다.
+- **관계:** 적용 뒤 막힌 행동 하나는 `tune-automode`, 묶음 밖의 사용자 `permissions.allow`·`agent-skills.json` 키는 `skills-config`, hooks는 `update-config`, 정기 자동화가 하는 일은 `reap-resources`, 떠 있는 세션 reload는 `skills-sync broadcast`가 맡는다. 체크아웃 로드만 하는 `bootstrap.py`는 그대로 있고 `setup.py`가 그 launchd 작업을 다시 쓴다.
 
 ## 채팅
 
@@ -650,7 +657,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **티켓 흐름:** `write-ticket`, `deliver-ticket`, `handoff-ticket`, `dispatch-card`, `end-session`. Orca 카드와 트래커를 전제로 한 티켓 하나의 처음부터 끝까지다.
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
-- **머신 관리:** `reap-resources`, `tune-automode`, `setup-pc`.
+- **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
 - **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
 
 ### upstream 동기화 상태

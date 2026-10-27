@@ -1,6 +1,6 @@
 ---
 name: tune-automode
-description: "Use when the auto-mode classifier denied an action and the user wants that kind allowed from now on, or asks to change what auto mode lets the agent do — \"auto mode 가 막았어\", \"이거 허용되게 규칙 추가해줘\", \"autoMode 규칙 고쳐줘\". Drafts the smallest rule and a script the user runs; never edits settings.json. permissions.allow and hooks belong to update-config."
+description: "Use when the auto-mode classifier denied an action and the user wants that kind allowed from now on, or asks to change what auto mode lets the agent do — \"auto mode 가 막았어\", \"이거 허용되게 규칙 추가해줘\", \"autoMode 규칙 고쳐줘\". Drafts the smallest rule and a script the user runs; never edits settings.json. User permissions.allow belongs to skills-config, hooks to update-config."
 ---
 
 # tune-automode
@@ -20,7 +20,8 @@ auto mode 분류기의 거부 하나, 또는 사용자의 "에이전트가 X 하
 
 | 상황 | 가는 곳 |
 |---|---|
-| 도구 권한 프롬프트, `permissions.allow`/`deny`의 `Bash(...)` 패턴, hooks, env | `update-config` |
+| 사용자 설정의 `permissions.allow` 규칙, `agent-skills.json` 키, 그리고 그것과 함께 넣을 autoMode 규칙 | `skills-config`(autoMode 부분은 이 스킬의 spec과 병합을 그대로 쓴다) |
+| 프로젝트 `.claude/settings.json`, `permissions.deny`, hooks, env | `update-config` |
 | 프로젝트 전체를 보고 autoMode 초안을 처음부터 잡기 | 내장 `/auto-mode-setup` |
 | 특정 거부 하나 또는 행동 하나에 맞춘 규칙 추가·수정 | 이 스킬 |
 

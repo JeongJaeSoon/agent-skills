@@ -48,9 +48,9 @@ Claude Code 세션 안에서:
 
 | 지점 | 기본 | 바꾸는 법 |
 |---|---|---|
-| 사용자 설정 적용(`setup-pc`, `tune-automode`) | HITL: 에이전트는 diff와 `!` 한 줄만 만들고 사람이 실행한다 | 없음 |
+| 사용자 설정 적용(`setup-pc`, `tune-automode`, `skills-config`) | HITL: 에이전트는 diff와 `!` 한 줄만 만들고 사람이 실행한다 | 없음 |
 | `setup.py --actions-only`(동기화·자동화 켜기) | HITL: `guard.py`가 auto mode에서도 권한 창을 띄운다 | 없음 |
-| 그 밖의 권한 창 | HITL: 사람이 승인한다 | 사람이 `permissions.allow` 항목(`update-config`)을 더하면 그 명령은 묻지 않고 진행한다 |
+| 그 밖의 권한 창 | HITL: 사람이 승인한다 | 사람이 `permissions.allow` 항목(사용자 설정의 memory 경로 규칙·MCP 도구 이름은 `skills-config`, Bash 규칙과 프로젝트 설정은 `update-config`)을 더하면 그 명령은 묻지 않고 진행한다 |
 | auto mode 분류기의 거부 | HITL: 에이전트가 보고하고 멈춘다 | `tune-automode`가 만든 autoMode 규칙을 사람이 적용하면 그 부류는 진행한다. 판정 없는 거부(`no verdict`)는 규칙으로 바뀌지 않는다 |
 | 되돌릴 수 없는 행동(파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기) | HITL: 멈추고 묻는다 | 없음 |
 | `orchestrate` 머지 정책 | HOTL: `autonomous`, 워커가 `orch land`로 머지(그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때. 없으면 묻는다) | `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 푼다 |
@@ -70,7 +70,7 @@ HOTL에서 사람이 보는 곳은 `brief`의 현황 보고와 대시보드의 �
 |---|---|---|
 | [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | 티켓 쓰기부터 완료·다음 티켓 넘기기·세션 정리·진행 기록까지 |
 | [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 착지시키고, 끝난 뒤 실제로 어땠는지 잰다 |
-| [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, PC 설치·갱신 |
+| [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, agent-skills.json 키·permissions.allow 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
 | [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
 | [글쓰기](docs/skills.md#글쓰기) | `brief`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
@@ -92,7 +92,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 ## 테스트
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 
