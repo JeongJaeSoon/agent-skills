@@ -107,6 +107,11 @@ assert [i["type"] for i in items(st)][5] == "ready_to_merge"
 mixed = [{"type": "reload_pending", "at": "2026-10-27T15:31:21+0900"}, {"type": "sync_stalled", "at": "2026-10-27T10:00:00Z"},
          {"type": "custom", "at": None}, {"type": "decision", "at": "2026-10-26T00:00:00Z"}]
 assert [i["type"] for i in sorted(mixed, key=fleet.needs_order)] == ["decision", "sync_stalled", "reload_pending", "custom"]
+# macOS's /usr/bin/python3 is 3.9, whose fromisoformat takes no `+0900`.
+for py in [sys.executable] + [p for p in ("/usr/bin/python3",) if os.path.exists(p)]:
+    out = subprocess.run([py, "-c", "import fleet; print(fleet.parse('2026-10-27T15:31:21+0900').isoformat())"],
+                         cwd=pathlib.Path(__file__).parent, capture_output=True, text=True)
+    assert out.stdout.strip() == "2026-10-27T15:31:21+09:00", (py, out.stdout, out.stderr)
 # A PR a held board item names goes last, marked with the hold, until its date comes or the item leaves the board.
 board_path, ahead = state_dir / "board.json", (now + dt.timedelta(days=2)).astimezone().strftime("%m/%d 09:00")
 
