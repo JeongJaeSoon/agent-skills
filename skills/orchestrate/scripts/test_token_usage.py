@@ -33,8 +33,14 @@ def user(sid, text, days_ago, origin="human", **kw):
                  "message": {"role": "user", "content": text}, **kw})
 
 
+def result(sid, tool_id, text, days_ago, as_blocks=True):
+    content = [{"type": "text", "text": text}] if as_blocks else text
+    return line({"type": "user", "sessionId": sid, "timestamp": ts(days_ago, 2),
+                 "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": content}]}})
+
+
 def usage(sid, mid, days_ago, inp=100, c5=0, c1=0, read=0, out=10, tools=(), **kw):
-    content = [{"type": "text", "text": SECRET}] + [{"type": "tool_use", "name": n, "input": i} for n, i in tools]
+    content = [{"type": "text", "text": SECRET}] + [{"type": "tool_use", "name": t[0], "input": t[1], "id": (t[2:] or [None])[0]} for t in tools]
     return line({"type": "assistant", "sessionId": sid, "timestamp": ts(days_ago, 1), **kw,
                  "message": {"id": mid, "content": content, "usage": {
                      "input_tokens": inp, "cache_creation_input_tokens": c5 + c1, "cache_read_input_tokens": read,
@@ -103,6 +109,55 @@ assert cache["days"][ts(0)[:10]]["who"] == {"interactive": [7, 7.0, 1]}, cache["
     "s-auto2", "m-b1", 0, tools=[("Bash", {"command": "orca orchestration send --to x --subject y"})]))
 cache = tu.collect(now=NOW, autos=AUTOS, hooks=set())
 assert cache["sessions"]["s-auto2"]["outward"] is True
+
+# A janitor round counts when `reap --plan` acted on a target, judged from its output; skips, failures, notes, a scan
+# (which prints the same `- target: why` shape) and an outcome that is itself a skip leave the round empty.
+jproj = root / "janitor" / "-tmp-acme-app"
+jproj.mkdir(parents=True)
+J = {"root": root / "janitor", "path": root / "janitor-cache.json", "now": NOW, "autos": AUTOS, "hooks": set()}
+REAP = "python3 /tmp/acme/reap.py reap --plan /tmp/acme/janitor-plan.json"
+DONE = "- orca-worktree [app] /tmp/acme/wt (3일): ignored 항목 0개는 휴지통으로, worktree 는 orca worktree rm 으로 제거"
+rounds = {
+    "s-r-done": [("Bash", REAP, "- 건너뜀 tmpdir /tmp/acme/x: 더는 정리 대상이 아님\n" + DONE)],
+    "s-r-str": [("Bash", 'python3 "$R" reap --plan p.json', DONE, False)],
+    "s-r-skip": [("Bash", REAP, "- 건너뜀 tmpdir /tmp/acme/x: 더는 정리 대상이 아님\n- 메모: docker: 데몬 응답 없음, 건너뜀")],
+    "s-r-fail": [("Bash", REAP, "- 실패 orca-worktree [app] /tmp/acme/wt: 보내지 않음")],
+    "s-r-human": [("Bash", REAP, "- gui-app pid 9 (프로세스 1, 1M, CPU 0%, 3일) App: 건너뜀: 사람이 띄운 셸의 자식\n"
+                                 "- proc pid 8 (프로세스 1, 1M, CPU 0%, 3일) x: 사라졌거나 다른 프로세스")],
+    "s-r-scan": [("Bash", "python3 /tmp/acme/reap.py scan --kinds janitor", DONE),
+                 ("Bash", 'grep -n "reap --plan" /tmp/acme/SKILL.md', DONE)],
+    "s-r-tab": [("mcp__claude-in-chrome__tabs_close_mcp", None, "closed")],
+    "s-r-rm": [("Bash", "orca worktree rm --worktree path:/tmp/acme/wt --run-hooks", "ok")],
+}
+for sid, calls in rounds.items():
+    text = user(sid, AUTO_PROMPT, 0)
+    for i, (tool, cmd, out, *blocks) in enumerate(calls):
+        text += usage(sid, f"m-{sid}-{i}", 0, tools=[(tool, {"command": cmd} if cmd else {}, f"t-{sid}-{i}")])
+        text += result(sid, f"t-{sid}-{i}", out, 0, *blocks)
+    (jproj / f"{sid}.jsonl").write_text(text)
+cache = tu.collect(**J)
+got = {sid: cache["sessions"][sid]["outward"] for sid in rounds}
+assert got == {"s-r-done": True, "s-r-str": True, "s-r-skip": False, "s-r-fail": False, "s-r-human": False,
+               "s-r-scan": False, "s-r-tab": True, "s-r-rm": True}, got
+assert "휴지통" not in J["path"].read_text(), "only the verdict is kept, not the output"
+# The output can land in a later collect than the call.
+(jproj / "s-r-late.jsonl").write_text(user("s-r-late", AUTO_PROMPT, 0)
+                                     + usage("s-r-late", "m-late", 0, tools=[("Bash", {"command": REAP}, "t-late")]))
+assert tu.collect(**J)["sessions"]["s-r-late"]["outward"] is False
+with open(jproj / "s-r-late.jsonl", "a") as f:
+    f.write(result("s-r-late", "t-late", DONE, 0))
+assert tu.collect(**J)["sessions"]["s-r-late"]["outward"] is True
+# The outcomes read as "did nothing" are reap.py's own words: a rewording there must fail here.
+reap_src = (pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts" / "reap.py").read_text()
+for word in [f"- {w}" for w in tu.REAP_NOT_DONE_LINES] + list(tu.REAP_NOT_DONE_OUTCOMES):
+    assert word.strip() in reap_src, word
+
+# The same transcript reached through two symlinked projects folders (one per Claude profile) counts once.
+alias = root / "profile-b-projects"
+alias.symlink_to(root / "projects")
+before = json.dumps(tu.collect(now=NOW, autos=AUTOS, hooks=set())["days"], sort_keys=True)
+cache = tu.collect(root=alias, now=NOW, autos=AUTOS, hooks=set())
+assert cache["last"]["parsed"] == 0 and json.dumps(cache["days"], sort_keys=True) == before, cache["last"]
 before = cache["days"][ts(2)[:10]]["who"]["subagent:general-purpose"][2]
 (sub / "agent-a.jsonl").write_text(usage("s-int", "m-s9", 2, inp=1, out=0))
 cache = tu.collect(now=NOW, autos=AUTOS, hooks=set())

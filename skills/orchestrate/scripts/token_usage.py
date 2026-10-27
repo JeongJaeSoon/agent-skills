@@ -27,7 +27,7 @@ try:
 except ImportError:  # an install without the repo's scripts/: no static sizes, no hook sizes
     skill_tokens = None
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 # Input-token equivalents of each usage field, from list prices: a cache read costs a tenth of input, a cache write
 # 1.25 (5 min) or 2 (1 h) times, output five times.
 WEIGHTS = {"input": 1.0, "cache_5m": 1.25, "cache_1h": 2.0, "cache_read": 0.1, "output": 5.0}
@@ -38,8 +38,17 @@ NOT_FEATURES = ("interactive", "unclassified")
 DEFAULTS = {"daily_share": 0.3, "daily_min": 50_000_000, "surge": 1.5, "surge_min": 20_000_000,
             "empty_runs": 7, "empty_window": 10}
 OUTWARD_BASH = re.compile(r"\borca\s+orchestration\s+(?:send|reply)\b|\bgh\s+pr\s+(?:merge|comment|review|edit|create)\b"
-                          r"|\bgh\s+api\b[^\n]*-X\s*(?:POST|PATCH|PUT|DELETE)|\bgit\s+(?:commit|push)\b")
-OUTWARD_TOOL = re.compile(r"slack.*(?:send|schedule)|(?:save|create|add)_?(?:comment|issue|message)", re.I)
+                          r"|\bgh\s+api\b[^\n]*-X\s*(?:POST|PATCH|PUT|DELETE)|\bgit\s+(?:commit|push)\b"
+                          r"|\borca\s+(?:worktree\s+rm|terminal\s+close)\b")
+# The janitor's chrome-window targets are closed by the agent with its browser tools, not by reap.
+OUTWARD_TOOL = re.compile(r"slack.*(?:send|schedule)|(?:save|create|add)_?(?:comment|issue|message)|tabs_close", re.I)
+# A janitor round's work is `reap.py reap --plan`, which prints one `- <target>: <outcome>` line per target whether it
+# acted or not, so the call counts only when its output has a line that is none of these (reap-resources reap.py).
+REAP_CALL = re.compile(r"(?:\breap\.py[\"']?|\"\$R\")\s+reap\b")
+REAP_NOT_DONE_LINES = ("건너뜀 ", "실패 ", "메모: ")
+REAP_NOT_DONE_OUTCOMES = ("건너뜀", "사라졌거나 다른 프로세스", "tip 이 바뀜", "거부됨")
+REAP_DONE = re.compile(r"^- (?!%s)(?![^\n]*: (?:%s))[^\n]*: \S" % ("|".join(map(re.escape, REAP_NOT_DONE_LINES)),
+                                                       "|".join(map(re.escape, REAP_NOT_DONE_OUTCOMES))), re.M)
 SLASH = re.compile(r"<command-name>/?([^<]*)</command-name>(?:.*?<command-args>(.*?)</command-args>)?", re.S)
 LINE_KEYS = ('"usage"', '"type":"user"', "hook_success")
 
@@ -164,7 +173,16 @@ def scan(path, st, days, sessions, autos, hooks):
         st["sid"] = st["sid"] or d.get("sessionId")
         kind = d.get("type")
         if kind == "user" and not d.get("isMeta"):
-            text = _text((d.get("message") or {}).get("content"))
+            content = (d.get("message") or {}).get("content")
+            if st.get("reaps") and isinstance(content, list):
+                for b in content:
+                    if not (isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in st["reaps"]):
+                        continue
+                    st["reaps"].remove(b["tool_use_id"])
+                    out = _text(b.get("content")) if isinstance(b.get("content"), list) else b.get("content")
+                    if REAP_DONE.search(str(out or "")) and st["sid"] in sessions:
+                        sessions[st["sid"]]["outward"] = True
+            text = _text(content)
             if text is None:
                 continue
             head = text.lstrip()
@@ -193,9 +211,12 @@ def scan(path, st, days, sessions, autos, hooks):
                 name, inp = b.get("name") or "", b.get("input") or {}
                 if name == "Skill" and inp.get("skill"):
                     st["skill"] = str(inp["skill"])
-                outward = (name == "Bash" and OUTWARD_BASH.search(str(inp.get("command") or ""))) or OUTWARD_TOOL.search(name)
+                command = str(inp.get("command") or "") if name == "Bash" else ""
+                outward = OUTWARD_BASH.search(command) or OUTWARD_TOOL.search(name)
                 if outward and session:
                     session["outward"] = True
+                elif session and REAP_CALL.search(command) and b.get("id"):
+                    st["reaps"] = (st.get("reaps", []) + [b["id"]])[-IDS_KEPT:]
             u, mid = msg.get("usage"), msg.get("id")
             if not isinstance(u, dict) or not mid or mid in st["ids"]:
                 continue
@@ -233,7 +254,9 @@ def scan(path, st, days, sessions, autos, hooks):
 
 
 def transcripts(root):
-    return sorted([*root.glob("*/*.jsonl"), *root.glob("*/*/subagents/*.jsonl")])
+    """The real path of each transcript once: each Claude profile reaches the same files through its own symlinked
+    projects folder, and a key by the path it was reached through counted one file once per profile."""
+    return sorted({p.resolve() for p in [*root.glob("*/*.jsonl"), *root.glob("*/*/subagents/*.jsonl")]})
 
 
 def collect(root=None, path=None, now=None, autos=None, hooks=None):
