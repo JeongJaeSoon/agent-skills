@@ -124,10 +124,11 @@ vs 86b859a: always +140 tokens (+517 width), on invoke +2,490, named refs +271, 
 ### 2.1 출처와 읽는 법
 
 - 로컬 Claude Code transcript JSONL만 읽는다. 경로는 `$CLAUDE_PROJECTS_DIR`, 없으면 `$CLAUDE_CONFIG_DIR/projects`, 없으면 `~/.claude/projects`이고, 그 아래 `*/*.jsonl`과 `*/*/subagents/*.jsonl`이다. 코드·테스트·문서에 실제 경로를 적지 않는다.
-- 읽는 필드: `assistant` 행의 `message.id`, `message.usage`(input, cache 생성 5분·1시간, cache read, output), `timestamp`, `sessionId`, `attributionSkill`, tool_use의 이름과 `Skill`의 스킬 이름, Bash 명령(바깥 행동 판정에만), `user` 행의 `turnOrigin`, 훅 첨부(`hook_success`)의 명령 경로와 `additionalContext` 길이, `subagents/*.meta.json`의 `agentType`.
+- 읽는 필드: `assistant` 행의 `message.id`, `message.usage`(input, cache 생성 5분·1시간, cache read, output), `timestamp`, `sessionId`, `attributionSkill`, tool_use의 이름과 `Skill`의 스킬 이름, Bash 명령(바깥 행동 판정에만), 자동화 세션의 `reap.py reap` 호출 결과(같은 판정에만), `user` 행의 `turnOrigin`, 훅 첨부(`hook_success`)의 명령 경로와 `additionalContext` 길이, `subagents/*.meta.json`의 `agentType`.
 - **본문은 저장하지도 출력하지도 않는다.** 캐시에 남는 것은 숫자, 귀속 키(자동화·스킬·에이전트 이름, lead slug), 세션 id, 파일 경로의 해시뿐이다. 자동화 식별에 쓰는 첫 프롬프트는 공백을 정규화한 앞 120자의 SHA-1 앞 16자리만 비교한다.
 - 같은 `message.id`가 content 블록마다 여러 행으로 반복되므로(표본에서 44%) 파일마다 최근 id 64개를 두고 한 번만 센다.
 - **증분 읽기**: 캐시(`<fleet state>/token-usage-cache.json`)에 파일마다 inode, 읽은 byte offset, mtime과 그 세션의 진행 상태(누가, 현재 턴 출처, 현재 스킬)를 둔다. 다음 수집은 offset부터 마지막 완전한 줄까지만 읽는다(쓰는 중인 반 줄은 다음 번에). 크기가 offset보다 작아지거나 inode가 바뀐 파일만 처음부터 다시 읽는다. 결과는 UTC 날짜별 버킷으로 쌓고 120일이 지나면 버린다. 줄 필터(`"usage"`, `"type":"user"`, `hook_success`가 든 줄만 JSON 파싱)를 쓴다.
+- 파일 키는 심링크를 푼 실제 경로다. Claude 프로필마다 `$CLAUDE_CONFIG_DIR/projects` 가 같은 폴더를 가리키는 심링크일 수 있고, 지나온 경로로 키를 잡으면 프로필 수만큼 같은 파일을 다시 세었다(캐시 버전 2 에서 고침, 버전이 바뀌면 캐시를 한 번 다시 쌓는다).
 - 측정(2026-10-28, 한 PC): 남아 있는 transcript 4,035개 첫 수집 30초, 새 줄이 없을 때 다음 수집 0.7초.
 
 ### 2.2 귀속
@@ -152,7 +153,7 @@ API 호출 하나(`message.id` 하나)를 두 축으로 나눈다. 미분류 비
 
 **훅 주입**: 이 플러그인의 훅(`hooks/hooks.json`에 있는 스크립트 이름)이 남긴 `additionalContext`를 근사 토큰으로 바꿔 훅별로 `횟수`와 `합계`를 낸다. 주입된 문구는 이후 턴에서 cache read로 다시 읽히지만 그 몫은 나누지 않는다(세션 축 합계에 이미 들어 있다).
 
-**자동화 회차**: 자동화 세션 하나가 한 회차다. 바깥 행동(Bash의 `orca orchestration send|reply`, `gh pr merge|comment|review|edit|create`, 쓰기 메서드의 `gh api`, `git commit|push`, 이름이 Slack 전송이나 코멘트·이슈·메시지 생성인 도구)이 하나도 없으면 빈 회차다.
+**자동화 회차**: 자동화 세션 하나가 한 회차다. 바깥 행동(Bash의 `orca orchestration send|reply`, `gh pr merge|comment|review|edit|create`, 쓰기 메서드의 `gh api`, `git commit|push`·`orca worktree rm`·`orca terminal close`, 이름이 Slack 전송이나 코멘트·이슈·메시지 생성, 브라우저 탭 닫기인 도구)이 하나도 없으면 빈 회차다. janitor 의 본업인 `reap.py reap --plan` 은 대상마다 `- <대상>: <결과>` 한 줄을 찍고 아무것도 안 해도 실행은 되므로, 그 호출의 출력에 건너뜀·실패·메모가 아니고 결과가 `건너뜀`·`사라졌거나 다른 프로세스`·`tip 이 바뀜`·`거부됨`도 아닌 줄이 있을 때만 바깥 행동으로 센다. 출력은 판정에만 쓰고 저장하지 않는다. 이 단어들은 reap.py 의 출력 문구라서, 테스트가 reap.py 원문에 그대로 있는지 확인한다. 읽기만 하는 명령(`reap.py scan`·`precheck`, `mentions.py plan|commit`, `prs.py plan`)은 세지 않는다.
 
 ### 2.3 가시화
 
