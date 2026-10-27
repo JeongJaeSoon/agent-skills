@@ -251,9 +251,10 @@ def measure(root, count=None):
 
 def merge_base(ref, repo=REPO):
     """The commit HEAD branched from ref. Comparing with ref itself would count what ref gained since as this
-    branch's change; ref is returned as is when there is no common commit."""
-    r = subprocess.run(["git", "-C", str(repo), "merge-base", ref, "HEAD"], capture_output=True, text=True)
-    return r.stdout.strip() or ref if r.returncode == 0 else ref
+    branch's change; ref is returned as is when HEAD contains it or there is no common commit."""
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True).stdout.strip()
+    point = git("merge-base", ref, "HEAD")
+    return point if point and point != git("rev-parse", "--verify", "-q", ref + "^{commit}") else ref
 
 
 def measure_ref(ref, count=None, repo=REPO):
