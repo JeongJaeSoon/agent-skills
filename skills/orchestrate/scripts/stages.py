@@ -1,4 +1,4 @@
-"""The stage table the brief skill reports and the dashboard's Brief page draws: one row per work item, its PR merge, dev check
+"""The stage table the brief skill reports and the dashboard's Stages page draws: one row per work item, its PR merge, dev check
 and prod check, each cell a mark and the evidence behind it.
 
 Most rows are generated: each fleet tick derives a program's rows from its ledger, its Run's cards and GitHub
@@ -159,8 +159,9 @@ def merge_cell(pr, prs):
 def merged(store, made):
     """Generated rows with the recorded ones over them: a recorded cell replaces the generated cell of its column, a
     recorded row of the same id its fields. A recorded row with a generated row's PR is the same work: it folds into that
-    row, its title and cells over the generated ones, and the rows under it move along; a recorded group left with no
-    row of its own goes. An overlay whose generated row is gone has nothing to sit on."""
+    row, its title and cells over the generated ones, and the rows under it move along; so does a PR-less row under a
+    program's group whose id names one of its predicate items (by_item). A recorded group left with no row of its own
+    goes. An overlay whose generated row is gone has nothing to sit on."""
     rows = dict(made["rows"])
     by_pr = {r["pr"]: k for k, r in rows.items() if r.get("pr")}
     into = {}
@@ -168,7 +169,7 @@ def merged(store, made):
         if k in rows:
             rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")},
                        "cells": {**rows[k].get("cells", {}), **r.get("cells", {})}}
-        elif (on := not r.get("group") and by_pr.get(r.get("pr"))):
+        elif (on := not r.get("group") and (by_pr.get(r.get("pr")) or by_item(k, r, made["rows"], set(into.values())))):
             into[k] = on
             rows[on] = {**rows[on], **{f: v for f, v in r.items() if v and f in ("title", "done_at")},
                         "cells": {**rows[on].get("cells", {}), **r.get("cells", {})}}
@@ -183,6 +184,19 @@ def merged(store, made):
     gone = {k for k in kids if (store["rows"].get(k) or {}).get("group") and k not in made["rows"] and kids[k] <= set(into)}
     rows = {k: r for k, r in rows.items() if k not in gone}
     return rows, made["order"] + [k for k in store["order"] if k in rows and k not in made["rows"]]
+
+
+def by_item(rid, row, made, taken):
+    """The generated row a PR-less recorded row stands for: it hangs under a program's generated group, and its id past
+    the group's (`<slug>-release` under `<slug>`) names words of exactly one predicate item there (`<slug>/P1-release`).
+    None when no item or several match, or another recorded row already folded into it: two rows beat a wrong merge."""
+    parent = row.get("parent")
+    if row.get("pr") or not (made.get(parent) or {}).get("group") or not rid.lower().startswith(f"{parent.lower()}-"):
+        return None
+    want = set(rid[len(parent) + 1:].lower().split("-"))
+    hits = [k for k, r in made.items()
+            if r.get("parent") == parent and r.get("item") and want <= set(k.split("/", 1)[1].lower().split("-"))]
+    return hits[0] if len(hits) == 1 and hits[0] not in taken else None
 
 
 def table(state=None):

@@ -48,11 +48,13 @@ assert events[-1]["text"].endswith("…") and len(events[-1]["text"].encode()) <
 fleet.append_line(fleet.state_dir() / "events.jsonl", events[-1])  # and it fits under append_line's 4 KiB
 
 # The snapshot: every registered job, a record exactly as written, None for one that never ran.
-reg = (("tidy", "Self-clean (tidy)", "after each fleet collect"), ("skill-usage", "Skill usage collect", "every 15m"))
+reg = (("tidy", "Self-clean (tidy)", None, "after each fleet collect", "fleet-tick"),
+       ("skill-usage", "Skill usage collect", "15m", "every 15m", None))
 snap = jobs.snapshot(reg)
 by = {j["key"]: j for j in snap["jobs"]}
-assert by["tidy"]["record"] == jobs.records()["tidy"] and by["tidy"]["runs_in"] == "orch-dash"
-assert by["skill-usage"]["record"] is None and by["skill-usage"]["cadence"] == "every 15m"
+assert by["tidy"]["record"] == jobs.records()["tidy"] and by["tidy"]["runs_in"] == "orch-dash" and by["tidy"]["group"] == "fleet-tick"
+assert by["skill-usage"]["record"] is None and by["skill-usage"]["cadence"] == "every 15m" and by["skill-usage"]["every"] == "15m"
+assert [jobs.short(s) for s in (10, 90, 300, 900, 6 * 3600)] == ["10s", "90s", "5m", "15m", "6h"]
 
 # skills-sync: the demo's sync.json (ok, 900 s) maps to its record; a stopped sync is an error.
 sync = by["skills-sync"]
@@ -72,7 +74,7 @@ import reap_hard  # noqa: E402
 assert reap_hard.LAST.parent == root
 reap_hard.LAST.unlink()  # the demo's pass
 reap = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["reap-hard"]
-assert reap["record"] is None and reap["cadence"] == f"every {reap_hard.config()['interval'] // 60}m"
+assert reap["record"] is None and reap["cadence"] == f"every {reap_hard.config()['interval'] // 60}m" and "launchd agent" in reap["why"]
 t = time.time()
 reap_hard.write_last({"t": t, "at": "x", "acted": 3, "skipped": 0, "failed": 1, "kept": 4, "notes": ["/private/path"], "dark": []})
 reap = {j["key"]: j for j in jobs.snapshot(reg)["jobs"]}["reap-hard"]["record"]
@@ -85,7 +87,7 @@ assert f"{fleet.EXTERNAL_KEEP_DAYS} days" in rules["Inbox item expiry"] and "24 
 
 # The server's registry: every job it records has a row, and the page reads it from /api/fleet/jobs.
 import dash  # noqa: E402
-keys = [k for k, _, _ in dash.JOBS]
+keys = [k for k, *_ in dash.JOBS]
 assert keys == ["fleet-tick", "requests-reconcile", "tidy", "relay", "selfcheck", "skill-usage", "pr-stats"]
 src = (HERE / "dash.py").read_text() + (HERE / "fleet.py").read_text()
 assert all(f'jobs.record("{k}"' in src for k in keys), [k for k in keys if f'jobs.record("{k}"' not in src]

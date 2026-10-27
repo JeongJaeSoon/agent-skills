@@ -3,11 +3,13 @@ already record, so the table fills without anyone running `orch stage add`.
 
 Rows of a program (~/.claude/programs/<slug>/):
 - a group row `<slug>`, the heading;
-- one row `<slug>/<item>` per predicate item (program.json `predicate`);
+- one row `<slug>/<item>` per predicate item (program.json `predicate`), `item` true;
 - one row `<slug>/<ticket>` per worker card of the program's Run (`run`) whose ticket is not a predicate item, the
-  ticket read from the card title's first word (`role-terms: …`, `ABC-12 …`); a card with none is `<slug>/<task id>`.
+  ticket read from the card title's first word (`role-terms: …`, `ABC-12 …`); a card with none, or a second card of a
+  ticket another card already holds, is `<slug>/<task id>` (row_key).
 A row's PR is the one the ledger names for its ticket (`ready`, `landed`, … with `ticket`), else one the fleet
-collector saw a worker session of that ticket own, else one whose branch is named after the ticket. With several, an
+collector saw the worker session of that card own (matched by its task title), else one whose branch is named after
+the ticket. With several, an
 open one is shown before a merged one. Cards and sessions are archived once the work lands, so a landed row's
 evidence is the ledger and GitHub: the collector keeps every PR a program's ledger names (fleet.program_prs), with
 its branch, after the search stops finding it.
@@ -89,6 +91,17 @@ def ticket_of(title):
     return word if prog.TICKET_ID.fullmatch(word) else None
 
 
+def row_key(task, ledger_tickets, taken):
+    """A card's row key: its ticket, or `<ticket>-<word>` when the ledger names that ticket after the title's second word
+    (`ABC-1 K4: …` spawned as ABC-1-K4). A card whose key another card of the Run already holds keys by its task id:
+    two cards of one ticket are two rows, each with its own PR."""
+    k = ticket_of(task.get("title"))
+    words = (task.get("title") or "").split()
+    if k and len(words) > 1 and f"{k}-{words[1].rstrip(':')}" in ledger_tickets:
+        k = f"{k}-{words[1].rstrip(':')}"
+    return k if k and k not in taken else task["id"]
+
+
 def recent(cfg, events, now):
     """The program's last ledger event (its creation without one), or None when that is older than ACTIVE_S."""
     last = max(filter(None, (fleet.parse(e.get("ts")) for e in events)), default=fleet.parse(cfg.get("created_at")))
@@ -110,20 +123,23 @@ def build(programs, state, now):
             continue
         done_at, created = prog.final_check_at(events), cfg.get("created_at") or fleet.iso(last)
         tickets = list(dict.fromkeys(cfg.get("predicate") or []))
-        title = {}
+        items = set(tickets)
+        ledger_tickets = {e["ticket"] for e in events if isinstance(e.get("ticket"), str)}
+        title, card_key = {}, {}
         for t in state.get("tasks") or []:
             if run and t.get("run") == run:
-                k = ticket_of(t.get("title")) or t["id"]
+                k = card_key[t["id"]] = row_key(t, ledger_tickets, set(card_key.values()))
                 if k not in tickets:
                     tickets.append(k)
                 title.setdefault(k, t.get("title"))
+        by_title = {t.get("title"): card_key[t["id"]] for t in state.get("tasks") or [] if t["id"] in card_key}
         # ticket -> PR keys, in the order they were first named.
         named = {}
         for e in events:
             if e.get("pr") is not None and e.get("ticket") and repo:
                 named.setdefault(e["ticket"], []).append(fleet.pr_key(repo, e["pr"]))
         for s in state.get("sessions") or []:
-            if run and s.get("run") == run and (k := ticket_of(s.get("task_title"))):
+            if run and s.get("run") == run and (k := by_title.get(s.get("task_title")) or ticket_of(s.get("task_title"))):
                 named.setdefault(k, []).extend(p["key"] for p in prs.values() if p.get("session") == s["id"])
         # A card's branch is named after its ticket (`<user>/role-terms`); its PR outlives the card's session.
         for p in sorted(prs.values(), key=lambda p: p.get("created") or ""):
@@ -147,7 +163,7 @@ def build(programs, state, now):
             at = max((e["ts"] for e in events if e.get("ts") and (e.get("ticket") == k or e.get("pr") in nums)),
                      default=fleet.iso(last))
             rows[rid] = {"id": rid, "title": fleet.mask(" ".join((title.get(k) or k).split()), 120), "pr": pr,
-                         "parent": slug, "cells": cells, "source": "auto", "program": slug, "created_at": created,
+                         "parent": slug, "cells": cells, "source": "auto", "program": slug, "item": k in items, "created_at": created,
                          "at": at, "done_at": done_at}
             order.append(rid)
         summary[slug] = {"active": not done_at and not prog.stopped(events), "rows": len(tickets)}

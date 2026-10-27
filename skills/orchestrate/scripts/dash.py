@@ -1519,15 +1519,19 @@ def pr_stats_loop():
         time.sleep(60)
 
 
-# orch-dash's own jobs, as the Automations page lists them: (jobs.record key, name, cadence).
+# orch-dash's own jobs, as the Automations page lists them: (jobs.record key, name, how often in short, cadence in
+# words, the job whose run this one rides on). The page folds a rider under that job's row.
 JOBS = (
-    ("fleet-tick", "Fleet collect · Needs you", f"every {fleet.ORCA_EVERY}s while a page is open, else {FLEET_IDLE_EVERY}s"),
-    ("requests-reconcile", "Owner requests reconcile", "each fleet collect"),
-    ("tidy", "Self-clean (tidy)", "after each fleet collect"),
-    ("relay", "Decision relay · reload retry", "after each fleet collect"),
-    ("selfcheck", "Self-check", f"every {selfcheck.EVERY // 60}m, {selfcheck.GRACE_S}s while a finding waits for its second read"),
-    ("skill-usage", "Skill usage collect", f"every {SKILLS_EVERY // 60}m"),
-    ("pr-stats", "PR stats collect", f"every {PR_STATS_EVERY // 3600}h, {PR_STATS_RETRY // 3600}h after a failure"),
+    ("fleet-tick", "Fleet tick", jobs.short(fleet.ORCA_EVERY),
+     f"every {fleet.ORCA_EVERY}s while a page is open, else {FLEET_IDLE_EVERY}s", None),
+    ("requests-reconcile", "Owner requests reconcile", None, "each fleet collect", "fleet-tick"),
+    ("tidy", "Self-clean (tidy)", None, "after each fleet collect", "fleet-tick"),
+    ("relay", "Decision relay · reload retry", None, "after each fleet collect", "fleet-tick"),
+    ("selfcheck", "Self-check", jobs.short(selfcheck.EVERY),
+     f"every {selfcheck.EVERY // 60}m, {selfcheck.GRACE_S}s while a finding waits for its second read", None),
+    ("skill-usage", "Skill usage collect", jobs.short(SKILLS_EVERY), f"every {SKILLS_EVERY // 60}m", None),
+    ("pr-stats", "PR stats collect", jobs.short(PR_STATS_EVERY),
+     f"every {PR_STATS_EVERY // 3600}h, {PR_STATS_RETRY // 3600}h after a failure", None),
 )
 
 
@@ -1686,7 +1690,7 @@ def closed_recent(days=7):
 
 
 def stage_report():
-    """The stage table whole, generated rows and recorded ones, for the Brief page: the periodic text leaves it out.
+    """The stage table whole, generated rows and recorded ones, for the Stages page: the periodic text leaves it out.
     Read per request, so an `orch stage set` shows on the next poll."""
     try:
         return acks.mark_stages(stages.table())
