@@ -435,6 +435,34 @@ def skills_report(now):
             "skills": skills, "signals": {"added": 0}}
 
 
+def tokens_report(now):
+    """token_usage.report() over invented day buckets, so the demo's Tokens page never reads real transcripts."""
+    import token_usage
+    axes = {  # weighted tokens a day in the last week; the week before is scaled by the second value
+        "who": {"interactive": (60e6, 1), "orchestrator": (25e6, 0.9), "subagent:general-purpose": (14e6, 1.2),
+                "automation:watch-prs": (9e6, 0.4), "lead:launchpad-ga": (8e6, 0), "automation:janitor": (2e6, 1)},
+        "skill": {"none": (70e6, 1), "skill:agent-skills:orchestrate": (21e6, 0.9),
+                  "skill:agent-skills:deliver-ticket": (13e6, 1.1), "skill:agent-skills:watch-prs": (9e6, 0.4),
+                  "skill:agent-skills:reap-resources": (2e6, 1), "skill:simplify": (3e6, 0.5)},
+        "origin": {"human": (62e6, 1), "task_notification": (30e6, 0.8), "subagent": (14e6, 1.2), "scheduled": (12e6, 0.6)},
+    }
+    days = {}
+    for n in range(14):
+        day = (now - dt.timedelta(days=n)).strftime("%Y-%m-%d")
+        b = days[day] = {"hooks": {"reorient.py": [40, 4800], "prose_check.py": [12, 900]},
+                         "fields": {"input": 3_000_000, "cache_5m": 4_000_000, "cache_1h": 6_000_000,
+                                    "cache_read": 600_000_000, "output": 900_000}}
+        for axis, rows in axes.items():
+            b[axis] = {k: [int(w * (f if n >= 7 else 1) * 6), w * (f if n >= 7 else 1), int(w / 2e5)]
+                       for k, (w, f) in rows.items() if n < 7 or f}
+    sessions = {f"demo-{who}-{i}": {"who": f"automation:{who}", "start": _ago(now, 12 * i + 1),
+                                    "outward": who == "watch-prs" and i % 3 == 0, "weighted": 180_000.0}
+                for who in ("watch-prs", "janitor") for i in range(12)}
+    cache = {"days": days, "sessions": sessions, "automations": {"a": ["watch-prs", "watch-prs"], "b": ["janitor", "reap-resources"]},
+             "collected_at": _iso(now), "last": {"files": 412, "parsed": 3, "lines": 120, "seconds": 0.3}}
+    return token_usage.report(cache, 7, now)
+
+
 def stage_table(now):
     """An invented `orch stage` table in stages.json's shape. Its PR keys are FakeFleetWorld's, so merge cells fill."""
     def row(rid, title, pr=None, parent=None, group=False, done_h=None, **cells):
@@ -480,6 +508,7 @@ def build(root, now=None):
     (root / "fleet-state").mkdir(parents=True, exist_ok=True)
     (root / "fleet-state" / "skills.json").write_text(json.dumps(skills_report(now)))
     (root / "fleet-state" / "pr-stats.json").write_text(json.dumps(pr_stats_report(now)))
+    (root / "fleet-state" / "tokens.json").write_text(json.dumps(tokens_report(now)))
     (root / "fleet-state" / "stages.json").write_text(json.dumps(stage_table(now), ensure_ascii=False))
     # The scratch card's brief and report (FakeFleetWorld wt-scratch): the Brief's row for it reads the report.
     (root / "briefs").mkdir(exist_ok=True)
@@ -500,7 +529,7 @@ def build(root, now=None):
                                                           "skipped": 0, "failed": 0, "kept": 5, "notes": [], "dark": []}))
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
-            "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
+            "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "ORCH_TOKENS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
 

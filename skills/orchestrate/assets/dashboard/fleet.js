@@ -18,6 +18,7 @@ const FLEET_SECTIONS = [
   { id: "monitors", label: "Monitors", icon: "activity" },
   { id: "skills", label: "Skills", icon: "spark", sep: true },
   { id: "changes", label: "Skill changes", icon: "merge" },
+  { id: "tokens", label: "Tokens", icon: "coins" },
   { id: "stats", label: "PR stats", icon: "chart" },
   { id: "graph", label: "Graph", icon: "graph" },
   { id: "flow", label: "Data flow", icon: "link" },
@@ -707,6 +708,42 @@ function fleetSkills() {
     ${srcs.length > 1 ? `<div class="chips proj-chips" role="group" aria-label="Source">${srcChip("all", "All sources")}${(rep.sources || []).map((x) => srcChip(x.source, x.source, x.skills)).join("")}</div>` : ""}
     ${srcs.filter((x) => groups[x]).map((x) => `<div class="card table-wrap"><div class="card-head"><h3 class="mono">${esc(x)}</h3><span class="aside">${editable.has(x) ? tag("editable", "accent", "") + " " : ""}${groups[x].length} skills</span></div>${skillTable(groups[x])}</div>`).join("")
       || '<div class="card"><div class="empty-chart">No skill matches.</div></div>'}`;
+}
+
+// Token use comes from /api/fleet/tokens (token_usage.py), refreshed by the server every 15 minutes.
+const tokN = (n) => n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : `${Math.round(n)}`;
+const tokTrend = (t) => t == null ? '<span class="muted">new</span>' : `<span class="${t >= 0.5 ? "toned tone-bad" : t <= -0.3 ? "toned tone-good" : "dim"}">${t >= 0 ? "+" : ""}${Math.round(t * 100)}%</span>`;
+function tokTable(rows, label, hot) {
+  const body = rows.slice(0, 12).map((r) => `<tr><td class="mono">${hot.has(r.key) ? tag("hot", "bad", "") + " " : ""}${esc(r.key)}</td>
+    <td class="num">${tokN(r.weighted)}</td><td class="num hide-sm dim">${tokN(r.tokens)}</td><td class="num">${(r.share * 100).toFixed(1)}%</td><td class="num">${tokTrend(r.trend)}</td></tr>`).join("");
+  return `<div class="card table-wrap"><div class="card-head"><h3>${esc(label)}</h3><span class="aside">${rows.length}</span></div>
+    <table><thead><tr><th>Key</th><th class="num">Weighted</th><th class="num hide-sm">Tokens</th><th class="num">Share</th><th class="num">vs prior</th></tr></thead><tbody>${body || '<tr><td colspan="5" class="muted">None in this window.</td></tr>'}</tbody></table></div>`;
+}
+function fleetTokens() {
+  pollJson("tokens", "/api/fleet/tokens", 60e3);
+  const rep = F.tokens;
+  const head = `<div class="view-head"><div><h2>Tokens</h2><p>API token use in local Claude Code transcripts, by who spent it (automation, role, subagent, interactive) and by the skill in effect, over the last ${rep && rep.days ? rep.days : 7} UTC days against the days before. Weighted is in input-token equivalents: a cache read counts 0.1, a cache write 1.25 or 2, output 5. Read incrementally by token_usage.py; no prompt or message text is kept and nothing here calls a model. Static sizes next to a warning come from scripts/skill_tokens.py.</p></div>
+    ${rep && !rep.error ? `<div class="aside muted">${esc(rep.window[0])} – ${esc(rep.window[1])} · collected ${relSpan(rep.collected_at)}</div>` : ""}</div>`;
+  if (!rep) return head + '<div class="loading">Loading…</div>';
+  if (rep.error) return head + `<div class="card"><div class="empty-chart">${esc(rep.error === "HTTP 503" ? "The first token usage collect has not finished." : rep.error)}</div></div>`;
+  const t = rep.totals, hot = new Set(rep.warnings.map((w) => w.key)), f = t.fields || {};
+  const cacheIn = (f.cache_read || 0) / ((f.cache_read || 0) + (f.input || 0) + (f.cache_5m || 0) + (f.cache_1h || 0) || 1);
+  const kpis = `<div class="kpis" style="--n:4">
+    ${kpi("Weighted tokens", tokN(t.weighted), `${tokN(t.tokens)} raw · ${t.calls.toLocaleString()} API calls`)}
+    ${kpi("Cache read share", `${(cacheIn * 100).toFixed(0)}%`, "of input tokens")}
+    ${kpi("Warnings", `${rep.warnings.length}`, rep.warnings.length ? "marked hot below" : "nothing over its threshold")}
+    ${kpi("Unclassified", `${(rep.unclassified.who * 100).toFixed(1)}%`, `origin unknown ${(rep.unclassified.origin * 100).toFixed(1)}%`)}</div>`;
+  const warn = rep.warnings.map((w) => `<li>${tag(w.kind, "bad", "")} <span class="mono">${esc(w.text)}</span>${w.static ? ` <span class="muted">static: ${esc(w.static.skill)} listing ${w.static.listing_tokens} tokens a turn, SKILL.md ${w.static.skill_md_tokens.toLocaleString()} a load</span>` : ""}</li>`).join("");
+  const autos = rep.automations.map((a) => `<tr><td class="mono">${hot.has(a.key) ? tag("hot", "bad", "") + " " : ""}${esc(a.key)}</td><td class="num">${a.rounds}</td>
+    <td class="num ${a.empty_recent >= a.recent / 2 && a.recent ? "toned tone-warn" : "dim"}">${a.empty_recent}/${a.recent}</td><td class="num">${tokN(a.weighted_per_round)}</td></tr>`).join("");
+  const hooks = rep.hooks.map((h) => `<tr><td class="mono">${esc(h.name)}</td><td class="num">${h.count}</td><td class="num">${h.tokens.toLocaleString()}</td></tr>`).join("");
+  return head + kpis + (warn ? `<div class="card"><div class="card-head"><h3>Using the most</h3><span class="aside">${rep.warnings.length}</span></div><ul class="rows">${warn}</ul></div>` : "")
+    + `<div class="grid">${tokTable(rep.who, "Who", hot)}${tokTable(rep.skill, "Skill in effect", hot)}</div>
+    <div class="grid">${tokTable(rep.origin, "Turn origin", hot)}
+      <div class="card table-wrap"><div class="card-head"><h3>Automation rounds</h3><span class="aside">empty = nothing sent, commented, merged or pushed</span></div>
+        <table><thead><tr><th>Automation</th><th class="num">Rounds</th><th class="num">Empty, recent</th><th class="num">Per round</th></tr></thead><tbody>${autos || '<tr><td colspan="4" class="muted">No automation sessions matched.</td></tr>'}</tbody></table>
+        <div class="card-head"><h3>Hook injections</h3><span class="aside">count × approximate size</span></div>
+        <table><thead><tr><th>Hook</th><th class="num">Count</th><th class="num">Tokens</th></tr></thead><tbody>${hooks || '<tr><td colspan="3" class="muted">No injected text in this window.</td></tr>'}</tbody></table></div></div>`;
 }
 
 // Data flow and skill changes come from /api/fleet/flow and /api/fleet/changes (flow.py), each cached by the server.
@@ -1429,7 +1466,7 @@ function fleetStats() {
     <div class="grid">${card("Weekday × hour", "", punch)}
     ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
 }
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, tokens: fleetTokens, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

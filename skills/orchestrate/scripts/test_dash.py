@@ -13,6 +13,7 @@ store, fx = root / "programs", root / "fixtures"
 A, B = "launchpad-ga", "billing-q4"
 assert os.environ["ORCH_SKILLS"] == "off", "the demo must not scan real transcripts"
 assert os.environ["ORCH_PR_STATS"] == "off", "the demo must not search the real GitHub"
+assert os.environ["ORCH_TOKENS"] == "off", "the demo must not read real transcripts for token use"
 
 
 def state(slug):
