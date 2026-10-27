@@ -28,17 +28,13 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
 1. **Name the change.** The key and value, or the action the user wants to stop being prompted for, in the user's words.
 2. **Check the key or the rule.**
    - A key: find it in the owning skill's Config section (`watch-prs`, `watch-mentions`, `reap-resources`, `use-tracker`, `use-notes`, …). `emit` refuses a key no skill documents and a value outside a documented `"a | b | c"` list or of another type than the script's default. A key that really is new goes in `allow_unknown` by its exact name, so the user sees it in the spec.
-   - A rule: the smallest one that covers the action. These checks are a best-effort guardrail against rules that plainly allow anything, not a security boundary; the diff the user reviews before `--apply` is the decision. `emit` refuses:
-     - a bare tool name and `Bash(*)`;
-     - a `Bash` rule with a wildcard anywhere but a trailing `:*`, or quotes, escapes, `$` or `=` in the command name;
-     - a command that runs whatever follows it (`env`, `sudo`, `nohup`, `xargs`, `find`, …) or starts programs outside the session (`launchctl`, `crontab`, `open`);
-     - an interpreter (`python3`, `bash`, `node`, …) not followed directly by a script path, or for Python `-m <module>`; stdin paths (`-`, `/dev/…`) do not count;
-     - a runner (`uv run`, `npx`, `npm exec`, `poetry run`, `bundle exec`, …) not followed directly by a command, and that command is checked again by these rules;
-     - `git`, `make` or `npm run` with no subcommand, target or script after it, and any prefix that reaches a runner (`Bash(npm:*)`, `Bash(uv:*)`);
-     - path rules over the whole home directory, with `.`, `..`, `//`, `[…]` or `{…}` in the path, or able to match anything in the config directories' settings, `CLAUDE.md`, skills, agents, hooks, plugins, commands or output styles, `agent-skills.json`, shell startup files, `~/bin`, `~/.local/bin`, `~/.ssh`, `~/.config` or other credential directories;
-     - secret-shaped values.
+   - A rule: the smallest one that covers the action. `add` takes two kinds only: a path rule for `Edit`, `Write`, `Read`, `MultiEdit` or `NotebookEdit`, and one MCP tool by its full name, `mcp__server__tool`. A `Bash` rule is outside this skill: a shell command can run anything, so no check on its text holds; tell the user to review it and add it by hand or through `update-config`. A whole MCP server (`mcp__server`, `mcp__server__*`) is refused too, because one server can hold send and delete tools next to the read ones. The path checks are a best-effort guardrail, not a security boundary; the diff the user reviews before `--apply` is the decision. `emit` refuses a path rule:
+     - with a character outside ASCII, `.`, `..`, `//`, `[…]` or `{…}`, or over the whole home directory;
+     - able to match the config directories' settings, `CLAUDE.md`, skills, agents, hooks, plugins, commands or output styles, `agent-skills.json`, shell and editor startup files, PATH directories (`~/bin`, `~/.local/bin`, `~/.cargo/bin`, shims, `/opt/homebrew/bin`, `/usr/local/bin`, …), launch agents and daemons, package-manager configs, credentials (`~/.ssh`, `~/.config`, `~/.git-credentials`, keychains, …), or anything under Orca's application-support directory except a project's `projects/<name>/memory/` directory;
+     - for `Edit` or `Write`, able to reach a repository's `.claude`, `.mcp.json`, `.git/hooks` or `.git/config` anywhere, so `Edit(//repo/**)` is refused; for `Read`, naming one of them (`Read(//repo/**)` passes, `Read(//repo/.git/**)` does not);
+     - holding a secret-shaped value.
 
-     Some narrow rules are refused too (`python3 -u x.py`, `git -C dir status`); write the form the rules accept. Its message names the reason, so narrow the rule rather than reword it. A `remove` is not checked this way: taking a broad rule out only narrows. Write path rules as `//absolute/path`; when part of the path is a symlink, `emit` adds the same rule on the real path, because a rule matches the path as the tool sees it.
+     Its message names the reason, so narrow the rule rather than reword it. A `remove` is not checked this way, Bash included: taking a broad rule out only narrows. Write path rules as `//absolute/path`; when part of the path is a symlink, `emit` adds the same rule on the real path, because a rule matches the path as the tool sees it.
 3. **Write the spec.**
 
    ```json

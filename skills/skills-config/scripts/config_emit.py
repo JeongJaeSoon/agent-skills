@@ -16,8 +16,9 @@ agent-skills.json is one file per user, ~/.claude/agent-skills.json ($AGENT_SKIL
 HASH is the start of the script's sha256 (plus SPEC with --spec), printed with the diff; emit's run line has shasum
 check the whole file first, because an edited copy could also drop its own check, and runs python3 -I, so a module
 planted beside the copy or in the working directory is not imported in place of the standard library.
-The permission checks are a best-effort guardrail against rules that plainly allow anything; the diff the user
-reviews before --apply is the decision.
+permissions.add takes path rules (Edit, Write, Read, ...) and single MCP tools only; a Bash rule is refused, since
+no check on a shell command holds, and goes through update-config or the user's own edit. The path checks are a
+best-effort guardrail; the diff the user reviews before --apply is the decision.
 """
 import argparse
 import ast
@@ -67,26 +68,21 @@ SECTIONS = {
     "reap-hard": (["docs/reap-hard.md"], {"": "scripts/reap_hard.py"}),
 }
 PATH_TOOLS = ("Edit", "Write", "Read", "MultiEdit", "NotebookEdit")
-# These run whatever command follows them, so no prefix of theirs names one command. find runs one through -exec.
-WRAPPERS = {"env", "sudo", "doas", "su", "nohup", "timeout", "gtimeout", "command", "builtin", "exec", "eval", "xargs",
-            "nice", "time", "stdbuf", "caffeinate", "watch", "parallel", "source", ".", "find", "ssh"}
-# These start or schedule programs outside the session.
-LAUNCHERS = {"launchctl", "crontab", "at", "open"}
-# These run any code they are given; a rule on one must name the script (or a python module) right after it.
-INTERPRETERS = {"bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "python", "pypy", "node", "deno", "bun",
-                "ruby", "perl", "php", "lua", "awk", "gawk", "osascript", "pwsh"}
-# The word after each of these is a command of its own and is checked again; any shorter prefix reaches them.
-RUNNERS = {"uv run", "uv tool run", "uvx", "npx", "bunx", "npm exec", "npm x", "pnpm exec", "pnpm dlx", "yarn exec",
-           "yarn dlx", "poetry run", "pipx run", "bundle exec"}
-# The word after each of these picks what runs: a git subcommand (or -c alias), a make target, a package script.
-NEEDS_TARGET = {"git", "make", "npm run", "npm run-script", "pnpm run", "yarn run"}
 CONFIG_SUBDIRS = ("hooks", "skills", "agents", "plugins", "commands", "output-styles")
 CONFIG_FILES = ("settings.json", "settings.local.json", "CLAUDE.md", ".claude.json")
-# Files and directories under home that run code or hold credentials.
-HOME_DIRS = (".ssh", ".config", ".gnupg", ".aws", ".kube", ".docker", "Library/LaunchAgents", ".local/bin", "bin",
-             ".oh-my-zsh")
-HOME_FILES = (".claude.json", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile",
-              ".gitconfig", ".netrc", ".npmrc")
+# Files and directories under home that run code (startup files, PATH directories) or hold credentials.
+HOME_DIRS = (".ssh", ".config", ".gnupg", ".aws", ".kube", ".docker", "Library/LaunchAgents", "Library/LaunchDaemons",
+             "Library/Keychains", "Library/Application Support/Code/User", ".local/bin", "bin", ".oh-my-zsh", ".zsh",
+             ".zshrc.d", ".cargo/bin", "go/bin", ".pyenv/shims", ".rbenv/shims", ".volta/bin", ".bun/bin", ".deno/bin",
+             ".nvm", ".pip", ".git-templates")
+HOME_FILES = (".claude.json", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".bash_login",
+              ".profile", ".gitconfig", ".git-credentials", ".netrc", ".npmrc", ".tmux.conf", ".vimrc",
+              ".cargo/config.toml", ".pypirc", ".gemrc", ".condarc")
+SYSTEM_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/Library/LaunchAgents", "/Library/LaunchDaemons")
+# Every Orca profile's settings and hooks; only a project's memory directory under it is open (memory_dir).
+ORCA_DIR = "Library/Application Support/orca"
+# Wherever a repository sits: its Claude settings, MCP servers, git hooks and config.
+ANYWHERE = ((".claude",), (".mcp.json",), (".git", "hooks"), (".git", "config"))
 FILE_EXTS = {"py", "json", "md", "sh", "js", "ts", "txt", "yaml", "yml", "toml", "plist", "log", "html", "tsv", "csv"}
 SECRET = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|xox[abposr]-|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
                     r"|-----BEGIN|(?<![A-Za-z0-9/])(?=[A-Za-z0-9_+=-]*\d)(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{40,}")
@@ -153,92 +149,71 @@ def check_secret(value, where):
 
 
 def check_permission(rule):
+    """Only path rules and single MCP tools: a shell command can run anything, so no check on Bash rules holds."""
     if not isinstance(rule, str) or not rule.strip():
         raise Refused(f"a permission rule must be a non-empty string, got {rule!r}")
+    if not rule.isascii():
+        raise Refused(f"{rule}: a character outside ASCII can pass for another one; write the rule in ASCII")
     check_secret(rule, "permissions")
     m = re.fullmatch(r"([\w-]+)(?:\((.*)\))?", rule.strip(), re.S)
     if not m:
-        raise Refused(f"not a permission rule: {rule!r}; use Tool or Tool(specifier)")
+        raise Refused(f"not a permission rule: {rule!r}; use Tool(specifier) or mcp__server__tool")
     tool, spec = m.groups()
-    if spec is None:
-        if not re.fullmatch(r"mcp__[\w-]+__[\w-]+", tool):
-            raise Refused(f"{rule}: a bare tool name allows every use of it; add a specifier")
-        return
-    if not spec.strip() or not re.sub(r"domain:|[*/:~.\s]", "", spec):
-        raise Refused(f"{rule}: the specifier matches everything")
     if tool == "Bash":
-        check_command(rule, spec)
-    if tool in PATH_TOOLS:
-        path = rule_path(spec)
-        if re.search(r"(^|/)\.\.?(/|$)", path) or "//" in path:
-            raise Refused(f"{rule}: write the path without '.', '..' or '//'")
-        if re.search(r"[\[{]", path):
-            raise Refused(f"{rule}: [...] and {{...}} are not checked here; write one rule per path")
-        literal = re.split(r"[*?]", path, maxsplit=1)[0]
-        if literal != path:
-            literal = literal[:literal.rfind("/") + 1]  # a wildcard mid-name reaches the whole parent directory
-        literal, home = pathlib.Path(literal or "/"), pathlib.Path.home()
-        if literal in (home, *home.parents) or literal == pathlib.Path("/"):
-            raise Refused(f"{rule}: covers the whole home directory or more")
-        for protected in protected_paths():
-            if overlaps(path, protected) or overlaps(path, os.path.realpath(protected)):
-                raise Refused(f"{rule}: can reach {protected}; settings, instructions, skills, hooks, shell startup "
-                              f"files and credentials are the user's to edit")
+        raise Refused(f"{rule}: Bash rules are outside this skill; a person reviews and adds them by hand or "
+                      f"through update-config")
+    if tool.startswith("mcp__"):
+        if spec is not None or not re.fullmatch(r"mcp__[\w-]+__[\w-]+", tool):
+            raise Refused(f"{rule}: name one MCP tool as mcp__server__tool; a whole server can send and delete too")
+        return
+    if tool not in PATH_TOOLS:
+        raise Refused(f"{rule}: this skill adds only {', '.join(PATH_TOOLS)} path rules and mcp__server__tool; "
+                      f"use update-config for the rest")
+    if spec is None:
+        raise Refused(f"{rule}: a bare tool name allows every use of it; add a path")
+    if not spec.strip() or not re.sub(r"[*/:~.\s]", "", spec):
+        raise Refused(f"{rule}: the specifier matches everything")
+    path = rule_path(spec)
+    if re.search(r"(^|/)\.\.?(/|$)", path) or "//" in path:
+        raise Refused(f"{rule}: write the path without '.', '..' or '//'")
+    if re.search(r"[\[{]", path):
+        raise Refused(f"{rule}: [...] and {{...}} are not checked here; write one rule per path")
+    literal = re.split(r"[*?]", path, maxsplit=1)[0]
+    if literal != path:
+        literal = literal[:literal.rfind("/") + 1]  # a wildcard mid-name reaches the whole parent directory
+    literal, home = pathlib.Path(literal or "/"), pathlib.Path.home()
+    if literal in (home, *home.parents) or literal == pathlib.Path("/"):
+        raise Refused(f"{rule}: covers the whole home directory or more")
+    for protected in protected_paths():
+        if reaches(path, protected):
+            raise Refused(f"{rule}: can reach {protected}; settings, instructions, skills, hooks, shell startup "
+                          f"files, PATH directories and credentials are the user's to edit")
+    if memory_dir(path):
+        return
+    orca = f"{home}/{ORCA_DIR}/**"
+    if reaches(path, orca):
+        raise Refused(f"{rule}: can reach {orca}, every Orca profile's settings and hooks; only a project's "
+                      f"memory directory there is open")
+    for seq in ANYWHERE:
+        # Writing anywhere a repository's .claude or .git/hooks could be runs code; reading only shows it.
+        hit = names(path, seq) if tool == "Read" else overlaps(path, "/".join(("**", *seq, "**")))
+        if hit:
+            raise Refused(f"{rule}: can {'name' if tool == 'Read' else 'reach'} a repository's {'/'.join(seq)}; "
+                          f"name a narrower path")
 
 
-def check_command(rule, spec):
-    """Not a shell parser: structural checks (wildcards, then what the first words make run) rather than a list
-    of every risky command, which would never be complete."""
-    words = re.sub(r":\*$", " *", spec.strip()).split()
-    if words and words[-1] == "*":
-        words.pop()
-    if any(re.search(r"[*?\[]", w) for w in words):
-        raise Refused(f"{rule}: a wildcard goes only at the end, as ':*'; write out every word before it")
-    while words and re.fullmatch(r"\w+=\S*", words[0]):
-        words.pop(0)
-    check_words(rule, words)
+def memory_dir(path):
+    """.../projects/<one segment>/memory/..., with no ** before memory, which could step through anything else."""
+    segs = segments(path)
+    return any(segs[i] == "projects" and segs[i + 2] == "memory" and "**" not in segs[:i + 3]
+               for i in range(len(segs) - 2))
 
 
-def check_words(rule, words):
-    if not words:
-        raise Refused(f"{rule}: name the command")
-    first = re.sub(r"^(['\"])(.+)\1$", r"\2", words[0])
-    if re.search(r"[\\'\"$`=]", first):
-        raise Refused(f"{rule}: quotes, escapes, $ or = in the command name are not checked here; write it plainly")
-    # /usr/bin/Python3.12 -> python; a default macOS volume runs it whatever the case
-    name = re.sub(r"[\d.]+$", "", os.path.basename(first).lower()) or first
-    if name in WRAPPERS:
-        raise Refused(f"{rule}: {name} runs whatever command follows it; allow that command by name instead")
-    if name in LAUNCHERS:
-        raise Refused(f"{rule}: {name} starts or schedules programs outside the session")
-    phrase = [name, *(w.lower() for w in words[1:])]
-    whole = " ".join(phrase)
-    reached = sorted(p for p in RUNNERS | NEEDS_TARGET if p.startswith(whole + " "))
-    if reached:
-        raise Refused(f"{rule}: also covers {reached[0]}, which runs whatever comes after it; name more words")
-    for n in (3, 2, 1):
-        head, rest = " ".join(phrase[:n]), words[n:]
-        if head in RUNNERS:
-            if not rest or rest[0].startswith("-"):
-                raise Refused(f"{rule}: {head} runs any command it is given; name the command right after it")
-            return check_words(rule, rest)
-        if head in NEEDS_TARGET:
-            if not rest or rest[0].startswith("-"):
-                raise Refused(f"{rule}: the word after {head} picks what runs; name it")
-            return
-    if name in INTERPRETERS:
-        rest = words[1:]
-        python = name in ("python", "pypy")
-        if python and rest[:1] == ["-m"] and len(rest) > 1 and re.fullmatch(r"\w+(\.\w+)*", rest[1]):
-            return
-        if not rest or not is_script(rest[0]):
-            raise Refused(f"{rule}: {name} runs any command or code it is given; name the script file right after "
-                          f"it" + (" (or -m <module>)" if python else ""))
-
-
-def is_script(word):
-    return bool(re.fullmatch(r"[\w./~+-]+", word)) and not word.startswith(("-", "/dev/", "/proc/")) and \
-        ("/" in word or bool(re.search(r"\.\w+$", word)))
+def names(path, seq):
+    """Whether some run of the path's segments matches seq with at least one of them not a bare * or **."""
+    segs = segments(path)
+    return any(all(s == "**" or segment_meets(s, p) for s, p in zip(segs[i:i + len(seq)], seq)) and
+               any(s.strip("*") for s in segs[i:i + len(seq)]) for i in range(len(segs) - len(seq) + 1))
 
 
 def rule_path(spec):
@@ -251,16 +226,27 @@ def rule_path(spec):
 
 def protected_paths():
     home = pathlib.Path.home()
-    out = [str(SKILLS_JSON), *(f"{home}/{f}" for f in HOME_FILES), *(f"{home}/{d}/**" for d in HOME_DIRS)]
+    out = [str(SKILLS_JSON), *(f"{home}/{f}" for f in HOME_FILES), *(f"{home}/{d}/**" for d in HOME_DIRS),
+           *(f"{d}/**" for d in SYSTEM_DIRS)]
     for cfg in {CONFIG_DIR, HOME_DIR}:
         out += [f"{cfg}/{f}" for f in CONFIG_FILES] + [f"{cfg}/{d}/**" for d in CONFIG_SUBDIRS]
     return out
 
 
+def segments(glob):
+    return ["**" if "**" in s else s for s in glob.lower().strip("/").split("/")]
+
+
+def reaches(path, glob):
+    """overlaps, against the glob as written and with its literal directories resolved through symlinks."""
+    head, sep, tail = glob.partition("/*")
+    return overlaps(path, glob) or overlaps(path, os.path.realpath(head) + sep + tail)
+
+
 def overlaps(a, b):
     """Whether one path can match both globs: * and ? stay within a segment, ** spans any number of them.
     Case is ignored, as on a default macOS volume; two wildcard segments are assumed to meet."""
-    a, b = (["**" if "**" in s else s for s in g.lower().strip("/").split("/")] for g in (a, b))
+    a, b = segments(a), segments(b)
 
     @functools.cache
     def walk(i, j):

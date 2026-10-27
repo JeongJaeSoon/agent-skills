@@ -166,7 +166,7 @@ class PermissionsTest(Base):
     def test_same_real_file_written_once(self):
         shutil.rmtree(self.profile)
         self.profile.symlink_to(self.claude)
-        r, _ = self.emit({"settings": ["profile", "home"], "permissions": {"add": ["Bash(npm run lint:*)"]}})
+        r, _ = self.emit({"settings": ["profile", "home"], "permissions": {"add": ["mcp__srv__tool"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.count("== settings:"), 1)
 
@@ -190,16 +190,17 @@ class PermissionsTest(Base):
         self.assertEqual(self.snapshot(), before)
 
     def test_broad_rules_refused(self):
-        cases = {"Bash(*)": "matches everything", "Bash": "bare tool name", "WebFetch(domain:*)": "matches everything",
-                 "Bash(python3:*)": "runs any command", "mcp__server": "bare tool name",
+        cases = {"Bash(*)": "outside this skill", "Bash": "outside this skill", "WebFetch(domain:*)": "update-config",
+                 "Bash(python3:*)": "outside this skill", "mcp__server": "one MCP tool", "Edit": "bare tool name",
                  f"Edit(/{self.home}/**)": "whole home", "Edit(//**)": "matches everything",
                  "Edit(~/.claude/**)": "user's to edit", f"Write(/{self.profile}/settings.json)": "user's to edit",
-                 "Edit(src/**)": "absolute path", "Bash(curl -H 'Authorization: " + "ghp_" + "a" * 36 + "')": "secret"}
+                 "Edit(src/**)": "absolute path", "Edit(//tmp/é/x)": "ASCII",
+                 "Read(//tmp/x-" + "ghp_" + "a" * 36 + ")": "secret"}
         for rule, why in cases.items():
             r, _ = self.emit({"permissions": {"add": [rule]}})
             self.assertNotEqual(r.returncode, 0, rule)
             self.assertIn(why, r.stderr, rule)
-        r, _ = self.emit({"permissions": {"add": ["mcp__server__tool", "Bash(python3 scripts/check.py:*)"]}})
+        r, _ = self.emit({"permissions": {"add": ["mcp__server__tool", f"Read(/{self.home}/src/app/**)"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_remove_takes_a_broad_rule(self):
@@ -224,12 +225,31 @@ class RuleProbeTest(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-    REFUSED = [
-        "Bash(python3 -c:*)", "Bash(bash -c:*)", "Bash(sh -c *)", "Bash(node -e:*)", "Bash(env X=1:*)",
-        "Bash(sudo -u root:*)", "Bash(/bin/bash:*)", "Bash(/usr/bin/env:*)", "Bash(python3.12:*)", "Bash(py*)",
-        "Bash(p*:*)", "Bash(a*)", "Bash(b*)", "Bash(uv run:*)", "Bash(fish:*)", "Bash(nohup:*)", "Bash(timeout:*)",
-        "Bash(command:*)", "Bash(find:*)", "Bash(awk:*)", "Bash(FOO=1 bash:*)", "Bash(npx:*)",
+    # Every Bash rule is out of scope: the strings earlier reviews found passing a command check, then narrow ones.
+    BASH = [
+        "Bash(*)", "Bash", "Bash(python3 -c:*)", "Bash(bash -c:*)", "Bash(sh -c *)", "Bash(node -e:*)",
+        "Bash(env X=1:*)", "Bash(sudo -u root:*)", "Bash(/bin/bash:*)", "Bash(/usr/bin/env:*)", "Bash(python3.12:*)",
+        "Bash(py*)", "Bash(p*:*)", "Bash(a*)", "Bash(b*)", "Bash(uv run:*)", "Bash(fish:*)", "Bash(nohup:*)",
+        "Bash(timeout:*)", "Bash(command:*)", "Bash(find:*)", "Bash(awk:*)", "Bash(FOO=1 bash:*)", "Bash(npx:*)",
         "Bash(PYTHON3:*)", "Bash(Bash -c:*)", "Bash(uv tool run:*)",
+        "Bash(python3 -c import*)", "Bash(bash -c e*)", "Bash(perl -e x*)", "Bash(uv run python:*)",
+        "Bash(uv run bash:*)", "Bash(poetry run python:*)", "Bash(bundle exec ruby:*)", "Bash(npm exec bash:*)",
+        "Bash(npx node:*)", "Bash(uv run --with x python:*)", "Bash(uv run FOO=1 python:*)", "Bash(npm:*)",
+        "Bash(uv:*)", "Bash(uv tool:*)", "Bash(poetry:*)", "Bash(git:*)", "Bash(git -c:*)", "Bash(make:*)",
+        "Bash(npm run:*)", "Bash(launchctl:*)", "Bash(crontab:*)", "Bash(open -a:*)", "Bash(p\\ython3:*)",
+        "Bash($SHELL:*)", "Bash(python3 /dev/stdin:*)", "Bash(bash /dev/fd/0:*)", "Bash(python3 /proc/self/fd/0:*)",
+        "Bash(python3 -:*)", "Bash(python3 -m:*)", "Bash(\"python3\" -c:*)", "Bash(Python3.12 -c:*)",
+        "Bash(/opt/homebrew/bin/python3:*)", "Bash(FOO=1 python3:*)", "Bash(osascript -e:*)", "Bash(git * main)",
+        "Bash(PATH=/tmp/x gh pr view:*)", "Bash(GIT_PAGER=sh git log:*)", "Bash(NODE_OPTIONS=-r/tmp/x npm test:*)",
+        "Bash(DYLD_INSERT_LIBRARIES=/tmp/x.dylib ls:*)", "Bash(python3 -m timeit:*)", "Bash(python3 -m pdb:*)",
+        "Bash(python3 -m cProfile:*)", "Bash(python3 -m trace:*)", "Bash(python3 -m code:*)", "Bash(xcrun python3:*)",
+        "Bash(arch -arm64 bash:*)", "Bash(script -q /dev/null:*)", "Bash(sandbox-exec -p:*)",
+        "Bash(sqlite3 :memory:*)", "Bash(tclsh:*)", "Bash(expect -c:*)", "Bash(irb:*)", "Bash(swift:*)",
+        "Bash(jshell:*)", "Bash(vim -c:*)", "Bash(python3-intel64 -c:*)", "Bash(pythonw -c:*)", "Bash(python3t -c:*)",
+        "Bash(gh pr view:*)", "Bash(npm test:*)", "Bash(python3 scripts/check.py:*)", "Bash(git status:*)",
+    ]
+    ORCA = "/{h}/Library/Application Support/orca"
+    REFUSED = [
         "Edit(~/.claude/hooks/*.sh)", "Edit(~/.claude/hooks/sub/**)", "Edit(/{h}/prof/hooks/x.sh)",
         "Edit(~/.claude/skills/*/scripts/**)", "Edit(~/.claude/skills/*)", "Edit(~/.claude/plugins/marketplaces/**)",
         "Edit(~/.claude/agents/x/**)", "Edit(~/.claude/commands/**)", "Edit(~/.claude/output-styles/**)",
@@ -238,46 +258,60 @@ class RuleProbeTest(unittest.TestCase):
         "Edit(/{h}*/**)", "Edit(~/.claude/{{hooks,x}}/a)",
         "Edit(~/.zshrc)", "Edit(~/.ssh/**)", "Edit(~/.config/**)", "Edit(~/.gitconfig)", "Edit(~/*rc)",
         "Edit(~/Library/LaunchAgents/x.plist)", "Write(~/.claude.json)",
-        "Bash(python3 -c import*)", "Bash(bash -c e*)", "Bash(perl -e x*)", "Bash(uv run python:*)",
-        "Bash(uv run bash:*)", "Bash(poetry run python:*)", "Bash(bundle exec ruby:*)", "Bash(npm exec bash:*)",
-        "Bash(npx node:*)", "Bash(uv run --with x python:*)", "Bash(uv run FOO=1 python:*)","Bash(npm:*)", "Bash(uv:*)", "Bash(uv tool:*)",
-        "Bash(poetry:*)", "Bash(git:*)", "Bash(git -c:*)", "Bash(make:*)", "Bash(npm run:*)", "Bash(launchctl:*)",
-        "Bash(crontab:*)", "Bash(open -a:*)", "Bash(p\\ython3:*)", "Bash($SHELL:*)", "Bash(python3 /dev/stdin:*)",
-        "Bash(bash /dev/fd/0:*)", "Bash(python3 /proc/self/fd/0:*)", "Bash(python3 -:*)", "Bash(python3 -m:*)",
-        "Bash(\"python3\" -c:*)", "Bash(Python3.12 -c:*)", "Bash(/opt/homebrew/bin/python3:*)",
-        "Bash(FOO=1 python3:*)", "Bash(osascript -e:*)", "Bash(git * main)",
         "Edit(~/.local/bin/**)", "Edit(~/bin/**)", "Edit(~/.oh-my-zsh/**)",
+        "Edit(~/.claude/projects/**)", "Edit(~/.claude/keybindings.json)",
+        "Edit(~/.bash_login)", "Edit(~/.zsh/x.zsh)", "Edit(~/.zshrc.d/**)", "Edit(~/.tmux.conf)", "Edit(~/.vimrc)",
+        "Edit(~/.cargo/bin/x)", "Edit(~/go/bin/**)", "Edit(~/.pyenv/shims/python3)", "Edit(~/.rbenv/shims/**)",
+        "Edit(~/.volta/bin/**)", "Edit(~/.bun/bin/**)", "Edit(~/.deno/bin/**)", "Edit(~/.nvm/nvm.sh)",
+        "Edit(//opt/homebrew/bin/**)", "Edit(//usr/local/bin/x)",
+        "Edit(~/.cargo/config.toml)", "Edit(~/.pip/pip.conf)", "Edit(~/.gemrc)", "Edit(~/.condarc)",
+        "Edit(~/.git-templates/hooks/**)", "Read(~/.git-credentials)", "Read(~/.py" + "pirc)",
+        "Edit(" + ORCA + "/**)", "Edit(" + ORCA + "/claude-profiles/*/{p}/settings.json)",
+        "Edit(" + ORCA + "/claude-profiles/*/{p}/hooks/x.sh)", "Edit(" + ORCA + "/**/memory/**)",
+        "Edit(" + ORCA + "/*/memory/**)", "Read(" + ORCA + "/orca-runtime.json)",
+        "Edit(~/Library/Application Support/Code/User/settings.json)", "Edit(~/Library/LaunchDaemons/x.plist)",
+        "Edit(//Library/LaunchAgents/x.plist)", "Edit(//Library/LaunchDaemons/**)", "Read(~/Library/Keychains/**)",
+        "Edit(/{h}/src/app/.git/hooks/pre-commit)", "Edit(/{h}/src/app/.git/config)", "Edit(/{h}/src/app/.claude/x)",
+        "Edit(/{h}/src/app/.mcp.json)", "Edit(/{h}/src/app/**)", "Write(/{h}/src/app/*/hooks/x)",
+        "Read(/{h}/src/app/.git/**)", "Read(/{h}/src/app/.claude/settings.local.json)", "Read(/{h}/src/app/.mcp.json)",
+        "Read(/{h}/src/app/*.json)", "Read(/{h}/src/app/.cl?ude/x)", "Read(/{h}/src/*/hooks/x)",
+        "Edit(/{h}/src/аpp/x.md)", "Edit(~/．claude/settings.json)", "mcp__ѕrv__tool",
+        "mcp__server", "mcp__server__*", "mcp__srv__tool(x)", "WebFetch(domain:example.test)", "Glob(/{h}/src/**)",
     ]
     ALLOWED = [
-        "Edit(/{h}/prof/projects/*/memory/**)", "Edit(~/.claude/projects/*/memory/**)", "Edit(~/.claude/projects/**)",
-        "Edit(~/.claude/keybindings.json)", "Edit(/{h}/src/app/**)", "Bash(gh pr view:*)", "Bash(npm test:*)",
-        "Bash(npm run lint:*)", "Bash(python3 scripts/check.py:*)", "Bash(python3 -m pytest:*)",
-        "Bash(uv run pytest:*)", "Bash(uv run python -m pytest:*)", "Bash(poetry run python scripts/x.py:*)",
-        "Bash(npx prettier:*)", "Bash(git status:*)", "Bash(make test:*)", "Bash(npm test *)", "mcp__srv__tool", "WebFetch(domain:example.test)", "WebFetch(domain:*.com)",
+        "Edit(/{h}/prof/projects/*/memory/**)", "Edit(~/.claude/projects/*/memory/**)",
+        "Edit(" + ORCA + "/claude-profiles/*/{p}/projects/*/memory/**)", "Read(/{h}/src/app/**)",
+        "Read(/{h}/src/app/.git/HEAD)", "Edit(/{h}/src/app/docs/notes.md)", "mcp__srv__tool",
+        "mcp__plugin_x_y-slack__send_message",
     ]
+
+    def test_bash_refused_as_out_of_scope(self):
+        for rule in self.BASH:
+            with self.subTest(rule=rule), self.assertRaisesRegex(config_emit.Refused, "outside this skill"):
+                config_emit.check_permission(rule)
 
     def test_refused(self):
         for rule in self.REFUSED:
             with self.subTest(rule=rule), self.assertRaises(config_emit.Refused):
-                config_emit.check_permission(rule.format(h=self.home))
+                config_emit.check_permission(rule.format(h=self.home, p="home"))
 
     def test_allowed(self):
         for rule in self.ALLOWED:
             with self.subTest(rule=rule):
-                config_emit.check_permission(rule.format(h=self.home))
+                config_emit.check_permission(rule.format(h=self.home, p="home"))
 
 
 class HashAndOutTest(Base):
-    SPEC = {"permissions": {"add": ["Bash(npm run lint:*)"]}}
+    SPEC = {"permissions": {"add": ["mcp__srv__tool"]}}
 
     def test_wrong_hash_and_edited_copy_refused(self):
         r, out = self.emit(self.SPEC)
         digest = self.apply_line(r)
         self.assertNotEqual(self.run_copy(out, "--apply", "0" * 12).returncode, 0)
-        out.write_text(out.read_text().replace("npm run lint", "npm run any"))
+        out.write_text(out.read_text().replace("mcp__srv__tool", "mcp__srv__any"))
         r = self.run_copy(out, "--apply", digest)
         self.assertIn("does not match", r.stderr)
-        self.assertNotIn("npm run any", (self.profile / "settings.json").read_text())
+        self.assertNotIn("mcp__srv__any", (self.profile / "settings.json").read_text())
 
     def test_code_edited_after_emit_refused(self):
         r, out = self.emit(self.SPEC)
@@ -299,7 +333,7 @@ class HashAndOutTest(Base):
         line = r.stdout.strip().splitlines()[-1].strip().removeprefix("! ")
         r = subprocess.run(["bash", "-c", line], capture_output=True, text=True, env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Bash(npm run lint:*)", (self.profile / "settings.json").read_text())
+        self.assertIn("mcp__srv__tool", (self.profile / "settings.json").read_text())
 
     def test_run_line_ignores_a_module_planted_beside_the_copy(self):
         r, out = self.emit(self.SPEC)
@@ -309,7 +343,7 @@ class HashAndOutTest(Base):
         r = subprocess.run(["bash", "-c", line], capture_output=True, text=True, env=self.env, cwd=out.parent)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("PLANTED", r.stderr)
-        self.assertIn("Bash(npm run lint:*)", (self.profile / "settings.json").read_text())
+        self.assertIn("mcp__srv__tool", (self.profile / "settings.json").read_text())
 
     def test_out_inside_config_dirs_refused(self):
         self.write_spec(self.SPEC)

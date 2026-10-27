@@ -50,7 +50,7 @@ Claude Code 세션 안에서:
 |---|---|---|
 | 사용자 설정 적용(`setup-pc`, `tune-automode`, `skills-config`) | HITL: 에이전트는 diff와 `!` 한 줄만 만들고 사람이 실행한다 | 없음 |
 | `setup.py --actions-only`(동기화·자동화 켜기) | HITL: `guard.py`가 auto mode에서도 권한 창을 띄운다 | 없음 |
-| 그 밖의 권한 창 | HITL: 사람이 승인한다 | 사람이 `permissions.allow` 항목(사용자 설정은 `skills-config`, 프로젝트 설정은 `update-config`)을 더하면 그 명령은 묻지 않고 진행한다 |
+| 그 밖의 권한 창 | HITL: 사람이 승인한다 | 사람이 `permissions.allow` 항목(사용자 설정의 경로·MCP 규칙은 `skills-config`, Bash 규칙과 프로젝트 설정은 `update-config`)을 더하면 그 명령은 묻지 않고 진행한다 |
 | auto mode 분류기의 거부 | HITL: 에이전트가 보고하고 멈춘다 | `tune-automode`가 만든 autoMode 규칙을 사람이 적용하면 그 부류는 진행한다. 판정 없는 거부(`no verdict`)는 규칙으로 바뀌지 않는다 |
 | 되돌릴 수 없는 행동(파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기) | HITL: 멈추고 묻는다 | 없음 |
 | `orchestrate` 머지 정책 | HOTL: `autonomous`, 워커가 `orch land`로 머지(그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때. 없으면 묻는다) | `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 푼다 |
