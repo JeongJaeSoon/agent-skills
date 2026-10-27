@@ -38,6 +38,13 @@ assert kinds == ["mention", "name", "name", "thread"], kinds
 assert p["searches"][0]["keywords"] == [f"<@{ME}>"]
 assert all(f"-from:<@{ME}>" in s["filters"] for s in p["searches"] if s["kind"] == "name")
 assert p["searches"][-1]["filters"].startswith(f"from:<@{ME}> is:thread after:")
+# mention and name searches are cut by the tool's `after` (whole seconds) one second below oldest's floor, so a hit at
+# oldest still comes back from an exclusive server too, and the day filter stays for a server that ignores `after`.
+for s in p["searches"][:-1]:
+    assert s["after"] == str(int(p["oldest"]) - 1) and float(s["after"]) <= p["oldest"] and " after:" in f" {s['filters']}", s
+assert "after" not in p["searches"][-1], "the thread search needs thread_lookback_days of the owner's own messages"
+frac = m.plan(cfg, pathlib.Path(tempfile.mkdtemp()) / "mentions", NOW + 0.75)
+assert frac["searches"][0]["after"] == str(int(NOW + 0.75 - 24 * 3600) - 1), "a fractional oldest is floored, never rounded up"
 assert m.precheck(cfg, state, NOW + 60, live)[0] == 1, "a held lock skips the run"
 assert m.precheck(cfg, state, NOW + 61 * 60, live)[0] == 0, "a stale lock does not block forever"
 
@@ -55,6 +62,17 @@ assert [(i["channel_id"], i["kinds"]) for i in new] == [("C1", ["mention", "name
 reasons = sorted(d["why"] for d in dropped)
 assert reasons == sorted(["봇", "본인 발언", "공개 채널 아님", "공개 채널 아님", "공개 채널 아님", "대상 채널 아님", "창 이전"]), reasons
 assert all("text" not in i for i in new), "message text never travels through the script"
+
+# The `after` cut loses nothing ingest would keep, whether the server compares whole seconds inclusively (the live
+# tool) or exclusively: a hit in the same second as oldest, or exactly at it, still comes back and ingest keeps it.
+edge = [c("C5", f"{p['oldest']:.6f}"), c("C5", f"{p['oldest'] + 0.4:.6f}"), c("C5", f"{p['oldest'] - 0.4:.6f}"),
+        c("C5", f"{p['oldest'] - 1.2:.6f}"), *cands]
+server = lambda hits, after: [h for h in hits if int(float(h["ts"])) >= int(after)]
+everything, _ = m.ingest(edge, cfg, state)
+exclusive = lambda hits, after: [h for h in hits if int(float(h["ts"])) > int(after)]
+cut, _ = m.ingest(server(edge, p["searches"][0]["after"]), cfg, state)
+assert m.ingest(exclusive(edge, p["searches"][0]["after"]), cfg, state)[0] == everything
+assert cut == everything and f"C5/{p['oldest']:.6f}" in [m.key(i) for i in cut], cut
 
 # A channel allowlist keeps only those channels.
 only, _ = m.ingest(cands, {**cfg, "channels": ["C3"]}, state)

@@ -144,8 +144,13 @@ def plan(cfg, state, now):
     uid = cfg["user_id"]
     scope = " ".join(f"in:<#{c}>" for c in cfg["channels"])
     after = f"after:{day_before(oldest)}"
-    searches = [{"kind": "mention", "keywords": [f"<@{uid}>"], "filters": f"{after} {scope}".strip()}]
-    searches += [{"kind": "name", "keywords": [n], "filters": f"{after} -from:<@{uid}> {scope}".strip()} for n in cfg["names"]]
+    # The day filter alone returns up to two days of hits each round. The search tool's `after` takes whole Unix seconds,
+    # inclusive; one second below the floor still keeps every hit at or after oldest on a server that compares exclusively,
+    # ingest makes the exact cut, and a server that ignores `after` falls back to the day filter.
+    since = str(int(oldest) - 1)
+    searches = [{"kind": "mention", "keywords": [f"<@{uid}>"], "filters": f"{after} {scope}".strip(), "after": since}]
+    searches += [{"kind": "name", "keywords": [n], "filters": f"{after} -from:<@{uid}> {scope}".strip(), "after": since}
+                 for n in cfg["names"]]
     thread_after = day_before(now - cfg["thread_lookback_days"] * 86400)
     searches.append({"kind": "thread", "keywords": [], "filters": f"from:<@{uid}> is:thread after:{thread_after} {scope}".strip(),
                      "then": f"slack_read_thread per distinct (channel, thread_ts), oldest={oldest:.6f}, at most {cfg['max_threads']} threads"})
