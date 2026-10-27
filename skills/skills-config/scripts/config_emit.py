@@ -206,13 +206,28 @@ def memory_rule(rule, path):
 
 # Not glob: before 3.11 it skips hidden names, and include_hidden is 3.11+, while the run line's python3 may be 3.9.
 def named(prefix, segs):
-    """Every path prefix + segs[:k] names today, k = 1..len(segs); a "*" segment matches hidden entries too."""
+    """Every path prefix + segs[:k] names today, k = 1..len(segs); a "*" segment matches hidden entries too.
+    A directory that cannot be searched is refused: taken as empty, what is under it would go unchecked."""
+    def under(d, seg):
+        try:
+            if seg == "*":
+                return sorted(os.listdir(d))
+            os.lstat(os.path.join(d, seg))
+            return [seg]
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as e:
+            raise unlisted(d, e)
+
     level = [prefix.rstrip("/")]
     for seg in segs:
-        level = [os.path.join(d, n) for d in level
-                 for n in (sorted(os.listdir(d)) if seg == "*" and os.path.isdir(d) else
-                           [seg] if seg != "*" and os.path.lexists(os.path.join(d, seg)) else [])]
+        level = [os.path.join(d, n) for d in level for n in under(d, seg)]
         yield from level
+
+
+def unlisted(d, e):
+    return Refused(f"cannot list {d} ({e.strerror}), so what is under it is unchecked; make it readable "
+                   f"or leave it out of the rule")
 
 
 def tree(top, chain=(), seen=None):
@@ -220,8 +235,13 @@ def tree(top, chain=(), seen=None):
     A directory reached again through another link is yielded but not entered twice: links that share targets would
     otherwise walk every path through them, exponential in how many levels of them there are."""
     yield top
-    if not os.path.isdir(top):
+    # Not isdir(): it is False when stat() fails with EACCES, and a directory taken for a file is never entered.
+    try:
+        names = sorted(os.listdir(top))
+    except (FileNotFoundError, NotADirectoryError):
         return
+    except OSError as e:
+        raise unlisted(top, e)
     real = os.path.realpath(top)
     if real in chain:
         raise Refused(f"{top}: a symlink loop back to {real}")
@@ -229,11 +249,6 @@ def tree(top, chain=(), seen=None):
     if real in seen:
         return
     seen.add(real)
-    try:
-        names = sorted(os.listdir(top))
-    except OSError as e:
-        raise Refused(f"cannot list {top} ({e.strerror}), so what is under it is unchecked; make it readable "
-                      f"or leave it out of the rule")
     for n in names:
         yield from tree(os.path.join(top, n), (*chain, real), seen)
 

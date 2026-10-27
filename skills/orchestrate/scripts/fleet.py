@@ -1367,7 +1367,9 @@ class Fleet:
             self.mem["session_phase"] = {sid: s["phase"] for sid, s in sessions.items()}
             touched = {k for k, sid in self.owner_of.items() if sid in moved}
             low = self.rate is not None and self.rate < RATE_FLOOR and mono - self.last["prs"] < 900  # one try per 15 min
-            if force or touched or (mono - self.last["prs"] >= (PR_TICK_VIEWED if viewed else PR_TICK) and not low):
+            # 0.0 is "never": the monotonic clock's origin is unspecified, and macOS's 3.9 starts it near 0.
+            if force or touched or (not self.last["prs"] or mono - self.last["prs"] >= (PR_TICK_VIEWED if viewed
+                                                                                          else PR_TICK)) and not low:
                 try:
                     self.refresh_prs(sessions, cfg, force=force, viewed=viewed, now_due=touched)
                     self.ok("github")
