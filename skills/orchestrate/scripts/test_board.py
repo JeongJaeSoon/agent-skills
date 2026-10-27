@@ -15,7 +15,7 @@ tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
 state = tmp / "dashboard"
 env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
        "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC",
-       "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
+       "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "PROGRAMS_HOME": str(tmp / "programs")}
 T0 = "2026-10-13T14:00:00Z"
 NOW = "2026-10-13T14:30:00Z"
 
@@ -468,7 +468,8 @@ held = ok("brief", "render", "--periodic", "--now", NOW)
 assert held.count("#9 land 뒤") == 1 and "- #9 land 뒤 → 콘솔 시안 대비 main 누락 절차만 확인" in held.splitlines(), held
 
 # A report on request: no board at all, only the fleet's sessions and the stage table. The live card is a row, the stage
-# table goes first, the model's insight comes after 진행 중 and its decision is numbered after the registered one.
+# table is one line pointing at `orch stage show`, the model's insight comes after 진행 중 and its decision is numbered
+# after the registered one.
 req = tmp / "req"
 renv = {"ORCH_FLEET_STATE": str(req / "dashboard"), "ORCH_BRIEF_LAST": str(req / "brief-last")}
 
@@ -497,15 +498,7 @@ REQUEST = ["brief", "render", "--now", NOW, "--headline", "정렬 PR CI 중, 유
 REQUEST_GOLDEN = """\
 **14:30 · 정렬 PR CI 중, 유료 플랜 하나만 정해 주세요**
 
-prod: v1.7.1 · dev: v1.7.2
-✅ 완료·확인 · ❌ 미완료·실패 · ⚠️ 일부·추정 · 🔄 확인 중 · 해당 없음
-
-| 작업 | feature·대표 PR | PR 머지 | dev 확인 | prod 확인 |
-|---|---|---|---|---|
-| 로그인 개선 | acme/web#40 | ✅ 10/12 | ✅ v1.7.2 | 🔄 (QA) |
-
-다음 순서
-1. v1.7.2 prod 배포 (사람, 미정)
+단계표 1행 · `orch stage show`
 
 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)
 
@@ -536,27 +529,37 @@ if request != REQUEST_GOLDEN:
     sys.exit("\n".join(difflib.unified_diff(REQUEST_GOLDEN.splitlines(), request.splitlines(), "golden", "rendered", lineterm="")))
 for start, rows in table_width.tables(request):
     assert table_width.table_width(rows) <= 78, (start, table_width.table_width(rows))
-# The periodic form of the same fleet has no stage table; Telegram has no markdown and keeps the stage table's lines.
-assert "| 작업 |" not in rok("brief", "render", "--periodic", "--now", NOW)
+# Every form has the line and no table: periodic, and Telegram (no markdown, so no backticks). With the dashboard
+# up (its .dash.json pid alive) the line links its Stages page instead.
+periodic = rok("brief", "render", "--periodic", "--now", NOW)
+assert "| 작업 |" not in periodic and "단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
-assert not any(m in tg_req for m in ("**", "|", "](")), tg_req
-assert "📋 작업별 (prod: v1.7.1 · dev: v1.7.2)" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
-# A long stage name is cut to fit, and its whole text is listed under the table on the same screen.
+assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
+assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
+(tmp / "programs").mkdir(exist_ok=True)
+(tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
+assert "단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()
+(tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": 2 ** 22 + 1, "port": 4799}))  # no such process
+assert "단계표 1행 · `orch stage show`" in rok(*REQUEST).splitlines()
+# The table itself is `orch stage show`'s: a long stage name is cut to fit, its whole text listed under the table.
 WIDE_TITLE, WIDE_EVIDENCE = "아주 긴 이름의 작업으로 표의 폭을 넘기는 행", "로그로만 확인하고 화면은 아직 보지 않음"
 rok("stage", "add", "wide", "--title", WIDE_TITLE, "--pr", "acme/web#1234")
-code, cut, err = orch_env(renv, *REQUEST)
+code, cut, err = orch_env(renv, "stage", "show")
 assert code == 0 and all(table_width.table_width(t) <= 78 for _, t in table_width.tables(cut)), (code, err, cut)
 assert any(l.startswith("- [") and l.endswith(f"] {WIDE_TITLE}") for l in cut.splitlines()), cut
+assert "| 작업 |" in cut and "1. v1.7.2 prod 배포 (사람, 미정)" in cut and "단계표 2행 · `orch stage show`" in rok(*REQUEST).splitlines()
 # The stage table's PR is a plain key, so a long one is cut and listed the same way.
 WIDE_PR = "acme/a-very-long-repository-name-for-the-table#123456"
 rok("stage", "add", "wider", "--title", "넓은 PR", "--pr", WIDE_PR)
-code, cut, err = orch_env(renv, *REQUEST)
+code, cut, err = orch_env(renv, "stage", "show")
 assert code == 0 and any(l.startswith("- [") and l.endswith(f"] {WIDE_PR}") for l in cut.splitlines()), (code, err, cut)
-# A stage cell is never cut: a table its stage cells make too wide overflows whole, and the render says so.
+# A stage cell is never cut: a table its stage cells make too wide overflows whole, and show says so. The brief has
+# no table left to overflow.
 rok("stage", "set", "wide", "--col", "dev", "--mark", "partial", "--evidence", WIDE_EVIDENCE)
-code, cut, err = orch_env(renv, *REQUEST)
+code, cut, err = orch_env(renv, "stage", "show")
 assert code == 1 and "wider than 78" in err, (code, err)
 assert f"| {WIDE_TITLE} | acme/web#1234 | – | ⚠️ {WIDE_EVIDENCE} | – |" in cut.splitlines() and "\n- [" not in cut, cut
+assert orch_env(renv, *REQUEST)[0] == 0
 
 # GitHub outranks the board: a phase whose own PR merged is ✅ and leaves 진행 중 whatever its board next says, a PR
 # closed unmerged is ⏸️ PR 닫힘. A lead the board holds still shows its live cards whose PR no board row has, and a PR
@@ -715,7 +718,7 @@ assert section(text, "⏸️ **보류**") == ["- 다음 분기 → hold 보류 �
                                        "- v1 태그 → 배포 확인 (acme/app#1)", "- 다음 분기 → 배포 확인 (acme/app#2)",
                                        "- dev 배포 → A 머지 — dev 확인", "- prod 배포 → A 머지 — prod 확인"], text
 
-# The stage table drops a finished row and one a week unchanged; with none left, 다음 순서 goes with it.
+# The stage line counts the rows `orch stage show` prints: a finished row and one a week unchanged fold.
 sp = fd / "dashboard" / "stages.json"
 sp.write_text(json.dumps({"order": ["done", "all", "idle"], "next": ["다음 배포"], "rows": {
     "done": {"id": "done", "title": "끝남", "cells": {}, "created_at": "2026-10-13T10:00:00Z", "done_at": "2026-10-13T11:00:00Z"},
@@ -724,13 +727,14 @@ sp.write_text(json.dumps({"order": ["done", "all", "idle"], "next": ["다음 배
     "idle": {"id": "idle", "title": "멈춤", "created_at": "2026-10-01T00:00:00Z",
              "cells": {"merge": {"mark": "ok", "evidence": "10/5", "at": "2026-10-05T00:00:00Z"}}}}}, ensure_ascii=False))
 rq = fok("brief", "render", "--now", NOW, "--json")
-assert "| 작업 |" not in rq and "다음 배포" not in rq and "단계표 3" in json.loads(rq)["headline_facts"][-1], rq
+assert "| 작업 |" not in rq and "다음 배포" not in rq and "단계표" not in json.loads(rq)["headline_facts"][-1], rq
+assert "단계표 0행 (접음 3) · `orch stage show`" in json.loads(rq)["text"].splitlines(), rq
 s = json.loads(sp.read_text())
 s["order"].append("live")
 s["rows"]["live"] = {"id": "live", "title": "확인 중", "created_at": "2026-10-13T13:00:00Z", "cells": {}}
 sp.write_text(json.dumps(s, ensure_ascii=False))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
-assert "| 확인 중 | – | – | – | – |" in rq and "1. 다음 배포" in rq and "멈춤" not in rq, rq
+assert "단계표 1행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
 # A row with a ❌, ⚠️ or 🔄 cell is stuck, not finished: it stays however long it has been quiet.
 for m in ("fail", "partial", "checking"):
     s["order"].append(m)
@@ -738,7 +742,7 @@ for m in ("fail", "partial", "checking"):
                     "cells": {"merge": {"mark": "ok", "at": "2026-10-05T00:00:00Z"}, "dev": {"mark": m, "at": "2026-10-05T00:00:00Z"}}}
 sp.write_text(json.dumps(s, ensure_ascii=False))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
-assert all(f"막힘 {m}" in rq for m in ("fail", "partial", "checking")) and "멈춤" not in rq, rq
+assert "단계표 4행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
 # A row quiet since it was added whose PR just merged has dev to check next: the merge counts as a change.
 s["order"].append("merged")
 s["rows"]["merged"] = {"id": "merged", "title": "막 머지", "pr": "acme/web#9", "created_at": "2026-10-01T00:00:00Z", "cells": {}}
@@ -746,7 +750,7 @@ sp.write_text(json.dumps(s, ensure_ascii=False))
 (fd / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [],
                                                          "prs": [{"key": "acme/web#9", "state": "MERGED", "merged_at": "2026-10-12T00:00:00Z"}]}))
 rq = json.loads(fok("brief", "render", "--now", NOW, "--json"))["text"]
-assert "| 막 머지 | acme/web#9 | ✅ 10/12 | – | – |" in rq and "멈춤" not in rq, rq
+assert "단계표 5행 (접음 3) · `orch stage show`" in rq.splitlines(), rq
 # Telegram keeps the section's fold line.
 assert "✅ 그 전 완료 1건 (대시보드)" in fok("brief", "render", "--periodic", "--now", NOW, "--telegram").splitlines()
 

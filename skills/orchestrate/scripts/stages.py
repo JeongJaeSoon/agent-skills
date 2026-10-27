@@ -1,4 +1,4 @@
-"""The stage table the brief skill reports and the dashboard's Stages page draws: one row per work item, its PR merge, dev check
+"""The stage table `orch stage show` (the stage skill) prints and the dashboard's Stages page draws: one row per work item, its PR merge, dev check
 and prod check, each cell a mark and the evidence behind it.
 
 Most rows are generated: each fleet tick derives a program's rows from its ledger, its Run's cards and GitHub
@@ -10,7 +10,7 @@ outside any program needs a row too. The merge cell of a recorded row with a PR 
 fleet collector's PR list each time the table is shown. A group row (`--group`) is only a heading for
 the rows under it, a feature or an epic: it has no PR and no cells.
 """
-import datetime as dt, fcntl, json, pathlib, re, sys
+import datetime as dt, fcntl, json, os, pathlib, re, sys
 
 import fleet, stage_auto
 
@@ -268,6 +268,33 @@ def current(t, now, idle_s, state=None):
     out = [r for r in t["rows"] if r["id"] in keep]
     gone = sum(1 for r in t["rows"] if not r.get("group") and r["id"] not in keep)
     return {**t, "rows": out, "next": t["next"] if out else []}, gone
+
+
+def of_program(t, slug):
+    """The rows of one program: its group row and every row under it."""
+    keep = with_descendants({r["id"]: r for r in t["rows"]}, {slug})
+    return {**t, "rows": [r for r in t["rows"] if r["id"] in keep]}
+
+
+def dash_url():
+    """The dashboard's Stages page while this store's server runs (the pid in its .dash.json is alive), else None.
+    No request to it: the server itself renders the brief every few seconds."""
+    d = fleet.read_json(pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser() / ".dash.json", None) or {}
+    try:
+        os.kill(int(d["pid"]), 0)
+        return f"http://127.0.0.1:{int(d['port'])}/#/fleet/stages"
+    except (KeyError, TypeError, ValueError, OSError):
+        return None
+
+
+def pointer(t, gone, tg=False):
+    """The brief's one line in place of the table: the rows `orch stage show` prints (current()'s), and where the
+    table is. None when there is no row at all."""
+    n = sum(1 for r in t["rows"] if not r.get("group"))
+    if not n and not gone:
+        return None
+    where = dash_url() or ("orch stage show --telegram" if tg else "`orch stage show`")
+    return f"단계표 {n}행{f' (접음 {gone})' if gone else ''} · {where}"
 
 
 def cell_text(cell):

@@ -44,8 +44,9 @@ assert orch("next", "acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "v1.
     {"key": "acme/ops#88", "state": "MERGED", "merged_at": "2026-10-02T05:00:00Z"},
     {"key": "acme/web#45", "state": "OPEN", "ci": "failure"},
 ]}))
-code, md, _ = orch("show", "--md")
-assert code == 0, md
+# --all is the whole table; its stage cells alone pass 78 columns, so show prints it and exits 1.
+code, md, err = orch("show", "--md", "--all")
+assert code == 1 and err == "a table is wider than 78 columns", (code, err, md)
 lines = md.splitlines()
 assert lines[0] == "prod: v1.7.2 · dev: v1.8.0" and lines[1].startswith("✅ 완료·확인"), lines[:2]
 rows = [l for l in lines if l.startswith("| ") and not l.startswith("| 작업")]
@@ -70,7 +71,10 @@ assert [r["id"] for r in t["rows"]] == ["search", "reindex", "sort", "login"]
 assert t["rows"][0]["cells"]["merge"] == {"mark": "ok", "evidence": "10/2", "auto": True}
 
 # done marks a row finished and keeps it a week; drop removes it with its children.
-assert orch("done", "login")[0] == 0 and "로그인 개선 (끝남)" in orch("show")[1]
+# Without --all, show prints what the brief's line counts: the finished row folds into one line.
+code, cur, _ = orch("show")
+assert "로그인 개선" not in cur and cur.endswith("접음 1행 (끝남 또는 7일 그대로) · --all 로 전부"), cur
+assert orch("done", "login")[0] == 0 and "로그인 개선 (끝남)" in orch("show", "--all")[1]
 assert orch("drop", "search")[0] == 0
 assert [r["id"] for r in json.loads(orch("show", "--json")[1])["rows"]] == ["login"]
 store = json.loads((state / "stages.json").read_text())
@@ -102,6 +106,8 @@ assert rows == [
 tg = orch("show", "--telegram")[1].splitlines()
 assert tg[1:4] == ["[채팅]", "- 본체 (acme/web#60) — 머지 – · dev – · prod –",
                    "ㄴ 사이드바 접기 아이콘 — 머지 – · dev ⚠️ 스텁으로만 확인 · prod –"], tg
+assert [r["id"] for r in json.loads(orch("show", "--program", "chat", "--json")[1])["rows"]] == ["chat", "body", "icon", "ticket"]
+assert "단독 작업" not in orch("show", "--program", "chat")[1]
 # Dropping or pruning a group takes its rows' children too, not only its direct rows.
 assert orch("drop", "chat")[0] == 0
 assert [r["id"] for r in json.loads(orch("show", "--json")[1])["rows"]] == ["solo"]
