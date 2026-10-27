@@ -157,10 +157,22 @@ def check_permission(rule):
 
 def memory_rule(rule, path):
     """Whether path is <anchor>/projects/<name>/memory/<leaf>, with an Orca profile's name and home directory first
-    under its anchor, and no directory it names today leaves the anchor through a symlink: the real path must be on
-    the list too."""
+    under its anchor, and every directory it names today has its real path on the list too: a symlink may lead
+    from one config directory's projects/ to another's, as Orca profiles' do, but nowhere else."""
     home = pathlib.Path.home()
-    for anchor, profile in ((CONFIG_DIR, False), (HOME_DIR, False), (home / ORCA_PROFILES, True)):
+    orca = home / ORCA_PROFILES
+    roots = {os.path.realpath(r) for r in (CONFIG_DIR, HOME_DIR, *glob.glob(glob.escape(str(orca)) + "/*/home"))}
+
+    def listed(real, depth):
+        """real is projects/<name>/memory/... cut to depth segments, under some config directory's real path."""
+        for root in roots:
+            if real.startswith(root + "/"):
+                s = real[len(root) + 1:].split("/")
+                if len(s) == depth and s[0] == "projects" and (depth < 3 or s[2] == "memory"):
+                    return True
+        return False
+
+    for anchor, profile in ((CONFIG_DIR, False), (HOME_DIR, False), (orca, True)):
         prefix = f"{anchor}/"
         if not path.startswith(prefix):
             continue
@@ -174,14 +186,19 @@ def memory_rule(rule, path):
             continue
         # Every directory down to memory/ and all under it: a file not there yet is created through its parents.
         dirs = path[len(prefix):].split("/")[:-1]
+        top = len(dirs) - 3  # segments before projects/: an Orca profile's <name>/home
         real = os.path.realpath(anchor)
         hits = [h for k in range(1, len(dirs) + 1) for h in glob.glob(glob.escape(prefix) + "/".join(dirs[:k]),
                                                                        include_hidden=True)]
         for hit in hits:
             for p in [hit, *(glob.glob(glob.escape(hit) + "/**", recursive=True, include_hidden=True)
                              if hit.endswith("/memory") else [])]:
-                if os.path.realpath(p) != os.path.join(real, os.path.relpath(p, anchor)):
-                    raise Refused(f"{rule!r}: {p} goes through a symlink; a memory rule must name the real path")
+                rel = os.path.relpath(p, anchor).split("/")
+                ok = os.path.realpath(p) == os.path.join(real, *rel) if len(rel) <= top else \
+                    listed(os.path.realpath(p), len(rel) - top)
+                if not ok:
+                    raise Refused(f"{rule!r}: {p} resolves to {os.path.realpath(p)}, outside every config "
+                                  f"directory's projects/<name>/memory/")
         return True
     return False
 

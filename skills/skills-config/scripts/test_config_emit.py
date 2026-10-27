@@ -192,8 +192,27 @@ class PermissionsTest(Base):
         (self.claude / "projects" / "evil" / "memory").symlink_to(self.claude / "hooks")
         before = self.snapshot()
         r = self.run_copy(out, "--apply", self.apply_line(r))
-        self.assertIn("symlink", r.stderr)
+        self.assertIn("resolves to", r.stderr)
         self.assertEqual(self.snapshot(), before)
+
+    def test_profile_projects_linked_to_another_config_dir_passes(self):
+        """Orca links every profile's projects/ to ~/.claude/projects; a real path on the list is fine."""
+        (self.claude / "projects" / "app" / "memory").mkdir(parents=True)
+        (self.claude / "projects" / "app" / "memory" / "MEMORY.md").write_text("x")
+        (self.claude / "projects" / ".claude").mkdir()
+        orca = self.home / "Library" / "Application Support" / "orca" / "claude-profiles" / "p9" / "home"
+        orca.mkdir(parents=True)
+        for cfg in (self.profile, orca):
+            (cfg / "projects").symlink_to(self.claude / "projects")
+        rules = [self.rule("profiles/p1/cfg/projects/*/memory/**"),
+                 self.rule("Library/Application Support/orca/claude-profiles/*/" + "home/projects/*/memory/**")]
+        r, out = self.emit({"permissions": {"add": rules}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.run_copy(out, "--apply", self.apply_line(r)).returncode, 0)
+        (self.claude / "hooks").mkdir()
+        (self.claude / "projects" / "app" / "memory" / "x.sh").symlink_to(self.claude / "hooks" / "x.sh")
+        r, _ = self.emit({"permissions": {"add": rules[1:]}})
+        self.assertIn("resolves to", r.stderr)
 
     def test_remove_missing_refused_before_any_write(self):
         before = self.snapshot()
