@@ -14,8 +14,8 @@ static measures the checkout this script lives in (or --root DIR):
   invoke    each SKILL.md body plus the references/*.md it points at (one level), when the skill is loaded
   repo      CLAUDE.md and AGENTS.md, read only by sessions working in this repository
   dups      sentences of 60+ characters repeated in two or more files
---base REF measures REF too (from `git archive`, no checkout) and prints the difference; --baseline FILE compares with
-an earlier --json output.
+--base REF measures where HEAD branched from REF (`git merge-base`, from `git archive`, no checkout) and prints the
+difference; --baseline FILE compares with an earlier --json output.
 usage is real use from local transcripts, attributed to automations, roles, subagents and skills
 (skills/orchestrate/scripts/token_usage.py; the dashboard runs the same collect every 15 minutes).
 
@@ -95,6 +95,8 @@ def api_counter(model):
                 return json.load(r)["input_tokens"]
         except urllib.error.HTTPError as e:
             raise SystemExit(f"count_tokens failed: HTTP {e.code}") from None
+        except urllib.error.URLError as e:
+            raise SystemExit(f"count_tokens failed: {e.reason}") from None
 
     overhead = raw(".") - 1
     cache = {}
@@ -135,7 +137,7 @@ def unquote(v):
 
 def plugin_name(root):
     try:
-        return json.loads((root / ".claude-plugin" / "plugin.json").read_text())["name"]
+        return json.loads((root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["name"]
     except (OSError, ValueError, KeyError):
         return root.name
 
@@ -170,7 +172,8 @@ def references(root, skill_dir, body):
         hit = hit.resolve()
         try:
             key = hit.relative_to(root.resolve()).as_posix()
-        except ValueError:
+        except ValueError:  # a symlink out of the checkout: not this plugin's text
+            print(f"warning: {rel} in {skill_dir.name} resolves outside {root} ({hit}): not counted", file=sys.stderr)
             continue
         if key not in seen:
             seen.add(key)
@@ -180,7 +183,7 @@ def references(root, skill_dir, body):
 
 def hook_scripts(root):
     try:
-        cfg = json.loads((root / "hooks" / "hooks.json").read_text())
+        cfg = json.loads((root / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     found = {}
@@ -208,20 +211,20 @@ def measure(root, count=None):
     plugin = plugin_name(root)
     skills, agents, invoke, texts = [], [], [], {}
     for p in sorted((root / "skills").glob("*/SKILL.md")):
-        text = p.read_text(errors="replace")
+        text = p.read_text(encoding="utf-8", errors="replace")
         fm, body = split_frontmatter(text)
         name = fm.get("name") or p.parent.name
         line = skill_listing_line(plugin, name, fm)
         skills.append({"name": name, "tokens": count(line), "width": display_width(line)})
         refs = []
         for rel, cross in references(root, p.parent, body):
-            refs.append({"path": rel, "tokens": count((root / rel).read_text(errors="replace")), "cross": cross})
-            texts[rel] = split_frontmatter((root / rel).read_text(errors="replace"))[1]
+            refs.append({"path": rel, "tokens": count((root / rel).read_text(encoding="utf-8", errors="replace")), "cross": cross})
+            texts[rel] = split_frontmatter((root / rel).read_text(encoding="utf-8", errors="replace"))[1]
         # A named reference is often read for one section or not at all, so refs are an upper bound kept apart from the body.
         invoke.append({"skill": name, "tokens": count(text), "refs": refs, "refs_tokens": sum(r["tokens"] for r in refs)})
         texts[p.relative_to(root).as_posix()] = body
     for p in sorted((root / "agents").glob("*.md")):
-        text = p.read_text(errors="replace")
+        text = p.read_text(encoding="utf-8", errors="replace")
         fm, body = split_frontmatter(text)
         name = fm.get("name") or p.stem
         line = agent_listing_line(plugin, name, fm)
@@ -229,7 +232,7 @@ def measure(root, count=None):
         texts[p.relative_to(root).as_posix()] = body
     hooks = [{"name": script, "events": sorted(set(events)), "when": HOOKS.get(script, "unknown: not in skill_tokens.HOOKS")}
              for script, events in sorted(hook_scripts(root).items())]
-    repo = [{"path": n, "tokens": count((root / n).read_text(errors="replace"))}
+    repo = [{"path": n, "tokens": count((root / n).read_text(encoding="utf-8", errors="replace"))}
             for n in ("CLAUDE.md", "AGENTS.md") if (root / n).is_file()]
     where = {}
     for path, body in texts.items():
@@ -247,6 +250,14 @@ def measure(root, count=None):
     return {"version": 1, "approx": APPROX_VERSION if count is approx_tokens else "exact", "plugin": plugin,
             "totals": totals, "skills": skills, "agents": agents, "hooks": hooks, "invoke": invoke, "repo": repo,
             "dups": dups}
+
+
+def merge_base(ref, repo=REPO):
+    """The commit HEAD branched from ref. Comparing with ref itself would count what ref gained since as this
+    branch's change; ref is returned as is when HEAD contains it or there is no common commit."""
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True).stdout.strip()
+    point = git("merge-base", ref, "HEAD")
+    return point if point and point != git("rev-parse", "--verify", "-q", ref + "^{commit}") else ref
 
 
 def measure_ref(ref, count=None, repo=REPO):
@@ -285,7 +296,8 @@ def signed(n):
 def render(rep, top, budget=None):
     t = rep["totals"]
     out = [f"approximation: {rep['approx']} (relative comparison; --exact for API counts)", "",
-           "ALWAYS (every turn)                tokens   width"]
+           "ALWAYS (every turn; an upper bound: over the listing budget, descriptions are dropped)",
+           "                                   tokens   width"]
     share = f"   {100 * t['skills_width'] / budget:.0f}% of listing budget {fmt(budget)}" if budget else ""
     out.append(f"  skill listing, {len(rep['skills'])} skills    {fmt(sum(s['tokens'] for s in rep['skills'])):>9} "
                f"{fmt(t['skills_width']):>7}{share}")
@@ -386,7 +398,7 @@ def calibrate(root, count):
     files = sorted([*root.glob("skills/*/SKILL.md"), *root.glob("skills/*/references/**/*.md"), *root.glob("agents/*.md")])
     rows = []
     for p in files:
-        text = p.read_text(errors="replace")
+        text = p.read_text(encoding="utf-8", errors="replace")
         rows.append((class_counts(text), count(text)))
     coef = fit(rows)
     return {"files": len(rows), "coefficients": coef, "error_now": error_stats(rows, APPROX_PER_CHAR),
@@ -398,6 +410,8 @@ def main(argv):
         print(__doc__)
         return 0
     cmd, args = argv[0], argv[1:]
+    if hasattr(sys.stdout, "reconfigure"):  # Korean and CJK text prints under any locale
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if cmd == "usage":  # real use from transcripts: skills/orchestrate/scripts/token_usage.py
         sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
         import token_usage
@@ -410,6 +424,12 @@ def main(argv):
                 raise SystemExit(f"{flag} needs a value")
             return args[i + 1]
         return default
+
+    def number(flag, default):
+        try:
+            return int(opt(flag, default))
+        except ValueError:
+            raise SystemExit(f"{flag} needs an integer\n\n{__doc__}") from None
     root = pathlib.Path(opt("--root", REPO)).resolve()
     model = opt("--model", DEFAULT_MODEL)
     count = api_counter(model) if "--exact" in args or cmd == "calibrate" else None
@@ -419,19 +439,21 @@ def main(argv):
     if cmd != "static":
         print(__doc__, file=sys.stderr)
         return 2
-    top = int(opt("--top", "10"))
-    budget = int(opt("--listing-budget", "0")) or None
+    top = number("--top", "10")
+    budget = number("--listing-budget", "0") or None
     rep = measure(root, count)
     base, baseline = opt("--base"), opt("--baseline")
     if base or baseline:
-        old = measure_ref(base, count, root) if base else json.loads(pathlib.Path(baseline).read_text())
+        point = merge_base(base, root) if base else None
+        label = (base if point == base else f"{base} (merge-base {point[:10]})") if base else baseline
+        old = measure_ref(point, count, root) if base else json.loads(pathlib.Path(baseline).read_text(encoding="utf-8"))
         if old.get("approx") != rep["approx"]:
             print(f"warning: comparing {old.get('approx')} with {rep['approx']} counts", file=sys.stderr)
         d = diff(old, rep, top)
         if "--json" in args:
-            print(json.dumps({"base": base or baseline, **d}, ensure_ascii=False, indent=2))
+            print(json.dumps({"base": base or baseline, "merge_base": point, **d}, ensure_ascii=False, indent=2))
         else:
-            print(render_diff(d, base or baseline))
+            print(render_diff(d, label))
         return 0
     if "--json" in args:
         print(json.dumps(rep, ensure_ascii=False, indent=2))

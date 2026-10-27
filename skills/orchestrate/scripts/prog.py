@@ -98,10 +98,11 @@ Usage: orch <command> <slug> [options]
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
                  [--status moving|owner|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
   board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D]
-        | later drop <n> | todo [LINE]... | show
+        | later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n>
+        | todo from-later <n> [--due D] --who W | now [LINE]... | show
   board open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | tidy [--dry-run] [--json] | closed
                                      close what is over (tidy.py): open lists what can be closed now (a row,
-                                     card:<session>, doing:/later:/todo:<k>); done closes it, reopen undoes it.
+                                     card:<session>, doing:/later:/do:/todo:<k>); done closes it, reopen undoes it.
                                      tidy is one pass of what the dashboard's collector runs after each tick:
                                      it closes on evidence only (a merged or closed PR, a session gone) and
                                      marks what it cannot settle 확인 필요; closed lists every close with its
@@ -118,11 +119,14 @@ Usage: orch <command> <slug> [options]
                                      --owner (오너, owner or the gh login is the owner; another name is someone
                                      else); with neither the report marks it 확인 필요. --status owner is a row
                                      only the owner unblocks.
-                                     todo replaces the owner's to-do list (no lines clears it); doing lists work
+                                     now replaces the owner's now-list (no lines clears it); doing lists work
                                      that is moving but has no row (an investigation), --waiting when W is a
                                      person it waits on (a reply from another team), --owner 오너 when it waits
-                                     on the owner; later only work set aside on purpose, with the trigger that
-                                     brings it back
+                                     on the owner; todo lists work that will be done when its date (--due) or
+                                     condition (--after, met as a later trigger is) comes, by --who: then it
+                                     moves to the owner's list (W is the owner) or 진행 중 until done do:<k>;
+                                     from-later moves held item n there; later only work set aside on purpose,
+                                     with the trigger that brings it back (its --due only lifts the PR hold)
   brief render [--periodic] [--scope top-level|PROGRAM] [--telegram] [--headline T] [--decision T]... [--insight T]
                [--skipped T] [--now ISO8601] [--commit] [--json] [--no-fill] [--no-refresh]
                                      the brief skill's report, on request or (--periodic) on a schedule, from the
@@ -2422,8 +2426,18 @@ def cmd_board(argv):
             board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"))
         elif sub == "later" and rest[:1] == ["drop"] and len(rest) > 1:
             board.later_drop(int(rest[1]))
+        elif sub == "todo" and rest[:1] == ["add"] and len(rest) > 1:
+            board.todo_add(rest[1], opt(rest, "--due"), opt(rest, "--after"), opt(rest, "--who"))
+        elif sub == "todo" and rest[:1] == ["drop"] and "".join(rest[1:2]).isdigit():
+            board.todo_drop(int(rest[1]))
+        elif sub == "todo" and rest[:1] == ["from-later"] and "".join(rest[1:2]).isdigit():
+            board.todo_from_later(int(rest[1]), opt(rest, "--due"), opt(rest, "--who"))
         elif sub == "todo":
-            board.set_todo(rest)
+            # It replaced the owner's list before the to-do list took the name: an old line must not overwrite it.
+            sys.exit("board todo is the to-do list now: todo add <title> (--due D | --after C) --who W | todo drop <n> | "
+                     "todo from-later <n> [--due D] --who W. The owner's now-list moved to `orch board now [LINE]...`")
+        elif sub == "now":
+            board.set_now(rest)
         elif sub == "show":
             print(json.dumps(board.read(), ensure_ascii=False, indent=1))
         elif sub in ("done", "reopen") and rid:
@@ -2456,7 +2470,8 @@ def cmd_board(argv):
             sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] | lead close <name> | "
                      "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
                      "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
-                     "later drop <n> | todo [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
+                     "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
+                     "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
     except (ValueError, OSError) as e:
         sys.exit(str(e))

@@ -1,10 +1,11 @@
 """Rules of skill_tokens.py on a fake plugin, and a pass over this checkout. Run: python3 scripts/test_skill_tokens.py"""
-import contextlib, io, json, os, pathlib, subprocess, sys, tempfile
+import atexit, contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import skill_tokens as st  # noqa: E402
 
-tmp = pathlib.Path(tempfile.mkdtemp())
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-skill-tokens-"))
+atexit.register(shutil.rmtree, tmp, True)
 
 
 def write(root, rel, text):
@@ -95,6 +96,48 @@ write(root, "skills/beta/SKILL.md", "---\nname: beta\ndescription: Beta skill\n-
 d = st.diff(st.measure_ref("HEAD", repo=root), st.measure(root), 10)
 assert ("skills", "beta") in {(k, n) for k, n, _, _ in d["items"]}, d
 assert (root / "skills/beta/SKILL.md").read_text().endswith("short\n")
+
+# --base compares with where the branch left the ref, so what the ref gained since is not counted as this change.
+sha = lambda ref: subprocess.run(git + ["rev-parse", ref], capture_output=True, text=True, check=True).stdout.strip()
+base_sha = sha("HEAD")
+subprocess.run(git + ["branch", "-q", "trunk"], check=True)
+subprocess.run(git + ["switch", "-q", "-c", "work"], check=True)
+subprocess.run(git + ["commit", "-qam", "work"], check=True)
+subprocess.run(git + ["switch", "-q", "trunk"], check=True)
+write(root, "skills/alpha/references/own.md", "own reference text, grown on trunk after the branch left it\n")
+subprocess.run(git + ["commit", "-qam", "trunk moves on"], check=True)
+subprocess.run(git + ["switch", "-q", "work"], check=True)
+assert st.merge_base("trunk", root) == base_sha and st.merge_base("no-such-ref", root) == "no-such-ref"
+moved = {(k, n) for k, n, _, _ in st.diff(st.measure_ref("trunk", repo=root), st.measure(root), 10)["items"]}
+mine = {(k, n) for k, n, _, _ in st.diff(st.measure_ref(st.merge_base("trunk", root), repo=root), st.measure(root), 10)["items"]}
+assert ("refs", "skills/alpha/references/own.md") in moved and mine == {("skills", "beta"), ("invoke", "beta")}, (moved, mine)
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert st.main(["static", "--root", str(root), "--base", "trunk"]) == 0
+assert f"vs trunk (merge-base {base_sha[:10]})" in out.getvalue() and "reference" not in out.getvalue(), out.getvalue()
+
+# Files are read as UTF-8 whatever the locale: under C, Hangul would be counted as replacement characters.
+c_locale = {k: v for k, v in os.environ.items() if k != "PYTHONIOENCODING"}
+c_locale.update({"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"})
+r = subprocess.run([sys.executable, str(pathlib.Path(st.__file__)), "static", "--root", str(root), "--json"],
+                   capture_output=True, env=c_locale, check=True)
+assert json.loads(r.stdout.decode("utf-8"))["totals"] == st.measure(root)["totals"]
+
+# Integer options say so instead of a traceback; a reference that is a symlink out of the checkout is warned about.
+for flag in ("--top", "--listing-budget"):
+    try:
+        st.main(["static", "--root", str(root), flag, "ten"])
+        raise AssertionError(f"{flag} took a non-integer")
+    except SystemExit as e:
+        assert f"{flag} needs an integer" in str(e)
+outside = tmp / "outside.md"
+outside.write_text("text that is not in the plugin\n")
+(root / "skills/alpha/references/linked.md").symlink_to(outside)
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    assert st.references(root, root / "skills/alpha", "see references/linked.md") == []
+assert "references/linked.md in alpha resolves outside" in err.getvalue(), err.getvalue()
+(root / "skills/alpha/references/linked.md").unlink()
 
 # The CLI: table, JSON, and a baseline file.
 out = io.StringIO()

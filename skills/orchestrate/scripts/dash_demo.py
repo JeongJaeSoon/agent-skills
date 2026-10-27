@@ -527,7 +527,10 @@ def seed_board():
     board.set_row("lead-tools", title="릴리스 도구", status="done", progress="2/2", next="—", pr="acme/tools#6")
     board.doing_add("결제 팀 API 답변 대기", "사람", "10/14 회신")
     board.later_add("v2.5 계획", "v2.4.0 prod 배포 뒤")
-    board.set_todo(["acme/launchpad#43 리뷰"])
+    soon = dt.datetime.now().astimezone() + dt.timedelta(days=2)
+    board.todo_add("acme/launchpad#41 머지·배포", due=f"{soon:%Y-%m-%d} 09:00", who="오너")
+    board.todo_add("acme/tools#7 ready 로 전환", after="acme/launchpad#41 머지 후", who="lead-tools")
+    board.set_now(["acme/launchpad#43 리뷰"])
     import owner_requests as req  # the owner's requests to the orchestrator, as the request_log hook would log them
     now = dt.datetime.now(dt.timezone.utc)
     for ago, text in ((95, "acme/launchpad#41 머지되면 알려줘"), (50, "설치 가이드 스크린샷 다시 확인해줘"),

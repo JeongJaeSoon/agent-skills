@@ -99,7 +99,7 @@ board.later_add("열린 PR 뒤의 일", "acme/app#8 머지 뒤")
 board.later_add("모호한 일", "#9 머지 뒤")
 board.later_add("날짜 일", "목 10/30 09:00")
 LONG_TODO = "acme/app#7 리뷰 " + "긴 설명 " * 30  # over the 120 characters a close used to keep, under the board's 200
-board.set_todo([LONG_TODO, "acme/app#8 리뷰", "회의 준비"])
+board.set_now([LONG_TODO, "acme/app#8 리뷰", "회의 준비"])
 board.set_row("stale-row", title="오래된 일", repo="acme/app", status="moving", next="조사")
 board.set_row("fresh-row", title="새 일", repo="acme/app", status="moving", next="조사")
 board.set_row("card-dup", title="중복 카드 작업", repo="acme/app", status="moving", next="정리")

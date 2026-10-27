@@ -974,11 +974,11 @@ function fleetBrief() {
 
 // Done (tidy.py, `orch board done`): close a row, card or board item that is over, or reopen one. The collector closes
 // on evidence by itself after each tick; what it could not settle is marked "check". The server decides what may close.
-const DONE_KIND = { row: "row", doing: "in progress", later: "held", todo: "your to-do" };
+const DONE_KIND = { row: "row", doing: "in progress", later: "held", do: "to-do", todo: "you, now" };
 const doneBtn = (id, undo) => `<button class="chip ack" type="button" data-done="${esc(id)}"${undo ? " data-undo" : ""}
   title="${undo ? "Reopen: show it again (orch board reopen)" : "Done: close it here and in the brief (orch board done)"}">${undo ? "Reopen" : "Done"}</button>`;
 function doneCards(b) {
-  const open = (b.open || []).map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}<span class="grow full" title="${esc(o.label)}">${esc(o.label)}</span>
+  const open = (b.open || []).map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}${o.due ? tag("due", "accent", "clock") : ""}<span class="grow full" title="${esc(o.label)}">${esc(o.label)}</span>
     ${o.check ? `<span class="acts muted full" title="${esc(o.check)}">check: ${esc(o.check)}</span>` : ""}${doneBtn(o.id)}</li>`).join("");
   const shut = (b.closed || []).map((c) => `<li class="is-acked">${tag(c.by === "auto" ? "auto" : "you", c.by === "auto" ? "accent" : "")}<span class="grow full" title="${esc(c.label || c.id)}">${esc(c.label || c.id)}</span>
     <span class="acts muted full" title="${esc(c.evidence || "")}">${esc(c.rule || "")}: ${esc(c.evidence || "")} · ${relSpan(c.ts)}</span>${c.reopen ? doneBtn(c.id, true) : ""}</li>`).join("");

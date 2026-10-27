@@ -8,11 +8,11 @@ agent-skills가 컨텍스트에 넣는 토큰이 얼마인지, 실제 세션에�
 
 | 구분 | 값 | 뜻 |
 |---|---|---|
-| 스킬 목록(항상 로드) | 40줄, 표시 폭 13,538, 근사 3,681 토큰 | 스킬 목록 예산(컨텍스트 창의 약 1%, 표시 폭으로 셈)을 모든 플러그인과 개인 스킬이 나눠 쓴다. 넘치면 사용 횟수가 적은 스킬부터 description이 빠진다 |
+| 스킬 목록(항상 로드, 상한) | 40줄, 표시 폭 13,538, 근사 3,681 토큰 | 스킬 목록 예산(컨텍스트 창의 약 1%, 표시 폭으로 셈)을 모든 플러그인과 개인 스킬이 나눠 쓴다. 넘치면 사용 횟수가 적은 스킬부터 description이 빠진다 |
 | 가장 긴 목록 줄 | record-progress 583, setup-pc 532, ui-review 478, orchestrate 461, end-session 420 (표시 폭) | 줄이면 토큰도 줄고 목록에서 빠질 위험도 준다 |
 | 에이전트 목록(항상 로드) | 4줄, 근사 295 토큰 | |
-| SKILL.md 본문 합계(호출 시) | 근사 97,081 토큰 | orchestrate 15,452, watch-prs 8,871, reap-resources 6,665, deliver-ticket 4,806 |
-| 본문이 이름을 대는 reference(다 읽으면) | 근사 96,993 토큰(파일마다 한 번) | `orchestrate/references/dashboard.md` 하나가 22,285이고 세 스킬이 가리킨다 |
+| SKILL.md 본문 합계(호출 시) | 근사 97,273 토큰 | orchestrate 15,484, watch-prs 8,871, reap-resources 6,665, deliver-ticket 4,806 |
+| 본문이 이름을 대는 reference(다 읽으면) | 근사 97,255 토큰(파일마다 한 번) | `orchestrate/references/dashboard.md` 하나가 22,368이고 세 스킬이 가리킨다 |
 | 훅 주입(항상) | 평범한 세션에서 0 | 텍스트를 넣는 훅 다섯 개 모두 조건부다(§1.3) |
 | 실사용 7일(한 PC, 970개 transcript, 2.05 GB) | 63억 토큰 | cache read 98%, cache 생성 2%, output 0.4% |
 | 실사용 7일, 턴 출처별 | 사람 51%, 작업 알림(모니터·백그라운드 작업이 깨운 턴) 24%, 서브에이전트 12%, peer 메시지 10%, 예약 실행 4% | 같은 데이터를 스크립트 한 번(6초)으로 집계 |
@@ -79,7 +79,7 @@ ANTHROPIC_API_KEY=… python3 scripts/skill_tokens.py calibrate        # 새 계
 
 ### 1.5 diff
 
-- `--base <git-ref>`: `git archive`로 그 커밋의 `skills/`·`agents/`·`hooks/` 등을 임시 디렉터리에 풀어 같은 측정을 하고 차이를 낸다. 체크아웃이나 worktree를 만들지 않고 작업 트리를 건드리지 않는다.
+- `--base <git-ref>`: 이 브랜치가 그 ref에서 갈라진 커밋(`git merge-base <ref> HEAD`)을 잰다. ref 끝과 비교하면 main이 앞서간 만큼이 이 브랜치의 변화처럼 섞이기 때문이다. HEAD가 ref를 이미 포함하면 ref 그대로다. `git archive`로 그 커밋의 `skills/`·`agents/`·`hooks/` 등을 임시 디렉터리에 풀어 같은 측정을 하고 차이를 낸다. 체크아웃이나 worktree를 만들지 않고 작업 트리를 건드리지 않는다.
 - `--baseline <file.json>`: 이전 `--json` 출력과 비교한다.
 
 ### 1.6 사용
@@ -87,31 +87,32 @@ ANTHROPIC_API_KEY=… python3 scripts/skill_tokens.py calibrate        # 새 계
 ```bash
 python3 scripts/skill_tokens.py static                       # 표
 python3 scripts/skill_tokens.py static --json > base.json    # 기준선
-python3 scripts/skill_tokens.py static --base origin/main    # 이 브랜치가 늘린 양
+python3 scripts/skill_tokens.py static --base origin/main    # 이 브랜치가 늘린 양(merge-base 기준)
 python3 scripts/skill_tokens.py static --listing-budget 30000 # 스킬 목록 예산 중 이 플러그인 몫
 ```
 
 2026-10-28 이 저장소에서의 출력(일부):
 
 ```text
-ALWAYS (every turn)                tokens   width
+ALWAYS (every turn; an upper bound: over the listing budget, descriptions are dropped)
+                                   tokens   width
   skill listing, 40 skills        3,681  13,538
   agent listing, 4 agents          295   1,172
   longest descriptions: record-progress 583, setup-pc 532, ui-review 478, orchestrate 461, end-session 420, ...
 
 ON INVOKE, top 10       SKILL.md   named refs (if all read)   refs from other skills
-  orchestrate              15,452     47,225 in  7               1
+  orchestrate              15,484     47,308 in  7               1
   watch-prs                 8,871        953 in  1               1
   reap-resources            6,665      5,066 in  2               1
   deliver-ticket            4,806     12,761 in  8               2
   ...
-  all 40 skills            97,081     96,993 (each file once)
+  all 40 skills            97,273     97,255 (each file once)
 
 $ python3 scripts/skill_tokens.py static --base 86b859a --top 3
-vs 86b859a: always +140 tokens (+517 width), on invoke +2,298, named refs +9, repo-local +0, duplicates +20
+vs 86b859a: always +140 tokens (+517 width), on invoke +2,490, named refs +271, repo-local +0, duplicates +20
   on invoke     skills-config                       0 ->    1,709  (+1,709)
-  reference     skills/brief/references/hand-format.md    5,708 ->    4,982  (-726)
-  reference     skills/orchestrate/references/dashboard.md   21,631 ->   22,285  (+654)
+  reference     skills/orchestrate/references/dashboard.md   21,631 ->   22,368  (+737)
+  reference     skills/brief/references/hand-format.md    5,708 ->    5,161  (-547)
 ```
 
 이 저장소 전체를 재는 데 0.2초가 걸린다.
@@ -202,7 +203,7 @@ brief에는 경고가 있을 때만 한 줄이 붙는다: `토큰 경고 2건: a
 | 기존 SKILL.md 변경 | 없다. brief의 경고 한 줄은 스크립트 출력이라 SKILL.md 문장이 필요 없다 |
 | 자동화 | 없다. 실사용 수집은 이미 떠 있는 대시보드 서버의 루프에서 돈다 |
 
-정적 측정 PR의 확인: `python3 scripts/skill_tokens.py static --base origin/main` → `always +0 tokens (+0 width), on invoke +0, named refs +0`.
+정적 측정 PR의 확인: `python3 scripts/skill_tokens.py static --base origin/main`(merge-base와 비교) → `always +0 tokens (+0 width), on invoke +0, named refs +0`.
 
 ## 4. 개선 루프
 
