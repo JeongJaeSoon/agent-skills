@@ -184,6 +184,52 @@ class PermissionsTest(Base):
         r, _ = self.emit({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/real/memory/**)"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_hidden_symlink_and_loop_refused_on_every_python(self):
+        """glob skips hidden names before 3.11; macOS's /usr/bin/python3 is 3.9, and the run line may pick it."""
+        (self.claude / "hooks").mkdir()
+        memory = self.claude / "projects" / "app" / "memory"
+        memory.mkdir(parents=True)
+        (self.claude / "projects" / ".h").symlink_to(self.claude / "hooks")
+        (memory / ".h").symlink_to(self.claude / "hooks")
+        (memory / "loop").symlink_to(memory)
+        pythons = [sys.executable] + [p for p in ("/usr/bin/python3",) if os.path.exists(p)]
+        for python in pythons:
+            for rule in ("Edit(~/.claude/projects/*/memory/**)", "Edit(~/.claude/projects/app/memory/**)"):
+                self.write_spec({"settings": ["home"], "permissions": {"add": [rule]}})
+                out = self.home / "out" / "change.py"
+                r = subprocess.run([python, "-I", str(SCRIPT), "emit", "--spec", str(self.spec), "--out", str(out)],
+                                   capture_output=True, text=True, env=self.env)
+                self.assertIn("resolves to", r.stderr, (python, rule))
+                self.assertFalse(out.exists(), (python, rule))
+            (memory / ".h").unlink()
+            (memory / "loop").unlink()
+            r = subprocess.run([python, "-I", str(SCRIPT), "emit", "--spec", str(self.spec), "--out", str(out)],
+                               capture_output=True, text=True, env=self.env)
+            self.assertEqual(r.returncode, 0, (python, r.stderr))
+            out.unlink()
+            (memory / ".h").symlink_to(self.claude / "hooks")
+            (memory / "loop").symlink_to(memory)
+
+    def test_symlinked_profile_home_is_not_a_config_dir(self):
+        (self.claude / "hooks" / "projects" / "x" / "memory").mkdir(parents=True)
+        (self.claude / "projects").mkdir()
+        (self.claude / "projects" / "x").symlink_to(self.claude / "hooks" / "projects" / "x")
+        profiles = self.home / "Library" / "Application Support" / "orca" / "claude-profiles"
+        profiles.mkdir(parents=True)
+        (profiles / "fake2").mkdir()
+        (profiles / "fake2" / "home").symlink_to(self.claude / "hooks")
+        r, out = self.emit({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/x/memory/**)"]}})
+        self.assertIn("resolves to", r.stderr)
+        self.assertFalse(out.exists())
+        # A linked profile directory is the same hole one level up: any directory named home becomes a root.
+        (profiles / "fake2" / "home").unlink()
+        (self.claude / "v" / "home" / "projects" / "x" / "memory").mkdir(parents=True)
+        (self.claude / "projects" / "x").unlink()
+        (self.claude / "projects" / "x").symlink_to(self.claude / "v" / "home" / "projects" / "x")
+        (profiles / "fake3").symlink_to(self.claude / "v")
+        r, _ = self.emit({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/x/memory/**)"]}})
+        self.assertIn("resolves to", r.stderr)
+
     def test_symlink_planted_after_emit_refused_at_apply(self):
         r, out = self.emit({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/*/memory/**)"]}})
         self.assertEqual(r.returncode, 0, r.stderr)

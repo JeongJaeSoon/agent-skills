@@ -28,7 +28,7 @@ Claude Code 세션 안에서:
 
 1. 새 세션을 열면 `setup-pc`를 제안한다. 받아들이면 에이전트가 체크아웃을 clone하고 설정 파일별 diff를 보인다.
 2. `gh`가 로그인돼 있지 않으면 `! gh auth login`.
-3. diff를 읽고 에이전트가 건넨 `! python3 <체크아웃>/scripts/setup.py --settings-only … --apply <해시>` 한 줄을 붙여 넣는다. 에이전트는 사용자 설정을 직접 쓰지 않는다.
+3. diff를 읽고 에이전트가 건넨 `! python3 -I <체크아웃>/scripts/setup.py --settings-only … --apply <해시>` 한 줄을 붙여 넣는다. 에이전트는 사용자 설정을 직접 쓰지 않는다.
 4. 동기화 작업과 정기 자동화를 켜는 권한 창을 승인하고, 세션을 재시작한다.
 
 준비물(GitHub `gh` 로그인, 트래커, 노트, Orca·macOS가 필요한 기능), 셸에서 직접 설치, 갱신은 [docs/new-pc.md](docs/new-pc.md)와 [docs/operations.md](docs/operations.md#준비물)에 있다.

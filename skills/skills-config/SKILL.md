@@ -64,6 +64,8 @@ The script checks every file before it writes any, backs each up as `<file>.bak-
 
 Settings reach sessions started after the change. A session that still prompts or denies gets restarted, then the original action runs once more.
 
+The symlink check runs at `emit` and at `--apply` only: a symlink made under a covered `memory/` afterwards is not checked again by this skill.
+
 ## Tests
 
 `python3 skills/skills-config/scripts/test_config_emit.py`

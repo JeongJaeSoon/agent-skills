@@ -9,7 +9,7 @@
 1. Claude Code 세션 안에서 `/plugin marketplace add JeongJaeSoon/agent-skills`, `/plugin install agent-skills@jeongjaesoon`. 설치 창이 응답 언어, 체크아웃 경로(기본 `~/src/agent-skills`), 개인 설정 저장소 URL을 묻는다. 모두 비워도 된다. 셸의 `claude plugin install`은 이 창을 띄우지 않는다.
 2. 새 세션을 연다. 플러그인의 SessionStart hook이 설정되지 않은 PC임을 알아채고 `setup-pc`를 제안한다. 받아들이면 에이전트가 체크아웃과 개인 설정 저장소를 clone하고 dry run으로 diff를 보인다.
 3. `gh`가 로그인돼 있지 않으면 `! gh auth login`.
-4. diff를 읽고 에이전트가 건넨 `! python3 <체크아웃>/scripts/setup.py --settings-only … --apply <해시>` 한 줄을 붙여 넣는다.
+4. diff를 읽고 에이전트가 건넨 `! python3 -I <체크아웃>/scripts/setup.py --settings-only … --apply <해시>` 한 줄을 붙여 넣는다.
 5. 에이전트가 `setup.py --actions-only`를 실행하면 권한 창이 뜬다. 동기화 작업과 정기 자동화를 켜는 단계이고 Claude 설정은 쓰지 않는다. 승인한다.
 6. 세션을 재시작한다.
 
@@ -33,7 +33,7 @@ private git 저장소 하나에 `agent-skills.json`을 둔다. 에이전트가 `
 ```bash
 git clone https://github.com/JeongJaeSoon/agent-skills <체크아웃>
 python3 <체크아웃>/scripts/setup.py --language Korean     # 바뀔 내용: 파일별 diff, 마지막 줄에 --apply 줄
-python3 <체크아웃>/scripts/setup.py --language Korean --apply <해시>
+python3 -I <체크아웃>/scripts/setup.py --language Korean --apply <해시>
 ```
 
 dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한 것을 그대로 친다. 해시는 diff에 나온 계획 전체(쓸 파일 내용과 이어서 할 일)의 해시라서, 그 사이에 무엇이 바뀌면 거절하고 dry run을 다시 하라고 한다. 이미 설치한 PC에서 Claude Code를 쓰고 있다면 `setup-pc` 스킬("새 PC 세팅해줘")이 dry run을 돌려 diff를 보이고 `!` 한 줄을 건넨다.

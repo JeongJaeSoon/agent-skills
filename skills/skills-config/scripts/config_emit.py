@@ -161,7 +161,11 @@ def memory_rule(rule, path):
     from one config directory's projects/ to another's, as Orca profiles' do, but nowhere else."""
     home = pathlib.Path.home()
     orca = home / ORCA_PROFILES
-    roots = {os.path.realpath(r) for r in (CONFIG_DIR, HOME_DIR, *glob.glob(glob.escape(str(orca)) + "/*/home"))}
+    # A profile home that is itself a symlink would put its target, say hooks/, on the list.
+    profiles = [h for h in glob.glob(glob.escape(str(orca)) + "/*/home")
+                if os.path.realpath(h) == os.path.join(os.path.realpath(orca), os.path.basename(os.path.dirname(h)),
+                                                       "home")]
+    roots = {os.path.realpath(r) for r in (CONFIG_DIR, HOME_DIR, *profiles)}
 
     def listed(real, depth):
         """real is projects/<name>/memory/... cut to depth segments, under some config directory's real path."""
@@ -188,11 +192,8 @@ def memory_rule(rule, path):
         dirs = path[len(prefix):].split("/")[:-1]
         top = len(dirs) - 3  # segments before projects/: an Orca profile's <name>/home
         real = os.path.realpath(anchor)
-        hits = [h for k in range(1, len(dirs) + 1) for h in glob.glob(glob.escape(prefix) + "/".join(dirs[:k]),
-                                                                       include_hidden=True)]
-        for hit in hits:
-            for p in [hit, *(glob.glob(glob.escape(hit) + "/**", recursive=True, include_hidden=True)
-                             if hit.endswith("/memory") else [])]:
+        for hit in named(prefix, dirs):
+            for p in tree(hit) if hit.endswith("/memory") else [hit]:
                 rel = os.path.relpath(p, anchor).split("/")
                 ok = os.path.realpath(p) == os.path.join(real, *rel) if len(rel) <= top else \
                     listed(os.path.realpath(p), len(rel) - top)
@@ -201,6 +202,30 @@ def memory_rule(rule, path):
                                   f"directory's projects/<name>/memory/")
         return True
     return False
+
+
+# Not glob: before 3.11 it skips hidden names, and include_hidden is 3.11+, while the run line's python3 may be 3.9.
+def named(prefix, segs):
+    """Every path prefix + segs[:k] names today, k = 1..len(segs); a "*" segment matches hidden entries too."""
+    level = [prefix.rstrip("/")]
+    for seg in segs:
+        level = [os.path.join(d, n) for d in level
+                 for n in (sorted(os.listdir(d)) if seg == "*" and os.path.isdir(d) else
+                           [seg] if seg != "*" and os.path.lexists(os.path.join(d, seg)) else [])]
+        yield from level
+
+
+def tree(top, chain=()):
+    """top and everything under it, hidden entries and symlinked directories included; a directory loop is refused."""
+    yield top
+    if not os.path.isdir(top):
+        return
+    real = os.path.realpath(top)
+    if real in chain:
+        raise Refused(f"{top}: a symlink loop back to {real}")
+    for n in sorted(os.listdir(top)):
+        yield from tree(os.path.join(top, n), (*chain, real))
+
 
 def check_keys(keys):
     """Every key set or unset is documented for its section; enum and type follow the docs and DEFAULTS."""

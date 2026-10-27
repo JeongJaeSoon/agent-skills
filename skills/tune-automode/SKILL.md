@@ -60,7 +60,7 @@ autoMode는 사용자 설정(`~/.claude/settings.json`)과 조직 관리 설정�
 7. **사용자에게 넘긴다.** 채팅에 세 가지를 쓴다: 규칙 문구, diff, `emit`이 마지막에 출력한 실행 줄 그대로. 기본 설정 파일이면 이런 모양이다.
 
    ```
-   ! python3 ~/automode-rules/<slug>.py --apply <spec 해시>
+   ! python3 -I ~/automode-rules/<slug>.py --apply <spec 해시>
    ```
 
    `--apply`에 붙는 해시는 사용자가 본 diff의 spec을 가리킨다. emit 뒤에 스크립트의 spec이 바뀌면 해시가 맞지 않아 적용되지 않는다. 규칙을 고쳤으면 다시 emit하고 새 diff와 새 줄을 보여 준다. `--out`은 설정 디렉터리(`~/.claude` 또는 `CLAUDE_CONFIG_DIR`) 밖이어야 한다.
