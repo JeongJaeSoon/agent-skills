@@ -259,10 +259,10 @@ def fetch_automations():
         out.append({"id": a["id"], "name": mask(a.get("name"), 80), "rrule": a.get("rrule"), "timezone": a.get("timezone"),
                     "enabled": bool(a.get("enabled")), "next_run_at": ms_iso(a.get("nextRunAt")),
                     "last_run_at": ms_iso(a.get("lastRunAt")),
-                    # The output can name people and channels: masked, first line only.
+                    # The output can name people and channels: masked, first line only, never cut short.
                     "recent": [{"status": r.get("status"), "trigger": r.get("trigger"),
                                 "at": ms_iso(r.get("startedAt") or r.get("scheduledFor")),
-                                "summary": first_line((r.get("outputSnapshot") or {}).get("content") or r.get("error"), 120)}
+                                "summary": first_line((r.get("outputSnapshot") or {}).get("content") or r.get("error"), None)}
                                for r in runs]})
     return out
 
@@ -722,7 +722,7 @@ def build_sessions(fast, runs, cfg, declared=()):
             "orca_parent": w.get("parentWorktreeId"), "created": ms_iso(w.get("createdAt")),
             "linked_pr": w.get("linkedPR"), "agents": agents, "terminals": terms,
             "phase": phase_of(agents, terms), "kind": "task", "parent": None, "run": None, "dispatch": None,
-            "dispatch_status": None, "task_title": None}
+            "dispatch_status": None, "task": None, "task_title": None}
 
     # Orchestration: a Run's coordinator worktree, found through the coordinator's live terminal.
     coord_of_run = {r["id"]: wt_of_handle.get(r.get("coordinator_handle")) for r in runs["runs"]}
@@ -773,7 +773,7 @@ def build_sessions(fast, runs, cfg, declared=()):
         if w:
             t = tasks.get(w.get("taskId")) or {}
             s.update(run=w.get("runId"), dispatch=w.get("dispatchId"), dispatch_status=w.get("dispatchStatus"),
-                     task_title=task_name(t),
+                     task=w.get("taskId"), task_title=task_name(t),
                      dispatch_live=by_wt[sid][1], terminal=w.get("agentTerminalHandle"))
         if sid == root:
             s["kind"] = "orchestrator"

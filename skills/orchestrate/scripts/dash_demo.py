@@ -308,6 +308,23 @@ def finished(now, slug, repo, ended_h, verified=True):
     return cfg, L, issues, [], {"workers": [], "tasks": [], "run": {"id": run, "objective": slug}}, []
 
 
+PLUGIN_TASKS = [  # FakeFleetWorld's cards of the plugins program: the Stages page's card rows
+    ("task_pl1", "ACME-301 rollout: release the v2 API, switch the staging clients over, measure both versions side by side,"
+                 " then open the production change with the numbers attached"),
+    ("task_pl2", "ACME-301 K4: client plugins for both API versions"),
+    ("task_pl3", "ACME-301 smoke test"), ("task_pl4", "ACME-301 smoke test")]
+
+
+def plugins(now):
+    """A live program whose cards cover the stage table's card rules: a title past 120 characters, a K4 card that is
+    its predicate item's row, and two cards of one title."""
+    cfg = {"slug": "plugins-v2", "repo": "acme/plugins", "run": "run_plugins", "linear_project": "Plugins v2",
+           "predicate": ["P1-release", "P2-K4-clients-ready"], "merge_policy": "human-gate", "ceiling": 2,
+           "deadline": None, "created_at": _ago(now, 12), "skills_commit": None, "note": None}
+    L = [{"ts": _ago(now, 11), "ev": "spawned", "ticket": "ACME-301"}, {"ts": _ago(now, 6), "ev": "spawned", "ticket": "ACME-301-K4"}]
+    return cfg, L, [], [], {"workers": [], "tasks": [], "run": {"id": cfg["run"], "objective": "Plugins v2"}}, []
+
+
 def write_program(root, cfg, ledger, issues, prs, orca, notes):
     store, fx = root / "programs", root / "fixtures"
     d = store / cfg["slug"]
@@ -454,6 +471,7 @@ def build(root, now=None):
     a, b = alpha(now), beta(now)
     write_program(root, *a)
     write_program(root, *b)
+    write_program(root, *plugins(now))
     # Each in a repo of its own: the gh fixture is per repo, so sharing one would replace a live program's PRs.
     for slug, repo, h, ok in (("docs-refresh", "acme/docs", 30, True), ("ci-cache", "acme/ci", 70, True),
                               ("search-v1", "acme/search", 200, True), ("metrics-spike", "acme/metrics", 300, False)):
@@ -601,7 +619,8 @@ class FakeFleetWorld:
                                                 ("wt-lead", "run_demo"), ("wt-invoice", "run_lead"))],
                      "tasks": [{"id": f"task_{w}", "display_name": t, "status": "dispatched"} for w, t in
                                (("login", "ACME-101 login flow"), ("export", "ACME-102 billing export"), ("docs", "ACME-103 docs"),
-                                ("lead", "Billing tickets"), ("invoice", "ACME-104 invoice PDF"))],
+                                ("lead", "Billing tickets"), ("invoice", "ACME-104 invoice PDF"))]
+                              + [{"id": i, "run_id": "run_plugins", "display_name": t, "status": "completed"} for i, t in PLUGIN_TASKS],
                      "gates": [{"id": "g1", "status": "pending", "question": "Land #41 before #42?", "options": ["yes", "no"], "task_id": "task_export",
                                 "created_at": _ago(now, 0.5)}]}
         if crowd:
