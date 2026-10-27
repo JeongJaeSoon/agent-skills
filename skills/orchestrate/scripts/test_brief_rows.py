@@ -106,7 +106,7 @@ assert ("초안 — ready 로 만들지 정하기 (카드 세션 꺼짐; 보류�
         " · [#550](https://example.test/550) → headless-apitoken") in turn, turn
 # acme/plugins#633: the held item naming #633 holds the row: ⏸️ in the table, one 보류 line with the row's name.
 assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](https://example.test/633) 초안 수정요청 | — |" in text, text
-assert f"{soon} prod 전환 확인 후 → #633 ready 화 + 리뷰 재요청 (headless-skill)" in held, held
+assert f"{soon} prod 전환 확인 후 → headless-skill" in held, held  # the held item itself is counted on the pointer line
 assert not any("headless-skill" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # ...and Needs you demotes the PR on the same rule.
 holds = fleet.held_prs(fleet.read_json(sd / "board.json"), tidy.closed(), {k: v["detail"] for k, v in PRS.items()}, now)
@@ -115,9 +115,9 @@ assert holds == {"acme/plugins#633": f"{soon} prod 전환 확인 후", "acme/plu
 # acme/plugins#640: a held item names it, but its card is stopped at a prompt only the owner answers: 🙋, not ⏸️.
 assert rows["prompt-stopped"] == "owner", rows
 assert any(t.startswith("확인 대기 · [#640]") and t.endswith("→ prompt-stopped") for t in turn), turn
-assert f"{soon} 리뷰 뒤 → #640 다시 보기" in held, held
+assert not any("#640" in h for h in held), held  # a queue item, not a ⏸️ row: listed by orch board todo list
 # acme/api#641: the row would be ❔ (수정요청 받음), so its held item holds it, under one 보류 line.
-assert rows["api-cr"] == "held" and f"{soon} 배포 뒤 → #641 다시 보기 (api-cr)" in held, held
+assert rows["api-cr"] == "held" and f"{soon} 배포 뒤 · 수정 반영 → api-cr" in held, held
 assert not any("api-cr" in m for m in moving + turn + theirs), (moving, turn, theirs)
 # Waiting on a review: the next step is whose review, not the card's session.
 assert "team:app-dev · 리뷰 [#630](https://example.test/630) · 12h 전부터 → shared-files-fix · 다음: team:app-dev 리뷰 대기" in theirs, theirs
@@ -125,7 +125,7 @@ assert ("rev-h, team:app-dev · 리뷰 [#631](https://example.test/631) · 12h �
         in theirs), theirs
 assert any(t.startswith("team:app-dev · 리뷰 [#182]") and t.endswith("다음: team:app-dev 리뷰 대기") for t in theirs), theirs
 assert not any(w in t for t in theirs for w in ("세션 꺼짐", "에이전트 없음")), theirs
-assert "#182 다시 보기" in "\n".join(held) and rows["flows-revert"] == "waiting", (held, rows)
+assert any("#182 다시 보기" in k for k in rows) and rows["flows-revert"] == "waiting", rows  # still in the queue
 
 # Nothing is cut where it is written: a long title, next step, held item or stage evidence is kept whole.
 import stages  # noqa: E402

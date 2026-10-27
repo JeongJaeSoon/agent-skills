@@ -5,7 +5,7 @@ HITL과 HOTL을 함께 고려한 Claude Code 에이전트 스킬 모음.
 [![License: MIT](https://img.shields.io/github/license/JeongJaeSoon/agent-skills)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/JeongJaeSoon/agent-skills)](https://github.com/JeongJaeSoon/agent-skills/releases/latest)
 
-사람이 단계마다 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 둘 다 쓸 수 있게 만든 Claude Code 플러그인이다. 티켓 하나를 첫 수정부터 머지·완료 기록까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 40개와 hook으로 만든다. Claude Code로 GitHub 저장소의 티켓 작업을 맡기려는 개발자를 위한 것이다. 사용자 설정 쓰기나 되돌릴 수 없는 행동은 늘 사람이 승인하고, 머지 같은 지점은 사람이 승인할지 맡길지를 설정으로 고른다([HITL과 HOTL](#hitl과-hotl)).
+사람이 단계마다 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 둘 다 쓸 수 있게 만든 Claude Code 플러그인이다. 티켓 하나를 첫 수정부터 머지·완료 기록까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 41개와 hook으로 만든다. Claude Code로 GitHub 저장소의 티켓 작업을 맡기려는 개발자를 위한 것이다. 사용자 설정 쓰기나 되돌릴 수 없는 행동은 늘 사람이 승인하고, 머지 같은 지점은 사람이 승인할지 맡길지를 설정으로 고른다([HITL과 HOTL](#hitl과-hotl)).
 
 ## 특징
 
@@ -73,7 +73,7 @@ HOTL에서 사람이 보는 곳은 `brief`의 현황 보고와 대시보드의 �
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, agent-skills.json 키·permissions.allow 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
 | [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
-| [글쓰기](docs/skills.md#글쓰기) | `brief`, `stage`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 단계표, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
+| [글쓰기](docs/skills.md#글쓰기) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 단계표, 할 일·보류 큐, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
 | [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고. 원본 이름을 유지해 upstream을 따라간다 |
 
 여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 이름·시작 명령·`ROLE` 줄은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles), Orca의 "coordinator"와의 대응도 거기에 있다.

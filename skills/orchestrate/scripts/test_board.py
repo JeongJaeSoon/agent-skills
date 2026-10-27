@@ -117,14 +117,29 @@ ok("board", "set", "ghost", "--title", "정리 작업", "--progress", "1/3", "--
 ok("board", "set", "loose-70", "--kind", "task", "--repo", "acme/ops", "--title", "로그", "--pr", "acme/ops#70")
 ok("board", "set", "loose-71", "--kind", "task", "--repo", "acme/ops", "--title", "대시보드", "--pr", "acme/ops#71")
 # Moving work with no row of its own goes on the 진행 중 list after the rows' next steps; a wait on another person's
-# reply (--waiting) goes on 다른 사람 대기; only work set aside on purpose goes on 보류, after the held rows'
-# conditions. The same held item added twice in other words stays one item.
+# reply (--waiting) goes on 다른 사람 대기; only the held rows go on 보류. Work set aside on purpose is the held queue,
+# which the report only counts. The same held item added twice in other words stays one item, in its place.
 ok("board", "doing", "add", "다른 팀 답변 대기", "--owner", "다른 팀", "--next", "10/14 리마인드", "--waiting")
 ok("board", "doing", "add", "로그 누락 조사", "--owner", "워커", "--next", "원인 보고")
 ok("board", "later", "add", "prod 배포 창", "--trigger", "10/16")
 ok("board", "later", "add", "캐시 TTL 다시 보기", "--trigger", "10/20")
 ok("board", "later", "add", "캐시 TTL을 다시 보기", "--trigger", "10/20")
 assert [l["title"] for l in json.loads((state / "board.json").read_text())["later"]] == ["prod 배포 창", "캐시 TTL을 다시 보기"]
+# The queue's order is the list's: --at puts an item at a position, move takes one to another, a reword keeps its place.
+queue = lambda: [l["title"] for l in json.loads((state / "board.json").read_text())["later"]]
+ok("board", "later", "add", "릴리스 노트", "--trigger", "v2 뒤", "--at", "1", "--who", "writer")
+assert queue() == ["릴리스 노트", "prod 배포 창", "캐시 TTL을 다시 보기"], queue()
+ok("board", "later", "add", "캐시 TTL 다시 한번 보기", "--trigger", "10/20")
+assert queue() == ["릴리스 노트", "prod 배포 창", "캐시 TTL 다시 한번 보기"], queue()
+ok("board", "later", "move", "3", "--to", "1")
+assert queue() == ["캐시 TTL 다시 한번 보기", "릴리스 노트", "prod 배포 창"], queue()
+assert orch("board", "later", "move", "9", "--to", "1")[2] == "no later item 9; there are 3"
+assert orch("board", "later", "add", "x", "--trigger", "y", "--at", "0")[2].startswith("--at and --to take")
+ok("board", "later", "move", "1", "--to", "9")  # past the end: last
+ok("board", "later", "drop", "1")
+assert queue() == ["prod 배포 창", "캐시 TTL 다시 한번 보기"], queue()
+ok("board", "later", "add", "캐시 TTL을 다시 보기", "--trigger", "10/20")
+assert queue() == ["prod 배포 창", "캐시 TTL을 다시 보기"], queue()
 ok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
 stamp(ghost="2026-10-13T11:20:00Z")
 
@@ -166,6 +181,8 @@ if "--print" in sys.argv:
 
 GOLDEN = """\
 **14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전) · 접음 완료 1 (대시보드)**
+
+보류 큐 2건 · `orch board todo list` · `orch req list`
 
 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
 
@@ -233,9 +250,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 ⏸️ **보류**
 
-- ph3 머지 뒤 → 검색 개선 ph4 · ph5
-- 10/16 → prod 배포 창
-- 10/20 → 캐시 TTL을 다시 보기"""
+- ph3 머지 뒤 → 검색 개선 ph4 · ph5"""
 
 code, first, err = FIRST
 assert code == 0, err
@@ -292,7 +307,14 @@ sendlog.unlink()
 assert orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--periodic", "--now", NOW)[1] == \
     orch("brief", "render", "--periodic", "--now", NOW)[1], "a missing log adds nothing"
 assert "🙋 지금 오너가 할 일\n\n충돌 해소 승인 · #50 → 알림 정리\n리뷰 · #70·#71 → 로그·대시보드\n" in tg, tg
-assert tg.endswith("⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5\n10/16 → prod 배포 창\n10/20 → 캐시 TTL을 다시 보기"), tg
+assert tg.endswith("⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5"), tg
+assert "보류 큐 2건 · orch board todo list · orch req list" in tg.splitlines(), tg
+# The queue is a table in `orch board todo list`, its first item marked next; on Telegram, lines.
+listed = ok("board", "todo", "list", "--now", NOW, "--no-refresh")
+assert "| # | 할 일 | 다음 차례 조건 | 담당 |" in listed and "| ▶ 1 | prod 배포 창 | 10/16 | — |" in listed, listed
+assert "| 2 | 캐시 TTL을 다시 보기 | 10/20 | — |" in listed and "📅 할 일 없음" in listed, listed
+listed = ok("board", "todo", "list", "--now", NOW, "--no-refresh", "--telegram")
+assert "▶ 1 prod 배포 창 · 10/16 · —" in listed.splitlines() and "|" not in listed, listed
 
 # --json carries what a dashboard or the model needs beside the text.
 out = json.loads(ok("brief", "render", "--periodic", "--now", NOW, "--json", "--headline", "ph2 머지"))
@@ -448,24 +470,23 @@ assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
 carded = ok("brief", "render", "--periodic", "--now", NOW)
 assert "| 🔄 | 관측 카드 | #77 ? | — |" in carded and "- 🔄 관측 카드 — 리뷰 대기 · rev-a" in carded and "runner" not in carded, carded
 
-# Open owner requests get one line with their count, the oldest's age and how many are left unlinked; none, no line.
-assert "📝" not in carded
+# Open owner requests are counted on the one pointer line (their list is the dashboard's and `orch req list`); none, no line.
+assert "요청" not in carded
 (state / "requests.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
     {"ev": "open", "id": "r1", "ts": "2026-10-13T13:30:00Z", "text": "merge acme/web#77"},
     {"ev": "open", "id": "r2", "ts": "2026-10-13T14:20:00Z", "text": "look at the flaky test"},
     {"ev": "open", "id": "r3", "ts": "2026-10-13T13:00:00Z", "text": "reply to the reviewer"},
     {"ev": "done", "id": "r3", "ts": "2026-10-13T13:10:00Z", "evidence": "replied"}]))
 asked = ok("brief", "render", "--periodic", "--now", NOW)
-# The counts come with the command that lists them, so the line reaches the whole list.
-assert "📝 **요청** — 요청 2건 열림 · 가장 오래된 것 1h00m · 미연결 30분+ 1건 · 목록: `orch req list`" in asked, asked
+assert "📝" not in asked and "보류 큐 2건 · 요청 2건 열림 · `orch board todo list` · `orch req list`" in asked.splitlines(), asked
 
 # A held item stored twice before later add merged them renders once, in its newest words.
 b = json.loads((state / "board.json").read_text())
 b["later"] += [{"title": "콘솔 시안 대비 main에서 누락된 절차 확인", "trigger": "#9 land 뒤"},
                {"title": "콘솔 시안 대비 main 누락 절차만 확인", "trigger": "#9 land 뒤"}]
 (state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
-held = ok("brief", "render", "--periodic", "--now", NOW)
-assert held.count("#9 land 뒤") == 1 and "- #9 land 뒤 → 콘솔 시안 대비 main 누락 절차만 확인" in held.splitlines(), held
+held = ok("board", "todo", "list", "--now", NOW, "--no-refresh")
+assert held.count("#9 land 뒤") == 1 and "| 4 | 콘솔 시안 대비 main 누락 절차만 확인 | #9 land 뒤 | — |" in held, held  # its place in the store, as move and drop read it
 
 # A report on request: no board at all, only the fleet's sessions and the stage table. The live card is a row, the stage
 # table is one line pointing at `orch stage show`, the model's insight comes after 진행 중 and its decision is numbered
@@ -716,9 +737,10 @@ assert text.count("✅ 그 전 완료 2건 (대시보드)") == 1 and "접음 완
 assert "F/old" not in folded["snapshot"]["rows"] and "G/t" not in folded["snapshot"]["rows"]
 # A held item written twice, case and spacing aside, is one line in its newest wording; two that differ only in an
 # aside (a PR, a stage) are two items and both stay.
-assert section(text, "⏸️ **보류**") == ["- 다음 분기 → hold 보류 행", "- b2 머지 → Rollout  카드 재기동",
-                                       "- v1 태그 → 배포 확인 (acme/app#1)", "- 다음 분기 → 배포 확인 (acme/app#2)",
-                                       "- dev 배포 → A 머지 — dev 확인", "- prod 배포 → A 머지 — prod 확인"], text
+assert section(text, "⏸️ **보류**") == ["- 다음 분기 → hold 보류 행"], text
+queued = fok("board", "todo", "list", "--now", NOW, "--no-refresh")
+assert [l.split(" | ")[1] for l in queued.splitlines() if l.startswith("| ") and "다음 차례" not in l] == [
+    "Rollout  카드 재기동", "배포 확인 (acme/app#1)", "배포 확인 (acme/app#2)", "A 머지 — dev 확인", "A 머지 — prod 확인"], queued
 
 # The stage line counts the rows `orch stage show` prints: a finished row and one a week unchanged fold.
 sp = fd / "dashboard" / "stages.json"

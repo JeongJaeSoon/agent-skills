@@ -226,18 +226,43 @@ def work_key(item):
     return tuple(" ".join((item.get(f) or "").casefold().split()) for f in ("title", "trigger"))
 
 
-def later_add(title, trigger, due=None):
-    """Add a held item, or reword the one it repeats."""
+def later_add(title, trigger, due=None, who=None, at=None):
+    """Add a held item to the queue at position at (1 first; the end by default), or reword the one it repeats in its
+    place (moved to at when given). The list's order is the queue's: the first is next."""
     if not (title or "").strip() or not (trigger or "").strip():
-        raise ValueError("board later add needs a title and --trigger (what brings it back)")
-    item = {"title": one_line(title), "trigger": one_line(trigger), **({"due": due} if due else {})}
+        raise ValueError("board later add needs a title and --trigger (what makes it next)")
+    at = queue_pos(at)
+    item = {"title": one_line(title), "trigger": one_line(trigger), **({"due": due} if due else {}),
+            **({"who": one_line(who)} if (who or "").strip() else {})}
 
     def go(store):
-        old = next((i for i, l in enumerate(store["later"]) if same_later(l, item)), None)
-        if old is None:
-            store["later"].append(item)
-        else:
-            store["later"][old] = item
+        q = store["later"]
+        old = next((i for i, l in enumerate(q) if same_later(l, item)), None)
+        if old is not None:
+            q.pop(old)
+        q.insert(len(q) if at is None and old is None else old if at is None else at - 1, item)
+    return change(go)
+
+
+def queue_pos(at):
+    if at is None:
+        return None
+    if not str(at).isdigit() or int(at) < 1:
+        raise ValueError("--at and --to take a queue position, 1 or more")
+    return int(at)
+
+
+def later_move(n, to):
+    """Move held item n to position to in the queue (past the end: last)."""
+    to = queue_pos(to)
+    if to is None:
+        raise ValueError("board later move needs --to N")
+
+    def go(store):
+        q = store["later"]
+        if not 1 <= n <= len(q):
+            raise ValueError(f"no later item {n}; there are {len(q)}")
+        q.insert(to - 1, q.pop(n - 1))
     return change(go)
 
 
@@ -314,22 +339,7 @@ def set_now(lines):
     return change(lambda store: store.update(owner_todo=[one_line(l) for l in lines if l.strip()]))
 
 
-WEEKDAY = "월화수목금토일"
-
-
-def todo_when(t, now):
-    """When a to-do starts, as the report says it: its --due as a local date (and time, unless midnight), its --after."""
-    at = fleet.todo_dates(t, now)[0]
-    at = at and at.astimezone()
-    due = at and f"{at.month}/{at.day}({WEEKDAY[at.weekday()]})" + (f" {at:%H:%M}" if (at.hour, at.minute) != (0, 0) else "")
-    return " · ".join(x for x in (due, t.get("after")) if x)
-
-
-def todo_arrived(t, now, cards, prs):
-    """Whichever comes first: its --due, the date in its --after, or, with no date there, its --after met by the
-    held-item rule (tidy.trigger_met)."""
-    due, on = fleet.todo_dates(t, now)
-    return bool(any(x and x <= now for x in (due, on)) or not on and t.get("after") and tidy.trigger_met(t["after"], cards, prs))
+todo_when = fleet.todo_when
 
 
 # ---------------------------------------------------------------- render
@@ -581,7 +591,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
-    holds, held_by = fleet.held_prs(store, shut, prs, now), {}  # held_by: row id -> the PR a held item covers
+    holds, held_by = fleet.held_prs(store, shut, prs, now, cards), {}  # held_by: row id -> the PR a held item covers
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
         if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
@@ -835,11 +845,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if tidy.item_id("later", l) not in shut and not any(same_later(l, k) or work_key(l) == work_key(k) for k in later):
             later.insert(0, l)
     todos = [t for t in store["owner_todo"] if tidy.item_id("todo", t) not in shut]
-    # A to-do whose date or condition has come leaves 할 일 for the owner's list or 진행 중, and stays there until Done.
+    # A to-do whose date or condition has come goes to the owner's list or 진행 중, and stays there until Done.
     planned = [(tidy.item_id("do", t), t, todo_when(t, now)) for t in store["todo"] if tidy.item_id("do", t) not in shut]
-    arrived = [p for p in planned if todo_arrived(p[1], now, cards, prs)]
-    upcoming = sorted((p for p in planned if p not in arrived),
-                      key=lambda p: min(filter(None, fleet.todo_dates(p[1], now)), default=dt.datetime.max.replace(tzinfo=dt.timezone.utc)))
+    arrived = [p for p in planned if fleet.todo_come(p[1], now, prs, cards)]
+    upcoming = [p for p in planned if p not in arrived]
 
     # A section's merge target is the base most of its PRs share; a row with another base names its own.
     bases = {}
@@ -890,6 +899,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if collected:
         facts.append(collected)
     stage_line = stages.pointer(*stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state), tg)
+    shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
+    queued = [l for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"]
+    lists_line = lists_pointer(len(upcoming), len(queued), owner_requests.summary(now, shown)["open"], tg)
     if sum(folded.values()):
         facts.append(f"접음 완료 {sum(folded.values())} (대시보드)")
 
@@ -905,8 +917,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**"]
     width_ok = True
-    if stage_line:
-        out += ["", stage_line]
+    out += [x for line in (stage_line, lists_line) if line for x in ("", line)]
     if lines:
         out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
@@ -944,10 +955,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, one the owner
     # unblocks to 지금 오너가 할 일, one another person unblocks to 다른 사람 대기, every other open row's to 진행 중 in
     # table order, a sub-task after its head row. Each row goes to one list, by its own status, not its children's.
-    moving, held, turn, theirs, held_rows = [], [], [], [], {}
-    covered = {k for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"
-               for k in fleet.held_refs(l["title"], prs)}  # the PRs of the held items listed under 보류 or 할 일
-    covered |= {k for _, t, _ in upcoming for k in fleet.held_refs(t["title"], prs)}
+    moving, held, turn, theirs = [], [], [], []
     for sec in sections:
         head, head_out = None, False
         for l in (l for l in lines if l["sec"] == sec):
@@ -957,10 +965,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if st in (None, "done"):
                 continue
             if st == "held":
-                if held_by.get(l["key"]) in covered:  # its held item's line says it, with this row's name
-                    held_rows.setdefault(held_by[l["key"]], []).append(label(l))
-                else:
-                    held.append(f"{l['next'] or '—'} → {label(l)}")
+                held.append(f"{l['next'] or '—'} → {label(l)}")
                 continue
             where = l["cell"].split(" ")[0] if l["pr"] else l["cell"]
             if st == "owner":
@@ -1069,25 +1074,19 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     todo = todos + due_mine + turn
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
-    shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
-    if asked := owner_requests.line(owner_requests.summary(now, shown)):
-        out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked + (" · 목록: orch req list" if tg else " · 목록: `orch req list`")]
-    fired = {tidy.item_id("later", l) for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") == "check"}
-    def held_line(when, l):
-        names = [n for k in fleet.held_refs(l["title"], prs) for n in held_rows.get(k, [])]
-        return f"{when} → {l['title']}" + (f" ({'·'.join(names)})" if names else "")
-    if upcoming:
-        out += ["", "📅 할 일" if tg else "📅 **할 일**", ""] + [
-            (it if tg else f"- {it}") for it in (f"{held_line(when, t)} · {t['who']}" for _, t, when in upcoming)]
-    if held := list(dict.fromkeys(held + [held_line(l["trigger"], l) for l in later if tidy.item_id("later", l) not in fired])):
+    # Only the ⏸️ rows: the held items are a queue the pointer line counts (todo_tables lists it).
+    if held := list(dict.fromkeys(held)):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
     opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": "moving"} for i, d in doing]
-    opened += [{"id": tidy.item_id("later", l), "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held"}
-               for l in later]
+    opened += [{"id": tidy.item_id("later", l), "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held",
+                "title": l["title"], "trigger": l["trigger"], "who": l.get("who"), "n": n}
+               for n, l in enumerate(store["later"], 1) if l in later]
     opened += [{"id": i, "kind": "do", "label": f"{when} → {t['title']} · {t['who']}", "due": (i, t, when) in arrived,
-                "status": ("owner" if is_owner(t["who"], me) else "moving") if (i, t, when) in arrived else "planned"}
+                "status": ("owner" if is_owner(t["who"], me) else "moving") if (i, t, when) in arrived else "planned",
+                "title": t["title"], "who": t["who"], "when": when, "after": t.get("after"),
+                "at": fleet.iso(fleet.todo_start(t, now))}
                for i, t, when in planned]
     opened += [{"id": tidy.item_id("todo", t), "kind": "todo", "label": t, "status": "owner"} for t in todos]
     for o in opened:
@@ -1096,6 +1095,54 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
             "open": opened, "table_rows": table_rows,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
+
+
+def lists_pointer(todos, queued, asked, tg=False):
+    """The brief's one line in place of the to-do list, the held queue and the requests: how many of each, and where
+    they are (the dashboard's To-do page, whose Overview has the requests; on Telegram the commands, as
+    stages.pointer does)."""
+    parts = [f"{w} {n}건{tail}" for w, n, tail in (("할 일", todos, ""), ("보류 큐", queued, ""), ("요청", asked, " 열림")) if n]
+    if not parts:
+        return None
+    where = "orch board todo list · orch req list" if tg else stages.dash_url("todo") or "`orch board todo list` · `orch req list`"
+    return " · ".join(parts + [where])
+
+
+QUEUE_HEADER = ["#", "할 일", "다음 차례 조건", "담당"]
+TODO_HEADER = ["", "언제", "할 일", "담당"]
+
+
+def todo_order(items):
+    """The to-dos as the list shows them: one whose time came first, then by first date, undated last as added."""
+    far = "~"  # after every ISO date
+    return sorted(items, key=lambda o: (not o["due"], o.get("at") or far))
+
+
+def todo_tables(now=None, tg=False, fresh=True):
+    """`orch board todo list`: the to-dos (📅 waiting, ⏰ come) and the held queue (its first is next), each a table
+    cut to 78 columns as the report's are, or lines on Telegram. Returns (text, width_ok)."""
+    items = render(now=now, fill=True, periodic=False, fresh=fresh and now is None)["open"]
+    todos = todo_order([o for o in items if o["kind"] == "do"])
+    queue = sorted((o for o in items if o["kind"] == "later"), key=lambda o: o["n"])
+    rows_t = [["⏰" if o["due"] else "📅", o["when"] or "—", o["title"], o["who"] or "—"] for o in todos]
+    rows_q = [[f"▶ {o['n']}" if i == 0 else str(o["n"]), o["title"], o["trigger"], o.get("who") or "—"] for i, o in enumerate(queue)]
+    out, ok = [], True
+    for head, cap, rows, empty in ((TODO_HEADER, f"📅 할 일 {len(rows_t)}건 · ⏰ 도래 {sum(o['due'] for o in todos)}", rows_t, "📅 할 일 없음"),
+                                   (QUEUE_HEADER, f"⏸️ 보류 큐 {len(rows_q)}건 · ▶ 다음 차례", rows_q, "⏸️ 보류 큐 없음")):
+        out += [""] if out else []
+        if not rows:
+            out.append(empty)
+            continue
+        out.append(cap if tg else f"**{cap}**")
+        if tg:
+            out += [""] + [f"{r[0]} " + " · ".join(r[1:]) for r in rows]
+            continue
+        table, notes = table_width.fit([head] + rows, COLS, (2, 1))
+        ok &= table_width.table_width(table) <= COLS
+        out += ["", ("| " + " | ".join(table[0]) + " |").replace("|  |", "| |"), "|" + "---|" * len(head)]
+        out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
+        out += [""] + [f"- [{n}] {t}" for n, t in enumerate(notes, 1)] if notes else []
+    return "\n".join(out), ok
 
 
 def reap_line(now):

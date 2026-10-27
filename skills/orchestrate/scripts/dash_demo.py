@@ -530,6 +530,7 @@ def seed_board():
     soon = dt.datetime.now().astimezone() + dt.timedelta(days=2)
     board.todo_add("acme/launchpad#41 머지·배포", due=f"{soon:%Y-%m-%d} 09:00", who="오너")
     board.todo_add("acme/tools#7 ready 로 전환", after="acme/launchpad#41 머지 후", who="lead-tools")
+    board.todo_add("분기 회고 정리", due=f"{soon - dt.timedelta(days=3):%Y-%m-%d}", who="오너")  # come: ⏰ in the brief
     board.set_now(["acme/launchpad#43 리뷰"])
     import owner_requests as req  # the owner's requests to the orchestrator, as the request_log hook would log them
     now = dt.datetime.now(dt.timezone.utc)

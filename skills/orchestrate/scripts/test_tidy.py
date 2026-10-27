@@ -153,7 +153,8 @@ assert not any("초안 작업" in m for m in moving) and any(t.startswith("초�
                                                       and t.endswith(" → 초안 작업") for t in section(b["text"], "🙋")), b["text"]
 assert any(t.startswith("rev-a · 리뷰") and "청구 화면" in t for t in theirs), theirs  # was ⏸️ 세션 꺼짐, now the PR's wait
 assert not any("다음 일 시작" in h or "다른 일" in h for h in held), held
-assert any("열린 PR 뒤의 일" in h for h in held) and any("모호한 일" in h for h in held), held
+queued = [o.get("title") for o in b["open"] if o.get("kind") == "later"]  # the queue stays; the pointer line counts it
+assert "열린 PR 뒤의 일" in queued and "모호한 일" in queued, queued
 assert not any(h.startswith("세션 꺼짐") for h in held), held
 # A doing item about a card that has a row is one line: the card's, with the doing item's next step.
 assert not any("(card-review 카드)" in m for m in moving + theirs), moving

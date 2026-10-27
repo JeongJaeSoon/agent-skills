@@ -11,6 +11,7 @@ const FLEET_SECTIONS = [
   { id: "prs", label: "Pull requests", icon: "prs" },
   { id: "brief", label: "Brief", icon: "note" },
   { id: "stages", label: "Stages", icon: "flag" },
+  { id: "todo", label: "To-do", icon: "check" },
   { id: "sent", label: "Sent", icon: "chat" },
   { id: "timeline", label: "Timeline", icon: "list" },
   { id: "automations", label: "Automations", icon: "clock", sep: true },
@@ -125,7 +126,7 @@ function sessionTree(st) {
 function fleetSidebar() {
   const st = S.state;
   const counts = st ? { inbox: (st.items || []).length || null, sessions: (st.sessions || []).length,
-    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
+    prs: (st.prs || []).filter((p) => p.state === "OPEN").length || null, stages: stageOpen() || null, todo: todoItems().length + queueItems().length || null, automations: autoTroubled(st).length || null, monitors: monTroubled(st).length || null, graph: (st.prs || []).filter((p) => p.session).length || null } : {};
   $("#section-list").innerHTML = FLEET_SECTIONS.map((s) => `${s.sep ? '<li class="sb-sep" aria-hidden="true"></li>' : ""}<li><a class="nav-item" href="#/fleet/${s.id}"
       ${s.id === S.section ? 'aria-current="page"' : ""} title="${s.label}">${icon(s.icon)}<span class="sb-text">${s.label}</span>
       ${counts[s.id] != null ? `<span class="count">${counts[s.id]}</span>` : ""}</a></li>`).join("");
@@ -822,7 +823,7 @@ function fleetChanges() {
 
 // The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
 // while this view is open. The renderer owns rows, order, icons and bold; this only turns its Markdown into HTML.
-const BRIEF_FED = ["brief", "stages"];  // the Stages page reads the same answer's `stages`
+const BRIEF_FED = ["brief", "stages", "todo"];  // the Stages and To-do pages read the same answer's `stages` and `open`
 async function pollBrief() {
   if (F.briefBusy) return;
   F.briefBusy = true;
@@ -1015,6 +1016,35 @@ function stageSection(w) {
     : `<div class="empty-chart">${seen ? "Every row is acked." : 'No stage rows: no program had ledger activity in 7 days. <span class="mono">orch stage add</span> records work outside a program.'}</div>`;
   const next = (w.next || []).length ? `<div class="card"><div class="card-head"><h3>Next</h3></div><ol class="card-body wnext">${w.next.map((n) => `<li>${linkRefs(n, refs)}</li>`).join("")}</ol></div>` : "";
   return `<div class="card"><div class="toolbar wenv">${legend}${env}${acked}</div>${table}</div>` + next;
+}
+// The to-dos and the held queue (`orch board todo list` prints the same two tables): the brief only counts them. A
+// to-do (`open` kind "do") is a promise for a date or condition: one that has come (`due`, ⏰ in the brief) goes first,
+// then by first date, undated last as added. The queue (kind "later") is work set aside with no date, in the board's
+// order (`n`), its first next. Done is the Open items button.
+const todoItems = () => ((F.brief || {}).open || []).filter((o) => o.kind === "do");
+const queueItems = () => ((F.brief || {}).open || []).filter((o) => o.kind === "later").sort((a, b) => a.n - b.n);
+function fleetTodo() {
+  if (!F.brief) pollBrief();
+  const head = `<div class="view-head"><div><h2>To-do</h2><p>To-dos are promises kept on a date or a condition (<span class="mono">orch board todo add &lt;work&gt; (--due D | --after C) --who W</span>); one that has come moves up into the brief's 지금 오너가 할 일 or 진행 중 as ⏰ until Done. The queue is work set aside with no date, in order (<span class="mono">orch board later add … [--at N]</span>, <span class="mono">later move &lt;n&gt; --to N</span>).</p></div></div>`;
+  if (!F.brief) return head + '<div class="loading">Loading…</div>';
+  const rank = (o) => [o.due ? 0 : 1, o.at ? ms(o.at) : Infinity];
+  const items = todoItems().map((o, n) => [o, n]).sort(([a, i], [b, j]) => {
+    const [x, y] = [rank(a), rank(b)];
+    return x[0] - y[0] || (x[1] === y[1] ? i - j : x[1] < y[1] ? -1 : 1);
+  }).map(([o]) => o), queue = queueItems();
+  const note = F.doneError ? `<div class="ack-note">${tag("not closed", "warn", "alert")} ${esc(F.doneError)}</div>` : "";
+  const work = (o) => `${esc(o.title || o.label)}${o.check ? ` <span class="muted">check: ${esc(o.check)}</span>` : ""}`;
+  const done = (o) => `<td class="bact" data-row-label="${esc(o.title || o.label)}">${doneBtn(o.id)}</td>`;
+  const table = (cols, rows) => `<div class="table-wrap"><table class="todo"><thead><tr>${cols.map((c) => `<th>${c}</th>`).join("")}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const todoRows = items.map((o) => `<tr><td class="bmark" title="${o.due ? "come" : "waiting"}">${o.due ? "⏰" : "📅"}</td><td style="white-space:nowrap">${esc(o.when || "–")}</td>
+      <td>${work(o)}</td><td>${esc(o.who || "–")}</td>${done(o)}</tr>`).join("");
+  const queueRows = queue.map((o, i) => `<tr><td style="white-space:nowrap">${i ? "" : tag("next", "accent", "arrow") + " "}${o.n}</td>
+      <td>${work(o)}</td><td class="muted">${esc(o.trigger || "–")}</td><td>${esc(o.who || "–")}</td>${done(o)}</tr>`).join("");
+  return head + note + undoNote()
+    + `<div class="card"><div class="card-head"><h3>To-dos</h3><span class="aside muted">${items.length} · ${items.filter((o) => o.due).length} due</span></div>
+    ${items.length ? table(["", "When", "To-do", "Who"], todoRows) : '<div class="empty-chart">No to-do. <span class="mono">orch board todo add</span> records one.</div>'}</div>`
+    + `<div class="card"><div class="card-head"><h3>Held queue</h3><span class="aside muted">${queue.length}</span></div>
+    ${queue.length ? table(["#", "Work", "Next when", "Who"], queueRows) : '<div class="empty-chart">Nothing held. <span class="mono">orch board later add</span> queues one.</div>'}</div>`;
 }
 function fleetStages() {
   if (!F.brief) pollBrief();
@@ -1399,7 +1429,7 @@ function fleetStats() {
     <div class="grid">${card("Weekday × hour", "", punch)}
     ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
 }
-const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
+const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
   const key = e.target.id === "chat-input" ? F.sessionId : e.target.dataset.decideInput;

@@ -1748,7 +1748,8 @@ class Fleet:
                  for it in items if it["key"] not in dismissed]
         import tidy
         held = held_prs(read_json(state_dir() / "board.json", {}) or {}, tidy.closed(),
-                        {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}, now)
+                        {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}, now,
+                        tidy.cards_of(read_json(state_dir() / "state.json", {})))
         for i in items:
             if i.get("source") == "github" and i.get("pr") in held:
                 i["held"] = held[i["pr"]]
@@ -1963,10 +1964,40 @@ def todo_dates(t, now):
     return due_at(t.get("due"), None, base), trigger_at(t.get("after"), base)
 
 
-def held_prs(store, shut, prs, now):
+def todo_come(t, now, prs, cards=None):
+    """Whether a to-do's time has come, whichever is first: its --due or the date in its --after has passed, or, with
+    no date there, every PR its --after names (and the PR of the card it names) has merged. The one rule for the
+    report's ⏰ and for lifting the to-do's hold on its PRs in Needs you."""
+    import tidy
+    due, on = todo_dates(t, now)
+    if any(x and x <= now for x in (due, on)):
+        return True
+    after = t.get("after") or ""
+    card = not on and after and tidy.named(after, cards or {})
+    return bool(not on and after and tidy.refs_over(pr_refs(after) + [card and card.get("pr")], prs))
+
+
+def todo_start(t, now):
+    """The first of a to-do's dates, in UTC, or None when it has neither."""
+    at = min(filter(None, todo_dates(t, now)), default=None)
+    return at and at.astimezone(dt.timezone.utc)
+
+
+WEEKDAY = "월화수목금토일"
+
+
+def todo_when(t, now):
+    """When a to-do starts, as the report says it: its --due as a local date (and time, unless midnight), its --after."""
+    at = todo_dates(t, now)[0]
+    at = at and at.astimezone()
+    due = at and f"{at.month}/{at.day}({WEEKDAY[at.weekday()]})" + (f" {at:%H:%M}" if (at.hour, at.minute) != (0, 0) else "")
+    return " · ".join(x for x in (due, t.get("after")) if x)
+
+
+def held_prs(store, shut, prs, now, cards=None):
     """PR key -> the hold, for each PR a held board item or a to-do names in its title (held_refs). The hold lifts
-    when the item is dropped or closed (tidy), when its --due or the date in its trigger (a to-do's --after) comes,
-    or, with no date, when every PR its trigger names has merged."""
+    when the item is dropped or closed (tidy), when a to-do's time comes (todo_come), or when a held item's --due or
+    the date in its trigger comes or, with no date, every PR its trigger names has merged. cards: tidy.cards_of()."""
     import tidy
     out = {}
     items = [("later", l, l["trigger"]) for l in store.get("later") or []]
@@ -1974,16 +2005,16 @@ def held_prs(store, shut, prs, now):
     for kind, l, trigger in items:
         if tidy.item_id(kind, l) in shut:
             continue
-        if kind == "do":  # whichever comes first, as board.todo_arrived reads it
-            due, on = todo_dates(l, now)
-            if any(x and x <= now for x in (due, on)) or not on and tidy.refs_over(pr_refs(trigger), prs):
+        if kind == "do":
+            if todo_come(l, now, prs, cards):
                 continue
         else:
             at = due_at(l.get("due"), trigger, now)
             if at and at <= now or not at and tidy.refs_over(pr_refs(trigger), prs):
                 continue
+        why = todo_when(l, now) if kind == "do" else " · ".join(x for x in (trigger, l.get("due")) if x)
         for k in held_refs(l["title"], prs):
-            out.setdefault(k, " · ".join(x for x in (trigger, l.get("due")) if x))
+            out.setdefault(k, why)
     return out
 
 

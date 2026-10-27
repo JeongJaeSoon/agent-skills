@@ -297,7 +297,7 @@ def ago(minutes):
 
 
 def line(s):
-    """One line for a report; empty when nothing is open."""
+    """The summary in one line; empty when nothing is open."""
     if not s["open"]:
         return ""
     flag = f" · 미연결 {UNLINKED_MIN}분+ {len(s['unlinked'])}건" if s["unlinked"] else ""
