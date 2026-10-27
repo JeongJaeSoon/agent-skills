@@ -1,6 +1,6 @@
 # agent-skills 토큰 사용량 측정
 
-상태: 2026-10-27 승인. 정적 측정(§1)은 `scripts/skill_tokens.py`로 구현됐다. 실사용 측정(§2)은 다음 PR에서 구현하며, 그때까지 §2는 설계다.
+상태: 2026-10-27 승인. 정적 측정(§1)은 `scripts/skill_tokens.py`, 실사용 측정(§2)은 `skills/orchestrate/scripts/token_usage.py`로 구현됐다.
 
 agent-skills가 컨텍스트에 넣는 토큰이 얼마인지, 실제 세션에서 어느 기능이 토큰을 얼마나 쓰는지를 **결정론적 스크립트만으로** 재고 보여 준다. 측정·집계·귀속·경고·대시보드 갱신 어디에도 LLM 호출(서브에이전트, 스킬 실행, `count_tokens` API)이 없다.
 
@@ -119,79 +119,87 @@ vs 86b859a: always +140 tokens (+517 width), on invoke +2,490, named refs +271, 
 
 ## 2. 실사용 측정
 
+구현: `skills/orchestrate/scripts/token_usage.py`. CLI는 `python3 scripts/skill_tokens.py usage`(같은 파일의 `main`), 대시보드 서버가 같은 수집을 15분마다 돌린다.
+
 ### 2.1 출처와 읽는 법
 
-- 로컬 Claude Code transcript JSONL만 읽는다. 경로는 `$CLAUDE_PROJECTS_DIR`, 없으면 `$CLAUDE_CONFIG_DIR/projects`, 없으면 `~/.claude/projects`. 코드·테스트·문서에 실제 경로를 적지 않는다(`skill_usage.py`와 같은 탐지).
-- 읽는 필드: `assistant` 행의 `message.id`, `message.usage`(input, cache 생성 5분·1시간, cache read, output), `model`, `timestamp`, `sessionId`, `attributionSkill`, `Skill` tool_use의 스킬 이름, `user` 행의 `turnOrigin`, 훅 첨부(`hook_success`)의 명령 경로와 출력 길이, `subagents/*.meta.json`의 `agentType`. **본문은 저장하지도 출력하지도 않는다.** 자동화 식별에 쓰는 첫 프롬프트는 앞 200자의 해시만 비교한다.
-- 같은 `message.id`가 content 블록마다 여러 행으로 반복되므로(표본에서 44%) id로 한 번만 센다.
-- **증분 읽기**: 파일마다 `(inode, 읽은 byte offset, mtime)`과 그 세션의 진행 상태(현재 턴 출처, 현재 스킬, 본 message id)를 캐시에 둔다. transcript는 덧붙이기만 하므로 다음 수집은 offset부터 읽는다. 크기가 offset보다 작거나 inode가 바뀌면 그 파일만 처음부터 다시 읽는다. 결과는 `(날짜, 귀속 키) → 합계` 일별 버킷으로 쌓아서 지워진 transcript의 과거도 남는다. 줄 필터(`"usage"`·`"turnOrigin"`·`"Skill"`·`hook_success` 포함 줄만 JSON 파싱)로 7일치 2 GB 첫 수집이 6초였다.
+- 로컬 Claude Code transcript JSONL만 읽는다. 경로는 `$CLAUDE_PROJECTS_DIR`, 없으면 `$CLAUDE_CONFIG_DIR/projects`, 없으면 `~/.claude/projects`이고, 그 아래 `*/*.jsonl`과 `*/*/subagents/*.jsonl`이다. 코드·테스트·문서에 실제 경로를 적지 않는다.
+- 읽는 필드: `assistant` 행의 `message.id`, `message.usage`(input, cache 생성 5분·1시간, cache read, output), `timestamp`, `sessionId`, `attributionSkill`, tool_use의 이름과 `Skill`의 스킬 이름, Bash 명령(바깥 행동 판정에만), `user` 행의 `turnOrigin`, 훅 첨부(`hook_success`)의 명령 경로와 `additionalContext` 길이, `subagents/*.meta.json`의 `agentType`.
+- **본문은 저장하지도 출력하지도 않는다.** 캐시에 남는 것은 숫자, 귀속 키(자동화·스킬·에이전트 이름, lead slug), 세션 id, 파일 경로의 해시뿐이다. 자동화 식별에 쓰는 첫 프롬프트는 공백을 정규화한 앞 120자의 SHA-1 앞 16자리만 비교한다.
+- 같은 `message.id`가 content 블록마다 여러 행으로 반복되므로(표본에서 44%) 파일마다 최근 id 64개를 두고 한 번만 센다.
+- **증분 읽기**: 캐시(`<fleet state>/token-usage-cache.json`)에 파일마다 inode, 읽은 byte offset, mtime과 그 세션의 진행 상태(누가, 현재 턴 출처, 현재 스킬)를 둔다. 다음 수집은 offset부터 마지막 완전한 줄까지만 읽는다(쓰는 중인 반 줄은 다음 번에). 크기가 offset보다 작아지거나 inode가 바뀐 파일만 처음부터 다시 읽는다. 결과는 UTC 날짜별 버킷으로 쌓고 120일이 지나면 버린다. 줄 필터(`"usage"`, `"type":"user"`, `hook_success`가 든 줄만 JSON 파싱)를 쓴다.
+- 측정(2026-10-28, 한 PC): 남아 있는 transcript 4,035개 첫 수집 30초, 새 줄이 없을 때 다음 수집 0.7초.
 
 ### 2.2 귀속
 
-assistant 응답 하나(API 호출 하나)를 두 축으로 분류한다. 축마다 "미분류" 비율을 표에 같이 낸다.
+API 호출 하나(`message.id` 하나)를 두 축으로 나눈다. 미분류 비율을 표 머리에 같이 낸다.
 
 **누가(세션 축)**, 위에서부터 처음 맞는 것:
 
 1. 서브에이전트 transcript → `subagent:<agentType>`
-2. 자동화 세션: 첫 사람·예약 프롬프트의 해시가 등록된 자동화 프롬프트와 같음 → `automation:<이름>`. 등록 목록은 `orca automations list --json`을 수집할 때 한 번 읽어 이름과 프롬프트 해시만 캐시한다. Orca가 없으면 `~/.claude/agent-skills.json`의 `token_usage.automations`(이름 → 프롬프트 앞부분 정규식) 설정을 쓴다. 둘 다 없으면 이 규칙을 건너뛴다
-3. 역할 세션: `$AGENT_SKILLS_STATE/roles/<session>.json`(reorient가 쓰는 기록) → `orchestrator`, `lead:<slug>`
-4. Orca 워커: 첫 프롬프트에 디스패치 preamble(Task·Dispatch id)이 있음 → `worker`
-5. 나머지 → `interactive`, 판단할 근거가 없으면 `unclassified`
+2. 자동화 세션: 첫 프롬프트의 해시가 등록된 자동화 프롬프트와 같음 → `automation:<이름>`. 등록 목록은 수집할 때마다 `orca automations list --json`에서 이름과 프롬프트 해시만 읽는다. Orca가 없거나 실패하면 캐시에 남은 직전 목록을 쓴다
+3. 역할 세션: `$AGENT_SKILLS_STATE/roles/<session>.json`(reorient가 쓰는 기록) → `orchestrator`, `lead:<slug>`. 역할은 세션 중간에 생기기도 하므로 `interactive`인 세션은 사람 프롬프트마다 다시 본다
+4. 나머지 → `interactive`. 첫 프롬프트 전의 호출은 `unclassified`
+
+프롬프트는 `<`로 시작하지 않는 사람 입력, `<pasted_content>`, 슬래시 명령이다. 슬래시 명령은 `<command-name>`과 `<command-args>`로 `/이름 인자`를 다시 만들어 쓴다(본문은 isMeta 행으로 따로 온다). 2026-10-28 실데이터에서 이것을 넣기 전 미분류가 27%, 넣은 뒤 0%였다.
 
 **무엇이(턴 축)**:
 
-- 스킬: 그 응답의 `attributionSkill`, 없으면 같은 턴에서 마지막으로 불린 `Skill` → `skill:<name>`
-- 턴 출처: `turnOrigin` 값 그대로(`human`, `task_notification` = 모니터·백그라운드 작업·inbox wait가 깨운 턴, `peer`, `scheduled`, `auto_continuation`)
-- 둘 다 없음 → `unclassified`
+- 스킬: 그 응답의 `attributionSkill`, 없으면 같은 턴에서 마지막으로 불린 `Skill` → `skill:<name>`, 둘 다 없으면 `none`
+- 턴 출처: `turnOrigin`(`human`, `task_notification` = 모니터·백그라운드 작업·inbox wait가 깨운 턴, `peer`, `scheduled`, `sdk`, `auto_continuation`). 값이 없으면 `<task-notification>`으로 시작하는 턴은 `task_notification`, 서브에이전트 transcript는 `subagent`, 그 밖은 `unknown`
 
-**훅 주입**: 이 플러그인의 훅(명령 경로가 플러그인 루트의 `hooks/<name>.py`)이 남긴 첨부의 출력 길이를 근사 토큰으로 바꿔 훅별로 `횟수 × 크기`를 더한다. 주입된 문구는 이후 턴에서 cache read로 다시 읽히지만 그 몫은 나누지 않는다(세션 축 합계에 이미 들어 있다).
+**가중치**: 표의 "weighted"는 입력 토큰 환산이다. cache read 0.1, cache 생성 5분 1.25·1시간 2, output 5(가격표 비율). 98%가 cache read라 원래 토큰 합만 보면 순위가 cache read로 정해진다.
+
+**훅 주입**: 이 플러그인의 훅(`hooks/hooks.json`에 있는 스크립트 이름)이 남긴 `additionalContext`를 근사 토큰으로 바꿔 훅별로 `횟수`와 `합계`를 낸다. 주입된 문구는 이후 턴에서 cache read로 다시 읽히지만 그 몫은 나누지 않는다(세션 축 합계에 이미 들어 있다).
+
+**자동화 회차**: 자동화 세션 하나가 한 회차다. 바깥 행동(Bash의 `orca orchestration send|reply`, `gh pr merge|comment|review|edit|create`, 쓰기 메서드의 `gh api`, `git commit|push`, 이름이 Slack 전송이나 코멘트·이슈·메시지 생성인 도구)이 하나도 없으면 빈 회차다.
 
 ### 2.3 가시화
 
-CLI(`python3 scripts/skill_tokens.py usage`, 다음 PR) 목업. 숫자는 모양을 보이기 위한 자리값이고, 실측은 §0의 turnOrigin·서브에이전트 비율뿐이다.
+CLI(`--days N`, `--json`, 캐시만 읽는 `--no-collect`). 아래는 대시보드 데모의 지어낸 데이터다.
 
 ```text
-$ python3 scripts/skill_tokens.py usage --days 7
-누가                 tokens   가중     share  turns  추세(전주 대비)
-  interactive         3.2B     410M    51%    2,183   +4%
-  orchestrator        1.1B     150M    18%      …     +22% ▲
-  subagent:*          0.75B     95M    12%
-  automation:watch-prs 0.2B     28M     4%     336회  빈 회차 71%  ▲
-  unclassified         …              2.1%
-무엇이(상위)
-  turnOrigin=task_notification 1.5B  24%
-  skill:orchestrate             …
-훅 주입  reorient 1,940회 × ≈110 = 213K
+$ python3 scripts/skill_tokens.py usage
+2026-10-22 .. 2026-10-29 (UTC days, end exclusive) · 5.0B tokens, 826.0M weighted (input-equivalent), 4,130 API calls
+unclassified: who 0.0%, origin 0.0%
+
+WHO                                  tokens  weighted  share   trend
+  interactive                          2.5B    420.0M  50.8%     +0%
+  orchestrator                         1.1B    175.0M  21.2%    +11%
+  subagent:general-purpose           588.0M     98.0M  11.9%    -17%
+  automation:watch-prs               378.0M     63.0M   7.6%   +150%
+...
+AUTOMATION ROUNDS                  in window  empty (recent)  weighted/round
+  automation:janitor                      12     10/10             180.0K
+  automation:watch-prs                    12      6/10             180.0K
+
+HOOK INJECTIONS                    count  tokens (approx.)
+  reorient.py                        280    33,600
+  prose_check.py                      84     6,300
+
+WARNINGS (4)
+  surge      automation:watch-prs +150% vs the 7 days before — static: watch-prs listing 116 tokens/turn, SKILL.md 8,871 per load
+  empty_runs automation:janitor 10/10 recent rounds did nothing outward — static: reap-resources listing 107 tokens/turn, SKILL.md 6,665 per load
+...
 ```
 
-대시보드(`orch-dash`) 패널 "토큰" 목업(숫자는 자리값):
+대시보드(`orch-dash`) Tokens 페이지: 대시보드 서버의 `tokens_loop`가 `tokens.json`이 없거나 15분 지났을 때 수집하고(`ORCH_TOKENS=off`로 끔), 페이지는 `/api/fleet/tokens` JSON만 그린다. 경고 목록("Using the most"), 누가·스킬·턴 출처 표(전 기간 대비, 경고 대상은 `hot`), 자동화 회차, 훅 주입. Automations 페이지의 orch-dash 작업 목록에 "Token usage collect"가 같이 나온다. 데모(`dash.py demo`)는 지어낸 `tokens.json`을 쓰고 실제 transcript를 읽지 않는다.
 
-```text
-┌ 토큰 · 최근 7일 ─────────────────────────────────────────────┐
-│ 합계 6.3B (가중 0.9B) · 미분류 2.1% · 전주 대비 +9%           │
-│ ▇▇▇▇▇▅▅▃ 일별 막대(누가 축으로 색 구분)                         │
-│ 많이 잡아먹는 것                                             │
-│  ▲ automation:watch-prs  빈 회차 71% (48/67) · 회차당 0.6M   │
-│     → 항상 로드: watch-prs 목록 줄 405폭, 본문 8,871          │
-│  ▲ orchestrator  전주 대비 +22%                               │
-│ 상위 소비자 표 (누가 / 무엇이 탭) · 정적 측정 요약 링크         │
-└──────────────────────────────────────────────────────────────┘
-```
-
-패널 데이터는 `skills.json`과 같은 방식이다. 대시보드 서버의 기존 수집 루프에 15분마다 증분 수집 하나를 더하고, 결과 JSON을 `/api/fleet/tokens`로 낸다. 브라우저는 그 JSON만 그린다.
+![Tokens 페이지(데모 데이터)](img/token-usage-panel.png)
 
 ### 2.4 경고
 
-| 경고 | 기본 임계 | 설정 키 |
+`interactive`와 `unclassified`, 스킬 `none`에는 경고를 내지 않는다(줄일 기능이 아니다).
+
+| 경고 | 기본 임계 | 설정 키(`~/.claude/agent-skills.json`의 `token_usage`) |
 |---|---|---|
-| 기능별 하루 가중 토큰 | 기능 하나가 하루 전체의 30% 이상, 그리고 가중 50M 이상 | `token_usage.daily_share`, `token_usage.daily_min` |
-| 급증 | 최근 7일이 직전 7일보다 50% 이상 많고 가중 20M 이상 | `token_usage.surge` |
-| 빈 회차 반복 | 자동화 회차 중 바깥 행동(코디네이터 전송, Slack·GitHub 쓰기, 커밋)이 하나도 없는 회차가 최근 10회 중 7회 이상 | `token_usage.empty_runs` |
+| 하루 비중(`daily`) | 어제나 오늘, 키 하나가 그날 가중 합계의 30% 이상이고 가중 50M 이상 | `daily_share`, `daily_min` |
+| 급증(`surge`) | 기간 가중 합계가 직전 같은 기간의 1.5배 이상이고 가중 20M 이상 | `surge`, `surge_min` |
+| 빈 회차 반복(`empty_runs`) | 자동화의 최근 10회 중 빈 회차가 7회 이상 | `empty_runs`, `empty_window` |
 
-빈 회차는 tool_use의 명령 이름만 보고 판단한다(`orca orchestration send`, `gh pr merge|comment`, Slack 전송 도구, `git commit`). 경고 행마다 그 기능의 정적 측정(항상 로드 크기, 호출 시 크기)을 붙여 "무엇을 줄이면 되는지"를 바로 보인다. 자동화라면 precheck로 회차 자체를 건너뛰는 것이 description 축약보다 큰 개선이라는 점도 경고 문구에 쓴다.
+숫자가 아닌 값과 모르는 키는 무시한다. 설정 파일 위치는 `$AGENT_SKILLS_CONFIG`로 바꿀 수 있다. 경고마다 그 기능의 정적 측정(목록 줄 토큰, `SKILL.md` 토큰)을 붙인다. 스킬 키는 그 스킬, 자동화는 프롬프트가 처음 이름을 대는 스킬, `orchestrator`·`lead:*`는 `orchestrate`다.
 
-brief에는 경고가 있을 때만 한 줄이 붙는다: `토큰 경고 2건: automation:watch-prs 빈 회차 71%, orchestrator +22% (orch-dash 토큰 패널)`. 이 줄은 `prog.py brief render`가 수집 결과 JSON에서 만든다. 경고가 없으면 아무것도 붙지 않는다.
-
+brief: 주기 보고(`orch brief render --periodic`)에만, `tokens.json`에 경고가 있고 그 보고가 26시간 안에 만들어졌을 때 한 줄이 붙는다. `🔥 토큰 경고 4건: automation:watch-prs +150% vs the 7 days before; … 외 2건 (대시보드 Tokens)`. `board.token_line`이 파일만 읽어 만들고 수집은 하지 않는다.
 ## 3. 측정기 자체 비용
 
 측정·집계·경고·대시보드 갱신은 모두 결정론적 스크립트다. LLM 호출은 0이다(`--exact`·`calibrate`의 `count_tokens`만 예외이고, 명시 플래그일 때만 돈다).
@@ -202,8 +210,11 @@ brief에는 경고가 있을 때만 한 줄이 붙는다: `토큰 경고 2건: a
 | 새 훅 | 없다. 어떤 훅도 매 턴 이 측정을 돌리거나 결과를 주입하지 않는다 |
 | 기존 SKILL.md 변경 | 없다. brief의 경고 한 줄은 스크립트 출력이라 SKILL.md 문장이 필요 없다 |
 | 자동화 | 없다. 실사용 수집은 이미 떠 있는 대시보드 서버의 루프에서 돈다 |
+| 기존 reference 변경 | 없다. 사용법은 이 문서에만 있다 |
 
-정적 측정 PR의 확인: `python3 scripts/skill_tokens.py static --base origin/main`(merge-base와 비교) → `always +0 tokens (+0 width), on invoke +0, named refs +0`.
+두 PR의 확인: `python3 scripts/skill_tokens.py static --base origin/main`(merge-base와 비교) → `always +0 tokens (+0 width), on invoke +0, named refs +0`.
+
+실행 비용: 15분마다 증분 수집 한 번(새 줄만 파싱, 새 줄이 없으면 1초 안), `orca automations list` 한 번, 정적 측정 한 번(0.2초). 첫 수집만 남은 transcript 전체를 읽는다(§2.1).
 
 ## 4. 개선 루프
 
@@ -214,6 +225,6 @@ brief에는 경고가 있을 때만 한 줄이 붙는다: `토큰 경고 2건: a
 ## 5. 구현 범위
 
 1. **정적**(이 문서와 함께 들어간 PR): `scripts/skill_tokens.py`의 `static`(표·JSON·`--base`·`--baseline`·`--listing-budget`·`--exact`)과 `calibrate`, `scripts/test_skill_tokens.py`.
-2. **실사용**(다음 PR): `usage` 하위 명령(증분 캐시, 귀속, 경고), `orch-dash` 토큰 패널, brief 경고 한 줄, 테스트(합성 transcript fixture만, 실제 경로·이름 없음).
+2. **실사용**: `skills/orchestrate/scripts/token_usage.py`(증분 캐시, 귀속, 경고)와 `usage` 하위 명령, `orch-dash` Tokens 페이지(`dash.py`, `fleet.js`, `flow.py`의 저장소 지도, 데모 데이터), brief 경고 한 줄(`board.token_line`), `test_token_usage.py`(합성 transcript fixture만, 실제 경로·이름 없음).
 
 실제 스킬 축약은 두 PR 모두에 넣지 않는다. 개선 후보는 PR 본문에 적는다.

@@ -88,7 +88,7 @@ assert f"{fleet.EXTERNAL_KEEP_DAYS} days" in rules["Inbox item expiry"] and "24 
 # The server's registry: every job it records has a row, and the page reads it from /api/fleet/jobs.
 import dash  # noqa: E402
 keys = [k for k, *_ in dash.JOBS]
-assert keys == ["fleet-tick", "requests-reconcile", "tidy", "relay", "selfcheck", "skill-usage", "pr-stats"]
+assert keys == ["fleet-tick", "requests-reconcile", "tidy", "relay", "selfcheck", "skill-usage", "token-usage", "pr-stats"]
 src = (HERE / "dash.py").read_text() + (HERE / "fleet.py").read_text()
 assert all(f'jobs.record("{k}"' in src for k in keys), [k for k in keys if f'jobs.record("{k}"' not in src]
 assert "/api/fleet/jobs" in (HERE.parent / "assets" / "dashboard" / "fleet.js").read_text()

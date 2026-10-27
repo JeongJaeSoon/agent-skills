@@ -588,7 +588,7 @@ def drop_acked(lines, prs, rows, have):
 def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False, periodic=True,
            decisions=(), insight=None, fresh=False):
     """The brief skill's report as text, with what the caller needs around it. periodic (§1 Periodic report) adds
-    the skipped actions and the reap line; the stage table is one line pointing at it (stages.pointer). fill adds
+    the skipped actions, the reap line and a token warning line; the stage table is one line pointing at it (stages.pointer). fill adds
     fleet_rows() for the leads and cards the board does not have; fresh collects the fleet again when its files are
     old. decisions are the model's own items (DECISION_FORM), numbered after the registered ones; insight goes after
     진행 중, so the report still ends on what the human acts on.
@@ -1074,6 +1074,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out += ["", skipped]
     if periodic and (reaped := reap_line(now)):
         out += ["", reaped]
+    if periodic and (tokens := token_line(now)):
+        out += ["", tokens]
     if moving:
         out += ["", "🔄 진행 중" if tg else "🔄 **진행 중**", ""] + [it if tg else f"- {it}" for it in moving]
     if theirs:
@@ -1179,6 +1181,18 @@ def reap_line(now):
     except ImportError:  # an install without the repo's scripts/
         return None
     return reap_hard.last_line(now.timestamp())
+
+
+def token_line(now, max_age_h=26):
+    """One line when the dashboard's last token usage report (token_usage.py) has warnings; None otherwise, or when
+    that report is older than a day and a bit, so a stopped collect does not keep an old warning up."""
+    rep = fleet.read_json(fleet.state_dir() / "tokens.json", None)
+    at = fleet.parse((rep or {}).get("generated_at"))
+    if not rep or not rep.get("warnings") or not at or (now - at).total_seconds() > max_age_h * 3600:
+        return None
+    ws = rep["warnings"]
+    more = f" 외 {len(ws) - 2}건" if len(ws) > 2 else ""
+    return f"🔥 토큰 경고 {len(ws)}건: {'; '.join(w['text'] for w in ws[:2])}{more} (대시보드 Tokens)"
 
 
 def close(ids, undo=False, why=None):
