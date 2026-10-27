@@ -531,6 +531,10 @@ table.jobs td.jsub { padding-left: calc(var(--s3) + var(--s5)); }
 .chip.mini { height: 20px; padding: 0 8px; margin-left: var(--s1); font-size: 11px; vertical-align: 1px; }
 table.jobs .jsum { margin-top: 2px; font-size: var(--t-sm); }
 .rows .acts.full { white-space: normal; flex: 0 1 45%; }
+/* A request's text has the row's width, three lines until opened; its links and age wrap on the line below. */
+.rows.reqs > li { align-items: flex-start; }
+.rows.reqs .req-text { color: var(--ink); font-size: inherit; line-height: 20px; -webkit-line-clamp: 3; }
+.rows.reqs .sub { font-size: var(--t-sm); }
 .wcell.tone-bad .wtext, .wcell.tone-warn .wtext { color: var(--tone); }
 .legend .wmark { margin-right: 2px; }
 .nowrap { white-space: nowrap; }

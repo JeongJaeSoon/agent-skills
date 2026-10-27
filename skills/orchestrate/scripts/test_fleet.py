@@ -779,7 +779,8 @@ const S = {{filters: {{}}}};
 process.stdout.write(itemList({{sessions: []}}, {json.dumps(rows)}, {{limit: 8}}));"""
     card = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
     assert card.count("<li class=\"item") == 8 and __import__("re").findall(r">row(\d+)<", card)[:3] == ["15", "16", "0"], card
-    # Nothing in an item or a request is cut: the text wraps, and the request card reaches every request on the page.
+    # Nothing in an item or a request is cut: the text wraps (a request folds to three lines until opened), and the
+    # request card reaches every request on the page.
     assert "ellipsis" not in card and "row0" in card, card
     long = "x" * 400
     reqs = {"open": 12, "items": [{"id": f"r{n}", "text": f"req{n} {long}", "ts": fleet.iso(now), "links": [], "acked": False} for n in range(12)]}
@@ -793,6 +794,23 @@ process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     assert got["eight"].count(">req") == 8 and "Show all 12" in got["eight"] and long in got["eight"], got["eight"][:400]
     assert got["all"].count(">req") == 12 and "Show 8" in got["all"] and "ellipsis" not in got["all"]
+    # A pasted prompt shows without its tags, and its links go on the line under the text, never beside it, so a long
+    # link list cannot squeeze the text into one column. The stored text keeps the tags.
+    reqs = {"open": 1, "items": [{"id": "r78", "text": '<pasted_content id="4e37"> /goal fix <b>it</b> </pasted_content id="4e37">',
+                                  "ts": fleet.iso(now), "links": ["program:acme card:wt-x", "ABC-1", "ABC-2"], "acked": False}]}
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+const st = {{requests: {json.dumps(reqs)}}};
+const out = {{card: requestCard(st)}};
+F.tlOpen.add("req:r78"); out.open = requestCard(st); out.stored = st.requests.items[0].text;
+process.stdout.write(JSON.stringify(out));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    card = got["card"]
+    assert "pasted_content" not in card and ">/goal fix &lt;b&gt;it&lt;/b&gt;</div>" in card, card
+    assert 'class="rows reqs"' in card and 'data-tl-open="req:r78"' in card and 'aria-expanded="false"' in card, card
+    assert "acts" not in card and '<div class="sub muted full">program:acme card:wt-x, ABC-1, ABC-2 · ' in card, card
+    assert 'aria-expanded="true"' in got["open"] and "pasted_content" in got["stored"], got
 
     # The stage table opens on open rows. Each program's finished rows wait behind its own "▸ N finished", and a program
     # with none open is one dimmed heading line after the open ones; Ack all sits inside an opened program, not on top.

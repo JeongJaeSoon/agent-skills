@@ -355,8 +355,8 @@ const TL_ICON = {
   info: '<circle cx="8" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
 };
 const TL_STEP = 50;
-// Two lines until clicked (tlToggle), then the whole text.
-const expandable = (id, text) => `<div class="tl-desc ${F.tlOpen.has(id) ? "open" : ""}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(text)}</div>`;
+// Clamped (two lines; `cls` may set another) until clicked (tlToggle), then the whole text.
+const expandable = (id, text, cls = "") => `<div class="${["tl-desc", cls, F.tlOpen.has(id) && "open"].filter(Boolean).join(" ")}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(text)}</div>`;
 
 // Newest first, one group per day. `fold` names the list so "Show more" survives a redraw; `here` is the session
 // whose page this is (its rows have nowhere else to go).
@@ -471,16 +471,18 @@ function fleetOverview(st) {
 // The owner's open requests to an orchestrator or lead (orch req, hooks/request_log.py); one unlinked for 30 min is amber. The
 // fleet tick links and closes them (owner_requests.reconcile); one unlinked for 12 h has expired and is not listed. A PR
 // closed unmerged does not close its request, so its link is tagged for the orchestrator or lead.
+// A prompt pasted in arrives wrapped in <pasted_content id=…> tags; the page shows what was pasted without them.
+const unpaste = (text) => String(text).replace(/<\/?pasted_content\b[^>]*>/g, " ").replace(/[ \t]{2,}/g, " ").trim();
 function requestCard(st) {
   const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
   if (!(rq.items || []).length) return "";
   const { shown, head } = ackSplit(rq.items.map((q) => ({ ...q, ack: q.acked ? "acked" : "ackable", key: `req:${q.id}` })), "open request");
-  // Eight until Show all, each request's text whole.
+  // Eight until Show all. The text takes the row's width and opens in place; links and age go on the line under it.
   const more = shown.length > 8 ? `<button class="chip" type="button" data-req-all aria-pressed="${!!F.reqShowAll}">${F.reqShowAll ? "Show 8" : `Show all ${shown.length}`}</button>` : "";
-  const rows = (F.reqShowAll ? shown : shown.slice(0, 8)).map((q) => `<li class="${q.acked ? "is-acked" : ""}">${tag(q.id, late.has(q.id) ? "warn" : "")}<span class="grow full">${esc(q.text)}</span>
-    <span class="acts muted">${q.links.length ? q.links.map((l) => esc(l) + ((q.closed || []).includes(l) ? ` ${tag("closed", "warn")}` : "")).join(", ") : "not linked"} · ${relSpan(q.ts)}</span>${ackBtn(q)}</li>`).join("");
+  const rows = (F.reqShowAll ? shown : shown.slice(0, 8)).map((q) => `<li class="${q.acked ? "is-acked" : ""}">${tag(q.id, late.has(q.id) ? "warn" : "")}<div class="grow">${expandable(`req:${q.id}`, unpaste(q.text), "req-text")}
+    <div class="sub muted full">${q.links.length ? q.links.map((l) => esc(l) + ((q.closed || []).includes(l) ? ` ${tag("closed", "warn")}` : "")).join(", ") : "not linked"} · ${relSpan(q.ts)}</div></div>${ackBtn(q)}</li>`).join("");
   return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code>${head}${more}</span></div>
-    ${ackNote()}<ul class="rows">${rows || '<li class="muted">Every open request is acked.</li>'}</ul></div>`;
+    ${ackNote()}<ul class="rows reqs">${rows || '<li class="muted">Every open request is acked.</li>'}</ul></div>`;
 }
 
 // Acks (acks.py, `orch-dash ack`): the owner's "checked, stop showing it" on finished rows and on their requests. The
