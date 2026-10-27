@@ -276,13 +276,13 @@ def of_program(t, slug):
     return {**t, "rows": [r for r in t["rows"] if r["id"] in keep]}
 
 
-def dash_url():
-    """The dashboard's Stages page while this store's server runs (the pid in its .dash.json is alive), else None.
+def dash_url(page="stages"):
+    """The dashboard's page (Stages by default) while this store's server runs (the pid in its .dash.json is alive), else None.
     No request to it: the server itself renders the brief every few seconds."""
     d = fleet.read_json(pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser() / ".dash.json", None) or {}
     try:
         os.kill(int(d["pid"]), 0)
-        return f"http://127.0.0.1:{int(d['port'])}/#/fleet/stages"
+        return f"http://127.0.0.1:{int(d['port'])}/#/fleet/{page}"
     except (KeyError, TypeError, ValueError, OSError):
         return None
 

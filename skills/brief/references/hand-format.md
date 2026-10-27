@@ -10,7 +10,7 @@ Every report opens with a headline: bold, led by the time, one sentence with the
 2. **In progress** — what is moving, who or what moves it, and the next event (CI running, review requested, worker on step N).
 3. **Decision needed** — numbered across the whole report. Each item: the question in one line, the options, one recommendation with its reason, and what happens if the human does not answer. Only a choice outside the scope the human approved goes here: their budget, a permission they hold, another team's scope, or an irreversible or outward act the approval does not cover (`orchestrate` "What reaches the human"). Inside that scope, take the recommended default, act, and report it under Done: merging an approved PR, picking a reviewer, closing a stale draft, a setting or a design option. A decision is a choice; an action only a person can perform is Only you, and one topic goes in one of the two. Inside a program, a decision registered with `orch decide add` keeps its id beside the number (`1. (d3) …`), so an answer by either closes it.
 4. **Only you** — what the human alone can do: a permission dialog, a login, a payment, an approval a ruleset requires from a person. Say where and what to press or run. Always there: with nothing for the human, `없음` and when the next one appears, so the human sees there is nothing for them.
-5. **Held** — work set aside on purpose that nobody is moving now, each item with the condition that brings it back (a merge, a date, a decision). An item waiting on a reply, under investigation or being fixed is In progress, with who moves it and the next event.
+5. **Held** — the ⏸️ rows: work stopped, each with the condition that restarts it (a merge, a date, a decision). The held queue (work set aside with no date, in turn) and the to-dos (promises kept on a date or condition) are not listed: the pointer line below counts them. An item waiting on a reply, under investigation or being fixed is In progress, with who moves it and the next event.
 
 A block the human's settings or another skill add to the reply (an output style's insight box, a summary) goes after In progress and before Decision needed, so the report ends on what the human acts on.
 
@@ -20,7 +20,7 @@ When the report covers several work items (tickets, tracks, a program's predicat
 - **Done so far** — only what was verified, with the evidence Done asks for.
 - **Left** — the next stage, who moves it (an agent or a person), and when it is expected; "미정" when no time is fixed. A step that is the human's also goes under Only you.
 
-The report carries no stage table (merge / dev / prod per item), even when the items ship through PRs and deploys: that table is the `stage` skill's. When the stage record has rows, one line right under the headline points to it, as the renderer writes it: `단계표 N행 (접음 M) · <where>`. N and M are the rows `orch stage show` prints and the count on its `접음` line (`(접음 M)` left out at 0). `<where>` is the dashboard's Stages URL when its server is running on this machine, else `` `orch stage show` ``; on Telegram always `orch stage show --telegram`, since the dashboard listens on 127.0.0.1 only. With no rows, no line.
+The report carries no stage table (merge / dev / prod per item), even when the items ship through PRs and deploys: that table is the `stage` skill's. When the stage record has rows, one line right under the headline points to it, as the renderer writes it: `단계표 N행 (접음 M) · <where>`. N and M are the rows `orch stage show` prints and the count on its `접음` line (`(접음 M)` left out at 0). `<where>` is the dashboard's Stages URL when its server is running on this machine, else `` `orch stage show` ``; on Telegram always `orch stage show --telegram`, since the dashboard listens on 127.0.0.1 only. With no rows, no line. The to-dos, the held queue and the owner's requests are not listed either: one line under that one, `할 일 N건 · 보류 큐 K건 · 요청 M건 열림 · <where>`, counts the to-dos whose date or condition has not come (promises: `orch board todo add`), the held queue (work set aside with no date, in turn: `orch board later add`) and the requests still open and not acked (`orch req list`), each part left out at 0 and the line when all are. `<where>` is the dashboard's To-do URL (its Overview has the requests) while the server runs, else `` `orch board todo list` · `orch req list` ``; on Telegram always `orch board todo list · orch req list`. The headline does not repeat these counts.
 
 ### Periodic report
 
@@ -36,7 +36,7 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
    - PR: its PR as a link and the PR's state from the PR list, or `—` when it has none. Merged: the merge commit's first 7 characters (`[#12](https://…) a1b2c3d`); closed: `닫힘`; open: what stands before the merge, in this order — `초안`, `❗DIRTY`, `❗리뷰` (a required review missing), `수정요청`, `CI✗`, `CI…`, `BEHIND`, `BLOCKED` — or `✓` when it can merge (`열림` while GitHub has not computed it). `❗` marks what a person must resolve: bold is kept for changed rows. A PR whose base is not the section's adds its own (`[#50](https://…) ❗DIRTY→main`). Under the legend, one line `PR: ❗ 사람이 풀 것 · …` explains the marks the tables use.
    - Progress: an 8-cell bar and N/M from the Progress rule above, and nothing else (`██████░░ 6/8`, filled cells = round(8·N/M)). M is the item's own stage count, so it changes with the item (`3/4`); `—` when there is no basis.
 
-   The next step is not a column: a row's next stage and who moves it go under item 6, or item 10 for a held row, so no cell is ever cut to fit.
+   The next step is not a column: a row's next stage and who moves it go under item 6, or item 9 for a held row, so no cell is ever cut to fit.
 
    Under each lead or phase row, one row per sub-task it owns (each card, worker and open PR), named `└ <short name>` with its PR in the PR column, or `└ <identifier> <short name>` without one (`└ 설정`, `└ w2 발송`, `└ ABC-1 색인`), filling the same four columns. A card, its worker and the PR it opened are one sub-task, one row, named by the furthest of them: PR, then worker, then card. Several PRs never share a cell, except in the reviewer row of item 4. A merged sub-task stays, ✅, until its lead is done. A row with sub-task rows takes the worst of their statuses (🔴, 🙋, ⏳, ❔, ⏸️, 🔄; ✅ only when the lead is done). A sub-task in another repository goes in that repository's section, under a row with only the lead's name and `—` in status and progress. With no leads there are no sub-task rows. The rows come from four reads at each report: the list of leads (`orch status` inside a program), each lead's latest report, one read per repository of the human's open PRs, and the worker list; a merged sub-task comes from the saved last table.
 4. When two or more of a lead's PRs wait only on the same reviewer, they fold into one sub-task row under that lead, `└ <reviewer> 대기` (`└ 오너 리뷰` when the reviewer is the owner) with `#a·#b·#c` in its PR cell, a PR with another base keeping its `→main`, and the lead row stays. PRs with no lead fold into a bullet under the table, `⏳ N건 <reviewer> 대기 — 분야 a·b·c` (`🙋 N건 오너 리뷰 — …`). A PR returns to its own row when anything else happens to it.
@@ -46,10 +46,9 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
    Then `⏳ **다른 사람 대기**`, a list under the lead line, one item per ⏳ row, folded reviewer and `--waiting` work: `<who> · <what> · <age>부터 → <work> · 다음: <next step>` (`rev-b · 리뷰 #61·#62 · 3h 전부터 → 분류`).
 7. `❓ **결정 필요**`, numbered as §1 says, each item one line: `1. <question> → 추천: X — <reason>`. An open decision is asked again in the same words, with `(지난 보고와 동일)` and its `orch decide` id when it has one, until the human answers it.
 8. `🙋 **지금 오너가 할 일**`, a list under the lead line: the `orch board now` lines, then the owner's to-dos whose date or condition came (`⏰ <work> · <when> 도래`), then one item per 🙋 row, folded owner review and `doing` item on the owner, `<what> · <where> → <work it unblocks>` (`리뷰 · #70·#71 → 로그·대시보드`); or `— 없음` on the lead line.
-9. `📅 **할 일**`, a list under the lead line, one `<when> → <work> · <who>` item each for the to-dos (`orch board todo add <work> (--due D | --after C) --who W`) whose date or condition has not come: the dated ones first by date (`10/30(금) 09:00`), then the rest in the order added. A to-do naming an open PR folds that PR's ⏸️ row into its item, as a held item does.
-10. `⏸️ **보류**`, a list under the lead line, one `<condition> → <work>` item each: the ⏸️ rows (their next stage is the condition), then the work set aside with `orch board later add <work> --trigger <condition>`. Held as §1 defines it. One piece of work appears once: adding an item with the same condition and a reworded title replaces the old one.
+9. `⏸️ **보류**`, a list under the lead line, one `<condition> → <row>` item per ⏸️ row (its next stage is the condition). The held queue is not listed: the pointer line counts it.
 
-Items 6 (each of its two lists), 7, 9 and 10 are left out when empty; item 8 is always there (§1 Only you).
+Items 6 (each of its two lists), 7 and 9 are left out when empty; item 8 is always there (§1 Only you).
 
 A row that changed since the last report (status, progress, next or PR state), or that it did not have, has its name in bold (after the `└` on a sub-task row). Bold is the only mark: a symbol beside the status icon reads as part of the status. The last report is `~/.local/state/agent-skills/brief-last/<scope>.json` (scope: the program slug, or `top-level`), each row keyed so the next report can match it, with its status, progress, next and PR state; save it after sending. With no saved table, send it with no row in bold and say so in the headline. On Telegram, which has no bold, each row is one line with its PR and state after the name (`✅ ph2 #42 9f8e7d6 — …`), a sub-task line starts with `└`, and a changed row has `(바뀜)` after its name.
 
@@ -74,6 +73,8 @@ An illustrative shape (the items are made up):
 ```text
 단계표 3행 (접음 1) · orch stage show --telegram
 
+보류 큐 1건 · orch board todo list · orch req list
+
 ✅ 완료
 - acme/web#42 머지 (a1b2c3d, CI 통과 38/38)
 
@@ -85,9 +86,6 @@ An illustrative shape (the items are made up):
 
 🙋 사람만
 - GitHub에서 배포 승인 버튼
-
-⏸️ 보류
-- 10/20 → 캐시 TTL 다시 보기
 ```
 
 ### Terminal
@@ -102,6 +100,8 @@ An illustrative report on request (the items are made up):
 
 ```markdown
 **14:45 · 검색 개선 PR 생성, 유료 플랜 하나만 정해 주세요**
+
+보류 큐 1건 · `orch board todo list` · `orch req list`
 
 ✅ **완료**
 
@@ -118,14 +118,14 @@ An illustrative report on request (the items are made up):
 ❓ **결정 필요** — 1. 검색 API 유료 플랜(월 $50, 승인 예산 밖): 올림 / 현행 유지 → 추천: 현행 유지 — 무료 한도의 60%만 씀 · 답이 없으면 현행 유지
 
 🙋 **지금 오너가 할 일** — GitHub acme/web Environments → production → 대기 중인 배포 승인 (규칙상 사람만)
-
-⏸️ **보류** — 10/20 → 캐시 TTL 다시 보기
 ```
 
 An illustrative periodic report (the items are made up):
 
 ```markdown
 **23:45 · 검색 개선 ph2 머지, 나머지는 변화 없음**
+
+할 일 1건 · 보류 큐 2건 · 요청 2건 열림 · `orch board todo list` · `orch req list`
 
 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 막대=단계(추정)
 
@@ -181,13 +181,7 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 - 충돌 해소 승인 · [#50](https://example.test/50) → 알림 정리
 - 리뷰 · #70·#71 → 로그·대시보드
 
-📅 **할 일**
-
-- 10/16(금) 09:00 → acme/web#50 머지·배포 · 오너
-
 ⏸️ **보류**
 
 - ph3 머지 뒤 → 검색 개선 ph4 · ph5
-- 10/16 → prod 배포 창
-- 10/20 → 캐시 TTL 다시 보기
 ```

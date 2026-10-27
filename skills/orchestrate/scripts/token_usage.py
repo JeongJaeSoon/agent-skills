@@ -12,6 +12,8 @@ collect() reads each transcript from where the last collect stopped (byte offset
 plus this plugin's hook injections (count × approximate size) and, per automation session, whether it did anything
 outward. report() turns the buckets into tables, trends and warnings. Only numbers, names and hashes are kept: no
 prompt or message text is stored or printed. Nothing here calls a model.
+A file whose inode changed or that shrank is read again from the start while the days already added stay, so a
+file replaced by the same content counts twice; transcripts are append-only, so this is rare.
 """
 import datetime as dt, hashlib, json, os, pathlib, re, subprocess, sys, time
 

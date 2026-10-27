@@ -10,7 +10,7 @@ tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-todo-"))
 state = tmp / "dashboard"
 env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
        "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC",
-       "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
+       "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "PROGRAMS_HOME": str(tmp / "programs")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
 import board, fleet, tidy  # noqa: E402
@@ -85,20 +85,44 @@ state.mkdir(parents=True, exist_ok=True)
 (state / "state.json").write_text(json.dumps({"generated_at": BEFORE, "sessions": []}))
 write_prs(merged5=False)
 
-# Before anything comes: 📅 할 일 after the owner's list and before 보류, dated items first by date, each with who does it.
+# Before anything comes the report lists no to-do: one line counts them and says where the list is (the dashboard's
+# To-do page; with no server here, the command), and Telegram always gets the commands.
 out = render(BEFORE)
-heads = [l for l in out.splitlines() if l.startswith(("🙋", "📅", "⏸️"))]
-assert heads == ["🙋 **지금 오너가 할 일**", "📅 **할 일**", "⏸️ **보류**"], out
-assert section(out, "📅 **할 일**") == ["- 10/30(금) 09:00 → acme/app#1 머지·배포 · 오너",
-                                         "- 11/3(화) · v2 출시 뒤 → 릴리스 노트 정리 · writer",
-                                         "- acme/app#5 머지 후 → acme/app#2 ready로 전환 · lead-billing"], out
+assert "📅" not in out and "할 일 3건 · 보류 큐 1건 · `orch board todo list` · `orch req list`" in out.splitlines(), out
 assert section(out, "🙋 **지금 오너가 할 일**") == ["- acme/app#3 리뷰"], out
-assert "⏰" not in out
+assert "⏰" not in out and "머지·배포" not in out, out
 tg = render(BEFORE, "--telegram")
-assert "10/30(금) 09:00 → acme/app#1 머지·배포 · 오너" in tg.splitlines(), tg
-# A to-do naming an open PR holds it in Needs you until it comes, as a held item does.
+assert "할 일 3건 · 보류 큐 1건 · orch board todo list · orch req list" in tg.splitlines(), tg
+# A held row whose PR a to-do names stays in 보류 under the to-do's date: the list it once folded into is gone.
+ok("board", "set", "deploy", "--repo", "acme/app", "--title", "배포 리드", "--status", "held", "--pr", "acme/app#1")
+assert "- 10/30(금) 09:00 → 배포 리드" in section(render(BEFORE), "⏸️ **보류**"), render(BEFORE)
+ok("board", "drop", "deploy")
+# `orch board todo list` has the list the report only counts: a table, ⏰ for one whose time came, 📅 for one waiting,
+# in the page's order, and the held queue under it.
+listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
+assert listed.splitlines()[:7] == ["**📅 할 일 3건 · ⏰ 도래 0**", "", "| | 언제 | 할 일 | 담당 |", "|---|---|---|---|",
+                                   "| 📅 | 10/30(금) 09:00 | acme/app#1 머지·배포 | 오너 |",
+                                   "| 📅 | 11/3(화) · v2 출시 뒤 | 릴리스 노트 정리 | writer |",
+                                   "| 📅 | acme/app#5 머지 후 | acme/app#2 ready로 전환 | lead-billing |"], listed
+assert "| ▶ 1 | 캐시 TTL 다시 보기 | 11월 QA 다음 회차 | — |" in listed, listed
+# With the dashboard up, the line links its To-do page; never on Telegram, where 127.0.0.1 is another device.
+(tmp / "programs").mkdir()
+(tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4999}))
+assert "할 일 3건 · 보류 큐 1건 · http://127.0.0.1:4999/#/fleet/todo" in render(BEFORE).splitlines()
+assert "할 일 3건 · 보류 큐 1건 · orch board todo list · orch req list" in render(BEFORE, "--telegram").splitlines()
+(tmp / "programs" / ".dash.json").unlink()
+# The page reads each to-do's parts from the render's open items: dated ones carry their first date as `at`.
+rendered = json.loads(render(BEFORE, "--json"))
+page = sorted(({k: o[k] for k in ("title", "who", "when", "after", "at", "due")} for o in rendered["open"] if o["kind"] == "do"),
+              key=lambda o: o["title"])
+assert page == [
+    {"title": "acme/app#1 머지·배포", "who": "오너", "when": "10/30(금) 09:00", "after": None, "at": "2026-10-30T09:00:00Z", "due": False},
+    {"title": "acme/app#2 ready로 전환", "who": "lead-billing", "when": "acme/app#5 머지 후", "after": "acme/app#5 머지 후", "at": None, "due": False},
+    {"title": "릴리스 노트 정리", "who": "writer", "when": "11/3(화) · v2 출시 뒤", "after": "v2 출시 뒤", "at": "2026-11-03T00:00:00Z", "due": False}], page
+assert "할 일" not in rendered["headline_facts"][0], rendered["headline_facts"]
+# A to-do naming an open PR holds it in Needs you until it comes, as a held item does, its date as the report says it.
 now = fleet.parse(BEFORE)
-assert set(fleet.held_prs(board.read(), {}, {}, now)) == {"acme/app#1", "acme/app#2"}
+assert fleet.held_prs(board.read(), {}, {}, now) == {"acme/app#1": "10/30(금) 09:00", "acme/app#2": "acme/app#5 머지 후"}
 assert "acme/app#1" in fleet.board_prs()
 
 # 10/30 09:05 with #5 merged: the owner's item goes to their list, lead-billing's to 진행 중; 할 일 keeps the rest.
@@ -106,7 +130,7 @@ write_prs(merged5=True)
 out = render(AFTER)
 assert "- ⏰ acme/app#1 머지·배포 · 10/30(금) 09:00 도래" in section(out, "🙋 **지금 오너가 할 일**"), out
 assert "- ⏰ acme/app#2 ready로 전환 — acme/app#5 머지 후 도래 · lead-billing" in section(out, "🔄 **진행 중**"), out
-assert section(out, "📅 **할 일**") == ["- 11/3(화) · v2 출시 뒤 → 릴리스 노트 정리 · writer"], out
+assert "할 일 1건 · 보류 큐 1건 · `orch board todo list` · `orch req list`" in out.splitlines(), out
 merged = {"acme/app#5": {"state": "MERGED", "merged_at": "2026-10-29T00:00:00Z"}}
 assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()
 
@@ -142,7 +166,7 @@ JAN = "2027-01-10T00:00:00Z"
 out = render(JAN)
 doing = "\n".join(section(out, "🔄 **진행 중**"))
 assert all(f"⏰ {w}" in doing for w in ("분기 정산", "회고 정리", "감사 대응", "옛 할 일")), out
-assert "📅 **할 일**" not in out, out
+assert not any(l.startswith("할 일 ") for l in out.splitlines()), out
 
 # --due and --after: whichever comes first. A later --due does not wait out a merged --after, and a passed --due does
 # not wait for an --after still open; Needs you lifts the PR hold on the same rule.
@@ -153,7 +177,30 @@ doing = "\n".join(section(out, "🔄 **진행 중**"))
 assert "⏰ acme/app#1 핫픽스 배포" in doing and "⏰ acme/app#2 롤백 확인" in doing, out
 assert set(fleet.held_prs(board.read(), {}, merged, fleet.parse(AFTER))) == set()
 write_prs(merged5=False)
-assert "acme/app#1 핫픽스 배포" in "\n".join(section(render(BEFORE), "📅 **할 일**"))
+out = render(BEFORE)
+assert "acme/app#1 핫픽스 배포" not in out and any(l.startswith("할 일 ") for l in out.splitlines()), out
+
+# --after naming only a PR, no merge word: the report's ⏰ and the Needs you hold read one rule (fleet.todo_come), so
+# the to-do comes the moment the hold lifts, and not before.
+board.todo_add("acme/app#2 배포 노트", after="acme/app#5", who="writer")
+t = store()["todo"][-1]
+assert not fleet.todo_come(t, fleet.parse(BEFORE), {}) and "acme/app#2" in fleet.held_prs(board.read(), {}, {}, fleet.parse(BEFORE))
+assert fleet.todo_come(t, fleet.parse(BEFORE), merged)
+write_prs(merged5=True)
+assert "- ⏰ acme/app#2 배포 노트 — acme/app#5 도래 · writer" in section(render(BEFORE), "🔄 **진행 중**"), render(BEFORE)
+assert "acme/app#2" not in fleet.held_prs(board.read(), {}, merged, fleet.parse(BEFORE))
+# A card it names stands for the card's PR, in both.
+cards = {"c1": {"id": "c1", "name": "deploy-card", "pr": "acme/app#5"}}
+assert fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), merged, cards)
+assert not fleet.todo_come({"title": "x", "who": "w", "after": "deploy-card 끝나면"}, fleet.parse(BEFORE), {}, cards)
+
+# A long name is cut to fit 78 columns as the report's tables are, its whole text under the table.
+board.todo_add("아주 긴 할 일 이름이 표 폭을 넘겨서 잘려야 하는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다", due="2027-05-01", who="writer")
+listed = ok("board", "todo", "list", "--now", BEFORE, "--no-refresh")
+assert "아주 긴 할 일 이…[2]" in listed and "- [2] 아주 긴 할 일 이름이 표 폭을 넘겨서 잘려야 하는 경우를 확인하기 위한 문장 — 끝까지 읽혀야 한다" in listed, listed
+sys.path.insert(0, str(HERE.parents[1] / "brief" / "scripts"))
+import table_width  # noqa: E402
+assert all(table_width.text_width(l) <= 78 for l in listed.splitlines() if l.startswith("|")), listed
 
 assert orch("board", "todo", "drop", "abc")[2].startswith("board todo is the to-do list now: todo add")
 

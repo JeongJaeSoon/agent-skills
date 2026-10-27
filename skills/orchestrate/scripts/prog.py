@@ -97,9 +97,10 @@ Usage: orch <command> <slug> [options]
   board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] | lead close <name>
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
                  [--status moving|owner|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
-  board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D]
-        | later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n>
-        | todo from-later <n> [--due D] --who W | now [LINE]... | show
+  board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n>
+        | later add <title> --trigger T [--due D] [--who W] [--at N] | later move <n> --to N | later drop <n>
+        | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W
+        | todo list [--telegram] [--json] [--now ISO8601] [--no-refresh] | now [LINE]... | show
   board open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | tidy [--dry-run] [--json] | closed
                                      close what is over (tidy.py): open lists what can be closed now (a row,
                                      card:<session>, doing:/later:/do:/todo:<k>); done closes it, reopen undoes it.
@@ -122,11 +123,13 @@ Usage: orch <command> <slug> [options]
                                      now replaces the owner's now-list (no lines clears it); doing lists work
                                      that is moving but has no row (an investigation), --waiting when W is a
                                      person it waits on (a reply from another team), --owner 오너 when it waits
-                                     on the owner; todo lists work that will be done when its date (--due) or
-                                     condition (--after, met as a later trigger is) comes, by --who: then it
+                                     on the owner; todo is a promise kept on a date (--due) or condition
+                                     (--after: a date, or every PR it names merged) by --who: when it comes it
                                      moves to the owner's list (W is the owner) or 진행 중 until done do:<k>;
-                                     from-later moves held item n there; later only work set aside on purpose,
-                                     with the trigger that brings it back (its --due only lifts the PR hold)
+                                     from-later moves held item n there; later is the queue of work set aside
+                                     with no date, in order (the first is next; --at N, move <n> --to N), with
+                                     what makes it next (--trigger; its --due only lifts the PR hold). todo list
+                                     prints both as tables; the report only counts them
   brief render [--periodic] [--scope top-level|PROGRAM] [--telegram] [--headline T] [--decision T]... [--insight T]
                [--skipped T] [--now ISO8601] [--commit] [--json] [--no-fill] [--no-refresh]
                                      the brief skill's report, on request or (--periodic) on a schedule, from the
@@ -2423,7 +2426,9 @@ def cmd_board(argv):
         elif sub == "doing" and rest[:1] == ["drop"] and len(rest) > 1:
             board.doing_drop(int(rest[1]))
         elif sub == "later" and rest[:1] == ["add"] and len(rest) > 1:
-            board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"))
+            board.later_add(rest[1], opt(rest, "--trigger"), opt(rest, "--due"), opt(rest, "--who"), opt(rest, "--at"))
+        elif sub == "later" and rest[:1] == ["move"] and "".join(rest[1:2]).isdigit():
+            board.later_move(int(rest[1]), opt(rest, "--to"))
         elif sub == "later" and rest[:1] == ["drop"] and len(rest) > 1:
             board.later_drop(int(rest[1]))
         elif sub == "todo" and rest[:1] == ["add"] and len(rest) > 1:
@@ -2432,10 +2437,18 @@ def cmd_board(argv):
             board.todo_drop(int(rest[1]))
         elif sub == "todo" and rest[:1] == ["from-later"] and "".join(rest[1:2]).isdigit():
             board.todo_from_later(int(rest[1]), opt(rest, "--due"), opt(rest, "--who"))
+        elif sub == "todo" and rest[:1] == ["list"]:
+            now = opt(rest, "--now")
+            if "--json" in rest:
+                items = board.render(now=now and fleet_parse(now), fill=True, periodic=False, fresh=not now)["open"]
+                return print(json.dumps([o for o in items if o["kind"] in ("do", "later")], ensure_ascii=False, indent=1))
+            text, ok = board.todo_tables(now and fleet_parse(now), "--telegram" in rest, "--no-refresh" not in rest)
+            print(text)
+            sys.exit(0 if ok else 1)
         elif sub == "todo":
             # It replaced the owner's list before the to-do list took the name: an old line must not overwrite it.
             sys.exit("board todo is the to-do list now: todo add <title> (--due D | --after C) --who W | todo drop <n> | "
-                     "todo from-later <n> [--due D] --who W. The owner's now-list moved to `orch board now [LINE]...`")
+                     "todo from-later <n> [--due D] --who W | todo list [--telegram] [--json]. The owner's now-list moved to `orch board now [LINE]...`")
         elif sub == "now":
             board.set_now(rest)
         elif sub == "show":
