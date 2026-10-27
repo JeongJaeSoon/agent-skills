@@ -293,8 +293,8 @@ the exact `reap --plan` command to the user (a scheduled run: to `reap.inbox_to`
 
 ## Config
 
-`~/.claude/agent-skills.json`, all optional. Paths of a particular project's test cache stay here,
-not in this repo:
+`~/.claude/agent-skills.json`, all optional, changed through `skills-config` (the agent emits, the user applies).
+Paths of a particular project's test cache stay here, not in this repo:
 
 ```json
 {"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,

@@ -16,7 +16,7 @@ through `use-tracker`.
 
 `~/.claude/agent-skills.json` → `"mentions"`. Only `user_id` is required. User-specific values
 (their ID, name spellings, channels, the orchestrator's or lead's address, the tracker project) live here and
-never in this repo.
+never in this repo. A change to these keys goes through `skills-config`: the agent emits, the user applies.
 
 ```json
 {"mentions": {"user_id": "U0…", "names": ["<name as people write it>", "<another spelling>"],

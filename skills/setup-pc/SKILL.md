@@ -17,7 +17,8 @@ Installing the plugin brings the skills; it does not bring the user settings, th
 | Change after setup | Owner |
 |---|---|
 | A rule for one action auto mode denied | `tune-automode` |
-| `permissions.allow` or hooks beyond the bundle | `update-config` |
+| `permissions.allow` beyond the bundle, `agent-skills.json` keys | `skills-config` |
+| Hooks | `update-config` |
 | What the periodic automations do | `reap-resources`; this skill only checks they are on |
 | Reloading running sessions | `skills-sync broadcast` (never a raw `orca terminal send`) |
 

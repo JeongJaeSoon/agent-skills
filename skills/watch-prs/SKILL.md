@@ -23,7 +23,7 @@ merged PRs do their own writing.
 
 `~/.claude/agent-skills.json` → `"prs"`. The key must exist (an empty object is enough); every field
 is optional. User-specific values (orgs, bot accounts, the orchestrator's or lead's address) live here and
-never in this repo.
+never in this repo. A change to these keys goes through `skills-config`: the agent emits, the user applies.
 
 ```json
 {"prs": {"orgs": [], "repos": [], "exclude_orgs": [], "exclude_repos": [],
