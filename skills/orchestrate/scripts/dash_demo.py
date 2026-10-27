@@ -546,7 +546,7 @@ def seed_holds(root, now=None):
 
 def seed_board():
     """An invented board for the Brief page, written through board.py into $ORCH_FLEET_STATE (set it first)."""
-    import board
+    import board, fleet
     board.lead_add("lead-login", "term_0FAKE1", "acme/launchpad")
     board.set_row("lead-login", title="로그인 개편", status="moving", progress="3/5", next="CI · 워커", pr="acme/launchpad#41")
     board.set_row("lead-login/export", title="청구 내보내기", status="blocked", progress="1/3", next="리뷰 지적 반영 · 워커",
@@ -560,6 +560,16 @@ def seed_board():
     board.todo_add("acme/launchpad#41 머지·배포", due=f"{soon:%Y-%m-%d} 09:00", who="오너")
     board.todo_add("acme/tools#7 ready 로 전환", after="acme/launchpad#41 머지 후", who="lead-tools")
     board.todo_add("분기 회고 정리", due=f"{soon - dt.timedelta(days=3):%Y-%m-%d}", who="오너")  # come: ⏰ in the brief
+    # The shapes that crowd the To-do page: a long condition, long work, a --after repeating its --due's date.
+    board.todo_add("헤드리스 호출 경로를 기본값으로 바꾸고, 기존 브라우저 로그인 경로는 한 릴리스 동안 폴백으로 남긴 뒤 사용 지표를 보고 제거한다",
+                   after="prod 사용 가능 + CI 등 로그인 화면 없는 헤드리스 호출이 문제없다고 검증되고, 스테이징에서 일주일 동안 오류율이 기준선 이하로 유지된 뒤",
+                   who="오케스트레이터")
+    board.todo_add("v2.5 릴리스 노트 초안 리뷰", due=f"{soon:%Y-%m-%d} 09:00",
+                   after=f"{fleet.WEEKDAY[soon.weekday()]} {soon.month}/{soon.day} 09:00", who="lead-tools")
+    board.todo_add("만료 예정 토큰 교체", due=f"{soon - dt.timedelta(days=5):%Y-%m-%d} 18:00", who="오너")  # overdue
+    board.later_add("설치 가이드 스크린샷을 1440·390 light·dark 로 다시 찍고 문서 이미지를 교체한다",
+                    "acme/launchpad#43 머지 뒤, 디자인 토큰 변경(acme/launchpad#45)이 dev 에 반영되고 나서", who="lead-login")
+    board.later_add("대시보드 성능 측정", "다음 분기 계획 확정 뒤", who="오케스트레이터")
     board.set_now(["acme/launchpad#43 리뷰"])
     import owner_requests as req  # the owner's requests to the orchestrator, as the request_log hook would log them
     now = dt.datetime.now(dt.timezone.utc)

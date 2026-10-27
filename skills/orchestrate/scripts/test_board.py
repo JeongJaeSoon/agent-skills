@@ -308,7 +308,7 @@ assert orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--
     orch("brief", "render", "--periodic", "--now", NOW)[1], "a missing log adds nothing"
 assert "🙋 지금 오너가 할 일\n\n충돌 해소 승인 · #50 → 알림 정리\n리뷰 · #70·#71 → 로그·대시보드\n" in tg, tg
 assert tg.endswith("⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5"), tg
-assert "보류 큐 2건 · orch board todo list · orch req list" in tg.splitlines(), tg
+assert "보류 큐 2건 · orch board todo list --telegram · orch req list" in tg.splitlines(), tg
 # The queue is a table in `orch board todo list`, its first item marked next; on Telegram, lines.
 listed = ok("board", "todo", "list", "--now", NOW, "--no-refresh")
 assert "| # | 할 일 | 다음 차례 조건 | 담당 |" in listed and "| ▶ 1 | prod 배포 창 | 10/16 | — |" in listed, listed
@@ -486,7 +486,7 @@ b["later"] += [{"title": "콘솔 시안 대비 main에서 누락된 절차 확�
                {"title": "콘솔 시안 대비 main 누락 절차만 확인", "trigger": "#9 land 뒤"}]
 (state / "board.json").write_text(json.dumps(b, ensure_ascii=False))
 held = ok("board", "todo", "list", "--now", NOW, "--no-refresh")
-assert held.count("#9 land 뒤") == 1 and "| 4 | 콘솔 시안 대비 main 누락 절차만 확인 | #9 land 뒤 | — |" in held, held  # its place in the store, as move and drop read it
+assert held.count("#9 land 뒤") == 1 and "| 3 | 콘솔 시안 대비 main 누락 절차만 확인 | #9 land 뒤 | — |" in held, held  # its place in the queue, as move and drop read it
 
 # A report on request: no board at all, only the fleet's sessions and the stage table. The live card is a row, the stage
 # table is one line pointing at `orch stage show`, the model's insight comes after 진행 중 and its decision is numbered

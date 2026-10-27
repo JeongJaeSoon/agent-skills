@@ -226,6 +226,32 @@ def work_key(item):
     return tuple(" ".join((item.get(f) or "").casefold().split()) for f in ("title", "trigger"))
 
 
+def shown_later(q, shut):
+    """The store indices of the held items the queue shows, in turn: not closed, and of one written twice before
+    later_add merged them, the newest wording. Its positions (1 first) are the numbers the list shows and the
+    commands take."""
+    shown = []
+    for i in reversed(range(len(q))):
+        l = q[i]
+        if tidy.item_id("later", l) not in shut and not any(same_later(l, q[k]) or work_key(l) == work_key(q[k]) for k in shown):
+            shown.insert(0, i)
+    return shown
+
+
+def queue_at(q, n):
+    """The store index of the held item the list shows at n."""
+    shown = shown_later(q, tidy.closed())
+    if not 1 <= n <= len(shown):
+        raise ValueError(f"no later item {n}; there are {len(shown)}")
+    return shown[n - 1]
+
+
+def queue_insert(q, item, to):
+    """Put item before the one the list shows at to (1 first; None or past the end: last)."""
+    shown = shown_later(q, tidy.closed())
+    q.insert(len(q) if to is None or to > len(shown) else shown[to - 1], item)
+
+
 def later_add(title, trigger, due=None, who=None, at=None):
     """Add a held item to the queue at position at (1 first; the end by default), or reword the one it repeats in its
     place (moved to at when given). The list's order is the queue's: the first is next."""
@@ -240,7 +266,10 @@ def later_add(title, trigger, due=None, who=None, at=None):
         old = next((i for i, l in enumerate(q) if same_later(l, item)), None)
         if old is not None:
             q.pop(old)
-        q.insert(len(q) if at is None and old is None else old if at is None else at - 1, item)
+        if at is None and old is not None:
+            q.insert(old, item)
+        else:
+            queue_insert(q, item, at)
     return change(go)
 
 
@@ -260,17 +289,13 @@ def later_move(n, to):
 
     def go(store):
         q = store["later"]
-        if not 1 <= n <= len(q):
-            raise ValueError(f"no later item {n}; there are {len(q)}")
-        q.insert(to - 1, q.pop(n - 1))
+        queue_insert(q, q.pop(queue_at(q, n)), to)
     return change(go)
 
 
 def later_drop(n):
     def go(store):
-        if not 1 <= n <= len(store["later"]):
-            raise ValueError(f"no later item {n}; there are {len(store['later'])}")
-        store["later"].pop(n - 1)
+        store["later"].pop(queue_at(store["later"], n))
     return change(go)
 
 
@@ -326,9 +351,7 @@ def todo_from_later(n, due=None, who=None):
     due = check_due(due, now)
 
     def go(store):
-        if not 1 <= n <= len(store["later"]):
-            raise ValueError(f"no later item {n}; there are {len(store['later'])}")
-        l = store["later"].pop(n - 1)
+        l = store["later"].pop(queue_at(store["later"], n))
         due_ = due or l.get("due") and (moment(l["due"], now) or one_line(l["due"]))
         store["todo"].append({"title": l["title"], "who": one_line(who), **({"due": due_} if due_ else {}),
                               "after": l["trigger"], "added": fleet.iso(now)})
@@ -840,10 +863,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 l["next"] = d["next"]
             continue
         doing.append((iid, d))
-    later = []
-    for l in reversed(store["later"]):  # a held item written twice before later_add merged them: the newest wording
-        if tidy.item_id("later", l) not in shut and not any(same_later(l, k) or work_key(l) == work_key(k) for k in later):
-            later.insert(0, l)
+    later = [store["later"][i] for i in shown_later(store["later"], shut)]
     todos = [t for t in store["owner_todo"] if tidy.item_id("todo", t) not in shut]
     # A to-do whose date or condition has come goes to the owner's list or 진행 중, and stays there until Done.
     planned = [(tidy.item_id("do", t), t, todo_when(t, now)) for t in store["todo"] if tidy.item_id("do", t) not in shut]
@@ -1084,10 +1104,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": "moving"} for i, d in doing]
     opened += [{"id": tidy.item_id("later", l), "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held",
                 "title": l["title"], "trigger": l["trigger"], "who": l.get("who"), "n": n}
-               for n, l in enumerate(store["later"], 1) if l in later]
+               for n, l in enumerate(later, 1)]
     opened += [{"id": i, "kind": "do", "label": f"{when} → {t['title']} · {t['who']}", "due": (i, t, when) in arrived,
                 "status": ("owner" if is_owner(t["who"], me) else "moving") if (i, t, when) in arrived else "planned",
                 "title": t["title"], "who": t["who"], "when": when, "after": t.get("after"),
+                **dict(zip(("date", "cond"), fleet.todo_parts(t, now))),
                 "at": fleet.iso(fleet.todo_start(t, now))}
                for i, t, when in planned]
     opened += [{"id": tidy.item_id("todo", t), "kind": "todo", "label": t, "status": "owner"} for t in todos]
@@ -1106,7 +1127,7 @@ def lists_pointer(todos, queued, asked, tg=False):
     parts = [f"{w} {n}건{tail}" for w, n, tail in (("할 일", todos, ""), ("보류 큐", queued, ""), ("요청", asked, " 열림")) if n]
     if not parts:
         return None
-    where = "orch board todo list · orch req list" if tg else stages.dash_url("todo") or "`orch board todo list` · `orch req list`"
+    where = "orch board todo list --telegram · orch req list" if tg else stages.dash_url("todo") or "`orch board todo list` · `orch req list`"
     return " · ".join(parts + [where])
 
 
@@ -1127,10 +1148,15 @@ def todo_tables(now=None, tg=False, fresh=True):
     todos = todo_order([o for o in items if o["kind"] == "do"])
     queue = sorted((o for o in items if o["kind"] == "later"), key=lambda o: o["n"])
     rows_t = [["⏰" if o["due"] else "📅", o["when"] or "—", o["title"], o["who"] or "—"] for o in todos]
-    rows_q = [[f"▶ {o['n']}" if i == 0 else str(o["n"]), o["title"], o["trigger"], o.get("who") or "—"] for i, o in enumerate(queue)]
+    # The captions count as the brief's pointer line does: to-dos whose time has not come, held items whose trigger
+    # tidy has not found met (❔, listed in their place).
+    rows_q = [[("▶ " if i == 0 else "") + (ICON["check"] if o["check"] else "") + str(o["n"]), o["title"], o["trigger"],
+               o.get("who") or "—"] for i, o in enumerate(queue)]
+    due, check = sum(o["due"] for o in todos), sum(bool(o["check"]) for o in queue)
     out, ok = [], True
-    for head, cap, rows, empty in ((TODO_HEADER, f"📅 할 일 {len(rows_t)}건 · ⏰ 도래 {sum(o['due'] for o in todos)}", rows_t, "📅 할 일 없음"),
-                                   (QUEUE_HEADER, f"⏸️ 보류 큐 {len(rows_q)}건 · ▶ 다음 차례", rows_q, "⏸️ 보류 큐 없음")):
+    for head, cap, rows, empty in ((TODO_HEADER, f"📅 할 일 {len(todos) - due}건 · ⏰ 도래 {due}", rows_t, "📅 할 일 없음"),
+                                   (QUEUE_HEADER, f"⏸️ 보류 큐 {len(queue) - check}건 · ▶ 다음 차례"
+                                    + (f" · {ICON['check']} 확인 필요 {check}" if check else ""), rows_q, "⏸️ 보류 큐 없음")):
         out += [""] if out else []
         if not rows:
             out.append(empty)

@@ -856,28 +856,34 @@ process.stdout.write(JSON.stringify({{brief: fleetBrief(), stages: fleetStages()
     assert "open row" in got["stages"] and got["moved"] == "stages", got
 
     # The To-do page lists the brief answer's "do" items, one that has come first (⏰), then by date, undated last,
-    # and the held queue by its place, its first marked next; each row has the Open items' Done button.
-    todos = [{"id": "do:undated", "kind": "do", "label": "x", "title": "ready 로 전환", "who": "lead-a", "when": "#5 머지 후", "after": "#5 머지 후", "at": None, "due": False},
-             {"id": "do:later", "kind": "do", "label": "x", "title": "릴리스 노트", "who": "writer", "when": "11/3(화)", "after": None, "at": "2026-11-03T00:00:00Z", "due": False},
-             {"id": "do:sooner", "kind": "do", "label": "x", "title": "배포 창", "who": "오너", "when": "10/30(금) 09:00", "after": None, "at": "2026-10-30T09:00:00Z", "due": False},
-             {"id": "do:come", "kind": "do", "label": "x", "title": "회고 정리", "who": "오너", "when": "10/29(목)", "after": None, "at": "2026-10-29T00:00:00Z", "due": True},
-             {"id": "later:b", "kind": "later", "label": "x", "status": "held", "title": "second held", "trigger": "v3 뒤", "who": None, "n": 2},
-             {"id": "later:a", "kind": "later", "label": "x", "status": "held", "title": "first held", "trigger": "QA 뒤", "who": "writer", "n": 1},
+    # and the held queue by its place, its first marked ▶; each row has the Open items' Done button. When is the date
+    # alone (a condition is a chip, its words a grey line under the work), a come date past today is overdue, the work
+    # opens past two lines, and the sidebar counts as the brief's pointer: no come to-do, no held item to check.
+    todos = [{"id": "do:undated", "kind": "do", "label": "x", "title": "ready 로 전환", "who": "lead-a", "when": "#5 머지 후", "after": "#5 머지 후", "date": None, "cond": "#5 머지 후", "at": None, "due": False},
+             {"id": "do:later", "kind": "do", "label": "x", "title": "릴리스 노트", "who": "writer", "when": "11/3(화) · v2 뒤", "after": "v2 뒤", "date": "11/3(화)", "cond": "v2 뒤", "at": "2099-11-03T00:00:00Z", "due": False},
+             {"id": "do:sooner", "kind": "do", "label": "x", "title": "배포 창", "who": "오케스트레이터", "when": "10/30(금) 09:00", "after": None, "date": "10/30(금) 09:00", "cond": None, "at": "2099-10-30T09:00:00Z", "due": False},
+             {"id": "do:come", "kind": "do", "label": "x", "title": "회고 정리", "who": "오너", "when": "1/1(수)", "after": None, "date": "1/1(수)", "cond": None, "at": "2020-01-01T00:00:00Z", "due": True},
+             {"id": "later:b", "kind": "later", "label": "x", "status": "held", "title": "second held", "trigger": "v3 뒤", "who": None, "n": 2, "check": "조건 충족: acme/app#5 머지"},
+             {"id": "later:a", "kind": "later", "label": "x", "status": "held", "title": "first held", "trigger": "QA 뒤", "who": "writer", "n": 1, "check": None},
              {"id": "row:x", "kind": "row", "label": "a row", "status": "moving"}]
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const S = {{filters: {{}}}};
 F.brief = {{text: "x", done: [], open: {json.dumps(todos)}, closed: []}};
-process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("todo"), n: todoItems().length}}));"""
+process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("todo"), n: todoItems().length, count: todoCount()}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
     page = got["page"]
-    assert got["section"] == "todo" and got["n"] == 4 and "a row" not in page, got
+    assert got["section"] == "todo" and got["n"] == 4 and got["count"] == 4 and "a row" not in page, got
     order = [page.index(t) for t in ("회고 정리", "배포 창", "릴리스 노트", "ready 로 전환", "first held", "second held")]
     assert order == sorted(order), page
-    assert page.count('title="come">⏰') == 1 and page.count('title="waiting">📅') == 3 and "10/30(금) 09:00" in page and "<td>lead-a</td>" in page, page
+    assert page.count('title="come">⏰') == 1 and page.count('title="waiting">📅') == 3, page
+    assert '<td class="todo-when"><span>10/30(금) 09:00</span></td>' in page and "11/3(화) · v2 뒤" not in page, page
+    assert page.count(">condition</span>") == 1 and page.count('todo-sub" data-tl-open="todo-sub:do:undated"') == 1, page
+    assert 'class="is-late"' in page and page.count("d overdue</span>") == 1 and "3 · ⏰ 1 come · 1 overdue" in page, page
+    assert 'class="tl-desc todo-text" data-tl-open="todo:do:sooner"' in page and '<span class="todo-who" title="오케스트레이터">' in page, page
     assert all(f'data-done="{k}"' in page for k in ("do:undated", "do:later", "do:sooner", "do:come", "later:a", "later:b")), page
-    assert "4 · 1 due" in page and page.count(">next<") == 1 and page.index(">next<") < page.index("first held"), page
-    assert "<th>Next when</th>" in page and '<td class="muted">QA 뒤</td>' in page, page
+    assert page.count("▶ ") == 1 and page.index("▶ 1") < page.index("first held") and ">❔2</td>" in page and "1 · ❔ 1 check" in page, page
+    assert "<th>Work · next when</th>" in page and "orch board todo add &lt;" not in page, page
 
     # The Brief page draws the renderer's text whole: a cut cell gets the text its `- [n]` line holds (bold and └ kept)
     # and the list goes; repository tables share one set of column widths; the sections under them become tables.
