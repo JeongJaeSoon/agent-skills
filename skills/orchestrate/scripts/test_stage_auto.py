@@ -207,4 +207,34 @@ assert ids.index("hand-note") == ids.index("omega/O-1") + 1, ids
 stages.set_cell("hand-o1", "merge", "partial", "reverted")
 assert {r["id"]: r for r in stages.table({"prs": []})["rows"]}["omega/O-1"]["cells"]["merge"]["mark"] == "partial"
 
+# Two cards of one ticket are two rows: the second is keyed by the ledger's `<ticket>-<word>` (else its task id), and
+# each row's PR is the one its own card's session owns, matched by task title, not by the ticket both titles start with.
+program("delta", {"repo": "acme/svc", "run": "run_d", "created_at": ago(10),
+                  "predicate": ["P1-release", "P2-dev-check", "P3-C2-prod", "P4-K4-ready", "P5-C3-prod"]},
+        [{"ts": ago(9), "ev": "spawned", "ticket": "D-1"}, {"ts": ago(8), "ev": "spawned", "ticket": "D-1-K4"}])
+two = {"tasks": [{"id": "task_d1", "run": "run_d", "title": "D-1 rollout: release then prod"},
+                 {"id": "task_d2", "run": "run_d", "title": "D-1 K4: client plugins for both versions"},
+                 {"id": "task_d3", "run": "run_d", "title": "D-1 C3 conflict check"}],
+       "sessions": [{"id": "s-d1", "run": "run_d", "task_title": "D-1 rollout: release then prod"},
+                    {"id": "s-d2", "run": "run_d", "task_title": "D-1 K4: client plugins for both versions"}],
+       "prs": [{"key": "acme/plugins#7", "repo": "acme/plugins", "state": "OPEN", "session": "s-d2", "created": ago(5)}]}
+made, _, _ = stage_auto.build(stage_auto.load_programs("delta"), two, now)
+assert made["delta/D-1"]["pr"] is None and made["delta/D-1-K4"]["pr"] == "acme/plugins#7", made
+assert made["delta/task_d3"]["title"] == "D-1 C3 conflict check" and made["delta/P1-release"]["item"], made
+assert not made["delta/D-1"]["item"], made["delta/D-1"]
+
+# A PR-less row recorded under a program's group folds into the one predicate item its id names past the group's;
+# an id that names two items (prod) or none stays its own row.
+stage_auto.refresh(two, now)
+stages.add("delta", "delta by hand", group=True)  # a lead records its own heading under the program's id
+stages.add("delta-release", "release with the two fixes", parent="delta")
+stages.set_cell("delta-release", "merge", "ok", "v1.2.0")
+stages.add("delta-k4", "K4 client PRs", parent="delta")
+stages.add("delta-prod", "prod rollout", parent="delta")
+stages.add("delta-docs", "docs page", parent="delta")
+got = {r["id"]: r for r in stages.table(two)["rows"]}
+assert got["delta/P1-release"]["title"] == "release with the two fixes" and got["delta/P1-release"]["cells"]["merge"]["evidence"] == "v1.2.0"
+assert got["delta/P4-K4-ready"]["title"] == "K4 client PRs" and "delta-release" not in got and "delta-k4" not in got, list(got)
+assert "delta-prod" in got and "delta-docs" in got and got["delta/D-1-K4"]["title"].startswith("D-1 K4"), list(got)
+
 print("test_stage_auto: ok")
