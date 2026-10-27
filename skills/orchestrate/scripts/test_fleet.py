@@ -821,6 +821,35 @@ process.stdout.write(JSON.stringify({{brief: fleetBrief(), stages: fleetStages()
     assert 'href="#/fleet/stages"' in got["brief"] and "1 in progress" in got["brief"] and "open row" not in got["brief"], got["brief"]
     assert "open row" in got["stages"] and got["moved"] == "stages", got
 
+    # The Brief page draws the renderer's text whole: a cut cell gets the text its `- [n]` line holds (bold and └ kept)
+    # and the list goes; repository tables share one set of column widths; the sections under them become tables.
+    text = "\n".join([
+        "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|",
+        "| ❔ | **lead-one** | — | — |",
+        "| 🙋 | └ **ABC-1 rollout: release then prod…[1]** | — | — |",
+        "| ⏳ | └ ABC-1 K4: client plugins for…[2] | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — |", "",
+        "- [1] ABC-1 rollout: release then prod, then the final check", "- [2] ABC-1 K4: client plugins for both versions", "",
+        "🔄 **진행 중**", "", "- ❔ guard-fix — 확인 필요: 세션 꺼짐 · 6h 전", "- 🔄 rollout plan — 수 10/28: release · coordinator", "- └ 🔴 child card — 턴 종료", "",
+        "⏳ **다른 사람 대기**", "", "- team:reviewers · 리뷰 [#7](https://github.com/acme/plugins/pull/7) · 3일 전부터 → ABC-1 K4 · 다음: 리뷰 대기 · 코디네이터", "",
+        "❓ **결정 필요** — 1. (d1) settle the copy → 추천: 적용", "", "2. (d2) pick a date → 추천: Friday", "",
+        "🙋 **지금 오너가 할 일** — 없음", "",
+        "📝 **요청** — 요청 3건 열림 · 목록: `orch req list`", "",
+        "⏸️ **보류**", "", "- 10/30 09:00 → acme/app#9 머지 + 배포"])
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+process.stdout.write(briefHtml({json.dumps(text)}));"""
+    page = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
+    assert "…[" not in page and "- [1]" not in page and "then the final check</b>" in page and "└ ABC-1 K4: client plugins for both versions" in page, page
+    assert 'class="brief-table brepo"' in page and '<col class="bpr">' in page and 'class="slide"' in page, page
+    assert re.findall(r'<h4 class="bhead">(.*?)</h4>', page) == ["🔄 진행 중", "⏳ 다른 사람 대기", "❓ 결정 필요",
+                                                                 '🙋 지금 오너가 할 일 <span class="muted">— 없음</span>', "📝 요청", "⏸️ 보류"], page
+    assert "<td>확인 필요: 세션 꺼짐 · 6h 전</td>" in page and "release · orchestrator</td>" in page and "코디네이터" not in page, page
+    assert "<th>다음</th>" in page and "<td>리뷰 대기 · 오케스트레이터</td>" in page and "<td>ABC-1 K4</td>" in page, page
+    assert '<td class="bmark">2.</td><td>(d2) pick a date</td><td>Friday</td>' in page, page
+    assert '<td class="bmark">🔴</td><td>└ child card</td><td>턴 종료</td>' in page, page
+    assert '<span class="mono">orch req list</span>' in page and "<td>acme/app#9 머지 + 배포</td>" in page, page
+    assert "❔" not in page and page.count('class="qmark"') == 2, "❔ is drawn as a toned mark, not the pale emoji"
+
     # Kind reads as a role: the lead says "lead", a session under it says "worker" whether its Run or Orca's parent put it
     # there, a standalone under the root stays "standalone". The overview's lead card counts the lead's sessions and PRs.
     sess = [{"id": "wt-root", "name": "root", "kind": "orchestrator", "parent": None, "phase": "working"},

@@ -830,27 +830,78 @@ async function pollBrief() {
   } catch (e) { F.brief = { message: String(e.message || e) }; F.briefEtag = null; }
   F.briefBusy = false;
 }
+// ❔ is a pale outline glyph in most emoji fonts: drawn as a toned mark instead.
 const briefInline = (s) => esc(s).replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => link(url, text))
-  .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, '<span class="mono">$1</span>')
+  .replace(/❔/g, '<span class="qmark" role="img" aria-label="확인 필요">?</span>');
+// The renderer cuts a cell to fit 78 terminal columns as `head…[n]` and puts the whole text in `- [n] …` under the
+// table. The page has the width: each cut cell gets its whole text back (its └ and bold kept) and the list goes.
+const uncut = (cell, notes) => cell.replace(/^((?:[└ㄴ] )?(?:\*\*)?)(.*)…\[(\d+)\](\**)$/, (m, pre, head, n, post) => notes[n] != null ? pre + notes[n] + post : m);
+// The sections under the tables, as `<emoji> **name**[ — first item]` then `- item` (or `n. item`) lines, become tables
+// too. split: what parts a line falls into, in order: [separator, column name] — the text before the first separator
+// is the first column. A line without the separator leaves the rest empty.
+const BRIEF_SECTIONS = {
+  "진행 중": [["", "항목"], [" — ", "상황"]],
+  "다른 사람 대기": [["", "누구 · 무엇 · 언제"], [" → ", "항목"], [" · 다음: ", "다음"]],
+  "결정 필요": [["", "결정"], [" → 추천: ", "추천"]],
+  "지금 오너가 할 일": [["", "할 일"], [" → ", "항목"]],
+  "보류": [["", "언제 · 조건"], [" → ", "할 일"]],
+};
+const STATUS_MARK = /^(└ )?(🔄|🙋|⏳|⏸️|✅|❔|❓|🔴|📝|\d+\.)\s+/u;  // a row under a lead keeps its └ in the item
+// A row the orchestrator or a lead wrote ends with who wrote it; the old role name reads as today's.
+const roleNow = (s) => s.replace(/(^|· )coordinator$/, "$1orchestrator").replace(/(^|· )코디네이터$/, "$1오케스트레이터");
+function sectionTable(name, items) {
+  const split = BRIEF_SECTIONS[name] || [["", "항목"]];
+  const rows = items.map((it) => {
+    const t = roleNow(it), m = t.match(STATUS_MARK), rest = m ? (m[1] || "") + t.slice(m[0].length) : t;
+    const cells = [];
+    split.reduce((left, [sep], i) => {
+      const next = split[i + 1], at = next ? left.indexOf(next[0]) : -1;
+      cells.push(at < 0 ? left : left.slice(0, at));
+      return at < 0 ? "" : left.slice(at + next[0].length);
+    }, rest);
+    return [m ? m[2] : "", ...cells];
+  });
+  const marked = rows.some((r) => r[0]);  // a section with no mark on any line gets no mark column
+  return `<div class="table-wrap"><table class="brief-table bsec"><thead><tr>${marked ? "<th></th>" : ""}${split.map(([, h]) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map((r) => `<tr>${(marked ? r : r.slice(1)).map((c, i) => `<td${marked && !i ? ' class="bmark"' : ""}>${briefInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
 function briefHtml(text) {
-  const out = [];
-  let rows = null;
-  const flush = () => {
-    if (!rows) return;
-    const [head, ...body] = rows;
-    out.push(`<div class="table-wrap"><table class="brief-table"><thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}</tr></thead>
-      <tbody>${body.map((r) => `<tr>${r.map((c) => `<td>${briefInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
-    rows = null;
-  };
-  for (const line of text.split("\n")) {
+  const out = [], lines = text.split("\n");
+  let i = 0;
+  const blank = () => { while (i < lines.length && !lines[i].trim()) i++; };
+  while (i < lines.length) {
+    const line = lines[i];
     if (line.startsWith("|")) {
-      if (!/^\|[-| ]+\|$/.test(line)) (rows ||= []).push(line.slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|")));
+      const rows = [];
+      for (; i < lines.length && lines[i].startsWith("|"); i++) {
+        if (!/^\|[-| ]+\|$/.test(lines[i])) rows.push(lines[i].slice(1, -1).split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|")));
+      }
+      const at = i, notes = {};
+      blank();
+      for (let m; i < lines.length && (m = lines[i].match(/^- \[(\d+)\] (.*)$/)); i++) notes[m[1]] = m[2];
+      if (!Object.keys(notes).length) i = at;
+      const [head, ...body] = rows;
+      // A repository table (`| | name | PR | progress |`) gets one shared set of column widths; a cell too long for its
+      // column scrolls sideways within itself instead of being cut.
+      const repo = head.length === 4 && !head[0];
+      out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? '<colgroup><col class="bmark"><col><col class="bpr"><col class="bprog"></colgroup>' : ""}
+        <thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}</tr></thead>
+        <tbody>${body.map((r) => `<tr>${r.map((c, n) => `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(uncut(c, notes))}</div>` : briefInline(uncut(c, notes))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
-    flush();
+    const sec = line.match(/^(\S+) \*\*(.+?)\*\*(?: — (.*))?$/u);
+    if (sec && (BRIEF_SECTIONS[sec[2]] || sec[3] != null)) {
+      const items = sec[3] && sec[3] !== "없음" ? [sec[3]] : [];
+      i++;
+      for (blank(); i < lines.length && /^(- |\d+\. )/.test(lines[i]); i++, blank()) items.push(lines[i].replace(/^- /, ""));
+      out.push(`<h4 class="bhead">${briefInline(`${sec[1]} ${sec[2]}`)}${sec[3] === "없음" ? ' <span class="muted">— 없음</span>' : ""}</h4>`);
+      if (items.length) out.push(sectionTable(sec[2], items));
+      continue;
+    }
     if (line.trim()) out.push(`<p>${briefInline(line)}</p>`);
+    i++;
   }
-  flush();
   return out.join("");
 }
 function fleetBrief() {
@@ -921,14 +972,14 @@ function stageSection(w) {
   const row = (r) => `<tr class="${r.done_at ? "is-done" : ""}">
       <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
       <td class="mono wpr" data-label="PR">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
-      ${STAGE_COLS.slice(2).map(([l, c]) => `<td data-label="${l}">${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
+      ${STAGE_COLS.slice(2).map(([l, c]) => `<td data-label="${l}"${(r.cells || {})[c] ? "" : ' class="wempty"'}>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
   const blocks = {};
   all.forEach((r) => (blocks[topOf(r)] ||= []).push(r));
   const html = Object.entries(blocks).map(([id, members]) => {
     const g = byId[id], work = members.filter((r) => !r.group);
     const done = work.filter((r) => !lit.has(r.id)), open = work.length - done.length, unfolded = F.stageFold.has(id);
     const ackable = done.filter((r) => r.ack === "ackable" && !r.hidden).map((r) => r.key);
-    const fold = done.length ? `<button class="chip" type="button" data-stage-fold="${esc(id)}" aria-expanded="${unfolded}">${unfolded ? "▾" : "▸"} ${done.length} finished</button>`
+    const fold = done.length ? `<button class="chip mini" type="button" data-stage-fold="${esc(id)}" aria-expanded="${unfolded}">${unfolded ? "▾" : "▸"} ${done.length} finished</button>`
       + (unfolded && ackable.length > 1 ? `<button class="chip ack" type="button" data-ack="${esc(ackable.join(" "))}" title="Ack every finished row of this program">Ack all ${ackable.length}</button>` : "") : "";
     const head = g.group ? `<tr class="wgroup ${open ? "" : "is-done"}"><td colspan="5"><div class="wghead"><b>${esc(g.title)}</b>
         <span class="muted">${open} open</span>${fold}${ackBtn(g)}</div></td></tr>`
@@ -1023,7 +1074,7 @@ function internalJobs() {
   const riders = (j) => rep.jobs.filter((k) => k.group === j.key);
   const line = (j, sub) => {
     const r = j.record, kids = sub ? [] : riders(j), open = F.jobOpen.has(j.key);
-    const toggle = kids.length ? ` <button class="chip" type="button" data-job-open="${esc(j.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${kids.length} more</button>` : "";
+    const toggle = kids.length ? ` <button class="chip mini" type="button" data-job-open="${esc(j.key)}" aria-expanded="${open}">${open ? "▾" : "▸"} ${kids.length} more</button>` : "";
     const name = `<td class="${sub ? "jsub" : ""}"><b>${esc(j.name)}</b> <span class="src">${esc(j.runs_in)}</span>${toggle}</td>`;
     const every = `<td class="nowrap" title="${esc(j.cadence || "")}">${esc(j.every || (j.group ? "each tick" : "?"))}</td>`;
     if (j.error) return `<tr>${name}${every}<td colspan="3">${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;

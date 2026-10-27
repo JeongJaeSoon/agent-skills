@@ -1,4 +1,4 @@
-"""The stage table the brief skill reports and the dashboard's Brief page draws: one row per work item, its PR merge, dev check
+"""The stage table the brief skill reports and the dashboard's Stages page draws: one row per work item, its PR merge, dev check
 and prod check, each cell a mark and the evidence behind it.
 
 Most rows are generated: each fleet tick derives a program's rows from its ledger, its Run's cards and GitHub

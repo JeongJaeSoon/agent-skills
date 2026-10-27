@@ -132,7 +132,7 @@ def rules():
                                          "\"✅ 그 전 완료 N건\" line", "applied": "each brief render"},
         {"name": "Brief stage table", "rule": f"a stage row finished, or unchanged for {lim['stage_idle_d']} days, leaves the brief's "
                                               "stage table", "applied": "each brief render"},
-        {"name": "Stage row expiry", "rule": f"a finished row leaves the Brief's stage table {stages.DONE_KEEP_S // 86400} days after done",
+        {"name": "Stage row expiry", "rule": f"a finished row leaves the Stages page {stages.DONE_KEEP_S // 86400} days after done",
          "applied": "each read of stages.json"},
     ]
 

@@ -508,7 +508,7 @@ table.work th:first-child, table.work td:first-child { padding-left: var(--s4); 
 table.work td { vertical-align: top; overflow-wrap: anywhere; }
 .wgroup td { background: var(--panel-2); }
 .wghead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); }
-.wtitle { padding-left: calc(var(--s4) + var(--lv, 0) * 1.4em) !important; }
+.wtitle { padding-left: calc(var(--s4) + var(--lv, 0) * var(--s5)) !important; }
 .wpr { font-size: var(--t-sm); }
 .wcell { display: flex; gap: var(--s1); align-items: baseline; }
 .wcell .wmark { flex: none; }
@@ -524,9 +524,11 @@ table.work td { vertical-align: top; overflow-wrap: anywhere; }
   table.work tr:not(.wgroup) td { border: 0; padding: 2px var(--s4); }
   table.work td[data-label]:not(.wtitle)::before { content: attr(data-label); display: inline-block; min-width: 6.5em; color: var(--ink-3); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.04em; }
   table.work td[data-label]:not(.wtitle) { display: flex; gap: var(--s2); align-items: baseline; }
+  table.work td.wempty { display: none; }
 }
 table.jobs .src { font-size: 10.5px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 0 4px; vertical-align: 1px; }
-table.jobs td.jsub { padding-left: calc(var(--s3) + 1.4em); }
+table.jobs td.jsub { padding-left: calc(var(--s3) + var(--s5)); }
+.chip.mini { height: 20px; padding: 0 8px; margin-left: var(--s1); font-size: 11px; vertical-align: 1px; }
 table.jobs .jsum { margin-top: 2px; font-size: var(--t-sm); }
 .rows .acts.full { white-space: normal; flex: 0 1 45%; }
 .wcell.tone-bad .wtext, .wcell.tone-warn .wtext { color: var(--tone); }
@@ -545,7 +547,19 @@ li.is-acked > :not(.ack) { opacity: 0.5; }
 .wnext { margin: 0; padding-left: calc(var(--s4) + 1.2em); display: grid; gap: var(--s1); }
 .brief p { margin: 0 0 var(--s3); }
 .brief .table-wrap { margin: 0 0 var(--s4); }
-.brief-table td:nth-child(3) { font-family: var(--mono); white-space: nowrap; }
+.brief-table th { background: var(--panel-2); }
+.brief-table td.bmark { width: 2.5em; text-align: center; white-space: nowrap; }
+/* Every repository table shares these widths, so their columns line up down the page. */
+.brief-table.brepo { table-layout: fixed; min-width: 640px; }
+.brief-table.brepo col.bmark { width: 2.75em; }
+.brief-table.brepo col.bpr { width: 15em; }
+.brief-table.brepo col.bprog { width: 9em; }
+.brief-table.brepo td:nth-child(3) { font-family: var(--mono); }
+.brief-table .slide { white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.brief-table.bsec td { vertical-align: top; overflow-wrap: anywhere; }
+.brief .bhead { font-size: var(--t-md); margin: var(--s4) 0 var(--s2); }
+.qmark { display: inline-grid; place-items: center; width: 1.15em; height: 1.15em; border-radius: 50%; background: var(--warn); color: var(--bg);
+  font-size: 0.85em; font-weight: 700; line-height: 1; vertical-align: 0.05em; }
 
 /* automations: one block per run, coloured by its result */
 .run { color: var(--tone, var(--ink-3)); font-size: 15px; line-height: 1; letter-spacing: 1px; }

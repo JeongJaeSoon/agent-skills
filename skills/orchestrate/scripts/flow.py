@@ -46,7 +46,7 @@ PRODUCERS = {
 }
 CONSUMERS = {
     "page": "dashboard · Overview, Inbox, PRs, Sessions, Graph, Timeline, Automations",
-    "brief": "orch brief render · Brief page with its stage table, /brief",
+    "brief": "orch brief render · Brief and Stages pages, /brief",
     "skillspage": "dashboard · Skills",
     "statspage": "dashboard · PR stats",
     "sentpage": "dashboard · Sent",
