@@ -355,7 +355,7 @@ const TL_ICON = {
   info: '<circle cx="8" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
 };
 const TL_STEP = 50;
-// Two lines until clicked (tlToggle), then the whole text.
+// Clamped (two lines; `cls` may set another) until clicked (tlToggle), then the whole text.
 const expandable = (id, text, cls = "") => `<div class="${["tl-desc", cls, F.tlOpen.has(id) && "open"].filter(Boolean).join(" ")}" data-tl-open="${esc(id)}" role="button" tabindex="0" aria-expanded="${F.tlOpen.has(id)}">${esc(text)}</div>`;
 
 // Newest first, one group per day. `fold` names the list so "Show more" survives a redraw; `here` is the session
