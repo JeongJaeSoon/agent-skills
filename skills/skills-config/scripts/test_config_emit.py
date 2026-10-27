@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import config_emit  # noqa: E402
@@ -65,7 +66,7 @@ class AgentSkillsKeysTest(Base):
         r, out = self.emit(self.SPEC)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('+    "assign_reviewers": true', r.stdout)
-        self.assertIn("! python3", r.stdout)
+        self.assertRegex(r.stdout, r"! echo .* \| shasum -a 256 -c - && python3 ")
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(oct(out.stat().st_mode & 0o777), "0o600")
 
@@ -104,6 +105,11 @@ class AgentSkillsKeysTest(Base):
         r, _ = self.emit({"agent_skills": {"set": {"prs.assign_reviewer": True},
                                            "allow_unknown": ["prs.assign_reviewer"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_file_extension_is_not_a_documented_key(self):
+        for key in ("prs.py", "prs.json", "brief.md"):
+            r, _ = self.emit({"agent_skills": {"set": {key: "x"}}})
+            self.assertIn("not a documented key", r.stderr, key)
 
     def test_unknown_section_refused(self):
         r, _ = self.emit({"agent_skills": {"set": {"nosuch.key": 1}}})
@@ -196,6 +202,59 @@ class PermissionsTest(Base):
         r, _ = self.emit({"permissions": {"add": ["mcp__server__tool", "Bash(python3 scripts/check.py:*)"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_remove_takes_a_broad_rule(self):
+        (self.profile / "settings.json").write_text(json.dumps({"permissions": {"allow": ["Bash(*)", "Bash(x:*)"]}}))
+        r, out = self.emit({"permissions": {"remove": ["Bash(*)"]}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("null", r.stdout)
+        self.assertNotIn('"autoMode"', r.stdout)
+
+
+class RuleProbeTest(unittest.TestCase):
+    """Rules an independent review found passing, and the narrow rules that must keep passing."""
+
+    def setUp(self):
+        self.home = pathlib.Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.home)
+        h, profile = self.home, self.home / "prof"
+        for patch in (mock.patch.object(pathlib.Path, "home", return_value=h),
+                      mock.patch.object(config_emit, "HOME_DIR", h / ".claude"),
+                      mock.patch.object(config_emit, "CONFIG_DIR", profile),
+                      mock.patch.object(config_emit, "SKILLS_JSON", h / ".claude" / "agent-skills.json")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    REFUSED = [
+        "Bash(python3 -c:*)", "Bash(bash -c:*)", "Bash(sh -c *)", "Bash(node -e:*)", "Bash(env X=1:*)",
+        "Bash(sudo -u root:*)", "Bash(/bin/bash:*)", "Bash(/usr/bin/env:*)", "Bash(python3.12:*)", "Bash(py*)",
+        "Bash(p*:*)", "Bash(a*)", "Bash(b*)", "Bash(uv run:*)", "Bash(fish:*)", "Bash(nohup:*)", "Bash(timeout:*)",
+        "Bash(command:*)", "Bash(find:*)", "Bash(awk:*)", "Bash(FOO=1 bash:*)", "Bash(npx:*)",
+        "Edit(~/.claude/hooks/*.sh)", "Edit(~/.claude/hooks/sub/**)", "Edit(/{h}/prof/hooks/x.sh)",
+        "Edit(~/.claude/skills/*/scripts/**)", "Edit(~/.claude/skills/*)", "Edit(~/.claude/plugins/marketplaces/**)",
+        "Edit(~/.claude/agents/x/**)", "Edit(~/.claude/commands/**)", "Edit(~/.claude/output-styles/**)",
+        "Edit(~/.claude/*.json)", "Edit(~/.claude/settings.local.json)", "Edit(~/.CLAUDE/Settings.json)",
+        "Edit(/{h}/../**)", "Edit(~/../**)", "Edit(/{h}/./**)", "Edit(/{h}/x/../.claude/settings.json)",
+        "Edit(/{h}*/**)", "Edit(~/.claude/{{hooks,x}}/a)",
+        "Edit(~/.zshrc)", "Edit(~/.ssh/**)", "Edit(~/.config/**)", "Edit(~/.gitconfig)", "Edit(~/*rc)",
+        "Edit(~/Library/LaunchAgents/x.plist)", "Write(~/.claude.json)",
+    ]
+    ALLOWED = [
+        "Edit(/{h}/prof/projects/*/memory/**)", "Edit(~/.claude/projects/*/memory/**)", "Edit(~/.claude/projects/**)",
+        "Edit(~/.claude/keybindings.json)", "Edit(/{h}/src/app/**)", "Bash(gh pr view:*)", "Bash(npm test:*)",
+        "Bash(npm run lint:*)", "Bash(python3 scripts/check.py:*)", "Bash(python3 -m pytest:*)",
+        "Bash(uv run pytest:*)", "mcp__srv__tool", "WebFetch(domain:example.test)", "WebFetch(domain:*.com)",
+    ]
+
+    def test_refused(self):
+        for rule in self.REFUSED:
+            with self.subTest(rule=rule), self.assertRaises(config_emit.Refused):
+                config_emit.check_permission(rule.format(h=self.home))
+
+    def test_allowed(self):
+        for rule in self.ALLOWED:
+            with self.subTest(rule=rule):
+                config_emit.check_permission(rule.format(h=self.home))
+
 
 class HashAndOutTest(Base):
     SPEC = {"permissions": {"add": ["Bash(npm run lint:*)"]}}
@@ -208,6 +267,28 @@ class HashAndOutTest(Base):
         r = self.run_copy(out, "--apply", digest)
         self.assertIn("does not match", r.stderr)
         self.assertNotIn("npm run any", (self.profile / "settings.json").read_text())
+
+    def test_code_edited_after_emit_refused(self):
+        r, out = self.emit(self.SPEC)
+        line = r.stdout.strip().splitlines()[-1].strip().removeprefix("! ")
+        digest = self.apply_line(r)
+        tampered = out.read_text().replace("    for path, after in changes:\n",
+                                           "    changes[0][1]['permissions']['allow'].append('Bash(*)')\n"
+                                           "    for path, after in changes:\n", 1)
+        self.assertNotEqual(tampered, out.read_text())
+        out.write_text(tampered)
+        before = self.snapshot()
+        self.assertIn("does not match", self.run_copy(out, "--apply", digest).stderr)
+        r = subprocess.run(["bash", "-c", line], capture_output=True, text=True, env=self.env)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_run_line_applies_untouched_copy(self):
+        r, out = self.emit(self.SPEC)
+        line = r.stdout.strip().splitlines()[-1].strip().removeprefix("! ")
+        r = subprocess.run(["bash", "-c", line], capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Bash(npm run lint:*)", (self.profile / "settings.json").read_text())
 
     def test_out_inside_config_dirs_refused(self):
         self.write_spec(self.SPEC)

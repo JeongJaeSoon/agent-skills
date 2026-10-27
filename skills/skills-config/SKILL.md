@@ -28,7 +28,12 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
 1. **Name the change.** The key and value, or the action the user wants to stop being prompted for, in the user's words.
 2. **Check the key or the rule.**
    - A key: find it in the owning skill's Config section (`watch-prs`, `watch-mentions`, `reap-resources`, `use-tracker`, `use-notes`, …). `emit` refuses a key no skill documents and a value outside a documented `"a | b | c"` list or of another type than the script's default. A key that really is new goes in `allow_unknown` by its exact name, so the user sees it in the spec.
-   - A rule: the smallest one that covers the action. `emit` refuses rules that allow everything or anything (a bare tool name, `Bash(*)`, `Bash(python3:*)`), path rules over the whole home directory or reaching the config directories' settings, instructions, skills, agents, hooks or plugins, and secret-shaped values; its message names the reason, so narrow the rule rather than reword it. Write path rules as `//absolute/path`; when part of the path is a symlink, `emit` adds the same rule on the real path, because a rule matches the path as the tool sees it.
+   - A rule: the smallest one that covers the action. `emit` refuses:
+     - rules that allow everything or anything: a bare tool name, `Bash(*)`, a wildcard in the command name (`Bash(py*)`), a command that runs whatever follows it (`env`, `sudo`, `nohup`, `timeout`, `xargs`, `find`, …), and an interpreter or `uv run`-style runner with nothing but flags after it (`Bash(python3:*)`, `Bash(bash -c:*)`);
+     - path rules over the whole home directory, with `.`, `..`, `//`, `[…]` or `{…}` in the path, or able to match anything in the config directories' settings, `CLAUDE.md`, skills, agents, hooks, plugins, commands or output styles, `agent-skills.json`, shell startup files, `~/.ssh`, `~/.config` or other credential directories;
+     - secret-shaped values.
+
+     Its message names the reason, so narrow the rule rather than reword it. A `remove` is not checked this way: taking a broad rule out only narrows. Write path rules as `//absolute/path`; when part of the path is a symlink, `emit` adds the same rule on the real path, because a rule matches the path as the tool sees it.
 3. **Write the spec.**
 
    ```json
@@ -49,10 +54,10 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
 5. **Hand it over.** Post the diff and the run line `emit` printed last, as is:
 
    ```
-   ! python3 ~/agent-skills-config/<slug>.py --apply <spec hash>
+   ! echo '<sha256>  <path>' | shasum -a 256 -c - && python3 <path> --apply <first 12 of sha256>
    ```
 
-   The hash covers the spec the user reviewed; a script edited afterwards is refused. Re-emit after any change and post the new diff and line.
+   The sha256 covers the whole emitted file, its embedded spec and its code. `shasum` checks it before Python starts, so a file edited after `emit` never runs; the script's own `--apply` check catches only an edit that left that check in place. Re-emit after any change and post the new diff and line.
 
 The script checks every file before it writes any, backs each up as `<file>.bak-skills-config-<time>`, merges (a value already there is a no-op, so a second run changes nothing), replaces it atomically through its real path (a symlinked file stays a symlink), reads it back, and prints a rollback `cp` line per file. A `remove` or `unset` that finds nothing is refused, so a second run of such a spec is refused too: it was already applied. Files are rewritten with two-space indentation.
 

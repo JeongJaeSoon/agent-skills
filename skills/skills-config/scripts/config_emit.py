@@ -13,11 +13,14 @@ SPEC: {"agent_skills": {"set": {"prs.after_hours": "send-now"}, "unset": ["prs.c
 "settings" picks the settings.json files permissions and autoMode go to: "profile" is $CLAUDE_CONFIG_DIR/settings.json
 (as Claude Code reads it), "home" is ~/.claude/settings.json; default ["profile"]; the same real file is written once.
 agent-skills.json is one file per user, ~/.claude/agent-skills.json ($AGENT_SKILLS_CONFIG moves it).
-HASH is the spec hash printed with the diff; a spec edited after review no longer matches it.
+HASH is the start of the script's sha256 (plus SPEC with --spec), printed with the diff; emit's run line has shasum
+check the whole file first, because an edited copy could also drop its own check.
 """
 import argparse
 import ast
 import difflib
+import fnmatch
+import functools
 import hashlib
 import json
 import os
@@ -61,9 +64,21 @@ SECTIONS = {
     "reap-hard": (["docs/reap-hard.md"], {"": "scripts/reap_hard.py"}),
 }
 PATH_TOOLS = ("Edit", "Write", "Read", "MultiEdit", "NotebookEdit")
-# A prefix rule on one of these runs anything.
-RUNNERS = {"bash", "sh", "zsh", "env", "sudo", "xargs", "eval", "exec", "python", "python3", "node", "ruby", "perl",
-           "npx", "uvx", "osascript"}
+# These run whatever command follows them, so no prefix of theirs names one command. find runs one through -exec.
+WRAPPERS = {"env", "sudo", "doas", "su", "nohup", "timeout", "gtimeout", "command", "builtin", "exec", "eval", "xargs",
+            "nice", "time", "stdbuf", "caffeinate", "watch", "parallel", "source", ".", "find", "ssh"}
+# These run any code they are given; a rule on one must name the script or module.
+INTERPRETERS = {"bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "python", "pypy", "node", "deno", "bun",
+                "ruby", "perl", "php", "lua", "awk", "gawk", "osascript", "pwsh", "npx", "uvx", "bunx"}
+SUBCOMMAND_RUNNERS = {"uv": {"run", "tool"}, "npm": {"exec", "x"}, "pnpm": {"exec", "dlx"}, "yarn": {"exec", "dlx"},
+                      "poetry": {"run"}, "pipx": {"run"}, "bundle": {"exec"}}
+CONFIG_SUBDIRS = ("hooks", "skills", "agents", "plugins", "commands", "output-styles")
+CONFIG_FILES = ("settings.json", "settings.local.json", "CLAUDE.md", ".claude.json")
+# Files and directories under home that run code or hold credentials.
+HOME_DIRS = (".ssh", ".config", ".gnupg", ".aws", ".kube", ".docker", "Library/LaunchAgents")
+HOME_FILES = (".claude.json", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile",
+              ".gitconfig", ".netrc", ".npmrc")
+FILE_EXTS = {"py", "json", "md", "sh", "js", "ts", "txt", "yaml", "yml", "toml", "plist", "log", "html", "tsv", "csv"}
 SECRET = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|xox[abposr]-|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
                     r"|-----BEGIN|(?<![A-Za-z0-9/])(?=[A-Za-z0-9_+=-]*\d)(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{40,}")
 SECRET_KEY = re.compile(r"token|secret|passw|api_?key|credential", re.I)
@@ -98,8 +113,11 @@ def check_spec(spec, am):
     if not isinstance(perms, dict) or set(perms) - {"add", "remove"} or \
             not all(isinstance(perms.get(k, []), list) for k in ("add", "remove")):
         raise Refused("permissions takes only 'add' and 'remove' lists")
-    for rule in [*perms.get("add", []), *perms.get("remove", [])]:
+    for rule in perms.get("add", []):
         check_permission(rule)
+    for rule in perms.get("remove", []):  # removing narrows, so even a broad rule may go
+        if not isinstance(rule, str) or not rule.strip():
+            raise Refused(f"a permission rule must be a non-empty string, got {rule!r}")
     if "autoMode" in spec:
         try:
             am.check_spec(spec["autoMode"])
@@ -140,19 +158,39 @@ def check_permission(rule):
     if not spec.strip() or not re.sub(r"domain:|[*/:~.\s]", "", spec):
         raise Refused(f"{rule}: the specifier matches everything")
     if tool == "Bash":
-        head = re.split(r"[\s:]", spec.strip(), maxsplit=1)[0]
-        rest = spec.strip()[len(head):].strip(" :*")
-        if head in RUNNERS and not rest:
-            raise Refused(f"{rule}: {head} runs any command; name the command it runs")
+        check_command(rule, spec)
     if tool in PATH_TOOLS:
         path = rule_path(spec)
-        literal = pathlib.Path(re.split(r"[*?\[{]", path, maxsplit=1)[0] or "/")
-        home = pathlib.Path.home()
+        if re.search(r"(^|/)\.\.?(/|$)", path) or "//" in path:
+            raise Refused(f"{rule}: write the path without '.', '..' or '//'")
+        if re.search(r"[\[{]", path):
+            raise Refused(f"{rule}: [...] and {{...}} are not checked here; write one rule per path")
+        literal = re.split(r"[*?]", path, maxsplit=1)[0]
+        if literal != path:
+            literal = literal[:literal.rfind("/") + 1]  # a wildcard mid-name reaches the whole parent directory
+        literal, home = pathlib.Path(literal or "/"), pathlib.Path.home()
         if literal in (home, *home.parents) or literal == pathlib.Path("/"):
             raise Refused(f"{rule}: covers the whole home directory or more")
         for protected in protected_paths():
-            if glob_match(path, str(protected)) or glob_match(path, os.path.realpath(protected)):
-                raise Refused(f"{rule}: matches {protected}; settings, instructions, skills and hooks are the user's to edit")
+            if overlaps(path, protected) or overlaps(path, os.path.realpath(protected)):
+                raise Refused(f"{rule}: can reach {protected}; settings, instructions, skills, hooks, shell startup "
+                              f"files and credentials are the user's to edit")
+
+
+def check_command(rule, spec):
+    words = [w.strip("'\"\\") for w in re.sub(r":\*$", " *", spec.strip()).split()]
+    while words and re.fullmatch(r"\w+=\S*", words[0]):
+        words.pop(0)
+    if not words or re.search(r"[*?\[]", words[0]):
+        raise Refused(f"{rule}: the command name is a wildcard; name the command")
+    name = re.sub(r"[\d.]+$", "", os.path.basename(words[0])) or words[0]  # /usr/bin/python3.12 -> python
+    if name in WRAPPERS:
+        raise Refused(f"{rule}: {name} runs whatever command follows it; allow that command by name instead")
+    rest = [w for w in words[1:] if w != "*"]
+    if rest and rest[0] in SUBCOMMAND_RUNNERS.get(name, ()):
+        name, rest = f"{name} {rest[0]}", rest[1:]
+    if (name in INTERPRETERS or " " in name) and all(w.startswith("-") for w in rest):
+        raise Refused(f"{rule}: {name} runs any command or code it is given; name the script or module it runs")
 
 
 def rule_path(spec):
@@ -164,17 +202,37 @@ def rule_path(spec):
 
 
 def protected_paths():
-    out = [SKILLS_JSON]
+    home = pathlib.Path.home()
+    out = [str(SKILLS_JSON), *(f"{home}/{f}" for f in HOME_FILES), *(f"{home}/{d}/**" for d in HOME_DIRS)]
     for cfg in {CONFIG_DIR, HOME_DIR}:
-        out += [cfg / "settings.json", cfg / "settings.local.json", cfg / "CLAUDE.md", cfg / "agents" / "a.md",
-                cfg / "skills" / "s" / "SKILL.md", cfg / "hooks" / "h.py", cfg / "plugins" / "p" / "x.json"]
+        out += [f"{cfg}/{f}" for f in CONFIG_FILES] + [f"{cfg}/{d}/**" for d in CONFIG_SUBDIRS]
     return out
 
 
-def glob_match(pattern, path):
-    rx = "".join(".*" if t == "**" else "[^/]*" if t == "*" else "[^/]" if t == "?" else re.escape(t)
-                 for t in re.split(r"(\*\*|\*|\?)", pattern))
-    return re.fullmatch(rx, path) is not None
+def overlaps(a, b):
+    """Whether one path can match both globs: * and ? stay within a segment, ** spans any number of them.
+    Case is ignored, as on a default macOS volume; two wildcard segments are assumed to meet."""
+    a, b = (["**" if "**" in s else s for s in g.lower().strip("/").split("/")] for g in (a, b))
+
+    @functools.cache
+    def walk(i, j):
+        if i < len(a) and a[i] == "**":
+            return walk(i + 1, j) or j < len(b) and walk(i, j + 1)
+        if j < len(b) and b[j] == "**":
+            return walk(i, j + 1) or i < len(a) and walk(i + 1, j)
+        if i == len(a) or j == len(b):
+            return i == len(a) and j == len(b)
+        return segment_meets(a[i], b[j]) and walk(i + 1, j + 1)
+    return walk(0, 0)
+
+
+def segment_meets(x, y):
+    wild = re.compile(r"[*?]")
+    if wild.search(x) and wild.search(y):
+        return True
+    if wild.search(x):
+        return fnmatch.fnmatchcase(y, x)
+    return fnmatch.fnmatchcase(x, y) if wild.search(y) else x == y
 
 
 def with_twins(rules):
@@ -212,7 +270,8 @@ def check_keys(keys):
             if i and ".".join(rest[:i]) in default_files:
                 node = defaults(REPO / default_files[".".join(rest[:i])])
             known = isinstance(node, dict) and part in node or \
-                re.search(rf'"{re.escape(part)}"\s*:|`{re.escape(part)}`|\.{re.escape(part)}\b', text)
+                re.search(rf'"{re.escape(part)}"\s*:|`{re.escape(part)}`', text) or \
+                part not in FILE_EXTS and re.search(rf"\.{re.escape(part)}(?![\w-])", text)
             if not known:
                 raise Refused(f"{key}: {part!r} is not a documented key of {section}; list it in "
                               f"agent_skills.allow_unknown if it is meant")
@@ -244,8 +303,12 @@ def defaults(path):
     return {}
 
 
-def spec_hash(spec):
-    return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:12]
+def script_hash(path, spec=None):
+    """sha256 of the script's own bytes, which hold the embedded spec and code; a --spec run adds that spec.
+    A script edited after review fails this, but an edit could also drop the check: the run line's shasum
+    is what refuses a tampered file before Python starts."""
+    data = path.read_bytes() + (json.dumps(spec, sort_keys=True).encode() if spec is not None else b"")
+    return hashlib.sha256(data).hexdigest()
 
 
 def load(path, missing_ok=False):
@@ -320,7 +383,7 @@ def diff(before, after, label):
         return (json.dumps(d, ensure_ascii=False, indent=2) + "\n").splitlines(True)
     if label == "settings":
         keys = [k for k in ("permissions", "autoMode") if before.get(k) != after.get(k)]
-        before, after = {k: before.get(k) for k in keys}, {k: after.get(k) for k in keys}
+        before, after = ({k: d[k] for k in keys if k in d} for d in (before, after))
     return "".join(difflib.unified_diff(text(before), text(after), f"{label} (current)", f"{label} (new)"))
 
 
@@ -370,10 +433,9 @@ def write(path, data):
     return real, saved, undo
 
 
-def run(spec, settings_override, skills_json, apply):
-    digest = spec_hash(spec)
+def run(spec, settings_override, skills_json, apply, digest=None):
     if apply and apply != digest:
-        raise Refused(f"--apply {apply} does not match this spec ({digest}); review the diff again")
+        raise Refused(f"--apply {apply} does not match this script and spec ({digest}); review the diff again")
     changes = []
     for path, before, after, notes, label in plan(spec, settings_override, skills_json):
         print(f"== {label}: {path}" + (f" -> {path.resolve()}" if path.resolve() != path.absolute() else ""))
@@ -387,7 +449,7 @@ def run(spec, settings_override, skills_json, apply):
         print("\nno change: every file already has this spec")
         return
     if not apply:
-        print(f"\n(dry run; nothing written; spec hash {digest})")
+        print("\n(dry run; nothing written" + (f"; hash {digest})" if digest else ")"))
         return
     print()
     for path, after in changes:
@@ -416,7 +478,10 @@ def emit(spec, out, settings_override, skills_json):
     extra = "".join(f" --settings {shlex.quote(str(p.absolute()))}" for p in settings_override or [])
     if skills_json != SKILLS_JSON:
         extra += f" --skills-json {shlex.quote(str(skills_json.absolute()))}"
-    print(f"\nwrote {out}\nThe user reviews it and runs:\n  ! python3 {shlex.quote(str(out))}{extra} --apply {spec_hash(spec)}")
+    digest = script_hash(out)
+    check = shlex.quote(f"{digest}  {out}")
+    print(f"\nwrote {out}\nThe user reviews it and runs:\n"
+          f"  ! echo {check} | shasum -a 256 -c - && python3 {shlex.quote(str(out))}{extra} --apply {digest[:12]}")
 
 
 def prepare(spec):
@@ -457,7 +522,7 @@ def main(argv):
                 p.error("emit needs --spec and --out and never takes --apply")
             emit(spec, a.out, a.settings, a.skills_json)
         else:
-            run(spec, a.settings, a.skills_json, a.apply)
+            run(spec, a.settings, a.skills_json, a.apply, script_hash(HERE, spec if a.spec else None)[:12])
     except Refused as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
