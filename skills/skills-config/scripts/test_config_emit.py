@@ -229,6 +229,7 @@ class RuleProbeTest(unittest.TestCase):
         "Bash(sudo -u root:*)", "Bash(/bin/bash:*)", "Bash(/usr/bin/env:*)", "Bash(python3.12:*)", "Bash(py*)",
         "Bash(p*:*)", "Bash(a*)", "Bash(b*)", "Bash(uv run:*)", "Bash(fish:*)", "Bash(nohup:*)", "Bash(timeout:*)",
         "Bash(command:*)", "Bash(find:*)", "Bash(awk:*)", "Bash(FOO=1 bash:*)", "Bash(npx:*)",
+        "Bash(PYTHON3:*)", "Bash(Bash -c:*)", "Bash(uv tool run:*)",
         "Edit(~/.claude/hooks/*.sh)", "Edit(~/.claude/hooks/sub/**)", "Edit(/{h}/prof/hooks/x.sh)",
         "Edit(~/.claude/skills/*/scripts/**)", "Edit(~/.claude/skills/*)", "Edit(~/.claude/plugins/marketplaces/**)",
         "Edit(~/.claude/agents/x/**)", "Edit(~/.claude/commands/**)", "Edit(~/.claude/output-styles/**)",

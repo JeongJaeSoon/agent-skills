@@ -57,7 +57,7 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
    ! echo '<sha256>  <path>' | shasum -a 256 -c - && python3 <path> --apply <first 12 of sha256>
    ```
 
-   The sha256 covers the whole emitted file, its embedded spec and its code. `shasum` checks it before Python starts, so a file edited after `emit` never runs; the script's own `--apply` check catches only an edit that left that check in place. Re-emit after any change and post the new diff and line.
+   The sha256 covers the whole emitted file, its embedded spec and its code. `shasum` checks it before Python starts, so a file edited after `emit` never runs from that line; the script's own `--apply` check catches only an edit that left that check in place. Re-emit after any change and post the new diff and line.
 
 The script checks every file before it writes any, backs each up as `<file>.bak-skills-config-<time>`, merges (a value already there is a no-op, so a second run changes nothing), replaces it atomically through its real path (a symlinked file stays a symlink), reads it back, and prints a rollback `cp` line per file. A `remove` or `unset` that finds nothing is refused, so a second run of such a spec is refused too: it was already applied. Files are rewritten with two-space indentation.
 

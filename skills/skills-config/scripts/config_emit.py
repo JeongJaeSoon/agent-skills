@@ -70,7 +70,7 @@ WRAPPERS = {"env", "sudo", "doas", "su", "nohup", "timeout", "gtimeout", "comman
 # These run any code they are given; a rule on one must name the script or module.
 INTERPRETERS = {"bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "python", "pypy", "node", "deno", "bun",
                 "ruby", "perl", "php", "lua", "awk", "gawk", "osascript", "pwsh", "npx", "uvx", "bunx"}
-SUBCOMMAND_RUNNERS = {"uv": {"run", "tool"}, "npm": {"exec", "x"}, "pnpm": {"exec", "dlx"}, "yarn": {"exec", "dlx"},
+SUBCOMMAND_RUNNERS = {"uv": {"run", "tool"}, "uv tool": {"run"},"npm": {"exec", "x"}, "pnpm": {"exec", "dlx"}, "yarn": {"exec", "dlx"},
                       "poetry": {"run"}, "pipx": {"run"}, "bundle": {"exec"}}
 CONFIG_SUBDIRS = ("hooks", "skills", "agents", "plugins", "commands", "output-styles")
 CONFIG_FILES = ("settings.json", "settings.local.json", "CLAUDE.md", ".claude.json")
@@ -183,11 +183,12 @@ def check_command(rule, spec):
         words.pop(0)
     if not words or re.search(r"[*?\[]", words[0]):
         raise Refused(f"{rule}: the command name is a wildcard; name the command")
-    name = re.sub(r"[\d.]+$", "", os.path.basename(words[0])) or words[0]  # /usr/bin/python3.12 -> python
+    # /usr/bin/Python3.12 -> python; a default macOS volume runs it whatever the case
+    name = re.sub(r"[\d.]+$", "", os.path.basename(words[0]).lower()) or words[0]
     if name in WRAPPERS:
         raise Refused(f"{rule}: {name} runs whatever command follows it; allow that command by name instead")
     rest = [w for w in words[1:] if w != "*"]
-    if rest and rest[0] in SUBCOMMAND_RUNNERS.get(name, ()):
+    while rest and rest[0] in SUBCOMMAND_RUNNERS.get(name, ()):
         name, rest = f"{name} {rest[0]}", rest[1:]
     if (name in INTERPRETERS or " " in name) and all(w.startswith("-") for w in rest):
         raise Refused(f"{rule}: {name} runs any command or code it is given; name the script or module it runs")
