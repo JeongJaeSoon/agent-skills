@@ -28,12 +28,17 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
 1. **Name the change.** The key and value, or the action the user wants to stop being prompted for, in the user's words.
 2. **Check the key or the rule.**
    - A key: find it in the owning skill's Config section (`watch-prs`, `watch-mentions`, `reap-resources`, `use-tracker`, `use-notes`, …). `emit` refuses a key no skill documents and a value outside a documented `"a | b | c"` list or of another type than the script's default. A key that really is new goes in `allow_unknown` by its exact name, so the user sees it in the spec.
-   - A rule: the smallest one that covers the action. `emit` refuses:
-     - rules that allow everything or anything: a bare tool name, `Bash(*)`, a wildcard in the command name (`Bash(py*)`), a command that runs whatever follows it (`env`, `sudo`, `nohup`, `timeout`, `xargs`, `find`, …), and an interpreter or `uv run`-style runner with nothing but flags after it (`Bash(python3:*)`, `Bash(bash -c:*)`);
-     - path rules over the whole home directory, with `.`, `..`, `//`, `[…]` or `{…}` in the path, or able to match anything in the config directories' settings, `CLAUDE.md`, skills, agents, hooks, plugins, commands or output styles, `agent-skills.json`, shell startup files, `~/.ssh`, `~/.config` or other credential directories;
+   - A rule: the smallest one that covers the action. These checks are a best-effort guardrail against rules that plainly allow anything, not a security boundary; the diff the user reviews before `--apply` is the decision. `emit` refuses:
+     - a bare tool name and `Bash(*)`;
+     - a `Bash` rule with a wildcard anywhere but a trailing `:*`, or quotes, escapes, `$` or `=` in the command name;
+     - a command that runs whatever follows it (`env`, `sudo`, `nohup`, `xargs`, `find`, …) or starts programs outside the session (`launchctl`, `crontab`, `open`);
+     - an interpreter (`python3`, `bash`, `node`, …) not followed directly by a script path, or for Python `-m <module>`; stdin paths (`-`, `/dev/…`) do not count;
+     - a runner (`uv run`, `npx`, `npm exec`, `poetry run`, `bundle exec`, …) not followed directly by a command, and that command is checked again by these rules;
+     - `git`, `make` or `npm run` with no subcommand, target or script after it, and any prefix that reaches a runner (`Bash(npm:*)`, `Bash(uv:*)`);
+     - path rules over the whole home directory, with `.`, `..`, `//`, `[…]` or `{…}` in the path, or able to match anything in the config directories' settings, `CLAUDE.md`, skills, agents, hooks, plugins, commands or output styles, `agent-skills.json`, shell startup files, `~/bin`, `~/.local/bin`, `~/.ssh`, `~/.config` or other credential directories;
      - secret-shaped values.
 
-     Its message names the reason, so narrow the rule rather than reword it. A `remove` is not checked this way: taking a broad rule out only narrows. Write path rules as `//absolute/path`; when part of the path is a symlink, `emit` adds the same rule on the real path, because a rule matches the path as the tool sees it.
+     Some narrow rules are refused too (`python3 -u x.py`, `git -C dir status`); write the form the rules accept. Its message names the reason, so narrow the rule rather than reword it. A `remove` is not checked this way: taking a broad rule out only narrows. Write path rules as `//absolute/path`; when part of the path is a symlink, `emit` adds the same rule on the real path, because a rule matches the path as the tool sees it.
 3. **Write the spec.**
 
    ```json
@@ -54,10 +59,10 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
 5. **Hand it over.** Post the diff and the run line `emit` printed last, as is:
 
    ```
-   ! echo '<sha256>  <path>' | shasum -a 256 -c - && python3 <path> --apply <first 12 of sha256>
+   ! echo '<sha256>  <path>' | shasum -a 256 -c - && python3 -I <path> --apply <first 12 of sha256>
    ```
 
-   The sha256 covers the whole emitted file, its embedded spec and its code. `shasum` checks it before Python starts, so a file edited after `emit` never runs from that line; the script's own `--apply` check catches only an edit that left that check in place. Re-emit after any change and post the new diff and line.
+   The sha256 covers the whole emitted file, its embedded spec and its code. `shasum` checks it before Python starts, so a file edited after `emit` never runs from that line, and `-I` keeps a module planted beside it or in the working directory from loading; the script's own `--apply` check catches only an edit that left that check in place. Re-emit after any change and post the new diff and line.
 
 The script checks every file before it writes any, backs each up as `<file>.bak-skills-config-<time>`, merges (a value already there is a no-op, so a second run changes nothing), replaces it atomically through its real path (a symlinked file stays a symlink), reads it back, and prints a rollback `cp` line per file. A `remove` or `unset` that finds nothing is refused, so a second run of such a spec is refused too: it was already applied. Files are rewritten with two-space indentation.
 

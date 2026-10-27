@@ -238,12 +238,22 @@ class RuleProbeTest(unittest.TestCase):
         "Edit(/{h}*/**)", "Edit(~/.claude/{{hooks,x}}/a)",
         "Edit(~/.zshrc)", "Edit(~/.ssh/**)", "Edit(~/.config/**)", "Edit(~/.gitconfig)", "Edit(~/*rc)",
         "Edit(~/Library/LaunchAgents/x.plist)", "Write(~/.claude.json)",
+        "Bash(python3 -c import*)", "Bash(bash -c e*)", "Bash(perl -e x*)", "Bash(uv run python:*)",
+        "Bash(uv run bash:*)", "Bash(poetry run python:*)", "Bash(bundle exec ruby:*)", "Bash(npm exec bash:*)",
+        "Bash(npx node:*)", "Bash(uv run --with x python:*)", "Bash(uv run FOO=1 python:*)","Bash(npm:*)", "Bash(uv:*)", "Bash(uv tool:*)",
+        "Bash(poetry:*)", "Bash(git:*)", "Bash(git -c:*)", "Bash(make:*)", "Bash(npm run:*)", "Bash(launchctl:*)",
+        "Bash(crontab:*)", "Bash(open -a:*)", "Bash(p\\ython3:*)", "Bash($SHELL:*)", "Bash(python3 /dev/stdin:*)",
+        "Bash(bash /dev/fd/0:*)", "Bash(python3 /proc/self/fd/0:*)", "Bash(python3 -:*)", "Bash(python3 -m:*)",
+        "Bash(\"python3\" -c:*)", "Bash(Python3.12 -c:*)", "Bash(/opt/homebrew/bin/python3:*)",
+        "Bash(FOO=1 python3:*)", "Bash(osascript -e:*)", "Bash(git * main)",
+        "Edit(~/.local/bin/**)", "Edit(~/bin/**)", "Edit(~/.oh-my-zsh/**)",
     ]
     ALLOWED = [
         "Edit(/{h}/prof/projects/*/memory/**)", "Edit(~/.claude/projects/*/memory/**)", "Edit(~/.claude/projects/**)",
         "Edit(~/.claude/keybindings.json)", "Edit(/{h}/src/app/**)", "Bash(gh pr view:*)", "Bash(npm test:*)",
         "Bash(npm run lint:*)", "Bash(python3 scripts/check.py:*)", "Bash(python3 -m pytest:*)",
-        "Bash(uv run pytest:*)", "mcp__srv__tool", "WebFetch(domain:example.test)", "WebFetch(domain:*.com)",
+        "Bash(uv run pytest:*)", "Bash(uv run python -m pytest:*)", "Bash(poetry run python scripts/x.py:*)",
+        "Bash(npx prettier:*)", "Bash(git status:*)", "Bash(make test:*)", "Bash(npm test *)", "mcp__srv__tool", "WebFetch(domain:example.test)", "WebFetch(domain:*.com)",
     ]
 
     def test_refused(self):
@@ -289,6 +299,16 @@ class HashAndOutTest(Base):
         line = r.stdout.strip().splitlines()[-1].strip().removeprefix("! ")
         r = subprocess.run(["bash", "-c", line], capture_output=True, text=True, env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Bash(npm run lint:*)", (self.profile / "settings.json").read_text())
+
+    def test_run_line_ignores_a_module_planted_beside_the_copy(self):
+        r, out = self.emit(self.SPEC)
+        line = r.stdout.strip().splitlines()[-1].strip().removeprefix("! ")
+        self.assertIn(" python3 -I ", line)
+        (out.parent / "difflib.py").write_text("import sys\nsys.stderr.write('PLANTED')\nsys.exit(99)\n")
+        r = subprocess.run(["bash", "-c", line], capture_output=True, text=True, env=self.env, cwd=out.parent)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("PLANTED", r.stderr)
         self.assertIn("Bash(npm run lint:*)", (self.profile / "settings.json").read_text())
 
     def test_out_inside_config_dirs_refused(self):

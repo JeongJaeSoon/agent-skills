@@ -14,7 +14,10 @@ SPEC: {"agent_skills": {"set": {"prs.after_hours": "send-now"}, "unset": ["prs.c
 (as Claude Code reads it), "home" is ~/.claude/settings.json; default ["profile"]; the same real file is written once.
 agent-skills.json is one file per user, ~/.claude/agent-skills.json ($AGENT_SKILLS_CONFIG moves it).
 HASH is the start of the script's sha256 (plus SPEC with --spec), printed with the diff; emit's run line has shasum
-check the whole file first, because an edited copy could also drop its own check.
+check the whole file first, because an edited copy could also drop its own check, and runs python3 -I, so a module
+planted beside the copy or in the working directory is not imported in place of the standard library.
+The permission checks are a best-effort guardrail against rules that plainly allow anything; the diff the user
+reviews before --apply is the decision.
 """
 import argparse
 import ast
@@ -67,15 +70,21 @@ PATH_TOOLS = ("Edit", "Write", "Read", "MultiEdit", "NotebookEdit")
 # These run whatever command follows them, so no prefix of theirs names one command. find runs one through -exec.
 WRAPPERS = {"env", "sudo", "doas", "su", "nohup", "timeout", "gtimeout", "command", "builtin", "exec", "eval", "xargs",
             "nice", "time", "stdbuf", "caffeinate", "watch", "parallel", "source", ".", "find", "ssh"}
-# These run any code they are given; a rule on one must name the script or module.
+# These start or schedule programs outside the session.
+LAUNCHERS = {"launchctl", "crontab", "at", "open"}
+# These run any code they are given; a rule on one must name the script (or a python module) right after it.
 INTERPRETERS = {"bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "python", "pypy", "node", "deno", "bun",
-                "ruby", "perl", "php", "lua", "awk", "gawk", "osascript", "pwsh", "npx", "uvx", "bunx"}
-SUBCOMMAND_RUNNERS = {"uv": {"run", "tool"}, "uv tool": {"run"},"npm": {"exec", "x"}, "pnpm": {"exec", "dlx"}, "yarn": {"exec", "dlx"},
-                      "poetry": {"run"}, "pipx": {"run"}, "bundle": {"exec"}}
+                "ruby", "perl", "php", "lua", "awk", "gawk", "osascript", "pwsh"}
+# The word after each of these is a command of its own and is checked again; any shorter prefix reaches them.
+RUNNERS = {"uv run", "uv tool run", "uvx", "npx", "bunx", "npm exec", "npm x", "pnpm exec", "pnpm dlx", "yarn exec",
+           "yarn dlx", "poetry run", "pipx run", "bundle exec"}
+# The word after each of these picks what runs: a git subcommand (or -c alias), a make target, a package script.
+NEEDS_TARGET = {"git", "make", "npm run", "npm run-script", "pnpm run", "yarn run"}
 CONFIG_SUBDIRS = ("hooks", "skills", "agents", "plugins", "commands", "output-styles")
 CONFIG_FILES = ("settings.json", "settings.local.json", "CLAUDE.md", ".claude.json")
 # Files and directories under home that run code or hold credentials.
-HOME_DIRS = (".ssh", ".config", ".gnupg", ".aws", ".kube", ".docker", "Library/LaunchAgents")
+HOME_DIRS = (".ssh", ".config", ".gnupg", ".aws", ".kube", ".docker", "Library/LaunchAgents", ".local/bin", "bin",
+             ".oh-my-zsh")
 HOME_FILES = (".claude.json", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".profile",
               ".gitconfig", ".netrc", ".npmrc")
 FILE_EXTS = {"py", "json", "md", "sh", "js", "ts", "txt", "yaml", "yml", "toml", "plist", "log", "html", "tsv", "csv"}
@@ -178,20 +187,58 @@ def check_permission(rule):
 
 
 def check_command(rule, spec):
-    words = [w.strip("'\"\\") for w in re.sub(r":\*$", " *", spec.strip()).split()]
+    """Not a shell parser: structural checks (wildcards, then what the first words make run) rather than a list
+    of every risky command, which would never be complete."""
+    words = re.sub(r":\*$", " *", spec.strip()).split()
+    if words and words[-1] == "*":
+        words.pop()
+    if any(re.search(r"[*?\[]", w) for w in words):
+        raise Refused(f"{rule}: a wildcard goes only at the end, as ':*'; write out every word before it")
     while words and re.fullmatch(r"\w+=\S*", words[0]):
         words.pop(0)
-    if not words or re.search(r"[*?\[]", words[0]):
-        raise Refused(f"{rule}: the command name is a wildcard; name the command")
+    check_words(rule, words)
+
+
+def check_words(rule, words):
+    if not words:
+        raise Refused(f"{rule}: name the command")
+    first = re.sub(r"^(['\"])(.+)\1$", r"\2", words[0])
+    if re.search(r"[\\'\"$`=]", first):
+        raise Refused(f"{rule}: quotes, escapes, $ or = in the command name are not checked here; write it plainly")
     # /usr/bin/Python3.12 -> python; a default macOS volume runs it whatever the case
-    name = re.sub(r"[\d.]+$", "", os.path.basename(words[0]).lower()) or words[0]
+    name = re.sub(r"[\d.]+$", "", os.path.basename(first).lower()) or first
     if name in WRAPPERS:
         raise Refused(f"{rule}: {name} runs whatever command follows it; allow that command by name instead")
-    rest = [w for w in words[1:] if w != "*"]
-    while rest and rest[0] in SUBCOMMAND_RUNNERS.get(name, ()):
-        name, rest = f"{name} {rest[0]}", rest[1:]
-    if (name in INTERPRETERS or " " in name) and all(w.startswith("-") for w in rest):
-        raise Refused(f"{rule}: {name} runs any command or code it is given; name the script or module it runs")
+    if name in LAUNCHERS:
+        raise Refused(f"{rule}: {name} starts or schedules programs outside the session")
+    phrase = [name, *(w.lower() for w in words[1:])]
+    whole = " ".join(phrase)
+    reached = sorted(p for p in RUNNERS | NEEDS_TARGET if p.startswith(whole + " "))
+    if reached:
+        raise Refused(f"{rule}: also covers {reached[0]}, which runs whatever comes after it; name more words")
+    for n in (3, 2, 1):
+        head, rest = " ".join(phrase[:n]), words[n:]
+        if head in RUNNERS:
+            if not rest or rest[0].startswith("-"):
+                raise Refused(f"{rule}: {head} runs any command it is given; name the command right after it")
+            return check_words(rule, rest)
+        if head in NEEDS_TARGET:
+            if not rest or rest[0].startswith("-"):
+                raise Refused(f"{rule}: the word after {head} picks what runs; name it")
+            return
+    if name in INTERPRETERS:
+        rest = words[1:]
+        python = name in ("python", "pypy")
+        if python and rest[:1] == ["-m"] and len(rest) > 1 and re.fullmatch(r"\w+(\.\w+)*", rest[1]):
+            return
+        if not rest or not is_script(rest[0]):
+            raise Refused(f"{rule}: {name} runs any command or code it is given; name the script file right after "
+                          f"it" + (" (or -m <module>)" if python else ""))
+
+
+def is_script(word):
+    return bool(re.fullmatch(r"[\w./~+-]+", word)) and not word.startswith(("-", "/dev/", "/proc/")) and \
+        ("/" in word or bool(re.search(r"\.\w+$", word)))
 
 
 def rule_path(spec):
@@ -482,7 +529,7 @@ def emit(spec, out, settings_override, skills_json):
     digest = script_hash(out)
     check = shlex.quote(f"{digest}  {out}")
     print(f"\nwrote {out}\nThe user reviews it and runs:\n"
-          f"  ! echo {check} | shasum -a 256 -c - && python3 {shlex.quote(str(out))}{extra} --apply {digest[:12]}")
+          f"  ! echo {check} | shasum -a 256 -c - && python3 -I {shlex.quote(str(out))}{extra} --apply {digest[:12]}")
 
 
 def prepare(spec):
