@@ -269,6 +269,46 @@ class PermissionsTest(Base):
             self.assertNotIn("Traceback", r.stderr, python)
             self.assertFalse(out.exists(), python)
 
+    def test_unsearchable_link_target_refused_not_skipped(self):
+        """isdir() is False when stat() fails with EACCES, so a link into a mode-0600 config dir read as no directory."""
+        (self.profile / "hooks").mkdir()
+        (self.profile / "projects" / "x").mkdir(parents=True)
+        (self.profile / "projects" / "x" / "memory").symlink_to(self.profile / "hooks")
+        (self.claude / "projects").symlink_to(self.profile / "projects")
+        self.profile.chmod(0o600)
+        self.addCleanup(self.profile.chmod, 0o700)
+        pythons = [sys.executable] + [p for p in ("/usr/bin/python3",) if os.path.exists(p)]
+        for python in pythons:
+            self.write_spec({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/*/memory/**)"]}})
+            out = self.home / "out" / "change.py"
+            r = subprocess.run([python, "-I", str(SCRIPT), "emit", "--spec", str(self.spec), "--out", str(out)],
+                               capture_output=True, text=True, env=self.env)
+            self.assertEqual(r.returncode, 1, (python, r.stderr))
+            self.assertIn(f"refused: cannot list {self.claude / 'projects'} (Permission denied)", r.stderr, python)
+            self.assertNotIn("Traceback", r.stderr, python)
+            self.assertFalse(out.exists(), python)
+
+    def test_memory_linked_into_unsearchable_dir_refused(self):
+        (self.profile / "hooks").mkdir()
+        target = self.profile / "projects" / "y" / "memory"
+        target.mkdir(parents=True)
+        (target / "evil").symlink_to(self.profile / "hooks")
+        (self.claude / "projects" / "x").mkdir(parents=True)
+        (self.claude / "projects" / "x" / "memory").symlink_to(target)
+        self.profile.chmod(0o600)
+        self.addCleanup(self.profile.chmod, 0o700)
+        pythons = [sys.executable] + [p for p in ("/usr/bin/python3",) if os.path.exists(p)]
+        for python in pythons:
+            self.write_spec({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/*/memory/**)"]}})
+            out = self.home / "out" / "change.py"
+            r = subprocess.run([python, "-I", str(SCRIPT), "emit", "--spec", str(self.spec), "--out", str(out)],
+                               capture_output=True, text=True, env=self.env)
+            self.assertEqual(r.returncode, 1, (python, r.stderr))
+            self.assertIn(f"refused: cannot list {self.claude / 'projects' / 'x' / 'memory'} (Permission denied)",
+                          r.stderr, python)
+            self.assertNotIn("Traceback", r.stderr, python)
+            self.assertFalse(out.exists(), python)
+
     def test_symlinked_profile_home_is_not_a_config_dir(self):
         (self.claude / "hooks" / "projects" / "x" / "memory").mkdir(parents=True)
         (self.claude / "projects").mkdir()

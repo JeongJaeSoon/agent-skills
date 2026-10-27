@@ -211,7 +211,7 @@ def named(prefix, segs):
     def under(d, seg):
         try:
             if seg == "*":
-                return sorted(os.listdir(d)) if os.path.isdir(d) else []
+                return sorted(os.listdir(d))
             os.lstat(os.path.join(d, seg))
             return [seg]
         except (FileNotFoundError, NotADirectoryError):
@@ -235,8 +235,13 @@ def tree(top, chain=(), seen=None):
     A directory reached again through another link is yielded but not entered twice: links that share targets would
     otherwise walk every path through them, exponential in how many levels of them there are."""
     yield top
-    if not os.path.isdir(top):
+    # Not isdir(): it is False when stat() fails with EACCES, and a directory taken for a file is never entered.
+    try:
+        names = sorted(os.listdir(top))
+    except (FileNotFoundError, NotADirectoryError):
         return
+    except OSError as e:
+        raise unlisted(top, e)
     real = os.path.realpath(top)
     if real in chain:
         raise Refused(f"{top}: a symlink loop back to {real}")
@@ -244,10 +249,6 @@ def tree(top, chain=(), seen=None):
     if real in seen:
         return
     seen.add(real)
-    try:
-        names = sorted(os.listdir(top))
-    except OSError as e:
-        raise unlisted(top, e)
     for n in names:
         yield from tree(os.path.join(top, n), (*chain, real), seen)
 
