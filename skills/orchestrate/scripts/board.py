@@ -55,7 +55,8 @@ def last_path(scope):
 def read():
     store = fleet.read_json(path(), {}) or {}
     return {"v": 1, "rows": store.get("rows") or {}, "order": store.get("order") or [], "leads": store.get("leads") or {},
-            "doing": store.get("doing") or [], "later": store.get("later") or [], "owner_todo": store.get("owner_todo") or []}
+            "doing": store.get("doing") or [], "later": store.get("later") or [], "todo": store.get("todo") or [],
+            "owner_todo": store.get("owner_todo") or []}
 
 
 def change(fn):
@@ -64,6 +65,8 @@ def change(fn):
     with (fleet.state_dir() / "board.lock").open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         store = read()
+        for t in store["todo"]:  # a to-do from before the stamp: its M/D reads against this write
+            t.setdefault("added", fleet.iso(fleet.utcnow()))
         out = fn(store)
         cutoff = fleet.iso(fleet.utcnow() - dt.timedelta(seconds=DONE_KEEP_S))
         gone = {k for k, r in store["rows"].items() if not r.get("parent") and (r.get("done_at") or "9") < cutoff}
@@ -246,8 +249,87 @@ def later_drop(n):
     return change(go)
 
 
-def set_todo(lines):
+def moment(due, now):
+    """--due as the ISO8601 moment it names now, or None. A to-do keeps this, not the words: `10/1` read again next
+    year would name next year's."""
+    at = fleet.due_at(due, None, now)
+    return at and at.isoformat()
+
+
+def check_due(due, now):
+    at = due and moment(due, now)
+    if due and not at:
+        raise ValueError("--due is YYYY-MM-DD[ HH:MM], M/D[ HH:MM] or ISO8601")
+    return at
+
+
+def todo_add(title, due=None, after=None, who=None):
+    """A to-do: work that will be done when its date (--due) or condition (--after) comes, by who. Rewords the one it
+    repeats, as later_add does."""
+    if not (title or "").strip() or not ((due or "").strip() or (after or "").strip()) or not (who or "").strip():
+        raise ValueError("board todo add needs a title, --due D or --after C (when it starts) and --who W (who does it);"
+                         " work with no when is `board doing add` or `board later add`")
+    now = fleet.utcnow()
+    due = check_due(due, now)
+    item = {"title": one_line(title), "who": one_line(who), **({"due": due} if due else {}),
+            **({"after": one_line(after)} if after else {}), "added": fleet.iso(now)}
+
+    def go(store):
+        same = (i for i, t in enumerate(store["todo"]) if (t.get("due"), t.get("after")) == (item.get("due"), item.get("after"))
+                and difflib.SequenceMatcher(None, t["title"], item["title"]).ratio() >= 0.6)
+        old = next(same, None)
+        if old is None:
+            store["todo"].append(item)
+        else:
+            store["todo"][old] = item
+    return change(go)
+
+
+def todo_drop(n):
+    def go(store):
+        if not 1 <= n <= len(store["todo"]):
+            raise ValueError(f"no todo item {n}; there are {len(store['todo'])}")
+        store["todo"].pop(n - 1)
+    return change(go)
+
+
+def todo_from_later(n, due=None, who=None):
+    """Move held item n to the to-do list: its trigger becomes --after, its --due carries over unless due is given."""
+    if not (who or "").strip():
+        raise ValueError("board todo from-later needs --who W (who does it)")
+    now = fleet.utcnow()
+    due = check_due(due, now)
+
+    def go(store):
+        if not 1 <= n <= len(store["later"]):
+            raise ValueError(f"no later item {n}; there are {len(store['later'])}")
+        l = store["later"].pop(n - 1)
+        due_ = due or l.get("due") and (moment(l["due"], now) or one_line(l["due"]))
+        store["todo"].append({"title": l["title"], "who": one_line(who), **({"due": due_} if due_ else {}),
+                              "after": l["trigger"], "added": fleet.iso(now)})
+    return change(go)
+
+
+def set_now(lines):
     return change(lambda store: store.update(owner_todo=[one_line(l) for l in lines if l.strip()]))
+
+
+WEEKDAY = "월화수목금토일"
+
+
+def todo_when(t, now):
+    """When a to-do starts, as the report says it: its --due as a local date (and time, unless midnight), its --after."""
+    at = fleet.todo_dates(t, now)[0]
+    at = at and at.astimezone()
+    due = at and f"{at.month}/{at.day}({WEEKDAY[at.weekday()]})" + (f" {at:%H:%M}" if (at.hour, at.minute) != (0, 0) else "")
+    return " · ".join(x for x in (due, t.get("after")) if x)
+
+
+def todo_arrived(t, now, cards, prs):
+    """Whichever comes first: its --due, the date in its --after, or, with no date there, its --after met by the
+    held-item rule (tidy.trigger_met)."""
+    due, on = fleet.todo_dates(t, now)
+    return bool(any(x and x <= now for x in (due, on)) or not on and t.get("after") and tidy.trigger_met(t["after"], cards, prs))
 
 
 # ---------------------------------------------------------------- render
@@ -753,6 +835,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if tidy.item_id("later", l) not in shut and not any(same_later(l, k) or work_key(l) == work_key(k) for k in later):
             later.insert(0, l)
     todos = [t for t in store["owner_todo"] if tidy.item_id("todo", t) not in shut]
+    # A to-do whose date or condition has come leaves 할 일 for the owner's list or 진행 중, and stays there until Done.
+    planned = [(tidy.item_id("do", t), t, todo_when(t, now)) for t in store["todo"] if tidy.item_id("do", t) not in shut]
+    arrived = [p for p in planned if todo_arrived(p[1], now, cards, prs)]
+    upcoming = sorted((p for p in planned if p not in arrived),
+                      key=lambda p: min(filter(None, fleet.todo_dates(p[1], now)), default=dt.datetime.max.replace(tzinfo=dt.timezone.utc)))
 
     # A section's merge target is the base most of its PRs share; a row with another base names its own.
     bases = {}
@@ -859,7 +946,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     # table order, a sub-task after its head row. Each row goes to one list, by its own status, not its children's.
     moving, held, turn, theirs, held_rows = [], [], [], [], {}
     covered = {k for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"
-               for k in fleet.held_refs(l["title"], prs)}  # the PRs of the held items listed under 보류
+               for k in fleet.held_refs(l["title"], prs)}  # the PRs of the held items listed under 보류 or 할 일
+    covered |= {k for _, t, _ in upcoming for k in fleet.held_refs(t["title"], prs)}
     for sec in sections:
         head, head_out = None, False
         for l in (l for l in lines if l["sec"] == sec):
@@ -913,6 +1001,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     for l in later:
         if (v := verdicts.get(tidy.item_id("later", l))) and v["verdict"] == "check":
             moving.append(f"{ICON['check']} {l['title']} — 확인 필요: {v['evidence']}")
+    due_mine = []
+    for _, t, when in arrived:
+        if is_owner(t["who"], me):
+            due_mine.append(f"⏰ {t['title']} · {when} 도래")
+        else:
+            moving.append(f"⏰ {t['title']} — {when} 도래 · {t['who']}")
 
     for sec in sections:
         repo, prog = sec
@@ -972,23 +1066,29 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             items.append(text + (" (지난 보고와 동일)" if d["id"] in asked else ""))
         items += [f"{i}. {one_line(d)}" for i, d in enumerate(own, len(decisions) + 1)]
         out += ["", ("❓ 결정 필요" if tg else "❓ **결정 필요**") + " — " + items[0]] + [x for it in items[1:] for x in ("", it)]
-    todo = todos + turn
+    todo = todos + due_mine + turn
     out += ["", ("🙋 지금 오너가 할 일" if tg else "🙋 **지금 오너가 할 일**") + ("" if todo else " — 없음")]
     out += [""] + [it if tg else f"- {it}" for it in todo] if todo else []
     shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
     if asked := owner_requests.line(owner_requests.summary(now, shown)):
         out += ["", ("📝 요청" if tg else "📝 **요청**") + " — " + asked + (" · 목록: orch req list" if tg else " · 목록: `orch req list`")]
     fired = {tidy.item_id("later", l) for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") == "check"}
-    def held_line(l):
+    def held_line(when, l):
         names = [n for k in fleet.held_refs(l["title"], prs) for n in held_rows.get(k, [])]
-        return f"{l['trigger']} → {l['title']}" + (f" ({'·'.join(names)})" if names else "")
-    if held := list(dict.fromkeys(held + [held_line(l) for l in later if tidy.item_id("later", l) not in fired])):
+        return f"{when} → {l['title']}" + (f" ({'·'.join(names)})" if names else "")
+    if upcoming:
+        out += ["", "📅 할 일" if tg else "📅 **할 일**", ""] + [
+            (it if tg else f"- {it}") for it in (f"{held_line(when, t)} · {t['who']}" for _, t, when in upcoming)]
+    if held := list(dict.fromkeys(held + [held_line(l["trigger"], l) for l in later if tidy.item_id("later", l) not in fired])):
         out += ["", "⏸️ 보류" if tg else "⏸️ **보류**", ""] + [it if tg else f"- {it}" for it in held]
     opened = [{"id": item_of(rows[l["key"]]), "kind": "row", "label": label(l), "status": l["own"]}
               for l in lines if l["key"] in rows and l["own"] not in (None, "done")]
     opened += [{"id": i, "kind": "doing", "label": d["title"], "status": "moving"} for i, d in doing]
     opened += [{"id": tidy.item_id("later", l), "kind": "later", "label": f"{l['trigger']} → {l['title']}", "status": "held"}
                for l in later]
+    opened += [{"id": i, "kind": "do", "label": f"{when} → {t['title']} · {t['who']}", "due": (i, t, when) in arrived,
+                "status": ("owner" if is_owner(t["who"], me) else "moving") if (i, t, when) in arrived else "planned"}
+               for i, t, when in planned]
     opened += [{"id": tidy.item_id("todo", t), "kind": "todo", "label": t, "status": "owner"} for t in todos]
     for o in opened:
         v = verdicts.get(o["id"]) or {}

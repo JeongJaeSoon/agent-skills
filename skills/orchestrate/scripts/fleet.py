@@ -1047,11 +1047,12 @@ def held_refs(text, prs):
 
 
 def board_prs():
-    """The PR keys board.json's rows name, and every full owner/repo#N in its doing, later and owner_todo text and in
+    """The PR keys board.json's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and in
     the external inbox."""
     b = read_json(state_dir() / "board.json", {}) or {}
     text = [f"{d.get('title')} {d.get('next')}" for d in b.get("doing") or []]
     text += [f"{l.get('title')} {l.get('trigger')}" for l in b.get("later") or []] + list(b.get("owner_todo") or [])
+    text += [f"{t.get('title')} {t.get('after') or ''}" for t in b.get("todo") or []]
     text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({})]
     return ({r.get("pr") for r in (b.get("rows") or {}).values() if isinstance(r, dict)} | set(pr_refs(" ".join(text)))) - {None}
 
@@ -1949,21 +1950,40 @@ def trigger_at(text, now):
     return t.replace(year=t.year + 1) if not y and t < local - dt.timedelta(days=180) else t
 
 
+def due_at(due, text, now):
+    """The moment an item's --due names (ISO8601, or what trigger_at reads), else the date in text, else None."""
+    at = parse(due) or trigger_at(due, now) or trigger_at(text, now)
+    return at and (at if at.tzinfo else at.astimezone())  # a bare date is local time
+
+
+def todo_dates(t, now):
+    """A to-do's (--due, the date in --after) as moments, each None without one. A M/D reads against when the to-do
+    was added, not now: read against now, one that came last year comes again next year."""
+    base = parse(t.get("added")) or now
+    return due_at(t.get("due"), None, base), trigger_at(t.get("after"), base)
+
+
 def held_prs(store, shut, prs, now):
-    """PR key -> the hold, for each PR a held board item's title names (held_refs). The hold lifts when the item
-    is dropped or closed (tidy), when its --due or the date in its trigger comes, or, with no date, when every PR its
-    trigger names has merged."""
+    """PR key -> the hold, for each PR a held board item or a to-do names in its title (held_refs). The hold lifts
+    when the item is dropped or closed (tidy), when its --due or the date in its trigger (a to-do's --after) comes,
+    or, with no date, when every PR its trigger names has merged."""
     import tidy
     out = {}
-    for l in store.get("later") or []:
-        if tidy.item_id("later", l) in shut:
+    items = [("later", l, l["trigger"]) for l in store.get("later") or []]
+    items += [("do", t, t.get("after") or "") for t in store.get("todo") or []]
+    for kind, l, trigger in items:
+        if tidy.item_id(kind, l) in shut:
             continue
-        at = parse(l.get("due")) or trigger_at(l.get("due"), now) or trigger_at(l["trigger"], now)
-        at = at and (at if at.tzinfo else at.astimezone())  # a bare date is local time
-        if at and at <= now or not at and tidy.refs_over(pr_refs(l["trigger"]), prs):
-            continue
+        if kind == "do":  # whichever comes first, as board.todo_arrived reads it
+            due, on = todo_dates(l, now)
+            if any(x and x <= now for x in (due, on)) or not on and tidy.refs_over(pr_refs(trigger), prs):
+                continue
+        else:
+            at = due_at(l.get("due"), trigger, now)
+            if at and at <= now or not at and tidy.refs_over(pr_refs(trigger), prs):
+                continue
         for k in held_refs(l["title"], prs):
-            out.setdefault(k, l["trigger"] + (f" · {l['due']}" if l.get("due") else ""))
+            out.setdefault(k, " · ".join(x for x in (trigger, l.get("due")) if x))
     return out
 
 
