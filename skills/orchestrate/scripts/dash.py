@@ -46,6 +46,7 @@ import prog  # noqa: E402  ledger arithmetic lives there; never re-derive cap or
 import fleet  # noqa: E402
 import selfcheck  # noqa: E402
 import skill_usage  # noqa: E402
+import token_usage  # noqa: E402
 import pr_stats  # noqa: E402
 import sent  # noqa: E402
 import stages  # noqa: E402
@@ -1354,6 +1355,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not f.exists():
                 return self.send(503, b'{"error":"first skill usage collect has not finished"}')
             return self.send_cached(f.read_bytes())
+        if path == "/api/fleet/tokens":
+            f = token_usage.out_path()
+            if not f.exists():
+                return self.send(503, b'{"error":"first token usage collect has not finished"}')
+            return self.send_cached(f.read_bytes())
         if path == "/api/fleet/stats":
             f = pr_stats.out_path()
             if not f.exists():
@@ -1497,6 +1503,25 @@ def skills_loop():
         time.sleep(60)
 
 
+TOKENS_EVERY = 900
+
+
+def tokens_loop():
+    while True:
+        f = token_usage.out_path()
+        try:
+            if not f.exists() or time.time() - f.stat().st_mtime >= TOKENS_EVERY:
+                rep = token_usage.refresh()
+                c = rep.get("collect") or {}
+                jobs.record("token-usage", n=len(rep["warnings"]),
+                            result=f"warnings {len(rep['warnings'])} · {c.get('parsed', 0)} transcripts read in {c.get('seconds', 0)}s",
+                            next_in=TOKENS_EVERY, event=FLEET.event)
+        except Exception as e:
+            log(f"tokens: collect failed: {e!r}")
+            jobs.record("token-usage", error=repr(e), next_in=TOKENS_EVERY, event=FLEET.event)
+        time.sleep(60)
+
+
 PR_STATS_EVERY = 6 * 3600  # dozens of searches a collect; counts by month do not need fresher
 PR_STATS_RETRY = 3600  # after a failure, mostly a rate limit or an expired login
 
@@ -1530,6 +1555,7 @@ JOBS = (
     ("selfcheck", "Self-check", jobs.short(selfcheck.EVERY),
      f"every {selfcheck.EVERY // 60}m, {selfcheck.GRACE_S}s while a finding waits for its second read", None),
     ("skill-usage", "Skill usage collect", jobs.short(SKILLS_EVERY), f"every {SKILLS_EVERY // 60}m", None),
+    ("token-usage", "Token usage collect", jobs.short(TOKENS_EVERY), f"every {TOKENS_EVERY // 60}m", None),
     ("pr-stats", "PR stats collect", jobs.short(PR_STATS_EVERY),
      f"every {PR_STATS_EVERY // 3600}h, {PR_STATS_RETRY // 3600}h after a failure", None),
 )
@@ -1539,7 +1565,7 @@ def code_files():
     # Every module the server may import, lazily too, from beside it and the two other places board.py and fleet.py
     # reach: one left out would not restart it.
     near = [*HERE.glob("*.py"), HERE.parents[1] / "brief" / "scripts" / "table_width.py",
-            *(HERE.parents[2] / "scripts" / n for n in ("sync.py", "reap_hard.py"))]
+            *(HERE.parents[2] / "scripts" / n for n in ("sync.py", "reap_hard.py", "skill_tokens.py"))]
     return (*sorted(f for f in near if f.exists() and not f.name.startswith("test_")), *sorted(ASSETS.glob("*")))
 
 
@@ -1634,6 +1660,8 @@ def serve(host, port, interval, make_fleet=None):
         threading.Thread(target=fleet_loop, daemon=True).start()
         if os.environ.get("ORCH_SKILLS") != "off":
             threading.Thread(target=skills_loop, daemon=True).start()
+        if os.environ.get("ORCH_TOKENS") != "off":
+            threading.Thread(target=tokens_loop, daemon=True).start()
         if os.environ.get("ORCH_PR_STATS") != "off":
             threading.Thread(target=pr_stats_loop, daemon=True).start()
     log(f"serving {home()} on http://{host}:{port}/ (tracker+github every {interval}s, "

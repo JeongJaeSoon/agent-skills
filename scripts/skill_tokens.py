@@ -5,6 +5,7 @@ Usage:
   python3 scripts/skill_tokens.py static [--json] [--top N] [--listing-budget N] [--base REF | --baseline FILE]
                                          [--exact [--model M]] [--root DIR]
   python3 scripts/skill_tokens.py calibrate [--model M]
+  python3 scripts/skill_tokens.py usage [--days N] [--json] [--no-collect]
 
 static measures the checkout this script lives in (or --root DIR):
   always    the skill listing line of each SKILL.md and the agent listing line of each agents/*.md, every turn
@@ -15,6 +16,8 @@ static measures the checkout this script lives in (or --root DIR):
   dups      sentences of 60+ characters repeated in two or more files
 --base REF measures REF too (from `git archive`, no checkout) and prints the difference; --baseline FILE compares with
 an earlier --json output.
+usage is real use from local transcripts, attributed to automations, roles, subagents and skills
+(skills/orchestrate/scripts/token_usage.py; the dashboard runs the same collect every 15 minutes).
 
 Token counts are an offline approximation by character class (APPROX_PER_CHAR) unless --exact, which calls the
 count_tokens API with ANTHROPIC_API_KEY (never printed or stored) and fails without it. calibrate fits new coefficients
@@ -395,6 +398,10 @@ def main(argv):
         print(__doc__)
         return 0
     cmd, args = argv[0], argv[1:]
+    if cmd == "usage":  # real use from transcripts: skills/orchestrate/scripts/token_usage.py
+        sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
+        import token_usage
+        return token_usage.main(args)
 
     def opt(flag, default=None):
         if flag in args:
