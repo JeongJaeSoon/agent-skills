@@ -38,7 +38,9 @@ HOME_DIR = pathlib.Path.home() / ".claude"
 CONFIG_DIR = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME_DIR).expanduser()
 SETTINGS = {"profile": CONFIG_DIR / "settings.json", "home": HOME_DIR / "settings.json"}
 SKILLS_JSON = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
-REPO = pathlib.Path(__file__).resolve().parents[3]
+HERE = pathlib.Path(__file__).resolve()
+# An emitted copy can sit anywhere, even at /tmp/x.py; it never reads the repo.
+REPO = HERE.parents[3] if len(HERE.parents) > 3 else HERE.parent
 AUTOMODE_PATH = REPO / "skills" / "tune-automode" / "scripts" / "automode_rule.py"
 
 # Where each agent-skills.json section is documented (key names, "a | b | c" values) and where its DEFAULTS live

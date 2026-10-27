@@ -23,7 +23,7 @@ class Base(unittest.TestCase):
         self.home = pathlib.Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, self.home)
         self.claude = self.home / ".claude"
-        self.profile = self.home / "profiles" / "p1" / "home"
+        self.profile = self.home / "profiles" / "p1" / "cfg"
         for d in (self.claude, self.profile):
             d.mkdir(parents=True)
             (d / "settings.json").write_text(json.dumps(
@@ -88,6 +88,15 @@ class AgentSkillsKeysTest(Base):
         self.assertIn("no change", r.stdout)
         self.assertEqual(len(list(self.claude.glob("agent-skills.json.bak-skills-config-*"))), 1)
 
+    def test_emitted_copy_runs_from_a_shallow_path(self):
+        r, out = self.emit(self.SPEC)
+        shallow = pathlib.Path("/tmp") / f"sc-{self.home.name}.py"
+        shutil.copy(out, shallow)
+        self.addCleanup(shallow.unlink)
+        r = self.run_copy(shallow, "--apply", self.apply_line(r))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(json.loads(self.skills_json.read_text())["prs"]["assign_reviewers"])
+
     def test_undocumented_key_refused_unless_listed(self):
         r, _ = self.emit({"agent_skills": {"set": {"prs.assign_reviewer": True}}})
         self.assertNotEqual(r.returncode, 0)
@@ -134,7 +143,7 @@ class PermissionsTest(Base):
 
     def test_both_settings_files_get_rules_and_automode(self):
         spec = {"settings": ["profile", "home"],
-                "permissions": {"add": [self.rule("profiles/*/home/projects/*/memory/**"),
+                "permissions": {"add": [self.rule("profiles/*/cfg/projects/*/memory/**"),
                                         self.rule(".claude/projects/*/memory/**")]},
                 "autoMode": {"add": {"allow": [AM_LINE]}}}
         r, out = self.emit(spec)
