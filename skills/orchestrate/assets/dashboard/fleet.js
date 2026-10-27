@@ -1082,7 +1082,7 @@ function fleetTodo() {
     <thead><tr>${cols.map(([h]) => `<th>${h}</th>`).join("")}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
   const today = new Date().setHours(0, 0, 0, 0);
   const late = (o) => o.due && o.at && ms(o.at) < today ? Math.ceil((today - ms(o.at)) / 86400e3) : 0;
-  const when = (o) => (o.date ? `<span class="${o.due ? "todo-come" : ""}">${esc(o.date)}</span>` : tag("condition", "", ""))
+  const when = (o) => (o.date ? `<span${o.due ? ' class="todo-come"' : ""}>${esc(o.date)}</span>` : tag("condition", "", ""))
     + (late(o) ? `<div class="todo-sub">${tag(`${late(o)}d overdue`, "bad", "")}</div>` : "");
   const todoRows = items.map((o) => `<tr class="${late(o) ? "is-late" : ""}"><td class="bmark" title="${o.due ? "come" : "waiting"}">${o.due ? "⏰" : "📅"}</td>
       <td class="todo-when">${when(o)}</td><td>${work(o, o.cond)}</td>${who(o)}${done(o)}</tr>`).join("");

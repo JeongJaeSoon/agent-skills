@@ -877,7 +877,7 @@ process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("
     order = [page.index(t) for t in ("회고 정리", "배포 창", "릴리스 노트", "ready 로 전환", "first held", "second held")]
     assert order == sorted(order), page
     assert page.count('title="come">⏰') == 1 and page.count('title="waiting">📅') == 3, page
-    assert '<td class="todo-when"><span class="">10/30(금) 09:00</span></td>' in page and "11/3(화) · v2 뒤" not in page, page
+    assert '<td class="todo-when"><span>10/30(금) 09:00</span></td>' in page and "11/3(화) · v2 뒤" not in page, page
     assert page.count(">condition</span>") == 1 and page.count('todo-sub" data-tl-open="todo-sub:do:undated"') == 1, page
     assert 'class="is-late"' in page and page.count("d overdue</span>") == 1 and "3 · ⏰ 1 come · 1 overdue" in page, page
     assert 'class="tl-desc todo-text" data-tl-open="todo:do:sooner"' in page and '<span class="todo-who" title="오케스트레이터">' in page, page
