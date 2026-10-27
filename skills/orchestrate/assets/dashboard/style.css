@@ -524,7 +524,7 @@ table.work td { vertical-align: top; overflow-wrap: anywhere; }
   table.work tr:not(.wgroup) td { border: 0; padding: 2px var(--s4); }
   table.work td[data-label]:not(.wtitle)::before { content: attr(data-label); display: inline-block; min-width: 6.5em; color: var(--ink-3); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.04em; }
   table.work td[data-label]:not(.wtitle) { display: flex; gap: var(--s2); align-items: baseline; }
-  table.work td.wempty { display: none; }
+  table.work td.wempty[data-label] { display: none; }
 }
 table.jobs .src { font-size: 10.5px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 0 4px; vertical-align: 1px; }
 table.jobs td.jsub { padding-left: calc(var(--s3) + var(--s5)); }
