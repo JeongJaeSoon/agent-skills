@@ -539,6 +539,8 @@ assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
 assert "단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()
+tg_req = rok(*REQUEST, "--telegram")  # the dashboard is on 127.0.0.1 only: Telegram, read elsewhere, gets the command
+assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "127.0.0.1" not in tg_req, tg_req
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": 2 ** 22 + 1, "port": 4799}))  # no such process
 assert "단계표 1행 · `orch stage show`" in rok(*REQUEST).splitlines()
 # The table itself is `orch stage show`'s: a long stage name is cut to fit, its whole text listed under the table.

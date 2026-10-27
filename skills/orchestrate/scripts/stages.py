@@ -289,11 +289,12 @@ def dash_url():
 
 def pointer(t, gone, tg=False):
     """The brief's one line in place of the table: the rows `orch stage show` prints (current()'s), and where the
-    table is. None when there is no row at all."""
+    table is. None when there is no row at all. Telegram always gets the command: the dashboard listens on
+    127.0.0.1 only, so its link is dead on the phone reading the message."""
     n = sum(1 for r in t["rows"] if not r.get("group"))
     if not n and not gone:
         return None
-    where = dash_url() or ("orch stage show --telegram" if tg else "`orch stage show`")
+    where = "orch stage show --telegram" if tg else dash_url() or "`orch stage show`"
     return f"단계표 {n}행{f' (접음 {gone})' if gone else ''} · {where}"
 
 

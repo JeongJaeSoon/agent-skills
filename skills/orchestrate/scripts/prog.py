@@ -2381,11 +2381,11 @@ def cmd_stage(argv):
             t, gone = stages.table(state), 0
             if opt(rest, "--program"):
                 t = stages.of_program(t, opt(rest, "--program"))
-            if "--json" in rest:
-                return print(json.dumps(t, ensure_ascii=False, indent=1))
             if "--all" not in rest:  # the rows the brief's line counts
                 idle_d = {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"]
                 t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state)
+            if "--json" in rest:
+                return print(json.dumps(t, ensure_ascii=False, indent=1))
             text = (stages.render_telegram if "--telegram" in rest else stages.render_md)(t)
             fold = f"접음 {gone}행 (끝남 또는 {idle_d}일 그대로) · --all 로 전부" if gone else ""
             print("\n\n".join(filter(None, (text, fold))) or "기록된 단계 없음")

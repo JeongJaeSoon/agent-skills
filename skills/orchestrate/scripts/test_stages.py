@@ -65,9 +65,11 @@ assert tg.splitlines()[0] == "📋 작업별 (prod: v1.7.2 · dev: v1.8.0)", tg
 assert "ㄴ 정렬 버그 (acme/web#45) — 머지 ❌ CI 실패 · dev ⚠️ a|b · prod –" in tg.splitlines(), tg
 assert "| " not in tg and "**" not in tg
 
-code, js, _ = orch("show", "--json")
+code, js, _ = orch("show", "--json", "--all")
 t = json.loads(js)
 assert [r["id"] for r in t["rows"]] == ["search", "reindex", "sort", "login"]
+# Without --all, --json folds like the table: login, every cell ✅, is finished.
+assert [r["id"] for r in json.loads(orch("show", "--json")[1])["rows"]] == ["search", "reindex", "sort"]
 assert t["rows"][0]["cells"]["merge"] == {"mark": "ok", "evidence": "10/2", "auto": True}
 
 # done marks a row finished and keeps it a week; drop removes it with its children.
@@ -76,7 +78,7 @@ code, cur, _ = orch("show")
 assert "로그인 개선" not in cur and cur.endswith("접음 1행 (끝남 또는 7일 그대로) · --all 로 전부"), cur
 assert orch("done", "login")[0] == 0 and "로그인 개선 (끝남)" in orch("show", "--all")[1]
 assert orch("drop", "search")[0] == 0
-assert [r["id"] for r in json.loads(orch("show", "--json")[1])["rows"]] == ["login"]
+assert [r["id"] for r in json.loads(orch("show", "--json", "--all")[1])["rows"]] == ["login"]
 store = json.loads((state / "stages.json").read_text())
 store["rows"]["login"]["done_at"] = "2020-01-01T00:00:00Z"
 (state / "stages.json").write_text(json.dumps(store))

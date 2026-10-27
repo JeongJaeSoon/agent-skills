@@ -5,7 +5,7 @@ HITL과 HOTL을 함께 고려한 Claude Code 에이전트 스킬 모음.
 [![License: MIT](https://img.shields.io/github/license/JeongJaeSoon/agent-skills)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/JeongJaeSoon/agent-skills)](https://github.com/JeongJaeSoon/agent-skills/releases/latest)
 
-사람이 단계마다 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 둘 다 쓸 수 있게 만든 Claude Code 플러그인이다. 티켓 하나를 첫 수정부터 머지·완료 기록까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 39개와 hook으로 만든다. Claude Code로 GitHub 저장소의 티켓 작업을 맡기려는 개발자를 위한 것이다. 사용자 설정 쓰기나 되돌릴 수 없는 행동은 늘 사람이 승인하고, 머지 같은 지점은 사람이 승인할지 맡길지를 설정으로 고른다([HITL과 HOTL](#hitl과-hotl)).
+사람이 단계마다 승인하는 방식(Human-in-the-loop, HITL)과, 에이전트가 진행하고 사람은 지켜보다 예외에만 끼어드는 방식(Human-on-the-loop, HOTL)을 둘 다 쓸 수 있게 만든 Claude Code 플러그인이다. 티켓 하나를 첫 수정부터 머지·완료 기록까지 끌고 가는 흐름과, Orca 워커 여러 개로 프로젝트 하나를 끝내는 흐름을 스킬 40개와 hook으로 만든다. Claude Code로 GitHub 저장소의 티켓 작업을 맡기려는 개발자를 위한 것이다. 사용자 설정 쓰기나 되돌릴 수 없는 행동은 늘 사람이 승인하고, 머지 같은 지점은 사람이 승인할지 맡길지를 설정으로 고른다([HITL과 HOTL](#hitl과-hotl)).
 
 ## 특징
 
