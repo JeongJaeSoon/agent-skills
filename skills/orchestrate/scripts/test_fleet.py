@@ -51,7 +51,8 @@ assert {s["id"]: s["project"] for s in st["sessions"]} == {"wt-coord": "platform
 assert [(i["project"], i["session"]) for i in items(st, "approval") if i["source"] == "orca-gate"] == [("launchpad", "wt-coord")]
 assert [i["project"] for i in items(st, "decision")] == ["platform"] and all(i["project"] for i in items(st))
 assert {t["id"]: t["project"] for t in st["tasks"]} == {"task_login": "launchpad", "task_export": "launchpad", "task_docs": "launchpad",
-                                                       "task_lead": "platform", "task_invoice": "launchpad"}
+                                                       "task_lead": "platform", "task_invoice": "launchpad",
+                                                       **{t: None for t, _ in dash_demo.PLUGIN_TASKS}}  # cards with no worktree left
 assert fleet.project_of("/h/orca/workspaces/acme-api/fix-1", None, "o/other") == "acme-api"
 assert fleet.project_of("/src/app-wt", None, "o/app") == "app" and fleet.project_of("/src/app-wt") == "app-wt"
 assert fleet.project_of(None) is None
@@ -576,6 +577,7 @@ process.stdout.write(JSON.stringify({{autos: fleetAutomations(st), holds: holdsC
     assert "not read" in jobs_html and "&lt;b&gt;ValueError" in jobs_html, "a row it could not read says why, the rest still show"
     assert jobs_html.count("no record") == 1 and "Rules applied on read" in jobs_html and "Inbox item expiry" in jobs_html
     assert "no change" in jobs_html and "last acted: 3" in jobs_html, "a run that counted 0 says no change, its last change kept"
+    assert '<div class="muted">closed 0</div>' in jobs_html and 'title="closed 0"' not in jobs_html, "a 0 run's words show, not on hover"
 
     # Jobs riding on the fleet tick fold into its row: closed, one summary; opened, a line each with its own result.
     tick = {"at": fleet.iso(now), "ok": True, "n": None, "result": "Needs you 4", "next_at": fleet.iso(now)}
@@ -588,15 +590,20 @@ F.jobs = {{jobs: [{{key: "fleet-tick", name: "Fleet tick", every: "10s", cadence
                    record: {{at: old, ok: true, n: 0, result: "closed 0", next_at: null}}}},
                  {{key: "relay", name: "Relay", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick",
                    record: {{at: old, ok: true, n: 2, result: "answers relayed 2", next_at: null}}}},
+                 {{key: "brief-rows", name: "Brief rows", every: null, cadence: "after each fleet collect", runs_in: "orch-dash", group: "fleet-tick", record: null}},
                  {{key: "reap-hard", name: "reap-hard", every: "10m", cadence: "every 10m", runs_in: "launchd", record: null, why: "agent not installed"}}],
           rules: []}};
 const out = {{closed: internalJobs()}};
-F.jobOpen.add("fleet-tick"); out.open = internalJobs();
+F.jobOpen.add("fleet-tick"); out.open = internalJobs(); F.jobOpen.delete("fleet-tick");
+F.jobs.jobs[2].record.n = 0; out.quiet = internalJobs();
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    assert got["closed"].count("<tr") == 4 and "▸ 2 more" in got["closed"] and "Relay: <b>answers relayed 2</b>" in got["closed"], got["closed"]
+    assert got["closed"].count("<tr") == 4 and "▸ 3 more" in got["closed"] and "Relay: <b>answers relayed 2</b>" in got["closed"], got["closed"]
     assert ">10s<" in got["closed"] and "Self-clean</b>" not in got["closed"], got["closed"]
-    assert got["open"].count("<tr") == 6 and 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
+    # A rider with no record is counted as such, not as no change.
+    assert "Relay: <b>answers relayed 2</b> · <span class=\"muted\">1 no change · 1 no record</span>" in got["closed"], got["closed"]
+    assert "3 more: 2 no change · 1 no record" in got["quiet"], got["quiet"]
+    assert got["open"].count("<tr") == 7 and 'class="jsub"' in got["open"] and "Self-clean</b>" in got["open"], got["open"]
     assert "no record · agent not installed" in got["closed"] and 'class="is-done"' in got["closed"], got["closed"]
 
     # Monitors render escaped; every one not running is flagged and counted, a dead one with its exit code.
@@ -1344,6 +1351,14 @@ finally:
 assert [r["status"] for r in autos[0]["recent"]] == ["failed"] + ["completed"] * 5, autos
 assert autos[0]["next_run_at"] == "2026-10-09T11:40:00Z" and "xoxb" not in json.dumps(autos), autos
 assert autos[0]["recent"][0]["summary"] == "posted with [masked]", autos[0]["recent"][0]
+# A long first line reaches the page whole: the table wraps it, nothing here cuts it.
+secret_out = "round done: " + "item seen " * 30 + "END\nsecond line"
+fleet.orca = fake_orca
+try:
+    autos = fleet.fetch_automations()
+finally:
+    fleet.orca = real_orca
+assert autos[0]["recent"][0]["summary"] == "round done: " + "item seen " * 30 + "END", autos[0]["recent"][0]
 
 # Monitors: the demo world's watches reach state.json on the session whose worktree they run in.
 st = f.tick(force=True)

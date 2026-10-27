@@ -219,7 +219,9 @@ two = {"tasks": [{"id": "task_d1", "run": "run_d", "title": "D-1 rollout: releas
                     {"id": "s-d2", "run": "run_d", "task_title": "D-1 K4: client plugins for both versions"}],
        "prs": [{"key": "acme/plugins#7", "repo": "acme/plugins", "state": "OPEN", "session": "s-d2", "created": ago(5)}]}
 made, _, _ = stage_auto.build(stage_auto.load_programs("delta"), two, now)
-assert made["delta/D-1"]["pr"] is None and made["delta/D-1-K4"]["pr"] == "acme/plugins#7", made
+assert made["delta/D-1"]["pr"] is None and made["delta/P4-K4-ready"]["pr"] == "acme/plugins#7", made
+# The `<ticket>-<word>` card's word names exactly one predicate item (K4 -> P4-K4-ready): it is that item's row.
+assert "delta/D-1-K4" not in made and made["delta/P4-K4-ready"]["title"].startswith("D-1 K4"), list(made)
 assert made["delta/task_d3"]["title"] == "D-1 C3 conflict check" and made["delta/P1-release"]["item"], made
 assert not made["delta/D-1"]["item"], made["delta/D-1"]
 
@@ -235,6 +237,38 @@ stages.add("delta-docs", "docs page", parent="delta")
 got = {r["id"]: r for r in stages.table(two)["rows"]}
 assert got["delta/P1-release"]["title"] == "release with the two fixes" and got["delta/P1-release"]["cells"]["merge"]["evidence"] == "v1.2.0"
 assert got["delta/P4-K4-ready"]["title"] == "K4 client PRs" and "delta-release" not in got and "delta-k4" not in got, list(got)
-assert "delta-prod" in got and "delta-docs" in got and got["delta/D-1-K4"]["title"].startswith("D-1 K4"), list(got)
+assert got["delta/P4-K4-ready"]["title_full"] == "K4 client PRs", "a recorded title replaces the uncut one too"
+assert "delta-prod" in got and "delta-docs" in got and "delta/D-1-K4" not in got, list(got)
+
+# A long card title: `title` is cut for the text brief as before, `title_full` carries it whole to the dashboard.
+long = "E-1 " + "word " * 40 + "END"
+program("eps", {"repo": "acme/eps", "run": "run_e", "created_at": ago(10), "predicate": []},
+        [{"ts": ago(9), "ev": "spawned", "ticket": "E-1"}, {"ts": ago(8), "ev": "ready", "ticket": "E-1", "pr": 1}])
+first = {"tasks": [{"id": "task_e1", "run": "run_e", "title": long},
+                   {"id": "task_e2", "run": "run_e", "title": "E-2 same words"},
+                   {"id": "task_e3", "run": "run_e", "title": "E-2 same words"}],
+         "sessions": [{"id": "s-e3", "run": "run_e", "task_title": "E-2 same words"},
+                      {"id": "s-e2", "run": "run_e", "task": "task_e2", "task_title": "E-2 same words"}],
+         "prs": [{"key": "acme/eps#9", "repo": "acme/eps", "state": "OPEN", "session": "s-e3", "created": ago(5)},
+                 {"key": "acme/eps#8", "repo": "acme/eps", "state": "OPEN", "session": "s-e2", "created": ago(5)}]}
+made, _, held = stage_auto.build(stage_auto.load_programs("eps"), first, now)
+assert len(made["eps/E-1"]["title"]) == 120 and made["eps/E-1"]["title_full"] == long, made["eps/E-1"]
+# Two cards of one title: a session that names its task id takes its own card's row; one known only by the shared
+# title could be either's, so neither row takes its PR, and both rows stay.
+assert made["eps/E-2"]["pr"] == "acme/eps#8" and made["eps/task_e3"]["pr"] is None, made
+
+# A card keeps its row across ticks: archived (gone from the Run's tasks), its row, title and ledger PR stay; a later
+# card of its ticket keys by its own task id instead of taking that row.
+later = {"tasks": [{"id": "task_e4", "run": "run_e", "title": "E-1 follow-up"}], "sessions": [], "prs": []}
+made, _, _ = stage_auto.build(stage_auto.load_programs("eps"), later, now, held)
+assert made["eps/E-1"]["title_full"] == long and made["eps/E-1"]["pr"] == "acme/eps#1", made["eps/E-1"]
+assert made["eps/task_e4"]["title"] == "E-1 follow-up" and made["eps/task_e4"]["pr"] is None, list(made)
+# Without what the last tick held, the follow-up takes E-1: the order dependence the stored cards guard against.
+made, _, _ = stage_auto.build(stage_auto.load_programs("eps"), later, now)
+assert made["eps/E-1"]["title"] == "E-1 follow-up", made["eps/E-1"]
+# refresh() stores the cards and reads them back on the next tick.
+stage_auto.refresh(first, now)
+stage_auto.refresh(later, now)
+assert stage_auto.read()["rows"]["eps/task_e4"]["title"] == "E-1 follow-up"
 
 print("test_stage_auto: ok")

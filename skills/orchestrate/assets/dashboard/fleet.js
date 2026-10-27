@@ -970,7 +970,7 @@ function stageSection(w) {
   const level = {};
   all.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
   const row = (r) => `<tr class="${r.done_at ? "is-done" : ""}">
-      <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
+      <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title_full || r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
       <td class="mono wpr" data-label="PR">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
       ${STAGE_COLS.slice(2).map(([l, c]) => `<td data-label="${l}"${(r.cells || {})[c] ? "" : ' class="wempty"'}>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
   const blocks = {};
@@ -1080,11 +1080,14 @@ function internalJobs() {
     if (j.error) return `<tr>${name}${every}<td colspan="3">${tag("not read", "warn", "alert")} ${esc(j.error)}</td></tr>`;
     if (!r) return `<tr class="is-done">${name}${every}<td colspan="3" class="muted">no record · ${esc(j.why || "It has not recorded a run in this store.")}</td></tr>`;
     const warned = r.warned_at ? ` <a href="#/fleet/timeline" title="The timeline line written when it started failing">Timeline warning ${esc(hhmm(r.warned_at))} ${icon("arrow")}</a>` : "";
-    // A count of 0 is "no change", its words kept on hover; only a run that changed something stands out.
-    const said = r.n === 0 ? `<span class="muted" title="${esc(r.result || "")}">no change</span>` : r.n > 0 ? `<b>${esc(r.result || "ran")}</b>` : esc(r.result || "ran");
+    // A count of 0 is "no change", its words under it in grey; only a run that changed something stands out.
+    const said = r.n === 0 ? `<span class="muted">no change</span>${r.result ? `<div class="muted">${esc(r.result)}</div>` : ""}` : r.n > 0 ? `<b>${esc(r.result || "ran")}</b>` : esc(r.result || "ran");
     const busy = kids.filter((k) => k.error || (k.record && (!k.record.ok || k.record.n > 0)));
-    const sum = !kids.length ? "" : `<div class="jsum">${busy.length ? busy.map((k) => `${esc(k.name)}: ${k.error || !k.record.ok ? tag("▲ failed", "bad", "") : `<b>${esc(k.record.result || "ran")}</b>`}`).join(" · ")
-      : `<span class="muted">${kids.length} more: no change</span>`}</div>`;
+    const unrecorded = kids.filter((k) => !k.error && !k.record).length, unchanged = kids.length - busy.length - unrecorded;
+    const quiet = [unchanged && `${unchanged} no change`, unrecorded && `${unrecorded} no record`].filter(Boolean).join(" · ");
+    const parts = busy.map((k) => `${esc(k.name)}: ${k.error || !k.record.ok ? tag("▲ failed", "bad", "") : `<b>${esc(k.record.result || "ran")}</b>`}`);
+    if (quiet) parts.push(`<span class="muted">${busy.length ? quiet : `${kids.length} more: ${quiet}`}</span>`);
+    const sum = kids.length ? `<div class="jsum">${parts.join(" · ")}</div>` : "";
     const res = r.ok ? `${said}${warned ? `<div class="muted">last failure ${relSpan(r.failed_at)}${warned}</div>` : ""}`
       : `${tag("▲ failed", "bad", "")}${expandable(`job|${j.key}`, r.error)}<div class="muted">failing since ${relSpan(r.failed_at)}${warned}</div>`;
     const acted = r.acted_at ? `<div class="muted">last acted: ${esc(String(r.acted_n))} · ${relSpan(r.acted_at)}</div>` : "";

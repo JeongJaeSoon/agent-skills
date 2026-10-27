@@ -165,13 +165,15 @@ def merged(store, made):
     rows = dict(made["rows"])
     by_pr = {r["pr"]: k for k, r in rows.items() if r.get("pr")}
     into = {}
+    # A recorded title replaces the generated one whole, the dashboard's uncut title_full with it.
+    full = lambda r: {"title_full": r["title"]} if r.get("title") else {}  # noqa: E731
     for k, r in store["rows"].items():
         if k in rows:
-            rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")},
+            rows[k] = {**rows[k], **{f: v for f, v in r.items() if v and f not in ("cells", "overlay")}, **full(r),
                        "cells": {**rows[k].get("cells", {}), **r.get("cells", {})}}
         elif (on := not r.get("group") and (by_pr.get(r.get("pr")) or by_item(k, r, made["rows"], set(into.values())))):
             into[k] = on
-            rows[on] = {**rows[on], **{f: v for f, v in r.items() if v and f in ("title", "done_at")},
+            rows[on] = {**rows[on], **{f: v for f, v in r.items() if v and f in ("title", "done_at")}, **full(r),
                         "cells": {**rows[on].get("cells", {}), **r.get("cells", {})}}
         elif not r.get("overlay"):
             rows[k] = r

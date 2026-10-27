@@ -6,9 +6,12 @@ Rows of a program (~/.claude/programs/<slug>/):
 - one row `<slug>/<item>` per predicate item (program.json `predicate`), `item` true;
 - one row `<slug>/<ticket>` per worker card of the program's Run (`run`) whose ticket is not a predicate item, the
   ticket read from the card title's first word (`role-terms: …`, `ABC-12 …`); a card with none, or a second card of a
-  ticket another card already holds, is `<slug>/<task id>` (row_key).
+  ticket another card already holds, is `<slug>/<task id>` (row_key). A card qualified past its ticket (`ABC-1 K4: …`,
+  ledger ticket ABC-1-K4) whose qualifier names exactly one predicate item (`P6-K4-ready`) is that item's row.
+A card keeps the row it got first: each tick stores which card holds which row (programs.<slug>.cards), so a card
+that leaves the Run (archived) keeps its row, and a later card of its ticket never takes that row's id, ack or PR.
 A row's PR is the one the ledger names for its ticket (`ready`, `landed`, … with `ticket`), else one the fleet
-collector saw the worker session of that card own (matched by its task title), else one whose branch is named after
+collector saw the worker session of that card own (matched by task id, else by a task title no other card shares), else one whose branch is named after
 the ticket. With several, an
 open one is shown before a merged one. Cards and sessions are archived once the work lands, so a landed row's
 evidence is the ledger and GitHub: the collector keeps every PR a program's ledger names (fleet.program_prs), with
@@ -27,7 +30,7 @@ and leave after the stage table's 7 days, like any finished row. `_`-prefixed di
 
 Written to stages-auto.json beside stages.json, never into it: stages.json holds only what a person recorded.
 """
-import datetime as dt, json, os, pathlib, re
+import collections, datetime as dt, json, os, pathlib, re
 
 import fleet, prog
 
@@ -91,14 +94,25 @@ def ticket_of(title):
     return word if prog.TICKET_ID.fullmatch(word) else None
 
 
-def row_key(task, ledger_tickets, taken):
-    """A card's row key: its ticket, or `<ticket>-<word>` when the ledger names that ticket after the title's second word
-    (`ABC-1 K4: …` spawned as ABC-1-K4). A card whose key another card of the Run already holds keys by its task id:
-    two cards of one ticket are two rows, each with its own PR."""
-    k = ticket_of(task.get("title"))
-    words = (task.get("title") or "").split()
+def qualified(title, ledger_tickets):
+    """The card's ticket, or `<ticket>-<word>` when the ledger names that ticket after the title's second word
+    (`ABC-1 K4: …` spawned as ABC-1-K4)."""
+    k = ticket_of(title)
+    words = (title or "").split()
     if k and len(words) > 1 and f"{k}-{words[1].rstrip(':')}" in ledger_tickets:
-        k = f"{k}-{words[1].rstrip(':')}"
+        return f"{k}-{words[1].rstrip(':')}"
+    return k
+
+
+def row_key(task, ledger_tickets, taken, items=()):
+    """A card's row key: qualified(), or the one predicate item whose words hold the qualifier (ABC-1-K4 ->
+    P6-K4-ready; none or several: the qualified ticket). A card whose key another card of the Run already holds keys
+    by its task id: two cards of one ticket are two rows, each with its own PR."""
+    k = qualified(task.get("title"), ledger_tickets)
+    if k and k != ticket_of(task.get("title")):
+        word = k.rsplit("-", 1)[1].lower()
+        hits = [i for i in items if word in i.lower().split("-")]
+        k = hits[0] if len(hits) == 1 else k
     return k if k and k not in taken else task["id"]
 
 
@@ -113,8 +127,9 @@ def active(cfg, events, now):
     return bool(recent(cfg, events, now)) and not prog.final_check_at(events) and not prog.stopped(events)
 
 
-def build(programs, state, now):
-    """(rows, order, programs summary) from [(program.json, events)] and the fleet state (sessions, tasks, prs)."""
+def build(programs, state, now, held=None):
+    """(rows, order, programs summary) from [(program.json, events)] and the fleet state (sessions, tasks, prs).
+    held: the last tick's programs summary, whose `cards` (task id -> its row key and title) this tick keeps."""
     prs = {p.get("key"): p for p in state.get("prs") or []}
     rows, order, summary = {}, [], {}
     for cfg, events in programs:
@@ -125,25 +140,39 @@ def build(programs, state, now):
         tickets = list(dict.fromkeys(cfg.get("predicate") or []))
         items = set(tickets)
         ledger_tickets = {e["ticket"] for e in events if isinstance(e.get("ticket"), str)}
-        title, card_key = {}, {}
-        for t in state.get("tasks") or []:
-            if run and t.get("run") == run:
-                k = card_key[t["id"]] = row_key(t, ledger_tickets, set(card_key.values()))
-                if k not in tickets:
-                    tickets.append(k)
-                title.setdefault(k, t.get("title"))
-        by_title = {t.get("title"): card_key[t["id"]] for t in state.get("tasks") or [] if t["id"] in card_key}
+        kept = ((held or {}).get(slug) or {}).get("cards") or {}
+        cards = {tid: {"id": tid, "title": c.get("title")} for tid, c in kept.items()}
+        cards.update({t["id"]: t for t in state.get("tasks") or [] if run and t.get("run") == run})
+        card_key = {tid: c["key"] for tid, c in kept.items() if c.get("key")}
+        title, alias = {}, {}
+        for t in cards.values():
+            if t["id"] not in card_key:
+                card_key[t["id"]] = row_key(t, ledger_tickets, set(card_key.values()), items)
+            k = card_key[t["id"]]
+            if k not in tickets:
+                tickets.append(k)
+            title.setdefault(k, t.get("title"))
+            if k in items and (q := qualified(t.get("title"), ledger_tickets)) != k:
+                alias[q] = k
+        # A ledger ticket that names a card folded into an item counts as that item from here on.
+        events = [{**e, "ticket": alias[e["ticket"]]} if isinstance(e.get("ticket"), str) and e["ticket"] in alias else e
+                  for e in events]
+        # A session finds its card by task id; by title only when no other card shares it, else neither row takes its PR.
+        twice = {x for x, n in collections.Counter(t.get("title") for t in cards.values()).items() if n > 1}
+        by_title = {t.get("title"): card_key[t["id"]] for t in cards.values() if t.get("title") not in twice}
         # ticket -> PR keys, in the order they were first named.
         named = {}
         for e in events:
             if e.get("pr") is not None and e.get("ticket") and repo:
                 named.setdefault(e["ticket"], []).append(fleet.pr_key(repo, e["pr"]))
         for s in state.get("sessions") or []:
-            if run and s.get("run") == run and (k := by_title.get(s.get("task_title")) or ticket_of(s.get("task_title"))):
+            if run and s.get("run") == run and (k := card_key.get(s.get("task")) or s.get("task_title") not in twice and (
+                    by_title.get(s.get("task_title")) or ticket_of(s.get("task_title")))):
                 named.setdefault(k, []).extend(p["key"] for p in prs.values() if p.get("session") == s["id"])
         # A card's branch is named after its ticket (`<user>/role-terms`); its PR outlives the card's session.
         for p in sorted(prs.values(), key=lambda p: p.get("created") or ""):
             k = (p.get("branch") or "").rsplit("/", 1)[-1]
+            k = alias.get(k, k)
             if p.get("repo") == repo and k in tickets and (fleet.parse(p.get("created")) or last) >= fleet.parse(created):
                 named.setdefault(k, []).append(p["key"])
         landed = {fleet.pr_key(repo, e["pr"]): e for e in events
@@ -162,11 +191,14 @@ def build(programs, state, now):
             nums = {int(x.rsplit("#", 1)[1]) for x in keys if x.startswith(f"{repo}#")}
             at = max((e["ts"] for e in events if e.get("ts") and (e.get("ticket") == k or e.get("pr") in nums)),
                      default=fleet.iso(last))
-            rows[rid] = {"id": rid, "title": fleet.mask(" ".join((title.get(k) or k).split()), 120), "pr": pr,
+            # title stays cut for the text brief; the dashboard shows title_full.
+            full = " ".join((title.get(k) or k).split())
+            rows[rid] = {"id": rid, "title": fleet.mask(full, 120), "title_full": fleet.mask(full), "pr": pr,
                          "parent": slug, "cells": cells, "source": "auto", "program": slug, "item": k in items, "created_at": created,
                          "at": at, "done_at": done_at}
             order.append(rid)
-        summary[slug] = {"active": not done_at and not prog.stopped(events), "rows": len(tickets)}
+        summary[slug] = {"active": not done_at and not prog.stopped(events), "rows": len(tickets),
+                         "cards": {tid: {"key": card_key[tid], "title": t.get("title")} for tid, t in cards.items()}}
     return rows, order, summary
 
 
@@ -184,7 +216,7 @@ def merge_cell(pr, landed, prs):
 def refresh(state, now=None):
     """Rebuild stages-auto.json from the programs on disk and this tick's state."""
     now = now or fleet.utcnow()
-    rows, order, summary = build(load_programs(), state, now)
+    rows, order, summary = build(load_programs(), state, now, read()["programs"])
     fleet.write_atomic(path(), json.dumps({"generated_at": fleet.iso(now), "rows": rows, "order": order,
                                            "programs": summary}, ensure_ascii=False, indent=1) + "\n")
     return rows
