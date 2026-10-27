@@ -1,6 +1,6 @@
-# agent-skills 토큰 사용량 측정 (설계안)
+# agent-skills 토큰 사용량 측정
 
-상태: 설계안, 승인 대기. 승인되면 이 문서가 사용 설명서가 된다.
+상태: 2026-10-27 승인. 정적 측정(§1)은 `scripts/skill_tokens.py`로 구현됐다. 실사용 측정(§2)은 다음 PR에서 구현하며, 그때까지 §2는 설계다.
 
 agent-skills가 컨텍스트에 넣는 토큰이 얼마인지, 실제 세션에서 어느 기능이 토큰을 얼마나 쓰는지를 **결정론적 스크립트만으로** 재고 보여 준다. 측정·집계·귀속·경고·대시보드 갱신 어디에도 LLM 호출(서브에이전트, 스킬 실행, `count_tokens` API)이 없다.
 
@@ -8,10 +8,12 @@ agent-skills가 컨텍스트에 넣는 토큰이 얼마인지, 실제 세션에�
 
 | 구분 | 값 | 뜻 |
 |---|---|---|
-| 스킬 description 합계(항상 로드) | 39개, 표시 폭 12,641 | 스킬 목록 예산(컨텍스트 창의 약 1%, 표시 폭으로 셈)을 모든 플러그인과 개인 스킬이 나눠 쓴다. 넘치면 사용 횟수가 적은 스킬부터 description이 빠진다 |
-| 가장 긴 description | record-progress 569, setup-pc 523, ui-review 462, orchestrate 447, end-session 410 (표시 폭) | 줄이면 토큰도 줄고 목록에서 빠질 위험도 준다 |
-| SKILL.md 본문 합계(호출 시) | 391 KB | orchestrate 63 KB, watch-prs 36 KB, reap-resources 27 KB, deliver-ticket 20 KB가 절반 |
-| 훅 주입(항상) | 평범한 세션에서 0 | 훅 다섯 개 모두 조건부다(§1.3) |
+| 스킬 목록(항상 로드) | 39줄, 표시 폭 13,391, 근사 3,640 토큰 | 스킬 목록 예산(컨텍스트 창의 약 1%, 표시 폭으로 셈)을 모든 플러그인과 개인 스킬이 나눠 쓴다. 넘치면 사용 횟수가 적은 스킬부터 description이 빠진다 |
+| 가장 긴 목록 줄 | record-progress 583, setup-pc 532, ui-review 478, orchestrate 461, end-session 420 (표시 폭) | 줄이면 토큰도 줄고 목록에서 빠질 위험도 준다 |
+| 에이전트 목록(항상 로드) | 4줄, 근사 295 토큰 | |
+| SKILL.md 본문 합계(호출 시) | 근사 96,886 토큰 | orchestrate 15,441, watch-prs 8,871, reap-resources 6,665, deliver-ticket 4,806 |
+| 본문이 이름을 대는 reference(다 읽으면) | 근사 97,531 토큰(파일마다 한 번) | `orchestrate/references/dashboard.md` 하나가 22,097이고 세 스킬이 가리킨다 |
+| 훅 주입(항상) | 평범한 세션에서 0 | 텍스트를 넣는 훅 다섯 개 모두 조건부다(§1.3) |
 | 실사용 7일(한 PC, 970개 transcript, 2.05 GB) | 63억 토큰 | cache read 98%, cache 생성 2%, output 0.4% |
 | 실사용 7일, 턴 출처별 | 사람 51%, 작업 알림(모니터·백그라운드 작업이 깨운 턴) 24%, 서브에이전트 12%, peer 메시지 10%, 예약 실행 4% | 같은 데이터를 스크립트 한 번(6초)으로 집계 |
 
@@ -28,47 +30,91 @@ agent-skills가 컨텍스트에 넣는 토큰이 얼마인지, 실제 세션에�
 | 항상: 스킬 목록 | 각 `skills/*/SKILL.md` frontmatter | 목록 한 줄 그대로: `- agent-skills:<name>: <description>`. `disable-model-invocation: true`이면 description 없이 이름만 |
 | 항상: 에이전트 목록 | `agents/*.md` frontmatter | `- agent-skills:<name>: <description> (Tools: …)`, tools가 없으면 `All tools` |
 | 조건부: 훅 주입 | `hooks/hooks.json`의 각 명령 | §1.3 |
-| 호출 시 | `SKILL.md` 본문 전체 + 본문이 가리키는 파일 | 본문의 `[…](references/x.md)` 링크와 백틱 `references/x.md`를 1단계만 따라간다. 다른 스킬의 reference(`interrogate`의 `references/lead-judgment.md`)는 호출한 스킬 쪽 비용에 넣고 `cross` 표시 |
+| 호출 시 | `SKILL.md` 전체(frontmatter 포함) + 본문이 이름을 대는 reference | 본문의 `[…](references/x.md)` 링크와 백틱 `references/x.md`를 1단계만 따라간다. 다른 스킬의 reference(`interrogate`의 `references/lead-judgment.md`)는 그 이름을 댄 스킬 쪽에 넣고 `cross`로 센다. reference는 한 절만 읽거나 아예 안 읽는 경우가 많아서, 본문과 섞지 않고 "다 읽으면"의 상한으로 따로 낸다 |
 | 저장소 안에서만 | `CLAUDE.md`, `AGENTS.md` | 이 저장소에서 작업하는 세션만 읽는다. 플러그인 사용자에게는 0이라 따로 적는다 |
 
 ### 1.2 토큰 근사
 
-오프라인 근사가 기본이다. 문자를 네 부류로 나눠 계수를 곱한다.
+오프라인 근사가 기본이다. 문자를 여섯 부류로 나눠 계수를 곱한다(`APPROX_PER_CHAR`).
 
 | 부류 | 기본 계수(토큰/문자) |
 |---|---|
 | ASCII 영숫자 | 0.25 |
 | ASCII 문장부호·기호 | 0.5 |
 | 공백·줄바꿈 | 0.1 |
-| 한글 음절 | 0.9 |
-| 그 밖의 CJK·기타 | 1.2 |
+| 한글 음절·자모 | 0.9 |
+| 그 밖의 CJK(전각) | 1.2 |
+| 그 밖의 비ASCII(대시, 화살표 등) | 1.0 |
 
-이 계수는 **보정 전 추정값**이다. 정확 측정은 `--exact`(명시 플래그)일 때만 `count_tokens` API를 부르고, 키가 없으면 그 플래그는 오류로 끝난다. 키는 읽기만 하고 출력·저장하지 않는다. `calibrate` 하위 명령은 저장소 파일 표본에 대해 근사와 API 값을 맞춰 새 계수를 출력만 한다(사람이 커밋). 지금 이 PC에는 키가 없어서 오차를 아직 재지 못했다. 보정한 사람이 이 절에 "표본 N개, 파일별 오차 중앙값 x%, 최대 y%"를 적는다. 그 전까지 숫자는 "상대 비교용"이다(어느 것이 큰가, PR이 늘렸는가).
+**정확도.** 이 계수는 보정 전 추정값이다. API 값과의 오차는 아직 재지 못했다(API 키가 없었다). 그래서 지금 숫자는 상대 비교용이다. 어느 파일이 큰지, PR이 얼마나 늘렸는지를 보는 데 쓰고, 절대값을 청구 금액처럼 읽지 않는다. 보정은 키가 있는 사람이 한다.
+
+```bash
+ANTHROPIC_API_KEY=… python3 scripts/skill_tokens.py calibrate        # 새 계수와 오차(중앙값·최대, %)를 출력만 한다
+```
+
+`calibrate`는 이 체크아웃의 `SKILL.md`·reference·에이전트 파일마다 API 값을 받아 부류별 계수를 최소제곱으로 맞추고, 지금 계수의 오차와 새 계수의 오차를 나란히 출력한다. 계수를 바꾸는 커밋에 그 출력과 "표본 N개, 오차 중앙값 x%, 최대 y%"를 이 절에 적는다.
+
+`--exact`는 명시 플래그일 때만 `count_tokens` API를 부른다(파일·목록 줄마다 한 번, 같은 텍스트는 한 번). 요청마다 붙는 고정 오버헤드는 한 글자짜리 요청으로 재서 뺀다. 키가 없으면 근사로 넘어가지 않고 오류로 끝난다. 키는 환경 변수에서 읽기만 하고 출력·저장하지 않는다. 그 밖의 경로는 어떤 모델도 부르지 않는다.
 
 스킬 목록에는 토큰과 별도로 **표시 폭**(CJK 한 글자 = 2)을 낸다. 목록 예산이 토큰이 아니라 표시 폭으로 잘리기 때문이다. `--listing-budget N`으로 예산을 넣으면 이 플러그인 몫이 몇 %인지 보여 준다. 기본값은 없고(몫을 내지 않음), 실제 예산은 `claude -p … --debug-file`의 "Skill listing over budget" 줄에서 읽어 넣는다. `~/.claude.json`은 읽지 않는다.
 
 ### 1.3 훅
 
-`hooks.json`의 훅은 모두 조건부다. 언제 주입하는지와 주입할 때의 최대 문구 크기를 따로 적는다.
+훅은 실행하지 않는다(2026-10-27 결정). 정적 측정은 `hooks.json`의 훅마다 이벤트와 "언제 텍스트를 넣는가"만 낸다. 텍스트를 넣는 훅은 모두 조건부이고, 넣는 양은 세션 상태(열린 결정 수, 역할, 프로그램 이름)에 따라 달라서 파일만 보고 정할 수 없기 때문이다. 크기는 §2가 transcript의 훅 첨부에서 `횟수 × 실제 크기`로 잰다.
 
-| 훅 | 이벤트 | 주입 조건 | 크기를 구하는 법 |
-|---|---|---|---|
-| `onboard.py` | SessionStart | 설정이 적용되지 않은 프로필에서 한 번 | `message()`를 그대로 호출 |
-| `reorient.py` | SessionStart, UserPromptSubmit | 역할(orchestrator·lead)이 선언된 세션 | `role_long()`·`role_line()`을 고정 입력으로 호출 |
-| `decision.py` | UserPromptSubmit | Orca 터미널이고 그 터미널의 열린 결정이 있을 때 | 결정 다섯 개를 채운 고정 입력으로 문구 함수 호출 |
-| `request_log.py` | UserPromptSubmit | 역할 세션의 사람 프롬프트 | 같은 방식 |
-| `prose_check.py` | PreToolUse | 트래커 쓰기 명령에서 문체 위반이 있을 때 | 같은 방식 |
+| 훅 | 이벤트 | 텍스트를 넣는 때 |
+|---|---|---|
+| `onboard.py` | SessionStart | 설정이 적용되지 않은 프로필에서, 적용하거나 거절할 때까지 |
+| `reorient.py` | SessionStart, UserPromptSubmit | 역할(orchestrator·lead)이 선언된 세션의 프롬프트마다, 그리고 세션 시작 |
+| `decision.py` | UserPromptSubmit | Orca 터미널에 그 터미널이 등록한 열린 결정이 있을 때 프롬프트마다 |
+| `request_log.py` | UserPromptSubmit | 역할 세션의 사람 프롬프트마다 |
+| `prose_check.py` | PreToolUse | 커밋·PR·트래커 쓰기의 문장이 write-plainly에 걸릴 때 |
+| 나머지 다섯 개 | PreToolUse 등 | 넣지 않는다. 막거나 거부할 때 그 이유만 |
 
-문구 함수만 부르고 상태 파일은 쓰지 않는다. 함수가 상태를 건드리는 훅은 고정 입력을 만드는 작은 어댑터를 둔다. 문자열 상수를 AST로 긁는 방식은 쓰지 않는다(조건별로 합쳐지지 않는 문구까지 더해 과대 추정한다).
+`HOOKS` 표에 없는 훅이 `hooks.json`에 생기면 `unknown`으로 나오고 테스트가 실패한다.
 
 ### 1.4 중복
 
-정규화(소문자, 공백 압축, 목록 기호·강조 제거) 뒤 60자 이상 같은 문장이 두 파일 이상에 나오면 보고한다. 문장 단위만 한다. 비슷한 문단(shingle) 탐지는 넣지 않는다. 결과는 "같은 규칙이 N개 스킬에 있고 합쳐서 몇 토큰"이다.
+정규화(소문자, 공백 압축, 목록 기호·강조 제거) 뒤 60자 이상 같은 문장이 두 파일 이상에 나오면 보고한다. 문장은 줄 안에서 마침표로 자르므로, 줄바꿈된 문단은 같은 줄끼리 맞춰진다. 비슷한 문단(shingle) 탐지는 넣지 않는다. `save`는 한 곳에만 둘 때 줄어드는 토큰이다. 일부러 같은 글을 여러 곳에 두는 경우도 있다(`orchestrate`의 거부된 행동 문단은 워커 brief에 그대로 붙여야 해서 `test_refusal_copies.py`가 사본을 맞춘다). 중복이라고 바로 줄일 대상은 아니다.
 
 ### 1.5 diff
 
-- `--base <git-ref>`: `git ls-tree -r`와 `git cat-file --batch`로 그 커밋의 파일을 읽어 같은 측정을 하고 차이를 낸다. 체크아웃이나 worktree를 만들지 않는다.
+- `--base <git-ref>`: `git archive`로 그 커밋의 `skills/`·`agents/`·`hooks/` 등을 임시 디렉터리에 풀어 같은 측정을 하고 차이를 낸다. 체크아웃이나 worktree를 만들지 않고 작업 트리를 건드리지 않는다.
 - `--baseline <file.json>`: 이전 `--json` 출력과 비교한다.
+
+### 1.6 사용
+
+```bash
+python3 scripts/skill_tokens.py static                       # 표
+python3 scripts/skill_tokens.py static --json > base.json    # 기준선
+python3 scripts/skill_tokens.py static --base origin/main    # 이 브랜치가 늘린 양
+python3 scripts/skill_tokens.py static --listing-budget 30000 # 스킬 목록 예산 중 이 플러그인 몫
+```
+
+2026-10-27 이 저장소에서의 출력(일부):
+
+```text
+ALWAYS (every turn)                tokens   width
+  skill listing, 39 skills        3,640  13,391
+  agent listing, 4 agents          295   1,172
+  longest descriptions: record-progress 583, setup-pc 532, ui-review 478, orchestrate 461, end-session 420, ...
+
+ON INVOKE, top 10       SKILL.md   named refs (if all read)   refs from other skills
+  orchestrate              15,441     47,037 in  7               1
+  watch-prs                 8,871        953 in  1               1
+  reap-resources            6,665      5,066 in  2               1
+  deliver-ticket            4,806     12,761 in  8               2
+  ...
+  all 39 skills            96,886     97,531 (each file once)
+
+$ python3 scripts/skill_tokens.py static --base 86b859a --top 3
+vs 86b859a: always +99 tokens (+370 width), on invoke +2,103, named refs +547, repo-local +0, duplicates +20
+  on invoke     skills-config                       0 ->    1,709  (+1,709)
+  reference     skills/orchestrate/references/dashboard.md   21,631 ->   22,097  (+466)
+  on invoke     orchestrate                    15,181 ->   15,441  (+260)
+```
+
+이 저장소 전체를 재는 데 0.2초가 걸린다.
 
 ## 2. 실사용 측정
 
@@ -101,28 +147,10 @@ assistant 응답 하나(API 호출 하나)를 두 축으로 분류한다. 축마
 
 ### 2.3 가시화
 
-CLI(`skill-tokens`):
+CLI(`python3 scripts/skill_tokens.py usage`, 다음 PR) 목업. 숫자는 모양을 보이기 위한 자리값이고, 실측은 §0의 turnOrigin·서브에이전트 비율뿐이다.
 
 ```text
-$ skill-tokens static
-항상 로드          tokens≈  display  비고
-  스킬 목록 39개      3,950    12,641  (--listing-budget 을 주면 몫 %)
-  에이전트 목록 4개      260       988
-  훅 (조건부)             0         —  최대 주입: reorient 410, onboard 180
-호출 시 상위 5      tokens≈  본문   refs  cross
-  orchestrate       17,800  15,900  1,900   0
-  watch-prs          9,000   9,000      0   0
-  reap-resources     6,900   6,900      0   0
-  deliver-ticket     5,100   4,900    200   1
-  end-session        4,000   4,000      0   0
-중복 (60자 이상 같은 문장, 2개 이상 파일)
-  "never send the reload with orca terminal send…"  3곳  ≈120
-(숫자는 보정 전 근사. 정확 측정: --exact, API 키 필요)
-
-$ skill-tokens static --base origin/main
-항상 +42 (스킬 목록 +38: tune-automode description +17자), 호출 시 +310 (brief +310)
-
-$ skill-tokens usage --days 7
+$ python3 scripts/skill_tokens.py usage --days 7
 누가                 tokens   가중     share  turns  추세(전주 대비)
   interactive         3.2B     410M    51%    2,183   +4%
   orchestrator        1.1B     150M    18%      …     +22% ▲
@@ -135,9 +163,7 @@ $ skill-tokens usage --days 7
 훅 주입  reorient 1,940회 × ≈110 = 213K
 ```
 
-(실측은 표시 폭 12,641, 본문 크기 순위, turnOrigin·서브에이전트 비율뿐이다. 토큰 수, 중복 문장, diff, 세션 축 행은 모양을 보이기 위한 자리값이다.)
-
-대시보드(`orch-dash`) 패널 "토큰"(경고 행의 숫자는 자리값):
+대시보드(`orch-dash`) 패널 "토큰" 목업(숫자는 자리값):
 
 ```text
 ┌ 토큰 · 최근 7일 ─────────────────────────────────────────────┐
@@ -145,7 +171,7 @@ $ skill-tokens usage --days 7
 │ ▇▇▇▇▇▅▅▃ 일별 막대(누가 축으로 색 구분)                         │
 │ 많이 잡아먹는 것                                             │
 │  ▲ automation:watch-prs  빈 회차 71% (48/67) · 회차당 0.6M   │
-│     → 항상 로드: watch-prs description 393폭, 본문 9,000      │
+│     → 항상 로드: watch-prs 목록 줄 405폭, 본문 8,871          │
 │  ▲ orchestrator  전주 대비 +22%                               │
 │ 상위 소비자 표 (누가 / 무엇이 탭) · 정적 측정 요약 링크         │
 └──────────────────────────────────────────────────────────────┘
@@ -167,26 +193,26 @@ brief에는 경고가 있을 때만 한 줄이 붙는다: `토큰 경고 2건: a
 
 ## 3. 측정기 자체 비용
 
+측정·집계·경고·대시보드 갱신은 모두 결정론적 스크립트다. LLM 호출은 0이다(`--exact`·`calibrate`의 `count_tokens`만 예외이고, 명시 플래그일 때만 돈다).
+
 | 항목 | 컨텍스트 비용 |
 |---|---|
-| 새 스킬 | 만들지 않는다. CLI는 `scripts/skill_tokens.py` + `bin/skill-tokens`, 실사용 수집은 같은 파일의 `usage` 하위 명령 |
+| 새 스킬·에이전트 | 없다. CLI는 `scripts/skill_tokens.py` 하나, 실사용 수집은 같은 파일의 `usage` 하위 명령 |
 | 새 훅 | 없다. 어떤 훅도 매 턴 이 측정을 돌리거나 결과를 주입하지 않는다 |
-| 기존 SKILL.md 변경 | brief의 경고 한 줄은 스크립트 출력이라 SKILL.md 문장이 필요 없다. 개선 루프(§4)를 넣는다면 `write-skill` §5에 한 줄(≈40토큰, 호출 시에만) |
-| 자동화 | 새 자동화 없다. 수집은 이미 떠 있는 대시보드 서버의 루프에서 돈다 |
+| 기존 SKILL.md 변경 | 없다. brief의 경고 한 줄은 스크립트 출력이라 SKILL.md 문장이 필요 없다 |
+| 자동화 | 없다. 실사용 수집은 이미 떠 있는 대시보드 서버의 루프에서 돈다 |
 
-이 표의 숫자는 PR에서 `skill-tokens static --base origin/main`의 출력으로 확인한다. 기대값: 항상 로드 +0, 호출 시 +0~40.
+정적 측정 PR의 확인: `python3 scripts/skill_tokens.py static --base origin/main` → `always +0 tokens (+0 width), on invoke +0, named refs +0`.
 
-## 4. 개선 루프 (제안)
+## 4. 개선 루프
 
-- `write-skill` §5에 "`skill-tokens static --base origin/main`의 항상 로드 증가분을 보고에 적는다" 한 줄. 스킬 수정이라 write-skill 전 절차(prompt audit, 이름 grep, eval, reload)가 붙는다. 이번 PR에 넣을지, 후속으로 뺄지 고른다.
+- `write-skill` §5에 "`static --base origin/main`의 항상 로드 증가분을 보고에 적는다" 한 줄은 후속으로 뺐다(2026-10-27 결정). 스킬 수정이라 write-skill 전 절차가 붙는다.
 - `reflect`는 바꾸지 않는다. 경고가 생기면 대시보드와 brief에서 사람이 보고 reflect를 부른다.
-- CI 예산 경고는 제안만: `test_skill_tokens.py`에 "스킬 목록 표시 폭 합계 ≤ N"을 하나 두면 description이 늘 때 테스트가 실패한다. N을 정하는 것은 오너 몫이라 이번에는 넣지 않는다.
+- CI 예산 경고는 제안만 한다: `test_skill_tokens.py`에 "스킬 목록 표시 폭 합계 ≤ N"을 하나 두면 description이 늘 때 테스트가 실패한다. N은 오너가 정하면 넣는다.
 
 ## 5. 구현 범위
 
-범위가 커서 PR 두 개를 제안한다. 각 PR은 README 테스트 루프를 3.9와 최신 Python 양쪽에서 통과시킨다.
+1. **정적**(이 문서와 함께 들어간 PR): `scripts/skill_tokens.py`의 `static`(표·JSON·`--base`·`--baseline`·`--listing-budget`·`--exact`)과 `calibrate`, `scripts/test_skill_tokens.py`.
+2. **실사용**(다음 PR): `usage` 하위 명령(증분 캐시, 귀속, 경고), `orch-dash` 토큰 패널, brief 경고 한 줄, 테스트(합성 transcript fixture만, 실제 경로·이름 없음).
 
-1. **PR 1 정적**: `scripts/skill_tokens.py static`(표·JSON·`--base`·`--baseline`·`--exact`·`calibrate`), `bin/skill-tokens`, `scripts/test_skill_tokens.py`, 이 문서. 본문에 현재 저장소의 개선 후보 5~10개.
-2. **PR 2 실사용**: `usage` 하위 명령(증분 캐시, 귀속, 경고), `orch-dash` 토큰 패널, brief 경고 한 줄, 테스트(합성 transcript fixture만, 실제 경로·이름 없음).
-
-실제 스킬 축약은 두 PR 모두에 넣지 않는다.
+실제 스킬 축약은 두 PR 모두에 넣지 않는다. 개선 후보는 PR 본문에 적는다.
