@@ -22,7 +22,7 @@ class Setup(unittest.TestCase):
             self.env.pop(k, None)
 
     def run_setup(self, *args, ok=True):
-        p = subprocess.run([sys.executable, str(SETUP), "--here", "--language", "Korean", *args],
+        p = subprocess.run([sys.executable, "-I", str(SETUP), "--here", "--language", "Korean", *args],
                            capture_output=True, text=True, env=self.env)
         if ok:
             self.assertEqual(p.returncode, 0, p.stderr + p.stdout)

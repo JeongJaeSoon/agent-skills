@@ -251,7 +251,7 @@ class EmitTest(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("dev-restart", r.stdout)
         digest = automode_rule.spec_hash(SPEC)
-        self.assertIn(f"! python3 {out} --settings {self.settings} --apply {digest}", r.stdout)
+        self.assertIn(f"! python3 -I {out} --settings {self.settings} --apply {digest}", r.stdout)
         self.assertFalse(self.backups())
 
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "CLAUDE_SKILL_DIR")}

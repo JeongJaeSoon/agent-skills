@@ -387,7 +387,7 @@ def main(argv):
         if not args.apply:
             if files or actions:
                 print(f"\n(dry run; nothing written; plan hash {h})\nApply with:\n"
-                      f"  ! python3 {' '.join(map(shlex.quote, [str(HERE / 'setup.py'), *argv]))} --apply {h}")
+                      f"  ! python3 -I {' '.join(map(shlex.quote, [str(HERE / 'setup.py'), *argv]))} --apply {h}")
             return 0
         print()
         undo = []

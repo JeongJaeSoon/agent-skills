@@ -206,7 +206,7 @@ def emit(spec, out, settings):
         f.write(body)
     out.chmod(0o600)
     target = "" if settings == DEFAULT_SETTINGS else f" --settings {shlex.quote(str(settings.absolute()))}"
-    print(f"\nwrote {out}\nThe user reviews it and runs:\n  ! python3 {shlex.quote(str(out))}{target} --apply {spec_hash(spec)}")
+    print(f"\nwrote {out}\nThe user reviews it and runs:\n  ! python3 -I {shlex.quote(str(out))}{target} --apply {spec_hash(spec)}")
 
 
 def main(argv):

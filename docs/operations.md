@@ -84,7 +84,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 
 **4. auto mode가 막았을 때: 「auto mode 가 막았어」, 「이거 허용되게 규칙 추가해줘」 → `tune-automode`**
 
-에이전트는 거부된 행동을 다른 형태로 다시 하지 않는다. 대신 그 행동 부류만 덮는 가장 작은 autoMode 규칙 초안과 적용 스크립트를 만들고, 사람이 diff를 보고 `! python3 <경로> --apply <spec 해시>`로 적용한다. 에이전트는 `settings.json`을 고치지 않는다.
+에이전트는 거부된 행동을 다른 형태로 다시 하지 않는다. 대신 그 행동 부류만 덮는 가장 작은 autoMode 규칙 초안과 적용 스크립트를 만들고, 사람이 diff를 보고 `! python3 -I <경로> --apply <spec 해시>`로 적용한다. 에이전트는 `settings.json`을 고치지 않는다.
 
 **5. 나를 기다리는 PR: 「리뷰 요청 온 PR 정리해줘」, 「내 PR 리뷰 리마인드」 → `watch-prs`**
 
