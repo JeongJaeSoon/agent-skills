@@ -149,7 +149,7 @@ class PermissionsTest(Base):
 
     def test_both_settings_files_get_rules_and_automode(self):
         spec = {"settings": ["profile", "home"],
-                "permissions": {"add": [self.rule("profiles/*/cfg/projects/*/memory/**"),
+                "permissions": {"add": [self.rule("profiles/p1/cfg/projects/*/memory/**"),
                                         self.rule(".claude/projects/*/memory/**")]},
                 "autoMode": {"add": {"allow": [AM_LINE]}}}
         r, out = self.emit(spec)
@@ -170,17 +170,30 @@ class PermissionsTest(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.count("== settings:"), 1)
 
-    def test_symlink_twin_added_to_spec(self):
-        real = self.home / "real-claude"
-        real.mkdir()
-        (self.home / "linked").symlink_to(real)
-        r, out = self.emit({"permissions": {"add": [self.rule("linked/projects/*/memory/**")]}})
+    def test_symlinked_memory_dir_refused(self):
+        (self.claude / "hooks").mkdir()
+        (self.claude / "projects" / "evil").mkdir(parents=True)
+        (self.claude / "projects" / "evil" / "memory").symlink_to(self.claude / "hooks")
+        (self.claude / "projects" / "evil2").symlink_to(self.claude / "hooks")
+        for rule in ("Edit(~/.claude/projects/evil/memory/**)", "Edit(~/.claude/projects/evil/memory/x.sh)",
+                     "Edit(~/.claude/projects/*/memory/**)", self.rule(".claude/projects/evil/memory/**"),
+                     self.rule(".claude/projects/evil2/memory/**")):
+            r, out = self.emit({"settings": ["home"], "permissions": {"add": [rule]}})
+            self.assertNotEqual(r.returncode, 0, rule)
+            self.assertFalse(out.exists(), rule)
+        r, _ = self.emit({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/real/memory/**)"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
-        twin = f"Edit(/{real}/projects/*/memory/**)"
-        self.assertIn(f"symlink twin added: {twin}", r.stdout)
+
+    def test_symlink_planted_after_emit_refused_at_apply(self):
+        r, out = self.emit({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/*/memory/**)"]}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        (self.claude / "hooks").mkdir()
+        (self.claude / "projects" / "evil").mkdir(parents=True)
+        (self.claude / "projects" / "evil" / "memory").symlink_to(self.claude / "hooks")
+        before = self.snapshot()
         r = self.run_copy(out, "--apply", self.apply_line(r))
-        allow = json.loads((self.profile / "settings.json").read_text())["permissions"]["allow"]
-        self.assertIn(twin, allow)
+        self.assertIn("symlink", r.stderr)
+        self.assertEqual(self.snapshot(), before)
 
     def test_remove_missing_refused_before_any_write(self):
         before = self.snapshot()
@@ -189,18 +202,16 @@ class PermissionsTest(Base):
         self.assertFalse(out.exists())
         self.assertEqual(self.snapshot(), before)
 
-    def test_broad_rules_refused(self):
-        cases = {"Bash(*)": "outside this skill", "Bash": "outside this skill", "WebFetch(domain:*)": "update-config",
-                 "Bash(python3:*)": "outside this skill", "mcp__server": "one MCP tool", "Edit": "bare tool name",
-                 f"Edit(/{self.home}/**)": "whole home", "Edit(//**)": "matches everything",
-                 "Edit(~/.claude/**)": "user's to edit", f"Write(/{self.profile}/settings.json)": "user's to edit",
-                 "Edit(src/**)": "absolute path", "Edit(//tmp/é/x)": "ASCII",
-                 "Read(//tmp/x-" + "ghp_" + "a" * 36 + ")": "secret"}
-        for rule, why in cases.items():
+    def test_rules_outside_the_allow_list_refused(self):
+        for rule in ("Bash(*)", "Bash", "WebFetch(domain:*)", "Bash(python3:*)", "mcp__server", "Edit",
+                     f"Edit(/{self.home}/**)", "Edit(//**)", "Edit(~/.claude/**)",
+                     f"Write(/{self.profile}/settings.json)",
+                     "Edit(src/**)", "Edit(//tmp/é/x)", f"Read(/{self.home}/src/app/**)",
+                     "Read(//tmp/x-" + "ghp_" + "a" * 36 + ")"):
             r, _ = self.emit({"permissions": {"add": [rule]}})
             self.assertNotEqual(r.returncode, 0, rule)
-            self.assertIn(why, r.stderr, rule)
-        r, _ = self.emit({"permissions": {"add": ["mcp__server__tool", f"Read(/{self.home}/src/app/**)"]}})
+            self.assertIn("outside this skill", r.stderr, rule)
+        r, _ = self.emit({"permissions": {"add": ["mcp__server__tool", "Read(~/.claude/projects/*/memory/**)"]}})
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_remove_takes_a_broad_rule(self):
@@ -212,7 +223,7 @@ class PermissionsTest(Base):
 
 
 class RuleProbeTest(unittest.TestCase):
-    """Rules an independent review found passing, and the narrow rules that must keep passing."""
+    """Every rule earlier reviews found passing a deny list, now outside the allow list, and the rules it takes."""
 
     def setUp(self):
         self.home = pathlib.Path(tempfile.mkdtemp()).resolve()
@@ -225,7 +236,6 @@ class RuleProbeTest(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-    # Every Bash rule is out of scope: the strings earlier reviews found passing a command check, then narrow ones.
     BASH = [
         "Bash(*)", "Bash", "Bash(python3 -c:*)", "Bash(bash -c:*)", "Bash(sh -c *)", "Bash(node -e:*)",
         "Bash(env X=1:*)", "Bash(sudo -u root:*)", "Bash(/bin/bash:*)", "Bash(/usr/bin/env:*)", "Bash(python3.12:*)",
@@ -249,6 +259,7 @@ class RuleProbeTest(unittest.TestCase):
         "Bash(gh pr view:*)", "Bash(npm test:*)", "Bash(python3 scripts/check.py:*)", "Bash(git status:*)",
     ]
     ORCA = "/{h}/Library/Application Support/orca"
+    PROFILE = ORCA + "/claude-profiles/p1/home"
     REFUSED = [
         "Edit(~/.claude/hooks/*.sh)", "Edit(~/.claude/hooks/sub/**)", "Edit(/{h}/prof/hooks/x.sh)",
         "Edit(~/.claude/skills/*/scripts/**)", "Edit(~/.claude/skills/*)", "Edit(~/.claude/plugins/marketplaces/**)",
@@ -277,23 +288,60 @@ class RuleProbeTest(unittest.TestCase):
         "Read(/{h}/src/app/*.json)", "Read(/{h}/src/app/.cl?ude/x)", "Read(/{h}/src/*/hooks/x)",
         "Edit(/{h}/src/аpp/x.md)", "Edit(~/．claude/settings.json)", "mcp__ѕrv__tool",
         "mcp__server", "mcp__server__*", "mcp__srv__tool(x)", "WebFetch(domain:example.test)", "Glob(/{h}/src/**)",
+        "Read(/{h}/src/app/**)", "Read(/{h}/src/app/.git/HEAD)", "Edit(/{h}/src/app/docs/notes.md)",
+        "Edit(/{h}/src/app/src/*.py)",
+        "Edit(~/.claude/projects/*/memory/../../hooks/x)", "Edit(~/.claude/projects/**/memory/**)",
+        "Edit(~/.claude/**/memory/**)", "Edit(~/.claude/projects/*/*/**)", "Edit(~/.claude/projects/*/memory*/**)",
+        "Edit(~/.claude/projects/*/MEMORY/**)", "Edit(~/.claude/Projects/*/memory/**)",
+        "Edit(~/.claude/projects/*/memory/../x)",
+        "Edit(~/.claude/projects/*/memory/.claude/settings.json)", "Edit(~/.claude/projects/*/memory/.git/hooks/x)",
+        "Edit(~/.claude/projects/*/memory/x/../../../../hooks/a)", "Edit(" + ORCA + "/*/projects/x/memory/**)",
+        "Edit(" + ORCA + "/claude-profiles/*/*/projects/*/memory/**)",
+        "Edit(" + ORCA + "/claude-profiles/*/{p}/projects/*/memory/**/settings.json)",
+        "Edit(" + ORCA + "/**/projects/*/memory/**)", "Edit(~/projects/x/memory/**)",
+        "Edit(//tmp/projects/x/memory/**)",
+        "Edit(/{h}/src/app/projects/x/memory/.git/hooks/a)", "Edit(~/.claude/projects/*/memory)",
+        "Edit(~/.claude/projects/*/memory/*)", "Edit(~/.claude/projects/?/memory/**)",
+        "Edit(~/.claude/projects/*?/memory/**)",
+        "Edit(~/.claude/projects/*/memory/**/hooks/**)", "Edit(~/.claude/projects/.git/memory/**)",
+        "Edit(~/.claude/projects/*/memory/.hidden)", "Edit(~/.claude/projects/*/memory/x/y.md)",
+        "Edit(" + PROFILE + "/settings.json)", "Edit(" + PROFILE + "/hooks/x.sh)", "Edit(" + ORCA + "/*)",
+        "Edit(" + ORCA + "/claude-profiles/*/{p}/*.json)", "Read(" + ORCA + "/claude-profiles/p2/{p}/settings.json)",
+        "Edit(/{h}/src/app/.GIT/Hooks/x)", "Edit(/{h}/src/app/.git/modules/sub/hooks/pre-commit)",
+        "Edit(/{h}/src/app/.git/modules/sub/config)", "Edit(/{h}/src/app/.git/worktrees/w/config.worktree)",
+        "Edit(/{h}/bare.git/hooks/post-receive)", "Edit(/{h}/bare.git/config)", "Edit(/{h}/src/app/.husky/pre-commit)",
+        "Edit(/{h}/src/app/.vscode/tasks.json)", "Edit(/{h}/src/app/.envrc)", "Edit(/{h}/src/app/CLAUDE.md)",
+        "Edit(/{h}/src/app/.pre-commit-config.yaml)", "Edit(/{h}/src/app/.git/info/attributes)",
+        "Edit(/{h}/src/app/.gitattributes)", "Edit(/{h}/src/app/.github/workflows/x.yml)",
+        "Edit(~/.ZSHRC)", "Edit(~/.zsh*)", "Edit(~/.*rc)", "Edit(~/.*)", "Edit(~/Library/*/x.plist)",
+        "Edit(//opt/homebrew/*/x)", "Edit(//opt/homebrew/opt/python/bin/x)", "Edit(//opt/homebrew/Cellar/**)",
+        "Write(//opt/homebrew/opt/gh/bin/gh)", "Edit(//usr/local/*/x)", "Edit(//private/etc/zshrc)",
+        "Edit(//etc/paths.d/x)",
+        "Edit(~/.hammerspoon/init.lua)", "Edit(~/.local/share/x)", "Edit(~/.claude/projects/x/y.json)",
+        "Edit(~/.claude.json.backup)", "Edit(~/.claude-x/settings.json)",
+        "Edit(~/Library/Application Support/Claude/claude_desktop_config.json)", "Edit(~/.cursor/mcp.json)",
+        "Edit(~/.codex/config.toml)", "Edit(~/.gemini/settings.json)",
+        "mcp__srv", "mcp__plugin__x__y", "mcp__a__b__c", "mcp__srv__", "mcp____tool", "mcp__srv__tool ",
+        " mcp__srv__tool", "MCP__srv__tool", "mcp__srv__tool\n", "mcp__srv___tool", "mcp___srv__tool",
+        "Agent(x)", "Skill(x)", "Task(x)", 7, None, "",
     ]
+    # The two rules a live setup uses, in both spellings, and the other path tools on them.
     ALLOWED = [
         "Edit(/{h}/prof/projects/*/memory/**)", "Edit(~/.claude/projects/*/memory/**)",
-        "Edit(" + ORCA + "/claude-profiles/*/{p}/projects/*/memory/**)", "Read(/{h}/src/app/**)",
-        "Read(/{h}/src/app/.git/HEAD)", "Edit(/{h}/src/app/docs/notes.md)", "mcp__srv__tool",
-        "mcp__plugin_x_y-slack__send_message",
+        "Edit(/{h}/.claude/projects/*/memory/**)", "Edit(" + ORCA + "/claude-profiles/*/{p}/projects/*/memory/**)",
+        "Write(~/.claude/projects/*/memory/**)", "MultiEdit(~/.claude/projects/*/memory/**)",
+        "NotebookEdit(~/.claude/projects/*/memory/**)", "Read(~/.claude/projects/*/memory/**)",
+        "Write(" + ORCA + "/claude-profiles/*/{p}/projects/*/memory/**)",
+        "MultiEdit(" + ORCA + "/claude-profiles/p1/{p}/projects/-Users-x-src-app/memory/*.md)",
+        "Edit(~/.claude/projects/x/memory/MEMORY.md)", "mcp__srv__tool", "mcp__plugin_x_y-slack__send_message",
+        "mcp__-__-",
     ]
 
-    def test_bash_refused_as_out_of_scope(self):
-        for rule in self.BASH:
-            with self.subTest(rule=rule), self.assertRaisesRegex(config_emit.Refused, "outside this skill"):
-                config_emit.check_permission(rule)
-
     def test_refused(self):
-        for rule in self.REFUSED:
-            with self.subTest(rule=rule), self.assertRaises(config_emit.Refused):
-                config_emit.check_permission(rule.format(h=self.home, p="home"))
+        for rule in self.BASH + self.REFUSED:
+            rule = rule.format(h=self.home, p="home") if isinstance(rule, str) and rule in self.REFUSED else rule
+            with self.subTest(rule=rule), self.assertRaisesRegex(config_emit.Refused, "outside this skill|string"):
+                config_emit.check_permission(rule)
 
     def test_allowed(self):
         for rule in self.ALLOWED:

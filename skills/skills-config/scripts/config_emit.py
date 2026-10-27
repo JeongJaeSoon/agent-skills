@@ -16,15 +16,14 @@ agent-skills.json is one file per user, ~/.claude/agent-skills.json ($AGENT_SKIL
 HASH is the start of the script's sha256 (plus SPEC with --spec), printed with the diff; emit's run line has shasum
 check the whole file first, because an edited copy could also drop its own check, and runs python3 -I, so a module
 planted beside the copy or in the working directory is not imported in place of the standard library.
-permissions.add takes path rules (Edit, Write, Read, ...) and single MCP tools only; a Bash rule is refused, since
-no check on a shell command holds, and goes through update-config or the user's own edit. The path checks are a
-best-effort guardrail; the diff the user reviews before --apply is the decision.
+permissions.add is an allow list: path rules inside a config directory's projects/<name>/memory/ and exact MCP tool
+names. A deny list over paths and commands never closed, so every other rule, Bash included, is refused and goes
+through update-config or the user's own edit.
 """
 import argparse
 import ast
 import difflib
-import fnmatch
-import functools
+import glob
 import hashlib
 import json
 import os
@@ -68,21 +67,11 @@ SECTIONS = {
     "reap-hard": (["docs/reap-hard.md"], {"": "scripts/reap_hard.py"}),
 }
 PATH_TOOLS = ("Edit", "Write", "Read", "MultiEdit", "NotebookEdit")
-CONFIG_SUBDIRS = ("hooks", "skills", "agents", "plugins", "commands", "output-styles")
-CONFIG_FILES = ("settings.json", "settings.local.json", "CLAUDE.md", ".claude.json")
-# Files and directories under home that run code (startup files, PATH directories) or hold credentials.
-HOME_DIRS = (".ssh", ".config", ".gnupg", ".aws", ".kube", ".docker", "Library/LaunchAgents", "Library/LaunchDaemons",
-             "Library/Keychains", "Library/Application Support/Code/User", ".local/bin", "bin", ".oh-my-zsh", ".zsh",
-             ".zshrc.d", ".cargo/bin", "go/bin", ".pyenv/shims", ".rbenv/shims", ".volta/bin", ".bun/bin", ".deno/bin",
-             ".nvm", ".pip", ".git-templates")
-HOME_FILES = (".claude.json", ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".bashrc", ".bash_profile", ".bash_login",
-              ".profile", ".gitconfig", ".git-credentials", ".netrc", ".npmrc", ".tmux.conf", ".vimrc",
-              ".cargo/config.toml", ".pypirc", ".gemrc", ".condarc")
-SYSTEM_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/Library/LaunchAgents", "/Library/LaunchDaemons")
-# Every Orca profile's settings and hooks; only a project's memory directory under it is open (memory_dir).
-ORCA_DIR = "Library/Application Support/orca"
-# Wherever a repository sits: its Claude settings, MCP servers, git hooks and config.
-ANYWHERE = ((".claude",), (".mcp.json",), (".git", "hooks"), (".git", "config"))
+ORCA_PROFILES = "Library/Application Support/orca/claude-profiles"
+NAME = re.compile(r"\*|[A-Za-z0-9_-][A-Za-z0-9._-]*")
+LEAF = re.compile(r"\*\*|\*\.md|[A-Za-z0-9_-][A-Za-z0-9._-]*")
+# One part of mcp__<server>__<tool>; an edge "_" would make the split ambiguous.
+MCP_PART = re.compile(r"[A-Za-z0-9-]([A-Za-z0-9_-]*[A-Za-z0-9-])?")
 FILE_EXTS = {"py", "json", "md", "sh", "js", "ts", "txt", "yaml", "yml", "toml", "plist", "log", "html", "tsv", "csv"}
 SECRET = re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|xox[abposr]-|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
                     r"|-----BEGIN|(?<![A-Za-z0-9/])(?=[A-Za-z0-9_+=-]*\d)(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{40,}")
@@ -149,143 +138,52 @@ def check_secret(value, where):
 
 
 def check_permission(rule):
-    """Only path rules and single MCP tools: a shell command can run anything, so no check on Bash rules holds."""
-    if not isinstance(rule, str) or not rule.strip():
-        raise Refused(f"a permission rule must be a non-empty string, got {rule!r}")
-    if not rule.isascii():
-        raise Refused(f"{rule}: a character outside ASCII can pass for another one; write the rule in ASCII")
-    check_secret(rule, "permissions")
-    m = re.fullmatch(r"([\w-]+)(?:\((.*)\))?", rule.strip(), re.S)
-    if not m:
-        raise Refused(f"not a permission rule: {rule!r}; use Tool(specifier) or mcp__server__tool")
-    tool, spec = m.groups()
-    if tool == "Bash":
-        raise Refused(f"{rule}: Bash rules are outside this skill; a person reviews and adds them by hand or "
-                      f"through update-config")
-    if tool.startswith("mcp__"):
-        if spec is not None or not re.fullmatch(r"mcp__[\w-]+__[\w-]+", tool):
-            raise Refused(f"{rule}: name one MCP tool as mcp__server__tool; a whole server can send and delete too")
+    """An allow list: a path rule inside a memory directory of a config directory, or one MCP tool by exact name.
+    Anything else is refused rather than judged; widening the list means adding one shape here."""
+    if not isinstance(rule, str):
+        raise Refused(f"a permission rule must be a string, got {rule!r}")
+    parts = rule.split("__")
+    if len(parts) == 3 and parts[0] == "mcp" and all(MCP_PART.fullmatch(x) for x in parts[1:]):
         return
-    if tool not in PATH_TOOLS:
-        raise Refused(f"{rule}: this skill adds only {', '.join(PATH_TOOLS)} path rules and mcp__server__tool; "
-                      f"use update-config for the rest")
-    if spec is None:
-        raise Refused(f"{rule}: a bare tool name allows every use of it; add a path")
-    if not spec.strip() or not re.sub(r"[*/:~.\s]", "", spec):
-        raise Refused(f"{rule}: the specifier matches everything")
-    path = rule_path(spec)
-    if re.search(r"(^|/)\.\.?(/|$)", path) or "//" in path:
-        raise Refused(f"{rule}: write the path without '.', '..' or '//'")
-    if re.search(r"[\[{]", path):
-        raise Refused(f"{rule}: [...] and {{...}} are not checked here; write one rule per path")
-    literal = re.split(r"[*?]", path, maxsplit=1)[0]
-    if literal != path:
-        literal = literal[:literal.rfind("/") + 1]  # a wildcard mid-name reaches the whole parent directory
-    literal, home = pathlib.Path(literal or "/"), pathlib.Path.home()
-    if literal in (home, *home.parents) or literal == pathlib.Path("/"):
-        raise Refused(f"{rule}: covers the whole home directory or more")
-    for protected in protected_paths():
-        if reaches(path, protected):
-            raise Refused(f"{rule}: can reach {protected}; settings, instructions, skills, hooks, shell startup "
-                          f"files, PATH directories and credentials are the user's to edit")
-    if memory_dir(path):
-        return
-    orca = f"{home}/{ORCA_DIR}/**"
-    if reaches(path, orca):
-        raise Refused(f"{rule}: can reach {orca}, every Orca profile's settings and hooks; only a project's "
-                      f"memory directory there is open")
-    for seq in ANYWHERE:
-        # Writing anywhere a repository's .claude or .git/hooks could be runs code; reading only shows it.
-        hit = names(path, seq) if tool == "Read" else overlaps(path, "/".join(("**", *seq, "**")))
-        if hit:
-            raise Refused(f"{rule}: can {'name' if tool == 'Read' else 'reach'} a repository's {'/'.join(seq)}; "
-                          f"name a narrower path")
+    m = re.fullmatch(r"([A-Za-z]+)\((//|~/)(.+)\)", rule)
+    if m and m.group(1) in PATH_TOOLS:
+        path = (str(pathlib.Path.home()) + "/" if m.group(2) == "~/" else "/") + m.group(3)
+        if memory_rule(rule, path):
+            return
+    raise Refused(f"{rule!r}: outside this skill, which adds only {'/'.join(PATH_TOOLS)} rules inside "
+                  f"<config dir>/projects/<name>/memory/ and exact mcp__server__tool names; use update-config "
+                  f"or have a person review and add it")
 
 
-def memory_dir(path):
-    """.../projects/<one segment>/memory/..., with no ** before memory, which could step through anything else."""
-    segs = segments(path)
-    return any(segs[i] == "projects" and segs[i + 2] == "memory" and "**" not in segs[:i + 3]
-               for i in range(len(segs) - 2))
-
-
-def names(path, seq):
-    """Whether some run of the path's segments matches seq with at least one of them not a bare * or **."""
-    segs = segments(path)
-    return any(all(s == "**" or segment_meets(s, p) for s, p in zip(segs[i:i + len(seq)], seq)) and
-               any(s.strip("*") for s in segs[i:i + len(seq)]) for i in range(len(segs) - len(seq) + 1))
-
-
-def rule_path(spec):
-    if spec.startswith("//"):
-        return spec[1:]
-    if spec.startswith("~/"):
-        return str(pathlib.Path.home()) + spec[1:]
-    raise Refused(f"{spec}: use an absolute path (//abs/path or ~/path) in user settings")
-
-
-def protected_paths():
+def memory_rule(rule, path):
+    """Whether path is <anchor>/projects/<name>/memory/<leaf>, with an Orca profile's name and home directory first
+    under its anchor, and no directory it names today leaves the anchor through a symlink: the real path must be on
+    the list too."""
     home = pathlib.Path.home()
-    out = [str(SKILLS_JSON), *(f"{home}/{f}" for f in HOME_FILES), *(f"{home}/{d}/**" for d in HOME_DIRS),
-           *(f"{d}/**" for d in SYSTEM_DIRS)]
-    for cfg in {CONFIG_DIR, HOME_DIR}:
-        out += [f"{cfg}/{f}" for f in CONFIG_FILES] + [f"{cfg}/{d}/**" for d in CONFIG_SUBDIRS]
-    return out
-
-
-def segments(glob):
-    return ["**" if "**" in s else s for s in glob.lower().strip("/").split("/")]
-
-
-def reaches(path, glob):
-    """overlaps, against the glob as written and with its literal directories resolved through symlinks."""
-    head, sep, tail = glob.partition("/*")
-    return overlaps(path, glob) or overlaps(path, os.path.realpath(head) + sep + tail)
-
-
-def overlaps(a, b):
-    """Whether one path can match both globs: * and ? stay within a segment, ** spans any number of them.
-    Case is ignored, as on a default macOS volume; two wildcard segments are assumed to meet."""
-    a, b = segments(a), segments(b)
-
-    @functools.cache
-    def walk(i, j):
-        if i < len(a) and a[i] == "**":
-            return walk(i + 1, j) or j < len(b) and walk(i, j + 1)
-        if j < len(b) and b[j] == "**":
-            return walk(i, j + 1) or i < len(a) and walk(i + 1, j)
-        if i == len(a) or j == len(b):
-            return i == len(a) and j == len(b)
-        return segment_meets(a[i], b[j]) and walk(i + 1, j + 1)
-    return walk(0, 0)
-
-
-def segment_meets(x, y):
-    wild = re.compile(r"[*?]")
-    if wild.search(x) and wild.search(y):
-        return True
-    if wild.search(x):
-        return fnmatch.fnmatchcase(y, x)
-    return fnmatch.fnmatchcase(x, y) if wild.search(y) else x == y
-
-
-def with_twins(rules):
-    """Each path rule, plus the same rule on the real path when its literal part goes through a symlink:
-    a permission rule matches the path as the tool sees it, which can be either one."""
-    out = []
-    for rule in rules:
-        out.append(rule)
-        m = re.fullmatch(r"([\w-]+)\((//.*)\)", rule)
-        if not m or m.group(1) not in PATH_TOOLS:
+    for anchor, profile in ((CONFIG_DIR, False), (HOME_DIR, False), (home / ORCA_PROFILES, True)):
+        prefix = f"{anchor}/"
+        if not path.startswith(prefix):
             continue
-        path = rule_path(m.group(2))
-        literal = re.split(r"[*?\[{]", path, maxsplit=1)[0]
-        base = literal if literal.endswith("/") else os.path.dirname(literal) + "/"
-        real = os.path.realpath(base).rstrip("/") + "/"
-        if real != base:
-            out.append(f"{m.group(1)}(/{real}{path[len(base):]})")
-    return list(dict.fromkeys(out))
-
+        segs = path[len(prefix):].split("/")
+        if profile:
+            if len(segs) < 2 or not NAME.fullmatch(segs[0]) or segs[1] != "home":
+                continue
+            segs = segs[2:]
+        if len(segs) != 4 or segs[0] != "projects" or not NAME.fullmatch(segs[1]) or segs[2] != "memory" \
+                or not LEAF.fullmatch(segs[3]):
+            continue
+        # Every directory down to memory/ and all under it: a file not there yet is created through its parents.
+        dirs = path[len(prefix):].split("/")[:-1]
+        real = os.path.realpath(anchor)
+        hits = [h for k in range(1, len(dirs) + 1) for h in glob.glob(glob.escape(prefix) + "/".join(dirs[:k]),
+                                                                       include_hidden=True)]
+        for hit in hits:
+            for p in [hit, *(glob.glob(glob.escape(hit) + "/**", recursive=True, include_hidden=True)
+                             if hit.endswith("/memory") else [])]:
+                if os.path.realpath(p) != os.path.join(real, os.path.relpath(p, anchor)):
+                    raise Refused(f"{rule!r}: {p} goes through a symlink; a memory rule must name the real path")
+        return True
+    return False
 
 def check_keys(keys):
     """Every key set or unset is documented for its section; enum and type follow the docs and DEFAULTS."""
@@ -519,15 +417,9 @@ def emit(spec, out, settings_override, skills_json):
 
 
 def prepare(spec):
-    """Check a spec read from --spec against the docs and add symlink twins; an emitted spec is already final."""
+    """Check a spec read from --spec, its keys against the docs."""
     check_spec(spec, automode())
     check_keys(spec.get("agent_skills", {}))
-    perms = spec.get("permissions")
-    if perms:
-        spec["permissions"] = {k: with_twins(v) for k, v in perms.items()}
-        for rule in [r for r in spec["permissions"].get("add", []) if r not in perms.get("add", [])]:
-            check_permission(rule)
-            print(f"symlink twin added: {rule}")
     return spec
 
 

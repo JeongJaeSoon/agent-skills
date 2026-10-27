@@ -5,7 +5,7 @@ description: "Use when the user wants a value in ~/.claude/agent-skills.json cha
 
 # skills-config
 
-One entry point for the user-level settings agent-skills depends on: keys in `~/.claude/agent-skills.json`, rules in `permissions.allow` of the user's `settings.json`, and autoMode rules riding along in the same change. The agent drafts a spec and emits a standalone script; the user runs it.
+One entry point for the user-level settings agent-skills depends on: keys in `~/.claude/agent-skills.json`, memory-directory path rules and exact MCP tool names in `permissions.allow` of the user's `settings.json`, and autoMode rules (from `tune-automode`) riding along in the same change. The agent drafts a spec and emits a standalone script; the user runs it.
 
 ## What the agent does not do
 
@@ -28,13 +28,11 @@ One entry point for the user-level settings agent-skills depends on: keys in `~/
 1. **Name the change.** The key and value, or the action the user wants to stop being prompted for, in the user's words.
 2. **Check the key or the rule.**
    - A key: find it in the owning skill's Config section (`watch-prs`, `watch-mentions`, `reap-resources`, `use-tracker`, `use-notes`, …). `emit` refuses a key no skill documents and a value outside a documented `"a | b | c"` list or of another type than the script's default. A key that really is new goes in `allow_unknown` by its exact name, so the user sees it in the spec.
-   - A rule: the smallest one that covers the action. `add` takes two kinds only: a path rule for `Edit`, `Write`, `Read`, `MultiEdit` or `NotebookEdit`, and one MCP tool by its full name, `mcp__server__tool`. A `Bash` rule is outside this skill: a shell command can run anything, so no check on its text holds; tell the user to review it and add it by hand or through `update-config`. A whole MCP server (`mcp__server`, `mcp__server__*`) is refused too, because one server can hold send and delete tools next to the read ones. The path checks are a best-effort guardrail, not a security boundary; the diff the user reviews before `--apply` is the decision. `emit` refuses a path rule:
-     - with a character outside ASCII, `.`, `..`, `//`, `[…]` or `{…}`, or over the whole home directory;
-     - able to match the config directories' settings, `CLAUDE.md`, skills, agents, hooks, plugins, commands or output styles, `agent-skills.json`, shell and editor startup files, PATH directories (`~/bin`, `~/.local/bin`, `~/.cargo/bin`, shims, `/opt/homebrew/bin`, `/usr/local/bin`, …), launch agents and daemons, package-manager configs, credentials (`~/.ssh`, `~/.config`, `~/.git-credentials`, keychains, …), or anything under Orca's application-support directory except a project's `projects/<name>/memory/` directory;
-     - for `Edit` or `Write`, able to reach a repository's `.claude`, `.mcp.json`, `.git/hooks` or `.git/config` anywhere, so `Edit(//repo/**)` is refused; for `Read`, naming one of them (`Read(//repo/**)` passes, `Read(//repo/.git/**)` does not);
-     - holding a secret-shaped value.
+   - A rule: `add` takes an allow list of two shapes, and refuses everything else as outside this skill:
+     - an `Edit`, `Write`, `Read`, `MultiEdit` or `NotebookEdit` rule inside a config directory's memory directory: `~/.claude/projects/<name>/memory/<leaf>`, `$CLAUDE_CONFIG_DIR/projects/<name>/memory/<leaf>`, or the same `projects/<name>/memory/<leaf>` under an Orca profile's `~/Library/Application Support/orca/claude-profiles/<name>/home`, written as `~/…` or `//absolute/path`. `<name>` is one literal name or `*`; `<leaf>` is `**`, `*.md` or one file name; no segment may start with `.`. A directory on that path, or under the memory directory, that resolves through a symlink refuses the rule, at `emit` and again at `--apply`;
+     - one MCP tool by its exact name, `mcp__server__tool`: exactly three `__`-separated parts, no edge `_`, no spaces. A whole server (`mcp__server`, `mcp__server__*`) can hold send and delete tools next to the read ones.
 
-     Its message names the reason, so narrow the rule rather than reword it. A `remove` is not checked this way, Bash included: taking a broad rule out only narrows. Write path rules as `//absolute/path`; when part of the path is a symlink, `emit` adds the same rule on the real path, because a rule matches the path as the tool sees it.
+     Any other rule, `Bash` included, is outside this skill: a check on a shell command or an arbitrary path never closed. Tell the user to review it and add it by hand or through `update-config`. A new kind of rule gets in by adding one shape to the allow list in `config_emit.py`, with its tests. A `remove` is not checked this way, Bash included: taking a rule out only narrows.
 3. **Write the spec.**
 
    ```json
