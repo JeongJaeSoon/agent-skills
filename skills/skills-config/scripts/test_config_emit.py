@@ -210,6 +210,32 @@ class PermissionsTest(Base):
             (memory / ".h").symlink_to(self.claude / "hooks")
             (memory / "loop").symlink_to(memory)
 
+    def test_shared_link_targets_walked_once(self):
+        """Each level holds s/ and links a, b to it: walked path by path that is 3^16 entries, hours."""
+        level = self.claude / "projects" / "app" / "memory"
+        level.mkdir(parents=True)
+        for _ in range(16):
+            (level / "s").mkdir()
+            for k in "ab":
+                (level / k).symlink_to(level / "s")
+            level = level / "s"
+        self.write_spec({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/*/memory/**)"]}})
+        out = self.home / "out" / "change.py"
+        r = subprocess.run([sys.executable, "-I", str(SCRIPT), "emit", "--spec", str(self.spec), "--out", str(out)],
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_unreadable_memory_subdir_refused_with_its_path(self):
+        locked = self.claude / "projects" / "app" / "memory" / "locked"
+        locked.mkdir(parents=True)
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        r, out = self.emit({"settings": ["home"], "permissions": {"add": ["Edit(~/.claude/projects/*/memory/**)"]}})
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"refused: cannot list {locked} (Permission denied)", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse(out.exists())
+
     def test_symlinked_profile_home_is_not_a_config_dir(self):
         (self.claude / "hooks" / "projects" / "x" / "memory").mkdir(parents=True)
         (self.claude / "projects").mkdir()
