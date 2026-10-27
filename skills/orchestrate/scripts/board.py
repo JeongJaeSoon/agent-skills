@@ -478,7 +478,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     old. decisions are the model's own items (DECISION_FORM), numbered after the registered ones; insight goes after
     진행 중, so the report still ends on what the human acts on.
 
-    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "done", "snapshot"}. done is drop_acked()'s;
+    Returns {"text", "headline_facts", "changed", "stale", "width_ok", "done", "open", "table_rows", "snapshot"}. done is
+    drop_acked()'s; table_rows has one list per repository table in the text, in order, one {label, ack, done} per body
+    row: the id its Ack or Done button posts, or None (the page has only the text, so it places the buttons by position).
     snapshot is what commit() saves for the next report to compare against."""
     now = now or fleet.utcnow()
     tg = channel == "telegram"
@@ -824,6 +826,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if lines:
         out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
+    ackable, table_rows = {d["id"] for d in done if not d["acked"]}, []
 
     def label(l):
         """A phase is named with its lead outside the table, where no section heading says whose it is."""
@@ -940,6 +943,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
+            # Done only on 🙋 ❔ 🔴 rows: 🔄 ⏳ ⏸️ are still moving.
+            table_rows.append([{"label": l["name"], "ack": f"board:{l['key']}" if f"board:{l['key']}" in ackable else None,
+                                "done": item_of(rows[l["key"]]) if l["key"] in rows and l["own"] in ("owner", "check", "blocked")
+                                else None} for l in mine])
             out += [""] + [f"- [{n}] {t}" for n, t in enumerate(notes, 1)] if notes else []
         if folded.get(sec):
             out += ["", f"{ICON['done']} 그 전 완료 {folded[sec]}건 (대시보드)"]
@@ -990,7 +997,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         v = verdicts.get(o["id"]) or {}
         o["check"] = v.get("evidence") if v.get("verdict") == "check" else None
     return {"text": "\n".join(out), "headline_facts": facts, "changed": changed, "stale": stale, "width_ok": width_ok, "done": done,
-            "open": opened,
+            "open": opened, "table_rows": table_rows,
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
 
 

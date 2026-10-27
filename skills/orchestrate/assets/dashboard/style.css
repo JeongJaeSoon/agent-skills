@@ -554,6 +554,8 @@ li.is-acked > :not(.ack) { opacity: 0.5; }
 .brief-table.brepo col.bmark { width: 2.75em; }
 .brief-table.brepo col.bpr { width: 15em; }
 .brief-table.brepo col.bprog { width: 9em; }
+.brief-table.brepo col.bact { width: 5.5em; }
+.brief-table td.bact { text-align: right; white-space: nowrap; }
 .brief-table.brepo td:nth-child(3) { font-family: var(--mono); }
 .brief-table .slide { white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
 .brief-table.bsec td { vertical-align: top; overflow-wrap: anywhere; }
