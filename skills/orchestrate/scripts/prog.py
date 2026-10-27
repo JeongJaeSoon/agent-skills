@@ -85,8 +85,10 @@ Usage: orch <command> <slug> [options]
                                      expires: out of the counts and list (--all shows it), still closable
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
-  stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]
-                                     no slug: the stage table the brief skill reports, one row per work item.
+  stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]
+                                     no slug: the stage table (the stage skill), one row per work item. show
+                                     leaves out a row finished or 7 days unchanged ("stage_idle_d") unless --all,
+                                     --program keeps one program's rows, and exits 1 past 78 columns.
                                      Write a cell where you verified it; ok needs --evidence. The merge
                                      cell of a row with --pr comes from the fleet PR list. `next` replaces
                                      the next-steps list (no lines clears it); done rows leave after 7
@@ -126,7 +128,8 @@ Usage: orch <command> <slug> [options]
                                      the brief skill's report, on request or (--periodic) on a schedule, from the
                                      board, the fleet's sessions, prs.json, open decisions and brief-last/<scope>.json
                                      (bold = changed since it). The time is the system clock's in the local time
-                                     zone. On request the stage table (stages.json) goes first; --periodic adds
+                                     zone. The stage table is one line: its row count and the dashboard's Stages
+                                     page (`orch stage show` while the dashboard is down); --periodic adds
                                      --skipped and the last reap. The model gives only --headline (a sentence),
                                      --decision ("<question>: <options> → 추천: X — <reason> · 답이 없으면 Y",
                                      numbered after the registered ones) and --insight (after 진행 중). state.json
@@ -136,8 +139,7 @@ Usage: orch <command> <slug> [options]
                                      min shows its age (board rows past it are counted in the headline), an open
                                      PR probed over 30 min ago is in the headline,
                                      over 120 min marks it ⚠️ (merged and closed PRs do not age), a lead whose terminal left the fleet turns 🔴;
-                                     a ✅ row merged over 24 h ago folds into its section's count, a stage row
-                                     finished or 7 days unchanged leaves the stage table;
+                                     a ✅ row merged over 24 h ago folds into its section's count;
                                      override in the dashboard config: {"board": {"row_min", "pr_warn_min",
                                      "pr_stale_min", "state_min", "done_fold_h", "stage_idle_d"}}. Exit 1 when a table is wider than 78 columns. Rows the
                                      board lacks come from the fleet's sessions (state.json): each lead the board
@@ -2374,15 +2376,25 @@ def cmd_stage(argv):
         elif sub in ("done", "drop") and rid:
             stages.finish(rid, drop=sub == "drop")
         elif sub == "show":
-            t = stages.table()
+            import board, fleet, table_width
+            state = fleet.read_json(fleet.state_dir() / "state.json", {})
+            t, gone = stages.table(state), 0
+            if opt(rest, "--program"):
+                t = stages.of_program(t, opt(rest, "--program"))
+            if "--all" not in rest:  # the rows the brief's line counts
+                idle_d = {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"]
+                t, gone = stages.current(t, fleet.utcnow(), idle_d * 86400, state)
             if "--json" in rest:
-                print(json.dumps(t, ensure_ascii=False, indent=1))
-            else:
-                print((stages.render_telegram if "--telegram" in rest else stages.render_md)(t) or "기록된 단계 없음")
+                return print(json.dumps(t, ensure_ascii=False, indent=1))
+            text = (stages.render_telegram if "--telegram" in rest else stages.render_md)(t)
+            fold = f"접음 {gone}행 (끝남 또는 {idle_d}일 그대로) · --all 로 전부" if gone else ""
+            print("\n\n".join(filter(None, (text, fold))) or "기록된 단계 없음")
+            if "--telegram" not in rest and any(table_width.table_width(x) > stages.COLS for _, x in table_width.tables(text)):
+                sys.exit("a table is wider than 78 columns")
         else:
             sys.exit("usage: orch stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group] | set <id> --col merge|dev|prod "
                      "--mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO] | env [--prod V] [--dev V] | "
-                     "next [LINE]... | done <id> | drop <id> | show [--md|--telegram|--json]")
+                     "next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
 

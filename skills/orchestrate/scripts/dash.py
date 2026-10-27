@@ -1690,7 +1690,7 @@ def closed_recent(days=7):
 
 
 def stage_report():
-    """The stage table whole, generated rows and recorded ones, for the Stages page: the periodic text leaves it out.
+    """The stage table whole, generated rows and recorded ones, for the Stages page: the brief's text has only a line pointing here.
     Read per request, so an `orch stage set` shows on the next poll."""
     try:
         return acks.mark_stages(stages.table())

@@ -473,7 +473,7 @@ def drop_acked(lines, prs, rows, have):
 def render(scope="top-level", channel="terminal", now=None, headline=None, skipped=None, fill=False, periodic=True,
            decisions=(), insight=None, fresh=False):
     """The brief skill's report as text, with what the caller needs around it. periodic (§1 Periodic report) adds
-    the skipped actions and the reap line; on request (periodic=False) the stage table goes first. fill adds
+    the skipped actions and the reap line; the stage table is one line pointing at it (stages.pointer). fill adds
     fleet_rows() for the leads and cards the board does not have; fresh collects the fleet again when its files are
     old. decisions are the model's own items (DECISION_FORM), numbered after the registered ones; insight goes after
     진행 중, so the report still ends on what the human acts on.
@@ -802,10 +802,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append(f"확인함으로 숨긴 행 {len(hidden)}")
     if collected:
         facts.append(collected)
-    stage_t, stage_gone = stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state) if not periodic else (None, 0)
-    if sum(folded.values()) or stage_gone:
-        facts.append("접음 " + ", ".join(f"{w} {n}" for w, n in (("완료", sum(folded.values())), ("단계표", stage_gone)) if n)
-                     + " (대시보드)")
+    stage_line = stages.pointer(*stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state), tg)
+    if sum(folded.values()):
+        facts.append(f"접음 완료 {sum(folded.values())} (대시보드)")
 
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · "
@@ -819,10 +818,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     head = f"{local:%H:%M} · " + " · ".join(([headline] if headline else []) + facts[1 if headline else 0:])
     out = [head if tg else f"**{head}**"]
     width_ok = True
-    if stage_t and stage_t["rows"]:
-        stage = stages.render_telegram(stage_t) if tg else stages.render_md(stage_t)
-        out += ["", stage]
-        width_ok &= all(table_width.table_width(t) <= COLS for _, t in table_width.tables(stage))
+    if stage_line:
+        out += ["", stage_line]
     if lines:
         out += ["", legend] + (["", "PR: " + " · ".join(pr_legend)] if pr_legend else [])
     many = {repo for repo, prog in sections if sum(1 for s in sections if s[0] == repo) > 1}
