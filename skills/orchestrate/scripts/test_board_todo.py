@@ -101,6 +101,10 @@ assert "- 📅 10/30(금) 09:00 → 배포 리드" in section(out, "⏸️ **보
 assert "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 📅 할 일로 넘김 · 막대=단계(추정)" in out.splitlines(), out
 assert "📅 배포 리드 #1 ✓ — —" in tg.splitlines() and "📅 10/30(금) 09:00 → 배포 리드" in tg.splitlines(), tg
 assert json.loads(render(BEFORE, "--json"))["width_ok"]
+# A sub-task still moving under it is listed in 진행 중 under the row's name, with the same 📅.
+ok("board", "set", "deploy/notes", "--title", "배포 노트", "--status", "moving", "--next", "초안 작성")
+assert section(render(BEFORE), "🔄 **진행 중**")[:2] == ["- 📅 배포 리드", "- └ 🔄 notes 배포 노트 — 초안 작성"], render(BEFORE)
+ok("board", "drop", "deploy/notes")
 # A held item naming the same PR is the row's hold (its trigger is the text), so the row is ⏸️ again.
 ok("board", "later", "add", "acme/app#1 재검토", "--trigger", "QA 뒤")
 out = render(BEFORE)
