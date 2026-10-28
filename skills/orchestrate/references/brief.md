@@ -69,7 +69,11 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             log and reads it; it never writes or runs that script. Such a read found mid-run with
             no plan here is reported to whoever gave the worker this work, not scripted on the
             spot. A read already refused follows FORBIDDEN's refused-act paragraph: no plan is
-            written here for it afterwards.
+            written here for it afterwards. A check that needs an act a guard may block
+            (restarting one service of a running stack, a request that carries a credential)
+            names its exact command here: the form the verify skill documents, or the one an
+            earlier worker's report shows passing. With neither, plan it as the human's
+            run_command, as for a blocked read.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
 LAND        After review, record the verdict on the reviewed head: orch verdict <slug> --pr <N>
             --sha <head> --source <independent-review, review:<reviewer>, verifier:<reviewer>,
