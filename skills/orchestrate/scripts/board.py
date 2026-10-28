@@ -615,6 +615,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
     holds, held_by = fleet.held_prs(store, shut, prs, now, cards), {}  # held_by: row id -> the PR a held item covers
+    # The PRs a to-do holds and no held item does (that one's text wins): their rows read 📅, not ⏸️.
+    todo_held = (set(fleet.held_prs({"todo": store["todo"]}, shut, prs, now, cards))
+               - set(fleet.held_prs({"later": store["later"]}, shut, prs, now, cards)))
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
         if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
@@ -925,9 +928,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if sum(folded.values()):
         facts.append(f"접음 완료 {sum(folded.values())} (대시보드)")
 
+    def mark(l, st):
+        return "📅" if st == "held" and held_by.get(l["key"]) in todo_held else ICON.get(st, "—")
+
     used = {l["status"] for l in lines}
     legend = ("🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · "
               + "".join(f"{ICON[s]} {w} · " for s, w in (("done", "완료"), ("blocked", "막힘"), ("check", "확인 필요")) if s in used)
+              + ("📅 할 일로 넘김 · " if any(mark(l, l["status"]) == "📅" for l in lines) else "")
+              + ("⏰ 도래 · " if arrived else "")
               + "막대=단계(추정)")
     states = " ".join(l["pr_state"] for l in lines if not l["fold"])
     pr_legend = [f"{m} {w}" for m, w in PR_LEGEND if m in states]
@@ -985,7 +993,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if st in (None, "done"):
                 continue
             if st == "held":
-                held.append(f"{l['next'] or '—'} → {label(l)}")
+                held.append(("📅 " if mark(l, st) == "📅" else "") + f"{l['next'] or '—'} → {label(l)}")
                 continue
             where = l["cell"].split(" ")[0] if l["pr"] else l["cell"]
             if st == "owner":
@@ -997,7 +1005,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 continue
             if l["depth"] and not head_out:
                 # a head that waits on a person is an item of its own list: here it only names the sub-tasks' group
-                moving.append(" ".join(([ICON[head["own"]]] if head["own"] not in (None, "owner", "waiting") else [])
+                moving.append(" ".join(([mark(head, head["own"])] if head["own"] not in (None, "owner", "waiting") else [])
                                        + [label(head)]))
                 head_out = True
             nxt = f"확인 필요: {w['why']}" if st == "check" else l["next"] or "—"
@@ -1047,14 +1055,14 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 if l["status"] is None:  # the lead's name over its sub-tasks in another repository
                     out.append(name)
                     continue
-                out.append(("└ " if l["depth"] else "") + f"{ICON[l['status']]} {name} — {l['progress']}")
+                out.append(("└ " if l["depth"] else "") + f"{mark(l, l['status'])} {name} — {l['progress']}")
         elif mine:  # a section of folded bullets only has no table
             def dress(i, c, s):
                 l = mine[i - 1]
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
             # Only a name is cut to fit, and its whole text goes in the numbered list under the table. A table the
             # other cells alone make too wide overflows, and the render reports it.
-            table, notes = table_width.fit([HEADER] + [[ICON.get(l["status"], "—"), l["name"], l["cell"] or "—", l["progress"]]
+            table, notes = table_width.fit([HEADER] + [[mark(l, l["status"]), l["name"], l["cell"] or "—", l["progress"]]
                                                        for l in mine], COLS, (1,), deco=dress)
             width_ok &= table_width.table_width(table) <= COLS
             out += ["", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|"]
@@ -1124,7 +1132,7 @@ def lists_pointer(todos, queued, asked, tg=False):
     """The brief's one line in place of the to-do list, the held queue and the requests: how many of each, and where
     they are (the dashboard's To-do page, whose Overview has the requests; on Telegram the commands, as
     stages.pointer does)."""
-    parts = [f"{w} {n}건{tail}" for w, n, tail in (("할 일", todos, ""), ("보류 큐", queued, ""), ("요청", asked, " 열림")) if n]
+    parts = [f"{w} {n}건{tail}" for w, n, tail in (("📅 할 일", todos, ""), ("⏸️ 보류 큐", queued, ""), ("📨 요청", asked, " 열림")) if n]
     if not parts:
         return None
     where = "orch board todo list --telegram · orch req list" if tg else stages.dash_url("todo") or "`orch board todo list` · `orch req list`"

@@ -20,7 +20,7 @@ When the report covers several work items (tickets, tracks, a program's predicat
 - **Done so far** — only what was verified, with the evidence Done asks for.
 - **Left** — the next stage, who moves it (an agent or a person), and when it is expected; "미정" when no time is fixed. A step that is the human's also goes under Only you.
 
-The report carries no stage table (merge / dev / prod per item), even when the items ship through PRs and deploys: that table is the `stage` skill's. When the stage record has rows, one line right under the headline points to it, as the renderer writes it: `단계표 N행 (접음 M) · <where>`. N and M are the rows `orch stage show` prints and the count on its `접음` line (`(접음 M)` left out at 0). `<where>` is the dashboard's Stages URL when its server is running on this machine, else `` `orch stage show` ``; on Telegram always `orch stage show --telegram`, since the dashboard listens on 127.0.0.1 only. With no rows, no line. The to-dos, the held queue and the owner's requests are not listed either: one line under that one, `할 일 N건 · 보류 큐 K건 · 요청 M건 열림 · <where>`, counts the to-dos whose date or condition has not come (promises: `orch board todo add`), the held queue (work set aside with no date, in turn: `orch board later add`) and the requests still open and not acked (`orch req list`), each part left out at 0 and the line when all are. `<where>` is the dashboard's To-do URL (its Overview has the requests) while the server runs, else `` `orch board todo list` · `orch req list` ``; on Telegram always `orch board todo list --telegram · orch req list`. The headline does not repeat these counts.
+The report carries no stage table (merge / dev / prod per item), even when the items ship through PRs and deploys: that table is the `stage` skill's. When the stage record has rows, one line right under the headline points to it, as the renderer writes it: `단계표 N행 (접음 M) · <where>`. N and M are the rows `orch stage show` prints and the count on its `접음` line (`(접음 M)` left out at 0). `<where>` is the dashboard's Stages URL when its server is running on this machine, else `` `orch stage show` ``; on Telegram always `orch stage show --telegram`, since the dashboard listens on 127.0.0.1 only. With no rows, no line. The to-dos, the held queue and the owner's requests are not listed either: one line under that one, `📅 할 일 N건 · ⏸️ 보류 큐 K건 · 📨 요청 M건 열림 · <where>`, counts the to-dos whose date or condition has not come (promises: `orch board todo add`), the held queue (work set aside with no date, in turn: `orch board later add`) and the requests still open and not acked (`orch req list`), each part left out at 0 and the line when all are. `<where>` is the dashboard's To-do URL (its Overview has the requests) while the server runs, else `` `orch board todo list` · `orch req list` ``; on Telegram always `orch board todo list --telegram · orch req list`. The headline does not repeat these counts.
 
 ### Periodic report
 
@@ -29,7 +29,7 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
 `orch brief render --periodic` prints this shape; by hand it is:
 
 1. The headline, bold and led by the time: `**14:30 · <what changed, one sentence>**`, or `**14:30 · 변화 없음 — <why, a few words>**`.
-2. The legend, one line: `🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)`, with `✅ 완료`, `🔴 막힘` and `❔ 확인 필요` added before `막대` when a row uses them.
+2. The legend, one line: `🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)`, with `✅ 완료`, `🔴 막힘` and `❔ 확인 필요` added before `막대` when a row uses them, `📅 할 일로 넘김` when a held row's PR is named by a to-do (that row reads 📅, not ⏸️), and `⏰ 도래` when a to-do's time has come.
 3. One section per repository, headed by a bold line, `**owner/repo → main**`, ending in the merge target most of its PRs share; a repository running several programs gets one section per program, `**owner/repo — <program> → main**`. Record each lead with its project (epic, program) as `--program`; a lead without one beside another lead in the same repository is headed `(프로젝트 미지정)`. Each section has one table, headed `| | 리드/Phase | PR | 진행 |`, with one row per lead, or per phase when a lead works in phases (per item when there are no leads). Every row goes out every time, changed or not.
    - Status, one icon: 🔄 moving · 🙋 waiting on the owner · ⏳ waiting on another person · ❔ waiting on a person nothing names (§1 says how each is decided) · ⏸️ held until something else lands · 🔴 blocked · ✅ done.
    - Name: the lead or phase. Phases waiting in the same state may share a row (`ph4 · ph5`).
@@ -73,7 +73,7 @@ An illustrative shape (the items are made up):
 ```text
 단계표 3행 (접음 1) · orch stage show --telegram
 
-보류 큐 1건 · orch board todo list --telegram · orch req list
+⏸️ 보류 큐 1건 · orch board todo list --telegram · orch req list
 
 ✅ 완료
 - acme/web#42 머지 (a1b2c3d, CI 통과 38/38)
@@ -101,7 +101,7 @@ An illustrative report on request (the items are made up):
 ```markdown
 **14:45 · 검색 개선 PR 생성, 유료 플랜 하나만 정해 주세요**
 
-보류 큐 1건 · `orch board todo list` · `orch req list`
+⏸️ 보류 큐 1건 · `orch board todo list` · `orch req list`
 
 ✅ **완료**
 
@@ -125,7 +125,7 @@ An illustrative periodic report (the items are made up):
 ```markdown
 **23:45 · 검색 개선 ph2 머지, 나머지는 변화 없음**
 
-할 일 1건 · 보류 큐 2건 · 요청 2건 열림 · `orch board todo list` · `orch req list`
+📅 할 일 1건 · ⏸️ 보류 큐 2건 · 📨 요청 2건 열림 · `orch board todo list` · `orch req list`
 
 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 막대=단계(추정)
 

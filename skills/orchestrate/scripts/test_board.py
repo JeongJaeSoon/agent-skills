@@ -182,7 +182,7 @@ if "--print" in sys.argv:
 GOLDEN = """\
 **14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전) · 접음 완료 1 (대시보드)**
 
-보류 큐 2건 · `orch board todo list` · `orch req list`
+⏸️ 보류 큐 2건 · `orch board todo list` · `orch req list`
 
 🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · ✅ 완료 · 🔴 막힘 · 막대=단계(추정)
 
@@ -308,7 +308,7 @@ assert orch_env({"AGENT_SKILLS_CONFIG": str(skills_cfg)}, "brief", "render", "--
     orch("brief", "render", "--periodic", "--now", NOW)[1], "a missing log adds nothing"
 assert "🙋 지금 오너가 할 일\n\n충돌 해소 승인 · #50 → 알림 정리\n리뷰 · #70·#71 → 로그·대시보드\n" in tg, tg
 assert tg.endswith("⏸️ 보류\n\nph3 머지 뒤 → 검색 개선 ph4 · ph5"), tg
-assert "보류 큐 2건 · orch board todo list --telegram · orch req list" in tg.splitlines(), tg
+assert "⏸️ 보류 큐 2건 · orch board todo list --telegram · orch req list" in tg.splitlines(), tg
 # The queue is a table in `orch board todo list`, its first item marked next; on Telegram, lines.
 listed = ok("board", "todo", "list", "--now", NOW, "--no-refresh")
 assert "| # | 할 일 | 다음 차례 조건 | 담당 |" in listed and "| ▶ 1 | prod 배포 창 | 10/16 | — |" in listed, listed
@@ -478,7 +478,7 @@ assert "요청" not in carded
     {"ev": "open", "id": "r3", "ts": "2026-10-13T13:00:00Z", "text": "reply to the reviewer"},
     {"ev": "done", "id": "r3", "ts": "2026-10-13T13:10:00Z", "evidence": "replied"}]))
 asked = ok("brief", "render", "--periodic", "--now", NOW)
-assert "📝" not in asked and "보류 큐 2건 · 요청 2건 열림 · `orch board todo list` · `orch req list`" in asked.splitlines(), asked
+assert "📝" not in asked and "⏸️ 보류 큐 2건 · 📨 요청 2건 열림 · `orch board todo list` · `orch req list`" in asked.splitlines(), asked
 
 # A held item stored twice before later add merged them renders once, in its newest words.
 b = json.loads((state / "board.json").read_text())
