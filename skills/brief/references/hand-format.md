@@ -46,7 +46,7 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
    Then `⏳ **다른 사람 대기**`, a list under the lead line, one item per ⏳ row, folded reviewer and `--waiting` work: `<who> · <what> · <age>부터 → <work> · 다음: <next step>` (`rev-b · 리뷰 #61·#62 · 3h 전부터 → 분류`).
 7. `❓ **결정 필요**`, numbered as §1 says, each item one line: `1. <question> → 추천: X — <reason>`. An open decision is asked again in the same words, with `(지난 보고와 동일)` and its `orch decide` id when it has one, until the human answers it.
 8. `🙋 **지금 오너가 할 일**`, a list under the lead line: the `orch board now` lines, then the owner's to-dos whose date or condition came (`⏰ <work> · <when> 도래`), then one item per 🙋 row, folded owner review and `doing` item on the owner, `<what> · <where> → <work it unblocks>` (`리뷰 · #70·#71 → 로그·대시보드`); or `— 없음` on the lead line.
-9. `⏸️ **보류**`, a list under the lead line, one `<condition> → <row>` item per ⏸️ row (its next stage is the condition). The held queue is not listed: the pointer line counts it.
+9. `⏸️ **보류**`, a list under the lead line, one `<condition> → <row>` item per ⏸️ row (its next stage is the condition, less a date that only repeats the hold's). The held queue and a 📅 row, which its to-do holds, are not listed: the pointer line counts them.
 
 Items 6 (each of its two lists), 7 and 9 are left out when empty; item 8 is always there (§1 Only you).
 

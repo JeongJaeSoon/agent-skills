@@ -1749,10 +1749,10 @@ class Fleet:
         import tidy
         held = held_prs(read_json(state_dir() / "board.json", {}) or {}, tidy.closed(),
                         {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}, now,
-                        tidy.cards_of(read_json(state_dir() / "state.json", {})))
+                        tidy.cards_of(read_json(state_dir() / "state.json", {})), why := {})
         for i in items:
             if i.get("source") == "github" and i.get("pr") in held:
-                i["held"] = held[i["pr"]]
+                i["held"], i["held_todo"] = held[i["pr"]], why[i["pr"]][0] == "do"
         items.sort(key=needs_order)
         # A session's badge counts exactly the Needs you items on it, so the badges and the inbox always agree:
         # the badges plus the items that belong to no session are the inbox. No local "seen" mark hides any.
@@ -1989,17 +1989,23 @@ WEEKDAY = "월화수목금토일"
 def todo_parts(t, now):
     """A to-do's (date, condition) as the report says them: its --due as a local date (and time, unless midnight), and
     its --after without a date that only repeats the --due (with its weekday), None when nothing else is left."""
-    at, on = todo_dates(t, now)
+    at = todo_dates(t, now)[0]
     at = at and at.astimezone()
     due = at and f"{at.month}/{at.day}({WEEKDAY[at.weekday()]})" + (f" {at:%H:%M}" if (at.hour, at.minute) != (0, 0) else "")
-    after = t.get("after") or ""
-    if at and on and f"{on.astimezone():%m%d%H%M}" == f"{at:%m%d%H%M}":  # an M/D's year is a guess
-        m = DATE_RE.search(after)
-        day = f"[{WEEKDAY}]"
-        after = (re.sub(rf"(?:{day}(?:요일)?\s*)?$", "", after[:m.start()].rstrip())
-                 + re.sub(rf"^\s*\({day}\)", "", after[m.end():]))
-        after = after if re.search(r"\w", after) else ""
-    return due, after.strip() or None
+    return due, drop_date(t.get("after") or "", at, parse(t.get("added")) or now) or None
+
+
+def drop_date(text, at, base):
+    """text less the date in it (with its weekday) when that date only repeats the moment at, stripped; "" when
+    nothing else is left. The date reads as trigger_at does against base."""
+    on = trigger_at(text, base)
+    if not (at and on and f"{on.astimezone():%m%d%H%M}" == f"{at.astimezone():%m%d%H%M}"):  # an M/D's year is a guess
+        return (text or "").strip()
+    m = DATE_RE.search(text)
+    day = f"[{WEEKDAY}]"
+    text = (re.sub(rf"(?:{day}(?:요일)?\s*)?$", "", text[:m.start()].rstrip())
+            + re.sub(rf"^\s*\({day}\)", "", text[m.end():]))
+    return text.strip() if re.search(r"\w", text) else ""
 
 
 def todo_when(t, now):
@@ -2007,10 +2013,12 @@ def todo_when(t, now):
     return " · ".join(x for x in todo_parts(t, now) if x)
 
 
-def held_prs(store, shut, prs, now, cards=None):
+def held_prs(store, shut, prs, now, cards=None, why=None):
     """PR key -> the hold, for each PR a held board item or a to-do names in its title (held_refs). The hold lifts
     when the item is dropped or closed (tidy), when a to-do's time comes (todo_come), or when a held item's --due or
-    the date in its trigger comes or, with no date, every PR its trigger names has merged. cards: tidy.cards_of()."""
+    the date in its trigger comes or, with no date, every PR its trigger names has merged. cards: tidy.cards_of().
+    why, a dict, gets PR key -> (the hold's kind, "later" or "do"; the moment it names: a to-do's first date, a held
+    item's --due or trigger date, else None)."""
     import tidy
     out = {}
     items = [("later", l, l["trigger"]) for l in store.get("later") or []]
@@ -2021,13 +2029,16 @@ def held_prs(store, shut, prs, now, cards=None):
         if kind == "do":
             if todo_come(l, now, prs, cards):
                 continue
+            when = todo_start(l, now)
         else:
-            at = due_at(l.get("due"), trigger, now)
-            if at and at <= now or not at and tidy.refs_over(pr_refs(trigger), prs):
+            when = due_at(l.get("due"), trigger, now)
+            if when and when <= now or not when and tidy.refs_over(pr_refs(trigger), prs):
                 continue
-        why = todo_when(l, now) if kind == "do" else " · ".join(x for x in (trigger, l.get("due")) if x)
+        text = todo_when(l, now) if kind == "do" else " · ".join(x for x in (trigger, l.get("due")) if x)
         for k in held_refs(l["title"], prs):
-            out.setdefault(k, why)
+            if k not in out and why is not None:
+                why[k] = kind, when
+            out.setdefault(k, text)
     return out
 
 

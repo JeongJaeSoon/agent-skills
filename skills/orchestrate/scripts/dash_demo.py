@@ -570,6 +570,12 @@ def seed_board():
     board.later_add("설치 가이드 스크린샷을 1440·390 light·dark 로 다시 찍고 문서 이미지를 교체한다",
                     "acme/launchpad#43 머지 뒤, 디자인 토큰 변경(acme/launchpad#45)이 dev 에 반영되고 나서", who="lead-login")
     board.later_add("대시보드 성능 측정", "다음 분기 계획 확정 뒤", who="오케스트레이터")
+    # Held rows: two that to-dos hold (📅, not under 보류; one's --next repeats the to-do's date) and one set aside.
+    board.todo_add("acme/launchpad#44 머지·배포", due=f"{soon:%Y-%m-%d} 09:00", who="오너")
+    board.set_row("lead-login/invoice", title="청구서 PDF", status="held", pr="acme/launchpad#44",
+                  next=f"{fleet.WEEKDAY[soon.weekday()]} {soon.month}/{soon.day} 09:00 머지+배포 (오너 지시)")
+    board.set_row("lead-tools/pin", title="node 버전 고정", status="held", pr="acme/tools#7", next="리뷰 대기")
+    board.set_row("lead-login/tokens", title="디자인 토큰", status="held", next="릴리스 동결 해제 뒤 재개")
     board.set_now(["acme/launchpad#43 리뷰"])
     import owner_requests as req  # the owner's requests to the orchestrator, as the request_log hook would log them
     now = dt.datetime.now(dt.timezone.utc)

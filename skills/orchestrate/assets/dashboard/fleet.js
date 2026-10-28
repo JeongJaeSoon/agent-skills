@@ -248,7 +248,7 @@ function itemRow(st, it, { showSession = true } = {}) {
   const go = showSession && s ? `data-go="${sessionHref(s.id)}"` : "";
   return `<li class="item ${it.missed ? "is-missed" : ""}" ${go}><span class="ic tone-${tone}">${icon(ic)}</span>
     <div class="grow"><div class="full"><b>${esc(label)}</b> <span class="dim">${esc(it.title || "")}</span></div>
-      <div class="sub muted full">${projBadge(it.project)}${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}${it.held ? ` · ${tag("held", "")} ${esc(it.held)}` : ""}
+      <div class="sub muted full">${projBadge(it.project)}${showSession && s ? `<a href="${sessionHref(s.id)}">${esc(s.name)}</a> · ` : ""}${it.pr ? `<span class="mono">${esc(it.pr)}</span> · ` : ""}${esc(it.source || "")}${it.held ? ` · ${tag(it.held_todo ? "to-do" : "held", "")} ${esc(it.held)}` : ""}
       ${it.command ? ` · <span class="mono">${esc(it.command)}</span>` : it.detail ? ` · ${esc(String(it.detail).split("\n")[0])}` : ""}</div>
       ${it.type === "prompt" ? promptActs(it) : it.type === "decision" ? decisionActs(st, it) : ""}</div>
     <span class="acts">${it.missed ? tag("missed", "bad", "alert") : ""}<span class="when">${it.at ? relSpan(it.at) : ""}</span>
