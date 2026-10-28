@@ -69,9 +69,11 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             log and reads it; it never writes or runs that script. Such a read found mid-run with
             no plan here is reported to whoever gave the worker this work, not scripted on the
             spot. A check that needs an act a guard may block (restarting one service of a
-            running stack, a request that carries a credential) names its exact command here:
-            the form the verify skill documents, or the one an earlier worker's report shows
-            passing. With neither, plan it as the human's run_command, as for a blocked read.
+            running stack, a request that carries a credential) names its exact command here,
+            a credential by its source (an env var, a secret path), never its value: the form
+            the verify skill documents, or the one an earlier worker's report shows passing.
+            With neither, plan it as the human's run_command, as for a blocked read; the worker
+            waits for the result that run logs.
             A read or act already refused follows FORBIDDEN's refused-act paragraph: no plan is
             written here for it afterwards.
 TIMEBOX     Rough cap. When it runs out, report partial findings with --outcome failed and stop.
