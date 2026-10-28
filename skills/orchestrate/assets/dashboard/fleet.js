@@ -893,7 +893,7 @@ const BRIEF_SECTIONS = {
   "지금 오너가 할 일": [["", "할 일"], [" → ", "항목"]],
   "보류": [["", "언제 · 조건"], [" → ", "할 일"]],
 };
-const STATUS_MARK = /^(└ )?(🔄|🙋|⏳|⏸️|✅|❔|❓|🔴|📝|\d+\.)\s+/u;  // a row under a lead keeps its └ in the item
+const STATUS_MARK = /^(└ )?(🔄|🙋|⏳|⏸️|📅|⏰|✅|❔|❓|🔴|📝|\d+\.)\s+/u;  // a row under a lead keeps its └ in the item
 // A row the orchestrator or a lead wrote ends with who wrote it; the old role name reads as today's.
 const roleNow = (s) => s.replace(/(^|· )coordinator$/, "$1orchestrator").replace(/(^|· )코디네이터$/, "$1오케스트레이터");
 function sectionTable(name, items) {
