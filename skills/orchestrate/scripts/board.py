@@ -614,10 +614,9 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
-    holds, held_by = fleet.held_prs(store, shut, prs, now, cards), {}  # held_by: row id -> the PR a held item covers
+    holds, held_by = fleet.held_prs(store, shut, prs, now, cards, hold_why := {}), {}  # held_by: row id -> the PR a held item covers
     # The PRs a to-do holds and no held item does (that one's text wins): their rows read 📅, not ⏸️.
-    todo_held = (set(fleet.held_prs({"todo": store["todo"]}, shut, prs, now, cards))
-               - set(fleet.held_prs({"later": store["later"]}, shut, prs, now, cards)))
+    todo_held = {k for k, (kind, _) in hold_why.items() if kind == "do"}
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
         if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
@@ -664,7 +663,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
 
         def fold():
             nonlocal status, nxt
-            status, nxt, held_by[r["id"]] = "held", hold if nxt in GENERIC_NEXT or nxt == hold else f"{hold} · {nxt}", r["pr"]
+            own = fleet.drop_date(nxt, hold_why[r["pr"]][1], now)  # the hold says its date: the next does not again
+            status, nxt, held_by[r["id"]] = "held", hold if own in GENERIC_NEXT or own == hold else f"{hold} · {own}", r["pr"]
             waits.pop(r["id"], None)
 
         if hold and status == "held":
@@ -980,7 +980,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         return (f"{who}{f' · {what}' if what else ''}{since(at)}{asked(who, keys)} → {unblocks}"
                 f"{f' · 다음: {nxt}' if nxt else ''}")
 
-    # The next steps leave the tables, so no cell is ever cut: a held row's goes to 보류 as its condition, one the owner
+    # The next steps leave the tables, so no cell is ever cut: a ⏸️ row's goes to 보류 as its condition, one the owner
     # unblocks to 지금 오너가 할 일, one another person unblocks to 다른 사람 대기, every other open row's to 진행 중 in
     # table order, a sub-task after its head row. Each row goes to one list, by its own status, not its children's.
     moving, held, turn, theirs = [], [], [], []
@@ -993,7 +993,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             if st in (None, "done"):
                 continue
             if st == "held":
-                held.append(("📅 " if mark(l, st) == "📅" else "") + f"{l['next'] or '—'} → {label(l)}")
+                if mark(l, st) != "📅":  # a row a to-do holds is the to-do's: the pointer line counts it
+                    held.append(f"{l['next'] or '—'} → {label(l)}")
                 continue
             where = l["cell"].split(" ")[0] if l["pr"] else l["cell"]
             if st == "owner":

@@ -93,23 +93,30 @@ assert section(out, "🙋 **지금 오너가 할 일**") == ["- acme/app#3 리�
 assert "⏰" not in out and "머지·배포" not in out, out
 tg = render(BEFORE, "--telegram")
 assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · orch board todo list --telegram · orch req list" in tg.splitlines(), tg
-# A held row whose PR a to-do names stays in 보류 under the to-do's date: the list it once folded into is gone. It reads
-# 📅, not ⏸️, in its table row, its 보류 line and the legend, on Telegram too, and the table still fits 78 columns.
-ok("board", "set", "deploy", "--repo", "acme/app", "--title", "배포 리드", "--status", "held", "--pr", "acme/app#1")
+# A held row whose PR a to-do names is the to-do's, not a held one: 📅, not ⏸️, in its table row and the legend, on
+# Telegram too, and never under 보류, which is the queue set aside; the pointer line counts the to-do. Its next step
+# says the to-do's date once, though its own --next repeats it, and the table still fits 78 columns.
+ok("board", "set", "deploy", "--repo", "acme/app", "--title", "배포 리드", "--status", "held", "--pr", "acme/app#1",
+   "--next", "금 10/30 09:00 머지+배포 (오너 지시)")
 out, tg = render(BEFORE), render(BEFORE, "--telegram")
-assert "- 📅 10/30(금) 09:00 → 배포 리드" in section(out, "⏸️ **보류**") and "| 📅 | 배포 리드 |" in out, out
+assert "| 📅 | 배포 리드 |" in out and "⏸️ **보류**" not in out and "→ 배포 리드" not in out, out
+assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · `orch board todo list` · `orch req list`" in out.splitlines(), out
 assert "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 📅 할 일로 넘김 · 막대=단계(추정)" in out.splitlines(), out
-assert "📅 배포 리드 #1 ✓ — —" in tg.splitlines() and "📅 10/30(금) 09:00 → 배포 리드" in tg.splitlines(), tg
-assert json.loads(render(BEFORE, "--json"))["width_ok"]
+assert "📅 배포 리드 #1 ✓ — —" in tg.splitlines() and "⏸️ 보류" not in tg.splitlines() and "→ 배포 리드" not in tg, tg
+got = json.loads(render(BEFORE, "--json"))
+assert got["width_ok"] and got["snapshot"]["rows"]["deploy"]["next"] == "10/30(금) 09:00 · 머지+배포 (오너 지시)", got["snapshot"]
 # A sub-task still moving under it is listed in 진행 중 under the row's name, with the same 📅.
 ok("board", "set", "deploy/notes", "--title", "배포 노트", "--status", "moving", "--next", "초안 작성")
 assert section(render(BEFORE), "🔄 **진행 중**")[:2] == ["- 📅 배포 리드", "- └ 🔄 notes 배포 노트 — 초안 작성"], render(BEFORE)
 ok("board", "drop", "deploy/notes")
-# A held item naming the same PR is the row's hold (its trigger is the text), so the row is ⏸️ again.
-ok("board", "later", "add", "acme/app#1 재검토", "--trigger", "QA 뒤")
+# A held item naming the same PR is the row's hold (its trigger is the text), so the row is ⏸️ under 보류 again, its
+# --next less the date the trigger already says.
+ok("board", "later", "add", "acme/app#1 재검토", "--trigger", "10/30 09:00 QA 뒤")
 out = render(BEFORE)
-assert "- QA 뒤 → 배포 리드" in section(out, "⏸️ **보류**") and "| ⏸️ | 배포 리드 |" in out and "할 일로 넘김" not in out, out
+assert section(out, "⏸️ **보류**") == ["- 10/30 09:00 QA 뒤 · 머지+배포 (오너 지시) → 배포 리드"], out
+assert "| ⏸️ | 배포 리드 |" in out and "할 일로 넘김" not in out, out
 ok("board", "later", "drop", "2")
+ok("board", "set", "deploy", "--next", "")
 ok("board", "drop", "deploy")
 # `orch board todo list` has the list the report only counts: a table, ⏰ for one whose time came, 📅 for one waiting,
 # in the page's order, and the held queue under it.

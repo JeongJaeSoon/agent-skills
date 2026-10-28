@@ -130,6 +130,12 @@ st = hold((now - dt.timedelta(days=1)).astimezone().strftime("%m/%d") + " 이후
 assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
 st = hold("acme/launchpad#41 머지 뒤")  # no date: held while the PR its trigger names is open
 assert all(i.get("held") for i in items(st) if i.get("pr") == "acme/launchpad#42")
+assert not any(i.get("held_todo") for i in items(st))
+# A to-do naming the PR holds it too, tagged as the to-do's, not a held item's.
+fleet.write_atomic(board_path, json.dumps({"doing": [], "owner_todo": [], "rows": {}, "later": [], "todo": [
+    {"title": "acme/launchpad#42 머지·배포", "who": "오너", "after": "acme/launchpad#41 머지 뒤"}]}))
+pr42 = [i for i in items(f.tick(force=True)) if i.get("pr") == "acme/launchpad#42"]
+assert pr42 and all(i["held"] == "acme/launchpad#41 머지 뒤" and i["held_todo"] for i in pr42), pr42
 board_path.unlink()
 st = f.tick(force=True)
 assert not any(i.get("held") for i in items(st)) and [fleet.needs_rank(i) for i in items(st)] == ranks
