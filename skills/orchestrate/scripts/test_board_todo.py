@@ -231,6 +231,13 @@ assert fleet.todo_parts({**base, "after": "금 10/30 09:00"}, now) == ("10/30(�
 assert fleet.todo_when({**base, "after": "목요일 10/30 09:00"}, now) == "10/30(금) 09:00"
 assert fleet.todo_parts({**base, "after": "10/30 09:00 이후 검증"}, now) == ("10/30(금) 09:00", "이후 검증")
 assert fleet.todo_parts({**base, "after": "10/31 09:00"}, now) == ("10/30(금) 09:00", "10/31 09:00")
+# The report's own form, the weekday between the date and the time, reads as the same moment and goes too.
+at = fleet.parse(base["due"])
+assert fleet.drop_date("10/30(금) 09:00 sample task", at, now) == "sample task"
+assert fleet.drop_date("10/30(금) 09:00", at, now) == ""
+assert fleet.drop_date("10/31(토) 09:00 sample task", at, now) == "10/31(토) 09:00 sample task"
+for after in ("금 10/30 09:00 sample task", "10/30 09:00 sample task", "2026-10-30 09:00 sample task"):
+    assert fleet.drop_date(after, at, now) == "sample task", after
 board.todo_add("노트 리뷰", due="2027-06-01 09:00", after="화 6/1 09:00", who="writer")
 page = {o["title"]: o for o in json.loads(ok("board", "todo", "list", "--now", BEFORE, "--no-refresh", "--json")) if o["kind"] == "do"}
 assert {k: page["노트 리뷰"][k] for k in ("when", "date", "cond")} == {"when": "6/1(화) 09:00", "date": "6/1(화) 09:00", "cond": None}, page["노트 리뷰"]

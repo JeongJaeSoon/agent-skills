@@ -1922,7 +1922,9 @@ RELOAD_ALERT_TRIES = 3  # config reload_alert_tries: refused this often, a reloa
 NEEDS_RANK = {"decision": 0, "approval": 0, "permission": 0, "prompt": 0, "question": 0, "login": 0, "run_command": 0,
               "ready_to_merge": 1}
 HELD_RANK = 3
-DATE_RE = re.compile(r"(?<![\d.])(?:(\d{4})-)?(\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?(?![\d/])")
+WEEKDAY = "월화수목금토일"
+# The report writes M/D(요일) HH:MM, so a weekday may sit between the date and the time.
+DATE_RE = re.compile(rf"(?<![\d.])(?:(\d{{4}})-)?(\d{{1,2}})[/-](\d{{1,2}})(?:\([{WEEKDAY}]\))?(?:\s+(\d{{1,2}}):(\d{{2}}))?(?![\d/])")
 
 
 def needs_rank(item):
@@ -1981,9 +1983,6 @@ def todo_start(t, now):
     """The first of a to-do's dates, in UTC, or None when it has neither."""
     at = min(filter(None, todo_dates(t, now)), default=None)
     return at and at.astimezone(dt.timezone.utc)
-
-
-WEEKDAY = "월화수목금토일"
 
 
 def todo_parts(t, now):
