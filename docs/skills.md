@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 7개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 10개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -596,6 +596,9 @@ Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도�
 
 ### 결정 자동 닫기
 `hooks/decision.py`(UserPromptSubmit). `orch decide add`로 결정을 등록한 터미널(`$ORCA_TERMINAL_HANDLE`)에 사람이 친 프롬프트만 본다. 첫 줄이 id로 시작하거나(`d3 허락`, `decision d3: 허락`) 그 터미널의 열린 결정 가운데 하나에만 있는 선택지 이름으로 시작하면 그 결정을 답과 함께 done으로 닫고 오케스트레이터나 리드에게 알린다. 애매하면 닫지 않고 열린 결정 목록을 알림으로만 넣는다. 다른 터미널(워커)의 입력으로는 닫지 않고, 오류는 모두 exit 0이다. 이미 떠 있던 세션은 `/reload-plugins`나 재시작 뒤부터 적용된다.
+
+### 요청 기록
+`hooks/request_log.py`(UserPromptSubmit). 오케스트레이터나 리드로 선언된 세션(역할 판정은 reorient hook과 같다)에서만, 사람이 친 프롬프트 하나를 요청 원장(`skills/orchestrate/scripts/owner_requests.py`)에 열린 항목으로 남긴다. 여러 요청이 한꺼번에 오면 작은 요청이 묻혔기 때문이다. 모델에게는 요청 id, 열린 요청 수, 30분 넘게 연결되지 않은 요청만 한 줄로 알리고, 모델이 `orch req link|done|drop`으로 처리한다. 사람의 요청이 아닌 것(`<`로 시작하는 harness 줄, 친 그대로의 slash 명령, 대시보드 결정의 답, 카드가 전달한 `[카드 이름] …` 보고, compact 머리말, ROLE 선언만 있는 프롬프트, 빈 프롬프트)은 남기지 않는다. 다른 세션에서는 아무것도 하지 않고, 오류는 모두 exit 0이다.
 
 ### 권한 창 기록
 `hooks/permission.py`(PermissionRequest). 권한 창이 뜰 때 도구 이름과 가린 인자를 `$ORCA_TERMINAL_HANDLE`별로 대시보드 상태 디렉터리의 `prompts/`에 적는다. 결정은 내리지 않아서 권한 흐름은 그대로다. 대시보드는 그 터미널 화면에 같은 요청의 권한 창이 떠 있을 때만 인박스 항목에 승인·거부·터미널 열기 버튼을 붙인다. 사람이 누르면 보내기 직전에 화면을 다시 읽어 확인하고, 한 번만 허용하는 `Yes`나 `No`의 번호 하나만 누른다. "다시 묻지 않기", "항상 허용", "auto mode로 전환"처럼 규칙을 저장하거나 모드를 바꾸는 선택지는 고르지 않는다. 자세한 내용은 `skills/orchestrate/references/dashboard.md`.
