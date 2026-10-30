@@ -19,14 +19,14 @@ macOS with [Orca](https://github.com/stablyai/orca) is the primary environment. 
 
 A 4-minute overview of the parts, the two flows and where you stay in charge.
 
-https://github.com/user-attachments/assets/e33deb97-f364-4448-ab4a-bce9853ee977
+https://github.com/user-attachments/assets/1e240200-0d28-4f8b-b13c-ae25a68984f9
 
-Subtitles: [English (.srt)](docs/video/agent-skills-explainer-en.srt). The video is also available in [Japanese](https://github.com/user-attachments/assets/52557640-bd1b-4485-b4b4-5b835eb5931a) and [Korean](https://github.com/user-attachments/assets/15b9b1db-87ee-4042-81ed-8f13c4a23b03).
+Subtitles: [English (.srt)](docs/video/agent-skills-explainer-en.srt). The video is also available in [Japanese](https://github.com/user-attachments/assets/206c4624-dca8-448d-8179-69c08ecc511c) and [Korean](https://github.com/user-attachments/assets/4989f7f2-54d3-493a-8692-e0a4157199b0).
 
 ## What you get
 
 - **One ticket, start to finish.** `deliver-ticket` plans, writes tests, gets a review from someone other than the author, opens the PR, waits for CI, merges, and closes the ticket with evidence for each acceptance criterion.
-- **A project on many workers.** `orchestrate` gives each Orca worker one ticket and keeps a program ledger. PRs land only through the `orch land` gate or a merge you approve, and PRs that touch shared files land one at a time.
+- **A project on many workers.** `orchestrate` gives each Orca worker one ticket and keeps a program ledger. PRs merge only through the `orch land` gate or a merge you approve, and PRs that touch shared files merge one at a time.
 - **A place to watch.** `brief` reports what is in progress, waiting on others, waiting on you, and on hold. The `orch-dash` dashboard shows open decisions, permission prompts and an inbox.
 - **Refusals stay refused.** An action denied by a permission prompt, the auto-mode classifier, a hook or a person is reported, never retried in another form.
 - **No config, no guessing.** Notes, the lessons ledger, personal folders and chat channels are used only where your config names them. A missing key turns the feature off or makes the skill ask.
@@ -39,7 +39,10 @@ Required:
 - Claude Code
 - `git`
 - `python3` 3.9 or later (macOS's `/usr/bin/python3` works)
-- `gh`, logged in to github.com, for the full setup
+
+Full setup only:
+
+- `gh`, logged in to github.com
 
 Optional:
 
@@ -60,7 +63,7 @@ Paste this into a Claude Code session:
 Set up the Claude Code plugin at https://github.com/JeongJaeSoon/agent-skills for me. Read https://raw.githubusercontent.com/JeongJaeSoon/agent-skills/main/INSTALL.md and follow it: check my environment first, ask me before each choice, and give me any command I have to run myself. Don't edit my settings files directly.
 ```
 
-[INSTALL.md](INSTALL.md) is the procedure the agent follows. It checks your environment, then asks whether you want the marketplace plugin only or the full setup, which values to set (reply language, checkout path, personal config repo), and for approval before each of the two commands it runs.
+[INSTALL.md](INSTALL.md) is the procedure the agent follows. It checks your environment, then asks whether you want the marketplace plugin only or the full setup, which values to set (reply language, checkout path, personal config repo), and for your approval of the two commands it runs.
 
 ### Do it yourself
 
@@ -73,7 +76,7 @@ Set up the Claude Code plugin at https://github.com/JeongJaeSoon/agent-skills fo
 
    The install dialog asks for a reply language, a checkout path (default `~/src/agent-skills`) and a personal config repo URL. All three can stay empty.
 2. Start a new session. Plugins load at session start, so `/reload-plugins` is not enough here.
-3. The new session offers `setup-pc` once. Accept it for the full setup: the agent clones the checkout and shows a diff for each settings file. It never writes them itself. You read the diff and paste the `! python3 ... --apply <hash>` line it gives you.
+3. Each new session offers `setup-pc` until you accept or decline. Declining stops the offer for that profile. Accept it for the full setup: the agent clones the checkout and shows a diff for each settings file. It never writes them itself. You read the diff and paste the `! python3 ... --apply <hash>` line it gives you.
 4. Approve the permission prompt that turns on the sync job and automations, then restart the session.
 
 The full guide, with a shell-only path, updates, the complete table of approval points, and uninstalling, is [docs/install.md](docs/install.md).
@@ -82,7 +85,7 @@ The full guide, with a shell-only path, updates, the complete table of approval 
 
 Skills fire on their own when the situation in their description comes up. You can also call one by name as `/agent-skills:<name>`.
 
-- "Finish ABC-1" runs `deliver-ticket` from the plan to the merge and the closed ticket.
+- "Finish ABC-1" runs `deliver-ticket` from the plan to the merge and the closed ticket. This needs a tracker: Linear by default, or set `tracker.adapter` (see [Configuration](#configuration)).
 - "Give me a status report" runs `brief`. Claude Code has a built-in `/brief`, so call this one directly as `/agent-skills:brief`.
 - In Orca, start a top-level session with `claude --agent agent-skills:orchestrator --name orchestrator` and ask it to take over every session. The orchestrator hands each project to a lead session, and each lead runs its workers.
 

@@ -19,14 +19,14 @@ GitHub 저장소의 티켓 작업을 Claude Code에 맡기려는 개발자를 �
 
 구성 요소, 두 흐름, 사람이 결정권을 쥐는 지점을 4분 남짓으로 소개한다.
 
-https://github.com/user-attachments/assets/15b9b1db-87ee-4042-81ed-8f13c4a23b03
+https://github.com/user-attachments/assets/4989f7f2-54d3-493a-8692-e0a4157199b0
 
-자막: [한국어 (.srt)](docs/video/agent-skills-explainer-ko.srt). [영어판](https://github.com/user-attachments/assets/e33deb97-f364-4448-ab4a-bce9853ee977)과 [일본어판](https://github.com/user-attachments/assets/52557640-bd1b-4485-b4b4-5b835eb5931a)도 있다.
+자막: [한국어 (.srt)](docs/video/agent-skills-explainer-ko.srt). [영어판](https://github.com/user-attachments/assets/1e240200-0d28-4f8b-b13c-ae25a68984f9)과 [일본어판](https://github.com/user-attachments/assets/206c4624-dca8-448d-8179-69c08ecc511c)도 있다.
 
 ## 무엇을 얻나
 
 - **티켓 하나를 끝까지.** `deliver-ticket`이 계획, 테스트, 작성자 외 독립 리뷰, PR, CI 확인, 머지, 완료 기준별 근거를 단 티켓 닫기까지 한다.
-- **워커 여러 개로 프로젝트 하나.** `orchestrate`가 Orca 워커마다 티켓 하나를 맡기고 프로그램 원장을 둔다. PR은 `orch land` 게이트를 통과하거나 사람이 승인한 머지로만 들어가고, 공유 파일을 고친 PR은 하나씩 들어간다.
+- **워커 여러 개로 프로젝트 하나.** `orchestrate`가 Orca 워커마다 티켓 하나를 맡기고 프로그램 원장을 둔다. PR은 `orch land` 게이트를 통과하거나 사람이 승인해야만 머지되고, 공유 파일을 고친 PR은 하나씩 머지된다.
 - **사람이 보는 곳.** `brief`가 진행 중, 다른 사람 대기, 내 결정 대기, 보류로 나눠 보고한다. 대시보드 `orch-dash`에는 열린 결정, 권한 창, 받은편지함이 뜬다.
 - **거부된 행동은 다시 하지 않는다.** 권한 창, auto mode 분류기, hook, 사람이 거부한 행동은 형태를 바꿔 재시도하지 않고 보고한다.
 - **설정이 없으면 추정하지 않는다.** 노트, 회고 원장, 개인 폴더, 채팅 채널은 설정에 적힌 곳만 쓴다. 키가 없으면 그 기능은 꺼지거나 스킬이 먼저 묻는다.
@@ -39,7 +39,10 @@ https://github.com/user-attachments/assets/15b9b1db-87ee-4042-81ed-8f13c4a23b03
 - Claude Code
 - `git`
 - `python3` 3.9 이상(macOS의 `/usr/bin/python3`도 된다)
-- `gh`, github.com 로그인(전체 설정에서 쓴다)
+
+전체 설정에만 필요:
+
+- `gh`, github.com 로그인
 
 선택:
 
@@ -60,7 +63,7 @@ Claude Code 세션에 아래 의뢰문을 붙여 넣는다.
 https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설정해 줘. https://raw.githubusercontent.com/JeongJaeSoon/agent-skills/main/INSTALL.md 를 읽고 그대로 따라 줘. 먼저 내 환경을 확인하고, 고를 것이 있으면 그때마다 묻고, 내가 직접 쳐야 하는 명령은 그대로 건네줘. 설정 파일은 직접 고치지 마.
 ```
 
-에이전트가 따르는 절차는 [INSTALL.md](INSTALL.md)(영어)다. 환경을 확인한 뒤 마켓플레이스 플러그인만 설치할지 전체 설정까지 할지, 넣을 값(응답 언어, 체크아웃 경로, 개인 설정 저장소)을 묻고, 실행할 명령 두 개마다 먼저 승인을 받는다.
+에이전트가 따르는 절차는 [INSTALL.md](INSTALL.md)(영어)다. 환경을 확인한 뒤 마켓플레이스 플러그인만 설치할지 전체 설정까지 할지, 넣을 값(응답 언어, 체크아웃 경로, 개인 설정 저장소)을 묻고, 실행할 명령 두 개에 대해 승인을 받는다.
 
 ### 직접 하기
 
@@ -73,16 +76,16 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 
    설치 창이 응답 언어, 체크아웃 경로(기본 `~/src/agent-skills`), 개인 설정 저장소 URL을 묻는다. 셋 다 비워도 된다.
 2. 새 세션을 연다. 플러그인은 세션이 시작될 때 읽히므로 여기서는 `/reload-plugins`로 부족하다.
-3. 새 세션이 `setup-pc`를 한 번 제안한다. 전체 설정을 하려면 받아들인다. 에이전트가 체크아웃을 clone하고 설정 파일별 diff를 보인다. 설정 파일은 에이전트가 직접 쓰지 않는다. diff를 읽고 에이전트가 건넨 `! python3 ... --apply <해시>` 한 줄을 붙여 넣는다.
+3. 새 세션은 받아들이거나 거절할 때까지 매번 `setup-pc`를 제안한다. 거절하면 그 프로필에서는 더 제안하지 않는다. 전체 설정을 하려면 받아들인다. 에이전트가 체크아웃을 clone하고 설정 파일별 diff를 보인다. 설정 파일은 에이전트가 직접 쓰지 않는다. diff를 읽고 에이전트가 건넨 `! python3 ... --apply <해시>` 한 줄을 붙여 넣는다.
 4. 동기화 작업과 자동화를 켜는 권한 창을 승인하고 세션을 재시작한다.
 
-셸에서만 설치하는 법, 갱신, 승인 지점 전체 표, 제거는 [docs/install.ko.md](docs/install.ko.md)에 있다. 새 PC 설정을 더 깊이 보려면 [docs/new-pc.md](docs/new-pc.md).
+셸에서만 설치하는 법, 갱신, 승인 지점 전체 표, 제거는 [docs/install.ko.md](docs/install.ko.md)에 있다.
 
 ## 첫걸음
 
 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. `/agent-skills:<이름>`으로 직접 부를 수도 있다.
 
-- 「ABC-1 끝내줘」라고 하면 `deliver-ticket`이 계획부터 머지, 티켓 닫기까지 한다.
+- 「ABC-1 끝내줘」라고 하면 `deliver-ticket`이 계획부터 머지, 티켓 닫기까지 한다. 트래커가 있어야 한다(기본은 Linear, 바꾸려면 `tracker.adapter`, [설정](#설정) 참고).
 - 「현황 보고해줘」라고 하면 `brief`가 돈다. Claude Code에 내장 `/brief`가 있어서 직접 부를 때는 `/agent-skills:brief`다.
 - Orca 안에서 `claude --agent agent-skills:orchestrator --name orchestrator`로 최상위 세션을 띄우고 모든 세션을 맡긴다. 오케스트레이터가 프로젝트마다 리드 세션을 띄우고, 리드가 워커를 돌린다.
 
@@ -94,7 +97,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 - **머지.** `orchestrate`와 `deliver-ticket`이 준비된 PR을 스스로 머지하는 것은 그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때뿐이다. 없으면 묻는다. `human-gate` 정책으로 두거나 직접 보겠다고 하면 머지마다 그 앞에서 멈춘다.
 - **정기 정리.** `janitor`와 `pressure-watch`가 끝난 에이전트의 잔여물을 정기적으로 치운다. 끄려면 `skills-sync setup disable <이름>`. `watch-prs`의 내 PR 자동 승인·자동 머지는 설정하기 전까지 꺼져 있다.
 
-지점마다 기본값과 바꾸는 법은 [docs/install.ko.md](docs/install.ko.md#안전-장치), 안전 경계와 hook의 세부는 [docs/operations.md](docs/operations.md#안전-경계).
+지점마다 기본값과 바꾸는 법은 [docs/install.ko.md](docs/install.ko.md#안전-장치)에 있다.
 
 ## 스킬
 
@@ -103,14 +106,14 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 | 묶음 | 스킬 | 하는 일 |
 |---|---|---|
 | [티켓 하나](docs/skills.md#티켓-하나) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | 티켓 쓰기부터 완료, 다음 티켓 넘기기, 세션 정리, 진행 기록까지 |
-| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 착지시키고, 끝난 뒤 실제로 어땠는지 잰다 |
+| [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 끝난 뒤 실제로 어땠는지 잰다 |
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, 설정 키 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
 | [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
 | [글쓰기](docs/skills.md#글쓰기) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 단계표, 할 일·보류 큐, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
 | [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고 |
 
-pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔고, upstream을 따라가려고 원본 이름을 유지한다. 여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 이름·시작 명령·`ROLE` 줄, Orca의 "coordinator"와의 대응은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles)(영어)에 있다.
+pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)에서 가져왔고, upstream을 따라가려고 원본 이름을 유지한다. 여러 세션이 함께 일할 때 워커 위의 층은 오케스트레이터(최상위 세션 하나)와 리드(프로젝트 하나를 맡은 세션) 둘이다. 자세한 것은 [orchestrate의 Roles 표](skills/orchestrate/SKILL.md#roles)(영어).
 
 ## 설정
 
@@ -120,13 +123,12 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 
 - [docs/install.ko.md](docs/install.ko.md): 설치, 갱신, 승인 지점, 제거, 문제 해결
 - [INSTALL.md](INSTALL.md)(영어): 에이전트가 따르는 설치 절차
-- [docs/new-pc.md](docs/new-pc.md): 새 PC 설치, 셸에서 직접, 갱신
 - [docs/skills.md](docs/skills.md): 스킬 카탈로그
-- [docs/operations.md](docs/operations.md): 용어, 정기 자동화, 사용 시나리오, 안전 경계와 hook, 스킬 고치기
+- [docs/operations.md](docs/operations.md): 용어, 정기 자동화, 사용 시나리오, 안전 장치와 hook, 스킬 고치기
+- [docs/new-pc.md](docs/new-pc.md): 새 PC 설치의 세부
 - [docs/automation.md](docs/automation.md): 어떤 일을 어떤 장치로 돌리나
-- [docs/configuration-migration.md](docs/configuration-migration.md): 설정 키와 전환
 - [docs/platform.md](docs/platform.md): 체크아웃 로드와 동기화 설계
-- [docs/token-usage.md](docs/token-usage.md): 이 플러그인이 컨텍스트에 넣는 토큰을 정적으로 재기(`python3 scripts/skill_tokens.py static`)와 transcript에서 기능별로 실제 쓴 토큰 재기(`python3 scripts/skill_tokens.py usage`, 대시보드 Tokens)
+- [docs/token-usage.md](docs/token-usage.md): 이 플러그인이 컨텍스트에 넣는 토큰과 기능별로 쓴 토큰 재기
 - [소개 페이지](https://jeongjaesoon.github.io/agent-skills/): 한 장으로 보는 소개(GitHub Pages)
 - 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR). 오른쪽 위에서 한국어·English·日本語를 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다.
 
@@ -142,8 +144,6 @@ CI가 없다. 변경을 보내기 전에 테스트 파일을 모두 돌린다.
 for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
-
-스킬을 고치는 절차(worktree, 동기화, `claude plugin eval`)는 [docs/operations.md](docs/operations.md#스킬-고치기)와 [AGENTS.md](AGENTS.md).
 
 ## 라이선스
 

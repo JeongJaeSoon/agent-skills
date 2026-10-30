@@ -19,14 +19,14 @@ GitHub リポジトリのチケット作業を Claude Code に任せたい開発
 
 構成要素、二つの流れ、人が決定権を持つ地点を約4分で紹介します。
 
-https://github.com/user-attachments/assets/52557640-bd1b-4485-b4b4-5b835eb5931a
+https://github.com/user-attachments/assets/206c4624-dca8-448d-8179-69c08ecc511c
 
-字幕: [日本語 (.srt)](docs/video/agent-skills-explainer-ja.srt)。[英語版](https://github.com/user-attachments/assets/e33deb97-f364-4448-ab4a-bce9853ee977)と[韓国語版](https://github.com/user-attachments/assets/15b9b1db-87ee-4042-81ed-8f13c4a23b03)もあります。
+字幕: [日本語 (.srt)](docs/video/agent-skills-explainer-ja.srt)。[英語版](https://github.com/user-attachments/assets/1e240200-0d28-4f8b-b13c-ae25a68984f9)と[韓国語版](https://github.com/user-attachments/assets/4989f7f2-54d3-493a-8692-e0a4157199b0)もあります。
 
 ## できること
 
 - **チケット1件を最後まで。** `deliver-ticket` が計画、テスト、作成者以外による独立レビュー、PR、CI の確認、マージ、受け入れ条件ごとの根拠を添えたチケットのクローズまで進めます。
-- **複数ワーカーでプロジェクト1件。** `orchestrate` は Orca のワーカーごとにチケットを1件渡し、プログラム台帳を持ちます。PR は `orch land` のゲートを通るか、人が承認したマージでしか入りません。共有ファイルを変えた PR は1件ずつ入ります。
+- **複数ワーカーでプロジェクト1件。** `orchestrate` は Orca のワーカーごとにチケットを1件渡し、プログラム台帳を持ちます。PR は `orch land` のゲートを通すか人が承認しない限りマージされません。共有ファイルを変えた PR は1件ずつマージされます。
 - **見る場所がある。** `brief` が進行中、他の人待ち、自分の判断待ち、保留に分けて報告します。ダッシュボード `orch-dash` には未決の判断、権限ダイアログ、受信箱が出ます。
 - **拒否された操作はやり直さない。** 権限ダイアログ、auto mode の分類器、フック、人が拒否した操作は、形を変えて再試行せずに報告します。
 - **設定がなければ推測しない。** ノート、振り返り台帳、個人フォルダ、チャットのチャンネルは、設定に書かれた場所だけを使います。キーがなければその機能はオフになるか、スキルが先に聞きます。
@@ -39,7 +39,10 @@ https://github.com/user-attachments/assets/52557640-bd1b-4485-b4b4-5b835eb5931a
 - Claude Code
 - `git`
 - `python3` 3.9 以上(macOS の `/usr/bin/python3` で動きます)
-- `gh`(github.com にログイン済み。フルセットアップで使います)
+
+フルセットアップのみ:
+
+- `gh`(github.com にログイン済み)
 
 任意:
 
@@ -60,7 +63,7 @@ Claude Code のセッションに次の依頼文を貼り付けます。
 https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインをセットアップしてください。https://raw.githubusercontent.com/JeongJaeSoon/agent-skills/main/INSTALL.md を読んでその手順に従い、まず環境を確認し、選ぶところでは毎回私に聞き、私が自分で実行すべきコマンドはそのまま渡してください。設定ファイルを直接編集しないでください。
 ```
 
-エージェントが従う手順は [INSTALL.md](INSTALL.md)(英語)です。環境を確認したあと、マーケットプレイスのプラグインだけか、フルセットアップか、設定する値(応答言語、チェックアウトの場所、個人設定リポジトリ)を聞き、実行する二つのコマンドそれぞれの前に承認を求めます。
+エージェントが従う手順は [INSTALL.md](INSTALL.md)(英語)です。環境を確認したあと、マーケットプレイスのプラグインだけか、フルセットアップか、設定する値(応答言語、チェックアウトの場所、個人設定リポジトリ)を聞き、実行する二つのコマンドについて承認を求めます。
 
 ### 自分でやる
 
@@ -73,7 +76,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
    インストール画面で応答言語、チェックアウトの場所(既定は `~/src/agent-skills`)、個人設定リポジトリの URL を聞かれます。三つとも空のままで構いません。
 2. 新しいセッションを開きます。プラグインはセッション開始時に読み込まれるので、ここでは `/reload-plugins` では足りません。
-3. 新しいセッションが一度だけ `setup-pc` を提案します。フルセットアップにするなら受け入れます。エージェントはチェックアウトを clone し、設定ファイルごとの diff を見せます。設定ファイルを自分で書くことはありません。diff を読んだら、渡された `! python3 ... --apply <hash>` の行を貼り付けて実行します。
+3. 新しいセッションは、受け入れるか断るまで毎回 `setup-pc` を提案します。断るとそのプロファイルでは提案が止まります。フルセットアップにするなら受け入れます。エージェントはチェックアウトを clone し、設定ファイルごとの diff を見せます。設定ファイルを自分で書くことはありません。diff を読んだら、渡された `! python3 ... --apply <hash>` の行を貼り付けて実行します。
 4. 同期ジョブと自動化を有効にする権限ダイアログを承認し、セッションを再起動します。
 
 シェルだけで入れる方法、更新、承認地点の全一覧、アンインストールは [docs/install.ja.md](docs/install.ja.md) にあります。
@@ -82,7 +85,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 スキルは、description に書かれた状況になるとモデルが自分で呼び出します。`/agent-skills:<名前>` で直接呼ぶこともできます。
 
-- 「ABC-1 を終わらせて」と頼むと、`deliver-ticket` が計画からマージ、チケットのクローズまで進めます。
+- 「ABC-1 を終わらせて」と頼むと、`deliver-ticket` が計画からマージ、チケットのクローズまで進めます。トラッカーが必要です(既定は Linear。変えるには `tracker.adapter`、[設定](#設定)を参照)。
 - 「状況を報告して」と頼むと `brief` が動きます。Claude Code には組み込みの `/brief` があるので、直接呼ぶときは `/agent-skills:brief` です。
 - Orca の中で `claude --agent agent-skills:orchestrator --name orchestrator` を実行して最上位セッションを立て、全セッションの管理を頼みます。オーケストレーターはプロジェクトごとにリードのセッションを立て、リードがワーカーを動かします。
 
@@ -121,7 +124,7 @@ pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins
 - [docs/install.ja.md](docs/install.ja.md): インストール、更新、承認地点、アンインストール、トラブルシューティング
 - [INSTALL.md](INSTALL.md)(英語): エージェントが従うインストール手順
 - [docs/skills.ja.md](docs/skills.ja.md): スキルカタログ
-- [docs/operations.md](docs/operations.md)(韓国語): 用語、定期自動化、利用シナリオ、安全境界とフック、スキルの直し方
+- [docs/operations.md](docs/operations.md)(韓国語): 用語、定期自動化、利用シナリオ、安全装置とフック、スキルの直し方
 - [docs/new-pc.md](docs/new-pc.md)(韓国語): 新しい PC のセットアップの詳細
 - [docs/automation.md](docs/automation.md)(韓国語): どの仕事をどの仕組みで回すか
 - [docs/platform.md](docs/platform.md)(韓国語): チェックアウトの読み込みと同期の設計
