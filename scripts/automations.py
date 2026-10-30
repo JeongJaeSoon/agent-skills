@@ -139,7 +139,10 @@ class Janitor(OrcaJob):
         drift = janitor_drift(a, self.load) if main_checkout() else {}
         if not drift and a.get("enabled"):
             return 0, "이미 켜져 있음"
-        edit = [x for k, v in drift.items() for x in (f"--{k}", str(v))]
+        # orca rejects --precheck-timeout without --precheck.
+        fields = {"precheck": janitor_want(f"path:{REPO}", self.load)["precheck"], **drift} \
+            if "precheck-timeout" in drift else drift
+        edit = [x for k, v in fields.items() for x in (f"--{k}", str(v))]
         p = sh([ORCA, "automations", "edit", "--id", a["id"], *edit, "--enabled", "--json"])
         if p.returncode:
             return 1, f"orca automations edit 실패: {(p.stderr or p.stdout).strip()[:200]}"

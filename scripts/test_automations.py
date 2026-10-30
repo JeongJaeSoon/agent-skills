@@ -153,6 +153,14 @@ class Janitor(Base):
         self.assertIn("--enabled", edit)
         self.assertNotIn("--trigger", edit)
 
+    def test_timeout_drift_alone_still_passes_the_precheck(self):
+        """orca rejects --precheck-timeout without --precheck."""
+        fake = self.orca([janitor(precheck={"command": WANT["precheck"], "timeoutSeconds": 60}, prompt="old")])
+        self.assertEqual(self.j.enable(False)[0], 0)
+        (edit,) = fake.edits()
+        self.assertEqual(edit[edit.index("--precheck") + 1], WANT["precheck"])
+        self.assertEqual(edit[edit.index("--precheck-timeout") + 1], str(WANT["precheck-timeout"]))
+
     def test_drift_from_a_worktree_is_not_written(self):
         for here in (False, True):
             fake = self.orca([janitor(prompt="old")], main=False)
