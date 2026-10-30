@@ -1,4 +1,4 @@
-<!-- translated-from: ecc318a157bb7095dabc5c6a9f3a2082cb0f943c -->
+<!-- translated-from: 3964a0f55ccf0fcd49722e451258ece35c945486 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 10 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -617,7 +617,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
+- **Hooks:** permission decisions (`guard.py`), enforcing orchestrator delegation (`orchestrator_guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), logging the human requests the orchestrator or a lead receives (`request_log.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.
