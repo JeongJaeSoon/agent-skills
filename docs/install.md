@@ -54,7 +54,7 @@ claude plugin install agent-skills@jeongjaesoon --config language=English --conf
 1 userConfig option not yet set — run /plugin configure agent-skills@jeongjaesoon in Claude Code, or pass --config KEY=VALUE.
 ```
 
-The last line only says one value was left blank. Start a new session: plugins load at session start. The new session offers to run `setup-pc` once. Say yes for path B; say no and that profile is not asked again.
+The last line only says one value was left blank. Start a new session: plugins load at session start. Each new session offers to run `setup-pc` until you accept or decline. Say yes for path B; declining stops the offer for that profile.
 
 ## Path B: full setup from a session
 
@@ -167,7 +167,7 @@ A full setup (path B or C) also needs:
 | The automations | `<checkout>/bin/skills-sync setup disable <name>` for each; for a LaunchAgent one it also unloads the agent. `<checkout>/bin/reap-hard uninstall` and `<checkout>/bin/orch-dash uninstall-agent` if you installed those by hand |
 | State | Delete `~/.local/state/agent-skills/` |
 
-Two things are left behind: the Orca automation registrations, which `disable` turns off but does not delete, and `~/.claude/agent-skills.json`, which nothing removes.
+Two things are left behind: the Orca automation registrations, which `disable` turns off but does not delete, and `~/.claude/agent-skills.json`, which no step deletes; delete it yourself if you want it gone.
 
 ## Troubleshooting
 

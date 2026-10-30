@@ -34,6 +34,8 @@ After the install, the setup is the plugin's `setup-pc` skill. Its rules are in 
 
 ## 1. Check
 
+If this is a Claude Code session where the `agent-skills:setup-pc` skill is already available, the plugin is installed: tell the human to invoke it or accept its offer, and stop. Do not run its steps from this file.
+
 Run these. All are read-only. Show the human the results in one short table.
 
 | Command | Want |
@@ -44,7 +46,7 @@ Run these. All are read-only. Show the human the results in one short table.
 | `gh auth status` | logged in to github.com. Needed for the full setup; the human logs in, not you |
 | `uname -s` | `Darwin` for the full setup. On Linux the sync job is a cron line the human adds, and LaunchAgent automations are unsupported |
 | `command -v orca` | optional. Without Orca, the multi-session skills and the scheduled automations do nothing |
-| `echo "${CLAUDE_CONFIG_DIR:-unset}"` | when set (an Orca profile, for example), the plugin commands write to that profile only |
+| `echo "${CLAUDE_CONFIG_DIR:-unset}"` | when set (an Orca profile, for example), the plugin commands write to that profile only. If it is set, confirm with the human that this is the profile to install into |
 | `claude plugin list` | see below |
 
 `claude plugin list` tells you what is already there:
@@ -61,7 +63,7 @@ Ask these in one message and wait for the answers:
 1. **Which install.** *Marketplace only*: the plugin as published, updated with `claude plugin update`. *Full setup*: a live checkout of this repo on `main`, the recommended user settings, a sync job every 15 minutes and the default automations; it starts from the marketplace install and finishes in the next session.
 2. **Three optional values**, all of which may be left blank:
    - `language`: the language for replies, such as `English`.
-   - `checkout`: where the full setup clones this repo. Default `~/src/agent-skills`. Use an absolute path.
+   - `checkout`: where the full setup clones this repo. Default `~/src/agent-skills`; `setup-pc` expands `~`.
    - `personal_repo`: the URL of the human's private repo holding their `agent-skills.json`. No credentials in it.
 
 Whether this terminal is the orchestrator and which automations to keep are asked by `setup-pc` later. Do not ask them now.
@@ -74,7 +76,7 @@ After approval, run the two commands from a shell, in this order. Pass only the 
 
 ```bash
 claude plugin marketplace add JeongJaeSoon/agent-skills
-claude plugin install agent-skills@jeongjaesoon --config language=English --config checkout=/absolute/path
+claude plugin install agent-skills@jeongjaesoon --config language=<language> --config checkout=<checkout>
 ```
 
 Expected output (2.1.314):
@@ -93,7 +95,7 @@ Running `marketplace add` again when the marketplace is already there is harmles
 
 Plugins load when a session starts, so this session does not have the plugin yet.
 
-- **Marketplace only:** tell the human to start a new Claude Code session. The new session offers `setup-pc` once; the human may say no, and it does not ask that profile again.
+- **Marketplace only:** tell the human to start a new Claude Code session. Each new session offers `setup-pc` until the human accepts or declines; declining stops it for that profile.
 - **Full setup:** tell the human to start a new Claude Code session and accept the `setup-pc` offer. There, `setup-pc` clones the checkout, shows the settings diff, and gives the human one `! python3 -I …/setup.py … --apply <hash>` line to run. It then runs `setup.py --actions-only` behind a permission dialog. After that, the human restarts the session. Give the human the step 5 commands to run there; your part ends here.
 
 ## 5. Verify

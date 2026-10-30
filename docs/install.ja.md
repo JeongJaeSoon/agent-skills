@@ -54,7 +54,7 @@ claude plugin install agent-skills@jeongjaesoon --config language=Japanese --con
 1 userConfig option not yet set — run /plugin configure agent-skills@jeongjaesoon in Claude Code, or pass --config KEY=VALUE.
 ```
 
-最後の行は、値を 1 つ空欄にしたというだけの意味です。プラグインはセッションの開始時に読み込まれるので、新しいセッションを開きます。新しいセッションが一度だけ `setup-pc` を提案します。B に進むなら受け入れ、断ればそのプロファイルでは二度と聞かれません。
+最後の行は、値を 1 つ空欄にしたというだけの意味です。プラグインはセッションの開始時に読み込まれるので、新しいセッションを開きます。新しいセッションを開くたびに、受け入れるか断るまで `setup-pc` が提案されます。B に進むなら受け入れます。断ると、そのプロファイルでは提案されなくなります。
 
 ## B. セッションからフルセットアップ
 
@@ -125,7 +125,7 @@ Session-only plugins (--plugin-dir / --plugin-url):
 ## 更新
 
 - **マーケットプレイス版:** `claude plugin marketplace update jeongjaesoon`、`claude plugin update agent-skills@jeongjaesoon` のあと、動いているセッションで `/reload-plugins`。
-- **チェックアウト:** 同期ジョブが 15 分ごとに fast-forward するので、スキルは自動で最新になります。新しい推奨設定は `python3 <チェックアウト>/scripts/setup.py --update`（dry run）が表示する `--apply` の行で入れるか、セッションに「agent-skills を更新して」と頼みます。個人設定リポジトリがあれば先に `git -C ~/.config/agent-skills/personal pull --ff-only`。ほかにこのフォルダを pull するものはありません。
+- **チェックアウト:** 同期ジョブが 15 分ごとに fast-forward するので、スキルは自動で最新になります。新しい推奨設定は `python3 <チェックアウト>/scripts/setup.py --update`（dry run）が表示する `--apply` の行で入れるか、セッションに「agent-skills を更新して」と頼みます。個人設定リポジトリがあれば先に `git -C ~/.config/agent-skills/personal pull --ff-only`。ほかにこのリポジトリを pull する仕組みはありません。
 
 ## 安全装置
 
@@ -145,7 +145,7 @@ Session-only plugins (--plugin-dir / --plugin-url):
 | `secure-fill` による秘密値の入力 | HITL: 毎回 Touch ID で承認 | 許可リストの項目を `"approval": "none"` にすると Touch ID なしで入力する（`-T ""` で作った項目なら Keychain の確認は残る） |
 | `janitor`、`pressure-watch` | HOTL: エージェントが残した終了済みのリソースを定期的に片付ける | `<チェックアウト>/bin/skills-sync setup disable <名前>` |
 
-HOTL のとき人が見るのは、`brief` の状況報告と、ダッシュボードの決定・権限ダイアログ・受信箱です。ダッシュボード、`janitor`、watch のラウンドは Orca を前提にしています。詳しくは [operations.md](operations.md#안전-경계)（韓国語）。
+HOTL のとき人が見るのは、`brief` の状況報告と、ダッシュボードの未決の判断・権限ダイアログ・受信箱です。ダッシュボード、`janitor`、watch のラウンドは Orca を前提にしています。詳しくは [operations.md](operations.md#안전-경계)（韓国語）。
 
 ## アンインストール
 
@@ -167,7 +167,7 @@ claude plugin marketplace remove jeongjaesoon
 | 自動化 | 1 つずつ `<チェックアウト>/bin/skills-sync setup disable <名前>`。LaunchAgent のものはその agent も止める。手で入れた `bin/reap-hard` とダッシュボードの agent は `<チェックアウト>/bin/reap-hard uninstall`、`<チェックアウト>/bin/orch-dash uninstall-agent` |
 | 状態ファイル | `~/.local/state/agent-skills/` を削除 |
 
-残るものが 2 つあります。Orca の automation 登録は `disable` で止まるだけで削除はされません。`~/.claude/agent-skills.json` は何も消しません。
+残るものが 2 つあります。Orca の automation 登録は `disable` で止まるだけで削除はされません。`~/.claude/agent-skills.json` は、どの手順でも削除されません。不要なら自分で削除します。
 
 ## トラブルシューティング
 

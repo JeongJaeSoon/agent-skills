@@ -2,7 +2,7 @@
 
 [English](install.md) · [日本語](install.ja.md) · 한국어
 
-사람이 직접 설치할 때 보는 안내다. 에이전트에게 맡기려면 [INSTALL.md](../INSTALL.md)를 건넨다. 같은 단계에 에이전트가 지킬 규칙을 붙인 파일이다. 설정 하나하나의 뜻과 옵션 전체는 [new-pc.md](new-pc.md)에 있다.
+사람이 직접 설치할 때 보는 안내다. 에이전트에게 맡기려면 [INSTALL.md](../INSTALL.md)를 건넨다. 같은 단계에 에이전트가 지킬 규칙을 붙인 파일이다.
 
 설치 방법은 셋이다.
 
@@ -54,7 +54,7 @@ claude plugin install agent-skills@jeongjaesoon --config language=Korean --confi
 1 userConfig option not yet set — run /plugin configure agent-skills@jeongjaesoon in Claude Code, or pass --config KEY=VALUE.
 ```
 
-마지막 줄은 값 하나를 비워 뒀다는 뜻일 뿐이다. 플러그인은 세션이 시작될 때 로드되므로 새 세션을 연다. 새 세션이 `setup-pc`를 한 번 제안한다. B로 갈 거면 받아들이고, 거절하면 그 프로필에서는 다시 묻지 않는다.
+마지막 줄은 값 하나를 비워 뒀다는 뜻일 뿐이다. 플러그인은 세션이 시작될 때 로드되므로 새 세션을 연다. 새 세션마다 받아들이거나 거절할 때까지 `setup-pc`를 제안한다. B로 갈 거면 받아들인다. 거절하면 그 프로필에서는 더 제안하지 않는다.
 
 ## B. 세션에서 전체 설정
 
@@ -77,6 +77,8 @@ python3 -I ~/src/agent-skills/scripts/setup.py --language Korean --apply <해시
 - dry run은 아무것도 쓰지 않는다. 첫 줄 `target <경로>`가 쓸 `settings.json`이고, 마지막 줄이 칠 `--apply` 명령이다. 이 줄은 Claude Code 세션에 붙여 넣도록 `! `로 시작하므로, 셸에서는 `!`를 뺀다.
 - `--settings-only`가 없으면 `--apply`가 동기화 작업 설치, 한 번 동기화, 기본 자동화 켜기까지 하고 점검 표를 출력한다.
 - 마켓플레이스 사본이 설치돼 있으면 diff가 그것을 끈다(`enabledPlugins`를 `false`로). 둘 다 켜져 있으면 hook이 두 번 돈다. setup이 이미 있는 값을 바꾸는 경우는 이것 하나다.
+
+옵션, 개인 설정 저장소의 형태, 권장 설정 하나하나의 뜻은 [new-pc.md](new-pc.md)에 있다.
 
 ## 최소 설정
 
@@ -123,7 +125,7 @@ Session-only plugins (--plugin-dir / --plugin-url):
 ## 갱신
 
 - **마켓플레이스 사본:** `claude plugin marketplace update jeongjaesoon`, `claude plugin update agent-skills@jeongjaesoon`, 그다음 떠 있는 세션에서 `/reload-plugins`.
-- **체크아웃:** 동기화 작업이 15분마다 fast-forward하므로 스킬은 저절로 최신이 된다. 새 권장 설정은 `python3 <체크아웃>/scripts/setup.py --update`(dry run)가 출력한 `--apply` 줄로 넣거나, 세션에 "agent-skills 업데이트해줘"라고 한다. 개인 설정 저장소가 있으면 먼저 `git -C ~/.config/agent-skills/personal pull --ff-only`. 다른 무엇도 그 폴더를 당기지 않는다.
+- **체크아웃:** 동기화 작업이 15분마다 fast-forward하므로 스킬은 저절로 최신이 된다. 새 권장 설정은 `python3 <체크아웃>/scripts/setup.py --update`(dry run)가 출력한 `--apply` 줄로 넣거나, 세션에 "agent-skills 업데이트해줘"라고 한다. 개인 설정 저장소가 있으면 먼저 `git -C ~/.config/agent-skills/personal pull --ff-only`. 이 폴더를 pull하는 작업은 따로 없다.
 
 ## 안전 장치
 
@@ -138,7 +140,7 @@ Session-only plugins (--plugin-dir / --plugin-url):
 | 되돌릴 수 없는 행동(파괴적 migration, 공유 브랜치 force push, 프로덕션 배포, 바깥으로 보내기) | HITL: 멈추고 묻는다 | 없음 |
 | `orchestrate` 머지 정책 | HOTL: `autonomous`, 워커가 `orch land`로 머지(그 저장소의 머지를 허용하는 autoMode 규칙이 있을 때. 없으면 묻는다) | `human-gate`면 워커는 READY에서 멈추고 사람이 게이트를 푼다 |
 | `deliver-ticket` 혼자 도는 카드의 머지 | HOTL: 준비된 PR을 묻지 않고 머지(그 머지를 허용하는 autoMode 규칙이 있을 때. 없으면 묻는다) | hold를 걸거나 직접 보겠다고 하면 머지 전에 묻는다. 계속 flaky한 체크, 되돌릴 수 없는 migration 같은 예외에서도 묻는다 |
-| `watch-prs` `ownergate`(봇 PR 승인) | 꺼짐. `prs.kinds`에 넣고 `prs.ownergate`에 게이트 항목을 적으면 HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 덮으면 회차가 실행한다(HOTL) |
+| `watch-prs` `ownergate`(봇 PR 승인) | 꺼짐. `prs.kinds`에 넣고 `prs.ownergate`에 게이트 항목을 적으면 HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 허용하면 정기 실행이 처리한다(HOTL) |
 | `watch-prs` `ready_to_merge` | 꺼짐 | `prs.kinds`에 더하면 `merge_repos`의 내 PR 중 게이트를 모두 통과한 것을 머지한다(HOTL) |
 | `secure-fill` 비밀값 입력 | HITL: 매번 Touch ID 승인 | 허용 목록 항목을 `"approval": "none"`으로 두면 Touch ID 없이 채운다(`-T ""`로 만든 항목이면 Keychain 확인은 남는다) |
 | `janitor`, `pressure-watch` | HOTL: 에이전트가 남긴 끝난 리소스를 정기적으로 정리한다 | `<체크아웃>/bin/skills-sync setup disable <이름>` |
@@ -165,7 +167,7 @@ claude plugin marketplace remove jeongjaesoon
 | 자동화 | 하나씩 `<체크아웃>/bin/skills-sync setup disable <이름>`. LaunchAgent인 것은 그 agent도 내린다. 손으로 설치한 `bin/reap-hard`와 대시보드 agent는 `<체크아웃>/bin/reap-hard uninstall`, `<체크아웃>/bin/orch-dash uninstall-agent` |
 | 상태 파일 | `~/.local/state/agent-skills/` 삭제 |
 
-남는 것이 둘 있다. Orca automation 등록은 `disable`이 끄기만 하고 지우지 않는다. `~/.claude/agent-skills.json`은 아무것도 지우지 않는다.
+남는 것이 둘 있다. Orca automation 등록은 `disable`이 끄기만 하고 지우지 않는다. `~/.claude/agent-skills.json`은 어떤 단계도 지우지 않으니 필요하면 직접 지운다.
 
 ## 문제 해결
 
