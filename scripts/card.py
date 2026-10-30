@@ -5,10 +5,12 @@ Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--parent-worktree <selector> | --no-parent]
 
-The prompt is the brief's `/goal` line (with ` 브리프: <brief path>` appended unless it names the path), then its
-APPROVED, lead and CLOSE/KEEP rows. A row is a line that starts with the key (`CLOSE: …`, `` `CLOSE`: … ``,
-`DELEGATE    …`), plus the indented lines under it. A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a
-`<project>: lead` head) needs every row of orchestrate references/brief.md "Lead"; any brief needs CLOSE or KEEP.
+The prompt is the brief's `/goal` line (with ` 브리프: <brief path>` appended unless it already names a brief), then
+its PROGRAM, APPROVED, lead and CLOSE/KEEP rows. A row is a line outside a ``` fence that starts with the key and a
+colon (`CLOSE: …`, `` `CLOSE`: … ``) or the template's wide gap (`DELEGATE    …`), plus the indented lines under it.
+A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a `<project>: lead` head) needs every row of orchestrate
+references/brief.md "Lead"; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
+`APPROVED:` row. The brief is a local file; a note only the notes store can reach is copied to one first.
 
 `--prompt "$(cat brief.md)"` hides those lines from the guard hook, which reads only the command text; this reads
 the file and checks them itself, with the hook's own patterns. The card is created from a subprocess, so no hook
@@ -28,7 +30,10 @@ ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
 LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "TASKS", "GATE")
-ROWS = ("APPROVED", *LEAD_ROWS, "CLOSE", "KEEP")
+ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP")
+FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
+# dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
+APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
 ME = "skills-sync card"
 
 
@@ -38,15 +43,19 @@ class Refuse(Exception):
         self.code = code
 
 
+def starts_row(line, key):
+    # A colon or the template's column gap: "KEEP the old API" in prose is not a KEEP row.
+    return re.match(rf"^[ \t]*`?{key}`?(?:[ \t]*:|[ \t]{{2,}}\S)", line) is not None
+
+
 def row(text, key):
     """The first row for `key`, with its indented continuation lines, else None."""
     lines = text.splitlines()
-    head = re.compile(rf"^[ \t]*`?{key}`?(?:[ \t]*:|[ \t]+|$)")
     for i, line in enumerate(lines):
-        if head.match(line):
+        if starts_row(line, key):
             out = [line.strip()]
             for nxt in lines[i + 1:]:
-                if not nxt.strip() or not nxt[:1].isspace() or any(re.match(rf"^[ \t]*`?{k}`?(?:[ \t]*:|[ \t]+)", nxt) for k in ROWS):
+                if not nxt.strip() or not nxt[:1].isspace() or any(starts_row(nxt, k) for k in ROWS):
                     break
                 out.append(nxt.rstrip())
             return "\n".join(out)
@@ -60,12 +69,15 @@ def compose(brief_path):
         text = path.read_text()
     except (OSError, UnicodeDecodeError) as e:
         raise Refuse(2, f"cannot read the brief: {e}")
+    text = FENCE.sub("", text)  # a quoted template is not the brief's own rows
     goal = GOAL.search(text)
     rows = {k: row(text, k) for k in ROWS}
     lead = guard.is_lead(text)
     missing = [] if goal else ["`/goal <goal>` line"]
     if not (rows["CLOSE"] or rows["KEEP"]):
         missing.append("CLOSE or KEEP row")
+    if APPROVED_PROSE.search(text) and not rows["APPROVED"]:
+        missing.append("`APPROVED:` row (an Approved heading or bullet is not copied into the prompt)")
     if lead:
         missing += [f"{k} row" for k in LEAD_ROWS if not rows[k]]
         if rows["ROLE"] and not guard.LEAD_ROLE.search(rows["ROLE"]):
@@ -74,7 +86,7 @@ def compose(brief_path):
         raise Refuse(2, f"{path} has no {', no '.join(missing)}. Add it as a line of its own in the brief "
                         "(dispatch-card §2; a lead's rows are orchestrate references/brief.md \"Lead\").")
     head = goal.group(0).rstrip()
-    if str(path) not in head:
+    if not any(s in head for s in ("브리프:", str(path), brief_path)):
         head += f" 브리프: {path}"
     prompt = "\n".join([head, *(rows[k] for k in ROWS if rows[k])])
     # The hook's own test on the result: if its patterns move, this refuses instead of creating what it would refuse.
@@ -98,6 +110,13 @@ def pressure_refusal(cmd):
     except Exception:
         return None
     return out[1] if out and out[0] == "deny" else None
+
+
+def github_repo(worktree):
+    """`owner/name` of the card's origin, for the Sent page; None when it is not a GitHub remote."""
+    p, _ = run(["git", "-C", worktree or ".", "remote", "get-url", "origin"], timeout=10) if worktree else (None, "")
+    m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?/?$", p.stdout.strip()) if p and not p.returncode else None
+    return m and m.group(1)
 
 
 def run(cmd, stdin=None, timeout=120):
@@ -145,10 +164,12 @@ def create(argv):
     res = out["result"]
     print(json.dumps(res, ensure_ascii=False, indent=1))
     failed = []
-    p, err = run([ORCH, "sent", "add", "--to", opts["--name"], "--kind", "card", "--channel", ME, "-"], stdin=prompt)
+    path = res["worktree"].get("path")
+    gh = github_repo(path)
+    p, err = run([ORCH, "sent", "add", "--to", opts["--name"], "--kind", "card", "--channel", ME,
+                  *(["--repo", gh] if gh else []), "-"], stdin=prompt)
     if not p or p.returncode:
         failed.append(f"orch sent add: {err}")
-    path = res["worktree"].get("path")
     if opts.get("--display-name") and path:
         p, err = run([ORCA, "worktree", "set", "--worktree", f"path:{path}", "--display-name", opts["--display-name"], "--json"])
         if not p or p.returncode:

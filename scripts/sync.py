@@ -11,6 +11,7 @@ Usage:
   skills-sync close-setup <worktree path>
                                          close a new card's setup terminal once Orca's setup script finished
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
+                   [--parent-worktree <selector> | --no-parent]
                                          create a card whose first prompt carries the brief's /goal, CLOSE/KEEP
                                          and lead lines written out (scripts/card.py)
   skills-sync status                     print the last sync result and the pending reload

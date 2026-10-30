@@ -68,8 +68,9 @@ session as not the human's, so an approval sent afterwards is refused. The brief
 - **Do not** — repo A is off limits; anything else the target must leave alone. Paste the
   refused-act paragraph of `orchestrate` `references/brief.md` FORBIDDEN verbatim: a card
   restarted after a `no verdict` needs it most.
-- **Approved** — the acts the human already approved for this work, each with their words and
-  the date (merge, deploy, restarting an app, a settings or language change, an upgrade). The
+- **Approved** — an `APPROVED:` row: the acts the human already approved for this work, each with
+  their words and the date (merge, deploy, restarting an app, a settings or language change, an
+  upgrade). Written as a row, it reaches the first prompt (§3); a heading or bullet does not. The
   card decides inside them with the recommended default and reports what it chose; it does not
   ask.
 - **Human only** — what stays the human's: permission dialogs, logins, payments, document
@@ -130,17 +131,20 @@ skills-sync close-setup "<result.worktree.path>"
   end-session §8` and drop the questions it left waiting (`orchestrate` "Stay answerable").
   Without the summary the new card redoes or undoes finished work; left open, the old card waits
   on a question about work the new card already did.
-- `skills-sync card` writes the brief's `/goal` line (plus the brief's path), APPROVED, CLOSE or
-  KEEP and lead rows into `--prompt` itself, logs it with `orch sent add`, sets the display name
-  and prints Orca's create output. A row is a line starting with its key (`CLOSE: …`); a `## Close`
-  heading is not one. Never pass `--prompt "$(cat <brief>)"`: the guard hook reads only the command
-  text, so it refuses that card even when the file holds the lines. A nonzero exit is a failing
-  check, not a refusal: 2 names the missing line (add it to the brief), 3 is the pressure gate's
-  reason (wait as it says, then run the same command), 4 is Orca's create error (Orca can fail a
-  launch whose outcome it could not confirm: check `orca worktree ps` before running it again),
-  5 means the card exists but its log or name failed (do that step by hand; do not create it
-  again). An inline brief
-  with no file goes straight to `orca worktree create --prompt`, its lines written out.
+- `skills-sync card` writes the brief's `/goal` line (plus the brief's path, unless the line
+  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows into `--prompt` itself, logs it with
+  `orch sent add`, sets the display name and prints Orca's create output. A row is a line outside
+  a ``` fence that starts with its key and a colon (`CLOSE: …`), or the Lead template's wide gap; a
+  `## Close` heading is not one. The brief is a local file: a note only the notes store reaches is
+  copied to one first. The guard hook checks that file as the helper does; the auto-mode
+  classifier sees only the command and its path, and the helper is not auto-allowed. Never pass
+  `--prompt "$(cat <brief>)"`: the hook reads only the command text, so it refuses that card even
+  when the file holds the lines. A nonzero exit is a failing check, not a refusal: 2 names the
+  missing line (add it to the brief), 3 is the pressure gate's reason (wait as it says, then run
+  the same command), 4 is Orca's create error (Orca can fail a launch whose outcome it could not
+  confirm: check `orca worktree ps` before running it again), 5 means the card exists but its log
+  or name failed (do that step by hand; do not create it again). An inline brief with no file goes
+  straight to `orca worktree create --prompt`, its lines written out.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
 - `--name` is `<target>-<topic>`, e.g. `blog-launch-post`. A ticket-backed card uses the
