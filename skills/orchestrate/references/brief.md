@@ -232,7 +232,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A card started through `dispatch-card` to run a project for the session above it (a lead) gets this brief in this format, never one of your own; when to start one, and what the layer above does after, is `references/top-level.md` "Starting a lead". Its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. Without a DELEGATE line, a lead investigates and implements on its own.
+A card started through `dispatch-card` to run a project for the session above it (a lead) gets this brief in this format, never one of your own; when to start one, and what the layer above does after, is `references/top-level.md` "Starting a lead". Its first prompt is `/goal <GOAL>. 브리프: <note path>` followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE`, `TASKS`, `GATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`; `skills-sync card` writes them all out from the brief file and refuses a lead's brief missing any). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. Without a DELEGATE line, a lead investigates and implements on its own.
 
 ```
 <project>: lead
@@ -251,6 +251,12 @@ DELEGATE    You do not investigate, implement, verify or drive a browser yoursel
             or "Single worker"), never this Lead brief; only the human or the top-level starts
             a lead.
 PREDICATE   The countable done condition, and what is out of scope.
+TASKS       Each unit you start is an Orca task: `task-create --deps '[…]'` with its start-after
+            prerequisites, started from `task-list --ready` with `worker-start --task <id>`
+            (SKILL.md Scale). A unit you start as a card instead names why in your next report.
+GATE        A decision that waits on the human is a `gate-create` on the task it blocks, beside
+            `orch decide add`. A step due at a date or time goes in a gate or an `orch board`
+            item's `--next` with that time, never only in your memory.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
             route them down to your own workers, never to another session's. Units the

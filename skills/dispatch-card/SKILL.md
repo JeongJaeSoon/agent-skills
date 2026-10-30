@@ -86,10 +86,11 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   `KEEP` instead only when this session will reuse the card.
   The line goes in `--prompt` itself, written out, wherever the rest of the brief lives: the
   plugin's guard hook refuses an `orca worktree create --prompt` without `CLOSE` or `KEEP`.
+  `skills-sync card` (§3) copies it from the brief file for you.
 
 A card that will run a project for this session through cards of its own (a lead) gets
 `orchestrate` `references/brief.md` "Lead" instead of the list above, and its `--prompt` also
-carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE` and `PREDICATE` lines; the hook refuses a lead's prompt (a `MODE`
+carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `TASKS` and `GATE` lines; the hook refuses a lead's prompt (a `MODE`
 line or a `<project>: lead` head) that lacks `MODE`, `ROLE`, `DELEGATE` or `PREDICATE`. The `ROLE` line binds the
 lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It stands
 in for `claude --agent agent-skills:lead`: `orca worktree create --agent` takes an Orca agent id, not CLI flags. Without these lines a lead reports done and waits for an order that never comes.
@@ -109,21 +110,12 @@ Same command and conventions as `handoff-ticket` §3. What differs:
 
 ```bash
 orca worktree ps                     # a card already on this task? the first rule below
-orca worktree create \
+# the brief is a file holding a `/goal <goal>` line and its APPROVED, CLOSE or KEEP (and a lead's) rows
+skills-sync card <brief file> \
   --repo name:<repo> \
   --name "<target>-<topic>" \
-  --parent-worktree active \
-  --agent claude \
-  --prompt "/goal <goal>. 브리프: <note path> + 3-line summary + the CLOSE line, or /goal + the inline brief" \
-  --comment "<note path>" \
-  --json
-# log the prompt as sent, for the dashboard's Sent page (orchestrate references/dashboard.md "Sent instructions");
-# on stdin, not --text: a quoted prompt breaks and shows in ps
-orch sent add --to "<target>-<topic>" --kind card --channel "orca worktree create --prompt" --repo <owner/repo> - <<'EOF'
-<the --prompt text>
-EOF
-# name the card by what it does, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
-orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID or target> <short title>" --json
+  --display-name "<ID or target> <short title>" \
+  --comment "<brief path>"
 # close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
 # (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit;
 #  a setup stopped on a trust prompt never ends: trust as in orchestrate references/top-level.md "Starting a worker")
@@ -138,6 +130,17 @@ skills-sync close-setup "<result.worktree.path>"
   end-session §8` and drop the questions it left waiting (`orchestrate` "Stay answerable").
   Without the summary the new card redoes or undoes finished work; left open, the old card waits
   on a question about work the new card already did.
+- `skills-sync card` writes the brief's `/goal` line (plus the brief's path), APPROVED, CLOSE or
+  KEEP and lead rows into `--prompt` itself, logs it with `orch sent add`, sets the display name
+  and prints Orca's create output. A row is a line starting with its key (`CLOSE: …`); a `## Close`
+  heading is not one. Never pass `--prompt "$(cat <brief>)"`: the guard hook reads only the command
+  text, so it refuses that card even when the file holds the lines. A nonzero exit is a failing
+  check, not a refusal: 2 names the missing line (add it to the brief), 3 is the pressure gate's
+  reason (wait as it says, then run the same command), 4 is Orca's create error (Orca can fail a
+  launch whose outcome it could not confirm: check `orca worktree ps` before running it again),
+  5 means the card exists but its log or name failed (do that step by hand; do not create it
+  again). An inline brief
+  with no file goes straight to `orca worktree create --prompt`, its lines written out.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
 - `--name` is `<target>-<topic>`, e.g. `blog-launch-post`. A ticket-backed card uses the

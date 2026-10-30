@@ -213,6 +213,16 @@ README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 �
 
 `close-setup`은 그 카드의 에이전트 없는 터미널마다 화면과 누적 출력에서 `…/orca/setup-runner.sh` 경로를 찾고, 그 경로를 품은 프로세스가 두 번 연달아 없을 때 닫는다. 명령 줄이 찍힌 직후 스크립트가 시작되기 전을 끝난 것으로 보지 않으려고 두 번 본다. 2분 안에 스크립트가 보이지 않는 셸은 사람이 연 것으로 보고 두고, 30분이 지나도 도는 스크립트는 두고 종료 코드 1로 알린다.
 
+### 브리프 파일로 카드 만들기 (`skills-sync card <브리프>`, 2026-10-30)
+
+guard hook은 Bash 명령 텍스트만 본다. 그래서 `--prompt "$(cat brief.md)"`로 만든 카드는 파일에 `CLOSE`와 리드 줄이 있어도 거부되고, 그 줄을 빼먹은 카드는 hook을 지나 시작 직후 멈춘다. `--body "$(cat)"` 관행이 카드 `--prompt`로 번진 것이 원인이었다.
+
+`card`는 브리프 파일에서 `/goal` 줄, `APPROVED`, 리드 행(`MODE`·`ROLE`·`INBOX`·`DELEGATE`·`PREDICATE`·`TASKS`·`GATE`), `CLOSE`/`KEEP`을 읽어 `--prompt`에 그대로 적고, `orch sent add`와 표시 이름 지정까지 한다. 빠진 줄은 hook과 같은 패턴(`hooks/guard.py`를 import)으로 판정해 종료 코드 2로 알린다.
+
+- `orch` 동사로 두지 않았다. guard hook이 `orch <동사>`를 자동 허용하므로 카드 생성이 분류기를 거치지 않게 된다.
+- 하위 프로세스에서 `orca worktree create`를 부르니 `pressure_gate.py`가 그 명령을 보지 못한다. 그래서 같은 명령 문자열로 그 hook의 `gate()`를 직접 불러 거부면 종료 코드 3으로 끝낸다. `AGENT_SKILLS_PRESSURE_GATE=0`도 hook과 같게 따른다.
+- 재현하지 못하는 hook 판정이 하나 있다. "리드는 다른 리드를 띄우지 않는다"는 hook 이벤트의 세션·에이전트 정보로 판정하는데, 하위 프로세스는 그 정보를 받지 못한다.
+
 ## 5. 다른 PC 부트스트랩
 
 새 PC는 `scripts/setup.py` 한 줄로 이 절의 일과 권장 사용자 설정을 함께 넣는다([new-pc.md](new-pc.md)). 이 절은 그 안에서 체크아웃을 로드하고 동기화하는 부분, 곧 `bootstrap.py`만 따로 돌릴 때의 동작이다.
