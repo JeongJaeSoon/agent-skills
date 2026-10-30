@@ -1,6 +1,6 @@
 # Janitor kinds: exact conditions
 
-`reap` judges these again before it acts; this is the reference for why a card stayed or went.
+The kinds the janitor's `card` kind ([cards.md](cards.md)) replaced; they run only when named in `--kinds`. `reap` judges these again before it acts.
 
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|

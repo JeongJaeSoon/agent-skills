@@ -23,13 +23,13 @@ Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [..
 "load_limit": <5-minute load; default the CPU count>, "load_cooldown_minutes": 60, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2,
 "regenerated_untracked": true, "preview_ports": [4500, 4599]}.
-Janitor kinds (orca-worktree, done-card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack;
-`--kinds janitor`) cover only
+Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack;
+`--kinds janitor`): card is every Orca card, judged by cards.py; the rest cover only
 what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
 (cliProvenance created-by-cli, with or without --parent-worktree), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
-default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. done-card is an orca-worktree that only its idle Claude session keeps: reap asks that session once,
-through `skills-sync nudge`, to close itself. reap moves files to the trash and never empties it (the OS may: scan
+default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. orca-worktree and done-card (a nudge asking an idle session to close itself) are the
+card kinds before card, run only when named in --kinds. reap moves files to the trash and never empties it (the OS may: scan
 alerts when Finder's auto-empty is on), and leaves a chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
 The ledger is --ledger or $AGENT_SKILLS_LEDGER, default <state>/ledger.jsonl (state: --state or $AGENT_SKILLS_STATE,
 default ~/.local/state/agent-skills). program moves a closed program untouched for
@@ -463,7 +463,7 @@ def scan(kinds, hours, cfg, repo_list):
                               if (x := judge_worktree(repo, w, hours, cwd_of, time.time(), projects_dir, orca))]
             except RuntimeError as e:
                 notes.append(f"{repo}: {e}")
-    if set(JANITOR) & kinds:
+    if (set(JANITOR) | set(CARD_LEGACY)) & kinds:
         items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
                               regenerated=cfg.get("regenerated_untracked", True) is not False,
                               evidence_roots=cfg.get("evidence_roots"),
@@ -497,11 +497,15 @@ def trash_auto_empty():
         (run(["defaults", "read", "com.apple.finder", "FXRemoveOldTrashItems"], check=False) or "").strip() == "1"
 
 
-# Janitor kinds: only what an agent created (the ledger, or an Orca orchestration worker).
-JANITOR = ("orca-worktree", "done-card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch",
+# Janitor kinds: every Orca card (card, judged by cards.py), and of the rest only what an agent created (the ledger, or
+# an Orca orchestration worker).
+JANITOR = ("card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch",
            "compose-stack")
 # What the scheduled run covers: the janitor kinds, the user's download and desktop folders, closed programs and hook state.
 SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
+# The card kinds before `card`: asked for by name only. Their ledger lines stay valid.
+CARD_LEGACY = ("orca-worktree", "done-card")
+LEDGER_KINDS = CARD_LEGACY + tuple(k for k in JANITOR if k != "card")
 # Kinds that would find something new every round; the precheck looks at them once a day.
 DAILY = ("user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
@@ -555,8 +559,8 @@ def ledger_read(path):
 
 def ledger_add(path, kind, rid, pr=None, worktree=None, run_id=None, by=None, **extra):
     """extra: url (chrome-window), or retired=True, which drops the id from every later scan."""
-    if kind not in JANITOR:
-        raise SystemExit(f"--kind must be one of {', '.join(JANITOR)}")
+    if kind not in LEDGER_KINDS:
+        raise SystemExit(f"--kind must be one of {', '.join(LEDGER_KINDS)}")
     entry = {"ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"), "run": run_id, "kind": kind, "id": rid,
              "links": {"pr": pr, "worktree": worktree}, "by": by, **{k: v for k, v in extra.items() if v is not None}}
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1181,6 +1185,12 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
                  done_idle_s=2 * 3600, quiet=None, regenerated=True, preview=(4500, 4599), shell_idle_s=30 * 60):
     pr_state = pr_state or pr_reader()
     items = []
+    if "card" in kinds:
+        import cards
+        found, card_notes = cards.scan(config(), repo_list)
+        notes += card_notes
+        items += [{"kind": "card", "key": f"card:{c['path']}", "name": c["path"], "target": c["verdict"] in cards.ACTING,
+                   **{k: c[k] for k in ("verdict", "why", "head", "close", "pr", "state")}} for c in found]
     if "compose-stack" in kinds:
         stacks = compose_stacks()
         if stacks is None:
@@ -1578,6 +1588,7 @@ def schedule_prompt(script, state_dir, ledger=None, inbox=None):
               "reap 은 계획의 대상을 다시 확인한 뒤 닫거나 휴지통으로 옮기고, 바뀐 것은 건너뛴다. "
               "출력에 '에이전트가 처리'로 남은 chrome-window 는 브라우저 도구가 있고 그 창·탭의 URL 이 출력에 적힌 URL 과 같을 때만 닫는다. "
               "다르거나 브라우저 도구가 없으면 남긴다. "
+              "계획의 card 중 판정이 '사람 결정'인 카드는 건드리지 않고, 보고에 카드 경로와 이유를 따로 모아 적는다. "
               "그 뒤 정리한 것, 건너뛴 것, 남긴 것과 이유를 한국어로 보고한다. "
               "계획에 없는 것은 건드리지 않고, rm 으로 지우거나 휴지통을 비우지 않는다. "
               "reap 이 권한·분류기에 거부되면 다른 명령으로 우회하지 않는다. "
@@ -1939,6 +1950,9 @@ def act(item, notes):
         return item["how"][0] + " (ledger 에서 내림)"
     if kind == "done-card":
         return nudge_card(item)
+    if kind == "card":
+        import cards
+        return cards.act({**item, "path": item["name"]}, config())
     if kind == "compose-stack":
         # No -v: the stack's volumes are data, and stay.
         run(["docker", "compose", "-p", item["name"], "down"])
@@ -1993,9 +2007,9 @@ def main():
         sys.exit("use --kinds VALUE with supported kinds; --kinds=VALUE is not supported")
     if "--kinds" in sys.argv:
         requested = opt("--kinds") if sys.argv.index("--kinds") + 1 < len(sys.argv) else None
-        if not requested or set(requested.split(",")) - set(KINDS + SCHEDULED + ("janitor",)):
+        if not requested or set(requested.split(",")) - set(KINDS + SCHEDULED + CARD_LEGACY + ("janitor",)):
             sys.exit("--kinds requires a comma-separated list of supported kinds: " +
-                     ",".join(dict.fromkeys(KINDS + SCHEDULED + ("janitor",))))
+                     ",".join(dict.fromkeys(KINDS + SCHEDULED + CARD_LEGACY + ("janitor",))))
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     cfg = config()
     if cmd == "reap":
@@ -2012,7 +2026,7 @@ def main():
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
-            if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip")):
+            if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip", "head", "verdict")):
                 print(f"- 건너뜀 {label(old)}: 더는 정리 대상이 아님")
                 continue
             try:
@@ -2102,7 +2116,7 @@ def main():
         stamp_round(STATE)
     names =(opt("--kinds") or ",".join(SCHEDULED if cmd == "precheck" else KINDS)).split(",")
     names = [k for n in names for k in (JANITOR if n == "janitor" else (n,))]
-    kinds = set(names) & set(KINDS + SCHEDULED)
+    kinds = set(names) & set(KINDS + SCHEDULED + CARD_LEGACY)
     pre_notes = []
     for k in DAILY:
         if cmd == "precheck" and k in kinds and not user_folder_due(STATE, kind=k):
@@ -2110,14 +2124,14 @@ def main():
             pre_notes.append(f"{k}: 하루 한 번만 정리한다, 이번 회차는 건너뜀")
     hours = float(opt("--hours") or cfg.get("hours") or 6)
     repo_list = repos([a for i, a in enumerate(sys.argv) if i and sys.argv[i - 1] == "--repo"]) \
-        if {"branch", "worktree", "orca-worktree", "done-card"} & kinds else []
+        if {"branch", "worktree", "card", "orca-worktree", "done-card"} & kinds else []
     items, notes = scan(kinds, hours, cfg, repo_list)
     notes = pre_notes + notes
     msgs, totals = alerts(items, {**ALERT, **(cfg.get("alert") or {})})
     if trash_auto_empty():
         msgs.append("휴지통 자동 비움 켜짐(Finder: 30일 지난 항목 제거): 휴지통으로 옮긴 것은 30일 뒤 영구 삭제된다")
     data ={"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "hours": hours,
-            "kinds": [k for k in KINDS + SCHEDULED if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
+            "kinds": [k for k in KINDS + SCHEDULED + CARD_LEGACY if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
     if cmd == "precheck":
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
         command = round_cmd(pathlib.Path(__file__).resolve(), STATE, ledger_path(), "reap", "--plan", str(STATE / "janitor-plan.json"))

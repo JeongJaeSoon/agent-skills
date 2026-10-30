@@ -167,7 +167,7 @@ note that the card is left for the parent or the human.
 **Who closes a finished card.** This is the one rule; other skills link here. The card itself
 closes first, in the turn its work is done: a worker by §7, a dispatched card by §8. The backstop
 is the session that started it, in the wake that card's report or `worker_done` arrives
-(`orchestrate`, "What you started, you close"). The `reap-resources` janitor's `done-card` nudge
+(`orchestrate`, "What you started, you close"). The `reap-resources` janitor's `card` round
 and `reap-hard` are sweeps for cards both missed, hours later. Nobody plans on them, and a card
 or its parent never waits for them.
 

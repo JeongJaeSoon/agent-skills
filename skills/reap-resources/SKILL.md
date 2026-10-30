@@ -9,9 +9,25 @@ Sessions end and leave things running or lying around: test
 servers reparented to pid 1, the volumes and images of finished compose stacks, local branches
 of merged PRs, git worktrees in the scratchpad of a finished session.
 
-This skill needs no program. The janitor kinds below remove settled Orca worker and card worktrees with
-`orca worktree rm`, the same command the resource steward uses (`orchestrate` `references/roles.md`),
-after moving the worktree's ignored files to the trash.
+This skill needs no program. Finished Orca cards are removed with `orca worktree rm`, the same command the resource
+steward uses (`orchestrate` `references/roles.md`), after moving the worktree's ignored files to the trash.
+
+## Cards: take stock of every Orca card
+
+"끝난 카드 정리해줘", or `/agent-skills:reap-resources` with it: every Orca card on this host, whatever made it,
+gets one verdict: 삭제, 터미널만 닫기 (open PR), 남김, or 사람 결정. The rule and the traps it covers (a stale
+`origin/HEAD`, a pre-rebase copy, idle shells holding the card, a screen that says "done"):
+[references/cards.md](references/cards.md), the only place it is written.
+
+```bash
+C="${CLAUDE_SKILL_DIR}/scripts/cards.py"
+python3 "$C" scan --plan <scratchpad>/cards-plan.json    # read only: 카드 | repo/branch | PR | 판정 | 이유
+python3 "$C" apply --plan <scratchpad>/cards-plan.json   # after the person has read the table
+```
+
+Show the table and stop before `apply`: the person running it confirms. A 사람 결정 row is theirs to settle; `apply`
+never touches it. From a shell the same two lines work with the checkout's path in place of `${CLAUDE_SKILL_DIR}`.
+The janitor's `card` kind is this same code, so the scheduled round closes what `scan` would.
 
 ## Run
 
@@ -33,7 +49,7 @@ python3 "$R" reap --plan <scratchpad>/reap-plan.json    # act on that list, noth
 
 ## Janitor: what agents created
 
-These kinds look only at what an agent registered in the ledger, an Orca orchestration worker
+`card` is the section above. The other kinds look only at what an agent registered in the ledger, an Orca orchestration worker
 made, or an agent made with `orca worktree create`, with or without `--parent-worktree` (Orca records
 `cliProvenance` `created-by-cli`; a registration step skipped still leaves it). A worktree the user made in the app and the
 main checkout never show up; anything not registered shows up
@@ -46,7 +62,6 @@ scan and precheck report it under `## 경보`.
 
 ```bash
 python3 "$R" ledger add --kind tmpdir --path /tmp/build-x --pr acme/app#12     # right after creating it
-python3 "$R" ledger add --kind orca-worktree --path <card path>              # a card you started (dispatch-card §3)
 python3 "$R" ledger add --kind gui-app --pid 4242 --worktree <worktree path>   # pid + start time are recorded
 python3 "$R" ledger add --kind chrome-window --id <window or tab id> --url <its URL> --pr acme/app#12
 python3 "$R" ledger add --kind evidence --path /tmp/task/shots --pr acme/app#12   # a screenshot or recording, once it is on the PR
@@ -66,8 +81,7 @@ line adds to it and keeps the owner links. `--pid` is recorded, never checked: t
 
 | Kind | Target when | Kept when | Action |
 |---|---|---|---|
-| orca-worktree | in the ledger, made by an orchestration worker, or with `orca worktree create`; its PR merged or closed, or, for a worker's card only, no PR with HEAD on `origin/HEAD` and its sessions quiet for `--hours` (never under 2); and nothing in it would be lost: no changes (Orca's regenerated `.agents/skills` copy aside), nothing unpushed, no live worker turn, and no process but Orca's own idle shells, silent for `reap.idle_minutes`. Exact conditions: [references/janitor-kinds.md](references/janitor-kinds.md) | an open PR, a no-PR card no worker made, a pinned CLI card, changes, unpushed commits, a live turn or a process; skipped: the main checkout, worktrees outside `--repo`, a `retained` worker row | ignored files (and the regenerated copies, judged again) to the trash, the idle shells' terminals closed one by one, then `orca worktree rm --worktree path:<p> --run-hooks` (end-session §4). Tracked files are in git |
-| done-card | a Claude session idles in a card that would be an orca-worktree target with its merged or closed PR but for the processes in it, or in a clean card with no PR whose HEAD is on `origin/HEAD` (a verify or read-only card): no live worker turn, and its transcripts quiet for `reap.done_card_hours` (default 2). Quiet is read from the newest timestamped entry, never the file time: an idle session appends untimed lines every 30 minutes | anything else that keeps an orca-worktree; a card whose session is a lead or the orchestrator (`--agent`/`--name lead:` or a `ROLE` record) or whose child cards are still open or cannot be listed: those wait on their workers; no Claude process in it; the worker list unreadable; the session already asked once (a `done-card` ledger line), which is reported, not asked again | `skills-sync nudge` into the card's one Claude terminal: close by `end-session` §8 if nothing is left, else say what is. Never killed. A refused nudge (screen not idle) fails the item, so the next precheck holds it back a day |
+| card | [references/cards.md](references/cards.md) 삭제 or 터미널만 닫기 | 남김, 사람 결정 (reported, never acted on) | the listed terminals closed one by one; for 삭제, judged again, ignored files to the trash, `orca worktree rm --worktree path:<p> --run-hooks` |
 | orca-worker | a row of `orca orchestration worker-list --terminal-state reclaimable` | - | `orca orchestration worker-release --dispatch <id>` |
 | tmpdir | under a temp dir, its link is done, and no process has its cwd or executable under it | outside a temp dir, an open PR, no link, a process in it; a path already gone is not listed | `lsregister -u` each `.app` under it, then the trash |
 | gui-app | the registered pid with the same start time still runs and its link is done | an open PR, no link | `kill -TERM <pid>` |
@@ -169,13 +183,10 @@ by the reap output in its report.
 
 A precheck prints what it could not read (`gh`, `orca`) and the alerts to stderr.
 `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
-so a scan there can see fewer workers than the automation does. Any process in a worktree keeps
-it from removal except Orca's terminal shell left at its prompt in a card whose terminals have gone silent, and
-`orca-worker` reports a reclaimable worker terminal. Limit: those shells are matched to the card's Orca terminals by
-count, not by identity, so a silent shell of another card's terminal that `cd`-ed into this card passes as one of
-this card's, and the reap closes this card's handles while that shell stays. A finished card
-whose Claude session sits at an empty prompt would stay forever that way, so `done-card` asks that
-session to close itself. `done-card` and reap-hard
+so a scan there can see fewer workers than the automation does. What keeps a card from removal is
+[references/cards.md](references/cards.md); `orca-worker` reports a reclaimable worker terminal. The kinds `card`
+replaced, `orca-worktree` and `done-card` (a nudge asking an idle session to close itself), run only when named in
+`--kinds`; their rule is [references/janitor-kinds.md](references/janitor-kinds.md). `card` and reap-hard
 are sweeps for cards that neither closed themselves nor were closed by the session that started them
 (`end-session` §8, "Who closes a finished card"). Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
