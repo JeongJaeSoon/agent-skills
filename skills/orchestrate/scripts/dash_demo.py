@@ -377,7 +377,8 @@ def _transcripts(root, now, workers):
 
 
 def pr_stats_report(now):
-    """An invented PR history in pr_stats.py's shape, growing over the year, so the demo never searches GitHub."""
+    """An invented PR history in pr_stats.py's shape, so the demo never searches GitHub. It grows steeply, a handful of
+    PRs a month at first and hundreds in the last months, as when agents take over, so the range chips have work to do."""
     import random
     import pr_stats
     rnd = random.Random(7)
@@ -388,7 +389,7 @@ def pr_stats_report(now):
     raw, day = [], since
     while day <= today:
         k = (day - since).days / max(1, (today - since).days)
-        for i in range(rnd.choices([0, 1, 2, 3, 5], [3, 3, 2, 1, 1 + 4 * k])[0] + (day.weekday() < 5) * int(4 * k)):
+        for i in range(rnd.choices([0, 0, 1, 2], [6, 3, 2, 1])[0] + (day.weekday() < 5) * int(40 * k ** 6)):
             src = rnd.choices(["Me", "Agent A", "Agent B"], [10, 3 * k, 2 * k])[0]
             t = dt.datetime.combine(day, dt.time(rnd.choice([10, 11, 14, 15, 16, 17, 21, 23]), rnd.randrange(60))).astimezone()
             state = "open" if (today - day).days < 5 and rnd.random() < 0.5 else rnd.choices(["merged", "closed"], [85, 15])[0]

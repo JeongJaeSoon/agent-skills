@@ -1878,6 +1878,33 @@ finally:
     jobs.path().write_text(saved)
 assert isinstance(st, dict) and "jobs.json" in err.getvalue(), err.getvalue()
 
+# PR stats: the charts open on the last six months with the y-axis fitted to them, and every bar carries one tooltip
+# for its whole month or week (states, total, line values) in place of an SVG <title> the poll would close.
+if shutil.which("node"):
+    rep = dash_demo.pr_stats_report(now)
+    stat_helpers = "\n".join(take(n) for n in ("$", "niceStep", "yAxis", "kpi", "chips"))
+    js = f"""{stat_helpers}
+{(assets / "fleet.js").read_text()}
+F.stats = {json.dumps(rep)}; F.statsAt = Date.now();
+const view = (range) => {{ S.filters.pr_range = range; return fleetStats(); }};
+process.stdout.write(JSON.stringify({{dflt: view(undefined), all: view("all"), d90: view("90d")}}));"""
+    ctx = ("const vm = require('vm'), sb = {process, S: {filters: {}, section: 'stats'}, getComputedStyle: () => ({paddingLeft: '0', paddingRight: '0'}),"
+           " document: {addEventListener() {}, querySelector: () => ({clientWidth: 1000})}};"
+           "vm.runInNewContext(require('fs').readFileSync(0, 'utf8'), sb);")
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=helpers + "\n" + js, capture_output=True, text=True, check=True).stdout)
+    charts = lambda html: [c.split("</svg>")[0] for c in html.split('<div class="chart">')[1:]]  # noqa: E731
+    bars = lambda html: [c.count("data-tip=") for c in charts(html)]  # noqa: E731
+    months, weeks = len(rep["views"]["all"]["months"]), len(rep["views"]["all"]["weeks"])
+    assert bars(got["all"]) == [months, months, weeks], bars(got["all"])
+    m6, _, w6 = bars(got["dflt"])
+    assert m6 in (6, 7) and 26 <= w6 <= 28 and bars(got["d90"])[0] in (3, 4), (bars(got["dflt"]), bars(got["d90"]))
+    assert 'data-val="6m" aria-pressed="true"' in got["dflt"], "six months is the default range"
+    monthly, _, weekly = charts(got["dflt"])
+    assert "<title>" not in monthly and monthly.count("&lt;b&gt;") == 5 * m6, "Merged, Open, Closed, Total and Trend per month"
+    assert "Total&lt;b&gt;" in monthly and "Trend&lt;b&gt;" in monthly and "4-week average&lt;b&gt;" in weekly
+    last = rep["views"]["all"]["monthly"]
+    assert f'aria-label="{rep["views"]["all"]["months"][-1]}: {last["merged"][-1] + last["open"][-1] + last["closed"][-1]}, Merged {last["merged"][-1]}' in monthly
+
 import dash  # noqa: E402
 assert {"owner_requests.py", "board.py", "holds.py", "stages.py"} <= {f.name for f in dash.code_files()}
 assert not any(f.name.startswith("test_") for f in dash.code_files())

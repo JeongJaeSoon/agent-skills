@@ -1389,7 +1389,8 @@ async function chatAction(act) {
 
 // My pull requests over time (pr_stats.py via /api/fleet/stats): PRs I authored plus those agents opened for me,
 // searched on GitHub every 6 h. Charts are plain SVG strings drawn at the view's pixel width (a resize renders the view
-// again), so a wide window gets wider bars, not taller charts and larger text; a bar's <title> is its tooltip.
+// again), so a wide window gets wider bars, not taller charts and larger text. A bar's tooltip is the shared #tip, not
+// an SVG <title>: the poll re-renders the view every few seconds, which closes a native tooltip mid-hover.
 async function pollStats() {
   const failed = (r) => r.error && !r.views;  // a collect error over last good counts is shown, not retried
   if (F.statsBusy || (F.stats && Date.now() - F.statsAt < (failed(F.stats) ? 5e3 : 60e3))) return;
@@ -1403,6 +1404,9 @@ async function pollStats() {
   if (S.section === "stats") renderView();
 }
 const STAT_STATE = [["merged", "Merged", "var(--accent)"], ["open", "Open", "var(--good)"], ["closed", "Closed", "var(--bad)"]];
+// The newest month runs to hundreds while the first ones hold a handful, so the charts open on a recent window and the
+// y-axis fits it. Six months keeps enough monthly bars to read a direction; the KPIs above stay whole-period.
+const STAT_RANGES = [["90d", "90 days", 90], ["6m", "6 months", 182], ["12m", "12 months", 365], ["all", "All", 0]];
 const STAT_SRC_COLORS = ["var(--ink-3)", "var(--derived)", "var(--warn)", "var(--good)", "var(--accent)"];
 // Stacked bars per bucket, with optional lines over them on the same y-scale.
 function statWidth() {
@@ -1417,19 +1421,21 @@ function statBars({ labels, titles, series, lines = [], height = 220, every }) {
   const band = (W - m.l - m.r) / labels.length, bw = Math.max(1, Math.min(40, band * 0.72));
   const y = (v) => H - m.b - (v / max) * (H - m.t - m.b), cx = (i) => m.l + band * i + band / 2;
   const nth = every || Math.max(1, Math.ceil(labels.length / 14));
-  let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(series.map((s) => s.name).join(", "))}"><g class="axis">${yAxis(max, m.l, W - m.r, y)}`;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="group" aria-label="${esc(series.map((s) => s.name).join(", "))}"><g class="axis">${yAxis(max, m.l, W - m.r, y)}`;
   labels.forEach((l, i) => { if ((labels.length - 1 - i) % nth === 0) svg += `<text x="${cx(i)}" y="${H - 6}" text-anchor="middle">${esc(l)}</text>`; });
   svg += "</g>";
+  const row = (name, color, v) => `<div class="row"><span class="sw" style="background:${color}"></span>${esc(name)}<b>${v ?? "—"}</b></div>`;
   labels.forEach((_, i) => {
     let acc = 0;
-    const tip = `${titles[i]}: ${tot[i]}\n${series.map((s) => `${s.name} ${s.values[i]}`).join(" · ")}`;
-    svg += `<g><title>${esc(tip)}</title>`;
+    const tip = `<div class="tt">${esc(titles[i])}</div>${series.map((s) => row(s.name, s.color, s.values[i])).join("")}${row("Total", "transparent", tot[i])}`
+      + lines.map((l) => row(l.name, l.color, l.values[i])).join("");
+    const said = [`${titles[i]}: ${tot[i]}`, ...series.map((s) => `${s.name} ${s.values[i]}`), ...lines.map((l) => `${l.name} ${l.values[i] ?? "none"}`)].join(", ");
     for (const s of series) {
       const v = s.values[i];
       if (v) svg += `<rect x="${cx(i) - bw / 2}" y="${y(acc + v)}" width="${bw}" height="${y(acc) - y(acc + v)}" style="fill:${s.color}"/>`;
       acc += v;
     }
-    svg += `<rect x="${m.l + band * i}" y="${m.t}" width="${band}" height="${H - m.t - m.b}" fill="transparent"/></g>`;
+    svg += `<rect x="${m.l + band * i}" y="${m.t}" width="${band}" height="${H - m.t - m.b}" fill="transparent" role="img" aria-label="${esc(said)}" data-tip="${esc(tip)}"/>`;
   });
   for (const l of lines) {
     const pts = l.values.map((v, i) => (v == null ? null : `${cx(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean);
@@ -1455,15 +1461,21 @@ function fleetStats() {
     ${kpi("Merged", `${st.merged}`, `${v.total ? Math.round((100 * st.merged) / v.total) : 0}% · ${st.open} open · ${st.closed} closed`)}
     ${kpi("By source", srcs.map((s) => v.by_source[s]).join(" / "), srcs.map(esc).join(" / "))}
     ${kpi("Weekly trend", `${v.weekly.slope >= 0 ? "+" : ""}${v.weekly.slope}<small>/wk</small>`, "slope of the weekly fit, current week left out")}</div>`;
+  const range = STAT_RANGES.find(([id]) => id === S.filters.pr_range) || STAT_RANGES[1], span = range[2];
   const toolbar = `<div class="toolbar">${chips("pr_stats", [["all", "All PRs", rep.views.all.total], ["no_batch", "Without campaigns", rep.views.no_batch.total]], nb ? "no_batch" : "all")}
+    ${chips("pr_range", STAT_RANGES.map(([id, label]) => [id, label]), range[0])}
     ${rep.batch_titles.length ? `<span class="muted">${rep.batch_count} PRs in ${rep.batch_titles.map((t) => `“${esc(t)}”`).join(", ")}</span>` : ""}</div>`;
-  const stateSeries = (b) => STAT_STATE.map(([k, name, color]) => ({ name, color, values: b[k] }));
-  const months = v.months.map(statMonth), mTitles = v.months;
-  const monthly = statBars({ labels: months, titles: mTitles, series: stateSeries(v.monthly), lines: [{ values: v.monthly.trend, color: "var(--ink-2)", dash: true }], every: 1 });
-  const bySource = statBars({ labels: months, titles: mTitles, series: srcs.map((s, i) => ({ name: s, color: srcColor(i), values: v.monthly.by_source[s] })), height: 180, every: 1 });
-  const weeks = v.weeks.map((w) => `${+w.slice(5, 7)}/${+w.slice(8)}`);
-  const weekly = statBars({ labels: weeks, titles: v.weeks.map((w) => `week of ${w}`), series: stateSeries(v.weekly),
-    lines: [{ values: v.weekly.ma4, color: "var(--warn)" }, { values: v.weekly.trend, color: "var(--ink-2)", dash: true }] });
+  const since = (n) => (span ? new Date(Date.now() - n * 864e5).toISOString().slice(0, 10) : "");
+  // A month or week stays while any of its days is in range; "-31" sorts after every real day of the month.
+  const from = (keys, end, n) => Math.min(keys.length - 1, Math.max(0, keys.findIndex((k) => end(k) >= since(n))));
+  const mi = from(v.months, (m) => `${m}-31`, span), wi = from(v.weeks, (w) => w, span + 6);
+  const stateSeries = (b, i) => STAT_STATE.map(([k, name, color]) => ({ name, color, values: b[k].slice(i) }));
+  const months = v.months.slice(mi).map(statMonth), mTitles = v.months.slice(mi);
+  const monthly = statBars({ labels: months, titles: mTitles, series: stateSeries(v.monthly, mi), lines: [{ name: "Trend", values: v.monthly.trend.slice(mi), color: "var(--ink-2)", dash: true }], every: 1 });
+  const bySource = statBars({ labels: months, titles: mTitles, series: srcs.map((s, i) => ({ name: s, color: srcColor(i), values: v.monthly.by_source[s].slice(mi) })), height: 180, every: 1 });
+  const weeks = v.weeks.slice(wi).map((w) => `${+w.slice(5, 7)}/${+w.slice(8)}`);
+  const weekly = statBars({ labels: weeks, titles: v.weeks.slice(wi).map((w) => `week of ${w}`), series: stateSeries(v.weekly, wi),
+    lines: [{ name: "4-week average", values: v.weekly.ma4.slice(wi), color: "var(--warn)" }, { name: "Trend", values: v.weekly.trend.slice(wi), color: "var(--ink-2)", dash: true }] });
   const pmax = Math.max(1, ...v.punch.flat()), days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const punch = `<table class="punch"><thead><tr><th></th>${[...Array(24).keys()].map((h) => `<th>${h % 3 ? "" : h}</th>`).join("")}</tr></thead><tbody>${v.punch.map((row, d) =>
     `<tr><th>${days[d]}</th>${row.map((n, h) => `<td title="${days[d]} ${h}:00 · ${n}" style="${n ? `background:color-mix(in srgb, var(--accent) ${Math.round(12 + (88 * n) / pmax)}%, transparent)` : ""}"></td>`).join("")}</tr>`).join("")}</tbody></table>`;
@@ -1478,6 +1490,14 @@ function fleetStats() {
     <div class="grid">${card("Weekday × hour", "", punch)}
     ${card("Repositories", "top 10", `<div class="repo-list">${repos || '<div class="empty-chart">No pull requests.</div>'}</div>`)}</div>`;
 }
+// The view is an HTML string, so a bar has no listener of its own; statTip hides only what this handler showed, since
+// the program charts in app.js share #tip.
+document.addEventListener("pointermove", (e) => {
+  const band = e.target.closest?.(".chart [data-tip]");
+  if (band) { showTip(band.dataset.tip, e.clientX, e.clientY); F.statTip = true; }
+  else if (F.statTip) { hideTip(); F.statTip = false; }
+});
+document.addEventListener("pointerout", (e) => { if (!e.relatedTarget && F.statTip) { hideTip(); F.statTip = false; } });
 const FLEET_VIEWS = { overview: fleetOverview, inbox: fleetInbox, prs: fleetPrs, brief: fleetBrief, stages: fleetStages, todo: fleetTodo, automations: fleetAutomations, monitors: fleetMonitors, sent: fleetSent, skills: fleetSkills, changes: fleetChanges, tokens: fleetTokens, flow: fleetFlow, stats: fleetStats, graph: fleetGraph, sessions: fleetSessions, session: fleetSession, timeline: fleetTimeline };
 
 document.addEventListener("input", (e) => {
