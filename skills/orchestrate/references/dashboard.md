@@ -431,6 +431,8 @@ The first source is always the PRs I authored (`author:@me`). Agents that open P
 
 Days, weeks (from Monday) and hours are in the server's time zone. A trend line is a least-squares fit without the last month or week, which is still filling. A campaign is one title on 10 or more PRs (`BATCH_MIN`); the "Without campaigns" view drops them. The file holds counts, repository names and campaign titles, no PR text.
 
+The Monthly, By source and Weekly charts show 90 days, 6 months (the default), 12 months or everything, and their y-axis fits the range shown, so early months of a handful of PRs do not flatten to zero under recent months of hundreds. The trend line stays the fit over the whole history. The KPIs above them always count the whole history. Pointing at a bar shows one tooltip for its month or week: each series, the total, and the trend and 4-week average there. There is no log scale: on stacked bars it would misstate each segment's share.
+
 ## Freshness
 
 The bar under the headline shows each source's last success, both as a local time and as a relative time that ticks every second.
