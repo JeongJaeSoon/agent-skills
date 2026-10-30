@@ -136,7 +136,9 @@ skills-sync close-setup "<result.worktree.path>"
   `orch sent add`, sets the display name and prints Orca's create output. A row is a line outside
   a ``` fence that starts with its key and a colon (`CLOSE: …`), or the Lead template's wide gap; a
   `## Close` heading is not one. The brief is a local file: a note only the notes store reaches is
-  copied to one first. The guard hook checks that file as the helper does; the auto-mode
+  copied to one first. The guard hook checks that file as the helper does, but only for a plain
+  `skills-sync card` call: a wrapper (`env …`, `bash -c`, running `scripts/card.py` itself) skips
+  its lead-starts-lead test, since the hook is a guardrail, not a sandbox. The auto-mode
   classifier sees only the command and its path, and the helper is not auto-allowed. Never pass
   `--prompt "$(cat <brief>)"`: the hook reads only the command text, so it refuses that card even
   when the file holds the lines. A nonzero exit is a failing check, not a refusal: 2 names the

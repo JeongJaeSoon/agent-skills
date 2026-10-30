@@ -11,7 +11,8 @@ and `PREDICATE`. A card whose first prompt lacks them reports done and idles for
 work itself, and one without ROLE never gets the reorient hook's per-prompt reminder (dispatch-card §2).
 The text is read as written: a prompt built from a file or variable is denied too.
 `skills-sync card <brief>` (scripts/card.py) is checked on the brief file it names, with that helper's own rules,
-and so is the lead test below.
+and so is the lead test below; a relative path after a `cd` or `pushd`, or a check that cannot run, is denied.
+A wrapper (`env …`, `bash -c`, scripts/card.py run directly) is not seen: a guardrail, not a sandbox.
 
 Deny: a lead's card started from a session that is itself a lead, known by its `agent_type` (`claude --agent
 agent-skills:lead`), its `ROLE: lead` record from the reorient hook, or its transcript's first user prompt passing the
@@ -54,6 +55,7 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 # The helper reads its brief from a file this hook can open, so the card checks run on that file (dispatch-card §3).
 CARD_HELPER = re.compile(r"(?:^|[;&|(])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
+CHDIR = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\b", re.M)
 LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lead. Give the card a "
                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
                   "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
@@ -141,18 +143,24 @@ def lead_session(agent, session, transcript):
     return agent == "agent-skills:lead" or declared_lead(session) or bool(transcript and started_as_lead(transcript))
 
 
-def helper_card(brief, cwd):
-    """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file."""
+def helper_card(brief, cwd, moves):
+    """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
+    `moves`: the command changes directory first, so a relative path would be read from the wrong place."""
     brief = brief.strip("'\"")
     if set(brief) & set("$`*?"):
         return None, "Write the brief's path out in `skills-sync card <brief>`; this hook reads that file and cannot expand it."
     path = pathlib.Path(brief).expanduser()
-    sys.path.insert(0, str(ROOT / "scripts"))
-    import card
+    if moves and not path.is_absolute():
+        return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
     try:
-        return card.compose(str(path if path.is_absolute() else pathlib.Path(cwd or ".") / path)), None
-    except card.Refuse as e:
-        return None, str(e)
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import card
+        try:
+            return card.compose(str(path if path.is_absolute() else pathlib.Path(cwd or ".") / path)), None
+        except card.Refuse as e:
+            return None, str(e)
+    except Exception as e:  # a check that cannot run does not let the card through
+        return None, f"The guard hook could not check the brief of `skills-sync card` ({type(e).__name__}: {e})."
 
 
 def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=None):
@@ -187,9 +195,10 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=N
                                   "and PREDICATE lines, copied from orchestrate references/brief.md \"Lead\" (dispatch-card §2).")
         if lead and lead_session(agent, session, transcript):
             return decide("deny", LEAD_FROM_LEAD)
-    helper = CARD_HELPER.search(cmd)
-    if helper and "--help" not in cmd:
-        prompt, refused = helper_card(helper[1], cwd)
+    for helper in CARD_HELPER.finditer(cmd):
+        if helper[1].startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
+            continue
+        prompt, refused = helper_card(helper[1], cwd, bool(CHDIR.search(cmd)))
         if refused:
             return decide("deny", refused)
         if is_lead(prompt) and lead_session(agent, session, transcript):

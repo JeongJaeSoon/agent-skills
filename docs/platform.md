@@ -221,7 +221,7 @@ guard hook은 Bash 명령 텍스트만 본다. 그래서 `--prompt "$(cat brief.
 
 - `orch` 동사로 두지 않았다. guard hook이 `orch <동사>`를 자동 허용하므로 카드 생성이 분류기를 거치지 않게 된다.
 - 하위 프로세스에서 `orca worktree create`를 부르니 `pressure_gate.py`가 그 명령을 보지 못한다. 그래서 같은 명령 문자열로 그 hook의 `gate()`를 직접 불러 거부면 종료 코드 3으로 끝낸다. 위험 수준의 거부는 hook처럼 부하 대기열에 들어가고, 통과하면 그 항목을 재시도로, 생성 결과를 완료나 실패로 기록한다. hook 이벤트의 세션 자리에는 `ORCA_TERMINAL_HANDLE`을 쓰므로, 같은 세션에서 같은 `skills-sync card`를 다시 돌리면 같은 항목을 찾는다. `AGENT_SKILLS_PRESSURE_GATE=0`도 hook과 같게 따른다.
-- "리드는 다른 리드를 띄우지 않는다"는 hook 이벤트의 세션·에이전트 정보가 있어야 판정할 수 있어 helper 안에서는 할 수 없다. 그래서 guard hook이 `skills-sync card <경로>` 명령을 알아보고 그 브리프 파일에 helper와 같은 검사와 이 판정을 적용한다. 경로는 이벤트의 cwd 기준으로 읽고, 변수나 glob이 든 경로는 거부한다.
+- "리드는 다른 리드를 띄우지 않는다"는 hook 이벤트의 세션·에이전트 정보가 있어야 판정할 수 있어 helper 안에서는 할 수 없다. 그래서 guard hook이 `skills-sync card <경로>` 명령을 알아보고 그 브리프 파일에 helper와 같은 검사와 이 판정을 적용한다. 경로는 이벤트의 cwd 기준으로 읽는다. 명령에 `cd`나 `pushd`가 있으면 절대 경로만 받고, 변수나 glob이 든 경로와 검사 자체가 실패한 경우(import 오류 등)는 거부한다. 한 명령 안의 모든 `skills-sync card` 호출을 검사하고, 인자가 `--help`인 호출만 건너뛴다. `env …`, `bash -c`, `scripts/card.py` 직접 실행 같은 wrapper 형태는 이 검사를 거치지 않는다. hook은 guardrail이지 sandbox가 아니다.
 - 행은 ``` 펜스 밖에서 `KEY:` 형식이나 템플릿의 넓은 칸 간격으로 시작하는 줄만 인정한다. "KEEP the old API" 같은 산문이나 인용한 템플릿이 행으로 잡히지 않게 하려는 것이다. Approved 제목이나 불릿만 있고 `APPROVED:` 행이 없으면 승인이 프롬프트에서 빠지므로 종료 코드 2로 거부한다.
 - 분류기는 명령과 경로만 보고 브리프 본문(APPROVED, DELEGATE)은 보지 못한다. `$(cat)`과 같은 한계다. helper는 자동 허용되지 않으니 분류기 판정은 그대로 거친다.
 - 브리프는 로컬 파일만 받는다. notes store에서만 읽을 수 있는 노트는 먼저 파일로 옮긴다.

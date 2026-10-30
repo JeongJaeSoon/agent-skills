@@ -216,7 +216,21 @@ assert bash(HELPER.format("absent.md")) == "deny"
 assert bash(HELPER.format("$BRIEF")) == "deny"
 assert bash(HELPER.format("lead.md")) == "none"
 assert bash(HELPER.format("lead.md"), session="joined") == "deny", "a lead starting a lead through the helper"
-assert bash("cd /x && " + HELPER.format("lead.md"), agent="agent-skills:lead") == "deny"
+# After a cd the event's cwd is not where a relative path points: only an absolute one is read.
+assert bash("cd /x && " + HELPER.format("worker.md")) == "deny" and "absolute path" in reason("cd /x && " + HELPER.format("worker.md"))
+assert bash("cd /x && " + HELPER.format(H / "worker.md")) == "none"
+assert bash("pushd /x; " + HELPER.format(H / "lead.md"), agent="agent-skills:lead") == "deny"
+# Every call is checked, and only a call whose own argument is --help is skipped.
+assert bash(HELPER.format("--help")) == "none"
+assert bash(HELPER.format("lead.md") + " --comment --help", session="joined") == "deny"
+assert bash(HELPER.format("lead.md") + "; echo --help", session="joined") == "deny"
+assert bash(HELPER.format("worker.md") + " && " + HELPER.format("lead.md"), session="joined") == "deny"
+assert bash(HELPER.format("worker.md") + " && " + HELPER.format("noclose.md")) == "deny"
+# A check that cannot run (here: no helper to import) denies instead of letting the card through.
+EMPTY = tempfile.mkdtemp()
+assert bash(HELPER.format("worker.md"), CLAUDE_PLUGIN_ROOT=EMPTY) == "deny"
+assert "could not check" in run("Bash", {"command": HELPER.format("worker.md")}, "term_me",
+                                field="permissionDecisionReason", CLAUDE_PLUGIN_ROOT=EMPTY)
 assert bash('grep "skills-sync card" notes.md') == "none"  # quoted words are not the helper being run
 assert "skills-sync card <brief>" in reason(f'{NEW} --prompt "/goal fix X"'), "the deny names the helper"
 print("guard: all pass")
