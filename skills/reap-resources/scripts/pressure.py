@@ -79,7 +79,7 @@ def config(overrides=()):
         if key in ("safe_kinds", "always_on"):
             cfg[key] = value.split(",")
         elif isinstance(default, list):
-            cfg[key] = [float("inf") if x.strip().lower() in ("inf", "none", "null") else float(x)
+            cfg[key] = [None if x.strip().lower() in ("inf", "-inf", "none", "null") else float(x)
                         for x in value.split(",")]
         else:
             cfg[key] = float(value) if isinstance(default, (int, float)) else value
@@ -159,8 +159,9 @@ def hits(m, cfg):
         level, phrase = hit[-1], f"{metric} {v:g} {'≥' if higher else '≤'} {cfg[metric][hit[-1] - 1]:g}"
         idle = m.get("cpu_idle_pct")
         # Load counts waiting threads (the Docker VM's vCPUs among them): with CPU left idle it is no danger.
-        if metric == "load_per_cpu" and level == 2 and idle is not None and idle > float(cfg["load_idle_pct"]):
-            level, phrase = 1, f"{phrase} (CPU idle {idle:g}% > {cfg['load_idle_pct']:g}%)"
+        cap = DEFAULTS["load_idle_pct"] if cfg.get("load_idle_pct") is None else float(cfg["load_idle_pct"])
+        if metric == "load_per_cpu" and level == 2 and idle is not None and idle > cap:
+            level, phrase = 1, f"{phrase} (CPU idle {idle:g}% > {cap:g}%)"
         out.append((metric, level, phrase))
     return out
 
@@ -251,7 +252,11 @@ def docker_mem_pct(run=sh):
 
 
 def take_sample(st, now, cfg, run=sh):
-    """The state fields one round adds: its counters, the swap history, and the sample check and the hook read."""
+    """The state fields one round adds: its counters, the swap history, and the sample check and the hook read.
+    Nothing when the last counters are under half an interval old: a round run by hand right after the LaunchAgent's
+    would put a 10-second rate, spikes and all, in place of the 3-minute one."""
+    if now - (st.get("counters") or {}).get("t", -math.inf) < float(cfg["interval"]) / 2:
+        return {}
     cur = counters(now, run)
     gb = swap_gb(sysctl("vm.swapusage"))
     hist = swap_history(st.get("swap_hist"), now, gb)
@@ -475,8 +480,11 @@ def reaped_lines(out):
 
 def leak_notice(cfg, m, st, record, now, dry_run, out, send_fn):
     """Swap growing for half an hour holds nothing, but someone should find what leaks: one note per renotify_minutes."""
-    growth = m.get("swap_growth_gb_h")
-    if growth is None or growth < cfg["swap_growth_gb_h"][0]:
+    growth, warn = m.get("swap_growth_gb_h"), cfg["swap_growth_gb_h"][0]
+    if growth is None or warn is None or growth < warn:
+        if growth is not None and st.get("leak_dash_t") and not dry_run:
+            dash_note("resolve", key="pressure:swap-growth")
+            st.pop("leak_dash_t")
         return
     if now - st.get("leak_t", 0) < float(cfg["renotify_minutes"]) * 60:
         return
@@ -487,15 +495,15 @@ def leak_notice(cfg, m, st, record, now, dry_run, out, send_fn):
         return
     record["leak_t"] = now
     to = notify_to(cfg)
-    if not (to and send_fn(to, subject, body, "status")):
-        dash_note("add", subject, key="pressure:swap-growth")
+    if not (to and send_fn(to, subject, body, "status")) and dash_note("add", subject, key="pressure:swap-growth"):
+        record["leak_dash_t"] = now
     log(f"leak {subject}")
 
 
 def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=None, plan_fn=plan_targets,
                reap_fn=reap_plan, consumers_fn=consumers, send_fn=send):
     now = now or time.time()
-    st = {} if dry_run else load_state()
+    st = load_state()  # a dry run reads the last counters too, and saves nothing
     st.update((sample_fn or (lambda s, t: take_sample(s, t, cfg)))(st, now))
     m = snapshot(cfg, st, now, measure_fn)
     level, why = judge(m, cfg)
@@ -504,6 +512,9 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     if why:
         out(f"- 임계값 초과: {', '.join(why)}")
     record = {"t": now, "level": level, "metrics": m, "why": why}
+    if level != "danger" and st.get("dash_t") and not dry_run:
+        dash_note("resolve")
+        st.pop("dash_t")
     leak_notice(cfg, m, st, record, now, dry_run, out, send_fn)
     if not dry_run:  # before the sweep, which can take minutes: the hook and check judge this sample meanwhile
         save_state({**st, **record})
@@ -511,20 +522,19 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
         if not dry_run:
             if st.get("level") not in (None, "ok"):
                 log(f"ok {summary(m)}")
-            if st.get("dash_t"):
-                dash_note("resolve")
-                st.pop("dash_t")
             save_state({**st, **record})
         return 0
     if level == "warn" and st.get("level") == "warn" and now - st.get("scan_t", 0) < float(cfg["rescan_minutes"]) * 60:
         out(f"- 경고가 이어지는 중: 안전 대상 정리는 {(now - st['scan_t']) / 60:.0f}분 전에 했고 {cfg['rescan_minutes']:g}분마다 한다")
-        save_state({**st, **record})
+        if not dry_run:
+            save_state({**st, **record})
         return 1
     kinds = safe_kinds(cfg)
     plan_path = PLAN.with_name("pressure-plan.dry-run.json") if dry_run else PLAN
+    # Set even when the scan failed: the warn deny asked for one round, and a failure every round must not hold
+    # every heavy start at warn.
+    record["scan_t"] = now
     targets, notes = plan_fn(kinds, plan_path)
-    if targets is not None:  # only a scan that ran is a sweep the hook may count on
-        record["scan_t"] = now
     out(f"- 안전 대상 종류: {', '.join(kinds) or '없음'}")
     if unknown_kinds(cfg):
         out(f"- 메모: 이 reap.py 에 없는 종류라 뺌: {', '.join(unknown_kinds(cfg))}")

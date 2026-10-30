@@ -38,7 +38,9 @@ Docker CPU는 따로 재지 않는다. OrbStack VM의 vCPU는 호스트 스레�
 
 사용자가 늘 켜 두는 서비스(관측 스택, 채팅 UI 같은 것)는 `always_on`에 compose 프로젝트, 컨테이너 이름, k8s namespace로 적어 개수에서 뺀다. 판정 줄에는 `컨테이너 N개(상시 M개 제외)`로 따로 보인다. restart policy로 고르지 않는 이유는 카드의 레인 스택도 `unless-stopped`를 쓰기 때문이다. 이름은 머신마다 다르므로 저장소 기본값은 빈 목록이다. `docker_mem_pct`에는 상시 서비스도 들어간다. 정리 대상에서 빼는 것과 자원 사용량에서 빼는 것은 다르다.
 
-경고 단계는 알리지 않고 정리만 하는 것이 기본이다. 정리한 것이 있을 때만 한 줄을 보내고, 같은 경고가 이어지면 10분(`rescan_minutes`)마다만 다시 스캔한다. 스캔이 실패한 회차는 hook이 "최근 정리함"으로 세지 않는다.
+경고 단계는 알리지 않고 정리만 하는 것이 기본이다. 정리한 것이 있을 때만 한 줄을 보내고, 같은 경고가 이어지면 10분(`rescan_minutes`)마다만 다시 스캔한다. 스캔이 실패한 회차도 hook의 "최근 회차"로 센다. 경고만으로는 막을 이유가 없고, 스캔이 매번 실패하면 경고 단계의 모든 무거운 시작이 막히기 때문이다.
+
+수동 `round`가 직전 회차 뒤 `interval`의 절반이 안 돼 실행되면 샘플을 새로 재지 않고 직전 3분 샘플을 그대로 쓴다. 10초짜리 순간값(idle 0.2% 같은 급등)이 7분 동안 판정을 바꾸지 않게 하려는 것이다.
 
 다른 머신에서는 `~/.claude/agent-skills.json`의 `reap.pressure`에서 항목별 `[경고, 위험]`을 바꾼다.
 
@@ -46,9 +48,9 @@ Docker CPU는 따로 재지 않는다. OrbStack VM의 vCPU는 호스트 스레�
 {"reap": {"pressure": {"load_per_cpu": [1.3, 2.0], "docker_mem_pct": [60, 85], "swap_gb": [8, null], "always_on": ["<compose-project>"], "notify_to": "run:<id>"}}}
 ```
 
-위험을 끄려면 위험 값에 `null`을 쓴다(`--set`에서는 `inf`).
+위험을 끄려면 위험 값에 `null`을 쓴다(`--set`에서는 `none`). 예전 기본값(`swap_gb: [8, 16]`, `containers: [40, 80]`)을 설정 파일에 그대로 적어 둔 머신은 그 값이 이기므로 여전히 위험을 낸다. 새 규칙을 쓰려면 그 줄을 지운다.
 
-`notify_to`가 없으면 `reap.inbox_to`로 보낸다. 다만 LaunchAgent에는 Orca 송신 터미널(`ORCA_TERMINAL_HANDLE`)이 없어 `orca orchestration send`가 `no_active_sender_terminal`로 실패한다. `term_`과 `run:` 주소 모두 그렇다. 그래서 전송에 실패하면(받는 곳이 없을 때도) 위험과 누수 알림을 orchestrate 대시보드의 Needs you(`~/.local/state/agent-skills/dashboard/inbox-external.jsonl`, 키 `pressure:danger`·`pressure:swap-growth`)에 올린다. 위험 줄은 정상으로 돌아오면 닫힌다. 같은 알림은 `renotify_minutes`(30분) 안에 다시 시도하지 않는다. 예전에는 실패 때 `danger_t`를 0으로 돌려 매 회차 재시도했다. 대시보드가 없는 머신에서는 로그(`~/.local/state/agent-skills/pressure.log`)에만 남는다.
+`notify_to`가 없으면 `reap.inbox_to`로 보낸다. 다만 LaunchAgent에는 Orca 송신 터미널(`ORCA_TERMINAL_HANDLE`)이 없어 `orca orchestration send`가 `no_active_sender_terminal`로 실패한다. `term_`과 `run:` 주소 모두 그렇다. 그래서 전송에 실패하면(받는 곳이 없을 때도) 위험과 누수 알림을 orchestrate 대시보드의 Needs you(`~/.local/state/agent-skills/dashboard/inbox-external.jsonl`, 키 `pressure:danger`·`pressure:swap-growth`)에 올린다. 위험 줄은 위험에서 벗어나면, 누수 줄은 증가율이 경고선 아래로 내려가면 닫힌다. 같은 알림은 `renotify_minutes`(30분) 안에 다시 시도하지 않는다. 예전에는 실패 때 `danger_t`를 0으로 돌려 매 회차 재시도했다. 대시보드가 없는 머신에서는 로그(`~/.local/state/agent-skills/pressure.log`)에만 남는다.
 
 ## 설치와 확인
 

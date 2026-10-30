@@ -33,7 +33,11 @@ assert p.judge({**OK, "vm_pressure": 4}, cfg)[0] == "danger"
 assert p.judge({**OK, "docker_mem_pct": 92}, cfg)[0] == "danger"
 assert p.judge({**OK, "swap_growth_gb_h": 4.5}, cfg) == ("warn", ["swap_growth_gb_h 4.5 ≥ 2"])
 assert p.blocked_by({**OK, "disk_free_gb": 5, "swap_gb": 60}, cfg) == ["disk_free_gb"]
-assert p.config([("swap_gb", "8,inf")])["swap_gb"] == [8.0, float("inf")]
+# A danger of none turns it off, whichever way the metric points; a null where a number belongs falls back.
+assert p.config([("swap_gb", "8,none")])["swap_gb"] == [8.0, None]
+assert p.judge({**OK, "disk_free_gb": 500}, p.config([("disk_free_gb", "50,none")]))[0] == "ok"
+assert p.judge({**OK, "disk_free_gb": 5}, p.config([("disk_free_gb", "50,inf")]))[0] == "warn"
+assert p.judge({**OK, "load_per_cpu": 2.4, "cpu_idle_pct": 30}, {**cfg, "load_idle_pct": None})[0] == "warn"
 
 # Samples between rounds: rates over the gap since the last counters; a reboot or a long gap gives no rate.
 prev = {"t": 1000.0, "boot": 5, "swapouts": 100, "cpu": [10, 10, 80, 0]}
@@ -42,6 +46,9 @@ assert p.rates(prev, cur, cfg) == {"swapout_pps": 400.0, "cpu_idle_pct": 25.0}
 assert p.rates({**prev, "boot": 4}, cur, cfg) == {"swapout_pps": None, "cpu_idle_pct": None}
 assert p.rates({**prev, "t": 1180.0 - 4 * 180}, cur, cfg) == {"swapout_pps": None, "cpu_idle_pct": None}
 assert p.rates(None, cur, cfg) == {"swapout_pps": None, "cpu_idle_pct": None}
+# A round run by hand seconds after the LaunchAgent's keeps the 3-minute sample instead of a 10-second one.
+kept = {"counters": prev, "sample": {"t": 1000.0, "cpu_idle_pct": 40.0}}
+assert p.take_sample(kept, 1010.0, cfg) == {}
 hist = [[0.0, 50.0], [1800.0, 51.0]]
 assert p.swap_growth(hist, 3600.0, 54.5) == 4.5 and p.swap_growth(hist[-1:], 3000.0, 54.5) is None
 assert [t for t, _ in p.swap_history(hist, 3700.0 + 3600, 60.0)] == [3700.0 + 3600]  # an hour old drops out
@@ -127,14 +134,15 @@ assert [(g["project"], g["containers"], round(g["cpu"]), g["mem_mb"]) for g in g
 
 # Round: ok does nothing; warn reaps the plan's targets and says what went; nothing reaped sends nothing.
 sent, lines = [], []
-def run_round(metrics, targets, reaped=(), consumers=([], []), dry=False, now=1000.0, sample=None, **over):
+def run_round(metrics, targets, reaped=(), consumers=([], []), dry=False, now=1000.0, sample=None, send_fn_ok=True,
+              **over):
     lines.clear()
     return p.round_once({**cfg, "notify_to": "run:orch", **over}, dry, out=lines.append, now=now,
                         measure_fn=lambda: metrics,
                         sample_fn=lambda st, now: {"sample": {"t": now, **sample}} if sample else {},
                         plan_fn=lambda kinds, path: (targets, []),
                         reap_fn=lambda path: list(reaped), consumers_fn=lambda c: consumers,
-                        send_fn=lambda *a: sent.append(a) or True)
+                        send_fn=lambda *a: sent.append(a) or send_fn_ok)
 
 target = {"kind": "orphan", "key": "proc:42", "target": True, "name": "vite", "why": "cwd 사라짐", "pid": 42,
           "procs": 1, "rss": 1, "cpu": 0, "age": 1}
@@ -178,17 +186,17 @@ assert [(r["op"], r["key"], r["type"]) for r in rows] == [("add", "pressure:dang
 assert "위험" in rows[0]["title"] and p.load_state()["danger_t"] == 9000.0
 run_round(DANGER, [], consumers=(procs, projects), now=9060.0)
 assert not sent, sent
-run_round(OK, [], now=9120.0)
+run_round(WARN, [], now=9120.0)  # out of danger, if not yet ok: the danger row goes
 assert json.loads(inbox.read_text().splitlines()[-1])["op"] == "resolve"
 run_round(OK, [], now=9180.0)
 assert len(inbox.read_text().splitlines()) == 2  # resolved once
 
-# A scan that failed is no sweep: the hook must not let a warn start through on it.
+# A scan that failed still counts as the round the warn deny asked for: warn alone holds nothing.
 run_round(OK, [])
 p.round_once({**cfg, "notify_to": None}, False, out=lines.append, now=9300.0, measure_fn=lambda: WARN,
              sample_fn=lambda st, now: {}, plan_fn=lambda k, path: (None, ["reap scan 실패"]), reap_fn=None,
              consumers_fn=None, send_fn=None)
-assert "scan_t" not in p.load_state() or p.load_state()["scan_t"] != 9300.0
+assert p.load_state()["scan_t"] == 9300.0
 
 # The round saves its sample before the sweep, so the hook reads it even while reap runs for minutes.
 seen = {}
@@ -205,6 +213,13 @@ sent.clear()
 run_round({**OK, "swap_gb": 30.0}, [], now=20000.0, sample={"swap_growth_gb_h": 4.5})
 run_round({**OK, "swap_gb": 31.0}, [], now=20180.0, sample={"swap_growth_gb_h": 4.5})
 assert len(sent) == 1 and "누수" in sent[0][1] and "4.5GB" in sent[0][1], sent
+run_round({**OK, "swap_gb": 30.0}, [], now=22000.0, sample={"swap_growth_gb_h": 4.5}, send_fn_ok=False)
+assert json.loads(inbox.read_text().splitlines()[-1])["key"] == "pressure:swap-growth"
+run_round({**OK, "swap_gb": 30.0}, [], now=22180.0, sample={"swap_growth_gb_h": 0.1})
+assert json.loads(inbox.read_text().splitlines()[-1]) | {"at": 0} == \
+    {"v": 1, "op": "resolve", "key": "pressure:swap-growth", "at": 0}
+run_round({**OK, "swap_gb": 30.0}, [], now=22360.0, sample={"swap_growth_gb_h": 4.5},
+          swap_growth_gb_h=[None, None])  # a growth note turned off
 
 # Dry run: prints the plan and the message, reaps, sends and records nothing.
 sent.clear()
@@ -212,6 +227,9 @@ before = p.load_state()
 assert run_round(WARN, [target], reaped=["- should not run"], dry=True, now=99999.0) == 1
 assert not sent and p.load_state() == before
 assert any("정리 예정 1개" in line for line in lines) and any("dry-run" in line for line in lines), lines
+run_round(WARN, [], now=100000.0)
+before = p.load_state()
+assert run_round(WARN, [target], dry=True, now=100060.0) == 1 and p.load_state() == before  # nothing saved
 
 # A scan that failed reaps nothing and, at danger, still reports consumers.
 lines.clear()

@@ -269,12 +269,14 @@ sample while it is younger than `sample_fresh_minutes` (7). An older sample is l
   active dispatch, which the LaunchAgent has none of), then the round stops. Nothing
   is stopped or killed, whoever owns it. Sent again only on entering danger or after `renotify_minutes` (30). A send
   that fails (the LaunchAgent has no Orca sender terminal) is not retried each round: the danger goes to the orchestrate
-  dashboard's Needs-you list (`inbox-external.jsonl`, key `pressure:danger`) and is resolved there on the next ok.
+  dashboard's Needs-you list (`inbox-external.jsonl`, key `pressure:danger`) and is resolved there once the level
+  leaves danger. A round run within half an `interval` of the last one keeps that round's sample.
 - Never: `compose down -v`, `docker system prune`, volume or image removal, a kill by pattern, anything of a card or
   lead that is still working (reap's own rules keep those).
 
 `hooks/pressure_gate.py` (PreToolUse, Bash) denies `orch heavy`, `docker compose … up` and `orca worktree create`
-while the level is danger, and at warn until a round's scan ran in the last `gate_fresh_minutes` (15). Its level is
+while the level is danger, and at warn until a round ran its scan in the last `gate_fresh_minutes` (15; a failed scan
+counts, so warn never holds for good). Its level is
 `check`'s, so the deny's wait (`round`, then `Monitor` on `check` until it exits 0 or 1, for at most 15 minutes, then
 report) ends when the hook would let the start through. Danger from disk alone asks for space to be freed instead of
 a wait. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
