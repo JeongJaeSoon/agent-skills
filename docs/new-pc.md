@@ -54,7 +54,7 @@ dry run은 아무것도 쓰지 않는다. 두 번째 줄은 첫 줄이 출력한
 
 다시 돌려도 이미 된 것은 건너뛴다. 묶음에서 빼고 싶은 규칙은 적용 뒤 지우면 된다. 한 번 제안한 항목은 `~/.local/state/agent-skills/setup-applied.json`에 남아 다시 제안하지 않는다. 새 설정은 새 세션부터 적용되므로 떠 있던 세션은 재시작한다. 체크아웃 폴더에서 `claude`를 처음 띄우면 폴더 신뢰 창이 한 번 뜬다.
 
-옵션: `--settings-only`(파일만 쓰고 launchd·동기화·자동화·점검은 건너뜀), `--actions-only`(그 반대: 파일은 쓰지 않고 4~6만, 해시 없음. `setup-pc`가 권한 창 뒤에서 돌린다), `--update`(아래). 기본 on 자동화에는 watch-prs·watch-mentions도 있는데, `agent-skills.json`에 `prs`·`mentions` 키가 있을 때만 켠다.
+옵션: `--settings-only`(파일만 쓰고 launchd·동기화·자동화·점검은 건너뜀), `--actions-only`(그 반대: 파일은 쓰지 않고 4~6만, 해시 없음. `setup-pc`가 권한 창 뒤에서 돌린다), `--update`(아래), `--replace-drifted`·`--settings`([아래](#본문이-바뀐-automode-규칙-drift)). 기본 on 자동화에는 watch-prs·watch-mentions도 있는데, `agent-skills.json`에 `prs`·`mentions` 키가 있을 때만 켠다.
 
 ## 갱신
 
@@ -66,6 +66,32 @@ python3 <체크아웃>/scripts/setup.py --update     # 지금 체크아웃과 �
 ```
 
 dry run은 여기서도 아무것도 쓰지 않고 fetch도 하지 않는다. fast-forward는 `first` 줄로만 보인다. 출력한 `--apply` 줄을 그대로 치면 먼저 체크아웃을 fast-forward하고(`skills-sync sync`, 더러운 체크아웃이나 갈라진 체크아웃이면 멈춘다) 계획을 다시 맞춰 본다. 새 릴리스가 권장값을 더했으면 해시가 맞지 않아 거절하는데, 그때는 이미 fast-forward된 상태이니 dry run을 다시 한다. 파일에 바뀔 것이 없으면 `no change`이고 그 줄은 fast-forward·launchd 작업·자동화만 돌린다.
+
+### 본문이 바뀐 autoMode 규칙 (drift)
+
+`--update`는 없는 값만 더하므로, 릴리스가 권장 autoMode 규칙의 본문을 고쳐도 이미 들어간 옛 본문은 그대로 남는다. 규칙의 라벨(첫 콜론 앞, 예: `Scheduled janitor round:`)이 권장 규칙과 같고 본문만 다르면 drift로 본다. setup은 그 옆에 새 본문을 하나 더 넣지 않고, dry run에 `drifted autoMode.allow 'Scheduled janitor round' …` 줄로 알린다. `setup_check.py check` 표에도 `autoMode 권장 규칙` 행이 `differs`로 나온다.
+
+```bash
+python3 <체크아웃>/scripts/setup.py --replace-drifted 'Scheduled janitor round'   # 그 규칙만. 라벨을 빼면 drift 전부
+python3 -I <체크아웃>/scripts/setup.py --replace-drifted 'Scheduled janitor round' --apply <해시>
+```
+
+- `--replace-drifted`는 drift 규칙을 권장 본문(`{checkout}`·`{state}`는 다른 값과 같은 방식으로 채운 것)으로 바꾸는 것만 계획한다. 다른 권장값은 더하지 않고, 제안 기록·`agent-skills.json`도 쓰지 않고, launchd·동기화·자동화도 돌리지 않는다.
+- `--apply` 없이는 diff만 보인다. `--apply`는 다른 쓰기와 같이 백업, 원자적 교체, 다시 읽어 확인, 되돌리는 `cp` 줄 출력을 한다.
+- 라벨이 권장 규칙과 겹치지 않는 사용자 규칙은 건드리지 않는다. 같은 라벨의 규칙이 둘 이상이면 어느 쪽을 바꿀지 정할 수 없어 `kept` 줄만 내고 그대로 둔다. 하나만 남기고 다시 돌린다.
+- drift가 아닌 라벨(오타, 이미 권장 본문과 같은 규칙)을 넘기면 `refused: --replace-drifted: no drifted rule labelled …`로 멈춘다.
+
+**어느 settings.json을 쓰는가.** 출력 첫 줄 `target  <경로>`가 이번에 계획하고 쓸 파일이다. 기본값은 `$CLAUDE_SETTINGS`, 없으면 `$CLAUDE_CONFIG_DIR/settings.json`, 그것도 없으면 `~/.claude/settings.json`이다. Claude Code의 설정 홈은 세션마다 다를 수 있다. 셸에서 띄운 `claude`는 `~/.claude`를 읽고, Orca처럼 프로필마다 `CLAUDE_CONFIG_DIR`을 따로 주는 앱 안의 세션은 그 디렉터리를 읽는다. 다른 홈의 파일은 `--settings <홈>/settings.json`으로 직접 고른다.
+
+**홈이 여럿일 때.** 홈마다 dry run을 따로 돌려 drift가 있는 곳을 먼저 본다. 해시는 파일마다 다르니 `--apply`도 홈마다 그 dry run이 낸 줄을 친다.
+
+```bash
+for s in ~/.claude/settings.json <다른 설정 홈>/settings.json; do
+  python3 <체크아웃>/scripts/setup.py --settings "$s" --replace-drifted 'Scheduled janitor round'
+done
+```
+
+drift가 없는 홈은 `no change`로 끝난다. 실제로 쓰는 홈만 고쳐도 되고, 둘 다 쓰면 둘 다 고친다. 제안 기록(`~/.local/state/agent-skills/setup-applied.json`)과 `agent-skills.json`은 홈과 상관없이 하나라서, 홈을 바꿔 일반 `--update`를 돌려도 이미 제안한 항목은 다시 나오지 않는다.
 
 ## 옮기지 않는 것
 

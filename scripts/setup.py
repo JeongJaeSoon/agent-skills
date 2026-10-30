@@ -14,6 +14,10 @@ Options:
   --orca-run        bind this terminal to a new Orca Run when it has none (`run-create`)
   --actions-only    only the steps after the files: launchd job, sync, automations, Orca and check. Writes no
                     settings and takes no HASH: the agent runs it, and the plugin's guard hook asks the human first
+  --replace-drifted [LABEL ...]
+                    plan only this: the recommended text in place of each drifted autoMode rule (below), or only
+                    of those with these labels. Nothing else is added and no step runs; still a dry run until --apply
+  --settings FILE   the settings.json to plan for (default: $CLAUDE_SETTINGS, else $CLAUDE_CONFIG_DIR/settings.json)
   --bundle FILE     another recommended-settings file (tests)
   --here            allow a worktree checkout; implies --settings-only (tests)
 
@@ -21,6 +25,13 @@ HASH is printed with the diff and covers every planned write and action, so anyt
 review no longer matches. Merging adds only what is missing and never overwrites a value, except that an enabled
 marketplace copy of agent-skills is turned off; a recommended item applied once and later removed by the user is
 not offered again (the record is in the agent-skills state dir).
+
+An autoMode rule is drifted when it starts with the same label as a recommended rule (the text before the first
+colon, e.g. "Scheduled janitor round:") but its text differs, as when a release rewrote the recommended one.
+setup never adds the recommended text next to it; the dry run names it with a `drifted` line, and only
+--replace-drifted puts the recommended text, placeholders filled, in its place (all of them, or only the labels
+it names). Rules with a label of the user's own are never touched, and two rules sharing one recommended label are
+left for the user to fix by hand.
 
 The personal folder ($AGENT_SKILLS_CONFIG_DIR/personal, default ~/.config/agent-skills/personal; setup-pc clones the
 user's private repo there) joins the plan when it exists: its agent-skills.json keys are added where missing, like
@@ -149,6 +160,44 @@ def leaves(d, prefix=""):
             yield f"{prefix}{k}", v
 
 
+def label(rule):
+    head, colon, _ = rule.partition(":")
+    return head if colon else None
+
+
+def drifted(automode, rec):
+    """(section, recommended rule, user rules with its label) for each recommended rule not in the user's list."""
+    out = []
+    for name in SECTIONS:
+        have = automode.get(name) if isinstance(automode.get(name), list) else []
+        for rule in rec.get(name) or []:
+            same = [r for r in have if isinstance(r, str) and label(r) == label(rule)]
+            if rule not in have and label(rule) and same:
+                out.append((name, rule, same))
+    return out
+
+
+def drift_plan(automode, rec, notes, replace):
+    """(replace items for the drifted rules `replace` names, None: none, empty: all; recommended rules whose label
+    the user's list already has, which are never added next to it)."""
+    drift = drifted(automode, rec)
+    swap = []
+    for name, rule, same in drift:
+        if len(same) > 1:
+            notes.append(f"kept    {len(same)} rules in autoMode.{name} start with {label(rule) + ':'!r}; "
+                         "leave one, then --replace-drifted can update it")
+        elif replace is not None and (not replace or label(rule) in replace):
+            swap.append({"section": name, "old": same[0], "new": rule})
+            notes.append(f"replace autoMode.{name} {label(rule)!r}: the recommended text takes its place")
+        elif replace is None:
+            notes.append(f"drifted autoMode.{name} {label(rule)!r} differs from the recommended text; "
+                         "--replace-drifted shows the change")
+    unknown = set(replace or ()) - {label(rule) for _, rule, _ in drift}
+    if unknown:
+        raise Refused(f"--replace-drifted: no drifted rule labelled {', '.join(map(repr, sorted(unknown)))}")
+    return swap, {(name, rule) for name, rule, _ in drift}
+
+
 def merge_settings(current, rec, skip, notes):
     """Return (new settings, item ids now present). Never overwrites; `skip` holds ids offered before."""
     new, offered = json.loads(json.dumps(current)), set()
@@ -178,15 +227,16 @@ def merge_settings(current, rec, skip, notes):
                 put(new, key, value)
             elif dig(new, key) not in (None, value):
                 notes.append(f"kept    {key} = {dig(new, key)!r} (recommended {value!r})")
+    automode = new.get("autoMode", {})
+    if not isinstance(automode, dict):
+        raise Refused("autoMode in settings is not an object")
+    labelled = drift_plan(automode, rec.get("autoMode") or {}, notes, None)[1]
     add = {}
     for name in SECTIONS:
         rules = (rec.get("autoMode") or {}).get(name) or []
-        add[name] = [r for r in rules if f"autoMode.{name}\t{r}" not in skip]
+        add[name] = [r for r in rules if f"autoMode.{name}\t{r}" not in skip and (name, r) not in labelled]
         offered |= {f"autoMode.{name}\t{r}" for r in rules}
     if any(add.values()):
-        automode = new.get("autoMode", {})
-        if not isinstance(automode, dict):
-            raise Refused("autoMode in settings is not an object")
         new["autoMode"], _ = automode_merge(automode, {"add": add})
     return new, offered
 
@@ -221,6 +271,8 @@ def plan(args):
     skip = set(record.get("offered") or [])
     notes = []
     settings = read_json(p["settings"], {})
+    if args.replace_drifted is not None:
+        return replace_plan(args, p, settings, rec, notes)
     new_settings, offered = merge_settings(settings, rec, skip, notes)
     skills_json = read_json(p["skills_json"], None)
     new_skills, offered_keys = merge_keys(skills_json or {}, keys, skip, notes, personal)
@@ -249,6 +301,19 @@ def plan(args):
     return files, actions, notes
 
 
+def replace_plan(args, p, settings, rec, notes):
+    """Only the drifted rules' replacement in settings.json: nothing added, no record, no steps."""
+    automode = settings.get("autoMode", {})
+    if not isinstance(automode, dict):
+        raise Refused("autoMode in settings is not an object")
+    swap, _ = drift_plan(automode, rec.get("autoMode") or {}, notes, {x.rstrip(":") for x in args.replace_drifted})
+    if not swap:
+        return [], [], notes
+    new = json.loads(json.dumps(settings))
+    new["autoMode"], _ = automode_merge(automode, {"replace": swap})
+    return [(p["settings"], settings, new)], [FAST_FORWARD] if args.update else [], notes
+
+
 def text(d):
     return json.dumps(d, ensure_ascii=False, indent=2) + "\n"
 
@@ -259,6 +324,7 @@ def digest(files, actions):
 
 
 def show(files, actions, notes):
+    print(f"target  {paths()['settings']}")
     for note in notes:
         print(note)
     if FAST_FORWARD in actions:
@@ -358,12 +424,16 @@ def main(argv):
     ap.add_argument("--settings-only", action="store_true")
     ap.add_argument("--orca-run", action="store_true")
     ap.add_argument("--actions-only", action="store_true")
+    ap.add_argument("--replace-drifted", nargs="*", metavar="LABEL")
+    ap.add_argument("--settings", type=pathlib.Path)
     ap.add_argument("--bundle", type=pathlib.Path)
     ap.add_argument("--here", action="store_true")
     args = ap.parse_args(argv)
     if args.actions_only and (args.apply or args.settings_only or args.update or args.here):
         ap.error("--actions-only takes none of --apply, --settings-only, --update, --here")
-    args.settings_only = args.settings_only or args.here
+    args.settings_only = args.settings_only or args.here or args.replace_drifted is not None
+    if args.settings:
+        os.environ["CLAUDE_SETTINGS"] = str(args.settings.expanduser().absolute())
     try:
         preflight(args)
         if args.actions_only:
@@ -406,7 +476,8 @@ def main(argv):
         if failed:
             raise Refused(f"the settings files are written, but these steps failed: {', '.join(failed)}; "
                           "fix the cause, then dry run again")
-        print(f"done. New sessions load {REPO}; restart the ones already running.")
+        print("done. New sessions read the replaced rules; restart the ones already running." if args.replace_drifted is not None
+              else f"done. New sessions load {REPO}; restart the ones already running.")
     except Refused as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1

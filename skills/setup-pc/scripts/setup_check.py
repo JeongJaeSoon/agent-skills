@@ -11,7 +11,7 @@ settings.json follows CLAUDE_CONFIG_DIR (default ~/.claude) and CLAUDE_SETTINGS;
 ~/.claude/agent-skills.json in every profile, moved only by AGENT_SKILLS_CONFIG. Also AGENT_SKILLS_STATE and
 AGENT_SKILLS_CONFIG_DIR (default ~/.config/agent-skills).
 """
-import datetime, json, os, pathlib, re, shutil, subprocess, sys
+import datetime, importlib.util, json, os, pathlib, re, shutil, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 UPSTREAM = "https://github.com/JeongJaeSoon/agent-skills"
@@ -271,6 +271,26 @@ def check_settings(settings, base):
     return rows
 
 
+def check_drift(settings, bundle=REPO / "scripts" / "recommended-settings.json"):
+    """setup.py's drifted rules: a user autoMode rule with a recommended rule's label but other text."""
+    setup_py = REPO / "scripts" / "setup.py"
+    if not bundle.is_file() or not setup_py.is_file():  # a marketplace copy ships neither
+        return []
+    spec = importlib.util.spec_from_file_location("agent_skills_setup", setup_py)
+    setup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup)
+    # gh_login left empty keeps the check offline; the rules naming the user's repositories are not compared.
+    values = {"checkout": str(REPO), "state": str(paths()["state"]), "gh_login": ""}
+    rec = setup.fill(json.loads(bundle.read_text()).get("settings") or {}, values).get("autoMode") or {}
+    am = settings.get("autoMode")
+    drift = setup.drifted(am if isinstance(am, dict) else {}, rec)
+    if not drift:
+        return [row("ok", "autoMode 권장 규칙", "본문이 어긋난 규칙 없음")]
+    labels = ", ".join(f"{name} {setup.label(rule)!r}" for name, rule, _ in drift)
+    return [row("differs", "autoMode 권장 규칙", f"라벨은 같고 본문이 다름: {labels}",
+                "setup.py --settings-only --replace-drifted 의 diff 를 보고, 그 끝의 --apply 줄을 사람이 친다")]
+
+
 def check_config(p, base):
     cfg = read_json(p["skills_json"], None)
     rows = []
@@ -312,7 +332,7 @@ def check(base=None):
         rows += check_automations(run)
     if shutil.which("orca"):
         rows += check_orca(settings, run)
-    return rows + check_settings(settings, base) + check_config(p, base)
+    return rows + check_settings(settings, base) + check_drift(settings) + check_config(p, base)
 
 
 def automode_spec(base):

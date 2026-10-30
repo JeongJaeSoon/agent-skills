@@ -245,6 +245,26 @@ class Baseline(Base):
         self.assertFalse([r for r in rows if r["status"] == "differs"])
 
 
+class Drift(Base):
+    def bundle(self):
+        path = self.tmp / "bundle.json"
+        path.write_text(json.dumps({"settings": {"autoMode": {"allow": ["$defaults", "Test round: run {checkout}/x."]}}}))
+        return path
+
+    def test_drifted_rule_differs(self):
+        rows = sc.check_drift({"autoMode": {"allow": ["Test round: run elsewhere.", "Mine: x."]}}, self.bundle())
+        self.assertEqual(rows[0]["status"], "differs")
+        self.assertIn("Test round", rows[0]["have"])
+        self.assertIn("--replace-drifted", rows[0]["next"])
+
+    def test_same_text_is_ok(self):
+        rows = sc.check_drift({"autoMode": {"allow": [f"Test round: run {sc.REPO}/x."]}}, self.bundle())
+        self.assertEqual(rows[0]["status"], "ok")
+
+    def test_no_bundle_no_row(self):
+        self.assertEqual(sc.check_drift({}, self.tmp / "nope.json"), [])
+
+
 class Cli(Base):
     def test_main_writes_nothing(self):
         self.settings(SETTINGS)
