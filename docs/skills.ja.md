@@ -1,7 +1,7 @@
-<!-- translated-from: 8ef3dacadf12ef053a9d65c1de6889fb208d74fd -->
+<!-- translated-from: 3964a0f55ccf0fcd49722e451258ece35c945486 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック6個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます。
+`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック10個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -19,8 +19,11 @@
               resource steward が定期的に）
               secure-fill（ブラウザの認証欄に秘密の値を。エージェントは値を見ない）
               tune-automode（分類器の拒否を最小の autoMode ルールに。適用はユーザー）
+              skills-config（agent-skills.json のキー・permissions.allow の変更：emit → 人の --apply）
               setup-pc（新しい PC の設定・更新：dry run の diff → ユーザーの --apply 1 行）
-どこでも      use-tracker（チケット）· use-notes（ノート）
+チャット      watch-mentions（公開チャンネルのメンション・名前への言及・参加スレッドの新しい返信を、
+              オーケストレーターかリードに1通で）
+どこでも      record-progress（いつ何を残すか）→ use-tracker（チケット）· use-notes（ノート）
               · pstack スキル（設計・レビュー・検証・振り返り）
 ```
 
@@ -48,8 +51,9 @@ PR を受け持つスキルとマージする主体:
   - 骨組みは設定のトラッカーテンプレート（`tracker.<adapter>.templates`）を優先し、なければ同梱のテンプレートを使います。テンプレートの読み込みに失敗したら止まります。
   - `🛠 구현 힌트`（実装のヒント）には、実際に開いたパスだけを書きます。
   - タイトルは動詞で始め、受け入れ基準には確認方法を添え、`🚫 범위 밖`（範囲外）は必ず書きます。
+  - タイトルと本文の言語は設定の `tracker.<adapter>.language`、なければそのトラッカーについてのユーザーのルール、それもなければユーザーが使っている言語です。
   - 依存はトラッカーの relation で結び、1チケット = 1PR に分けます。互いに依存する PR は GitHub stack として計画します。
-  - 下書き全体を一度見せ、承認を得てから登録します。混ざった依頼と、セッションが自分で起こす follow-up は先に登録します。
+  - 下書き全体を一度見せ、承認を得てから登録します。ユーザーの指示が尋ねずに登録するよう求めるとき、そして混ざった依頼と、セッションが自分で起こす NOW の follow-up は、先に登録して URL を見せます。上位チケットの本文には `✅ 완료 조건`（完了条件）、`🚫 범위 밖`（範囲外）、`⏸️ 보류`（保留）を置きます。
 - **同梱:** `references/templates.md`（開発チケットと調査チケットの骨組み）。
 - **関連:** トラッカーの操作はすべて `use-tracker` で行います。follow-up の形式は `orchestrate` と `measure-delivery` が数えます。
 
@@ -57,7 +61,7 @@ PR を受け持つスキルとマージする主体:
 - **使う場面:** 複数のファイルを直す前から完了まで使います。PR の作成・更新・マージ（「pr 작성까지」（PR 作成まで）、「머지까지 진행해줘」（マージまで進めて））、リリース、レビューコメントへの対応、独立レビュー、「동작확인」（動作確認）、「내가 확인할 거 있어?」（自分が確認すべきことはある?）、「이 티켓 끝내줘」（このチケットを終わらせて）、stack の作業もここに入ります。
 - **内容:**
   - **計画:** plan mode には入らず、承認も待ちません。チケットには計画コメントを一つだけ残し（変わったら直します）、進捗は worklog に、結果は完了コメントに書きます。作業の形に応じてスキルを呼びます。大きなマイグレーションや多段階の変更は `figure-it-out`、戻しにくい設計判断は `architect`（→ `arena`）、見慣れないコードは `how`、理由の分からないコードは `why` です。
-  - **実装:** worktree のブランチでだけ行います。些細でないロジックは、実行できるテストなしにはコミットしません。バグは失敗する再現テストから書きます。範囲外で見つけたものは、この diff で直すか、follow-up チケットにするか、worklog に書くだけにします。
+  - **実装:** worktree のブランチでだけ行います。些細でないロジックは、実行できるテストなしにはコミットしません。バグは失敗する再現テストから書きます。範囲外で見つけたものは、この diff で直すか、完了条件に照らして NOW（follow-up チケット）・LATER（`⏸️ 보류`（保留）に1行）・DROP（理由を1行）に分けます。プログラムの中ではチケットを作らず、worker_done に分類の提案を書きます。
   - **証拠のルール:**
     - デプロイする行にはすべて実行時の証拠が必要で、否定された仮説から生まれた変更は元に戻します。
     - バグはユーザーが見た画面（ブラウザならブラウザ自動化）で再現し、確認します。
@@ -83,9 +87,9 @@ PR を受け持つスキルとマージする主体:
 - **関連:** `figure-it-out`、`architect`、`how`、`why`、`tdd`、`prune-comments`、`interrogate` の判定の枠組み、`write-plainly`、`blast-radius`、`write-ticket`、`use-tracker`、`use-notes`、`orchestrate`（`orch land`、`orch heavy`）、`handoff-ticket`。
 
 ### ui-review
-- **いつ:** 試作・画面・UI を変える PR を人に見せる前（「UI 리뷰해줘」「시안 점검해줘」）。人が UI の問題を指摘したあとは、直してから規則を足す。
-- **内容:** headless Chrome で 1280・390 のページを測る（行の高さ、同じ列のボタン幅、揃え線、縦の中心、4px グリッド、はみ出し、リンクの下線、既存画面とのコンポーネント一致）。測れないもの（人に見えるシステムの手順、重複する設定、まとまり）はシナリオ表で実際に操作して判定する。製品のデザインシステムが優先。規則と根拠は `references/rules.md`。
-- **関係:** `deliver-ticket` §3 と visual-evidence、`orchestrate` のリードが試作を人に送る前。
+- **いつ:** 試作・画面・UI を変える PR を人に見せる前（「UI 리뷰해줘」（UI をレビューして）、「시안 점검해줘」（試作を点検して）、「화면 밸런스 봐줘」（画面のバランスを見て））。人が UI の問題を指摘したあとは、直してから規則を足します。スクリーンショットを撮って載せるのは `deliver-ticket` の visual-evidence です。
+- **内容:** 製品のデザインシステムがこのスキルの既定値より優先し、同じ種類の既存画面を基準（baseline）に選びます。`scripts/ui_measure.py` が headless Chrome で 1280・390 のページを測ります（行の高さ、同じ列のボタン幅、揃え線、縦の中心、4px グリッド、はみ出し、リンクの下線、表の見出しと入力コントロールの一貫性、名前のない記号、基準画面とのコンポーネント一致）。1行の値の折り返しや色のない画面などは警告です。測れないもの（画面に出るシステム側の手順、同じものを変える重複したオプション、設定のまとまり）は `references/walkthrough.md` のシナリオ表で実際に操作して判定します。理由のある例外なしに FAIL が残っていれば試作は送りません。規則と根拠は `references/rules.md` にあり、新しい指摘は一般的な規則ならこのスキルに、一つの製品の規則ならそのリポジトリか `~/.config/agent-skills/ui-review/rules.md` に足します。
+- **関係:** `deliver-ticket` §3 のレビューと visual-evidence の判定、`orchestrate` のリードが試作や画面を人に送る前。
 
 ### handoff-ticket
 - **使う場面:** 「핸드오프」（ハンドオフ）、「다음 작업으로 넘어가자」（次の作業に移ろう）、「남은 작업 있어?」（残りの作業はある?）、「머지하고 다음 진행해줘」（マージして次に進めて）、そしてチケットが終わった瞬間。「병렬로 진행」（並列で進めて）は同じリポジトリのチケットカードのときだけ該当し、サブエージェントや脇ブランチのカードの可能性があれば先に見分けます。このセッションで作業を続ける必要があるなら `dispatch-card` を使います。
@@ -136,7 +140,7 @@ PR を受け持つスキルとマージする主体:
   - 実際の成果物に対して既存の harness または直接検査を選びます。再利用可能な検証スキルは合意した範囲で有用な場合だけ作成します。
   3. **Scale:** 常駐の役割（プログラムごとに main ガーディアンと QA リード、マシンに1つずつ flow improver と resource steward）を立ち上げます。チケットワーカーの同時実行の上限は1から始め、main に green で着地するたびに1ずつ増やし（既定の ceiling は6）、red になれば半分にします。
   4. **Drain:** `orch wait` をバックグラウンドで一つだけ回します。worker_done が来たら、同じターンで `CLOSE OUT` を処理します。毎回 `orch status` で締めくくり、STALLED、SPARE、LEDGER GAP、LANDED-BUT-OPEN の行に対応します。製品ではなく作業の進め方がずれたとき（人による修正、ブリーフが答えておくべきだった質問、プロセスが原因の停滞、スキルやスクリプトの欠陥）は、`orch record <slug> signal` で一行だけ残し、分析は Close に回します。Run に属さない `/goal` カードを立てたセッションは、その横で `orch watch-cards` も一つ回し、確認プロンプト・質問・API の再試行・ログイン切れ・goal の消失・ディスク不足で止まったカードを通知で受け取ります（答えはリードが画面を読んで決めます）。
-  5. **Triage:** follow-up は基本的に先送り（park）します。predicate を妨げるものと、再現した欠陥だけを受け入れます。ブリーフでは follow-up を parent ではなく related で結ばせます。Orca の既定は parent ですが、そうすると集計や段階のバーが元のチケットの計画済みの作業として数えてしまいます。
+  5. **Triage:** predicate が完了条件です。ワーカーは見つけたものを分類の提案とともに報告するだけで、リードが NOW（predicate を妨げるものか再現した欠陥。チケットを登録して admitted）、LATER（プログラムノートの `보류`（保留）、チケットなし）、DROP（理由を1行）に分けます。NOW のチケットは parent ではなく related で結びます。Orca の既定は parent ですが、そうすると集計や段階のバーが元のチケットの計画済みの作業として数えてしまいます。
   6. **Land:** ワーカーが `orch land` で自分で着地させます。通常の PR は並列にマージされ、migration・CI・Dockerfile・compose のような共有ファイルは、専有レーンで base ごとに一つずつマージされます。
   7. **main の検証:** red になったら、ガーディアンがまず flake かどうかを見て hotfix か revert を選び、その間は main の修正だけを着地させます。QA リードは、チケットの検証、定期的な E2E、設計の整合性の監査を担当します。
   8. **Close:** 新しい main で最終確認をして `record predicate_verified` で記録します。続いて役割を解き、`measure-delivery` を回したあと、`reflect` をプログラムモードで回します。`worker-list --terminal-state reclaimable` が空になるまでは終わりません。
@@ -182,14 +186,16 @@ PR を受け持つスキルとマージする主体:
   - **docker:** コンテナが1つもない compose project の dangling volume と、どのコンテナも使っていないタグなしイメージ。コンテナのある project、その名前を含む volume、compose ラベルのない volume は残して報告だけします。
   - **branch:** PR がすべてマージかクローズ済みで、worktree がなく、tip が PR の head と同じローカルブランチ。復元コマンドも出力します。
   - **worktree:** 一時ディレクトリにあって消えた worktree（Orca のものは除く）と、セッションの transcript が N 時間動いていない Claude scratchpad の、クリーンで push 済みの detached worktree。どちらも `git worktree remove <パス>` でその項目だけを消します。Orca の worktree は resource steward の担当です。
+  - **card:** Orca のカードすべて（アプリ・CLI・ワーカーのどれが作ったかを問わず）を `scripts/cards.py scan` がカードごとに、削除・ターミナルだけ閉じる（開いた PR あり）・残す・人の判断、のどれかに判定して表にします。人が表を見て `apply --plan` で実行し、janitor の回も同じコードを使います。規則と落とし穴（古い `origin/HEAD` は GitHub の compare で確かめ直す、rebase 前の写しは patch-id で見分ける、プロンプトで止まったシェル、「終わった」と書いた idle の画面）は `references/cards.md` 一か所にあります。
   - **janitor:** エージェントが ledger（`~/.local/state/agent-skills/ledger.jsonl`）に登録した一時ディレクトリ・GUI アプリ・ブラウザウィンドウと、Orca オーケストレーションのワーカーが作った worktree・終わったワーカーのターミナルだけを見ます。`reap --plan` が対象を確かめ直してから閉じるかゴミ箱に移します。ツールは完全には削除せず、ゴミ箱も空にしません。OS がゴミ箱を自動で空にする設定なら警報で知らせます。ブラウザウィンドウはエージェントがブラウザツールで閉じます。
   - **user-folder:** `reap.user_folders` に明示したフォルダーだけを整理します。未設定なら無効です。期間・開いているファイル・ダウンロード中の検査とゴミ箱への保管は維持します。
   - **program:** `~/.claude/programs`（`PROGRAMS_HOME`）のうち、閉じたプログラム（最終確認 `predicate_verified` の後に着地・predicate 変更・admitted の後続がないもの）で、記録（ダッシュボードのキャッシュを除く ledger・decisions・reflect など）が 7 日（`reap.program_days`）以上変わっていないものを `_archive/` に移します。削除はしません。名前に `resume` か `handoff` を含む再開ノートがあれば、閉じていても残します。
   - **state-file:** reorient フックのセッションファイル（`<state>/reorient/*.json`）のうち 7 日（`reap.state_days`）を過ぎたものを 1 つのフォルダにまとめてゴミ箱へ、512KB（`reap.log_max_kb`）を超えた `sync.log` は `sync.log.1` にローテーションします（前の `.1` はゴミ箱）。program とあわせて、定期実行では 1 日 1 回だけ見ます。
-  - **定期実行:** `precheck` は対象があれば exit 0 で、前回の `reap` が失敗した対象とまったく同じなら 1 日のあいだ飛ばします。3 時間ごとの Orca automation の precheck に使い、`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
+  - **定期実行:** `precheck` は対象があれば exit 0 で、前回の `reap` が失敗した対象とまったく同じなら 1 日のあいだ飛ばします。3 時間ごとの Orca automation の precheck に使い、PC の負荷が高ければ `precheck --load` の job がその間にもう一度回ります。`schedule` はその登録コマンドを出力するだけです（[automation.md](automation.md)、韓国語）。
+  - **pressure:** `scripts/pressure.py` がモデルなしで3分ごと（LaunchAgent）に load・メモリ圧迫・swap・ディスク・実行中のコンテナを測ります。警告なら安全な種類（`orphan`、`compose-stack`、`gui-app`、`orca-worker`）だけを `reap --plan` で片付け、片付けたものがあればオーケストレーターに1行送ります。ターミナルが生きているカードの中の対象は残します。危険なのに片付けるものがなければ、上位の消費者（プロセス・compose プロジェクトとそのカード）を知らせて止まります。他人のものは終了させません。閾値と根拠は [pressure.md](pressure.md)（韓国語）にあります。
   - **load:** `reap.py load` は読むだけです。CPU の上位消費者（Claude セッションとその子、残骸のツリー、その他のプロセス）を ours-idle・ours-working・leftover・system に分け、5 分の負荷が上限（既定は CPU 数）以上なら分類ごとの対処を出します。静かなセッションには残りの作業を尋ね、なければ自分で閉じてもらいます。残骸は `reap` で片付け、動いているものは残して新しい dispatch を止め、system は自分たちのものではないと報告だけします。上限を超えて測ったベンチマークは証拠になりません。
   - `pkill`、`docker system prune`、`--force` は使いません。累積の数値（孤児プロセス、dangling volume、片付けるブランチと worktree）が設定の閾値に達すると `경보`（警報）を出します。
-- **同梱:** `scripts/reap.py`、テストファイル。
+- **同梱:** `scripts/reap.py`、`scripts/pressure.py`、テストファイル。
 - **関連:** `orchestrate` の resource steward がラウンドごとに呼び、警報が残ればダッシュボードの受信箱で人に知らせます。
 
 ### secure-fill
@@ -204,14 +210,25 @@ PR を受け持つスキルとマージする主体:
 - **いつ:** auto mode の分類器が行動を拒否し、ユーザーがその種の行動を今後許可したいとき。または auto mode がエージェントに許す範囲を変えたいとき。「auto mode 가 막았어」（auto mode に止められた）、「이거 허용되게 규칙 추가해줘」（これを許可するルールを足して）。
 - **内容:** 拒否カテゴリと拒否された行動から、その行動の種類だけを覆う最小の allow・soft_deny・environment ルールを作ります。ルールには行動の種類、安全になる条件、`Not covered:` を入れます。レビューチェックリスト（包括的な許可をしない、ユーザーが名指ししていない本番破壊系の操作を入れない、ユーザー本人のチャットだけを権限とみなす）を通したあと、`scripts/automode_rule.py emit` が diff を表示し、spec を埋め込んだ単体スクリプトをホーム配下に書きます。ユーザーが `! python3 -I <パス> --apply <spec ハッシュ>` で適用します。ハッシュはユーザーが見た diff の spec と一致する必要があります。スクリプトはタイムスタンプ付きバックアップ、冪等なマージ、JSON 検証を行い、戻すコマンドを出力します。エージェントは settings.json を編集せず、そのスクリプトを実行せず、待つあいだ拒否を回避しません。
 - **同梱:** `scripts/automode_rule.py`、テスト、`references/example-settings.json`。
-- **関係:** ツールパターンの権限（`permissions.allow`、hooks）は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「프로젝트 지속 승인」）をこのスキルで作ります。
+- **関係:** ユーザー設定の `permissions.allow` と `agent-skills.json` のキーは `skills-config`（autoMode ルールを一緒に入れるときはこのスキルのエンジンを共有）、プロジェクト設定と hooks は組み込みの `update-config`、プロジェクト全体の初期案は組み込みの `/auto-mode-setup` が担当します。`orchestrate` の Frame と Refused acts が、リポジトリのマージ・デプロイの継続承認ルール（「프로젝트 지속 승인」）をこのスキルで作ります。
+
+### skills-config
+- **いつ:** `~/.claude/agent-skills.json` の値を変えるとき、ユーザーの `settings.json` の `permissions.allow` にルールを足したり外したりするとき。「agent-skills 설정 바꿔줘」（agent-skills の設定を変えて）、「allow 규칙 추가해줘」（allow ルールを足して）。
+- **内容:** spec 一つ（`agent_skills.set`・`unset`、`permissions.add`・`remove`、`autoMode`、対象の `settings`）を `scripts/config_emit.py emit` が検査してファイルごとの diff を見せ、spec を埋め込んだ単体スクリプトを設定ディレクトリの外に書きます。ユーザーが `! echo '<sha256>  <パス>' | shasum -a 256 -c - && python3 -I <パス> --apply <ハッシュの先頭12文字>` で適用します。
+  - ハッシュはスクリプトファイル全体（埋め込んだ spec とコード）を覆い、`shasum` が Python より先に検査するので、emit のあとに書き換えたファイルはこの1行では実行されません。`-I` なので、スクリプトの隣や作業ディレクトリに置かれたモジュールも読みません。
+  - キーは各スキルの Config 節とスクリプトの `DEFAULTS` で検査します。文書にないキーは spec の `allow_unknown` に名前を書いたときだけ通ります。
+  - `permissions.add` は許可リスト方式で、二つの形だけを受け付けます。一つは設定ディレクトリの memory ディレクトリの中を指す `Edit`・`Write`・`Read`・`MultiEdit`・`NotebookEdit` のルール（`~/.claude/projects/<名前>/memory/…`、`$CLAUDE_CONFIG_DIR/projects/<名前>/memory/…`、Orca プロファイル `claude-profiles/<名前>/home` の下の同じ `projects/<名前>/memory/…`。`<名前>` はリテラル一つか `*`、memory の後ろは `**`・`*.md`・ファイル名一つ）です。そのパスと memory の下は実パスでもどれかの設定ディレクトリの同じ形の中になければならず、外（例: `hooks/`）を指すシンボリックリンクがあれば emit と `--apply` で拒否します（Orca プロファイルの `projects/` → `~/.claude/projects` のリンクは通します）。もう一つは正確な MCP ツール名（`mcp__server__tool`、`__` で分けてちょうど3つの部分）です。
+  - それ以外のルールは `Bash` を含めてすべてこのスキルの範囲外です。シェルコマンドや任意のパスに対する禁止リストは、検証し直すたびに穴が見つかって閉じられなかったので、人がレビューして直接か `update-config` で入れます。範囲を広げるときは、許可リストに形を一つずつテストとともに足します。`remove` は狭めるだけなので文字列の確認だけです。
+  - `settings` で `$CLAUDE_CONFIG_DIR` と `~/.claude` の settings.json を両方選べます。スクリプトはすべてのファイルを先に検査し、ファイルごとに `.bak-skills-config-<時刻>` のバックアップ、冪等なマージ、原子的な置き換え、読み直しての確認、戻す行の出力を行います。
+- **同梱:** `scripts/config_emit.py`、テストファイル。
+- **関係:** autoMode ルールの文言は `tune-automode` が作り、このスキルはその spec を `automode_rule.py` のマージのまま同じスクリプトに載せます。プロジェクト設定と hooks は組み込みの `update-config`、新しい PC は `setup-pc` です。
 
 ### setup-pc
 - **いつ:** agent-skills を別の PC に入れるとき、インストール済みの PC を最新にそろえるとき。「새 PC 세팅해줘」（新しい PC を設定して）、「다른 PC 에서도 똑같이 쓰게 해줘」（別の PC でも同じように使えるようにして）、「agent-skills 업데이트해줘」（agent-skills を更新して）、「플러그인 최신화」（プラグインを最新に）、"set up agent-skills on a new PC"、"update agent-skills"。
 - **新しい PC:** ユーザーはセッション内の `/plugin install`（インストール画面が応答言語・チェックアウトのパス・個人設定リポジトリを尋ねます）と新しいセッションを開くことだけをします。プラグインの SessionStart hook（`hooks/onboard.py`）が未設定の PC だと気づいてこのスキルを提案し、スキルがチェックアウトと個人設定リポジトリを clone してから、下の dry run と 1 行に進みます。設定ファイルを書かない手順（同期ジョブ、janitor・pressure-watch・watch-prs・watch-mentions の自動化、点検表）はスキルが `setup.py --actions-only` で実行し、guard hook が権限ダイアログを出します。設計は [zero-command-setup.md](zero-command-setup.md)。
-- **内容:** 入口はチェックアウトの `scripts/setup.py` です。dry run が設定ファイルごとの diff を見せ、スキルはユーザーが打つ `! python3 -I … --apply <ハッシュ>` の 1 行を渡します。その 1 行がバックアップ、足りない値だけを足す冪等なマージ（既存の値は上書きしない。有効なマーケットプレイス版を無効にすることだけが例外）、原子的な置き換え、読み直しての確認、ファイルごとの戻し行の出力を行います。入れる値はリポジトリの推奨デフォルト（`scripts/recommended-settings.json`）と、個人設定リポジトリの `agent-skills.json` とトラッカーのサイト規則だけです。社内名リスト・個人の指示・エージェント・autoMode ルールは移しません。一度提案した項目は記録し、ユーザーが消したルールは再提案しません。`--update` は新しく増えた推奨値だけを計画し、適用時にチェックアウトを fast-forward します。推奨ルールと同じラベル（最初のコロンより前）で本文が古い autoMode ルールは重複して足さず `drifted` と報告し、`--replace-drifted [ラベル ...]` がその置き換えだけを計画します。出力の 1 行目が対象の settings.json で、`--settings` で別のファイルを選べます。元の PC で `export` した基準ファイルと比べる `check --baseline` は任意です。スキルは設定ファイルを書かず、`--apply` も実行しません。
-- **同梱:** `scripts/setup_check.py`、テスト。リポジトリの `scripts/setup.py`、`scripts/recommended-settings.json`、`scripts/test_setup.py`、`hooks/onboard.py`。
-- **関係:** 適用後に止められた行動ひとつは `tune-automode`、バンドル外の `permissions`・hooks は `update-config`、自動化の中身は `reap-resources`、動いているセッションの reload は `skills-sync broadcast` が担当します。
+- **内容:** 入口はチェックアウトの `scripts/setup.py` です。スキルが言語と Orca Run に結び付けるかどうかを尋ね、dry run で設定ファイルごとの diff を見せてから、ユーザーが打つ `! python3 -I … --apply <ハッシュ>` の 1 行を渡します。その 1 行がバックアップ、足りない値だけを足す冪等なマージ（既存の値は上書きしない。有効なマーケットプレイス版を無効にすることだけが例外）、原子的な置き換え、読み直しての確認、ファイルごとの戻し行の出力を行い、続いて launchd の同期ジョブ・同期・既定でオンの定期自動化を有効にし、`scripts/setup_check.py check` の表を出します。入れる値はリポジトリの推奨デフォルト（`scripts/recommended-settings.json`: チェックアウトの読み込み、`language`・`outputStyle`・既定の permission mode、一般化した autoMode ルール一式、参照系とダッシュボードサーバーだけを入れた `permissions.allow` 一式、`agent-skills.json` の最小限のキー）と、個人設定リポジトリの `agent-skills.json` とトラッカーのサイト規則だけです。社内名リスト・個人の指示・エージェント・autoMode ルールは移しません。一度提案した項目は記録し、ユーザーが消したルールは再提案しません。更新モードは `--update` です（dry run は fetch もせずに新しく増えた推奨値だけを見せ、`--apply` の行が fast-forward したあと計画を照らし合わせ直します）。推奨ルールと同じラベル（最初のコロンより前）で本文が古い autoMode ルールは重複して足さず `drifted` と報告し、`--replace-drifted [ラベル ...]` がその置き換えだけを計画します。出力の 1 行目が対象の settings.json で、`--settings` で別のファイルを選べます。元の PC で `export` した基準ファイルと比べる `check --baseline` は任意です。スキルは設定ファイルをどのツールでも書かず、`--apply` も実行しません。
+- **同梱:** `scripts/setup_check.py`、テスト。リポジトリの `scripts/setup.py`、`scripts/recommended-settings.json`、`scripts/test_setup.py`。
+- **関係:** 適用後に止められた行動ひとつは `tune-automode`、一式の外のユーザーの `permissions.allow`・`agent-skills.json` のキーは `skills-config`、hooks は `update-config`、定期自動化の中身は `reap-resources`、動いているセッションの reload は `skills-sync broadcast` が担当します。チェックアウトの読み込みだけを行う `bootstrap.py` はそのまま残り、`setup.py` がその launchd ジョブを書き直します。
 
 ## チャットとレビュー
 
@@ -228,10 +245,12 @@ PR を受け持つスキルとマージする主体:
 - **内容:**
   - トラッカーは、プログラムの設定 → `~/.claude/agent-skills.json` → 既定値の linear の順に決めます。
   - セッションでは MCP（Linear なら `orca linear`）を優先し、スクリプトは常に `tracker.py` を使います。`tracker.py` のコマンドは list、get、children、create、label、comment、transition です。transition はまず現在の状態を読み、すでにその段階かそれより先に進んでいるチケットは変えません。`--to review` は設定の `tracker.<adapter>.review_status` があればその名前の状態へ、なければ In Review へ、それもなければ名前に review を含む唯一の started 状態へ移します。
+  - 書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指すユーザーの Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
+  - 値を伏せる読み取り経路（`<PERSON>` のようなエンティティのプレースホルダーや `****`）で読んだ値はデータではありません。判断や書き戻しの前に伏せない経路で読み直し、伏せた値をフィールドに書き戻しません。
   - 状態の語彙は triage、backlog、unstarted、started、completed、canceled です。
-  - follow-up の形式は、`follow-up` ラベル、1行目の `파생: <ID> · 원인: <분류>`（派生元: <ID> · 原因: <分類>）、related relation です。
+  - 完了条件は上位チケットの本文（`✅ 완료 조건`、`🚫 범위 밖`、`⏸️ 보류`）に、親のないチケットは受け入れ条件に置きます。NOW に分類したものだけがチケットになります。
+  - follow-up の形式は、`follow-up` ラベル、1行目の `파생: <ID> · 원인: <분류>`（派生元: <ID> · 原因: <分類>）、2行目の `완료 조건: <항목>`（完了条件: <項目>）、related relation です。
   - チケットの本文は、信頼しないデータとして扱います。
-  - 書き込みはすべて担当エージェントに任せ、読み取りだけをセッションで行います。担当はユーザーの指示 → 設定の `tracker.delegate_agent` → プラグイン agent `agent-skills:task-tracker` の順に決め、`"none"` ならセッションで直接書きます。`task-tracker` はトラッカーサイト固有の規則（プロジェクト、状態・遷移 id、ラベル、言語）を `tracker.rules_file` が指す Markdown から毎回読み、キーがあるのにファイルがない・読めないときは推測せずに止まります。
 - **同梱:** `scripts/tracker.py`（標準ライブラリだけを使う Linear・Jira のアダプター、fixture モード付き）、`references/linear.md`、`references/jira.md`。
 
 ### use-notes (旧名 `use-obsidian`)
@@ -239,14 +258,28 @@ PR を受け持つスキルとマージする主体:
 - **内容:**
   - `notes` 設定またはユーザーが選んだ obsidian / markdown アダプターを使います。個人 vault の既定値はありません。
   - パスとファイル名は選択した保存先の規則またはユーザー指定に従います。
-  - 書き込みはすべて担当エージェントに任せます。担当はユーザーの指示 → 設定の `notes.delegate_agent` → プラグイン agent `agent-skills:notes-writer` の順に決め、`"none"` ならセッションで直接書きます。`notes-writer` は保存先の規則ファイルを毎回読み、読めなければ止まります。
+  - 書き込みはすべて担当エージェントに任せます。担当はユーザーの指示 → 設定の `notes.delegate_agent` → プラグイン agent `agent-skills:notes-writer` の順に決め、`"none"` ならセッションで直接書きます。`notes-writer` は保存先の規則ファイルを毎回読み（読めなければ止まります）、今は Obsidian vault と Markdown フォルダーだけを扱います。Confluence・GitHub wiki のアダプターは後回し（LATER）です。
   - Obsidian vault は、ユーザーの指示が決める経路、なければ `notes.obsidian.access`（`mcp`・`cli`・`filesystem`）が決める一つの経路だけで読み書きします。`mcp` なら接続された Obsidian MCP の vault ツールだけを使い、vault フォルダーにシェルコマンド・ファイルツール・Obsidian CLI を使いません。同期サービスがディスク上のコピーを遅れて揃える vault 向けです。どちらもなければファイルシステムに切り替えず、止まって尋ねます。表示のための別ページ公開は必須にしません。
 - **同梱:** `references/obsidian.md`、`references/markdown.md`。
 
 ## 文章
 
 ### brief
-完了・進行中・判断事項・人だけが行う手順を根拠とともに報告します。レポートは要求時も定期も `orch brief render`（定期は `--periodic`）の出力をそのまま送り、モデルは見出しの一文・判断事項・Insight だけを渡します。
+進行中・他の人の待ち・判断事項・オーナーが今やること・保留を、根拠とともに報告します。レポートは要求時も定期も `orch brief render --commit`（定期は `--periodic`、Telegram は `--telegram`）の出力を手を加えずにそのまま送り、間違った行は記録（`orch board set`、`orch stage set`）を直してから描き直します。行は board だけでなく、生きている Orca のカード・リード・Run、カードの REPORT 行が指す報告ファイル、GitHub の PR の状態から毎回作り直します。人を待つ行は、オーナーが解くもの（🙋）と他の人のレビュー・返事待ち（⏳）に分かれます。段階表は1行のリンクで `stage` スキルを、予定（📅）・保留キュー（⏸️）・開いた依頼の件数は1行で `todo` スキルとダッシュボードを指します。モデルが渡すのは判断だけで、見出しの一文・推奨付きの判断事項・Insight・定期の回で飛ばした行動です。手で書くのは、レンダラーが失敗したときと、一つのセッションが自分の作業一つを報告するとき（`end-session` §6、`references/hand-format.md`）だけです。
+
+### stage
+- **いつ:** 「단계표 보여줘」（段階表を見せて）、`/agent-skills:stage`。`brief` は段階表を1行のリンクでしか見せないので、表そのものが必要なときに呼びます。
+- **内容:**
+  - `orch stage show [--program P] [--telegram] [--all]` の出力をそのまま送ります。すべて終わったか7日（`stage_idle_d`）変わっていない行は畳んで件数だけを書き、`--all` ならすべて見せます。78列に収めるために長い名前・PR キーだけを `…[n]` で切り、段階の欄だけで78列を超えるならそのまま出力して 1 で終わります。
+  - 段階表（作業 / PR マージ / dev 確認 / prod 確認）は、ダッシュボードの fleet tick が1分ごとに作ります。7日以内に ledger が動いたプログラムごとに、predicate の項目と Run のワーカーカード一つにつき1行です。マージの欄はマージ sha があるときだけ埋め、dev・prod の欄は空けておきます。人やエージェントが確認した欄は `orch stage set <プログラム>/<項目>` で上書きし、その値が生成された値に勝ちます。ダッシュボードでは Stages 画面です。有効なプログラムなのに行がない、または `board.stage_warn_h`（既定は6）時間更新されていなければ、reorient フックがプロンプトごとに1行警告します。
+- **関係:** `brief` の段階表の行が指す先です。記録の規則は `orchestrate` の `references/dashboard.md` の「The stage table」にあります。
+
+### todo
+- **いつ:** 「할 일 보여줘」（予定を見せて）、「보류 큐 보여줘」（保留キューを見せて）、`/agent-skills:todo`。`brief` は予定と保留キューを1行で数えるだけなので、一覧が必要なときに呼びます。
+- **内容:**
+  - `orch board todo list [--telegram]` の出力をそのまま送ります。表は二つです。予定の表（状態 ⏰ 到来 / 📅 待ち · いつ · やること · 担当）は到来したものが先、次に日付順、日付のないものは入れた順です。保留キューの表（# · やること · 次に着手する条件 · 担当）は順番どおりで、先頭に ▶（次に着手）が付きます。番号は閉じた項目を除いた1からの順番で、`later move`・`later drop`・`todo from-later` が受け取る番号と同じです。表の見出しの件数は brief の1行と同じ基準です。78列に収めるために長い欄だけを `…[n]` で切り、原文を表の下に置きます。Telegram では表を使わず行で書きます。
+  - 追加と完了: 予定は `orch board todo add <作業> (--due D | --after C) --who W`、閉じるのは `orch board done do:<k>`、保留の項目を予定に変えるのは `todo from-later <n> --who W` です。保留は `orch board later add <作業> --trigger <次に着手する条件> [--who W] [--at N]`、順番の移動は `later move <n> --to N` です。
+- **関係:** `brief` の予定・保留キューの行が指す先です。ダッシュボードでは To-do ページです。
 
 ### map-features
 - **いつ:** 製品がいま何をするかを人が読む地図が必要なとき。PRD、ロードマップ、オンボーディング、現況ドキュメント。「feature map 만들어줘」（feature map を作って）、「기능 지도 그려줘」（機能地図を描いて）、「지금 뭐가 구현돼 있는지 정리해줘」（いま何が実装されているか整理して）。verify スキルが機能を動かすための地図は `create-verification-skill`、1つのサブシステムの動きは `how` です。
@@ -338,7 +371,7 @@ PR を受け持つスキルとマージする主体:
 - **内容:**
   - 1行や1コミットについての質問は、git blame → コミット → PR だけで答える narrow mode で終え、探さなかった出典を明示します。
   - それ以外は、出典ごとに調査役を一つずつ並列に立ち上げます（git・`gh`、Linear/Jira、Notion、Google Drive、Obsidian、Slack）。調査役は自分の出典だけを掘り、他の出典の手がかりはメモするだけです。空の結果も発見として残します。
-  - Datadog、Sentry、warehouse は接続がないので「アクセスなし」と記録します。Calendar は日付の範囲を絞るときだけ使います。
+  - Datadog、Sentry、warehouse のようにセッションに接続のない出典は「アクセスなし」と記録します。Calendar は日付の範囲を絞るときだけ使います。
   - まとめは Direct / Supported / Inferred / Speculative / Unknown の5段階に分け、引用を付けます。コードをそのコード自身の意図の根拠にはせず、質問に混ざった仮説は候補としてだけ扱います。
   - 答えは What We Found、Reasonably Infer、Competing Hypotheses、What We Don't Know、Sources Consulted の順です。コードを変えようとしている質問なら、Preserve / Change / Avoid / Risk を付けます。
 - **同梱:** `epistemics.md`（確信度の基準）、`investigator-prompt.md`、`synthesizer-prompt.md`、`source-playbook.md`、`sources/`（code-archaeology、linear、notion、google-drive、obsidian、slack、incident-postmortem）。
@@ -494,20 +527,42 @@ PR を受け持つスキルとマージする主体:
 | 許可 | `orca orchestration <コマンド>`。reset、worker-abandon、gate-resolve は除きます |
 | 許可 | `orch <コマンド>`。任意のコマンドを実行する `heavy`、マージポリシーを変えうる `set`・`init`、台帳を書き換える `backfill` は除きます |
 | 拒否 | 他のターミナルの Orca メールボックスを読む `check`/`inbox --terminal <他人の handle>`。同じコマンドの中で `$ORCA_TERMINAL_HANDLE` を束縛し直す場合も含みます |
+| 拒否 | `run_in_background` なしで5秒以上の sleep でポーリングするループ（`until`/`while`/`for … do … sleep N`）。バックグラウンドの呼び出しは終わると通知でセッションを起こすので、その出力ファイルはポーリングしません。条件を見張る必要があれば `Monitor` を使います |
+| 確認 | `python3 <チェックアウトの絶対パス>/scripts/setup.py --actions-only [--orca-run]`。Claude の設定は書かず、同期ジョブと定期自動化を有効にする段階なので、auto mode でも人に権限ダイアログを出します |
 
 許可を出すのは、シェルの演算子、リダイレクト、置換、変数を含まない単一のコマンドだけです。変数は `$ORCA_TERMINAL_HANDLE` だけが例外です。コマンド名のすぐ後にサブコマンドが来る必要があり、フラグが先に来たら判定しません。判定しなかった呼び出しは、ふだんの権限の流れ（auto mode の分類器、ユーザーのルール）に乗ります。
 
-### 宣言された役割の再確認
-`hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。操作を止めず外部コマンドも実行しません。
+### オーケストレーターへの委任の強制
+`hooks/orchestrator_guard.py`（PreToolUse、すべてのツール）。最上位のオーケストレーターのメインスレッドでだけ判定します。`agent_id` がなく `agent_type` が `agent-skills:orchestrator` の呼び出しか、reorient フックに `ROLE: orchestrator` と記録されたセッションで `agent_id`・`agent_type` のない呼び出しです。サブエージェントは自分のタイプと `agent_id` を付けて来るので、委任された側は止めません。設計と別案の比較は [orchestrator-guard.md](orchestrator-guard.md)（韓国語）にあります。
+
+| 判定 | 対象 |
+|---|---|
+| 拒否 | ブラウザ・デスクトップ・チャット送信のツール、WebFetch、WebSearch |
+| 拒否 | 状態ディレクトリ（`~/.local/state`、`$AGENT_SKILLS_STATE`、`$PROGRAMS_HOME`、`$CLAUDE_CONFIG_DIR/projects/*/memory`、一時ディレクトリとセッションの scratchpad、`orchestrator_guard.write_dirs`）の外への Edit・Write・NotebookEdit |
+| 拒否 | `run_in_background` のコマンドを `tail`・`head`（`-f` を除く）にパイプしたもの。監視側の行が終わるまでパイプに縛られ、出力ファイルに出てきません |
+| 拒否 | 1ターン（`prompt_id`。10分の空白も新しいターンとし、`prompt_id` がなければ数えない）の直接の作業呼び出しが `work_calls`（既定は3）を超えたもの。状態ディレクトリの外の Read、Grep、Glob、上で拒否していない MCP ツール、ルーティング用のコマンド（`orca`、`orch`、`skills-sync` などとパイプの後のフィルター、メッセージ本文用の `"$(cat <ファイル>)"`）以外の Bash を数えます |
+
+Agent、SendMessage、AskUserQuestion、Skill、Cron*、Monitor のようなルーティング用のツールは、数えも止めもしません。拒否の理由には委任の経路（Agent、`orca worktree create`、リードへの `orca orchestration send`、`orch …`）が書かれます。`ROLE: none` ならそのセッションで、`AGENT_SKILLS_ORCHESTRATOR_GUARD=0` ならすべてのセッションで無効になります。設定は `~/.claude/agent-skills.json` の `orchestrator_guard`（`work_calls`、`write_dirs`、`route_commands`、`deny_tools`）です。
+
+### オーケストレーター・リードの再確認
+`hooks/onboard.py`（SessionStart `startup|clear`）。このプロファイルのユーザー設定（`env.CLAUDE_CODE_PLUGIN_DIRS`。Orca のプロファイルごとに別々に見ます）もセッションの同じ環境変数もチェックアウトを読み込んでいないときだけ、インストール画面の値とともに `setup-pc` を提案するよう促す段落を入れます。`-p` セッション（`CLAUDE_CODE_ENTRYPOINT` が `sdk-cli`）には入れません。Agent SDK のセッション（`sdk-ts`・`sdk-py`）は人が入力する GUI かもしれないので入れ、最初の依頼がブリーフや自動化のプロンプトなら無視するよう段落に書いてあります。URL の認証情報は消してから入れます。人が断ればエージェントが `onboard.py --decline` を実行し、そのプロファイルでは二度と尋ねません。`AGENT_SKILLS_ONBOARD=0` ですべて無効になります。
+
+`hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。操作を止めず外部コマンドも実行しません。オーケストレーターのセッション名（`session_title`）が `orchestrator` でなければ、SessionStart の案内の最後に、人に `/rename orchestrator` を頼み自分の Orca タブの名前を変える（`orca terminal rename`）よう促す行を付けます。
 
 ### ターミナルで答えた決定のクローズ
 `hooks/decision.py`（UserPromptSubmit）。`orch decide add` で決定を登録したターミナル（`$ORCA_TERMINAL_HANDLE`）に人が入力したプロンプトだけを見ます。1 行目が id で始まる（`d3 許可`、`decision d3: 許可`）か、そのターミナルの開いている決定のうち一つにしかない選択肢名で始まると、その決定を答えとともに done でクローズし、オーケストレーターかリードに伝えます。曖昧なときはクローズせず、開いている決定の一覧をリマインダーとして差し込むだけです。ほかのターミナル（ワーカー）の入力ではクローズせず、エラーはすべて exit 0 です。すでに起動しているセッションには `/reload-plugins` か再起動のあとから効きます。
+
+### 依頼の記録
+`hooks/request_log.py`（UserPromptSubmit）。オーケストレーターかリードと宣言されたセッション（役割の判定は reorient フックと同じ）でだけ、人が入力したプロンプト一つを依頼台帳（`skills/orchestrate/scripts/owner_requests.py`）に開いた項目として残します。複数の依頼が一度に来ると、小さな依頼が埋もれていたためです。モデルには依頼の id、開いている依頼の数、30分を超えて何にも結び付いていない依頼だけを1行で知らせ、モデルが `orch req link|done|drop` で処理します。人の依頼ではないもの（`<` で始まる harness の行、入力したままの slash コマンド、ダッシュボードの決定への答え、カードが転送した `[カード名] …` の報告、compact の前置き、ROLE の宣言だけのプロンプト、空のプロンプト）は残しません。ほかのセッションでは何もせず、エラーはすべて exit 0 です。
 
 ### 権限ダイアログの記録
 `hooks/permission.py`（PermissionRequest）。権限ダイアログが開くと、ツール名とマスクした引数を `$ORCA_TERMINAL_HANDLE` ごとにダッシュボードの状態ディレクトリの `prompts/` に書きます。判定はしないので、権限の流れは変わりません。ダッシュボードは、そのターミナルの画面に同じリクエストのダイアログが出ている間だけ、インボックスの項目に承認・拒否・ターミナルを開くボタンを付けます。人が押すと、送る直前に画面を読み直して確かめ、一回だけ許可する `Yes` か `No` の番号を一つだけ押します。「今後確認しない」「常に許可」「auto mode に切り替え」のようにルールを保存したりモードを変えたりする選択肢は選びません。詳しくは `skills/orchestrate/references/dashboard.md` にあります。
 
 ### 完了主張の検査
 `hooks/claim_check.py` は Stop/SubagentStop でコード変更後に実行のない完了主張を一度だけ止めます。拒否されたコマンドや引用例は除外し、未検証と明記した報告を認めます。`AGENT_SKILLS_CLAIM_CHECK=0` で無効になります。適切なテストが実行されたことを保証するものではありません。
+
+### 重い開始の前の負荷確認
+`hooks/pressure_gate.py`（PreToolUse、Bash）。コマンドの位置に `orch heavy`、`docker compose … up`、`docker-compose … up`、`orca worktree create` があるときだけ、`reap-resources` の `pressure.py` でマシンを測ります（0.3秒前後）。危険なら拒否し（swap とディスクは何時間も高いまま残るので警告までしか数えません）、警告なら直近15分（`reap.pressure.gate_fresh_minutes`）に片付けラウンドがないときだけ拒否します。拒否の理由には先に実行する `pressure.py round` が入ります。危険なときはそのコマンドをセッション・コマンド単位の待ち行列（`pressure.py queue`）とダッシュボードの Needs you に残し（期限は `reap.pressure.queue_minutes`、既定は15分）、`Monitor` で `pressure.py queue wait <id>` を待って 0 で終われば、同じセッションが同じコマンドをもう一度実行します。待ち行列はコマンドを自分では実行しません。再試行の成否は同じスクリプトが PostToolUse・PostToolUseFailure で記録し、期限の切れた項目は断念として残します。他人のカードやプロセスは終了させません。測定に失敗したら判定しません。ユーザーが今すぐ実行するよう言ったときだけ、コマンドの前に `AGENT_SKILLS_PRESSURE_GATE=0` を付けます。
 
 ### 文体の検査
 `hooks/prose_check.py` は PR・コミット・トラッカーの文章を決定的なパターンで確認します。助言を追加するだけで、操作を止めたり権限を変更したりしません。`AGENT_SKILLS_PROSE_CHECK=0` で無効になります。
@@ -563,8 +618,8 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **チケットの流れ:** `write-ticket`、`deliver-ticket`、`handoff-ticket`、`dispatch-card`、`end-session`。Orca のカードとトラッカーを前提にした、チケット一つの最初から最後までです。
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
-- **マシンの手入れ:** `reap-resources`、`tune-automode`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、圧縮後の再オリエンテーション（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）。
+- **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。
+- **フック:** 権限の判定（`guard.py`）、オーケストレーターへの委任の強制（`orchestrator_guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、オーケストレーター・リードが受けた人の依頼の記録（`request_log.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。
