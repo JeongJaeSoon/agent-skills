@@ -108,7 +108,7 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 |---|---|---|
 | `guard.py` | Bash·Skill 호출 전 | 이 플러그인 스킬과 `orch`(`heavy`·`set`·`init`·`backfill` 제외)·`orca orchestration`(reset·worker-abandon·gate-resolve 제외) 명령을 허용하고, 다른 터미널의 Orca 메일함 읽기와 foreground sleep 폴링 루프를 거부한다. `setup.py --actions-only`는 권한 창. 나머지는 평소 권한 흐름을 탄다([권한 결정](skills.md#권한-결정)) |
 | `orchestrator_guard.py` | 모든 도구 호출 전 | 최상위 오케스트레이터 본인 스레드에서만 브라우저·채팅 전송·웹 도구, 상태 디렉터리 밖 편집, `tail`로 파이프한 배경 감시자, 턴당 네 번째 직접 작업 호출을 거부하고 위임 경로를 알린다. `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`으로 끈다 |
-| `pressure_gate.py` | Bash 호출 전 | `orch heavy`·`docker compose up`·`orca worktree create`를 PC 사용량이 위험이거나, 경고인데 최근 15분 안에 정리 회차가 없으면 거부하고 정리·대기 방법을 알린다. `AGENT_SKILLS_PRESSURE_GATE=0`으로 끈다 |
+| `pressure_gate.py` | Bash 호출 전·후 | `orch heavy`·`docker compose up`·`orca worktree create`를 PC 사용량이 위험이거나, 경고인데 최근 15분 안에 정리 회차가 없으면 거부하고 정리·대기 방법을 알린다. 위험으로 거부한 명령은 대기열과 대시보드에 남기고, 같은 세션의 재시도 결과를 기록한다. `AGENT_SKILLS_PRESSURE_GATE=0`으로 끈다 |
 | `prose_check.py` | PR·커밋·Linear·Jira 저장 전 | 본문의 write-plainly 금지 패턴을 알린다. 막지 않는다 |
 | `claim_check.py` | 멈출 때(Stop, SubagentStop) | 코드를 고치고 아무것도 돌리지 않은 채 "고쳤다"고 하면 한 번 막는다. `AGENT_SKILLS_CLAIM_CHECK=0`으로 끈다 |
 | `onboard.py` | 세션 시작 | 설정되지 않은 PC에서 `setup-pc`를 제안한다. 거절하면 그 프로필에서는 다시 묻지 않고(`onboard.py --decline`), `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다 |

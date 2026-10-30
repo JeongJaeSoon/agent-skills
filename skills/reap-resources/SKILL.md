@@ -247,6 +247,7 @@ taken while the load is at or above the limit is not evidence: measure again onc
 ```bash
 P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"
 python3 "$P" check                     # measure only; exit 0 ok, 1 warn, 2 danger
+python3 "$P" queue                     # heavy starts the hook held at danger: waiting, retrying, done, failed, gave_up
 python3 "$P" round --dry-run --set load_per_cpu=0.5,1   # what a round would reap and send, with lowered thresholds
 python3 "$P" round                     # one round, what the LaunchAgent runs
 python3 "$P" install | uninstall | status   # macOS LaunchAgent, every `interval` seconds, from the main checkout
@@ -287,10 +288,17 @@ sample while it is younger than `sample_fresh_minutes` (7). An older sample is l
 
 `hooks/pressure_gate.py` (PreToolUse, Bash) denies `orch heavy`, `docker compose … up` and `orca worktree create`
 while the level is danger, and at warn until a round ran its scan in the last `gate_fresh_minutes` (15; a failed scan
-counts, so warn never holds for good). Its level is
-`check`'s, so the deny's wait (`round`, then `Monitor` on `check` until it exits 0 or 1, for at most 15 minutes, then
-report) ends when the hook would let the start through. Danger from disk alone asks for space to be freed instead of
-a wait. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
+counts, so warn never holds for good). At danger the deny puts the command in a queue
+(`<state>/pressure-queue.json`, one entry per session and command, a repeat deny counting the same entry) with a
+deadline `queue_minutes` (15) away, and on the dashboard's Needs-you list (key `pressure:queue:<id>`, its copy button
+`pressure.py queue`, never the held command). The deny names the wait: `round` first unless one is fresh, then
+`Monitor` on `queue wait <id>`, which exits 0 once the hook would let that command through, so the session runs the
+same command again, and 3 when it must not run (deadline passed, recorded as given up; or already retried). The queue
+never runs a command itself: the retry is the asking session's own tool call, through the same hooks and permission
+checks, and another session's run of the same text is not that entry's retry. The same script as PostToolUse and
+PostToolUseFailure records the retry's outcome: done takes the row off the dashboard, a failure (`Exit code N`)
+stays on it. A round gives up on waiting entries past their deadline. `python3 "$P" queue` lists entries
+for a week. Danger from disk alone asks for space to be freed instead of a wait, and queues nothing. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
 `AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
 off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
 a deny and a manual `round`.
@@ -329,7 +337,8 @@ Paths of a particular project's test cache stay here, not in this repo:
                        "vm_pressure": [2, 4], "swapout_pps": [300, 1500], "swap_gb": [16, null],
                        "swap_growth_gb_h": [2, null], "disk_free_gb": [50, 20], "docker_mem_pct": [70, 90],
                        "containers": [40, null], "sample_fresh_minutes": 7, "always_on": [],
-                       "notify_to": "run:<id>", "rescan_minutes": 10, "renotify_minutes": 30, "gate_fresh_minutes": 15}}}
+                       "notify_to": "run:<id>", "rescan_minutes": 10, "renotify_minutes": 30, "gate_fresh_minutes": 15,
+                       "queue_minutes": 15}}}
 ```
 
 Alerts count everything the scan saw, kept items included: orphan processes, dangling volumes, and branch and worktree
