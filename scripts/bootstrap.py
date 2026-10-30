@@ -15,7 +15,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from sync import INTERVAL_S  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS", "~/.claude/settings.json")).expanduser()
+# The file Claude Code reads, as setup.py picks it: an Orca profile sets CLAUDE_CONFIG_DIR.
+SETTINGS = pathlib.Path(os.environ.get("CLAUDE_SETTINGS")
+                        or pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude") / "settings.json").expanduser()
 LABEL = "io.github.jeongjaesoon.agent-skills-sync"
 PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
 STATE = pathlib.Path("~/.local/state/agent-skills").expanduser()

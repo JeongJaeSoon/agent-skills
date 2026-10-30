@@ -1,0 +1,121 @@
+# Installing agent-skills: instructions for an agent
+
+You are an agent asked to set up the [agent-skills](https://github.com/JeongJaeSoon/agent-skills) Claude Code plugin for a human. Follow this file from top to bottom. The human-facing guide with every path and option is [docs/install.md](docs/install.md).
+
+The plugin loads only in Claude Code (checked on 2.1.314). If you are another agent, you can run the checks and walk the human through the steps, but only a Claude Code session can show the plugin loaded.
+
+## Rules
+
+These hold for every step, including after a step fails.
+
+**The only writes you may make** are these two commands, each run once after the human has approved it in chat:
+
+```bash
+claude plugin marketplace add JeongJaeSoon/agent-skills
+claude plugin install agent-skills@jeongjaesoon [--config key=value ...]
+```
+
+They write the Claude Code settings themselves (`enabledPlugins`, `extraKnownMarketplaces`, `pluginConfigs`), so they are the one exception to the next rule.
+
+**Never:**
+
+- Edit a settings file, or anything under `~/.claude` or `$CLAUDE_CONFIG_DIR`, with any tool. That includes `settings.json`, `agent-skills.json` and `installed_plugins.json`. Those settings decide what agents may do, so a change to them is the human's, made after reading a diff.
+- Run `setup.py --apply`, `bootstrap.py --write`, `gh auth login` or `gh auth setup-git`, for the same reason. Give the human the line to run.
+- Retry a step that a permission prompt, the auto-mode classifier, a hook or the human refused, in any form: not a rewritten command, not a script, not another tool. The refusal is the answer to that step. Report it with the exact command and stop that step.
+- Put a token or password in a URL or a `--config` value. `--config` values are stored as plain text in `settings.json`.
+- Tell the human to use `/reload-plugins` after a full setup. Running sessions are restarted.
+
+After the install, the setup is the plugin's `setup-pc` skill. Its rules are in [What this skill never does](skills/setup-pc/SKILL.md#what-this-skill-never-does); they apply to you as well.
+
+## 1. Check
+
+Run these. All are read-only. Show the human the results in one short table.
+
+| Command | Want |
+|---|---|
+| `claude --version` | `2.1.314 (Claude Code)` or later is what this file was checked on |
+| `python3 --version` | 3.9 or later |
+| `git --version` | any |
+| `gh auth status` | logged in to github.com. Needed for the full setup; the human logs in, not you |
+| `uname -s` | `Darwin` for the full setup. On Linux the sync job is a cron line the human adds, and LaunchAgent automations are unsupported |
+| `command -v orca` | optional. Without Orca, the multi-session skills and the scheduled automations do nothing |
+| `echo "${CLAUDE_CONFIG_DIR:-unset}"` | when set (an Orca profile, for example), the plugin commands write to that profile only |
+| `claude plugin list` | see below |
+
+`claude plugin list` tells you what is already there:
+
+- `agent-skills@jeongjaesoon`, `✔ enabled`: the marketplace copy is installed. Do not install again; go to step 4.
+- `agent-skills@inline` with a `Path:`: a checkout is loaded through `CLAUDE_CODE_PLUGIN_DIRS`. Do not add the marketplace copy, or every hook runs twice. Tell the human to ask a Claude Code session to "update agent-skills" (the `setup-pc` skill) and stop.
+- Neither: go on.
+
+## 2. Ask the human
+
+Ask these, one message, and wait for the answers:
+
+1. **Which install.** *Marketplace only*: the plugin as published, updated with `claude plugin update`. *Full setup*: a live checkout of this repo on `main`, the recommended user settings, a sync job every 15 minutes and the default automations; it starts from the marketplace install and finishes in the next session.
+2. **Three optional values**, all of which may be left blank:
+   - `language`: the language for replies, such as `English`.
+   - `checkout`: where the full setup clones this repo. Default `~/src/agent-skills`. Use an absolute path.
+   - `personal_repo`: the URL of the human's private repo holding their `agent-skills.json`. No credentials in it.
+3. **Approval** for the two commands in step 3, shown exactly as you will run them.
+
+Whether this terminal is the orchestrator and which automations to keep are asked by `setup-pc` later. Do not ask them now.
+
+## 3. Install
+
+After approval, run the two commands from a shell. Pass only the values the human gave:
+
+```bash
+claude plugin marketplace add JeongJaeSoon/agent-skills
+claude plugin install agent-skills@jeongjaesoon --config language=English --config checkout=/absolute/path
+```
+
+Expected output (2.1.314):
+
+```
+✔ Successfully added marketplace: jeongjaesoon (declared in user settings)
+✔ Successfully installed plugin: agent-skills@jeongjaesoon (scope: user)
+1 userConfig option not yet set — run /plugin configure agent-skills@jeongjaesoon in Claude Code, or pass --config KEY=VALUE.
+```
+
+The last line only means a value was left blank. If you are inside a Claude Code session, the human can instead type `/plugin marketplace add JeongJaeSoon/agent-skills` and `/plugin install agent-skills@jeongjaesoon`; the in-session install opens a dialog for the three values.
+
+If a command fails, show the error and stop. Do not try another source or another form of the command.
+
+## 4. Hand off
+
+Plugins load when a session starts, so this session does not have the plugin yet.
+
+- **Marketplace only:** tell the human to start a new Claude Code session. The new session offers `setup-pc` once; the human may say no, and it does not ask that profile again.
+- **Full setup:** tell the human to start a new Claude Code session and accept the `setup-pc` offer. There, `setup-pc` clones the checkout, shows the settings diff, and gives the human one `! python3 -I …/setup.py … --apply <hash>` line to run. It then runs `setup.py --actions-only` behind a permission dialog. After that, the human restarts the session. Your part ends here.
+
+## 5. Verify
+
+`claude plugin list` after a marketplace install:
+
+```
+  ❯ agent-skills@jeongjaesoon
+    Version: <commit>
+    Scope: user
+    Status: ✔ enabled
+```
+
+After a full setup, the marketplace copy is turned off and the checkout is loaded:
+
+```
+  ❯ agent-skills@jeongjaesoon
+    Status: ✘ disabled
+
+Session-only plugins (--plugin-dir / --plugin-url):
+  ❯ agent-skills@inline
+    Path: <checkout>
+    Status: ✔ loaded
+```
+
+After a full setup, also run `python3 <checkout>/skills/setup-pc/scripts/setup_check.py check`. It is read-only and prints a table. Rows marked `missing`, `differs` or `warn` are left to do; each row's last column says who does it. Give the human the table as printed.
+
+In a new session, `/agent-skills:brief` answering with a status report shows the skills are loaded. Bare `/brief` is a Claude Code built-in.
+
+## Report
+
+End with: the check table, which install, the commands you ran and their output, anything refused or failed with its exact command, and what the human does next.
