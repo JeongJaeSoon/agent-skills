@@ -10,6 +10,9 @@ line, a `ROLE: lead <slug>` line, or the template's `<project>: lead` head) with
 and `PREDICATE`. A card whose first prompt lacks them reports done and idles for days, a lead without DELEGATE did the
 work itself, and one without ROLE never gets the reorient hook's per-prompt reminder (dispatch-card §2).
 The text is read as written: a prompt built from a file or variable is denied too.
+`skills-sync card <brief>` (scripts/card.py) is checked on the brief file it names, with that helper's own rules,
+and so is the lead test below; a relative path after a `cd` or `pushd`, or a check that cannot run, is denied.
+A wrapper (`env …`, `bash -c`, scripts/card.py run directly) is not seen: a guardrail, not a sandbox.
 
 Deny: a lead's card started from a session that is itself a lead, known by its `agent_type` (`claude --agent
 agent-skills:lead`), its `ROLE: lead` record from the reorient hook, or its transcript's first user prompt passing the
@@ -50,6 +53,13 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
                      r"\b(?:read|printf\s+-v)\b[^;&|\n]*\bORCA_TERMINAL_HANDLE")
 # In command position only: a grep or echo that quotes the words is not a card being made.
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
+# The helper reads its brief from a file this hook can open, so the card checks run on that file (dispatch-card §3).
+CARD_HELPER = re.compile(r"(?:^|[;&|(])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
+CHDIR = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\b", re.M)
+LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lead. Give the card a "
+                  "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
+                  "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
+                  "top-level starts a lead.")
 CLOSE_OR_KEEP = re.compile(r"\b(?:CLOSE|KEEP)\b")
 MODE = re.compile(r"""(?m)(?:^|--prompt[\s=]+["']?)\s*MODE\b""")
 # The head is a line of its own, or opens the prompt; "take the lead" or "(lead: x)" in a worker's text is neither.
@@ -129,7 +139,31 @@ def started_as_lead(transcript):
     return False
 
 
-def bash(cmd, background=False, transcript=None, agent=None, session=None):
+def lead_session(agent, session, transcript):
+    return agent == "agent-skills:lead" or declared_lead(session) or bool(transcript and started_as_lead(transcript))
+
+
+def helper_card(brief, cwd, moves):
+    """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
+    `moves`: the command changes directory first, so a relative path would be read from the wrong place."""
+    brief = brief.strip("'\"")
+    if set(brief) & set("$`*?"):
+        return None, "Write the brief's path out in `skills-sync card <brief>`; this hook reads that file and cannot expand it."
+    path = pathlib.Path(brief).expanduser()
+    if moves and not path.is_absolute():
+        return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import card
+        try:
+            return card.compose(str(path if path.is_absolute() else pathlib.Path(cwd or ".") / path)), None
+        except card.Refuse as e:
+            return None, str(e)
+    except Exception as e:  # a check that cannot run does not let the card through
+        return None, f"The guard hook could not check the brief of `skills-sync card` ({type(e).__name__}: {e})."
+
+
+def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=None):
     loop = None if background else SLEEP_LOOP.search(cmd)
     # A short retry loop (sleep 1-4) is left alone; polling loops seen in practice slept 5 to 30 s.
     if loop and (loop[1] == "$" or int(loop[1]) >= 5):
@@ -153,17 +187,22 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None):
             if not LEAD_ROLE.search(cmd):
                 missing.append("`ROLE: lead <slug>`")
         if missing:
-            return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Write it literally in "
-                                  "--prompt (not from a file or variable): `CLOSE: 완료 기준을 채우고 결과를 적으면 "
-                                  "end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP when this session will reuse the card; "
-                                  "a lead also gets its MODE, `ROLE: lead <slug>`, DELEGATE and PREDICATE lines, copied from orchestrate "
-                                  "references/brief.md \"Lead\" (dispatch-card §2).")
-        if lead and (agent == "agent-skills:lead" or declared_lead(session)
-                     or transcript and started_as_lead(transcript)):
-            return decide("deny", "This session is a lead, and a lead does not start another lead. Give the card a "
-                                  "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
-                                  "without the Lead's MODE or ROLE line or `<project>: lead` head; only the human or the "
-                                  "top-level starts a lead.")
+            return decide("deny", f"The card's --prompt has no {' and no '.join(missing)} line. Create the card from "
+                                  "its brief file with `skills-sync card <brief>` (dispatch-card §3), which writes those lines "
+                                  "into --prompt, or write them literally in --prompt (not from a file or variable): "
+                                  "`CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다`, or KEEP "
+                                  "when this session will reuse the card; a lead also gets its MODE, `ROLE: lead <slug>`, DELEGATE "
+                                  "and PREDICATE lines, copied from orchestrate references/brief.md \"Lead\" (dispatch-card §2).")
+        if lead and lead_session(agent, session, transcript):
+            return decide("deny", LEAD_FROM_LEAD)
+    for helper in CARD_HELPER.finditer(cmd):
+        if helper[1].startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
+            continue
+        prompt, refused = helper_card(helper[1], cwd, bool(CHDIR.search(cmd)))
+        if refused:
+            return decide("deny", refused)
+        if is_lead(prompt) and lead_session(agent, session, transcript):
+            return decide("deny", LEAD_FROM_LEAD)
     words = simple_words(cmd)
     if not words or REBINDS.search(cmd):
         return
@@ -202,7 +241,7 @@ def main():
     tool, args = event.get("tool_name"), event.get("tool_input") or {}
     if tool == "Bash":
         bash(args.get("command") or "", args.get("run_in_background") is True, event.get("transcript_path"),
-             event.get("agent_type"), str(event.get("session_id") or ""))
+             event.get("agent_type"), str(event.get("session_id") or ""), event.get("cwd"))
     elif tool == "Skill":
         skill = str(args.get("skill") or "")
         name = skill.removeprefix(f"{PLUGIN}:")

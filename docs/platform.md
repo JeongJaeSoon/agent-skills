@@ -213,6 +213,19 @@ README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 �
 
 `close-setup`은 그 카드의 에이전트 없는 터미널마다 화면과 누적 출력에서 `…/orca/setup-runner.sh` 경로를 찾고, 그 경로를 품은 프로세스가 두 번 연달아 없을 때 닫는다. 명령 줄이 찍힌 직후 스크립트가 시작되기 전을 끝난 것으로 보지 않으려고 두 번 본다. 2분 안에 스크립트가 보이지 않는 셸은 사람이 연 것으로 보고 두고, 30분이 지나도 도는 스크립트는 두고 종료 코드 1로 알린다.
 
+### 브리프 파일로 카드 만들기 (`skills-sync card <브리프>`, 2026-10-30)
+
+guard hook은 Bash 명령 텍스트만 본다. 그래서 `--prompt "$(cat brief.md)"`로 만든 카드는 파일에 `CLOSE`와 리드 줄이 있어도 거부되고, 그 줄을 빼먹은 카드는 hook을 지나 시작 직후 멈춘다. `--body "$(cat)"` 관행이 카드 `--prompt`로 번진 것이 원인이었다.
+
+`card`는 브리프 파일에서 `/goal` 줄, `APPROVED`, 리드 행(`MODE`·`ROLE`·`INBOX`·`DELEGATE`·`PREDICATE`·`TASKS`·`GATE`), `CLOSE`/`KEEP`을 읽어 `--prompt`에 그대로 적고, `orch sent add`와 표시 이름 지정까지 한다. 빠진 줄은 hook과 같은 패턴(`hooks/guard.py`를 import)으로 판정해 종료 코드 2로 알린다.
+
+- `orch` 동사로 두지 않았다. guard hook이 `orch <동사>`를 자동 허용하므로 카드 생성이 분류기를 거치지 않게 된다.
+- 하위 프로세스에서 `orca worktree create`를 부르니 `pressure_gate.py`가 그 명령을 보지 못한다. 그래서 같은 명령 문자열로 그 hook의 `gate()`를 직접 불러 거부면 종료 코드 3으로 끝낸다. 위험 수준의 거부는 hook처럼 부하 대기열에 들어가고, 통과하면 그 항목을 재시도로, 생성 결과를 완료나 실패로 기록한다. hook 이벤트의 세션 자리에는 `ORCA_TERMINAL_HANDLE`을 쓰므로, 같은 세션에서 같은 `skills-sync card`를 다시 돌리면 같은 항목을 찾는다. `AGENT_SKILLS_PRESSURE_GATE=0`도 hook과 같게 따른다.
+- "리드는 다른 리드를 띄우지 않는다"는 hook 이벤트의 세션·에이전트 정보가 있어야 판정할 수 있어 helper 안에서는 할 수 없다. 그래서 guard hook이 `skills-sync card <경로>` 명령을 알아보고 그 브리프 파일에 helper와 같은 검사와 이 판정을 적용한다. 경로는 이벤트의 cwd 기준으로 읽는다. 명령에 `cd`나 `pushd`가 있으면 절대 경로만 받고, 변수나 glob이 든 경로와 검사 자체가 실패한 경우(import 오류 등)는 거부한다. 한 명령 안의 모든 `skills-sync card` 호출을 검사하고, 인자가 `--help`인 호출만 건너뛴다. `env …`, `bash -c`, `scripts/card.py` 직접 실행 같은 wrapper 형태는 이 검사를 거치지 않는다. hook은 guardrail이지 sandbox가 아니다.
+- 행은 ``` 펜스 밖에서 `KEY:` 형식이나 템플릿의 넓은 칸 간격으로 시작하는 줄만 인정한다. "KEEP the old API" 같은 산문이나 인용한 템플릿이 행으로 잡히지 않게 하려는 것이다. Approved 제목이나 불릿만 있고 `APPROVED:` 행이 없으면 승인이 프롬프트에서 빠지므로 종료 코드 2로 거부한다.
+- 분류기는 명령과 경로만 보고 브리프 본문(APPROVED, DELEGATE)은 보지 못한다. `$(cat)`과 같은 한계다. helper는 자동 허용되지 않으니 분류기 판정은 그대로 거친다.
+- 브리프는 로컬 파일만 받는다. notes store에서만 읽을 수 있는 노트는 먼저 파일로 옮긴다.
+
 ## 5. 다른 PC 부트스트랩
 
 새 PC는 `scripts/setup.py` 한 줄로 이 절의 일과 권장 사용자 설정을 함께 넣는다([new-pc.md](new-pc.md)). 이 절은 그 안에서 체크아웃을 로드하고 동기화하는 부분, 곧 `bootstrap.py`만 따로 돌릴 때의 동작이다.

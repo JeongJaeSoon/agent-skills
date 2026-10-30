@@ -29,9 +29,12 @@ lead = brief[brief.index("## Lead"):brief.index("## Rules for filling it")]
 assert re.search(r"^INBOX\s", lead, re.M), "Lead brief template lost its INBOX line"
 assert "`INBOX`" in lead.split("```", 1)[0], "Lead first prompt does not carry INBOX"
 card = (root.parent / "dispatch-card" / "SKILL.md").read_text()
-assert "`MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE` and `PREDICATE` lines" in card, \
+assert "`MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `TASKS` and `GATE` lines" in card, \
     "dispatch-card: a lead's prompt does not carry ROLE and INBOX"
 assert re.search(r"^ROLE: lead <slug>$", lead, re.M), "Lead brief template lost its ROLE line"
+for row in ("TASKS", "GATE"):  # the lead keeps start-after order and human waits in Orca, not its memory
+    assert re.search(rf"^{row}\s", lead, re.M) and f"`{row}`" in lead.split("```", 1)[0], f"Lead brief lost its {row} row"
+assert "task-create --deps" in lead and "gate-create" in lead, "Lead brief: TASKS/GATE lost their commands"
 
 for name in ("SKILL.md", "brief.md"):
     assert "load a policy skill before the first write" in texts[name], f"{name}: lost the policy-skill-before-first-write rule"

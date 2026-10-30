@@ -10,6 +10,10 @@ Usage:
                                          type one line into a session, only if it is idle at an empty prompt
   skills-sync close-setup <worktree path>
                                          close a new card's setup terminal once Orca's setup script finished
+  skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
+                   [--parent-worktree <selector> | --no-parent]
+                                         create a card whose first prompt carries the brief's /goal, CLOSE/KEEP
+                                         and lead lines written out (scripts/card.py)
   skills-sync status                     print the last sync result and the pending reload
   skills-sync setup [status|apply|enable NAME|disable NAME]
                                          periodic automations: list, turn on defaults, turn one on or off
@@ -492,6 +496,9 @@ def main(argv):
         return nudge(argv[1], argv[2])
     if cmd == "close-setup" and len(argv) == 2:
         return close_setup(argv[1])
+    if cmd == "card":
+        from card import main as card
+        return card(argv[1:])
     if cmd == "status":
         return status()
     if cmd == "setup":
