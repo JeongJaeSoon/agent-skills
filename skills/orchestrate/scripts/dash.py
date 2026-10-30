@@ -22,7 +22,8 @@ Usage: orch-dash <command> [options]
                                      a realistic fake program in a temp store, served offline
   fleet                              one collect of the fleet view (every Orca session), prints a summary
   skills [--no-signals]              one collect of skill usage from local transcripts (skill_usage.py), prints a summary
-  prstats [--out PATH]               one collect of my PR counts from GitHub search (pr_stats.py), prints a summary
+  prstats [--out PATH]               one collect of my PR counts from GitHub search (pr_stats.py), prints a summary;
+                                     saves even a drop the scheduled collect held back as suspicious
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
   ack <id>... | ack --done-before AGE [--kind req|stage|board]... | unack <id>... | acks [--all] [--json]
@@ -1533,7 +1534,7 @@ def pr_stats_loop():
     while True:
         if time.time() >= due:
             try:
-                pr_stats.refresh()
+                pr_stats.refresh(guard=True)
                 due = time.time() + PR_STATS_EVERY
                 jobs.record("pr-stats", result="counts refreshed", next_in=PR_STATS_EVERY, event=FLEET.event)
             except Exception as e:

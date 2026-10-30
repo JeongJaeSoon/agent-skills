@@ -417,7 +417,7 @@ Each collect appends one row per flag other than `unused_30d`, per skill, per IS
 
 ## PR stats
 
-`scripts/pr_stats.py` (`orch-dash prstats`) searches GitHub with `gh api graphql` for every pull request created since `since`, one search per source per month (a month at the 1,000-hit search cap is split in halves until each part fits), and writes counts to `<fleet state>/pr-stats.json`. `serve` runs it when the file is missing or 6 hours old, and an hour after a failed collect, which keeps the last counts and adds the error the page shows above them; the page reads `/api/fleet/stats`. `ORCH_PR_STATS=off` turns it off.
+`scripts/pr_stats.py` (`orch-dash prstats`) searches GitHub with `gh api graphql` for every pull request created since `since`, one search per source per month (a month at the 1,000-hit search cap is split in halves until each part fits), and writes counts to `<fleet state>/pr-stats.json`. `serve` runs it when the file is missing or 6 hours old, and an hour after a failed collect, which keeps the last counts and adds the error the page shows above them. `serve`'s collect also fails when a source lost more than a quarter of its PRs since the last report with the same `since` and sources, since search drops an organization whose SSO authorization lapsed without any error; `orch-dash prstats` by hand saves such a drop. The page reads `/api/fleet/stats`. `ORCH_PR_STATS=off` turns it off.
 
 The first source is always the PRs I authored (`author:@me`). Agents that open PRs on my behalf are added under `pr_stats` in the fleet config:
 
