@@ -31,6 +31,8 @@ Claude Code 세션 안에서:
 3. diff를 읽고 에이전트가 건넨 `! python3 -I <체크아웃>/scripts/setup.py --settings-only … --apply <해시>` 한 줄을 붙여 넣는다. 에이전트는 사용자 설정을 직접 쓰지 않는다.
 4. 동기화 작업과 정기 자동화를 켜는 권한 창을 승인하고, 세션을 재시작한다.
 
+갱신은 `setup.py --update`가 새로 생긴 권장값만 더한다. 릴리스가 본문을 고친 autoMode 규칙(라벨은 같고 본문이 다른 것)은 덮지 않고 `drifted` 줄로 알리며, `setup.py --replace-drifted [라벨 …]`이 그 규칙만 권장 본문으로 바꾸는 diff를 보인다. 어느 settings.json을 쓰는지는 출력 첫 줄에 나오고 `--settings`로 고를 수 있다([docs/new-pc.md](docs/new-pc.md#본문이-바뀐-automode-규칙-drift)).
+
 준비물(GitHub `gh` 로그인, 트래커, 노트, Orca·macOS가 필요한 기능), 셸에서 직접 설치, 갱신은 [docs/new-pc.md](docs/new-pc.md)와 [docs/operations.md](docs/operations.md#준비물)에 있다.
 
 ## 사용 예

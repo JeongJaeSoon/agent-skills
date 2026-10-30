@@ -187,6 +187,71 @@ class Setup(unittest.TestCase):
         self.assertIn("writing", p.stderr)
         self.assertRegex(p.stdout, r"rollback:\n  cp \S+ \S+settings\.json\n  rm \S+agent-skills\.json")
 
+    def drifted(self, *user_rules):
+        bundle = self.home / "bundle.json"
+        bundle.write_text(json.dumps({"settings": {"autoMode": {"allow": [
+            "$defaults", "Test round: run {checkout}/reap.py on {state}/plan.json. Not covered: rm.",
+            "Other round: the new words."]}}}))
+        self.settings.write_text(json.dumps({"autoMode": {"allow": ["$defaults", *user_rules]}}))
+        return "--bundle", str(bundle)
+
+    def allow(self):
+        return json.loads(self.settings.read_text())["autoMode"]["allow"]
+
+    def test_a_drifted_rule_is_reported_and_kept_without_the_flag(self):
+        old, mine = "Test round: run <checkout>/reap.py. Not covered: rm.", "My round: my own words."
+        bundle = self.drifted(old, mine)
+        out = self.run_setup(*bundle).stdout
+        self.assertIn("drifted autoMode.allow 'Test round'", out)
+        self.run_setup(*bundle, "--apply", self.plan_hash(*bundle))
+        self.assertEqual(self.allow(), ["$defaults", old, mine, "Other round: the new words."])
+
+    def test_replace_drifted_puts_the_filled_rule_in_its_place(self):
+        old, mine = "Test round: run <checkout>/reap.py. Not covered: rm.", "My round: my own words."
+        bundle = (*self.drifted(old, mine), "--replace-drifted")
+        new = f"Test round: run {HERE.parent}/reap.py on {self.state}/plan.json. Not covered: rm."
+        before = self.snapshot()
+        out = self.run_setup(*bundle).stdout
+        self.assertIn(f'-      "{old}"', out)
+        self.assertIn(f'+      "{new}"', out)
+        self.assertEqual(self.snapshot(), before)
+        out = self.run_setup(*bundle, "--apply", self.plan_hash(*bundle)).stdout
+        self.assertEqual(self.allow(), ["$defaults", new, mine])
+        self.assertFalse((self.cfg / "agent-skills.json").exists())
+        self.assertNotIn("env", json.loads(self.settings.read_text()))
+        backups = list(self.cfg.glob("settings.json.bak-setup-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(json.loads(backups[0].read_text())["autoMode"]["allow"], ["$defaults", old, mine])
+        self.assertIn(f"cp {backups[0].resolve()} {self.settings.resolve()}", out)
+
+    def test_named_labels_replace_only_those(self):
+        old, other = "Test round: the old words.", "Other round: the old words."
+        bundle = self.drifted(old, other)
+        args = (*bundle, "--replace-drifted", "Other round:")
+        self.run_setup(*args, "--apply", self.plan_hash(*args))
+        self.assertEqual(self.allow(), ["$defaults", old, "Other round: the new words."])
+        p = self.run_setup(*bundle, "--replace-drifted", "Typo round", ok=False)
+        self.assertIn("no drifted rule labelled 'Typo round'", p.stderr)
+
+    def test_two_rules_with_one_label_are_left_alone(self):
+        rules = ["Test round: one.", "Test round: two."]
+        bundle = (*self.drifted(*rules), "--replace-drifted")
+        out = self.run_setup(*bundle).stdout
+        self.assertIn("2 rules in autoMode.allow start with 'Test round:'", out)
+        self.assertNotIn("--apply", out)
+        self.assertEqual(self.allow(), ["$defaults", *rules])
+
+    def test_settings_flag_picks_the_file_and_names_it_first(self):
+        other = self.home / "profile" / "settings.json"
+        other.parent.mkdir()
+        other.write_text("{}")
+        out = self.run_setup("--settings", str(other)).stdout
+        self.assertEqual(out.splitlines()[0], f"target  {other}")
+        self.run_setup("--settings", str(other), "--apply", self.plan_hash("--settings", str(other)))
+        self.assertIn("autoMode", json.loads(other.read_text()))
+        self.assertFalse(self.settings.exists())
+        self.assertEqual(self.run_setup().stdout.splitlines()[0], f"target  {self.settings}")
+
 
 class Steps(unittest.TestCase):
     """setup.py in-process with subprocess.run and bootstrap stubbed, so no test runs the real sync."""
@@ -286,6 +351,14 @@ class Bundle(unittest.TestCase):
         text = BUNDLE.read_text()
         hits = [p for p in patterns if re.search(p, text, re.I)]
         self.assertEqual(hits, [])
+
+    def test_labels_are_unique_per_section(self):
+        spec = importlib.util.spec_from_file_location("setup_labels", SETUP)
+        setup = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(setup)
+        for name, rules in json.loads(BUNDLE.read_text())["settings"]["autoMode"].items():
+            labels = [setup.label(r) for r in rules if setup.label(r)]
+            self.assertEqual(len(labels), len(set(labels)), name)
 
     def test_rules_name_their_limits(self):
         rules = json.loads(BUNDLE.read_text())["settings"]["autoMode"]["allow"]
