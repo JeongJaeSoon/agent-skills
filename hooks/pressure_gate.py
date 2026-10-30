@@ -7,7 +7,7 @@ A Bash call that starts something heavy (`orch heavy`, `docker compose … up`, 
 last `gate_fresh_minutes`: the safe targets are already gone, and warn alone is no reason to wait. At danger it waits.
 
 `AGENT_SKILLS_PRESSURE_GATE=0`, in the hook's environment or before the heavy command itself, turns it off.
-Swap and disk raise the gate to warn at most: they stay high for hours.
+The level is the one `pressure.py check` reports (pressure.snapshot + judge), so waiting on check ends when this would.
 Any failure to measure gives no decision.
 """
 import json, os, pathlib, re, shlex, sys, time
@@ -83,14 +83,12 @@ def heavy(cmd):
     return next(filter(None, map(starts_heavy, segments(cmd))), None)
 
 
-def gate(cmd, metrics, state, cfg, now=None, judge=None):
-    """(decision, reason) or None."""
+def gate(cmd, metrics, state, cfg, now=None, p=None):
+    """(decision, reason) or None. p is the pressure module."""
     what = heavy(cmd)
     if not what:
         return None
-    # Swap drains slowly and disk is freed by hand: hours of danger would hold every heavy start, so they warn only.
-    level, why = judge(metrics, {**cfg, "swap_gb": [cfg["swap_gb"][0], float("inf")],
-                                 "disk_free_gb": [cfg["disk_free_gb"][0], float("-inf")]})
+    level, why = p.judge(metrics, cfg)
     if level == "ok":
         return None
     now = now or time.time()
@@ -103,10 +101,14 @@ def gate(cmd, metrics, state, cfg, now=None, judge=None):
                         "한 번 실행하고 같은 명령을 다시 시도한다. 그 회차는 끝난 카드의 스택·고아 프로세스처럼 reap 목록에 오른 것만 "
                         "정리하고, 경고만 남으면 이 hook 은 다음 시도를 통과시킨다.")
     first = "" if fresh else f"`{py} round` 를 먼저 한 번 실행한다(안전 대상을 정리하고, 없으면 최대 소비자를 보고한다). "
+    tail = ("남의 카드·프로세스는 종료하지 않는다. 사용자가 지금 실행하라고 했을 때만 명령 앞에 "
+            "AGENT_SKILLS_PRESSURE_GATE=0 을 붙인다.")
+    if p.blocked_by(metrics, cfg) == ["disk_free_gb"]:  # waiting frees no disk
+        return ("deny", f"{MARK} {SOURCE} 디스크 여유가 위험 수준({', '.join(why)})이라 `{what}` 를 지금 시작하지 않는다. "
+                        f"{first}기다려도 풀리지 않으니 대기하지 말고, 사용자에게 디스크 정리를 요청하고 멈춘다. {tail}")
     return ("deny", f"{MARK} {SOURCE} PC 사용량 위험({', '.join(why)})이라 `{what}` 를 지금 시작하지 않는다. {first}위험이 이어지면 Monitor 로 "
-                    f"`{py} check` 가 0(정상) 또는 1(경고)로 끝날 때까지 기다린 뒤 다시 시도한다(foreground sleep 루프 금지). "
-                    "남의 카드·프로세스는 종료하지 않는다. 사용자가 지금 실행하라고 했을 때만 명령 앞에 "
-                    "AGENT_SKILLS_PRESSURE_GATE=0 을 붙인다.")
+                    f"`{py} check` 가 0(정상) 또는 1(경고)로 끝날 때까지 최대 15분 기다린 뒤 다시 시도한다(foreground sleep 루프 금지). "
+                    "15분이 지나도 2면 대기를 멈추고 check 출력(이유·측정값)을 보고한다. " + tail)
 
 
 def main():
@@ -123,7 +125,8 @@ def main():
         sys.path.insert(0, str(SCRIPT.parent))
         import pressure
         cfg = pressure.config()
-        out = gate(cmd, pressure.measure(always_on=cfg["always_on"]), pressure.load_state(), cfg, judge=pressure.judge)
+        state = pressure.load_state()
+        out = gate(cmd, pressure.snapshot(cfg, state), state, cfg, p=pressure)
     except Exception:  # a broken measurement must not block work
         return 0
     if out:

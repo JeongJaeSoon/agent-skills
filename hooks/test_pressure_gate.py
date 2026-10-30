@@ -12,11 +12,11 @@ import pressure
 cfg = dict(pressure.DEFAULTS)
 OK = {"cpus": 18, "load5": 9.0, "load_per_cpu": 0.5, "mem_free_pct": 60, "vm_pressure": 1, "swap_gb": 1.0,
       "disk_free_gb": 200.0, "containers": 10}
-WARN, DANGER = {**OK, "load_per_cpu": 1.2}, {**OK, "mem_free_pct": 5}
+WARN, DANGER = {**OK, "load_per_cpu": 1.4}, {**OK, "mem_free_pct": 5}
 
 
 def gate(cmd, m, scan_t=None, now=10000.0):
-    out = g.gate(cmd, m, {"scan_t": scan_t} if scan_t else {}, cfg, now=now, judge=pressure.judge)
+    out = g.gate(cmd, m, {"scan_t": scan_t} if scan_t else {}, cfg, now=now, p=pressure)
     return out[0] if out else "none"
 
 
@@ -42,15 +42,24 @@ assert gate("docker compose up -d", WARN, scan_t=10000.0 - 16 * 60) == "deny"
 assert gate("docker compose up -d", DANGER, scan_t=10000.0 - 60) == "deny"
 assert gate("docker compose ps", DANGER) == "none"
 assert gate("AGENT_SKILLS_PRESSURE_GATE=0 docker compose up -d", DANGER) == "none"
-# Swap and disk raise the gate to warn at most: a fresh sweep lets the start through.
-assert gate("docker compose up", {**OK, "swap_gb": 30}, scan_t=10000.0 - 60) == "none"
-assert gate("docker compose up", {**OK, "disk_free_gb": 5}) == "deny"
-reason = g.gate("orch heavy x -- make", DANGER, {}, cfg, now=1.0, judge=pressure.judge)[1]
+# The hook and `check` share one judge: every danger `check` reports holds a start, and a level `check` reports as
+# ok or warn never does once a sweep is fresh. Waiting for `check` to leave danger therefore ends the wait.
+LEAK = {**OK, "swap_gb": 56.0, "swapout_pps": 0.0, "vm_pressure": 2, "containers": 45}
+for m in (LEAK, {**OK, "load_per_cpu": 2.4, "cpu_idle_pct": 30}, {**OK, "swapout_pps": 2000},
+          {**OK, "load_per_cpu": 2.4, "cpu_idle_pct": 0}, {**OK, "vm_pressure": 4}, {**OK, "docker_mem_pct": 95},
+          {**OK, "disk_free_gb": 5}, WARN, DANGER):
+    level = pressure.judge(m, cfg)[0]
+    assert gate("docker compose up", m, scan_t=10000.0 - 60) == ("deny" if level == "danger" else "none"), (m, level)
+# Disk does not free itself: held, but the deny asks for space to be freed instead of a wait.
+disk = g.gate("docker compose up", {**OK, "disk_free_gb": 5}, {}, cfg, now=1.0, p=pressure)[1]
+assert "Monitor" not in disk and "디스크" in disk, disk
+reason = g.gate("orch heavy x -- make", DANGER, {}, cfg, now=1.0, p=pressure)[1]
 assert "pressure.py round" in reason and "Monitor" in reason and "종료하지 않는다" in reason, reason
+assert "15분" in reason, "the wait has a cap"
 assert reason.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) "), reason
-assert g.gate("docker compose up -d", WARN, {}, cfg, now=1.0, judge=pressure.judge)[1].startswith(
+assert g.gate("docker compose up -d", WARN, {}, cfg, now=1.0, p=pressure)[1].startswith(
     "[gate:pressure] (agent-skills hooks/pressure_gate.py) ")
-assert "round" not in g.gate("orch heavy x -- make", DANGER, {"scan_t": 1.0}, cfg, now=2.0, judge=pressure.judge)[1] \
+assert "round" not in g.gate("orch heavy x -- make", DANGER, {"scan_t": 1.0}, cfg, now=2.0, p=pressure)[1] \
     .split("Monitor")[0], "a fresh sweep does not ask for another round"
 
 # The hook process: off by environment, silent for other tools and plain commands.
