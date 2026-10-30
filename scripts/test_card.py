@@ -1,5 +1,5 @@
-"""`skills-sync card` against a fake orca, a fake orch and a stub pressure module. Run: python3 scripts/test_card.py"""
-import contextlib, io, json, os, pathlib, subprocess, sys, tempfile, types
+"""`skills-sync card` against a fake orca, a fake orch and the pressure gate on canned load. Run: python3 scripts/test_card.py"""
+import contextlib, io, json, os, pathlib, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-card-")).resolve()
@@ -27,10 +27,15 @@ subprocess.run(["git", "init", "-q", str(CARD_DIR)], check=True)
 subprocess.run(["git", "-C", str(CARD_DIR), "remote", "add", "origin", "git@github.com:acme/app.git"], check=True)
 os.environ["FAKE_CARD_PATH"] = str(CARD_DIR)
 
+# The real pressure module and its queue in a throwaway state dir; only the measurement is canned.
+os.environ.update(AGENT_SKILLS_STATE=str(tmp / "state"), AGENT_SKILLS_CONFIG=str(tmp / "none.json"),
+                  ORCA_TERMINAL_HANDLE="term_me")
+sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
+import pressure  # noqa: E402
 LEVEL = {"now": "ok"}
-sys.modules["pressure"] = types.SimpleNamespace(
-    config=lambda: {"gate_fresh_minutes": 10}, load_state=lambda: {}, snapshot=lambda cfg, st: {},
-    judge=lambda m, cfg: (LEVEL["now"], ["load_per_cpu 3.1"]), blocked_by=lambda m, cfg: ["load_per_cpu"])
+pressure.snapshot = lambda cfg, st, *a, **k: {"load_per_cpu": 3.1}
+pressure.judge = lambda m, cfg: (LEVEL["now"], ["load_per_cpu 3.1"])
+pressure.blocked_by = lambda m, cfg: ["load_per_cpu"]
 sys.path.insert(0, str(HERE))
 import card  # noqa: E402
 
@@ -112,13 +117,18 @@ assert go(path, "--repo", "r", "--name", "x", "--bogus")[0] == 2
 assert go(brief(WORKER.replace(CLOSE, "KEEP: reused for the next ticket"), "keep.md"), "--repo", "r", "--name", "x")[0] == 0
 
 # The pressure gate's real decision on the composed command: danger refuses with exit 3 and creates nothing.
+# The deny queues it like the hook does; the same `skills-sync card` run again once load drops finds that entry.
 LEVEL["now"] = "danger"
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x")
 assert rc == 3 and "[gate:pressure]" in err and err.startswith("[skills-sync card]") and not calls, (rc, err, calls)
+(entry,) = pressure.queue_read().values()
+assert entry["state"] == "waiting" and entry["session"] == "term_me" and f"queue wait {entry['id']}" in err, (entry, err)
 os.environ["AGENT_SKILLS_PRESSURE_GATE"] = "0"
-assert go(path, "--repo", "r", "--name", "x")[0] == 0
+assert go(path, "--repo", "r", "--name", "y")[0] == 0
 del os.environ["AGENT_SKILLS_PRESSURE_GATE"]
 LEVEL["now"] = "ok"
+assert go(path, "--repo", "r", "--name", "x")[0] == 0
+assert pressure.queue_read()[entry["id"]]["state"] == "done", pressure.queue_read()
 
 # A failed create is exit 4 with orca's reason; a failed log after a create is exit 5, the create output still printed.
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="create-fails")

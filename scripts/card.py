@@ -96,20 +96,36 @@ def compose(brief_path):
     return prompt
 
 
-def pressure_refusal(cmd):
-    """The pressure gate's deny reason for this command, else None (no decision on any failure, like the hook)."""
-    if os.environ.get("AGENT_SKILLS_PRESSURE_GATE") == "0":
+def pressure_check(cmd):
+    """(the pressure gate's deny reason or None, a function recording this start's outcome in the gate's queue).
+    The hook's own steps for a command it sees: a danger deny queues it, a pass marks that entry's retry. Running the
+    same `skills-sync card` again builds the same command, so its entry is found again; no decision on any failure."""
+    def none(*_):
         return None
+    if os.environ.get("AGENT_SKILLS_PRESSURE_GATE") == "0":
+        return None, none
+    # The terminal stands in for the hook event's session: the same session's rerun finds its queue entry.
+    session = os.environ.get("ORCA_TERMINAL_HANDLE", "")
     try:
         import pressure_gate
         sys.path.insert(0, str(pressure_gate.SCRIPT.parent))
         import pressure
         cfg = pressure.config()
         state = pressure.load_state()
-        out = pressure_gate.gate(cmd, pressure.snapshot(cfg, state), state, cfg, p=pressure)
+        out = pressure_gate.gate(cmd, pressure.snapshot(cfg, state), state, cfg, p=pressure, session=session,
+                                 cwd=os.getcwd())
     except Exception:
-        return None
-    return out[1] if out and out[0] == "deny" else None
+        return None, none
+    if out and out[0] == "deny":
+        return out[1], none
+
+    def mark(outcome, error=None):
+        try:
+            pressure.queue_mark(session, cmd, outcome, error)
+        except Exception:
+            pass
+    mark("retrying")
+    return None, mark
 
 
 def github_repo(worktree):
@@ -150,9 +166,10 @@ def create(argv):
     if opts.get("--comment"):
         cmd += ["--comment", opts["--comment"]]
     cmd.append("--json")
-    reason = pressure_refusal(shlex.join(["orca", *cmd[1:]]))
+    reason, mark = pressure_check(shlex.join(["orca", *cmd[1:]]))
     if reason:
-        raise Refuse(3, f"[{ME}] not created, the pressure gate refused it: {reason}")
+        raise Refuse(3, f"[{ME}] not created, the pressure gate refused it (for `queue wait`, run this same "
+                        f"`skills-sync card` command again once it ends with 0): {reason}")
     p, err = run(cmd)
     try:
         out = json.loads(p.stdout) if p else None
@@ -160,7 +177,10 @@ def create(argv):
         out = None
     if not p or p.returncode or not out or out.get("ok") is False or not (out.get("result") or {}).get("worktree"):
         e = (out or {}).get("error") or {}
-        raise Refuse(4, f"[{ME}] orca worktree create failed: " + (f"{e.get('code')}: {e.get('message')}" if e else err))
+        err = f"{e.get('code')}: {e.get('message')}" if e else err
+        mark("failed", err)
+        raise Refuse(4, f"[{ME}] orca worktree create failed: {err}")
+    mark("done")
     res = out["result"]
     print(json.dumps(res, ensure_ascii=False, indent=1))
     failed = []
