@@ -12,10 +12,11 @@ Usage:
                      macOS LaunchAgent running `round` every `interval` seconds
 
 No model is called. Thresholds live under "reap" → "pressure" in ~/.claude/agent-skills.json (DEFAULTS); each is
-[warn, danger]. Nothing outside reap's own target list is ever touched: no kill by pattern, no compose down -v,
+[warn, danger], a danger of null (or inf) meaning warn only. check and the hook judge what `round` last sampled
+(swapout rate, CPU idle, Docker memory) only while it is younger than `sample_fresh_minutes`. Nothing outside reap's own target list is ever touched: no kill by pattern, no compose down -v,
 no prune, no volume or image removal.
 """
-import contextlib, fcntl, json, os, pathlib, plistlib, re, shlex, shutil, subprocess, sys, time
+import contextlib, ctypes, ctypes.util, fcntl, json, math, os, pathlib, plistlib, re, shlex, shutil, subprocess, sys, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 REAP = HERE / "reap.py"
@@ -31,14 +32,20 @@ LOG = reap.STATE / "pressure.log"
 DISABLED = reap.STATE / "pressure-disabled"
 
 # Defaults measured on an 18-core, 64 GB Apple Silicon machine (docs/pressure.md has the numbers behind them).
+# A danger of None is warn only: the metric is worth a sweep or a note, never a reason to hold a start.
 DEFAULTS = {
     "interval": 180,
-    "load_per_cpu": [1.0, 2.0],  # 5-minute load / logical CPUs, at or above
+    "load_per_cpu": [1.3, 2.0],  # 5-minute load / logical CPUs, at or above
+    "load_idle_pct": 10,  # load reaches danger only while CPU idle over the last round is at or below this
     "mem_free_pct": [20, 10],  # kern.memorystatus_level, at or below
     "vm_pressure": [2, 4],  # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
-    "swap_gb": [8, 16],
+    "swap_gb": [16, None],  # in use: what past pressure or a leak left, not what is swapping now
+    "swap_growth_gb_h": [2, None],  # net growth over the last 30-60 minutes: a leak to look into
+    "swapout_pps": [300, 1500],  # pages swapped out per second between rounds
     "disk_free_gb": [50, 20],  # on the volume holding $HOME, at or below
-    "containers": [40, 80],  # running docker containers, a Kubernetes pod as one and kube-system not at all
+    "containers": [40, None],  # running docker containers, a Kubernetes pod as one and kube-system not at all
+    "docker_mem_pct": [70, 90],  # every container's memory (docker stats) / the Docker VM's MemTotal
+    "sample_fresh_minutes": 7,  # a round's sample older than this is not judged on (two intervals and a slow round)
     # Compose projects, container names or Kubernetes namespaces that run all day (the user's own services): left out
     # of `containers` and shown apart. A restart policy cannot tell them, since card stacks use unless-stopped too.
     "always_on": [],
@@ -53,10 +60,12 @@ DEFAULTS = {
     "gate_fresh_minutes": 15,
     "top": 5,
 }
-# (key, metric, higher is worse)
-CHECKS = (("load_per_cpu", "load_per_cpu", True), ("mem_free_pct", "mem_free_pct", False),
-          ("vm_pressure", "vm_pressure", True), ("swap_gb", "swap_gb", True),
-          ("disk_free_gb", "disk_free_gb", False), ("containers", "containers", True))
+# (metric, higher is worse); each is also its threshold's key
+CHECKS = (("load_per_cpu", True), ("mem_free_pct", False), ("vm_pressure", True), ("swap_gb", True),
+          ("swap_growth_gb_h", True), ("swapout_pps", True), ("disk_free_gb", False), ("containers", True),
+          ("docker_mem_pct", True))
+# What a round samples and check and the hook read back from its state.
+SAMPLED = ("swapout_pps", "cpu_idle_pct", "docker_mem_pct", "swap_growth_gb_h")
 LEVELS = ("ok", "warn", "danger")
 LEVEL_KO = {"ok": "정상", "warn": "경고", "danger": "위험"}
 
@@ -70,7 +79,8 @@ def config(overrides=()):
         if key in ("safe_kinds", "always_on"):
             cfg[key] = value.split(",")
         elif isinstance(default, list):
-            cfg[key] = [float(x) for x in value.split(",")]
+            cfg[key] = [float("inf") if x.strip().lower() in ("inf", "none", "null") else float(x)
+                        for x in value.split(",")]
         else:
             cfg[key] = float(value) if isinstance(default, (int, float)) else value
     return cfg
@@ -133,29 +143,135 @@ def measure(docker=True, run=sh, always_on=()):
     return m
 
 
-def judge(m, cfg):
-    """(level, reasons): the worst level any metric reaches, and one phrase per metric at warn or above."""
-    worst, why = 0, []
-    for key, metric, higher in CHECKS:
+def hits(m, cfg):
+    """[(metric, level 1 or 2, phrase)] for each metric at warn or above. The one rule hook, check and round share."""
+    out = []
+    for metric, higher in CHECKS:
         v = m.get(metric)
         if v is None:
             continue
-        hit = [i + 1 for i, t in enumerate(cfg[key][:2]) if (v >= t if higher else v <= t)]
-        if hit:
-            worst = max(worst, hit[-1])
-            why.append(f"{metric} {v:g} {'≥' if higher else '≤'} {cfg[key][hit[-1] - 1]:g}")
-    return LEVELS[worst], why
+        pair = [(math.inf if higher else -math.inf) if t is None else t for t in cfg[metric][:2]]
+        if not higher:
+            pair = [-t for t in pair]
+        hit = [i + 1 for i, t in enumerate(pair) if (v if higher else -v) >= t]
+        if not hit:
+            continue
+        level, phrase = hit[-1], f"{metric} {v:g} {'≥' if higher else '≤'} {cfg[metric][hit[-1] - 1]:g}"
+        idle = m.get("cpu_idle_pct")
+        # Load counts waiting threads (the Docker VM's vCPUs among them): with CPU left idle it is no danger.
+        if metric == "load_per_cpu" and level == 2 and idle is not None and idle > float(cfg["load_idle_pct"]):
+            level, phrase = 1, f"{phrase} (CPU idle {idle:g}% > {cfg['load_idle_pct']:g}%)"
+        out.append((metric, level, phrase))
+    return out
+
+
+def judge(m, cfg):
+    """(level, reasons): the worst level any metric reaches, and one phrase per metric at warn or above."""
+    found = hits(m, cfg)
+    return LEVELS[max((lvl for _, lvl, _ in found), default=0)], [why for _, _, why in found]
+
+
+def blocked_by(m, cfg):
+    return [metric for metric, lvl, _ in hits(m, cfg) if lvl == 2]
 
 
 def summary(m):
     parts = [f"load5 {m['load5']:g}/{m['cpus']}코어"]
-    for k, fmt in (("mem_free_pct", "메모리 여유 {}%"), ("vm_pressure", "압박 레벨 {}"), ("swap_gb", "swap {}GB"),
-                   ("disk_free_gb", "디스크 여유 {}GB"), ("containers", "컨테이너 {}개")):
+    for k, fmt in (("cpu_idle_pct", "CPU idle {:g}%"), ("mem_free_pct", "메모리 여유 {}%"), ("vm_pressure", "압박 레벨 {}"),
+                   ("swap_gb", "swap {}GB"), ("swap_growth_gb_h", "swap 증가 {:g}GB/h"),
+                   ("swapout_pps", "swapout {:g}/s"), ("disk_free_gb", "디스크 여유 {}GB"),
+                   ("docker_mem_pct", "Docker 메모리 {:g}%"), ("containers", "컨테이너 {}개")):
         if m.get(k) is not None:
             parts.append(fmt.format(m[k]))
-    if m.get("always_on"):
-        parts[-1] += f"(상시 {m['always_on']}개 제외)"
+            if k == "containers" and m.get("always_on"):
+                parts[-1] += f"(상시 {m['always_on']}개 제외)"
+    if m.get("sample_age_min") is not None:
+        parts.append(f"샘플 {m['sample_age_min']:g}분 전(오래돼 판정에서 뺌)")
     return ", ".join(parts)
+
+
+# ---------------------------------------------------------------- sampled between rounds
+
+def cpu_ticks():
+    """host_statistics(HOST_CPU_LOAD_INFO): cumulative [user, system, idle, nice] ticks of all CPUs, None elsewhere."""
+    with contextlib.suppress(OSError, AttributeError, TypeError):
+        lib = ctypes.CDLL(ctypes.util.find_library("System") or "")
+        lib.mach_host_self.restype = ctypes.c_uint
+        buf, n = (ctypes.c_uint * 4)(), ctypes.c_uint(4)
+        if lib.host_statistics(lib.mach_host_self(), 3, buf, ctypes.byref(n)) == 0:
+            return list(buf)
+    return None
+
+
+def counters(now, run=sh):
+    """What a rate is computed from. boot tells a reboot, after which every counter starts over."""
+    boot = re.search(r"sec = (\d+)", sysctl("kern.boottime") or "")
+    swapouts = sysctl("vm.compressor.swapper.swapouts_total")
+    return {"t": now, "boot": int(boot[1]) if boot else None,
+            "swapouts": int(swapouts) if swapouts and swapouts.isdigit() else None, "cpu": cpu_ticks()}
+
+
+def rates(prev, cur, cfg):
+    """Swapout pages/s and CPU idle % since the previous round's counters. A reboot, a counter gone backwards or a
+    gap over three intervals gives None: no rate, never a zero one."""
+    out = {"swapout_pps": None, "cpu_idle_pct": None}
+    dt = cur["t"] - (prev or {}).get("t", 0)
+    if not prev or prev.get("boot") != cur.get("boot") or not 0 < dt <= 3 * float(cfg["interval"]):
+        return out
+    if None not in (prev.get("swapouts"), cur.get("swapouts")) and cur["swapouts"] >= prev["swapouts"]:
+        out["swapout_pps"] = round((cur["swapouts"] - prev["swapouts"]) / dt, 1)
+    if prev.get("cpu") and cur.get("cpu"):
+        d = [b - a for a, b in zip(prev["cpu"], cur["cpu"])]
+        if min(d) >= 0 and sum(d):
+            out["cpu_idle_pct"] = round(100 * d[2] / sum(d), 1)
+    return out
+
+
+def swap_history(hist, now, gb):
+    """The last hour of (t, swap GB), one per round, with this one added."""
+    return [h for h in hist or () if now - h[0] < 3600] + ([[now, gb]] if gb is not None else [])
+
+
+def swap_growth(hist, now, gb):
+    """Net swap growth in GB/h since the oldest point of the hour, once that is 30 minutes old."""
+    if gb is None or not hist or now - hist[0][0] < 1800:
+        return None
+    return round((gb - hist[0][1]) / ((now - hist[0][0]) / 3600), 1)
+
+
+def docker_mem_pct(run=sh):
+    """Every running container's memory as a share of the Docker VM's. The VM's own kernel and daemons are not in it,
+    so a low value does not prove the VM has room."""
+    total = run(["docker", "info", "--format", "{{.MemTotal}}"], timeout=10)
+    stats = run(["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}"], timeout=20)
+    if not total or not total.strip().isdigit() or stats is None or not int(total):
+        return None
+    used = sum(mem_mb(line.split("/")[0]) for line in stats.splitlines())
+    return round(100 * used * (1 << 20) / int(total), 1)
+
+
+def take_sample(st, now, cfg, run=sh):
+    """The state fields one round adds: its counters, the swap history, and the sample check and the hook read."""
+    cur = counters(now, run)
+    gb = swap_gb(sysctl("vm.swapusage"))
+    hist = swap_history(st.get("swap_hist"), now, gb)
+    sample = {"t": now, **rates(st.get("counters"), cur, cfg), "swap_growth_gb_h": swap_growth(hist, now, gb),
+              "docker_mem_pct": docker_mem_pct(run) if shutil.which("docker") else None}
+    return {"counters": cur, "swap_hist": hist, "sample": sample}
+
+
+def snapshot(cfg, st, now=None, measure_fn=None):
+    """What hook, check and round judge: the metrics read now, plus the last round's sample while it is fresh."""
+    now = now or time.time()
+    m = (measure_fn or (lambda: measure(always_on=cfg["always_on"])))()
+    sample = st.get("sample") or {}
+    age = now - sample.get("t", 0)
+    fresh = 0 <= age <= float(cfg["sample_fresh_minutes"]) * 60
+    for k in SAMPLED:
+        m[k] = sample.get(k) if fresh else None
+    if sample and not fresh:
+        m["sample_age_min"] = round(age / 60)
+    return m
 
 
 # ---------------------------------------------------------------- state
@@ -327,6 +443,29 @@ def send(to, subject, body, kind, run=reap.run):
                 "--json"], check=False) is not None
 
 
+# orchestrate's dashboard lists rows appended here under "Needs you" (fleet.py inbox_add, the same line format).
+DASH_KEY = "pressure:danger"
+
+
+def dash_inbox():
+    return pathlib.Path(os.environ.get("ORCH_FLEET_STATE", "~/.local/state/agent-skills/dashboard")).expanduser() \
+        / "inbox-external.jsonl"
+
+
+def dash_note(op, title=None, key=DASH_KEY):
+    """Add or resolve a row on the dashboard. A machine without the dashboard has no such directory: False."""
+    path = dash_inbox()
+    if not path.parent.is_dir():
+        return False
+    row = {"v": 1, "op": op, "key": key, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if op == "add":
+        row.update(type="pc_pressure", title=title[:200], session=None, url=None, command=None, source="pressure-watch")
+    with contextlib.suppress(OSError), path.open("a") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return True
+    return False
+
+
 # ---------------------------------------------------------------- round
 
 def reaped_lines(out):
@@ -334,31 +473,58 @@ def reaped_lines(out):
     return [line for line in out if line.startswith("- ") and not line.startswith(("- 건너뜀", "- 실패", "- 메모"))]
 
 
-def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, plan_fn=plan_targets, reap_fn=reap_plan,
-               consumers_fn=consumers, send_fn=send):
+def leak_notice(cfg, m, st, record, now, dry_run, out, send_fn):
+    """Swap growing for half an hour holds nothing, but someone should find what leaks: one note per renotify_minutes."""
+    growth = m.get("swap_growth_gb_h")
+    if growth is None or growth < cfg["swap_growth_gb_h"][0]:
+        return
+    if now - st.get("leak_t", 0) < float(cfg["renotify_minutes"]) * 60:
+        return
+    subject = f"PC swap 이 시간당 {growth:g}GB 늘고 있음(지금 {m.get('swap_gb')}GB): 메모리 누수 의심, 막지는 않음"
+    body = f"{summary(m)}\n`top -o mem` 으로 메모리가 계속 느는 프로세스를 찾는다. 재시작·종료는 소유자가 정한다"
+    out(f"- 누수 알림: {subject}")
+    if dry_run:
+        return
+    record["leak_t"] = now
+    to = notify_to(cfg)
+    if not (to and send_fn(to, subject, body, "status")):
+        dash_note("add", subject, key="pressure:swap-growth")
+    log(f"leak {subject}")
+
+
+def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=None, plan_fn=plan_targets,
+               reap_fn=reap_plan, consumers_fn=consumers, send_fn=send):
     now = now or time.time()
     st = {} if dry_run else load_state()
-    m = measure_fn()
+    st.update((sample_fn or (lambda s, t: take_sample(s, t, cfg)))(st, now))
+    m = snapshot(cfg, st, now, measure_fn)
     level, why = judge(m, cfg)
     out(f"# PC 사용량 {LEVEL_KO[level]} ({time.strftime('%Y-%m-%d %H:%M', time.localtime(now))})\n")
     out(f"- 측정: {summary(m)}")
     if why:
         out(f"- 임계값 초과: {', '.join(why)}")
     record = {"t": now, "level": level, "metrics": m, "why": why}
+    leak_notice(cfg, m, st, record, now, dry_run, out, send_fn)
+    if not dry_run:  # before the sweep, which can take minutes: the hook and check judge this sample meanwhile
+        save_state({**st, **record})
     if level == "ok":
         if not dry_run:
             if st.get("level") not in (None, "ok"):
                 log(f"ok {summary(m)}")
+            if st.get("dash_t"):
+                dash_note("resolve")
+                st.pop("dash_t")
             save_state({**st, **record})
         return 0
     if level == "warn" and st.get("level") == "warn" and now - st.get("scan_t", 0) < float(cfg["rescan_minutes"]) * 60:
         out(f"- 경고가 이어지는 중: 안전 대상 정리는 {(now - st['scan_t']) / 60:.0f}분 전에 했고 {cfg['rescan_minutes']:g}분마다 한다")
         save_state({**st, **record})
         return 1
-    record["scan_t"] = now
     kinds = safe_kinds(cfg)
     plan_path = PLAN.with_name("pressure-plan.dry-run.json") if dry_run else PLAN
     targets, notes = plan_fn(kinds, plan_path)
+    if targets is not None:  # only a scan that ran is a sweep the hook may count on
+        record["scan_t"] = now
     out(f"- 안전 대상 종류: {', '.join(kinds) or '없음'}")
     if unknown_kinds(cfg):
         out(f"- 메모: 이 reap.py 에 없는 종류라 뺌: {', '.join(unknown_kinds(cfg))}")
@@ -401,10 +567,13 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, plan_fn=pl
         out(f"\n## 알림 {'(보내지 않음, dry-run)' if dry_run else ''}\n")
         out(f"- 받는 곳: {to or '없음 (reap.pressure.notify_to 또는 reap.inbox_to 미설정)'}")
         out(f"- 제목: {subject}")
-        if to and not dry_run and not send_fn(to, subject, body, kind):
-            out(f"- {to} 로 보내지 못함")
-            if "danger_t" in record:
-                record["danger_t"] = 0  # tried again next round
+        if not dry_run and not (to and send_fn(to, subject, body, kind)):
+            # A LaunchAgent has no Orca sender terminal, so `orchestration send` fails there every time: retrying
+            # each round only repeats it. A danger goes to the dashboard instead and waits for renotify_minutes.
+            out(f"- {to} 로 보내지 못함" if to else "- 받는 곳 없음")
+            if "danger_t" in record and dash_note("add", subject):
+                record["dash_t"] = now
+                out("- 대시보드 Needs you 에 올림")
     if not dry_run:
         if message or st.get("level") != level:
             log(f"{level} {', '.join(why)}" + (f" · {message[1]}" if message else ""))
@@ -510,7 +679,7 @@ def main(argv):
     cmd = argv[0] if argv else ""
     cfg = config(overrides(argv)) if cmd in ("check", "round") else None
     if cmd == "check":
-        m = measure(always_on=cfg["always_on"])
+        m = snapshot(cfg, load_state())
         level, why = judge(m, cfg)
         if "--json" in argv:
             print(json.dumps({"level": level, "why": why, "metrics": m}, ensure_ascii=False))

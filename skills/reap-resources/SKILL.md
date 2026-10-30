@@ -244,12 +244,19 @@ python3 "$P" install | uninstall | status   # macOS LaunchAgent, every `interval
 `uninstall` leaves `<state>/pressure-disabled` so `skills-sync setup apply` keeps the job off; `install` removes it,
 and `status` shows it.
 
-Each metric has a `[warn, danger]` pair under `reap.pressure`: `load_per_cpu` (5-minute load / logical CPUs),
-`mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's own level, 2 warn, 4 critical),
-`swap_gb`, `disk_free_gb` (the volume holding `$HOME`, at or below), `containers` (running; a Kubernetes pod
-counts once, its pause container included, and `kube-system` not at all; the compose projects, container names or
-namespaces in `always_on` are left out and shown apart). A metric the OS does not offer is left out. The level is the
-worst metric's.
+Each metric has a `[warn, danger]` pair under `reap.pressure`; a danger of `null` is warn only:
+`load_per_cpu` (5-minute load / logical CPUs; danger only while CPU idle over the last round is at or below
+`load_idle_pct`, or unknown), `mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's
+own level, 2 warn, 4 critical), `swapout_pps` (pages swapped out per second between rounds), `swap_gb` (in use, warn
+only), `swap_growth_gb_h` (net growth over 30-60 minutes, warn only, with one leak note per `renotify_minutes`),
+`disk_free_gb` (the volume holding `$HOME`, at or below), `docker_mem_pct` (all containers' memory / the Docker VM's),
+`containers` (running, warn only; a Kubernetes pod counts once, its pause container included, and `kube-system` not
+at all; the compose projects, container names or namespaces in `always_on` are left out and shown apart). A metric the
+OS does not offer is left out. The level is the worst metric's.
+
+One rule, one input: `round` samples the rates (swapout, CPU idle, Docker memory, swap growth) from counters it keeps
+between rounds and saves them before it sweeps; `check`, the hook and `round` judge the metrics read now plus that
+sample while it is younger than `sample_fresh_minutes` (7). An older sample is left out and shown as such.
 
 - **warn**: `reap.py scan --kinds <safe_kinds>` then `reap --plan`, so only what reap itself lists goes. Default
   `safe_kinds`: `orphan`, `compose-stack`, `gui-app`, `orca-worker` (a kind this reap.py does not know is dropped,
@@ -260,14 +267,17 @@ worst metric's.
 - **danger**: the same sweep. With nothing reaped (none listed, or reap skipped or failed them all), the top consumers (reap's `load` classes, compose projects with
   their CPU and memory, each with the Orca card it lies in) go out as one `status` message (an `escalation` needs an
   active dispatch, which the LaunchAgent has none of), then the round stops. Nothing
-  is stopped or killed, whoever owns it. Sent again only on entering danger or after `renotify_minutes` (30).
+  is stopped or killed, whoever owns it. Sent again only on entering danger or after `renotify_minutes` (30). A send
+  that fails (the LaunchAgent has no Orca sender terminal) is not retried each round: the danger goes to the orchestrate
+  dashboard's Needs-you list (`inbox-external.jsonl`, key `pressure:danger`) and is resolved there on the next ok.
 - Never: `compose down -v`, `docker system prune`, volume or image removal, a kill by pattern, anything of a card or
   lead that is still working (reap's own rules keep those).
 
 `hooks/pressure_gate.py` (PreToolUse, Bash) denies `orch heavy`, `docker compose … up` and `orca worktree create`
-while the level is danger, and at warn until a round has swept in the last `gate_fresh_minutes` (15). The deny says
-to run `round`, then wait with `Monitor` on `check`. Swap and disk raise the gate to warn at most: both stay high for
-hours. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
+while the level is danger, and at warn until a round's scan ran in the last `gate_fresh_minutes` (15). Its level is
+`check`'s, so the deny's wait (`round`, then `Monitor` on `check` until it exits 0 or 1, for at most 15 minutes, then
+report) ends when the hook would let the start through. Danger from disk alone asks for space to be freed instead of
+a wait. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
 `AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
 off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
 a deny and a manual `round`.
@@ -302,8 +312,10 @@ Paths of a particular project's test cache stay here, not in this repo:
           "inbox_to": "run:<id>", "plan_repeat": 2, "done_card_hours": 2, "idle_minutes": 30, "load_cooldown_minutes": 60,
           "user_folders": [], "regenerated_untracked": true, "preview_ports": [4500, 4599], "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},
-          "pressure": {"interval": 180, "load_per_cpu": [1.0, 2.0], "mem_free_pct": [20, 10], "vm_pressure": [2, 4],
-                       "swap_gb": [8, 16], "disk_free_gb": [50, 20], "containers": [40, 80], "always_on": [],
+          "pressure": {"interval": 180, "load_per_cpu": [1.3, 2.0], "load_idle_pct": 10, "mem_free_pct": [20, 10],
+                       "vm_pressure": [2, 4], "swapout_pps": [300, 1500], "swap_gb": [16, null],
+                       "swap_growth_gb_h": [2, null], "disk_free_gb": [50, 20], "docker_mem_pct": [70, 90],
+                       "containers": [40, null], "sample_fresh_minutes": 7, "always_on": [],
                        "notify_to": "run:<id>", "rescan_minutes": 10, "renotify_minutes": 30, "gate_fresh_minutes": 15}}}
 ```
 
