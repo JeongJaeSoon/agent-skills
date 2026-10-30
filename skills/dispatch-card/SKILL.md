@@ -151,6 +151,7 @@ skills-sync close-setup "<result.worktree.path>"
 ```bash
 orca terminal wait --terminal <result.agentTerminalHandle> --for tui-idle --timeout-ms 60000
 orca terminal read --terminal <handle> --screen
+orch watch-cards --card <handle>   # under run_in_background: STARTED, ENDED, CLOSED, or STUCK on a lost login, a prompt or no /goal
 ```
 
 Take the handle only from the `agentTerminalHandle` field of the create output, never from a
@@ -159,7 +160,11 @@ loose `term_…` match: the brief can carry another handle (your own, in its REP
 check that the handle is not your own (`$ORCA_TERMINAL_HANDLE`).
 
 Once. Read that the agent picked up the brief, report the worktree path, branch and handle, and
-return to what this session was doing. `--parent-worktree active` is how this session finds the
+return to what this session was doing. The `--card` check reports about four minutes later, since a
+card can lose its login a few turns in; on `STUCK`, read its screen, and for a lost login or a
+missing `/goal` start a new card on the same brief and supersede this one (§3, first rule). `ENDED`
+and `CLOSED` are a card that finished or stopped inside the window: read its report or screen first, and
+start it again only when that shows the work is not done. `--parent-worktree active` is how this session finds the
 card again when it ends (`end-session` §3); a `--no-parent` card goes in the worklog instead. Results are fire-and-forget by default: do not loop on
 `tui-idle`, do not block repo A on repo B.
 

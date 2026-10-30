@@ -64,9 +64,10 @@ Usage: orch <command> <slug> [options]
                                      print the next batch one line per message with its ack line;
                                      with --wait, acks heartbeat-only batches and waits on; a failed
                                      --ack is reported and the wait still runs
-  watch-cards [--interval 180] [--idle-min 30] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
+  watch-cards [--interval 180] [--idle-min 30] [--goal-lost-min 15] [--min-free-gb 15] [--timeout-ms 3300000] [--once]
                                      no slug: exit on a new stuck screen in any agent terminal but this
-                                     one (cards no Run lists), or low disk; never types (card_watch.py)
+                                     one (cards no Run lists), a lost login or goal, or low disk; never types
+                                     (card_watch.py). --card HANDLE [--within 240]: one new card's start
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
   decide list | done <id> [--answer TEXT] | drop <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
