@@ -120,7 +120,8 @@ with tempfile.TemporaryDirectory() as tmp:
             assert why == "세션 기록 폴더를 읽지 못함(PermissionError)", (locked, why)
         finally:
             locked.chmod(0o700)
-    assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/other") is None, "no folder is no transcript"
+    assert reap.transcript_quiet(pathlib.Path(tmp), now, reasons=True)("/w/other") is None, "no folder is no transcript"
+    assert reap.transcript_quiet(pathlib.Path(tmp) / "absent", now, reasons=True)("/w/my_repo.x") is None
 
 # Docker: only dangling volumes of a project with no container at all; a volume named after a live project stays.
 now = time.time()
