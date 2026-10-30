@@ -20,11 +20,12 @@ worktree create`, an orchestration worker. The first row that matches decides.
 | 10 | A commit off every remote whose message is on the remote with another patch | 사람 결정 |
 | 11 | A commit off every remote with no such message | 남김 |
 | 12 | Merged or closed PR that carried HEAD (HEAD is its head or behind it), every agent idle | 삭제 |
-| 13 | No PR, HEAD on the remote default branch, no agent terminal, or every agent said it is done | 삭제 |
+| 13 | No PR, HEAD on the remote default branch, no Claude session in the card, or every agent terminal said it is done | 삭제 |
 | 14 | Anything else (HEAD past a merged PR's head, no PR and HEAD off the default branch, an agent not idle yet) | 남김 |
 
 "Idle" for an agent: its transcript quiet for `reap.idle_minutes` (the terminal's own output time when it has no
-transcript), or its screen says it is done.
+transcript), or its screen says it is done. A Claude process in the card with no Orca agent terminal (a headless
+`claude -p`, a session another tool started) is an agent too: idle only by its transcript, never when it has none.
 
 삭제 closes each listed terminal (`orca terminal close --terminal <handle>`, never `--all`), judges the card again
 once they have exited, moves its ignored files to the trash and runs `orca worktree rm --worktree path:<p>
@@ -44,6 +45,10 @@ once they have exited, moves its ignored files to the trash and runs `orca workt
 - **"Done, close me" on an idle screen.** An agent that wrote that it is finished counts as idle before its
   transcript has been quiet long enough (`reap.cards.done_patterns`). The screen never outweighs changes, unpushed
   commits or a running turn, and a question on it (`reap.cards.question_patterns`) sends the card to a person.
+- **A Claude session with no Orca terminal.** A headless `claude -p` thinking or editing between shell calls has
+  no agent terminal and no shell child, so neither rule 3 nor rule 5 sees it. Its process is an agent for rules 8
+  and 12, released once its transcript has been quiet for `reap.idle_minutes`; with no PR (rule 13) it keeps the
+  card, since it has no screen to say it is done.
 
 ## Config
 

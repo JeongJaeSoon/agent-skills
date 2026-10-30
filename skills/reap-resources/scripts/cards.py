@@ -229,11 +229,14 @@ def judge(f, idle_s):
     if (loud := [t for t in shells if t["silent"] < idle_s]):
         return KEEP, f"셸 터미널 {loud[0]['handle']} 이 {int(idle_s // 60)}분 안에 출력함", []
     quiet = f.get("quiet")
+    # A Claude process with no Orca agent terminal (headless `claude -p`, another tool's session) needs idle evidence
+    # too; with neither a transcript nor a terminal to read, it never counts as idle.
+    live = agents or f.get("claude")
     said_done = bool(agents) and all(t["screen"] == "done" for t in agents)
     # A session that wrote "done, close me" is idle evidence on its own; otherwise its transcript must be quiet.
-    agents_idle = not agents or said_done or (
-        (quiet if isinstance(quiet, (int, float)) else min(t["silent"] for t in agents)) >= idle_s)
-    if isinstance(quiet, str) and agents and not said_done:
+    agents_idle = not live or said_done or (
+        (quiet if isinstance(quiet, (int, float)) else min((t["silent"] for t in agents), default=0)) >= idle_s)
+    if isinstance(quiet, str) and live and not said_done:
         return KEEP, quiet, []
     handles = [t["handle"] for t in f["terminals"]]
     if f.get("pr_unread"):
@@ -261,8 +264,8 @@ def judge(f, idle_s):
         return KEEP, f"PR 없음, {f.get('landed_via') or '기본 브랜치를 모름'}", []
     if not f["landed"]:
         return KEEP, f"PR 없음, HEAD 가 기본 브랜치에 없음({f['landed_via']})", []
-    if agents and not said_done:
-        return KEEP, "PR 없음, 에이전트 터미널이 있음(끝났다는 말 없음)", []
+    if live and not said_done:
+        return KEEP, "PR 없음, Claude 세션이 있음(끝났다는 말 없음)", []
     return REMOVE, f"PR 없음, HEAD 가 기본 브랜치에 있음({f['landed_via']}){tail}", handles
 
 

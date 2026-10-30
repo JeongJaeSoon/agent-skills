@@ -150,6 +150,21 @@ m = machine(rows=rows2, cwd_of={20: CARD}, prs=MERGED)
 v = cards.judge(cards.gather({"path": CARD}, m, fake(branch_prs=[PR], terminals=[term("a1", True, 2 * 3600)])), IDLE)
 assert v[0] == cards.KEEP and "진행 중" in v[1], v
 
+# A Claude process with no Orca agent terminal (headless `claude -p`, a session another tool started) mid-turn, its
+# transcript written a minute ago: it is a live session, not an empty card. With no transcript it is never idle.
+rows3 = {30: row(30, "claude -p review this"), 31: row(31, "node /some/runner.js")}
+rows3[30]["ppid"] = 31
+m = machine(rows=rows3, cwd_of={30: CARD}, prs=MERGED, quiet=60)
+v = cards.judge(cards.gather({"path": CARD}, m, fake(branch_prs=[PR])), IDLE)
+assert v[0] == cards.KEEP and "조용하지 않음" in v[1], v
+m = machine(rows=rows3, cwd_of={30: CARD}, quiet=60)
+v = cards.judge(cards.gather({"path": CARD}, m, fake(local_landed=True)), IDLE)
+assert v[0] == cards.KEEP and "Claude 세션이 있음" in v[1], v
+m = machine(rows=rows3, cwd_of={30: CARD}, prs=MERGED, quiet=None)
+assert cards.judge(cards.gather({"path": CARD}, m, fake(branch_prs=[PR])), IDLE)[0] == cards.KEEP
+m = machine(rows=rows3, cwd_of={30: CARD}, prs=MERGED, quiet=3 * 3600)
+assert cards.judge(cards.gather({"path": CARD}, m, fake(branch_prs=[PR])), IDLE)[0] == cards.REMOVE
+
 # Trap 4: the agent's screen. "끝났다, 닫아도 된다" on an idle screen is evidence the session is done even before its
 # transcript has been quiet for idle_minutes; a question on screen goes to a person; neither overrides changes.
 m = machine(quiet=10 * 60)
@@ -159,7 +174,7 @@ assert v[0] == cards.REMOVE and "화면에 끝났다고 씀" in v[1] and v[2] ==
 v = verdict(m, local_landed=True, terminals=[term("a1", True, 20 * 60, ["다음 단계로 갈까?", "Enter to select · Esc to cancel"])])
 assert v[0] == cards.ASK, v
 v = verdict(m, local_landed=True, terminals=[term("a1", True, 20 * 60, ["❯"])])
-assert v[0] == cards.KEEP and "에이전트 터미널" in v[1], v
+assert v[0] == cards.KEEP and "Claude 세션이 있음" in v[1], v
 v = verdict(m, local_landed=True, status=" M a.py\n", terminals=[term("a1", True, 20 * 60, done)])
 assert v[0] == cards.KEEP and "변경" in v[1], v
 
