@@ -1,5 +1,5 @@
 """pressure_gate.py: heavy starts wait while the machine is loaded. Run: python3 hooks/test_pressure_gate.py"""
-import importlib.util, json, os, pathlib, subprocess, sys, tempfile, time
+import fcntl, importlib.util, json, os, pathlib, subprocess, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 os.environ["AGENT_SKILLS_STATE"] = tempfile.mkdtemp()
@@ -164,5 +164,43 @@ assert pressure.queue_expire(t0 + 16 * 60) == [], "given up once"
 before = dict(pressure.queue_read())
 g.gate("docker compose up --wait", {**OK, "disk_free_gb": 5}, {}, cfg, now=1.0, p=pressure, session="s6")
 assert pressure.queue_read().keys() == before.keys()
+
+# A retry another hook or the permission check held never gets an outcome: one more window, then it fails with that
+# reason, so the row does not say "재시도 중" for good. Denied again meanwhile, it waits anew with a fresh deadline.
+pressure.enqueue("s7", "/w", CARD, "orca worktree create", ["x"], cfg, now=t0)
+assert pressure.queue_mark("s7", CARD, "retrying", now=t0 + 60)["deadline"] == t0 + 60 + 15 * 60
+assert pressure.queue_expire(t0 + 10 * 60) == [] and entry(CARD, "s7")["state"] == "retrying"
+assert [x["state"] for x in pressure.queue_expire(t0 + 17 * 60)] == ["failed"]
+assert entry(CARD, "s7")["error"] == pressure.NO_OUTCOME and "다른 hook" in dash_rows()[-1]["title"]
+pressure.enqueue("s8", "/w", CARD, "orca worktree create", ["x"], cfg, now=t0)
+pressure.queue_mark("s8", CARD, "retrying", now=t0 + 60)
+again = pressure.enqueue("s8", "/w", CARD, "orca worktree create", ["y"], cfg, now=t0 + 120)
+assert again["state"] == "waiting" and again["deadline"] == t0 + 120 + 15 * 60 and again["attempts"] == 2, again
+# Given up, then the session ran it after all and it went through: the row closes instead of saying "포기" for a week.
+assert entry("docker compose up", "s4")["state"] == "gave_up"
+assert pressure.queue_mark("s4", "docker compose up", "retrying") and pressure.queue_mark("s4", "docker compose up", "done")
+assert dash_rows()[-1] == {**dash_rows()[-1], "op": "resolve", "key": f"pressure:queue:{entry('docker compose up', 's4')['id']}"}
+
+# A queue that cannot be written still holds a danger start, on the old wait; only a failed measurement lets it through.
+lock = open(pressure.reap.STATE / "pressure-queue.lock", "w")
+fcntl.flock(lock, fcntl.LOCK_EX)
+pressure.LOCK_WAIT_S = 0.1
+held = g.gate("docker compose up -d", DANGER, {}, cfg, now=1.0, p=pressure, session="s10")
+assert held[0] == "deny" and "대기열에 넣지 못함" in held[1] and "pressure.py check" in held[1], held
+assert held[1].startswith("[gate:pressure] "), held
+lock.close()
+pressure.LOCK_WAIT_S = 3
+
+# A broken entry costs itself, not the round: no KeyError, and the whole entries still expire.
+q = json.loads(pressure.QUEUE.read_text())
+q["q-broken"] = {"state": "waiting"}
+q["q-junk"] = "x"
+pressure.QUEUE.write_text(json.dumps(q))
+assert "q-broken" not in pressure.queue_read() and "q-junk" not in pressure.queue_read()
+pressure.queue_expire(time.time() + 10 ** 6)
+assert all(e["state"] not in ("waiting", "retrying") for e in pressure.queue_read().values())
+pressure.QUEUE.write_text("{not json")
+assert pressure.queue_read() == {} and pressure.queue_expire() == []
+assert pre(CARD, "s11", "danger").startswith("[gate:pressure] ") and entry(CARD, "s11")["state"] == "waiting"
 
 print("ok")

@@ -297,8 +297,12 @@ same command again, and 3 when it must not run (deadline passed, recorded as giv
 never runs a command itself: the retry is the asking session's own tool call, through the same hooks and permission
 checks, and another session's run of the same text is not that entry's retry. The same script as PostToolUse and
 PostToolUseFailure records the retry's outcome: done takes the row off the dashboard, a failure (`Exit code N`)
-stays on it. A round gives up on waiting entries past their deadline. `python3 "$P" queue` lists entries
-for a week. Danger from disk alone asks for space to be freed instead of a wait, and queues nothing. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
+stays on it, and the same session's later success closes a failed or given-up entry too. A retry is marked before
+other hooks and the permission check decide, so one that gets no outcome fails after one more window. A command run
+with `run_in_background` gets its PostToolUse when it starts, so its entry reads done before the command ends. A round
+ends overdue entries. `python3 "$P" queue` lists entries for a week. A queue that cannot be written (lock held past
+3 seconds, unwritable state) still denies, with the old wait on `check`. Danger from disk alone asks for space to be
+freed instead of a wait, and queues nothing. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
 `AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
 off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
 a deny and a manual `round`.

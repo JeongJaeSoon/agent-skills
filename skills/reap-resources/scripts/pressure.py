@@ -490,16 +490,29 @@ def queue_id(session, command):
     return "q-" + hashlib.sha1(f"{session}\0{command}".encode()).hexdigest()[:8]
 
 
+QUEUE_FIELDS = {"id", "session", "command", "what", "why", "added", "deadline", "attempts", "state"}
+LOCK_WAIT_S = 3  # well inside the hook's timeout: a hook killed by its timeout lets the command through
+
+
 def queue_read():
-    return load_state(QUEUE)
+    """The queue, less any entry that is not a whole one: a hand edit or a torn write costs that entry, not every round."""
+    return {k: e for k, e in load_state(QUEUE).items() if isinstance(e, dict) and QUEUE_FIELDS <= e.keys()}
 
 
 def queue_change(fn):
     """Run fn(queue) under the queue's lock. fn returns None when it changed nothing, so the file is left alone, or the
-    entries whose dashboard row changes."""
+    entries whose dashboard row changes. Raises when the lock is not had within LOCK_WAIT_S."""
     reap.STATE.mkdir(parents=True, exist_ok=True)
     with open(reap.STATE / "pressure-queue.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        until = time.monotonic() + LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > until:
+                    raise TimeoutError("pressure-queue.lock held")
+                time.sleep(0.05)
         q = queue_read()
         out = fn(q)
         changed = [dict(e) for e in out or ()]
@@ -535,7 +548,8 @@ def queue_note(e):
 
 
 def enqueue(session, cwd, command, what, why, cfg, now=None):
-    """The entry for this session's command, added or, while it is still open, counted again with its first deadline."""
+    """The entry for this session's command, added or, while it still waits, counted again with its first deadline.
+    A retry denied again waits anew, with a fresh deadline."""
     now = now or time.time()
     qid, seen = queue_id(session, command), []
 
@@ -546,18 +560,22 @@ def enqueue(session, cwd, command, what, why, cfg, now=None):
             seen.append(dict(e))
             if e["state"] == "waiting":  # its dashboard row already says so
                 return []
-            e["state"] = "waiting"
+            e.update(state="waiting", deadline=now + e.get("window", float(cfg["queue_minutes"]) * 60))
         else:
             e = q[qid] = {"id": qid, "session": session, "cwd": cwd, "command": command, "what": what,
-                          "why": ", ".join(why), "added": now, "deadline": now + float(cfg["queue_minutes"]) * 60,
+                          "why": ", ".join(why), "added": now, "window": float(cfg["queue_minutes"]) * 60,
                           "attempts": 1, "state": "waiting"}
+            e["deadline"] = now + e["window"]
             log(f"queue {qid} {what} waiting · {e['why']}")
         return [e]
     return (queue_change(add) or seen)[0]
 
 
-# Which state each event may leave from: a retry only of a waiting entry, an outcome only of a retry.
-MOVES = {"retrying": ("waiting",), "done": ("retrying",), "failed": ("retrying",), "gave_up": ("waiting",)}
+# Which state each event may leave from: an outcome only of a retry. The session's own run of the same command after
+# its entry gave up or failed is a retry too, so a later success clears that row.
+MOVES = {"retrying": ("waiting", "gave_up", "failed"), "done": ("retrying",), "failed": ("retrying",),
+         "gave_up": ("waiting",)}
+NO_OUTCOME = "결과가 오지 않음: 다른 hook·권한 확인이 막았거나 세션이 끝남"
 
 
 def queue_mark(session, command, state, error=None, now=None):
@@ -570,9 +588,15 @@ def queue_mark(session, command, state, error=None, now=None):
         e = q.get(qid)
         if not e or e["state"] not in MOVES[state]:
             return None
+        t = now or time.time()
+        if state == "retrying":
+            # The hook marks a retry before other hooks and the permission check have had their say; an outcome that
+            # never comes ends it after one more window of the entry's own length.
+            e["deadline"] = t + e.get("window", 15 * 60)
+            e.pop("error", None)
+        else:
+            e["ended"] = t
         e["state"] = state
-        if state != "retrying":
-            e["ended"] = now or time.time()
         if error:
             e["error"] = str(error)[:200]
         log(f"queue {qid} {e['what']} {state}" + (f" · {error}" if error else ""))
@@ -581,16 +605,23 @@ def queue_mark(session, command, state, error=None, now=None):
 
 
 def queue_expire(now=None):
-    """Waiting entries past their deadline give up: the session that asked stopped waiting or never came back."""
+    """Open entries past their deadline end: a waiting one gives up (its session stopped waiting or never came back),
+    a retry with no outcome fails (something else held the call, or the session ended)."""
     now = now or time.time()
-    if not any(e["state"] == "waiting" and e["deadline"] <= now for e in queue_read().values()):
+
+    def overdue(q):
+        return [e for e in q.values() if e["state"] in ("waiting", "retrying") and e["deadline"] <= now]
+    if not overdue(queue_read()):
         return []
 
     def expire(q):
-        gone = [e for e in q.values() if e["state"] == "waiting" and e["deadline"] <= now]
+        gone = overdue(q)
         for e in gone:
-            e.update(state="gave_up", ended=now)
-            log(f"queue {e['id']} {e['what']} gave_up")
+            if e["state"] == "waiting":
+                e.update(state="gave_up", ended=now)
+            else:
+                e.update(state="failed", ended=now, error=NO_OUTCOME)
+            log(f"queue {e['id']} {e['what']} {e['state']}")
         return gone or None
     return queue_change(expire)
 

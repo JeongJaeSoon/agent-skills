@@ -6,11 +6,13 @@ A Bash call that starts something heavy (`orch heavy`, `docker compose … up`, 
 (skills/reap-resources/scripts/pressure.py). At warn it goes through once a pressure round swept the safe targets in the
 last `gate_fresh_minutes`: the safe targets are already gone, and warn alone is no reason to wait. At danger it waits:
 the command goes into pressure.py's queue, shown on the dashboard, until the same session runs it again once
-`pressure.py queue wait <id>` says the hook would let it through, or the deadline passes. The same script, run as
-PostToolUse and PostToolUseFailure, records that retry's outcome.
+`pressure.py queue wait <id>` says the hook would let it through, or the deadline passes; a queue that cannot be
+written falls back to waiting on `pressure.py check`. The same script, run as PostToolUse and PostToolUseFailure,
+records that retry's outcome.
 
 `AGENT_SKILLS_PRESSURE_GATE=0`, in the hook's environment or before the heavy command itself, turns it off.
-The level is the one `pressure.py check` reports (pressure.snapshot + judge), so waiting on check ends when this would.
+The level is the one `pressure.py check` reports and `queue wait` judges (pressure.snapshot + judge, gate_open), so
+either wait ends when this would let the command through.
 Any failure to measure gives no decision.
 """
 import json, os, pathlib, re, shlex, sys, time
@@ -109,7 +111,13 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
     if p.blocked_by(metrics, cfg) == ["disk_free_gb"]:  # waiting frees no disk
         return ("deny", f"{MARK} {SOURCE} 디스크 여유가 위험 수준({', '.join(why)})이라 `{what}` 를 지금 시작하지 않는다. "
                         f"{first}기다려도 풀리지 않으니 대기하지 말고, 사용자에게 디스크 정리를 요청하고 멈춘다. {tail}")
-    e = p.enqueue(session, cwd, cmd, what, why, cfg, now)
+    try:
+        e = p.enqueue(session, cwd, cmd, what, why, cfg, now)
+    except Exception:  # an unwritable queue still holds the start: only a failed measurement lets it through
+        return ("deny", f"{MARK} {SOURCE} PC 사용량 위험({', '.join(why)})이라 `{what}` 를 지금 시작하지 않는다(대기열에 넣지 못함). "
+                        f"{first}위험이 이어지면 Monitor 로 `{py} check` 가 0(정상) 또는 1(경고)로 끝날 때까지 최대 "
+                        f"{float(cfg['queue_minutes']):g}분 기다린 뒤 다시 시도한다(foreground sleep 루프 금지). 그래도 2면 대기를 "
+                        "멈추고 check 출력(이유·측정값)을 보고한다. " + tail)
     return ("deny", f"{MARK} {SOURCE} PC 사용량 위험({', '.join(why)})이라 `{what}` 를 지금 시작하지 않고 대기열 {e['id']} 에 "
                     f"넣었다(최대 {float(cfg['queue_minutes']):g}분, 기한 {p.hhmm(e['deadline'])}, 대시보드 Needs you 에 남는다). "
                     f"{first}Monitor 로 `{py} queue wait {e['id']}` 가 끝날 때까지 기다린다(foreground sleep 루프 금지). "
