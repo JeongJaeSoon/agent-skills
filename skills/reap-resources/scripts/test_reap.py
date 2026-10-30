@@ -110,6 +110,17 @@ with tempfile.TemporaryDirectory() as tmp:
     main.write_text('{"type":"user","timestamp":"soon"}\n')
     assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") is None, "an unreadable time is unknown, not quiet"
     assert reap.transcript_quiet(pathlib.Path(tmp), now, reasons=True)("/w/my_repo.x").endswith("을 읽지 못함")
+    # Path.is_dir and glob swallow a PermissionError: a folder that cannot be listed must not read as no transcript.
+    main.write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n')
+    for locked in (proj, proj / "sid" / "subagents", pathlib.Path(tmp)) if os.geteuid() else ():
+        locked.chmod(0o000)
+        try:
+            assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") is None, locked
+            why = reap.transcript_quiet(pathlib.Path(tmp), now, reasons=True)("/w/my_repo.x")
+            assert why == "세션 기록 폴더를 읽지 못함(PermissionError)", (locked, why)
+        finally:
+            locked.chmod(0o700)
+    assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/other") is None, "no folder is no transcript"
 
 # Docker: only dangling volumes of a project with no container at all; a volume named after a live project stays.
 now = time.time()

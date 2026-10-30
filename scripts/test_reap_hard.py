@@ -165,6 +165,12 @@ finally:
 assert os.geteuid() == 0 or "ROLE 기록을 읽지 못함(PermissionError)" in unreadable, unreadable
 (roles / "sess-a.json").unlink()
 assert rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles) is None
+tdir.chmod(0)  # a transcript folder it cannot list may hold the ROLE session
+try:
+    unreadable = rh.reap.coordinator_in("/ws/app/lead", orch, cwd, projects, roles)
+finally:
+    tdir.chmod(0o755)
+assert os.geteuid() == 0 or unreadable == "세션 기록 폴더를 읽지 못함(PermissionError)", unreadable
 assert rh.reap.coordinator_in("/ws/app/lead", {}, cwd, projects, roles) == "pid 20 의 프로세스 행을 읽지 못함"
 no_claude = {20: lead_rows[20], 21: {**lead_rows[21], "cmd": "node vite"}}
 assert rh.reap.coordinator_in("/ws/app/lead", no_claude, cwd, projects, roles) is None  # no live Claude: nothing to protect
