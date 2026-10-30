@@ -1,0 +1,124 @@
+1
+00:00:00,000 --> 00:00:08,871
+From one ticket to a project with many PRs:
+agents do the work, you keep the decisions and approvals.
+
+2
+00:00:09,300 --> 00:00:19,629
+A Claude Code plugin with four kinds of parts:
+41 skills, 4 agent definitions, 10 hooks, and commands
+
+3
+00:00:20,033 --> 00:00:30,851
+Skills fire when their situation shows up, or by name.
+Hooks step in before and after an action, and can stop it.
+
+4
+00:00:31,267 --> 00:00:40,129
+Human in the loop: approve each step.
+Human on the loop: agents run, you step in on exceptions.
+
+5
+00:00:40,534 --> 00:00:52,941
+Owner → one orchestrator → one lead per project
+→ cards (one ticket each, own worktree)
+
+6
+00:00:53,367 --> 00:01:05,510
+The orchestrator writes no PR: it routes and judges.
+One PR → a /goal card. Several related PRs → a lead.
+
+7
+00:01:05,934 --> 00:01:19,689
+Built on Orca: a terminal per worktree, a Run for the goal, mail.
+The lead keeps one background wait and wakes on news.
+
+8
+00:01:20,101 --> 00:01:30,061
+Plan → build (own worktree) → test → review by a non-author
+→ PR → CI
+
+9
+00:01:30,468 --> 00:01:43,913
+The worker lands its own PR with orch land, only when every check passes,
+then watches main CI and reports worker_done with evidence.
+
+10
+00:01:44,335 --> 00:01:55,943
+Ledger → program directory · machine state → local state
+tickets → tracker · reasoning → notes · PRs and CI → GitHub
+
+11
+00:01:56,368 --> 00:02:06,036
+dispatch-card opens a card, deliver-ticket carries a ticket to done,
+and orchestrate runs the whole program.
+
+12
+00:02:06,468 --> 00:02:18,086
+record-progress records, end-session closes, brief reports,
+watch-prs gathers reviews, reap-resources cleans up.
+
+13
+00:02:18,502 --> 00:02:29,764
+The dashboard is a local page; it spends no tokens.
+Board: progress, main CI, in flight vs cap, land order.
+
+14
+00:02:30,169 --> 00:02:36,822
+Stages: one row per item — PR, merged, dev check, prod check.
+
+15
+00:02:37,236 --> 00:02:43,796
+To-do: dated and conditional to-dos, and the held queue.
+Overdue items turn red.
+
+16
+00:02:44,203 --> 00:02:52,584
+Inbox: everything waiting on you, by type.
+Answer a decision with a button; it goes back to the lead.
+
+17
+00:02:53,003 --> 00:02:59,444
+PR stats: PRs you and your agents opened, by month and source.
+Collected every 6 hours.
+
+18
+00:02:59,870 --> 00:03:08,384
+A day: you ask → the request is logged
+→ the orchestrator starts a lead
+
+19
+00:03:08,803 --> 00:03:19,078
+The lead pilots one card, then adds one per green landing.
+Each card opens a PR and gets an independent review.
+
+20
+00:03:19,503 --> 00:03:27,302
+Land → release and check → one brief to the owner:
+done, in progress, decisions needed
+
+21
+00:03:27,703 --> 00:03:39,740
+Around the clock: wait in the background, watch-cards finds stuck cards,
+the janitor cleans up every 3 hours.
+
+22
+00:03:40,170 --> 00:03:47,477
+Machine load is measured every 3 minutes.
+At the danger level, heavy starts are refused and queued.
+
+23
+00:03:47,903 --> 00:04:02,291
+The auto-mode classifier judges every act; a refused act is never retried.
+Hooks and a separate guard plugin watch too.
+
+24
+00:04:02,703 --> 00:04:14,769
+Approvals, permission prompts, logins, irreversible acts: human only.
+Collected in one inbox and sent to you in one batch.
+
+25
+00:04:15,170 --> 00:04:23,971
+Agents carry the work, state stays in the ledger and dashboard,
+and you keep the decisions and approvals.
+
