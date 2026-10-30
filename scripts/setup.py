@@ -429,8 +429,9 @@ def main(argv):
     ap.add_argument("--bundle", type=pathlib.Path)
     ap.add_argument("--here", action="store_true")
     args = ap.parse_args(argv)
-    if args.actions_only and (args.apply or args.settings_only or args.update or args.here):
-        ap.error("--actions-only takes none of --apply, --settings-only, --update, --here")
+    if args.actions_only and (args.apply or args.settings_only or args.update or args.here
+                              or args.replace_drifted is not None):
+        ap.error("--actions-only takes none of --apply, --settings-only, --update, --here, --replace-drifted")
     args.settings_only = args.settings_only or args.here or args.replace_drifted is not None
     if args.settings:
         os.environ["CLAUDE_SETTINGS"] = str(args.settings.expanduser().absolute())

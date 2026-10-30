@@ -288,7 +288,7 @@ def check_drift(settings, bundle=REPO / "scripts" / "recommended-settings.json")
         return [row("ok", "autoMode 권장 규칙", "본문이 어긋난 규칙 없음")]
     labels = ", ".join(f"{name} {setup.label(rule)!r}" for name, rule, _ in drift)
     return [row("differs", "autoMode 권장 규칙", f"라벨은 같고 본문이 다름: {labels}",
-                "setup.py --settings-only --replace-drifted 의 diff 를 보고, 그 끝의 --apply 줄을 사람이 친다")]
+                "setup.py --replace-drifted [라벨] 의 diff 를 보고, 그 끝의 --apply 줄을 사람이 친다")]
 
 
 def check_config(p, base):
