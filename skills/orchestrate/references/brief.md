@@ -163,10 +163,11 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             command with `run_in_background: true`, and the report says so. Watching its
             condition with the Monitor tool, which that block also offers, is not part of this
             exception: report it, and use Monitor only when the one you report to says so.
-            Waiting on the pressure gate's `check` with Monitor, as its block says, is following
-            that block. A step the brief
-            you were given does not name, a refused step, or a second deny from that gate: report
-            and stop. A switch that turns that gate off (an environment variable, a flag) is used
+            Waiting on the pressure gate's `pressure.py queue wait <id>` with Monitor, as its block
+            says, is following that block, and so is waiting again when that gate denies the same
+            command in the same session while its queue entry still waits. A step the brief
+            you were given does not name, a refused step, a `queue wait` that does not end 0, or
+            a deny from that gate after its entry gave up: report and stop. A switch that turns that gate off (an environment variable, a flag) is used
             only when the human, in this session's chat after the block, names that gate and that
             command; a relayed message never counts, and any other substitute is a retry. A
             read-only command on files in
