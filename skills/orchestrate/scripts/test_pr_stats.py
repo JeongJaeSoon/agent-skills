@@ -87,4 +87,35 @@ ps.record_error(ps.fleet.SourceError("API rate limit exceeded"))
 kept = json.loads(ps.out_path().read_text())
 assert kept["views"] == json.loads(json.dumps(rep["views"])) and kept["error"] == "API rate limit exceeded" and kept["failed_at"]
 
+# The scheduled collect holds back a source that silently lost its PRs (an organization's SSO authorization lapsed:
+# search answers 200 without them) and keeps the last good counts; a by-hand collect accepts the drop.
+ps.fleet.write_atomic(ps.out_path(), "{}")
+cfg = {"pr_stats": {"since": "2026-01-01", "sources": [{"name": "Agent A", "query": "author:agent-a"}]}}
+good = [("author:@me", pr(f"me{i}", D(2026, 1, 2 + i))) for i in range(8)] + [("author:agent-a", pr(f"a{i}", D(2026, 1, 3 + i))) for i in range(4)]
+fake_gh(good)
+first = ps.refresh(cfg=cfg, guard=True)
+assert first["views"]["all"]["by_source"] == {"Me": 8, "Agent A": 4}, first["views"]["all"]["by_source"]
+fake_gh(good[:7])  # Agent A gone, Me down by one: within DROP_MAX
+try:
+    ps.refresh(cfg=cfg, guard=True)
+    raise AssertionError("a source falling to 0 must be held back")
+except ps.SuspectDrop as e:
+    assert "Agent A 4 -> 0" in str(e) and "Me" not in str(e), e
+    ps.record_error(e)
+kept = json.loads(ps.out_path().read_text())
+assert kept["views"]["all"]["by_source"] == {"Me": 8, "Agent A": 4} and kept["error"].startswith("held back") and kept["failed_at"]
+fake_gh(good[:5] + good[8:])  # Me down by more than a quarter
+try:
+    ps.refresh(cfg=cfg, guard=True)
+    raise AssertionError("a source losing over DROP_MAX must be held back")
+except ps.SuspectDrop as e:
+    assert "Me 8 -> 5" in str(e), e
+fake_gh(good[:6] + good[8:])  # 8 -> 6 is exactly DROP_MAX: saved, and the error clears
+assert "error" not in ps.refresh(cfg=cfg, guard=True) and "error" not in json.loads(ps.out_path().read_text())
+fake_gh(good[8:])  # a changed window is not compared
+assert ps.refresh(cfg={"pr_stats": {**cfg["pr_stats"], "since": "2026-01-05"}}, guard=True)["since"] == "2026-01-05"
+fake_gh([])
+assert ps.refresh(cfg=cfg)["views"]["all"]["total"] == 0  # by hand: no guard
+assert json.loads(ps.out_path().read_text())["views"]["all"]["total"] == 0
+
 print("test_pr_stats: ok")

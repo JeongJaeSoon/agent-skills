@@ -8,6 +8,10 @@ Searches GitHub (gh api graphql) for every PR since `since`, one search per sour
 a weekday x hour grid and the top repositories, each with and without bulk campaigns (one title on BATCH_MIN or more
 PRs). Days and hours are in this machine's time zone. Only counts, repository names and campaign titles are kept.
 
+The dashboard's scheduled collect passes guard=True: a source that lost more than DROP_MAX of its PRs since the last
+report is held back, not saved (see drop_check). Running this script by hand saves whatever it finds, which is how a
+real drop (a big repository archived) gets accepted.
+
 Config, under "pr_stats" in the fleet config (fleet.config_path()), all optional:
   since    first day counted, YYYY-MM-DD (default: January 1 of last year)
   sources  agents that open PRs for me, each {"name", "query", "author"?}: `query` is GitHub search syntax added to
@@ -24,6 +28,7 @@ import fleet  # noqa: E402
 BATCH_MIN = 10
 STATES = ("merged", "open", "closed")
 SEARCH_CAP = 1000  # GitHub search returns at most this many hits for one query
+DROP_MAX = 0.25  # share of one source's PRs that may vanish between two collects before the result is held back
 PACE = 2.0  # seconds between searches: back-to-back searches trip GitHub's secondary rate limit
 NODE = "... on PullRequest { url title createdAt state author { login } repository { nameWithOwner } }"
 
@@ -157,11 +162,34 @@ def report(raw, since, sources, today, now=None):
             "views": {"all": view(prs, since, today, names), "no_batch": view(rest, since, today, names)}}
 
 
-def refresh(out=None, cfg=None):
+class SuspectDrop(fleet.SourceError):
+    pass
+
+
+def drop_check(prev, rep):
+    """Raise SuspectDrop when a source lost more than DROP_MAX of its PRs against the previous report.
+
+    Counts cover a fixed window, so they only shrink when PRs leave the search: an archived or deleted repository, or
+    lost access. The last one is silent: when an organization's SAML SSO authorization lapses, search answers 200 with
+    that organization's PRs left out, no error and no header saying so. A changed window or source list is not compared.
+    """
+    if not prev or not prev.get("views") or (prev.get("since"), prev.get("sources")) != (rep["since"], rep["sources"]):
+        return
+    old, new = prev["views"]["all"]["by_source"], rep["views"]["all"]["by_source"]
+    lost = [f"{s} {old[s]} -> {new.get(s, 0)}" for s in rep["sources"] if new.get(s, 0) < old.get(s, 0) * (1 - DROP_MAX)]
+    if lost:
+        raise SuspectDrop(f"held back as suspicious, {', '.join(lost)}; an organization's SSO authorization may have "
+                          f"lapsed. Run `orch-dash prstats` to accept the new counts")
+
+
+def refresh(out=None, cfg=None, guard=False):
     since, sources = settings(cfg)
     today = dt.datetime.now().astimezone().date()
     rep = report(fetch(since, sources, today), since, sources, today)
-    fleet.write_atomic(pathlib.Path(out) if out else out_path(), json.dumps(rep, ensure_ascii=False))
+    f = pathlib.Path(out) if out else out_path()
+    if guard:
+        drop_check(fleet.read_json(f, {}), rep)
+    fleet.write_atomic(f, json.dumps(rep, ensure_ascii=False))
     return rep
 
 
