@@ -10,7 +10,7 @@
 - **B. セッションからフルセットアップ**: このリポジトリのチェックアウトを直接読み込み、推奨ユーザー設定、同期ジョブ、既定の自動化まで入れます。A から始めて、次のセッションで仕上げます。
 - **C. シェルからフルセットアップ**: B と同じ結果を、Claude Code のセッションを使わずに得ます。
 
-以下のコマンドはすべて、`HOME`・`CLAUDE_CONFIG_DIR`・`CLAUDE_CODE_PLUGIN_DIRS` を一時ディレクトリに向けた環境で Claude Code 2.1.314 を使って実際に実行しました。載せている出力はそのときのものです。
+載せている出力は、`HOME`・`CLAUDE_CONFIG_DIR`・`CLAUDE_CODE_PLUGIN_DIRS` を一時ディレクトリに向けた環境で Claude Code 2.1.314 を使って実行したときのものです。実行したのは A、マーケットプレイス版のアンインストール、C の `--settings-only --apply` までです。同期ジョブと自動化を入れる段階（`--actions-only`、フルの `--apply`）とアンインストールの `launchctl`・自動化の行は実行していません。launchd は実際のユーザーと共有されるためです。
 
 ## 前提
 
@@ -74,7 +74,7 @@ python3 -I ~/src/agent-skills/scripts/setup.py --language Japanese --apply <ハ�
 ```
 
 - チェックアウトは `main` ブランチのメインチェックアウトである必要があります。worktree や別のブランチでは拒否されます。
-- dry run は何も書きません。1 行目の `target <パス>` が書き込む `settings.json`、最後の行が実行する `--apply` コマンドです。
+- dry run は何も書きません。1 行目の `target <パス>` が書き込む `settings.json`、最後の行が実行する `--apply` コマンドです。この行は Claude Code のセッションに貼るための `! ` で始まるので、シェルでは `!` を外します。
 - `--settings-only` を付けない `--apply` は、同期ジョブの設置、1 回の同期、既定の自動化の有効化まで行い、点検表を表示します。
 - マーケットプレイス版が入っていれば、diff はそれを無効にします（`enabledPlugins` を `false` に）。両方が有効だと hook が 2 回ずつ動くためです。セットアップが既存の値を変えるのはこの 1 つだけです。
 
@@ -125,7 +125,7 @@ Session-only plugins (--plugin-dir / --plugin-url):
 ## 更新
 
 - **マーケットプレイス版:** `claude plugin marketplace update jeongjaesoon`、`claude plugin update agent-skills@jeongjaesoon` のあと、動いているセッションで `/reload-plugins`。
-- **チェックアウト:** 同期ジョブが 15 分ごとに fast-forward するので、スキルは自動で最新になります。新しい推奨設定は `python3 <チェックアウト>/scripts/setup.py --update`（dry run）が表示する `--apply` の行で入れるか、セッションに「agent-skills を更新して」と頼みます。個人設定リポジトリがあれば先に `git -C ~/.config/agent-skills/personal pull --ff-only`。このフォルダはほかの何も pull しません。
+- **チェックアウト:** 同期ジョブが 15 分ごとに fast-forward するので、スキルは自動で最新になります。新しい推奨設定は `python3 <チェックアウト>/scripts/setup.py --update`（dry run）が表示する `--apply` の行で入れるか、セッションに「agent-skills を更新して」と頼みます。個人設定リポジトリがあれば先に `git -C ~/.config/agent-skills/personal pull --ff-only`。ほかにこのフォルダを pull するものはありません。
 
 ## 安全装置
 
@@ -143,7 +143,7 @@ Session-only plugins (--plugin-dir / --plugin-url):
 | `watch-prs` の `ownergate`（ボット PR の承認） | 無効。`prs.kinds` に入れて `prs.ownergate` にゲート項目を書くと HITL: 人が `!` の行で承認する | 本番でなく autoMode の allow ルールが覆っていれば、ラウンドが実行する（HOTL） |
 | `watch-prs` の `ready_to_merge` | 無効 | `prs.kinds` に足すと、`merge_repos` にある自分の PR のうち全ゲートを通ったものをマージする（HOTL） |
 | `secure-fill` による秘密値の入力 | HITL: 毎回 Touch ID で承認 | 許可リストの項目を `"approval": "none"` にすると Touch ID なしで入力する（`-T ""` で作った項目なら Keychain の確認は残る） |
-| `janitor`、`pressure-watch` | HOTL: エージェントが残した終了済みのリソースを定期的に片付ける | `skills-sync setup disable <名前>` |
+| `janitor`、`pressure-watch` | HOTL: エージェントが残した終了済みのリソースを定期的に片付ける | `<チェックアウト>/bin/skills-sync setup disable <名前>` |
 
 HOTL のとき人が見るのは、`brief` の状況報告と、ダッシュボードの決定・権限ダイアログ・受信箱です。ダッシュボード、`janitor`、watch のラウンドは Orca を前提にしています。詳しくは [operations.md](operations.md#안전-경계)（韓国語）。
 
@@ -164,7 +164,7 @@ claude plugin marketplace remove jeongjaesoon
 |---|---|
 | `settings.json` の `env.CLAUDE_CODE_PLUGIN_DIRS` とほかの推奨設定 | `--apply` が表示した戻しの行（`cp settings.json.bak-setup-<時刻> settings.json`）を実行するか、不要なキーを消す。動いているセッションは再起動する |
 | 同期ジョブ（macOS） | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` のあと `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` を削除 |
-| 自動化 | 1 つずつ `skills-sync setup disable <名前>`。LaunchAgent のものはその agent も止める。手で入れた `bin/reap-hard` とダッシュボードの agent は `bin/reap-hard uninstall`、`orch-dash uninstall-agent` |
+| 自動化 | 1 つずつ `<チェックアウト>/bin/skills-sync setup disable <名前>`。LaunchAgent のものはその agent も止める。手で入れた `bin/reap-hard` とダッシュボードの agent は `<チェックアウト>/bin/reap-hard uninstall`、`<チェックアウト>/bin/orch-dash uninstall-agent` |
 | 状態ファイル | `~/.local/state/agent-skills/` を削除 |
 
 残るものが 2 つあります。Orca の automation 登録は `disable` で止まるだけで削除はされません。`~/.claude/agent-skills.json` は何も消しません。

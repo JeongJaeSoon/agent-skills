@@ -174,7 +174,7 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
         rows.append(row("ok", "최신 여부", f"origin main {remote[:7]} 과 같음"))
     sync =read_json(p["state"] / "sync.json", None)
     if not sync:
-        rows.append(row("missing", "자동 동기화", "sync.json 없음 (한 번도 안 돎)", f"python3 {where}/scripts/setup.py --actions-only (setup-pc 가 권한 창 뒤에서 돌린다)"))
+        rows.append(row("missing", "자동 동기화", "sync.json 없음 (한 번도 안 돎)", f"! python3 {where}/scripts/setup.py --actions-only (사람이 직접 쳐도 되고, setup-pc 는 권한 창 뒤에서 돌린다)"))
     else:
         at = datetime.datetime.strptime(sync["at"], "%Y-%m-%dT%H:%M:%S%z")
         age = ((now or datetime.datetime.now(at.tzinfo)) - at).total_seconds()
@@ -187,7 +187,7 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
     if darwin:
         rc, _ = run(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"])
         if rc:
-            rows.append(row("missing", "launchd 동기화 작업", "로드 안 됨", f"python3 {where}/scripts/setup.py --actions-only (setup-pc 가 권한 창 뒤에서 돌린다)"))
+            rows.append(row("missing", "launchd 동기화 작업", "로드 안 됨", f"! python3 {where}/scripts/setup.py --actions-only (사람이 직접 쳐도 되고, setup-pc 는 권한 창 뒤에서 돌린다)"))
     else:
         rows.append(row("unsupported", "launchd 동기화 작업", f"macOS 전용 ({sys.platform})",
                         f"cron 에 손으로: */15 * * * * python3 {where}/scripts/sync.py sync"))

@@ -10,7 +10,7 @@ There are three ways in:
 - **B. Full setup from a session.** A live checkout of this repo, the recommended user settings, a sync job and the default automations. It starts with A and finishes in the next session.
 - **C. Full setup from a shell.** The same result as B without a Claude Code session.
 
-Every command below was run in a throwaway environment (temporary `HOME`, `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_PLUGIN_DIRS`) on Claude Code 2.1.314, and the outputs shown are from that run.
+The outputs shown come from a run in a throwaway environment (temporary `HOME`, `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_PLUGIN_DIRS`) on Claude Code 2.1.314. That run covered path A, the marketplace uninstall, and path C up to `--settings-only --apply`. It did not run the steps that install the sync job and automations (`--actions-only`, a full `--apply`) or the `launchctl` and automation rows under Uninstall, because launchd is shared with the real user.
 
 ## Prerequisites
 
@@ -74,7 +74,7 @@ python3 -I ~/src/agent-skills/scripts/setup.py --language English --apply <hash>
 ```
 
 - The checkout must be the main checkout on branch `main`. A worktree or another branch is refused.
-- The dry run writes nothing. Its first line, `target <path>`, is the `settings.json` it will write. Its last line is the exact `--apply` command.
+- The dry run writes nothing. Its first line, `target <path>`, is the `settings.json` it will write. Its last line is the exact `--apply` command, starting with `! ` for pasting into a Claude Code session; in a shell, drop the `!`.
 - Without `--settings-only`, `--apply` also installs the sync job, runs one sync and turns on the default automations, then prints the check table.
 - If the marketplace copy is installed, the diff turns it off (`enabledPlugins` to `false`). With both on, every hook runs twice. It is the one existing value setup changes.
 
@@ -143,7 +143,7 @@ Where a human approves (HITL, human in the loop) and where the agent goes ahead 
 | `watch-prs` `ownergate` (approving bot PRs) | Off. Add it to `prs.kinds` with gate entries in `prs.ownergate` and it is HITL: you approve with a `!` line | Outside production, and when an autoMode allow rule covers it, the round runs it (HOTL) |
 | `watch-prs` `ready_to_merge` | Off | Add it to `prs.kinds` and your PRs in `merge_repos` that pass every gate are merged (HOTL) |
 | Filling secrets with `secure-fill` | HITL: Touch ID every time | Set an allowlist entry to `"approval": "none"` and it fills without Touch ID (an item created with `-T ""` still gets the Keychain prompt) |
-| `janitor`, `pressure-watch` | HOTL: finished resources agents left behind are cleaned up on a schedule | `skills-sync setup disable <name>` |
+| `janitor`, `pressure-watch` | HOTL: finished resources agents left behind are cleaned up on a schedule | `<checkout>/bin/skills-sync setup disable <name>` |
 
 Under HOTL you watch through `brief` status reports and the dashboard's decisions, permission dialogs and inbox. The dashboard, `janitor` and the watch rounds assume Orca. More in [operations.md](operations.md#안전-경계) (Korean).
 
@@ -164,7 +164,7 @@ A full setup (path B or C) also needs:
 |---|---|
 | `env.CLAUDE_CODE_PLUGIN_DIRS` and the other recommended settings in `settings.json` | Run the rollback line `--apply` printed (`cp settings.json.bak-setup-<time> settings.json`), or delete the keys you do not want. Restart running sessions |
 | The sync job (macOS) | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync`, then delete `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` |
-| The automations | `skills-sync setup disable <name>` for each; for a LaunchAgent one it also unloads the agent. `bin/reap-hard uninstall` and `orch-dash uninstall-agent` if you installed those by hand |
+| The automations | `<checkout>/bin/skills-sync setup disable <name>` for each; for a LaunchAgent one it also unloads the agent. `<checkout>/bin/reap-hard uninstall` and `<checkout>/bin/orch-dash uninstall-agent` if you installed those by hand |
 | State | Delete `~/.local/state/agent-skills/` |
 
 Two things are left behind: the Orca automation registrations, which `disable` turns off but does not delete, and `~/.claude/agent-skills.json`, which nothing removes.

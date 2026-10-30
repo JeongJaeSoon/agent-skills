@@ -10,7 +10,7 @@
 - **B. 세션에서 전체 설정.** 이 저장소의 체크아웃을 직접 읽고, 권장 사용자 설정, 동기화 작업, 기본 자동화까지 넣는다. A로 시작해 다음 세션에서 끝난다.
 - **C. 셸에서 전체 설정.** B와 같은 결과를 Claude Code 세션 없이.
 
-아래 명령은 모두 `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PLUGIN_DIRS`를 임시 디렉터리로 돌린 환경에서 Claude Code 2.1.314로 실제로 돌렸고, 보이는 출력은 그때 나온 것이다.
+보이는 출력은 `HOME`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PLUGIN_DIRS`를 임시 디렉터리로 돌린 환경에서 Claude Code 2.1.314로 돌린 것이다. 돌린 범위는 A, 마켓플레이스 사본 제거, C의 `--settings-only --apply`까지다. 동기화 작업과 자동화를 넣는 단계(`--actions-only`, 전체 `--apply`)와 제거 표의 `launchctl`·자동화 행은 돌리지 않았다. launchd는 실제 사용자와 같이 쓰기 때문이다.
 
 ## 준비물
 
@@ -74,7 +74,7 @@ python3 -I ~/src/agent-skills/scripts/setup.py --language Korean --apply <해시
 ```
 
 - 체크아웃은 `main` 브랜치의 메인 체크아웃이어야 한다. worktree나 다른 브랜치면 거절한다.
-- dry run은 아무것도 쓰지 않는다. 첫 줄 `target <경로>`가 쓸 `settings.json`이고, 마지막 줄이 칠 `--apply` 명령이다.
+- dry run은 아무것도 쓰지 않는다. 첫 줄 `target <경로>`가 쓸 `settings.json`이고, 마지막 줄이 칠 `--apply` 명령이다. 이 줄은 Claude Code 세션에 붙여 넣도록 `! `로 시작하므로, 셸에서는 `!`를 뺀다.
 - `--settings-only`가 없으면 `--apply`가 동기화 작업 설치, 한 번 동기화, 기본 자동화 켜기까지 하고 점검 표를 출력한다.
 - 마켓플레이스 사본이 설치돼 있으면 diff가 그것을 끈다(`enabledPlugins`를 `false`로). 둘 다 켜져 있으면 hook이 두 번 돈다. setup이 이미 있는 값을 바꾸는 경우는 이것 하나다.
 
@@ -141,7 +141,7 @@ Session-only plugins (--plugin-dir / --plugin-url):
 | `watch-prs` `ownergate`(봇 PR 승인) | 꺼짐. `prs.kinds`에 넣고 `prs.ownergate`에 게이트 항목을 적으면 HITL: 사람이 `!` 줄로 승인한다 | 프로덕션이 아니고 autoMode allow 규칙이 덮으면 회차가 실행한다(HOTL) |
 | `watch-prs` `ready_to_merge` | 꺼짐 | `prs.kinds`에 더하면 `merge_repos`의 내 PR 중 게이트를 모두 통과한 것을 머지한다(HOTL) |
 | `secure-fill` 비밀값 입력 | HITL: 매번 Touch ID 승인 | 허용 목록 항목을 `"approval": "none"`으로 두면 Touch ID 없이 채운다(`-T ""`로 만든 항목이면 Keychain 확인은 남는다) |
-| `janitor`, `pressure-watch` | HOTL: 에이전트가 남긴 끝난 리소스를 정기적으로 정리한다 | `skills-sync setup disable <이름>` |
+| `janitor`, `pressure-watch` | HOTL: 에이전트가 남긴 끝난 리소스를 정기적으로 정리한다 | `<체크아웃>/bin/skills-sync setup disable <이름>` |
 
 HOTL에서 사람이 보는 곳은 `brief`의 현황 보고와 대시보드의 결정·권한 창·받은편지함이다. 대시보드·`janitor`·watch 회차는 Orca를 전제로 한다. 세부는 [operations.md](operations.md#안전-경계).
 
@@ -162,7 +162,7 @@ claude plugin marketplace remove jeongjaesoon
 |---|---|
 | `settings.json`의 `env.CLAUDE_CODE_PLUGIN_DIRS`와 다른 권장 설정 | `--apply`가 출력한 되돌리기 줄(`cp settings.json.bak-setup-<시각> settings.json`)을 치거나 원하지 않는 키를 지운다. 떠 있는 세션은 재시작한다 |
 | 동기화 작업(macOS) | `launchctl bootout gui/$(id -u)/io.github.jeongjaesoon.agent-skills-sync` 뒤 `~/Library/LaunchAgents/io.github.jeongjaesoon.agent-skills-sync.plist` 삭제 |
-| 자동화 | 하나씩 `skills-sync setup disable <이름>`. LaunchAgent인 것은 그 agent도 내린다. 손으로 설치한 `bin/reap-hard`와 대시보드 agent는 `bin/reap-hard uninstall`, `orch-dash uninstall-agent` |
+| 자동화 | 하나씩 `<체크아웃>/bin/skills-sync setup disable <이름>`. LaunchAgent인 것은 그 agent도 내린다. 손으로 설치한 `bin/reap-hard`와 대시보드 agent는 `<체크아웃>/bin/reap-hard uninstall`, `<체크아웃>/bin/orch-dash uninstall-agent` |
 | 상태 파일 | `~/.local/state/agent-skills/` 삭제 |
 
 남는 것이 둘 있다. Orca automation 등록은 `disable`이 끄기만 하고 지우지 않는다. `~/.claude/agent-skills.json`은 아무것도 지우지 않는다.
