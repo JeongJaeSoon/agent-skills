@@ -19,9 +19,9 @@ GitHub 저장소의 티켓 작업을 Claude Code에 맡기려는 개발자를 �
 
 구성 요소, 두 흐름, 사람이 결정권을 쥐는 지점을 4분 남짓으로 소개한다.
 
-<!-- VIDEO_URL_KO -->
+https://github.com/user-attachments/assets/15b9b1db-87ee-4042-81ed-8f13c4a23b03
 
-자막: [한국어 (.srt)](docs/video/agent-skills-explainer-ko.srt). [영어판](<!-- VIDEO_LINK_EN -->)과 [일본어판](<!-- VIDEO_LINK_JA -->)도 있다.
+자막: [한국어 (.srt)](docs/video/agent-skills-explainer-ko.srt). [영어판](https://github.com/user-attachments/assets/e33deb97-f364-4448-ab4a-bce9853ee977)과 [일본어판](https://github.com/user-attachments/assets/52557640-bd1b-4485-b4b4-5b835eb5931a)도 있다.
 
 ## 무엇을 얻나
 

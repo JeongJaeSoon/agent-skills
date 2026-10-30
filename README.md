@@ -19,9 +19,9 @@ macOS with [Orca](https://github.com/stablyai/orca) is the primary environment. 
 
 A 4-minute overview of the parts, the two flows and where you stay in charge.
 
-<!-- VIDEO_URL_EN -->
+https://github.com/user-attachments/assets/e33deb97-f364-4448-ab4a-bce9853ee977
 
-Subtitles: [English (.srt)](docs/video/agent-skills-explainer-en.srt). The video is also available in [Japanese](<!-- VIDEO_LINK_JA -->) and [Korean](<!-- VIDEO_LINK_KO -->).
+Subtitles: [English (.srt)](docs/video/agent-skills-explainer-en.srt). The video is also available in [Japanese](https://github.com/user-attachments/assets/52557640-bd1b-4485-b4b4-5b835eb5931a) and [Korean](https://github.com/user-attachments/assets/15b9b1db-87ee-4042-81ed-8f13c4a23b03).
 
 ## What you get
 

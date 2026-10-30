@@ -19,9 +19,9 @@ GitHub リポジトリのチケット作業を Claude Code に任せたい開発
 
 構成要素、二つの流れ、人が決定権を持つ地点を約4分で紹介します。
 
-<!-- VIDEO_URL_JA -->
+https://github.com/user-attachments/assets/52557640-bd1b-4485-b4b4-5b835eb5931a
 
-字幕: [日本語 (.srt)](docs/video/agent-skills-explainer-ja.srt)。[英語版](<!-- VIDEO_LINK_EN -->)と[韓国語版](<!-- VIDEO_LINK_KO -->)もあります。
+字幕: [日本語 (.srt)](docs/video/agent-skills-explainer-ja.srt)。[英語版](https://github.com/user-attachments/assets/e33deb97-f364-4448-ab4a-bce9853ee977)と[韓国語版](https://github.com/user-attachments/assets/15b9b1db-87ee-4042-81ed-8f13c4a23b03)もあります。
 
 ## できること
 
