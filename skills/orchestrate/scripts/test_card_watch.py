@@ -1,5 +1,5 @@
 """card_watch.py: which screens wake the orchestrator or lead, and which do not twice. Run: python3 test_card_watch.py"""
-import contextlib, io, pathlib, sys, tempfile
+import contextlib, io, os, pathlib, sys, tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import card_watch, prog
 
@@ -58,6 +58,65 @@ assert scan(seen, free=9.0) == [] and seen["disk"] == "low", "low disk is report
 scan(seen, free=40)
 assert "disk" not in seen
 
+# A lost login or a goal Claude Code stopped is STUCK (auth) at once, whatever glyph the line opens with.
+dead403 = ["⏺ Bash(gh pr view 1)", "  ⎿  Please run /login · API Error: 403 Forbidden", "─" * 40, "❯", "─" * 40,
+           "  ⏵⏵ auto mode on · 1 shell", "  ⏺ main", "  ◯ general-purpose  reading notes"]  # the status area lists agents with ⏺
+cleared = ["⏺ Running tests", '⚠ Goal cleared after an unrecoverable error (authentication failed): "ship it". Run /goal again to continue.', "❯ "]
+paused = ["⏺ Report sent.", "Goal paused · usage limit reached · send a message after it resets", "❯ "]
+expired = ["⏺ Login expired · Please run /login", "❯ "]
+screens = {"h1": dead403, "h2": cleared, "h3": paused, "h4": expired}
+seen = {}
+found = scan(seen)
+assert found[0] == 'STUCK card-a (auth): "Please run /login · API Error: 403 Forbidden"', found
+assert found[2].startswith('STUCK card-b (auth): "Goal cleared after an unrecoverable error (authentication failed)'), found
+assert found[4] == 'STUCK card-c (auth): "Goal paused · usage limit reached · send a message after it resets"', found
+assert found[6] == 'STUCK card-d (auth): "Login expired · Please run /login"', found
+assert scan(seen) == [], "an auth screen still showing is not reported again"
+
+# Quoting the text is not hitting it: mid-sentence, in a later turn, or a session that went on after it.
+mention = ["⏺ The lead stopped on 「Please run /login · API Error: 403」, so I restarted it.", "❯ "]
+said = ["⏺ Cards hit API Error: 403 and Goal paused · usage limit yesterday.", "❯ "]
+recovered = ["  ⎿  Please run /login · API Error: 403 Forbidden", "> /login", "⏺ Login successful. Continuing.", "❯ "]
+screens = {"h1": mention, "h2": said, "h3": recovered, "h4": idle}
+assert scan({}) == [], scan({})
+
+# A card once seen under /goal that sits on an empty prompt without it has lost its goal.
+lost = ["⏺ Report sent.", "❯ ", "  ⏵⏵ auto mode on"]
+terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 16 * 60000), term("h2", "/w/card-b", last=NOW - 16 * 60000),
+                                    term("h3", "/w/card-c", last=NOW - 5 * 60000)], "me")
+screens = {"h1": goal, "h2": idle, "h3": goal}
+seen = {}
+assert scan(seen) == [] and seen["goals"] == ["h1", "h3"], seen
+screens = {"h1": lost, "h2": idle, "h3": lost}
+found = scan(seen)
+assert found == ["STUCK card-a (goal lost, idle 16 min): read its screen", "  orca terminal read --terminal h1 --screen"], \
+    "a session never under /goal, and a goal card idle 5 min, are fine"
+assert scan(seen) == [] and seen["goals"] == ["h1", "h3"], "reported once; the card stays known"
+screens["h1"] = ["⏺ Working", "❯ draft text", ""]
+assert scan(seen) == [], "text in the input box is not an empty prompt"
+terms = terms[1:]
+scan(seen)
+assert seen["goals"] == ["h3"], "a card that left the listing is forgotten"
+terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 16 * 60000)], "me")
+assert scan({"h1": "x"}) == [], "a state file from before goals were kept loads as none"
+
+# --card judges a new card's start at the end of the window.
+class Clock:
+    t = NOW / 1000
+    def __call__(self): return self.t
+    def sleep(self, s): self.t += s
+def start(screen, out_at, seen_term=True):
+    clock = Clock()
+    t = term("hn", "/w/card-n", last=out_at(clock))
+    return card_watch.check_start("hn", lambda h: screen, lambda: [t] if seen_term else [], 240, 30, clock, clock.sleep)
+later = lambda c: (c.t + 200) * 1000
+assert start(goal, later) == ["STARTED card-n: /goal active, output since the check began"]
+assert start(goal, lambda c: c.t * 1000 - 1)[0].startswith("STUCK card-n (not started)"), "/goal active but silent since create"
+shell = ["Last login: Thu", "user@host card-n % /goal ship it"]
+assert start(shell, later)[0] == 'STUCK card-n (not started): no /goal active with new output; last line "user@host card-n % /goal ship it"'
+assert start(dead403, later)[0] == 'STUCK card-n (auth): "Please run /login · API Error: 403 Forbidden"', "a finding ends the check early"
+assert start(goal, later, seen_term=False) == ["STUCK hn (not started): no agent terminal with this handle"]
+
 # The watch exits on a finding and remembers it across restarts; a terminal it cannot read is skipped.
 screens = {"h1": menu, "h2": idle, "h3": idle, "h4": idle}
 def read_or_gone(h):
@@ -80,4 +139,14 @@ with tempfile.TemporaryDirectory() as d:
     with contextlib.redirect_stdout(out):
         card_watch.main(["--self", "me", "--min-free-gb", "0", "--state", str(state), "--interval", "1", "--timeout-ms", "500"])
     assert out.getvalue().startswith("QUIET"), out.getvalue()
+
+    # Without --self the watch skips the terminal named by ORCA_TERMINAL_HANDLE, so it never reports its own session.
+    screens = {"me": menu, "h1": idle, "h2": idle, "h3": idle, "h4": idle}
+    prog.read_screen = lambda h: screens[h]
+    for own, want in (("me", "OK 4 agent terminals"), ("", "STUCK me (a select menu)")):
+        os.environ["ORCA_TERMINAL_HANDLE"] = own
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            card_watch.main(["--min-free-gb", "0", "--state", str(pathlib.Path(d) / f"self-{own}.json"), "--once"])
+        assert out.getvalue().startswith(want), (own, out.getvalue())
 print("ok")
