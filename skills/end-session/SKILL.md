@@ -127,8 +127,8 @@ it), then pick the row:
   to the second row and leave the card: `orca orchestration send --to run:<runId> --type status
   --subject "card left: worktree rm refused by permission layer" --body "<card path>"` (after
   `worker_done` a send without `--to` finds no Run), then
-  `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The `CLOSE OUT` of the orchestrator or lead above it
-  line removes the card, or puts it to the human.
+  `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The orchestrator or lead above it
+  puts the card to the human and does not remove it: its own rm would be the refused act run by another session.
 - **`KEEP`** is the brief's opt-out: the orchestrator or lead above it plans to reuse this terminal or card.
 - **An open PR** keeps the worker only until it lands. A later wake (a review fix, a message)
   runs this table again and closes if the PR has merged or closed since. Nothing else wakes an
