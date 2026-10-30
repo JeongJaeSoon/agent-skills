@@ -122,6 +122,8 @@ failing test before the fix, a refactor's deletions before the reshape. Amend wh
 belongs in the commit you just made; make a new one when it is separable. Never
 `git reset --hard` while uncommitted work exists — commit it or copy it aside first.
 
+Under auto mode a force-push is refused as destructive unless an approval or allow rule names it,
+so a pushed PR branch takes a change on main by merging main in (§6, "merge main in"), never by a rebase.
 A force-push to a PR branch (after a rebase or an amend), when one is permitted, keeps the old
 head recoverable: record the remote sha, create a local `backup/<branch>-<sha8>` at it (this session
 deletes it with `git branch -D` once the PR merges), push with

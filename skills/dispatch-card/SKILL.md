@@ -65,9 +65,12 @@ session as not the human's, so an approval sent afterwards is refused. The brief
 - **Background** — what happened in repo A and why this work follows from it.
 - **Sources** — links, not summaries: repo, PR, commit, note paths the target session reads itself.
 - **Deliverable and done** — the exact output and what makes it complete.
-- **Do not** — repo A is off limits; anything else the target must leave alone. Paste the
-  refused-act paragraph of `orchestrate` `references/brief.md` FORBIDDEN verbatim: a card
-  restarted after a `no verdict` needs it most.
+- **Do not** — repo A is off limits; anything else the target must leave alone. Paste from
+  `orchestrate` `references/brief.md` FORBIDDEN, verbatim, the refused-act paragraph (a card
+  restarted after a `no verdict` needs it most) and the sentences from "No force-push" through
+  "each of them then counts as refused": no force-push, no rebase only to catch up, file edits
+  with Edit and Write only, one file-changing act per Bash call, nothing chained. A card gets
+  these rules from no other place. Copy them by those first and last words, not by line numbers.
 - **Approved** — an `APPROVED:` row: the acts the human already approved for this work, each with
   their words and the date (merge, deploy, restarting an app, a settings or language change, an
   upgrade). Written as a row, it reaches the first prompt (§3); a heading or bullet does not. The
