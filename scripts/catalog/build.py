@@ -11,7 +11,10 @@ SRC_PATH = "docs/skills.md"
 
 
 def git(*args):
-    return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+    return r.stdout.strip()
 
 
 src_ko = (REPO / SRC_PATH).read_text()
@@ -26,11 +29,20 @@ def load_translation(lang):
     m = re.match(r"<!-- translated-from: (\w+) -->\n", text)
     if not m:
         sys.exit(f"skills.{lang}.md must start with <!-- translated-from: <sha> -->")
+    path = f"docs/skills.{lang}.md"
     base = m.group(1)
-    newer = git("log", "--format=%h %s", f"{base}..HEAD", "--", SRC_PATH)
-    stale = bool(newer) or dirty
+    reachable = subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor", base, "HEAD"],
+                               capture_output=True).returncode == 0
+    if not reachable:
+        # A squash merge leaves translated-from off main's history; the squash commit carries both files,
+        # so the translation's own last commit is the nearest point known to match the Korean source.
+        base = git("log", "-1", "--format=%h", "--", path)
+        print(f"note: translated-from {m.group(1)[:7]} is not in this history (squash merge?); "
+              f"{path} is checked from its last commit {base}", file=sys.stderr)
+    newer = git("log", "--format=%h %s", f"{base}..HEAD", "--", SRC_PATH) if base else ""
+    stale = bool(newer) or dirty and not git("status", "--porcelain", "--", path)
     if stale:
-        print(f"WARNING: {SRC_PATH} changed after {base}; skills.{lang}.md is stale:", file=sys.stderr)
+        print(f"WARNING: {SRC_PATH} changed after {base[:7]}; {path} is stale:", file=sys.stderr)
         print(newer or "  (uncommitted changes)", file=sys.stderr)
     return text[m.end():], base, stale
 

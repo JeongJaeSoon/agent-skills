@@ -88,7 +88,7 @@ PR を受け持つスキルとマージする主体:
 
 ### ui-review
 - **いつ:** 試作・画面・UI を変える PR を人に見せる前（「UI 리뷰해줘」（UI をレビューして）、「시안 점검해줘」（試作を点検して）、「화면 밸런스 봐줘」（画面のバランスを見て））。人が UI の問題を指摘したあとは、直してから規則を足します。スクリーンショットを撮って載せるのは `deliver-ticket` の visual-evidence です。
-- **内容:** 製品のデザインシステムがこのスキルの既定値より優先し、同じ種類の既存画面を基準（baseline）に選びます。`scripts/ui_measure.py` が headless Chrome で 1280・390 のページを測ります（行の高さ、同じ列のボタン幅、揃え線、縦の中心、4px グリッド、はみ出し、リンクの下線、表の見出しと入力コントロールの一貫性、名前のない記号、基準画面とのコンポーネント一致）。1行の値の折り返しや色のない画面などは警告です。測れないもの（人に見えるシステムの手順、重複する設定、まとまり）は `references/walkthrough.md` のシナリオ表で実際に操作して判定します。理由のある例外なしに FAIL が残っていれば試作は送りません。規則と根拠は `references/rules.md` にあり、新しい指摘は一般的な規則ならこのスキルに、一つの製品の規則ならそのリポジトリか `~/.config/agent-skills/ui-review/rules.md` に足します。
+- **内容:** 製品のデザインシステムがこのスキルの既定値より優先し、同じ種類の既存画面を基準（baseline）に選びます。`scripts/ui_measure.py` が headless Chrome で 1280・390 のページを測ります（行の高さ、同じ列のボタン幅、揃え線、縦の中心、4px グリッド、はみ出し、リンクの下線、表の見出しと入力コントロールの一貫性、名前のない記号、基準画面とのコンポーネント一致）。1行の値の折り返しや色のない画面などは警告です。測れないもの（画面に出るシステム側の手順、同じものを変える重複したオプション、設定のまとまり）は `references/walkthrough.md` のシナリオ表で実際に操作して判定します。理由のある例外なしに FAIL が残っていれば試作は送りません。規則と根拠は `references/rules.md` にあり、新しい指摘は一般的な規則ならこのスキルに、一つの製品の規則ならそのリポジトリか `~/.config/agent-skills/ui-review/rules.md` に足します。
 - **関係:** `deliver-ticket` §3 のレビューと visual-evidence の判定、`orchestrate` のリードが試作や画面を人に送る前。
 
 ### handoff-ticket
@@ -277,8 +277,8 @@ PR を受け持つスキルとマージする主体:
 ### todo
 - **いつ:** 「할 일 보여줘」（予定を見せて）、「보류 큐 보여줘」（保留キューを見せて）、`/agent-skills:todo`。`brief` は予定と保留キューを1行で数えるだけなので、一覧が必要なときに呼びます。
 - **内容:**
-  - `orch board todo list [--telegram]` の出力をそのまま送ります。表は二つです。予定の表（状態 ⏰ 到来 / 📅 待ち · いつ · やること · 担当）は到来したものが先、次に日付順、日付のないものは入れた順です。保留キューの表（# · やること · 次の番の条件 · 担当）は順番どおりで、先頭に ▶（次の番）が付きます。番号は閉じた項目を除いた1からの順番で、`later move`・`later drop`・`todo from-later` が受け取る番号と同じです。表の見出しの件数は brief の1行と同じ基準です。78列に収めるために長い欄だけを `…[n]` で切り、原文を表の下に置きます。Telegram では表を使わず行で書きます。
-  - 追加と完了: 予定は `orch board todo add <作業> (--due D | --after C) --who W`、閉じるのは `orch board done do:<k>`、保留の項目を予定に変えるのは `todo from-later <n> --who W` です。保留は `orch board later add <作業> --trigger <次の番の条件> [--who W] [--at N]`、順番の移動は `later move <n> --to N` です。
+  - `orch board todo list [--telegram]` の出力をそのまま送ります。表は二つです。予定の表（状態 ⏰ 到来 / 📅 待ち · いつ · やること · 担当）は到来したものが先、次に日付順、日付のないものは入れた順です。保留キューの表（# · やること · 次に着手する条件 · 担当）は順番どおりで、先頭に ▶（次に着手）が付きます。番号は閉じた項目を除いた1からの順番で、`later move`・`later drop`・`todo from-later` が受け取る番号と同じです。表の見出しの件数は brief の1行と同じ基準です。78列に収めるために長い欄だけを `…[n]` で切り、原文を表の下に置きます。Telegram では表を使わず行で書きます。
+  - 追加と完了: 予定は `orch board todo add <作業> (--due D | --after C) --who W`、閉じるのは `orch board done do:<k>`、保留の項目を予定に変えるのは `todo from-later <n> --who W` です。保留は `orch board later add <作業> --trigger <次に着手する条件> [--who W] [--at N]`、順番の移動は `later move <n> --to N` です。
 - **関係:** `brief` の予定・保留キューの行が指す先です。ダッシュボードでは To-do ページです。
 
 ### map-features
@@ -562,7 +562,7 @@ Agent、SendMessage、AskUserQuestion、Skill、Cron*、Monitor のようなル�
 `hooks/claim_check.py` は Stop/SubagentStop でコード変更後に実行のない完了主張を一度だけ止めます。拒否されたコマンドや引用例は除外し、未検証と明記した報告を認めます。`AGENT_SKILLS_CLAIM_CHECK=0` で無効になります。適切なテストが実行されたことを保証するものではありません。
 
 ### 重い開始の前の負荷確認
-`hooks/pressure_gate.py`（PreToolUse、Bash）。コマンドの位置に `orch heavy`、`docker compose … up`、`docker-compose … up`、`orca worktree create` があるときだけ、`reap-resources` の `pressure.py` でマシンを測ります（0.3秒前後）。危険なら拒否し（swap とディスクは何時間も高いまま残るので警告までしか数えません）、警告なら直近15分（`reap.pressure.gate_fresh_minutes`）に片付けの回がないときだけ拒否します。拒否の理由には先に実行する `pressure.py round` が入ります。危険なときはそのコマンドをセッション・コマンド単位の待ち行列（`pressure.py queue`）とダッシュボードの Needs you に残し（期限は `reap.pressure.queue_minutes`、既定は15分）、`Monitor` で `pressure.py queue wait <id>` を待って 0 で終われば、同じセッションが同じコマンドをもう一度実行します。待ち行列はコマンドを自分では実行しません。再試行の成否は同じスクリプトが PostToolUse・PostToolUseFailure で記録し、期限の切れた項目は断念として残します。他人のカードやプロセスは終了させません。測定に失敗したら判定しません。ユーザーが今すぐ実行するよう言ったときだけ、コマンドの前に `AGENT_SKILLS_PRESSURE_GATE=0` を付けます。
+`hooks/pressure_gate.py`（PreToolUse、Bash）。コマンドの位置に `orch heavy`、`docker compose … up`、`docker-compose … up`、`orca worktree create` があるときだけ、`reap-resources` の `pressure.py` でマシンを測ります（0.3秒前後）。危険なら拒否し（swap とディスクは何時間も高いまま残るので警告までしか数えません）、警告なら直近15分（`reap.pressure.gate_fresh_minutes`）に片付けラウンドがないときだけ拒否します。拒否の理由には先に実行する `pressure.py round` が入ります。危険なときはそのコマンドをセッション・コマンド単位の待ち行列（`pressure.py queue`）とダッシュボードの Needs you に残し（期限は `reap.pressure.queue_minutes`、既定は15分）、`Monitor` で `pressure.py queue wait <id>` を待って 0 で終われば、同じセッションが同じコマンドをもう一度実行します。待ち行列はコマンドを自分では実行しません。再試行の成否は同じスクリプトが PostToolUse・PostToolUseFailure で記録し、期限の切れた項目は断念として残します。他人のカードやプロセスは終了させません。測定に失敗したら判定しません。ユーザーが今すぐ実行するよう言ったときだけ、コマンドの前に `AGENT_SKILLS_PRESSURE_GATE=0` を付けます。
 
 ### 文体の検査
 `hooks/prose_check.py` は PR・コミット・トラッカーの文章を決定的なパターンで確認します。助言を追加するだけで、操作を止めたり権限を変更したりしません。`AGENT_SKILLS_PROSE_CHECK=0` で無効になります。

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest release gets fixes. Releases are tagged `vYYYY.MM.DD.N`; see [Releases](https://github.com/JeongJaeSoon/agent-skills/releases).
+Only the latest release gets fixes. A fix ships in a new release tagged `vYYYY.MM.DD.N` ([Releases](https://github.com/JeongJaeSoon/agent-skills/releases)); older tags are not patched. A marketplace install follows `main`, so updating the plugin picks up the fix.
 
 ## Reporting a vulnerability
 

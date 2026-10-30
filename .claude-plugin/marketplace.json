@@ -3,7 +3,7 @@
   "owner": {
     "name": "JeongJaeSoon"
   },
-  "description": "Claude Code plugin marketplace for agent-skills",
+  "description": "Claude Code plugin marketplace for agent-skills: skills, agents and hooks that take a ticket to a merged PR",
   "plugins": [
     {
       "name": "agent-skills",
