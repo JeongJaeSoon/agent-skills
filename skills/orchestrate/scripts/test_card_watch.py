@@ -58,7 +58,8 @@ assert scan(seen, free=9.0) == [] and seen["disk"] == "low", "low disk is report
 scan(seen, free=40)
 assert "disk" not in seen
 
-# A lost login or a goal Claude Code stopped is STUCK (auth) at once, whatever glyph the line opens with.
+# A lost login or a goal Claude Code stopped is STUCK (auth) once the card is quiet, whatever glyph the line opens with.
+terms = card_watch.agent_terminals([term(h, f"/w/card-{c}", last=NOW - 3 * 60000) for h, c in zip(("h1", "h2", "h3", "h4"), "abcd")], "me")
 dead403 = ["⏺ Bash(gh pr view 1)", "  ⎿  Please run /login · API Error: 403 Forbidden", "─" * 40, "❯", "─" * 40,
            "  ⏵⏵ auto mode on · 1 shell", "  ⏺ main", "  ◯ general-purpose  reading notes"]  # the status area lists agents with ⏺
 cleared = ["⏺ Running tests", '⚠ Goal cleared after an unrecoverable error (authentication failed): "ship it". Run /goal again to continue.', "❯ "]
@@ -77,8 +78,18 @@ assert scan(seen) == [], "an auth screen still showing is not reported again"
 mention = ["⏺ The lead stopped on 「Please run /login · API Error: 403」, so I restarted it.", "❯ "]
 said = ["⏺ Cards hit API Error: 403 and Goal paused · usage limit yesterday.", "❯ "]
 recovered = ["  ⎿  Please run /login · API Error: 403 Forbidden", "> /login", "⏺ Login successful. Continuing.", "❯ "]
-screens = {"h1": mention, "h2": said, "h3": recovered, "h4": idle}
+listed = ["⏺ Three screens mean the login is gone:", "  - Please run /login · API Error: 403 Forbidden",
+          "  ⎿  「Please run /login」 was on screen", "❯"]
+screens = {"h1": mention, "h2": said, "h3": recovered, "h4": listed}
 assert scan({}) == [], scan({})
+ticked = ["⏺ Notes:", "  `Please run /login · API Error: 403` is the text to watch", "> Goal paused · usage limit reached", "❯"]
+running = ["⏺ Bash(grep -rn 'Please run /login' logs/)", "  ⎿  Please run /login · API Error: 403 Forbidden",
+           "✶ Grepping… (12s · esc to interrupt)", "❯"]  # tool output under ⎿ reads like a real 403
+screens = {"h1": ticked, "h2": running, "h3": idle, "h4": idle}
+assert scan({}) == [], "a backtick or > quote, and a turn still running, are not a lost login"
+terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 60000)], "me")
+screens = {"h1": dead403}
+assert scan({}) == [], "a card that wrote output a minute ago is still working"
 
 # A card once seen under /goal that sits on an empty prompt without it has lost its goal.
 lost = ["⏺ Report sent.", "❯ ", "  ⏵⏵ auto mode on"]
@@ -106,15 +117,23 @@ class Clock:
     def __call__(self): return self.t
     def sleep(self, s): self.t += s
 def start(screen, out_at, seen_term=True):
+    """screen and seen_term may be functions of the seconds since the check began: the card changes in the window."""
     clock = Clock()
-    t = term("hn", "/w/card-n", last=out_at(clock))
-    return card_watch.check_start("hn", lambda h: screen, lambda: [t] if seen_term else [], 240, 30, clock, clock.sleep)
+    t0, t = clock.t, term("hn", "/w/card-n", last=out_at(clock))
+    at = lambda v: v(clock.t - t0) if callable(v) else v
+    return card_watch.check_start("hn", lambda h: at(screen), lambda: [t] if at(seen_term) else [], 240, 30, clock, clock.sleep)
 later = lambda c: (c.t + 200) * 1000
 assert start(goal, later) == ["STARTED card-n: /goal active, output since the check began"]
 assert start(goal, lambda c: c.t * 1000 - 1)[0].startswith("STUCK card-n (not started)"), "/goal active but silent since create"
 shell = ["Last login: Thu", "user@host card-n % /goal ship it"]
 assert start(shell, later)[0] == 'STUCK card-n (not started): no /goal active with new output; last line "user@host card-n % /goal ship it"'
-assert start(dead403, later)[0] == 'STUCK card-n (auth): "Please run /login · API Error: 403 Forbidden"', "a finding ends the check early"
+assert start(dead403, lambda c: c.t * 1000 - 3 * 60000)[0] == 'STUCK card-n (auth): "Please run /login · API Error: 403 Forbidden"', \
+    "a finding ends the check early"
+done = ["⏺ PR opened and reported.", "❯"]
+assert start(lambda s: goal if s < 120 else done, later)[0].startswith("ENDED card-n: /goal was active and is off now"), \
+    "a short task that met its goal inside the window ended; it did not fail to start"
+assert start(goal, later, seen_term=lambda s: s < 120)[0].startswith("CLOSED card-n: its terminal is gone"), \
+    "a card that closed itself inside the window is not a failed start"
 assert start(goal, later, seen_term=False) == ["STUCK hn (not started): no agent terminal with this handle"]
 
 # The watch exits on a finding and remembers it across restarts; a terminal it cannot read is skipped.

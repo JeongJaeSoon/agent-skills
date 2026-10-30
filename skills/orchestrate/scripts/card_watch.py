@@ -18,7 +18,8 @@ terminal: what to answer is the call of the orchestrator or lead that started th
 output says why it ended (STUCK lines, QUIET or OK).
 
 --card checks one card just created: it exits STUCK on the first finding, and at --within seconds prints
-STARTED only when the screen shows `/goal active` and the card has written output since the check began.
+STARTED when the screen shows `/goal active` and the card has written output since the check began, ENDED
+when `/goal` was on and is off now, CLOSED when its terminal went away after it was seen, else STUCK.
 """
 import argparse, hashlib, json, os, pathlib, re, shutil, sys, tempfile, time
 
@@ -31,7 +32,10 @@ STATE_DIR = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state
 AUTH = re.compile(r"(?:Please run /login\b|(?:Not logged in|Login expired|OAuth token revoked) · Please run /login"
                   r"|Session expired\. Please run /login|API Error: 403\b"
                   r"|Goal cleared after an unrecoverable error \(|Goal paused · )")
-GLYPHS = re.compile(r"^\W+")
+GLYPHS = re.compile(r"^[\s⏺⎿⚠✗●◯○\ufe0f]+")  # Claude Code's own marks only: a "- " bullet, `, > or 「 is not stripped
+# A turn in progress: tool output under ⎿ can carry the very same text as a real 403, so none counts while it runs.
+SPINNER = re.compile(r"^\s*(?:[✻✶✳✢✽]\s|[·*]\s+\w+…)")
+AUTH_QUIET_MIN = 2  # a dead session writes nothing; a working one quoting the text keeps writing
 
 
 def agent_terminals(listing, self_handle):
@@ -39,10 +43,12 @@ def agent_terminals(listing, self_handle):
 
 
 def auth_line(tail):
-    """The newest auth or goal-stop message, unless an assistant turn (⏺) came after it: that session went on.
+    """The newest auth or goal-stop message, unless an assistant turn (⏺) came after it or a turn is still running.
 
     Only the lines above the input box count: the status area below it lists agents with the same ⏺ glyph."""
     box = max((i for i, l in enumerate(tail) if l.strip().startswith("❯")), default=len(tail))
+    if any(SPINNER.match(l) for l in tail[:box]):
+        return None
     for l in reversed(tail[:box]):
         s = l.strip()
         if AUTH.match(GLYPHS.sub("", s)):
@@ -71,8 +77,9 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
             continue
         name = (t.get("worktreePath") or "").rstrip("/").rsplit("/", 1)[-1] or h
         tail = lines[-25:]
-        auth, hit, goal = auth_line(tail), prog.screen_prompt(lines), under_goal(t, tail)
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
+        auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
+        hit, goal = prog.screen_prompt(lines), under_goal(t, tail)
         if goal:
             goals.add(h)
         if auth:
@@ -113,29 +120,40 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
 
 
 def check_start(handle, read, listing, within, interval, clock=time.time, sleep=time.sleep):
-    """One card just created: STUCK on the first finding, else at the deadline STARTED or STUCK (not started).
+    """One card just created: STUCK on the first finding, else at the deadline STARTED, ENDED, CLOSED or STUCK.
 
     `/goal active` shows the moment `/goal` is typed, and cards have lost their login a few turns later, so it
-    is judged at the end of the window, not on first sight."""
-    start_ms, deadline = clock() * 1000, clock() + within
+    is judged at the end of the window, not on first sight. A short task can finish inside the window: a card
+    seen under `/goal` whose goal is now off, or whose terminal is gone, ended rather than failed to start."""
+    def tail_of(h):
+        try:
+            return read(h)[-25:]
+        except (SystemExit, Exception):
+            return []
+    start_ms, deadline, seen, was_goal = clock() * 1000, clock() + within, None, False
     while True:
         t = next((t for t in listing() if t.get("handle") == handle), None)
         if t:
+            seen = t
+            was_goal = was_goal or under_goal(t, tail_of(handle))
             out = scan([t], {}, read, clock() * 1000, 10**9, 1.0, 0)
             if out:
                 return out
         if clock() + interval > deadline:
             break
         sleep(interval)
+    name = ((seen or {}).get("worktreePath") or "").rstrip("/").rsplit("/", 1)[-1] or handle
     if not t:
+        if seen:
+            return [f"CLOSED {name}: its terminal is gone after it started; read its report or PR before starting it again"]
         return [f"STUCK {handle} (not started): no agent terminal with this handle"]
-    name = (t.get("worktreePath") or "").rstrip("/").rsplit("/", 1)[-1] or handle
-    try:
-        tail = read(handle)[-25:]
-    except (SystemExit, Exception):
-        tail = []
-    if under_goal(t, tail) and (t.get("lastOutputAt") or 0) > start_ms:
+    tail = tail_of(handle)
+    goal = under_goal(t, tail)
+    if goal and (t.get("lastOutputAt") or 0) > start_ms:
         return [f"STARTED {name}: /goal active, output since the check began"]
+    if was_goal and not goal:
+        return [f"ENDED {name}: /goal was active and is off now (met or cleared); read its screen before starting it again",
+                f"  orca terminal read --terminal {handle} --screen"]
     last = next((l.strip() for l in reversed(tail) if l.strip()), "")
     return [f'STUCK {name} (not started): no /goal active with new output; last line "{last}"',
             f"  orca terminal read --terminal {handle} --screen"]
