@@ -1463,8 +1463,7 @@ function fleetStats() {
     ${kpi("Weekly trend", `${v.weekly.slope >= 0 ? "+" : ""}${v.weekly.slope}<small>/wk</small>`, "slope of the weekly fit, current week left out")}</div>`;
   const range = STAT_RANGES.find(([id]) => id === S.filters.pr_range) || STAT_RANGES[1], span = range[2];
   const toolbar = `<div class="toolbar">${chips("pr_stats", [["all", "All PRs", rep.views.all.total], ["no_batch", "Without campaigns", rep.views.no_batch.total]], nb ? "no_batch" : "all")}
-    ${chips("pr_range", STAT_RANGES.map(([id, label]) => [id, label]), range[0])}
-    ${rep.batch_titles.length ? `<span class="muted">${rep.batch_count} PRs in ${rep.batch_titles.map((t) => `“${esc(t)}”`).join(", ")}</span>` : ""}</div>`;
+    ${chips("pr_range", STAT_RANGES.map(([id, label]) => [id, label]), range[0])}</div>`;
   const since = (n) => (span ? new Date(Date.now() - n * 864e5).toISOString().slice(0, 10) : "");
   // A month or week stays while any of its days is in range; "-31" sorts after every real day of the month.
   const from = (keys, end, n) => Math.min(keys.length - 1, Math.max(0, keys.findIndex((k) => end(k) >= since(n))));
