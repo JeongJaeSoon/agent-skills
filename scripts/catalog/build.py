@@ -16,6 +16,7 @@ def git(*args):
 
 src_ko = (REPO / SRC_PATH).read_text()
 pstack = json.loads((REPO / "vendor/pstack/manifest.json").read_text())
+hooks = len(set(re.findall(r"/hooks/(\w+)\.py", (REPO / "hooks/hooks.json").read_text())))
 sha = git("log", "-1", "--format=%h", "--", SRC_PATH)
 dirty = bool(git("status", "--porcelain", "--", SRC_PATH))
 
@@ -197,7 +198,7 @@ for lang, (doc, base, stale) in docs.items():
     parts["INTRO"].append(f'<div {a}>{doc["intro"]}</div>')
     parts["FACTS"].append(
         f'<ul class="facts" {a}><li>{f[0]} <b>{doc["skills"]}</b></li><li>{f[1]} <b>{doc["aliases"]}</b></li>'
-        f'<li>{f[2]} <b>orch · orch-dash · skills-sync</b></li><li>{f[3]} <b>6</b></li>'
+        f'<li>{f[2]} <b>orch · orch-dash · skills-sync</b></li><li>{f[3]} <b>{hooks}</b></li>'
         f'<li>pstack pin <b>{pstack["pin"][:7]}</b> ({pstack["upstream_version"]})</li></ul>')
     parts["NAV"].append(f'<nav class="toc" {a} aria-label="{ui["nav"]}"><ul>{doc["nav"]}</ul></nav>')
     parts["BODY"].append(f'<div {a}>\n{doc["body"]}\n</div>')
