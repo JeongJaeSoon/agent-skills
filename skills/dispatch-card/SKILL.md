@@ -124,8 +124,6 @@ orch sent add --to "<target>-<topic>" --kind card --channel "orca worktree creat
 EOF
 # name the card by what it does, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<ID or target> <short title>" --json
-# register it, so the janitor asks it to close if it idles once its PRs land (`reap-resources` done-card)
-python3 "<reap-resources dir>/scripts/reap.py" ledger add --kind orca-worktree --path "<result.worktree.path>"
 # close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
 # (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit;
 #  a setup stopped on a trust prompt never ends: trust as in orchestrate references/top-level.md "Starting a worker")
