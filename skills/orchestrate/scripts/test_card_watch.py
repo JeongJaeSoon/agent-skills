@@ -87,6 +87,12 @@ running = ["⏺ Bash(grep -rn 'Please run /login' logs/)", "  ⎿  Please run /l
            "✶ Grepping… (12s · esc to interrupt)", "❯"]  # tool output under ⎿ reads like a real 403
 screens = {"h1": ticked, "h2": running, "h3": idle, "h4": idle}
 assert scan({}) == [], "a backtick or > quote, and a turn still running, are not a lost login"
+cooked_below = ["⏺ Bash(gh pr view 1)", "  ⎿  Please run /login · API Error: 403 Forbidden", "✻ Cooked for 41s", "❯"]
+cooked_above = ["✻ Worked for 2m 3s", "⏺ Bash(gh pr view 1)", "  ⎿  Please run /login · API Error: 403 Forbidden", "❯"]
+screens = {"h1": cooked_below, "h2": cooked_above, "h3": idle, "h4": idle}
+assert [l for l in scan({}) if l.startswith("STUCK")] == ['STUCK card-a (auth): "Please run /login · API Error: 403 Forbidden"',
+                                                        'STUCK card-b (auth): "Please run /login · API Error: 403 Forbidden"'], \
+    "a finished turn's summary line is not a live spinner"
 terms = card_watch.agent_terminals([term("h1", "/w/card-a", last=NOW - 60000)], "me")
 screens = {"h1": dead403}
 assert scan({}) == [], "a card that wrote output a minute ago is still working"
@@ -132,6 +138,8 @@ assert start(dead403, lambda c: c.t * 1000 - 3 * 60000)[0] == 'STUCK card-n (aut
 done = ["⏺ PR opened and reported.", "❯"]
 assert start(lambda s: goal if s < 120 else done, later)[0].startswith("ENDED card-n: /goal was active and is off now"), \
     "a short task that met its goal inside the window ended; it did not fail to start"
+assert start(lambda s: goal if s < 120 else cleared, later)[0].startswith('STUCK card-n (auth): "Goal cleared after'), \
+    "a goal a 403 cleared under two minutes before the deadline is not ENDED"
 assert start(goal, later, seen_term=lambda s: s < 120)[0].startswith("CLOSED card-n: its terminal is gone"), \
     "a card that closed itself inside the window is not a failed start"
 assert start(goal, later, seen_term=False) == ["STUCK hn (not started): no agent terminal with this handle"]

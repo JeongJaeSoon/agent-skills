@@ -34,7 +34,8 @@ AUTH = re.compile(r"(?:Please run /login\b|(?:Not logged in|Login expired|OAuth 
                   r"|Goal cleared after an unrecoverable error \(|Goal paused · )")
 GLYPHS = re.compile(r"^[\s⏺⎿⚠✗●◯○\ufe0f]+")  # Claude Code's own marks only: a "- " bullet, `, > or 「 is not stripped
 # A turn in progress: tool output under ⎿ can carry the very same text as a real 403, so none counts while it runs.
-SPINNER = re.compile(r"^\s*(?:[✻✶✳✢✽]\s|[·*]\s+\w+…)")
+# Only a live spinner: a finished turn leaves "✻ Cooked for 41s", which has neither mark.
+SPINNER = re.compile(r"^\s*[✻✶✳✢✽·*]\s+\S.*(?:…|esc to interrupt)")
 AUTH_QUIET_MIN = 2  # a dead session writes nothing; a working one quoting the text keeps writing
 
 
@@ -43,17 +44,15 @@ def agent_terminals(listing, self_handle):
 
 
 def auth_line(tail):
-    """The newest auth or goal-stop message, unless an assistant turn (⏺) came after it or a turn is still running.
+    """The newest auth or goal-stop message, unless an assistant turn (⏺) or a live spinner came after it.
 
     Only the lines above the input box count: the status area below it lists agents with the same ⏺ glyph."""
     box = max((i for i, l in enumerate(tail) if l.strip().startswith("❯")), default=len(tail))
-    if any(SPINNER.match(l) for l in tail[:box]):
-        return None
     for l in reversed(tail[:box]):
         s = l.strip()
         if AUTH.match(GLYPHS.sub("", s)):
             return GLYPHS.sub("", s)
-        if s.startswith("⏺"):
+        if s.startswith("⏺") or SPINNER.match(l):
             return None
     return None
 
@@ -151,6 +150,8 @@ def check_start(handle, read, listing, within, interval, clock=time.time, sleep=
     goal = under_goal(t, tail)
     if goal and (t.get("lastOutputAt") or 0) > start_ms:
         return [f"STARTED {name}: /goal active, output since the check began"]
+    if was_goal and not goal and auth_line(tail):  # a goal cleared by a 403 in the last two quiet minutes
+        return [f'STUCK {name} (auth): "{auth_line(tail)}"', f"  orca terminal read --terminal {handle} --screen"]
     if was_goal and not goal:
         return [f"ENDED {name}: /goal was active and is off now (met or cleared); read its screen before starting it again",
                 f"  orca terminal read --terminal {handle} --screen"]
