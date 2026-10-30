@@ -144,11 +144,11 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
     remote = remote.split()[0] if remote else ""
     if mode == "none":
         return [row("missing", "agent-skills 설치", "로드 안 됨",
-                    f"고치며 쓰면 clone 뒤 python3 <체크아웃>/scripts/bootstrap.py --write, 쓰기만 하면 "
+                    f"고치며 쓰면 clone 뒤 python3 <체크아웃>/scripts/setup.py 의 dry run 이 낸 ! --apply 줄, 쓰기만 하면 "
                     f"! claude plugin marketplace add JeongJaeSoon/agent-skills · ! claude plugin install {MARKET_ID}")]
     if mode == "both":
         return [row("warn", "agent-skills 설치", f"체크아웃 {where} 와 {MARKET_ID} 둘 다 켜짐 (hook 두 번)",
-                    f"python3 {where}/scripts/bootstrap.py --write 가 {MARKET_ID} 를 끈다")]
+                    f"python3 {where}/scripts/setup.py 의 dry run 이 낸 ! --apply 줄이 {MARKET_ID} 를 끈다")]
     if mode == "marketplace":
         rows = [row("ok", "agent-skills 설치", f"마켓플레이스 {MARKET_ID} @ {(where or '?')[:7]}")]
         if not remote:
@@ -174,7 +174,7 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
         rows.append(row("ok", "최신 여부", f"origin main {remote[:7]} 과 같음"))
     sync =read_json(p["state"] / "sync.json", None)
     if not sync:
-        rows.append(row("missing", "자동 동기화", "sync.json 없음 (한 번도 안 돎)", f"python3 {where}/scripts/bootstrap.py --write"))
+        rows.append(row("missing", "자동 동기화", "sync.json 없음 (한 번도 안 돎)", f"! python3 {where}/scripts/setup.py --actions-only (사람이 직접 쳐도 되고, setup-pc 는 권한 창 뒤에서 돌린다)"))
     else:
         at = datetime.datetime.strptime(sync["at"], "%Y-%m-%dT%H:%M:%S%z")
         age = ((now or datetime.datetime.now(at.tzinfo)) - at).total_seconds()
@@ -187,7 +187,7 @@ def check_install(settings, installed, p, run=run, darwin=sys.platform == "darwi
     if darwin:
         rc, _ = run(["launchctl", "print", f"gui/{os.getuid()}/{LABEL}"])
         if rc:
-            rows.append(row("missing", "launchd 동기화 작업", "로드 안 됨", f"python3 {where}/scripts/bootstrap.py --write"))
+            rows.append(row("missing", "launchd 동기화 작업", "로드 안 됨", f"! python3 {where}/scripts/setup.py --actions-only (사람이 직접 쳐도 되고, setup-pc 는 권한 창 뒤에서 돌린다)"))
     else:
         rows.append(row("unsupported", "launchd 동기화 작업", f"macOS 전용 ({sys.platform})",
                         f"cron 에 손으로: */15 * * * * python3 {where}/scripts/sync.py sync"))

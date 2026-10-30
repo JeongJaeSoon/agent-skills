@@ -48,14 +48,21 @@ class Install(Base):
     def test_none_points_to_both_install_paths(self):
         rows = sc.check_install({}, {}, sc.paths(), fake_run({}), darwin=False)
         self.assertEqual(rows[0]["status"], "missing")
-        self.assertIn("bootstrap.py --write", rows[0]["next"])
+        self.assertIn("scripts/setup.py", rows[0]["next"])
         self.assertIn("claude plugin install agent-skills@jeongjaesoon", rows[0]["next"])
+
+    def test_no_row_points_to_bootstrap(self):
+        # docs/new-pc.md and setup-pc name setup.py; bootstrap.py --write is not a line the human is given.
+        rows = [*sc.check_install({}, {}, sc.paths(), fake_run({}), darwin=False),
+                *self.inline(None, darwin=True, launchd_rc=113).values()]
+        self.assertFalse([r["next"] for r in rows if "bootstrap.py" in r["next"]])
 
     def test_both_warns_double_load(self):
         co = self.checkout()
         s = {"env": {sc.ENV_KEY: str(co)}, "enabledPlugins": {sc.MARKET_ID: True}}
         rows = sc.check_install(s, {}, sc.paths(), fake_run({}), darwin=False)
         self.assertEqual(rows[0]["status"], "warn")
+        self.assertIn(f"{co}/scripts/setup.py", rows[0]["next"])
 
     def test_marketplace_behind_gives_update_lines(self):
         s = {"enabledPlugins": {sc.MARKET_ID: True}}

@@ -342,6 +342,32 @@ class Steps(unittest.TestCase):
         self.assertIn("these steps failed: skills-sync setup apply", err)
 
 
+class Bootstrap(unittest.TestCase):
+    def load(self, env):
+        with mock.patch.dict(os.environ, env):
+            for k in ("CLAUDE_SETTINGS", "CLAUDE_CONFIG_DIR"):
+                if k not in env:
+                    os.environ.pop(k, None)
+            spec = importlib.util.spec_from_file_location("bootstrap_under_test", HERE / "bootstrap.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+
+    def test_settings_follow_the_claude_profile(self):
+        profile = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, profile)
+        (profile / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_PLUGIN_DIRS": str(HERE.parent)}}))
+        b = self.load({"CLAUDE_CONFIG_DIR": str(profile)})
+        self.assertEqual(b.SETTINGS, profile / "settings.json")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(b.settings_change())
+
+    def test_claude_settings_wins_and_home_is_the_default(self):
+        self.assertEqual(self.load({"CLAUDE_SETTINGS": "/x/s.json", "CLAUDE_CONFIG_DIR": "/y"}).SETTINGS,
+                         pathlib.Path("/x/s.json"))
+        self.assertEqual(self.load({}).SETTINGS, pathlib.Path("~/.claude/settings.json").expanduser())
+
+
 class Bundle(unittest.TestCase):
     def test_has_no_internal_names(self):
         names = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG_DIR") or "~/.config/agent-skills").expanduser() / "internal-names.txt"
