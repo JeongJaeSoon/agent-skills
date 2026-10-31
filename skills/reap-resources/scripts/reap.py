@@ -867,8 +867,11 @@ def coordinator_in(path, rows, cwd_of, projects, roles=None):
         return None
     if not starts:
         return "claude 시작 시각을 읽지 못함"
-    d = pathlib.Path(projects) / re.sub(r"[^A-Za-z0-9]", "-", path)
-    for f in d.glob("*.jsonl") if d.is_dir() else ():
+    try:
+        files = session_files(pathlib.Path(projects) / re.sub(r"[^A-Za-z0-9]", "-", path), subagents=False)
+    except OSError as e:
+        return f"세션 기록 폴더를 읽지 못함({type(e).__name__})"
+    for f in files:
         try:
             if f.stat().st_mtime < min(starts) - 60:
                 continue
@@ -1766,14 +1769,30 @@ def last_entry_time(path):
     return max(times, default=mtime)
 
 
+def session_files(d, subagents=True):
+    """A project dir's *.jsonl, and */subagents/*.jsonl with subagents; [] when the dir is absent. Raises OSError for
+    a folder it cannot list, which Path.is_dir and Path.glob would pass over as empty."""
+    def ls(p):
+        try:
+            with os.scandir(p) as it:
+                return list(it)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+    top = ls(d)
+    files = [e.path for e in top if e.name.endswith(".jsonl")]
+    if subagents:
+        files += [s.path for e in top if e.is_dir() for s in ls(os.path.join(e.path, "subagents"))
+                  if s.name.endswith(".jsonl")]
+    return [pathlib.Path(f) for f in files]
+
+
 def transcript_quiet(projects_dir, now, reasons=False):
     """Seconds since the cwd's sessions last wrote an entry, subagents' included; None when there is no transcript.
     A transcript that cannot be read gives None too (unknown keeps a card), or the reason with reasons=True."""
     def quiet(cwd):
         d = projects_dir / re.sub(r"[^A-Za-z0-9]", "-", cwd)
         try:
-            times = [t for f in ((f for g in ("*.jsonl", "*/subagents/*.jsonl") for f in d.glob(g)) if d.is_dir() else ())
-                     if (t := last_entry_time(f)) is not None]
+            times = [t for f in session_files(d) if (t := last_entry_time(f)) is not None]
         except Unreadable as e:
             return str(e) if reasons else None
         except OSError as e:
