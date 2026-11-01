@@ -522,6 +522,49 @@ with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "1"])
 assert "dashboard" not in out.getvalue(), "a server already current stays quiet"
 prog.ensure_dash = saved_ensure
+# A lead started with worker-start (program.json lead_dispatch): its units are the Dispatches under its Task, and
+# orch wait reads and acks its own Dispatch mailbox, never the coordinator's Run inbox.
+row = lambda d, task, parent=None, h=None: {"dispatchId": d, "taskId": task, "agentTerminalHandle": h,
+                                           "projection": {"parent": {"taskId": parent} if parent else None}}
+fleet_rows = [row("ctx_L", "tL", h="term_L"), row("u1", "t1", "tL"), row("u2", "t2", "t1"), row("x", "tx"), row("y", "ty", "tx")]
+assert [w["dispatchId"] for w in prog.lead_scope(fleet_rows, "ctx_L")] == ["u1", "u2"]
+assert prog.lead_scope(fleet_rows, None) == fleet_rows and prog.lead_scope(fleet_rows, "ctx_gone") == []
+calls = []
+def lead_orca(*a):
+    calls.append(a)
+    return {"workers": fleet_rows} if a[:2] == ("orchestration", "worker-list") else {}
+prog.orca_json, prog.run_workers = lead_orca, lambda run: []
+prog.Program = lambda slug: type("P", (), {"cfg": {"run": "run_top", "repo": "o/r", "lead_dispatch": "ctx_L"}, "slug": slug,
+                                           "events": lambda self: [], "dir": _pdir})()
+saved_me = prog.os.environ.get("ORCA_TERMINAL_HANDLE")
+prog.os.environ["ORCA_TERMINAL_HANDLE"] = "term_L"
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_wait(["s", "--rounds", "1"])
+checks = [a for a in calls if a[:2] == ("orchestration", "check")]
+assert checks and all(a[2:4] == ("--terminal", "term_L") and "--run" not in a for a in checks), checks
+# Another worker of that Run (a standing role) is refused, as before.
+prog.os.environ["ORCA_TERMINAL_HANDLE"] = "term_role"
+fleet_rows.append(row("ctx_role", "tr", "tL", h="term_role"))
+try:
+    prog.cmd_wait(["s", "--rounds", "1"])
+    raise AssertionError("a standing role's orch wait must be refused")
+except SystemExit as e:
+    assert "not lead dispatch ctx_L" in str(e), e
+# The lead's Dispatch released, or its terminal not yet attached: refused, never the coordinator's Run inbox.
+for rows, me in ((fleet_rows[1:], "term_L"), ([dict(fleet_rows[0], agentTerminalHandle=None)], "term_L")):
+    calls.clear()
+    prog.orca_json = lambda *a, rows=rows: (calls.append(a), {"workers": rows} if a[:2] == ("orchestration", "worker-list") else {})[1]
+    prog.os.environ["ORCA_TERMINAL_HANDLE"] = me
+    try:
+        prog.cmd_wait(["s", "--rounds", "1"])
+        raise AssertionError("a lead dispatch that is not this terminal must be refused")
+    except SystemExit as e:
+        assert "not lead dispatch" in str(e), e
+    assert not any(a[:2] == ("orchestration", "check") for a in calls), calls
+if saved_me is None:
+    del prog.os.environ["ORCA_TERMINAL_HANDLE"]
+else:
+    prog.os.environ["ORCA_TERMINAL_HANDLE"] = saved_me
 prog.orca_json, prog.Program, prog.run_workers = saved
 # worker-list pages at 100, newest first: the oldest cards are on the last page.
 pages = {None: {"workers": [{"dispatchId": "new"}], "page": {"hasMore": True, "nextCursor": "c1"}},

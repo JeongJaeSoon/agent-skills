@@ -1341,6 +1341,16 @@ for sid in ("x", "y"):
 root_wt, got = tree([run("r-top", "top", "t9"), run("r-a", "a", "t2"), run("r-b", "b", "t3")], [], ["top", "a", "b"], {"b": "a"})
 assert root_wt == "top" and got["a"] == ("orchestration", "top") and got["b"] == ("orchestration", "a"), got
 
+# A lead started with worker-start works on the orchestrator's Run, and so do its units: a unit whose Task's parent
+# is the lead's Task hangs under the lead, not the Run's coordinator; the declared lead is an orchestration row.
+unit = lambda wt, task, parent=None: {**worker("r-top", wt), "taskId": task,
+                                      "projection": {"parent": {"taskId": parent} if parent else None}}
+root_wt, got = tree([run("r-top", "top", "t1")],
+                    [unit("lead", "t-lead"), unit("u1", "t-u1", "t-lead"), unit("u2", "t-u2", "t-u1"), unit("w9", "t-w9")],
+                    ["top", "lead", "u1", "u2", "w9"], declared=[("/work/lead", "lead", "lead")])
+assert root_wt == "top" and got == {"top": ("orchestrator", None), "lead": ("orchestration", "top"), "u1": ("task", "lead"),
+                                    "u2": ("task", "u1"), "w9": ("task", "top")}, got
+
 # A top level with no Run of its own, beside a lead's Run: the declared roles keep the lead off the root. Folder
 # contexts share one path, and the session name picks the declared one; a declared lead with no Run is still a lead.
 declared = [("/home/bench", "top", "orchestrator"), ("/work/ops", "ops-1", "lead"), ("/work/net", "net-1", "lead")]
