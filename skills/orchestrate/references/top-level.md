@@ -47,7 +47,7 @@ You start a lead yourself; the human does not have to ask for one. A lead owns o
 3. A single card that gains a related PR or an order: promote it then. Start a lead and hand it the card in progress, listed in its CONTEXT (below).
 4. A project that has a lead: its new requests go to that lead ("Routing"), and you start no card for it.
 
-How: one lead per project, as a `/goal` card (`dispatch-card`) with the Lead brief and its first-prompt lines (`brief.md`, "Lead"), not `worker-start`: Orca's nesting limit refuses a dispatched worker's own `worker-start` (`nested_worker_depth_exceeded`). Name the program with a slug for the repository and topic. Its PREDICATE is landing the open PRs in their order plus the new request; its CONTEXT lists each unit already on that work (dispatch id or card path, branch, PR and state) and the human's requests behind them, quoted. Several tracks: one lead per track, each with its own QA lead; a track of a couple of tickets, or one that depends on another, joins that track. Its REPORT line asks for its Run id in its first report to PARENT. The brief's lead row comes from the lead's session itself (its `ROLE: lead <slug>` line, then its Run), so there is no `orch board lead add` to run; tell the human one line: which lead now owns which project and why.
+How: one lead per project, as a `/goal` card (`dispatch-card`, which records your worktree as its Orca parent) with the Lead brief and its first-prompt lines (`brief.md`, "Lead"), not `worker-start`. Orca's nesting limit (Settings → Orchestration, "Nested worker depth", default 1) counts every generation under the first Run: a lead started as a worker is depth 1, its workers depth 2, so at the default its first `worker-start` is refused (`nested_worker_depth_exceeded`), and a Run of its own does not reset the count. A `/goal` card lead binds its own Run at depth 0, so it works at any setting and its workers keep the whole budget for their own helpers. Name the program with a slug for the repository and topic. Its PREDICATE is landing the open PRs in their order plus the new request; its CONTEXT lists each unit already on that work (dispatch id or card path, branch, PR and state) and the human's requests behind them, quoted. Several tracks: one lead per track, each with its own QA lead; a track of a couple of tickets, or one that depends on another, joins that track. Its REPORT line asks for its Run id in its first report to PARENT. The brief's lead row comes from the lead's session itself (its `ROLE: lead <slug>` line, then its Run), so there is no `orch board lead add` to run; tell the human one line: which lead now owns which project and why.
 
 After: the project is the lead's ("Routing", the lead row). The units in its CONTEXT stay in your Run, so their mail, release and close stay with you, while their work is the lead's to direct:
 
@@ -152,3 +152,16 @@ The dashboard's collector watches the PRs of every session on the roster and app
 ## Skills changed
 
 After an `agent-skills` change reaches the loaded checkout, run `skills-sync broadcast` (`scripts/sync.py`, `docs/platform.md` §4). It sends `/reload-skills` or `/reload-plugins` only to sessions idle at an empty prompt and keeps the rest pending. Never type the reload into sessions yourself. This session reloads through the same broadcast, aimed at its own handle after its turn ends (`write-skill` §7).
+
+## What runs on Orca and what does not
+
+Decided against Orca 1.4.245, the version this was measured on; check again when Orca adds the feature.
+
+| Feature | Uses | Why |
+|---|---|---|
+| Lineage (the card tree in Orca's sidebar) | Orca: `new-child`, `--parent-worktree` | Every card and worker sits under the session that started it. The dashboard's tree reads the same `parentWorktreeId` |
+| Supervision, mail, tasks, gates | Orca: Runs, `worker-start`, `send`/`check`, `task-create`, `gate-create` | Orca records them and wakes a bound terminal; the program keeps no copy |
+| Leads | A `/goal` card, not a worker | "Starting a lead": Orca's nesting limit |
+| Dashboard, brief, decision inbox, stage table | This plugin (`orch-dash`) | It joins Orca with GitHub, the tracker and the program ledger, which Orca does not hold |
+| Landing (`orch land`, ledger) and resource reaping | This plugin | Merge order, main CI and machine cleanup are outside Orca |
+| Reports for the human | The local dashboard and the notes store, never a published web page | A published page is readable by anyone holding its URL, and nothing on the way checks a report for confidential data or secrets |

@@ -6,7 +6,8 @@ Usage:
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
 
 Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to a Run, starts
-a supervised worker (`orca orchestration worker-start --worktree new-top-level`): a Dispatch, so the card's
+a supervised worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree
+as its parent; `new-top-level` when this session is not in a worktree Orca manages): a Dispatch, so the card's
 worker_done, escalation and ask reach the Run and Orca watches it for prompts. Its spec is the prompt below without
 the leading `/goal`. Anything else (a handoff, a lead's brief, which must start workers of its own, or --card) is a
 `/goal` card from `orca worktree create`. A brief reporting to `run:` from a session with no Run is a `/goal` card,
@@ -169,6 +170,10 @@ def github_repo(worktree):
     return m and m.group(1)
 
 
+# Orca's refusal of `--worktree new-child` from a terminal whose workspace is not a git worktree it manages.
+UNMANAGED = "could not be resolved to a git worktree Orca manages"
+
+
 def run(cmd, stdin=None, timeout=120):
     try:
         p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=timeout)
@@ -251,7 +256,7 @@ def create(argv):
     if worker:
         # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
         spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
-        cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree", "new-top-level",
+        cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree", "new-child",
                "--repo", opts["--repo"], "--name", opts["--name"], "--agent", "claude",
                # Orca times out before this process does, so a slow start still returns its receipt
                "--timeout-ms", "840000"]
@@ -270,6 +275,10 @@ def create(argv):
         raise Refuse(3, f"[{ME}] not created, the pressure gate refused it (for `queue wait`, run this same "
                         f"`skills-sync card` command again once it ends with 0): {reason}")
     p, err = run(cmd, timeout=900 if worker else 120)
+    if worker and p and p.returncode and UNMANAGED in p.stdout + p.stderr:
+        # Refused while resolving the parent, before anything was created: start it without lineage instead.
+        cmd[cmd.index("new-child")] = "new-top-level"
+        p, err = run(cmd, timeout=900)
     try:
         out = json.loads(p.stdout) if p else None
     except ValueError:

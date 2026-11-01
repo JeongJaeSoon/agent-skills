@@ -19,6 +19,10 @@ elif a[:2] == ["sent", "add"] and mode == "sent-fails":
 elif a[:2] == ["orchestration", "run-current"]:
     print(json.dumps({"ok": True, "result": {"run": None if mode == "no-run" else {"id": "run_me"}}}))
 elif a[:2] == ["orchestration", "worker-start"]:
+    if mode == "unmanaged" and "new-child" in a:
+        print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": "The dispatching terminal's "
+              "workspace could not be resolved to a git worktree Orca manages, which --worktree new-child needs"}}))
+        sys.exit(1)
     if mode == "start-fails":
         print(json.dumps({"ok": False, "error": {"code": "outcome_unknown", "message": "turn not seen"},
                           "result": {"failedStage": "turn_start", "recovery": ["orca orchestration worker-stop --dispatch ctx_1"]}}))
@@ -180,7 +184,7 @@ assert rc == 0, err
 start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
 spec = start[start.index("--spec") + 1]
 assert spec.startswith("ship the helper and open its PR 브리프:") and "/goal" not in spec.splitlines()[0], spec
-assert start[start.index("--worktree") + 1] == "new-top-level" and start[start.index("--display-name") + 1] == "ABC-1 helper"
+assert start[start.index("--worktree") + 1] == "new-child" and start[start.index("--display-name") + 1] == "ABC-1 helper"
 assert start[start.index("--timeout-ms") + 1] == "840000", start
 assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [["reference", "add", URL, "--worktree", f"path:{CARD_DIR}", "--json"]]
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
@@ -194,6 +198,13 @@ assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["
 assert not any(c["argv"][:2] == ["reference", "add"] for c in calls)
 # A REPORT row continued onto a second line is read whole.
 assert card.report_to("REPORT: orca orchestration send \\\n  --to term_x --type status\n") == ["term_x"]
+# From a terminal outside a worktree Orca manages, new-child is refused before anything exists: new-top-level instead.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="unmanaged")
+starts = [c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"]]
+assert rc == 0 and [s[s.index("--worktree") + 1] for s in starts] == ["new-child", "new-top-level"], (rc, err, starts)
+# Any other refusal is not retried: a second start could duplicate the worker.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="start-fails")
+assert rc == 4 and sum(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls) == 1, (rc, calls)
 # A failed start keeps Orca's whole receipt (stage, recovery commands) on stderr.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="start-fails")
 assert rc == 4 and "worker-start failed: outcome_unknown" in err and "worker-stop --dispatch ctx_1" in err, err
