@@ -128,6 +128,7 @@ pstack グループは Lauren Tan の [pstack](https://github.com/cursor/plugins
 - [docs/new-pc.md](docs/new-pc.md)(韓国語): 新しい PC のセットアップの詳細
 - [docs/automation.md](docs/automation.md)(韓国語): どの仕事をどの仕組みで回すか
 - [docs/platform.md](docs/platform.md)(韓国語): チェックアウトの読み込みと同期の設計
+- [docs/orca-migration.ja.md](docs/orca-migration.ja.md): 2026-11-01 に orch から Orca へ移したもの、以前のセッションと並べて動かす方法、切り替えの順序と元に戻す方法
 - [docs/token-usage.md](docs/token-usage.md)(韓国語): このプラグインがコンテキストに足すトークンと、機能ごとに使ったトークンの測り方
 
 ## 貢献とセキュリティ

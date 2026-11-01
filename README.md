@@ -128,6 +128,7 @@ Nothing is required. Skills read their keys from `~/.claude/agent-skills.json`, 
 - [docs/new-pc.md](docs/new-pc.md) (Korean): setting up a new PC in depth
 - [docs/automation.md](docs/automation.md) (Korean): which mechanism runs which job
 - [docs/platform.md](docs/platform.md) (Korean): how the checkout is loaded and synced
+- [docs/orca-migration.md](docs/orca-migration.md): what moved from orch to Orca on 2026-11-01, running beside older sessions, the switch-over order and how to undo it
 - [docs/token-usage.md](docs/token-usage.md) (Korean): measuring the tokens this plugin adds to context and the tokens each feature used
 
 ## Contributing and security
