@@ -630,6 +630,16 @@ def fetch_sent(procs=None, now=None):
         raise SourceError(f"sent: {type(e).__name__}: {e}")
 
 
+def orca_sent(tasks):
+    """Sent rows for the Orca Tasks the Runs hold: a worker's brief is its Task spec, so a session that starts a
+    worker with `worker-start` writes no `orch sent add` line for it."""
+    return [{"ts": iso(dt.datetime.fromisoformat(t["created_at"].replace("Z", "+00:00")).replace(tzinfo=dt.timezone.utc)),
+             "from": t.get("created_by_terminal_handle"), "to": f"task:{t['id']}", "kind": "worker",
+             "channel": "orca worker-start", "subject": t.get("task_title") or t.get("display_name"),
+             "text": t["spec"], "source": "orca"}
+            for t in tasks or [] if t.get("spec") and t.get("created_at") and t.get("id")]
+
+
 def graphql(query):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
     inaccessible PR must not blank the others."""
@@ -677,6 +687,29 @@ def short_branch(ref):
     return (ref or "").removeprefix("refs/heads/")
 
 
+GH_PR_URL = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
+
+
+def pr_key_of_url(url):
+    m = GH_PR_URL.match(url or "")
+    return m and pr_key(m.group(1), int(m.group(2)))
+
+
+def orca_links(w):
+    """(refs, linked_pr) from a worktree's Orca link fields. refs: each linkedItems entry as {type, provider, url,
+    key}; Orca records a PR it observes on the branch there as well as the links set at creation (--reference).
+    linked_pr: linkedPR with its url filled from linkedItems when Orca left it out, and its owner/repo#N key."""
+    refs = [{"type": i.get("type"), "provider": i.get("provider"), "url": i.get("url"),
+             "key": i.get("key") or i.get("identifier") or (pr_key_of_url(i.get("url")) if i.get("type") == "pr" else None)}
+            for i in w.get("linkedItems") or [] if isinstance(i, dict)]
+    pr = w.get("linkedPR") if isinstance(w.get("linkedPR"), dict) else None
+    if pr and pr.get("number"):
+        url = pr.get("url") or next((r["url"] for r in refs if r["type"] == "pr" and r["url"]
+                                     and r["url"].endswith(f"/pull/{pr['number']}")), None)
+        pr = {**pr, "url": url, "key": pr_key_of_url(url)}
+    return refs, pr
+
+
 def agent_row(a):
     return {"pane": a.get("paneKey"), "state": a.get("state"), "type": a.get("agentType"),
             "mode": a.get("workingMode"), "tool": a.get("toolName"), "detail": mask(a.get("toolInput"), 140),
@@ -714,6 +747,7 @@ def build_sessions(fast, runs, cfg, declared=()):
         terms = terms_by_wt.get(w["worktreeId"], [])
         if w.get("isMainWorktree") and not agents and not cfg.get("include_main_worktrees"):
             continue
+        refs, linked_pr = orca_links(w)
         sessions[w["worktreeId"]] = {
             "id": w["worktreeId"], "name": mask(w.get("displayName") or pathlib.Path(w.get("path", "")).name, 120),
             "repo_name": w.get("repo"), "branch": short_branch(w.get("branch")), "path": w.get("path"),
@@ -721,7 +755,8 @@ def build_sessions(fast, runs, cfg, declared=()):
             # Orca's worktree time does not move while an agent in it works, so the agents' own times count too.
             "last_activity": max(filter(None, [ms_iso(w.get("lastActivityAt"))] + [a["updated"] for a in agents]), default=None),
             "orca_parent": w.get("parentWorktreeId"), "created": ms_iso(w.get("createdAt")),
-            "linked_pr": w.get("linkedPR"), "agents": agents, "terminals": terms,
+            "linked_pr": linked_pr, "refs": refs, "workspace_status": w.get("workspaceStatus"),
+            "agents": agents, "terminals": terms,
             "phase": phase_of(agents, terms), "kind": "task", "parent": None, "run": None, "dispatch": None,
             "dispatch_status": None, "task": None, "task_title": None}
 
@@ -1347,7 +1382,7 @@ class Fleet:
                     except SourceError as e:
                         self.ok("monitors", str(e))
                     try:
-                        self.sent = self.fetch_sent(procs=procs)
+                        self.sent = self.fetch_sent(procs=procs) + orca_sent(self.runs.get("tasks"))
                         self.ok("sent")
                     except SourceError as e:
                         self.ok("sent", str(e))
@@ -1409,12 +1444,18 @@ class Fleet:
         # 1. Which PR does each session's branch have (cached; a branch without one is re-asked every 10 min).
         ask, owner_of = [], {}
         for s in sessions.values():
+            # Orca's own link first: its url names the PR's repository, which may not be the session's.
+            lp = s.get("linked_pr") if isinstance(s.get("linked_pr"), dict) else {}
+            if lp.get("key"):
+                owner_of.setdefault(lp["key"], s["id"])
+            for r in s.get("refs") or []:
+                if r.get("type") == "pr" and r.get("key"):
+                    owner_of.setdefault(r["key"], s["id"])
             repo = s["gh_repo"]
             if not repo:
                 continue
-            if isinstance(s.get("linked_pr"), dict) and s["linked_pr"].get("number"):
-                k = pr_key(repo, s["linked_pr"]["number"])
-                owner_of.setdefault(k, s["id"])
+            if lp.get("number") and not lp.get("key"):
+                owner_of.setdefault(pr_key(repo, lp["number"]), s["id"])
             if not s["branch"] or s["branch"] in BRANCH_SKIP:
                 continue
             bk = f"{repo}@{s['branch']}"

@@ -628,7 +628,7 @@ function attentionItems(st) {
   const sp = s.spare || {};
   if (sp.slots && (sp.ready || []).length) out.push(["accent", "spark", `${sp.slots} slot${sp.slots > 1 ? "s" : ""} free under the cap — ready to start: ${sp.ready.slice(0, 6).join(", ")}`, "tasks"]);
   const g = s.gaps || {};
-  if ((g.spawns || []).length) out.push(["warn", "alert", `Ledger gap: ${g.spawns.length} running dispatch${g.spawns.length > 1 ? "es" : ""} never recorded (${g.spawns.slice(0, 4).join(", ")}) — cap and roles are counted from the ledger: orch record … spawned --note <dispatchId>`, "workers"]);
+  if ((g.spawns || []).length) out.push(["warn", "alert", `Ledger gap: ${g.spawns.length} running dispatch${g.spawns.length > 1 ? "es" : ""} with no ticket (${g.spawns.slice(0, 4).join(", ")}) — its Orca Task spec does not open with a ticket ID, so the cap cannot count it: orch record … spawned --ticket <ID> --note <dispatchId>`, "workers"]);
   if ((g.landings || []).length) out.push(["warn", "alert", `Ledger gap: merged PR${g.landings.length > 1 ? "s" : ""} the ledger never saw (#${g.landings.slice(0, 6).join(", #")}) — land through orch land; recover with orch backfill`, "prs"]);
   if ((g.ci || []).length) out.push(["warn", "alert", `Ledger gap: landing${g.ci.length > 1 ? "s" : ""} with no main CI result (#${g.ci.slice(0, 6).join(", #")}) — record main_green or main_red`, "activity"]);
   if ((s.untriaged || []).length) out.push(["accent", "issues", `Untriaged follow-up: ${s.untriaged.join(", ")} — admit or park.`, "issues"]);

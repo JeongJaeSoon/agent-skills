@@ -1909,4 +1909,20 @@ import dash  # noqa: E402
 assert {"owner_requests.py", "board.py", "holds.py", "stages.py"} <= {f.name for f in dash.code_files()}
 assert not any(f.name.startswith("test_") for f in dash.code_files())
 
+# Orca link fields: linkedItems become refs, linkedPR gets its url (from linkedItems when Orca left it out) and an
+# owner/repo#N key from that url, which may name another repository than the session's. An older Orca with none of
+# these fields gives empty refs and no PR.
+refs, lp = fleet.orca_links({"linkedPR": {"number": 5, "state": "merged"}, "linkedItems": [
+    {"provider": "github", "type": "pr", "number": 5, "url": "https://github.com/acme/other/pull/5", "origins": [{"kind": "observed"}]},
+    {"provider": "linear", "type": "issue", "url": "https://linear.app/acme/issue/ABC-1", "identifier": "ABC-1"}]})
+assert lp == {"number": 5, "state": "merged", "url": "https://github.com/acme/other/pull/5", "key": "acme/other#5"}, lp
+assert [(r["type"], r["key"]) for r in refs] == [("pr", "acme/other#5"), ("issue", "ABC-1")], refs
+assert fleet.orca_links({}) == ([], None)
+assert fleet.orca_links({"linkedPR": {"number": 3, "url": "https://github.com/acme/app/pull/3", "checksStatus": "success"}})[1]["key"] == "acme/app#3"
+# A worker's brief reaches the Sent page from its Orca Task, with no `orch sent add` line.
+rows = fleet.orca_sent([{"id": "task_1", "spec": "ABC-1 do it", "created_at": "2026-01-02 03:04:05", "created_by_terminal_handle": "term_x",
+                         "task_title": "ABC-1"}, {"id": "task_2", "spec": None}])
+assert rows == [{"ts": "2026-01-02T03:04:05Z", "from": "term_x", "to": "task:task_1", "kind": "worker", "channel": "orca worker-start",
+                 "subject": "ABC-1", "text": "ABC-1 do it", "source": "orca"}], rows
+
 print("test_fleet: ok")

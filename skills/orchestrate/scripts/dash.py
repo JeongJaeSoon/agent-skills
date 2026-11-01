@@ -416,7 +416,7 @@ def shape_workers(raw, events, tasks=()):
         stage, live = p.get("stage") or {}, p.get("liveness") or {}
         wt_path = ((w.get("resource") or {}).get("worktreeId") or "").split("::", 1)[-1] or None
         wt = (wt_path or "").rstrip("/").rsplit("/", 1)[-1]
-        ticket = by_dispatch.get(w.get("dispatchId"))
+        ticket = prog.dispatch_tickets([w], tasks).get(w.get("dispatchId")) or by_dispatch.get(w.get("dispatchId"))
         if not ticket:
             m = TICKET_RE.search(wt)
             ticket = m.group(1).upper() if m else None
@@ -800,7 +800,9 @@ def ledger_gaps(cfg, events, workers, prs, tnow, contains=None):
     ours = {x.get("base") for x in prs if x["number"] in landed} | {x.get("branch") for x in prs if x["number"] in landed}
     ours = (ours | {cfg.get("base")}) - {None}
     return {
-        "spawns": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in mapped],
+        # A Dispatch whose Orca Task (or worktree name) gives its ticket needs no `spawned` line.
+        "spawns": [w["dispatch"] for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in mapped
+                   and not w.get("ticket")],
         "landings": sorted(p["number"] for p in prs if p["state"] == "merged" and p.get("merged_at")
                            and prog.parse_ts(p["merged_at"]) >= t0 and p["number"] not in landed
                            and (not ours or p.get("base") in ours)),
@@ -831,7 +833,7 @@ def summarize(cfg, events, issues, workers, tnow, order, leftover=0):
     verified = prog.final_check_current(events)
     roles = {e.get("note") for e in events if e["ev"] == "spawned" and e.get("role")}
     live = [w for w in workers if w.get("outcome") == "in_progress" and w["dispatch"] not in roles]
-    units = prog.live_units(events, [w["dispatch"] for w in live])
+    units = prog.live_units(events, [w["dispatch"] for w in live], {w["dispatch"]: w["ticket"] for w in live if w.get("ticket")})
     ready = prog.ready_prs(events)
     human = [s for s in ready if cfg.get("merge_policy") == "human-gate" and "approved" not in s]
     main, cap = prog.main_state(events), prog.cap_from(events, cfg.get("ceiling", 6))
@@ -1055,6 +1057,8 @@ def _merge(slug, d, cfg, fetched, interval):
     else:
         pr_rows = read_json(rows_path, [])
     raw_orca, fresh_orca = outcome("orca")
+    if fresh_orca:
+        events = prog.with_orca_spawns(events, raw_orca.get("workers") or [], raw_orca.get("tasks") or [])
     try:
         # Orca down: rank on the last shaped tasks, or dependent PRs would look ready.
         dep_tasks = raw_orca.get("tasks") if fresh_orca else [

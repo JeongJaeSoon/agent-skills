@@ -163,6 +163,20 @@ ev = [at(1, "spawned", ticket="S-1", note="ctx_a1"), at(1, "spawned", ticket="S-
       at(1, "spawned", ticket="S-3", note="ctx_c3"), at(1, "dep", ticket="S-2", after=["S-1"])]
 assert prog.live_units(ev, ["ctx_a1", "ctx_b2", "ctx_c3"]) == 2
 assert prog.live_units(ev, ["ctx_b2", "ctx_c3", "ctx_ff"]) == 3  # the lower layer landed; an unrecorded worker counts
+# With no `spawned` line, the Orca Task's spec gives the ticket, so the land-after chain still counts once.
+deps_only = [at(1, "dep", ticket="S-2", after=["S-1"])]
+orca_t = prog.dispatch_tickets([{"dispatchId": "ctx_a1", "taskId": "t1"}, {"dispatchId": "ctx_b2", "taskId": "t2"}, {"dispatchId": "ctx_x", "taskId": "t9"}],
+                               [{"id": "t1", "spec": "S-1: login\nPROGRAM: p"}, {"id": "t2", "spec": "S-2 billing"}, {"id": "t9", "spec": "no ticket here"}])
+assert orca_t == {"ctx_a1": "S-1", "ctx_b2": "S-2"}, orca_t
+assert prog.live_units(deps_only, ["ctx_a1", "ctx_b2"], orca_t) == 1 and prog.live_units(deps_only, ["ctx_a1", "ctx_b2"]) == 2
+# Orca's Task stands in for a `spawned` line no lead wrote: dated by the Task, the ledger's own line winning.
+syn = prog.with_orca_spawns([at(1, "spawned", ticket="S-1-K4", note="ctx_a1")],
+                            [{"dispatchId": "ctx_a1", "taskId": "t1"}, {"dispatchId": "ctx_b2", "taskId": "t2"}, {"dispatchId": "ctx_x", "taskId": "t9"}],
+                            [{"id": "t1", "spec": "S-1 x", "created_at": "2026-01-02 03:04:05"},
+                             {"id": "t2", "spec": "S-2 billing", "created_at": "2026-01-02 03:04:05"}, {"id": "t9", "spec": "none"}])
+assert [(e["ticket"], e["note"]) for e in syn if e["ev"] == "spawned"] == [("S-1-K4", "ctx_a1"), ("S-2", "ctx_b2")], syn
+assert syn[-1] == {"ts": "2026-01-02T03:04:05+00:00", "ev": "spawned", "ticket": "S-2", "note": "ctx_b2", "orca": True}
+assert prog.live_units(syn[1:] + deps_only, ["ctx_a1", "ctx_b2"]) in (1, 2)
 
 print("prog.py land order: all pass")
 
@@ -183,6 +197,10 @@ workers = [
 ]
 assert prog.landed_but_open(ev, workers, tasks, wts) == [("A-1", "d1", False, "/w/1"), ("A-2", "d2", True, "/w/2")], \
     prog.landed_but_open(ev, workers, tasks, wts)
+# A follow-up card on a landed ticket with no `spawned` line: its Orca Task, created after the landing, protects it.
+fu_tasks = tasks + [{"id": "tf", "display_name": "A-1 follow-up", "spec": "A-1 follow-up", "created_at": "2026-09-25 00:00:00"}]
+fu_workers = workers + [{"dispatchId": "ctx_f1", "taskId": "tf", "terminalState": "active", "resource": {"worktreeId": "wf"}}]
+assert ("A-1", "ctx_f1", True, "/w/f") not in prog.landed_but_open(ev, fu_workers, fu_tasks, wts + [{"id": "wf", "path": "/w/f"}])
 # A fold into a lower PR's branch does not finish its ticket.
 fold = [{"ev": "landed", "pr": 3, "ticket": "A-3", "onto": 9, "ts": "2026-09-24T00:00:00+00:00"}]
 assert prog.landed_but_open(ev + fold, workers, tasks, wts) == prog.landed_but_open(ev, workers, tasks, wts)
@@ -420,6 +438,18 @@ screens["h1"] = perm2
 assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True)[0].startswith("STUCK a1 (a permission prompt)"), seen
 screens["h1"] = idle
 assert prog.stuck_sweep(live, "s", seen, read=read) == [] and seen == {}
+# Orca's agentWait decides first: a wait it found is STUCK even on a screen the regexes miss; when it looked and
+# found none, a menu-like screen is not, but a full disk still is; when it never looked, the screen decides.
+waits = {"a1": {"evidence": "hook", "prompt": "Allow the edit?"}, "a2": None}
+got = prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: waits.get(d, prog.NOT_LOOKED))
+assert got[0].startswith('STUCK a1 (waiting on a prompt (Orca agentWait, hook)): "Allow the edit?"'), got
+screens["h2"] = menu
+assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: waits.get(d, prog.NOT_LOOKED)))
+screens["h2"] = ["npm ERR! ENOSPC: no space left", "❯ "]
+assert any(l.startswith("STUCK a2 (a full disk)") for l in prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: waits.get(d, prog.NOT_LOOKED)))
+screens["h2"] = menu
+assert any(l.startswith("STUCK a2 (a select menu)") for l in prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: prog.NOT_LOOKED))
+screens["h2"] = idle
 # A new prompt ends the wait early: nobody watches a worker's terminal.
 prog.orca_json = lambda *a: {"deliveryId": None, "messages": []}
 prog.run_workers = lambda run: live
