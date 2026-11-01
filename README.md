@@ -146,3 +146,5 @@ bash scripts/pstack-sync-test.sh
 ## License
 
 MIT. `vendor/pstack` and the skills taken from it keep their original author's MIT license (`vendor/pstack/LICENSE`).
+
+<!-- session-pr-e2e test 2026-11-01 (skills): 머지 금지, 오너 확인 뒤 닫음 -->
