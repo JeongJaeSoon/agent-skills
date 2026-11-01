@@ -23,8 +23,11 @@ elif a[:2] == ["orchestration", "worker-start"]:
         print(json.dumps({"ok": False, "error": {"code": "outcome_unknown", "message": "turn not seen"},
                           "result": {"failedStage": "turn_start", "recovery": ["orca orchestration worker-stop --dispatch ctx_1"]}}))
         sys.exit(1)
-    print(json.dumps({"ok": True, "result": {"dispatch": {"id": "ctx_1", "assigneeHandle": "term_w"},
-                                             "resource": {"worktreeId": "repo1::" + os.environ["FAKE_CARD_PATH"]}}}))
+    # Orca 1.4.239's receipt: the worktree and the agent terminal appear only as effects
+    effects = [] if mode == "no-path" else [{"kind": "worktree", "action": "created_top_level",
+                                             "id": "repo1::" + os.environ["FAKE_CARD_PATH"]}]
+    effects.append({"kind": "terminal", "role": "agent", "action": "created", "id": "term_w"})
+    print(json.dumps({"ok": True, "result": {"runId": "run_me", "dispatchId": "ctx_1", "state": "ready", "effects": effects}}))
 elif a[:2] == ["reference", "add"] and mode == "ref-fails":
     print("not a url", file=sys.stderr); sys.exit(1)
 '''
@@ -178,12 +181,19 @@ start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "wor
 spec = start[start.index("--spec") + 1]
 assert spec.startswith("ship the helper and open its PR 브리프:") and "/goal" not in spec.splitlines()[0], spec
 assert start[start.index("--worktree") + 1] == "new-top-level" and start[start.index("--display-name") + 1] == "ABC-1 helper"
+assert start[start.index("--timeout-ms") + 1] == "840000", start
 assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [["reference", "add", URL, "--worktree", f"path:{CARD_DIR}", "--json"]]
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
 assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"}}, out
 # A failed reference after the start is exit 5: the worker runs, so it is not started again.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="ref-fails")
 assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["kind"] == "worker", (rc, err)
+# A start Orca reports done whose receipt names no worktree is still a running worker: exit 5, not 4.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="no-path")
+assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["handle"] == "term_w", (rc, err)
+assert not any(c["argv"][:2] == ["reference", "add"] for c in calls)
+# A REPORT row continued onto a second line is read whole.
+assert card.report_to("REPORT: orca orchestration send \\\n  --to term_x --type status\n") == ["term_x"]
 # A failed start keeps Orca's whole receipt (stage, recovery commands) on stderr.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="start-fails")
 assert rc == 4 and "worker-start failed: outcome_unknown" in err and "worker-stop --dispatch ctx_1" in err, err

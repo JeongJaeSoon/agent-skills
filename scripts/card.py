@@ -30,8 +30,8 @@ agentTerminalHandle) and run.
 
 Exit codes: 0 created; 2 usage, unreadable brief, a missing line or a `term_` report address; 3 the pressure gate
 refused (wait as its reason says, then run this again); 4 the create or worker-start failed (its whole receipt,
-with any recovery commands, goes to stderr); 5 the card exists but linking, logging or naming it failed (the
-create output is still printed; do not create it again).
+with any recovery commands, goes to stderr); 5 the card exists but linking, logging or naming it failed, or a
+started worker's receipt names no worktree (the create output is still printed; do not create it again).
 """
 import itertools, json, os, pathlib, re, shlex, subprocess, sys
 
@@ -75,7 +75,7 @@ def row(text, key):
     return None
 
 
-SEND_TO = re.compile(r"orchestration\s+send\b[^\n]*?--to[ =]+[`'\"]?([\w:.@<>-]+)")
+SEND_TO = re.compile(r"orchestration\s+send\b(?:[^\n]|\\\n)*?--to[ =]+[`'\"]?([\w:.@<>-]+)")
 
 
 def report_to(text):
@@ -192,6 +192,9 @@ def worktree_path(res):
         w = res.get("worktree")
         if isinstance(w, dict) and w.get("path"):
             return w["path"]
+        # worker-start (1.4.239) names it only as an effect: {"kind": "worktree", "id": "<repo id>::<path>"}
+        if res.get("kind") == "worktree" and isinstance(res.get("id"), str) and "/" in res["id"]:
+            return res["id"].split("::", 1)[-1]
         for k in ("worktreePath", "worktreeId"):
             if isinstance(res.get(k), str) and "/" in res[k]:
                 return res[k].split("::", 1)[-1]
@@ -206,7 +209,9 @@ def worktree_path(res):
 def handle_of(res):
     """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older agentTerminalHandle."""
     return ((((res.get("launch") or {}).get("outcome") or {}).get("handle")) or res.get("agentTerminalHandle")
-            or ((res.get("worker") or {}).get("agentTerminalHandle")) or ((res.get("dispatch") or {}).get("assigneeHandle")))
+            or ((res.get("worker") or {}).get("agentTerminalHandle")) or ((res.get("dispatch") or {}).get("assigneeHandle"))
+            or next((e.get("id") for e in res.get("effects") or [] if isinstance(e, dict)
+                     and e.get("kind") == "terminal" and e.get("role") == "agent"), None))
 
 
 def parse_args(rest):
@@ -247,7 +252,9 @@ def create(argv):
         # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
         spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
         cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree", "new-top-level",
-               "--repo", opts["--repo"], "--name", opts["--name"], "--agent", "claude"]
+               "--repo", opts["--repo"], "--name", opts["--name"], "--agent", "claude",
+               # Orca times out before this process does, so a slow start still returns its receipt
+               "--timeout-ms", "840000"]
         cmd += ["--display-name", opts["--display-name"]] if opts.get("--display-name") else []
     else:
         cmd = [ORCA, "worktree", "create", "--repo", opts["--repo"], "--name", opts["--name"]]
@@ -269,7 +276,14 @@ def create(argv):
         out = None
     res = (out or {}).get("result") or {}
     path = worktree_path(res)
-    if not p or p.returncode or not out or out.get("ok") is False or not (path if worker else res.get("worktree")):
+    started = bool(p and not p.returncode and out and out.get("ok") is not False)
+    if worker and started and not path:  # it runs: a retry would start a second worker
+        mark("done")
+        print(json.dumps({**res, "card": {"kind": "worker", "path": None, "handle": handle_of(res), "run": run_id}},
+                         ensure_ascii=False, indent=1))
+        raise Refuse(5, f"[{ME}] the worker started but its receipt names no worktree, so nothing was linked. "
+                        "Do not create it again; find it with `orca orchestration worker-list`.")
+    if not started or not (path if worker else res.get("worktree")):
         e = (out or {}).get("error") or {}
         err = f"{e.get('code')}: {e.get('message')}" if e else err
         mark("failed", err)

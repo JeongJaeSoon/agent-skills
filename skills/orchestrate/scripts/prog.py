@@ -393,11 +393,12 @@ def dep_map(events, extra=None):
 
 
 def orca_ts(s):
-    """An Orca task time ("YYYY-MM-DD HH:MM:SS", UTC) in the ledger's format, or None."""
+    """An Orca task time ("YYYY-MM-DD HH:MM:SS", UTC unless it carries an offset) in the ledger's format, or None."""
     try:
-        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=dt.timezone.utc).isoformat() if s else None
-    except ValueError:
+        t = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
         return None
+    return (t.astimezone(dt.timezone.utc) if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).isoformat()
 
 
 def with_orca_spawns(events, workers, tasks):
@@ -430,14 +431,13 @@ def dispatch_tickets(workers, tasks):
 
 def live_units(events, dispatches, orca_tickets=None):
     """Live workers as the cap counts them: the layers of one land-after chain (ledger `dep`) land as one
-    merge, so they count once. A Dispatch's ticket comes from its Orca Task (orca_tickets), else from a `spawned`
-    line an older brief had the lead record."""
-    ticket = {}
+    merge, so they count once. A Dispatch's ticket comes from a `spawned` line naming it, else from its Orca Task
+    (orca_tickets): a lead records `spawned` for sub-units (ABC-1-K2) whose Task specs all open with the parent ID."""
+    ticket = dict(orca_tickets or {})
     for e in events:
         if e["ev"] == "spawned" and e.get("ticket"):
             for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or "")):
                 ticket[d] = e["ticket"]
-    ticket.update(orca_tickets or {})
     live = {ticket.get(d, d) for d in dispatches}
     root = {t: t for t in live}
 
@@ -2045,8 +2045,10 @@ def judge_wait(waited, lines, activity=None):
     screen the regexes miss; when it looked and found none, only what it does not judge (disk, API retries) is read
     from the screen; when it never looked, the screen decides as for a card."""
     if isinstance(waited, dict):
+        # kind is the dedupe key: only the evidence's source, never a payload that may carry a fresh timestamp
         ev = waited.get("evidence") or waited.get("source") or "orca"
-        return (f"waiting on a prompt (Orca agentWait, {ev if isinstance(ev, str) else json.dumps(ev)[:80]})",
+        ev = ev if isinstance(ev, str) else (ev.get("source") or ev.get("kind") or "orca") if isinstance(ev, dict) else "orca"
+        return (f"waiting on a prompt (Orca agentWait, {str(ev)[:40]})",
                 str(waited.get("prompt") or waited.get("question") or waited.get("text") or "")[:200])
     if lines is None:
         return None

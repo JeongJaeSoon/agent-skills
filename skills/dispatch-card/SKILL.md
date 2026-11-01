@@ -135,7 +135,7 @@ skills-sync close-setup "<result.worktree.path>"
   end-session §8` and drop the questions it left waiting (`orchestrate` "Stay answerable").
   Without the summary the new card redoes or undoes finished work; left open, the old card waits
   on a question about work the new card already did.
-- Which card it makes. A brief whose REPORT line sends to `run:<id>` is work this session waits
+- Which card it makes. A brief whose REPORT or PARENT line sends to `run:<id>` is work this session waits
   on: from a session bound to a Run (`orca orchestration run-current`; bind one as in
   `orchestrate` references/top-level.md "Your Run"), `skills-sync card` starts it as a supervised
   worker with `orca orchestration worker-start --worktree new-top-level`. It is then a Dispatch:

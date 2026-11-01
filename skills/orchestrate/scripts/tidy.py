@@ -4,8 +4,7 @@ the owner closes the rest from the dashboard or `orch board done`. Every close s
 An item is closed only on evidence this file can check: a PR merged or closed (prs.json, or the merged state Orca
 observed on a card's linked PR), a session gone from Orca's list, or the owner's word. A text names a PR only by its
 full owner/repo#N (a bare #N could be any repository's), and a card only by a slug-shaped key (two hyphenated words
-or more, case ignored) standing alone in the text: its display name, the ticket ID opening it, its worktree directory
-or its branch's last segment (keys_of). Anything less
+or more, case ignored) standing alone in the text: its display name or its worktree directory (keys_of). Anything less
 certain is not closed: assess() calls it `check`, and the report shows it as 확인 필요 instead of 진행 중 or 보류.
 Nothing the owner or another person acts on is closed by the tick: a doing item waiting on a person or the owner's,
 a decision, an inbox item of a type the owner acts on (OWNER_TYPES: a command to run, a decision, a login...), a row
@@ -68,11 +67,10 @@ def cards_of(state):
 
 
 def keys_of(card):
-    """The lowercase slug-shaped names a text may call a card by: its display name, the ticket ID that opens a
-    display name such as "ABC-1 short title", its worktree directory name and its branch's last segment."""
-    name = (card.get("name") or "").strip()
-    raw = [name, name.split()[0] if name else "", pathlib.PurePath(card.get("path") or "").name,
-           (card.get("branch") or "").rsplit("/", 1)[-1]]
+    """The lowercase slug-shaped names a text may call a card by: its display name and its worktree directory name.
+    Not the ticket ID alone, nor the branch's last segment: a follow-up item cites its parent's ticket ("ABC-1
+    follow-up"), and a branch tail is often a generic word pair (fix-tests), so either would close the wrong item."""
+    raw = [(card.get("name") or "").strip(), pathlib.PurePath(card.get("path") or "").name]
     return {k.lower() for k in raw if k and SLUG.fullmatch(k.lower())}
 
 
@@ -128,7 +126,7 @@ def assess(store, state, prs, me=None, now=None):
     now = now or fleet.utcnow()
     cards = cards_of(state)
     prs = {**orca_merged(cards, {c["pr"] for c in cards.values()}), **prs}
-    live ={s["id"] for s in cards.values() if s.get("phase") in ("working", "waiting")}
+    live = {s["id"] for s in cards.values() if s.get("phase") in ("working", "waiting")}
     out = {}
 
     def put(iid, verdict, rule, evidence, label):
