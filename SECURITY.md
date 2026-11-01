@@ -17,7 +17,7 @@ You'll get a reply on the report itself. Say there if you'd like to be credited 
 
 ## Scope
 
-This plugin runs inside Claude Code with your permissions. Its hooks make permission decisions (`hooks/guard.py`, `hooks/orchestrator_guard.py`), and some scripts write settings files only after you approve a diff (`scripts/setup.py`, `skills/skills-config`, `skills/tune-automode`). Reports about these are especially welcome:
+This plugin runs inside Claude Code with your permissions. Its hooks make permission decisions (`hooks/guard.py`), and some scripts write settings files only after you approve a diff (`scripts/setup.py`, `skills/skills-config`, `skills/tune-automode`). Reports about these are especially welcome:
 
 - a hook that allows something it should leave to the normal permission flow,
 - a script that writes a settings file without the approval step, or writes more than the diff it showed,
