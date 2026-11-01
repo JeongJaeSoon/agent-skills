@@ -1,4 +1,4 @@
-<!-- translated-from: 3964a0f55ccf0fcd49722e451258ece35c945486 -->
+<!-- translated-from: 98634c878b3e50fbd940d0389300f1613459b34f -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 10 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -149,6 +149,7 @@ Records verified milestones in the configured tracker or notes store within the 
   - Standing roles send routine reports with `--type status`. Escalation is only for when the lead needs to step in.
   - Deliberate departures from Orca's default rules (starting the concurrency cap at 1, worker model defaults, a worktree per ticket, a background `orch wait`, a long `worker_done`, a one-line `terminal send` nudge) are listed with reasons in a table in SKILL.md.
   - There are two merge policies: autonomous (the default) and human-gate. Humans get only the dashboard and summaries.
+  - **What Orca owns (2026-11-01):** a card's progress, PR and ticket come from its Orca worktree (`workspaceStatus`, `linkedPR`, `linkedItems`) and the Run's Tasks and Dispatches. Cards are not written as board doing lines, lead rows come from the sessions, and `orch sent` records only paths outside Orca. Wait detection reads Orca's `agentWait` first. `skills-sync card` starts a card that reports to a Run with `worker-start`. A decision that blocks a Task is asked only as a gate. Heavy work, holds, requests, the stage table, to-dos, the brief renderer and heartbeats stay in orch. Card doing lines written before this are cleaned up with `orch migrate` (a dry-run; `--apply` backs up and then closes them; `--restore` undoes it). The switch-over steps are in [orca-migration.md](orca-migration.md).
   - Taking over goes in this order: program note → `run-use` → `orch set` (aligns the ledger with the policy in the note) → `orch status`.
 - **Bundled:**
   - `references/`
