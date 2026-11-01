@@ -2041,10 +2041,11 @@ def agent_waits():
         panes = {a["paneKey"]: a["agentWait"]
                  for w in orca_json("worktree", "ps", "--agent-wait", "--limit", "500").get("worktrees") or []
                  for a in w.get("agents") or [] if a.get("paneKey") and "agentWait" in a}
-        terms = orca_json("terminal", "list").get("terminals") or []
+        # An orphaned terminal lists its pty as tabId and leafId; its pane is recordedPaneKey.
+        return {t["handle"]: panes[k] for t in orca_json("terminal", "list").get("terminals") or []
+                if t.get("handle") and (k := t.get("recordedPaneKey") or f"{t.get('tabId')}:{t.get('leafId')}") in panes}
     except (SystemExit, Exception):
         return {}
-    return {t["handle"]: panes[k] for t in terms if (k := f"{t.get('tabId')}:{t.get('leafId')}") in panes}
 
 
 def judge_wait(waited, lines, activity=None):

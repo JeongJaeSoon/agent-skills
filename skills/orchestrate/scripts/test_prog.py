@@ -464,9 +464,12 @@ def fake_ps(*a):
                               {"agents": [{"paneKey": "t9:l9", "agentWait": None}]}, {}]}
     assert a[:2] == ("terminal", "list"), a
     return {"terminals": [{"handle": "h1", "tabId": "t1", "leafId": "l1"}, {"handle": "h2", "tabId": "t2", "leafId": "l2"},
-                          {"handle": "h3", "tabId": "t3", "leafId": "l3"}, {"handle": "h4", "tabId": "t4", "leafId": "l4"}]}
+                          {"handle": "h3", "tabId": "t3", "leafId": "l3"}, {"handle": "h4", "tabId": "t4", "leafId": "l4"},
+                          # an orphaned terminal lists its pty as tab and leaf; its pane is recordedPaneKey
+                          {"handle": "h9", "orphaned": True, "tabId": "pty:x", "leafId": "pty:x", "recordedPaneKey": "t9:l9"},
+                          {"tabId": "t1", "leafId": "l1"}]}
 saved_oj, prog.orca_json = prog.orca_json, fake_ps
-assert prog.agent_waits() == {"h1": None, "h2": {"evidence": "hook"}}, prog.agent_waits()
+assert prog.agent_waits() == {"h1": None, "h2": {"evidence": "hook"}, "h9": None}, prog.agent_waits()
 prog.orca_json = lambda *a: (_ for _ in ()).throw(SystemExit("orca down"))
 assert prog.agent_waits() == {}, "an unreadable listing leaves every terminal to the screen"
 prog.orca_json = saved_oj
