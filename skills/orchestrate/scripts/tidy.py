@@ -94,7 +94,7 @@ def orca_merged(cards, keys):
     out = {}
     for c in cards.values():
         lp = c.get("linked_pr") if isinstance(c.get("linked_pr"), dict) else {}
-        if lp.get("key") in keys and str(lp.get("state") or "").lower() == "merged":
+        if lp.get("key") and lp["key"] in keys and str(lp.get("state") or "").lower() == "merged":
             out[lp["key"]] = {"state": "MERGED"}
     return out
 

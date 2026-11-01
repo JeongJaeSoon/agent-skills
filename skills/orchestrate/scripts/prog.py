@@ -68,6 +68,10 @@ Usage: orch <command> <slug> [options]
                                      no slug: exit on a new stuck screen in any agent terminal but this
                                      one (cards no Run lists), a lost login or goal, or low disk; never types
                                      (card_watch.py). --card HANDLE [--within 240]: one new card's start
+  migrate [--apply | --restore BACKUP_DIR]
+                                     no slug: close the board doing lines that name a card, now that the
+                                     card's Orca worktree is its record (orca_migrate.py). Bare: dry-run;
+                                     --apply backs up first; --restore reopens what that run closed
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
   decide list | done <id> [--answer TEXT] | drop <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -2702,9 +2706,10 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "req": cmd_req, "release": lambda argv: cmd_hold(argv, release=True),
-            "watch-cards": lambda argv: __import__("card_watch").main(argv)}
+            "watch-cards": lambda argv: __import__("card_watch").main(argv),
+            "migrate": lambda argv: __import__("orca_migrate").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["inbox"])) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["inbox"], ["migrate"])) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])

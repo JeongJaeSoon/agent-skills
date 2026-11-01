@@ -161,6 +161,7 @@ PR 을 맡는 스킬과 머지 주체:
   - 상시 역할의 평상시 보고는 `--type status`로 보낸다. escalation은 리드가 나서야 할 때만 쓴다.
   - Orca 기본 규칙과 일부러 다르게 하는 것(동시 실행 상한 1부터, 워커 모델 기본값, 티켓마다 worktree, 백그라운드 `orch wait`, 긴 `worker_done`, `terminal send` 한 줄 넛지)은 SKILL.md 표에 이유와 함께 있다.
   - 머지 정책은 autonomous(기본)와 human-gate 두 가지다. 사람에게는 대시보드와 요약만 보낸다.
+  - **Orca가 원천인 것(2026-11-01):** 카드의 진행·PR·티켓은 Orca 칸(`workspaceStatus`, `linkedPR`, `linkedItems`)과 Run의 Task·Dispatch에서 읽는다. 카드는 board doing 줄로 적지 않고, 리드 행은 세션에서 만들며, Sent 표는 Orca 밖 경로만 `orch sent`로 적는다. 대기 판정은 Orca의 `agentWait`를 먼저 본다. Run에 보고하는 카드는 `skills-sync card`가 `worker-start`로 띄운다. Task를 막는 결정은 gate로만 묻는다. 무거운 일·보류·요청·단계표·할 일과 브리프 렌더러, heartbeat는 orch에 남는다. 이전에 쓴 카드 doing 줄은 `orch migrate`(dry-run, `--apply`는 백업 뒤 닫음, `--restore`로 되돌림)로 정리한다. 전환 순서는 [orca-migration.ko.md](orca-migration.ko.md).
   - 이어받을 때는 프로그램 노트 → `run-use` → `orch set`(노트의 정책을 원장에 맞춤) → `orch status` 순서로 한다.
 - **동봉:**
   - `references/`

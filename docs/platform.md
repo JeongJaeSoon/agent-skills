@@ -225,6 +225,7 @@ guard hook은 Bash 명령 텍스트만 본다. 그래서 `--prompt "$(cat brief.
 - 행은 ``` 펜스 밖에서 `KEY:` 형식이나 템플릿의 넓은 칸 간격으로 시작하는 줄만 인정한다. "KEEP the old API" 같은 산문이나 인용한 템플릿이 행으로 잡히지 않게 하려는 것이다. Approved 제목이나 불릿만 있고 `APPROVED:` 행이 없으면 승인이 프롬프트에서 빠지므로 종료 코드 2로 거부한다.
 - 분류기는 명령과 경로만 보고 브리프 본문(APPROVED, DELEGATE)은 보지 못한다. `$(cat)`과 같은 한계다. helper는 자동 허용되지 않으니 분류기 판정은 그대로 거친다.
 - 브리프는 로컬 파일만 받는다. notes store에서만 읽을 수 있는 노트는 먼저 파일로 옮긴다.
+- 2026-11-01부터 브리프의 `REPORT`가 `run:<id>`를 가리키고 이 세션이 Run에 묶여 있으면 `orca orchestration worker-start --worktree new-top-level`로 감독 worker를 띄운다. Task·Dispatch가 생기므로 진행·완료는 `worker_done`과 Run 기록에서 읽고, `orch sent add`는 하지 않는다(Sent 표는 Run의 Task에서 만든다). 리드 브리프, `--card`, Run에 묶이지 않은 세션은 예전처럼 `worktree create` 카드다. `--reference <URL>`은 카드면 `worktree create --reference`, worker면 시작 뒤 `orca reference add`로 붙는다. `REPORT`가 `term_` 주소면 종료 코드 2로 거부한다(Run 밖 터미널로는 `worker_done`이 가지 않는다). Orca가 실패나 결과 불명을 돌려주면 받은 JSON 전체를 stderr에 찍고 종료 코드 4, 만든 뒤 링크·표시 이름 지정이 실패하면 5로 끝낸다. 5는 다시 만들지 말라는 뜻이다. `worker-start`의 새 worktree도 `pressure_gate`에서 무거운 동작으로 센다.
 
 ## 5. 다른 PC 부트스트랩
 

@@ -128,6 +128,7 @@ pstack 묶음은 Lauren Tan의 [pstack](https://github.com/cursor/plugins)(MIT)�
 - [docs/new-pc.md](docs/new-pc.md): 새 PC 설치의 세부
 - [docs/automation.md](docs/automation.md): 어떤 일을 어떤 장치로 돌리나
 - [docs/platform.md](docs/platform.md): 체크아웃 로드와 동기화 설계
+- [docs/orca-migration.ko.md](docs/orca-migration.ko.md): 2026-11-01에 orch에서 Orca로 옮긴 것, 이전 세션과 함께 돌리는 법, 전환 순서와 되돌리기
 - [docs/token-usage.md](docs/token-usage.md): 이 플러그인이 컨텍스트에 넣는 토큰과 기능별로 쓴 토큰 재기
 - [소개 페이지](https://jeongjaesoon.github.io/agent-skills/): 한 장으로 보는 소개(GitHub Pages)
 - 한눈에 보기: [스킬 카탈로그](https://claude.ai/artifact/16394ZGS3RX9sTU6h2ME8d), [사용 안내서](https://claude.ai/artifact/1ifoY8ykKHBqcZMrKN9ACR). 오른쪽 위에서 한국어·English·日本語를 고르고, 링크 끝에 `#en`이나 `#ja`를 붙이면 그 언어로 열린다.
