@@ -1,7 +1,7 @@
-<!-- translated-from: 98634c878b3e50fbd940d0389300f1613459b34f -->
+<!-- translated-from: 34e7848df43dc24e4bcc76886e1ebd4ff36b3411 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック10個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック9個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -533,18 +533,6 @@ PR を受け持つスキルとマージする主体:
 
 許可を出すのは、シェルの演算子、リダイレクト、置換、変数を含まない単一のコマンドだけです。変数は `$ORCA_TERMINAL_HANDLE` だけが例外です。コマンド名のすぐ後にサブコマンドが来る必要があり、フラグが先に来たら判定しません。判定しなかった呼び出しは、ふだんの権限の流れ（auto mode の分類器、ユーザーのルール）に乗ります。
 
-### オーケストレーターへの委任の強制
-`hooks/orchestrator_guard.py`（PreToolUse、すべてのツール）。最上位のオーケストレーターのメインスレッドでだけ判定します。`agent_id` がなく `agent_type` が `agent-skills:orchestrator` の呼び出しか、reorient フックに `ROLE: orchestrator` と記録されたセッションで `agent_id`・`agent_type` のない呼び出しです。サブエージェントは自分のタイプと `agent_id` を付けて来るので、委任された側は止めません。設計と別案の比較は [orchestrator-guard.md](orchestrator-guard.md)（韓国語）にあります。
-
-| 判定 | 対象 |
-|---|---|
-| 拒否 | ブラウザ・デスクトップ・チャット送信のツール、WebFetch、WebSearch |
-| 拒否 | 状態ディレクトリ（`~/.local/state`、`$AGENT_SKILLS_STATE`、`$PROGRAMS_HOME`、`$CLAUDE_CONFIG_DIR/projects/*/memory`、一時ディレクトリとセッションの scratchpad、`orchestrator_guard.write_dirs`）の外への Edit・Write・NotebookEdit |
-| 拒否 | `run_in_background` のコマンドを `tail`・`head`（`-f` を除く）にパイプしたもの。監視側の行が終わるまでパイプに縛られ、出力ファイルに出てきません |
-| 拒否 | 1ターン（`prompt_id`。10分の空白も新しいターンとし、`prompt_id` がなければ数えない）の直接の作業呼び出しが `work_calls`（既定は3）を超えたもの。状態ディレクトリの外の Read、Grep、Glob、上で拒否していない MCP ツール、ルーティング用のコマンド（`orca`、`orch`、`skills-sync` などとパイプの後のフィルター、メッセージ本文用の `"$(cat <ファイル>)"`）以外の Bash を数えます |
-
-Agent、SendMessage、AskUserQuestion、Skill、Cron*、Monitor のようなルーティング用のツールは、数えも止めもしません。拒否の理由には委任の経路（Agent、`orca worktree create`、リードへの `orca orchestration send`、`orch …`）が書かれます。`ROLE: none` ならそのセッションで、`AGENT_SKILLS_ORCHESTRATOR_GUARD=0` ならすべてのセッションで無効になります。設定は `~/.claude/agent-skills.json` の `orchestrator_guard`（`work_calls`、`write_dirs`、`route_commands`、`deny_tools`）です。
-
 ### オーケストレーター・リードの再確認
 `hooks/onboard.py`（SessionStart `startup|clear`）。このプロファイルのユーザー設定（`env.CLAUDE_CODE_PLUGIN_DIRS`。Orca のプロファイルごとに別々に見ます）もセッションの同じ環境変数もチェックアウトを読み込んでいないときだけ、インストール画面の値とともに `setup-pc` を提案するよう促す段落を入れます。`-p` セッション（`CLAUDE_CODE_ENTRYPOINT` が `sdk-cli`）には入れません。Agent SDK のセッション（`sdk-ts`・`sdk-py`）は人が入力する GUI かもしれないので入れ、最初の依頼がブリーフや自動化のプロンプトなら無視するよう段落に書いてあります。URL の認証情報は消してから入れます。人が断ればエージェントが `onboard.py --decline` を実行し、そのプロファイルでは二度と尋ねません。`AGENT_SKILLS_ONBOARD=0` ですべて無効になります。
 
@@ -620,7 +608,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、オーケストレーターへの委任の強制（`orchestrator_guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、オーケストレーター・リードが受けた人の依頼の記録（`request_log.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）。
+- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、オーケストレーター・リードが受けた人の依頼の記録（`request_log.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。

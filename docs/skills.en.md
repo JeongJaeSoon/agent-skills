@@ -1,7 +1,7 @@
-<!-- translated-from: 98634c878b3e50fbd940d0389300f1613459b34f -->
+<!-- translated-from: 34e7848df43dc24e4bcc76886e1ebd4ff36b3411 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 10 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 9 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -531,18 +531,6 @@ Program state lives in `~/.claude/programs/<slug>/`: `program.json`, the append-
 
 Allow is given only to a single command with no shell operators, redirections, substitutions or variables. The one variable allowed is `$ORCA_TERMINAL_HANDLE`. The subcommand must come right after the command name; if a flag comes first, no decision is made. Calls without a decision go through the normal permission flow (the auto mode classifier and the user's own rules).
 
-### Enforcing orchestrator delegation
-`hooks/orchestrator_guard.py` (PreToolUse, every tool). It decides only on the top-level orchestrator's main thread: a call with no `agent_id` whose `agent_type` is `agent-skills:orchestrator`, or a call with neither `agent_id` nor `agent_type` in a session the reorient hook recorded as `ROLE: orchestrator`. Subagents arrive with their own type and `agent_id`, so the side that was delegated to is never blocked. The design and the alternatives compared: [orchestrator-guard.md](orchestrator-guard.md) (Korean).
-
-| Decision | Applies to |
-|---|---|
-| Deny | Browser, desktop and chat-send tools, WebFetch, WebSearch |
-| Deny | Edit, Write and NotebookEdit outside the state directories (`~/.local/state`, `$AGENT_SKILLS_STATE`, `$PROGRAMS_HOME`, `$CLAUDE_CONFIG_DIR/projects/*/memory`, temp dirs and the session scratchpad, `orchestrator_guard.write_dirs`) |
-| Deny | A `run_in_background` command piped to `tail` or `head` (except `-f`). The watcher's lines stay stuck in the pipe until it ends and never reach the output file |
-| Deny | Direct work calls in one turn (`prompt_id`; a 10-minute gap also starts a new turn; nothing is counted without a `prompt_id`) beyond `work_calls` (default 3). It counts Read, Grep and Glob outside the state directories, MCP tools not denied above, and Bash other than routing commands (`orca`, `orch`, `skills-sync` and the like, filters after a pipe, `"$(cat <file>)"` for a message body) |
-
-Routing tools such as Agent, SendMessage, AskUserQuestion, Skill, Cron* and Monitor are neither counted nor blocked. The deny reason names the delegation paths (Agent, `orca worktree create`, `orca orchestration send` to a lead, `orch …`). `ROLE: none` turns it off for that session, and `AGENT_SKILLS_ORCHESTRATOR_GUARD=0` for every session. Settings: `orchestrator_guard` in `~/.claude/agent-skills.json` (`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
-
 ### Re-orienting the orchestrator and leads
 `hooks/onboard.py` (SessionStart `startup|clear`). Only when neither this profile's user settings (`env.CLAUDE_CODE_PLUGIN_DIRS`, checked per Orca profile) nor the session's own environment variable of that name loads the checkout, it adds a paragraph telling the agent to offer `setup-pc`, with the values from the install dialog. It adds nothing to `-p` sessions (`CLAUDE_CODE_ENTRYPOINT` is `sdk-cli`). Agent SDK sessions (`sdk-ts`, `sdk-py`) may be a GUI a person types into, so they get it, and the paragraph says to ignore it when the first request is a brief or an automation prompt. Credentials in URLs are stripped first. When the human declines, the agent runs `onboard.py --decline` and that profile is not asked again. `AGENT_SKILLS_ONBOARD=0` turns it off everywhere.
 
@@ -618,7 +606,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), enforcing orchestrator delegation (`orchestrator_guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), logging the human requests the orchestrator or a lead receives (`request_log.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), logging the human requests the orchestrator or a lead receives (`request_log.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.

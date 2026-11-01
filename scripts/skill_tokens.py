@@ -44,7 +44,6 @@ HOOKS = {
     "request_log.py": "role sessions: each human prompt",
     "prose_check.py": "a commit, PR or tracker write whose text breaks write-plainly",
     "guard.py": REFUSAL_ONLY,
-    "orchestrator_guard.py": REFUSAL_ONLY,
     "pressure_gate.py": REFUSAL_ONLY,
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,

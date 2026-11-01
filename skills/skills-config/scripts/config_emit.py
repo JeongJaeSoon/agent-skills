@@ -61,7 +61,6 @@ SECTIONS = {
     "notes": (["skills/use-notes/SKILL.md"], {}),
     "reflect": (["skills/reflect/SKILL.md"], {}),
     "brief": (["skills/brief/SKILL.md"], {}),
-    "orchestrator_guard": (["docs/orchestrator-guard.md"], {}),
     "preview-watch": (["docs/preview-watch.md"], {"": "scripts/preview_watch.py"}),
     "share-server": (["docs/share-server.md"], {"": "scripts/share_server.py"}),
     "reap-hard": (["docs/reap-hard.md"], {"": "scripts/reap_hard.py"}),

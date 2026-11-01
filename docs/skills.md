@@ -1,6 +1,6 @@
 # 스킬 카탈로그
 
-`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 10개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
+`agent-skills` 플러그인이 싣는 스킬 41개(`skills/*/SKILL.md`), 명령 3개(`orch`, `orch-dash`, `skills-sync`), hook 9개를 정리한다. 스킬은 description에 적힌 상황이 오면 모델이 스스로 부른다. 직접 부를 때는 `/agent-skills:<이름>`을 쓰고, 다른 플러그인과 이름이 겹치지 않으면 `/<이름>`도 된다. 예외는 `brief`다. 맨 `/brief`는 이 플러그인 스킬로 가지 않으므로 `/agent-skills:brief`로 부른다([brief](#brief)).
 
 설정 기본값 변경과 기존 데이터 보존 방법은 [설정 전환 안내](configuration-migration.md)를 따른다. 노트·원장·개인 폴더는 명시 설정이 필요하고, 성과 보고 기본 시간대는 UTC다.
 
@@ -565,18 +565,6 @@ PR 을 맡는 스킬과 머지 주체:
 
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
-### 오케스트레이터 위임 강제
-`hooks/orchestrator_guard.py`(PreToolUse, 모든 도구). 최상위 오케스트레이터의 메인 스레드에서만 판정한다. `agent_id`가 없고 `agent_type`이 `agent-skills:orchestrator`이거나, reorient hook에 `ROLE: orchestrator`로 기록된 세션에서 `agent_id`·`agent_type`이 없는 호출이다. 서브에이전트는 자기 타입과 `agent_id`를 달고 오므로 위임받은 쪽은 막지 않는다. 설계와 다른 안의 비교는 [orchestrator-guard.md](orchestrator-guard.md).
-
-| 결정 | 대상 |
-|---|---|
-| 거부 | 브라우저·데스크톱·채팅 전송 도구, WebFetch, WebSearch |
-| 거부 | 상태 디렉터리(`~/.local/state`, `$AGENT_SKILLS_STATE`, `$PROGRAMS_HOME`, `$CLAUDE_CONFIG_DIR/projects/*/memory`, 임시 디렉터리와 세션 scratchpad, `orchestrator_guard.write_dirs`) 밖의 Edit·Write·NotebookEdit |
-| 거부 | `run_in_background`인 명령을 `tail`·`head`(`-f` 제외)로 파이프한 것. 감시자의 줄이 끝날 때까지 파이프에 묶여 출력 파일에 안 나온다 |
-| 거부 | 한 턴(`prompt_id`, 10분 공백도 새 턴, `prompt_id`가 없으면 세지 않음)에 직접 작업 호출이 `work_calls`(기본 3)를 넘은 것. 상태 디렉터리 밖 Read, Grep, Glob, 위에서 거부하지 않은 MCP 도구, 라우팅 명령(`orca`, `orch`, `skills-sync` 등과 파이프 뒤 필터, 메시지 본문용 `"$(cat <파일>)"`) 밖의 Bash를 센다 |
-
-Agent, SendMessage, AskUserQuestion, Skill, Cron*, Monitor 같은 라우팅 도구는 세지도 막지도 않는다. 거부 사유는 위임 경로(Agent, `orca worktree create`, 리드에게 `orca orchestration send`, `orch …`)를 알려 준다. `ROLE: none`이면 그 세션에서, `AGENT_SKILLS_ORCHESTRATOR_GUARD=0`이면 모든 세션에서 꺼진다. 설정은 `~/.claude/agent-skills.json`의 `orchestrator_guard`(`work_calls`, `write_dirs`, `route_commands`, `deny_tools`).
-
 ### 오케스트레이터·리드 재정렬
 `hooks/onboard.py`(SessionStart `startup|clear`). 이 프로필의 사용자 설정(`env.CLAUDE_CODE_PLUGIN_DIRS`, Orca 프로필마다 따로 본다)도 세션의 같은 환경 변수도 체크아웃을 로드하지 않을 때만, 설치 창의 값과 함께 `setup-pc`를 제안하라는 문단을 넣는다. `-p` 세션(`CLAUDE_CODE_ENTRYPOINT`가 `sdk-cli`)에는 넣지 않는다. Agent SDK 세션(`sdk-ts`·`sdk-py`)은 사람이 입력하는 GUI 일 수도 있어 넣고, 첫 요청이 브리프·자동화 프롬프트면 무시하라고 문단이 말한다. URL의 인증 정보는 지우고 넣는다. 사람이 거절하면 에이전트가 `onboard.py --decline`을 돌려 그 프로필에서는 다시 묻지 않는다. `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다.
 
@@ -676,7 +664,7 @@ pstack 스킬 58개(원칙 24개와 나머지 34개) 가운데 원칙 24개 전�
 - **프로젝트 운영:** `orchestrate`의 `orch` 원장, 착지 게이트와 독점 레인, human-gate, main 가디언, QA 리드, `orch-dash` 대시보드. 모양은 pstack 플레이북을 따랐지만 Orca Run과 GitHub stack 위에서 새로 만들었다.
 - **측정과 어댑터:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **머신 관리:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **hook:** 권한 결정(`guard.py`), 오케스트레이터 위임 강제(`orchestrator_guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 오케스트레이터·리드가 받은 사람 요청 기록(`request_log.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
+- **hook:** 권한 결정(`guard.py`), 오케스트레이터·리드 재정렬(`reorient.py`), 미설정 PC의 설정 제안(`onboard.py`), 대시보드에서 답하는 권한 창 기록(`permission.py`), 터미널에서 답한 결정 닫기(`decision.py`), 오케스트레이터·리드가 받은 사람 요청 기록(`request_log.py`), 완료 주장 검사(`claim_check.py`), 무거운 시작 전 사용량 확인(`pressure_gate.py`), 문체 검사(`prose_check.py`).
 
 ### upstream 동기화 상태
 - **마지막 동기화:** 2026-10-26, `b42effe`(0.15.3)에서 `99b609a`(0.15.32)로. 그 사이 upstream은 pstack에 커밋 74개를 쌓았다.
