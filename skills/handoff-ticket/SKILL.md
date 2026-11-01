@@ -92,7 +92,7 @@ orca worktree create \
   --no-parent \
   --agent claude \
   --prompt "/goal <TICKET-ID>. CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다" \
-  --comment "<ticket URL>" \
+  --reference "<ticket URL, or a Jira key>" \
   --json
 # name the card after the ticket, not Orca's automatic title (the tab title is the agent's; a rename does not stick)
 orca worktree set --worktree "path:<result.worktree.path>" --display-name "<TICKET-ID> <short title>" --json
@@ -101,9 +101,14 @@ orca worktree set --worktree "path:<result.worktree.path>" --display-name "<TICK
 skills-sync close-setup "<result.worktree.path>"
 ```
 
-- Link the card to the ticket the way the active tracker allows (`use-tracker` → "Link an Orca
-  card"; on Linear, add `--linear-issue "<TICKET-ID>"`). If the link is rejected, the
-  `--comment` URL is enough and the new session moves the ticket itself.
+- `--reference` is the card's link to its ticket in Orca (`linkedItems`): `orca reference find
+  <TICKET-ID>` then finds the card, and the new session's `orca linear attach --current` works.
+  Linear and GitHub take the full URL; a bare key is read as Jira. Do not add the legacy
+  `--linear-issue` or `--issue` flags beside it: Orca refuses the mix. If the reference is
+  rejected, create the card without it and put the ticket URL in the prompt; the new session
+  moves the ticket itself.
+- This is a handoff, not supervised work: it has no REPORT line and stays a `/goal` card, not an
+  Orca worker (Orca's roles: a handoff creates no Run, Task or Dispatch).
 - `--name` becomes the branch name (with the user's branch prefix, if Orca adds one).
 - Stacked work: pass the lower ticket's branch as `--base-branch` and say in the prompt
   "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`)".
@@ -118,9 +123,11 @@ skills-sync close-setup "<result.worktree.path>"
 ## 4. Verify it started
 
 ```bash
-orca terminal wait --terminal <result.agentTerminalHandle> --for tui-idle --timeout-ms 60000
+orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000
 orca terminal read --terminal <handle>
 ```
+
+The handle is `result.launch.outcome.handle` (`result.agentTerminalHandle` on an older Orca).
 
 `tui-idle` also fires on a permission or question prompt. Read the output and confirm the
 agent picked up `/goal` before reporting success. Report the worktree path, branch and handle.

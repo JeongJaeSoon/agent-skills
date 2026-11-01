@@ -162,9 +162,12 @@ Repair it within scope or report the unresolved gap and use direct checks that p
 acceptance criteria; never claim a pass from a stale harness.
 
 After the test suite and E2E check, push and open a PR with `gh pr create` in the draft/ready state the user requested.
+In an Orca card, right after it: `orca worktree set --worktree current --workspace-status in-review --json`
+(the card's board column; Orca links the PR to the card by itself, from the branch, so no `--pr`).
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
-with `orca linear attach --current --url <pr> --title "PR"` (outside an Orca card,
-`orca linear attach <ID> --url <pr>`). Move the ticket at each milestone as `use-tracker`
+with `orca linear attach --current --url <pr> --title "PR"` when the card links a Linear issue
+(`linkedItems` in `orca worktree current --json`, set by the card's `--reference`), else
+`orca linear attach <ID> --url <pr>`. Move the ticket at each milestone as `use-tracker`
 "Milestones" says: its `PR:` line now, `review` when you request a review. A review request
 is not made until `gh pr view <n> --json reviewRequests,assignees` lists the reviewer:
 `gh pr edit --add-reviewer` can exit 0 without adding anyone.

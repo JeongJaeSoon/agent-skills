@@ -2,7 +2,7 @@
 """PreToolUse hook of the agent-skills plugin: look at the machine before a heavy start.
 
 A Bash call that starts something heavy (`orch heavy`, `docker compose … up`, `docker-compose … up`,
-`orca worktree create`) is denied while the machine is at warn or danger by reap-resources' pressure check
+`orca worktree create`, `orca orchestration worker-start` into a new worktree) is denied while the machine is at warn or danger by reap-resources' pressure check
 (skills/reap-resources/scripts/pressure.py). At warn it goes through once a pressure round swept the safe targets in the
 last `gate_fresh_minutes`: the safe targets are already gone, and warn alone is no reason to wait. At danger it waits:
 the command goes into pressure.py's queue, shown on the dashboard, until the same session runs it again once
@@ -77,6 +77,11 @@ def starts_heavy(argv):
         return "orch heavy"
     if head == "orca" and words[1:3] == ["worktree", "create"]:
         return "orca worktree create"
+    # A worker in a new worktree is a new agent like a created card; one on an existing worktree is not.
+    if head == "orca" and words[1:3] == ["orchestration", "worker-start"] and any(
+            w in ("new-top-level", "new-child") or w.startswith(("--worktree=new-top-level", "--worktree=new-child"))
+            for w in words[3:]):
+        return "orca orchestration worker-start"
     rest = words[2:] if head == "docker" and words[1:2] == ["compose"] else words[1:] if head == "docker-compose" else None
     j = 0
     while rest is not None and j < len(rest) and rest[j].startswith("-"):

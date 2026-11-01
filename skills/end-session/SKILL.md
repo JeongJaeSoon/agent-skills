@@ -61,7 +61,7 @@ git status --short --untracked-files=no # must be empty (tracked changes)
 git status --short --ignored             # untracked leftovers: build caches or regenerated .agents/skills copies only?
 git diff --stat origin/main...HEAD       # for a branch with no PR; after a squash merge this still shows the branch's diff
 gh pr list --head "$(git branch --show-current)" --state merged --json number,mergeCommit
-orca worktree current --json             # linked ticket (linkedLinearIssue / linkedIssue / linkedWorkItem), linkedPR; workspaceStatus does not decide anything
+orca worktree current --json             # linked ticket (linkedItems, set by --reference; legacy linkedLinearIssue / linkedIssue / linkedWorkItem), linkedPR; workspaceStatus does not decide anything
 gh pr list --head "$(git branch --show-current)" --state open --json number,url
 ```
 
@@ -160,6 +160,15 @@ the parent to decide. Then run §3 and pick by §4's table on real output:
 | A `superseded by <card>` message from the session that started this card | Stop the work and push nothing more. The report names what is uncommitted or unpushed, then close by the rows above; where §4 would keep the worktree, only `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. A question you left waiting is withdrawn |
 | The brief's deliverable is the open PR itself (its `CLOSE` line says to close once the PR is up and reported; merge and review are not this card's) | The report text, then `orca terminal close --terminal $ORCA_TERMINAL_HANDLE --json`. The worktree stays for the PR (§4); a review round starts a new card on it. Once the PR merges, the session that started this card removes the worktree, the backstop in "Who closes a finished card" below; the janitor's sweep catches it only if that is missed |
 | A question waiting on the human, an open PR that is not the deliverable, a dirty tree, or a `KEEP` line | Stay. Say in the report and the note what holds the card. A later wake (a review fix, a message) runs this table again; otherwise the parent's check closes it |
+
+A card `skills-sync card` started as a supervised worker (its prompt carries Orca's worker
+preamble) is a worker: it closes by §7 with `worker_done`, not by this section.
+
+When a row keeps the worktree after the brief's whole done is reached (its PRs merged, and any
+release, deploy or check it names finished), set the card's board column first, as its own
+call: `orca worktree set --worktree current --workspace-status completed --json`. Not for a
+superseded card, nor for one whose deliverable is an open PR (its column stays `in-review`):
+Orca's own PR state and agent state stay the truth, the column only shows it on Orca's board.
 
 A refused `worktree rm` is not retried in any form (§7); close only this terminal and say in the
 note that the card is left for the parent or the human.

@@ -37,7 +37,7 @@ replaces the template body rather than merging with it, so passing both discards
 | Relate | `save_issue` (`id`, `relatedTo`) | `relation add ID --related OTHER --type related` | `create --related OTHER` |
 | Block (dependency) | `save_issue` (`id`, `blockedBy` / `blocks`) | `relation add ID --related OTHER --type blocked-by\|blocks` | — |
 | Read a template | `get_template` (name from `templates`) | — | — |
-| Link an Orca card | — | `orca worktree create … --linear-issue ID` (or `orca worktree set --worktree <sel> --linear-issue ID`) | — |
+| Link an Orca card | — | `orca worktree create … --reference <issue URL>` (`skills-sync card --reference`), or `orca reference add <issue URL> --worktree <sel>` on a card that has none; not mixed with the legacy `--linear-issue` | — |
 | States / labels | `list_issue_statuses`, `list_issue_labels` | `team states --team K`, `team labels --team K` | — |
 
 ## Orca CLI limits (checked against Orca's shipped CLI)

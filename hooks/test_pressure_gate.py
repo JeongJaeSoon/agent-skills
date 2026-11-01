@@ -33,6 +33,11 @@ for cmd in ("docker compose ps", "docker compose down", "grep 'docker compose up
             "cd x && AGENT_SKILLS_PRESSURE_GATE=0 docker compose up", "echo 'unterminated"):
     assert not g.heavy(cmd), cmd
 assert g.heavy("docker compose up -d && foo --help") == "docker compose up"
+# A worker in a new worktree is a new agent; one sent to an existing worktree is not.
+assert g.heavy("orca orchestration worker-start --spec x --worktree new-top-level --agent claude") == "orca orchestration worker-start"
+assert g.heavy("orca orchestration worker-start --spec x --worktree=new-child --agent claude")
+assert not g.heavy("orca orchestration worker-start --task t --worktree current --agent claude")
+assert not g.heavy("orca orchestration worker-start --help")
 
 # ok: nothing. warn: denied until a sweep ran in gate_fresh_minutes. danger: denied either way.
 assert gate("docker compose up -d", OK) == "none"

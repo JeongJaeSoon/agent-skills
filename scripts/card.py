@@ -3,7 +3,16 @@
 
 Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
-                   [--parent-worktree <selector> | --no-parent]
+                   [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
+
+Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to a Run, starts
+a supervised worker (`orca orchestration worker-start --worktree new-top-level`): a Dispatch, so the card's
+worker_done, escalation and ask reach the Run and Orca watches it for prompts. Its spec is the prompt below without
+the leading `/goal`. Anything else (a handoff, a lead's brief, which must start workers of its own, or --card) is a
+`/goal` card from `orca worktree create`. A brief reporting to `run:` from a session with no Run is a `/goal` card,
+with a warning. A REPORT or PARENT line that sends to a `term_…` handle is refused: such mail wakes nobody.
+--reference links the ticket in Orca (linkedItems): on create for a card, by `orca reference add` right after the
+start for a worker, which takes no link flag.
 
 The prompt is the brief's `/goal` line (with ` 브리프: <brief path>` appended unless it already names a brief), then
 its PROGRAM, APPROVED, lead and CLOSE/KEEP rows. A row is a line outside a ``` fence that starts with the key and a
@@ -16,11 +25,15 @@ references/brief.md "Lead"; any brief needs CLOSE or KEEP, and one with an Appro
 the file and checks them itself, with the hook's own patterns. The card is created from a subprocess, so no hook
 sees that `orca worktree create`: the pressure gate's decision is taken here instead.
 
-Exit codes: 0 created; 2 usage, unreadable brief or a missing line; 3 the pressure gate refused (wait as its
-reason says, then run this again); 4 `orca worktree create` failed; 5 the card exists but logging it or naming it
-failed (the create output is still printed).
+The created output is printed with a `card` object: kind (worker | card), path, handle (launch.outcome.handle, else
+agentTerminalHandle) and run.
+
+Exit codes: 0 created; 2 usage, unreadable brief, a missing line or a `term_` report address; 3 the pressure gate
+refused (wait as its reason says, then run this again); 4 the create or worker-start failed (its whole receipt,
+with any recovery commands, goes to stderr); 5 the card exists but linking, logging or naming it failed, or a
+started worker's receipt names no worktree (the create output is still printed; do not create it again).
 """
-import json, os, pathlib, re, shlex, subprocess, sys
+import itertools, json, os, pathlib, re, shlex, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "hooks"))
@@ -62,6 +75,22 @@ def row(text, key):
     return None
 
 
+SEND_TO = re.compile(r"orchestration\s+send\b(?:[^\n]|\\\n)*?--to[ =]+[`'\"]?([\w:.@<>-]+)")
+
+
+def report_to(text):
+    """The addresses the brief's REPORT and PARENT rows send to (`orca orchestration send --to <address>`). A row
+    that names only a file has none."""
+    out = []
+    for key in ("REPORT", "PARENT"):
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if starts_row(line, key):
+                block = [line] + list(itertools.takewhile(lambda l: l.strip() and l[:1].isspace(), lines[i + 1:]))
+                out += SEND_TO.findall("\n".join(block))
+    return out
+
+
 def compose(brief_path):
     """The card's first prompt from the brief file, or Refuse(2)."""
     path = pathlib.Path(brief_path).expanduser().resolve()
@@ -85,6 +114,11 @@ def compose(brief_path):
     if missing:
         raise Refuse(2, f"{path} has no {', no '.join(missing)}. Add it as a line of its own in the brief "
                         "(dispatch-card §2; a lead's rows are orchestrate references/brief.md \"Lead\").")
+    bad = [a for a in report_to(text) if a.startswith("term_")]
+    if bad:
+        raise Refuse(2, f"{path}: its REPORT/PARENT line sends to {bad[0]}, a terminal handle. A message to a terminal is "
+                        "only stored: nothing wakes the session. Address the reporting session's Run instead "
+                        "(`orca orchestration send --to run:<its run id>`; `orca orchestration run-current` prints it).")
     head = goal.group(0).rstrip()
     if not any(s in head for s in ("브리프:", str(path), brief_path)):
         head += f" 브리프: {path}"
@@ -143,26 +177,91 @@ def run(cmd, stdin=None, timeout=120):
     return p, (p.stderr or p.stdout).strip()[:400]
 
 
-def create(argv):
-    if not argv or argv[0].startswith("-"):
-        raise Refuse(2, __doc__)
-    brief, rest, opts = argv[0], argv[1:], {}
+def run_current():
+    """The Run this session coordinates (`run-current`), or None: unbound, or Orca did not answer."""
+    p, _ = run([ORCA, "orchestration", "run-current", "--json"], timeout=30)
+    try:
+        return (json.loads(p.stdout).get("result") or {}).get("run") if p and not p.returncode else None
+    except (ValueError, AttributeError):
+        return None
+
+
+def worktree_path(res):
+    """The new worktree's path in a create or worker-start receipt, wherever this Orca version puts it."""
+    if isinstance(res, dict):
+        w = res.get("worktree")
+        if isinstance(w, dict) and w.get("path"):
+            return w["path"]
+        # worker-start (1.4.239) names it only as an effect: {"kind": "worktree", "id": "<repo id>::<path>"}
+        if res.get("kind") == "worktree" and isinstance(res.get("id"), str) and "/" in res["id"]:
+            return res["id"].split("::", 1)[-1]
+        for k in ("worktreePath", "worktreeId"):
+            if isinstance(res.get(k), str) and "/" in res[k]:
+                return res[k].split("::", 1)[-1]
+        for v in res.values():
+            if isinstance(v, (dict, list)) and (found := worktree_path(v)):
+                return found
+    elif isinstance(res, list):
+        return next(filter(None, map(worktree_path, res)), None)
+    return None
+
+
+def handle_of(res):
+    """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older agentTerminalHandle."""
+    return ((((res.get("launch") or {}).get("outcome") or {}).get("handle")) or res.get("agentTerminalHandle")
+            or ((res.get("worker") or {}).get("agentTerminalHandle")) or ((res.get("dispatch") or {}).get("assigneeHandle"))
+            or next((e.get("id") for e in res.get("effects") or [] if isinstance(e, dict)
+                     and e.get("kind") == "terminal" and e.get("role") == "agent"), None))
+
+
+def parse_args(rest):
+    opts, refs = {}, []
     valued = {"--repo", "--name", "--display-name", "--comment", "--parent-worktree"}
     i = 0
     while i < len(rest):
-        if rest[i] in valued and i + 1 < len(rest):
+        if rest[i] == "--reference" and i + 1 < len(rest):
+            refs.append(rest[i + 1])
+            i += 2
+        elif rest[i] in valued and i + 1 < len(rest):
             opts[rest[i]], i = rest[i + 1], i + 2
-        elif rest[i] == "--no-parent":
-            opts["--no-parent"], i = True, i + 1
+        elif rest[i] in ("--no-parent", "--card"):
+            opts[rest[i]], i = True, i + 1
         else:
             raise Refuse(2, f"unexpected argument {rest[i]!r}\n{__doc__}")
     for k in ("--repo", "--name"):
         if not opts.get(k):
             raise Refuse(2, f"{k} is required (dispatch-card §3)")
+    return opts, refs
+
+
+def create(argv):
+    if not argv or argv[0].startswith("-"):
+        raise Refuse(2, __doc__)
+    brief = argv[0]
+    opts, refs = parse_args(argv[1:])
     prompt = compose(brief)
-    cmd = [ORCA, "worktree", "create", "--repo", opts["--repo"], "--name", opts["--name"]]
-    cmd += ["--no-parent"] if opts.get("--no-parent") else ["--parent-worktree", opts.get("--parent-worktree", "active")]
-    cmd += ["--agent", "claude", "--prompt", prompt]
+    text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
+    to_run = any(a.startswith("run:") for a in report_to(text))
+    lead = guard.is_lead(text)
+    run_id = run_current() if to_run and not lead and not opts.get("--card") else None
+    if to_run and not lead and not opts.get("--card") and not run_id:
+        print(f"[{ME}] warning: the brief reports to a Run but this session is bound to none, so the card starts as a "
+              "/goal card with no Dispatch (`orca orchestration run-current`; dispatch-card §3)", file=sys.stderr)
+    worker = bool(run_id)
+    if worker:
+        # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
+        spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
+        cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree", "new-top-level",
+               "--repo", opts["--repo"], "--name", opts["--name"], "--agent", "claude",
+               # Orca times out before this process does, so a slow start still returns its receipt
+               "--timeout-ms", "840000"]
+        cmd += ["--display-name", opts["--display-name"]] if opts.get("--display-name") else []
+    else:
+        cmd = [ORCA, "worktree", "create", "--repo", opts["--repo"], "--name", opts["--name"]]
+        cmd += ["--no-parent"] if opts.get("--no-parent") else ["--parent-worktree", opts.get("--parent-worktree", "active")]
+        cmd += ["--agent", "claude", "--prompt", prompt]
+        for r in refs:
+            cmd += ["--reference", r]
     if opts.get("--comment"):
         cmd += ["--comment", opts["--comment"]]
     cmd.append("--json")
@@ -170,32 +269,48 @@ def create(argv):
     if reason:
         raise Refuse(3, f"[{ME}] not created, the pressure gate refused it (for `queue wait`, run this same "
                         f"`skills-sync card` command again once it ends with 0): {reason}")
-    p, err = run(cmd)
+    p, err = run(cmd, timeout=900 if worker else 120)
     try:
         out = json.loads(p.stdout) if p else None
     except ValueError:
         out = None
-    if not p or p.returncode or not out or out.get("ok") is False or not (out.get("result") or {}).get("worktree"):
+    res = (out or {}).get("result") or {}
+    path = worktree_path(res)
+    started = bool(p and not p.returncode and out and out.get("ok") is not False)
+    if worker and started and not path:  # it runs: a retry would start a second worker
+        mark("done")
+        print(json.dumps({**res, "card": {"kind": "worker", "path": None, "handle": handle_of(res), "run": run_id}},
+                         ensure_ascii=False, indent=1))
+        raise Refuse(5, f"[{ME}] the worker started but its receipt names no worktree, so nothing was linked. "
+                        "Do not create it again; find it with `orca orchestration worker-list`.")
+    if not started or not (path if worker else res.get("worktree")):
         e = (out or {}).get("error") or {}
         err = f"{e.get('code')}: {e.get('message')}" if e else err
         mark("failed", err)
-        raise Refuse(4, f"[{ME}] orca worktree create failed: {err}")
+        if out:  # a failed or outcome_unknown start names its stage, its effects and the recovery commands
+            print(json.dumps(out, ensure_ascii=False, indent=1), file=sys.stderr)
+        verb = "orca orchestration worker-start" if worker else "orca worktree create"
+        raise Refuse(4, f"[{ME}] {verb} failed: {err}")
     mark("done")
-    res = out["result"]
-    print(json.dumps(res, ensure_ascii=False, indent=1))
+    print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle_of(res),
+                                      "run": run_id}}, ensure_ascii=False, indent=1))
     failed = []
-    path = res["worktree"].get("path")
-    gh = github_repo(path)
-    p, err = run([ORCH, "sent", "add", "--to", opts["--name"], "--kind", "card", "--channel", ME,
-                  *(["--repo", gh] if gh else []), "-"], stdin=prompt)
-    if not p or p.returncode:
-        failed.append(f"orch sent add: {err}")
-    if opts.get("--display-name") and path:
-        p, err = run([ORCA, "worktree", "set", "--worktree", f"path:{path}", "--display-name", opts["--display-name"], "--json"])
+    if worker and refs and path:  # worker-start takes no link flag; only this new card is written
+        p, err = run([ORCA, "reference", "add", *refs, "--worktree", f"path:{path}", "--json"])
         if not p or p.returncode:
-            failed.append(f"orca worktree set: {err}")
+            failed.append(f"orca reference add: {err}")
+    if not worker:  # a worker's brief is its Orca Task spec, which the Sent page reads
+        gh = github_repo(path)
+        p, err = run([ORCH, "sent", "add", "--to", opts["--name"], "--kind", "card", "--channel", ME,
+                      *(["--repo", gh] if gh else []), "-"], stdin=prompt)
+        if not p or p.returncode:
+            failed.append(f"orch sent add: {err}")
+        if opts.get("--display-name") and path:
+            p, err = run([ORCA, "worktree", "set", "--worktree", f"path:{path}", "--display-name", opts["--display-name"], "--json"])
+            if not p or p.returncode:
+                failed.append(f"orca worktree set: {err}")
     if failed:
-        raise Refuse(5, f"[{ME}] the card was created but: {'; '.join(failed)}")
+        raise Refuse(5, f"[{ME}] the card was created but: {'; '.join(failed)}. Do not create it again.")
     return 0
 
 

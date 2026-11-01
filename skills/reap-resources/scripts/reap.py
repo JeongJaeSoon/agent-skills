@@ -1595,7 +1595,7 @@ def schedule_prompt(script, state_dir, ledger=None, inbox=None):
               "그 뒤 정리한 것, 건너뛴 것, 남긴 것과 이유를 한국어로 보고한다. "
               "계획에 없는 것은 건드리지 않고, rm 으로 지우거나 휴지통을 비우지 않는다. "
               "reap 이 권한·분류기에 거부되면 다른 명령으로 우회하지 않는다. "
-              + (f"거부된 명령 한 줄을 `orca orchestration send --to {shlex.quote(inbox)} --type escalation "
+              + (f"거부된 명령 한 줄을 `orca orchestration send --to {shlex.quote(inbox)} --type status "
                  "--subject 'reap-resources janitor: reap 거부됨' --body '<명령>'` 로 보내고, 보고 첫 줄에도 적는다."
                  if inbox else "거부된 명령 한 줄을 보고 첫 줄에 적는다."))
     return prompt
@@ -1609,7 +1609,8 @@ def notify_unrun(inbox, command, send=run):
         print(line)
         if not inbox:
             return False
-        if send(["orca", "orchestration", "send", "--to", inbox, "--type", "escalation",
+        # status, not escalation: an escalation needs an active Dispatch, which an automation round has none of.
+        if send(["orca", "orchestration", "send", "--to", inbox, "--type", "status",
                  "--subject", "reap-resources janitor: 계획이 실행되지 않음", "--body", line, "--json"], check=False) is None:
             print(f"메모: {inbox} 로 보내지 못함", file=sys.stderr)
             return False

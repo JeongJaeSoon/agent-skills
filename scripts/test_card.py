@@ -16,6 +16,20 @@ if a[:2] == ["worktree", "create"]:
     print(json.dumps({"ok": True, "result": {"worktree": {"path": os.environ["FAKE_CARD_PATH"]}, "agentTerminalHandle": "term_new"}}))
 elif a[:2] == ["sent", "add"] and mode == "sent-fails":
     print("disk full", file=sys.stderr); sys.exit(1)
+elif a[:2] == ["orchestration", "run-current"]:
+    print(json.dumps({"ok": True, "result": {"run": None if mode == "no-run" else {"id": "run_me"}}}))
+elif a[:2] == ["orchestration", "worker-start"]:
+    if mode == "start-fails":
+        print(json.dumps({"ok": False, "error": {"code": "outcome_unknown", "message": "turn not seen"},
+                          "result": {"failedStage": "turn_start", "recovery": ["orca orchestration worker-stop --dispatch ctx_1"]}}))
+        sys.exit(1)
+    # Orca 1.4.239's receipt: the worktree and the agent terminal appear only as effects
+    effects = [] if mode == "no-path" else [{"kind": "worktree", "action": "created_top_level",
+                                             "id": "repo1::" + os.environ["FAKE_CARD_PATH"]}]
+    effects.append({"kind": "terminal", "role": "agent", "action": "created", "id": "term_w"})
+    print(json.dumps({"ok": True, "result": {"runId": "run_me", "dispatchId": "ctx_1", "state": "ready", "effects": effects}}))
+elif a[:2] == ["reference", "add"] and mode == "ref-fails":
+    print("not a url", file=sys.stderr); sys.exit(1)
 '''
 for name in ("orca", "orch"):
     (tmp / name).write_text(FAKE)
@@ -155,5 +169,47 @@ assert rc == 0 and "MODE" not in p and "TASKS" not in p and p.count("CLOSE") == 
 rc, out, err, calls = go(brief("/goal fix X. 브리프: ~/notes/x.md\nPROGRAM: acme\n" + CLOSE + "\n", "prog.md"), "--repo", "r", "--name", "x")
 p = prompt_of(calls)
 assert rc == 0 and p.splitlines()[:2] == ["/goal fix X. 브리프: ~/notes/x.md", "PROGRAM: acme"], p
+
+# A brief reporting to a Run, from a session bound to one: a supervised worker. Its spec drops the leading /goal, the
+# display name goes on the start, the ticket is linked on that new card only, and no Sent line is written.
+SUPERVISED = WORKER + "REPORT: orca orchestration send --to run:run_me --type status at each milestone\n"
+URL = "https://linear.app/acme/issue/ABC-1"
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "name:acme", "--name", "abc-1", "--display-name", "ABC-1 helper",
+                         "--reference", URL)
+assert rc == 0, err
+start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
+spec = start[start.index("--spec") + 1]
+assert spec.startswith("ship the helper and open its PR 브리프:") and "/goal" not in spec.splitlines()[0], spec
+assert start[start.index("--worktree") + 1] == "new-top-level" and start[start.index("--display-name") + 1] == "ABC-1 helper"
+assert start[start.index("--timeout-ms") + 1] == "840000", start
+assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [["reference", "add", URL, "--worktree", f"path:{CARD_DIR}", "--json"]]
+assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
+assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"}}, out
+# A failed reference after the start is exit 5: the worker runs, so it is not started again.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="ref-fails")
+assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["kind"] == "worker", (rc, err)
+# A start Orca reports done whose receipt names no worktree is still a running worker: exit 5, not 4.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="no-path")
+assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["handle"] == "term_w", (rc, err)
+assert not any(c["argv"][:2] == ["reference", "add"] for c in calls)
+# A REPORT row continued onto a second line is read whole.
+assert card.report_to("REPORT: orca orchestration send \\\n  --to term_x --type status\n") == ["term_x"]
+# A failed start keeps Orca's whole receipt (stage, recovery commands) on stderr.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="start-fails")
+assert rc == 4 and "worker-start failed: outcome_unknown" in err and "worker-stop --dispatch ctx_1" in err, err
+# No Run bound: a /goal card with a warning, the reference on the create. --card forces a card too.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="no-run")
+create = calls[1]["argv"]
+assert rc == 0 and "bound to none" in err and create[:2] == ["worktree", "create"] and create[create.index("--reference") + 1] == URL, (err, calls)
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--card")
+assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and json.loads(out)["card"]["handle"] == "term_new"
+# A lead brief reporting to a Run stays a /goal card: a dispatched lead could not start workers of its own.
+LEAD_RUN = LEAD.replace("CLOSE       Once", "PARENT      orca orchestration send --to run:run_top\nCLOSE       Once")
+rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--no-parent")
+assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"], calls
+# A report address that is a terminal handle wakes nobody: refused before anything runs.
+rc, out, err, calls = go(brief(WORKER + "REPORT: `orca orchestration send --to term_abc --type status`\n", "term.md"), "--repo", "r", "--name", "x")
+assert rc == 2 and "term_abc" in err and not calls, (rc, err)
+assert card.report_to("REPORT  a digest to ~/r.md\n") == [] and card.report_to("PARENT: send --to run:x\n") == []
 
 print("ok")
