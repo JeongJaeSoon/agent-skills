@@ -89,7 +89,7 @@ starts now as a stack on the lower one's branch.
 orca worktree create \
   --name "<ticket-id-lowercase>" \
   --base-branch "<branch this ticket must stack on, else omit>" \
-  --no-parent \
+  --parent-worktree "<this card's parent: id:<result.worktree.parentWorktreeId from orca worktree show --worktree active --json>; else active>" \
   --agent claude \
   --prompt "/goal <TICKET-ID>. CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다" \
   --reference "<ticket URL, or a Jira key>" \
@@ -109,6 +109,9 @@ skills-sync close-setup "<result.worktree.path>"
   moves the ticket itself.
 - This is a handoff, not supervised work: it has no REPORT line and stays a `/goal` card, not an
   Orca worker (Orca's roles: a handoff creates no Run, Task or Dispatch).
+- `--parent-worktree` keeps the next card in the same Orca lineage: under the lead or orchestrator
+  this card sits under, so it stays there after this card closes, or under this card when it has
+  no parent. `--no-parent` only for a ticket unrelated to this session's work.
 - `--name` becomes the branch name (with the user's branch prefix, if Orca adds one).
 - Stacked work: pass the lower ticket's branch as `--base-branch` and say in the prompt
   "stack on <lower ticket> (`gh stack link <lower PR> <this PR> --base main`)".
