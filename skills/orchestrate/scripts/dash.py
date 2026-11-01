@@ -416,7 +416,7 @@ def shape_workers(raw, events, tasks=()):
         stage, live = p.get("stage") or {}, p.get("liveness") or {}
         wt_path = ((w.get("resource") or {}).get("worktreeId") or "").split("::", 1)[-1] or None
         wt = (wt_path or "").rstrip("/").rsplit("/", 1)[-1]
-        ticket = prog.dispatch_tickets([w], tasks).get(w.get("dispatchId")) or by_dispatch.get(w.get("dispatchId"))
+        ticket = by_dispatch.get(w.get("dispatchId")) or prog.dispatch_tickets([w], tasks).get(w.get("dispatchId"))
         if not ticket:
             m = TICKET_RE.search(wt)
             ticket = m.group(1).upper() if m else None
