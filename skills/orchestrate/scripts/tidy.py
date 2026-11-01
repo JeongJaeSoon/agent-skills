@@ -4,7 +4,7 @@ the owner closes the rest from the dashboard or `orch board done`. Every close s
 An item is closed only on evidence this file can check: a PR merged or closed (prs.json, or the merged state Orca
 observed on a card's linked PR), a session gone from Orca's list, or the owner's word. A text names a PR only by its
 full owner/repo#N (a bare #N could be any repository's), and a card only by a slug-shaped key (two hyphenated words
-or more, case ignored) standing alone in the text: its display name or its worktree directory (keys_of). Anything less
+or more, case ignored) standing alone in the text: its display name or its worktree directory, never a bare ticket ID (keys_of). Anything less
 certain is not closed: assess() calls it `check`, and the report shows it as 확인 필요 instead of 진행 중 or 보류.
 Nothing the owner or another person acts on is closed by the tick: a doing item waiting on a person or the owner's,
 a decision, an inbox item of a type the owner acts on (OWNER_TYPES: a command to run, a decision, a login...), a row
@@ -25,6 +25,7 @@ import fleet
 POST_MERGE = re.compile(r"릴리스|배포|apply|deploy|release|rollout|롤아웃", re.I)
 MERGE_WORD = re.compile(r"머지|merge", re.I)
 SLUG = re.compile(r"[a-z0-9][a-z0-9._]*(?:-[a-z0-9._]+)+")
+TICKET_ONLY = re.compile(r"[a-z][a-z0-9]*-\d+")
 CARD_KINDS = ("task", "standalone")
 OWNER_TYPES = fleet.STICKY_TYPES + ("decision",)
 STALE_H = 8  # a moving board row this long without a word, and nothing live to vouch for it, is 확인 필요
@@ -67,11 +68,12 @@ def cards_of(state):
 
 
 def keys_of(card):
-    """The lowercase slug-shaped names a text may call a card by: its display name and its worktree directory name.
-    Not the ticket ID alone, nor the branch's last segment: a follow-up item cites its parent's ticket ("ABC-1
-    follow-up"), and a branch tail is often a generic word pair (fix-tests), so either would close the wrong item."""
+    """The lowercase slug-shaped names a text may call a card by: its display name and its worktree directory name,
+    unless that name is a bare ticket ID (workers are named `abc-1`). Nor the branch's last segment: a follow-up item
+    cites its parent's ticket ("ABC-1 follow-up"), and a branch tail is often a generic word pair (fix-tests), so
+    either would close the wrong item."""
     raw = [(card.get("name") or "").strip(), pathlib.PurePath(card.get("path") or "").name]
-    return {k.lower() for k in raw if k and SLUG.fullmatch(k.lower())}
+    return {k.lower() for k in raw if k and SLUG.fullmatch(k.lower()) and not TICKET_ONLY.fullmatch(k.lower())}
 
 
 def named(text, cards):
