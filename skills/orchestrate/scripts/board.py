@@ -487,6 +487,9 @@ def fleet_rows(state, leads, board_rows):
     held = {l.get("handle"): name for name, l in leads.items()}
     on_board = {r.get("pr") for r in board_rows.values()} - {None}
     pr_of, under = {}, {}
+    for s in sessions:  # Orca's own link first
+        if isinstance(s.get("linked_pr"), dict) and s["linked_pr"].get("key"):
+            pr_of[s.get("id")] = s["linked_pr"]["key"]
     for p in state.get("prs") or []:  # newest first
         if p.get("session"):
             pr_of.setdefault(p["session"], p.get("key"))

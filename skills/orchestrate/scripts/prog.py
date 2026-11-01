@@ -388,10 +388,48 @@ def dep_map(events, extra=None):
     return after
 
 
-def live_units(events, dispatches):
+def orca_ts(s):
+    """An Orca task time ("YYYY-MM-DD HH:MM:SS", UTC unless it carries an offset) in the ledger's format, or None."""
+    try:
+        t = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return (t.astimezone(dt.timezone.utc) if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).isoformat()
+
+
+def with_orca_spawns(events, workers, tasks):
+    """events plus a `spawned` line for each Dispatch no `spawned` line names, from its Orca Task: the ticket its
+    spec opens with, dated by the Task's creation, marked "orca". Orca's own record of the start, so a lead no
+    longer writes one; a line already in the ledger (an older brief, a sub-unit ticket, a --role) wins."""
+    have = {d for e in events if e["ev"] == "spawned" for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or ""))}
+    by_task = {t.get("id"): t for t in tasks or []}
+    extra = []
+    for w in workers or []:
+        d, t = w.get("dispatchId"), by_task.get(w.get("taskId")) or {}
+        ticket, ts = ticket_of(t), orca_ts(t.get("created_at"))
+        if d and d not in have and ticket and ts:
+            extra.append({"ts": ts, "ev": "spawned", "ticket": ticket, "note": d, "orca": True})
+            have.add(d)
+    return events + extra
+
+
+def dispatch_tickets(workers, tasks):
+    """dispatchId -> ticket, from the Orca Task each Dispatch works (its spec opens with the ticket ID)."""
+    by_task = {t.get("id"): t for t in tasks or []}
+    out = {}
+    for w in workers or []:
+        d = w.get("dispatchId") or w.get("dispatch")
+        t = ticket_of(by_task.get(w.get("taskId") or w.get("task")) or {})
+        if d and t:
+            out[d] = t
+    return out
+
+
+def live_units(events, dispatches, orca_tickets=None):
     """Live workers as the cap counts them: the layers of one land-after chain (ledger `dep`) land as one
-    merge, so they count once."""
-    ticket = {}
+    merge, so they count once. A Dispatch's ticket comes from a `spawned` line naming it, else from its Orca Task
+    (orca_tickets): a lead records `spawned` for sub-units (ABC-1-K2) whose Task specs all open with the parent ID."""
+    ticket = dict(orca_tickets or {})
     for e in events:
         if e["ev"] == "spawned" and e.get("ticket"):
             for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or "")):
@@ -432,6 +470,7 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     A ticket can take several PRs, a backfilled landing among them: while the tracker says it is open,
     a landing is not its live worker's end. Without the tracker, a landing is, except for a card spawned after it."""
     ticket_by_task = {t["id"]: ticket_of(t) for t in tasks}
+    events = with_orca_spawns(events, workers, tasks)
     # A fold into a lower PR's branch reaches the base only with that PR: its ticket is still in flight.
     tickets_of = pr_ticket(events)
     last_land = {}
@@ -1047,6 +1086,7 @@ def cmd_status(argv):
 
     # 2. flow
     workers = run_workers(cfg["run"])
+    events = with_orca_spawns(events, workers, run_tasks(cfg["run"]))
     roles = {e.get("note"): e["role"] for e in events if e["ev"] == "spawned" and e.get("role")}
     running = [w for w in workers if (w.get("projection") or {}).get("outcome") == "in_progress"]
     live = [w for w in running if w["dispatchId"] not in roles]
@@ -1984,22 +2024,56 @@ def read_screen(handle):
     return orca_json("terminal", "read", "--terminal", handle, "--screen").get("terminal", {}).get("tail", [])
 
 
-def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False):
-    """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours."""
+NOT_LOOKED = object()
+# The screen kinds Orca's agentWait does not judge: a worker in them is not parked on a human-only prompt.
+NOT_A_WAIT = {"a full disk", "an API retry loop"}
+
+
+def agent_wait(dispatch):
+    """Orca's observation.agentWait for a Dispatch: a dict naming the human-only prompt and its evidence, None when
+    Orca looked and found no wait, NOT_LOOKED when the field is absent (an older host, an unreadable pane...)."""
+    obs = orca_json("orchestration", "worker-show", "--dispatch", dispatch).get("observation") or {}
+    return obs["agentWait"] if "agentWait" in obs else NOT_LOOKED
+
+
+def judge_wait(waited, lines, activity=None):
+    """(kind, question) for a Dispatch's terminal, or None. Orca's agentWait first: a wait it found stands even on a
+    screen the regexes miss; when it looked and found none, only what it does not judge (disk, API retries) is read
+    from the screen; when it never looked, the screen decides as for a card."""
+    if isinstance(waited, dict):
+        # kind is the dedupe key: only the evidence's source, never a payload that may carry a fresh timestamp
+        ev = waited.get("evidence") or waited.get("source") or "orca"
+        ev = ev if isinstance(ev, str) else (ev.get("source") or ev.get("kind") or "orca") if isinstance(ev, dict) else "orca"
+        return (f"waiting on a prompt (Orca agentWait, {str(ev)[:40]})",
+                str(waited.get("prompt") or waited.get("question") or waited.get("text") or "")[:200])
+    if lines is None:
+        return None
+    hit = screen_prompt(lines, None if waited is None else activity)
+    return None if hit and waited is None and hit[0] not in NOT_A_WAIT else hit
+
+
+def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, wait_of=agent_wait):
+    """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours.
+    Orca's agentWait decides first; the screen is read for what it does not cover (disk, API retries), and for every
+    kind when Orca never looked."""
     out, now = [], {}
     for w in workers:
         d, h = w.get("dispatchId"), w.get("agentTerminalHandle")
         if w.get("terminalState") != "active" or not d or not h:
             continue
         try:
+            waited = wait_of(d)
+        except (SystemExit, Exception):
+            waited = NOT_LOOKED
+        try:
             lines = read(h)
         except (SystemExit, Exception):
-            continue
-        hit = screen_prompt(lines, ((w.get("projection") or {}).get("stage") or {}).get("activity"))
+            lines = None
+        hit = judge_wait(waited, lines, ((w.get("projection") or {}).get("stage") or {}).get("activity"))
         if not hit:
             continue
         kind, question = hit
-        key = hashlib.sha1("\n".join(prompt_block(lines[-25:])).encode()).hexdigest()[:12]
+        key = hashlib.sha1(("\n".join(prompt_block((lines or [])[-25:])) or kind + question).encode()).hexdigest()[:12]
         now[d] = key
         if only_new and seen.get(d) == key:
             continue
@@ -2116,9 +2190,11 @@ def print_reviews(p):
         events = p.events()
         if not ready_prs(events):
             return
-        spawned = {d: e["ticket"] for e in events if e["ev"] == "spawned" and e.get("ticket")
+        workers = run_workers(p.cfg["run"])
+        spawned = {d: e["ticket"] for e in with_orca_spawns(events, workers, run_tasks(p.cfg["run"]))
+                   if e["ev"] == "spawned" and e.get("ticket")
                    for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or ""))}
-        active = {spawned.get(w.get("dispatchId")) for w in run_workers(p.cfg["run"]) if w.get("terminalState") == "active"}
+        active = {spawned.get(w.get("dispatchId")) for w in workers if w.get("terminalState") == "active"}
         repo = p.cfg["repo"]
         fields = "state,reviewDecision,mergeStateStatus,isDraft,labels,statusCheckRollup,headRefOid"
         lines = review_sweep(events, lambda n: gh_json("pr", "view", str(n), "--repo", repo, "--json", fields),

@@ -10,7 +10,8 @@ Usage: orch watch-cards [--interval 180] [--idle-min 30] [--goal-lost-min 15] [-
        orch watch-cards --card HANDLE [--within 240]
 
 Each round reads every agent terminal but this session's own and exits on a new finding: a lost login or a
-stopped goal (auth), a select menu, a permission prompt, an interrupted turn, a full disk, an API retry loop,
+stopped goal (auth), a select menu, a permission prompt or an interrupted turn (for a live Dispatch's terminal,
+Orca's agentWait decides whether it waits on a human), a full disk, an API retry loop,
 a `/goal` card with no output for --idle-min minutes, a card once seen under `/goal` that sits on an empty
 prompt without it for --goal-lost-min minutes, or free disk under --min-free-gb. A finding still on screen is
 not reported again, also across restarts (--state); once it clears, the next one is new. It never types into a
@@ -61,11 +62,25 @@ def under_goal(t, tail):
     return any("/goal active" in l for l in tail) or "/goal active" in (t.get("preview") or "")
 
 
-def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15):
+def dispatched_handles():
+    """handle -> dispatchId for the agent terminals of live Dispatches in this session's scope (its Run, or every
+    Run when it has none). Empty when the listing fails, so the screen decides for every card as before."""
+    try:
+        res = prog.orca_json("orchestration", "worker-list", "--terminal-state", "active", "--limit", "100")
+    except (SystemExit, Exception):
+        return {}
+    return {w["agentTerminalHandle"]: w.get("dispatchId") for w in res.get("workers") or []
+            if w.get("agentTerminalHandle") and w.get("dispatchId")}
+
+
+def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_min=15, dispatched=None,
+         wait_of=prog.agent_wait):
     """Lines for findings not in seen; seen becomes this round's findings, so a cleared one can come back.
 
     seen["goals"] lists the handles once seen under `/goal`: a `/goal` card's goal has no other record, and only
-    such a card is expected to keep one."""
+    such a card is expected to keep one. A terminal in dispatched (handle -> dispatchId) is judged by Orca's
+    agentWait first (prog.judge_wait), the screen only for what Orca does not judge or did not look at."""
+    dispatched = dispatched or {}
     out, now, retrying = [], {}, []
     goals = set(seen.get("goals") or []) & {t["handle"] for t in terms}
     for t in terms:
@@ -78,7 +93,15 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
         tail = lines[-25:]
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
-        hit, goal = prog.screen_prompt(lines), under_goal(t, tail)
+        if h in dispatched:
+            try:
+                waited = wait_of(dispatched[h])
+            except (SystemExit, Exception):
+                waited = prog.NOT_LOOKED
+            hit = prog.judge_wait(waited, lines)
+        else:
+            hit = prog.screen_prompt(lines)
+        goal = under_goal(t, tail)
         if goal:
             goals.add(h)
         if auth:
@@ -199,7 +222,7 @@ def main(argv):
         terms = listing()
         free_gb = shutil.disk_usage(pathlib.Path.home()).free / 2**30
         lines = scan(terms, seen, prog.read_screen, time.time() * 1000, a.idle_min, free_gb, a.min_free_gb,
-                     a.goal_lost_min)
+                     a.goal_lost_min, dispatched_handles())
         save(state, seen)
         if lines:
             print("\n".join(lines), flush=True)
