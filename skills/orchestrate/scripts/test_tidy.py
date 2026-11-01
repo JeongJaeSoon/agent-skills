@@ -288,6 +288,7 @@ assert tidy.named("fix-tests on the release branch", cards) is None, "a branch t
 # Workers are named after their bare ticket ID (`--name abc-1`): that directory is no key either.
 bare = {"k9": {**card("k9", "ABC-1 initial schema", "offline"), "path": "/w/abc-1"}}
 assert tidy.keys_of(bare["k9"]) == set() and tidy.named("ABC-1 follow-up: backfill old rows", bare) is None
+assert all(tidy.keys_of({"path": f"/w/{k}"}) == set() for k in ("my_proj-12", "9x-1"))
 assert tidy.named("abc-1-login-v2 other", cards) is None, "a longer key is not this card"
 assert tidy.named("abc-1-login and payments-fix", cards) is None, "two cards named: ambiguous"
 twin = {**card("k3", "abc-1-login", "offline"), "path": "/w/other-dir"}
