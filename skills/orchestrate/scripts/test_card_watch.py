@@ -176,4 +176,15 @@ with tempfile.TemporaryDirectory() as d:
         with contextlib.redirect_stdout(out):
             card_watch.main(["--min-free-gb", "0", "--state", str(pathlib.Path(d) / f"self-{own}.json"), "--once"])
         assert out.getvalue().startswith(want), (own, out.getvalue())
+
+# A live Dispatch's terminal is judged by Orca's agentWait: a menu Orca saw no wait in is not reported, a wait Orca
+# found is, and a terminal Orca never looked at falls back to the screen.
+screens = {"h1": menu, "h2": idle, "h3": idle, "h4": idle}
+waits = {"ctx_1": None}
+d_scan = lambda dispatched: card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, dispatched=dispatched,
+                                             wait_of=lambda d: waits.get(d, prog.NOT_LOOKED))
+assert d_scan({"h1": "ctx_1"}) == [], "Orca looked and found no human-only prompt"
+waits["ctx_1"] = {"evidence": "prompt-text", "prompt": "Which base?"}
+assert d_scan({"h1": "ctx_1"})[0].startswith('STUCK card-a (waiting on a prompt (Orca agentWait, prompt-text)): "Which base?"')
+assert d_scan({"h1": "ctx_unknown"})[0].startswith("STUCK card-a (a select menu)")
 print("ok")

@@ -1,9 +1,10 @@
 """What is over leaves the board on evidence, without anyone asking: the fleet tick runs run() after each collect, and
 the owner closes the rest from the dashboard or `orch board done`. Every close says when and on what it was judged.
 
-An item is closed only on evidence this file can check: a PR merged or closed (prs.json), a session gone from Orca's
-list, or the owner's word. A text names a PR only by its full owner/repo#N (a bare #N could be any repository's),
-and a card only by its slug-shaped name (two hyphenated words or more) standing alone in the text. Anything less
+An item is closed only on evidence this file can check: a PR merged or closed (prs.json, or the merged state Orca
+observed on a card's linked PR), a session gone from Orca's list, or the owner's word. A text names a PR only by its
+full owner/repo#N (a bare #N could be any repository's), and a card only by a slug-shaped key (two hyphenated words
+or more, case ignored) standing alone in the text: its display name or its worktree directory, never a bare ticket ID (keys_of). Anything less
 certain is not closed: assess() calls it `check`, and the report shows it as 확인 필요 instead of 진행 중 or 보류.
 Nothing the owner or another person acts on is closed by the tick: a doing item waiting on a person or the owner's,
 a decision, an inbox item of a type the owner acts on (OWNER_TYPES: a command to run, a decision, a login...), a row
@@ -17,13 +18,14 @@ reopen keeps the evidence it undid, and the tick does not close that id again on
 ext: or req: id adds the inbox item again or opens the request again. Past fleet.ROTATE_BYTES the file moves to .1
 and each id's last line is carried into the new one ("carried": true), so no close or reopen is forgotten.
 """
-import contextlib, fcntl, json, re
+import contextlib, fcntl, json, pathlib, re
 
 import fleet
 
 POST_MERGE = re.compile(r"릴리스|배포|apply|deploy|release|rollout|롤아웃", re.I)
 MERGE_WORD = re.compile(r"머지|merge", re.I)
 SLUG = re.compile(r"[a-z0-9][a-z0-9._]*(?:-[a-z0-9._]+)+")
+TICKET_ONLY = re.compile(r"[a-z0-9][a-z0-9_]*-\d+")  # Jira keys may hold "_", Linear team keys may start with a digit
 CARD_KINDS = ("task", "standalone")
 OWNER_TYPES = fleet.STICKY_TYPES + ("decision",)
 STALE_H = 8  # a moving board row this long without a word, and nothing live to vouch for it, is 확인 필요
@@ -55,24 +57,46 @@ def closed():
 # ---------------------------------------------------------------- evidence
 
 def cards_of(state):
-    """Card sessions by id, each with its newest PR key (or None)."""
+    """Card sessions by id, each with its newest PR key (or None): Orca's linked PR first, then the collector's."""
     pr_of = {}
     for p in (state or {}).get("prs") or []:  # newest first
         if p.get("session"):
             pr_of.setdefault(p["session"], p.get("key"))
-    return {s["id"]: {**s, "pr": pr_of.get(s["id"]) or (s.get("report") or {}).get("pr")}
+    return {s["id"]: {**s, "pr": ((s.get("linked_pr") or {}).get("key") if isinstance(s.get("linked_pr"), dict) else None)
+                      or pr_of.get(s["id"]) or (s.get("report") or {}).get("pr")}
             for s in (state or {}).get("sessions") or [] if s.get("kind") in CARD_KINDS}
 
 
+def keys_of(card):
+    """The lowercase slug-shaped names a text may call a card by: its display name and its worktree directory name,
+    unless that name is a bare ticket ID (workers are named `abc-1`). Nor the branch's last segment: a follow-up item
+    cites its parent's ticket ("ABC-1 follow-up"), and a branch tail is often a generic word pair (fix-tests), so
+    either would close the wrong item."""
+    raw = [(card.get("name") or "").strip(), pathlib.PurePath(card.get("path") or "").name]
+    return {k.lower() for k in raw if k and SLUG.fullmatch(k.lower()) and not TICKET_ONLY.fullmatch(k.lower())}
+
+
 def named(text, cards):
-    """The one card the text names, or None (none, or more than one)."""
-    hits = [c for c in cards.values() if SLUG.fullmatch(c.get("name") or "")
-            and re.search(rf"(?<![\w-]){re.escape(c['name'])}(?![\w-])", text or "")]
+    """The one card the text names, or None (none, or more than one). Case is ignored: a ticket ID is upper case in
+    prose and lower case in a worktree name. The owner field is a person, never a card key."""
+    low = (text or "").lower()
+    hits = [c for c in cards.values()
+            if any(re.search(rf"(?<![\w-]){re.escape(k)}(?![\w-])", low) for k in keys_of(c))]
     return hits[0] if len(hits) == 1 else None
 
 
 def merged(p):
     return p.get("state") == "MERGED" or bool(p.get("merged_at"))
+
+
+def orca_merged(cards, keys):
+    """PR details for keys that only Orca's observed linkedPR says are merged (prs.json may not hold them)."""
+    out = {}
+    for c in cards.values():
+        lp = c.get("linked_pr") if isinstance(c.get("linked_pr"), dict) else {}
+        if lp.get("key") and lp["key"] in keys and str(lp.get("state") or "").lower() == "merged":
+            out[lp["key"]] = {"state": "MERGED"}
+    return out
 
 
 def pr_line(k, p):
@@ -103,6 +127,7 @@ def assess(store, state, prs, me=None, now=None):
     import board  # imports this module, so not at the top
     now = now or fleet.utcnow()
     cards = cards_of(state)
+    prs = {**orca_merged(cards, {c["pr"] for c in cards.values()}), **prs}
     live = {s["id"] for s in cards.values() if s.get("phase") in ("working", "waiting")}
     out = {}
 

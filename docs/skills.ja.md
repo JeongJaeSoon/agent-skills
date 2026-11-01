@@ -1,4 +1,4 @@
-<!-- translated-from: 3964a0f55ccf0fcd49722e451258ece35c945486 -->
+<!-- translated-from: 98634c878b3e50fbd940d0389300f1613459b34f -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック10個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -149,6 +149,7 @@ PR を受け持つスキルとマージする主体:
   - 常駐の役割のふだんの報告は `--type status` で送ります。escalation は、リードが乗り出すべきときだけ使います。
   - Orca の既定のルールと意図的に違えている点（同時実行の上限を1から、ワーカーのモデルの既定値、チケットごとの worktree、バックグラウンドの `orch wait`、長い `worker_done`、`terminal send` による一行のナッジ）は、理由とともに SKILL.md の表にあります。
   - マージポリシーは autonomous（既定）と human-gate の二つです。人にはダッシュボードと要約だけを送ります。
+  - **Orca を正とするもの（2026-11-01）：** カードの進み具合・PR・チケットは、その Orca worktree の欄（`workspaceStatus`、`linkedPR`、`linkedItems`）と Run の Task・Dispatch から読みます。カードを board の doing 行には書かず、リードの行はセッションから作り、`orch sent` には Orca を通らない経路だけを記録します。待ちの判定はまず Orca の `agentWait` を見ます。Run に報告するカードは `skills-sync card` が `worker-start` で立ち上げます。Task を止める決定は gate だけで尋ねます。重い作業・保留・依頼・段階表・やることとブリーフのレンダラー、heartbeat は orch に残ります。以前に書いたカードの doing 行は `orch migrate` で片付けます（引数なしは dry-run、`--apply` はバックアップしてから閉じ、`--restore` で元に戻す）。切り替えの手順は [orca-migration.ja.md](orca-migration.ja.md) にあります。
   - 引き継ぐときは、プログラムノート → `run-use` → `orch set`（ノートのポリシーを台帳に合わせる）→ `orch status` の順に進めます。
 - **同梱:**
   - `references/`

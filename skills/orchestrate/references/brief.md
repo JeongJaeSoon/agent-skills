@@ -126,9 +126,11 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             aimed at a renamed target, not handed to a subagent or another session. Report it in the
             same turn to whoever gave you this work, with what the act was for, the refusal's
             category (`no verdict` when the classifier gave none) and the exact command: a worker
-            reports to the orchestrator or lead that dispatched it, as an orchestration message of type escalation (its terminal
+            (a session Orca dispatched: its prompt carries Orca's worker preamble) reports to the
+            orchestrator or lead that dispatched it, as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
-            orchestration channel to the human in its own chat, with its Human only batch. A message
+            Dispatch (escalation and worker_done need one) as `--type status` to the `run:<id>` its
+            brief's REPORT line names, or with none, to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool,
             never quoted: a hook that matched the command's text blocks a message quoting it. That
             file goes under <temp>/orch-refusal/<your worktree's directory name>/, where <temp> is
@@ -254,9 +256,11 @@ PREDICATE   The countable done condition, and what is out of scope.
 TASKS       Each unit you start is an Orca task: `task-create --deps '[…]'` with its start-after
             prerequisites, started from `task-list --ready` with `worker-start --task <id>`
             (SKILL.md Scale). A unit you start as a card instead names why in your next report.
-GATE        A decision that waits on the human is a `gate-create` on the task it blocks, beside
-            `orch decide add`. A step due at a date or time goes in a gate or an `orch board`
-            item's `--next` with that time, never only in your memory.
+GATE        A decision that blocks a task is a `gate-create` on that task only: Orca shows it and
+            the human resolves it there (the dashboard lists open gates in Needs you). A decision
+            no task waits on is `orch decide add`. Never both for one question. A step due at a
+            date or time goes in a gate or an `orch board` item's `--next` with that time, never
+            only in your memory.
 CONTEXT     Tickets, repos, notes and decisions so far, pasted or linked.
 ROUTING     New requests for this project, from the human or from above, come to you and you
             route them down to your own workers, never to another session's. Units the
@@ -302,7 +306,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files, auto-memory lessons) comes back in the worker's message, and the session that wrote the brief writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
-- Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). Afterwards run `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
+- Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). No `orch record … spawned` line: `orch` reads the Dispatch and its ticket from the Orca Task (the spec's first line). Record one only when the unit's ticket is not the ID the spec opens with (a sub-unit such as `ABC-1-K4`): `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.
 - Direction in CONTEXT is labelled by origin. The owner's words are quoted verbatim as the owner's; a proposal of yours, a lead's or a reviewer's is labelled as such, never as the owner's recommendation. No advice on getting an act past a prompt, the classifier or a hook, even when the layer above calls it the owner's intent ("Refused acts").
 - **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal or card you mean to give the next task needs a `KEEP` line naming that task; without one, a landed, clean card is gone by the time you read its `worker_done`.
