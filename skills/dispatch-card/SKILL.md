@@ -119,7 +119,8 @@ skills-sync card <brief file> \
   --repo name:<repo> \
   --name "<target>-<topic>" \
   --display-name "<ID or target> <short title>" \
-  --comment "<brief path>"
+  --comment "<brief path>" \
+  --reference "<ticket URL, or a Jira key>"   # one per ticket; omit when there is none
 # close the setup terminal once setup finishes; it stays a shell, so `terminal wait --for exit` never fires
 # (run it in the background: it waits up to 30 min, past the 10-min foreground Bash limit;
 #  a setup stopped on a trust prompt never ends: trust as in orchestrate references/top-level.md "Starting a worker")
@@ -134,9 +135,27 @@ skills-sync close-setup "<result.worktree.path>"
   end-session §8` and drop the questions it left waiting (`orchestrate` "Stay answerable").
   Without the summary the new card redoes or undoes finished work; left open, the old card waits
   on a question about work the new card already did.
+- Which card it makes. A brief whose REPORT line sends to `run:<id>` is work this session waits
+  on: from a session bound to a Run (`orca orchestration run-current`; bind one as in
+  `orchestrate` references/top-level.md "Your Run"), `skills-sync card` starts it as a supervised
+  worker with `orca orchestration worker-start --worktree new-top-level`. It is then a Dispatch:
+  its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
+  human can answer. Its spec is the composed prompt without the leading `/goal` (Orca delivers a
+  spec as the task after its own preamble). Everything else is a `/goal` card from `orca
+  worktree create`: a brief with no Run report (fire-and-forget), a lead's brief (a dispatched
+  lead could not start workers of its own), a session with no Run (the helper warns), or
+  `--card`. The printed output ends in a `card` object: `kind` (worker or card), `path`,
+  `handle`, `run`.
+- A REPORT or PARENT line that sends to a `term_…` handle is refused (exit 2): mail to a handle is
+  stored and wakes nobody. Write `orca orchestration send --to run:<your run id>`.
+- `--reference` links the ticket in Orca (the card's `linkedItems`), so `orca reference find
+  <ticket>` finds the card and `orca linear attach --current` works from it: on create for a
+  `/goal` card, by `orca reference add` on the new card right after the start for a worker.
+  Linear and GitHub take the full URL; a bare key is read as Jira.
 - `skills-sync card` writes the brief's `/goal` line (plus the brief's path, unless the line
-  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows into `--prompt` itself, logs it with
-  `orch sent add`, sets the display name and prints Orca's create output. A row is a line outside
+  names one), PROGRAM, APPROVED, lead and CLOSE or KEEP rows into `--prompt` itself, logs a
+  `/goal` card with `orch sent add` (a worker's spec is its Orca Task, which the Sent page reads),
+  sets the display name and prints Orca's create output. A row is a line outside
   a ``` fence that starts with its key and a colon (`CLOSE: …`), or the Lead template's wide gap; a
   `## Close` heading is not one. The brief is a local file: a note only the notes store reaches is
   copied to one first. The guard hook checks that file as the helper does, but only for a plain
@@ -146,9 +165,11 @@ skills-sync close-setup "<result.worktree.path>"
   `--prompt "$(cat <brief>)"`: the hook reads only the command text, so it refuses that card even
   when the file holds the lines. A nonzero exit is a failing check, not a refusal: 2 names the
   missing line (add it to the brief), 3 is the pressure gate's reason (wait as it says, then run
-  the same command), 4 is Orca's create error (Orca can fail a launch whose outcome it could not
-  confirm: check `orca worktree ps` before running it again), 5 means the card exists but its log
-  or name failed (do that step by hand; do not create it again). An inline brief with no file goes
+  the same command), 4 is Orca's create or `worker-start` error, with Orca's whole receipt on
+  stderr (Orca can fail a launch whose outcome it could not confirm: follow the receipt's recovery
+  commands, or check `orca worktree ps` and `orca orchestration worker-list`, before running it
+  again), 5 means the card exists but its link, log or name failed (do that step by hand; do not
+  create it again). The `term_` refusal is a 2. An inline brief with no file goes
   straight to `orca worktree create --prompt`, its lines written out.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
@@ -160,14 +181,21 @@ skills-sync close-setup "<result.worktree.path>"
 
 ## 4. Confirm the start, then go back to work
 
+A worker (`card.kind` worker) needs no start check: `worker-start` exits 0 only once Orca saw it
+ready. Read it with `orca orchestration worker-show --dispatch <id>` and `worker-read --dispatch
+<id> --source auto` (a worker may have no terminal, and terminal verbs refuse such a handle), talk
+to it with `orca orchestration send --to dispatch:<id>`, and wait for its `worker_done` in your
+inbox wait (`orch inbox --wait`, or `orch wait` in a program). `orch watch-cards` judges its
+prompts from Orca's `agentWait`. A `/goal` card (`card.kind` card):
+
 ```bash
-orca terminal wait --terminal <result.agentTerminalHandle> --for tui-idle --timeout-ms 60000
+orca terminal wait --terminal <card.handle> --for tui-idle --timeout-ms 60000
 orca terminal read --terminal <handle> --screen
 orch watch-cards --card <handle>   # under run_in_background: STARTED, ENDED, CLOSED, or STUCK on a lost login, a prompt or no /goal
 ```
 
-Take the handle only from the `agentTerminalHandle` field of the create output, never from a
-loose `term_…` match: the brief can carry another handle (your own, in its REPORT line), and a
+Take the handle only from the `card.handle` field of the output (Orca's `launch.outcome.handle`,
+or `agentTerminalHandle` on an older Orca), never from a loose `term_…` match: the brief or its context can quote another handle (your own among them), and a
 `/goal` or nudge sent to the first match lands on the sending session. Before any send,
 check that the handle is not your own (`$ORCA_TERMINAL_HANDLE`).
 

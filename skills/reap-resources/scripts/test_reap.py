@@ -764,11 +764,14 @@ with tempfile.TemporaryDirectory() as tmp:
         st2, tries = pathlib.Path(tmp2), []
         fail = lambda n: tries.append(n) and False
         assert [reap.precheck(items, st2, now=k, repeat=1, notify=fail)[0] for k in (1, 2, 3)] == [0, 1, 1] and tries == [1, 1]
-# notify_unrun sends one escalation to the configured address; without one it prints only.
+# notify_unrun sends one status message (an automation round has no Dispatch for an escalation) to the configured
+# address; without one it prints only.
 calls = []
 send = lambda argv, check: calls.append(argv) or "{}"
 assert reap.notify_unrun("run:r1", "python3 reap.py reap --plan /s/p.json", send)(2) is True
 assert calls[0][:5] == ["orca", "orchestration", "send", "--to", "run:r1"] and "reap --plan /s/p.json" in calls[0][-2], calls
+assert calls[0][calls[0].index("--type") + 1] == "status", calls
+assert "--type status" in reap.schedule_prompt("reap.py", pathlib.Path("/s"), inbox="run:r1")
 assert reap.notify_unrun(None, "x", send)(2) is False and len(calls) == 1
 assert reap.notify_unrun("run:r1", "x", lambda argv, check: None)(2) is False
 
