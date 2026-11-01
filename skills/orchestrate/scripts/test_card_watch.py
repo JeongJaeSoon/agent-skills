@@ -177,14 +177,17 @@ with tempfile.TemporaryDirectory() as d:
             card_watch.main(["--min-free-gb", "0", "--state", str(pathlib.Path(d) / f"self-{own}.json"), "--once"])
         assert out.getvalue().startswith(want), (own, out.getvalue())
 
-# A live Dispatch's terminal is judged by Orca's agentWait: a menu Orca saw no wait in is not reported, a wait Orca
-# found is, and a terminal Orca never looked at falls back to the screen.
+# Every agent terminal, a Run's worker or not, is judged by Orca's agentWait: a menu Orca saw no wait in is not
+# reported, a wait Orca found is, and a terminal Orca never looked at falls back to the screen. The auth, goal and
+# disk checks Orca does not make still read the screen.
 screens = {"h1": menu, "h2": idle, "h3": idle, "h4": idle}
-waits = {"ctx_1": None}
-d_scan = lambda dispatched: card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, dispatched=dispatched,
-                                             wait_of=lambda d: waits.get(d, prog.NOT_LOOKED))
-assert d_scan({"h1": "ctx_1"}) == [], "Orca looked and found no human-only prompt"
-waits["ctx_1"] = {"evidence": "prompt-text", "prompt": "Which base?"}
-assert d_scan({"h1": "ctx_1"})[0].startswith('STUCK card-a (waiting on a prompt (Orca agentWait, prompt-text)): "Which base?"')
-assert d_scan({"h1": "ctx_unknown"})[0].startswith("STUCK card-a (a select menu)")
+w_scan = lambda waits: card_watch.scan(terms, {}, read, NOW, 30, 100.0, 15, waits=waits)
+assert w_scan({"h1": None}) == [], "Orca looked and found no human-only prompt"
+assert w_scan({"h1": {"evidence": "prompt-text", "prompt": "Which base?"}})[0].startswith(
+    'STUCK card-a (waiting on a prompt (Orca agentWait, prompt-text)): "Which base?"')
+assert w_scan({})[0].startswith("STUCK card-a (a select menu)"), "no verdict for h1: the screen decides"
+screens["h1"] = ["Waiting for API response · will retry in 30s", "❯ "]
+assert w_scan({"h1": None})[0].startswith("STUCK card-a (an API retry loop)"), "Orca does not judge API retries"
+screens["h1"] = idle
 print("ok")
+

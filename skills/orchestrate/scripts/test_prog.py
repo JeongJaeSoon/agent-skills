@@ -443,16 +443,36 @@ screens["h1"] = idle
 assert prog.stuck_sweep(live, "s", seen, read=read) == [] and seen == {}
 # Orca's agentWait decides first: a wait it found is STUCK even on a screen the regexes miss; when it looked and
 # found none, a menu-like screen is not, but a full disk still is; when it never looked, the screen decides.
-waits = {"a1": {"evidence": "hook", "prompt": "Allow the edit?"}, "a2": None}
-got = prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: waits.get(d, prog.NOT_LOOKED))
+waits = {"h1": {"evidence": "hook", "prompt": "Allow the edit?"}, "h2": None}
+got = prog.stuck_sweep(live, "s", {}, read=read, waits=waits)
 assert got[0].startswith('STUCK a1 (waiting on a prompt (Orca agentWait, hook)): "Allow the edit?"'), got
 screens["h2"] = menu
-assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: waits.get(d, prog.NOT_LOOKED)))
+assert not any(l.startswith("STUCK a2") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits))
 screens["h2"] = ["npm ERR! ENOSPC: no space left", "❯ "]
-assert any(l.startswith("STUCK a2 (a full disk)") for l in prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: waits.get(d, prog.NOT_LOOKED)))
+assert any(l.startswith("STUCK a2 (a full disk)") for l in prog.stuck_sweep(live, "s", {}, read=read, waits=waits))
 screens["h2"] = menu
-assert any(l.startswith("STUCK a2 (a select menu)") for l in prog.stuck_sweep(live, "s", {}, read=read, wait_of=lambda d: prog.NOT_LOOKED))
+assert any(l.startswith("STUCK a2 (a select menu)") for l in prog.stuck_sweep(live, "s", {}, read=read, waits={}))
 screens["h2"] = idle
+# The verdicts come from one `worktree ps --agent-wait`, matched to terminal handles by pane (tabId:leafId). A row
+# without the field, or a pane no terminal holds, gives no verdict.
+def fake_ps(*a):
+    if a[:2] == ("worktree", "ps"):
+        assert "--agent-wait" in a, a
+        return {"worktrees": [{"agents": [{"paneKey": "t1:l1", "agentWait": None},
+                                          {"paneKey": "t2:l2", "agentWait": {"evidence": "hook"}},
+                                          {"paneKey": "t3:l3"}]},
+                              {"agents": [{"paneKey": "t9:l9", "agentWait": None}]}, {}]}
+    assert a[:2] == ("terminal", "list"), a
+    return {"terminals": [{"handle": "h1", "tabId": "t1", "leafId": "l1"}, {"handle": "h2", "tabId": "t2", "leafId": "l2"},
+                          {"handle": "h3", "tabId": "t3", "leafId": "l3"}, {"handle": "h4", "tabId": "t4", "leafId": "l4"},
+                          # an orphaned terminal lists its pty as tab and leaf; its pane is recordedPaneKey
+                          {"handle": "h9", "orphaned": True, "tabId": "pty:x", "leafId": "pty:x", "recordedPaneKey": "t9:l9"},
+                          {"tabId": "t1", "leafId": "l1"}]}
+saved_oj, prog.orca_json = prog.orca_json, fake_ps
+assert prog.agent_waits() == {"h1": None, "h2": {"evidence": "hook"}, "h9": None}, prog.agent_waits()
+prog.orca_json = lambda *a: (_ for _ in ()).throw(SystemExit("orca down"))
+assert prog.agent_waits() == {}, "an unreadable listing leaves every terminal to the screen"
+prog.orca_json = saved_oj
 # A new prompt ends the wait early: nobody watches a worker's terminal.
 prog.orca_json = lambda *a: {"deliveryId": None, "messages": []}
 prog.run_workers = lambda run: live
