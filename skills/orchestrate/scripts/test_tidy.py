@@ -275,25 +275,28 @@ assert tidy.closed()[todo[2]]["by"] == "owner" and tidy.latest()["card:s4"]["ev"
 assert tidy.timeline() == [], "carried lines are not new events"
 assert tidy.run(now=now) == []
 
-# Card keys: a display name "<ID> <title>" (not slug-shaped as a whole), upper-case prose, the worktree directory and
-# the branch all find the card; two cards sharing a key find neither; the owner field is never a key.
-c_id = {**card("k1", "ABC-1 short title", "offline"), "path": "/w/abc-1", "branch": "user/abc-1"}
-c_dir = {**card("k2", "Readable Title", "offline"), "path": "/w/payments-fix", "branch": "feature/payments-fix"}
+# Card keys: the worktree directory and a slug display name, in any case; two cards sharing a key find neither; the
+# owner field is never a key. The ticket ID alone and the branch tail are not keys: a follow-up cites its parent's ID,
+# and a branch tail is often a generic word pair, so either would close the wrong item.
+c_id = {**card("k1", "ABC-1 short title", "offline"), "path": "/w/abc-1-login", "branch": "user/abc-1-login"}
+c_dir = {**card("k2", "Readable Title", "offline"), "path": "/w/payments-fix", "branch": "feature/fix-tests"}
 cards = {"k1": c_id, "k2": c_dir}
-assert tidy.named("ABC-1 머지 대기", cards) is c_id and tidy.named("abc-1 done", cards) is c_id
+assert tidy.named("ABC-1-LOGIN 머지 대기", cards) is c_id and tidy.named("abc-1-login done", cards) is c_id
 assert tidy.named("payments-fix 카드", cards) is c_dir and tidy.named("PAYMENTS-FIX", cards) is c_dir
-assert tidy.named("ABC-10 other", cards) is None, "a longer ID is not this card"
-assert tidy.named("abc-1 and payments-fix", cards) is None, "two cards named: ambiguous"
-twin = {**card("k3", "ABC-1 again", "offline"), "path": "/w/other-dir"}
-assert tidy.named("ABC-1", {**cards, "k3": twin}) is None, "two cards with one key: ambiguous"
+assert tidy.named("ABC-1 follow-up: backfill old rows", cards) is None, "the parent's ticket ID is not the card"
+assert tidy.named("fix-tests on the release branch", cards) is None, "a branch tail is not the card"
+assert tidy.named("abc-1-login-v2 other", cards) is None, "a longer key is not this card"
+assert tidy.named("abc-1-login and payments-fix", cards) is None, "two cards named: ambiguous"
+twin = {**card("k3", "abc-1-login", "offline"), "path": "/w/other-dir"}
+assert tidy.named("abc-1-login", {**cards, "k3": twin}) is None, "two cards with one key: ambiguous"
 # Orca's observed linkedPR is merge evidence even when prs.json does not hold that PR.
-oc = {**card("k4", "ABC-2 orca linked", "offline"), "path": "/w/abc-2",
+oc = {**card("k4", "ABC-2 orca linked", "offline"), "path": "/w/abc-2-orca",
       "linked_pr": {"number": 77, "state": "merged", "key": "acme/app#77", "url": "https://github.com/acme/app/pull/77"}}
 st2 = {"sessions": [oc], "prs": []}
-got = tidy.assess({"doing": [{"title": "ABC-2 작업", "owner": "card", "next": "머지"}]}, st2, {}, "owner-me", now)
+got = tidy.assess({"doing": [{"title": "abc-2-orca 작업", "owner": "card", "next": "머지"}]}, st2, {}, "owner-me", now)
 assert [v["rule"] for k, v in got.items() if k.startswith("doing:")] == ["pr_merged"], got
 open_lp = {**oc, "linked_pr": {**oc["linked_pr"], "state": "open"}}
-got = tidy.assess({"doing": [{"title": "ABC-2 작업", "owner": "card", "next": "머지"}]},
+got = tidy.assess({"doing": [{"title": "abc-2-orca 작업", "owner": "card", "next": "머지"}]},
                   {"sessions": [open_lp], "prs": []}, {}, "owner-me", now)
 assert not [k for k in got if k.startswith("doing:")], got
 print("test_tidy: ok")

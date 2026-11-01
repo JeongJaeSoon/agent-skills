@@ -169,6 +169,9 @@ orca_t = prog.dispatch_tickets([{"dispatchId": "ctx_a1", "taskId": "t1"}, {"disp
                                [{"id": "t1", "spec": "S-1: login\nPROGRAM: p"}, {"id": "t2", "spec": "S-2 billing"}, {"id": "t9", "spec": "no ticket here"}])
 assert orca_t == {"ctx_a1": "S-1", "ctx_b2": "S-2"}, orca_t
 assert prog.live_units(deps_only, ["ctx_a1", "ctx_b2"], orca_t) == 1 and prog.live_units(deps_only, ["ctx_a1", "ctx_b2"]) == 2
+# Sub-units a lead recorded keep their own tickets though both Task specs open with the parent's ID: two, not one.
+subs = [at(1, "spawned", ticket="S-1-K1", note="ctx_a1"), at(1, "spawned", ticket="S-1-K2", note="ctx_b2")]
+assert prog.live_units(subs, ["ctx_a1", "ctx_b2"], {"ctx_a1": "S-1", "ctx_b2": "S-1"}) == 2
 # Orca's Task stands in for a `spawned` line no lead wrote: dated by the Task, the ledger's own line winning.
 syn = prog.with_orca_spawns([at(1, "spawned", ticket="S-1-K4", note="ctx_a1")],
                             [{"dispatchId": "ctx_a1", "taskId": "t1"}, {"dispatchId": "ctx_b2", "taskId": "t2"}, {"dispatchId": "ctx_x", "taskId": "t9"}],

@@ -1918,6 +1918,10 @@ refs, lp = fleet.orca_links({"linkedPR": {"number": 5, "state": "merged"}, "link
 assert lp == {"number": 5, "state": "merged", "url": "https://github.com/acme/other/pull/5", "key": "acme/other#5"}, lp
 assert [(r["type"], r["key"]) for r in refs] == [("pr", "acme/other#5"), ("issue", "ABC-1")], refs
 assert fleet.orca_links({}) == ([], None)
+# A PR's key comes from its url only: an identifier such as "#7" would reach the PR probe as a repository.
+refs, _ = fleet.orca_links({"linkedItems": [{"type": "pr", "identifier": "#7", "url": "https://github.com/acme/app/pull/7"},
+                                            {"type": "pr", "identifier": "#8"}]})
+assert [r["key"] for r in refs] == ["acme/app#7", None], refs
 assert fleet.orca_links({"linkedPR": {"number": 3, "url": "https://github.com/acme/app/pull/3", "checksStatus": "success"}})[1]["key"] == "acme/app#3"
 # A worker's brief reaches the Sent page from its Orca Task, with no `orch sent add` line.
 rows = fleet.orca_sent([{"id": "task_1", "spec": "ABC-1 do it", "created_at": "2026-01-02 03:04:05", "created_by_terminal_handle": "term_x",

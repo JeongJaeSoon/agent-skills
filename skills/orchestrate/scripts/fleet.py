@@ -633,11 +633,16 @@ def fetch_sent(procs=None, now=None):
 def orca_sent(tasks):
     """Sent rows for the Orca Tasks the Runs hold: a worker's brief is its Task spec, so a session that starts a
     worker with `worker-start` writes no `orch sent add` line for it."""
-    return [{"ts": iso(dt.datetime.fromisoformat(t["created_at"].replace("Z", "+00:00")).replace(tzinfo=dt.timezone.utc)),
-             "from": t.get("created_by_terminal_handle"), "to": f"task:{t['id']}", "kind": "worker",
+    def when(s):  # "YYYY-MM-DD HH:MM:SS" is UTC; a time with an offset keeps it
+        try:
+            t = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except (ValueError, AttributeError, TypeError):
+            return None
+        return iso(t.astimezone(dt.timezone.utc) if t.tzinfo else t.replace(tzinfo=dt.timezone.utc))
+    return [{"ts": ts, "from": t.get("created_by_terminal_handle"), "to": f"task:{t['id']}", "kind": "worker",
              "channel": "orca worker-start", "subject": t.get("task_title") or t.get("display_name"),
              "text": t["spec"], "source": "orca"}
-            for t in tasks or [] if t.get("spec") and t.get("created_at") and t.get("id")]
+            for t in tasks or [] if t.get("spec") and t.get("id") and (ts := when(t.get("created_at")))]
 
 
 def graphql(query):
@@ -699,8 +704,9 @@ def orca_links(w):
     """(refs, linked_pr) from a worktree's Orca link fields. refs: each linkedItems entry as {type, provider, url,
     key}; Orca records a PR it observes on the branch there as well as the links set at creation (--reference).
     linked_pr: linkedPR with its url filled from linkedItems when Orca left it out, and its owner/repo#N key."""
+    # A PR's key feeds the PR probe, which needs owner/repo#N: Orca's identifier for one may be a bare "#7".
     refs = [{"type": i.get("type"), "provider": i.get("provider"), "url": i.get("url"),
-             "key": i.get("key") or i.get("identifier") or (pr_key_of_url(i.get("url")) if i.get("type") == "pr" else None)}
+             "key": pr_key_of_url(i.get("url")) if i.get("type") == "pr" else i.get("key") or i.get("identifier")}
             for i in w.get("linkedItems") or [] if isinstance(i, dict)]
     pr = w.get("linkedPR") if isinstance(w.get("linkedPR"), dict) else None
     if pr and pr.get("number"):
