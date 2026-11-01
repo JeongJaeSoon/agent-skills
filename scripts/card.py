@@ -5,14 +5,19 @@ Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
 
-Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to a Run, starts
-a supervised worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree
-as its parent; `new-top-level` with --no-parent or when this session is not in a worktree Orca manages; any other
---parent-worktree is ignored, since worker-start takes none): a Dispatch, so the card's
-worker_done, escalation and ask reach the Run and Orca watches it for prompts. Its spec is the prompt below without
-the leading `/goal`. Anything else (a handoff, a lead's brief, which must start workers of its own, or --card) is a
-`/goal` card from `orca worktree create`. A brief reporting to `run:` from a session with no Run is a `/goal` card,
-with a warning. A REPORT or PARENT line that sends to a `term_…` handle is refused: such mail wakes nobody.
+Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to a Run or
+itself a dispatched worker (a lead started with worker-start, whose `run-current` is null), starts a supervised
+worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree as its
+parent; `new-top-level` with --no-parent or when this session is not in a worktree Orca manages; any other
+--parent-worktree is ignored, since worker-start takes none): a Dispatch, so the card's worker_done, escalation and
+ask reach this session and Orca watches it for prompts. Its spec is the prompt below without the leading `/goal`.
+A lead's brief starts that way too when Orca's Nested worker depth is 3 or more (`orch doctor`, orca_settings.py),
+so the lead's workers' helpers still fit; below that it is a `/goal` card, with the one-line settings proposal as a
+warning. A lead's brief that names the `human-gate` merge policy stays a `/goal` card at any depth: its landings wait on
+Orca gates, and Orca lets no dispatched worker create a Task or gate on the Run it works for. Anything else (a handoff, or --card) is a `/goal` card from `orca worktree create`. A brief reporting to
+`run:` from a session with no Run is a `/goal` card, with a warning. A brief that sends anything to a `term_…`
+handle (`orchestration send --to term_…`, in any line) is refused: a handle dies with its terminal, so the mail is
+lost on a restart (`terminal_not_found`), and while it lives the mail is only stored.
 --reference links the ticket in Orca (linkedItems): on create for a card, by `orca reference add` right after the
 start for a worker, which takes no link flag.
 
@@ -39,7 +44,9 @@ import itertools, json, os, pathlib, re, shlex, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "hooks"))
+sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
 import guard  # noqa: E402
+import orca_settings  # noqa: E402
 
 ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
@@ -50,6 +57,7 @@ FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
 ME = "skills-sync card"
+HUMAN_GATE = re.compile(r"\bhuman-gate\b")
 
 
 class Refuse(Exception):
@@ -116,11 +124,13 @@ def compose(brief_path):
     if missing:
         raise Refuse(2, f"{path} has no {', no '.join(missing)}. Add it as a line of its own in the brief "
                         "(dispatch-card §2; a lead's rows are orchestrate references/brief.md \"Lead\").")
-    bad = [a for a in report_to(text) if a.startswith("term_")]
+    bad = [a for a in SEND_TO.findall(text) if a.startswith("term_")]
     if bad:
-        raise Refuse(2, f"{path}: its REPORT/PARENT line sends to {bad[0]}, a terminal handle. A message to a terminal is "
-                        "only stored: nothing wakes the session. Address the reporting session's Run instead "
-                        "(`orca orchestration send --to run:<its run id>`; `orca orchestration run-current` prints it).")
+        raise Refuse(2, f"{path}: it sends to {bad[0]}, a terminal handle. The handle dies with its terminal, so a "
+                        "report sent after a restart is lost (terminal_not_found), and until then the mail is only "
+                        "stored. Address the reporting session's Run instead (`orca orchestration send --to "
+                        "run:<its run id>`; `orca orchestration run-current` prints it, `orch doctor` says when the "
+                        "session has none).")
     head = goal.group(0).rstrip()
     if not any(s in head for s in ("브리프:", str(path), brief_path)):
         head += f" 브리프: {path}"
@@ -249,10 +259,25 @@ def create(argv):
     text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
     to_run = any(a.startswith("run:") for a in report_to(text))
     lead = guard.is_lead(text)
-    run_id = run_current() if to_run and not lead and not opts.get("--card") else None
-    if to_run and not lead and not opts.get("--card") and not run_id:
-        print(f"[{ME}] warning: the brief reports to a Run but this session is bound to none, so the card starts as a "
-              "/goal card with no Dispatch (`orca orchestration run-current`; dispatch-card §3)", file=sys.stderr)
+    if lead and to_run and not opts.get("--card"):
+        settings, why = orca_settings.read()
+        if HUMAN_GATE.search(text):
+            to_run = False
+            print(f"[{ME}] the lead starts as a /goal card: its program merges through Orca gates (human-gate), and a "
+                  "dispatched worker can create no Task or gate on the Run it works for "
+                  "(worker_cannot_coordinate_own_run)", file=sys.stderr)
+        elif not orca_settings.lead_as_worker(settings):
+            to_run = False
+            fix = "; ".join(orca_settings.suggestions(settings)) if settings else f"Orca's settings unread: {why}"
+            print(f"[{ME}] the lead starts as a /goal card: {fix}", file=sys.stderr)
+    run_id = None
+    if to_run and not opts.get("--card"):
+        own = None if (run_id := run_current()) else orca_settings.own_dispatch(ORCA)
+        run_id = run_id or own and own.get("runId") and {"id": own["runId"], "via": "own_dispatch"}
+        if not run_id:
+            print(f"[{ME}] warning: the brief reports to a Run but this session is bound to none and is no "
+                  "dispatched worker, so the card starts as a /goal card with no Dispatch "
+                  "(`orca orchestration run-current`; dispatch-card §3)", file=sys.stderr)
     worker = bool(run_id)
     if worker:
         # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.

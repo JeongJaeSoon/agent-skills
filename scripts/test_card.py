@@ -17,7 +17,11 @@ if a[:2] == ["worktree", "create"]:
 elif a[:2] == ["sent", "add"] and mode == "sent-fails":
     print("disk full", file=sys.stderr); sys.exit(1)
 elif a[:2] == ["orchestration", "run-current"]:
-    print(json.dumps({"ok": True, "result": {"run": None if mode == "no-run" else {"id": "run_me"}}}))
+    print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead") else {"id": "run_me"}}}))
+elif a[:2] == ["orchestration", "worker-list"]:
+    # A lead started with worker-start: unbound (run-current null), its own Dispatch on its coordinator's Run.
+    mine = [{"agentTerminalHandle": "term_me", "runId": "run_top", "dispatchId": "ctx_lead"}] if mode == "worker-lead" else []
+    print(json.dumps({"ok": True, "result": {"workers": [{"agentTerminalHandle": "term_other", "runId": "run_x"}] + mine}}))
 elif a[:2] == ["orchestration", "worker-start"]:
     if mode == "unmanaged" and "new-child" in a:
         print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": "The dispatching terminal's "
@@ -56,6 +60,25 @@ pressure.judge = lambda m, cfg: (LEVEL["now"], ["load_per_cpu 3.1"])
 pressure.blocked_by = lambda m, cfg: ["load_per_cpu"]
 sys.path.insert(0, str(HERE))
 import card  # noqa: E402
+import sqlite3  # noqa: E402
+
+ORCA_DATA = tmp / "orca-data"  # never the real Orca profile store
+os.environ["AGENT_SKILLS_ORCA_DATA_DIR"] = str(ORCA_DATA)
+
+
+def orca_depth(depth):
+    """Orca's settings store with Nested worker depth `depth`, or none at all for None."""
+    db = ORCA_DATA / "profiles" / "local-default" / "profile-state.db"
+    if db.exists():
+        db.unlink()
+    if depth is None:
+        return
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(db)
+    con.execute("create table profile_state_documents (domain text primary key, payload text)")
+    con.execute("insert into profile_state_documents values ('settings', ?)", (json.dumps({"nestedWorkerMaxDepth": depth}),))
+    con.commit()
+    con.close()
 
 CLOSE = "CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다"
 WORKER = f"# card brief\n\n/goal ship the helper and open its PR\n\nAPPROVED: push and PR (owner, 2026-01-01)\n\n{CLOSE}\n"
@@ -214,17 +237,40 @@ rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "
 assert rc == 4 and "worker-start failed: outcome_unknown" in err and "worker-stop --dispatch ctx_1" in err, err
 # No Run bound: a /goal card with a warning, the reference on the create. --card forces a card too.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="no-run")
-create = calls[1]["argv"]
+create = next(c["argv"] for c in calls if c["argv"][:2] == ["worktree", "create"])
 assert rc == 0 and "bound to none" in err and create[:2] == ["worktree", "create"] and create[create.index("--reference") + 1] == URL, (err, calls)
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--card")
 assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and json.loads(out)["card"]["handle"] == "term_new"
-# A lead brief reporting to a Run stays a /goal card: a dispatched lead could not start workers of its own.
+# A lead brief reporting to a Run: a dispatched worker once Nested worker depth reaches 3 (its workers' helpers sit
+# at depth 3), its spec carrying every lead row; below that, or with Orca's settings unreadable, a /goal card that
+# says why and what to change.
 LEAD_RUN = LEAD.replace("CLOSE       Once", "PARENT      orca orchestration send --to run:run_top\nCLOSE       Once")
-rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--no-parent")
+orca_depth(3)
+rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead")
+start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
+spec = start[start.index("--spec") + 1]
+assert rc == 0 and start[start.index("--worktree") + 1] == "new-child", (rc, err, calls)
+assert spec.startswith("run the acme program") and "ROLE: lead acme" in spec and "DELEGATE " in spec and "CLOSE " in spec, spec
+for depth, want in ((2, "Nested worker depth"), (None, "unread")):
+    orca_depth(depth)
+    rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--no-parent")
+    assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and want in err, (depth, err, calls)
+assert "3으로" in card.orca_settings.suggestions({"nestedWorkerMaxDepth": 2})[0]
+orca_depth(3)
+rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--card")
 assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"], calls
-# A report address that is a terminal handle wakes nobody: refused before anything runs.
+# A human-gate program lands through Orca gates, which a dispatched lead cannot create: a card at any depth.
+rc, out, err, calls = go(brief(LEAD_RUN + "Merge policy: human-gate.\n", "lead-gate.md"), "--repo", "r", "--name", "acme-lead")
+assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and "worker_cannot_coordinate_own_run" in err, (err, calls)
+# A lead that is itself a dispatched worker (run-current null) starts its units as workers on the Run it works for.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
+assert rc == 0 and any(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls), (err, calls)
+assert json.loads(out)["card"]["run"] == {"id": "run_top", "via": "own_dispatch"}, out
+# A report address that is a terminal handle dies with its terminal: refused before anything runs, in any line.
 rc, out, err, calls = go(brief(WORKER + "REPORT: `orca orchestration send --to term_abc --type status`\n", "term.md"), "--repo", "r", "--name", "x")
 assert rc == 2 and "term_abc" in err and not calls, (rc, err)
+rc, out, err, calls = go(brief(WORKER + "- 보고: orca orchestration send --to term_abc (실패하면 orch inbox)\n", "term2.md"), "--repo", "r", "--name", "x")
+assert rc == 2 and "term_abc" in err and "terminal_not_found" in err and not calls, (rc, err)
 assert card.report_to("REPORT  a digest to ~/r.md\n") == [] and card.report_to("PARENT: send --to run:x\n") == []
 
 print("ok")

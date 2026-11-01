@@ -72,6 +72,10 @@ Usage: orch <command> <slug> [options]
                                      no slug: close the board doing lines that name a card, now that the
                                      card's Orca worktree is its record (orca_migrate.py). Bare: dry-run;
                                      --apply backs up first; --restore reopens what that run closed
+  doctor [--json]                    no slug: Orca's orchestration settings (read-only), whether a lead starts
+                                     as a dispatched worker (Nested worker depth >= 3) or a /goal card, a
+                                     one-line proposal per setting to change, and this terminal's Run
+                                     (orca_settings.py)
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
   decide list | done <id> [--answer TEXT] | drop <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
@@ -215,7 +219,7 @@ def orca_json(*args):
     return out.get("result", out)
 
 
-def run_workers(run_id):
+def all_workers(run_id):
     """Every Dispatch of the Run. worker-list pages at 100, newest first, and a program passed 86 in two days:
     one page would drop the oldest cards from LANDED-BUT-OPEN."""
     workers, cursor = [], None
@@ -225,6 +229,36 @@ def run_workers(run_id):
         cursor = (res.get("page") or {}).get("nextCursor")
         if not (res.get("page") or {}).get("hasMore") or not cursor:
             return workers
+
+
+# The program's lead Dispatch (program.json `lead_dispatch`) once a Program is loaded: set for a lead started with
+# worker-start, which works on its coordinator's Run beside the coordinator's other units.
+LEAD = {"dispatch": None}
+
+
+def run_workers(run_id):
+    """The program's Dispatches: the whole Run for a lead that coordinates it, the Dispatches under the lead's Task
+    for a lead that is one of the Run's workers (lead_scope)."""
+    return lead_scope(all_workers(run_id), LEAD["dispatch"])
+
+
+def own_worker(workers, me):
+    """This terminal's own Dispatch among the Run's workers."""
+    return next((w for w in workers if me and w.get("agentTerminalHandle") == me), None)
+
+
+def lead_scope(workers, lead_dispatch):
+    """The Dispatches whose Task descends from the lead Dispatch's Task (`projection.parent.taskId`); every one when
+    the lead is no worker of the Run."""
+    mine = next((w for w in workers if lead_dispatch and w.get("dispatchId") == lead_dispatch), None)
+    if not mine:
+        return workers
+    parent = {w.get("taskId"): ((w.get("projection") or {}).get("parent") or {}).get("taskId") for w in workers}
+
+    def under(task, seen=()):
+        up = parent.get(task)
+        return up == mine.get("taskId") or bool(up) and up not in seen and under(up, (*seen, task))
+    return [w for w in workers if under(w.get("taskId"))]
 
 
 def gh_json(*args):
@@ -250,6 +284,7 @@ class Program:
             sys.exit(f"no program '{slug}' at {self.dir}; run init first")
         self.cfg = json.loads(path.read_text())
         self.ledger_path = self.dir / "ledger.jsonl"
+        LEAD["dispatch"] = self.cfg.get("lead_dispatch")
 
     def events(self):
         if not self.ledger_path.exists():
@@ -943,6 +978,15 @@ def cmd_init(argv):
         "deadline": opt(argv, "--deadline"), "created_at": now(), "skills_commit": skills_commit,
         "note": opt(argv, "--note"), "final_check": opt(argv, "--final-check"),
     }
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    if me and (mine := own_worker(all_workers(run_id), me)):
+        # A lead started with worker-start: its units are the Dispatches under its own, and its mail is its Dispatch's.
+        cfg["lead_dispatch"] = mine.get("dispatchId")
+        print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
+              "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
+        if policy == "human-gate":
+            print("warning: human-gate needs Orca gates, which this lead cannot create; `orch gate` will refuse. "
+                  "Use `orch decide add` per PR, or restart the lead as a /goal card")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
     (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     print(f"initialised {d}")
@@ -1691,6 +1735,10 @@ def cmd_gate(argv):
     pr = int(opt(argv, "--pr"))
     if p.cfg["merge_policy"] != "human-gate":
         sys.exit("gates are for merge_policy human-gate; autonomous programs land with orch land")
+    if p.cfg.get("lead_dispatch"):
+        sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
+                 "for (worker_cannot_coordinate_own_run). Ask the human with `orch decide add` per PR, or have the "
+                 "orchestrator restart this lead as a /goal card (`skills-sync card --card`)")
     if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
         gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
@@ -2222,21 +2270,24 @@ def cmd_wait(argv):
     rounds = int(opt(argv, "--rounds", "3"))
     run_id = p.cfg["run"]
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
-    workers = run_workers(run_id) if me else []
-    if me and me in {w.get("agentTerminalHandle") for w in workers}:
-        sys.exit("orch wait reads and acks the lead's Run inbox, and this terminal is one of the Run's"
+    # A lead started with worker-start is a worker of the Run: its units report to its Dispatch mailbox, and the
+    # Run inbox is its coordinator's, which it must never take. Any other worker of the Run keeps no standing wait.
+    mine = own_worker(all_workers(run_id), me) if me else None
+    if mine and (not p.cfg.get("lead_dispatch") or mine.get("dispatchId") != p.cfg["lead_dispatch"]):
+        sys.exit("orch wait reads and acks the lead's inbox, and this terminal is one of the Run's other"
                  " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
                  " background command such as `gh run watch <id>`.")
+    box = ["--terminal", me] if mine else ["--run", run_id]
     # STALLED comes from the collector; a lead that only loops `wait` would otherwise keep an old server.
     if (line := ensure_dash()) and not line.startswith("dashboard: http"):
         print(line, flush=True)
     for i in range(rounds):
-        res = orca_json("orchestration", "check", "--run", run_id, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
+        res = orca_json("orchestration", "check", *box, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
                         "--timeout-ms", timeout)
         did, msgs = batch(res)
         if not did:
             # A typed wait never wakes for heartbeats, so they pile up in the FIFO; pull that batch.
-            did, msgs = batch(orca_json("orchestration", "check", "--run", run_id))
+            did, msgs = batch(orca_json("orchestration", "check", *box))
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
         for m in msgs:
             if revoked_echo(m):
@@ -2254,10 +2305,10 @@ def cmd_wait(argv):
             print_stuck(p, run_id)
             print_reviews(p)
             print(f"ACTIONABLE delivery={did} ({len(work)} of {len(msgs)}): process every message, then "
-                  f"orca orchestration check --run {run_id} --ack {did} --json")
+                  f"orca orchestration check {' '.join(box)} --ack {did} --json")
             return
         if did:
-            orca_json("orchestration", "check", "--run", run_id, "--ack", did)
+            orca_json("orchestration", "check", *box, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
         if print_stuck(p, run_id, only_new=True):
             print_sweep(run_id, p.dir / "self-check.json")
@@ -2715,9 +2766,10 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "req": cmd_req, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
-            "migrate": lambda argv: __import__("orca_migrate").main(argv)}
+            "migrate": lambda argv: __import__("orca_migrate").main(argv),
+            "doctor": lambda argv: __import__("orca_settings").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["inbox"], ["migrate"])) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])

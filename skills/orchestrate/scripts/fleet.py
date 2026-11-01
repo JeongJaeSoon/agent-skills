@@ -779,10 +779,14 @@ def build_sessions(fast, runs, cfg, declared=()):
         if not prev or (live and not prev[1]):
             by_wt[wt] = (w, live)
 
+    wt_of_task = {w["taskId"]: (w.get("resource") or {}).get("worktreeId") for w in runs["workers"] if w.get("taskId")}
+
     def dispatcher(sid):
-        """The on-screen coordinator whose Run dispatched this worktree, if another session is."""
+        """The on-screen session that started this worktree's worker: the worker whose Task is its parent Task (a
+        lead started with worker-start starts its own units on its coordinator's Run), else the Run's coordinator."""
         w = by_wt.get(sid, (None, False))[0]
-        up = w and coord_of_run.get(w.get("runId"))
+        up = w and wt_of_task.get(((w.get("projection") or {}).get("parent") or {}).get("taskId") or "")
+        up = up if up in sessions and up != sid else w and coord_of_run.get(w.get("runId"))
         return up if up in sessions and up != sid else None
 
     def orca_parent(s):
@@ -823,8 +827,10 @@ def build_sessions(fast, runs, cfg, declared=()):
             s["kind"] = "orchestration"
             s["parent"] = dispatcher(sid) or orca_parent(s) or root
             s["run"] = next(rid for rid, wt in coord_of_run.items() if wt == sid)
-        elif w and coord_of_run.get(w.get("runId")) in sessions:
-            s["parent"] = coord_of_run[w["runId"]]
+        elif w and dispatcher(sid):
+            s["parent"] = dispatcher(sid)
+            if role_of.get(sid) == "lead":
+                s["kind"] = "orchestration"
         else:
             s["parent"] = orca_parent(s) or root
             s["kind"] = "task" if w else "orchestration" if role_of.get(sid) == "lead" else "standalone"
