@@ -19,7 +19,7 @@
 
 ## 以前のセッションと並べて動かすとき
 
-- **リリース前に立ち上げたカード**は、読み込んだコードのまま動き続けます。そのカードの doing 行は、`orch migrate --apply` か tidy が閉じるまで開いたままです。tidy はカードを表示名、その先頭のチケット ID、worktree のディレクトリ名、ブランチ名の末尾から大文字小文字を区別せずに探し、Orca の `linkedPR` が merged であることもマージの根拠として受け付けます。
+- **リリース前に立ち上げたカード**は、読み込んだコードのまま動き続けます。そのカードの doing 行は、`orch migrate --apply` か tidy が閉じるまで開いたままです。tidy はカードを表示名か worktree のディレクトリ名から大文字小文字を区別せずに探し、Orca の `linkedPR` が merged であることもマージの根拠として受け付けます。チケット ID だけやブランチ名はキーにしないので、親のチケットを書いた後続の行は開いたまま残ります。
 - **リリース前に立ち上げたリード**は、まだ `orch board lead add` と `orch sent add` を使うことがあります。fleet は board のリードとそのセッションをターミナルの handle でまとめるので、リードは一度だけ表示されます。
 - **`term_` のアドレスに報告するブリーフ**は、新しい `skills-sync card` が拒否します（終了コード 2）。Run の外のターミナルには `worker_done` が届かないためです。その行を `run:<id>` に変えるか、消してカード自身のチャットに報告させます。
 - **`agentWait` を返さない Orca** では、これまでどおり画面を読みます。
@@ -32,12 +32,12 @@
 1. 読み込まれる main のチェックアウトをリリースまで fast-forward します（[platform.md](platform.md)、韓国語）。
 2. オーケストレーター、次に各リードで、ターンの区切りに `/reload-plugins`。動いているカードは何もしなくてかまいません。
 3. オーケストレーターで `orca orchestration run-current --json`。null なら、以前のブリーフが報告していた Run で `orca orchestration run-use <id>`。Run が一つもないときだけ新しく作ります。
-4. `orch migrate`（dry-run）。最初のリスト（カード一つを指す doing 行）を確認します。人を待つ行、オーナーの行、オーナーが開き直した行は入っていません。
-5. `orch migrate --apply`。表示されるバックアップのディレクトリを控えておきます。
+4. `orch migrate`（dry-run）。最初のリスト（カード一つを指す doing 行）を確認します。人を待つ行、オーナーの行、オーナーが開き直した行、カードはマージ済みでも残りの手順（リリース、デプロイ）を書いた行は入っていません。最後のものは別に一覧され、そのまま残ります。
+5. `orch migrate --apply`。表示されるバックアップのディレクトリと `orch board reopen` の行を控えておきます。
 6. ダッシュボードを確認します。Sessions 表に Orca から来た Ticket・PR の列があり、board の開いた doing リストには残った待ちだけがあります。
 
 ## 元に戻す
 
-- **状態：** `orch migrate --restore <バックアップのディレクトリ>` は、その実行が閉じた行を開き直し、そのあとオーナーが変えたものはそのままにします。同じことをする `orch board reopen` の行も出力するので、古いコードでも実行できます。バックアップには実行前の `board.json`、`tidy.jsonl`、`decisions.json` が 0600 のファイルとして入っています。
+- **状態：** `orch migrate --restore <バックアップのディレクトリ>` は、その実行が閉じた行を開き直し、そのあとオーナーが変えたものはそのままにします。古いコードが読み込まれているときは、代わりに `--apply` が出力した `orch board reopen` の行を実行します。バックアップには実行前の `board.json`、`tidy.jsonl`、`decisions.json` が 0600 のファイルとして入っています。
 - **コード：** 読み込まれるチェックアウトを前のリリースのタグに戻し、もう一度 `/reload-plugins`。
 - **Orca の値：** `workspaceStatus` はカードが自分の欄にだけ書き（PR を開くと `in-review`、閉じるときに `completed`）、リンクは新しいコードが立ち上げたカードにだけ付きます。状態を戻すには `orca worktree set --worktree <sel> --workspace-status in-progress`。

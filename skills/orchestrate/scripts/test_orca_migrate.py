@@ -24,16 +24,22 @@ def card(sid, name, phase, slug=None, **kw):
             "path": f"/w/{slug}", "branch": f"u/{slug}", "terminals": [{"handle": f"term_{sid}"}], **kw}
 
 
-state = {"sessions": [card("s1", "ABC-1 로그인", "working", "abc-1-login"), card("s2", "abc-2-pay", "offline",
-                                                                  linked_pr={"key": "acme/app#2", "state": "merged"}),
+merged = {"key": "acme/app#2", "state": "merged"}
+state = {"sessions": [card("s1", "ABC-1 로그인", "working", "abc-1-login"), card("s2", "abc-2-pay", "offline", linked_pr=merged),
+                      card("s3", "abc-3-x", "working", linked_pr={"key": "acme/app#3", "state": "merged"}),
                       {"id": "s-lead", "name": "lead:x", "kind": "lead", "phase": "working", "terminals": [{"handle": "term_lead"}]}],
          "prs": []}
-doing = [{"title": "ABC-1 로그인 카드 진행", "next": "리뷰"},                 # names one card: migrate closes it
+doing = [{"title": "abc-1-login 카드 진행", "next": "리뷰"},                  # names one card: migrate closes it
          {"title": "abc-2-pay 결제", "next": ""},                             # its card's PR merged: the tick closes it
          {"title": "디자인 확인", "next": "", "waiting": "디자이너"},           # waits on a person: stays
          {"title": "abc-1-login 오너 확인", "owner": "오너"},                  # the owner's: stays
          {"title": "인프라 정리", "next": ""},                                 # names no card: stays
-         {"title": "결제 화면", "owner": "abc-1-login"}]                       # --owner held the card's name: closes
+         {"title": "결제 화면", "owner": "abc-1-login"},                       # --owner held the card's name: closes
+         {"title": "abc-2-pay 롤아웃", "next": "prod deploy"},                # merged, a step left: stays
+         {"title": "abc-3-x 후속", "next": "머지 후 정리"},                    # merged, its card still busy: stays
+         {"title": "abc-1-login 정리", "next": "release 준비"},               # a release step named: stays
+         {"title": "리뷰", "owner": "alice (abc-1-login)"},                   # another person's: the owner field is not a key
+         {"title": "ABC-1 follow-up", "next": ""}]                            # cites the ticket ID only: not the card
 board_store = {"v": 1, "rows": {}, "order": [], "doing": doing, "later": [], "todo": [], "owner_todo": [],
                "leads": {"lead:x": {"name": "lead:x", "handle": "term_lead", "repo": "acme/app"},
                          "lead:old": {"name": "lead:old", "handle": "term_gone", "repo": "acme/app", "closed_at": "2026-01-01T00:00:00Z"}}}
@@ -60,6 +66,7 @@ assert snapshot() == before, "dry-run wrote a file"
 p = orca_migrate.plan()
 assert [c["id"] for c in p["close"]] == [first, owned], p
 assert [c["id"] for c in p["tick"]] == [tidy.item_id("doing", doing[1])], p
+assert [c["id"] for c in p["steps"]] == [tidy.item_id("doing", d) for d in doing[6:9]], p
 assert [l["name"] for l in p["leads"]] == ["lead:x"] and p["leads"][0]["in_fleet"], p
 assert [d["id"] for d in p["decisions"]] == ["d1"], p
 assert "Orca 카드 ABC-1 로그인 (working)" in out and "dry-run" in out, out
@@ -79,7 +86,7 @@ assert json.loads((bk / "migrate.json").read_text())["closed"] == [first, owned]
 assert (sd / "board.json").read_bytes() == before["board.json"]
 cur = tidy.latest()[first]
 assert cur["ev"] == "done" and cur["by"] == "migrate" and cur["rule"] == "moved_to_orca", cur
-assert f"--restore {bk}" in out, out
+assert f"--restore {bk}" in out and f"orch board reopen {first} {owned}" in out, out
 
 # Idempotent: nothing left, no second backup.
 code, out, err = run("--apply")
@@ -89,17 +96,17 @@ assert len([d for d in sd.iterdir() if d.name.startswith("backup-orca-v2-")]) ==
 # Restore: reopens it; the board reads the line open again.
 code, out, err = run("--restore", str(bk))
 assert code == 0, err
-assert tidy.latest()[first]["ev"] == "reopen" and first in out and "orch board reopen" in out, out
+assert tidy.latest()[first]["ev"] == "reopen" and first in out, out
 # A reopened line is the owner's call from now on: a new apply leaves it.
 assert orca_migrate.plan()["close"] == []
 code, out, err = run("--restore", str(bk))
-assert code == 0 and "reopened 0" in out and first in out, out  # nothing closed by migrate now: skipped
+assert code == 0 and "reopened 0" in out and f"already reopened: {first} {owned}" in out, out
 
 # A close the owner made after migrate is not undone by restore.
 tidy.append([{"ev": "done", "id": first, "ts": fleet.iso(fleet.utcnow()), "by": "owner", "rule": "manual",
               "evidence": "오너", "label": "x"}], tidy.latest())
-ids, skipped = orca_migrate.restore(bk)
-assert ids == [] and skipped == [first, owned]
+ids, again, skipped = orca_migrate.restore(bk)
+assert ids == [] and again == [owned] and skipped == [first]
 
 # Bad input.
 code, out, err = run("--restore", str(tmp))

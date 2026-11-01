@@ -2,14 +2,16 @@
 
 Before, a card's progress was a hand-written board doing line; now the card's Orca worktree (workspaceStatus,
 linkedPR, its Task) is the record and the doing list keeps only waits no card covers. Nothing is deleted:
-  migrate                 dry-run. Lists the doing lines that name exactly one card (tidy.named) and would close, the
-                          ones the next tidy tick closes anyway, board leads the fleet already shows, open decisions
+  migrate                 dry-run. Lists the doing lines that name exactly one card (tidy.named, or an owner field that
+                          is one card's whole key) and would close, the ones the next tidy tick closes anyway, the ones
+                          kept for a step left after the merge, board leads, and open decisions
   migrate --apply         backs up board.json, tidy.jsonl and decisions.json to <state>/backup-orca-v2-<ts>/
                           (0700 dir, 0600 files) under the board and tidy locks, then appends a tidy `done` line
                           (by "migrate", rule "moved_to_orca") per listed doing line and writes migrate.json there.
-                          A second run finds nothing left and writes nothing.
+                          A second run finds nothing left and writes nothing. It also prints the same undo as an
+                          `orch board reopen` line, which code before this one runs too.
   migrate --restore DIR   appends a `reopen` line for each id DIR/migrate.json closed that is still closed by
-                          migrate; prints the same as `orch board reopen` lines, which code before this one also runs.
+                          migrate.
 A doing line waiting on someone, or the owner's, or one the owner reopened, is left alone. Leads and decisions are
 only reported: a running lead started before this version still writes its board lead, and the fleet shows both.
 """
@@ -32,23 +34,31 @@ def plan(now=None):
     have = tidy.latest()
     verdicts = tidy.assess(store, state, prs, me, now)
     cards = tidy.cards_of(state)
-    close, tick = [], []
+    close, tick, steps = [], [], []
     for d in store["doing"]:
         iid = tidy.item_id("doing", d)
         cur = have.get(iid) or {}
         if cur.get("ev") == "done" or cur.get("ev") == "reopen" or d.get("waiting") or board.is_owner(d.get("owner"), me):
             continue
-        if (verdicts.get(iid) or {}).get("verdict") == "done":
-            tick.append({"id": iid, "label": d["title"], "evidence": verdicts[iid]["evidence"]})
-        # Older orchestrators put the card's name in --owner, so a whole owner field that is a card key counts too.
-        elif card := tidy.named(f"{d['title']} {d.get('next') or ''}", cards) or tidy.named(d.get("owner"), cards):
+        v = verdicts.get(iid) or {}
+        if v.get("verdict") == "done":
+            tick.append({"id": iid, "label": d["title"], "evidence": v["evidence"]})
+            continue
+        # A step left after the merge (a release, a deploy) lives only in this line, not on the card.
+        if v or tidy.POST_MERGE.search(d.get("next") or ""):
+            steps.append({"id": iid, "label": d["title"], "evidence": v.get("evidence") or f"남은 단계: {d.get('next')}"})
+            continue
+        # Older orchestrators put the card's name in --owner: the whole field must be one card's key.
+        owner = (d.get("owner") or "").strip().lower()
+        by_owner = [c for c in cards.values() if owner and owner in tidy.keys_of(c)]
+        if card := tidy.named(f"{d['title']} {d.get('next') or ''}", cards) or (by_owner[0] if len(by_owner) == 1 else None):
             close.append({"id": iid, "label": d["title"],
                           "evidence": f"Orca 카드 {card.get('name') or card['id']} ({card.get('phase') or '?'})"})
     handles = {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
     leads = [{"name": n, "handle": l.get("handle"), "in_fleet": l.get("handle") in handles}
              for n, l in store["leads"].items() if not l.get("closed_at")]
     decisions = [{"id": d.get("id"), "title": d.get("title")} for d in fleet.open_decisions()]
-    return {"close": close, "tick": tick, "leads": leads, "decisions": decisions}
+    return {"close": close, "tick": tick, "steps": steps, "leads": leads, "decisions": decisions}
 
 
 @contextlib.contextmanager
@@ -62,8 +72,8 @@ def board_lock():
 
 def backup(now):
     sd = fleet.state_dir()
-    dest = sd / f"backup-orca-v2-{now.strftime('%Y%m%dT%H%M%SZ')}"
-    dest.mkdir(mode=0o700)
+    dest = sd / f"backup-orca-v2-{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+    dest.mkdir(mode=0o700)  # applies run under the board lock, so two never take the same microsecond
     os.chmod(dest, 0o700)
     for name in FILES:
         if (sd / name).exists():
@@ -91,21 +101,23 @@ def apply(now=None):
 
 
 def restore(dest, now=None):
-    """Returns (reopened ids, ids skipped because something after migrate changed them)."""
+    """Returns (reopened ids, ids a restore already reopened, ids something after migrate changed)."""
     record = fleet.read_json(dest / "migrate.json", None)
     if not isinstance(record, dict) or not isinstance(record.get("closed"), list):
         raise ValueError(f"{dest}/migrate.json is missing or not a migrate record")
-    ts, rows, skipped = fleet.iso(now or fleet.utcnow()), [], []
+    ts, rows, again, skipped = fleet.iso(now or fleet.utcnow()), [], [], []
     with tidy.locked() as have:
         for iid in record["closed"]:
             cur = have.get(iid) or {}
             if cur.get("ev") == "done" and cur.get("by") == "migrate":
                 rows.append({"ev": "reopen", "id": iid, "ts": ts, "by": "migrate", "rule": "restore",
                              "evidence": cur.get("evidence"), "label": cur.get("label")})
+            elif cur.get("ev") == "reopen" and cur.get("by") == "migrate":
+                again.append(iid)
             else:
                 skipped.append(iid)
         tidy.append(rows, have)
-    return [r["id"] for r in rows], skipped
+    return [r["id"] for r in rows], again, skipped
 
 
 def report(p):
@@ -113,6 +125,8 @@ def report(p):
     out += [f"  {c['id']}  {c['label']}  ← {c['evidence']}" for c in p["close"]]
     out.append(f"다음 tidy tick 이 닫을 doing 줄 (migrate 는 손대지 않음): {len(p['tick'])}")
     out += [f"  {c['id']}  {c['label']}  ← {c['evidence']}" for c in p["tick"]]
+    out.append(f"머지 뒤 단계가 남은 doing 줄 (그대로 둠; 그 단계는 이 줄에만 있음): {len(p['steps'])}")
+    out += [f"  {c['id']}  {c['label']}  ← {c['evidence']}" for c in p["steps"]]
     out.append(f"열린 board 리드 (그대로 둠; fleet 에 보이면 새 리드는 lead add 하지 않음): {len(p['leads'])}")
     out += [f"  {l['name']}  {l['handle']}  {'fleet 에 있음' if l['in_fleet'] else 'fleet 에 없음'}" for l in p["leads"]]
     out.append(f"열린 결정 (그대로 둠; Task 를 막는 결정이면 gate 로 다시 묻기): {len(p['decisions'])}")
@@ -129,16 +143,17 @@ def main(argv):
         print(f"backup: {dest}")
         print(f"closed {len(ids)}: " + " ".join(ids))
         print(f"undo: orch migrate --restore {dest}")
+        print("undo with older code: orch board reopen " + " ".join(ids))
     elif argv[:1] == ["--restore"] and len(argv) == 2:
         try:
-            ids, skipped = restore(pathlib.Path(argv[1]).expanduser())
+            ids, again, skipped = restore(pathlib.Path(argv[1]).expanduser())
         except ValueError as e:
             sys.exit(str(e))
         print(f"reopened {len(ids)}" + (": " + " ".join(ids) if ids else ""))
+        if again:
+            print("already reopened: " + " ".join(again))
         if skipped:
             print("left as they are (changed after migrate): " + " ".join(skipped))
-        if ids:
-            print("same with older code: orch board reopen " + " ".join(ids))
     elif not argv:
         print(report(plan()))
         print("dry-run: nothing written. orch migrate --apply to close the first list.")
