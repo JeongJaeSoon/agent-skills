@@ -25,7 +25,7 @@ import fleet
 POST_MERGE = re.compile(r"릴리스|배포|apply|deploy|release|rollout|롤아웃", re.I)
 MERGE_WORD = re.compile(r"머지|merge", re.I)
 SLUG = re.compile(r"[a-z0-9][a-z0-9._]*(?:-[a-z0-9._]+)+")
-TICKET_ONLY = re.compile(r"[a-z][a-z0-9]*-\d+")
+TICKET_ONLY = re.compile(r"[a-z0-9][a-z0-9_]*-\d+")  # Jira keys may hold "_", Linear team keys may start with a digit
 CARD_KINDS = ("task", "standalone")
 OWNER_TYPES = fleet.STICKY_TYPES + ("decision",)
 STALE_H = 8  # a moving board row this long without a word, and nothing live to vouch for it, is 확인 필요
