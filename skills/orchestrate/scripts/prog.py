@@ -248,17 +248,8 @@ def own_worker(workers, me):
 
 
 def lead_scope(workers, lead_dispatch):
-    """The Dispatches whose Task descends from the lead Dispatch's Task (`projection.parent.taskId`); every one when
-    the lead is no worker of the Run."""
-    mine = next((w for w in workers if lead_dispatch and w.get("dispatchId") == lead_dispatch), None)
-    if not mine:
-        return workers
-    parent = {w.get("taskId"): ((w.get("projection") or {}).get("parent") or {}).get("taskId") for w in workers}
-
-    def under(task, seen=()):
-        up = parent.get(task)
-        return up == mine.get("taskId") or bool(up) and up not in seen and under(up, (*seen, task))
-    return [w for w in workers if under(w.get("taskId"))]
+    import orca_settings
+    return orca_settings.lead_scope(workers, lead_dispatch)
 
 
 def gh_json(*args):
@@ -542,13 +533,18 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
 
 
 def run_tasks(run_id):
+    """The Run's tasks this program owns (orca_settings.scope_tasks)."""
     r = run(["orca", "orchestration", "task-list", "--run", run_id, "--json"], check=False)
     try:
         out = json.loads(r.stdout)
     except ValueError:
         return []
     tasks = out.get("result", out) if isinstance(out, dict) else out
-    return tasks.get("tasks", []) if isinstance(tasks, dict) else tasks or []
+    tasks = tasks.get("tasks", []) if isinstance(tasks, dict) else tasks or []
+    if not LEAD["dispatch"]:
+        return tasks
+    import orca_settings
+    return orca_settings.scope_tasks(tasks, run_workers(run_id), LEAD["dispatch"])
 
 
 def orca_deps(run_id):
@@ -979,7 +975,12 @@ def cmd_init(argv):
         "note": opt(argv, "--note"), "final_check": opt(argv, "--final-check"),
     }
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
-    if me and (mine := own_worker(all_workers(run_id), me)):
+    try:
+        mine = own_worker(all_workers(run_id), me) if me else None
+    except SystemExit as e:  # Orca unreadable: a coordinating lead needs nothing from it to start a program
+        mine = None
+        print(f"note: could not list the Run's workers ({e}); recorded as a lead that coordinates its Run")
+    if mine:
         # A lead started with worker-start: its units are the Dispatches under its own, and its mail is its Dispatch's.
         cfg["lead_dispatch"] = mine.get("dispatchId")
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
@@ -2272,12 +2273,20 @@ def cmd_wait(argv):
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     # A lead started with worker-start is a worker of the Run: its units report to its Dispatch mailbox, and the
     # Run inbox is its coordinator's, which it must never take. Any other worker of the Run keeps no standing wait.
-    mine = own_worker(all_workers(run_id), me) if me else None
-    if mine and (not p.cfg.get("lead_dispatch") or mine.get("dispatchId") != p.cfg["lead_dispatch"]):
+    lead = p.cfg.get("lead_dispatch")
+    if lead:
+        row = next((w for w in all_workers(run_id) if w.get("dispatchId") == lead), None)
+        if not row or not me or row.get("agentTerminalHandle") != me:
+            sys.exit(f"orch wait reads the lead's own mailbox, and this terminal is not lead dispatch {lead}"
+                     f" ({'not listed on ' + run_id if not row else 'its terminal is ' + str(row.get('agentTerminalHandle'))})."
+                     " The Run's inbox is its coordinator's: never wait on it from here.")
+        box = ["--terminal", me]
+    elif me and own_worker(all_workers(run_id), me):
         sys.exit("orch wait reads and acks the lead's inbox, and this terminal is one of the Run's other"
                  " workers. Wake on your own mailbox (check --terminal $ORCA_TERMINAL_HANDLE --wait) or a"
                  " background command such as `gh run watch <id>`.")
-    box = ["--terminal", me] if mine else ["--run", run_id]
+    else:
+        box = ["--run", run_id]
     # STALLED comes from the collector; a lead that only loops `wait` would otherwise keep an old server.
     if (line := ensure_dash()) and not line.startswith("dashboard: http"):
         print(line, flush=True)

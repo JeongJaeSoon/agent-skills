@@ -85,4 +85,11 @@ with contextlib.redirect_stdout(out):
     s.main([])
 assert "Run run_top 의 워커" in out.getvalue() and "dispatch:ctx_lead" in out.getvalue(), out.getvalue()
 assert "묶여 있지 않다" not in out.getvalue()
+# A worker lead owns only the tasks its units run; a coordinating lead owns the whole Run.
+tasks = [{"id": "t1"}, {"id": "tx"}]
+assert s.scope_tasks(tasks, [{"taskId": "t1"}], "ctx_L") == [{"id": "t1"}] and s.scope_tasks(tasks, [], None) == tasks
+# A malformed profile index falls back to the default profile instead of crashing.
+with tempfile.TemporaryDirectory() as tmp:
+    (pathlib.Path(tmp) / "orca-profile-index.json").write_text("[]")
+    assert s.read(pathlib.Path(tmp))[0] is None
 print("test_orca_settings: ok")

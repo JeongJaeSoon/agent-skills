@@ -528,7 +528,7 @@ row = lambda d, task, parent=None, h=None: {"dispatchId": d, "taskId": task, "ag
                                            "projection": {"parent": {"taskId": parent} if parent else None}}
 fleet_rows = [row("ctx_L", "tL", h="term_L"), row("u1", "t1", "tL"), row("u2", "t2", "t1"), row("x", "tx"), row("y", "ty", "tx")]
 assert [w["dispatchId"] for w in prog.lead_scope(fleet_rows, "ctx_L")] == ["u1", "u2"]
-assert prog.lead_scope(fleet_rows, None) == fleet_rows and prog.lead_scope(fleet_rows, "ctx_gone") == fleet_rows
+assert prog.lead_scope(fleet_rows, None) == fleet_rows and prog.lead_scope(fleet_rows, "ctx_gone") == []
 calls = []
 def lead_orca(*a):
     calls.append(a)
@@ -549,7 +549,18 @@ try:
     prog.cmd_wait(["s", "--rounds", "1"])
     raise AssertionError("a standing role's orch wait must be refused")
 except SystemExit as e:
-    assert "other workers" in str(e), e
+    assert "not lead dispatch ctx_L" in str(e), e
+# The lead's Dispatch released, or its terminal not yet attached: refused, never the coordinator's Run inbox.
+for rows, me in ((fleet_rows[1:], "term_L"), ([dict(fleet_rows[0], agentTerminalHandle=None)], "term_L")):
+    calls.clear()
+    prog.orca_json = lambda *a, rows=rows: (calls.append(a), {"workers": rows} if a[:2] == ("orchestration", "worker-list") else {})[1]
+    prog.os.environ["ORCA_TERMINAL_HANDLE"] = me
+    try:
+        prog.cmd_wait(["s", "--rounds", "1"])
+        raise AssertionError("a lead dispatch that is not this terminal must be refused")
+    except SystemExit as e:
+        assert "not lead dispatch" in str(e), e
+    assert not any(a[:2] == ("orchestration", "check") for a in calls), calls
 if saved_me is None:
     del prog.os.environ["ORCA_TERMINAL_HANDLE"]
 else:

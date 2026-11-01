@@ -296,8 +296,11 @@ def fetch_orca(cfg):
         cursor = (res.get("page") or {}).get("nextCursor")
         if not (res.get("page") or {}).get("hasMore") or not cursor:
             break
+    import orca_settings  # a lead started as a worker shares its coordinator's Run: only the units under it
+    tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
+    workers = orca_settings.lead_scope(workers, cfg.get("lead_dispatch"))
     return {"workers": workers,
-            "tasks": orca_result("task-list", "--run", cfg["run"]).get("tasks", []),
+            "tasks": orca_settings.scope_tasks(tasks, workers, cfg.get("lead_dispatch")),
             "run": orca_result("run-show", "--id", cfg["run"]).get("run") or {},
             "worktrees": (wts.get("result", wts) if isinstance(wts, dict) else {}).get("worktrees", [])}
 

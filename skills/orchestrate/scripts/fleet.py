@@ -779,7 +779,10 @@ def build_sessions(fast, runs, cfg, declared=()):
         if not prev or (live and not prev[1]):
             by_wt[wt] = (w, live)
 
-    wt_of_task = {w["taskId"]: (w.get("resource") or {}).get("worktreeId") for w in runs["workers"] if w.get("taskId")}
+    wt_of_task = {}  # worker-list is newest first: a retried Task resolves to its newest attempt's worktree
+    for w in runs["workers"]:
+        if w.get("taskId"):
+            wt_of_task.setdefault(w["taskId"], (w.get("resource") or {}).get("worktreeId"))
 
     def dispatcher(sid):
         """The on-screen session that started this worktree's worker: the worker whose Task is its parent Task (a

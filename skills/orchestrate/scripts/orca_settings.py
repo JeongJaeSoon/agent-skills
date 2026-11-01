@@ -40,7 +40,8 @@ def read(base=None):
     Orca's default."""
     base = pathlib.Path(base) if base else data_dir()
     try:
-        profile = json.loads((base / "orca-profile-index.json").read_text()).get("activeProfileId") or "local-default"
+        index = json.loads((base / "orca-profile-index.json").read_text())
+        profile = (index.get("activeProfileId") if isinstance(index, dict) else None) or "local-default"
     except (OSError, ValueError):
         profile = "local-default"
     db = base / "profiles" / profile / "profile-state.db"
@@ -112,14 +113,43 @@ def own_dispatch(orca=None):
                                 "--terminal-state", "active", "--limit", "100", *(["--cursor", cursor] if cursor else []),
                                 "--json"], capture_output=True, text=True, timeout=30)
             res = (json.loads(p.stdout).get("result") or {}) if not p.returncode else {}
-        except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+            mine = next((w for w in res.get("workers") or [] if w.get("agentTerminalHandle") == me), None)
+            page = res.get("page") or {}
+        except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
             return None
-        if mine := next((w for w in res.get("workers") or [] if w.get("agentTerminalHandle") == me), None):
+        if mine:
             return mine
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
+        cursor = page.get("nextCursor")
+        if not page.get("hasMore") or not cursor:
             return None
     return None
+
+
+def lead_scope(workers, lead_dispatch):
+    """A program's Dispatches. With no lead_dispatch (a lead that coordinates its own Run), every one. A lead started
+    as a dispatched worker shares its coordinator's Run, so only the Dispatches whose Task descends from the lead
+    Dispatch's Task (`projection.parent.taskId`), and none at all when that Dispatch is not listed: the rest of the Run
+    is the coordinator's and other leads' work."""
+    if not lead_dispatch:
+        return workers
+    mine = next((w for w in workers if w.get("dispatchId") == lead_dispatch), None)
+    if not mine:
+        return []
+    parent = {w.get("taskId"): ((w.get("projection") or {}).get("parent") or {}).get("taskId") for w in workers}
+
+    def under(task, seen=()):
+        up = parent.get(task)
+        return up == mine.get("taskId") or bool(up) and up not in seen and under(up, (*seen, task))
+    return [w for w in workers if under(w.get("taskId"))]
+
+
+def scope_tasks(tasks, scoped_workers, lead_dispatch):
+    """The Run's tasks a program owns: every one for a coordinating lead; for a worker lead, which can create no task
+    of its own, the tasks its units run."""
+    if not lead_dispatch:
+        return tasks
+    ids = {w.get("taskId") for w in scoped_workers}
+    return [t for t in tasks if t.get("id") in ids]
 
 
 def report(settings, why, run):
