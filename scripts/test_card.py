@@ -262,7 +262,7 @@ assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"], calls
 # A human-gate program lands through Orca gates, which a dispatched lead cannot create: a card at any depth.
 rc, out, err, calls = go(brief(LEAD_RUN + "Merge policy: human-gate.\n", "lead-gate.md"), "--repo", "r", "--name", "acme-lead")
 assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and "worker_cannot_coordinate_own_run" in err, (err, calls)
-assert card.HUMAN_GATE.search("--merge-policy human-gate") and not card.HUMAN_GATE.search("No human-gate here; merge policy: auto.")
+assert card.HUMAN_GATE.search("--merge-policy human-gate") and card.HUMAN_GATE.search("Merge policy is human-gate.") and not card.HUMAN_GATE.search("No human-gate here; merge policy: auto.")
 # A lead that is itself a dispatched worker (run-current null) starts its units as workers on the Run it works for.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
 assert rc == 0 and any(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls), (err, calls)

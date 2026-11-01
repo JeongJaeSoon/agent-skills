@@ -977,9 +977,9 @@ def cmd_init(argv):
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
     try:
         mine = own_worker(all_workers(run_id), me) if me else None
-    except SystemExit as e:  # Orca unreadable: a coordinating lead needs nothing from it to start a program
-        mine = None
-        print(f"note: could not list the Run's workers ({e}); recorded as a lead that coordinates its Run")
+    except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
+        sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
+                 f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
     if mine:
         # A lead started with worker-start: its units are the Dispatches under its own, and its mail is its Dispatch's.
         cfg["lead_dispatch"] = mine.get("dispatchId")

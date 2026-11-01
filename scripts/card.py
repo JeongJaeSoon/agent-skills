@@ -57,7 +57,7 @@ FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
 ME = "skills-sync card"
-HUMAN_GATE = re.compile(r"(?i)merge[ _-]?policy\W{0,20}human-gate|--merge-policy[ =]human-gate")
+HUMAN_GATE = re.compile(r"(?i)merge[ _-]?policy\W{0,20}(?:(?:is|=|:)\W{0,5})?human-gate|--merge-policy[ =]human-gate")
 
 
 class Refuse(Exception):
