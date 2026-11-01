@@ -2033,11 +2033,18 @@ NOT_LOOKED = object()
 NOT_A_WAIT = {"a full disk", "an API retry loop"}
 
 
-def agent_wait(dispatch):
-    """Orca's observation.agentWait for a Dispatch: a dict naming the human-only prompt and its evidence, None when
-    Orca looked and found no wait, NOT_LOOKED when the field is absent (an older host, an unreadable pane...)."""
-    obs = orca_json("orchestration", "worker-show", "--dispatch", dispatch).get("observation") or {}
-    return obs["agentWait"] if "agentWait" in obs else NOT_LOOKED
+def agent_waits():
+    """{terminal handle: Orca's agentWait} for every agent terminal, a Run's worker or not, from one
+    `worktree ps --agent-wait`: a dict naming the human-only prompt and its evidence, None when Orca looked and found
+    no wait. A handle left out (an older host, a row past the page, an unreadable pane) was not looked at."""
+    try:
+        panes = {a["paneKey"]: a["agentWait"]
+                 for w in orca_json("worktree", "ps", "--agent-wait", "--limit", "500").get("worktrees") or []
+                 for a in w.get("agents") or [] if a.get("paneKey") and "agentWait" in a}
+        terms = orca_json("terminal", "list").get("terminals") or []
+    except (SystemExit, Exception):
+        return {}
+    return {t["handle"]: panes[k] for t in terms if (k := f"{t.get('tabId')}:{t.get('leafId')}") in panes}
 
 
 def judge_wait(waited, lines, activity=None):
@@ -2056,19 +2063,17 @@ def judge_wait(waited, lines, activity=None):
     return None if hit and waited is None and hit[0] not in NOT_A_WAIT else hit
 
 
-def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, wait_of=agent_wait):
+def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=None):
     """A worker's terminal has no human watching it: a menu or permission prompt there blocked a program for hours.
     Orca's agentWait decides first; the screen is read for what it does not cover (disk, API retries), and for every
     kind when Orca never looked."""
     out, now = [], {}
+    waits = agent_waits() if waits is None else waits
     for w in workers:
         d, h = w.get("dispatchId"), w.get("agentTerminalHandle")
         if w.get("terminalState") != "active" or not d or not h:
             continue
-        try:
-            waited = wait_of(d)
-        except (SystemExit, Exception):
-            waited = NOT_LOOKED
+        waited = waits.get(h, NOT_LOOKED)
         try:
             lines = read(h)
         except (SystemExit, Exception):
