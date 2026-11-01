@@ -89,7 +89,7 @@ starts now as a stack on the lower one's branch.
 orca worktree create \
   --name "<ticket-id-lowercase>" \
   --base-branch "<branch this ticket must stack on, else omit>" \
-  --parent-worktree "<this card's parent: parentWorktreeId from orca worktree show --worktree active --json, as id:<it>; else active>" \
+  --parent-worktree "<this card's parent: id:<result.worktree.parentWorktreeId from orca worktree show --worktree active --json>; else active>" \
   --agent claude \
   --prompt "/goal <TICKET-ID>. CLOSE: 완료 기준을 채우고 결과를 적으면 end-session §8대로 같은 턴에 스스로 닫는다" \
   --reference "<ticket URL, or a Jira key>" \

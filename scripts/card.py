@@ -7,7 +7,8 @@ Usage:
 
 Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to a Run, starts
 a supervised worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree
-as its parent; `new-top-level` when this session is not in a worktree Orca manages): a Dispatch, so the card's
+as its parent; `new-top-level` with --no-parent or when this session is not in a worktree Orca manages; any other
+--parent-worktree is ignored, since worker-start takes none): a Dispatch, so the card's
 worker_done, escalation and ask reach the Run and Orca watches it for prompts. Its spec is the prompt below without
 the leading `/goal`. Anything else (a handoff, a lead's brief, which must start workers of its own, or --card) is a
 `/goal` card from `orca worktree create`. A brief reporting to `run:` from a session with no Run is a `/goal` card,
@@ -256,7 +257,9 @@ def create(argv):
     if worker:
         # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
         spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
-        cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree", "new-child",
+        # worker-start takes no parent selector: new-child parents it to this session, --no-parent drops lineage
+        cmd = [ORCA, "orchestration", "worker-start", "--spec", spec, "--worktree",
+               "new-top-level" if opts.get("--no-parent") else "new-child",
                "--repo", opts["--repo"], "--name", opts["--name"], "--agent", "claude",
                # Orca times out before this process does, so a slow start still returns its receipt
                "--timeout-ms", "840000"]
@@ -275,9 +278,10 @@ def create(argv):
         raise Refuse(3, f"[{ME}] not created, the pressure gate refused it (for `queue wait`, run this same "
                         f"`skills-sync card` command again once it ends with 0): {reason}")
     p, err = run(cmd, timeout=900 if worker else 120)
-    if worker and p and p.returncode and UNMANAGED in p.stdout + p.stderr:
+    at = cmd.index("--worktree") + 1 if worker else None
+    if worker and cmd[at] == "new-child" and p and p.returncode and UNMANAGED in p.stdout + p.stderr:
         # Refused while resolving the parent, before anything was created: start it without lineage instead.
-        cmd[cmd.index("new-child")] = "new-top-level"
+        cmd[at] = "new-top-level"
         p, err = run(cmd, timeout=900)
     try:
         out = json.loads(p.stdout) if p else None

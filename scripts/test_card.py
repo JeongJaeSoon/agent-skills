@@ -202,6 +202,10 @@ assert card.report_to("REPORT: orca orchestration send \\\n  --to term_x --type 
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="unmanaged")
 starts = [c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"]]
 assert rc == 0 and [s[s.index("--worktree") + 1] for s in starts] == ["new-child", "new-top-level"], (rc, err, starts)
+# --no-parent asks for no lineage: new-top-level from the start.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--no-parent")
+starts = [c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"]]
+assert rc == 0 and [s[s.index("--worktree") + 1] for s in starts] == ["new-top-level"] and "--no-parent" not in starts[0], starts
 # Any other refusal is not retried: a second start could duplicate the worker.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="start-fails")
 assert rc == 4 and sum(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls) == 1, (rc, calls)

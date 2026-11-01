@@ -138,7 +138,7 @@ skills-sync close-setup "<result.worktree.path>"
 - Which card it makes. A brief whose REPORT or PARENT line sends to `run:<id>` is work this session waits
   on: from a session bound to a Run (`orca orchestration run-current`; bind one as in
   `orchestrate` references/top-level.md "Your Run"), `skills-sync card` starts it as a supervised
-  worker with `orca orchestration worker-start --worktree new-child` (your worktree becomes its Orca parent). It is then a Dispatch:
+  worker with `orca orchestration worker-start --worktree new-child` (your worktree becomes its Orca parent; `new-top-level` with `--no-parent`). It is then a Dispatch:
   its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
   human can answer. Its spec is the composed prompt without the leading `/goal` (Orca delivers a
   spec as the task after its own preamble). Everything else is a `/goal` card from `orca
