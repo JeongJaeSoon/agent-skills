@@ -1,5 +1,6 @@
 """`prog.py land` end to end against a fake gh. Run: python3 test_land.py"""
 import datetime as dt, json, os, pathlib, subprocess, sys, tempfile
+os.environ.pop("ORCH_HEAVY_SLOT", None)  # this suite may itself run inside `orch heavy`; its slots are its own
 
 HERE = pathlib.Path(__file__).resolve().parent
 FAKE_ORCA = r'''#!/usr/bin/env python3

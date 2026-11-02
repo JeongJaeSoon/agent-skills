@@ -67,7 +67,7 @@ for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -
             "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
             "orch heavy - -- bash -c " + repr(LOOP), "cat tests.sh", "grep -n e2e package.json",
             "git add " + " ".join(f"hooks/test_{i}.py" for i in range(6)), "AGENT_SKILLS_PRESSURE_GATE=0 bash tests.sh",
-            "AGENT_SKILLS_PRESSURE_GATE=0 " + LOOP.split("\n")[1], "chrome --version", "npm run build", "ls tests",
+            "AGENT_SKILLS_PRESSURE_GATE=0 " + LOOP.split("\n")[1], "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'npm test'", "chrome --version", "npm run build", "ls tests",
             "pytest -k foo", "pytest tests/test_a.py::test_x", "orch heavy - -- npm test > out.txt",
             "pytest -x tests/", "pytest tests/unit", "bun test --bail src/a.spec.ts",
             "python3 -m pytest tests/test_a.py", "uv run pytest -k slow", "for f in a b; do echo $f; done"):

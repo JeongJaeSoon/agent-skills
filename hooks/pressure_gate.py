@@ -134,6 +134,7 @@ VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "
               "--outputFile", "--coverageDirectory", "--config", "--workers", "--maxWorkers"}
 # Shell words before the command a loop or branch runs: `for d in a b; do npm test; done`.
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
+OVERRIDE = re.compile(r"(?<![\w$])AGENT_SKILLS_PRESSURE_GATE=0(?![\w])")
 
 
 def narrowed(rest):
@@ -206,9 +207,11 @@ def runs_tests(argv):
 
 def unwrapped_tests(cmd):
     """What a line runs that belongs in an `orch heavy` slot, None when it runs none or already runs in one."""
+    if OVERRIDE.search(cmd):  # the user's go-ahead covers a `bash -c` body too, whose parse drops the assignment
+        return None
     segs = list(segments(cmd))  # a command passed to `orch heavy` is that segment's words, never a segment of its own
     found = next(filter(None, map(runs_tests, segs)), None)
-    if not found and "AGENT_SKILLS_PRESSURE_GATE=0" not in cmd and sum(
+    if not found and sum(
             bool(TEST_FILE.fullmatch(w)) for s in segs if s and os.path.basename(s[0]) in LOOPERS for w in s) >= SUITE_FILES:
         found = "test suite"
     return found
