@@ -12,7 +12,7 @@
 
 ## 판정 규칙
 
-`check`, hook, `round`는 같은 판정 함수(`pressure.judge`)와 같은 입력(`pressure.snapshot`)을 쓴다. 입력은 그 자리에서 읽는 값(load, 메모리 여유, 압박 레벨, swap 사용량, 디스크, 컨테이너 수)과, 직전 `round`가 회차 사이 카운터 차이로 잰 값(swapout 속도, CPU idle, Docker 메모리·CPU, swap 증가율)이다. CPU idle만은 hook·`check`·`queue wait`가 판정하는 그 자리에서 `idle_window_seconds`(2초) 동안 CPU tick 차이로 다시 재서 회차 값 대신 쓴다. `round`는 회차 사이 값이 없을 때(첫 회차, 늦어진 회차)만 그 자리에서 잰다. 회차 샘플은 `sample_fresh_minutes`(7분) 안의 것만 판정에 넣고, 더 오래되면 빼고 측정 줄에 `샘플 N분 전`으로 보인다. hook(10초 제한)이 `docker stats`(약 2.5초)나 속도를 직접 재지 않아도 되고, hook이 막은 것을 `check`가 풀어 주는 시점과 hook이 통과시키는 시점이 같다.
+`check`, hook, `round`는 같은 판정 함수(`pressure.judge`)와 같은 입력(`pressure.snapshot`)을 쓴다. 입력은 그 자리에서 읽는 값(load, 메모리 여유, 압박 레벨, swap 사용량, 디스크, 컨테이너 수)과, 직전 `round`가 회차 사이 카운터 차이로 잰 값(swapout 속도, CPU idle, Docker 메모리·CPU, swap 증가율)이다. CPU idle만은 hook·`check`·`queue wait`가 판정하는 그 자리에서 `idle_window_seconds`(2초) 동안 CPU tick 차이로 다시 재서 회차 값 대신 쓴다. `round`는 회차 사이 값이 없을 때(첫 회차, 늦어진 회차)만 그 자리에서 잰다. idle 측정 창은 `docker ps`·`orca` 같은 다른 측정과 겹쳐 돌므로, hook 전체는 `docker ps`(최대 5초)와 턴 수(최대 5초)를 더해도 hook 제한 20초 안에 끝난다. 회차 샘플은 `sample_fresh_minutes`(7분) 안의 것만 판정에 넣고, 더 오래되면 빼고 측정 줄에 `샘플 N분 전`으로 보인다. hook이 `docker stats`(약 2.5초)나 속도를 직접 재지 않아도 되고, hook이 막은 것을 `check`가 풀어 주는 시점과 hook이 통과시키는 시점이 같다.
 
 예전에는 hook만 swap과 디스크를 경고로 낮춰서, 차단 메시지가 시킨 "`check`가 0이나 1이 될 때까지 대기"가 누적 swap 때문에 끝나지 않았다(2026-10-30).
 

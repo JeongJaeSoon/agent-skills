@@ -337,22 +337,32 @@ def take_sample(st, now, cfg, run=sh):
     return {"counters": cur, "swap_hist": hist, "sample": sample}
 
 
-def live_idle(seconds, ticks=cpu_ticks, sleep=time.sleep):
-    """CPU idle % over the next `seconds`, from two host_statistics reads; None where the OS gives no ticks."""
-    a = ticks()
-    sleep(max(1.0, float(seconds)))
-    b = ticks()
-    if not a or not b:
-        return None
-    d = [y - x for x, y in zip(a, b)]
-    return round(100 * d[2] / sum(d), 1) if min(d) >= 0 and sum(d) else None
+def idle_start(seconds, ticks=cpu_ticks, sleep=time.sleep, clock=time.monotonic):
+    """Start reading CPU idle; the returned function waits out the rest of `seconds` (at least 1) and gives the idle %
+    since the start, None where the OS gives no ticks. What runs between the two overlaps the window."""
+    a, t0 = ticks(), clock()
+
+    def finish():
+        sleep(max(0.0, max(1.0, float(seconds)) - (clock() - t0)))
+        b = ticks()
+        if not a or not b:
+            return None
+        d = [y - x for x, y in zip(a, b)]
+        return round(100 * d[2] / sum(d), 1) if min(d) >= 0 and sum(d) else None
+    return finish
+
+
+def live_idle(seconds, ticks=cpu_ticks, sleep=time.sleep, clock=time.monotonic):
+    """CPU idle % over the next `seconds`, from two host_statistics reads."""
+    return idle_start(seconds, ticks, sleep, clock)()
 
 
 def snapshot(cfg, st, now=None, measure_fn=None, idle_fn=None):
     """What hook, check and round judge: the metrics read now, plus the last round's sample while it is fresh.
-    idle_fn reads CPU idle where the caller judges: a round late under the very load it measures leaves no fresh
+    idle_fn starts reading CPU idle where the caller judges (idle_start): a round late under the very load it measures leaves no fresh
     sample, and load would then be judged alone."""
     now = now or time.time()
+    finish = idle_fn() if idle_fn else None  # the window runs while the metrics below are read
     m = (measure_fn or (lambda: measure(always_on=cfg["always_on"])))()
     sample = st.get("sample") or {}
     age = now - sample.get("t", 0)
@@ -361,13 +371,13 @@ def snapshot(cfg, st, now=None, measure_fn=None, idle_fn=None):
         m[k] = sample.get(k) if fresh else None
     if sample and not fresh:
         m["sample_age_min"] = round(age / 60)
-    if idle_fn and (idle := idle_fn()) is not None:
+    if finish and (idle := finish()) is not None:
         m["cpu_idle_pct"], m["idle_live"] = idle, True
     return m
 
 
 def live(cfg):
-    return lambda: live_idle(cfg.get("idle_window_seconds") or DEFAULTS["idle_window_seconds"])
+    return lambda: idle_start(cfg.get("idle_window_seconds") or DEFAULTS["idle_window_seconds"])
 
 
 # ---------------------------------------------------------------- state
@@ -842,7 +852,7 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
     st.update((sample_fn or (lambda s, t: take_sample(s, t, cfg)))(st, now))
     m = snapshot(cfg, st, now, measure_fn)
     if m.get("cpu_idle_pct") is None and idle_fn:  # no rate across a gap (first round, or one run late): read it now
-        m = {**m, **({"cpu_idle_pct": v, "idle_live": True} if (v := idle_fn()) is not None else {})}
+        m = {**m, **({"cpu_idle_pct": v, "idle_live": True} if (v := idle_fn()()) is not None else {})}
     level, why = judge(m, cfg)
     out(f"# PC 사용량 {LEVEL_KO[level]} ({time.strftime('%Y-%m-%d %H:%M', time.localtime(now))})\n")
     out(f"- 측정: {summary(m)}")

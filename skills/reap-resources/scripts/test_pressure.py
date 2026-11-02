@@ -66,17 +66,21 @@ assert "샘플 8분 전" in p.summary(snap)
 # CPU idle read where the caller judges replaces the sample's, stale or fresh: a round run late under the very load it
 # measures leaves load judged alone otherwise.
 snap = p.snapshot(cfg, {"sample": sample}, now=5000.0 + 8 * 60, measure_fn=lambda: {**OK, "load_per_cpu": 2.4},
-                  idle_fn=lambda: 30.0)
+                  idle_fn=lambda: lambda: 30.0)
 assert snap["cpu_idle_pct"] == 30.0 and snap["idle_live"] and p.judge(snap, cfg)[0] == "warn"
 assert "CPU idle 30%(지금 잰 값)" in p.summary(snap)
 snap = p.snapshot(cfg, {"sample": sample}, now=5000.0 + 60, measure_fn=lambda: {**OK, "load_per_cpu": 2.4},
-                  idle_fn=lambda: 2.0)
+                  idle_fn=lambda: lambda: 2.0)
 assert snap["cpu_idle_pct"] == 2.0 and p.judge(snap, cfg)[0] == "danger"
-snap = p.snapshot(cfg, {"sample": sample}, now=5000.0 + 60, measure_fn=lambda: dict(OK), idle_fn=lambda: None)
+snap = p.snapshot(cfg, {"sample": sample}, now=5000.0 + 60, measure_fn=lambda: dict(OK), idle_fn=lambda: lambda: None)
 assert snap["cpu_idle_pct"] == 5.0 and "idle_live" not in snap  # no ticks: the fresh sample stands
 ticks = iter([[100, 100, 800, 0], [130, 130, 840, 0]])
 slept = []
-assert p.live_idle(1.0, ticks=lambda: next(ticks), sleep=slept.append) == 40.0 and slept == [1.0]
+assert p.live_idle(1.0, ticks=lambda: next(ticks), sleep=slept.append, clock=lambda: 0.0) == 40.0 and slept == [1.0]
+# What runs between start and finish counts toward the window: 1.5 s of reading leaves 0.5 s of a 2 s window.
+ticks, clock = iter([[0, 0, 0, 0], [10, 0, 10, 0]]), iter([10.0, 11.5])
+finish = p.idle_start(2.0, ticks=lambda: next(ticks), sleep=slept.append, clock=lambda: next(clock))
+assert finish() == 50.0 and slept[-1] == 0.5
 assert p.live_idle(1.0, ticks=lambda: None, sleep=lambda s: None) is None
 ticks = iter([[100, 100, 800, 0], [90, 100, 800, 0]])
 assert p.live_idle(1.0, ticks=lambda: next(ticks), sleep=lambda s: None) is None  # a counter gone backwards
