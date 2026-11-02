@@ -219,6 +219,28 @@ memo0 = {"first_seen": {"D:item": NOW - 3600}}
 _, _, m = patrol.judge(facts(failed={"board"}), memo0)
 assert m["first_seen"] == memo0["first_seen"]
 assert "board" in patrol.DEPENDS["D"]
+_, _, m = patrol.judge(facts(failed={"board"}), {"first_seen": {"D:item": NOW - 3600, "O:/w/a:acme/app#1": NOW - 90000}})
+assert m["first_seen"] == {"D:item": NOW - 3600}, "an O clock the round could see go is not kept by a board failure"
+_, _, m = patrol.judge(facts(failed={"state"}), {"first_seen": {"D:item": 1, "O:/w/a:acme/app#1": 2}})
+assert m["first_seen"] == {"D:item": 1, "O:/w/a:acme/app#1": 2}
+
+# A round cut short by the budget after its log rows: the rows stay and the next sync adds the Needs you item.
+sync0 = patrol.sync_needs_you
+def cut(*a, **k):
+    raise patrol.Budget()
+patrol.sync_needs_you = cut
+xf = facts(workers=[{"dispatchId": "dq", "agentTerminalHandle": "hq", "resource": {"worktreeId": "x::/w/q"},
+                     "projection": {"outcome": "in_progress", "liveness": {"verdict": "exited"}}}])
+try:
+    patrol.round_once(now=NOW + 500, gather_fn=lambda now, dl, memo: ({**xf, "now": now}, []))
+    raise AssertionError("no budget")
+except patrol.Budget:
+    pass
+patrol.sync_needs_you = sync0
+assert [r["code"] for r in patrol.open_findings().values()] == ["X"] and fleet.external_items() == []
+patrol.sync_needs_you()
+assert [k["type"] for k in fleet.external_items()] == ["patrol"]
+patrol.ack(["--all"])
 
 # Output marks move only past screens read; a failed terminal list keeps the error runs and marks.
 f = facts(terminals=[term("ha", "/w/a", last=5), term("hb", "/w/b", last=7)], screens={"ha": ["x"]}, fresh={"ha"})

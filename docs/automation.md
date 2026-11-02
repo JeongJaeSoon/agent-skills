@@ -123,7 +123,7 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 
 ## 세션 순찰 (`orch patrol`)
 
-모델 없이 도는 한 라운드다. reap-hard LaunchAgent가 회차를 마칠 때마다 `orch patrol --if-due`를 별도 프로세스로 띄우고, 순찰은 마지막 라운드가 25분 넘게 지났을 때만 돈다(그래서 15분 박자에서 두 번에 한 번, 30분). pressure 회차가 경고나 위험으로 바뀌면 그 회차도 같은 명령을 띄워 바로 한 번 더 돈다. 한 라운드는 120초가 지나면 아무것도 쓰지 않고 멈춘다. 새로 등록할 LaunchAgent는 없다. reap-hard와 pressure가 메인 체크아웃의 코드를 그대로 읽기 때문이다.
+모델 없이 도는 한 라운드다. reap-hard LaunchAgent가 회차를 마칠 때마다 `orch patrol --if-due`를 별도 프로세스로 띄우고, 순찰은 마지막 라운드가 25분 넘게 지났을 때만 돈다(그래서 15분 박자에서 두 번에 한 번, 30분). pressure 회차가 경고나 위험으로 바뀌면 그 회차도 같은 명령을 띄워 바로 한 번 더 돈다. 한 라운드는 120초가 지나면 그 자리에서 멈춘다. 그때까지 쓴 발견 기록은 남고, 대시보드 Needs you 항목은 다음 라운드가 기록에 맞춘다. 새로 등록할 LaunchAgent는 없다. reap-hard와 pressure가 메인 체크아웃의 코드를 그대로 읽기 때문이다.
 
 읽는 순서는 Orca 명령이 먼저다(`orca terminal list`, `orca worktree ps --agent-wait`, 모든 Run의 `orca orchestration worker-list`). 그다음 collector의 `state.json`(카드의 부모, 연결 PR, 보드), 카드별 세션 기록 끝부분, `orch sent` 기록, 직전 pressure 회차를 읽는다. PR은 collector가 모은 것을 쓰고 `gh`를 새로 부르지 않는다. 화면은 직전 라운드 뒤로 출력이 생긴 에이전트 터미널만 읽는다.
 

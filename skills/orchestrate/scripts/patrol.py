@@ -398,8 +398,11 @@ def judge(facts, memo):
         if v in VERDICT_OF.values():
             add("L", c["card"], (c["what"], facts["level"]), f"PC {facts['level']}: {c['what']} "
                 f"(CPU {c.get('cpu') or 0:.0f}%) held by a card judged {v}")
-    if failed & {"state", "board"}:  # O or D could not look: their day-long clocks keep running
-        new_memo["first_seen"] = {**(memo.get("first_seen") or {}), **new_memo["first_seen"]}
+    # A rule that could not look keeps its day-long clocks; one that looked keeps only what it saw.
+    blind = ("O:", "D:") if "state" in failed else ("D:",) if "board" in failed else ()
+    for k, at in (memo.get("first_seen") or {}).items():
+        if k.startswith(blind):
+            new_memo["first_seen"].setdefault(k, at)
     if "terminals" in failed:  # no terminal list: keep the error runs and output marks for the next round
         new_memo["errors"], new_memo["last_output"] = dict(hist), dict(seen)
     # W: the orchestrator's screen watch.
@@ -551,7 +554,6 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather):
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
-    signal.alarm(0)  # the budget is for reading; the writes below run to the end so the log and Needs you agree
     new, gone = write_round(findings, verdicts, dry, now, facts.get("failed") or ())
     if not dry:
         fleet.write_atomic(MEMO, json.dumps(memo2))
@@ -615,7 +617,8 @@ def main(argv):
         try:
             res = round_once("--dry-run" in argv, "--if-due" in argv)
         except Budget:
-            print(f"patrol: gave up at {BUDGET_S}s while reading; nothing written this round")
+            print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the next round brings "
+                  "Needs you in step with them")
             return
         finally:
             signal.alarm(0)
