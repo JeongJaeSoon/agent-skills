@@ -16,7 +16,9 @@ A role is declared, never guessed from the terminal, and read in this order:
    whatever started it. A fork gets a new session id and its input names no parent, so a fork of a session declared
    only this way is undeclared until it declares again.
 3. Neither: no output.
-A declared session gets the long paragraph at SessionStart and one line on every prompt. An orchestrator whose session
+A declared session gets the long paragraph at SessionStart and one line on every prompt. After a compaction the
+paragraph also carries orchestrate's core rules as text: the skill is too large to come back with the compaction's own
+re-injection, and the request to reload it went unanswered for weeks. An orchestrator whose session
 title is not `orchestrator` is also told at SessionStart how to name it; a role visible in session lists is how the
 human tells which session routes. Prompts run no external
 command, so the hook stays fast.
@@ -25,15 +27,28 @@ On a prompt the line also carries one stage-table warning when the table is not 
 (the lead's own, or any for the orchestrator): no work row, or rows the fleet tick has not rewritten in the dashboard
 config's `board.stage_warn_h` hours (stage_auto.warning). The Brief's stage table sat empty for weeks once while every
 row waited on a hand-written `orch stage add`.
+
+With `reflect.orchestrator_feedback` true in ~/.claude/agent-skills.json, an orchestrator session's transcript path is
+registered in $AGENT_SKILLS_STATE/transcripts/<session_id>.json with the span it held the role (`since`, `until` once
+`ROLE: none` clears it), so standing reflect reads the owner's corrections from that span only and never globs
+~/.claude/projects. Off, nothing is written. The span lives apart from the roles file so the role logic above stays
+the same whether or not the feature is on.
 """
-import json, os, pathlib, re, sys
+import datetime, json, os, pathlib, re, sys
 
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
-ROLES = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "roles"
+STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+ROLES, TRANSCRIPTS = STATE / "roles", STATE / "transcripts"
+CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 SESSION = re.compile(r"[\w-]{1,128}")
 ROLE = re.compile(r"^[ \t]*ROLE:?[ \t]+(orchestrator|lead[ \t]+([\w.-]+)|none)[ \t]*$", re.M)
 LEAD_TITLE = re.compile(r"lead:([\w.-]+)")
 AGENTS = {"agent-skills:orchestrator": "orchestrator", "agent-skills:lead": "lead"}
+SKILL = pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "SKILL.md"
+# Core rules 1 and 2 of SKILL.md in one line; the per-prompt reminder must never say less than they do.
+DELEGATE = ("Hand each instruction one layer down at once (a worker, a card, a background subagent); your own turn "
+            "holds coordination, the acts only the human's session may take, answers from context and one `--json` "
+            "read, and any other task work is a delegation.")
 
 
 def program_for(slug):
@@ -58,17 +73,51 @@ def program_message(slug, cfg, compacted):
             f"to do with each worker_done's card.")
 
 
+def core_rules(path=None):
+    """The numbered "Core rules" list at the top of orchestrate's SKILL.md, verbatim with its wrapped lines; "" when
+    it cannot be read."""
+    try:
+        lines = (path or SKILL).read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    start = next((i for i, line in enumerate(lines) if line.startswith("Core rules")), None)
+    if start is None:
+        return ""
+    rules = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            if rules:
+                break
+            continue
+        if re.match(r"\d+\. ", line) or (rules and line[:1] in " \t"):
+            rules.append(line)
+        else:
+            break
+    return "\n".join(rules)
+
+
+def with_core_rules(text):
+    """A compaction drops the skill body, so its core rules come back as text, not as a request to reload it."""
+    rules = core_rules()
+    if not rules:
+        return text
+    return (f"{text}\nThese core rules of agent-skills:orchestrate hold now, before you reload it:\n{rules}")
+
+
 def role_long(entry, compacted):
     if entry["role"] == "lead":
         slug = entry.get("slug")
         if not slug:
             return ("You are a lead (agent-skills:lead), but no program is named: ask the human for its slug, then "
                     "declare it with a prompt line `ROLE: lead <slug>`. Load agent-skills:orchestrate in program mode.")
-        return program_message(slug, program_for(slug), compacted)
-    return ("You are the top-level orchestrator. Load agent-skills:orchestrate now. Your turn is routing "
-            "and seconds-long reads, so the human's next message is answered in seconds; investigation, "
-            "implementation, verification and browser work go one layer down. Status reports go through "
-            "agent-skills:brief.")
+        text = program_message(slug, program_for(slug), compacted)
+        return with_core_rules(text) if compacted else text
+    if compacted:
+        return with_core_rules("Your context was just compacted. You are the top-level orchestrator. Load "
+                               "agent-skills:orchestrate (references/top-level.md) for any step these rules do not "
+                               "cover.")
+    return ("You are the top-level orchestrator. Load agent-skills:orchestrate now. " + DELEGATE + " Status reports "
+            "go through agent-skills:brief.")
 
 
 def name_check(event):
@@ -87,13 +136,11 @@ def role_line(entry):
         note = program_for(slug).get("note")
         brief = f"; program note {note}" if note else ""
         return (f"ROLE: lead {slug}. Run agent-skills:orchestrate in program mode for {slug} (load it now if it is not "
-                f"in your context){brief}; keep one `orch wait {slug}` running; delegate investigation, implementation "
-                f"and verification one layer down.")
+                f"in your context){brief}; keep one `orch wait {slug}` running. {DELEGATE}")
     if entry["role"] == "lead":
         return role_long(entry, False)
     return ("ROLE: orchestrator. Run agent-skills:orchestrate as the top-level orchestrator (load it now if it is not "
-            "in your context): route and do seconds-long reads; investigation, implementation, verification and "
-            "browser work go one layer down; status reports go through agent-skills:brief.")
+            f"in your context). {DELEGATE} Status reports go through agent-skills:brief.")
 
 
 def stage_warning(entry):
@@ -150,6 +197,39 @@ def resolve(event, record):
     return None
 
 
+def feedback_on():
+    try:
+        return json.loads(CONFIG.read_text()).get("reflect", {}).get("orchestrator_feedback") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def register(event, session, entry, record):
+    """Keeps the orchestrator span of this session's transcript for standing reflect, when the feature is on."""
+    path = event.get("transcript_path")
+    if not isinstance(path, str) or not path or not feedback_on():
+        return
+    file = TRANSCRIPTS / f"{session}.json"
+    try:
+        old = json.loads(file.read_text())
+    except (OSError, ValueError):
+        old = None
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if entry and entry["role"] == "orchestrator":
+        # A span reopened after `ROLE: none` starts again now: the conversation in between was not the orchestrator's.
+        since = old["since"] if old and old.get("since") and not old.get("until") else now
+        new = {"role": "orchestrator", "transcript": path, "since": since, "until": None}
+    elif old and not old.get("until") and ((record and record.get("role") == "none") or entry):
+        # Cleared, or now another role. A prompt of a session named only by its title resolves to nothing and keeps
+        # the span open.
+        new = {**old, "until": now}
+    else:
+        return
+    if new != old:
+        TRANSCRIPTS.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(new))
+
+
 def main():
     try:
         event = json.load(sys.stdin)
@@ -166,6 +246,10 @@ def main():
         except OSError:
             record = had
         entry = resolve(event, record)
+        try:
+            register(event, session, entry, record)
+        except OSError:
+            pass
         if record and record.get("role") == "none":
             if had != record and resolve(event, had):
                 text = "ROLE cleared: this session no longer gets the orchestrate reminder."
@@ -176,7 +260,13 @@ def main():
         if text and entry and (warn := stage_warning(entry)):
             text += " " + warn
     elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork"):
-        if entry := resolve(event, declared(session)):
+        record = declared(session)
+        entry = resolve(event, record)
+        try:
+            register(event, session, entry, record)
+        except OSError:
+            pass
+        if entry:
             text = role_long(entry, event.get("source") == "compact")
             if entry["role"] == "orchestrator":
                 text += name_check(event)

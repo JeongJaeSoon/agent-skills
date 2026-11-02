@@ -18,7 +18,8 @@ import datetime as dt, fcntl, json, os, re, threading
 
 import fleet
 
-KINDS = ("card", "terminal", "inbox", "subagent", "agent", "slack", "tracker", "other")
+# supersede: the receiver's work was replaced; `orch patrol` flags its card while an agent is still on it.
+KINDS = ("card", "terminal", "inbox", "subagent", "agent", "slack", "tracker", "supersede", "other")
 TEXT_MAX = 20000  # shown in full under a fold; longer is cut
 SAME_SEND = dt.timedelta(minutes=10)  # a logged send and its transcript copy are this close
 DAYS_MAX = fleet.SENT_KEEP.days

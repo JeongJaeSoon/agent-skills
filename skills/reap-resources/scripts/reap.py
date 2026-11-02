@@ -509,6 +509,43 @@ DAILY = ("user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
 STATE_HOME = pathlib.Path("~/.local/state/agent-skills").expanduser()
 STATE = pathlib.Path(opt("--state") or os.environ.get("AGENT_SKILLS_STATE") or STATE_HOME).expanduser()
+PATROL_FRESH_S = 3600
+PATROL_KEEP = ("working", "waiting", "run")  # a session moving, at a prompt for a human, or a Run worker its lead watches
+
+
+def patrol_working(now=None):
+    """Card paths `orch patrol` judged working (PATROL_KEEP) in a round under an hour old. Read only to keep a card: a patrol
+    verdict never makes anything a target."""
+    try:
+        v = json.loads((STATE / "patrol-verdicts.json").read_text())
+        if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
+            return set()
+        return {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return set()
+
+
+ORCH = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "prog.py"
+
+
+def spawn_patrol(reason, python=None):
+    """Start `orch patrol --if-due` detached, so a LaunchAgent pass never waits on it; it prints to
+    <state>/patrol.log and gives up on its own at 120 seconds. False when it could not start, or AGENT_SKILLS_PATROL=off
+    (tests)."""
+    if os.environ.get("AGENT_SKILLS_PATROL") == "off":
+        return False
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with open(STATE / "patrol.log", "a") as out:
+            out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
+            out.flush()
+            subprocess.Popen([python or sys.executable, str(ORCH), "patrol", "--if-due"], stdout=out, stderr=out,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
+
+
 LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
 
 
@@ -1415,7 +1452,8 @@ def notify_unrun(inbox, command, send=run):
 TRIGGER = "17 */3 * * *"
 # A busy machine is when finished cards cost the most, so a second job looks at the load between rounds; its precheck
 # reads only the load average unless the load is at the limit, and wakes nothing within the cooldown of any round.
-# Off the minutes of the periodic job, and of the half-hourly one older installs still run.
+# Off the minutes of the periodic job, and of the half-hourly one (`7,37 * * * *`) a job registered before the 3-hour
+# trigger keeps, with no load job, until `skills-sync setup enable janitor` brings both in line.
 LOAD_TRIGGER = "27,57 * * * *"
 LOAD_COOLDOWN_MINUTES = 60
 # Orca's default of 60 seconds is shorter than a precheck that reads `gh` and lsof for dozens of cards.

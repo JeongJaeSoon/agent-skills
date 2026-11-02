@@ -4,6 +4,7 @@ import os, pathlib, sys, tempfile
 
 os.environ["AGENT_SKILLS_STATE"] = tempfile.mkdtemp()
 os.environ["ORCH_FLEET_STATE"] = tempfile.mkdtemp()
+os.environ["AGENT_SKILLS_PATROL"] = "off"
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import pressure as p
 

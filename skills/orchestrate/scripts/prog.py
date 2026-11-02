@@ -97,9 +97,13 @@ Usage: orch <command> <slug> [options]
                                      the next-steps list (no lines clears it); done rows leave after 7
                                      days; drop removes a row and its children. --group makes a heading
                                      row (a feature or an epic) with no PR and no cells; --parent rows to it
-  board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] | lead close <name>
+  board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] [--worktree ID] | lead close <name>
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
                  [--status moving|owner|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
+                 [--worktree ID]
+                                     --worktree: the Orca worktree id whose session works the row (lead add
+                                     records the handle's own); the brief's 세션 column and the dashboard
+                                     link the row to it by that id, which a terminal restart does not change
   board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n>
         | later add <title> --trigger T [--due D] [--who W] [--at N] | later move <n> --to N | later drop <n>
         | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W
@@ -2404,6 +2408,8 @@ def cmd_wait(argv):
     # STALLED comes from the collector; a lead that only loops `wait` would otherwise keep an old server.
     if (line := ensure_dash()) and not line.startswith("dashboard: http"):
         print(line, flush=True)
+    if watched := watch_lines(me, False):
+        print("\n".join(watched), flush=True)
     for i in range(rounds):
         res = orca_json("orchestration", "check", *box, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
                         "--timeout-ms", timeout)
@@ -2443,12 +2449,29 @@ def cmd_wait(argv):
             print("\n".join(stalled), flush=True)
             print("STALLED: a worker stopped with its ticket open and nothing will wake it; wake it now", flush=True)
             return
+        if watched := watch_lines(me, False):  # each shows at most once per 30 minutes, so this ends no wait twice
+            print("\n".join(watched), flush=True)
+            print("PATROL: act on the lines above, then wait again", flush=True)
+            return
     print_sweep(run_id, p.dir / "self-check.json")
     print_stuck(p, run_id)
     print_reviews(p)
     moves = next_moves(run_workers(run_id))
     print("\n".join([f"EMPTY x{rounds}: " + (f"{len(moves)} live worker(s), each with its move:" if moves else "no live worker")]
                     + moves))
+
+
+def watch_lines(me, unowned):
+    """What the session's watchers left for it: its `orch watch-cards` gone quiet, and unacked `orch patrol` findings
+    routed to it. Each repeats every 30 minutes until dealt with."""
+    import card_watch, patrol
+    out = []
+    with contextlib.suppress(OSError, ValueError):
+        if line := card_watch.down_line(me):
+            out.append(line)
+    with contextlib.suppress(OSError, ValueError, TypeError):
+        out += patrol.pending_lines(me, unowned)
+    return out
 
 
 def inbox_line(m):
@@ -2494,6 +2517,10 @@ def cmd_inbox(argv):
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
     if work:
         print("\n".join(map(inbox_line, work)))
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    # Findings routed to nobody are the orchestrator's, the session that runs the watch over cards outside a Run.
+    if watched := watch_lines(me, bool(me and __import__("card_watch").last_scan(me))):
+        print("\n".join(watched))
     if did:
         print(f"{len(work)} of {len(msgs)} to act on (the rest heartbeats or refusals); then: orch inbox --ack {did} --wait")
     else:
@@ -2546,16 +2573,17 @@ def compose_projects():
         return None
 
 
-def register_stacks(before, owner, pr):
+def register_stacks(before, owner, pr, skip=()):
     """A stack left running after verification held gigabytes until someone downed it by hand: the ones this run
     created go to the reap ledger. Only a project with a config file in this worktree: the other slot's card may
     have started one meanwhile."""
     after = compose_projects()
     if before is None or after is None:
-        return
+        return []
     top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     wt = os.path.realpath(top.stdout.strip() if top.returncode == 0 else os.getcwd())
-    for name in sorted(set(after) - set(before)):
+    done = []
+    for name in sorted(set(after) - set(before) - set(skip)):
         if not any(os.path.realpath(f).startswith(wt + os.sep) for f in after[name]):
             print(f"heavy: compose 스택 {name} 은 이 worktree 밖에서 떠서 등록하지 않음", file=sys.stderr)
             continue
@@ -2565,6 +2593,51 @@ def register_stacks(before, owner, pr):
                            capture_output=True, text=True)
         print(f"heavy: compose 스택 {name} 을 reap ledger 에 등록했다. 검증이 끝나면 `docker compose -p {name} down`(-v 금지)"
               if r.returncode == 0 else f"heavy: compose 스택 {name} 등록 실패: {r.stderr.strip()}", file=sys.stderr)
+        if r.returncode == 0:
+            done.append(name)
+    return done
+
+
+def in_slot():
+    """Whether this process runs inside a slot still held: ORCH_HEAVY_SLOT names a slot file whose holder is alive
+    and one of this process's ancestors. A background child the slot's command left behind inherits the variable
+    after the slot is freed or taken by another run."""
+    path = os.environ.get("ORCH_HEAVY_SLOT")
+    try:
+        holder = int(json.loads(pathlib.Path(path).read_text() or "{}").get("pid", 0)) if path else 0
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+    pid = os.getppid()
+    while holder and pid > 1:
+        if pid == holder:
+            return True
+        r = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+        try:
+            pid = int(r.stdout.strip())
+        except ValueError:
+            return False
+    return False
+
+
+def heavy_run(cmd, env, owner, pr, nested=False):
+    """Run cmd and register the compose stacks it started; its exit code. A nested `orch heavy` lists what it
+    registered beside the slot so the outer run, which sees the same new stacks, keeps the inner owner and PR."""
+    log = pathlib.Path(env["ORCH_HEAVY_SLOT"] + ".stacks")
+    before = compose_projects()
+    try:
+        return subprocess.run(cmd, env=env).returncode
+    finally:
+        try:
+            inner = log.read_text().split() if log.exists() else []
+            names = register_stacks(before, owner, pr, skip=inner)
+            if nested:  # every level skips what a deeper one registered; only the outermost removes the list
+                with log.open("a") as f:
+                    f.writelines(f"{n}\n" for n in names)
+            else:
+                log.unlink(missing_ok=True)
+        except (OSError, subprocess.SubprocessError) as e:
+            # The command's exit code is the result; a failed registration is only reported.
+            print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
 
 
 def cmd_heavy(argv):
@@ -2574,9 +2647,10 @@ def cmd_heavy(argv):
         sys.exit("heavy <slug|-> [--wait-minutes 60] [--pr owner/repo#N] -- <command…>")
     cut = argv.index("--")
     cmd = argv[cut + 1:]
-    if os.environ.get("ORCH_HEAVY_SLOT"):  # already inside a slot: taking a second would wait on itself
-        sys.exit(subprocess.run(cmd).returncode)
     cfg, owner = ({}, "-") if argv[0] == "-" else (Program(argv[0]).cfg, argv[0])
+    pr = opt(argv[:cut], "--pr")
+    if in_slot():  # already inside a slot: taking a second would wait on itself
+        sys.exit(heavy_run(cmd, os.environ, owner, pr, nested=True))
     slots = HOME / "_heavy"
     slots.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + 60 * float(opt(argv[:cut], "--wait-minutes", "60"))
@@ -2584,8 +2658,11 @@ def cmd_heavy(argv):
     while True:
         for i in range(int(knob(cfg, "heavy_slots"))):
             path = slots / f"slot-{i}"
-            held = json.loads(path.read_text() or "{}") if path.exists() else {}
-            if held and not pid_alive(held.get("pid", 0)):
+            try:
+                held = json.loads(path.read_text() or "{}")
+            except (OSError, ValueError):
+                held = {}
+            if isinstance(held, dict) and held and not pid_alive(held.get("pid", 0)):
                 path.unlink(missing_ok=True)
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -2593,20 +2670,18 @@ def cmd_heavy(argv):
                 continue
             os.write(fd, json.dumps({"pid": os.getpid(), "program": owner, "cmd": " ".join(cmd)[:200], "ts": now()}).encode())
             os.close(fd)
-            before = compose_projects()
+            pathlib.Path(f"{path}.stacks").unlink(missing_ok=True)  # left by a run that was killed in this slot
             try:
-                sys.exit(subprocess.run(cmd, env={**os.environ, "ORCH_HEAVY_SLOT": str(path)}).returncode)
+                sys.exit(heavy_run(cmd, {**os.environ, "ORCH_HEAVY_SLOT": str(path)}, owner, pr))
             finally:
                 path.unlink(missing_ok=True)
-                try:
-                    register_stacks(before, owner, opt(argv[:cut], "--pr"))
-                except (OSError, subprocess.SubprocessError) as e:
-                    # The command's exit code is the result; a failed registration is only reported.
-                    print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
         holders, freed = [], False
         for f in sorted(slots.glob("slot-*")):
+            if not re.fullmatch(r"slot-\d+", f.name):  # `slot-0.stacks` lists a nested run's stacks
+                continue
             try:
-                holders.append(json.loads(f.read_text() or "{}"))
+                held = json.loads(f.read_text() or "{}")
+                holders.append(held if isinstance(held, dict) else {"slot": f.name, "unreadable": True})
             except FileNotFoundError:  # its holder finished while this read: take the slot now
                 freed = True
             except ValueError:
@@ -2698,12 +2773,12 @@ def cmd_board(argv):
     try:
         if sub == "lead" and rest[:1] == ["add"] and len(rest) > 1:
             board.lead_add(rest[1], opt(rest, "--handle"), opt(rest, "--repo"), opt(rest, "--run"), opt(rest, "--stale-min"),
-                           opt(rest, "--program"))
+                           opt(rest, "--program"), opt(rest, "--worktree"))
         elif sub == "lead" and rest[:1] == ["close"] and len(rest) > 1:
             board.lead_close(rest[1])
         elif sub == "set" and rid:
             board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
-                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr")})
+                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree")})
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
@@ -2765,9 +2840,9 @@ def cmd_board(argv):
             for k, r in tidy.closed().items():
                 print(f"{k}  {r['ts']}  {r.get('by')}  {r.get('rule')}: {r.get('evidence')}  ({r.get('label')})")
         else:
-            sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] | lead close <name> | "
-                     "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
-                     "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
+            sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
+                     "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
+                     "[--progress N/M] [--next T] [--owner W] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")
@@ -2885,10 +2960,11 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
+            "patrol": lambda argv: __import__("patrol").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
             "doctor": lambda argv: __import__("orca_settings").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["patrol"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] not in ("watch-cards", "patrol") and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])

@@ -242,6 +242,8 @@ taken while the load is at or above the limit is not evidence: measure again onc
 ## Pressure: before the machine slows down
 
 `scripts/pressure.py` watches the machine without a model and reaps what is safe before anyone notices.
+A round whose level turns warn or danger also starts `orch patrol --if-due` detached, which ties the top consumers
+to the state of the card behind each (its `L` rule); reap-hard starts it every other pass. Patrol verdicts only keep.
 
 ```bash
 P="${CLAUDE_SKILL_DIR}/scripts/pressure.py"
@@ -276,8 +278,8 @@ when it has no rate (first round, or one run late).
 
 - **warn**: `reap.py scan --kinds <safe_kinds>` then `reap --plan`, so only what reap itself lists goes. Default
   `safe_kinds`: `orphan`, `compose-stack`, `gui-app`, `orca-worker` (a kind this reap.py does not know is dropped,
-  with a note). A target inside an Orca card with a live terminal is spared; when Orca or the process cwds cannot be
-  read, the round reaps nothing.
+  with a note). A target inside an Orca card with a live terminal, or one `orch patrol` judged working, waiting or a
+  Run worker within the hour, is spared; when Orca or the process cwds cannot be read, the round reaps nothing.
   When something went, one `status` line to `notify_to` (else `reap.inbox_to`): what and why. A machine that stays at
   warn is swept again only after `rescan_minutes` (10).
 - **danger**: the same sweep. With nothing reaped (none listed, or reap skipped or failed them all), the top consumers (reap's `load` classes, compose projects with
@@ -313,7 +315,7 @@ ends overdue entries. `python3 "$P" queue` lists entries for a week. A queue tha
 3 seconds, unwritable state) still denies, with the old wait on `check`. Danger from disk alone asks for space to be
 freed instead of a wait, and queues nothing. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
 The same hook holds two more things at any level. A line that runs a whole test suite (`tests.sh`, a `for` loop over
-five or more test files, `npm test`, a bare `bun test` or `pytest`, `go test ./...`), an E2E (`playwright test`,
+five or more test files, `npm test`, a bare `bun test`, `pytest`, `jest` or `vitest`, `go test ./...`), an E2E (`playwright test`,
 `cypress run`, an `e2e` script) or a headless Chrome outside `orch heavy` is denied with the same line wrapped in
 `orch heavy - -- bash -c '…'`, so the two machine-wide slots cap what already-running cards run, not only what
 starts. A new card (`orca worktree create`, a worker into a new worktree) is denied while Orca

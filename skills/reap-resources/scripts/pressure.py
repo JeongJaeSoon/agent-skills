@@ -201,15 +201,16 @@ def judge(m, cfg):
 
 
 def active_turns(run=sh):
-    """Agent turns Orca shows in progress (state "working") over every card; None when Orca cannot say."""
-    out = run(["orca", "worktree", "ps", "--limit", "500", "--json"], timeout=5)  # sh gives None when orca is missing
+    """Agent turns Orca shows in progress (state "working") over every card; None when Orca cannot say, a cut-short
+    list included."""
+    out = run(["orca", "worktree", "ps", "--limit", "10000", "--json"], timeout=5)  # sh gives None when orca is missing
     try:
         data = json.loads(out or "")
     except ValueError:
         return None
     res = data.get("result", data) if isinstance(data, dict) else None
     trees = res.get("worktrees") if isinstance(res, dict) else None
-    if not isinstance(trees, list):
+    if not isinstance(trees, list) or res.get("truncated"):
         return None
     return sum(isinstance(a, dict) and a.get("state") == "working"
                for w in trees if isinstance(w, dict) for a in w.get("agents") or [])
@@ -486,7 +487,8 @@ def plan_targets(kinds, plan_path, run=subprocess.run, cards=None, cwd_of=None):
     cards = orca_cards() if cards is None else cards
     if cards is None:
         return None, notes + ["orca worktree ps 를 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음"]
-    live = [c["path"] for c in cards if c["live"]]
+    # A card `orch patrol` judged working is kept too: its verdict only ever keeps.
+    live = [c["path"] for c in cards if c["live"]] + sorted(reap.patrol_working())
     cwd_of = reap.cwds() if cwd_of is None else cwd_of
     if cwd_of is None and any("pid" in i for i in targets):
         return None, notes + ["프로세스 cwd 를 모두 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음"]
@@ -882,6 +884,8 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
             save_state({**st, **record})
         return 1
     kinds = safe_kinds(cfg)
+    if not dry_run and st.get("level") != level:
+        reap.spawn_patrol(f"pressure {level}")  # patrol ties this load to the state of each card behind it (its L rule)
     plan_path = PLAN.with_name("pressure-plan.dry-run.json") if dry_run else PLAN
     # Set even when the scan failed: the warn deny asked for one round, and a failure every round must not hold
     # every heavy start at warn.
