@@ -103,27 +103,35 @@ def same_to(a, b):
     return pa is None or pa != pb or a == b
 
 
-def page(rows, days=1, now=None, limit=LIMIT):
+MESSAGE_FIELDS = ("message", "thread", "run")
+
+
+def page(rows, days=1, now=None, limit=LIMIT, inbox_since=None):
     """{"rows", "total", "days", "inbox_since"}: the sent instructions of the last `days` days, newest first, one row
     per send, masked, at most `limit` of them. `rows` are the transcript and Orca rows (fleet.fetch_sent,
-    fleet.orca_messages_sent, fleet.orca_sent). An Orca message is a record of its own, like a log line: a copy from a
-    transcript or the dashboard folds into it, and it folds into a log line. inbox_since: the oldest Orca message
-    given, before which the page has only the log and transcripts."""
+    fleet.orca_messages_sent, fleet.orca_sent); they are not changed. An Orca message is a record of its own, like a
+    log line: a copy from a transcript or the dashboard folds into it, and it folds into a log line, which then
+    carries its ids. Two Orca messages never fold. inbox_since (fleet.inbox_cut): where a full inbox read starts,
+    None when the read held every message."""
     since = (now or fleet.utcnow()) - dt.timedelta(days=days)
     logged = read_log(since)
     by_key = {}
     for r in logged:
         by_key.setdefault(key(r.get("text")), []).append(r)
     out = list(logged)
-    recent = [r for r in rows if (r.get("ts") or "9") >= fleet.iso(since)]
-    messages = [r for r in recent if r.get("source") == "orca" and r.get("message")]
-    for r in messages + dashboard_sends(since) + [r for r in recent if not (r.get("source") == "orca" and r.get("message"))]:
+    recent = [dict(r) for r in rows if (r.get("ts") or "9") >= fleet.iso(since)]
+    messages = [r for r in recent if r.get("message")]
+    for r in messages + dashboard_sends(since) + [r for r in recent if not r.get("message")]:
         t = fleet.parse(r.get("ts"))
         twin = next((x for x in by_key.get(key(r.get("text")), []) if t and fleet.parse(x.get("ts"))
-                     and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND and same_to(x.get("to"), r.get("to"))), None)
+                     and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND and same_to(x.get("to"), r.get("to"))
+                     and not (x.get("message") and r.get("message"))), None)
         if twin:
-            twin.setdefault("also", []).append(r["source"])
+            twin["also"] = [*twin.get("also", []), r["source"]]
             twin.setdefault("claude_session", r.get("claude_session"))
+            for k in MESSAGE_FIELDS:
+                if r.get(k) is not None:
+                    twin.setdefault(k, r[k])
         else:
             out.append(r)
             if r.get("message"):
@@ -133,5 +141,4 @@ def page(rows, days=1, now=None, limit=LIMIT):
               **{k: fleet.mask(r.get(k), n) or None for k, n in (("subject", 200), ("to", 120), ("from", 120),
                                                                    ("channel", 120), ("repo", 120), ("cwd", 300))}}
              for r in out[:limit]]
-    return {"rows": shown, "total": len(out), "days": days,
-            "inbox_since": min((r["ts"] for r in rows if r.get("message")), default=None)}
+    return {"rows": shown, "total": len(out), "days": days, "inbox_since": inbox_since}

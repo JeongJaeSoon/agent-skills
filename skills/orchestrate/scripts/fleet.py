@@ -648,6 +648,13 @@ def orca_sent(tasks):
 REPORT_TYPES = {"worker_done", "escalation", "question", "merge_ready"}  # a message back up, not an instruction
 
 
+def inbox_cut(messages):
+    """Where the inbox read starts when it came back full (INBOX_LIMIT messages, heartbeats included): an older
+    message is past it. None when the read held every message Orca keeps."""
+    stamps = [m["created_at"] for m in messages or [] if isinstance(m, dict) and isinstance(m.get("created_at"), str)]
+    return min(stamps) if len(messages or []) >= INBOX_LIMIT and stamps else None
+
+
 def orca_messages_sent(messages):
     """Sent rows for the messages Orca's inbox keeps (every Run, every recipient), so an `orchestration send` or
     `reply` needs no `orch sent add` line and stays on the page after its sender's session ends. A message up to a
@@ -1337,7 +1344,7 @@ class Fleet:
         self.ps_table = ps_table  # read once a runs cycle for both monitors and sent
         self.fetch_automations, self.automations = fetch_automations, []
         self.fetch_monitors, self.monitors = fetch_monitors, []
-        self.fetch_sent, self.sent = fetch_sent, []  # served by /api/fleet/sent with the `orch sent` log, not in state.json
+        self.fetch_sent, self.sent, self.sent_inbox_since = fetch_sent, [], None  # served by /api/fleet/sent with the `orch sent` log, not in state.json
         self.declared_roles, self.declared = declared_roles, []
         self.read_screen = read_screen
         self.lock = threading.Lock()
@@ -1413,7 +1420,9 @@ class Fleet:
                     except SourceError as e:
                         self.ok("monitors", str(e))
                     try:
-                        self.sent = (self.fetch_sent(procs=procs) + orca_messages_sent((self.fast or {}).get("messages"))
+                        messages = (self.fast or {}).get("messages")
+                        self.sent_inbox_since = inbox_cut(messages)
+                        self.sent = (self.fetch_sent(procs=procs) + orca_messages_sent(messages)
                                      + orca_sent(self.runs.get("tasks")))
                         self.ok("sent")
                     except SourceError as e:

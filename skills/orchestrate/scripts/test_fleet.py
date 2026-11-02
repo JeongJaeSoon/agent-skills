@@ -1961,7 +1961,17 @@ p = sent.page([copy, elsewhere, unread] + rows, days=1, now=later)
 got = [(r["source"], r["to"], r.get("also")) for r in p["rows"] if r["to"] in ("dispatch:ctx_1", "dispatch:ctx_2")]
 assert sorted(got, key=str) == sorted([("orca", "dispatch:ctx_1", ["transcript"]), ("transcript", "dispatch:ctx_2", None),
                                        ("transcript", "dispatch:ctx_1", None)], key=str), got
-assert p["inbox_since"] == fleet.iso(now), p["inbox_since"]
+assert p["inbox_since"] is None, p["inbox_since"]
+# The rows given are not changed: a second poll of the same rows gives the same page.
+assert sent.page([copy, elsewhere, unread] + rows, days=1, now=later)["rows"] == p["rows"]
+# Two Orca messages never fold, even with the same text, receiver and minute (two workers reporting "done").
+twins = fleet.orca_messages_sent([{"id": i, "type": "worker_done", "from_handle": f, "to_handle": "run:run_1", "subject": "done",
+                                   "created_at": fleet.iso(now)} for i, f in (("w1", "term_x"), ("w2", "term_y"))])
+assert sorted(r["message"] for r in sent.page(twins, days=1, now=later)["rows"] if r.get("message")) == ["w1", "w2"]
+# The inbox read is cut only when it came back full; the cut counts heartbeats too.
+full = [{"type": "heartbeat", "created_at": f"2026-01-0{1 + i % 2}T00:00:00Z"} for i in range(fleet.INBOX_LIMIT)]
+assert fleet.inbox_cut(full) == "2026-01-01T00:00:00Z" and fleet.inbox_cut(full[:2]) is None and fleet.inbox_cut(None) is None
+assert sent.page([], days=1, now=later, inbox_since="2026-01-01T00:00:00Z")["inbox_since"] == "2026-01-01T00:00:00Z"
 # Orca files a send to a Run's coordinator terminal under run:<id>, so a term_ copy still folds into it.
 up = {**copy, "to": "term_coord", "text": "done"}
 p = sent.page([up] + rows, days=1, now=later)
@@ -1974,5 +1984,6 @@ p = sent.page(fleet.orca_messages_sent([{"id": "m9", "type": "status", "to_handl
                                           "created_at": fleet.iso(now)}]), days=1, now=later)
 got = [(r["source"], r["to"], r.get("also")) for r in p["rows"] if r["text"] == "logged twice"]
 assert sorted(got, key=str) == sorted([("log", "dispatch:ctx_9", ["orca"]), ("orca", "dispatch:ctx_8", None)], key=str), got
+assert [r.get("message") for r in p["rows"] if r["source"] == "log" and r["text"] == "logged twice"] == ["m9"], "the log row keeps the message id"
 
 print("test_fleet: ok")
