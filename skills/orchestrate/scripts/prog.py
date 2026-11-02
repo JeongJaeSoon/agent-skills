@@ -2631,8 +2631,11 @@ def cmd_heavy(argv):
     while True:
         for i in range(int(knob(cfg, "heavy_slots"))):
             path = slots / f"slot-{i}"
-            held = json.loads(path.read_text() or "{}") if path.exists() else {}
-            if held and not pid_alive(held.get("pid", 0)):
+            try:
+                held = json.loads(path.read_text() or "{}")
+            except (OSError, ValueError):
+                held = {}
+            if isinstance(held, dict) and held and not pid_alive(held.get("pid", 0)):
                 path.unlink(missing_ok=True)
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -2646,8 +2649,11 @@ def cmd_heavy(argv):
                 path.unlink(missing_ok=True)
         holders, freed = [], False
         for f in sorted(slots.glob("slot-*")):
+            if not re.fullmatch(r"slot-\d+", f.name):  # `slot-0.stacks` lists a nested run's stacks
+                continue
             try:
-                holders.append(json.loads(f.read_text() or "{}"))
+                held = json.loads(f.read_text() or "{}")
+                holders.append(held if isinstance(held, dict) else {"slot": f.name, "unreadable": True})
             except FileNotFoundError:  # its holder finished while this read: take the slot now
                 freed = True
             except ValueError:
