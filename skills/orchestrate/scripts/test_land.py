@@ -321,11 +321,14 @@ assert code == 1 and "every slot busy" in out, out
 (d / "programs" / "_heavy" / "slot-0.stacks").write_text("123\n")  # a nested run's stack list is no holder
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 1 and "every slot busy" in out and "Traceback" not in out and "123" not in out, out
-(d / "programs" / "_heavy" / "slot-0.stacks").unlink()
 code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(d / "programs" / "_heavy" / "slot-0")), "heavy", "t", "--wait-minutes", "0",
                  "--", "true")  # a live slot that is not an ancestor's
 assert code == 1 and "every slot busy" in out, out
+# A list a killed run left behind is dropped when the slot is taken again, so it hides no new stack.
 holder.wait()
+(d / "programs" / "_heavy" / "slot-0.stacks").write_text("old\n")
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 0 and not (d / "programs" / "_heavy" / "slot-0.stacks").exists(), out
 stale.unlink()
 (d / "programs" / "_heavy" / "slot-0").write_text(json.dumps({"pid": 999999}))
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")

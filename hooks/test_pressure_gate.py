@@ -97,7 +97,8 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("npx --package @playwright/test playwright test", "E2E"), ("npx -y vitest run", "test suite"),
                   ("pnpm dlx --package=vitest vitest run", "test suite"),
                   ("bash -e tests.sh", "test suite"), ("bash -eux scripts/run-tests.sh", "test suite"),
-                  ("bash -o pipefail tests.sh", "test suite"), ("pytest --confcutdir tests/", "test suite"),
+                  ("bash -o pipefail tests.sh", "test suite"), ("bash -o pipefail -c 'npm test'", "test suite"),
+                  ("bash +o history -lc 'pytest'", "test suite"), ("pytest --confcutdir tests/", "test suite"),
                   ("pytest --ignore tests/slow", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",

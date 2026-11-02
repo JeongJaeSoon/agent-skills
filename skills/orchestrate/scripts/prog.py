@@ -2643,6 +2643,7 @@ def cmd_heavy(argv):
                 continue
             os.write(fd, json.dumps({"pid": os.getpid(), "program": owner, "cmd": " ".join(cmd)[:200], "ts": now()}).encode())
             os.close(fd)
+            pathlib.Path(f"{path}.stacks").unlink(missing_ok=True)  # left by a run that was killed in this slot
             try:
                 sys.exit(heavy_run(cmd, {**os.environ, "ORCH_HEAVY_SLOT": str(path)}, owner, pr))
             finally:

@@ -26,6 +26,7 @@ ROOT = pathlib.Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or pathlib.Path(__file_
 SCRIPT = ROOT / "skills" / "reap-resources" / "scripts" / "pressure.py"
 WRAPPERS = {"sudo", "env", "nohup", "time", "command", "exec", "nice"}
 SHELLS = {"bash", "sh", "zsh"}
+SHELL_VALUE = {"-o", "+o", "-O", "+O"}  # shell options whose next word is their value
 # docker compose global options that take a value: `docker compose -f a.yml --profile x up`.
 COMPOSE_VALUE = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory",
                  "--ansi", "--progress", "--parallel"}
@@ -138,9 +139,9 @@ def segments(cmd, slotted=False):
     for argv in [a for a in out if a]:
         words = argv[skip_prefix(argv, keywords=True):]  # `FOO=1 env bash -c`, `do nice -n 5 bash -c`
         j, run_c = 1, False
-        while words and os.path.basename(words[0]) in SHELLS and j < len(words) and words[j].startswith("-"):
-            run_c |= not words[j].startswith("--") and "c" in words[j][1:]  # `-c`, `-lc`, `-l -c`
-            j += 1
+        while words and os.path.basename(words[0]) in SHELLS and j < len(words) and words[j][:1] in "-+":
+            run_c |= words[j][:2] != "--" and words[j][:1] == "-" and "c" in words[j][1:]  # `-c`, `-lc`, `-l -c`
+            j += 2 if words[j] in SHELL_VALUE else 1  # `-o pipefail`
         if run_c and j < len(words):
             # The user's go-ahead before `bash -c` covers every command of its body.
             lead = [w for w in argv[:len(argv) - len(words)] if w == OVERRIDE]
@@ -262,7 +263,7 @@ def runs_tests(argv):
         if head in SHELLS and len(words) > 1:  # `bash -eux tests.sh`; a `-c` body was read by segments()
             rest = words[1:]
             while rest and rest[0].startswith("-") and not (rest[0][1:2] != "-" and "c" in rest[0][1:]):
-                rest = rest[2 if rest[0] in ("-o", "+o", "-O", "+O") else 1:]
+                rest = rest[2 if rest[0] in SHELL_VALUE else 1:]
             words = rest if rest and not rest[0].startswith("-") else words
         elif head in ("python", "python3") and words[1:3] == ["-m", "pytest"]:
             words = ["pytest"] + words[3:]
