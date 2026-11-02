@@ -2730,7 +2730,16 @@ def cmd_sent(argv):
             print(f"logged {row['ts']} → {row['to']}")
         elif sub == "list":
             import fleet
-            rows = sent.page(fleet.fetch_sent(), int(opt(rest, "--days", "1")))["rows"]
+            try:
+                messages = fleet.orca("orchestration", "inbox", "--limit", str(fleet.INBOX_LIMIT)).get("messages")
+            except fleet.SourceError as e:
+                messages = None
+                print(f"orca inbox not read, its sends are missing: {e}", file=sys.stderr)
+            days = int(opt(rest, "--days", "1"))
+            pg = sent.page(fleet.fetch_sent() + fleet.orca_messages_sent(messages), days, inbox_since=fleet.inbox_cut(messages))
+            rows = pg["rows"]
+            if pg["inbox_since"] and pg["inbox_since"] > fleet.iso(fleet.utcnow() - dt.timedelta(days=days)):
+                print(f"orca messages before {pg['inbox_since']} are past the inbox read and not listed", file=sys.stderr)
             if "--json" in rest:
                 print(json.dumps(rows, ensure_ascii=False, indent=1))
             for r in [] if "--json" in rest else rows:

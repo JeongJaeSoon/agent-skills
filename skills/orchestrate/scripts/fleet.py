@@ -645,6 +645,29 @@ def orca_sent(tasks):
             for t in tasks or [] if t.get("spec") and t.get("id") and (ts := when(t.get("created_at")))]
 
 
+REPORT_TYPES = {"worker_done", "escalation", "question", "merge_ready"}  # a message back up, not an instruction
+
+
+def inbox_cut(messages):
+    """Where the inbox read starts when it came back full (INBOX_LIMIT messages, heartbeats included): an older
+    message is past it. None when the read held every message Orca keeps."""
+    stamps = [m["created_at"] for m in messages or [] if isinstance(m, dict) and isinstance(m.get("created_at"), str)]
+    return min(stamps) if len(messages or []) >= INBOX_LIMIT and stamps else None
+
+
+def orca_messages_sent(messages):
+    """Sent rows for the messages Orca's inbox keeps (every Run, every recipient), so an `orchestration send` or
+    `reply` needs no `orch sent add` line and stays on the page after its sender's session ends. A message up to a
+    coordinator (a report type, or to a `run:` inbox) is kind `report`. Heartbeats are left out: one every few
+    minutes per worker, no instruction."""
+    return [{"ts": m["created_at"], "from": m.get("from_handle"), "to": m.get("to_handle"),
+             "kind": "report" if m.get("type") in REPORT_TYPES or str(m.get("to_handle")).startswith("run:") else "inbox", "channel": f"orca {m.get('type') or 'message'}",
+             "subject": m.get("subject") or None, "text": m.get("body") or m.get("subject"), "source": "orca",
+             "message": m.get("id"), "thread": m.get("thread_id"), "run": m.get("run_id")}
+            for m in messages or [] if isinstance(m, dict) and m.get("type") != "heartbeat"
+            and isinstance(m.get("created_at"), str) and (m.get("body") or m.get("subject"))]
+
+
 def graphql(query):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
     inaccessible PR must not blank the others."""
@@ -1321,7 +1344,7 @@ class Fleet:
         self.ps_table = ps_table  # read once a runs cycle for both monitors and sent
         self.fetch_automations, self.automations = fetch_automations, []
         self.fetch_monitors, self.monitors = fetch_monitors, []
-        self.fetch_sent, self.sent = fetch_sent, []  # served by /api/fleet/sent with the `orch sent` log, not in state.json
+        self.fetch_sent, self.sent, self.sent_inbox_since = fetch_sent, [], None  # served by /api/fleet/sent with the `orch sent` log, not in state.json
         self.declared_roles, self.declared = declared_roles, []
         self.read_screen = read_screen
         self.lock = threading.Lock()
@@ -1397,7 +1420,10 @@ class Fleet:
                     except SourceError as e:
                         self.ok("monitors", str(e))
                     try:
-                        self.sent = self.fetch_sent(procs=procs) + orca_sent(self.runs.get("tasks"))
+                        messages = (self.fast or {}).get("messages")
+                        self.sent_inbox_since = inbox_cut(messages)
+                        self.sent = (self.fetch_sent(procs=procs) + orca_messages_sent(messages)
+                                     + orca_sent(self.runs.get("tasks")))
                         self.ok("sent")
                     except SourceError as e:
                         self.ok("sent", str(e))

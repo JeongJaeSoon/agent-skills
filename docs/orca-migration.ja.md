@@ -10,6 +10,7 @@
 | リードごとの `orch board lead add` | リードの行はセッションから作る。`lead add` は fleet から見えないリードにだけ使う |
 | カードごとの `orch record spawned` | 台帳は Orca の Task・Dispatch を読む。`spawned` は下位単位のチケットにだけ使う |
 | カードごとの `orch sent add` | Sent 表は Run の Task から作る。`orch sent` には Orca を通らない経路だけを記録する |
+| `orca orchestration send`・`reply` ごとの `orch sent add`(2026-11-02) | Sent 表は Orca の inbox を読む。heartbeat だけは除く |
 | 画面から待ちを判定 | まず Orca の `agentWait` を見て、Orca が見ていないときだけ画面を読む |
 | 監督するカードも普通の worktree | `REPORT` が `run:<id>` のカードは `skills-sync card` が `worker-start` で立ち上げる |
 | カードのコメントに書いていたチケット・PR のリンク | `--reference <URL>` で Orca のリンクとして保存する |
