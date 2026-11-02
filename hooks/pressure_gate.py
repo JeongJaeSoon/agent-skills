@@ -394,7 +394,7 @@ def runs_tests(argv):
         return "E2E" if any(E2E.fullmatch(a) for a in args) else "test suite" if "test" in args else None
     if head in ("jest", "vitest") and not narrowed([w for w in words[1:] if w not in ("run", "watch")]):
         return "test suite"
-    if head == "pytest" and not narrowed(words[1:], any_path=True) or head == "go" and args[:2] == ["test", "./..."]:
+    if head == "pytest" and not narrowed(words[1:], any_path=True) or head == "go" and args[:1] == ["test"] and "./..." in words[2:] and not narrowed(words[2:]):
         return "test suite"
     return None
 
