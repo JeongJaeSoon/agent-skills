@@ -134,7 +134,7 @@ assert not pathlib.Path(out["digest"]).exists() and list((TMP / "trash").glob("o
 
 # 3. Continuing: a tail with no owner prompt still moves scan_end; a rerun gives no event twice.
 with T2.open("a") as f:
-    f.write(json.dumps(assistant("a9", ts(1), "done")) + "\n")
+    f.write(json.dumps(assistant("a9", ts(1), "done with ABC-77", ("Read", {"file_path": "x/SKILL.md"}))) + "\n")
 code, out = run("digest")
 assert out["rows"] == 0 and out["digest"] is None and out["sessions"]["s1"]["to"] == T2.stat().st_size, out
 assert commit(out)[0] == 0
@@ -142,11 +142,17 @@ with T2.open("a") as f:
     f.write(json.dumps(user("u-next", "next correction", ts(0, 1))) + "\n")
 code, out = run("digest")
 assert [r["event"] for r in rows(out)] == ["s1:u-next"], rows(out)
+nxt = rows(out)[0]
+assert nxt["before"] == "done with ABC-77" and nxt["tools"] == ["Read x/SKILL.md"] and nxt["context"] == ["ABC-77"], \
+    "context read before the round boundary carries over"
 code, again = run("digest")
+assert again["digest"] != out["digest"] and again["round"] != out["round"], "each round owns its digest"
 assert [r["event"] for r in rows(again)] == ["s1:u-next"], "not committed: the same range is read again"
 assert commit(again)[0] == 0
 lost = commit(out)
 assert lost[0] == 1 and str(lost[1]).startswith("cursor moved"), lost
+assert not pathlib.Path(out["digest"]).exists(), "a round that lost still trashes its digest"
+assert not list(HOME.glob("orchestrator-next-*.json")), "no proposal is left behind"
 assert run("digest")[1]["rows"] == 0
 
 # 4. First round: no further back than 7 days, nor before `since`; nothing at or after `until`.
@@ -219,6 +225,8 @@ register("s9", TMP / "missing.jsonl")
 register("s10", T2, role="lead")
 code, out = run("digest")
 assert out["sessions"] == {"s9": {"note": "transcript missing"}}, out
-assert run("advance", "--round", "nope", "--expect", out["expect"])[1].startswith("no proposed cursor")
+assert run("advance", "--round", "orch-20260320T120000Z-00000000", "--expect", out["expect"])[1] \
+    .startswith("no proposed cursor")
+assert run("advance", "--round", "../x", "--expect", "none")[0] == 2
 assert run("bogus")[0] == 2
 print("orchestrator_feedback: all pass")

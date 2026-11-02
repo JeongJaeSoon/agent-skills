@@ -13,15 +13,15 @@ prompt, and the card, ticket and PR identifiers seen. It never globs ~/.claude/p
 
 The cursor, $PROGRAMS_HOME/_standing/reflect/orchestrator-cursor.json, keeps per session the end of the contiguous
 range already reviewed (`scan_end`), not the last row written: a tail with no owner prompt moves it too, and a round
-that runs out of room stops at the first prompt it could not take (`pending`). digest proposes the next cursor beside
-it; advance commits that proposal only when the cursor still names the round digest read (compare-and-swap, since a
-stale standing lock lets two rounds overlap), then moves the digest to the trash: it holds the owner's words, and only
-pointers go to the lessons ledger.
+that runs out of room stops at the first prompt it could not take (`pending`). digest proposes the next cursor in a file
+of its own round; advance commits that proposal only when the cursor still names the round digest read
+(compare-and-swap under a file lock, since a stale standing lock lets two rounds overlap), then moves the round's digest
+to the trash: it holds the owner's words, and only pointers go to the lessons ledger.
 
 With the feature off, or with no `reflect.ledger`, digest prints the reason and reads nothing. It stops when the
 digest or the ledger would land inside `reflect.skill_repository`.
 """
-import datetime as dt, json, os, pathlib, re, secrets, shutil, subprocess, sys
+import datetime as dt, fcntl, json, os, pathlib, re, secrets, shutil, subprocess, sys
 
 MAX_ROWS, MAX_BYTES = 200, 200_000  # per round, shared across sessions
 FIRST_DAYS = 7  # how far back a session's first round reads
@@ -37,6 +37,7 @@ UNWRAP = ("command-name", "command-args", "channel", "pasted_content")
 DROP_RE = re.compile(r"<(%s)\b[^>]*/>|<(%s)\b[^>]*>.*?</\2>" % ("|".join(DROP), "|".join(DROP)), re.S)
 UNWRAP_RE = re.compile(r"</?(?:%s)\b[^>]*>" % "|".join(UNWRAP))
 INTERRUPT_RE = re.compile(r"^\[Request interrupted by user[^\]]*\]$")
+ROUND_RE = re.compile(r"orch-\d{8}T\d{6}Z-[0-9a-f]{8}")
 CONTEXT_RE = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/(?:pull|issues)/\d+|\b[\w.-]+/[\w.-]+#\d+\b"
                         r"|\b[A-Z][A-Z0-9]{1,9}-\d+\b|\blead:[\w.-]+|\brun_[0-9a-f]{6,}\b")
 
@@ -194,11 +195,15 @@ def resume(path, mark, st):
     return None, "recovered: the transcript changed and the cursor's message is gone; reading again from `since`"
 
 
-def scan(session, path, start, lo, hi, max_rows, max_bytes, seen):
-    """Rows of owner prompts from byte start, and the cursor mark for the range reviewed."""
+def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, carry=None):
+    """Rows of owner prompts from byte start, and the cursor mark for the range reviewed.
+
+    carry is the context gathered since the last owner prompt before start, so a prompt right after a round's boundary
+    keeps the assistant text, tools and identifiers that led to it."""
     rows, used, pos, pending = [], 0, start, False
     last = (None, None)  # uuid and start byte of the last message line reviewed
-    before, tools, ids = "", [], []
+    carry = carry or {}
+    before, tools, ids = carry.get("before", ""), list(carry.get("tools", [])), list(carry.get("ids", []))
     line = line_at(path, start)
     with open(path, "rb") as f:
         f.seek(start)
@@ -246,7 +251,8 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen):
             if o.get("uuid"):
                 last = (o["uuid"], at)
             pos += len(raw)
-    return rows, {"scan_end": pos, "uuid": last[0], "uuid_at": last[1], "pending": pending}
+    carry = {"before": before[-BEFORE_CHARS:], "tools": tools[-TOOLS:], "ids": list(dict.fromkeys(ids))[-CONTEXT_IDS:]}
+    return rows, {"scan_end": pos, "uuid": last[0], "uuid_at": last[1], "pending": pending, "carry": carry}
 
 
 def digest(now=None):
@@ -280,16 +286,16 @@ def digest(now=None):
     share = max(len(live), 1)
     for session, reg, path, st, mark in live:
         since, until = parse_ts(reg.get("since")), parse_ts(reg.get("until"))
-        note = ""
+        note, carry = "", None
         if mark:
             start, note = resume(path, mark, st)
-            lo = since
+            lo, carry = since, mark.get("carry")
             if start is None:
-                start = 0
+                start, carry = 0, None
         else:
             start, first = 0, now - dt.timedelta(days=FIRST_DAYS)
             lo = max(since, first) if since else first
-        found, new = scan(session, path, start, lo, until, MAX_ROWS // share, MAX_BYTES // share, seen)
+        found, new = scan(session, path, start, lo, until, MAX_ROWS // share, MAX_BYTES // share, seen, carry)
         rows += found
         marks[session] = {**new, "inode": st.st_ino, "scanned_at": iso(now)}
         report[session] = {"from": start, "to": new["scan_end"], "rows": len(found), "pending": new["pending"],
@@ -298,10 +304,10 @@ def digest(now=None):
     round_id = f"orch-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
     out = None
     if rows:
-        out = home / f"orchestrator-{now.strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+        out = home / f"orchestrator-{round_id}.jsonl"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-    write_atomic(home / "orchestrator-cursor.next.json",
+    write_atomic(home / f"orchestrator-next-{round_id}.json",
                  {"round": round_id, "sessions": marks, "digest": str(out) if out else None})
     print(json.dumps({"round": round_id, "expect": prev, "digest": str(out) if out else None, "rows": len(rows),
                       "sessions": report, **({} if entries else {"note": "no orchestrator transcript registered"})},
@@ -323,25 +329,35 @@ def trash(path):
 
 
 def advance(round_id, expect):
+    """Commits round_id's proposed cursor if the cursor still names expect. Either way the round is over: its proposal
+    goes, and its digest goes to the trash (its findings are in the lessons ledger, or the next round reads again)."""
+    if not ROUND_RE.fullmatch(round_id):
+        print(f"not a round id: {round_id!r}")
+        return 2
     home = standing()
-    cursor_path, next_path = home / "orchestrator-cursor.json", home / "orchestrator-cursor.next.json"
-    found = read_json(cursor_path, {}).get("round")
-    if (None if expect in ("", "none") else expect) != found:
-        print(f"cursor moved: expected round {expect}, found {found}; nothing written, the next round reads again")
-        return 1
+    cursor_path, next_path = home / "orchestrator-cursor.json", home / f"orchestrator-next-{round_id}.json"
     proposal = read_json(next_path, {})
     if proposal.get("round") != round_id:
         print(f"no proposed cursor for round {round_id}; nothing written")
         return 1
-    digest_path = proposal.pop("digest", None)
-    write_atomic(cursor_path, proposal)
-    next_path.unlink()
+    home.mkdir(parents=True, exist_ok=True)
+    with open(home / "orchestrator-cursor.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # held until the file closes, so check and replace are one step
+        found = read_json(cursor_path, {}).get("round")
+        moved = (None if expect in ("", "none") else expect) != found
+        if not moved:
+            write_atomic(cursor_path, {k: v for k, v in proposal.items() if k != "digest"})
+        next_path.unlink()
+    digest_path = proposal.get("digest")
+    if moved:
+        print(f"cursor moved: expected round {expect}, found {found}; nothing written, the next round reads again")
     if digest_path and pathlib.Path(digest_path).exists():
         try:
             trash(pathlib.Path(digest_path))
         except (OSError, subprocess.CalledProcessError) as e:
-            print(f"cursor advanced; the digest stays at {digest_path} ({e})")
-            return 0
+            print(f"the digest stays at {digest_path} ({e})")
+    if moved:
+        return 1
     print(f"cursor advanced to round {round_id}")
     return 0
 
