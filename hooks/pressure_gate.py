@@ -97,14 +97,16 @@ def drop_heredocs(cmd, slotted=False):
     """cmd without the bodies of its here-documents, which are data (`cat > a.md <<EOF`), except where a shell
     reads the body as commands (`bash <<EOF`) or an unquoted body runs a substitution (`$(…)`, a backquote).
     With slotted, a body a shell reads inside `orch heavy` (`orch heavy - -- bash <<EOF`) goes too: it runs in
-    the slot."""
+    the slot. A shell body under the user's go-ahead (`AGENT_SKILLS_PRESSURE_GATE=0 bash <<EOF`) is read as that
+    shell's `-c` text, so the go-ahead covers each of its commands as it does for `bash -c`."""
     out, lines, quote = [], iter(cmd.split("\n")), ""
     for line in lines:
         out.append(line)
         m, quote = heredoc_at(line, quote)
         # Kept whenever a shell appears on the line (`FOO=1 bash <<EOF`, `cd x && env bash <<EOF`).
-        if not m or any(os.path.basename(w.strip("'\"")) in SHELLS for w in line.split()) and not (
-                slotted and re.search(r"(^|[\s;&|(/])orch\s+heavy\s", line)):
+        shell = bool(m) and any(os.path.basename(w.strip("'\"")) in SHELLS for w in line.split()) and not (
+            slotted and re.search(r"(^|[\s;&|(/])orch\s+heavy\s", line))
+        if not m or shell and OVERRIDE not in line.split():
             continue
         body, end = [], None
         for row in lines:
@@ -112,7 +114,9 @@ def drop_heredocs(cmd, slotted=False):
                 end = row
                 break
             body.append(row)
-        if not m.group(2) and any("$(" in r or "`" in r for r in body):
+        if shell:
+            out.append(shlex.join([OVERRIDE, "bash", "-c", "\n".join(body)]))
+        elif not m.group(2) and any("$(" in r or "`" in r for r in body):
             out += body
         if end is not None:
             out.append(end)
@@ -206,6 +210,7 @@ RUNNER_VALUE = {"--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspa
 # `git add` or `cat` of as many is not.
 SUITE_FILES = 5
 LOOPERS = {"for", "python", "python3", "pytest", "node", "bun", "deno", "go"}
+TEST_RUNNERS = LOOPERS - {"for"} | {"jest", "vitest", "playwright", "mocha"} | {"npm", "pnpm", "yarn"}
 # A redirection (`> out.txt`, `2>`, `&>`) and its target select no test.
 REDIRECT = re.compile(r"\d*(>>?|<<?|&>>?|>&)")
 # A runner given a test path (`tests/`, `tests/unit`, `a.test.ts`, `x.py::t`) or a name filter runs a subset.
@@ -275,6 +280,8 @@ def runs_tests(argv):
             while rest and rest[0].startswith("-"):
                 rest = rest[2 if rest[0] in LAUNCHER_VALUE else 1:]
             words = rest or words
+    if head in TEST_RUNNERS and sum(bool(TEST_FILE.fullmatch(w)) for w in words[1:]) >= SUITE_FILES:
+        return "test suite"  # `npx vitest run a.test.ts … e.test.ts`
     args = [w for w in words[1:] if not w.startswith("-")]
     if SUITE.fullmatch(head):
         return "test suite"

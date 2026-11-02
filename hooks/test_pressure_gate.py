@@ -98,7 +98,9 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("pnpm dlx --package=vitest vitest run", "test suite"),
                   ("bash -e tests.sh", "test suite"), ("bash -eux scripts/run-tests.sh", "test suite"),
                   ("bash -o pipefail tests.sh", "test suite"), ("bash -o pipefail -c 'npm test'", "test suite"),
-                  ("bash +o history -lc 'pytest'", "test suite"), ("pytest --confcutdir tests/", "test suite"),
+                  ("bash +o history -lc 'pytest'", "test suite"),
+                  ("npx vitest run " + " ".join(f"{c}.test.ts" for c in "abcde"), "test suite"), ("jest " + " ".join(f"{c}.test.ts" for c in "abcde"), "test suite"),
+                  ("FOO=1 bash <<'EOF'\nnpm test\nEOF", "test suite"), ("pytest --confcutdir tests/", "test suite"),
                   ("pytest --ignore tests/slow", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
@@ -112,7 +114,7 @@ for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -
             "for f in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do cat "$f"; done',
             "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'cd app && npx playwright test'",
             "cat > README.md <<'EOF'\nnpm test\nEOF", "cat <<-EOF > a.md\n\tpytest\n\tEOF",
-            "npx vitest run src/a.test.ts", "jest -t login", "npx jest --testPathPattern auth", "vitest --version", "pnpm exec vitest run src/a.test.ts", "npm exec --help", "orch heavy - -- bash <<'EOF'\nnpm test\nEOF", "bash -e scripts/build.sh", "bash -x", "pytest --confcutdir tests/ tests/test_a.py", "npm --prefix app test -- a.test.ts", "pnpm --dir app run build", 'python3 --version; for f in hooks/test_*.py; do cat "$f"; done',
+            "npx vitest run src/a.test.ts", "jest -t login", "npx jest --testPathPattern auth", "vitest --version", "pnpm exec vitest run src/a.test.ts", "npm exec --help", "AGENT_SKILLS_PRESSURE_GATE=0 bash <<'EOF'\ncd app && npm test\nEOF", "npx vitest run a.test.ts b.test.ts", "orch heavy - -- bash <<'EOF'\nnpm test\nEOF", "bash -e scripts/build.sh", "bash -x", "pytest --confcutdir tests/ tests/test_a.py", "npm --prefix app test -- a.test.ts", "pnpm --dir app run build", 'python3 --version; for f in hooks/test_*.py; do cat "$f"; done',
             'for f in hooks/test_*.py; do cat "$f"; done; python3 x.py', "pytest integration/check_login.py", "pytest src/", "nice -n 5 pytest tests/test_a.py", "AGENT_SKILLS_PRESSURE_GATE=0 nice -n 5 npm test", "AGENT_SKILLS_PRESSURE_GATE=0 env bash -lc 'npm test'", 'for f in hooks/test_*.py; do cat "$f"; done'):
     assert g.unwrapped_tests(cmd) is None, cmd
 wrapped = g.wrap_reason("cd /w && bash tests.sh", "test suite")
