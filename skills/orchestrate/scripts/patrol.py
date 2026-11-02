@@ -70,9 +70,11 @@ VOLATILE = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+Z?|\b\d{1,2}:\d\d(?::\d\d)?\b|\b\
 # ---------------------------------------------------------------- reading
 
 def orca_all(*args):
-    """An Orca listing over every Run: with this terminal's handle set, worker-list scopes to its bound Run."""
+    """An Orca listing over every Run: with this terminal's handle set, worker-list scopes to its bound Run. Run from
+    the checkout: outside a git directory (launchd starts in /) Orca was seen binding the list to one Run anyway."""
     env = {**os.environ, "ORCA_TERMINAL_HANDLE": ""}
-    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, env=env, timeout=30)
+    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, env=env, timeout=30,
+                       cwd=REAP_SCRIPTS.parents[2])
     out = json.loads(p.stdout or "{}")
     if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
         raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(out.get('error') if isinstance(out, dict) else out)[:120]}"
@@ -89,6 +91,8 @@ def all_workers(deadline):
         res = orca_all("orchestration", "worker-list", "--limit", "100", *(["--cursor", cursor] if cursor else []))
         if not isinstance(res.get("workers"), list):
             raise RuntimeError("worker-list answered without a workers list")
+        if (res.get("scope") or {}).get("source", "all") != "all":
+            raise RuntimeError(f"worker-list scoped to {res['scope']}, not every Run")
         workers += res["workers"]
         cursor = (res.get("page") or {}).get("nextCursor")
         if not (res.get("page") or {}).get("hasMore") or not cursor:

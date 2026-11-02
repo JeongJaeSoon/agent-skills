@@ -202,6 +202,12 @@ for out, rc in (('{"ok": false, "error": "no runtime"}', 0), ('{"ok": true, "res
         raise AssertionError(f"no raise for {out!r}")
     except RuntimeError:
         pass
+patrol.subprocess.run = lambda *a, **k: P('{"ok": true, "result": {"workers": [], "scope": {"source": "bound", "run": "r"}}}')
+try:
+    patrol.all_workers(time.time() + 120)
+    raise AssertionError("a list bound to one Run is not the fleet")
+except RuntimeError:
+    pass
 patrol.subprocess.run = lambda *a, **k: P('{"ok": true, "result": {"workers": [{"dispatchId": "d"}], "page": {}}}')
 assert patrol.all_workers(time.time() + 120) == [{"dispatchId": "d"}]
 patrol.subprocess.run = run0
