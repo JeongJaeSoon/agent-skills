@@ -104,7 +104,9 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("npx vitest run " + " ".join(f"{c}.test.ts" for c in "abcde"), "test suite"), ("jest " + " ".join(f"{c}.test.ts" for c in "abcde"), "test suite"),
                   ("FOO=1 bash <<'EOF'\nnpm test\nEOF", "test suite"),
                   ("orch heavy - -- true; bash <<EOF\nnpm test\nEOF", "test suite"),
-                  ("cat <<EOF\n$(npm test)\nEOF", "test suite"), ("pytest --confcutdir tests/", "test suite"),
+                  ("cat <<EOF\n$(npm test)\nEOF", "test suite"),
+                  ("npm \\\ntest", "test suite"), ("npx vitest run --exclude tests/slow/**", "test suite"),
+                  ("npm test -- --testPathIgnorePatterns tests/slow", "test suite"), ("pytest --confcutdir tests/", "test suite"),
                   ("pytest --ignore tests/slow", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",

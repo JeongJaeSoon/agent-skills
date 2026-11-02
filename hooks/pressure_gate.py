@@ -132,6 +132,7 @@ def segments(cmd, slotted=False):
     """The simple commands of a shell line as argv lists, split on unquoted ; & | ( ) and newlines.
     A `bash -c '<text>'` is read as its own line; a here-document body is not read. Unparsable text gives no
     segments."""
+    cmd = cmd.replace("\\\n", "")  # a line continuation: `npm \` then `test` is one command
     lex = shlex.shlex(drop_heredocs(cmd, slotted), posix=True, punctuation_chars="();&|\n")
     lex.whitespace, lex.whitespace_split = " \t\r", True
     out, cur = [], []
@@ -228,7 +229,9 @@ VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "
               "--coverage-dir", "--coverage-reporter", "--preload", "--rerun-each", "--reporter", "--reporter-outfile",
               "--outputFile", "--coverageDirectory", "--config", "--workers", "--maxWorkers", "--confcutdir",
               "--ignore", "--ignore-glob", "--deselect", "--cov-config", "--override-ini", "--import-mode", "--color",
-              "--capture", "-r", "--cache-dir", "--junit-prefix", "--log-level", "--log-cli-level", "--setup-timeout"}
+              "--capture", "-r", "--cache-dir", "--exclude", "--testPathIgnorePatterns",
+              "--testPathIgnorePattern", "--modulePathIgnorePatterns", "--coveragePathIgnorePatterns", "--root",
+              "--rootDir", "--dir", "--setupFiles", "--globalSetup", "--junit-prefix", "--log-level", "--log-cli-level", "--setup-timeout"}
 # Shell words before the command a loop or branch runs: `for d in a b; do npm test; done`.
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 
