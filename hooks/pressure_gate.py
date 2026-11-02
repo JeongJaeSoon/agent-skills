@@ -128,12 +128,47 @@ def drop_heredocs(cmd, slotted=False):
     return "\n".join(out)
 
 
+def substitutions(cmd):
+    """The commands cmd's substitutions run (`$(…)`, a backquote) outside single quotes, the quoted ones included."""
+    found, i, quote = [], 0, ""
+    while i < len(cmd):
+        c = cmd[i]
+        if quote == "'":
+            quote = "" if c == "'" else quote
+        elif c == "\\":
+            i += 1
+        elif c == "'" and not quote:
+            quote = c
+        elif c == '"':
+            quote = "" if quote else c
+        elif cmd.startswith("$((", i):  # arithmetic, not a command
+            end = cmd.find("))", i + 3)
+            i = len(cmd) if end < 0 else end + 1
+        elif cmd.startswith("$(", i) or c == "`":
+            if c == "`":
+                j = cmd.find("`", i + 1)
+                j = len(cmd) if j < 0 else j
+                found.append(cmd[i + 1:j])
+            else:
+                depth, j = 1, i + 2
+                while j < len(cmd) and depth:
+                    depth += {"(": 1, ")": -1}.get(cmd[j], 0)
+                    j += 1
+                found.append(cmd[i + 2:j - 1])
+                j -= 1
+            i = j
+        i += 1
+    return found
+
+
 def segments(cmd, slotted=False):
     """The simple commands of a shell line as argv lists, split on unquoted ; & | ( ) and newlines.
     A `bash -c '<text>'` is read as its own line; a here-document body is not read. Unparsable text gives no
     segments."""
-    cmd = cmd.replace("\\\n", "")  # a line continuation: `npm \` then `test` is one command
-    lex = shlex.shlex(drop_heredocs(cmd, slotted), posix=True, punctuation_chars="();&|\n")
+    cmd = drop_heredocs(cmd.replace("\\\n", ""), slotted)  # a line continuation: `npm \` then `test` is one command
+    for inner in substitutions(cmd):  # `out="$(npm test)"` runs npm test though the quotes keep it one word
+        yield from segments(inner, slotted)
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();&|\n")
     lex.whitespace, lex.whitespace_split = " \t\r", True
     out, cur = [], []
     try:

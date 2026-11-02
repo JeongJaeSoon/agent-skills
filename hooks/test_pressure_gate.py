@@ -44,6 +44,7 @@ assert g.heavy("cat <<<hello\norca worktree create --repo x") == "orca worktree 
 assert g.heavy("cat <<EOF\n$(docker compose up -d)\nEOF") == "docker compose up"
 assert not g.heavy("cat <<'EOF'\n$(docker compose up -d)\nEOF")
 assert g.heavy("for d in a b; do orch heavy - -- make; done") == "orch heavy"
+assert g.heavy('id="$(orca worktree create --repo x)"') == "orca worktree create"
 assert g.heavy("AGENT_SKILLS_PRESSURE_GATE=0 true; bash <<EOF\ndocker compose up -d\nEOF") == "docker compose up"
 assert not g.heavy("AGENT_SKILLS_PRESSURE_GATE=0 bash <<EOF\ndocker compose up -d\nEOF")
 assert g.new_card("orch heavy - -- bash <<'EOF'\norca worktree create --repo x\nEOF") == "orca worktree create"
@@ -106,7 +107,9 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("orch heavy - -- true; bash <<EOF\nnpm test\nEOF", "test suite"),
                   ("cat <<EOF\n$(npm test)\nEOF", "test suite"),
                   ("npm \\\ntest", "test suite"), ("npx vitest run --exclude tests/slow/**", "test suite"),
-                  ("npm test -- --testPathIgnorePatterns tests/slow", "test suite"), ("pytest --confcutdir tests/", "test suite"),
+                  ("npm test -- --testPathIgnorePatterns tests/slow", "test suite"),
+                  ('output="$(npm test 2>&1)"', "test suite"), ("printf '%s\\n' \"$(pytest)\"", "test suite"),
+                  ('echo "`npm test`"', "test suite"), ("pytest --confcutdir tests/", "test suite"),
                   ("pytest --ignore tests/slow", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
@@ -120,7 +123,7 @@ for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -
             "for f in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do cat "$f"; done',
             "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'cd app && npx playwright test'",
             "cat > README.md <<'EOF'\nnpm test\nEOF", "cat <<-EOF > a.md\n\tpytest\n\tEOF",
-            "npx vitest run src/a.test.ts", "jest -t login", "npx jest --testPathPattern auth", "vitest --version", "pnpm exec vitest run src/a.test.ts", "npm exec --help", "cat <<EOF\n$(date)\nnpm test\nEOF", "AGENT_SKILLS_PRESSURE_GATE=0 bash <<'EOF'\ncd app && npm test\nEOF", "npx vitest run a.test.ts b.test.ts", "orch heavy - -- bash <<'EOF'\nnpm test\nEOF", "bash -e scripts/build.sh", "bash -x", "pytest --confcutdir tests/ tests/test_a.py", "npm --prefix app test -- a.test.ts", "pnpm --dir app run build", 'python3 --version; for f in hooks/test_*.py; do cat "$f"; done',
+            "npx vitest run src/a.test.ts", "jest -t login", "npx jest --testPathPattern auth", "vitest --version", "pnpm exec vitest run src/a.test.ts", "npm exec --help", "echo '$(npm test)'", 'echo "$((1 + 2))"', 'v="$(date)"', "cat <<EOF\n$(date)\nnpm test\nEOF", "AGENT_SKILLS_PRESSURE_GATE=0 bash <<'EOF'\ncd app && npm test\nEOF", "npx vitest run a.test.ts b.test.ts", "orch heavy - -- bash <<'EOF'\nnpm test\nEOF", "bash -e scripts/build.sh", "bash -x", "pytest --confcutdir tests/ tests/test_a.py", "npm --prefix app test -- a.test.ts", "pnpm --dir app run build", 'python3 --version; for f in hooks/test_*.py; do cat "$f"; done',
             'for f in hooks/test_*.py; do cat "$f"; done; python3 x.py', "pytest integration/check_login.py", "pytest src/", "nice -n 5 pytest tests/test_a.py", "AGENT_SKILLS_PRESSURE_GATE=0 nice -n 5 npm test", "AGENT_SKILLS_PRESSURE_GATE=0 env bash -lc 'npm test'", 'for f in hooks/test_*.py; do cat "$f"; done'):
     assert g.unwrapped_tests(cmd) is None, cmd
 wrapped = g.wrap_reason("cd /w && bash tests.sh", "test suite")
