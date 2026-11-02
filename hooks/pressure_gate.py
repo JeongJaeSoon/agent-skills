@@ -64,7 +64,6 @@ def skip_prefix(words, keywords=False):
     return min(i, len(words))
 
 
-SUBST = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)|`([^`]*)`")
 # `<<EOF`, `<<-'END-TEXT'`, `<<"x y"`; not a here-string (`<<<word`). Groups: dash, quoted word, bare word.
 HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s;&|()<>'\"]+))")
 
@@ -127,14 +126,42 @@ def drop_heredocs(cmd, slotted=False):
         elif shell is not None:
             out.append(shlex.join([OVERRIDE, "bash", "-c", "\n".join(body)]))
         elif not quoted:  # only what a substitution runs: `$(date)` runs, the text around it is data
-            out += ["".join(g) for g in SUBST.findall("\n".join(body))]
+            out += substitutions("\n".join(body), quotes=False)
         if end is not None:
             out.append(end)
     return "\n".join(out)
 
 
-def substitutions(cmd):
-    """The commands cmd's substitutions run (`$(…)`, a backquote) outside single quotes, the quoted ones included."""
+def drop_comments(cmd):
+    """cmd without its comments (`#` starting a word outside quotes, to the end of its line), newlines kept."""
+    out, i, quote = [], 0, ""
+    while i < len(cmd):
+        c = cmd[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < len(cmd):
+                out.append(c)
+                i += 1
+                c = cmd[i]
+            elif c == quote:
+                quote = ""
+        elif c == "\\" and i + 1 < len(cmd):
+            out.append(c)
+            i += 1
+            c = cmd[i]
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+            end = cmd.find("\n", i)
+            i = len(cmd) if end < 0 else end
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def substitutions(cmd, quotes=True):
+    """The commands cmd's substitutions run (`$(…)`, a backquote) outside single quotes and comments, the
+    double-quoted ones included; `\\$(…)` is text. quotes=False reads a here-document body, where quotes are text."""
     found, i, quote = [], 0, ""
     while i < len(cmd):
         c = cmd[i]
@@ -142,10 +169,13 @@ def substitutions(cmd):
             quote = "" if c == "'" else quote
         elif c == "\\":
             i += 1
-        elif c == "'" and not quote:
+        elif quotes and c == "'" and not quote:
             quote = c
-        elif c == '"':
+        elif quotes and c == '"':
             quote = "" if quote else c
+        elif quotes and c == "#" and not quote and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+            end = cmd.find("\n", i)
+            i = len(cmd) if end < 0 else end
         elif cmd.startswith("$((", i):  # arithmetic, not a command
             end = cmd.find("))", i + 3)
             i = len(cmd) if end < 0 else end + 1
@@ -173,8 +203,9 @@ def segments(cmd, slotted=False):
     cmd = drop_heredocs(cmd.replace("\\\n", ""), slotted)  # a line continuation: `npm \` then `test` is one command
     for inner in substitutions(cmd):  # `out="$(npm test)"` runs npm test though the quotes keep it one word
         yield from segments(inner, slotted)
-    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();&|\n")
-    lex.whitespace, lex.whitespace_split = " \t\r", True
+    # shlex would eat a comment's newline too and join the next line's command to this one
+    lex = shlex.shlex(drop_comments(cmd), posix=True, punctuation_chars="();&|\n")
+    lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
     out, cur = [], []
     try:
         for tok in lex:
