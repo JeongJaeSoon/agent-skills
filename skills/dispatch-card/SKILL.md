@@ -70,7 +70,7 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   restarted after a `no verdict` needs it most) and the sentences from "No force-push" through
   "splitting an unquoted `$var`": no force-push, no rebase only to catch up, file edits
   with Edit and Write only, one file-changing act per Bash call, nothing chained, no inline
-  hook-matchable text, zsh quoting. A card gets
+  hook-matchable text, quoting under zsh. A card gets
   these rules from no other place. Copy them by those first and last words, not by line numbers.
 - **Approved** — an `APPROVED:` row: the acts the human already approved for this work, each with
   their words and the date (merge, deploy, restarting an app, a settings or language change, an

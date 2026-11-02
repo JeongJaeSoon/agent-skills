@@ -125,9 +125,10 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             check or probe with other acts in one Bash call either: a refusal takes every act in
             the call with it, and each of them then counts as refused. Hooks match the whole
             command text, so text a hook may read as a command (a prompt for another agent CLI,
-            a hook's test inputs) goes in a file written with the Write tool and passed by path
-            (`--prompt-file`) or on stdin, never inline. Bash runs zsh: quote a word that starts
-            with `=`, and call each item explicitly rather than splitting an unquoted `$var`.
+            a hook's test inputs) goes in a file written with the Write tool and passed on stdin
+            (`codex exec - < prompt.md`) or named in a short inline line that says to read it;
+            the text itself is never inline. Bash runs the user's shell; under zsh, quote a word
+            that starts with `=`, and call each item explicitly rather than splitting an unquoted `$var`.
             Write no file or script outside the worktree except under SCOPE's scratch root, its
             named temporary download directory, or the one refusal-report file below (which you
             leave in place); list what you put there (checkouts, files, compose projects) in the report and tear it down
