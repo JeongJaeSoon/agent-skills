@@ -207,4 +207,9 @@ st = json.loads((sd / "state.json").read_text())
 next(x for x in st["sessions"] if x["id"] == "s-task").update(phase="idle", last_activity=ago(1))
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 assert "gone-lead/t" in brief()["changed"]
+
+# A row linked by --worktree to a card whose PR its title never names takes that PR, since the card's own row is gone.
+board.set_row("wt-pr", title="untitled-fix", repo="acme/plugins", status="moving", worktree="s4")
+linked_row = next(x for x in sum(brief()["table_rows"], []) if "untitled-fix" in x["label"])
+assert linked_row["session"]["pr"] == "acme/plugins#630", linked_row
 print("test_brief_rows: ok")

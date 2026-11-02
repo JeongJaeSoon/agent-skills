@@ -671,7 +671,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     todo_held = {k for k, (kind, _) in hold_why.items() if kind == "do"}
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
-        if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
+        # The card is the one `--worktree` links, else the one the row's id and title name.
+        if card := cards.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards):
             r["linked"] = card["id"]
             r["pr"] = r.get("pr") or card["pr"]
     if fill:
