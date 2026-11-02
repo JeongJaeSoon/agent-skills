@@ -191,4 +191,20 @@ board.set_row("gone-lead/t", kind="task", parent="gone-lead", title="linked-task
 by_label = {x["label"]: x for x in sum(brief()["table_rows"], [])}
 assert by_label["t linked-task"]["session"]["word"] == "작업 중" and by_label["t linked-task"]["status"] != "🔴", by_label["t linked-task"]
 assert by_label["gone-lead"]["status"] == "🔴" and by_label["gone-lead"]["session"]["word"] == "세션 없음", by_label["gone-lead"]
+
+# A card a board row links with --worktree is that row's work: no fleet row of its own beside it.
+rows_, _ = board.fleet_rows(probe_state, {}, {"fix": {"id": "fix", "worktree": "w-titled"}})
+assert "w-titled" not in {r["session"] for r in rows_.values()}, rows_
+# ...and a board lead found by its worktree after a terminal restart (a new handle) holds its lead session.
+rows_, _ = board.fleet_rows(probe_state, {"계보": {"handle": "term_old", "worktree": "lead1"}}, {"계보": {"id": "계보"}})
+assert not any(r["kind"] == "lead" for r in rows_.values()) and all(r.get("parent") == "계보" for r in rows_.values()), rows_
+
+# A row whose only change is its session (작업 중 → 멈춤) is a changed row, bold in the next report.
+r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--commit", "--no-refresh"],
+                   capture_output=True, text=True, env=env)
+assert r.returncode == 0, r.stderr
+st = json.loads((sd / "state.json").read_text())
+next(x for x in st["sessions"] if x["id"] == "s-task").update(phase="idle", last_activity=ago(1))
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+assert "gone-lead/t" in brief()["changed"]
 print("test_brief_rows: ok")

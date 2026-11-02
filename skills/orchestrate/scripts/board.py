@@ -527,6 +527,9 @@ def fleet_rows(state, leads, board_rows):
     sessions = state.get("sessions") or []
     held = {l.get("handle"): name for name, l in leads.items()}
     on_board = {r.get("pr") for r in board_rows.values()} - {None}
+    # A worktree a board row or board lead links (`--worktree`) is that row's work, not a row of its own.
+    linked = {r.get("worktree") for r in board_rows.values()} - {None}
+    lead_wt = {l["worktree"]: name for name, l in leads.items() if l.get("worktree")}
     pr_of, under = {}, {}
     for s in sessions:  # Orca's own link first
         if isinstance(s.get("linked_pr"), dict) and s["linked_pr"].get("key"):
@@ -558,12 +561,13 @@ def fleet_rows(state, leads, board_rows):
         pr = pr_of.get(s.get("id")) or (s.get("report") or {}).get("pr")
         # A dispatch that completed with no PR has reported to its dispatcher and has nothing left to land.
         over = s.get("dispatch_status") == "completed" and not pr
-        return (s.get("phase") != "offline" or pr) and pr not in on_board and not over
+        return (s.get("phase") != "offline" or pr) and pr not in on_board and not over and s.get("id") not in linked
 
     for lead in sessions:
         if lead.get("kind") != "orchestration":
             continue
-        board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held), None)
+        board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held),
+                          lead_wt.get(lead.get("id")))  # a restarted terminal has a new handle, the same worktree
         if board_lead and board_lead not in board_rows:  # its rows were dropped from the board on purpose
             continue
         lid = f"fleet:{lead['id']}"
@@ -969,11 +973,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         else:
             l["cell"] = f"{pr_text(l['pr'])} {l['pr_state']}".strip() if l["pr"] else ""
 
-    # Bold: a row the last report did not have, or whose status, progress, next or PR state changed.
+    # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
     snap = {}
     for l in lines:
         snap[l["key"]] = {"status": l["status"], "progress": l["progress"], "next": l["next"],
-                          "pr": l["pr_state"]}
+                          "pr": l["pr_state"], "session": l["session"] and l["session"]["state"]}
         prev = (last_rows or {}).get(l["key"])
         # A fleet row (--fill) is not in a report the board committed, so only a change to one already seen counts.
         if last_rows is None:
