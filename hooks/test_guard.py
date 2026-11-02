@@ -273,6 +273,9 @@ for sub in ("echo '", "printf \"%s"):  # an unclosed quote ends with the backtic
     assert bash(f"echo `{sub}`\nskills-sync card {H / 'noclose.md'}") == "deny", sub
 assert bash(f"echo \"$(case a in a) echo \"it's\";; esac)\"\nskills-sync card {H / 'noclose.md'}") == "deny"
 assert bash(f"echo \\$'a\\'\nskills-sync card {H / 'noclose.md'}") == "deny"  # \$ is not ANSI-C quoting
+assert bash(f"echo $$'a\\'\nskills-sync card {H / 'noclose.md'}") == "deny"  # nor is $$ (the PID) before a quote
+for arith in ("$(( '{}' ))", "$[ '{}' ]", "(( '{}' ))"):  # bash runs a substitution in arithmetic quotes
+    assert bash("echo " + arith.format(f"$(skills-sync card {H / 'noclose.md'})")) == "deny", arith
 for word in ("`x`", "$(x)", "<(true)", "a\\\\\\ "):  # a # inside a word is not a comment
     assert bash(f"echo {word}#; skills-sync card {H / 'noclose.md'}") == "deny", word
 assert bash(f"cat <<true\ntr\\\nue\nskills-sync card {H / 'noclose.md'}\ntrue") == "deny"  # bash ends the body at tr\ue

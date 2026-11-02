@@ -147,8 +147,8 @@ def lead_session(agent, session, transcript):
 def command_text(cmd):
     """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
     comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them.
-    From a construct this parser does not follow (`${…}`, whose quotes nest; `case` in `$(…)`; a backslash in
-    backticks) on, nothing is blanked."""
+    From a construct this parser does not follow (`${…}`, whose quotes nest; arithmetic; `case` in `$(…)`; a
+    backslash in backticks; a heredoc delimiter it cannot read) on, nothing is blanked."""
     out, n = list(cmd), len(cmd)
     opened, closed = set(), set()  # just past an opening backtick (a word starts) and past a closing `)` or backtick
 
@@ -243,7 +243,7 @@ def command_text(cmd):
         return i, ((strip, word, not quoted) if sure and (word or quoted) else None)
 
     def command(i, close):
-        depth, arith, pending = 0, 0, []
+        depth, pending = 0, []
         # Bash cuts a backtick substitution at the next backtick before parsing it: nothing in it runs past there.
         end, prev = (cmd.find("`", i) % (n + 1) if close == "`" else n), i
         if close == "`":
@@ -255,18 +255,16 @@ def command_text(cmd):
             if c == close and (close != ")" or depth == 0):
                 closed.add(i + 1)
                 return i + 1
-            # Bash also rewrites backslashes inside backticks before running them.
-            if (cmd.startswith("${", i) or close == "`" and c == "\\"
+            # Bash also rewrites backslashes inside backticks before running them, and runs a substitution inside
+            # an arithmetic expression's quotes.
+            if (cmd.startswith(("${", "$((", "((", "$["), i) or close == "`" and c == "\\"
+                    or c == "'" and cmd[i - 2:i] == "$$"
                     or close == ")" and re.match(r"case\b", cmd[i:]) and starts_word(i)):
                 raise Unsure(i)
             if c == "(":
                 depth += 1
             elif c == ")" and depth:
                 depth -= 1
-            elif cmd.startswith("$[", i):  # old arithmetic, where `<<` is a shift too
-                arith += 1
-            elif c == "]" and arith:
-                arith -= 1
             if c == "\\":
                 blank(i, min(i + 2, n))
                 i += 2
@@ -291,9 +289,9 @@ def command_text(cmd):
                 i += 3
             elif cmd.startswith("<<", i):
                 at, (i, doc) = i, heredoc(i + 2)
-                # Unread, its body would be scanned as commands and a quote in it could blank what follows. Inside
-                # parentheses or $[…] it may be a shift (`$((1<<2))`) or a subshell's heredoc: not told apart here.
-                if not doc or depth or arith:
+                # Unread, its body would be scanned as commands and a quote in it could blank what follows. A
+                # subshell's heredoc is not followed either.
+                if not doc or depth:
                     raise Unsure(at)
                 pending.append(doc)
             elif c == "\n" and pending:
