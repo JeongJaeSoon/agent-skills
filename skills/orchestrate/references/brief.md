@@ -40,11 +40,13 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             to your Dispatch only through them; never rebuild them). Tell the
             lead only what changes scope, order or the predicate. Read your own mail with
             `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
-            or the same batch comes back. Blocked on a decision or an act you cannot take: `ask`,
-            which waits for the answer (after a timeout, resume the same message ID). Never send
-            a status and end your turn: waking an idle agent on mail is best-effort. After two
-            waits in a row end with no answer, register the question with `orch decide add` (it
-            shows in Needs you, and the answer is typed into your terminal), then end your turn.
+            or the same batch comes back. A decision the lead must answer: `ask --question
+            --options`, which waits for the lead's `reply`. A timeout exits 1 with `"timedOut":
+            true`; that is not a failure: run `ask --resume <messageId>` on the same message
+            (at most 30 minutes per wait) until it is answered, never a second question. While
+            it waits it shows in the dashboard's Needs you. `--type escalation` is for a blocker
+            the lead must act on, not for a choice. Never send a question as a status and end
+            your turn: a status wakes no wait, and waking an idle agent on mail is best-effort.
 ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a party outside the
             repo behaves (a client, an upstream) adds a line observing that real party, on dev
             or in a recorded trace; a test built on the brief's model of it shares the
@@ -129,7 +131,7 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             (a session Orca dispatched: its prompt carries Orca's worker preamble) reports to the
             orchestrator or lead that dispatched it, as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
-            Dispatch (escalation and worker_done need one) as `--type status` to the `run:<id>` its
+            Dispatch (Orca refuses escalation, `ask` and worker_done from it) as `--type question` to the `run:<id>` its
             brief's REPORT line names, or with none, to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool,
             never quoted: a hook that matched the command's text blocks a message quoting it. That
@@ -223,8 +225,8 @@ MODEL CALLS Another model (a subagent or an API) only when the task needs it; pi
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
             Waiting on a review or another outside event: the program brief's LAND sentences from
             "A wait on a human review" through "rate_limit`).", pasted verbatim.
-WAITING     `ask` what you cannot decide. After two waits in a row end with no answer,
-            `orch decide add` the question and end your turn; the answer is typed into your terminal.
+WAITING     `ask` what you cannot decide, and after a timeout (exit 1, `"timedOut": true`) `ask
+            --resume <messageId>` the same question until it is answered.
 REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
             Load end-session §7 before you send it; it picks worker_done and the closing calls.
 KEEP        <optional, as above>
@@ -270,7 +272,10 @@ ROUTING     New requests for this project, from the human or from above, come to
             layer above started before you (listed in CONTEXT) stay in its Run: send what
             you want from one of them to PARENT, which passes it on verbatim.
 PARENT      The Run of the session writing this brief, as `orca orchestration send --to
-            run:<its run id>`. Reports and the HUMAN ONLY batch go there. A send to it
+            run:<its run id>`. Reports go there as `--type status`; the HUMAN ONLY batch and any
+            question as `--type escalation` when you started as a dispatched worker (an `ask` would
+            stop your own inbox loop), as `--type question` when you started as a `/goal` card
+            (Orca refuses both `ask` and escalation without a Dispatch). A status wakes no wait. A send to it
             that fails is the routing gap HUMAN ONLY names; never guess another address.
 PERMISSIONS The autoMode rules for each outward act the predicate needs (merge, deploy, edits
             to tracker items or PRs an earlier session made), quoted, or "missing" (your
@@ -305,7 +310,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - A unit whose result a person opens as a live page (a mockup, a branch preview) gets in VERIFY: its own free port in the preview watcher's range, the server bound to 127.0.0.1, and the tailnet link fetched for 200 before it is reported, by `deliver-ticket` `references/visual-evidence.md` ("A live page for a person"). Two lanes on one port show each other's page. The card never runs `tailscale serve` and never asks for a port to be opened.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless, unrelated to the ticket. Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
 - **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Set Base from `gh pr list --state open`, not memory: an open PR the unit needs, or one already doing its scope, is its base. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
-- **Bound the wait for an answer** (the end of PEERS, or WAITING). "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
+- **A worker's question is an `ask`** (the end of PEERS, or WAITING), resumed after each timeout. Only a dispatched worker can `ask` or escalate; Orca refuses both from a `/goal` card, which asks by `dispatch-card` §2 "Questions". "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
 - An agent that will use a write tool whose host asks it to load a policy skill before the first write gets, in its brief or prompt, an instruction to load that skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
 - Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files, auto-memory lessons) comes back in the worker's message, and the session that wrote the brief writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.

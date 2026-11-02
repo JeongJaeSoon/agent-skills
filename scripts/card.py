@@ -328,7 +328,10 @@ def create(argv):
         if out:  # a failed or outcome_unknown start names its stage, its effects and the recovery commands
             print(json.dumps(out, ensure_ascii=False, indent=1), file=sys.stderr)
         verb = "orca orchestration worker-start" if worker else "orca worktree create"
-        raise Refuse(4, f"[{ME}] {verb} failed: {err}")
+        rid = (e.get("data") or {}).get("orchestrationRequestId")
+        raise Refuse(4, f"[{ME}] {verb} failed: {err}" + (
+            f". Before starting it again, ask Orca whether this start took effect: "
+            f"orca orchestration request-show --request {rid} --json" if rid else ""))
     mark("done")
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle_of(res),
                                       "run": run_id}}, ensure_ascii=False, indent=1))

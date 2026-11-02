@@ -28,7 +28,8 @@ elif a[:2] == ["orchestration", "worker-start"]:
               "workspace could not be resolved to a git worktree Orca manages, which --worktree new-child needs"}}))
         sys.exit(1)
     if mode == "start-fails":
-        print(json.dumps({"ok": False, "error": {"code": "outcome_unknown", "message": "turn not seen"},
+        print(json.dumps({"ok": False, "error": {"code": "outcome_unknown", "message": "turn not seen",
+                                                 "data": {"orchestrationRequestId": "req_1"}},
                           "result": {"failedStage": "turn_start", "recovery": ["orca orchestration worker-stop --dispatch ctx_1"]}}))
         sys.exit(1)
     # Orca 1.4.239's receipt: the worktree and the agent terminal appear only as effects
@@ -235,6 +236,11 @@ assert rc == 4 and sum(c["argv"][:2] == ["orchestration", "worker-start"] for c 
 # A failed start keeps Orca's whole receipt (stage, recovery commands) on stderr.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="start-fails")
 assert rc == 4 and "worker-start failed: outcome_unknown" in err and "worker-stop --dispatch ctx_1" in err, err
+# The mutation's request id is Orca's own answer to "did it start?": request-show reads it without starting anything.
+assert "orca orchestration request-show --request req_1 --json" in err.splitlines()[-1], err
+# A create failure carries no request id, so no request-show line.
+rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="create-fails")
+assert rc == 4 and "request-show" not in err, err
 # No Run bound: a /goal card with a warning, the reference on the create. --card forces a card too.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="no-run")
 create = next(c["argv"] for c in calls if c["argv"][:2] == ["worktree", "create"])
