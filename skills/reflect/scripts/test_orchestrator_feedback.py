@@ -184,8 +184,13 @@ code, out = run("digest")
 assert [r["event"] for r in rows(out)] == ["s6:w1"] and out["sessions"]["s6"]["to"] < T6.stat().st_size
 commit(out)
 write(T6, [user("w1", "first", ts(1)), user("w2", "second", ts(1, 1))])
+calls = []
+real_line_at = of.line_at
+of.line_at = lambda *a: calls.append(a) or real_line_at(*a)
 code, out = run("digest")
-assert [r["event"] for r in rows(out)] == ["s6:w2"], rows(out)
+of.line_at = real_line_at
+assert [r["event"] for r in rows(out)] == ["s6:w2"] and rows(out)[0]["line"] == 2, rows(out)
+assert not calls, "a cursor that still fits keeps the line count; only recovery counts again"
 commit(out)
 
 # 6. The round's cap: the first prompt that does not fit stays for the next round, marked pending.

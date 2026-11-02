@@ -199,31 +199,31 @@ def resume(path, mark, st):
         (None, None)
 
 
-def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=None):
+def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=None, line=None):
     """Rows of owner prompts from byte start, and the cursor mark for the range reviewed.
 
     max_rows and max_bytes are this session's share; budget ({"rows", "bytes"}) is what the whole round has left, and
     only a round's very first row may exceed a share. carry is the context gathered since the last owner prompt before
-    start, so a prompt right after a round's boundary keeps the assistant text, tools and identifiers that led to it."""
+    start, so a prompt right after a round's boundary keeps the assistant text, tools and identifiers that led to it.
+    line is the number of lines before start when the cursor knows it."""
     rows, used, pos, pending = [], 0, start, False
     last = (None, None)  # uuid and start byte of the last message line reviewed
     carry = carry or {}
     before, tools, ids = carry.get("before", ""), list(carry.get("tools", [])), list(carry.get("ids", []))
-    line = line_at(path, start)
+    count = line_at(path, start) if line is None else line  # lines before pos
     with open(path, "rb") as f:
         f.seek(start)
         while True:
             raw = f.readline()
             if not raw.endswith(b"\n"):  # end of file, or a line still being written
                 break
-            at, line = pos, line + 1
+            at, line = pos, count + 1
             try:
                 o = json.loads(raw)
             except ValueError:
-                pos += len(raw)
-                continue
+                o = None
             if not isinstance(o, dict):
-                pos += len(raw)
+                pos, count = pos + len(raw), count + 1
                 continue
             text = owner_text(o)
             ts = parse_ts(o.get("timestamp"))
@@ -258,9 +258,10 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
                 before, tools, ids = "", [], []
             if o.get("uuid"):
                 last = (o["uuid"], at)
-            pos += len(raw)
+            pos, count = pos + len(raw), count + 1
     carry = {"before": before[-BEFORE_CHARS:], "tools": tools[-TOOLS:], "ids": list(dict.fromkeys(ids))[-CONTEXT_IDS:]}
-    return rows, {"scan_end": pos, "uuid": last[0], "uuid_at": last[1], "pending": pending, "carry": carry}
+    return rows, {"scan_end": pos, "line": count, "uuid": last[0], "uuid_at": last[1], "pending": pending,
+                  "carry": carry}
 
 
 def digest(now=None):
@@ -296,17 +297,18 @@ def digest(now=None):
     share, budget = max(len(live), 1), {"rows": MAX_ROWS, "bytes": MAX_BYTES}
     for session, reg, path, st, mark in live:
         since, until = parse_ts(reg.get("since")), parse_ts(reg.get("until"))
-        note, carry, anchor = "", None, (None, None)
+        note, carry, anchor, line = "", None, (None, None), None
         if mark:
             start, note, anchor = resume(path, mark, st)
             lo, carry = since, mark.get("carry")
+            line = None if note else mark.get("line")
             if start is None:
                 start, carry = 0, None
         else:
             start, first = 0, now - dt.timedelta(days=FIRST_DAYS)
             lo = max(since, first) if since else first
         found, new = scan(session, path, start, lo, until, MAX_ROWS // share, MAX_BYTES // share, seen, budget,
-                          carry)
+                          carry, line)
         rows += found
         if not new["uuid"]:  # no message read: keep the anchor that places scan_end
             new["uuid"], new["uuid_at"] = anchor
