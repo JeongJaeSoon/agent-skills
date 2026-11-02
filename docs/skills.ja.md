@@ -1,7 +1,7 @@
-<!-- translated-from: 34e7848df43dc24e4bcc76886e1ebd4ff36b3411 -->
+<!-- translated-from: 74cfa5d49b49f560f1a286ca899030383722ac36 -->
 # スキルカタログ
 
-`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック9個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
+`agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
 
 既定値の変更と既存データの保持は[設定移行ガイド](configuration-migration.md)を参照してください。ノート・台帳・個人フォルダーには明示的な設定が必要で、レポートの既定タイムゾーンは UTC です。
 
@@ -266,7 +266,7 @@ PR を受け持つスキルとマージする主体:
 ## 文章
 
 ### brief
-進行中・他の人の待ち・判断事項・オーナーが今やること・保留を、根拠とともに報告します。レポートは要求時も定期も `orch brief render --commit`（定期は `--periodic`、Telegram は `--telegram`）の出力を手を加えずにそのまま送り、間違った行は記録（`orch board set`、`orch stage set`）を直してから描き直します。行は board だけでなく、生きている Orca のカード・リード・Run、カードの REPORT 行が指す報告ファイル、GitHub の PR の状態から毎回作り直します。人を待つ行は、オーナーが解くもの（🙋）と他の人のレビュー・返事待ち（⏳）に分かれます。段階表は1行のリンクで `stage` スキルを、予定（📅）・保留キュー（⏸️）・開いた依頼の件数は1行で `todo` スキルとダッシュボードを指します。モデルが渡すのは判断だけで、見出しの一文・推奨付きの判断事項・Insight・定期の回で飛ばした行動です。手で書くのは、レンダラーが失敗したときと、一つのセッションが自分の作業一つを報告するとき（`end-session` §6、`references/hand-format.md`）だけです。
+進行中・他の人の待ち・判断事項・オーナーが今やること・保留を、根拠とともに報告します。レポートは要求時も定期も `orch brief render --commit`（定期は `--periodic`、Telegram は `--telegram`）の出力を手を加えずにそのまま送り、間違った行は記録（`orch board set`、`orch stage set`）を直してから描き直します。行は board だけでなく、生きている Orca のカード・リード・Run、カードの REPORT 行が指す報告ファイル、GitHub の PR の状態から毎回作り直します。人を待つ行は、オーナーが解くもの（🙋）と他の人のレビュー・返事待ち（⏳）に分かれます。段階表は1行のリンクで `stage` スキルを、予定（📅）・保留キュー（⏸️）の件数は1行で `todo` スキルとダッシュボードを指します。モデルが渡すのは判断だけで、見出しの一文・推奨付きの判断事項・Insight・定期の回で飛ばした行動です。手で書くのは、レンダラーが失敗したときと、一つのセッションが自分の作業一つを報告するとき（`end-session` §6、`references/hand-format.md`）だけです。
 
 ### stage
 - **いつ:** 「단계표 보여줘」（段階表を見せて）、`/agent-skills:stage`。`brief` は段階表を1行のリンクでしか見せないので、表そのものが必要なときに呼びます。
@@ -541,9 +541,6 @@ PR を受け持つスキルとマージする主体:
 ### ターミナルで答えた決定のクローズ
 `hooks/decision.py`（UserPromptSubmit）。`orch decide add` で決定を登録したターミナル（`$ORCA_TERMINAL_HANDLE`）に人が入力したプロンプトだけを見ます。1 行目が id で始まる（`d3 許可`、`decision d3: 許可`）か、そのターミナルの開いている決定のうち一つにしかない選択肢名で始まると、その決定を答えとともに done でクローズし、オーケストレーターかリードに伝えます。曖昧なときはクローズせず、開いている決定の一覧をリマインダーとして差し込むだけです。ほかのターミナル（ワーカー）の入力ではクローズせず、エラーはすべて exit 0 です。すでに起動しているセッションには `/reload-plugins` か再起動のあとから効きます。
 
-### 依頼の記録
-`hooks/request_log.py`（UserPromptSubmit）。オーケストレーターかリードと宣言されたセッション（役割の判定は reorient フックと同じ）でだけ、人が入力したプロンプト一つを依頼台帳（`skills/orchestrate/scripts/owner_requests.py`）に開いた項目として残します。複数の依頼が一度に来ると、小さな依頼が埋もれていたためです。モデルには依頼の id、開いている依頼の数、30分を超えて何にも結び付いていない依頼だけを1行で知らせ、モデルが `orch req link|done|drop` で処理します。人の依頼ではないもの（`<` で始まる harness の行、入力したままの slash コマンド、ダッシュボードの決定への答え、カードが転送した `[カード名] …` の報告、compact の前置き、ROLE の宣言だけのプロンプト、空のプロンプト）は残しません。ほかのセッションでは何もせず、エラーはすべて exit 0 です。
-
 ### 権限ダイアログの記録
 `hooks/permission.py`（PermissionRequest）。権限ダイアログが開くと、ツール名とマスクした引数を `$ORCA_TERMINAL_HANDLE` ごとにダッシュボードの状態ディレクトリの `prompts/` に書きます。判定はしないので、権限の流れは変わりません。ダッシュボードは、そのターミナルの画面に同じリクエストのダイアログが出ている間だけ、インボックスの項目に承認・拒否・ターミナルを開くボタンを付けます。人が押すと、送る直前に画面を読み直して確かめ、一回だけ許可する `Yes` か `No` の番号を一つだけ押します。「今後確認しない」「常に許可」「auto mode に切り替え」のようにルールを保存したりモードを変えたりする選択肢は選びません。詳しくは `skills/orchestrate/references/dashboard.md` にあります。
 
@@ -608,7 +605,7 @@ pstack のスキル58個（原則24個と、その他34個）のうち、原則2
 - **プロジェクト運営:** `orchestrate` の `orch` 台帳、着地ゲートと専有レーン、human-gate、main ガーディアン、QA リード、`orch-dash` ダッシュボード。形は pstack のプレイブックに倣いましたが、Orca の Run と GitHub stack の上で新しく作りました。
 - **測定とアダプター:** `measure-delivery`、`use-tracker`、`use-notes`。
 - **マシンの手入れ:** `reap-resources`、`tune-automode`、`skills-config`、`setup-pc`。
-- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、オーケストレーター・リードが受けた人の依頼の記録（`request_log.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）。
+- **フック:** 権限の判定（`guard.py`）、オーケストレーター・リードの再確認（`reorient.py`）、未設定の PC での設定の提案（`onboard.py`）、ダッシュボードから答える権限ダイアログの記録（`permission.py`）、ターミナルで答えた決定のクローズ（`decision.py`）、完了主張の検査（`claim_check.py`）、重い開始の前の負荷確認（`pressure_gate.py`）、文体の検査（`prose_check.py`）。
 
 ### upstream との同期状況
 - **最後の同期:** 2026-10-26、`b42effe`（0.15.3）から `99b609a`（0.15.32）へ。その間に upstream は pstack に74個のコミットを積みました。

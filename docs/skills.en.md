@@ -1,7 +1,7 @@
-<!-- translated-from: 34e7848df43dc24e4bcc76886e1ebd4ff36b3411 -->
+<!-- translated-from: 74cfa5d49b49f560f1a286ca899030383722ac36 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 9 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -539,8 +539,6 @@ Allow is given only to a single command with no shell operators, redirections, s
 ### Closing decisions answered in the terminal
 `hooks/decision.py` (UserPromptSubmit). It reads only prompts typed into the terminal that registered a decision with `orch decide add` (`$ORCA_TERMINAL_HANDLE`). When the first line starts with the id (`d3 yes`, `decision d3: yes`), or with an option label that only one of that terminal's open decisions has, it closes that decision as done with the answer and tells the orchestrator or lead. When it is ambiguous it closes nothing and only adds a reminder listing the open decisions. Input in any other terminal (a worker's) never closes one, and every error exits 0. Sessions already running pick it up after `/reload-plugins` or a restart.
 
-### Request log
-`hooks/request_log.py` (UserPromptSubmit). Only in a session declared as the orchestrator or a lead (roles are resolved as in the reorient hook), it records each prompt a person typed as an open entry in the request ledger (`skills/orchestrate/scripts/owner_requests.py`), because small requests got buried when several arrived at once. The model gets one line with the request id, the number of open requests, and any request left unlinked for over 30 minutes, and handles them with `orch req link|done|drop`. Prompts that are not a person's request (harness lines starting with `<`, slash commands as typed, answers to dashboard decisions, `[card name] …` reports relayed by cards, compaction headers, prompts with only a ROLE declaration, empty prompts) are not recorded. It does nothing in other sessions, and every error exits 0.
 
 ### Recording permission prompts
 `hooks/permission.py` (PermissionRequest). When a permission dialog opens, it writes the tool name and its masked arguments to `prompts/` in the dashboard's state directory, keyed by `$ORCA_TERMINAL_HANDLE`. It makes no decision, so the permission flow is unchanged. The dashboard adds Approve, Deny and Open terminal buttons to the inbox item only while that terminal's screen shows the dialog for the same request. When a person clicks one, the server reads the screen again right before sending and presses a single digit: the one-time `Yes` or `No`. It never picks an option that saves a rule or changes the mode, such as "don't ask again", "always allow" or "switch to auto mode". Details are in `skills/orchestrate/references/dashboard.md`.
@@ -606,7 +604,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), logging the human requests the orchestrator or a lead receives (`request_log.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.
