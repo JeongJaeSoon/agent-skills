@@ -30,8 +30,9 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             decision enters the predicate. A fact left unchecked is marked unverified.
 DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
             a schema, a config key, a message format): name the contract and those units. Before
-            the first edit, run `how` on the existing code paths the contract changes (skip what
-            an upstream report covers), then `architect` on the contract. Put the sketch
+            the first edit, run `how` (simple mode) on the existing code paths the contract
+            changes or plugs into (skip what an upstream report covers), then `architect` on the
+            contract. Put the sketch
             in the ticket's plan comment (deliver-ticket §1); the units that build on it get that
             sketch in CONTEXT.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / orch dep).
