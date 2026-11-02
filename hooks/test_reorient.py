@@ -123,7 +123,8 @@ assert hook(**START, source="compact", agent=ORCH, session="a1") is None
 # The per-prompt line repeats rules 1 and 2 and says nothing looser.
 for line in (hook(agent=ORCH, session="c1"), hook(agent=LEAD, title="lead:p", session="c2")):
     assert "one layer down at once" in line and "one `--json` read" in line and "coordination" in line \
-        and "seconds-long" not in line, line
+        and "only the human's session may take" in line and "seconds-long" not in line, line
+assert "Acts only the human's session may take" in RULES[1], "rule 2 keeps the human-session acts"
 # A lead hands its own project to its workers; rule 4 must not forbid that.
 assert any("a lead sends its own project's work to its workers" in r for r in RULES)
 assert any("--worktree id:" in r for r in RULES), "attaching a Dispatch to an existing card stays allowed"

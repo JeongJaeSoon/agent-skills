@@ -39,7 +39,8 @@ AGENTS = {"agent-skills:orchestrator": "orchestrator", "agent-skills:lead": "lea
 SKILL = pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "SKILL.md"
 # Core rules 1 and 2 of SKILL.md in one line; the per-prompt reminder must never say less than they do.
 DELEGATE = ("Hand each instruction one layer down at once (a worker, a card, a background subagent); your own turn "
-            "holds coordination, answers from context and one `--json` read, never other task work.")
+            "holds coordination, the acts only the human's session may take, answers from context and one `--json` "
+            "read, and any other task work is a delegation.")
 
 
 def program_for(slug):
