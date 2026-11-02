@@ -180,4 +180,15 @@ assert board.session_state({"phase": "waiting", "last_activity": ago(0)}, now_) 
 assert board.session_state({"phase": "idle", "last_activity": ago(0.1)}, now_) == "working"
 assert board.session_state({"phase": "idle", "last_activity": ago(1)}, now_) == "stalled"
 assert board.session_state({"phase": "open"}, now_) == board.session_state(None, now_) == "none"
+
+# A lead whose session is gone, with a task row `board set --worktree` linked to a card still working: the task row is
+# judged by its own session (moving, 작업 중), the lead's own row by the lead's (🔴 세션 없음).
+st = json.loads((sd / "state.json").read_text())
+st["sessions"].append(card("s-task", "task-card", "working", "acme/app"))
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.lead_add("gone-lead", "term_gone", "acme/app", worktree="s-gone")
+board.set_row("gone-lead/t", kind="task", parent="gone-lead", title="linked-task", status="moving", worktree="s-task")
+by_label = {x["label"]: x for x in sum(brief()["table_rows"], [])}
+assert by_label["t linked-task"]["session"]["word"] == "작업 중" and by_label["t linked-task"]["status"] != "🔴", by_label["t linked-task"]
+assert by_label["gone-lead"]["status"] == "🔴" and by_label["gone-lead"]["session"]["word"] == "세션 없음", by_label["gone-lead"]
 print("test_brief_rows: ok")

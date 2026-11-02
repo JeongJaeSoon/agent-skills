@@ -743,11 +743,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                                           f"`orch board later add \"<할 일> {r['pr']}\" --trigger <날짜>` 로 ⏸️)",
                                   "since": r.get("since") or p.get("created")}
         lead = store["leads"].get(lead_of(r)["id"])
-        lead_sid = lead and lead_session(lead)
-        # By its worktree, since a restarted terminal has a new handle: gone once Orca no longer lists it or none of
-        # its terminals lives.
-        gone = live is not None and lead and (lead_sid not in sessions or sessions[lead_sid].get("phase") == "offline"
-                                              if lead_sid else lead["handle"] not in live)
+        # The session the row itself links (session_of falls back to its lead's), by worktree since a restarted terminal
+        # has a new handle: gone once Orca no longer lists it or none of its terminals lives.
+        row_sid = lead and session_of(r)
+        gone = live is not None and lead and (row_sid not in sessions or sessions[row_sid].get("phase") == "offline"
+                                              if row_sid else lead["handle"] not in live)
         if status == "moving" and lead and not lead.get("closed_at") and gone:
             status, nxt = "blocked", "세션 없음"
         if status in ("waiting", "owner") and r["id"] not in waits:
