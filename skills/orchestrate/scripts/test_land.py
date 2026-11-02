@@ -1,5 +1,6 @@
 """`prog.py land` end to end against a fake gh. Run: python3 test_land.py"""
 import datetime as dt, json, os, pathlib, subprocess, sys, tempfile
+os.environ.pop("ORCH_HEAVY_SLOT", None)  # this suite may itself run inside `orch heavy`; its slots are its own
 
 HERE = pathlib.Path(__file__).resolve().parent
 FAKE_ORCA = r'''#!/usr/bin/env python3
@@ -84,6 +85,7 @@ def pr(n, mss="CLEAN", base="main", stacked=False, files=None, behind=0):
 
 
 FAKE_DOCKER = r'''#!/bin/sh
+[ -n "$FAKE_DOCKER_FAIL" ] && exit 1
 cat "$FAKE_DOCKER_STATE" 2>/dev/null || echo "[]"
 '''
 
@@ -298,8 +300,36 @@ import time; time.sleep(1)
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 1 and "every slot busy" in out, out
 holder.wait()
+holder = subprocess.Popen([sys.executable, HERE / "prog.py", "heavy", "t", "--", "sleep", "2"], env=env)
+time.sleep(1)
+code, out = prog(env, "heavy", "t", "--wait-minutes", "1", "--", "true")  # says it waits, then runs once the slot frees
+assert code == 0 and "모두 사용 중이라" in out and "sleep 2" in out, out
+holder.wait()
+# A command already in a slot that calls `orch heavy` again runs at once instead of waiting on its own slot.
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", sys.executable, str(HERE / "prog.py"), "heavy", "t",
+                 "--wait-minutes", "0", "--", "sh", "-c", "exit 5")
+assert code == 5, out
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "sh", "-c", "exit 7")
 assert code == 7, out
+# A slot variable left over from a run that ended (a background child) is no slot: it waits like anyone else.
+holder = subprocess.Popen([sys.executable, HERE / "prog.py", "heavy", "t", "--", "sleep", "3"], env=env)
+time.sleep(1)
+stale = d / "programs" / "_heavy" / "slot-gone"
+stale.write_text(json.dumps({"pid": 999999}))
+code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(stale)), "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 1 and "every slot busy" in out, out
+(d / "programs" / "_heavy" / "slot-0.stacks").write_text("123\n")  # a nested run's stack list is no holder
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 1 and "every slot busy" in out and "Traceback" not in out and "123" not in out, out
+code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(d / "programs" / "_heavy" / "slot-0")), "heavy", "t", "--wait-minutes", "0",
+                 "--", "true")  # a live slot that is not an ancestor's
+assert code == 1 and "every slot busy" in out, out
+# A list a killed run left behind is dropped when the slot is taken again, so it hides no new stack.
+holder.wait()
+(d / "programs" / "_heavy" / "slot-0.stacks").write_text("old\n")
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 0 and not (d / "programs" / "_heavy" / "slot-0.stacks").exists(), out
+stale.unlink()
 (d / "programs" / "_heavy" / "slot-0").write_text(json.dumps({"pid": 999999}))
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 0 and not (d / "programs" / "_heavy" / "slot-0").exists(), out
@@ -324,6 +354,35 @@ assert isinstance(rows[0]["pid"], int) and "down" in r.stderr and "-v 금지" in
 # A project that was there before is not this run's.
 r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--", "true"], env=heavy_env, cwd=wt, capture_output=True, text=True)
 assert r.returncode == 0 and len((d / "reap-ledger.jsonl").read_text().splitlines()) == 1, r.stderr
+# A nested `orch heavy` inside a slot takes no slot but still registers the stacks its own command starts.
+after2 = json.dumps(json.loads(after) + [{"Name": "verify-2", "Status": "running(1)", "ConfigFiles": f"{wt}/compose.yaml"}])
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--pr", "acme/app#6", "--", "sh", "-c",
+                    f"printf '%s' '{after2}' > {d / 'docker.json'}"], env=dict(heavy_env, ORCH_HEAVY_SLOT=str(d / "slot-x")),
+                   cwd=wt, capture_output=True, text=True)
+rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
+assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[1:]] == [("verify-2", "acme/app#6")], (rows, r.stderr)
+# The outer run sees the inner run's stack as new too, and leaves its registration (and PR link) alone.
+after3 = json.dumps(json.loads(after2) + [{"Name": "verify-3", "Status": "running(1)", "ConfigFiles": f"{wt}/compose.yaml"}])
+inner = [sys.executable, str(HERE / "prog.py"), "heavy", "-", "--pr", "acme/app#7", "--", "sh", "-c",
+         f"printf '%s' '{after3}' > {d / 'docker.json'}"]
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--wait-minutes", "0", "--", *inner],
+                   env=heavy_env, cwd=wt, capture_output=True, text=True)
+rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
+assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[2:]] == [("verify-3", "acme/app#7")], (rows, r.stderr)
+assert not list((d / "programs" / "_heavy").glob("*.stacks")), "the outer run removes the inner run's list"
+# Three levels: the middle run, with its own PR, leaves the deepest run's registration alone too.
+after4 = json.dumps(json.loads(after3) + [{"Name": "verify-4", "Status": "running(1)", "ConfigFiles": f"{wt}/compose.yaml"}])
+deep = [sys.executable, str(HERE / "prog.py"), "heavy", "-", "--pr", "acme/app#9", "--", "sh", "-c",
+        f"printf '%s' '{after4}' > {d / 'docker.json'}"]
+middle = [sys.executable, str(HERE / "prog.py"), "heavy", "-", "--pr", "acme/app#8", "--", *deep]
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--wait-minutes", "0", "--", *middle],
+                   env=heavy_env, cwd=wt, capture_output=True, text=True)
+rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
+assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[3:]] == [("verify-4", "acme/app#9")], (rows, r.stderr)
+# With Docker unreadable a nested run still ends with its command's exit code.
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--", sys.executable, str(HERE / "prog.py"), "heavy", "-",
+                    "--", "sh", "-c", "exit 3"], env=dict(heavy_env, FAKE_DOCKER_FAIL="1"), cwd=wt, capture_output=True, text=True)
+assert r.returncode == 3 and "Traceback" not in r.stderr, r.stderr
 
 # status and queue run end to end on the same fakes.
 d, env = setup({"17": pr(17), "18": pr(18, files=["db/migrations/9.sql"])})

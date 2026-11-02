@@ -1,4 +1,4 @@
-<!-- translated-from: 52bf66799b5c023a7c248c66e6236a6d1bb70e0f -->
+<!-- translated-from: 98a0acfb6319e1dbfbfbf8ffa6c3ab109a4f5f66 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -548,7 +548,7 @@ PR を受け持つスキルとマージする主体:
 `hooks/claim_check.py` は Stop/SubagentStop でコード変更後に実行のない完了主張を一度だけ止めます。拒否されたコマンドや引用例は除外し、未検証と明記した報告を認めます。`AGENT_SKILLS_CLAIM_CHECK=0` で無効になります。適切なテストが実行されたことを保証するものではありません。
 
 ### 重い開始の前の負荷確認
-`hooks/pressure_gate.py`（PreToolUse、Bash）。コマンドの位置に `orch heavy`、`docker compose … up`、`docker-compose … up`、`orca worktree create` があるときだけ、`reap-resources` の `pressure.py` でマシンを測ります（0.3秒前後）。危険なら拒否し（swap とディスクは何時間も高いまま残るので警告までしか数えません）、警告なら直近15分（`reap.pressure.gate_fresh_minutes`）に片付けラウンドがないときだけ拒否します。拒否の理由には先に実行する `pressure.py round` が入ります。危険なときはそのコマンドをセッション・コマンド単位の待ち行列（`pressure.py queue`）とダッシュボードの Needs you に残し（期限は `reap.pressure.queue_minutes`、既定は15分）、`Monitor` で `pressure.py queue wait <id>` を待って 0 で終われば、同じセッションが同じコマンドをもう一度実行します。待ち行列はコマンドを自分では実行しません。再試行の成否は同じスクリプトが PostToolUse・PostToolUseFailure で記録し、期限の切れた項目は断念として残します。他人のカードやプロセスは終了させません。測定に失敗したら判定しません。ユーザーが今すぐ実行するよう言ったときだけ、コマンドの前に `AGENT_SKILLS_PRESSURE_GATE=0` を付けます。
+`hooks/pressure_gate.py`（PreToolUse、Bash）。コマンドの位置に `orch heavy`、`docker compose … up`、`docker-compose … up`、`orca worktree create` があるときだけ、`reap-resources` の `pressure.py` でマシンを測ります（0.3秒前後）。危険なら拒否し（swap とディスクは何時間も高いまま残るので警告までしか数えません）、警告なら直近15分（`reap.pressure.gate_fresh_minutes`）に片付けラウンドがないときだけ拒否します。拒否の理由には先に実行する `pressure.py round` が入ります。危険なときはそのコマンドをセッション・コマンド単位の待ち行列（`pressure.py queue`）とダッシュボードの Needs you に残し（期限は `reap.pressure.queue_minutes`、既定は15分）、`Monitor` で `pressure.py queue wait <id>` を待って 0 で終われば、同じセッションが同じコマンドをもう一度実行します。待ち行列はコマンドを自分では実行しません。再試行の成否は同じスクリプトが PostToolUse・PostToolUseFailure で記録し、期限の切れた項目は断念として残します。他人のカードやプロセスは終了させません。測定に失敗したら判定しません。ユーザーが今すぐ実行するよう言ったときだけ、コマンドの前に `AGENT_SKILLS_PRESSURE_GATE=0` を付けます。 レベルに関係なく、さらに二つを止めます。テストスイート全体（`tests.sh`、テストファイル5個以上を回す `for` ループ、`npm test`、引数なしの `bun test`・`pytest`・`jest`・`vitest`、`go test ./...`）、E2E（`playwright test`、`cypress run`、`e2e` スクリプト）、headless Chrome を `orch heavy` の外で実行すると拒否し、`orch heavy - -- bash -c '…'` で包んだ同じコマンドを示します。新しいカード（`orca worktree create`、新しい worktree への worker-start）は、Orca が示す進行中のエージェントのターンが CPU あたり `reap.pressure.active_turns_per_cpu`（既定 0.5、18コアなら9個、null で無効）に達していれば拒否し、`Monitor` で `pressure.py turns --wait 15` を待たせます。
 
 ### 文体の検査
 `hooks/prose_check.py` は PR・コミット・トラッカーの文章を決定的なパターンで確認します。助言を追加するだけで、操作を止めたり権限を変更したりしません。`AGENT_SKILLS_PROSE_CHECK=0` で無効になります。

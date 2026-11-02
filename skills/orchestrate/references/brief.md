@@ -62,8 +62,9 @@ ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a pa
             or in a recorded trace; a test built on the brief's model of it shares the
             assumption and passes on the bug.
 VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to drive,
-            plus known gotchas. Heavy local runs (compose stacks, image builds, local E2E) go
-            through `orch heavy <slug> -- <command>`, which caps them machine-wide.
+            plus known gotchas. Heavy local runs (compose stacks, image builds, the whole test
+            suite, local E2E, headless browser runs) go through `orch heavy <slug> -- <command>`,
+            which caps them machine-wide; a single test file runs bare.
             Once verification is done, down the stacks you started in the same turn, with the
             verify skill's own teardown when VERIFY names one (the app may start containers and
             networks outside compose that `compose down` leaves), else `docker compose -p
