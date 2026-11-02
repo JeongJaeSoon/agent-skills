@@ -232,5 +232,58 @@ assert bash(HELPER.format("worker.md"), CLAUDE_PLUGIN_ROOT=EMPTY) == "deny"
 assert "could not check" in run("Bash", {"command": HELPER.format("worker.md")}, "term_me",
                                 field="permissionDecisionReason", CLAUDE_PLUGIN_ROOT=EMPTY)
 assert bash('grep "skills-sync card" notes.md') == "none"  # quoted words are not the helper being run
+# A line of a quoted argument, a heredoc body or a comment that starts with the words is text, not a command.
+PROMPT_ARG = 'node companion.mjs task "Review card.py:\nskills-sync card / reads the brief\nfoo; skills-sync card /" --wait'
+assert bash(PROMPT_ARG) == "none"
+assert bash("node companion.mjs task 'Review:\nskills-sync card /' --wait") == "none"
+assert bash("cat <<'EOF' > notes.md\nskills-sync card /\nEOF\necho ok") == "none"
+assert bash("cat <<EOF > notes.md\nskills-sync card /\nEOF") == "none"
+assert bash("cat <<-EOF > notes.md\n\tskills-sync card /\n\tEOF") == "none"
+assert bash("echo don\\'t # it's skills-sync card /\nls") == "none"
+# Where bash runs it, the helper is checked as before, inside a substitution and after a heredoc too.
+assert bash(f'echo "$(skills-sync card {H / "noclose.md"})"') == "deny"
+assert bash(f"echo `skills-sync card {H / 'noclose.md'}`") == "deny"
+assert bash(f"cat <<EOF\n$(skills-sync card {H / 'noclose.md'})\nEOF") == "deny"
+assert bash(f"cat <<'EOF'\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo 'a' # note\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo \"it's\"; skills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"skills-sync card '{H / 'noclose.md'}'") == "deny"
+assert bash(f"echo $((1<<2)); ((x <<= 1))\nskills-sync card {H / 'noclose.md'}") == "deny"  # a shift, not a heredoc
+assert bash(f"cat <<<hello\nskills-sync card {H / 'noclose.md'}") == "deny"  # a here-string
+assert bash(f"echo $[1<<2]\nskills-sync card {H / 'noclose.md'}") == "deny"
+# A heredoc whose terminator line is not found takes nothing after it for a body.
+assert bash(f"cat <<EO\\\nF\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny"
+for delim in ('E"OF"', "E\\OF", "'EOF'", '"EOF"', "\\EOF"):  # bash's delimiter is EOF in each
+    assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny", delim
+    assert bash(f"cat <<{delim}\nskills-sync card /\nEOF") == "none", delim
+assert bash(f"if false; then\ncat <<$$'EOF'\ntext\n$$EOF\nfi\nskills-sync card {H / 'noclose.md'}\n$EOF") == "deny"
+assert bash(f"(cat <<'EOF'\nit's ready\nEOF\n)\nskills-sync card {H / 'noclose.md'}") == "deny"  # a subshell's heredoc
+assert bash(f"cat << \\\n'EOF'\nit's ready\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny"  # an unread delimiter
+assert bash(f"echo \\ #; skills-sync card {H / 'noclose.md'}") == "deny"  # an escaped space does not start a comment
+assert bash(f"echo \\\n# '\nskills-sync card {H / 'noclose.md'}\n# '") == "deny"  # a comment after a line continuation
+assert bash(f"echo \\\\ # don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` is one backslash, then a comment
+assert bash(f"echo a\\\\\n# don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` then a real newline
+assert bash(f"echo `# don't\nskills-sync card {H / 'noclose.md'}\n`") == "deny"  # a comment opening a substitution
+assert bash(f"echo $(# don't\nskills-sync card {H / 'noclose.md'}\n)") == "deny"
+assert bash(f"(true)# don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # a subshell's ) ends a word
+# Past a `${…}` (its quotes nest) or a `case` in `$(…)`, nothing is blanked.
+assert bash(f"echo \"${{x:-\"it's ready\"}}\"\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo ${{x:-\"it's\"}}\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo \"`echo \\\"it's ready\\\"`\"\nskills-sync card {H / 'noclose.md'}") == "deny"  # \" in backticks
+for sub in ("echo '", "printf \"%s"):  # an unclosed quote ends with the backtick substitution
+    assert bash(f"echo `{sub}`\nskills-sync card {H / 'noclose.md'}") == "deny", sub
+assert bash(f"echo \"$(case a in a) echo \"it's\";; esac)\"\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo \\$'a\\'\nskills-sync card {H / 'noclose.md'}") == "deny"  # \$ is not ANSI-C quoting
+assert bash(f"echo $$'a\\'\nskills-sync card {H / 'noclose.md'}") == "deny"  # nor is $$ (the PID) before a quote
+for arith in ("$(( '{}' ))", "$[ '{}' ]", "(( '{}' ))", "\"$(( '{}' ))\"", "\"$[ '{}' ]\""):  # bash runs a substitution in arithmetic quotes
+    assert bash("echo " + arith.format(f"$(skills-sync card {H / 'noclose.md'})")) == "deny", arith
+for word in ("`x`", "$(x)", "<(true)", "a\\\\\\ "):  # a # inside a word is not a comment
+    assert bash(f"echo {word}#; skills-sync card {H / 'noclose.md'}") == "deny", word
+assert bash(f"cat <<true\ntr\\\nue\nskills-sync card {H / 'noclose.md'}\ntrue") == "deny"  # bash ends the body at tr\ue
+# A delimiter bash rewrites through escapes is not read, so a later line spelling it raw blanks nothing.
+for delim, raw in (("$'E\\x4fF'", "E\\x4fF"), ('"E\\OF"', "E\\OF")):
+    assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}\n{raw}") == "deny", delim
+# A directory is named as one, not as an unreadable file.
+assert bash("skills-sync card /") == "deny" and "names a directory" in reason("skills-sync card /")
 assert "skills-sync card <brief>" in reason(f'{NEW} --prompt "/goal fix X"'), "the deny names the helper"
 print("guard: all pass")
