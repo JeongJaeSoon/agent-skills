@@ -1,6 +1,6 @@
 ---
 name: how
-description: "Explain how code works by reading it: a subsystem's runtime flow, its architecture, where something should live. Use for \"how does X work\", \"X 는 어떻게 동작해\", \"이 구조 설명해줘\", \"이건 어디에 둬야 해\", or a walkthrough before changing code. Why it is this way, or why it was decided, is why."
+description: "Use before editing a subsystem that neither you nor an upstream report has read. Explain how code works by reading it: a subsystem's runtime flow, its architecture, where something should live. Use for \"how does X work\", \"X 는 어떻게 동작해\", \"이 구조 설명해줘\", \"이건 어디에 둬야 해\". Why it is this way, or why it was decided, is why."
 ---
 
 # How

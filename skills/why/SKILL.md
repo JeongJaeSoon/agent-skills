@@ -1,6 +1,6 @@
 ---
 name: why
-description: "Find why code is the way it is or why something was decided, from history, PRs, tickets and chat. Use for \"왜 이렇게 됐어\", \"이 결정 배경이 뭐야\", \"이유가 뭐야\", \"why did we do X\", or before changing code whose reason is unclear. What code does is how."
+description: "Use before deleting, inverting or loosening code whose reason is not in a comment, test or the brief, and when a regression needs the change that introduced it. Find why code is the way it is or why something was decided, from history, PRs, tickets and chat. Use for \"왜 이렇게 됐어\", \"이 결정 배경이 뭐야\", \"이유가 뭐야\", \"why did we do X\". What code does is how."
 ---
 
 # Why
