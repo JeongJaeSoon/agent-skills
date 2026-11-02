@@ -99,9 +99,10 @@ def gate(cfg):
     repo = cfg.get("skill_repository")
     if repo:
         root = pathlib.Path(repo).expanduser().resolve()
-        for label, path in (("the digest folder", standing()), ("reflect.ledger", pathlib.Path(cfg["ledger"]))):
-            path = path.expanduser()
-            if path.is_absolute() and (path.resolve() == root or root in path.resolve().parents):
+        # A relative ledger is a notes-store path (a vault note), not a file this script or the cwd decides.
+        ledger = pathlib.Path(cfg["ledger"]).expanduser()
+        for label, path in (("the digest folder", standing()), ("reflect.ledger", ledger if ledger.is_absolute() else None)):
+            if path is not None and (path.resolve() == root or root in path.resolve().parents):
                 return 2, f"stop: {label} is inside reflect.skill_repository, which may be public"
     return None
 
@@ -176,11 +177,12 @@ def uuid_line(path, uuid):
 
 
 def resume(path, mark, st):
-    """Where to continue a session the cursor knows: (byte, note). byte is None when nothing places it."""
+    """Where to continue a session the cursor knows: (byte, note, anchor), anchor being the cursor's uuid and its line
+    start in the file as it is now. byte is None when nothing places it."""
     end = mark.get("scan_end", 0)
     if mark.get("inode") == st.st_ino and st.st_size >= end:
         if not mark.get("uuid"):
-            return end, ""
+            return end, "", (None, None)
         try:
             with open(path, "rb") as f:
                 f.seek(mark.get("uuid_at", 0))
@@ -188,18 +190,21 @@ def resume(path, mark, st):
         except (OSError, ValueError):
             ok = False
         if ok:
-            return end, ""
+            return end, "", (mark["uuid"], mark.get("uuid_at", 0))
     found = uuid_line(path, mark["uuid"]) if mark.get("uuid") else None
     if found:
-        return found[1], "recovered: the transcript changed; continued after the cursor's last message"
-    return None, "recovered: the transcript changed and the cursor's message is gone; reading again from `since`"
+        return found[1], "recovered: the transcript changed; continued after the cursor's last message", \
+            (mark["uuid"], found[0])
+    return None, "recovered: the transcript changed and the cursor's message is gone; reading again from `since`", \
+        (None, None)
 
 
-def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, carry=None):
+def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=None):
     """Rows of owner prompts from byte start, and the cursor mark for the range reviewed.
 
-    carry is the context gathered since the last owner prompt before start, so a prompt right after a round's boundary
-    keeps the assistant text, tools and identifiers that led to it."""
+    max_rows and max_bytes are this session's share; budget ({"rows", "bytes"}) is what the whole round has left, and
+    only a round's very first row may exceed a share. carry is the context gathered since the last owner prompt before
+    start, so a prompt right after a round's boundary keeps the assistant text, tools and identifiers that led to it."""
     rows, used, pos, pending = [], 0, start, False
     last = (None, None)  # uuid and start byte of the last message line reviewed
     carry = carry or {}
@@ -241,12 +246,15 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, carry=None):
                            "prompt": text[:PROMPT_CHARS], "before": before[-BEFORE_CHARS:], "tools": tools[-TOOLS:],
                            "context": list(dict.fromkeys(ids))[:CONTEXT_IDS]}
                     size = len(json.dumps(row, ensure_ascii=False).encode()) + 1
-                    if rows and (len(rows) >= max_rows or used + size > max_bytes):  # one row always fits
+                    first = not seen  # the round's first row always fits, so a round always moves
+                    if not first and (len(rows) >= max_rows or used + size > max_bytes
+                                      or budget["rows"] < 1 or size > budget["bytes"]):
                         pending = True
                         break
                     rows.append(row)
                     seen.add(event)
                     used += size
+                    budget["rows"], budget["bytes"] = budget["rows"] - 1, budget["bytes"] - size
                 before, tools, ids = "", [], []
             if o.get("uuid"):
                 last = (o["uuid"], at)
@@ -283,20 +291,27 @@ def digest(now=None):
                 and now.timestamp() - st.st_mtime > STALE_DAYS * 86400:
             continue
         live.append((session, reg, path, st, mark))
-    share = max(len(live), 1)
+    # The session that moved least recently goes first, so a share too small for one row cannot starve a session.
+    live.sort(key=lambda x: (x[4] or {}).get("moved_at") or "")
+    share, budget = max(len(live), 1), {"rows": MAX_ROWS, "bytes": MAX_BYTES}
     for session, reg, path, st, mark in live:
         since, until = parse_ts(reg.get("since")), parse_ts(reg.get("until"))
-        note, carry = "", None
+        note, carry, anchor = "", None, (None, None)
         if mark:
-            start, note = resume(path, mark, st)
+            start, note, anchor = resume(path, mark, st)
             lo, carry = since, mark.get("carry")
             if start is None:
                 start, carry = 0, None
         else:
             start, first = 0, now - dt.timedelta(days=FIRST_DAYS)
             lo = max(since, first) if since else first
-        found, new = scan(session, path, start, lo, until, MAX_ROWS // share, MAX_BYTES // share, seen, carry)
+        found, new = scan(session, path, start, lo, until, MAX_ROWS // share, MAX_BYTES // share, seen, budget,
+                          carry)
         rows += found
+        if not new["uuid"]:  # no message read: keep the anchor that places scan_end
+            new["uuid"], new["uuid_at"] = anchor
+        moved = new["scan_end"] != start or not mark
+        new["moved_at"] = iso(now) if moved else (mark or {}).get("moved_at")
         marks[session] = {**new, "inode": st.st_ino, "scanned_at": iso(now)}
         report[session] = {"from": start, "to": new["scan_end"], "rows": len(found), "pending": new["pending"],
                            **({"note": note} if note else {})}

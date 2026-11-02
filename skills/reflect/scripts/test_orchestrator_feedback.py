@@ -82,8 +82,14 @@ os.environ["PROGRAMS_HOME"] = str(TMP / "repo/programs")
 config(orchestrator_feedback=True, ledger="Project/x/learnings.md", skill_repository=str(TMP / "repo"))
 code, out = run("digest")
 assert code == 2 and "digest folder is inside" in out["skipped"], out
+os.chdir(TMP / "repo")
+os.environ["PROGRAMS_HOME"] = "."  # relative: resolved before the check
+code, out = run("digest")
+assert code == 2 and "digest folder is inside" in out["skipped"], out
 os.environ["PROGRAMS_HOME"] = str(TMP / "programs")
 config(orchestrator_feedback=True, ledger="Project/x/learnings.md", skill_repository=str(TMP / "repo"))
+assert of.gate(of.config()) is None, "a relative ledger is a notes-store path, whatever the cwd"
+os.chdir(TMP)
 
 # 2. The filter, on line shapes taken from real transcripts with their text replaced.
 TAG = "<system-reminder>\nmachine text\n</system-reminder>\n"
@@ -215,6 +221,43 @@ code, out = run("digest")
 assert [r["event"] for r in rows(out)] == ["s8:r0", "s8:r9"], "recovery reads from since, not only 7 days"
 assert "reading again from `since`" in out["sessions"]["s8"]["note"], out
 commit(out)
+
+# 7b. A round that reads no message keeps the anchor, so a later replacement still continues after it.
+T9 = TMP / "t9.jsonl"
+write(T9, [user("k1", "one", ts(1, 1))])
+register("s9b", T9, since=ts(20))
+commit(run("digest")[1])
+with T9.open("a") as f:
+    f.write('{"type": "user", "uuid": "k2", "tim')  # unfinished
+commit(run("digest")[1])
+anchor = json.loads((HOME / "orchestrator-cursor.json").read_text())["sessions"]["s9b"]
+assert anchor["uuid"] == "k1", anchor
+T9.unlink()
+write(T9, [user("k0", "old", ts(15)), user("k1", "one", ts(1, 1)), user("k3", "three", ts(1, 3))])
+code, out = run("digest")
+assert [r["event"] for r in rows(out) if r["event"].startswith("s9b")] == ["s9b:k3"], rows(out)
+commit(out)
+
+# 7c. The byte cap holds for the whole round, and a session left out goes first next round.
+for p in REG.glob("*.json"):
+    p.unlink()
+for i in range(3):
+    t = TMP / f"big{i}.jsonl"
+    write(t, [user(f"b{i}", "y" * 1000, ts(1, i))])
+    register(f"big{i}", t)
+of.MAX_BYTES = 1500
+code, out = run("digest")
+assert out["rows"] == 1 and sum(v["pending"] for v in out["sessions"].values()) == 2, out
+done = {r["event"] for r in rows(out)}
+commit(out)
+code, out = run("digest")
+done |= {r["event"] for r in rows(out)}
+commit(out)
+code, out = run("digest")
+done |= {r["event"] for r in rows(out)}
+commit(out)
+assert done == {"big0:b0", "big1:b1", "big2:b2"}, done
+of.MAX_BYTES = saved
 
 # 8. Registry edge cases.
 for p in REG.glob("*.json"):
