@@ -38,8 +38,8 @@ LEAD_TITLE = re.compile(r"lead:([\w.-]+)")
 AGENTS = {"agent-skills:orchestrator": "orchestrator", "agent-skills:lead": "lead"}
 SKILL = pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "SKILL.md"
 # Core rules 1 and 2 of SKILL.md in one line; the per-prompt reminder must never say less than they do.
-DELEGATE = ("Hand each instruction one layer down at once (a worker, a card, a background subagent); in your own turn "
-            "only answer from context or make one `--json` read.")
+DELEGATE = ("Hand each instruction one layer down at once (a worker, a card, a background subagent); your own turn "
+            "holds coordination, answers from context and one `--json` read, never other task work.")
 
 
 def program_for(slug):
@@ -64,20 +64,26 @@ def program_message(slug, cfg, compacted):
             f"to do with each worker_done's card.")
 
 
-def core_rules():
-    """The numbered "Core rules" list at the top of orchestrate's SKILL.md, verbatim; "" when it cannot be read."""
+def core_rules(path=None):
+    """The numbered "Core rules" list at the top of orchestrate's SKILL.md, verbatim with its wrapped lines; "" when
+    it cannot be read."""
     try:
-        lines = SKILL.read_text().splitlines()
-    except OSError:
+        lines = (path or SKILL).read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
         return ""
     start = next((i for i, line in enumerate(lines) if line.startswith("Core rules")), None)
     if start is None:
         return ""
     rules = []
     for line in lines[start + 1:]:
-        if not re.match(r"\d+\. ", line):
+        if not line.strip():
+            if rules:
+                break
+            continue
+        if re.match(r"\d+\. ", line) or (rules and line[:1] in " \t"):
+            rules.append(line)
+        else:
             break
-        rules.append(line)
     return "\n".join(rules)
 
 
