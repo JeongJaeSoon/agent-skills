@@ -113,22 +113,39 @@ SUITE_FILES = 5
 LOOPERS = {"for", "python", "python3", "pytest", "node", "bun", "deno", "go"}
 # A redirection (`> out.txt`, `2>`, `&>`) and its target select no test.
 REDIRECT = re.compile(r"\d*(>>?|<<?|&>>?|>&)")
-# A runner given a test path (`tests/`, `a.test.ts`, `x.py::t`) or a name filter runs a subset, not the suite.
+# A runner given a test path (`tests/`, `tests/unit`, `a.test.ts`, `x.py::t`) or a name filter runs a subset.
 FILTERS = {"-k", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter"}
-TEST_PATH = re.compile(r"(?!-).*(::|tests?\b|tests?[/_]|_tests?\.|\.(test|spec)\.|spec[s/])", re.I)
+TEST_DIR = re.compile(r"(.*/)?(tests?|specs?|__tests__)(/.*)?", re.I)
+# Options of pytest, bun, jest and vitest whose next word is a value (an output path, a count), never a test.
+VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "--cov", "--cov-report",
+              "--basetemp", "--rootdir", "--durations", "--maxfail", "--tb", "--log-file", "--html", "--timeout",
+              "--coverage-dir", "--coverage-reporter", "--preload", "--rerun-each", "--reporter", "--reporter-outfile",
+              "--outputFile", "--coverageDirectory", "--config", "--workers", "--maxWorkers"}
+# Shell words before the command a loop or branch runs: `for d in a b; do npm test; done`.
+KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 
 
 def narrowed(rest):
-    """Whether a runner's arguments pick tests: a test-shaped path or a name filter. An option's value (`-n 8`,
-    `--junitxml results.xml`, `--coverage-dir ./coverage`) is neither, so it leaves a whole suite."""
-    return any(w.split("=", 1)[0] in FILTERS or TEST_PATH.match(w) for w in rest)
+    """Whether a runner's arguments pick tests: a test file or directory, `x.py::t`, or a name filter. An option's
+    value (`-n 8`, `--junitxml test-results.xml`) is neither, so it leaves a whole suite."""
+    skip = False
+    for w in rest:
+        if skip:
+            skip = False
+        elif w.split("=", 1)[0] in FILTERS:
+            return True
+        elif w in VALUE_OPTS:
+            skip = True
+        elif not w.startswith("-") and ("::" in w or TEST_FILE.fullmatch(w) or TEST_DIR.fullmatch(w.rstrip("/"))):
+            return True
+    return False
 
 
 def runs_tests(argv):
     """'test suite', 'E2E' or 'browser' for one simple command that runs a whole suite, an E2E or a headless browser,
     else None. One named test file, or a runner given a path, is not a suite."""
     words, i = list(argv), 0
-    while i < len(words) and (ASSIGN.match(words[i]) or words[i] in WRAPPERS or
+    while i < len(words) and (ASSIGN.match(words[i]) or words[i] in WRAPPERS or words[i] in KEYWORDS or
                               (i and words[i - 1] in WRAPPERS and words[i].startswith("-"))):
         if words[i] == "AGENT_SKILLS_PRESSURE_GATE=0":
             return None
@@ -147,6 +164,10 @@ def runs_tests(argv):
     head = os.path.basename(words[0])
     if head in SHELLS and len(words) > 1 and not words[1].startswith("-"):
         words, head = words[1:], os.path.basename(words[1])
+    if head in ("python", "python3") and words[1:3] == ["-m", "pytest"]:
+        words, head = words[2:], "pytest"
+    if head in ("uv", "poetry", "pipenv") and words[1:2] == ["run"] and len(words) > 2:
+        words, head = words[2:], os.path.basename(words[2])
     args = [w for w in words[1:] if not w.startswith("-")]
     if SUITE.fullmatch(head):
         return "test suite"

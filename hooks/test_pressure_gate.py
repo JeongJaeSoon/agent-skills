@@ -55,7 +55,13 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("pytest -n 8", "test suite"), ("bun test --timeout 30000", "test suite"),
                   ("npm test > results.txt", "test suite"), ("npm test 2>&1 | tail -5", "test suite"),
                   ("orch heavy - -- bash tests.sh & npx playwright test", "E2E"),
-                  ("pytest --junitxml results.xml", "test suite"), ("bun test --coverage-dir ./coverage", "test suite")):
+                  ("pytest --junitxml results.xml", "test suite"), ("bun test --coverage-dir ./coverage", "test suite"),
+                  ("pytest --junitxml test-results.xml", "test suite"),
+                  ("bun test --coverage-dir ./test-coverage", "test suite"),
+                  ("for d in app api; do npm test; done", "test suite"),
+                  ("for d in app api; do (cd $d && npx playwright test); done", "E2E"),
+                  ("python3 -m pytest", "test suite"), ("uv run pytest -q", "test suite"),
+                  ("if true; then pytest; fi", "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
             "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
@@ -63,7 +69,8 @@ for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -
             "git add " + " ".join(f"hooks/test_{i}.py" for i in range(6)), "AGENT_SKILLS_PRESSURE_GATE=0 bash tests.sh",
             "AGENT_SKILLS_PRESSURE_GATE=0 " + LOOP.split("\n")[1], "chrome --version", "npm run build", "ls tests",
             "pytest -k foo", "pytest tests/test_a.py::test_x", "orch heavy - -- npm test > out.txt",
-            "pytest -x tests/", "pytest tests/unit", "bun test --bail src/a.spec.ts"):
+            "pytest -x tests/", "pytest tests/unit", "bun test --bail src/a.spec.ts",
+            "python3 -m pytest tests/test_a.py", "uv run pytest -k slow", "for f in a b; do echo $f; done"):
     assert g.unwrapped_tests(cmd) is None, cmd
 wrapped = g.wrap_reason("cd /w && bash tests.sh", "test suite")
 assert wrapped.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) ") and "run_in_background" in wrapped
