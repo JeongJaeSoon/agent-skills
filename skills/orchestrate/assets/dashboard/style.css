@@ -567,11 +567,18 @@ li.is-acked > :not(.ack) { opacity: 0.5; }
 .brief-table th { background: var(--panel-2); }
 .brief-table td.bmark { width: 2.5em; text-align: center; white-space: nowrap; }
 /* Every repository table shares these widths, so their columns line up down the page. */
-.brief-table.brepo { table-layout: fixed; min-width: 640px; }
+.brief-table.brepo { table-layout: fixed; min-width: 940px; }
 .brief-table.brepo col.bmark { width: 2.75em; }
 .brief-table.brepo col.bpr { width: 15em; }
 .brief-table.brepo col.bprog { width: 9em; }
-.brief-table.brepo col.bact { width: 5.5em; }
+.brief-table.brepo col.bact { width: 6.5em; }
+.brief-table.brepo col.bsess { width: 21em; }
+/* One line, so a row with a report is as tall as one without: the line is cut and its whole text is the title. */
+.brief-table .bsess-head { display: flex; align-items: center; gap: var(--s2); white-space: nowrap; min-width: 0; }
+.brief-table .chip { min-width: 60px; justify-content: center; }
+.brief-table .bsess-head .chip { height: 20px; padding: 0 8px; gap: var(--s1); font-size: 11px; flex: none; }
+.brief-table .bsess-head .chip svg.i { width: 12px; height: 12px; }
+.brief-table .bsess-last { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .brief-table td.bact { text-align: right; white-space: nowrap; }
 .brief-table.brepo td:nth-child(3) { font-family: var(--mono); }
 .brief-table .slide { white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }

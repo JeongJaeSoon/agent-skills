@@ -2165,6 +2165,27 @@ def send(session_id, text, handle=None, sender=None):
     return code, out
 
 
+def open_session(session_id, switch=None):
+    """Bring a fleet session's terminal to the front in Orca, for the dashboard's Orca button. The page names the
+    session by its worktree id; the handle is looked up now, since a restarted terminal has a new one. Its agent
+    terminal first, else any connected one. Returns (status, body) for the HTTP reply; every attempt is logged."""
+    state = read_json(state_dir() / "state.json", {}) or {}
+    s = next((x for x in state.get("sessions") or [] if x["id"] == session_id), None)
+    terms = [t for t in (s or {}).get("terminals") or [] if t.get("connected")]
+    term = next((t for t in terms if t.get("agent")), terms[0] if terms else None)
+    row = {"at": iso(utcnow()), "session": session_id, "handle": term and term["handle"], "text": "open"}
+    if not term:
+        code, out = 409, {"ok": False, "reason": "no connected terminal in this session"}
+    else:
+        try:
+            (switch or (lambda h: orca("terminal", "switch", "--terminal", h)))(term["handle"])
+            code, out = 200, {"ok": True, "reason": None}
+        except SourceError as e:
+            code, out = 200, {"ok": False, "reason": str(e)}
+    append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
+    return code, out
+
+
 def answer_prompt(session_id, prompt_id, action, sender=None):
     """Answer a pending permission dialog the way the human chose on the page: approve, deny, or open (switch Orca
     to that terminal). Returns (status, body) for the HTTP reply; every attempt is logged."""

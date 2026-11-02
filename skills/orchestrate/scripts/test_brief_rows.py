@@ -144,7 +144,7 @@ assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()
 b = brief()
 lines = b["text"].splitlines()
 cut = next(l for l in lines if l.startswith("| 🔄 | acme/app#877"))
-assert cut.endswith("…[1] | — | — |") and f"- [1] {' '.join(LONG.split())}" in lines, b["text"]
+assert cut.endswith("…[1] | — | — | 세션 없음 |") and f"- [1] {' '.join(LONG.split())}" in lines, b["text"]
 assert lines.index(f"- [1] {' '.join(LONG.split())}") - lines.index(cut) <= 3, b["text"]
 assert b["width_ok"] and {o["label"] for o in b["open"]} >= {" ".join(LONG.split())}, b["open"]
 # Orca cuts a task's name to a head and "...": the spec's first line is the whole of it, and nothing else replaces it.
@@ -152,4 +152,32 @@ assert fleet.task_name({"display_name": "role-terms: 용어 정리 — card (202
     == "role-terms: 용어 정리 — card (2026-10-27)"
 assert fleet.task_name({"display_name": "짧은 이름...", "spec": "다른 첫 줄\n본문"}) == "짧은 이름..."
 assert fleet.task_name({"task_title": "온전한 이름", "spec": "온전한 이름 그리고 더"}) == "온전한 이름"
+
+# A probe dispatched with an instruction for its spec ("send worker_done … 브리프: <path>") was listed under its lead as
+# a moving row named by that instruction: Orca names a task after the spec's first line. A card whose task name is a
+# goal sentence pointing at its brief goes by its worktree's name, and a dispatch that completed with no PR leaves.
+fake = lambda sid, **kw: {"id": sid, "kind": "task", "parent": "lead1", "phase": "idle", "name": sid, "gh_repo": "acme/app",
+                          "last_activity": ago(0.1), "terminals": [{"handle": f"term_{sid}"}], "report": None, **kw}
+probe_state = {"sessions": [{**fake("lead1", name="계보 리드"), "kind": "orchestration", "parent": "s-root"},
+                            {**card("s-root", "root", "working", "acme/app"), "kind": "orchestrator", "parent": None},
+                            fake("probe-bound", task_title='send worker_done with the body "ok" and stop 브리프: /var/x/bound-brief.md',
+                                 dispatch_status="completed"),
+                            fake("probe-live", task_title="/goal 측정 probe 를 끝까지 진행한다 브리프: ~/share/x/brief.md",
+                                 dispatch_status="dispatched"),
+                            fake("w-titled", task_title="ABC-7 정렬 수정", dispatch_status="dispatched", phase="working")]}
+rows_, _ = board.fleet_rows(probe_state, {}, {})
+titles = {r["session"]: r["title"] for r in rows_.values()}
+assert "probe-bound" not in titles, titles  # completed, no PR: nothing left to report
+assert titles["probe-live"] == "probe-live" and titles["w-titled"] == "ABC-7 정렬 수정", titles
+assert not any("worker_done" in t or "브리프" in t for t in titles.values()), titles
+assert board.card_title({"name": "wt", "task_title": "Brief: ~/b.md"}) == "wt"
+assert board.card_title({"name": "wt", "task_title": "ABC-1 브리프 정리"}) == "ABC-1 브리프 정리"  # no path: a name
+
+# Each open row's 세션 cell: working, stopped (a prompt waits, or the turn ended STALL_MIN ago), or no session.
+now_ = fleet.utcnow()
+assert board.session_state({"phase": "working"}, now_) == "working"
+assert board.session_state({"phase": "waiting", "last_activity": ago(0)}, now_) == "stalled"
+assert board.session_state({"phase": "idle", "last_activity": ago(0.1)}, now_) == "working"
+assert board.session_state({"phase": "idle", "last_activity": ago(1)}, now_) == "stalled"
+assert board.session_state({"phase": "open"}, now_) == board.session_state(None, now_) == "none"
 print("test_brief_rows: ok")

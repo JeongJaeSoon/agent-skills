@@ -102,7 +102,7 @@ out, tg = render(BEFORE), render(BEFORE, "--telegram")
 assert "| 📅 | 배포 리드 |" in out and "⏸️ **보류**" not in out and "→ 배포 리드" not in out, out
 assert "📅 할 일 3건 · ⏸️ 보류 큐 1건 · `orch board todo list`" in out.splitlines(), out
 assert "🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 📅 할 일로 넘김 · 막대=단계(추정)" in out.splitlines(), out
-assert "📅 배포 리드 #1 ✓ — —" in tg.splitlines() and "⏸️ 보류" not in tg.splitlines() and "→ 배포 리드" not in tg, tg
+assert "📅 배포 리드 #1 ✓ — — · 세션 없음" in tg.splitlines() and "⏸️ 보류" not in tg.splitlines() and "→ 배포 리드" not in tg, tg
 got = json.loads(render(BEFORE, "--json"))
 assert got["width_ok"] and got["snapshot"]["rows"]["deploy"]["next"] == "10/30(금) 09:00 · 머지+배포 (오너 지시)", got["snapshot"]
 # A sub-task still moving under it is listed in 진행 중 under the row's name, with the same 📅.

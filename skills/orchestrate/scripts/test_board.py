@@ -165,7 +165,7 @@ def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026
     pr("acme/ops#70", reviewers=["octo-owner"]), pr("acme/ops#71", reviewers=["octo-owner"]),
 ])}))
 (state / "state.json").write_text(json.dumps({"sessions": [
-    {"id": s, "terminals": [{"handle": h}]} for s, h in (("s1", "term_0FAKE1"), ("s2", "term_0FAKE2"), ("s3", "term_0FAKE3"))]}))
+    {"id": s, "phase": "working", "terminals": [{"handle": h}]} for s, h in (("s1", "term_0FAKE1"), ("s2", "term_0FAKE2"), ("s3", "term_0FAKE3"))]}))
 
 # ph1 merged 12 days before NOW: its ✅ row folds into the section's count; ph2, merged an hour ago, stays.
 FIRST = orch("brief", "render", "--periodic", "--now", NOW, "--commit", "--skipped", "21:00 이후라 Slack 미전송")
@@ -190,35 +190,35 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 **acme/web — 검색 개선 → main**
 
-| | 리드/Phase | PR | 진행 |
-|---|---|---|---|
-| ✅ | **ph2** | [#42](https://example.test/42) 42c0ffe | ████████ 8/8 |
-| 🔄 | ph3 | — | ███░░░░░ 3/8 |
-| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 |
-| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗ | ████░░░░ 4/8 |
-| ⏸️ | ph4 · ph5 | — | ░░░░░░░░ 0/8 |
+| | 리드/Phase | PR | 진행 | 세션 |
+|---|---|---|---|---|
+| ✅ | **ph2** | [#42](https://example.test/42) 42c0ffe | ████████ 8/8 | — |
+| 🔄 | ph3 | — | ███░░░░░ 3/8 | 작업 중 |
+| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | 작업 중 |
+| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗ | ████░░░░ 4/8 | 작업 중 |
+| ⏸️ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | 작업 중 |
 
 ✅ 그 전 완료 1건 (대시보드)
 
 **acme/ops — (프로젝트 미지정) → main**
 
-| | 리드/Phase | PR | 진행 |
-|---|---|---|---|
-| — | 검색 개선 | — | — |
-| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 |
-| ⏳ | 분류 | — | — |
-| ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — |
-| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 |
+| | 리드/Phase | PR | 진행 | 세션 |
+|---|---|---|---|---|
+| — | 검색 개선 | — | — | — |
+| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 작업 중 |
+| ⏳ | 분류 | — | — | 작업 중 |
+| ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — | — |
+| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 세션 없음 |
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
 **acme/web — 알림 정리 → feature/notify**
 
-| | 리드/Phase | PR | 진행 |
-|---|---|---|---|
-| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 |
-| 🔄 | └ 문구 다듬기와 길이 정리 | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 |
-| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 |
+| | 리드/Phase | PR | 진행 | 세션 |
+|---|---|---|---|---|
+| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | 작업 중 |
+| 🔄 | └ 문구 다듬기와 길이 정리 | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | 작업 중 |
+| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | — |
 
 21:00 이후라 Slack 미전송
 
@@ -272,7 +272,8 @@ assert not any(m in tg for m in ("**", "|", "](")), tg
 assert "✅ ph2 #42 42c0ffe (바뀜) — ████████ 8/8" in tg.splitlines(), tg
 assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4" in tg.splitlines(), tg
 assert "└ 🔄 문구 다듬기와 길이 정리 — CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
-assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "🙋 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4" in tg.splitlines(), tg
+assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "🙋 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4 · 작업 중" in tg.splitlines(), tg
+assert "🔴 정리 작업 — ███░░░░░ 1/3 · 세션 없음" in tg.splitlines(), tg  # each open row says whether a session runs it
 assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전) · 접음 완료 1 (대시보드)"
 assert "⏳ 다른 사람 대기\n\nrev-b · 리뷰 #61·#62 · 30분 전부터 → p61·p62\n" in tg, tg
 
@@ -390,9 +391,9 @@ prs_json["prs"].update(dict([pr("acme/wide#1201", merge_state="DIRTY", decision=
 code, wide, err = orch("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "넓은 표")
 wide = json.loads(wide)
 assert code == 1 and wide["width_ok"] is False and err == "a table is wider than 78 columns", (code, err, wide)
-assert "| 🔴 | 긴 이름의 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 | ████████ 100/100 |" \
+assert "| 🔴 | 긴 이름의 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 | ████████ 100/100 | 세션 없음 |" \
     in wide["text"].splitlines(), wide["text"]
-assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1124→feature/long-target·#1125 | — |" \
+assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1124→feature/long-target·#1125 | — | — |" \
     in wide["text"].splitlines(), wide["text"]
 assert "- 🔴 긴 이름의 리드 작업 — 세션 없음" in wide["text"].splitlines(), wide["text"]
 assert not any(m in wide["text"] for m in "¹²³…"), wide["text"]
@@ -427,11 +428,11 @@ fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" 
              or "c2" in l or "c4" in l]
 assert fill_rows == [
     "**acme/fill — 정산 리드 → main**",
-    "| 🙋 | 정산 리드 | — | — |",
-    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — |",
-    "| 🙋 | └ c2 | — | — |",
+    "| 🙋 | 정산 리드 | — | — | 작업 중 |",
+    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 |",
+    "| 🙋 | └ c2 | — | — | 멈춤 |",
     "**acme/fill**",
-    "| 🔄 | c4 | — | — |",
+    "| 🔄 | c4 | — | — | 작업 중 |",
     "- 🔄 정산 리드 — 턴 종료",
     "- └ 🔄 FILL-1 영수증 — 작업 중",
     "- 🔄 c4 — 작업 중 · 3h 전",
@@ -522,9 +523,9 @@ PR: ❗ 사람이 풀 것 · CI… CI 진행
 
 **acme/web → main**
 
-| | 리드/Phase | PR | 진행 |
-|---|---|---|---|
-| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | — |
+| | 리드/Phase | PR | 진행 | 세션 |
+|---|---|---|---|---|
+| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | — | 작업 중 |
 
 🔄 **진행 중**
 
@@ -551,7 +552,7 @@ periodic = rok("brief", "render", "--periodic", "--now", NOW)
 assert "| 작업 |" not in periodic and "단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
-assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — —" in tg_req.splitlines(), tg_req
+assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — — · 작업 중" in tg_req.splitlines(), tg_req
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
 assert "단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()

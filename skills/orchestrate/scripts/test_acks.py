@@ -78,7 +78,7 @@ assert {d["id"] for d in before["done"]} == {"board:lead-a"}, before["done"]
 flat = {x["label"]: (x["ack"], x["done"]) for t in before["table_rows"] for x in t}
 assert flat == {"릴리스 도구": ("board:lead-a", None), "청구 내보내기": (None, None), "t CSV 열": (None, None),
                 "설치 가이드": (None, None)}, before["table_rows"]
-assert len(before["table_rows"]) == sum(1 for line in before["text"].splitlines() if line == "| | 리드/Phase | PR | 진행 |")
+assert len(before["table_rows"]) == sum(1 for line in before["text"].splitlines() if line == "| | 리드/Phase | PR | 진행 | 세션 |")
 board.set_row("lead-c", status="blocked", next="세션 없음")
 assert {x["label"]: x["done"] for t in brief()["table_rows"] for x in t}["설치 가이드"] == "row:lead-c"
 board.set_row("lead-c", status="moving", next="리뷰 반영")
