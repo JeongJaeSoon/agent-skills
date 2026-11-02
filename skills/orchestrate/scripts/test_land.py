@@ -311,6 +311,18 @@ code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", sys.executable,
 assert code == 5, out
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "sh", "-c", "exit 7")
 assert code == 7, out
+# A slot variable left over from a run that ended (a background child) is no slot: it waits like anyone else.
+holder = subprocess.Popen([sys.executable, HERE / "prog.py", "heavy", "t", "--", "sleep", "3"], env=env)
+time.sleep(1)
+stale = d / "programs" / "_heavy" / "slot-gone"
+stale.write_text(json.dumps({"pid": 999999}))
+code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(stale)), "heavy", "t", "--wait-minutes", "0", "--", "true")
+assert code == 1 and "every slot busy" in out, out
+code, out = prog(dict(env, ORCH_HEAVY_SLOT=str(d / "programs" / "_heavy" / "slot-0")), "heavy", "t", "--wait-minutes", "0",
+                 "--", "true")  # a live slot that is not an ancestor's
+assert code == 1 and "every slot busy" in out, out
+holder.wait()
+stale.unlink()
 (d / "programs" / "_heavy" / "slot-0").write_text(json.dumps({"pid": 999999}))
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 0 and not (d / "programs" / "_heavy" / "slot-0").exists(), out
@@ -361,8 +373,8 @@ r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--wait-minu
 rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
 assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[3:]] == [("verify-4", "acme/app#9")], (rows, r.stderr)
 # With Docker unreadable a nested run still ends with its command's exit code.
-r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--", "sh", "-c", "exit 3"],
-                   env=dict(heavy_env, ORCH_HEAVY_SLOT=str(d / "slot-x"), FAKE_DOCKER_FAIL="1"), cwd=wt, capture_output=True, text=True)
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--", sys.executable, str(HERE / "prog.py"), "heavy", "-",
+                    "--", "sh", "-c", "exit 3"], env=dict(heavy_env, FAKE_DOCKER_FAIL="1"), cwd=wt, capture_output=True, text=True)
 assert r.returncode == 3 and "Traceback" not in r.stderr, r.stderr
 
 # status and queue run end to end on the same fakes.

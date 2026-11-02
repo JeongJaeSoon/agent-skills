@@ -2571,6 +2571,27 @@ def register_stacks(before, owner, pr, skip=()):
     return done
 
 
+def in_slot():
+    """Whether this process runs inside a slot still held: ORCH_HEAVY_SLOT names a slot file whose holder is alive
+    and one of this process's ancestors. A background child the slot's command left behind inherits the variable
+    after the slot is freed or taken by another run."""
+    path = os.environ.get("ORCH_HEAVY_SLOT")
+    try:
+        holder = int(json.loads(pathlib.Path(path).read_text() or "{}").get("pid", 0)) if path else 0
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+    pid = os.getppid()
+    while holder and pid > 1:
+        if pid == holder:
+            return True
+        r = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+        try:
+            pid = int(r.stdout.strip())
+        except ValueError:
+            return False
+    return False
+
+
 def heavy_run(cmd, env, owner, pr, nested=False):
     """Run cmd and register the compose stacks it started; its exit code. A nested `orch heavy` lists what it
     registered beside the slot so the outer run, which sees the same new stacks, keeps the inner owner and PR."""
@@ -2601,7 +2622,7 @@ def cmd_heavy(argv):
     cmd = argv[cut + 1:]
     cfg, owner = ({}, "-") if argv[0] == "-" else (Program(argv[0]).cfg, argv[0])
     pr = opt(argv[:cut], "--pr")
-    if os.environ.get("ORCH_HEAVY_SLOT"):  # already inside a slot: taking a second would wait on itself
+    if in_slot():  # already inside a slot: taking a second would wait on itself
         sys.exit(heavy_run(cmd, os.environ, owner, pr, nested=True))
     slots = HOME / "_heavy"
     slots.mkdir(parents=True, exist_ok=True)

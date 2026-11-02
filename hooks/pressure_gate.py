@@ -92,15 +92,18 @@ def heredoc_at(line, quote):
     return None, quote
 
 
-def drop_heredocs(cmd):
+def drop_heredocs(cmd, slotted=False):
     """cmd without the bodies of its here-documents, which are data (`cat > a.md <<EOF`), except where a shell
-    reads the body as commands (`bash <<EOF`) or an unquoted body runs a substitution (`$(…)`, a backquote)."""
+    reads the body as commands (`bash <<EOF`) or an unquoted body runs a substitution (`$(…)`, a backquote).
+    With slotted, a body a shell reads inside `orch heavy` (`orch heavy - -- bash <<EOF`) goes too: it runs in
+    the slot."""
     out, lines, quote = [], iter(cmd.split("\n")), ""
     for line in lines:
         out.append(line)
         m, quote = heredoc_at(line, quote)
         # Kept whenever a shell appears on the line (`FOO=1 bash <<EOF`, `cd x && env bash <<EOF`).
-        if not m or any(os.path.basename(w.strip("'\"")) in SHELLS for w in line.split()):
+        if not m or any(os.path.basename(w.strip("'\"")) in SHELLS for w in line.split()) and not (
+                slotted and re.search(r"(^|[\s;&|(/])orch\s+heavy\s", line)):
             continue
         body, end = [], None
         for row in lines:
@@ -115,11 +118,11 @@ def drop_heredocs(cmd):
     return "\n".join(out)
 
 
-def segments(cmd):
+def segments(cmd, slotted=False):
     """The simple commands of a shell line as argv lists, split on unquoted ; & | ( ) and newlines.
     A `bash -c '<text>'` is read as its own line; a here-document body is not read. Unparsable text gives no
     segments."""
-    lex = shlex.shlex(drop_heredocs(cmd), posix=True, punctuation_chars="();&|\n")
+    lex = shlex.shlex(drop_heredocs(cmd, slotted), posix=True, punctuation_chars="();&|\n")
     lex.whitespace, lex.whitespace_split = " \t\r", True
     out, cur = [], []
     try:
@@ -141,7 +144,7 @@ def segments(cmd):
         if run_c and j < len(words):
             # The user's go-ahead before `bash -c` covers every command of its body.
             lead = [w for w in argv[:len(argv) - len(words)] if w == OVERRIDE]
-            yield from (lead + inner for inner in segments(words[j]))
+            yield from (lead + inner for inner in segments(words[j], slotted))
         else:
             yield argv
 
@@ -322,7 +325,7 @@ def loop_runs(rest):
 
 def unwrapped_tests(cmd):
     """What a line runs that belongs in an `orch heavy` slot, None when it runs none or already runs in one."""
-    segs = list(segments(cmd))  # a command passed to `orch heavy` is that segment's words, never a segment of its own
+    segs = list(segments(cmd, slotted=True))  # a command passed to `orch heavy` is that segment's words, never a segment of its own
     found = next(filter(None, map(runs_tests, segs)), None)
     # A `for` list counts only when its own body (up to `done`) runs a program on the files, not `cat "$f"`;
     # a glob (`hooks/test_*.py`) may expand to any number of files, so it counts as a whole list.
