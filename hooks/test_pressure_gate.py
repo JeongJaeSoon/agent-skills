@@ -40,6 +40,9 @@ assert not g.heavy("orca orchestration worker-start --task t --worktree current 
 assert not g.heavy("orca orchestration worker-start --help")
 assert g.heavy("FOO=1 bash <<EOF\ndocker compose up -d\nEOF") == "docker compose up"
 assert not g.heavy("cat > a.md <<'EOF'\ndocker compose up -d\nEOF")
+assert g.heavy("cat <<<hello\norca worktree create --repo x") == "orca worktree create"
+assert g.heavy("cat <<EOF\n$(docker compose up -d)\nEOF") == "docker compose up"
+assert not g.heavy("cat <<'EOF'\n$(docker compose up -d)\nEOF")
 
 # Whole suites, E2E and headless browsers belong in an `orch heavy` slot; one test file, or one already in a slot, does not.
 LOOP = "fail=0\nfor t in " + " ".join(f"skills/x/scripts/test_{i}.py" for i in range(6)) + \

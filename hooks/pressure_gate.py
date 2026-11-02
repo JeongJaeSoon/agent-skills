@@ -40,12 +40,12 @@ POST = {"PostToolUse": "done", "PostToolUseFailure": "failed"}
 NEW_CARD = ("orca worktree create", "orca orchestration worker-start")
 
 
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
+HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)(\w+)\2")  # not a here-string (`<<<word`)
 
 
 def drop_heredocs(cmd):
     """cmd without the bodies of its here-documents, which are data (`cat > a.md <<EOF`), except where a shell
-    reads the body as commands (`bash <<EOF`)."""
+    reads the body as commands (`bash <<EOF`) or an unquoted body runs a substitution (`$(…)`, a backquote)."""
     out, lines = [], iter(cmd.split("\n"))
     for line in lines:
         out.append(line)
@@ -53,10 +53,16 @@ def drop_heredocs(cmd):
         # Kept whenever a shell appears on the line (`FOO=1 bash <<EOF`, `cd x && env bash <<EOF`).
         if not m or any(os.path.basename(w) in SHELLS for w in line.split()):
             continue
-        for body in lines:
-            if (body.lstrip("\t") if line[m.start():].startswith("<<-") else body) == m.group(2):
-                out.append(body)
+        body, end = [], None
+        for row in lines:
+            if (row.lstrip("\t") if m.group(1) else row) == m.group(3):
+                end = row
                 break
+            body.append(row)
+        if not m.group(2) and any("$(" in r or "`" in r for r in body):
+            out += body
+        if end is not None:
+            out.append(end)
     return "\n".join(out)
 
 
