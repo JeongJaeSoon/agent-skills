@@ -39,6 +39,10 @@ the recommended items, and win over a recommended default; a value already on th
 line. A relative tracker.rules_file points into that folder. Personal autoMode rules are not carried; each PC keeps
 its own.
 
+On macOS a dry run also prints `spotlight` lines: the development folders (reap-hard.workspaces and the repos Orca
+has registered) that Spotlight still indexes, with their size, and the System Settings step that stops it. They
+are not part of the plan or its hash; nothing here changes Spotlight.
+
 settings.json follows the Claude Code profile ($CLAUDE_CONFIG_DIR, as Claude Code reads it); agent-skills.json is
 one file per user, ~/.claude/agent-skills.json, where the skills' scripts read it (skills_json_path).
 """
@@ -341,6 +345,62 @@ def show(files, actions, notes):
             print(f"then    {action}")
 
 
+SPOTLIGHT_STEP = ("System Settings > Spotlight > Search Privacy… > + > add each path above > Done. No command does this "
+                  "without root: .metadata_never_index and the hidden flag are ignored, and a .noindex suffix renames "
+                  "the folder")
+
+
+def dev_roots():
+    """The Orca worktree root (reap-hard.workspaces) and each repo Orca has registered, nested ones dropped."""
+    sys.path.insert(0, str(HERE))
+    import reap_hard
+    roots = [reap_hard.config()["workspaces"]]
+    rc, out = sh(["orca", "repo", "list", "--json"], timeout=15) if shutil.which("orca") else (1, "")
+    try:
+        roots += [r["path"] for r in (json.loads(out).get("result") or {}).get("repos") or [] if r.get("path")]
+    except (ValueError, AttributeError, TypeError):
+        pass
+    found = sorted({os.path.realpath(os.path.expanduser(r)) for r in roots if os.path.isdir(os.path.expanduser(r))})
+    return [r for r in found if not any(r.startswith(o + os.sep) for o in found)]
+
+
+def spotlight(roots, size_timeout=20):
+    """(path, indexed item count, du size or None) for each root Spotlight still indexes, or may: a count of None
+    means mdfind failed, so the root was not checked."""
+    rows = []
+    for root in roots:
+        rc, out = sh(["mdfind", "-onlyin", root, "-count", 'kMDItemDisplayName == "*"'], timeout=30)
+        if rc != 0 or not out.isdigit():
+            rows.append([root, None, None])
+        elif int(out):
+            rows.append([root, int(out), None])
+    sized = [r for r in rows if r[1]]
+    procs = [subprocess.Popen(["du", "-sh", r[0]], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+             for r in sized]
+    deadline = time.monotonic() + size_timeout
+    for row, p in zip(sized, procs):
+        try:
+            row[2] = p.communicate(timeout=max(0.1, deadline - time.monotonic()))[0].split("\t")[0] or None
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+    return rows
+
+
+def show_spotlight():
+    roots = dev_roots()
+    rows = spotlight(roots)
+    home = str(pathlib.Path.home())
+    for path, count, size in rows:
+        shown = "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+        print(f"spotlight {shown}  " + (f"{size or 'size ?'}  {count:,} items indexed" if count is not None
+                                         else "not checked (mdfind failed); look in the Search Privacy list"))
+    if rows:
+        print(f"spotlight {SPOTLIGHT_STEP}")
+    elif roots:
+        print(f"spotlight none of the {len(roots)} development folders is indexed")
+
+
 def write(path, data):
     real = path.resolve()  # a dotfiles symlink stays a symlink
     real.parent.mkdir(parents=True, exist_ok=True)
@@ -456,6 +516,8 @@ def main(argv):
             print("no change: the settings files already have everything recommended"
                   + ("; the steps above still run" if actions else ""))
         if not args.apply:
+            if sys.platform == "darwin" and not args.here and args.replace_drifted is None:
+                show_spotlight()
             if files or actions:
                 print(f"\n(dry run; nothing written; plan hash {h})\nApply with:\n"
                       f"  ! python3 -I {' '.join(map(shlex.quote, [str(HERE / 'setup.py'), *argv]))} --apply {h}")
