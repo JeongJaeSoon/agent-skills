@@ -237,6 +237,31 @@ p.round_once(cfg, True, out=lines.append, measure_fn=lambda: DANGER, sample_fn=l
              reap_fn=None, consumers_fn=lambda c: (procs, []), send_fn=None)
 assert any("읽지 못해" in line for line in lines) and any("pid 7" in line for line in lines), lines
 
+# History: every saved round adds one point (dry runs none); a file whose oldest point is an hour past the 24 h it
+# keeps is cut back to 24 h; the report reads only the asked hours and never measures.
+hist = p.HISTORY
+hist.unlink(missing_ok=True)
+run_round(OK, [], now=200000.0)
+run_round(WARN, [], now=200180.0)
+run_round(WARN, [], dry=True, now=200360.0)
+rows = p.history_read()
+assert [(r["t"], r["level"], r["load_per_cpu"], r["queued"]) for r in rows] == \
+    [(200000.0, "ok", 0.5, 0), (200180.0, "warn", 1.4, 0)], rows
+assert set(rows[0]) == {"t", "level", "queued", *p.HISTORY_FIELDS}
+run_round(OK, [], now=200000.0 + p.HISTORY_KEEP_S + 3500)  # oldest 23h58m+1h past: not yet cut
+assert len(p.history_read()) == 3
+run_round(OK, [], now=200000.0 + p.HISTORY_KEEP_S + 3700)
+assert [r["t"] for r in p.history_read()] == [200000.0 + p.HISTORY_KEEP_S + 3500, 200000.0 + p.HISTORY_KEEP_S + 3700]
+with hist.open("a") as f:
+    f.write("not json\n")
+assert len(p.history_read()) == 2  # a torn line costs that line only
+rep = p.history_report({**cfg, "swapout_pps": [300, float("inf")]}, hours=1, now=200000.0 + p.HISTORY_KEEP_S + 3700 + 3500)
+assert [r["t"] for r in rep["series"]] == [200000.0 + p.HISTORY_KEEP_S + 3700], rep["series"]
+assert rep["thresholds"]["load_per_cpu"] == [1.3, 2.0] and rep["thresholds"]["swapout_pps"] == [300, None]
+assert rep["higher_worse"]["mem_free_pct"] is False and rep["last"]["level"] == "ok" and rep["queue"] == []
+json.dumps(rep, allow_nan=False)
+assert p.history_report(cfg, hours=999)["hours"] == 24
+
 # launchd spec: runs `round` from this file with a PATH that finds the tools reap calls.
 s = p.spec(180)
 assert s["ProgramArguments"][-2:] == [str(pathlib.Path(p.__file__).resolve()), "round"] and s["StartInterval"] == 180

@@ -17,7 +17,9 @@ SCOPE       Paths this unit may write and paths it may not. Its own worktree and
             name a task-specific directory in this SCOPE; do not assume an unset variable is a path.
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
-            unit depends on them. A fact you state here (something is absent from the base,
+            unit depends on them. When the unit changes a subsystem no upstream report
+            covers, name `how` (simple mode) for the worker; when it deletes or loosens
+            code whose reason is unknown, name `why` (narrow mode). A fact you state here (something is absent from the base,
             an evidence id) comes from a check that could have come out the other way:
             `git merge-base --is-ancestor <commit> <base>`, or a search that also finds a
             symbol known to exist. An empty `git grep -E` proves nothing (`\b` is a GNU
@@ -48,6 +50,11 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             it waits it shows in the dashboard's Needs you. `--type escalation` is for a blocker
             the lead must act on, not for a choice. Never send a question as a status and end
             your turn: a status wakes no wait, and waking an idle agent on mail is best-effort.
+LINEAGE     A card or helper you start sits under you: `skills-sync card <brief>` (dispatch-card
+            §3), or a raw `orca orchestration worker-start` with `--worktree new-child` only.
+            No `new-top-level`, `--no-parent` or `path:` parent unless this brief names it. When
+            the helper stops (exit 6, or a 4 that says nothing was created), report its choices; do
+            not pick `--no-parent` or `--card` to get past it.
 ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a party outside the
             repo behaves (a client, an upstream) adds a line observing that real party, on dev
             or in a recorded trace; a test built on the brief's model of it shares the
@@ -229,6 +236,7 @@ LAND        A change: its normal flow (deliver-ticket), or the push the owner al
 WAITING     `ask` what you cannot decide, and after a timeout (exit 1) the resume command Orca
             prints, or the preamble's `ask` with `--resume <messageId> --timeout-ms 1800000`,
             until it is answered.
+LINEAGE     As above.
 REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
             Load end-session §7 before you send it; it picks worker_done and the closing calls.
 KEEP        <optional, as above>
@@ -279,6 +287,11 @@ PARENT      The Run of the session writing this brief, as `orca orchestration se
             started as a `/goal` card (Orca refuses escalation without a Dispatch). A status wakes
             no wait. Decisions go by GATE. A send to it
             that fails is the routing gap HUMAN ONLY names; never guess another address.
+START       How you were started, as the writer expects it: a dispatched worker on run:<id> (the
+            PARENT Run, `worker-start --worktree new-child` from that Run's session) or a `/goal`
+            card under <the writer's session>. `skills-sync card` checks the first against the
+            starting session and stops before creating anything when it does not hold.
+LINEAGE     As in the worker brief above; your units sit under you and you under PARENT's session.
 PERMISSIONS The autoMode rules for each outward act the predicate needs (merge, deploy, edits
             to tracker items or PRs an earlier session made), quoted, or "missing" (your
             Frame asks the human for them). An act refused in your session or a card under you
@@ -311,13 +324,14 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - The worker runs the user's normal flow (`deliver-ticket`) for implementation and review. LAND, ORDER, PEERS and REPORT are what change inside a program, and so do browser checks: VERIFY sends them to the host's own browser (Orca's `orca tab` commands), not a browser extension. An extension may be disconnected, and that is not a blocker. Lanes share that browser and its logins, so a worker takes it with `orch hold browser --note "<what it checks>"` before driving it and `orch release browser` when done (the VERIFY line in both templates). `hold` refuses while another lane has it and names the holder: wait for it or ask that lane, never drive over its session.
 - A unit whose result a person opens as a live page (a mockup, a branch preview) gets in VERIFY: its own free port in the preview watcher's range, the server bound to 127.0.0.1, and the tailnet link fetched for 200 before it is reported, by `deliver-ticket` `references/visual-evidence.md` ("A live page for a person"). Two lanes on one port show each other's page. The card never runs `tailscale serve` and never asks for a port to be opened.
 - **Name the card.** Orca's automatic title comes from the first prompt and can be meaningless, unrelated to the ticket. Pass `worker-start --display-name "<ID> <short title>"`. That name sticks; the terminal tab title belongs to the agent, which overwrites a rename.
-- **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Set Base from `gh pr list --state open`, not memory: an open PR the unit needs, or one already doing its scope, is its base. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed.
+- **Plan chains as stacks.** A unit that has to land after another unit's PR builds on that branch (`Base: stacked on #N`), so the chain lands in one merge. Set Base from `gh pr list --state open`, not memory: an open PR the unit needs, or one already doing its scope, is its base. Record it with `orch dep`, not as an Orca dep: an Orca dep would keep this unit from starting until the lower PR had landed. An open PR that changes one of the paths in this unit's SCOPE is its base too, even when the unit needs nothing from it: `orch overlap <slug> --paths <SCOPE paths>` names it (`OVERLAP plan #N`).
 - **A worker's question is an `ask`** (the end of PEERS, or WAITING), resumed after each timeout. Only a dispatched worker can `ask` or escalate; Orca refuses both from a `/goal` card, which asks by `dispatch-card` §2 "Questions". "One inbox wait, always" (SKILL.md Drain) is the rule of the layers above a worker, not a worker's.
 - An agent that will use a write tool whose host asks it to load a policy skill before the first write gets, in its brief or prompt, an instruction to load that skill before its first write; otherwise the confirmation comes back in every session and stops it on a dialog.
 - Keep every write inside the worker's worktree except SCOPE's named temporary download directory. A write elsewhere can stop the worker on a permission prompt while Orca still reports it `live`. Anything kept outside it (logs, notes, program files, auto-memory lessons) comes back in the worker's message, and the session that wrote the brief writes it.
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). No `orch record … spawned` line: `orch` reads the Dispatch and its ticket from the Orca Task (the spec's first line). Record one only when the unit's ticket is not the ID the spec opens with (a sub-unit such as `ABC-1-K4`): `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
+- **Lineage and supervision.** Every brief carries the LINEAGE row, so each card lands under the session that started it (orchestrator, then lead, then its workers). A brief whose unit must be supervised names the Run in its REPORT or PARENT line (`run:<id>`, the Run the session that will start it is bound to) and, for a lead, its START form. Start it from that Run's session: `skills-sync card` compares the brief's Run with the starting session's, and stops on no binding, another Run or no answer from Orca. A `/goal` card on purpose is `--card`; a handoff with no relation to this session is `--no-parent`.
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.
 - Direction in CONTEXT is labelled by origin. The owner's words are quoted verbatim as the owner's; a proposal of yours, a lead's or a reviewer's is labelled as such, never as the owner's recommendation. No advice on getting an act past a prompt, the classifier or a hook, even when the layer above calls it the owner's intent ("Refused acts").
 - **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal or card you mean to give the next task needs a `KEEP` line naming that task; without one, a landed, clean card is gone by the time you read its `worker_done`.

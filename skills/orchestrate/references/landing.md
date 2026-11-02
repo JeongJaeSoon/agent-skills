@@ -67,7 +67,7 @@ Two kinds of edge, declared in two places. Pick per edge:
 | B needs A… | Edge | Where |
 |---|---|---|
 | **before B can start**: A's result on main, A's report, an API A creates that B cannot stub | start-after | Orca task deps. Orca keeps B out of `task-list --ready` until A's task completes |
-| **only to land first**: B can be written on top of A's branch now | land-after | A GitHub stack (B on A's branch) plus `orch dep <slug> --ticket B --after A`. No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
+| **only to land first**: B can be written on top of A's branch now, or B changes a path A changes (`orch overlap`) | land-after | A GitHub stack (B on A's branch) plus `orch dep <slug> --ticket B --after A`. No Orca dep: it would hold B back until A had landed, and the chain could never ride one merge |
 
 Start-after edges in Orca:
 

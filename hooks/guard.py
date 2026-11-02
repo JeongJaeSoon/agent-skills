@@ -12,6 +12,7 @@ work itself, and one without ROLE never gets the reorient hook's per-prompt remi
 The text is read as written: a prompt built from a file or variable is denied too.
 `skills-sync card <brief>` (scripts/card.py) is checked on the brief file it names, with that helper's own rules,
 and so is the lead test below; a relative path after a `cd` or `pushd`, or a check that cannot run, is denied.
+Only a call bash would run counts: the words inside quotes, a heredoc body or a comment are text.
 A wrapper (`env …`, `bash -c`, scripts/card.py run directly) is not seen: a guardrail, not a sandbox.
 
 Deny: a lead's card started from a session that is itself a lead, known by its `agent_type` (`claude --agent
@@ -54,7 +55,7 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 # In command position only: a grep or echo that quotes the words is not a card being made.
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 # The helper reads its brief from a file this hook can open, so the card checks run on that file (dispatch-card §3).
-CARD_HELPER = re.compile(r"(?:^|[;&|(])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
+CARD_HELPER = re.compile(r"(?:^|[;&|(`])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
 CHDIR = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\b", re.M)
 LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lead. Give the card a "
                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
@@ -143,6 +144,172 @@ def lead_session(agent, session, transcript):
     return agent == "agent-skills:lead" or declared_lead(session) or bool(transcript and started_as_lead(transcript))
 
 
+def command_text(cmd):
+    """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
+    comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them.
+    From a construct this parser does not follow (`${…}`, whose quotes nest; arithmetic; `case` in `$(…)`; a
+    backslash in backticks; a heredoc delimiter it cannot read) on, nothing is blanked."""
+    out, n = list(cmd), len(cmd)
+    opened, closed = set(), set()  # just past an opening backtick (a word starts) and past a closing `)` or backtick
+
+    class Unsure(Exception):
+        pass
+
+    def blank(i, j):
+        out[i:j] = " " * (j - i)
+
+    def expanding(i, end, close):
+        """Double-quoted text (close='"') or an unquoted heredoc body (close=None) from i; returns the index after it."""
+        while i < end:
+            c = cmd[i]
+            if c == close:
+                return i + 1
+            if cmd.startswith(("${", "$((", "$["), i):
+                raise Unsure(i)
+            if c == "\\":
+                blank(i, min(i + 2, end))
+                i += 2
+            elif cmd.startswith("$(", i):
+                i = command(i + 2, ")")
+            elif c == "`":
+                i = command(i + 1, "`")
+            else:
+                blank(i, i + 1)
+                i += 1
+        return end
+
+    def bodies(i, pending):
+        for strip, delim, expands in pending:
+            start = i
+            while i < n:
+                eol = cmd.find("\n", i)
+                eol = n if eol < 0 else eol
+                line = cmd[i:eol]
+                if expands and line.endswith("\\"):  # bash joins the next line, which may end the body sooner
+                    return n
+                if (line.lstrip("\t") if strip else line) == delim:
+                    if expands:
+                        expanding(start, i, None)
+                    else:
+                        blank(start, i)
+                    blank(i, eol)
+                    i = eol + 1
+                    break
+                i = eol + 1
+            else:  # no terminator line: the delimiter was misread, so nothing after it is taken for a body
+                return n
+        return i
+
+    def escaped(j):  # the character at j follows an odd run of backslashes
+        return (j - len(cmd[:j].rstrip("\\"))) % 2 == 1
+
+    def starts_word(i):
+        """`#` at i opens a comment: it starts a word, line continuations (`\\<newline>`) removed."""
+        while i >= 2 and cmd[i - 1] == "\n" and escaped(i - 1):
+            i -= 2
+        # A subshell's `)` ends a word, a substitution's does not: `(x)#` is a comment, `$(x)#` and `` `x`# `` are not.
+        return i == 0 or i in opened or (cmd[i - 1] in " \t\n;&|()" and i not in closed and not escaped(i - 1))
+
+    def heredoc(i):
+        """The delimiter word after `<<` at i, quotes removed: (index after it, (strip tabs, word, expands) or None)."""
+        strip = cmd.startswith("-", i)
+        i += strip
+        while i < n and cmd[i] in " \t":
+            i += 1
+        # A delimiter with a `$` ($'…', $"…", $$) or an escape bash would rewrite ("…\…", \<newline>) is not read
+        # (None), since a misread delimiter could match a later line and blank the commands before it.
+        word, quoted, sure = "", False, True
+        while i < n and cmd[i] not in " \t\n;&|<>()":
+            c = cmd[i]
+            if c == "$":
+                sure = False
+                word += c
+                i += 1
+            elif c in "'\"":
+                j = cmd.find(c, i + 1)
+                j = n if j < 0 else j
+                part = cmd[i + 1:j]
+                sure = sure and not (c == '"' and "\\" in part)
+                word, quoted = word + part, True
+                blank(i + 1, j)
+                i = j + 1
+            elif c == "\\":
+                sure = sure and cmd[i + 1:i + 2] != "\n"
+                word, quoted = word + cmd[i + 1:i + 2], True
+                i += 2
+            else:
+                word += c
+                i += 1
+        sure = sure and "`" not in word and cmd[i:i + 1] != "("  # `<<$(x)`: bash reads the substitution as the word
+        return i, ((strip, word, not quoted) if sure and (word or quoted) else None)
+
+    def command(i, close):
+        depth, pending = 0, []
+        # Bash cuts a backtick substitution at the next backtick before parsing it: nothing in it runs past there.
+        end, prev = (cmd.find("`", i) % (n + 1) if close == "`" else n), i
+        if close == "`":
+            opened.add(i)
+        while i < n:
+            if i > end:
+                raise Unsure(prev)
+            c, prev = cmd[i], i
+            if c == close and (close != ")" or depth == 0):
+                closed.add(i + 1)
+                return i + 1
+            # Bash also rewrites backslashes inside backticks before running them, and runs a substitution inside
+            # an arithmetic expression's quotes.
+            if (cmd.startswith(("${", "$((", "((", "$["), i) or close == "`" and c == "\\"
+                    or c == "'" and cmd[i - 2:i] == "$$"
+                    or close == ")" and re.match(r"case\b", cmd[i:]) and starts_word(i)):
+                raise Unsure(i)
+            if c == "(":
+                depth += 1
+            elif c == ")" and depth:
+                depth -= 1
+            if c == "\\":
+                blank(i, min(i + 2, n))
+                i += 2
+            elif c == "'":
+                ansi = i > 0 and cmd[i - 1] == "$" and not escaped(i - 1)
+                j = i + 1
+                while j < n and cmd[j] != "'":
+                    j += 2 if ansi and cmd[j] == "\\" else 1
+                blank(i + 1, min(j, n))
+                i = j + 1
+            elif c == '"':
+                i = expanding(i + 1, n, '"')
+            elif c == "`":
+                i = command(i + 1, "`")
+            elif cmd.startswith(("$(", "<(", ">("), i):  # its `)` does not end the word
+                i = command(i + 2, ")")
+            elif c == "#" and starts_word(i):
+                eol = cmd.find("\n", i)
+                blank(i, n if eol < 0 else eol)
+                i = n if eol < 0 else eol
+            elif cmd.startswith("<<<", i):  # a here-string, whose suffix is not a heredoc
+                i += 3
+            elif cmd.startswith("<<", i):
+                at, (i, doc) = i, heredoc(i + 2)
+                # Unread, its body would be scanned as commands and a quote in it could blank what follows. A
+                # subshell's heredoc is not followed either.
+                if not doc or depth:
+                    raise Unsure(at)
+                pending.append(doc)
+            elif c == "\n" and pending:
+                i, pending = bodies(i + 1, pending), []
+            else:
+                i += 1
+        if close == "`":  # the scan ran out before the closing backtick
+            raise Unsure(prev)
+        return n
+
+    try:
+        command(0, None)
+    except Unsure as e:
+        return "".join(out[:e.args[0]]) + cmd[e.args[0]:]
+    return "".join(out)
+
+
 def helper_card(brief, cwd, moves):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
     `moves`: the command changes directory first, so a relative path would be read from the wrong place."""
@@ -152,11 +319,14 @@ def helper_card(brief, cwd, moves):
     path = pathlib.Path(brief).expanduser()
     if moves and not path.is_absolute():
         return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
+    full = path if path.is_absolute() else pathlib.Path(cwd or ".") / path
+    if full.is_dir():
+        return None, f"`skills-sync card {brief}` names a directory, not a brief file; give it the brief's file path."
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
         import card
         try:
-            return card.compose(str(path if path.is_absolute() else pathlib.Path(cwd or ".") / path)), None
+            return card.compose(str(full)), None
         except card.Refuse as e:
             return None, str(e)
     except Exception as e:  # a check that cannot run does not let the card through
@@ -195,10 +365,11 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=N
                                   "and PREDICATE lines, copied from orchestrate references/brief.md \"Lead\" (dispatch-card §2).")
         if lead and lead_session(agent, session, transcript):
             return decide("deny", LEAD_FROM_LEAD)
-    for helper in CARD_HELPER.finditer(cmd):
-        if helper[1].startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
+    for helper in CARD_HELPER.finditer(command_text(cmd)):
+        brief = re.compile(r"\S+").match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
+        if brief.startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
             continue
-        prompt, refused = helper_card(helper[1], cwd, bool(CHDIR.search(cmd)))
+        prompt, refused = helper_card(brief, cwd, bool(CHDIR.search(cmd)))
         if refused:
             return decide("deny", refused)
         if is_lead(prompt) and lead_session(agent, session, transcript):

@@ -306,6 +306,23 @@ th.num .th-sort { justify-content: flex-end; }
 .grid-line { stroke: var(--grid); stroke-width: 1; }
 .base-line { stroke: var(--axis); stroke-width: 1; }
 .hover-line { stroke: var(--ink-3); stroke-width: 1; }
+/* PC load (overview) */
+.pressure { margin-bottom: var(--s3); }
+.p-now { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: 0 var(--s4) var(--s2); font-size: var(--t-sm); }
+.p-why { color: var(--ink-2); }
+.p-strip { position: relative; height: 6px; margin: 0 var(--s4) var(--s3); border-radius: 3px; background: var(--grid); overflow: hidden; }
+.p-strip i { position: absolute; top: 0; bottom: 0; background: var(--tone); }
+.p-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s3) var(--s4); padding: 0 var(--s4); }
+.pmetric { display: grid; gap: var(--s1); min-width: 0; }
+.pm-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.pm-v { font-size: var(--t-lg); font-variant-numeric: tabular-nums; }
+.pm-chart svg { height: 56px; border-bottom: 1px solid var(--line); }
+.pm-foot { font-size: var(--t-xs, 11px); }
+.p-axis { display: flex; justify-content: space-between; padding: var(--s1) var(--s4) 0; font-size: var(--t-xs, 11px); }
+.p-extra { padding: var(--s2) var(--s4) var(--s3); font-size: var(--t-sm); }
+.p-extra b { color: var(--ink); font-weight: 600; }
+.p-queue { border-top: 1px solid var(--line); }
+@media (max-width: 960px) { .p-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .empty-chart { height: 160px; display: grid; place-items: center; color: var(--ink-3); font-size: var(--t-sm); }
 
 /* dependency graph */

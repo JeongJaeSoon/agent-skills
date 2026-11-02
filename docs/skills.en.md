@@ -357,7 +357,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **Relation to deliver-ticket:** Review, commits and pushes for each unit follow `deliver-ticket`'s rules.
 
 ### how
-- **When:** "X는 어떻게 동작해?" (how does X work?), "이건 어디에 둬야 해?" (where should this go?)
+- **When:** "X는 어떻게 동작해?" (how does X work?), "이건 어디에 둬야 해?" (where should this go?), and before editing a subsystem that neither you nor an upstream report has read.
 - **What it does:**
   - Simple questions: the session explores and explains on its own.
   - Complex questions: launches 2–4 `Explore` explorers in parallel, then one opus synthesizes their findings.
@@ -366,7 +366,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
 - **Related:** Motivation and history ("왜 이렇게 됐어" (how did it end up like this?)) go to `why`.
 
 ### why
-- **When:** "왜 이렇게 됐어" (how did it end up like this?), "이거 왜 이렇게 짰어" (why was this written this way?), "이 결정 배경이 뭐야" (what's the background to this decision?), "이유가 뭐야" (what's the reason?), "이 값은 어디서 나왔어" (where did this value come from?), and looking for the reason behind the current shape before changing code. How something works is `how`'s job.
+- **When:** "왜 이렇게 됐어" (how did it end up like this?), "이거 왜 이렇게 짰어" (why was this written this way?), "이 결정 배경이 뭐야" (what's the background to this decision?), "이유가 뭐야" (what's the reason?), "이 값은 어디서 나왔어" (where did this value come from?), before deleting, inverting or loosening code whose reason is not in a comment, test or the brief, and when looking for the change that introduced a regression. How something works is `how`'s job.
 - **What it does:**
   - A question about one line or one commit ends in narrow mode, answered from git blame → commit → PR alone, and the answer names the sources it didn't search.
   - Otherwise it launches one investigator per source in parallel (git and `gh`, Linear/Jira, Notion, Google Drive, Obsidian, Slack). Each investigator digs only in its own source and just notes leads that point elsewhere. Empty results are recorded as findings too.
@@ -436,7 +436,7 @@ These skills come from [pstack](https://github.com/cursor/plugins), adapted for 
   - The writing follows `write-plainly`, in the user's language.
 
 ### tdd
-- **When:** TDD or a failing test is explicitly requested, or a bug has an obvious cheap local test target.
+- **When:** Fixing a bug that has a cheap local test target, or when TDD, a failing test or a regression test is requested.
 - **What it does:**
   - Runs the failing test first to confirm why it fails, makes the smallest fix, and confirms it passes.
   - If a test would be unrealistic, it says why and uses the closest runnable check. It never weakens existing assertions.

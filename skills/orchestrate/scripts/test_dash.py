@@ -257,6 +257,14 @@ body = json.dumps({"decision": "d1", "answer": "CSV"}).encode()
 assert post({"Host": host}, "/api/fleet/decide") == 403 and answers == []
 assert post({"Host": host, "X-Dash-Token": dash.TOKEN}, "/api/fleet/decide") == 200
 assert answers == [("d1", "CSV")], answers
+# PC load: pressure.py's history of the demo's seeded rounds, through the route; a missing script is an error row.
+pr = json.loads(urllib.request.urlopen(f"{base}/api/fleet/pressure?hours=24").read())
+assert pr["hours"] == 24 and len(pr["series"]) > 400 and pr["last"]["level"] == "warn", {k: pr.get(k) for k in ("hours", "last")}
+assert pr["thresholds"]["load_per_cpu"] == [1.3, 2.0] and [q["id"] for q in pr["queue"]] == ["q-0fake001"]
+assert len(dash.pressure_report(6)["series"]) < len(pr["series"])
+real_pressure, dash.PRESSURE = dash.PRESSURE, root / "missing.py"
+assert "error" in dash.pressure_report(), dash.pressure_report()
+dash.PRESSURE = real_pressure
 sk = json.loads(urllib.request.urlopen(f"{base}/api/fleet/skills").read())
 assert {"agent-skills", "user", "other"} <= {x["source"] for x in sk["sources"]}, sk["sources"]
 assert next(r for r in sk["skills"] if r["name"] == "agent-skills:teach")["flags"] == ["unused_30d"]
