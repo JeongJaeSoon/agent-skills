@@ -41,9 +41,10 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             lead only what changes scope, order or the predicate. Read your own mail with
             `check --terminal $ORCA_TERMINAL_HANDLE` and ack each delivery (`--ack <deliveryId>`),
             or the same batch comes back. A decision the lead must answer: `ask --question
-            --options`, which waits for the lead's `reply`. A timeout exits 1 with `"timedOut":
-            true`; that is not a failure: run `ask --resume <messageId>` on the same message
-            (at most 30 minutes per wait) until it is answered, never a second question. While
+            --options`, which waits for the lead's `reply`. A timeout (exit 1; `"timedOut": true`
+            under `--json`) is not a failure: run the resume command Orca prints, or the
+            preamble's `ask` with `--resume <messageId> --timeout-ms 1800000` (the most one wait
+            allows), until it is answered, never a second question. While
             it waits it shows in the dashboard's Needs you. `--type escalation` is for a blocker
             the lead must act on, not for a choice. Never send a question as a status and end
             your turn: a status wakes no wait, and waking an idle agent on mail is best-effort.
@@ -225,8 +226,9 @@ MODEL CALLS Another model (a subagent or an API) only when the task needs it; pi
 LAND        A change: its normal flow (deliver-ticket), or the push the owner allows. An investigation: none.
             Waiting on a review or another outside event: the program brief's LAND sentences from
             "A wait on a human review" through "rate_limit`).", pasted verbatim.
-WAITING     `ask` what you cannot decide, and after a timeout (exit 1, `"timedOut": true`) `ask
-            --resume <messageId>` the same question until it is answered.
+WAITING     `ask` what you cannot decide, and after a timeout (exit 1) the resume command Orca
+            prints, or the preamble's `ask` with `--resume <messageId> --timeout-ms 1800000`,
+            until it is answered.
 REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
             Load end-session §7 before you send it; it picks worker_done and the closing calls.
 KEEP        <optional, as above>

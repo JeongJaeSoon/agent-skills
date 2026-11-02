@@ -601,6 +601,7 @@ long = "options " + "x" * 3000 + " END"
 line = prog.inbox_line({"id": "m7", "type": "status", "thread_id": "m6", "body": long,
                         "payload": {"dispatchId": "ctx_1", "note": "y" * 300}})
 assert line.endswith(" END") and " thread=m6 " in line and '"note": "' + "y" * 300 + '"' in line, line
+assert 'payload={"dispatchId": "ctx_1"}' in prog.inbox_line({"id": "m8", "payload": '{"dispatchId":"ctx_1"}'})
 assert lines[1] == "1 of 2 to act on (the rest heartbeats or refusals); then: orch inbox --ack dv9 --wait", lines
 calls, queue = [], [{"deliveryId": None, "messages": []}]
 out = io.StringIO()

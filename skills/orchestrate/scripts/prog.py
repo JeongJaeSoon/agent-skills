@@ -2341,8 +2341,14 @@ def inbox_line(m):
     # Whole: a body cut short dropped the options of a decision and the evidence of a worker_done.
     body = (m.get("body") or "").replace("\n", "\n    ")
     thread = f" thread={m['thread_id']}" if m.get("thread_id") else ""
+    payload = m.get("payload")
+    if isinstance(payload, str):  # Orca often stores it as a JSON string; print it once, not escaped
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            pass
     return (f"INBOX id={m.get('id')} type={m.get('type')} from={m.get('from_handle')}{thread} "
-            f"subject={m.get('subject')} payload={json.dumps(m.get('payload'), ensure_ascii=False)} body={body}")
+            f"subject={m.get('subject')} payload={json.dumps(payload, ensure_ascii=False)} body={body}")
 
 
 def cmd_inbox(argv):

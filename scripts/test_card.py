@@ -27,6 +27,11 @@ elif a[:2] == ["orchestration", "worker-start"]:
         print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": "The dispatching terminal's "
               "workspace could not be resolved to a git worktree Orca manages, which --worktree new-child needs"}}))
         sys.exit(1)
+    if mode == "start-fails-dispatch":
+        print(json.dumps({"ok": False, "error": {"code": "outcome_unknown", "message": "turn not seen", "data": {
+            "orchestrationRequestId": "req_2", "dispatchId": "ctx_2", "recovery": {"queryCommand": [
+                "orca", "orchestration", "worker-show", "--dispatch", "ctx_2", "--json"]}}}}))
+        sys.exit(1)
     if mode == "start-fails":
         print(json.dumps({"ok": False, "error": {"code": "outcome_unknown", "message": "turn not seen",
                                                  "data": {"orchestrationRequestId": "req_1"}},
@@ -238,6 +243,18 @@ rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "
 assert rc == 4 and "worker-start failed: outcome_unknown" in err and "worker-stop --dispatch ctx_1" in err, err
 # The mutation's request id is Orca's own answer to "did it start?": request-show reads it without starting anything.
 assert "orca orchestration request-show --request req_1 --json" in err.splitlines()[-1], err
+# When Orca names the Dispatch, its own recovery query (worker-show) is printed, not request-show.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="start-fails-dispatch")
+last = err.splitlines()[-1]
+assert rc == 4 and "orca orchestration worker-show --dispatch ctx_2 --json" in last and "request-show" not in last, err
+# A start Orca never answered (the subprocess timed out) may still be starting: look before starting it again.
+real_run = card.run
+card.run = lambda cmd, **k: (None, "timed out after 900 seconds") if cmd[1:3] == ["orchestration", "worker-start"] else real_run(cmd, **k)
+try:
+    rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1")
+finally:
+    card.run = real_run
+assert rc == 4 and "timed out" in err and "worker-list" in err.splitlines()[-1], err
 # A create failure carries no request id, so no request-show line.
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="create-fails")
 assert rc == 4 and "request-show" not in err, err
