@@ -111,6 +111,17 @@ RUNNERS = {"npm", "pnpm", "yarn", "bun"}
 # `git add` or `cat` of as many is not.
 SUITE_FILES = 5
 LOOPERS = {"for", "python", "python3", "pytest", "node", "bun", "deno", "go"}
+# A redirection (`> out.txt`, `2>`, `&>`) and its target select no test.
+REDIRECT = re.compile(r"\d*(>>?|<<?|&>>?|>&)")
+# A runner given a path (`tests/a.py`, `a.test.ts`, `x.py::t`) or a name filter runs a subset, not the suite.
+FILTERS = {"-k", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter"}
+
+
+def narrowed(rest):
+    """Whether a runner's arguments pick tests: a path-shaped word or a name filter. An option's value (`-n 8`,
+    `--timeout 30000`) is neither, so it leaves a whole suite."""
+    return any(w.split("=", 1)[0] in FILTERS or not w.startswith("-") and
+               ("/" in w or "::" in w or re.search(r"\.[A-Za-z]\w*$", w)) for w in rest)
 
 
 def runs_tests(argv):
@@ -122,7 +133,15 @@ def runs_tests(argv):
         if words[i] == "AGENT_SKILLS_PRESSURE_GATE=0":
             return None
         i += 1
-    words = words[i:]
+    words, kept = words[i:], []
+    for w in words:
+        if kept and kept[-1] is None:
+            kept[-1] = ""  # the redirection's target
+        elif m := REDIRECT.match(w):
+            kept.append(None if m.end() == len(w) else "")
+        else:
+            kept.append(w)
+    words = [w for w in kept if w]
     if not words or "--help" in words:
         return None
     head = os.path.basename(words[0])
@@ -143,22 +162,19 @@ def runs_tests(argv):
         script = args[1] if args[:1] == ["run"] and len(args) > 1 else args[0] if args else ""
         if E2E.fullmatch(script):
             return "E2E"
-        if head == "bun" and args[:1] == ["test"] and len(args) == 1:
-            return "test suite"
-        if script in ("test", "test:all") and len(args) == (2 if args[:1] == ["run"] else 1):
+        after = words[words.index(script) + 1:] if script else []
+        if (script in ("test", "test:all") or head == "bun" and args[:1] == ["test"]) and not narrowed(after):
             return "test suite"
     if head == "make" and args:
         return "E2E" if any(E2E.fullmatch(a) for a in args) else "test suite" if "test" in args else None
-    if head == "pytest" and not args or head == "go" and args[:2] == ["test", "./..."]:
+    if head == "pytest" and not narrowed(words[1:]) or head == "go" and args[:2] == ["test", "./..."]:
         return "test suite"
     return None
 
 
 def unwrapped_tests(cmd):
     """What a line runs that belongs in an `orch heavy` slot, None when it runs none or already runs in one."""
-    segs = list(segments(cmd))
-    if any(starts_heavy(s) == "orch heavy" for s in segs):
-        return None
+    segs = list(segments(cmd))  # a command passed to `orch heavy` is that segment's words, never a segment of its own
     found = next(filter(None, map(runs_tests, segs)), None)
     if not found and "AGENT_SKILLS_PRESSURE_GATE=0" not in cmd and sum(
             bool(TEST_FILE.fullmatch(w)) for s in segs if s and os.path.basename(s[0]) in LOOPERS for w in s) >= SUITE_FILES:

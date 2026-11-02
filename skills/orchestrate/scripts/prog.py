@@ -2601,7 +2601,16 @@ def cmd_heavy(argv):
                 except (OSError, subprocess.SubprocessError) as e:
                     # The command's exit code is the result; a failed registration is only reported.
                     print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
-        holders = [json.loads(f.read_text() or "{}") for f in sorted(slots.glob("slot-*"))]
+        holders, freed = [], False
+        for f in sorted(slots.glob("slot-*")):
+            try:
+                holders.append(json.loads(f.read_text() or "{}"))
+            except FileNotFoundError:  # its holder finished while this read: take the slot now
+                freed = True
+            except ValueError:
+                holders.append({"slot": f.name, "unreadable": True})
+        if freed:
+            continue
         if time.monotonic() >= deadline:
             sys.exit(f"heavy: every slot busy after waiting: {json.dumps(holders, ensure_ascii=False)}")
         if not waited:

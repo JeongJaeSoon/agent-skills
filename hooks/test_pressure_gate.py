@@ -50,13 +50,18 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("pnpm test:e2e", "E2E"), ("npm run e2e", "E2E"), ("./scripts/e2e.sh", "E2E"), ("cypress run", "E2E"),
                   ("make e2e", "E2E"), ("bash -c 'cd app && npm run test:e2e'", "E2E"),
                   ("'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' --headless=new --dump-dom x", "browser"),
-                  ("chromium --headless --screenshot a.png x", "browser")):
+                  ("chromium --headless --screenshot a.png x", "browser"),
+                  # Option values and redirections pick no tests; a wrapped command does not cover its neighbour.
+                  ("pytest -n 8", "test suite"), ("bun test --timeout 30000", "test suite"),
+                  ("npm test > results.txt", "test suite"), ("npm test 2>&1 | tail -5", "test suite"),
+                  ("orch heavy - -- bash tests.sh & npx playwright test", "E2E")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
             "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
             "orch heavy - -- bash -c " + repr(LOOP), "cat tests.sh", "grep -n e2e package.json",
             "git add " + " ".join(f"hooks/test_{i}.py" for i in range(6)), "AGENT_SKILLS_PRESSURE_GATE=0 bash tests.sh",
-            "AGENT_SKILLS_PRESSURE_GATE=0 " + LOOP.split("\n")[1], "chrome --version", "npm run build", "ls tests"):
+            "AGENT_SKILLS_PRESSURE_GATE=0 " + LOOP.split("\n")[1], "chrome --version", "npm run build", "ls tests",
+            "pytest -k foo", "pytest tests/test_a.py::test_x", "orch heavy - -- npm test > out.txt"):
     assert g.unwrapped_tests(cmd) is None, cmd
 wrapped = g.wrap_reason("cd /w && bash tests.sh", "test suite")
 assert wrapped.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) ") and "run_in_background" in wrapped
