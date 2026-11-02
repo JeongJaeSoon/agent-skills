@@ -7,7 +7,7 @@
       },
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 10 }]
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 20 }]
       },
       {
         "matcher": "Bash|mcp__.*([Ll]inear|[Jj]ira|atlassian).*",

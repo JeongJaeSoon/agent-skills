@@ -22,7 +22,8 @@ Usage:
 
 No model is called. Thresholds live under "reap" → "pressure" in ~/.claude/agent-skills.json (DEFAULTS); each is
 [warn, danger], a danger of null (or inf) meaning warn only. check and the hook judge what `round` last sampled
-(swapout rate, CPU idle, Docker memory) only while it is younger than `sample_fresh_minutes`. Nothing outside reap's own target list is ever touched: no kill by pattern, no compose down -v,
+(swapout rate, Docker memory and CPU) only while it is younger than `sample_fresh_minutes`; CPU idle they read
+where they judge, over `idle_window_seconds`. Nothing outside reap's own target list is ever touched: no kill by pattern, no compose down -v,
 no prune, no volume or image removal.
 """
 import contextlib, ctypes, ctypes.util, fcntl, hashlib, json, math, os, pathlib, plistlib, re, shlex, shutil, subprocess, sys, time
@@ -41,7 +42,7 @@ LOG = reap.STATE / "pressure.log"
 HISTORY = reap.STATE / "pressure-history.jsonl"
 HISTORY_KEEP_S = 24 * 3600
 HISTORY_FIELDS = ("load_per_cpu", "cpu_idle_pct", "mem_free_pct", "swap_gb", "swapout_pps", "containers",
-                  "docker_mem_pct", "disk_free_gb")
+                  "docker_mem_pct", "docker_cpu_pct", "disk_free_gb")
 # Left by uninstall so `skills-sync setup apply` keeps a job the user turned off off; install removes it.
 DISABLED = reap.STATE / "pressure-disabled"
 
@@ -50,15 +51,23 @@ DISABLED = reap.STATE / "pressure-disabled"
 DEFAULTS = {
     "interval": 180,
     "load_per_cpu": [1.3, 2.0],  # 5-minute load / logical CPUs, at or above
-    "load_idle_pct": 10,  # load reaches danger only while CPU idle over the last round is at or below this
+    "load_idle_pct": 10,  # load reaches danger only while CPU idle is at or below this
+    # hook, check and queue wait read CPU idle over this many seconds where they judge, not from the last round.
+    # macOS adds to the CPU counters about once a second, so a window under 1 s often sees none and is raised to 1.
+    "idle_window_seconds": 2.0,
     "mem_free_pct": [20, 10],  # kern.memorystatus_level, at or below
     "vm_pressure": [2, 4],  # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
     "swap_gb": [16, None],  # in use: what past pressure or a leak left, not what is swapping now
     "swap_growth_gb_h": [2, None],  # net growth over the last 30-60 minutes: a leak to look into
     "swapout_pps": [300, 1500],  # pages swapped out per second between rounds
     "disk_free_gb": [50, 20],  # on the volume holding $HOME, at or below
-    "containers": [40, None],  # running docker containers, a Kubernetes pod as one and kube-system not at all
+    # Running docker containers, a Kubernetes pod as one and kube-system not at all. Shown, never judged: a count of
+    # mostly idle containers says nothing about load. The key stays so an old override still loads.
+    "containers": [40, None],
     "docker_mem_pct": [70, 90],  # every container's memory (docker stats) / the Docker VM's MemTotal
+    # every container's CPU (docker stats) / the Docker VM's CPUs. Warn only: the VM's vCPUs are host threads, so
+    # host CPU idle already holds them; this says the Docker side is where the CPU goes and sweeps its stacks.
+    "docker_cpu_pct": [50, None],
     "sample_fresh_minutes": 7,  # a round's sample older than this is not judged on (two intervals and a slow round)
     # Compose projects, container names or Kubernetes namespaces that run all day (the user's own services): left out
     # of `containers` and shown apart. A restart policy cannot tell them, since card stacks use unless-stopped too.
@@ -81,10 +90,10 @@ DEFAULTS = {
 }
 # (metric, higher is worse); each is also its threshold's key
 CHECKS = (("load_per_cpu", True), ("mem_free_pct", False), ("vm_pressure", True), ("swap_gb", True),
-          ("swap_growth_gb_h", True), ("swapout_pps", True), ("disk_free_gb", False), ("containers", True),
-          ("docker_mem_pct", True))
+          ("swap_growth_gb_h", True), ("swapout_pps", True), ("disk_free_gb", False), ("docker_mem_pct", True),
+          ("docker_cpu_pct", True))
 # What a round samples and check and the hook read back from its state.
-SAMPLED = ("swapout_pps", "cpu_idle_pct", "docker_mem_pct", "swap_growth_gb_h")
+SAMPLED = ("swapout_pps", "cpu_idle_pct", "docker_mem_pct", "docker_cpu_pct", "swap_growth_gb_h")
 LEVELS = ("ok", "warn", "danger")
 LEVEL_KO = {"ok": "정상", "warn": "경고", "danger": "위험"}
 
@@ -236,11 +245,14 @@ def summary(m):
     for k, fmt in (("cpu_idle_pct", "CPU idle {:g}%"), ("mem_free_pct", "메모리 여유 {}%"), ("vm_pressure", "압박 레벨 {}"),
                    ("swap_gb", "swap {}GB"), ("swap_growth_gb_h", "swap 증가 {:g}GB/h"),
                    ("swapout_pps", "swapout {:g}/s"), ("disk_free_gb", "디스크 여유 {}GB"),
-                   ("docker_mem_pct", "Docker 메모리 {:g}%"), ("containers", "컨테이너 {}개")):
+                   ("docker_mem_pct", "Docker 메모리 {:g}%"), ("docker_cpu_pct", "Docker CPU {:g}%"),
+                   ("containers", "컨테이너 {}개")):
         if m.get(k) is not None:
             parts.append(fmt.format(m[k]))
             if k == "containers" and m.get("always_on"):
                 parts[-1] += f"(상시 {m['always_on']}개 제외)"
+            if k == "cpu_idle_pct" and m.get("idle_live"):
+                parts[-1] += "(지금 잰 값)"
     if m.get("sample_age_min") is not None:
         parts.append(f"샘플 {m['sample_age_min']:g}분 전(오래돼 판정에서 뺌)")
     return ", ".join(parts)
@@ -295,15 +307,21 @@ def swap_growth(hist, now, gb):
     return round((gb - hist[0][1]) / ((now - hist[0][0]) / 3600), 1)
 
 
-def docker_mem_pct(run=sh):
-    """Every running container's memory as a share of the Docker VM's. The VM's own kernel and daemons are not in it,
+def docker_usage(run=sh):
+    """{docker_mem_pct, docker_cpu_pct}: every running container's memory and CPU (one `docker stats`) as a share of
+    the Docker VM's memory and CPUs, None each when docker cannot say. The VM's own kernel and daemons are not in it,
     so a low value does not prove the VM has room."""
-    total = run(["docker", "info", "--format", "{{.MemTotal}}"], timeout=10)
-    stats = run(["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}"], timeout=20)
-    if not total or not total.strip().isdigit() or stats is None or not int(total):
-        return None
-    used = sum(mem_mb(line.split("/")[0]) for line in stats.splitlines())
-    return round(100 * used * (1 << 20) / int(total), 1)
+    out = {"docker_mem_pct": None, "docker_cpu_pct": None}
+    info = (run(["docker", "info", "--format", "{{.MemTotal}} {{.NCPU}}"], timeout=10) or "").split()
+    stats = run(["docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}\t{{.MemUsage}}"], timeout=20)
+    if stats is None or len(info) != 2 or not all(x.isdigit() and int(x) for x in info):
+        return out
+    rows = [line.split("\t") for line in stats.splitlines() if "\t" in line]
+    used = sum(mem_mb(mem.split("/")[0]) for _, mem in rows)
+    cpu = sum(float(c.strip().rstrip("%") or 0) for c, _ in rows if re.fullmatch(r"\s*[\d.]+%?\s*", c))
+    out["docker_mem_pct"] = round(100 * used * (1 << 20) / int(info[0]), 1)
+    out["docker_cpu_pct"] = round(cpu / int(info[1]), 1)
+    return out
 
 
 def take_sample(st, now, cfg, run=sh):
@@ -316,13 +334,36 @@ def take_sample(st, now, cfg, run=sh):
     gb = swap_gb(sysctl("vm.swapusage"))
     hist = swap_history(st.get("swap_hist"), now, gb)
     sample = {"t": now, **rates(st.get("counters"), cur, cfg), "swap_growth_gb_h": swap_growth(hist, now, gb),
-              "docker_mem_pct": docker_mem_pct(run) if shutil.which("docker") else None}
+              **(docker_usage(run) if shutil.which("docker") else {"docker_mem_pct": None, "docker_cpu_pct": None})}
     return {"counters": cur, "swap_hist": hist, "sample": sample}
 
 
-def snapshot(cfg, st, now=None, measure_fn=None):
-    """What hook, check and round judge: the metrics read now, plus the last round's sample while it is fresh."""
+def idle_start(seconds, ticks=cpu_ticks, sleep=time.sleep, clock=time.monotonic):
+    """Start reading CPU idle; the returned function waits out the rest of `seconds` (at least 1) and gives the idle %
+    since the start, None where the OS gives no ticks. What runs between the two overlaps the window."""
+    a, t0 = ticks(), clock()
+
+    def finish():
+        sleep(max(0.0, max(1.0, float(seconds)) - (clock() - t0)))
+        b = ticks()
+        if not a or not b:
+            return None
+        d = [y - x for x, y in zip(a, b)]
+        return round(100 * d[2] / sum(d), 1) if min(d) >= 0 and sum(d) else None
+    return finish
+
+
+def live_idle(seconds, ticks=cpu_ticks, sleep=time.sleep, clock=time.monotonic):
+    """CPU idle % over the next `seconds`, from two host_statistics reads."""
+    return idle_start(seconds, ticks, sleep, clock)()
+
+
+def snapshot(cfg, st, now=None, measure_fn=None, idle_fn=None):
+    """What hook, check and round judge: the metrics read now, plus the last round's sample while it is fresh.
+    idle_fn starts reading CPU idle where the caller judges (idle_start): a round late under the very load it measures leaves no fresh
+    sample, and load would then be judged alone."""
     now = now or time.time()
+    finish = idle_fn() if idle_fn else None  # the window runs while the metrics below are read
     m = (measure_fn or (lambda: measure(always_on=cfg["always_on"])))()
     sample = st.get("sample") or {}
     age = now - sample.get("t", 0)
@@ -331,7 +372,13 @@ def snapshot(cfg, st, now=None, measure_fn=None):
         m[k] = sample.get(k) if fresh else None
     if sample and not fresh:
         m["sample_age_min"] = round(age / 60)
+    if finish and (idle := finish()) is not None:
+        m["cpu_idle_pct"], m["idle_live"] = idle, True
     return m
+
+
+def live(cfg):
+    return lambda: idle_start(cfg.get("idle_window_seconds") or DEFAULTS["idle_window_seconds"])
 
 
 # ---------------------------------------------------------------- state
@@ -753,7 +800,7 @@ def queue_wait(qid, cfg, poll=30.0, now_fn=time.time, sleep=time.sleep, measure_
             out(f"{qid}: 기한 {hhmm(e['deadline'])} 지남, 포기로 기록 — 다시 실행하지 않는다. {e['what']}: {e['why']}")
             return 3
         st = load_state()
-        m = snapshot(cfg, st, now, measure_fn)
+        m = snapshot(cfg, st, now, measure_fn, idle_fn=live(cfg))
         level, why = judge(m, cfg)
         if gate_open(level, st, cfg, now):
             out(f"{qid}: PC 사용량 {LEVEL_KO[level]}, 같은 세션에서 같은 명령을 다시 실행한다: {e['command']}")
@@ -801,11 +848,13 @@ def leak_notice(cfg, m, st, record, now, dry_run, out, send_fn):
 
 
 def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=None, plan_fn=plan_targets,
-               reap_fn=reap_plan, consumers_fn=consumers, send_fn=send):
+               reap_fn=reap_plan, consumers_fn=consumers, send_fn=send, idle_fn=None):
     now = now or time.time()
     st = load_state()  # a dry run reads the last counters too, and saves nothing
     st.update((sample_fn or (lambda s, t: take_sample(s, t, cfg)))(st, now))
     m = snapshot(cfg, st, now, measure_fn)
+    if m.get("cpu_idle_pct") is None and idle_fn:  # no rate across a gap (first round, or one run late): read it now
+        m = {**m, **({"cpu_idle_pct": v, "idle_live": True} if (v := idle_fn()()) is not None else {})}
     level, why = judge(m, cfg)
     out(f"# PC 사용량 {LEVEL_KO[level]} ({time.strftime('%Y-%m-%d %H:%M', time.localtime(now))})\n")
     out(f"- 측정: {summary(m)}")
@@ -1002,7 +1051,7 @@ def main(argv):
         print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}")
         return 1 if None not in (n, cap) and n >= cap else 0
     if cmd == "check":
-        m = snapshot(cfg, load_state())
+        m = snapshot(cfg, load_state(), idle_fn=live(cfg))
         level, why = judge(m, cfg)
         if "--json" in argv:
             print(json.dumps({"level": level, "why": why, "metrics": m}, ensure_ascii=False))
@@ -1015,7 +1064,7 @@ def main(argv):
         if not dry and not lock:
             return 0  # another round is running
         try:
-            return round_once(cfg, dry, measure_fn=lambda: measure(always_on=cfg["always_on"]))
+            return round_once(cfg, dry, measure_fn=lambda: measure(always_on=cfg["always_on"]), idle_fn=live(cfg))
         except Exception as e:  # launchd reruns it; leave one line instead of a traceback per round
             if dry:
                 raise
