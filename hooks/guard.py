@@ -216,8 +216,8 @@ def command_text(cmd):
         i += strip
         while i < n and cmd[i] in " \t":
             i += 1
-        # A delimiter whose escapes bash would rewrite ("…\…", $'…\…', \<newline>) is not read: its body is left
-        # unblanked, since a misread delimiter could match a later line and blank the commands before it.
+        # A delimiter whose escapes bash would rewrite ("…\…", $'…\…', \<newline>) is not read (None), since a
+        # misread delimiter could match a later line and blank the commands before it.
         word, quoted, sure, ansi = "", False, True, False
         while i < n and cmd[i] not in " \t\n;&|<>()":
             c = cmd[i]
@@ -289,11 +289,13 @@ def command_text(cmd):
                 i = n if eol < 0 else eol
             elif cmd.startswith("<<<", i):  # a here-string, whose suffix is not a heredoc
                 i += 3
-            # Inside parentheses `<<` may be a shift (`$((1<<2))`); a subshell's heredoc then stays unblanked.
-            elif not depth and not arith and cmd.startswith("<<", i):
-                i, doc = heredoc(i + 2)
-                if doc:
-                    pending.append(doc)
+            elif cmd.startswith("<<", i):
+                at, (i, doc) = i, heredoc(i + 2)
+                # Unread, its body would be scanned as commands and a quote in it could blank what follows. Inside
+                # parentheses or $[…] it may be a shift (`$((1<<2))`) or a subshell's heredoc: not told apart here.
+                if not doc or depth or arith:
+                    raise Unsure(at)
+                pending.append(doc)
             elif c == "\n" and pending:
                 i, pending = bodies(i + 1, pending), []
             else:

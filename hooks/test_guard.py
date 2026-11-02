@@ -256,6 +256,8 @@ assert bash(f"cat <<EO\\\nF\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") ==
 for delim in ('E"OF"', "E\\OF", "'EOF'", '"EOF"', "\\EOF", "$'EOF'"):  # bash's delimiter is EOF in each
     assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny", delim
     assert bash(f"cat <<{delim}\nskills-sync card /\nEOF") == "none", delim
+assert bash(f"(cat <<'EOF'\nit's ready\nEOF\n)\nskills-sync card {H / 'noclose.md'}") == "deny"  # a subshell's heredoc
+assert bash(f"cat << \\\n'EOF'\nit's ready\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny"  # an unread delimiter
 assert bash(f"echo \\ #; skills-sync card {H / 'noclose.md'}") == "deny"  # an escaped space does not start a comment
 assert bash(f"echo \\\n# '\nskills-sync card {H / 'noclose.md'}\n# '") == "deny"  # a comment after a line continuation
 assert bash(f"echo \\\\ # don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` is one backslash, then a comment
