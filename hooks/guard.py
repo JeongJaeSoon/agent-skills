@@ -12,6 +12,7 @@ work itself, and one without ROLE never gets the reorient hook's per-prompt remi
 The text is read as written: a prompt built from a file or variable is denied too.
 `skills-sync card <brief>` (scripts/card.py) is checked on the brief file it names, with that helper's own rules,
 and so is the lead test below; a relative path after a `cd` or `pushd`, or a check that cannot run, is denied.
+Only a call bash would run counts: the words inside quotes, a heredoc body or a comment are text.
 A wrapper (`env …`, `bash -c`, scripts/card.py run directly) is not seen: a guardrail, not a sandbox.
 
 Deny: a lead's card started from a session that is itself a lead, known by its `agent_type` (`claude --agent
@@ -54,7 +55,7 @@ REBINDS = re.compile(r"(?<![$\w{])ORCA_TERMINAL_HANDLE=(?!=)|\$\{ORCA_TERMINAL_H
 # In command position only: a grep or echo that quotes the words is not a card being made.
 CARD = re.compile(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b", re.M)
 # The helper reads its brief from a file this hook can open, so the card checks run on that file (dispatch-card §3).
-CARD_HELPER = re.compile(r"(?:^|[;&|(])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
+CARD_HELPER = re.compile(r"(?:^|[;&|(`])\s*(?:\S*/)?skills-sync\s+card\s+(\S+)", re.M)
 CHDIR = re.compile(r"(?:^|[;&|(])\s*(?:cd|pushd)\b", re.M)
 LEAD_FROM_LEAD = ("This session is a lead, and a lead does not start another lead. Give the card a "
                   "worker brief (the one at the top of orchestrate references/brief.md, or its \"Single worker\") "
@@ -143,6 +144,103 @@ def lead_session(agent, session, transcript):
     return agent == "agent-skills:lead" or declared_lead(session) or bool(transcript and started_as_lead(transcript))
 
 
+HEREDOC = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|(\\?)([^\s;&|<>()'"]+))""")
+
+
+def command_text(cmd):
+    """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
+    comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them."""
+    out, n = list(cmd), len(cmd)
+
+    def blank(i, j):
+        out[i:j] = " " * (j - i)
+
+    def expanding(i, end, close):
+        """Double-quoted text (close='"') or an unquoted heredoc body (close=None) from i; returns the index after it."""
+        while i < end:
+            c = cmd[i]
+            if c == close:
+                return i + 1
+            if c == "\\":
+                blank(i, min(i + 2, end))
+                i += 2
+            elif cmd.startswith("$(", i):
+                i = command(i + 2, ")")
+            elif c == "`":
+                i = command(i + 1, "`")
+            else:
+                blank(i, i + 1)
+                i += 1
+        return end
+
+    def bodies(i, pending):
+        for strip, delim, expands in pending:
+            start = i
+            while i < n:
+                eol = cmd.find("\n", i)
+                eol = n if eol < 0 else eol
+                line = cmd[i:eol]
+                if (line.lstrip("\t") if strip else line) == delim:
+                    if expands:
+                        expanding(start, i, None)
+                    else:
+                        blank(start, i)
+                    blank(i, eol)
+                    i = eol + 1
+                    break
+                i = eol + 1
+            else:  # no terminator: the body runs to the end
+                if expands:
+                    expanding(start, n, None)
+                else:
+                    blank(start, n)
+        return i
+
+    def command(i, close):
+        depth, pending = 0, []
+        while i < n:
+            c = cmd[i]
+            if c == close and (close != ")" or depth == 0):
+                return i + 1
+            if c == "(":
+                depth += 1
+            elif c == ")" and depth:
+                depth -= 1
+            if c == "\\":
+                blank(i, min(i + 2, n))
+                i += 2
+            elif c == "'":
+                ansi = i > 0 and cmd[i - 1] == "$"
+                j = i + 1
+                while j < n and cmd[j] != "'":
+                    j += 2 if ansi and cmd[j] == "\\" else 1
+                blank(i + 1, min(j, n))
+                i = j + 1
+            elif c == '"':
+                i = expanding(i + 1, n, '"')
+            elif c == "`":
+                i = command(i + 1, "`")
+            elif cmd.startswith("$(", i):
+                i = command(i + 2, ")")
+            elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+                eol = cmd.find("\n", i)
+                blank(i, n if eol < 0 else eol)
+                i = n if eol < 0 else eol
+            # Inside parentheses `<<` may be a shift (`$((1<<2))`); a subshell's heredoc then stays unblanked.
+            elif not depth and cmd.startswith("<<", i) and not cmd.startswith("<<<", i) and (m := HEREDOC.match(cmd, i)):
+                quoted = m[2] is not None or m[3] is not None or bool(m[4])
+                pending.append((bool(m[1]), m[2] if m[2] is not None else m[3] if m[3] is not None else m[5], not quoted))
+                i = m.end()
+            elif c == "\n" and pending:
+                i, pending = bodies(i + 1, pending), []
+            else:
+                i += 1
+        return n
+
+    command(0, None)
+    return "".join(out)
+
+
 def helper_card(brief, cwd, moves):
     """(the prompt the helper would send, None) or (None, the deny reason): the helper's own checks on that file.
     `moves`: the command changes directory first, so a relative path would be read from the wrong place."""
@@ -152,11 +250,14 @@ def helper_card(brief, cwd, moves):
     path = pathlib.Path(brief).expanduser()
     if moves and not path.is_absolute():
         return None, "This command changes directory, so give `skills-sync card` the brief's absolute path."
+    full = path if path.is_absolute() else pathlib.Path(cwd or ".") / path
+    if full.is_dir():
+        return None, f"`skills-sync card {brief}` names a directory, not a brief file; give it the brief's file path."
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
         import card
         try:
-            return card.compose(str(path if path.is_absolute() else pathlib.Path(cwd or ".") / path)), None
+            return card.compose(str(full)), None
         except card.Refuse as e:
             return None, str(e)
     except Exception as e:  # a check that cannot run does not let the card through
@@ -195,10 +296,11 @@ def bash(cmd, background=False, transcript=None, agent=None, session=None, cwd=N
                                   "and PREDICATE lines, copied from orchestrate references/brief.md \"Lead\" (dispatch-card §2).")
         if lead and lead_session(agent, session, transcript):
             return decide("deny", LEAD_FROM_LEAD)
-    for helper in CARD_HELPER.finditer(cmd):
-        if helper[1].startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
+    for helper in CARD_HELPER.finditer(command_text(cmd)):
+        brief = re.compile(r"\S+").match(cmd, helper.start(1))[0]  # the masked text blanks a quoted path
+        if brief.startswith("-"):  # `--help` or no brief: the helper prints its usage and creates nothing
             continue
-        prompt, refused = helper_card(helper[1], cwd, bool(CHDIR.search(cmd)))
+        prompt, refused = helper_card(brief, cwd, bool(CHDIR.search(cmd)))
         if refused:
             return decide("deny", refused)
         if is_lead(prompt) and lead_session(agent, session, transcript):

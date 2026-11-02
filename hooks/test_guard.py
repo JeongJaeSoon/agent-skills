@@ -232,5 +232,24 @@ assert bash(HELPER.format("worker.md"), CLAUDE_PLUGIN_ROOT=EMPTY) == "deny"
 assert "could not check" in run("Bash", {"command": HELPER.format("worker.md")}, "term_me",
                                 field="permissionDecisionReason", CLAUDE_PLUGIN_ROOT=EMPTY)
 assert bash('grep "skills-sync card" notes.md') == "none"  # quoted words are not the helper being run
+# A line of a quoted argument, a heredoc body or a comment that starts with the words is text, not a command.
+PROMPT_ARG = 'node companion.mjs task "Review card.py:\nskills-sync card / reads the brief\nfoo; skills-sync card /" --wait'
+assert bash(PROMPT_ARG) == "none"
+assert bash("node companion.mjs task 'Review:\nskills-sync card /' --wait") == "none"
+assert bash("cat <<'EOF' > notes.md\nskills-sync card /\nEOF\necho ok") == "none"
+assert bash("cat <<EOF > notes.md\nskills-sync card /\nEOF") == "none"
+assert bash("cat <<-EOF > notes.md\n\tskills-sync card /\n\tEOF") == "none"
+assert bash("echo don\\'t # it's skills-sync card /\nls") == "none"
+# Where bash runs it, the helper is checked as before, inside a substitution and after a heredoc too.
+assert bash(f'echo "$(skills-sync card {H / "noclose.md"})"') == "deny"
+assert bash(f"echo `skills-sync card {H / 'noclose.md'}`") == "deny"
+assert bash(f"cat <<EOF\n$(skills-sync card {H / 'noclose.md'})\nEOF") == "deny"
+assert bash(f"cat <<'EOF'\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo 'a' # note\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo \"it's\"; skills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"skills-sync card '{H / 'noclose.md'}'") == "deny"
+assert bash(f"echo $((1<<2)); ((x <<= 1))\nskills-sync card {H / 'noclose.md'}") == "deny"  # a shift, not a heredoc
+# A directory is named as one, not as an unreadable file.
+assert bash("skills-sync card /") == "deny" and "names a directory" in reason("skills-sync card /")
 assert "skills-sync card <brief>" in reason(f'{NEW} --prompt "/goal fix X"'), "the deny names the helper"
 print("guard: all pass")
