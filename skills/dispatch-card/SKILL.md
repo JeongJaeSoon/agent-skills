@@ -88,6 +88,8 @@ session as not the human's, so an approval sent afterwards is refused. The brief
   --wait --types status --timeout-ms 1800000` once nothing else can move, again after each empty
   wait. A card that coordinates a Run of its own gets that Run's FIFO batch instead, replayed
   until acked: process every message and `--ack <deliveryId>` each batch until the reply comes.
+  To look again, `check --all` and match `thread_id`; never a list you sort or cut yourself (a
+  card sorting by a field the rows do not have, `createdAt` for `created_at`, missed two replies).
   A supervised worker needs no such line: its preamble's `ask` does this.
 - **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 하고, 모델은 그때
   고른다. 무엇을 왜 불렀는지는 마지막 보고에 적는다". Never name a model in the brief: the card reads
