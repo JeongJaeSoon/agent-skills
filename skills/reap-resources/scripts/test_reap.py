@@ -685,9 +685,11 @@ with tempfile.TemporaryDirectory() as tmp:
         assert r.returncode and "--kinds card" in r.stderr, r.stderr
         plan["items"] = [{"kind": kind, "key": f"{kind}:{d}", "name": str(d), "target": True, "how": []},
                          {"kind": "evidence", "key": f"evidence:{shot}", "name": str(shot), "target": True, "how": []}]
-        (tmp / "old-plan.json").write_text(json.dumps(plan))
-        r = cli("reap", "--plan", str(tmp / "old-plan.json"))
-        assert r.returncode and f"{kind}:{d}" in r.stderr and "scan --kinds card" in r.stderr and r.stdout == "", r
+        for saved_plan in (tmp / "old-plan.json", tmp / "old" / "janitor-plan.json"):
+            saved_plan.parent.mkdir(exist_ok=True)
+            saved_plan.write_text(json.dumps(plan))
+            r = cli("reap", "--plan", str(saved_plan))
+            assert r.returncode and f"{kind}:{d}" in r.stderr and "scan --kinds card" in r.stderr and r.stdout == "", r
     out = cli("schedule", "--workspace", "path:/repo")
     assert out.returncode == 0 and out.stdout.startswith("orca automations create") and "--write" in out.stdout, out
     assert "automations-runner" not in out.stdout, "a chosen workspace needs no runner hint"

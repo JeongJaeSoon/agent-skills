@@ -1814,14 +1814,15 @@ def main():
         path = pathlib.Path(opt("--plan") or sys.exit("reap needs --plan PLAN.json"))
         plan = json.loads(path.read_text())
         wanted = {i["key"]: i for i in plan["items"] if i["target"]}
+        # Before the janitor filter, so a plan naming them is refused whatever its file name. A re-scan finds none of
+        # them, which would read as "no longer a target" and reap nothing in silence.
+        if retired := sorted(i["key"] for i in wanted.values() if i["kind"] in RETIRED_KINDS):
+            sys.exit(f"reap: 이 계획에 더는 지원하지 않는 종류가 있어 아무것도 하지 않았다: {', '.join(retired)}. "
+                     "scan --kinds card 로 계획을 다시 만든다")
         # The janitor round's autoMode rule covers only the scheduled kinds; a manual kind in that plan was put there by hand.
         if path.name == "janitor-plan.json":
             for key in [k for k, i in wanted.items() if i["kind"] not in SCHEDULED]:
                 print(f"- 건너뜀 {wanted.pop(key)['key']}: janitor 계획에 들어갈 수 없는 종류")
-        if retired := sorted(i["key"] for i in wanted.values() if i["kind"] in RETIRED_KINDS):
-            # A re-scan finds none of them, which would read as "no longer a target" and reap nothing in silence.
-            sys.exit(f"reap: 이 계획에 더는 지원하지 않는 종류가 있어 아무것도 하지 않았다: {', '.join(retired)}. "
-                     "scan --kinds card 로 계획을 다시 만든다")
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []
