@@ -23,7 +23,7 @@ EDITABLE = (REPO_PLUGIN, "user")
 SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
 MISS_SHARE = 0.2  # misses as a share of the prompts that carried a trigger phrase (misses + auto + chained fires)
-SCAN_VERSION = 5  # raise when scan_file counts differently, so cached transcripts are read again
+SCAN_VERSION = 6  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 # Only these flags become signals. unused_30d alone stays on the dashboard: zero uses in one window is not a reason
@@ -185,24 +185,68 @@ def _prompt(d):
 
 
 GIT_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+# git log options whose value is the next word, so a value such as "--grep -Sx" is not read as a pickaxe.
+LOG_OPTS_WITH_VALUE = {"--grep", "--author", "--committer", "--since", "--until", "--after", "--before", "-n",
+                       "--max-count", "--skip", "--format", "--pretty", "--date", "--encoding", "--grep-reflog"}
+SHELL_OPS = ";&|()\n"
+
+
+def shell_words(command):
+    """Split a shell command line into words and unquoted operators (returned as None), reading quotes, backslash
+    escapes and line continuations, and dropping comments. Expansions are left as text; None for an unbalanced quote."""
+    out, word, quoted, i, n = [], [], False, 0, len(command)
+
+    def flush():
+        nonlocal word, quoted
+        if word or quoted:
+            out.append("".join(word))
+        word, quoted = [], False
+    while i < n:
+        c = command[i]
+        if c == "\\":
+            if command[i + 1:i + 2] != "\n":
+                word.append(command[i + 1:i + 2])
+            i += 2
+        elif c in "'\"":
+            j, quoted = i + 1, True
+            while j < n and command[j] != c:
+                if c == '"' and command[j] == "\\" and j + 1 < n:
+                    j += 1
+                word.append(command[j])
+                j += 1
+            if j >= n:
+                return None
+            i = j + 1
+        elif c == "#" and not word and not quoted:
+            while i < n and command[i] != "\n":
+                i += 1
+        elif c in SHELL_OPS:
+            flush()
+            out.append(None)
+            i += 1
+        elif c.isspace():
+            flush()
+            i += 1
+        else:
+            word.append(c)
+            i += 1
+    flush()
+    return out
 
 
 def git_history_cmds(command):
     """Git commands in one shell command line that dig history by hand where `why` could have run: blame, and log
     with a pickaxe (-S/-G) or line-history (-L) option. Text that only mentions git (an echoed string) is not one."""
-    lex = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
-    lex.whitespace_split = True
-    try:
-        tokens = list(lex)
-    except ValueError:  # an unbalanced quote: the line cannot be read reliably, so it is not counted
+    words = shell_words(command)
+    if words is None:  # an unbalanced quote: the line cannot be read reliably, so it is not counted
         return 0
     count, seg = 0, []
-    for tok in tokens + [";"]:
-        if tok and set(tok) <= set(";&|()"):
+    for w in words + [None]:
+        if w is None:
             count += _is_git_history(seg)
             seg = []
         else:
-            seg.append(tok)
+            seg.append(w)
     return count
 
 
@@ -214,13 +258,16 @@ def _is_git_history(seg):
     i = 1
     while i < len(seg) and seg[i].startswith("-"):
         i += 2 if seg[i] in GIT_OPTS_WITH_VALUE else 1
-    sub, args = (seg[i], seg[i + 1:]) if i < len(seg) else (None, [])
-    if sub == "blame":
-        return True
-    if sub != "log":
+    if i >= len(seg) or seg[i] not in ("blame", "log"):
         return False
-    args = args[:args.index("--")] if "--" in args else args
-    return any(re.match(r"-[SGL]", a) for a in args)
+    if seg[i] == "blame":
+        return True
+    j = i + 1
+    while j < len(seg) and seg[j] != "--":
+        if re.match(r"-[SGL]", seg[j]):
+            return True
+        j += 2 if seg[j] in LOG_OPTS_WITH_VALUE else 1
+    return False
 
 
 def _hash(s):

@@ -159,7 +159,10 @@ assert ship["last_used"] == ts(1, 1), ship
 for cmd, n in [("git blame a.py", 1), ("git --no-pager blame a.py", 1), ("git --no-pager log -Sneedle -- a.py", 1),
                ('git -C "../sample repo" blame a.py', 1), ("printf '%s\\n' 'git blame a.py'", 0), ("git log -- -Sample.py", 0),
                ("git log -Sneedle -- a.py; git blame a.py", 2), ("cd x && GIT_PAGER=cat git log -G'x|y' | head", 1),
-               ("git log --since=1.week --stat", 0), ("echo git log -Sx", 0), ("git log -S'unbalanced", 0)]:
+               ("git log --since=1.week --stat", 0), ("echo git log -Sx", 0), ("git log -S'unbalanced", 0),
+               ('printf "%s" ";" "git" "blame"', 0), ('git -C ";" blame a.py', 1), ("# inspect history\ngit blame a.py", 1),
+               ("git \\\nblame a.py", 1), ("git log --grep -Something", 0), ("git log --grep x -S y", 1),
+               ("git blame a.py # and git log -Sx", 1), ("git log -S y\ngit blame b", 2)]:
     assert su.git_history_cmds(cmd) == n, (cmd, su.git_history_cmds(cmd))
 foreign = [[ts(1), "other-plugin:architect", "auto", "s9", "h"], [ts(1), "agent-skills:arena", "auto", "s9", "h"]]
 assert su.denominators(foreign, [], NOW)["7d"]["architect_sessions"] == 0, su.denominators(foreign, [], NOW)
