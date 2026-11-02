@@ -67,7 +67,8 @@ HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)(\w+)\2")  # not a here-strin
 
 
 def heredoc_at(line, quote):
-    """(the first here-document operator outside quotes on line, or None; the quote still open at its end)."""
+    """(the first here-document operator outside quotes, comments and arithmetic (`$((1<<20))`) on line, or None;
+    the quote still open at its end)."""
     i = 0
     while i < len(line):
         c = line[i]
@@ -80,6 +81,11 @@ def heredoc_at(line, quote):
             i += 1
         elif c in "'\"":
             quote = c
+        elif c == "#" and (i == 0 or line[i - 1] in " \t;&|("):
+            return None, quote
+        elif line.startswith("((", i):
+            end = line.find("))", i + 2)
+            i = len(line) if end < 0 else end + 1
         elif m := HEREDOC.match(line, i):
             return m, quote
         i += 1
@@ -190,6 +196,7 @@ SUITE = re.compile(r"(run[-_])?tests?([-_]all)?\.sh")
 TEST_FILE = re.compile(r"(.*/)?(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?)")
 E2E = re.compile(r"(.*[-_:./])?(e2e|playwright|cypress)([-_:.].*)?", re.I)
 RUNNERS = {"npm", "pnpm", "yarn", "bun"}
+LAUNCHER_VALUE = {"--package", "-p", "--cache", "--userconfig", "--registry"}
 RUNNER_VALUE = {"--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"}
 # This many test files in a `for` list or on one runner's line is a suite, the CONTRIBUTING loop among them;
 # `git add` or `cat` of as many is not.
@@ -253,16 +260,15 @@ def runs_tests(argv):
             words = ["pytest"] + words[3:]
         elif head in ("uv", "poetry", "pipenv") and words[1:2] == ["run"] and len(words) > 2:
             words = words[2:]
-        elif head in RUNNERS and words[1:2] in (["exec"], ["dlx"], ["x"]):  # `pnpm exec playwright test`
-            rest = words[2:]
+        elif head in ("npx", "bunx", "pnpx") or head in RUNNERS and words[1:2] in (["exec"], ["dlx"], ["x"]):
+            # `pnpm exec playwright test`, `npx --package @playwright/test playwright test`
+            rest = words[1 if head in ("npx", "bunx", "pnpx") else 2:]
             while rest and rest[0].startswith("-"):
-                rest = rest[1:]
+                rest = rest[2 if rest[0] in LAUNCHER_VALUE else 1:]
             words = rest or words
     args = [w for w in words[1:] if not w.startswith("-")]
     if SUITE.fullmatch(head):
         return "test suite"
-    if head in ("npx", "bunx", "pnpx") and args:
-        head, args = os.path.basename(args[0]), args[1:]
     if head in ("playwright", "cypress"):
         return "E2E" if args[:1] in (["test"], ["run"]) else None
     if E2E.fullmatch(head):

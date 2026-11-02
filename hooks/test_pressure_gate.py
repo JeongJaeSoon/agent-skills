@@ -44,6 +44,9 @@ assert g.heavy("cat <<<hello\norca worktree create --repo x") == "orca worktree 
 assert g.heavy("cat <<EOF\n$(docker compose up -d)\nEOF") == "docker compose up"
 assert not g.heavy("cat <<'EOF'\n$(docker compose up -d)\nEOF")
 assert g.heavy("for d in a b; do orch heavy - -- make; done") == "orch heavy"
+assert g.heavy("mask=$((1<<20))\ndocker compose up -d") == "docker compose up"
+assert g.heavy("# Example: cat <<EOF\norca worktree create --repo x") == "orca worktree create"
+assert g.heavy("(( x = 1 << 2 ))\norca worktree create --repo x") == "orca worktree create"
 assert g.heavy('"/bin/bash" <<EOF\ndocker compose up -d\nEOF') == "docker compose up"
 assert g.heavy('echo "a<<EOF"\norca worktree create --repo x') == "orca worktree create"
 
@@ -89,7 +92,9 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("pytest --capture sys", "test suite"),
                   ("for d in app api; do bash -c 'npm test'; done", "test suite"),
                   ("if true; then bash -c 'pytest'; fi", "test suite"), ("npm --prefix app test", "test suite"),
-                  ("pnpm --dir app test", "test suite"), ("yarn --cwd app test", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
+                  ("pnpm --dir app test", "test suite"), ("yarn --cwd app test", "test suite"),
+                  ("npx --package @playwright/test playwright test", "E2E"), ("npx -y vitest run", "test suite"),
+                  ("pnpm dlx --package=vitest vitest run", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
             "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
