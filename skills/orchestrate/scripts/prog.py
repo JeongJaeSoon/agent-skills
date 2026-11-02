@@ -2404,6 +2404,8 @@ def cmd_wait(argv):
     # STALLED comes from the collector; a lead that only loops `wait` would otherwise keep an old server.
     if (line := ensure_dash()) and not line.startswith("dashboard: http"):
         print(line, flush=True)
+    if watched := watch_lines(me, False):
+        print("\n".join(watched), flush=True)
     for i in range(rounds):
         res = orca_json("orchestration", "check", *box, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
                         "--timeout-ms", timeout)
@@ -2451,6 +2453,19 @@ def cmd_wait(argv):
                     + moves))
 
 
+def watch_lines(me, unowned):
+    """What the session's watchers left for it: its `orch watch-cards` gone quiet, and unacked `orch patrol` findings
+    routed to it. Each repeats every 30 minutes until dealt with."""
+    import card_watch, patrol
+    out = []
+    with contextlib.suppress(OSError, ValueError):
+        if line := card_watch.down_line(me):
+            out.append(line)
+    with contextlib.suppress(OSError, ValueError, TypeError):
+        out += patrol.pending_lines(me, unowned)
+    return out
+
+
 def inbox_line(m):
     # Whole: a body cut short dropped the options of a decision and the evidence of a worker_done.
     body = (m.get("body") or "").replace("\n", "\n    ")
@@ -2494,6 +2509,10 @@ def cmd_inbox(argv):
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
     if work:
         print("\n".join(map(inbox_line, work)))
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    # Findings routed to nobody are the orchestrator's, the session that runs the watch over cards outside a Run.
+    if watched := watch_lines(me, bool(me and __import__("card_watch").last_scan(me))):
+        print("\n".join(watched))
     if did:
         print(f"{len(work)} of {len(msgs)} to act on (the rest heartbeats or refusals); then: orch inbox --ack {did} --wait")
     else:
@@ -2869,10 +2888,11 @@ COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cm
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
+            "patrol": lambda argv: __import__("patrol").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
             "doctor": lambda argv: __import__("orca_settings").main(argv)}
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] != "watch-cards" and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
+    if len(sys.argv) < 3 - (sys.argv[1:2] in (["watch-cards"], ["patrol"], ["inbox"], ["migrate"], ["doctor"])) or sys.argv[1] not in COMMANDS or sys.argv[1] not in ("watch-cards", "patrol") and {"-h", "--help"} & set(sys.argv[2:(sys.argv + ["--"]).index("--")]):
         sys.exit(__doc__)
     COMMANDS[sys.argv[1]](sys.argv[2:])

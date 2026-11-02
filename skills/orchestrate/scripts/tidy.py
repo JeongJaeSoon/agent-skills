@@ -130,6 +130,8 @@ def assess(store, state, prs, me=None, now=None):
     cards = cards_of(state)
     prs = {**orca_merged(cards, {c["pr"] for c in cards.values()}), **prs}
     live = {s["id"] for s in cards.values() if s.get("phase") in ("working", "waiting")}
+    # orch patrol's D: doing items that named no PR or card for a day. Shown as ❔, never closed on it.
+    noref = set((fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json", {}) or {}).get("doing_noref") or ())
     out = {}
 
     def put(iid, verdict, rule, evidence, label):
@@ -142,6 +144,8 @@ def assess(store, state, prs, me=None, now=None):
         card = named(text, cards)
         ev = refs_over(fleet.pr_refs(text) + [card and card["pr"]], prs)
         if not ev:
+            if item_id("doing", d) in noref:
+                put(item_id("doing", d), "check", "no_ref", "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", d["title"])
             continue
         if card and card["id"] in live:
             put(item_id("doing", d), "check", "pr_merged_card_busy", f"{ev} · 카드 {card['name']} 작업 중", d["title"])

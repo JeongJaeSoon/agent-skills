@@ -1821,7 +1821,7 @@ class Fleet:
                             "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
         syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
         mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
-        items += kept + syncs + list(self.checks)
+        items += kept + syncs + watcher_items(sessions, now) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -1968,6 +1968,35 @@ def sync_items(now, terms=None):
             out.append({"key": f"reload:{handle}:{pending.get('since')}", "type": "reload_pending", "session": sid,
                         "terminal": handle, "at": pending.get("since"), "source": "skills-sync",
                         "title": f"Reload not sent: {mask(title or handle, 80)}", "detail": mask((why or {}).get("reason"), 200)})
+    return out
+
+
+WATCH_DOWN_S = 3600
+
+
+def watcher_items(sessions, now, last_scan=None):
+    """An orchestrator whose `orch watch-cards` has not finished a round for an hour, or never ran one: cards outside
+    a Run then sit on a prompt with nobody told, and the orchestrator itself may be asleep. One item per watcher
+    stop, so dismissing it does not hide the next one."""
+    if last_scan is None:
+        import card_watch
+        last_scan = card_watch.last_scan
+    out = []
+    for s in sessions.values():
+        if s.get("kind") != "orchestrator":
+            continue
+        for t in s.get("terminals") or []:
+            if not (t.get("agent") and t.get("handle")):
+                continue
+            last = last_scan(t["handle"])
+            if last and now.timestamp() - last[0] < WATCH_DOWN_S:
+                continue
+            ago = f"{int((now.timestamp() - last[0]) // 60)}분 전" if last else "기록 없음"
+            out.append({"key": f"watch:{t['handle']}:{int(last[0]) if last else 0}", "type": "watcher_down",
+                        "session": s["id"], "at": iso(dt.datetime.fromtimestamp(last[0], dt.timezone.utc)) if last else iso(now),
+                        "title": f"오케스트레이터 순찰 꺼짐: orch watch-cards 마지막 회차 {ago}",
+                        "detail": "오케스트레이터가 orch watch-cards 를 run_in_background 로, 파이프 없이 다시 띄운다",
+                        "source": "watch-cards"})
     return out
 
 

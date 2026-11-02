@@ -76,7 +76,8 @@ assert {r["login"]: r["status"] for r in prs[42]["reviewers"]} == {"rev-bob": "c
 got = sorted((i["type"], i["session"]) for i in items(st))
 assert got == sorted([("prompt", "wt-docs"), ("question", "wt-export"), ("approval", "wt-coord"), ("login", "wt-scratch"),
                       ("decision", "wt-coord"), ("ready_to_merge", "wt-login"), ("changes_requested", "wt-export"),
-                      ("review_comment_received", "wt-export"), ("ci_failed", "wt-export")]), got
+                      ("review_comment_received", "wt-export"), ("ci_failed", "wt-export"),
+                      ("watcher_down", "wt-coord")]), got  # the demo orchestrator never ran `orch watch-cards`
 
 # A session's badge is the number of Needs you items on it: the badges plus the sessionless items are the inbox.
 def badges_agree(st):
