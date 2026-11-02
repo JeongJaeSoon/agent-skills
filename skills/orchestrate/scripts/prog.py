@@ -2574,6 +2574,8 @@ def cmd_heavy(argv):
         sys.exit("heavy <slug|-> [--wait-minutes 60] [--pr owner/repo#N] -- <command…>")
     cut = argv.index("--")
     cmd = argv[cut + 1:]
+    if os.environ.get("ORCH_HEAVY_SLOT"):  # already inside a slot: taking a second would wait on itself
+        sys.exit(subprocess.run(cmd).returncode)
     cfg, owner = ({}, "-") if argv[0] == "-" else (Program(argv[0]).cfg, argv[0])
     slots = HOME / "_heavy"
     slots.mkdir(parents=True, exist_ok=True)
@@ -2593,7 +2595,7 @@ def cmd_heavy(argv):
             os.close(fd)
             before = compose_projects()
             try:
-                sys.exit(subprocess.run(cmd).returncode)
+                sys.exit(subprocess.run(cmd, env={**os.environ, "ORCH_HEAVY_SLOT": str(path)}).returncode)
             finally:
                 path.unlink(missing_ok=True)
                 try:

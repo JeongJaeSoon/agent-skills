@@ -113,15 +113,15 @@ SUITE_FILES = 5
 LOOPERS = {"for", "python", "python3", "pytest", "node", "bun", "deno", "go"}
 # A redirection (`> out.txt`, `2>`, `&>`) and its target select no test.
 REDIRECT = re.compile(r"\d*(>>?|<<?|&>>?|>&)")
-# A runner given a path (`tests/a.py`, `a.test.ts`, `x.py::t`) or a name filter runs a subset, not the suite.
+# A runner given a test path (`tests/`, `a.test.ts`, `x.py::t`) or a name filter runs a subset, not the suite.
 FILTERS = {"-k", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter"}
+TEST_PATH = re.compile(r"(?!-).*(::|tests?\b|tests?[/_]|_tests?\.|\.(test|spec)\.|spec[s/])", re.I)
 
 
 def narrowed(rest):
-    """Whether a runner's arguments pick tests: a path-shaped word or a name filter. An option's value (`-n 8`,
-    `--timeout 30000`) is neither, so it leaves a whole suite."""
-    return any(w.split("=", 1)[0] in FILTERS or not w.startswith("-") and
-               ("/" in w or "::" in w or re.search(r"\.[A-Za-z]\w*$", w)) for w in rest)
+    """Whether a runner's arguments pick tests: a test-shaped path or a name filter. An option's value (`-n 8`,
+    `--junitxml results.xml`, `--coverage-dir ./coverage`) is neither, so it leaves a whole suite."""
+    return any(w.split("=", 1)[0] in FILTERS or TEST_PATH.match(w) for w in rest)
 
 
 def runs_tests(argv):

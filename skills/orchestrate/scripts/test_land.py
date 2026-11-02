@@ -303,6 +303,10 @@ time.sleep(1)
 code, out = prog(env, "heavy", "t", "--wait-minutes", "1", "--", "true")  # says it waits, then runs once the slot frees
 assert code == 0 and "모두 사용 중이라" in out and "sleep 2" in out, out
 holder.wait()
+# A command already in a slot that calls `orch heavy` again runs at once instead of waiting on its own slot.
+code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", sys.executable, str(HERE / "prog.py"), "heavy", "t",
+                 "--wait-minutes", "0", "--", "sh", "-c", "exit 5")
+assert code == 5, out
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "sh", "-c", "exit 7")
 assert code == 7, out
 (d / "programs" / "_heavy" / "slot-0").write_text(json.dumps({"pid": 999999}))
