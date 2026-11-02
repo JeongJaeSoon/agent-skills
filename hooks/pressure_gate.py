@@ -65,7 +65,8 @@ def skip_prefix(words, keywords=False):
 
 
 SUBST = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)|`([^`]*)`")
-HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)(\w+)\2")  # not a here-string (`<<<word`)
+# `<<EOF`, `<<-'END-TEXT'`, `<<"x y"`; not a here-string (`<<<word`). Groups: dash, quoted word, bare word.
+HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s;&|()<>'\"]+))")
 
 
 def heredoc_at(line, quote):
@@ -113,15 +114,19 @@ def drop_heredocs(cmd, slotted=False):
             shell = None  # `orch heavy - -- bash <<EOF`: the body runs in the slot
         if not m or shell is not None and OVERRIDE not in words[:shell]:
             continue
+        quoted = m.group(4) is None
+        delim = m.group(2) if m.group(2) is not None else m.group(3) if quoted else m.group(4).replace("\\", "")
         body, end = [], None
         for row in lines:
-            if (row.lstrip("\t") if m.group(1) else row) == m.group(3):
+            if (row.lstrip("\t") if m.group(1) else row) == delim:
                 end = row
                 break
             body.append(row)
-        if shell is not None:
+        if end is None:  # no terminator found: read the rest as commands rather than drop them
+            out += body
+        elif shell is not None:
             out.append(shlex.join([OVERRIDE, "bash", "-c", "\n".join(body)]))
-        elif not m.group(2):  # only what a substitution runs: `$(date)` runs, the text around it is data
+        elif not quoted:  # only what a substitution runs: `$(date)` runs, the text around it is data
             out += ["".join(g) for g in SUBST.findall("\n".join(body))]
         if end is not None:
             out.append(end)

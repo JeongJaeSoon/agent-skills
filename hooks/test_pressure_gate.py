@@ -45,6 +45,10 @@ assert g.heavy("cat <<EOF\n$(docker compose up -d)\nEOF") == "docker compose up"
 assert not g.heavy("cat <<'EOF'\n$(docker compose up -d)\nEOF")
 assert g.heavy("for d in a b; do orch heavy - -- make; done") == "orch heavy"
 assert g.heavy('id="$(orca worktree create --repo x)"') == "orca worktree create"
+assert g.heavy("cat <<END-TEXT\nhello\nEND-TEXT\ndocker compose up -d") == "docker compose up"
+assert g.heavy("cat <<'END TEXT'\nhi\nEND TEXT\ndocker compose up -d") == "docker compose up"
+assert g.heavy("cat <<EOF\nhello\ndocker compose up -d") == "docker compose up"  # no terminator: nothing dropped
+assert not g.heavy("cat <<END-TEXT\ndocker compose up -d\nEND-TEXT")
 assert g.heavy("AGENT_SKILLS_PRESSURE_GATE=0 true; bash <<EOF\ndocker compose up -d\nEOF") == "docker compose up"
 assert not g.heavy("AGENT_SKILLS_PRESSURE_GATE=0 bash <<EOF\ndocker compose up -d\nEOF")
 assert g.new_card("orch heavy - -- bash <<'EOF'\norca worktree create --repo x\nEOF") == "orca worktree create"
@@ -109,7 +113,8 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("npm \\\ntest", "test suite"), ("npx vitest run --exclude tests/slow/**", "test suite"),
                   ("npm test -- --testPathIgnorePatterns tests/slow", "test suite"),
                   ('output="$(npm test 2>&1)"', "test suite"), ("printf '%s\\n' \"$(pytest)\"", "test suite"),
-                  ('echo "`npm test`"', "test suite"), ("pytest --confcutdir tests/", "test suite"),
+                  ('echo "`npm test`"', "test suite"),
+                  ("cat <<END-TEXT\nx\nEND-TEXT\nnpm test", "test suite"), ("pytest --confcutdir tests/", "test suite"),
                   ("pytest --ignore tests/slow", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
