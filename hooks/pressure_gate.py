@@ -99,6 +99,30 @@ def heredocs_at(line, quote):
     return found, quote
 
 
+def stdin_shell(words):
+    """Where the shell is in a simple command's words when it reads its commands from the here-document on stdin
+    (`bash <<EOF`, `FOO=1 env bash -s x <<EOF`, `orch heavy - -- bash <<EOF`); None when the body is only data, as
+    for `bash -c 'cat' <<EOF` or `bash script.sh <<EOF`."""
+    i = skip_prefix(words, keywords=True)
+    if words[i:i + 2] == ["orch", "heavy"] and "--" in words[i:]:
+        i = words.index("--", i) + 1
+        i += skip_prefix(words[i:])
+    if i >= len(words) or os.path.basename(words[i]) not in SHELLS:
+        return None
+    k, stdin = i + 1, False
+    while k < len(words) and words[k][:1] in "-+":
+        w = words[k]
+        if w == "--":
+            k += 1
+            break
+        if w[:1] == "-" and w[:2] != "--":
+            if "c" in w[1:]:
+                return None
+            stdin |= "s" in w[1:]
+        k += 2 if w in SHELL_VALUE else 1
+    return i if stdin or not [w for w in words[k:] if not REDIRECT.match(w)] else None
+
+
 def drop_heredocs(cmd, slotted=False):
     """cmd without the bodies of its here-documents, which are data (`cat > a.md <<EOF`), except where a shell
     reads the body as commands (`bash <<EOF`) or an unquoted body runs a substitution (`$(…)`, a backquote).
@@ -113,8 +137,8 @@ def drop_heredocs(cmd, slotted=False):
             # Only the simple command that receives the body counts: `orch heavy - -- true; bash <<EOF` runs it
             # outside.
             words = [w.strip("'\"") for w in line[start:m.start()].split()]
-            shell = next((k for k, w in enumerate(words) if os.path.basename(w) in SHELLS), None)
-            if shell is not None and slotted and any(words[k:k + 2] == ["orch", "heavy"] for k in range(shell)):
+            shell = stdin_shell(words)
+            if shell is not None and slotted and words[skip_prefix(words, keywords=True):][:2] == ["orch", "heavy"]:
                 shell = None  # `orch heavy - -- bash <<EOF`: the body runs in the slot
             quoted = m.group(4) is None
             delim = m.group(2) if m.group(2) is not None else m.group(3) if quoted else m.group(4).replace("\\", "")
