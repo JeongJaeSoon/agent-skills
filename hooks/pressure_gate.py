@@ -43,13 +43,33 @@ NEW_CARD = ("orca worktree create", "orca orchestration worker-start")
 HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)(\w+)\2")  # not a here-string (`<<<word`)
 
 
+def heredoc_at(line, quote):
+    """(the first here-document operator outside quotes on line, or None; the quote still open at its end)."""
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 1
+            elif c == quote:
+                quote = ""
+        elif c == "\\":
+            i += 1
+        elif c in "'\"":
+            quote = c
+        elif m := HEREDOC.match(line, i):
+            return m, quote
+        i += 1
+    return None, quote
+
+
 def drop_heredocs(cmd):
     """cmd without the bodies of its here-documents, which are data (`cat > a.md <<EOF`), except where a shell
     reads the body as commands (`bash <<EOF`) or an unquoted body runs a substitution (`$(…)`, a backquote)."""
-    out, lines = [], iter(cmd.split("\n"))
+    out, lines, quote = [], iter(cmd.split("\n")), ""
     for line in lines:
         out.append(line)
-        m = HEREDOC.search(line)
+        m, quote = heredoc_at(line, quote)
         # Kept whenever a shell appears on the line (`FOO=1 bash <<EOF`, `cd x && env bash <<EOF`).
         if not m or any(os.path.basename(w) in SHELLS for w in line.split()):
             continue
@@ -210,6 +230,11 @@ def runs_tests(argv):
             words = ["pytest"] + words[3:]
         elif head in ("uv", "poetry", "pipenv") and words[1:2] == ["run"] and len(words) > 2:
             words = words[2:]
+        elif head in RUNNERS and words[1:2] in (["exec"], ["dlx"], ["x"]):  # `pnpm exec playwright test`
+            rest = words[2:]
+            while rest and rest[0].startswith("-"):
+                rest = rest[1:]
+            words = rest or words
     args = [w for w in words[1:] if not w.startswith("-")]
     if SUITE.fullmatch(head):
         return "test suite"
