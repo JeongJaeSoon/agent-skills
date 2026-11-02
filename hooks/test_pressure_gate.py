@@ -38,6 +38,8 @@ assert g.heavy("orca orchestration worker-start --spec x --worktree new-top-leve
 assert g.heavy("orca orchestration worker-start --spec x --worktree=new-child --agent claude")
 assert not g.heavy("orca orchestration worker-start --task t --worktree current --agent claude")
 assert not g.heavy("orca orchestration worker-start --help")
+assert g.heavy("FOO=1 bash <<EOF\ndocker compose up -d\nEOF") == "docker compose up"
+assert not g.heavy("cat > a.md <<'EOF'\ndocker compose up -d\nEOF")
 
 # Whole suites, E2E and headless browsers belong in an `orch heavy` slot; one test file, or one already in a slot, does not.
 LOOP = "fail=0\nfor t in " + " ".join(f"skills/x/scripts/test_{i}.py" for i in range(6)) + \
@@ -67,7 +69,9 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("for t in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do "$t"; done', "test suite"),
                   ("npx vitest run", "test suite"), ("npx jest --runInBand", "test suite"), ("vitest", "test suite"),
                   ("jest", "test suite"), ("bash <<'EOF'\nnpm test\nEOF", "test suite"),
-                  ("cat > a.md <<'EOF'\nx\nEOF\nnpm test", "test suite")):
+                  ("cat > a.md <<'EOF'\nx\nEOF\nnpm test", "test suite"),
+                  ("FOO=1 bash <<EOF\nnpm test\nEOF", "test suite"), ("cd x && env bash <<'EOF'\npytest\nEOF", "test suite"),
+                  ("pytest -o addopts=", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
             "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
@@ -80,7 +84,7 @@ for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -
             "for f in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do cat "$f"; done',
             "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'cd app && npx playwright test'",
             "cat > README.md <<'EOF'\nnpm test\nEOF", "cat <<-EOF > a.md\n\tpytest\n\tEOF",
-            "npx vitest run src/a.test.ts", "jest -t login", "npx jest --testPathPattern auth", "vitest --version"):
+            "npx vitest run src/a.test.ts", "jest -t login", "npx jest --testPathPattern auth", "vitest --version", 'for f in hooks/test_*.py; do cat "$f"; done'):
     assert g.unwrapped_tests(cmd) is None, cmd
 wrapped = g.wrap_reason("cd /w && bash tests.sh", "test suite")
 assert wrapped.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) ") and "run_in_background" in wrapped

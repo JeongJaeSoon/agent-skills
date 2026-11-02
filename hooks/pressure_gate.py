@@ -50,8 +50,8 @@ def drop_heredocs(cmd):
     for line in lines:
         out.append(line)
         m = HEREDOC.search(line)
-        words = line.split()
-        if not m or words and os.path.basename(words[0]) in SHELLS:
+        # Kept whenever a shell appears on the line (`FOO=1 bash <<EOF`, `cd x && env bash <<EOF`).
+        if not m or any(os.path.basename(w) in SHELLS for w in line.split()):
             continue
         for body in lines:
             if (body.lstrip("\t") if line[m.start():].startswith("<<-") else body) == m.group(2):
@@ -149,7 +149,7 @@ LOOPERS = {"for", "python", "python3", "pytest", "node", "bun", "deno", "go"}
 REDIRECT = re.compile(r"\d*(>>?|<<?|&>>?|>&)")
 # A runner given a test path (`tests/`, `tests/unit`, `a.test.ts`, `x.py::t`) or a name filter runs a subset.
 FILTERS = {"-k", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter",
-           "--testPathPattern", "--testPathPatterns", "--findRelatedTests", "--changed", "--onlyChanged", "-o"}
+           "--testPathPattern", "--testPathPatterns", "--findRelatedTests", "--changed", "--onlyChanged"}
 TEST_DIR = re.compile(r"(.*/)?(tests?|specs?|__tests__)(/.*)?", re.I)
 # Options of pytest, bun, jest and vitest whose next word is a value (an output path, a count), never a test.
 VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "--cov", "--cov-report",
@@ -242,7 +242,8 @@ def unwrapped_tests(cmd):
     found = next(filter(None, map(runs_tests, segs)), None)
     # A `for` list counts only when the loop body runs a test file (`python3 "$t"`, `"$t"`), not `cat "$f"`.
     runs = any(h in LOOPERS - {"for"} or h.startswith("$") for h in map(head_word, segs))
-    if not found and sum(bool(TEST_FILE.fullmatch(w)) for s in segs if s and (
+    # A glob (`hooks/test_*.py`) may expand to any number of files, so it counts as a whole list.
+    if not found and sum(TEST_FILE.fullmatch(w) and (SUITE_FILES if set(w) & set("*?[") else 1) or 0 for s in segs if s and (
             s[0] == "for" and runs or os.path.basename(s[0]) in LOOPERS - {"for"}) for w in s) >= SUITE_FILES:
         found = "test suite"
     return found
