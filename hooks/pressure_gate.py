@@ -64,13 +64,14 @@ def skip_prefix(words, keywords=False):
     return min(i, len(words))
 
 
+SUBST = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)|`([^`]*)`")
 HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)(\w+)\2")  # not a here-string (`<<<word`)
 
 
 def heredoc_at(line, quote):
     """(the first here-document operator outside quotes, comments and arithmetic (`$((1<<20))`) on line, or None;
-    the quote still open at its end)."""
-    i = 0
+    the quote still open at its end; where the simple command holding the operator starts)."""
+    i = start = 0
     while i < len(line):
         c = line[i]
         if quote:
@@ -83,14 +84,16 @@ def heredoc_at(line, quote):
         elif c in "'\"":
             quote = c
         elif c == "#" and (i == 0 or line[i - 1] in " \t;&|("):
-            return None, quote
+            return None, quote, start
         elif line.startswith("((", i):
             end = line.find("))", i + 2)
             i = len(line) if end < 0 else end + 1
+        elif c in ";&|(":
+            start = i + 1
         elif m := HEREDOC.match(line, i):
-            return m, quote
+            return m, quote, start
         i += 1
-    return None, quote
+    return None, quote, start
 
 
 def drop_heredocs(cmd, slotted=False):
@@ -102,11 +105,13 @@ def drop_heredocs(cmd, slotted=False):
     out, lines, quote = [], iter(cmd.split("\n")), ""
     for line in lines:
         out.append(line)
-        m, quote = heredoc_at(line, quote)
-        # Kept whenever a shell appears on the line (`FOO=1 bash <<EOF`, `cd x && env bash <<EOF`).
-        shell = bool(m) and any(os.path.basename(w.strip("'\"")) in SHELLS for w in line.split()) and not (
-            slotted and re.search(r"(^|[\s;&|(/])orch\s+heavy\s", line))
-        if not m or shell and OVERRIDE not in line.split():
+        m, quote, start = heredoc_at(line, quote)
+        # Only the simple command that receives the body counts: `orch heavy - -- true; bash <<EOF` runs it outside.
+        words = [w.strip("'\"") for w in line[start:m.start()].split()] if m else []
+        shell = next((k for k, w in enumerate(words) if os.path.basename(w) in SHELLS), None)
+        if shell is not None and slotted and any(words[k:k + 2] == ["orch", "heavy"] for k in range(shell)):
+            shell = None  # `orch heavy - -- bash <<EOF`: the body runs in the slot
+        if not m or shell is not None and OVERRIDE not in words[:shell]:
             continue
         body, end = [], None
         for row in lines:
@@ -114,10 +119,10 @@ def drop_heredocs(cmd, slotted=False):
                 end = row
                 break
             body.append(row)
-        if shell:
+        if shell is not None:
             out.append(shlex.join([OVERRIDE, "bash", "-c", "\n".join(body)]))
-        elif not m.group(2) and any("$(" in r or "`" in r for r in body):
-            out += body
+        elif not m.group(2):  # only what a substitution runs: `$(date)` runs, the text around it is data
+            out += ["".join(g) for g in SUBST.findall("\n".join(body))]
         if end is not None:
             out.append(end)
     return "\n".join(out)
