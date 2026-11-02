@@ -29,9 +29,11 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             route or schema shows it, and an owner decision's technical premise, checked when the
             decision enters the predicate. A fact left unchecked is marked unverified.
 DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
-            a schema, a config key, a message format): name the contract and those units. Run
-            `architect` on it before the first edit and put the sketch in the ticket's plan
-            comment (deliver-ticket §1); the units that build on it get that sketch in CONTEXT.
+            a schema, a config key, a message format): name the contract and those units. Before
+            the first edit, run `how` on the existing code paths the contract changes (skip what
+            an upstream report covers), then `architect` on the contract. Put the sketch
+            in the ticket's plan comment (deliver-ticket §1); the units that build on it get that
+            sketch in CONTEXT.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / orch dep).
             Class: normal | urgent | gate.
             Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
