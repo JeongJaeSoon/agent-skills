@@ -16,7 +16,9 @@ A role is declared, never guessed from the terminal, and read in this order:
    whatever started it. A fork gets a new session id and its input names no parent, so a fork of a session declared
    only this way is undeclared until it declares again.
 3. Neither: no output.
-A declared session gets the long paragraph at SessionStart and one line on every prompt. An orchestrator whose session
+A declared session gets the long paragraph at SessionStart and one line on every prompt. After a compaction the
+paragraph also carries orchestrate's core rules as text: the skill is too large to come back with the compaction's own
+re-injection, and the request to reload it went unanswered for weeks. An orchestrator whose session
 title is not `orchestrator` is also told at SessionStart how to name it; a role visible in session lists is how the
 human tells which session routes. Prompts run no external
 command, so the hook stays fast.
@@ -34,6 +36,10 @@ SESSION = re.compile(r"[\w-]{1,128}")
 ROLE = re.compile(r"^[ \t]*ROLE:?[ \t]+(orchestrator|lead[ \t]+([\w.-]+)|none)[ \t]*$", re.M)
 LEAD_TITLE = re.compile(r"lead:([\w.-]+)")
 AGENTS = {"agent-skills:orchestrator": "orchestrator", "agent-skills:lead": "lead"}
+SKILL = pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "SKILL.md"
+# Core rules 1 and 2 of SKILL.md in one line; the per-prompt reminder must never say less than they do.
+DELEGATE = ("Hand each instruction one layer down at once (a worker, a card, a background subagent); in your own turn "
+            "only answer from context or make one `--json` read.")
 
 
 def program_for(slug):
@@ -58,17 +64,45 @@ def program_message(slug, cfg, compacted):
             f"to do with each worker_done's card.")
 
 
+def core_rules():
+    """The numbered "Core rules" list at the top of orchestrate's SKILL.md, verbatim; "" when it cannot be read."""
+    try:
+        lines = SKILL.read_text().splitlines()
+    except OSError:
+        return ""
+    start = next((i for i, line in enumerate(lines) if line.startswith("Core rules")), None)
+    if start is None:
+        return ""
+    rules = []
+    for line in lines[start + 1:]:
+        if not re.match(r"\d+\. ", line):
+            break
+        rules.append(line)
+    return "\n".join(rules)
+
+
+def with_core_rules(text):
+    """A compaction drops the skill body, so its core rules come back as text, not as a request to reload it."""
+    rules = core_rules()
+    if not rules:
+        return text
+    return (f"{text}\nThese core rules of agent-skills:orchestrate hold now, before you reload it:\n{rules}")
+
+
 def role_long(entry, compacted):
     if entry["role"] == "lead":
         slug = entry.get("slug")
         if not slug:
             return ("You are a lead (agent-skills:lead), but no program is named: ask the human for its slug, then "
                     "declare it with a prompt line `ROLE: lead <slug>`. Load agent-skills:orchestrate in program mode.")
-        return program_message(slug, program_for(slug), compacted)
-    return ("You are the top-level orchestrator. Load agent-skills:orchestrate now. Your turn is routing "
-            "and seconds-long reads, so the human's next message is answered in seconds; investigation, "
-            "implementation, verification and browser work go one layer down. Status reports go through "
-            "agent-skills:brief.")
+        text = program_message(slug, program_for(slug), compacted)
+        return with_core_rules(text) if compacted else text
+    if compacted:
+        return with_core_rules("Your context was just compacted. You are the top-level orchestrator. Load "
+                               "agent-skills:orchestrate (references/top-level.md) for any step these rules do not "
+                               "cover.")
+    return ("You are the top-level orchestrator. Load agent-skills:orchestrate now. " + DELEGATE + " Status reports "
+            "go through agent-skills:brief.")
 
 
 def name_check(event):
@@ -87,13 +121,11 @@ def role_line(entry):
         note = program_for(slug).get("note")
         brief = f"; program note {note}" if note else ""
         return (f"ROLE: lead {slug}. Run agent-skills:orchestrate in program mode for {slug} (load it now if it is not "
-                f"in your context){brief}; keep one `orch wait {slug}` running; delegate investigation, implementation "
-                f"and verification one layer down.")
+                f"in your context){brief}; keep one `orch wait {slug}` running. {DELEGATE}")
     if entry["role"] == "lead":
         return role_long(entry, False)
     return ("ROLE: orchestrator. Run agent-skills:orchestrate as the top-level orchestrator (load it now if it is not "
-            "in your context): route and do seconds-long reads; investigation, implementation, verification and "
-            "browser work go one layer down; status reports go through agent-skills:brief.")
+            f"in your context). {DELEGATE} Status reports go through agent-skills:brief.")
 
 
 def stage_warning(entry):
