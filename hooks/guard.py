@@ -147,7 +147,7 @@ def lead_session(agent, session, transcript):
 def command_text(cmd):
     """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
     comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them."""
-    out, n = list(cmd), len(cmd)
+    out, n, opened = list(cmd), len(cmd), set()  # opened: just past an opening backtick, where a word starts
 
     def blank(i, j):
         out[i:j] = " " * (j - i)
@@ -199,7 +199,8 @@ def command_text(cmd):
 
         while i >= 2 and cmd[i - 1] == "\n" and escaped(i - 1):
             i -= 2
-        return i == 0 or (cmd[i - 1] in " \t\n;&|()" and not escaped(i - 1))  # `\\ #` is a comment, `\ #` is not
+        # Not after `)` or a closing backtick: in `$(x)#` and `` `x`# `` the # is inside a word.
+        return i == 0 or i in opened or (cmd[i - 1] in " \t\n;&|(" and not escaped(i - 1))  # `\\ #` is a comment, `\ #` is not
 
     def heredoc(i):
         """The delimiter word after `<<` at i, quotes removed: (index after it, (strip tabs, word, expands) or None)."""
@@ -235,6 +236,8 @@ def command_text(cmd):
 
     def command(i, close):
         depth, arith, pending = 0, 0, []
+        if close == "`":
+            opened.add(i)
         while i < n:
             c = cmd[i]
             if c == close and (close != ")" or depth == 0):

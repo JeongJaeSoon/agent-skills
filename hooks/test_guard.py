@@ -260,6 +260,10 @@ assert bash(f"echo \\ #; skills-sync card {H / 'noclose.md'}") == "deny"  # an e
 assert bash(f"echo \\\n# '\nskills-sync card {H / 'noclose.md'}\n# '") == "deny"  # a comment after a line continuation
 assert bash(f"echo \\\\ # don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` is one backslash, then a comment
 assert bash(f"echo a\\\\\n# don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` then a real newline
+assert bash(f"echo `# don't\nskills-sync card {H / 'noclose.md'}\n`") == "deny"  # a comment opening a substitution
+assert bash(f"echo $(# don't\nskills-sync card {H / 'noclose.md'}\n)") == "deny"
+for word in ("`x`", "$(x)", "a\\\\\\ "):  # a # inside a word is not a comment
+    assert bash(f"echo {word}#; skills-sync card {H / 'noclose.md'}") == "deny", word
 assert bash(f"cat <<true\ntr\\\nue\nskills-sync card {H / 'noclose.md'}\ntrue") == "deny"  # bash ends the body at tr\ue
 # A delimiter bash rewrites through escapes is not read, so a later line spelling it raw blanks nothing.
 for delim, raw in (("$'E\\x4fF'", "E\\x4fF"), ('"E\\OF"', "E\\OF")):
