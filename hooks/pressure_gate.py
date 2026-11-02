@@ -10,6 +10,11 @@ the command goes into pressure.py's queue, shown on the dashboard, until the sam
 written falls back to waiting on `pressure.py check`. The same script, run as PostToolUse and PostToolUseFailure,
 records that retry's outcome.
 
+Two more holds. A line that runs a whole test suite, an E2E or a headless browser outside `orch heavy` is denied with
+the same line wrapped in it, whatever the level: the machine-wide slots are the cap, and tests run by live sessions
+saturated the CPU while the gate watched only starts. A new card (`orca worktree create`, a worker in a new worktree)
+is denied while Orca shows `turn_cap` agent turns in progress; the deny names `pressure.py turns --wait`.
+
 `AGENT_SKILLS_PRESSURE_GATE=0`, in the hook's environment or before the heavy command itself, turns it off.
 The level is the one `pressure.py check` reports and `queue wait` judges (pressure.snapshot + judge, gate_open), so
 either wait ends when this would let the command through.
@@ -32,6 +37,7 @@ MARK = "[gate:pressure]"
 SOURCE = "(agent-skills hooks/pressure_gate.py)"
 # PostToolUse and PostToolUseFailure: a Bash exit other than 0 is the failure event, with "Exit code N" as its error.
 POST = {"PostToolUse": "done", "PostToolUseFailure": "failed"}
+NEW_CARD = ("orca worktree create", "orca orchestration worker-start")
 
 
 def segments(cmd):
@@ -95,6 +101,80 @@ def heavy(cmd):
     return next(filter(None, map(starts_heavy, segments(cmd))), None)
 
 
+# A suite script (`tests.sh`, `run-tests.sh`), a test file (`test_x.py`, `x_test.go`, `x.spec.ts`) and the package
+# script names an E2E or browser run goes by.
+SUITE = re.compile(r"(run[-_])?tests?([-_]all)?\.sh")
+TEST_FILE = re.compile(r"(.*/)?(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?)")
+E2E = re.compile(r"(.*[-_:./])?(e2e|playwright|cypress)([-_:.].*)?", re.I)
+RUNNERS = {"npm", "pnpm", "yarn", "bun"}
+# This many test files in a `for` list or on one runner's line is a suite, the CONTRIBUTING loop among them;
+# `git add` or `cat` of as many is not.
+SUITE_FILES = 5
+LOOPERS = {"for", "python", "python3", "pytest", "node", "bun", "deno", "go"}
+
+
+def runs_tests(argv):
+    """'test suite', 'E2E' or 'browser' for one simple command that runs a whole suite, an E2E or a headless browser,
+    else None. One named test file, or a runner given a path, is not a suite."""
+    words, i = list(argv), 0
+    while i < len(words) and (ASSIGN.match(words[i]) or words[i] in WRAPPERS or
+                              (i and words[i - 1] in WRAPPERS and words[i].startswith("-"))):
+        if words[i] == "AGENT_SKILLS_PRESSURE_GATE=0":
+            return None
+        i += 1
+    words = words[i:]
+    if not words or "--help" in words:
+        return None
+    head = os.path.basename(words[0])
+    if head in SHELLS and len(words) > 1 and not words[1].startswith("-"):
+        words, head = words[1:], os.path.basename(words[1])
+    args = [w for w in words[1:] if not w.startswith("-")]
+    if SUITE.fullmatch(head):
+        return "test suite"
+    if head in ("npx", "bunx", "pnpx") and args:
+        head, args = os.path.basename(args[0]), args[1:]
+    if head in ("playwright", "cypress"):
+        return "E2E" if args[:1] in (["test"], ["run"]) else None
+    if E2E.fullmatch(head):
+        return "E2E"
+    if "chrom" in head.lower() and any(w.startswith("--headless") for w in words):
+        return "browser"
+    if head in RUNNERS:
+        script = args[1] if args[:1] == ["run"] and len(args) > 1 else args[0] if args else ""
+        if E2E.fullmatch(script):
+            return "E2E"
+        if head == "bun" and args[:1] == ["test"] and len(args) == 1:
+            return "test suite"
+        if script in ("test", "test:all") and len(args) == (2 if args[:1] == ["run"] else 1):
+            return "test suite"
+    if head == "make" and args:
+        return "E2E" if any(E2E.fullmatch(a) for a in args) else "test suite" if "test" in args else None
+    if head == "pytest" and not args or head == "go" and args[:2] == ["test", "./..."]:
+        return "test suite"
+    return None
+
+
+def unwrapped_tests(cmd):
+    """What a line runs that belongs in an `orch heavy` slot, None when it runs none or already runs in one."""
+    segs = list(segments(cmd))
+    if any(starts_heavy(s) == "orch heavy" for s in segs):
+        return None
+    found = next(filter(None, map(runs_tests, segs)), None)
+    if not found and "AGENT_SKILLS_PRESSURE_GATE=0" not in cmd and sum(
+            bool(TEST_FILE.fullmatch(w)) for s in segs if s and os.path.basename(s[0]) in LOOPERS for w in s) >= SUITE_FILES:
+        found = "test suite"
+    return found
+
+
+def wrap_reason(cmd, what):
+    line = shlex.join(["orch", "heavy", "-", "--", "bash", "-c", cmd])
+    return (f"{MARK} {SOURCE} {what} 실행은 머신 전체 무거운 실행 슬롯(`orch heavy`)을 거친다. 여러 카드가 동시에 전체 테스트·"
+            f"E2E·브라우저를 돌리면 CPU 가 포화된다. 같은 명령을 슬롯 안에서 다시 실행한다: `{line}` "
+            "슬롯이 다 차 있으면 빌 때까지 기다리므로 Bash 의 run_in_background 로 실행하고 끝나기를 기다린다. "
+            "파일 하나만 도는 테스트는 슬롯 없이 돌려도 된다. 사용자가 지금 그대로 실행하라고 했을 때만 명령 앞에 "
+            "AGENT_SKILLS_PRESSURE_GATE=0 을 붙인다.")
+
+
 def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
     """(decision, reason) or None. p is the pressure module. A danger deny puts the command in p's queue."""
     what = heavy(cmd)
@@ -103,7 +183,17 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
     level, why = p.judge(metrics, cfg)
     now = now or time.time()
     if p.gate_open(level, state, cfg, now):
-        return None
+        if what not in NEW_CARD:
+            return None
+        n, cap = p.active_turns(), p.turn_cap(cfg)
+        if None in (n, cap) or n < cap:
+            return None
+        py = shlex.join(["python3", str(SCRIPT)])
+        return ("deny", f"{MARK} {SOURCE} 진행 중인 에이전트 턴이 {n}개로 상한 {cap}개(`reap.pressure.active_turns_per_cpu`)에 "
+                        f"닿아 `{what}` 로 새 카드를 시작하지 않는다. 카드마다 테스트·hook·브라우저가 같이 돌아 CPU 가 포화된다. "
+                        f"Monitor 로 `{py} turns --wait {float(cfg['queue_minutes']):g}` 가 0 으로 끝나면 같은 명령을 다시 "
+                        "실행하고, 3 이면 시작하지 말고 그 출력을 보고한다(foreground sleep 루프 금지). 남의 카드·프로세스는 "
+                        "종료하지 않는다. 사용자가 지금 시작하라고 했을 때만 명령 앞에 AGENT_SKILLS_PRESSURE_GATE=0 을 붙인다.")
     fresh = p.fresh(state, cfg, now)
     py = shlex.join(["python3", str(SCRIPT)])
     if level == "warn":
@@ -138,9 +228,15 @@ def main():
     except ValueError:
         return 0
     cmd = (event.get("tool_input") or {}).get("command") or ""
-    if event.get("tool_name") != "Bash" or not heavy(cmd):
+    if event.get("tool_name") != "Bash":
         return 0
     session, kind = str(event.get("session_id") or ""), event.get("hook_event_name") or "PreToolUse"
+    if kind == "PreToolUse" and (tests := unwrapped_tests(cmd)):
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                 "permissionDecisionReason": wrap_reason(cmd, tests)}}, ensure_ascii=False))
+        return 0
+    if not heavy(cmd):
+        return 0
     try:
         sys.path.insert(0, str(SCRIPT.parent))
         import pressure

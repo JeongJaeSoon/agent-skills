@@ -135,10 +135,12 @@ report the old and new sha and the backup branch.
 
 Before pushing, run **both**:
 
-- the test suite
-- an E2E check against a running system (a local compose stack, image build or E2E run goes
-  through `orch heavy - -- <command>`, which
-  caps such runs machine-wide so parallel cards do not starve the machine) — CLI / `curl` for backend and APIs, browser automation for UI
+- the test suite, the whole of it through `orch heavy - -- <command>` (run with
+  `run_in_background`, since it may wait for a slot); a single test file runs bare
+- an E2E check against a running system (a local compose stack, image build, E2E or headless
+  browser run goes through `orch heavy - -- <command>`, which caps such runs machine-wide so
+  parallel cards do not starve the machine; the pressure hook denies a whole suite, an E2E or a
+  headless browser run outside it) — CLI / `curl` for backend and APIs, browser automation for UI
   and web flows (logged-in sites included), IDE diagnostics
   for type and lint. Once the check is done, down the compose stacks you started in the same turn,
   with the project verify skill's own teardown when it has one (the app may start containers outside

@@ -298,6 +298,11 @@ import time; time.sleep(1)
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "true")
 assert code == 1 and "every slot busy" in out, out
 holder.wait()
+holder = subprocess.Popen([sys.executable, HERE / "prog.py", "heavy", "t", "--", "sleep", "2"], env=env)
+time.sleep(1)
+code, out = prog(env, "heavy", "t", "--wait-minutes", "1", "--", "true")  # says it waits, then runs once the slot frees
+assert code == 0 and "모두 사용 중이라" in out and "sleep 2" in out, out
+holder.wait()
 code, out = prog(env, "heavy", "t", "--wait-minutes", "0", "--", "sh", "-c", "exit 7")
 assert code == 7, out
 (d / "programs" / "_heavy" / "slot-0").write_text(json.dumps({"pid": 999999}))

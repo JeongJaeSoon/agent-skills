@@ -2578,6 +2578,7 @@ def cmd_heavy(argv):
     slots = HOME / "_heavy"
     slots.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + 60 * float(opt(argv[:cut], "--wait-minutes", "60"))
+    waited = False
     while True:
         for i in range(int(knob(cfg, "heavy_slots"))):
             path = slots / f"slot-{i}"
@@ -2600,9 +2601,13 @@ def cmd_heavy(argv):
                 except (OSError, subprocess.SubprocessError) as e:
                     # The command's exit code is the result; a failed registration is only reported.
                     print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
+        holders = [json.loads(f.read_text() or "{}") for f in sorted(slots.glob("slot-*"))]
         if time.monotonic() >= deadline:
-            holders = [json.loads(f.read_text() or "{}") for f in sorted(slots.glob("slot-*"))]
             sys.exit(f"heavy: every slot busy after waiting: {json.dumps(holders, ensure_ascii=False)}")
+        if not waited:
+            print(f"heavy: 슬롯 {len(holders)}개가 모두 사용 중이라 빌 때까지 기다린다(최대 {opt(argv[:cut], '--wait-minutes', '60')}분): "
+                  + "; ".join(f"pid {h.get('pid')} {h.get('cmd', '')[:80]}" for h in holders), file=sys.stderr, flush=True)
+            waited = True
         time.sleep(15)
 
 

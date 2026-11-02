@@ -32,6 +32,13 @@
 | `docker_mem_pct`(컨테이너 메모리 합 ÷ VM MemTotal) | 25~40% (컨테이너 21~49개) | 70 | 90 | VM 한도를 넘으면 VM 안에서 OOM이 나고 호스트 지표에는 보이지 않는다. VM 커널·데몬 몫은 빠지므로 VM 전체 사용량보다 작다. 낮다고 여유가 확정되지는 않는다 |
 | `containers`(실행 중) | 21~99 | 40 | 없음 | 개수는 무게를 나타내지 못한다. 49개가 CPU 306%, 메모리 5.08GiB(VM의 32%)였다. 경고(정리 회차)만 한다 |
 
+### 테스트 슬롯과 새 카드 턴 상한
+
+2026-11-02 18시 이후 CPU idle 0~1%, 실행 대기 58~67, 초당 새 프로세스 약 1,100개가 이어졌다. 끝난 카드의 찌꺼기는 거의 없었고, 살아 있는 카드들이 각자 전체 테스트 스위트·`bun test`·`tsc`·headless Chrome을 동시에 돌렸다. 게이트는 `orch heavy`·compose·새 카드 같은 시작만 보고 있었으므로 이 실행들은 슬롯 2개를 거치지 않았다.
+
+- 전체 테스트·E2E·브라우저 실행은 수준과 상관없이 `orch heavy` 슬롯(기본 2개)을 거친다. 파일 하나짜리 테스트는 짧아서 그대로 둔다.
+- 새 카드는 Orca가 `working`으로 보이는 에이전트 턴이 `active_turns_per_cpu` × 논리 CPU(기본 0.5, 18코어면 9개) 이상이면 기다린다. 18:42에 턴이 진행 중이던 카드 10개만으로 CPU가 포화됐고, 19:24에는 `working` 21개에 load5 104였다. 상한은 포화가 관측된 10개보다 낮게, 코어 수에 비례하게 잡았다. 이미 도는 턴은 끊지 않고 새 카드만 막으므로, 턴이 끝나는 대로 다시 열린다.
+
 Docker CPU는 따로 재지 않는다. OrbStack VM의 vCPU는 호스트 스레드라서 Docker의 CPU 사용은 호스트 CPU idle에 그대로 잡힌다.
 
 `containers`는 `docker ps`의 줄 수가 아니다. OrbStack k8s를 켜면 pod마다 pause 컨테이너(`k8s_POD_*`)가 하나씩 더 뜨고, `kube-system`(coredns·traefik svclb·local-path-provisioner)이 늘 돈다. 그래서 k8s 컨테이너는 pod 하나(`io.kubernetes.pod.uid`)를 1로 세고 `kube-system`은 세지 않는다.

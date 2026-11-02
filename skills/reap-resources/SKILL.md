@@ -307,6 +307,13 @@ with `run_in_background` gets its PostToolUse when it starts, so its entry reads
 ends overdue entries. `python3 "$P" queue` lists entries for a week. A queue that cannot be written (lock held past
 3 seconds, unwritable state) still denies, with the old wait on `check`. Danger from disk alone asks for space to be
 freed instead of a wait, and queues nothing. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
+The same hook holds two more things at any level. A line that runs a whole test suite (`tests.sh`, a `for` loop over
+five or more test files, `npm test`, a bare `bun test` or `pytest`, `go test ./...`), an E2E (`playwright test`,
+`cypress run`, an `e2e` script) or a headless Chrome outside `orch heavy` is denied with the same line wrapped in
+`orch heavy - -- bash -c '…'`, so the two machine-wide slots cap what already-running cards run, not only what
+starts. A new card (`orca worktree create`, a worker into a new worktree) is denied while Orca
+shows `active_turns_per_cpu` (0.5, 9 on 18 CPUs; null is off) agent turns per CPU in progress; the deny names
+`Monitor` on `python3 "$P" turns --wait 15`, which exits 0 once under the cap and 3 after the wait.
 `AGENT_SKILLS_PRESSURE_GATE=0` (environment, or before the heavy command when the user said to go ahead) turns it
 off. The gate assumes the LaunchAgent is installed: without it, a machine that sits at warn costs every heavy start
 a deny and a manual `round`.

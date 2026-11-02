@@ -39,6 +39,56 @@ assert g.heavy("orca orchestration worker-start --spec x --worktree=new-child --
 assert not g.heavy("orca orchestration worker-start --task t --worktree current --agent claude")
 assert not g.heavy("orca orchestration worker-start --help")
 
+# Whole suites, E2E and headless browsers belong in an `orch heavy` slot; one test file, or one already in a slot, does not.
+LOOP = "fail=0\nfor t in " + " ".join(f"skills/x/scripts/test_{i}.py" for i in range(6)) + \
+    '; do python3 "$t" || fail=1; done\n(exit $fail)'
+for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-tests.sh", "test suite"),
+                  ("bash /tmp/scratch/tests.sh 2>&1 | tail -20", "test suite"), (LOOP, "test suite"),
+                  ("bun test", "test suite"), ("npm test", "test suite"), ("pnpm run test", "test suite"),
+                  ("CI=1 yarn test:all", "test suite"), ("pytest", "test suite"), ("go test ./...", "test suite"),
+                  ("make test", "test suite"), ("npx playwright test", "E2E"), ("bunx playwright test --headed", "E2E"),
+                  ("pnpm test:e2e", "E2E"), ("npm run e2e", "E2E"), ("./scripts/e2e.sh", "E2E"), ("cypress run", "E2E"),
+                  ("make e2e", "E2E"), ("bash -c 'cd app && npm run test:e2e'", "E2E"),
+                  ("'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' --headless=new --dump-dom x", "browser"),
+                  ("chromium --headless --screenshot a.png x", "browser")):
+    assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
+for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
+            "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
+            "orch heavy - -- bash -c " + repr(LOOP), "cat tests.sh", "grep -n e2e package.json",
+            "git add " + " ".join(f"hooks/test_{i}.py" for i in range(6)), "AGENT_SKILLS_PRESSURE_GATE=0 bash tests.sh",
+            "AGENT_SKILLS_PRESSURE_GATE=0 " + LOOP.split("\n")[1], "chrome --version", "npm run build", "ls tests"):
+    assert g.unwrapped_tests(cmd) is None, cmd
+wrapped = g.wrap_reason("cd /w && bash tests.sh", "test suite")
+assert wrapped.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) ") and "run_in_background" in wrapped
+line = wrapped.split("`")[3]
+assert line == "orch heavy - -- bash -c 'cd /w && bash tests.sh'" and g.unwrapped_tests(line) is None, line
+
+# A new card waits while Orca shows the cap's turns in progress; other heavy starts and an unknown count do not.
+assert pressure.turn_cap(cfg, 18) == 9 and pressure.turn_cap({**cfg, "active_turns_per_cpu": None}, 18) is None
+assert pressure.turn_cap({**cfg, "active_turns_per_cpu": 0.01}, 18) == 1
+real_turns, real_cap = pressure.active_turns, pressure.turn_cap
+pressure.turn_cap = lambda c, cpus=None: 9
+for n, card, compose in ((9, "deny", "none"), (8, "none", "none"), (None, "none", "none")):
+    pressure.active_turns = lambda n=n: n
+    assert gate("orca worktree create --repo x", OK) == card, n
+    assert gate("orca orchestration worker-start --spec x --worktree new-top-level", OK) == card, n
+    assert gate("docker compose up -d", OK) == compose, n
+pressure.active_turns = lambda: 12
+turns = g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure)[1]
+assert "12개" in turns and "상한 9개" in turns and "turns --wait 15" in turns and "Monitor" in turns, turns
+pressure.active_turns, pressure.turn_cap = real_turns, real_cap
+assert pressure.active_turns(run=lambda *a, **k: json.dumps({"ok": True, "result": {"worktrees": [
+    {"agents": [{"state": "working"}, {"state": "done"}]}, {"agents": [{"state": "working"}]}, {"agents": None}]}})) == 2
+assert pressure.active_turns(run=lambda *a, **k: None) is None
+assert pressure.active_turns(run=lambda *a, **k: "not json") is None
+ticks = iter([100.0, 100.0, 200.0, 2000.0])
+said = []
+assert pressure.turns_wait(cfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=iter([10**6, 10**6, 0]).__next__,
+                           out=said.append) == 0 and "0개" in said[-1]
+ticks = iter([0.0, 0.0, 901.0])
+assert pressure.turns_wait({**cfg, "active_turns_per_cpu": 0.5}, 15, now_fn=lambda: next(ticks), sleep=lambda s: None,
+                           count=lambda: 10**6, out=said.append) == 3 and "1000000개" in said[-1]
+
 # ok: nothing. warn: denied until a sweep ran in gate_fresh_minutes. danger: denied either way.
 assert gate("docker compose up -d", OK) == "none"
 assert gate("docker compose up -d", WARN) == "deny"
@@ -77,6 +127,9 @@ def hook(tool, cmd, **env):
 
 assert hook("Bash", "ls") == "" and hook("Read", "docker compose up") == ""
 assert hook("Bash", "docker compose up", AGENT_SKILLS_PRESSURE_GATE="0") == ""
+deny = json.loads(hook("Bash", "bash tests.sh"))["hookSpecificOutput"]
+assert deny["permissionDecision"] == "deny" and "orch heavy - -- bash -c 'bash tests.sh'" in deny["permissionDecisionReason"]
+assert hook("Bash", "bash tests.sh", AGENT_SKILLS_PRESSURE_GATE="0") == ""
 real = hook("Bash", "docker compose up")  # this machine's real level: either no decision or a well-formed deny
 assert real == "" or json.loads(real)["hookSpecificOutput"]["permissionDecision"] == "deny", real
 
@@ -89,6 +142,7 @@ for name, worst in (("danger", {"mem_free_pct": [101, 101]}), ("ok", {})):
     home = pathlib.Path(tempfile.mkdtemp())
     (home / ".claude").mkdir()
     never = {k: ([1e9, 1e9] if higher else [-1, -1]) for k, higher in pressure.CHECKS}
+    never["active_turns_per_cpu"] = None  # the turn cap reads this machine's Orca; its own tests fake the count
     (home / ".claude" / "agent-skills.json").write_text(json.dumps({"reap": {"pressure": {**never, **worst}}}))
     homes[name] = str(home)
 

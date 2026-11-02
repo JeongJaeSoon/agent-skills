@@ -11,6 +11,9 @@ Usage:
   pressure.py queue | queue wait <id>
                      the heavy starts the hook held at danger; wait exits 0 once the hook would let that one through
                      (its session runs the same command again), 3 when it should not run (deadline passed, or gone)
+  pressure.py turns [--wait MINUTES]
+                     agent turns Orca shows in progress against the new-card cap (active_turns_per_cpu); exit 1 at
+                     the cap. --wait polls until under it (0) or MINUTES pass (3)
   pressure.py history [--hours H]
                      JSON for the dashboard: the last round's level and metrics, the thresholds, the queue, and one
                      point per round over the last H hours (default 6, at most 24). Reads files only, measures nothing
@@ -71,6 +74,9 @@ DEFAULTS = {
     "gate_fresh_minutes": 15,
     # A heavy start the hook held at danger waits in the queue this long for its session to run it again.
     "queue_minutes": 15,
+    # A new card (`orca worktree create`, a worker in a new worktree) waits while Orca shows this many agent turns
+    # per logical CPU in progress (9 on 18 CPUs). null turns the cap off.
+    "active_turns_per_cpu": 0.5,
     "top": 5,
 }
 # (metric, higher is worse); each is also its threshold's key
@@ -183,6 +189,41 @@ def judge(m, cfg):
     """(level, reasons): the worst level any metric reaches, and one phrase per metric at warn or above."""
     found = hits(m, cfg)
     return LEVELS[max((lvl for _, lvl, _ in found), default=0)], [why for _, _, why in found]
+
+
+def active_turns(run=sh):
+    """Agent turns Orca shows in progress (state "working") over every card; None when Orca cannot say."""
+    out = run(["orca", "worktree", "ps", "--limit", "500", "--json"], timeout=5) if shutil.which("orca") else None
+    try:
+        data = json.loads(out or "")
+    except ValueError:
+        return None
+    res = data.get("result", data) if isinstance(data, dict) else None
+    trees = res.get("worktrees") if isinstance(res, dict) else None
+    if not isinstance(trees, list):
+        return None
+    return sum(isinstance(a, dict) and a.get("state") == "working"
+               for w in trees if isinstance(w, dict) for a in w.get("agents") or [])
+
+
+def turn_cap(cfg, cpus=None):
+    """How many turns in progress hold a new card; None when the cap is off."""
+    per = cfg.get("active_turns_per_cpu")
+    return None if per is None else max(1, int((cpus or os.cpu_count() or 1) * float(per)))
+
+
+def turns_wait(cfg, minutes, poll=30.0, now_fn=time.time, sleep=time.sleep, count=active_turns, out=print):
+    """0 once fewer turns than the cap are in progress (or the cap is off, or Orca cannot say), 3 after `minutes`."""
+    cap, deadline = turn_cap(cfg), now_fn() + 60 * minutes
+    while True:
+        n = count()
+        if cap is None or n is None or n < cap:
+            out(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}: 새 카드를 시작해도 된다")
+            return 0
+        if now_fn() >= deadline:
+            out(f"진행 중인 에이전트 턴 {n}개 ≥ 상한 {cap}, {minutes:g}분 기다려도 줄지 않음 — 시작하지 않는다")
+            return 3
+        sleep(poll)
 
 
 def blocked_by(m, cfg):
@@ -949,7 +990,13 @@ def overrides(argv):
 
 def main(argv):
     cmd = argv[0] if argv else ""
-    cfg = config(overrides(argv)) if cmd in ("check", "round", "queue", "history") else None
+    cfg = config(overrides(argv)) if cmd in ("check", "round", "queue", "history", "turns") else None
+    if cmd == "turns":
+        if "--wait" in argv[:-1]:
+            return turns_wait(cfg, float(argv[argv.index("--wait") + 1]))
+        n, cap = active_turns(), turn_cap(cfg)
+        print(f"진행 중인 에이전트 턴 {'?' if n is None else n}개 / 상한 {cap or '없음'}")
+        return 1 if None not in (n, cap) and n >= cap else 0
     if cmd == "check":
         m = snapshot(cfg, load_state())
         level, why = judge(m, cfg)
