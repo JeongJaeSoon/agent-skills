@@ -272,10 +272,10 @@ ROUTING     New requests for this project, from the human or from above, come to
             layer above started before you (listed in CONTEXT) stay in its Run: send what
             you want from one of them to PARENT, which passes it on verbatim.
 PARENT      The Run of the session writing this brief, as `orca orchestration send --to
-            run:<its run id>`. Reports go there as `--type status`; the HUMAN ONLY batch and any
-            question as `--type escalation` when you started as a dispatched worker (an `ask` would
-            stop your own inbox loop), as `--type question` when you started as a `/goal` card
-            (Orca refuses both `ask` and escalation without a Dispatch). A status wakes no wait. A send to it
+            run:<its run id>`. Reports go there as `--type status`; the HUMAN ONLY batch as `--type
+            escalation` when you started as a dispatched worker, as `--type question` when you
+            started as a `/goal` card (Orca refuses escalation without a Dispatch). A status wakes
+            no wait. Decisions go by GATE. A send to it
             that fails is the routing gap HUMAN ONLY names; never guess another address.
 PERMISSIONS The autoMode rules for each outward act the predicate needs (merge, deploy, edits
             to tracker items or PRs an earlier session made), quoted, or "missing" (your
