@@ -227,7 +227,11 @@ def supervisor(wanted):
         raise stop("Orca did not say which Run this terminal is bound to (`orca orchestration run-current --json` "
                    "failed, or ORCA_TERMINAL_HANDLE is unset)", "run this from an Orca terminal once that command "
                    "answers", card)
-    own = None if bound else orca_settings.own_dispatch(ORCA)
+    own = None if bound else orca_settings.own_dispatch(ORCA, failed="unknown")
+    if own == "unknown":
+        raise stop("this terminal is bound to no Run, and Orca did not answer whether it is a dispatched worker "
+                   "(`orca orchestration worker-list --terminal-state active --json` failed)",
+                   "run this again once that command answers", card)
     have = (bound or {}).get("id") or (own or {}).get("runId")
     want = " and ".join(f"run:{w}" for w in sorted(wanted))
     if not have:
@@ -323,6 +327,8 @@ def create(argv):
                         "repo's main worktree when several Orca workspaces share that path. Pass `id:<worktree id>` "
                         "(`orca worktree show --worktree <it> --json`), or leave it out for this terminal's worktree.")
     lead = guard.is_lead(text)
+    # Checked before the lead's form is picked: a lead started as a /goal card still reports to this Run.
+    checked = supervisor(wanted) if to_run and not opts.get("--card") else None
     if lead and to_run and not opts.get("--card"):
         settings, why = orca_settings.read()
         if HUMAN_GATE.search(text):
@@ -334,7 +340,7 @@ def create(argv):
             to_run = False
             fix = "; ".join(orca_settings.suggestions(settings)) if settings else f"Orca's settings unread: {why}"
             print(f"[{ME}] the lead starts as a /goal card: {fix}", file=sys.stderr)
-    run_id = supervisor(wanted) if to_run and not opts.get("--card") else None
+    run_id = checked if to_run else None
     worker = bool(run_id)
     parent = None if opts.get("--no-parent") else (
         opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())

@@ -25,7 +25,9 @@ elif a[:2] == ["terminal", "show"]:
 elif a[:2] == ["orchestration", "run-current"]:
     if mode == "orca-down":
         print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
-    print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead") else {"id": "run_me"}}}))
+    print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead", "worker-list-down") else {"id": "run_me"}}}))
+elif a[:2] == ["orchestration", "worker-list"] and mode == "worker-list-down":
+    print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
 elif a[:2] == ["orchestration", "worker-list"]:
     # A lead started with worker-start: unbound (run-current null), its own Dispatch on its coordinator's Run.
     mine = [{"agentTerminalHandle": "term_me", "runId": "run_top", "dispatchId": "ctx_lead"}] if mode == "worker-lead" else []
@@ -295,6 +297,7 @@ assert rc == 4 and "request-show" not in err, err
 for mode, brief_text, want in (("no-run", SUPERVISED, "run-use --id run_me"),
                                ("", SUPERVISED.replace("run:run_me", "run:run_other"), "works for run:run_me"),
                                ("orca-down", SUPERVISED, "did not say"),
+                               ("worker-list-down", SUPERVISED, "did not answer whether it is a dispatched worker"),
                                ("", SUPERVISED + "PARENT: orca orchestration send --to run:run_other\n", "run:run_me and run:run_other")):
     rc, out, err, calls = go(brief(brief_text, "sup-x.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode=mode)
     assert rc == 6 and want in err and "--card" in err and not creates(calls) and not out, (mode, rc, err, calls)
@@ -316,7 +319,7 @@ assert spec.startswith("run the acme program") and "ROLE: lead acme" in spec and
 for depth, want in ((2, "Nested worker depth"), (None, "unread")):
     orca_depth(depth)
     rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--no-parent")
-    assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and want in err, (depth, err, calls)
+    assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"] and want in err, (depth, err, calls)
 assert "3으로" in card.orca_settings.suggestions({"nestedWorkerMaxDepth": 2})[0]
 orca_depth(3)
 rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--card")
@@ -324,6 +327,14 @@ assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"], calls
 # A human-gate program lands through Orca gates, which a dispatched lead cannot create: a card at any depth.
 rc, out, err, calls = go(brief(LEAD_RUN + "Merge policy: human-gate.\n", "lead-gate.md"), "--repo", "r", "--name", "acme-lead")
 assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"] and "worker_cannot_coordinate_own_run" in err, (err, calls)
+# A lead that will start as a /goal card still reports to the Run: it is checked before the form is picked.
+rc, out, err, calls = go(brief(LEAD_RUN.replace("run:run_me", "run:run_other") + "Merge policy: human-gate.\n", "lead-gate.md"),
+                         "--repo", "r", "--name", "acme-lead")
+assert rc == 6 and "works for run:run_me" in err and not creates(calls), (rc, err)
+orca_depth(2)
+rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", mode="orca-down")
+assert rc == 6 and "did not say" in err and not creates(calls), (rc, err)
+orca_depth(3)
 assert card.HUMAN_GATE.search("--merge-policy human-gate") and card.HUMAN_GATE.search("Merge policy is human-gate.") and not card.HUMAN_GATE.search("No human-gate here; merge policy: auto.")
 # A lead that is itself a dispatched worker (run-current null) starts its units as workers on the Run it works for.
 SUP_TOP = SUPERVISED.replace("run:run_me", "run:run_top")
