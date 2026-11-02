@@ -294,7 +294,7 @@ def main():
             return 0
         cfg = pressure.config()
         state = pressure.load_state()
-        out = gate(cmd, pressure.snapshot(cfg, state), state, cfg, p=pressure, session=session,
+        out = gate(cmd, pressure.snapshot(cfg, state, idle_fn=pressure.live(cfg)), state, cfg, p=pressure, session=session,
                    cwd=str(event.get("cwd") or ""))
         if not out:
             pressure.queue_mark(session, cmd, "retrying")

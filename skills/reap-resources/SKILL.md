@@ -256,18 +256,23 @@ python3 "$P" install | uninstall | status   # macOS LaunchAgent, every `interval
 and `status` shows it.
 
 Each metric has a `[warn, danger]` pair under `reap.pressure`; a danger of `null` is warn only:
-`load_per_cpu` (5-minute load / logical CPUs; danger only while CPU idle over the last round is at or below
-`load_idle_pct`, or unknown), `mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's
+`load_per_cpu` (5-minute load / logical CPUs; danger only while CPU idle is at or below `load_idle_pct`, or
+unknown), `mem_free_pct` (`kern.memorystatus_level`, at or below), `vm_pressure` (the kernel's
 own level, 2 warn, 4 critical), `swapout_pps` (pages swapped out per second between rounds), `swap_gb` (in use, warn
 only), `swap_growth_gb_h` (net growth over 30-60 minutes, warn only, with one leak note per `renotify_minutes`),
 `disk_free_gb` (the volume holding `$HOME`, at or below), `docker_mem_pct` (all containers' memory / the Docker VM's),
-`containers` (running, warn only; a Kubernetes pod counts once, its pause container included, and `kube-system` not
-at all; the compose projects, container names or namespaces in `always_on` are left out and shown apart). A metric the
+`docker_cpu_pct` (all containers' CPU / the Docker VM's CPUs, warn only: host CPU idle already holds the VM's vCPUs).
+`containers` (running; a Kubernetes pod counts once, its pause container included, and `kube-system` not at all; the
+compose projects, container names or namespaces in `always_on` are left out and shown apart) is shown, never judged:
+a count of mostly idle containers is no load, and its key still loads from an older config. A metric the
 OS does not offer is left out. The level is the worst metric's.
 
-One rule, one input: `round` samples the rates (swapout, CPU idle, Docker memory, swap growth) from counters it keeps
-between rounds and saves them before it sweeps; `check`, the hook and `round` judge the metrics read now plus that
-sample while it is younger than `sample_fresh_minutes` (7). An older sample is left out and shown as such.
+One rule, one input: `round` samples the rates (swapout, CPU idle, Docker memory and CPU, swap growth) from counters
+it keeps between rounds and saves them before it sweeps; `check`, the hook and `round` judge the metrics read now plus
+that sample while it is younger than `sample_fresh_minutes` (7). An older sample is left out and shown as such. CPU
+idle is read again where `check`, the hook and `queue wait` judge, over `idle_window_seconds` (2), and replaces the
+round's: under the load it measures, the round runs late and its sample expires. `round` reads it on the spot only
+when it has no rate (first round, or one run late).
 
 - **warn**: `reap.py scan --kinds <safe_kinds>` then `reap --plan`, so only what reap itself lists goes. Default
   `safe_kinds`: `orphan`, `compose-stack`, `gui-app`, `orca-worker` (a kind this reap.py does not know is dropped,
@@ -351,7 +356,7 @@ Paths of a particular project's test cache stay here, not in this repo:
           "pressure": {"interval": 180, "load_per_cpu": [1.3, 2.0], "load_idle_pct": 10, "mem_free_pct": [20, 10],
                        "vm_pressure": [2, 4], "swapout_pps": [300, 1500], "swap_gb": [16, null],
                        "swap_growth_gb_h": [2, null], "disk_free_gb": [50, 20], "docker_mem_pct": [70, 90],
-                       "containers": [40, null], "sample_fresh_minutes": 7, "always_on": [],
+                       "docker_cpu_pct": [50, null], "idle_window_seconds": 2, "sample_fresh_minutes": 7, "always_on": [],
                        "notify_to": "run:<id>", "rescan_minutes": 10, "renotify_minutes": 30, "gate_fresh_minutes": 15,
                        "queue_minutes": 15}}}
 ```

@@ -454,7 +454,7 @@ const PRESSURE_LEVEL = { ok: ["ok", "good"], warn: ["warn", "warn"], danger: ["d
 const PRESSURE_CHARTS = [
   ["load_per_cpu", "Load per CPU", (v) => num(v, 2)],
   ["mem_free_pct", "Memory free", (v) => (v == null ? "—" : `${v}%`)],
-  ["containers", "Containers", (v) => num(v)],
+  ["docker_cpu_pct", "Docker CPU", (v) => (v == null ? "—" : `${v}%`)],
   ["queued", "Held starts", (v) => num(v)],
 ];
 async function pollPressure() {
@@ -505,7 +505,7 @@ function pressureCard() {
     return `<i class="tone-${(PRESSURE_LEVEL[r.level] || ["", "derived"])[1]}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%"></i>`;
   }).join("");
   const m = (last && last.metrics) || {};
-  const extra = [["CPU idle", m.cpu_idle_pct, "%"], ["Swap", m.swap_gb, " GB"], ["Swap-out", m.swapout_pps, "/s"], ["Docker memory", m.docker_mem_pct, "%"], ["Disk free", m.disk_free_gb, " GB"]]
+  const extra = [["CPU idle", m.cpu_idle_pct, "%"], ["Swap", m.swap_gb, " GB"], ["Swap-out", m.swapout_pps, "/s"], ["Docker memory", m.docker_mem_pct, "%"], ["Containers", m.containers, ""], ["Disk free", m.disk_free_gb, " GB"]]
     .filter(([, v]) => v != null).map(([k, v, u]) => `${k} <b>${esc(String(v))}${u}</b>`).join(" · ");
   const queue = (rep.queue || []).map((e) => `<li>${tag(e.state, e.state === "waiting" ? "warn" : "accent", "")}<span class="grow ellipsis">${esc(e.what)} <span class="muted">${esc(e.why || "")}</span></span><span class="when">until ${hhmm(e.deadline * 1000)}</span></li>`).join("");
   const empty = !(rep.series || []).length;
