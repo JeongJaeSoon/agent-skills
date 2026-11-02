@@ -144,9 +144,6 @@ def lead_session(agent, session, transcript):
     return agent == "agent-skills:lead" or declared_lead(session) or bool(transcript and started_as_lead(transcript))
 
 
-HEREDOC = re.compile(r"""<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|(\\?)([^\s;&|<>()'"]+))""")
-
-
 def command_text(cmd):
     """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
     comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them."""
@@ -196,6 +193,29 @@ def command_text(cmd):
                     blank(start, n)
         return i
 
+    def heredoc(i):
+        """The delimiter word after `<<` at i, quotes removed: (index after it, (strip tabs, word, expands) or None)."""
+        strip = cmd.startswith("-", i)
+        i += strip
+        while i < n and cmd[i] in " \t":
+            i += 1
+        word, quoted = "", False
+        while i < n and cmd[i] not in " \t\n;&|<>()":
+            c = cmd[i]
+            if c in "'\"":
+                j = cmd.find(c, i + 1)
+                j = n if j < 0 else j
+                word, quoted = word + cmd[i + 1:j], True
+                blank(i + 1, j)
+                i = j + 1
+            elif c == "\\":
+                word, quoted = word + cmd[i + 1:i + 2], True
+                i += 2
+            else:
+                word += c
+                i += 1
+        return i, ((strip, word, not quoted) if word or quoted else None)
+
     def command(i, close):
         depth, pending = 0, []
         while i < n:
@@ -222,15 +242,17 @@ def command_text(cmd):
                 i = command(i + 1, "`")
             elif cmd.startswith("$(", i):
                 i = command(i + 2, ")")
-            elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+            elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()") and (i < 2 or cmd[i - 2] != "\\"):
                 eol = cmd.find("\n", i)
                 blank(i, n if eol < 0 else eol)
                 i = n if eol < 0 else eol
+            elif cmd.startswith("<<<", i):  # a here-string, whose suffix is not a heredoc
+                i += 3
             # Inside parentheses `<<` may be a shift (`$((1<<2))`); a subshell's heredoc then stays unblanked.
-            elif not depth and cmd.startswith("<<", i) and not cmd.startswith("<<<", i) and (m := HEREDOC.match(cmd, i)):
-                quoted = m[2] is not None or m[3] is not None or bool(m[4])
-                pending.append((bool(m[1]), m[2] if m[2] is not None else m[3] if m[3] is not None else m[5], not quoted))
-                i = m.end()
+            elif not depth and cmd.startswith("<<", i):
+                i, doc = heredoc(i + 2)
+                if doc:
+                    pending.append(doc)
             elif c == "\n" and pending:
                 i, pending = bodies(i + 1, pending), []
             else:

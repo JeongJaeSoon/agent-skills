@@ -249,6 +249,11 @@ assert bash(f"echo 'a' # note\nskills-sync card {H / 'noclose.md'}") == "deny"
 assert bash(f"echo \"it's\"; skills-sync card {H / 'noclose.md'}") == "deny"
 assert bash(f"skills-sync card '{H / 'noclose.md'}'") == "deny"
 assert bash(f"echo $((1<<2)); ((x <<= 1))\nskills-sync card {H / 'noclose.md'}") == "deny"  # a shift, not a heredoc
+assert bash(f"cat <<<hello\nskills-sync card {H / 'noclose.md'}") == "deny"  # a here-string
+for delim in ('E"OF"', "E\\OF", "'EOF'", '"EOF"', "\\EOF"):  # bash's delimiter is EOF in each
+    assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny", delim
+    assert bash(f"cat <<{delim}\nskills-sync card /\nEOF") == "none", delim
+assert bash(f"echo \\ #; skills-sync card {H / 'noclose.md'}") == "deny"  # an escaped space does not start a comment
 # A directory is named as one, not as an unreadable file.
 assert bash("skills-sync card /") == "deny" and "names a directory" in reason("skills-sync card /")
 assert "skills-sync card <brief>" in reason(f'{NEW} --prompt "/goal fix X"'), "the deny names the helper"
