@@ -10,6 +10,7 @@
 | 리드마다 `orch board lead add` | 리드 행은 세션에서 만든다. fleet이 못 보는 리드에만 `lead add`를 쓴다 |
 | 카드마다 `orch record spawned` | 원장은 Orca의 Task·Dispatch를 읽는다. `spawned`는 하위 단위 티켓에만 쓴다 |
 | 카드마다 `orch sent add` | Sent 표는 Run의 Task에서 만든다. `orch sent`는 Orca 밖 경로만 적는다 |
+| `orca orchestration send`·`reply`마다 `orch sent add` (2026-11-02) | Sent 표가 Orca inbox를 읽는다. heartbeat만 뺀다 |
 | 화면으로 대기 판정 | Orca `agentWait`를 먼저 보고, Orca가 보지 않았을 때만 화면을 본다 |
 | 감독 카드도 일반 worktree | `REPORT`가 `run:<id>`인 카드는 `skills-sync card`가 `worker-start`로 띄운다 |
 | 카드 코멘트에 적던 티켓·PR 링크 | `--reference <URL>`로 Orca 링크에 저장한다 |

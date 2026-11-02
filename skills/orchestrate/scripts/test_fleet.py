@@ -1713,7 +1713,9 @@ for bad in (["demo", "--to", "x", "--text", "hi"], ["--to", "x", "--note", "hi"]
     assert out.returncode != 0 and "usage: orch sent add" in out.stderr, (bad, out.stderr)
 # The collector keeps the transcript rows for /api/fleet/sent and says how the read went.
 st = f.tick(force=True)
-assert f.sent == world.sent and st["sources"]["sent"]["ok"] and "sent" not in st, st["sources"]
+assert f.sent == world.sent + fleet.orca_messages_sent(f.fast["messages"]) + fleet.orca_sent(f.runs.get("tasks")), f.sent
+assert any(r["source"] == "orca" and r["kind"] == "inbox" for r in f.sent), "the inbox reaches the Sent rows"
+assert st["sources"]["sent"]["ok"] and "sent" not in st, st["sources"]
 # One ps a runs cycle feeds both monitors and sent; when ps fails, both say so.
 ps_calls, real_ps = [], f.ps_table
 f.ps_table = lambda: ps_calls.append(1) or {}
@@ -1938,5 +1940,39 @@ rows = fleet.orca_sent([{"id": "task_1", "spec": "ABC-1 do it", "created_at": "2
                          "task_title": "ABC-1"}, {"id": "task_2", "spec": None}])
 assert rows == [{"ts": "2026-01-02T03:04:05Z", "from": "term_x", "to": "task:task_1", "kind": "worker", "channel": "orca worker-start",
                  "subject": "ABC-1", "text": "ABC-1 do it", "source": "orca"}], rows
+# Orca's inbox is a Sent source: every message but heartbeats, so an `orchestration send` or `reply` needs no log line.
+# A message up to a coordinator is a report, not an instruction.
+msgs = [{"id": "m1", "type": "status", "from_handle": "term_a", "to_handle": "dispatch:ctx_1", "subject": "Re: q",
+         "body": "do (c)", "thread_id": "m0", "run_id": "run_1", "created_at": fleet.iso(now)},
+        {"id": "m2", "type": "heartbeat", "from_handle": "term_b", "to_handle": "run:run_1", "subject": "alive", "body": "",
+         "created_at": fleet.iso(now)},
+        {"id": "m3", "type": "worker_done", "from_handle": "term_b", "to_handle": "run:run_1", "subject": "done", "body": "",
+         "created_at": fleet.iso(now)},
+        {"id": "m4", "type": "status", "subject": "", "body": "", "created_at": fleet.iso(now)}, "junk"]
+rows = fleet.orca_messages_sent(msgs)
+assert [(r["to"], r["kind"], r["channel"], r["text"], r["message"], r["thread"]) for r in rows] == [
+    ("dispatch:ctx_1", "inbox", "orca status", "do (c)", "m1", "m0"), ("run:run_1", "report", "orca worker_done", "done", "m3", None)], rows
+later = now + dt.timedelta(minutes=1)
+# A transcript's copy of a message folds into it only with the same receiver; one with other text or receiver stays.
+copy = {"ts": fleet.iso(now), "to": "dispatch:ctx_1", "text": "do (c)", "channel": "orca orchestration send", "source": "transcript"}
+elsewhere = {**copy, "to": "dispatch:ctx_2"}
+unread = {**copy, "text": "$(cat f)"}
+p = sent.page([copy, elsewhere, unread] + rows, days=1, now=later)
+got = [(r["source"], r["to"], r.get("also")) for r in p["rows"] if r["to"] in ("dispatch:ctx_1", "dispatch:ctx_2")]
+assert sorted(got, key=str) == sorted([("orca", "dispatch:ctx_1", ["transcript"]), ("transcript", "dispatch:ctx_2", None),
+                                       ("transcript", "dispatch:ctx_1", None)], key=str), got
+assert p["inbox_since"] == fleet.iso(now), p["inbox_since"]
+# Orca files a send to a Run's coordinator terminal under run:<id>, so a term_ copy still folds into it.
+up = {**copy, "to": "term_coord", "text": "done"}
+p = sent.page([up] + rows, days=1, now=later)
+assert [(r["source"], r.get("also")) for r in p["rows"] if r["text"] == "done"] == [("orca", ["transcript"])], p["rows"]
+# A send also logged by hand shows once, as the log row naming Orca; the same text to another receiver does not fold.
+sent.add("dispatch:ctx_9", "logged twice", now=now)
+p = sent.page(fleet.orca_messages_sent([{"id": "m9", "type": "status", "to_handle": "dispatch:ctx_9", "body": "logged twice",
+                                          "created_at": fleet.iso(now)},
+                                         {"id": "m10", "type": "status", "to_handle": "dispatch:ctx_8", "body": "logged twice",
+                                          "created_at": fleet.iso(now)}]), days=1, now=later)
+got = [(r["source"], r["to"], r.get("also")) for r in p["rows"] if r["text"] == "logged twice"]
+assert sorted(got, key=str) == sorted([("log", "dispatch:ctx_9", ["orca"]), ("orca", "dispatch:ctx_8", None)], key=str), got
 
 print("test_fleet: ok")

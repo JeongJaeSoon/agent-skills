@@ -645,6 +645,22 @@ def orca_sent(tasks):
             for t in tasks or [] if t.get("spec") and t.get("id") and (ts := when(t.get("created_at")))]
 
 
+REPORT_TYPES = {"worker_done", "escalation", "question", "merge_ready"}  # a message back up, not an instruction
+
+
+def orca_messages_sent(messages):
+    """Sent rows for the messages Orca's inbox keeps (every Run, every recipient), so an `orchestration send` or
+    `reply` needs no `orch sent add` line and stays on the page after its sender's session ends. A message up to a
+    coordinator (a report type, or to a `run:` inbox) is kind `report`. Heartbeats are left out: one every few
+    minutes per worker, no instruction."""
+    return [{"ts": m["created_at"], "from": m.get("from_handle"), "to": m.get("to_handle"),
+             "kind": "report" if m.get("type") in REPORT_TYPES or str(m.get("to_handle")).startswith("run:") else "inbox", "channel": f"orca {m.get('type') or 'message'}",
+             "subject": m.get("subject") or None, "text": m.get("body") or m.get("subject"), "source": "orca",
+             "message": m.get("id"), "thread": m.get("thread_id"), "run": m.get("run_id")}
+            for m in messages or [] if isinstance(m, dict) and m.get("type") != "heartbeat"
+            and isinstance(m.get("created_at"), str) and (m.get("body") or m.get("subject"))]
+
+
 def graphql(query):
     """(data, errors). gh exits non-zero when any alias errors, even with the rest of the data present, so one
     inaccessible PR must not blank the others."""
@@ -1397,7 +1413,8 @@ class Fleet:
                     except SourceError as e:
                         self.ok("monitors", str(e))
                     try:
-                        self.sent = self.fetch_sent(procs=procs) + orca_sent(self.runs.get("tasks"))
+                        self.sent = (self.fetch_sent(procs=procs) + orca_messages_sent((self.fast or {}).get("messages"))
+                                     + orca_sent(self.runs.get("tasks")))
                         self.ok("sent")
                     except SourceError as e:
                         self.ok("sent", str(e))

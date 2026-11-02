@@ -10,6 +10,7 @@ This release reads a card's state from Orca instead of from lines a model wrote 
 | `orch board lead add` for every lead | The lead's row comes from its session. `lead add` stays for a lead the fleet cannot see |
 | `orch record spawned` for every card | The ledger reads Orca's Tasks and Dispatches. `spawned` stays for a sub-unit ticket |
 | `orch sent add` for every card | The Sent table reads the Run's Tasks. `orch sent` records only paths outside Orca |
+| `orch sent add` for an `orca orchestration send` or `reply` (2026-11-02) | The Sent table reads Orca's inbox, every message but heartbeats |
 | Wait detection from the screen | Orca's `agentWait` first; the screen when Orca has not looked |
 | Supervised cards as plain worktrees | `skills-sync card` starts a card whose `REPORT` is `run:<id>` with `worker-start` |
 | Ticket and PR links in the card comment | `--reference <URL>` stored as Orca links |

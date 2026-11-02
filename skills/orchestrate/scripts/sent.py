@@ -1,13 +1,16 @@
 """Instructions sent out of a session: to another session or card, a subagent, an inbox, Slack or a tracker. The
 dashboard's Sent page shows them so the human can read what was asked of whom.
 
-Three sources, each row tagged with its own:
+Four sources, each row tagged with its own:
 - log: `orch sent add`, written by the sender at the moment it sends. One file a day (UTC) under
   <fleet state>/sent/YYYY-MM-DD.jsonl, one JSON object a line: ts, from, to, kind, channel, repo, subject, text.
-  The only record that outlives the sending session, and the only one for Slack, tracker and other non-shell sends.
+  With Orca's own, the only record that outlives the sending session, and the only one for Slack, tracker and
+  other non-shell sends.
 - dashboard: a line typed from the dashboard's session page (sends.jsonl, fleet.send).
 - transcript: what the live Claude Code sessions sent by Agent, SendMessage or an orca send in Bash (fleet.fetch_sent).
-A send both logged and seen in a transcript or the dashboard log shows once, as the log row naming both sources.
+- orca: what Orca keeps itself — every inbox message but heartbeats (fleet.orca_messages_sent) and each Run Task's
+  spec (fleet.orca_sent). An `orchestration send` or `reply` therefore needs no log line.
+A send seen in two sources shows once, as its log row or else its Orca message, naming both sources.
 The log keeps the text as sent, so its files are owner-only (0600 in a 0700 directory); everything shown goes
 through fleet.mask.
 """
@@ -88,27 +91,47 @@ def key(text):
     return " ".join(re.sub(r"[\\'\"]", " ", text or "").split())[:200]
 
 
-def page(transcript_rows, days=1, now=None, limit=1000):
-    """{"rows", "total", "days"}: the sent instructions of the last `days` days, newest first, one row per send,
-    masked, at most `limit` of them."""
+ORCA_ADDRESS = ("run:", "dispatch:", "term_")
+LIMIT = 3000  # a day of Orca messages alone passes 1000
+
+
+def same_to(a, b):
+    """Two rows can be one send only when their receivers agree. Only Orca addresses of one form are compared: a log
+    line may name a card where its transcript copy has the command's own --to, and Orca stores a send to a Run's
+    coordinator terminal under `run:<id>`."""
+    pa, pb = (next((p for p in ORCA_ADDRESS if str(x).startswith(p)), None) for x in (a, b))
+    return pa is None or pa != pb or a == b
+
+
+def page(rows, days=1, now=None, limit=LIMIT):
+    """{"rows", "total", "days", "inbox_since"}: the sent instructions of the last `days` days, newest first, one row
+    per send, masked, at most `limit` of them. `rows` are the transcript and Orca rows (fleet.fetch_sent,
+    fleet.orca_messages_sent, fleet.orca_sent). An Orca message is a record of its own, like a log line: a copy from a
+    transcript or the dashboard folds into it, and it folds into a log line. inbox_since: the oldest Orca message
+    given, before which the page has only the log and transcripts."""
     since = (now or fleet.utcnow()) - dt.timedelta(days=days)
     logged = read_log(since)
     by_key = {}
     for r in logged:
         by_key.setdefault(key(r.get("text")), []).append(r)
     out = list(logged)
-    for r in dashboard_sends(since) + [r for r in transcript_rows if (r.get("ts") or "9") >= fleet.iso(since)]:
+    recent = [r for r in rows if (r.get("ts") or "9") >= fleet.iso(since)]
+    messages = [r for r in recent if r.get("source") == "orca" and r.get("message")]
+    for r in messages + dashboard_sends(since) + [r for r in recent if not (r.get("source") == "orca" and r.get("message"))]:
         t = fleet.parse(r.get("ts"))
         twin = next((x for x in by_key.get(key(r.get("text")), []) if t and fleet.parse(x.get("ts"))
-                     and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND), None)
+                     and abs(fleet.parse(x["ts"]) - t) <= SAME_SEND and same_to(x.get("to"), r.get("to"))), None)
         if twin:
             twin.setdefault("also", []).append(r["source"])
             twin.setdefault("claude_session", r.get("claude_session"))
         else:
             out.append(r)
+            if r.get("message"):
+                by_key.setdefault(key(r.get("text")), []).append(r)
     out.sort(key=lambda r: r.get("ts") or "", reverse=True)
     shown = [{**r, "text": fleet.mask(r.get("text"), TEXT_MAX),
               **{k: fleet.mask(r.get(k), n) or None for k, n in (("subject", 200), ("to", 120), ("from", 120),
                                                                    ("channel", 120), ("repo", 120), ("cwd", 300))}}
              for r in out[:limit]]
-    return {"rows": shown, "total": len(out), "days": days}
+    return {"rows": shown, "total": len(out), "days": days,
+            "inbox_since": min((r["ts"] for r in rows if r.get("message")), default=None)}
