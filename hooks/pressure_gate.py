@@ -68,10 +68,11 @@ def skip_prefix(words, keywords=False):
 HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|([^\s;&|()<>'\"]+))")
 
 
-def heredoc_at(line, quote):
-    """(the first here-document operator outside quotes, comments and arithmetic (`$((1<<20))`) on line, or None;
-    the quote still open at its end; where the simple command holding the operator starts)."""
+def heredocs_at(line, quote):
+    """([(operator match, where the simple command holding it starts)] for every here-document operator outside
+    quotes, comments and arithmetic (`$((1<<20))`) on line, in order; the quote still open at its end)."""
     i = start = 0
+    found = []
     while i < len(line):
         c = line[i]
         if quote:
@@ -84,16 +85,18 @@ def heredoc_at(line, quote):
         elif c in "'\"":
             quote = c
         elif c == "#" and (i == 0 or line[i - 1] in " \t;&|("):
-            return None, quote, start
+            break
         elif line.startswith("((", i):
             end = line.find("))", i + 2)
             i = len(line) if end < 0 else end + 1
         elif c in ";&|(":
             start = i + 1
         elif m := HEREDOC.match(line, i):
-            return m, quote, start
+            found.append((m, start))
+            i = m.end()
+            continue
         i += 1
-    return None, quote, start
+    return found, quote
 
 
 def drop_heredocs(cmd, slotted=False):
@@ -105,30 +108,33 @@ def drop_heredocs(cmd, slotted=False):
     out, lines, quote = [], iter(cmd.split("\n")), ""
     for line in lines:
         out.append(line)
-        m, quote, start = heredoc_at(line, quote)
-        # Only the simple command that receives the body counts: `orch heavy - -- true; bash <<EOF` runs it outside.
-        words = [w.strip("'\"") for w in line[start:m.start()].split()] if m else []
-        shell = next((k for k, w in enumerate(words) if os.path.basename(w) in SHELLS), None)
-        if shell is not None and slotted and any(words[k:k + 2] == ["orch", "heavy"] for k in range(shell)):
-            shell = None  # `orch heavy - -- bash <<EOF`: the body runs in the slot
-        if not m or shell is not None and OVERRIDE not in words[:shell]:
-            continue
-        quoted = m.group(4) is None
-        delim = m.group(2) if m.group(2) is not None else m.group(3) if quoted else m.group(4).replace("\\", "")
-        body, end = [], None
-        for row in lines:
-            if (row.lstrip("\t") if m.group(1) else row) == delim:
-                end = row
-                break
-            body.append(row)
-        if end is None:  # no terminator found: read the rest as commands rather than drop them
-            out += body
-        elif shell is not None:
-            out.append(shlex.join([OVERRIDE, "bash", "-c", "\n".join(body)]))
-        elif not quoted:  # only what a substitution runs: `$(date)` runs, the text around it is data
-            out += substitutions("\n".join(body), quotes=False)
-        if end is not None:
-            out.append(end)
+        ops, quote = heredocs_at(line, quote)
+        for m, start in ops:  # `cat <<A <<B`: the bodies follow in the order of their operators
+            # Only the simple command that receives the body counts: `orch heavy - -- true; bash <<EOF` runs it
+            # outside.
+            words = [w.strip("'\"") for w in line[start:m.start()].split()]
+            shell = next((k for k, w in enumerate(words) if os.path.basename(w) in SHELLS), None)
+            if shell is not None and slotted and any(words[k:k + 2] == ["orch", "heavy"] for k in range(shell)):
+                shell = None  # `orch heavy - -- bash <<EOF`: the body runs in the slot
+            quoted = m.group(4) is None
+            delim = m.group(2) if m.group(2) is not None else m.group(3) if quoted else m.group(4).replace("\\", "")
+            body, end = [], None
+            for row in lines:
+                if (row.lstrip("\t") if m.group(1) else row) == delim:
+                    end = row
+                    break
+                body.append(row)
+            text = "\n".join(body)
+            if end is None:  # no terminator found: read the rest as commands rather than drop them
+                out.append(drop_heredocs(text, slotted))
+            elif shell is not None and OVERRIDE in words[:shell]:
+                out.append(shlex.join([OVERRIDE, "bash", "-c", text]))
+            elif shell is not None:  # a shell reads the body as its commands
+                out.append(drop_heredocs(text, slotted))
+            elif not quoted:  # only what a substitution runs: `$(date)` runs, the text around it is data
+                out += substitutions(text, quotes=False)
+            if end is not None:
+                out.append(end)
     return "\n".join(out)
 
 
@@ -291,11 +297,11 @@ TEST_RUNNERS = LOOPERS - {"for"} | {"jest", "vitest", "playwright", "mocha"} | {
 # A redirection (`> out.txt`, `2>`, `&>`) and its target select no test.
 REDIRECT = re.compile(r"\d*(>>?|<<?|&>>?|>&)")
 # A runner given a test path (`tests/`, `tests/unit`, `a.test.ts`, `x.py::t`) or a name filter runs a subset.
-FILTERS = {"-k", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter",
+FILTERS = {"-k", "-m", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter",
            "--testPathPattern", "--testPathPatterns", "--findRelatedTests", "--changed", "--onlyChanged"}
 TEST_DIR = re.compile(r"(.*/)?(tests?|specs?|__tests__)(/.*)?", re.I)
 # Options of pytest, bun, jest and vitest whose next word is a value (an output path, a count), never a test.
-VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "--cov", "--cov-report",
+VALUE_OPTS = {"-n", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "--cov", "--cov-report",
               "--basetemp", "--rootdir", "--durations", "--maxfail", "--tb", "--log-file", "--html", "--timeout",
               "--coverage-dir", "--coverage-reporter", "--preload", "--rerun-each", "--reporter", "--reporter-outfile",
               "--outputFile", "--coverageDirectory", "--config", "--workers", "--maxWorkers", "--confcutdir",
