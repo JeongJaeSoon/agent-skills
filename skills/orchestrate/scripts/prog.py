@@ -730,8 +730,8 @@ def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
 
     files {pr: [paths]}, prs {pr: ticket or None}, after {ticket: tickets it lands after}. PRs are related
     through `orch dep` / Orca deps, one GitHub stack, or one PR's base being the other's head, transitively,
-    so the ends of a chain A <- B <- C are not reported."""
-    root = {n: n for n in files}
+    so the ends of a chain A <- B <- C are not reported, even when B is not a program PR."""
+    root = {n: n for n in [*files, *(r["number"] for r in rows), *(m for s in (stacks or {}).values() for m in s)]}
 
     def find(n):
         while root[n] != n:
@@ -768,10 +768,12 @@ def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
             if not shared:
                 continue
             more = f" (+{len(shared) - 1} more)" if len(shared) > 1 else ""
-            base = next((r.get("headRefName") for r in rows if r["number"] == a), None) or f"<#{a}'s branch>"
+            ra = next((r for r in rows if r["number"] == a), {})
+            # A merge, not a rebase: the conflict is settled once now, before review, and nothing is force-pushed.
             out.append(f"OVERLAP #{a} #{b} {shared[0]}{more} → stack #{b} on #{a} (orch dep): "
-                       f"gh pr edit {b} --base {base}; orch dep {slug} --ticket {prs.get(b) or '<ticket>'}"
-                       f" --after {prs.get(a) or '<ticket>'}")
+                       f"in #{b}'s worktree git merge origin/{ra.get('headRefName') or f'<#{a} branch>'} and push;"
+                       f" gh stack link {a} {b} --base {ra.get('baseRefName') or 'main'};"
+                       f" orch dep {slug} --ticket {prs.get(b) or '<ticket>'} --after {prs.get(a) or '<ticket>'}")
     return out
 
 

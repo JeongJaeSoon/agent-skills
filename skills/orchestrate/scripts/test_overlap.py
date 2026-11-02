@@ -21,7 +21,8 @@ prs = {1: "ABC-1", 2: "ABC-2"}
 # Two unrelated PRs on one file: the later one is stacked on the earlier, with the commands to do it.
 out = overlaps({1: ["skills/x/a.py", "README.md"], 2: ["skills/x/a.py"]}, prs, rows)
 assert out == ["OVERLAP #1 #2 skills/x/a.py → stack #2 on #1 (orch dep): "
-               "gh pr edit 2 --base abc-1-fix; orch dep p --ticket ABC-2 --after ABC-1"], out
+               "in #2's worktree git merge origin/abc-1-fix and push; gh stack link 1 2 --base main;"
+               " orch dep p --ticket ABC-2 --after ABC-1"], out
 # Several shared files: the first is named, the rest counted.
 out = overlaps({1: ["a", "b"], 2: ["b", "a"]}, prs, rows)
 assert out[0].startswith("OVERLAP #1 #2 a (+1 more) → stack #2 on #1"), out
@@ -40,6 +41,9 @@ chain = [row(1, "a1"), row(2, "b2", base="a1"), row(3, "c3", base="b2")]
 assert overlaps({1: ["a"], 2: ["z"], 3: ["a"]}, {1: "A-1", 2: "B-2", 3: "C-3"}, chain) == []
 assert overlaps({1: ["a"], 2: ["z"], 3: ["a"]}, {1: "A-1", 2: "B-2", 3: "C-3"}, rows,
                 after={"C-3": {"B-2"}, "B-2": {"A-1"}}) == []
+# The middle layer need not be a program PR (or have listable files) to tie the ends together.
+assert overlaps({1: ["a"], 3: ["a"]}, {1: "A-1", 3: "C-3"}, chain) == []
+assert overlaps({1: ["a"], 3: ["a"]}, {1: "A-1", 3: "C-3"}, rows, stacks={"s": [1, 2, 3]}) == []
 
 # Different files under one exclusive_paths glob still collide (two migrations), and the glob is named.
 out = overlaps({1: ["db/migrations/001.sql"], 2: ["db/migrations/002.sql"]}, prs, rows)
