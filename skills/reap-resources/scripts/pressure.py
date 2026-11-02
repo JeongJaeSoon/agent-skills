@@ -192,15 +192,16 @@ def judge(m, cfg):
 
 
 def active_turns(run=sh):
-    """Agent turns Orca shows in progress (state "working") over every card; None when Orca cannot say."""
-    out = run(["orca", "worktree", "ps", "--limit", "500", "--json"], timeout=5)  # sh gives None when orca is missing
+    """Agent turns Orca shows in progress (state "working") over every card; None when Orca cannot say, a cut-short
+    list included."""
+    out = run(["orca", "worktree", "ps", "--limit", "10000", "--json"], timeout=5)  # sh gives None when orca is missing
     try:
         data = json.loads(out or "")
     except ValueError:
         return None
     res = data.get("result", data) if isinstance(data, dict) else None
     trees = res.get("worktrees") if isinstance(res, dict) else None
-    if not isinstance(trees, list):
+    if not isinstance(trees, list) or res.get("truncated"):
         return None
     return sum(isinstance(a, dict) and a.get("state") == "working"
                for w in trees if isinstance(w, dict) for a in w.get("agents") or [])

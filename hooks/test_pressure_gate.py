@@ -71,7 +71,8 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("jest", "test suite"), ("bash <<'EOF'\nnpm test\nEOF", "test suite"),
                   ("cat > a.md <<'EOF'\nx\nEOF\nnpm test", "test suite"),
                   ("FOO=1 bash <<EOF\nnpm test\nEOF", "test suite"), ("cd x && env bash <<'EOF'\npytest\nEOF", "test suite"),
-                  ("pytest -o addopts=", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
+                  ("pytest -o addopts=", "test suite"), ("uv run python3 -m pytest", "test suite"),
+                  ("poetry run python -m pytest -q", "test suite"), ('for t in hooks/test_*.py; do python3 "$t"; done', "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
             "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
@@ -80,7 +81,7 @@ for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -
             "AGENT_SKILLS_PRESSURE_GATE=0 " + LOOP.split("\n")[1], "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'npm test'", "chrome --version", "npm run build", "ls tests",
             "pytest -k foo", "pytest tests/test_a.py::test_x", "orch heavy - -- npm test > out.txt",
             "pytest -x tests/", "pytest tests/unit", "bun test --bail src/a.spec.ts",
-            "python3 -m pytest tests/test_a.py", "uv run pytest -k slow", "for f in a b; do echo $f; done",
+            "python3 -m pytest tests/test_a.py", "uv run python -m pytest tests/test_a.py", "uv run pytest -k slow", "for f in a b; do echo $f; done",
             "for f in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do cat "$f"; done',
             "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'cd app && npx playwright test'",
             "cat > README.md <<'EOF'\nnpm test\nEOF", "cat <<-EOF > a.md\n\tpytest\n\tEOF",
@@ -116,6 +117,8 @@ real_which, pressure.shutil.which = pressure.shutil.which, lambda name: None  # 
 assert pressure.active_turns(run=lambda *a, **k: json.dumps({"worktrees": [{"agents": [{"state": "working"}]}]})) == 1
 pressure.shutil.which = real_which
 assert pressure.active_turns(run=lambda *a, **k: "not json") is None
+assert pressure.active_turns(run=lambda *a, **k: json.dumps({"result": {"truncated": True, "worktrees": [
+    {"agents": [{"state": "working"}]}]}})) is None  # a card left out could hold a turn
 ticks = iter([100.0, 100.0, 200.0, 2000.0])
 said = []
 assert pressure.turns_wait(cfg, 15, now_fn=lambda: next(ticks), sleep=lambda s: None, count=iter([10**6, 10**6, 0]).__next__,

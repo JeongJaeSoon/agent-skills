@@ -196,13 +196,14 @@ def runs_tests(argv):
     words = [w for w in kept if w]
     if not words or {"--help", "--version"} & set(words):
         return None
-    head = os.path.basename(words[0])
-    if head in SHELLS and len(words) > 1 and not words[1].startswith("-"):
-        words, head = words[1:], os.path.basename(words[1])
-    if head in ("python", "python3") and words[1:3] == ["-m", "pytest"]:
-        words, head = words[2:], "pytest"
-    if head in ("uv", "poetry", "pipenv") and words[1:2] == ["run"] and len(words) > 2:
-        words, head = words[2:], os.path.basename(words[2])
+    head = ""
+    while head != (head := os.path.basename(words[0])):  # peel launchers until the program shows: `uv run python -m pytest`
+        if head in SHELLS and len(words) > 1 and not words[1].startswith("-"):
+            words = words[1:]
+        elif head in ("python", "python3") and words[1:3] == ["-m", "pytest"]:
+            words = ["pytest"] + words[3:]
+        elif head in ("uv", "poetry", "pipenv") and words[1:2] == ["run"] and len(words) > 2:
+            words = words[2:]
     args = [w for w in words[1:] if not w.startswith("-")]
     if SUITE.fullmatch(head):
         return "test suite"
