@@ -342,6 +342,57 @@ class Steps(unittest.TestCase):
         self.assertIn("these steps failed: skills-sync setup apply", err)
 
 
+class Spotlight(unittest.TestCase):
+    def setUp(self):
+        self.home = pathlib.Path(tempfile.mkdtemp(prefix="setup-test-"))
+        self.addCleanup(shutil.rmtree, self.home)
+        spec = importlib.util.spec_from_file_location("setup_spotlight_test", SETUP)
+        self.setup = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.setup)
+        self.ws, self.repo, self.inner = self.home / "orca", self.home / "src" / "app", self.home / "orca" / "app"
+        for d in (self.ws, self.repo, self.inner):
+            d.mkdir(parents=True)
+        self.counts = {}
+
+    def fake_sh(self, cmd, timeout=60):
+        if cmd[:3] == ["orca", "repo", "list"]:
+            repos = [{"path": str(p)} for p in (self.repo, self.inner, self.home / "gone")]
+            return 0, json.dumps({"result": {"repos": repos}})
+        if cmd[0] == "mdfind":
+            return 0, str(self.counts.get(cmd[2], 0))
+        return 1, ""
+
+    def test_roots_come_from_config_and_orca_with_nested_and_missing_dropped(self):
+        hard = types.SimpleNamespace(config=lambda: {"workspaces": str(self.ws)})
+        with mock.patch.object(self.setup, "sh", self.fake_sh), mock.patch.object(self.setup.shutil, "which", bool), \
+                mock.patch.dict(sys.modules, {"reap_hard": hard}):
+            roots = self.setup.dev_roots()
+        self.assertEqual(roots, sorted(os.path.realpath(p) for p in (self.ws, self.repo)))
+
+    def test_only_indexed_roots_are_listed_with_their_size(self):
+        self.counts = {str(self.repo): 1234}
+        with mock.patch.object(self.setup, "sh", self.fake_sh):
+            rows = self.setup.spotlight([str(self.ws), str(self.repo)])
+        self.assertEqual([r[:2] for r in rows], [[str(self.repo), 1234]])
+        self.assertTrue(rows[0][2])
+
+    def test_a_slow_size_is_left_unknown(self):
+        self.counts = {str(self.repo): 1}
+        real = subprocess.Popen
+        slow = lambda *a, **kw: real(["sleep", "5"], stdout=subprocess.PIPE, text=True)
+        with mock.patch.object(self.setup, "sh", self.fake_sh), mock.patch.object(self.setup.subprocess, "Popen", slow):
+            rows = self.setup.spotlight([str(self.repo)], size_timeout=0.2)
+        self.assertEqual(rows, [[str(self.repo), 1, None]])
+
+    def test_output_names_the_gui_step_only_when_something_is_indexed(self):
+        for rows, want in (([["/x", 5, "1G"]], "Search Privacy"), ([], "none of the 1 development folders")):
+            out = io.StringIO()
+            with mock.patch.object(self.setup, "dev_roots", lambda: ["/x"]), \
+                    mock.patch.object(self.setup, "spotlight", lambda roots: rows), contextlib.redirect_stdout(out):
+                self.setup.show_spotlight()
+            self.assertIn(want, out.getvalue())
+
+
 class Bootstrap(unittest.TestCase):
     def load(self, env):
         with mock.patch.dict(os.environ, env):
