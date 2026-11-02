@@ -147,7 +147,8 @@ def lead_session(agent, session, transcript):
 def command_text(cmd):
     """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
     comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them.
-    From a construct this parser does not follow (`${…}`, whose quotes nest; `case` in `$(…)`) on, nothing is blanked."""
+    From a construct this parser does not follow (`${…}`, whose quotes nest; `case` in `$(…)`; a backslash in
+    backticks) on, nothing is blanked."""
     out, n = list(cmd), len(cmd)
     opened, closed = set(), set()  # just past an opening backtick (a word starts) and past a closing `)` or backtick
 
@@ -250,7 +251,9 @@ def command_text(cmd):
             if c == close and (close != ")" or depth == 0):
                 closed.add(i + 1)
                 return i + 1
-            if cmd.startswith("${", i) or close == ")" and re.match(r"case\b", cmd[i:]) and starts_word(i):
+            # Bash also rewrites backslashes inside backticks before running them.
+            if (cmd.startswith("${", i) or close == "`" and c == "\\"
+                    or close == ")" and re.match(r"case\b", cmd[i:]) and starts_word(i)):
                 raise Unsure(i)
             if c == "(":
                 depth += 1
