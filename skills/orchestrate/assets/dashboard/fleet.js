@@ -446,6 +446,80 @@ function relGraph(st, sessionId) {
       .map(([, [cls, label]]) => `<span><i class="key ${cls}"></i>${label}</span>`).join("")}${phaseKeys()}</div>`;
 }
 
+// ------------------------------------------------------------ PC load
+
+// reap-resources' pressure round (a LaunchAgent, every `interval` s) writes one point per round; /api/fleet/pressure
+// hands back those points, the thresholds the hook judges by and the held queue. Nothing here measures.
+const PRESSURE_LEVEL = { ok: ["ok", "good"], warn: ["warn", "warn"], danger: ["danger", "bad"] };
+const PRESSURE_CHARTS = [
+  ["load_per_cpu", "Load per CPU", (v) => num(v, 2)],
+  ["mem_free_pct", "Memory free", (v) => (v == null ? "—" : `${v}%`)],
+  ["containers", "Containers", (v) => num(v)],
+  ["queued", "Held starts", (v) => num(v)],
+];
+async function pollPressure() {
+  const hours = S.filters.pressure_hours === "24" ? 24 : 6;
+  if (F.pressureBusy || (F.pressure && F.pressureHours === hours && Date.now() - F.pressureAt < 60e3)) return;
+  F.pressureBusy = true;
+  try {
+    const r = await fetch(`/api/fleet/pressure?hours=${hours}`, { cache: "no-store" });
+    F.pressure = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
+  } catch (e) { F.pressure = { error: String(e.message || e) }; }
+  F.pressureAt = Date.now(); F.pressureHours = hours; F.pressureBusy = false;
+  if (isFleet() && S.section === "overview") renderView();
+}
+// One metric over the window. The SVG stretches to its cell (preserveAspectRatio none, strokes kept at 2px), so its
+// text lives in HTML around it. A gap of over three rounds breaks the line instead of drawing across it.
+function pressureChart(rep, key, label, fmt) {
+  const W = 300, H = 56, t1 = rep.now * 1000, t0 = t1 - rep.hours * 3600e3, gap = 3 * rep.interval * 1000;
+  const pts = (rep.series || []).map((r) => [r.t * 1000, r[key]]).filter(([, v]) => v != null);
+  const [warn, danger] = (rep.thresholds || {})[key] || [null, null];
+  const top = Math.max(key === "mem_free_pct" ? 100 : 1, ...pts.map(([, v]) => v), (danger ?? warn ?? 0) * 1.15);
+  const x = (t) => ((t - t0) / (t1 - t0)) * W, y = (v) => H - 2 - (v / top) * (H - 4);
+  let line = "", prev = null;
+  for (const [t, v] of pts) { line += `${prev == null || t - prev > gap ? "M" : "L"}${x(t).toFixed(1)},${y(v).toFixed(1)}`; prev = t; }
+  const rule = (v, tone) => v == null || v > top ? "" : `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" style="stroke:var(--${tone})" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
+  const band = W / Math.max(1, (rep.hours * 3600) / rep.interval);
+  const tips = (rep.series || []).filter((r) => r[key] != null).map((r) =>
+    `<rect x="${(x(r.t * 1000) - band / 2).toFixed(1)}" y="0" width="${band.toFixed(2)}" height="${H}" fill="transparent" data-tip="${esc(`<div class="tt">${hhmm(r.t * 1000)}</div><div class="row">${esc(label)}<b>${esc(fmt(r[key]))}</b></div><div class="row">Level<b>${esc((PRESSURE_LEVEL[r.level] || [r.level])[0])}</b></div>`)}"/>`).join("");
+  const now = key === "queued" ? (rep.queue || []).length : (((rep.last || {}).metrics || {})[key]);
+  const said = `${label}: now ${fmt(now)}${warn != null ? `, warn ${warn}` : ""}${danger != null ? `, danger ${danger}` : ""}, ${pts.length} points over ${rep.hours} hours`;
+  const limits = [warn != null && `warn ${(rep.higher_worse || {})[key] === false ? "≤" : "≥"} ${warn}`, danger != null && `danger ${danger}`].filter(Boolean).join(" · ");
+  return `<div class="pmetric"><div class="pm-head"><span class="eyebrow">${esc(label)}</span><b class="pm-v">${esc(fmt(now))}</b></div>
+    <div class="chart pm-chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" height="${H}" role="img" aria-label="${esc(said)}">
+      ${rule(warn, "warn")}${rule(danger, "bad")}<path d="${line}" fill="none" style="stroke:var(--accent)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>${tips}</svg></div>
+    <div class="pm-foot muted">${limits || "no threshold"}</div></div>`;
+}
+function pressureCard() {
+  pollPressure();
+  const rep = F.pressure, hours = S.filters.pressure_hours === "24" ? "24" : "6";
+  const head = (aside) => `<div class="card-head"><h3>PC load</h3><span class="aside">${aside}</span></div>`;
+  if (!rep) return `<div class="card pressure">${head("")}<div class="empty">Loading…</div></div>`;
+  if (rep.error) return `<div class="card pressure">${head("")}<div class="empty">${esc(rep.error)}</div></div>`;
+  const last = rep.last, lv = PRESSURE_LEVEL[last && last.level] || ["no round yet", ""];
+  const age = last ? new Date(last.t * 1000).toISOString() : null;
+  // A level strip over the same window: what state the machine was in, at a glance, before reading any one chart.
+  const t1 = rep.now * 1000, t0 = t1 - rep.hours * 3600e3, step = rep.interval * 1000;
+  const strip = (rep.series || []).map((r) => {
+    const l = ((r.t * 1000 - t0) / (t1 - t0)) * 100, w = (1.1 * step / (t1 - t0)) * 100;  // 10% over, so rounding leaves no seam
+    return `<i class="tone-${(PRESSURE_LEVEL[r.level] || ["", "derived"])[1]}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%"></i>`;
+  }).join("");
+  const m = (last && last.metrics) || {};
+  const extra = [["CPU idle", m.cpu_idle_pct, "%"], ["Swap", m.swap_gb, " GB"], ["Swap-out", m.swapout_pps, "/s"], ["Docker memory", m.docker_mem_pct, "%"], ["Disk free", m.disk_free_gb, " GB"]]
+    .filter(([, v]) => v != null).map(([k, v, u]) => `${k} <b>${esc(String(v))}${u}</b>`).join(" · ");
+  const queue = (rep.queue || []).map((e) => `<li>${tag(e.state, e.state === "waiting" ? "warn" : "accent", "")}<span class="grow ellipsis">${esc(e.what)} <span class="muted">${esc(e.why || "")}</span></span><span class="when">until ${hhmm(e.deadline * 1000)}</span></li>`).join("");
+  const empty = !(rep.series || []).length;
+  return `<div class="card pressure">${head(`${chips("pressure_hours", [["6", "6h"], ["24", "24h"]], hours)}`)}
+    <div class="p-now">${tag(lv[0], lv[1])}<span class="muted">${last ? `last round ${relSpan(age)}` : rep.installed ? "the pressure round has not run yet" : "pressure-watch is not installed (reap-resources pressure.py install)"}</span>
+      ${last && (last.why || []).length ? `<span class="p-why">${esc(last.why.join(", "))}</span>` : ""}</div>
+    ${empty ? `<div class="empty">No points in the last ${rep.hours}h yet: the pressure round records one every ${Math.round(rep.interval / 60)} min.</div>`
+      : `<div class="p-strip" role="img" aria-label="Level per round over the last ${rep.hours} hours">${strip}</div>
+    <div class="p-grid">${PRESSURE_CHARTS.map(([k, label, fmt]) => pressureChart(rep, k, label, fmt)).join("")}</div>
+    <div class="p-axis muted"><span>${rep.hours}h ago</span><span>now</span></div>`}
+    ${extra ? `<div class="p-extra muted">${extra}</div>` : ""}
+    ${queue ? `<ul class="rows p-queue">${queue}</ul>` : ""}</div>`;
+}
+
 // ------------------------------------------------------------ views
 
 function fleetOverview(st) {
@@ -453,7 +527,7 @@ function fleetOverview(st) {
   const n = (p) => ss.filter((s) => s.phase === p).length;
   const open = (st.prs || []).filter((p) => p.state === "OPEN");
   const missed = items.filter((i) => i.missed).length;
-  return `<div class="kpis" style="--n:3">
+  return `${pressureCard()}<div class="kpis" style="--n:3">
       ${kpi("Sessions", `${ss.length}`, phaseLegend(["working", "waiting", "idle"], n), { src: "orca" })}
       ${kpi("Needs you", `${items.length}${missed ? ` ${tag(`${missed} missed`, "bad", "alert")}` : ""}`, Object.entries(st.counts || {}).map(([t, c]) => `${itemMeta(t)[0]} ${c}`).join(" · ") || "inbox empty")}
       ${kpi("Open PRs", `${open.length}`, `${open.filter((p) => p.ci === "failure").length} CI failing · ${open.filter((p) => p.decision === "APPROVED").length} approved`, { src: "github" })}

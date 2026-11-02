@@ -52,6 +52,8 @@ Docker CPU는 따로 재지 않는다. OrbStack VM의 vCPU는 호스트 스레�
 
 `notify_to`가 없으면 `reap.inbox_to`로 보낸다. 다만 LaunchAgent에는 Orca 송신 터미널(`ORCA_TERMINAL_HANDLE`)이 없어 `orca orchestration send`가 `no_active_sender_terminal`로 실패한다. `term_`과 `run:` 주소 모두 그렇다. 그래서 전송에 실패하면(받는 곳이 없을 때도) 위험과 누수 알림을 orchestrate 대시보드의 Needs you(`~/.local/state/agent-skills/dashboard/inbox-external.jsonl`, 키 `pressure:danger`·`pressure:swap-growth`)에 올린다. 위험 줄은 위험에서 벗어나면, 누수 줄은 증가율이 경고선 아래로 내려가면 닫힌다. 같은 알림은 `renotify_minutes`(30분) 안에 다시 시도하지 않는다. 예전에는 실패 때 `danger_t`를 0으로 돌려 매 회차 재시도했다. 대시보드가 없는 머신에서는 로그(`~/.local/state/agent-skills/pressure.log`)에만 남는다.
 
+회차마다 수준과 주요 지표(CPU당 load, CPU idle, 메모리 여유, swap, swapout, 컨테이너 수, Docker 메모리, 디스크 여유), 대기열 건수를 한 줄씩 `~/.local/state/agent-skills/pressure-history.jsonl`에 남긴다. 가장 오래된 줄이 24시간보다 한 시간 넘게 지나면 24시간치만 남기고 다시 쓴다. 3분 간격이면 하루 480줄 남짓이다. orchestrate 대시보드는 Overview 맨 위 PC load 패널에서 `pressure.py history`로 이 기록을 읽어 최근 6시간(또는 24시간) 추이와 경고·위험선을 그린다. 대시보드는 파일만 읽고 직접 측정하지 않는다. 화면을 열 때마다 `docker stats`가 돌면 그것 자체가 부하가 되기 때문이다.
+
 ## 설치와 확인
 
 `skills-sync setup`의 `pressure-watch` 항목(기본 on)이다. `bootstrap.py --write`의 `apply`가 켜고, `skills-sync setup disable pressure-watch`로 끈다. 직접 부를 때:
