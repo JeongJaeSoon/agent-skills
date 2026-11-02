@@ -269,6 +269,31 @@ commit(out)
 assert done == {"big0:b0", "big1:b1", "big2:b2"}, done
 of.MAX_BYTES = saved
 
+# 7d. A closed span is done only once a complete line past `until` was read; a line still being written is not that.
+for p in REG.glob("*.json"):
+    p.unlink()
+TC = TMP / "tc.jsonl"
+write(TC, [user("c1", "in span", ts(1, 1))], tail=json.dumps(user("c2", "last words", ts(1, 2)))[:25])
+register("sc", TC, since=ts(5), until=ts(1, 3))
+code, out = run("digest")
+assert [r["event"] for r in rows(out)] == ["sc:c1"], rows(out)
+commit(out)
+assert of.wake(NOW + dt.timedelta(days=2)) == ["sc: grew since " + of.iso(NOW)], "the unread tail keeps it open"
+write(TC, [user("c1", "in span", ts(1, 1)), user("c2", "last words", ts(1, 2))])
+assert of.wake(NOW + dt.timedelta(days=2)) == ["sc: grew since " + of.iso(NOW)], "the finished line still wakes"
+code, out = run("digest")
+assert [r["event"] for r in rows(out)] == ["sc:c2"], rows(out)
+commit(out)
+with TC.open("a") as f:
+    f.write(json.dumps(user("c3", "after the role ended", ts(1, 9))) + "\n")
+code, out = run("digest")
+assert out["rows"] == 0 and json.loads((HOME / "orchestrator-cursor.json").read_text()) is not None
+commit(out)
+with TC.open("a") as f:
+    f.write(json.dumps(user("c4", "more unrelated talk", ts(0, 1))) + "\n")
+assert of.wake(NOW + dt.timedelta(days=2)) == [], "read past until: growth does not wake"
+assert "sc" not in run("digest")[1]["sessions"], "nor is the transcript opened again"
+
 # 8. Registry edge cases.
 for p in REG.glob("*.json"):
     p.unlink()

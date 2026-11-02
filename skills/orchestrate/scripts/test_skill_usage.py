@@ -381,10 +381,10 @@ reg = root / "as" / "transcripts" / "o1.json"
 closed = {**json.loads(reg.read_text()), "until": su.iso(dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=20))}
 reg.write_text(json.dumps(closed))
 mark(scan_end=5, scanned_at=old)
-assert su.precheck(home, collect_first=False) == 0, "last read before the span closed: read up to its end"
-mark(scan_end=5, scanned_at=recent)
-assert su.precheck(home, collect_first=False) == 1, "read after the span closed"
-mark(scan_end=5, scanned_at=recent, pending=True)
+assert su.precheck(home, collect_first=False) == 0, "not yet read past the span's end"
+mark(scan_end=5, scanned_at=old, passed_until=True)
+assert su.precheck(home, collect_first=False) == 1, "read past the span's end: growth is not orchestrator conversation"
+mark(scan_end=5, scanned_at=recent, passed_until=True, pending=True)
 assert su.precheck(home, collect_first=False) == 0, "still pending"
 mark(scanned_at=recent, inode=st.st_ino + 1)
 assert su.precheck(home, collect_first=False) == 0, "replaced: recover"

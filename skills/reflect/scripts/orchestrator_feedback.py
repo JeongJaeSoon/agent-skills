@@ -216,6 +216,7 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
     carry = carry or {}
     before, tools, ids = carry.get("before", ""), list(carry.get("tools", [])), list(carry.get("ids", []))
     count = line_at(path, start) if line is None else line  # lines before pos
+    passed = False  # a complete line at or after hi was read, so everything inside the span was
     with open(path, "rb") as f:
         f.seek(start)
         while True:
@@ -232,6 +233,8 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
                 continue
             text = owner_text(o)
             ts = parse_ts(o.get("timestamp"))
+            if hi and ts and ts >= hi and not pending:
+                passed = True
             if o.get("type") == "assistant":
                 for b in (o.get("message") or {}).get("content") or []:
                     if not isinstance(b, dict):
@@ -266,13 +269,12 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
             pos, count = pos + len(raw), count + 1
     carry = {"before": before[-BEFORE_CHARS:], "tools": tools[-TOOLS:], "ids": list(dict.fromkeys(ids))[-CONTEXT_IDS:]}
     return rows, {"scan_end": pos, "line": count, "uuid": last[0], "uuid_at": last[1], "pending": pending,
-                  "carry": carry}
+                  "carry": carry, "passed_until": passed}
 
 
 def span_done(reg, mark):
-    """The span closed (`until`) and a later scan read past it, so the transcript's growth is not the orchestrator's."""
-    until, scanned = parse_ts(reg.get("until")), parse_ts((mark or {}).get("scanned_at"))
-    return bool(until and scanned and scanned >= until and not mark.get("pending"))
+    """The span closed (`until`) and a scan read a complete line past it, so later growth is not the orchestrator's."""
+    return bool(reg.get("until") and mark and mark.get("passed_until") and not mark.get("pending"))
 
 
 def digest(now=None):
@@ -324,6 +326,8 @@ def digest(now=None):
         rows += found
         if not new["uuid"]:  # no message read: keep the anchor that places scan_end
             new["uuid"], new["uuid_at"] = anchor
+        if mark and not note and mark.get("passed_until") and until:  # the boundary was already crossed
+            new["passed_until"] = True
         moved = new["scan_end"] != start or not mark
         new["moved_at"] = iso(now) if moved else (mark or {}).get("moved_at")
         marks[session] = {**new, "inode": st.st_ino, "scanned_at": iso(now)}
