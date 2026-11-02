@@ -177,6 +177,8 @@ def command_text(cmd):
                 eol = cmd.find("\n", i)
                 eol = n if eol < 0 else eol
                 line = cmd[i:eol]
+                if expands and line.endswith("\\"):  # bash joins the next line, which may end the body sooner
+                    return n
                 if (line.lstrip("\t") if strip else line) == delim:
                     if expands:
                         expanding(start, i, None)
@@ -192,9 +194,12 @@ def command_text(cmd):
 
     def starts_word(i):
         """`#` at i opens a comment: it starts a word, line continuations (`\\<newline>`) removed."""
-        while i >= 2 and cmd[i - 2:i] == "\\\n":
+        def escaped(j):  # the character at j follows an odd run of backslashes
+            return (j - len(cmd[:j].rstrip("\\"))) % 2 == 1
+
+        while i >= 2 and cmd[i - 1] == "\n" and escaped(i - 1):
             i -= 2
-        return i == 0 or (cmd[i - 1] in " \t\n;&|()" and (i < 2 or cmd[i - 2] != "\\"))
+        return i == 0 or (cmd[i - 1] in " \t\n;&|()" and not escaped(i - 1))  # `\\ #` is a comment, `\ #` is not
 
     def heredoc(i):
         """The delimiter word after `<<` at i, quotes removed: (index after it, (strip tabs, word, expands) or None)."""

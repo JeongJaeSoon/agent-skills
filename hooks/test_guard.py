@@ -258,6 +258,9 @@ for delim in ('E"OF"', "E\\OF", "'EOF'", '"EOF"', "\\EOF", "$'EOF'"):  # bash's 
     assert bash(f"cat <<{delim}\nskills-sync card /\nEOF") == "none", delim
 assert bash(f"echo \\ #; skills-sync card {H / 'noclose.md'}") == "deny"  # an escaped space does not start a comment
 assert bash(f"echo \\\n# '\nskills-sync card {H / 'noclose.md'}\n# '") == "deny"  # a comment after a line continuation
+assert bash(f"echo \\\\ # don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` is one backslash, then a comment
+assert bash(f"echo a\\\\\n# don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` then a real newline
+assert bash(f"cat <<true\ntr\\\nue\nskills-sync card {H / 'noclose.md'}\ntrue") == "deny"  # bash ends the body at tr\ue
 # A delimiter bash rewrites through escapes is not read, so a later line spelling it raw blanks nothing.
 for delim, raw in (("$'E\\x4fF'", "E\\x4fF"), ('"E\\OF"', "E\\OF")):
     assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}\n{raw}") == "deny", delim
