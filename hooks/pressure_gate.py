@@ -362,13 +362,14 @@ def narrowed(rest, any_path=False, any_word=False):
     """Whether a runner's arguments pick tests: a test file or directory, `x.py::t`, or a name filter; with any_path
     (pytest, which runs whatever path it is given) any path-shaped argument, never an option's value like `yes`. An option's value (`-n 8`,
     `--junitxml test-results.xml`) is neither, so it leaves a whole suite. With any_word (jest, vitest, whose
-    positional words filter test paths: `vitest run src/components/Button`) any positional word that does not follow
-    an option: `--pool forks` may be an option and its value, so it is read as one and the run stays whole."""
+    positional words filter test paths: `vitest run src/components/Button`) any positional word, except a bare word
+    right after an option: `--pool forks` may be an option and its value, so the run stays whole."""
     skip = False
     for k, w in enumerate(rest):
         if skip:
             skip = False
-        elif any_word and k and rest[k - 1].startswith("-") and "=" not in rest[k - 1] and not w.startswith("-"):
+        elif any_word and k and rest[k - 1].startswith("-") and "=" not in rest[k - 1] and not w.startswith("-") \
+                and "/" not in w and not TEST_FILE.fullmatch(w):
             continue
         elif w.split("=", 1)[0] in FILTERS:
             return True
@@ -440,7 +441,8 @@ def runs_tests(argv):
         if E2E.fullmatch(script):
             return "E2E"
         after = words[words.index(script) + 1:] if script else []
-        if (script in ("test", "test:all") or head == "bun" and args[:1] == ["test"]) and not narrowed(after):
+        bun = head == "bun" and args[:1] == ["test"]  # `bun test src/components/`: positional words filter paths
+        if (script in ("test", "test:all") or bun) and not narrowed(after, any_word=bun):
             return "test suite"
     if head == "make" and args:
         return "E2E" if any(E2E.fullmatch(a) for a in args) else "test suite" if "test" in args else None
