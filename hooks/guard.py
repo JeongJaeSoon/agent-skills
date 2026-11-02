@@ -186,11 +186,8 @@ def command_text(cmd):
                     i = eol + 1
                     break
                 i = eol + 1
-            else:  # no terminator: the body runs to the end
-                if expands:
-                    expanding(start, n, None)
-                else:
-                    blank(start, n)
+            else:  # no terminator line: the delimiter was misread, so nothing after it is taken for a body
+                return n
         return i
 
     def heredoc(i):
@@ -202,7 +199,9 @@ def command_text(cmd):
         word, quoted = "", False
         while i < n and cmd[i] not in " \t\n;&|<>()":
             c = cmd[i]
-            if c in "'\"":
+            if c == "$" and cmd[i + 1:i + 2] in ("'", '"'):  # $'EOF' and $"EOF" delimit with EOF
+                i += 1
+            elif c in "'\"":
                 j = cmd.find(c, i + 1)
                 j = n if j < 0 else j
                 word, quoted = word + cmd[i + 1:j], True
@@ -217,7 +216,7 @@ def command_text(cmd):
         return i, ((strip, word, not quoted) if word or quoted else None)
 
     def command(i, close):
-        depth, pending = 0, []
+        depth, arith, pending = 0, 0, []
         while i < n:
             c = cmd[i]
             if c == close and (close != ")" or depth == 0):
@@ -226,6 +225,10 @@ def command_text(cmd):
                 depth += 1
             elif c == ")" and depth:
                 depth -= 1
+            elif cmd.startswith("$[", i):  # old arithmetic, where `<<` is a shift too
+                arith += 1
+            elif c == "]" and arith:
+                arith -= 1
             if c == "\\":
                 blank(i, min(i + 2, n))
                 i += 2
@@ -249,7 +252,7 @@ def command_text(cmd):
             elif cmd.startswith("<<<", i):  # a here-string, whose suffix is not a heredoc
                 i += 3
             # Inside parentheses `<<` may be a shift (`$((1<<2))`); a subshell's heredoc then stays unblanked.
-            elif not depth and cmd.startswith("<<", i):
+            elif not depth and not arith and cmd.startswith("<<", i):
                 i, doc = heredoc(i + 2)
                 if doc:
                     pending.append(doc)
