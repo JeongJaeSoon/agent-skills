@@ -176,6 +176,12 @@ assert cleared["until"] and cleared["since"] == first["since"], cleared
 assert hook(session="f1", transcript=T) is None and reg("f1") == cleared, "until is written once"
 hook(session="f1", prompt="ROLE: orchestrator", transcript=T)
 assert reg("f1")["until"] is None and reg("f1")["since"] >= cleared["until"], "a reopened span starts now"
+hook(session="f8", prompt="ROLE: orchestrator", transcript=T)
+hook(session="f8", prompt="ROLE: lead p", transcript=T)
+assert reg("f8")["until"], "turning lead closes the span"
+hook(**START, source="resume", title="orchestrator", session="f9", transcript=T)
+hook(session="f9", prompt="next", transcript=T)
+assert reg("f9")["until"] is None, "a title-only session's prompt resolves to nothing and keeps the span"
 hook(session="f4", prompt="ROLE: lead p", transcript=T)
 hook(agent=LEAD, title="lead:p", session="f5", transcript=T)
 assert reg("f4") is None and reg("f5") is None, "a lead is not registered"

@@ -219,7 +219,9 @@ def register(event, session, entry, record):
         # A span reopened after `ROLE: none` starts again now: the conversation in between was not the orchestrator's.
         since = old["since"] if old and old.get("since") and not old.get("until") else now
         new = {"role": "orchestrator", "transcript": path, "since": since, "until": None}
-    elif record and record.get("role") == "none" and old and not old.get("until"):
+    elif old and not old.get("until") and ((record and record.get("role") == "none") or entry):
+        # Cleared, or now another role. A prompt of a session named only by its title resolves to nothing and keeps
+        # the span open.
         new = {**old, "until": now}
     else:
         return
