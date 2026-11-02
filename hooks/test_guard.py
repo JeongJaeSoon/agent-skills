@@ -257,6 +257,10 @@ for delim in ('E"OF"', "E\\OF", "'EOF'", '"EOF"', "\\EOF", "$'EOF'"):  # bash's 
     assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny", delim
     assert bash(f"cat <<{delim}\nskills-sync card /\nEOF") == "none", delim
 assert bash(f"echo \\ #; skills-sync card {H / 'noclose.md'}") == "deny"  # an escaped space does not start a comment
+assert bash(f"echo \\\n# '\nskills-sync card {H / 'noclose.md'}\n# '") == "deny"  # a comment after a line continuation
+# A delimiter bash rewrites through escapes is not read, so a later line spelling it raw blanks nothing.
+for delim, raw in (("$'E\\x4fF'", "E\\x4fF"), ('"E\\OF"', "E\\OF")):
+    assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}\n{raw}") == "deny", delim
 # A directory is named as one, not as an unreadable file.
 assert bash("skills-sync card /") == "deny" and "names a directory" in reason("skills-sync card /")
 assert "skills-sync card <brief>" in reason(f'{NEW} --prompt "/goal fix X"'), "the deny names the helper"

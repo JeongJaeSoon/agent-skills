@@ -190,30 +190,43 @@ def command_text(cmd):
                 return n
         return i
 
+    def starts_word(i):
+        """`#` at i opens a comment: it starts a word, line continuations (`\\<newline>`) removed."""
+        while i >= 2 and cmd[i - 2:i] == "\\\n":
+            i -= 2
+        return i == 0 or (cmd[i - 1] in " \t\n;&|()" and (i < 2 or cmd[i - 2] != "\\"))
+
     def heredoc(i):
         """The delimiter word after `<<` at i, quotes removed: (index after it, (strip tabs, word, expands) or None)."""
         strip = cmd.startswith("-", i)
         i += strip
         while i < n and cmd[i] in " \t":
             i += 1
-        word, quoted = "", False
+        # A delimiter whose escapes bash would rewrite ("…\…", $'…\…', \<newline>) is not read: its body is left
+        # unblanked, since a misread delimiter could match a later line and blank the commands before it.
+        word, quoted, sure, ansi = "", False, True, False
         while i < n and cmd[i] not in " \t\n;&|<>()":
             c = cmd[i]
             if c == "$" and cmd[i + 1:i + 2] in ("'", '"'):  # $'EOF' and $"EOF" delimit with EOF
+                ansi = cmd[i + 1] == "'"
                 i += 1
             elif c in "'\"":
                 j = cmd.find(c, i + 1)
                 j = n if j < 0 else j
-                word, quoted = word + cmd[i + 1:j], True
+                part = cmd[i + 1:j]
+                sure = sure and not ((c == '"' or ansi) and "\\" in part)
+                word, quoted, ansi = word + part, True, False
                 blank(i + 1, j)
                 i = j + 1
             elif c == "\\":
+                sure = sure and cmd[i + 1:i + 2] != "\n"
                 word, quoted = word + cmd[i + 1:i + 2], True
                 i += 2
             else:
                 word += c
                 i += 1
-        return i, ((strip, word, not quoted) if word or quoted else None)
+        sure = sure and "`" not in word and cmd[i:i + 1] != "("  # `<<$(x)`: bash reads the substitution as the word
+        return i, ((strip, word, not quoted) if sure and (word or quoted) else None)
 
     def command(i, close):
         depth, arith, pending = 0, 0, []
@@ -245,7 +258,7 @@ def command_text(cmd):
                 i = command(i + 1, "`")
             elif cmd.startswith("$(", i):
                 i = command(i + 2, ")")
-            elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()") and (i < 2 or cmd[i - 2] != "\\"):
+            elif c == "#" and starts_word(i):
                 eol = cmd.find("\n", i)
                 blank(i, n if eol < 0 else eol)
                 i = n if eol < 0 else eol
