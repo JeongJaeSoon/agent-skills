@@ -337,10 +337,11 @@ VALUE_OPTS = {"-n", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "--cov"
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 
 
-def narrowed(rest, any_path=False):
+def narrowed(rest, any_path=False, any_word=False):
     """Whether a runner's arguments pick tests: a test file or directory, `x.py::t`, or a name filter; with any_path
     (pytest, which runs whatever path it is given) any path-shaped argument, never an option's value like `yes`. An option's value (`-n 8`,
-    `--junitxml test-results.xml`) is neither, so it leaves a whole suite."""
+    `--junitxml test-results.xml`) is neither, so it leaves a whole suite. With any_word (jest, vitest, whose
+    positional words filter test paths: `vitest run src/components/Button`) any positional word."""
     skip = False
     for w in rest:
         if skip:
@@ -349,7 +350,7 @@ def narrowed(rest, any_path=False):
             return True
         elif w in VALUE_OPTS:
             skip = True
-        elif not w.startswith("-") and (any_path and ("/" in w or w.endswith(".py")) or "::" in w or TEST_FILE.fullmatch(w) or TEST_DIR.fullmatch(w.rstrip("/"))):
+        elif not w.startswith("-") and (any_word or any_path and ("/" in w or w.endswith(".py")) or "::" in w or TEST_FILE.fullmatch(w) or TEST_DIR.fullmatch(w.rstrip("/"))):
             return True
     return False
 
@@ -416,7 +417,7 @@ def runs_tests(argv):
             return "test suite"
     if head == "make" and args:
         return "E2E" if any(E2E.fullmatch(a) for a in args) else "test suite" if "test" in args else None
-    if head in ("jest", "vitest") and not narrowed([w for w in words[1:] if w not in ("run", "watch")]):
+    if head in ("jest", "vitest") and not narrowed([w for w in words[1:] if w not in ("run", "watch")], any_word=True):
         return "test suite"
     if head == "pytest" and not narrowed(words[1:], any_path=True) or head == "go" and args[:1] == ["test"] and "./..." in words[2:] and not narrowed(words[2:]):
         return "test suite"
@@ -435,7 +436,7 @@ def loop_runs(rest):
         if seg and seg[0] == "done":
             return False
         h = head_word(seg)
-        if h in LOOPERS - {"for"} or h.startswith("$"):
+        if OVERRIDE not in seg[:skip_prefix(seg, keywords=True)] and (h in LOOPERS - {"for"} or h.startswith("$")):
             return True
     return False
 
