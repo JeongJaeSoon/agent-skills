@@ -125,7 +125,10 @@ def owner_text(o):
         a = o.get("attachment") or {}
         if a.get("type") != "queued_command" or (a.get("origin") or {}).get("kind") not in HUMAN:
             return ""
-        return clean(str(a.get("prompt") or ""))
+        prompt = a.get("prompt")
+        if isinstance(prompt, list):  # a prompt sent with an image arrives as content blocks
+            prompt = "\n".join(b.get("text") or "" for b in prompt if isinstance(b, dict) and b.get("type") == "text")
+        return clean(prompt if isinstance(prompt, str) else "")
     if o.get("type") != "user" or o.get("isCompactSummary") or o.get("isSidechain"):
         return ""
     content = (o.get("message") or {}).get("content")
@@ -266,6 +269,12 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
                   "carry": carry}
 
 
+def span_done(reg, mark):
+    """The span closed (`until`) and a later scan read past it, so the transcript's growth is not the orchestrator's."""
+    until, scanned = parse_ts(reg.get("until")), parse_ts((mark or {}).get("scanned_at"))
+    return bool(until and scanned and scanned >= until and not mark.get("pending"))
+
+
 def digest(now=None):
     now = now or now_utc()
     cfg = config()
@@ -290,8 +299,9 @@ def digest(now=None):
             report[session] = {"note": "transcript missing"}
             continue
         mark = marks.get(session)
-        if mark and not mark.get("pending") and mark.get("inode") == st.st_ino and mark.get("scan_end") == st.st_size \
-                and now.timestamp() - st.st_mtime > STALE_DAYS * 86400:
+        same = mark and mark.get("inode") == st.st_ino and st.st_size >= mark.get("scan_end", 0)
+        if same and (span_done(reg, mark) or (not mark.get("pending") and mark.get("scan_end") == st.st_size
+                                              and now.timestamp() - st.st_mtime > STALE_DAYS * 86400)):
             continue
         live.append((session, reg, path, st, mark))
     # The session that moved least recently goes first, so a share too small for one row cannot starve a session.
@@ -360,7 +370,7 @@ def wake(now=None, home=None):
             out.append(f"{session}: pending")
         elif mark.get("inode") != st.st_ino or st.st_size < mark.get("scan_end", 0):
             out.append(f"{session}: transcript replaced or truncated")
-        elif st.st_size > mark.get("scan_end", 0):
+        elif st.st_size > mark.get("scan_end", 0) and not span_done(reg, mark):
             scanned = parse_ts(mark.get("scanned_at"))
             if not scanned or now - scanned >= dt.timedelta(hours=CATCH_UP_HOURS):
                 out.append(f"{session}: grew since {mark.get('scanned_at')}")

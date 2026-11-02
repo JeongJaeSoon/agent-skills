@@ -376,6 +376,19 @@ for kw, code, why in (({}, 1, "caught up"), ({"pending": True}, 0, "pending"), (
                       ({"scan_end": st.st_size + 1}, 0, "shrank"), ({"inode": st.st_ino + 1}, 0, "replaced")):
     mark(**kw)
     assert su.precheck(home, collect_first=False) == code, why
+# A span closed by `ROLE: none` and read past its end: later growth is not orchestrator conversation.
+reg = root / "as" / "transcripts" / "o1.json"
+closed = {**json.loads(reg.read_text()), "until": su.iso(dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=20))}
+reg.write_text(json.dumps(closed))
+mark(scan_end=5, scanned_at=old)
+assert su.precheck(home, collect_first=False) == 0, "last read before the span closed: read up to its end"
+mark(scan_end=5, scanned_at=recent)
+assert su.precheck(home, collect_first=False) == 1, "read after the span closed"
+mark(scan_end=5, scanned_at=recent, pending=True)
+assert su.precheck(home, collect_first=False) == 0, "still pending"
+mark(scanned_at=recent, inode=st.st_ino + 1)
+assert su.precheck(home, collect_first=False) == 0, "replaced: recover"
+reg.write_text(json.dumps({**closed, "until": None}))
 mark()
 (home / "_standing" / "reflect" / "lock").mkdir()
 mark(pending=True)

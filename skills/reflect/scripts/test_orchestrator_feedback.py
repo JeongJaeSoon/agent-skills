@@ -110,6 +110,9 @@ lines = [
      "attachment": {"type": "queued_command", "prompt": "you merged before review again", "origin": HUMAN}},
     {"type": "attachment", "uuid": "u-queued-task", "timestamp": ts(2, 10),
      "attachment": {"type": "queued_command", "prompt": "<task-notification/>", "origin": {"kind": "task-notification"}}},
+    {"type": "attachment", "uuid": "u-queued-img", "timestamp": ts(2, 10),
+     "attachment": {"type": "queued_command", "origin": HUMAN,
+                    "prompt": [{"type": "text", "text": "[Image #2] why is this not under the run?"}, {"type": "image"}]}},
     {"type": "queue-operation", "operation": "enqueue", "timestamp": ts(2, 9), "content": "you merged before review again"},
     user("u-summary", "This session is being continued", ts(2, 11), origin=None, isCompactSummary=True),
     user("u-stop", "[Request interrupted by user]", ts(2, 12), origin=None),
@@ -123,7 +126,9 @@ write(T2, lines)
 register("s1", T2)
 code, out = run("digest")
 got = {r["event"].split(":")[1]: r for r in rows(out)}
-assert list(got) == ["u-plain", "u-blocks", "u-tagged", "u-chat", "u-queued", "u-legacy", "u-cmd"], list(got)
+assert list(got) == ["u-plain", "u-blocks", "u-tagged", "u-chat", "u-queued", "u-queued-img", "u-legacy", "u-cmd"], \
+    list(got)
+assert got["u-queued-img"]["prompt"] == "[Image #2] why is this not under the run?", got["u-queued-img"]
 assert got["u-blocks"]["prompt"] == "[Image #1] this border is wrong"
 assert got["u-tagged"]["prompt"] == "and keep the lineage under the run" and "machine" not in got["u-tagged"]["prompt"]
 assert got["u-chat"]["prompt"] == "use the recommended defaults"
