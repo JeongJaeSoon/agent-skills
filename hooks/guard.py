@@ -200,11 +200,11 @@ def command_text(cmd):
                 return n
         return i
 
+    def escaped(j):  # the character at j follows an odd run of backslashes
+        return (j - len(cmd[:j].rstrip("\\"))) % 2 == 1
+
     def starts_word(i):
         """`#` at i opens a comment: it starts a word, line continuations (`\\<newline>`) removed."""
-        def escaped(j):  # the character at j follows an odd run of backslashes
-            return (j - len(cmd[:j].rstrip("\\"))) % 2 == 1
-
         while i >= 2 and cmd[i - 1] == "\n" and escaped(i - 1):
             i -= 2
         # A subshell's `)` ends a word, a substitution's does not: `(x)#` is a comment, `$(x)#` and `` `x`# `` are not.
@@ -271,7 +271,7 @@ def command_text(cmd):
                 blank(i, min(i + 2, n))
                 i += 2
             elif c == "'":
-                ansi = i > 0 and cmd[i - 1] == "$"
+                ansi = i > 0 and cmd[i - 1] == "$" and not escaped(i - 1)
                 j = i + 1
                 while j < n and cmd[j] != "'":
                     j += 2 if ansi and cmd[j] == "\\" else 1
@@ -281,7 +281,7 @@ def command_text(cmd):
                 i = expanding(i + 1, n, '"')
             elif c == "`":
                 i = command(i + 1, "`")
-            elif cmd.startswith("$(", i):
+            elif cmd.startswith(("$(", "<(", ">("), i):  # its `)` does not end the word
                 i = command(i + 2, ")")
             elif c == "#" and starts_word(i):
                 eol = cmd.find("\n", i)

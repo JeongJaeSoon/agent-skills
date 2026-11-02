@@ -272,7 +272,8 @@ assert bash(f"echo \"`echo \\\"it's ready\\\"`\"\nskills-sync card {H / 'noclose
 for sub in ("echo '", "printf \"%s"):  # an unclosed quote ends with the backtick substitution
     assert bash(f"echo `{sub}`\nskills-sync card {H / 'noclose.md'}") == "deny", sub
 assert bash(f"echo \"$(case a in a) echo \"it's\";; esac)\"\nskills-sync card {H / 'noclose.md'}") == "deny"
-for word in ("`x`", "$(x)", "a\\\\\\ "):  # a # inside a word is not a comment
+assert bash(f"echo \\$'a\\'\nskills-sync card {H / 'noclose.md'}") == "deny"  # \$ is not ANSI-C quoting
+for word in ("`x`", "$(x)", "<(true)", "a\\\\\\ "):  # a # inside a word is not a comment
     assert bash(f"echo {word}#; skills-sync card {H / 'noclose.md'}") == "deny", word
 assert bash(f"cat <<true\ntr\\\nue\nskills-sync card {H / 'noclose.md'}\ntrue") == "deny"  # bash ends the body at tr\ue
 # A delimiter bash rewrites through escapes is not read, so a later line spelling it raw blanks nothing.
