@@ -30,11 +30,12 @@ A report sent on a schedule (a heartbeat, a cron or `/loop` round, a "report eve
 
 1. The headline, bold and led by the time: `**14:30 · <what changed, one sentence>**`, or `**14:30 · 변화 없음 — <why, a few words>**`.
 2. The legend, one line: `🔄 진행 · 🙋 오너 차례 · ⏳ 다른 사람 대기 · ⏸️ 보류 · 막대=단계(추정)`, with `✅ 완료`, `🔴 막힘` and `❔ 확인 필요` added before `막대` when a row uses them, `📅 할 일로 넘김` when a held row's PR is named by a to-do (that row reads 📅, not ⏸️), and `⏰ 도래` when a to-do's time has come.
-3. One section per repository, headed by a bold line, `**owner/repo → main**`, ending in the merge target most of its PRs share; a repository running several programs gets one section per program, `**owner/repo — <program> → main**`. Record each lead with its project (epic, program) as `--program`; a lead without one beside another lead in the same repository is headed `(프로젝트 미지정)`. Each section has one table, headed `| | 리드/Phase | PR | 진행 |`, with one row per lead, or per phase when a lead works in phases (per item when there are no leads). Every row goes out every time, changed or not.
+3. One section per repository, headed by a bold line, `**owner/repo → main**`, ending in the merge target most of its PRs share; a repository running several programs gets one section per program, `**owner/repo — <program> → main**`. Record each lead with its project (epic, program) as `--program`; a lead without one beside another lead in the same repository is headed `(프로젝트 미지정)`. Each section has one table, headed `| | 리드/Phase | PR | 진행 | 세션 |`, with one row per lead, or per phase when a lead works in phases (per item when there are no leads). Every row goes out every time, changed or not.
    - Status, one icon: 🔄 moving · 🙋 waiting on the owner · ⏳ waiting on another person · ❔ waiting on a person nothing names (§1 says how each is decided) · ⏸️ held until something else lands · 🔴 blocked · ✅ done.
    - Name: the lead or phase. Phases waiting in the same state may share a row (`ph4 · ph5`).
    - PR: its PR as a link and the PR's state from the PR list, or `—` when it has none. Merged: the merge commit's first 7 characters (`[#12](https://…) a1b2c3d`); closed: `닫힘`; open: what stands before the merge, in this order — `초안`, `❗DIRTY`, `❗리뷰` (a required review missing), `수정요청`, `CI✗`, `CI…`, `BEHIND`, `BLOCKED` — or `✓` when it can merge (`열림` while GitHub has not computed it). `❗` marks what a person must resolve: bold is kept for changed rows. A PR whose base is not the section's adds its own (`[#50](https://…) ❗DIRTY→main`). Under the legend, one line `PR: ❗ 사람이 풀 것 · …` explains the marks the tables use.
    - Progress: an 8-cell bar and N/M from the Progress rule above, and nothing else (`██████░░ 6/8`, filled cells = round(8·N/M)). M is the item's own stage count, so it changes with the item (`3/4`); `—` when there is no basis.
+   - Session: whether a session runs the row now — `작업 중` (its agent works, or its turn ended under 15 minutes ago), `멈춤` (a prompt waits on a person, or its turn ended 15 minutes ago or more) or `세션 없음` (it ended, its agent exited, or no session is linked). A row is linked by its Orca worktree, never by a terminal handle, which a restart changes; a phase or sub-task with no session of its own takes its lead's. `—` on a ✅ row and a row folding several PRs.
 
    The next step is not a column: a row's next stage and who moves it go under item 6, or item 9 for a held row, so no cell is ever cut to fit.
 
@@ -133,30 +134,30 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 **acme/web — 검색 개선 → main**
 
-| | 리드/Phase | PR | 진행 |
-|---|---|---|---|
-| ✅ | ph1 | [#40](https://example.test/40) a1b2c3d | ████████ 8/8 |
-| ✅ | **ph2** | [#42](https://example.test/42) 9f8e7d6 | ████████ 8/8 |
-| 🔄 | ph3 | — | ███░░░░░ 3/8 |
-| 🔄 | └ 정렬 | [#45](https://example.test/45) CI… | ████░░░░ 4/8 |
-| 🔄 | └ **w2 색인** | — | ██░░░░░░ 2/8 |
-| ⏸️ | ph4 · ph5 | — | ░░░░░░░░ 0/8 |
+| | 리드/Phase | PR | 진행 | 세션 |
+|---|---|---|---|---|
+| ✅ | ph1 | [#40](https://example.test/40) a1b2c3d | ████████ 8/8 | — |
+| ✅ | **ph2** | [#42](https://example.test/42) 9f8e7d6 | ████████ 8/8 | — |
+| 🔄 | ph3 | — | ███░░░░░ 3/8 | 작업 중 |
+| 🔄 | └ 정렬 | [#45](https://example.test/45) CI… | ████░░░░ 4/8 | 작업 중 |
+| 🔄 | └ **w2 색인** | — | ██░░░░░░ 2/8 | 멈춤 |
+| ⏸️ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | 작업 중 |
 
 **acme/web — 알림 정리 → feature/notify**
 
-| | 리드/Phase | PR | 진행 |
-|---|---|---|---|
-| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 |
-| ⏳ | └ A 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 |
-| 🔄 | └ 문구 | [#54](https://example.test/54) CI✗ | ████░░░░ 2/4 |
+| | 리드/Phase | PR | 진행 | 세션 |
+|---|---|---|---|---|
+| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | 멈춤 |
+| ⏳ | └ A 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | — |
+| 🔄 | └ 문구 | [#54](https://example.test/54) CI✗ | ████░░░░ 2/4 | 작업 중 |
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
 **acme/ops → main**
 
-| | 리드/Phase | PR | 진행 |
-|---|---|---|---|
-| 🔄 | 재색인 | [#88](https://example.test/88) ❗리뷰 | ██░░░░░░ 2/8 |
+| | 리드/Phase | PR | 진행 | 세션 |
+|---|---|---|---|---|
+| 🔄 | 재색인 | [#88](https://example.test/88) ❗리뷰 | ██░░░░░░ 2/8 | 세션 없음 |
 
 21:00 이후라 Slack 미전송 · 머지 가능 PR 없음
 

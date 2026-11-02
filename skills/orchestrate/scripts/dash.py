@@ -1420,6 +1420,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             code, out = fleet.send(body["session"], body["text"], handle)
             FLEET_WAKE.set()
             return self.send(code, json.dumps(out).encode())
+        elif path == "/api/fleet/open" and isinstance(body.get("session"), str):
+            code, out = fleet.open_session(body["session"])
+            return self.send(code, json.dumps(out).encode())
         elif path == "/api/fleet/decide" and all(isinstance(body.get(k), str) for k in ("decision", "answer")):
             code, out = fleet.decision_answer(body["decision"], body["answer"])
             FLEET_WAKE.set()

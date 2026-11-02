@@ -144,7 +144,7 @@ assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()
 b = brief()
 lines = b["text"].splitlines()
 cut = next(l for l in lines if l.startswith("| 🔄 | acme/app#877"))
-assert cut.endswith("…[1] | — | — |") and f"- [1] {' '.join(LONG.split())}" in lines, b["text"]
+assert cut.endswith("…[1] | — | — | 세션 없음 |") and f"- [1] {' '.join(LONG.split())}" in lines, b["text"]
 assert lines.index(f"- [1] {' '.join(LONG.split())}") - lines.index(cut) <= 3, b["text"]
 assert b["width_ok"] and {o["label"] for o in b["open"]} >= {" ".join(LONG.split())}, b["open"]
 # Orca cuts a task's name to a head and "...": the spec's first line is the whole of it, and nothing else replaces it.
@@ -152,4 +152,71 @@ assert fleet.task_name({"display_name": "role-terms: 용어 정리 — card (202
     == "role-terms: 용어 정리 — card (2026-10-27)"
 assert fleet.task_name({"display_name": "짧은 이름...", "spec": "다른 첫 줄\n본문"}) == "짧은 이름..."
 assert fleet.task_name({"task_title": "온전한 이름", "spec": "온전한 이름 그리고 더"}) == "온전한 이름"
+
+# A probe dispatched with an instruction for its spec ("send worker_done … 브리프: <path>") was listed under its lead as
+# a moving row named by that instruction: Orca names a task after the spec's first line. A card whose task name is a
+# goal sentence pointing at its brief goes by its worktree's name, and a dispatch that completed with no PR leaves.
+fake = lambda sid, **kw: {"id": sid, "kind": "task", "parent": "lead1", "phase": "idle", "name": sid, "gh_repo": "acme/app",
+                          "last_activity": ago(0.1), "terminals": [{"handle": f"term_{sid}"}], "report": None, **kw}
+probe_state = {"sessions": [{**fake("lead1", name="계보 리드"), "kind": "orchestration", "parent": "s-root"},
+                            {**card("s-root", "root", "working", "acme/app"), "kind": "orchestrator", "parent": None},
+                            fake("probe-bound", task_title='send worker_done with the body "ok" and stop 브리프: /var/x/bound-brief.md',
+                                 dispatch_status="completed"),
+                            fake("probe-live", task_title="/goal 측정 probe 를 끝까지 진행한다 브리프: ~/share/x/brief.md",
+                                 dispatch_status="dispatched"),
+                            fake("w-titled", task_title="ABC-7 정렬 수정", dispatch_status="dispatched", phase="working")]}
+rows_, _ = board.fleet_rows(probe_state, {}, {})
+titles = {r["session"]: r["title"] for r in rows_.values()}
+assert "probe-bound" not in titles, titles  # completed, no PR: nothing left to report
+assert titles["probe-live"] == "probe-live" and titles["w-titled"] == "ABC-7 정렬 수정", titles
+assert not any("worker_done" in t or "브리프" in t for t in titles.values()), titles
+assert board.card_title({"name": "wt", "task_title": "Brief: ~/b.md"}) == "wt"
+assert board.card_title({"name": "wt", "task_title": "ABC-1 브리프 정리"}) == "ABC-1 브리프 정리"  # no path: a name
+
+# Each open row's 세션 cell: working, stopped (a prompt waits, or the turn ended STALL_MIN ago), or no session.
+now_ = fleet.utcnow()
+assert board.session_state({"phase": "working"}, now_) == "working"
+assert board.session_state({"phase": "waiting", "last_activity": ago(0)}, now_) == "stalled"
+assert board.session_state({"phase": "idle", "last_activity": ago(0.1)}, now_) == "working"
+assert board.session_state({"phase": "idle", "last_activity": ago(1)}, now_) == "stalled"
+assert board.session_state({"phase": "open"}, now_) == board.session_state(None, now_) == "none"
+
+# A lead whose session is gone, with a task row `board set --worktree` linked to a card still working: the task row is
+# judged by its own session (moving, 작업 중), the lead's own row by the lead's (🔴 세션 없음).
+st = json.loads((sd / "state.json").read_text())
+st["sessions"].append(card("s-task", "task-card", "working", "acme/app"))
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+board.lead_add("gone-lead", "term_gone", "acme/app", worktree="s-gone")
+board.set_row("gone-lead/t", kind="task", parent="gone-lead", title="linked-task", status="moving", worktree="s-task")
+by_label = {x["label"]: x for x in sum(brief()["table_rows"], [])}
+assert by_label["t linked-task"]["session"]["word"] == "작업 중" and by_label["t linked-task"]["status"] != "🔴", by_label["t linked-task"]
+assert by_label["gone-lead"]["status"] == "🔴" and by_label["gone-lead"]["session"]["word"] == "세션 없음", by_label["gone-lead"]
+
+# A card a board row links with --worktree is that row's work: no fleet row of its own beside it.
+rows_, _ = board.fleet_rows(probe_state, {}, {"fix": {"id": "fix", "worktree": "w-titled"}})
+assert "w-titled" not in {r["session"] for r in rows_.values()}, rows_
+# ...and a board lead found by its worktree after a terminal restart (a new handle) holds its lead session.
+rows_, _ = board.fleet_rows(probe_state, {"계보": {"handle": "term_old", "worktree": "lead1"}}, {"계보": {"id": "계보"}})
+assert not any(r["kind"] == "lead" for r in rows_.values()) and all(r.get("parent") == "계보" for r in rows_.values()), rows_
+
+# A row whose only change is its session (작업 중 → 멈춤) is a changed row, bold in the next report.
+r = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--periodic", "--commit", "--no-refresh"],
+                   capture_output=True, text=True, env=env)
+assert r.returncode == 0, r.stderr
+st = json.loads((sd / "state.json").read_text())
+next(x for x in st["sessions"] if x["id"] == "s-task").update(phase="idle", last_activity=ago(1))
+fleet.write_atomic(sd / "state.json", json.dumps(st))
+assert "gone-lead/t" in brief()["changed"]
+
+# A row linked by --worktree to a card whose PR its title never names takes that PR, since the card's own row is gone.
+board.set_row("wt-pr", title="untitled-fix", repo="acme/plugins", status="moving", worktree="s4")
+linked_row = next(x for x in sum(brief()["table_rows"], []) if "untitled-fix" in x["label"])
+assert linked_row["session"]["pr"] == "acme/plugins#630", linked_row
+
+# A quiet row with no PR whose --worktree card is working is not stale: the card is its evidence.
+quiet_store = {"rows": {"q": {"id": "q", "title": "untitled", "status": "moving", "reported_at": ago(9), "worktree": "w-titled"}}}
+assert "row:q" not in tidy.assess(quiet_store, probe_state, {}, now=now), tidy.assess(quiet_store, probe_state, {}, now=now)
+# A board lead row linked to a lead session with --worktree holds that session: no second fleet lead row.
+rows_, _ = board.fleet_rows(probe_state, {}, {"L": {"id": "L", "kind": "lead", "worktree": "lead1"}})
+assert not any(r["kind"] == "lead" for r in rows_.values()) and all(r.get("parent") == "L" for r in rows_.values()), rows_
 print("test_brief_rows: ok")

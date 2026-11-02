@@ -261,6 +261,19 @@ assert out == {"ok": False, "reason": "safety check unavailable (scripts/sync.py
 log = (state_dir / "sends.jsonl").read_text()
 assert len(log.splitlines()) == 8 and secret not in log, log
 
+# The brief's Orca button names a session by its worktree id: the handle is the one its agent terminal has now.
+switched = []
+assert fleet.open_session("wt-export", switch=switched.append) == (200, {"ok": True, "reason": None}) and switched == ["term_export"]
+assert fleet.open_session("wt-nowhere", switch=switched.append)[0] == 409 and switched == ["term_export"]
+
+
+def refuse(handle):
+    raise fleet.SourceError("no such terminal")
+
+
+assert fleet.open_session("wt-export", switch=refuse) == (200, {"ok": False, "reason": "no such terminal"})
+(state_dir / "sends.jsonl").write_text(log)  # the counts below are of sends
+
 # Permission prompts. Fake screens in the shape Claude Code 2.1.282 draws (measured); every name here is invented.
 docs = next(i for i in items(st) if i["session"] == "wt-docs")
 assert docs["type"] == "prompt" and docs["prompt"] == "prompt-docs-1" and docs["handle"] == "term_docs", docs
@@ -864,10 +877,10 @@ process.stdout.write(JSON.stringify({{page: fleetTodo(), section: fleetSection("
     # The Brief page draws the renderer's text whole: a cut cell gets the text its `- [n]` line holds (bold and └ kept)
     # and the list goes; repository tables share one set of column widths; the sections under them become tables.
     text = "\n".join([
-        "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|",
-        "| ❔ | **lead-one** | — | — |",
-        "| 🙋 | └ **ABC-1 rollout: release then prod…[1]** | — | — |",
-        "| ⏳ | └ ABC-1 K4: client plugins for…[2] | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — |", "",
+        "| | 리드/Phase | PR | 진행 | 세션 |", "|---|---|---|---|---|",
+        "| ❔ | **lead-one** | — | — | 작업 중 |",
+        "| 🙋 | └ **ABC-1 rollout: release then prod…[1]** | — | — | 멈춤 |",
+        "| ⏳ | └ ABC-1 K4: client plugins for…[2] | [#7](https://github.com/acme/plugins/pull/7) ❗리뷰 | — | 세션 없음 |", "",
         "- [1] ABC-1 rollout: release then prod, then the final check", "- [2] ABC-1 K4: client plugins for both versions", "",
         "🔄 **진행 중**", "", "- ❔ guard-fix — 확인 필요: 세션 꺼짐 · 6h 전", "- 🔄 rollout plan — 수 10/28: release · coordinator", "- └ 🔴 child card — 턴 종료", "",
         "⏳ **다른 사람 대기**", "", "- team:reviewers · 리뷰 [#7](https://github.com/acme/plugins/pull/7) · 3일 전부터 → ABC-1 K4 · 다음: 리뷰 대기 · 코디네이터", "",
@@ -891,10 +904,14 @@ process.stdout.write(briefHtml({json.dumps(text)}));"""
 
     # Each repository row gets the button its table_rows entry names, at the right end; a table whose row count differs
     # from its entry gets none. The Finished rows card leaves out a row whose Ack is already in the table.
-    two = "\n".join(["| | 리드/Phase | PR | 진행 |", "|---|---|---|---|", "| ✅ | done lead | — | — |", "| 🔴 | stuck lead | — | — |",
-                     "| 🔄 | busy lead | — | — |", "", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|", "| ⏳ | other | — | — |"])
-    rows = [[{"label": "done lead", "ack": "board:a", "done": None}, {"label": "stuck lead", "ack": None, "done": "row:b"},
-             {"label": "busy lead", "ack": None, "done": None}], []]
+    two = "\n".join(["| | 리드/Phase | PR | 진행 | 세션 |", "|---|---|---|---|---|", "| ✅ | done lead | — | — | — |",
+                     "| 🔴 | stuck lead | — | — | 세션 없음 |", "| 🔄 | busy lead | — | — | 작업 중 |", "",
+                     "| | 리드/Phase | PR | 진행 | 세션 |", "|---|---|---|---|---|", "| ⏳ | other | — | — | 멈춤 |"])
+    busy = {"id": "wt-busy", "name": "busy-card", "state": "working", "word": "작업 중", "last": "PR 열고 <리뷰> 대기",
+            "at": "2026-10-28T09:00:00Z", "pr": "acme/plugins#7"}
+    rows = [[{"label": "done lead", "status": "✅", "session": None, "ack": "board:a", "done": None},
+             {"label": "stuck lead", "status": "🔴", "session": {"id": None, "state": "none", "word": "세션 없음"}, "ack": None, "done": "row:b"},
+             {"label": "busy lead", "status": "🔄", "session": busy, "ack": None, "done": None}], []]
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const S = {{filters: {{}}}};
@@ -906,6 +923,23 @@ process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
     first, second = page.split('<div class="table-wrap">')[1:3]
     assert first.count('<td class="bact"') == 3 and 'data-ack="board:a"' in first and 'data-done="row:b"' in first, first
     assert 'data-row-label="stuck lead"' in first and '<col class="bact">' in first and "bact" not in second, (first, second)
+    # A row's 세션 cell links to its session by worktree id, opens it in Orca and quotes its last report (escaped); one
+    # no session runs says so with no link or button; a table with no entries keeps the plain text.
+    cells = re.findall(r'<td class="bsess">(.*?)</td>', first, re.S)
+    assert len(cells) == 3 and cells[0] == "—" and "세션 없음" in cells[1] and "href" not in cells[1] and "data-open" not in cells[1], cells
+    assert 'href="#/fleet/session/wt-busy"' in cells[2] and 'data-open-session="wt-busy"' in cells[2], cells[2]
+    assert "PR 열고 &lt;리뷰&gt; 대기" in cells[2] and 'data-rel="2026-10-28T09:00:00Z"' in cells[2], cells[2]
+    assert "bsess" not in second.split("<tbody>")[1] and "멈춤" in second, second
+    # The session page lists the rows that session runs, with their PR and when it last reported.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const S = {{filters: {{}}}};
+F.brief = {{text: "x", table_rows: {json.dumps(rows)}}};
+process.stdout.write(JSON.stringify([briefRowsCard({{id: "wt-busy"}}, {{prs: [{{key: "acme/plugins#7", number: 7, url: "https://github.com/acme/plugins/pull/7"}}]}}),
+  briefRowsCard({{id: "wt-none"}}, {{prs: []}})]));"""
+    mine, none = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert "busy lead" in mine and ">#7</a>" in mine and "last report" in mine and "stuck lead" not in mine, mine
+    assert "No brief row is linked to this session." in none, none
     finished = page.split("<h3>Finished rows</h3>")[1].split("<h3>")[0]
     assert "folded lead" in finished and "done lead" not in finished and "Ack all 2" in finished, finished
     assert 'Acked <b>&lt;i&gt;gone&lt;/i&gt;</b>' in page and 'data-ack="board:z" data-undo' in page, page

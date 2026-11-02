@@ -97,9 +97,13 @@ Usage: orch <command> <slug> [options]
                                      the next-steps list (no lines clears it); done rows leave after 7
                                      days; drop removes a row and its children. --group makes a heading
                                      row (a feature or an epic) with no PR and no cells; --parent rows to it
-  board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] | lead close <name>
+  board lead add <name> --handle H --repo OWNER/NAME [--program P] [--run RUN] [--stale-min N] [--worktree ID] | lead close <name>
   board set <id> [--kind lead|phase|task] [--title T] [--repo OWNER/NAME] [--program P] [--parent ID]
                  [--status moving|owner|waiting|held|blocked|done] [--progress N/M|-] [--next TEXT] [--owner WHO] [--pr owner/repo#N]
+                 [--worktree ID]
+                                     --worktree: the Orca worktree id whose session works the row (lead add
+                                     records the handle's own); the brief's 세션 column and the dashboard
+                                     link the row to it by that id, which a terminal restart does not change
   board drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n>
         | later add <title> --trigger T [--due D] [--who W] [--at N] | later move <n> --to N | later drop <n>
         | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W
@@ -2682,12 +2686,12 @@ def cmd_board(argv):
     try:
         if sub == "lead" and rest[:1] == ["add"] and len(rest) > 1:
             board.lead_add(rest[1], opt(rest, "--handle"), opt(rest, "--repo"), opt(rest, "--run"), opt(rest, "--stale-min"),
-                           opt(rest, "--program"))
+                           opt(rest, "--program"), opt(rest, "--worktree"))
         elif sub == "lead" and rest[:1] == ["close"] and len(rest) > 1:
             board.lead_close(rest[1])
         elif sub == "set" and rid:
             board.set_row(rid, **{f: opt(rest, f"--{f}") for f in
-                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr")})
+                                  ("kind", "title", "repo", "program", "parent", "status", "progress", "next", "owner", "pr", "worktree")})
         elif sub == "drop" and rid:
             board.drop(rid)
         elif sub == "doing" and rest[:1] == ["add"] and len(rest) > 1:
@@ -2749,9 +2753,9 @@ def cmd_board(argv):
             for k, r in tidy.closed().items():
                 print(f"{k}  {r['ts']}  {r.get('by')}  {r.get('rule')}: {r.get('evidence')}  ({r.get('label')})")
         else:
-            sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] | lead close <name> | "
-                     "set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] [--progress N/M] "
-                     "[--next T] [--owner W] [--pr owner/repo#N] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
+            sys.exit("usage: orch board lead add <name> --handle H --repo R [--program P] [--run RUN] [--stale-min N] [--worktree ID] | "
+                     "lead close <name> | set <id> [--kind K] [--title T] [--repo R] [--program P] [--parent ID] [--status S] "
+                     "[--progress N/M] [--next T] [--owner W] [--pr owner/repo#N] [--worktree ID] | drop <id> | doing add <title> --owner W --next E [--waiting] | doing drop <n> | later add <title> --trigger T [--due D] | "
                      "later drop <n> | todo add <title> (--due D | --after C) --who W | todo drop <n> | todo from-later <n> [--due D] --who W | "
                      "now [LINE]... | show | open [--json] | done <id>... [--why T] [--json] | reopen <id>... [--json] | "
                      "tidy [--dry-run] [--json] | closed")

@@ -915,7 +915,7 @@ function fleetChanges() {
 
 // The periodic report as `orch brief render --periodic` prints it (via /api/fleet/brief), re-rendered on every poll
 // while this view is open. The renderer owns rows, order, icons and bold; this only turns its Markdown into HTML.
-const BRIEF_FED = ["brief", "stages", "todo"];  // the Stages and To-do pages read the same answer's `stages` and `open`
+const BRIEF_FED = ["brief", "stages", "todo", "session"];  // the Stages and To-do pages read the same answer's `stages` and `open`
 async function pollBrief() {
   if (F.briefBusy) return;
   F.briefBusy = true;
@@ -985,14 +985,15 @@ function briefHtml(text, tableRows = [], placed = new Set()) {
       for (let m; i < lines.length && (m = lines[i].match(/^- \[(\d+)\] (.*)$/)); i++) notes[m[1]] = m[2];
       if (!Object.keys(notes).length) i = at;
       const [head, ...body] = rows;
-      // A repository table (`| | name | PR | progress |`) gets one shared set of column widths; a cell too long for its
-      // column scrolls sideways within itself instead of being cut.
-      const repo = head.length === 4 && !head[0], acts = repo && tableRows[t++], btns = acts && acts.length === body.length ? acts : null;
+      // A repository table (`| | name | PR | progress | session |`) gets one shared set of column widths; a cell too long
+      // for its column scrolls sideways within itself instead of being cut.
+      const repo = head.length === 5 && !head[0], acts = repo && tableRows[t++], btns = acts && acts.length === body.length ? acts : null;
       (btns || []).forEach((x) => x.ack && placed.add(x.ack));
       const act = (x) => `<td class="bact" data-row-label="${esc(x.label || "")}">${x.ack ? ackBtn({ ack: "ackable", key: x.ack }) : x.done ? doneBtn(x.done) : ""}</td>`;
-      out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr"><col class="bprog">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
+      out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr"><col class="bprog"><col class="bsess">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
         <thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}${btns ? "<th></th>" : ""}</tr></thead>
-        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(uncut(c, notes))}</div>` : briefInline(uncut(c, notes))}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
+        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === 4 && btns ? `<td class="bsess">${sessCell(btns[k].session, c)}</td>`
+          : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(uncut(c, notes))}</div>` : briefInline(uncut(c, notes))}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
     const sec = line.match(/^(\S+) \*\*(.+?)\*\*(?: — (.*))?$/u);
@@ -1009,6 +1010,39 @@ function briefHtml(text, tableRows = [], placed = new Set()) {
   }
   return out.join("");
 }
+// A brief row's session, linked by its Orca worktree id (board.py session_of): never by a terminal handle, which a
+// restart changes. The state links to the session page; Orca brings its agent terminal to the front; under them, the
+// line it last reported. A row no session runs says 세션 없음 with neither.
+const SESSION_TONE = { working: "accent", stalled: "warn", none: "bad" };
+function sessCell(s, text) {
+  if (!s) return esc(text);
+  const word = tag(s.word, SESSION_TONE[s.state] || "", "");
+  const open = s.id && s.state !== "none" ? `<button class="chip" type="button" data-open-session="${esc(s.id)}" title="Bring this session's terminal to the front in Orca">${icon("arrow")}Orca</button>` : "";
+  const last = s.last ? `<span class="bsess-last muted" title="${esc(s.last)}">${esc(s.last)}${s.at ? ` · ${relSpan(s.at)}` : ""}</span>` : "";
+  return `<div class="bsess-head">${s.id ? `<a href="${sessionHref(s.id)}" title="${esc(`Session ${s.name || ""}`)}">${word}</a>` : word}${open}${last}</div>`;
+}
+const sessionRowsOf = (id) => ((F.brief || {}).table_rows || []).flat().filter((x) => x.session && x.session.id === id);
+function briefRowsCard(s, st) {
+  if (!F.brief) pollBrief();
+  const rows = sessionRowsOf(s.id), at = rows.map((x) => x.session.at).filter(Boolean).sort().pop();
+  const prOf = (key) => (st.prs || []).find((p) => p.key === key);
+  const list = rows.map((x) => {
+    const p = x.session.pr && prOf(x.session.pr);
+    return `<li><span class="bmark">${esc(x.status || "")}</span><a class="grow ellipsis" href="#/fleet/brief">${esc(x.label)}</a>
+      <span class="acts">${x.session.pr ? (p && p.url ? link(p.url, esc(`#${p.number}`)) : `<span class="mono">${esc(x.session.pr)}</span>`) : ""}${tag(x.session.word, SESSION_TONE[x.session.state] || "", "")}</span></li>`;
+  }).join("");
+  return `<div class="card"><div class="card-head"><h3>Brief rows</h3><span class="aside">${rows.length}${at ? ` · last report ${relSpan(at)}` : ""}</span></div>
+    <ul class="rows">${list || `<li class="muted">${F.brief ? "No brief row is linked to this session." : "Loading…"}</li>`}</ul></div>`;
+}
+async function openSession(t) {
+  t.disabled = true;
+  let out;
+  try { out = await fleetPost("/api/fleet/open", { session: t.dataset.openSession }); } catch (e) { out = { ok: false, reason: String(e.message || e) }; }
+  t.disabled = false;
+  t.title = out.ok ? "Opened in Orca." : `Not opened: ${out.reason}`;
+  if (!out.ok) t.classList.add("tone-bad");
+}
+
 function fleetBrief() {
   if (!F.brief) pollBrief();
   const b = F.brief;
@@ -1396,6 +1430,7 @@ function fleetSession(st) {
     ${chatCard(s)}
     <div class="grid">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside">${items.length}</span></div>${itemList(st, items, { showSession: false })}</div>
+      ${briefRowsCard(s, st)}
       <div class="card"><div class="card-head"><h3>Agents</h3><span class="aside">${(s.agents || []).length}</span></div><ul class="rows agents">${agents || '<li class="muted">No agent in this worktree.</li>'}</ul></div>
       <div class="card wide" data-src="github"><div class="card-head"><h3>Pull requests</h3></div>${relGraph(st, s.id)}</div>
       <div class="card wide"><div class="card-head"><h3>Timeline</h3></div>${timelineList(st, tl, { fold: `session:${s.id}`, here: s.id })}</div>
@@ -1580,6 +1615,8 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("click", async (e) => {
   const chat = e.target.closest("[data-chat]");
   if (chat) { chatAction(chat.dataset.chat); return; }
+  const opener = e.target.closest("[data-open-session]");
+  if (opener) { openSession(opener); return; }
   const answer = e.target.closest("[data-prompt]");
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const decide = e.target.closest("[data-decide]");
