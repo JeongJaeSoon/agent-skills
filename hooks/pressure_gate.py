@@ -330,6 +330,8 @@ SUITE = re.compile(r"(run[-_])?tests?([-_]all)?\.sh")
 TEST_FILE = re.compile(r"(.*/)?(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?)")
 E2E = re.compile(r"(.*[-_:./])?(e2e|playwright|cypress)([-_:.].*)?", re.I)
 RUNNERS = {"npm", "pnpm", "yarn", "bun"}
+UV_VALUE = {"--project", "--directory", "--with", "--with-editable", "--with-requirements", "--python", "-p",
+            "--package", "--extra", "--group", "--only-group", "--env-file", "--index", "--index-url", "-C"}
 LAUNCHER_VALUE = {"--package", "-p", "--cache", "--userconfig", "--registry"}
 RUNNER_VALUE = {"--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"}
 # This many test files in a `for` list or on one runner's line is a suite, the CONTRIBUTING loop among them;
@@ -360,11 +362,14 @@ def narrowed(rest, any_path=False, any_word=False):
     """Whether a runner's arguments pick tests: a test file or directory, `x.py::t`, or a name filter; with any_path
     (pytest, which runs whatever path it is given) any path-shaped argument, never an option's value like `yes`. An option's value (`-n 8`,
     `--junitxml test-results.xml`) is neither, so it leaves a whole suite. With any_word (jest, vitest, whose
-    positional words filter test paths: `vitest run src/components/Button`) any positional word."""
+    positional words filter test paths: `vitest run src/components/Button`) any positional word that does not follow
+    an option: `--pool forks` may be an option and its value, so it is read as one and the run stays whole."""
     skip = False
-    for w in rest:
+    for k, w in enumerate(rest):
         if skip:
             skip = False
+        elif any_word and k and rest[k - 1].startswith("-") and "=" not in rest[k - 1] and not w.startswith("-"):
+            continue
         elif w.split("=", 1)[0] in FILTERS:
             return True
         elif w in VALUE_OPTS:
@@ -402,7 +407,10 @@ def runs_tests(argv):
         elif head in ("python", "python3") and words[1:3] == ["-m", "pytest"]:
             words = ["pytest"] + words[3:]
         elif head in ("uv", "poetry", "pipenv") and words[1:2] == ["run"] and len(words) > 2:
-            words = words[2:]
+            rest = words[2:]  # `uv run --no-sync pytest`, `uv run --project app python -m pytest`
+            while rest and rest[0].startswith("-"):
+                rest = rest[2 if rest[0] in UV_VALUE else 1:]
+            words = rest or words
         elif head in ("npx", "bunx", "pnpx") or head in RUNNERS and words[1:2] in (["exec"], ["dlx"], ["x"]):
             # `pnpm exec playwright test`, `npx --package @playwright/test playwright test`
             rest = words[1 if head in ("npx", "bunx", "pnpx") else 2:]

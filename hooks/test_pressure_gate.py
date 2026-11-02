@@ -116,6 +116,8 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("npm test -- --testPathIgnorePatterns tests/slow", "test suite"),
                   ('output="$(npm test 2>&1)"', "test suite"), ("printf '%s\\n' \"$(pytest)\"", "test suite"),
                   ('echo "`npm test`"', "test suite"),
+                  ("npx vitest run --pool forks", "test suite"), ("npx jest --env jsdom", "test suite"),
+                  ("uv run --no-sync pytest", "test suite"), ("uv run --project app python -m pytest", "test suite"),
                   ('output="$(printf \')\'; npm test)"', "test suite"),
                   ("cat <<END-TEXT\nx\nEND-TEXT\nnpm test", "test suite"),
                   ("cat <<EOF\ndon't $(npm test)\nEOF", "test suite"), ("echo a # x\nnpm test", "test suite"),
