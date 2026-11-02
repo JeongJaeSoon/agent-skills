@@ -365,16 +365,20 @@ def dev_roots():
 
 
 def spotlight(roots, size_timeout=20):
-    """(path, indexed item count, du size or None) for each root Spotlight still indexes."""
+    """(path, indexed item count, du size or None) for each root Spotlight still indexes, or may: a count of None
+    means mdfind failed, so the root was not checked."""
     rows = []
     for root in roots:
         rc, out = sh(["mdfind", "-onlyin", root, "-count", 'kMDItemDisplayName == "*"'], timeout=30)
-        if rc == 0 and out.isdigit() and int(out):
+        if rc != 0 or not out.isdigit():
+            rows.append([root, None, None])
+        elif int(out):
             rows.append([root, int(out), None])
+    sized = [r for r in rows if r[1]]
     procs = [subprocess.Popen(["du", "-sh", r[0]], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-             for r in rows]
+             for r in sized]
     deadline = time.monotonic() + size_timeout
-    for row, p in zip(rows, procs):
+    for row, p in zip(sized, procs):
         try:
             row[2] = p.communicate(timeout=max(0.1, deadline - time.monotonic()))[0].split("\t")[0] or None
         except subprocess.TimeoutExpired:
@@ -389,7 +393,8 @@ def show_spotlight():
     home = str(pathlib.Path.home())
     for path, count, size in rows:
         shown = "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
-        print(f"spotlight {shown}  {size or 'size ?'}  {count:,} items indexed")
+        print(f"spotlight {shown}  " + (f"{size or 'size ?'}  {count:,} items indexed" if count is not None
+                                         else "not checked (mdfind failed); look in the Search Privacy list"))
     if rows:
         print(f"spotlight {SPOTLIGHT_STEP}")
     elif roots:

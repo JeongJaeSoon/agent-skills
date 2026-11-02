@@ -376,6 +376,20 @@ class Spotlight(unittest.TestCase):
         self.assertEqual([r[:2] for r in rows], [[str(self.repo), 1234]])
         self.assertTrue(rows[0][2])
 
+    def test_a_failed_query_is_unknown_not_unindexed(self):
+        def failing(cmd, timeout=60):
+            return (127, "timed out") if cmd[0] == "mdfind" else self.fake_sh(cmd, timeout)
+        with mock.patch.object(self.setup, "sh", failing):
+            rows = self.setup.spotlight([str(self.repo)])
+        self.assertEqual(rows, [[str(self.repo), None, None]])
+        out = io.StringIO()
+        with mock.patch.object(self.setup, "dev_roots", lambda: [str(self.repo)]), \
+                mock.patch.object(self.setup, "spotlight", lambda roots: rows), contextlib.redirect_stdout(out):
+            self.setup.show_spotlight()
+        self.assertIn("not checked", out.getvalue())
+        self.assertIn("Search Privacy", out.getvalue())
+        self.assertNotIn("none of the", out.getvalue())
+
     def test_a_slow_size_is_left_unknown(self):
         self.counts = {str(self.repo): 1}
         real = subprocess.Popen
