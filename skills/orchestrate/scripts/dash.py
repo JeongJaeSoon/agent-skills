@@ -26,11 +26,10 @@ Usage: orch-dash <command> [options]
                                      saves even a drop the scheduled collect held back as suspicious
   inbox add --type T --title TEXT [--session ID] [--url URL] [--command CMD] [--key KEY]
   inbox resolve --key KEY            put an item in (or take it out of) the fleet inbox
-  ack <id>... | ack --done-before AGE [--kind req|stage|board]... | unack <id>... | acks [--all] [--json]
-                                     mark finished stage rows (stage:<row>), finished brief rows (board:<row>) and
-                                     your requests (r7) as checked, so the dashboard and the brief leave them out;
-                                     a row in progress, waiting or held is refused, and an
-                                     acked request stays open (orch req done closes it). AGE: 90m, 24h, 7d (see acks.py)
+  ack <id>... | ack --done-before AGE [--kind stage|board]... | unack <id>... | acks [--all] [--json]
+                                     mark finished stage rows (stage:<row>) and finished brief rows (board:<row>)
+                                     as checked, so the dashboard and the brief leave them out; a row in progress,
+                                     waiting or held is refused. AGE: 90m, 24h, 7d (see acks.py)
   adopt [--apply] [--undo all|<worktree>]
                                      show (or write, when config adopt.write_orca_parent is on) each session's
                                      Orca parent worktree; every write is logged and --undo restores it
@@ -1558,7 +1557,6 @@ def pr_stats_loop():
 JOBS = (
     ("fleet-tick", "Fleet tick", jobs.short(fleet.ORCA_EVERY),
      f"every {fleet.ORCA_EVERY}s while a page is open, else {FLEET_IDLE_EVERY}s", None),
-    ("requests-reconcile", "Owner requests reconcile", None, "each fleet collect", "fleet-tick"),
     ("tidy", "Self-clean (tidy)", None, "after each fleet collect", "fleet-tick"),
     ("relay", "Decision relay · reload retry", None, "after each fleet collect", "fleet-tick"),
     ("selfcheck", "Self-check", jobs.short(selfcheck.EVERY),
@@ -2021,7 +2019,7 @@ def cmd_ack(argv, undo=False):
             can = None if ids else found  # ids named as well may be of another kind: write() looks them up
             ids += old
         elif not ids:
-            sys.exit("usage: orch-dash ack <id>... | ack --done-before AGE [--kind req|stage|board]... | unack <id>...")
+            sys.exit("usage: orch-dash ack <id>... | ack --done-before AGE [--kind stage|board]... | unack <id>...")
         written, refused = acks.write(ids, undo=undo, can=can)
     except (ValueError, OSError) as e:
         sys.exit(str(e))

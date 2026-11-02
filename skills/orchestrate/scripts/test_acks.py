@@ -11,7 +11,7 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import acks, board, fleet, owner_requests, stages  # noqa: E402
+import acks, board, fleet, stages  # noqa: E402
 
 
 def run(script, *args):
@@ -42,36 +42,35 @@ board.set_row("lead-b", title="청구 내보내기", status="done", next="—")
 board.set_row("lead-b/t", title="CSV 열", status="moving", next="CI · 워커")
 board.lead_add("lead-c", "term_0FAKE3", "acme/web")
 board.set_row("lead-c", title="설치 가이드", status="moving", next="리뷰 반영")
-for ago, text in ((600, "릴리스 노트 봐줘"), (30, "acme/app#1 머지되면 알려줘")):
-    owner_requests.add(text, "s-demo", "term_0FAKE0", now=now - dt.timedelta(minutes=ago))
 
 can = acks.ackable()
-assert {"stage:g", "stage:g1", "board:lead-a", "req:r1", "req:r2"} <= set(can), sorted(can)
+assert {"stage:g", "stage:g1", "board:lead-a"} <= set(can), sorted(can)
 for no in ("stage:w", "stage:w1", "stage:open", "board:lead-b", "board:lead-b/t", "board:lead-c"):
     assert no not in can, (no, sorted(can))
 
-# The CLI refuses what is not over and writes the rest; a bare rN is a request.
-code, out, err = run("dash.py", "ack", "stage:g", "stage:w", "board:lead-c", "r2", "nonsense")
-assert code == 1 and out == "acked 2: stage:g req:r2", (code, out, err)
-assert "refused stage:w:" in err and "refused board:lead-c:" in err and "refused nonsense:" in err, err
-assert set(acks.acked()) == {"stage:g", "req:r2"}
+# The CLI refuses what is not over and writes the rest. A req: id, from the removed owner-request ledger, is refused.
+code, out, err = run("dash.py", "ack", "stage:g", "stage:w", "board:lead-c", "req:r2", "nonsense")
+assert code == 1 and out == "acked 1: stage:g", (code, out, err)
+assert all(f"refused {i}:" in err for i in ("stage:w", "board:lead-c", "req:r2", "nonsense")), err
+assert set(acks.acked()) == {"stage:g"}
 code, out, _ = run("dash.py", "ack", "stage:g")  # already acked: nothing written, nothing refused
 assert code == 0 and out == "acked 0", out
 code, out, err = run("dash.py", "unack", "stage:g", "stage:g1")
 assert code == 1 and out == "unacked 1: stage:g" and "refused stage:g1: not acked" in err, (out, err)
-assert set(acks.acked()) == {"req:r2"}
+assert set(acks.acked()) == set()
 
-# --done-before: only what finished (a request: was asked) before the cutoff, per kind.
-code, out, err = run("dash.py", "ack", "--done-before", "6h", "--kind", "req")
-assert code == 0 and out == "acked 1: req:r1", (out, err)  # r2 is 30 min old and acked already
+# An ack an older version wrote for a request can still be taken back.
+fleet.append_line(acks.path(), {"ev": "ack", "id": "req:r1", "ts": fleet.iso(now)})
+code, out, err = run("dash.py", "unack", "req:r1")
+assert code == 0 and out == "unacked 1: req:r1", (out, err)
+
+# --done-before: only what finished before the cutoff, per kind.
 code, out, err = run("dash.py", "ack", "--done-before", "24h")
 assert code == 0 and out == "acked 0", (out, err)  # every row finished just now
 code, out, err = run("dash.py", "ack", "--done-before", "soon")
 assert code == 1 and "an age is N" in err, err
-code, out, err = run("dash.py", "unack", "r1", "r2")
-assert code == 0 and out == "unacked 2: req:r1 req:r2", (out, err)
 
-# The brief: an acked ✅ row leaves the table, every open row stays, and the requests line counts only unacked ones.
+# The brief: an acked ✅ row leaves the table and every open row stays.
 before = brief()
 assert {d["id"] for d in before["done"]} == {"board:lead-a"}, before["done"]
 # table_rows places the page's buttons: one list per repository table, one entry per row, in the text's order. Ack only
@@ -83,24 +82,23 @@ assert len(before["table_rows"]) == sum(1 for line in before["text"].splitlines(
 board.set_row("lead-c", status="blocked", next="세션 없음")
 assert {x["label"]: x["done"] for t in brief()["table_rows"] for x in t}["설치 가이드"] == "row:lead-c"
 board.set_row("lead-c", status="moving", next="리뷰 반영")
-assert "릴리스 도구" in before["text"] and "요청 2건 열림" in before["text"], before["text"]
-code, out, err = run("dash.py", "ack", "board:lead-a", "r1")
+assert "릴리스 도구" in before["text"] and "요청" not in before["text"], before["text"]
+code, out, err = run("dash.py", "ack", "board:lead-a")
 assert code == 0, err
 after = brief()
 assert "릴리스 도구" not in after["text"] and "acme/tools" not in after["text"], after["text"]  # its section goes too
 for kept in ("청구 내보내기", "CSV 열", "설치 가이드"):
     assert kept in after["text"], (kept, after["text"])
-assert "확인함으로 숨긴 행 1" in after["text"] and "요청 1건 열림" in after["text"], after["text"]
+assert "확인함으로 숨긴 행 1" in after["text"], after["text"]
 assert after["done"] == [{**before["done"][0], "acked": True}], after["done"]
 assert "릴리스 도구" not in {x["label"] for t in after["table_rows"] for x in t}, after["table_rows"]
-assert owner_requests.summary()["open"] == 2, "the orchestrator's or lead's own count keeps an acked request"
 code, out, _ = run("dash.py", "acks", "--json")
-assert {r["id"] for r in json.loads(out)} == {"board:lead-a", "req:r1"}, out
+assert {r["id"] for r in json.loads(out)} == {"board:lead-a"}, out
 
 # The file is the owner's alone and only ever appended to.
 f = acks.path()
 assert f.stat().st_mode & 0o777 == 0o600, oct(f.stat().st_mode)
-assert [json.loads(line)["ev"] for line in f.read_text().splitlines()] == ["ack", "ack", "unack", "ack", "unack", "unack", "ack", "ack"]
+assert [json.loads(line)["ev"] for line in f.read_text().splitlines()] == ["ack", "unack", "ack", "unack", "ack"]
 
 # The dashboard's POST: token and same-origin guard as every other write, then the same acks.write.
 import dash  # noqa: E402

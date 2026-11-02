@@ -578,20 +578,6 @@ def seed_board():
     board.set_row("lead-tools/pin", title="node 버전 고정", status="held", pr="acme/tools#7", next="리뷰 대기")
     board.set_row("lead-login/tokens", title="디자인 토큰", status="held", next="릴리스 동결 해제 뒤 재개")
     board.set_now(["acme/launchpad#43 리뷰"])
-    import owner_requests as req  # the owner's requests to the orchestrator, as the request_log hook would log them
-    now = dt.datetime.now(dt.timezone.utc)
-    for ago, text in ((95, "acme/launchpad#41 머지되면 알려줘"), (50, "설치 가이드 스크린샷 다시 확인해줘"),
-                      (12, "결제 팀 답변 왔는지 봐줘"), (5, "릴리스 노트 초안 보여줘")):
-        req.add(text, "s-demo", "term_0FAKE0", now=now - dt.timedelta(minutes=ago))
-    req.close("r1", "link", to="lead-login")
-    req.close("r3", "link", to="lead-login/export")
-    req.close("r4", "done", note="초안 공유함")
-    # A pasted prompt with a long link list: the case where the links once squeezed the text into one column.
-    req.add('<pasted_content id="4e37"> /goal launchpad 대시보드의 결제 내역 화면에서 금액 칸이 좁게 눌려 한 글자씩 줄바꿈되는 문제를 고쳐 PR을 머지까지 낸다. '
-            '증거: 오너 캡처, 1440·390 light·dark 전후 비교 </pasted_content id="4e37">', "s-demo", "term_0FAKE0",
-            now=now - dt.timedelta(minutes=3))
-    for to in ("program:launchpad-ga card:wt-payments-layout-fix", "ACME-904", "ACME-921"):
-        req.close("r5", "link", to=to)
 
 
 def live(root, period=20, world=None):
@@ -883,7 +869,6 @@ class FakeFleetWorld:
             (0.15, "item_question", "wt-export", "CSV or JSON for the export?", {}),
             (0.2, "prompt", "wt-login", "Rebase on main and rerun the login tests", {}),
             (0.3, "pr_approved", "wt-login", "#41 feat: login flow · reviewer-a", {**pr(41), "actor": "reviewer-a"}),
-            (0.4, "request_link", "wt-coord", "r3: lead-login/export", {}),
             (0.5, "pr_review_comment", "wt-docs", "#43 docs: setup guide · reviewer-b", {**pr(43), "actor": "reviewer-b"}),
             (0.7, "turn_done", "wt-docs", "Setup guide drafted; screenshots still to add.", {}),
             (0.9, "item_resolved", "wt-docs", "answered: Which port should the guide use?", {}),
@@ -894,14 +879,11 @@ class FakeFleetWorld:
             (1.8, "pr_review_requested", "wt-invoice", "#44 feat: invoice PDF · reviewer-a", {**pr(44), "actor": "reviewer-a"}),
             (2.0, "dash_cleaned", None, "Removed 3 stale worktree entries from the sidebar", {}),
             (2.5, "pr_merged", "wt-scratch", "#6 fix: cache key collision", pr(6, "acme/tools")),
-            (2.6, "request_done", "wt-coord", "r4: 초안 공유함", {}),
             (3.0, "item_decision", "wt-coord", "Ship the export behind a flag, or wait for the schema change?", {}),
             (26, "pr_checks_recovered", "wt-export", "#42 feat: billing export", pr(42)),
             (27, "item_verify_ok", "wt-invoice", "PDF renders in the preview; check the totals row.", {}),
-            (28, "request_drop", "wt-coord", "r2: superseded by r3", {}),
             (29, "inbox_aged_out", "wt-old", "Approval: Merge the cache spike?", {}),
             (30, "pr_closed", "wt-old", "#5 spike: cache warmup", pr(5, "acme/tools")),
-            (31, "requests_error", None, "ValueError('ledger row without an id')", {}),
             (32, "item_verify_failed", "wt-tax", "Rate table test fails for the reduced rate.", {}),
             (33, "pr_changes_requested", "wt-tax", "#40 feat: tax rates · reviewer-b", {**pr(40), "actor": "reviewer-b"}),
             (34, "mail_question", "wt-tax", "Round per line or per invoice?", {}),

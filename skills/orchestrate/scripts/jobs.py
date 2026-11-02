@@ -42,7 +42,7 @@ def line_text(text):
     return cut if cut == text else cut + "…"
 
 
-def record(key, n=None, result=None, error=None, next_in=None, event=None, kind="job_failed", now=None):
+def record(key, n=None, result=None, error=None, next_in=None, event=None, now=None):
     """Write key's run: n counted, result in words, error (None: it ran fine), next_in seconds to its next run.
     event(row) is the fleet's Fleet.event; it gets the warning line. Returns the record.
     Never raises: a record or warning line it cannot write goes to stderr, and the job that called it carries on."""
@@ -62,7 +62,7 @@ def record(key, n=None, result=None, error=None, next_in=None, event=None, kind=
                 rec["failed_at"] = stamp
                 if event:
                     try:
-                        event({"at": stamp, "kind": kind, "session": None, "job": key, "text": line_text(f"{key}: {error}")})
+                        event({"at": stamp, "kind": "job_failed", "session": None, "job": key, "text": line_text(f"{key}: {error}")})
                         rec["warned_at"] = stamp
                     except Exception as e:
                         print(f"jobs: could not write {key}'s timeline warning: {e!r}", file=sys.stderr, flush=True)
@@ -121,13 +121,11 @@ def reap_hard_job():
 
 def rules():
     """Applied whenever the data is read or drawn, so they have no run of their own."""
-    import board, owner_requests, stages
+    import board, stages
     lim = {**board.LIMITS, **(fleet.config().get("board") or {})}
     return [
         {"name": "Inbox item expiry", "rule": f"an item added with orch-dash inbox add and never resolved leaves Needs you "
                                               f"{fleet.EXTERNAL_KEEP_DAYS} days after it was added", "applied": "each fleet collect"},
-        {"name": "Request expiry", "rule": f"an open request with no link for {owner_requests.TTL_MIN // 60} h expires: still open "
-                                           "in the ledger, counted nowhere", "applied": "each read of the request ledger"},
         {"name": "Brief ✅ fold", "rule": f"a ✅ row merged over {lim['done_fold_h']} h ago folds into its repository's "
                                          "\"✅ 그 전 완료 N건\" line", "applied": "each brief render"},
         {"name": "Stage table fold", "rule": f"a stage row finished, or unchanged for {lim['stage_idle_d']} days, leaves "

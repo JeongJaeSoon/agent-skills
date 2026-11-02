@@ -1869,23 +1869,6 @@ class Fleet:
             held = [{**h, "session": by_handle.get(h["by"])} for h in holds.current()]
         except (OSError, ValueError):
             held = []
-        import acks, board, jobs, owner_requests
-        asked, by_key, have = owner_requests.fold(owner_requests.read()), {p["key"]: p for p in prs}, acks.acked()
-        try:
-            written = []
-            if rows := owner_requests.reconcile(asked, now, by_key, sessions, board.read()["rows"], by_handle,
-                                                mem.setdefault("request_cards", {}), mem.setdefault("request_gone", {}),
-                                                self.sources["orca"]["ok"]):
-                written, asked = owner_requests.apply(rows)
-                for r in written:
-                    self.event({"at": iso(now), "kind": f"request_{r['ev']}", "session": by_handle.get(asked[r["id"]].get("handle")),
-                                "text": mask(f"{r['id']}: {r.get('to') or r.get('evidence') or r.get('reason')}", 200)})
-            n = collections.Counter(r["ev"] for r in written)
-            jobs.record("requests-reconcile", n=len(written), now=now,
-                        result=f"linked {n['link']} · done {n['done']} · dropped {n['drop']}")
-        except Exception as e:  # a ledger it cannot settle must not take the dashboard down with it
-            # one timeline line, not one every tick it keeps failing
-            jobs.record("requests-reconcile", error=repr(e), event=self.event, kind="requests_error", now=now)
         return {"generated_at": iso(now), "root": root, "sessions": sorted(sessions.values(), key=lambda s: s.get("last_activity") or "", reverse=True),
                 "runs": [{"id": r["id"], "objective": mask(r.get("objective"), 200), "updated_at": r.get("updated_at")} for r in self.runs["runs"]],
                 "tasks": [{"id": t["id"], "run": t.get("run_id"), "title": task_name(t),
@@ -1893,11 +1876,6 @@ class Fleet:
                            "status": t.get("status"), "deps": t.get("deps")} for t in self.runs["tasks"]],
                 "prs": sorted(prs, key=lambda p: p.get("updated") or "", reverse=True), "items": items,
                 "timeline": timeline[:300], "holds": held, "automations": self.automations, "monitors": monitors, "sources": self.sources, "me": self.me,
-                "requests": {**owner_requests.summary(now, {k: q for k, q in asked.items() if f"req:{k}" not in have}),
-                             "items": [{**q, "session": by_handle.get(q.get("handle")), "acked": f"req:{q['id']}" in have,
-                                        "closed": [to for to in q["links"] if (pr := owner_requests.link_pr(to, by_key))
-                                                   and pr[1].get("state") == "CLOSED"]}
-                                       for q in asked.values() if owner_requests.visible(q, now)]},
                 "counts": {t: sum(1 for i in items if i["type"] == t) for t in {i["type"] for i in items}}}
 
 

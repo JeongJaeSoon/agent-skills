@@ -1,20 +1,20 @@
-"""What the owner has checked and no longer needs on screen: finished stage rows, finished brief rows, and their own
-requests. `orch-dash ack` writes here and the dashboard's buttons call the same functions, so the CLI is the record.
+"""What the owner has checked and no longer needs on screen: finished stage rows and finished brief rows.
+`orch-dash ack` writes here and the dashboard's buttons call the same functions, so the CLI is the record.
 
-An ack is the owner's view, not the work's state: an acked request is still open for `orch req`, an acked stage row
-is still in the stage table. Only what is over can be acked (a stage row with `done_at`, a brief row that is ✅, and
-every one of its sub-task rows too); a row in progress, waiting on someone or held (a closed PR's row too) is refused, so
-acking never hides what still needs someone. Requests are the owner's own: every one still shown (open, not expired) can be acked.
+An ack is the owner's view, not the work's state: an acked stage row is still in the stage table. Only what is over
+can be acked (a stage row with `done_at`, a brief row that is ✅, and every one of its sub-task rows too); a row in
+progress, waiting on someone or held (a closed PR's row too) is refused, so acking never hides what still needs someone.
 
 One append-only file, <fleet state>/acks.jsonl (0600), one JSON object a line:
-  {"ev": "ack" | "unack", "id": "req:r7" | "stage:<row id>" | "board:<brief row key>", "ts"}
+  {"ev": "ack" | "unack", "id": "stage:<row id>" | "board:<brief row key>", "ts"}
+Older files also hold "req:r7" ids from the removed owner-request ledger; they can only be un-acked.
 The set of acked ids is the fold of its lines.
 """
 import datetime as dt, fcntl, re
 
 import fleet
 
-KINDS = ("req", "stage", "board")
+KINDS = ("stage", "board")
 
 
 def path():
@@ -64,14 +64,10 @@ def mark_stages(table):
 
 
 def ackable(now=None, kinds=KINDS):
-    """id -> {label, at}: what of these kinds may be acked right now, acked or not. at is when it finished (a request:
-    when it was asked), for --done-before. Only a board: id costs a brief render."""
-    import board, owner_requests, stages  # board imports this module
+    """id -> {label, at}: what of these kinds may be acked right now, acked or not. at is when it finished, for
+    --done-before. Only a board: id costs a brief render."""
+    import board, stages  # board imports this module
     out = {}
-    if "req" in kinds:
-        out.update({f"req:{q['id']}": {"label": q["text"], "at": q.get("ts")}
-                    for q in owner_requests.fold(owner_requests.read()).values()
-                    if owner_requests.visible(q, now or fleet.utcnow())})
     if "stage" in kinds:
         out.update(stage_done({r["id"]: r for r in stages.table()["rows"]}))
     if "board" in kinds:
@@ -85,16 +81,15 @@ def ackable(now=None, kinds=KINDS):
 
 def why_not(aid):
     if kind(aid) not in KINDS or ":" not in aid:
-        return f"an id is req:rN, stage:<row> or board:<row> (got {aid})"
-    return {"req": "no open request by that id",
-            "stage": "no such row, or it or a row under it is not done",
+        return f"an id is stage:<row> or board:<row> (got {aid})"
+    return {"stage": "no such row, or it or a row under it is not done",
             "board": "no such brief row, or it or a row under it is still in progress, waiting or held"}[kind(aid)]
 
 
 def write(ids, undo=False, now=None, can=None):
     """Ack (or, with undo, un-ack) each id. Returns (written, [(id, reason)]): an id that cannot be acked is refused
     and the rest still go in; one already in the asked state is neither. can: ackable()'s answer, when the caller has it."""
-    ids = list(dict.fromkeys("req:" + i if re.fullmatch(r"r\d+", i) else i for i in ids))
+    ids = list(dict.fromkeys(ids))
     ts = fleet.iso(now or fleet.utcnow())
     if not undo and can is None:
         can = ackable(now, {kind(i) for i in ids})
@@ -115,7 +110,7 @@ def write(ids, undo=False, now=None, can=None):
 
 
 def older_than(age, kinds=KINDS, now=None):
-    """(ids not acked yet that finished, a request: was asked, longer ago than age ("24h", "7d", "90m"), ackable())."""
+    """(ids not acked yet that finished longer ago than age ("24h", "7d", "90m"), ackable())."""
     m = re.fullmatch(r"(\d+)([mhd])", age or "")
     if not m:
         raise ValueError(f"an age is N followed by m, h or d (got {age!r})")

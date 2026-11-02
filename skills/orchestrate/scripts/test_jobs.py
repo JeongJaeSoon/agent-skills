@@ -38,9 +38,9 @@ rec = jobs.record("tidy", n=0, result="closed 0", next_in=60, event=events.appen
 assert rec["ok"] and rec["error"] is None and rec["warned_at"] == "2026-10-27T09:06:00Z"
 jobs.record("tidy", error="ValueError('bad row')", event=events.append, now=now + dt.timedelta(minutes=8))
 assert len(events) == 3
-# The kind the caller names (the request ledger keeps its own), and secrets masked in record and line alike.
-jobs.record("requests-reconcile", error="token=ghp_abcdefghijklmnopqrstuvwxyz0123456789", event=events.append, kind="requests_error", now=now)
-assert events[-1]["kind"] == "requests_error" and "ghp_" not in events[-1]["text"] and "ghp_" not in jobs.records()["requests-reconcile"]["error"]
+# Secrets masked in record and line alike.
+jobs.record("relay", error="token=ghp_abcdefghijklmnopqrstuvwxyz0123456789", event=events.append, now=now)
+assert events[-1]["kind"] == "job_failed" and "ghp_" not in events[-1]["text"] and "ghp_" not in jobs.records()["relay"]["error"]
 # An error too long for one timeline line is cut there only; the record keeps it whole.
 long = "x" * 5000
 jobs.record("pr-stats", error=long, event=events.append, now=now)
@@ -88,7 +88,7 @@ assert f"{fleet.EXTERNAL_KEEP_DAYS} days" in rules["Inbox item expiry"] and "24 
 # The server's registry: every job it records has a row, and the page reads it from /api/fleet/jobs.
 import dash  # noqa: E402
 keys = [k for k, *_ in dash.JOBS]
-assert keys == ["fleet-tick", "requests-reconcile", "tidy", "relay", "selfcheck", "skill-usage", "token-usage", "pr-stats"]
+assert keys == ["fleet-tick", "tidy", "relay", "selfcheck", "skill-usage", "token-usage", "pr-stats"]
 src = (HERE / "dash.py").read_text() + (HERE / "fleet.py").read_text()
 assert all(f'jobs.record("{k}"' in src for k in keys), [k for k in keys if f'jobs.record("{k}"' not in src]
 assert "/api/fleet/jobs" in (HERE.parent / "assets" / "dashboard" / "fleet.js").read_text()

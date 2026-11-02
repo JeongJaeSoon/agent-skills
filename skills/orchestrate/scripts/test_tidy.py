@@ -12,7 +12,7 @@ env = {**os.environ, "ORCH_FLEET_STATE": str(tmp / "dashboard"), "ORCH_BRIEF_LAS
        "AGENT_SKILLS_CONFIG": str(tmp / "none.json")}
 os.environ.update(env)
 sys.path.insert(0, str(HERE))
-import board, fleet, owner_requests, tidy  # noqa: E402
+import board, fleet, tidy  # noqa: E402
 
 now = fleet.utcnow()
 sd = fleet.state_dir()
@@ -106,7 +106,7 @@ board.set_row("card-dup", title="중복 카드 작업", repo="acme/app", status=
 st = fleet.read_json(sd / "board.json")
 st["rows"]["stale-row"]["reported_at"] = ago(12)
 fleet.write_atomic(sd / "board.json", json.dumps(st))
-# Inbox items and the owner's requests.
+# Inbox items.
 fleet.inbox_add("review", "acme/app#7 리뷰 요청", key="k-merged")
 fleet.inbox_add("review", "acme/app#8 리뷰 요청", key="k-open")
 fleet.inbox_add("notice", "사라진 세션의 알림", session="s-gone", key="k-gone")
@@ -116,10 +116,6 @@ fleet.inbox_add("run_command", "권한 규칙 필요", session="s-gone", command
 fleet.inbox_add("run_command", "acme/app#7 뒤에 실행", session="s1", command="make deploy", key="k-after")
 fleet.inbox_add("decision", "배포 순서 결정", session="s-gone", key="k-decide")
 fleet.inbox_add("question", "사라진 세션의 질문", session="s-gone", key="k-ask")
-for text, link in (("로그인 끝나면 알려줘", "card:card-closed"), ("오래된 일 정리", "board:stale-row"),
-                   ("열린 PR 봐줘", "acme/app#8"), ("릴리스 PR", "acme/app#1")):
-    q, _ = owner_requests.add(text, "s-coord", "term_coord", now=now - dt.timedelta(hours=1))
-    owner_requests.close(q["id"], "link", to=link)
 
 S = fleet.read_json(sd / "board.json")
 ids = lambda kind, items: [tidy.item_id(kind, i) for i in items]  # noqa: E731
@@ -170,16 +166,11 @@ dry = json.loads(out)
 assert not tidy.path().exists(), "a dry run writes nothing"
 rows = tidy.run(now=now)
 assert [r["id"] for r in rows] == [r["id"] for r in dry]
-assert {r["id"] for r in rows} == {doing[0], todo[0], "card:s4", "ext:k-merged", "ext:k-gone", "req:r1"}, rows
+assert {r["id"] for r in rows} == {doing[0], todo[0], "card:s4", "ext:k-merged", "ext:k-gone"}, rows
 assert all(r["by"] == "auto" and r["evidence"] for r in rows), rows
 assert next(r for r in rows if r["id"] == todo[0])["label"] == S["owner_todo"][0] and len(S["owner_todo"][0]) > 120, "a label is kept whole"
 assert tidy.run(now=now) == [], "a second tick finds nothing new"
 assert tidy.path().stat().st_mode & 0o777 == 0o600
-# Requests: one linked to a card closed here closes; a board row only checked, or an open PR, keeps its request open,
-# and one linked only to a merged PR is the fleet tick's own reconcile's to close.
-reqs = owner_requests.fold(owner_requests.read())
-assert [reqs[r]["status"] for r in ("r1", "r2", "r3", "r4")] == ["done", "open", "open", "open"], reqs
-assert reqs["r1"]["note"].startswith("auto: card:card-closed 정리됨"), reqs["r1"]
 # Inbox: the merged PR's and the gone session's items leave; the open PR's and the command item stay.
 OWNER_ITEMS = {"ext:k-cmd", "ext:k-rule", "ext:k-after", "ext:k-decide", "ext:k-ask"}
 assert {i["key"] for i in fleet.external_items({})} == {"ext:k-open"} | OWNER_ITEMS
@@ -190,7 +181,7 @@ assert "| ✅ | 실험 정리 |" in b["text"], b["text"]  # the closed-PR card i
 
 # The timeline gets one line per close.
 tl = tidy.timeline()
-assert len(tl) == 6 and all(e["kind"] == "tidy_done_auto" for e in tl), tl
+assert len(tl) == 5 and all(e["kind"] == "tidy_done_auto" for e in tl), tl
 
 # Done and Reopen by hand: only an open id closes; a reopen keeps the tick from closing it again on the same evidence.
 code, out, err = run("board", "done", "row:fresh-row", "nonsense", "--why", "다른 카드로 옮김")
@@ -203,25 +194,17 @@ assert "| ⏸️ | 실험 정리 |" in brief()["text"]
 code, out, err = run("board", "reopen", "row:fresh-row")
 assert code == 1 and "not closed" in err, err
 
-# Reopen undoes the close outside the ledger too: the inbox item is back, the request open with its links.
-code, out, err = run("board", "reopen", "ext:k-gone", "req:r1")
-assert code == 0 and out == "reopened 2: ext:k-gone req:r1", (out, err)
+# Reopen undoes the close outside the ledger too: the inbox item is back.
+code, out, err = run("board", "reopen", "ext:k-gone")
+assert code == 0 and out == "reopened 1: ext:k-gone", (out, err)
 assert "ext:k-gone" in {i["key"] for i in fleet.external_items({})}
-r1 = owner_requests.fold(owner_requests.read())["r1"]
-assert r1["status"] == "open" and r1["links"] == ["card:card-closed"] and "note" not in r1, r1
-# A card the owner reopened is not over: the tick closes no request linked to it, old or new.
-q5, _ = owner_requests.add("실험 정리 다시 봐줘", "s-coord", "term_coord", now=now)
-owner_requests.close(q5["id"], "link", to="card:card-closed")
-assert tidy.run(now=now) == [], "nothing linked to a reopened card closes"
-reqs = owner_requests.fold(owner_requests.read())
-assert reqs["r1"]["status"] == reqs[q5["id"]]["status"] == "open", reqs
-# One that cannot be reopened is refused, writes nothing, and the page shows no Reopen for it.
+# One that cannot be reopened is refused, writes nothing, and the page shows no Reopen for it: an inbox item whose line
+# is gone, and a request the removed owner-request ledger closed.
 tidy.append([{"ev": "done", "id": i, "ts": fleet.iso(now), "by": "auto", "rule": "pr_over", "evidence": "x",
               "label": "지워진 줄"} for i in ("ext:k-none", "req:r99")], tidy.latest())
 code, out, err = run("board", "reopen", "ext:k-none", "req:r99")
-assert code == 1 and "its inbox line is gone" in err and "no request r99" in err, err
+assert code == 1 and "its inbox line is gone" in err and "owner-request ledger was removed" in err, err
 assert {"ext:k-none", "req:r99"} <= set(tidy.closed()) and not tidy.can_reopen("ext:k-none") and not tidy.can_reopen("req:r99")
-assert tidy.can_reopen("req:r1")
 
 # A --why is stored whole; one that would pass the 4 KiB line is refused, not cut.
 code, out, err = run("board", "done", todo[2], "--why", "가" * 1500)

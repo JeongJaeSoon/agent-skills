@@ -13,9 +13,10 @@ the report lists as the owner's turn or another person's wait.
 One append-only file, <fleet state>/tidy.jsonl (0600), one JSON object a line:
   {"ev": "done" | "reopen", "id", "ts", "by": "auto" | "owner", "rule", "evidence", "label"}
 ids: doing:<k> later:<k> do:<k> (a to-do) todo:<k> (the owner's now-list) (k: a digest of the item's words, so rewording it makes a new item), row:<board row
-id>, card:<session id> (a fleet row), ext:<inbox key>, req:<request id>. The state of an id is its last line. A
+id>, card:<session id> (a fleet row), ext:<inbox key>, and req:<request id> from the removed owner-request ledger
+(still in old files, never reopened). The state of an id is its last line. A
 reopen keeps the evidence it undid, and the tick does not close that id again on the same evidence. Reopening an
-ext: or req: id adds the inbox item again or opens the request again. Past fleet.ROTATE_BYTES the file moves to .1
+ext: id adds the inbox item again. Past fleet.ROTATE_BYTES the file moves to .1
 and each id's last line is carried into the new one ("carried": true), so no close or reopen is forgotten.
 """
 import contextlib, fcntl, json, pathlib, re
@@ -178,36 +179,6 @@ def assess(store, state, prs, me=None, now=None):
     return out
 
 
-def requests_over(rows_here, rows_marked, cards_done, prs, cards):
-    """req:<id> -> evidence for each open request every link of which is over and one of which was closed here: a
-    board row or card this ledger closed. Owner_requests' own reconcile in the fleet tick closes the rest (a merged
-    PR, a board row marked done, a card gone); it cannot see what only this ledger closed."""
-    import owner_requests  # imports fleet; kept local like board's
-    by_name = {c.get("name"): c["id"] for c in cards.values()}
-    out = {}
-    for q in owner_requests.fold(owner_requests.read()).values():
-        if q["status"] != "open" or not owner_requests.live_links(q):
-            continue
-        ev, here = [], False
-        for to in owner_requests.live_links(q):
-            to, pr = (to or "").strip(), owner_requests.link_pr(to, prs)
-            if to.startswith("board:") and to[6:] in rows_here | rows_marked:
-                ev.append(f"{to} 완료")
-                here |= to[6:] in rows_here
-            elif (c := owner_requests.card(to)) and by_name.get(c) in cards_done:
-                ev.append(f"{to} 정리됨")
-                here = True
-            elif pr and (e := refs_over([pr[0]], prs)):
-                ev.append(e)
-            else:
-                break
-        else:
-            if here:
-                out[f"req:{q['id']}"] = {"verdict": "done", "rule": "links_over", "evidence": "; ".join(ev),
-                                         "label": q["text"]}
-    return out
-
-
 # ---------------------------------------------------------------- writes
 
 @contextlib.contextmanager
@@ -243,28 +214,21 @@ def last_add(key):
 
 
 def can_reopen(iid):
-    import owner_requests
     if iid.startswith("ext:"):
         return bool(last_add(iid[4:]))
-    if iid.startswith("req:"):
-        return iid[4:] in owner_requests.fold(owner_requests.read())
-    return True
+    return not iid.startswith("req:")
 
 
 def revive(iid):
-    """Undo what closing iid did outside this ledger: the inbox item added again, the request opened again. Returns
-    the reason it cannot, or None."""
-    import owner_requests
+    """Undo what closing iid did outside this ledger: the inbox item added again. Returns the reason it cannot, or
+    None."""
+    if iid.startswith("req:"):
+        return "the owner-request ledger was removed"
     if iid.startswith("ext:") and not any(i["key"] == iid for i in fleet.external_items({})):
         if not (a := last_add(iid[4:])):
             return "its inbox line is gone"
         fleet.inbox_add(a["type"], a.get("title") or "", a.get("session"), a.get("url"), a.get("command"), key=a["key"],
                         source=a.get("source") or "skill")
-    elif iid.startswith("req:"):
-        try:
-            owner_requests.reopen(iid[4:])
-        except ValueError as e:
-            return str(e)
     return None
 
 
@@ -304,7 +268,6 @@ def write(ids, undo=False, why=None, can=None, now=None, by="owner"):
 
 def run(now=None, dry=False):
     """One tidy pass over the files the collector just wrote. Returns the lines it wrote (dry: would write)."""
-    import owner_requests
     now = now or fleet.utcnow()
     sd = fleet.state_dir()
     state = fleet.read_json(sd / "state.json", None)
@@ -316,11 +279,6 @@ def run(now=None, dry=False):
     found = {k: v for k, v in assess(store, state, prs, prs_file.get("me"), now).items() if v["verdict"] == "done"}
     with locked() as have:
         found = {k: v for k, v in found.items() if not undone(have.get(k), v)}
-        shut = {k for k, r in have.items() if r["ev"] == "done"} | set(found)
-        marked = {k for k, r in (store.get("rows") or {}).items() if r.get("status") == "done"}
-        found |= {k: v for k, v in requests_over({k[4:] for k in shut if k.startswith("row:")}, marked,
-                                                 {k[5:] for k in shut if k.startswith("card:")}, prs, cards_of(state)).items()
-                  if not undone(have.get(k), v)}
         ts, rows = fleet.iso(now), []
         for iid, v in found.items():
             row = {"ev": "done", "id": iid, "ts": ts, "by": "auto", "rule": v["rule"], "evidence": v["evidence"],
@@ -329,14 +287,9 @@ def run(now=None, dry=False):
                 rows.append(row)
         if dry:
             return rows
-        for r in list(rows):
+        for r in rows:
             if r["id"].startswith("ext:"):
                 fleet.inbox_resolve(r["id"][4:])
-            elif r["id"].startswith("req:"):
-                try:
-                    owner_requests.close(r["id"][4:], "done", "auto: " + r["evidence"])
-                except ValueError:  # the fleet tick closed it since the fold: not this ledger's close
-                    rows.remove(r)
         append(rows, have)
     return rows
 

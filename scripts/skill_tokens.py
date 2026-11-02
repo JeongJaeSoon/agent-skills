@@ -41,7 +41,6 @@ HOOKS = {
     "onboard.py": "once per profile, until setup is applied or declined",
     "reorient.py": "sessions with a declared orchestrator or lead role: each prompt, and session start",
     "decision.py": "Orca terminals with an open dashboard decision they registered: each prompt",
-    "request_log.py": "role sessions: each human prompt",
     "prose_check.py": "a commit, PR or tracker write whose text breaks write-plainly",
     "guard.py": REFUSAL_ONLY,
     "pressure_gate.py": REFUSAL_ONLY,

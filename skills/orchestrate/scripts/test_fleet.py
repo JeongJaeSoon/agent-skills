@@ -794,38 +794,8 @@ const S = {{filters: {{}}}};
 process.stdout.write(itemList({{sessions: []}}, {json.dumps(rows)}, {{limit: 8}}));"""
     card = subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout
     assert card.count("<li class=\"item") == 8 and __import__("re").findall(r">row(\d+)<", card)[:3] == ["15", "16", "0"], card
-    # Nothing in an item or a request is cut: the text wraps (a request folds to three lines until opened), and the
-    # request card reaches every request on the page.
+    # Nothing in an item is cut: the text wraps.
     assert "ellipsis" not in card and "row0" in card, card
-    long = "x" * 400
-    reqs = {"open": 12, "items": [{"id": f"r{n}", "text": f"req{n} {long}", "ts": fleet.iso(now), "links": [], "acked": False} for n in range(12)]}
-    js = f"""{helpers}
-{(assets / "fleet.js").read_text()}
-const S = {{filters: {{}}}};
-const st = {{requests: {json.dumps(reqs)}}};
-const out = {{eight: requestCard(st)}};
-F.reqShowAll = true; out.all = requestCard(st);
-process.stdout.write(JSON.stringify(out));"""
-    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    assert got["eight"].count(">req") == 8 and "Show all 12" in got["eight"] and long in got["eight"], got["eight"][:400]
-    assert got["all"].count(">req") == 12 and "Show 8" in got["all"] and "ellipsis" not in got["all"]
-    # A pasted prompt shows without its tags, and its links go on the line under the text, never beside it, so a long
-    # link list cannot squeeze the text into one column. The stored text keeps the tags.
-    reqs = {"open": 1, "items": [{"id": "r78", "text": '<pasted_content id="4e37"> /goal fix <b>it</b> </pasted_content id="4e37">',
-                                  "ts": fleet.iso(now), "links": ["program:acme card:wt-x", "ABC-1", "ABC-2"], "acked": False}]}
-    js = f"""{helpers}
-{(assets / "fleet.js").read_text()}
-const S = {{filters: {{}}}};
-const st = {{requests: {json.dumps(reqs)}}};
-const out = {{card: requestCard(st)}};
-F.tlOpen.add("req:r78"); out.open = requestCard(st); out.stored = st.requests.items[0].text;
-process.stdout.write(JSON.stringify(out));"""
-    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    card = got["card"]
-    assert "pasted_content" not in card and ">/goal fix &lt;b&gt;it&lt;/b&gt;</div>" in card, card
-    assert 'class="rows reqs"' in card and 'data-tl-open="req:r78"' in card and 'aria-expanded="false"' in card, card
-    assert "acts" not in card and '<div class="sub muted full">program:acme card:wt-x, ABC-1, ABC-2 · ' in card, card
-    assert 'aria-expanded="true"' in got["open"] and "pasted_content" in got["stored"], got
 
     # The stage table opens on open rows. Each program's finished rows wait behind its own "▸ N finished", and a program
     # with none open is one dimmed heading line after the open ones; Ack all sits inside an opened program, not on top.
@@ -1830,65 +1800,17 @@ with contextlib.ExitStack() as stack:
     assert [i["key"] for i in fleet.external_items(fleet.utcnow())] == ["ext:new"]
     assert [i["key"] for i in fleet.external_items()] == ["ext:old", "ext:new"]
 
-# The tick settles the request ledger: a request whose PR merged closes, one whose PR closed unmerged stays open with
-# the link tagged. A ledger it cannot settle warns once on the timeline, not every tick; an added inbox item that
-# ages out is on the timeline once too.
-import owner_requests  # noqa: E402
-world.prs[43].update(state="CLOSED", mergeStateStatus="UNKNOWN")
-ids = []
-for text, to in (("merge acme/tools#6 once green", "acme/tools#6"), ("finish the setup guide", "acme/launchpad#43")):
-    ids.append(owner_requests.add(text, "s-coord", "term_coord", now=clock[0])[0]["id"])
-    owner_requests.close(ids[-1], "link", to=to)
-merged_id, closed_id = ids
+# An added inbox item that ages out is on the timeline once, not every tick. A requests.jsonl left by the removed
+# owner-request ledger is not read.
 with (state_dir / "inbox-external.jsonl").open("a") as fh:
     fh.write(json.dumps({"op": "add", "key": "stale-login", "type": "login", "title": "Log in again",
                          "at": fleet.iso(clock[0] - dt.timedelta(days=fleet.EXTERNAL_KEEP_DAYS + 1))}) + "\n")
-st = f.tick(force=True)
-asked = owner_requests.fold(owner_requests.read())
-assert asked[merged_id]["status"] == "done" and "acme/tools#6 merged" in asked[merged_id]["note"], asked[merged_id]
-assert asked[closed_id]["status"] == "open"
-shown = {q["id"]: q for q in st["requests"]["items"]}
-assert merged_id not in shown and shown[closed_id]["closed"] == ["acme/launchpad#43"], shown.get(closed_id)
-assert any(e["kind"] == "request_done" and e["text"].startswith(merged_id) for e in f.events)
-assert "ext:stale-login" not in {i["key"] for i in st["items"]}
-# Reopened by the owner, a request whose links are all over stays open: only a link made after the reopen closes it.
-owner_requests.reopen(merged_id)
-f.tick(force=True)
-assert owner_requests.fold(owner_requests.read())[merged_id]["status"] == "open"
-owner_requests.close(merged_id, "link", to="acme/tools#6")
-f.tick(force=True)
-asked = owner_requests.fold(owner_requests.read())
-assert asked[merged_id]["status"] == "done" and owner_requests.live_links(asked[merged_id]) == ["acme/tools#6"], asked[merged_id]
-import jobs  # noqa: E402
-assert jobs.records()["requests-reconcile"]["ok"] and jobs.records()["requests-reconcile"]["acted_n"] == 1
-real_reconcile = owner_requests.reconcile
-owner_requests.reconcile = lambda *a, **k: 1 / 0
-try:
-    for _ in range(3):
-        st = f.tick(force=True)
-finally:
-    owner_requests.reconcile = real_reconcile
-assert [e["kind"] for e in f.events].count("requests_error") == 1
+(state_dir / "requests.jsonl").write_text(json.dumps({"ev": "open", "id": "r1", "ts": fleet.iso(clock[0]), "text": "x"}) + "\n")
+for _ in range(3):
+    st = f.tick(force=True)
+assert "ext:stale-login" not in {i["key"] for i in st["items"]} and "requests" not in st
 assert [e["kind"] for e in f.events].count("inbox_aged_out") == 1
-rec = jobs.records()["requests-reconcile"]
-assert not rec["ok"] and "ZeroDivisionError" in rec["error"], rec
-assert rec["warned_at"] == next(e["at"] for e in f.events if e["kind"] == "requests_error")
-f.tick(force=True)
-assert jobs.records()["requests-reconcile"]["ok"]
-# A reconcile error with jobs.json unwritable stays inside the tick: it returns, and the write failure goes to stderr.
-import contextlib, io  # noqa: E402
-saved = jobs.path().read_text()
-jobs.path().unlink()
-jobs.path().mkdir()
-owner_requests.reconcile, err = (lambda *a, **k: 1 / 0), io.StringIO()
-try:
-    with contextlib.redirect_stderr(err):
-        st = f.tick(force=True)
-finally:
-    owner_requests.reconcile = real_reconcile
-    jobs.path().rmdir()
-    jobs.path().write_text(saved)
-assert isinstance(st, dict) and "jobs.json" in err.getvalue(), err.getvalue()
+assert not any(e["kind"].startswith("request") for e in f.events)
 
 # PR stats: the charts open on the last six months with the y-axis fitted to them, and every bar carries one tooltip
 # for its whole month or week (states, total, line values) in place of an SVG <title> the poll would close.
@@ -1918,7 +1840,7 @@ process.stdout.write(JSON.stringify({{dflt: view(undefined), all: view("all"), d
     assert f'aria-label="{rep["views"]["all"]["months"][-1]}: {last["merged"][-1] + last["open"][-1] + last["closed"][-1]}, Merged {last["merged"][-1]}' in monthly
 
 import dash  # noqa: E402
-assert {"owner_requests.py", "board.py", "holds.py", "stages.py"} <= {f.name for f in dash.code_files()}
+assert {"board.py", "holds.py", "stages.py"} <={f.name for f in dash.code_files()}
 assert not any(f.name.startswith("test_") for f in dash.code_files())
 
 # Orca link fields: linkedItems become refs, linkedPR gets its url (from linkedItems when Orca left it out) and an
