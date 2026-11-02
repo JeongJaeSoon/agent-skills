@@ -11,12 +11,20 @@ with open(os.environ["FAKE_CARD_CALLS"], "a") as f:
     f.write(json.dumps({"bin": os.path.basename(sys.argv[0]), "argv": a, "stdin": sys.stdin.read() if "-" in a else None}) + "\n")
 mode = os.environ.get("FAKE_CARD_MODE", "")
 if a[:2] == ["worktree", "create"]:
+    if mode == "parent-missing":
+        print(json.dumps({"ok": False, "error": {"code": "LINEAGE_PARENT_NOT_FOUND", "message": "Parent selector was not found."}})); sys.exit(1)
     if mode == "create-fails":
         print(json.dumps({"ok": False, "error": {"code": "repo_not_found", "message": "no repo x"}})); sys.exit(1)
     print(json.dumps({"ok": True, "result": {"worktree": {"path": os.environ["FAKE_CARD_PATH"]}, "agentTerminalHandle": "term_new"}}))
 elif a[:2] == ["sent", "add"] and mode == "sent-fails":
     print("disk full", file=sys.stderr); sys.exit(1)
+elif a[:2] == ["terminal", "show"]:
+    if mode == "stale-terminal":
+        print(json.dumps({"ok": False, "error": {"code": "terminal_handle_stale", "message": "gone"}})); sys.exit(1)
+    print(json.dumps({"ok": True, "result": {"terminal": {"handle": a[a.index("--terminal") + 1], "worktreeId": "repo1::/wt/me"}}}))
 elif a[:2] == ["orchestration", "run-current"]:
+    if mode == "orca-down":
+        print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
     print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead") else {"id": "run_me"}}}))
 elif a[:2] == ["orchestration", "worker-list"]:
     # A lead started with worker-start: unbound (run-current null), its own Dispatch on its coordinator's Run.
@@ -120,6 +128,10 @@ def go(*argv, mode=""):
     return rc, out.getvalue(), err.getvalue(), calls
 
 
+def creates(calls):
+    return [c["argv"] for c in calls if c["argv"][:2] in (["worktree", "create"], ["orchestration", "worker-start"])]
+
+
 def prompt_of(calls):
     a = next(c["argv"] for c in calls if c["argv"][:2] == ["worktree", "create"])
     return a[a.index("--prompt") + 1]
@@ -132,12 +144,29 @@ assert rc == 0, err
 p = prompt_of(calls)
 assert p.splitlines()[0] == f"/goal ship the helper and open its PR 브리프: {path}", p
 assert "APPROVED: push and PR (owner, 2026-01-01)" in p and CLOSE in p and "# card brief" not in p, p
-create = calls[0]["argv"]
-assert create[create.index("--parent-worktree") + 1] == "active" and "--json" in create
-assert calls[1]["bin"] == "orch" and calls[1]["argv"][:4] == ["sent", "add", "--to", "acme-helper"] and calls[1]["stdin"] == p
-assert calls[1]["argv"][calls[1]["argv"].index("--repo") + 1] == "acme/app", calls[1]
-assert calls[2]["argv"][:4] == ["worktree", "set", "--worktree", f"path:{CARD_DIR}"], calls[2]
-assert json.loads(out)["agentTerminalHandle"] == "term_new"
+# The parent is this terminal's own worktree, looked up by its handle: not `active`, not a path.
+assert calls[0]["argv"] == ["terminal", "show", "--terminal", "term_me", "--json"], calls[0]
+create = calls[1]["argv"]
+assert create[create.index("--parent-worktree") + 1] == "id:repo1::/wt/me" and "--json" in create
+assert calls[2]["bin"] == "orch" and calls[2]["argv"][:4] == ["sent", "add", "--to", "acme-helper"] and calls[2]["stdin"] == p
+assert calls[2]["argv"][calls[2]["argv"].index("--repo") + 1] == "acme/app", calls[2]
+assert calls[3]["argv"][:4] == ["worktree", "set", "--worktree", f"path:{CARD_DIR}"], calls[3]
+assert json.loads(out)["agentTerminalHandle"] == "term_new" and json.loads(out)["card"]["parent"] == "id:repo1::/wt/me"
+# A lookup that fails, or no handle at all, creates nothing and prints the choices.
+rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="stale-terminal")
+assert rc == 6 and not creates(calls) and "terminal_handle_stale" in err and "--no-parent" in err and "  1. " in err, (rc, err)
+os.environ.pop("ORCA_TERMINAL_HANDLE")
+rc, out, err, calls = go(path, "--repo", "r", "--name", "x")
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_me"
+assert rc == 6 and not calls and "ORCA_TERMINAL_HANDLE" in err, (rc, err)
+# An explicit id parent is passed as given; a path parent is refused before any call.
+rc, out, err, calls = go(path, "--repo", "r", "--name", "x", "--parent-worktree", "id:repo1::/wt/lead")
+assert rc == 0 and creates(calls)[0][creates(calls)[0].index("--parent-worktree") + 1] == "id:repo1::/wt/lead", calls
+assert not any(c["argv"][:2] == ["terminal", "show"] for c in calls)
+rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="parent-missing")
+assert rc == 4 and len(creates(calls)) == 1 and "Nothing was created" in err and "--no-parent" in err, (rc, err)
+rc, out, err, calls = go(path, "--repo", "r", "--name", "x", "--parent-worktree", "path:/srv/shared")
+assert rc == 2 and "id:<worktree id>" in err and not calls, (rc, err)
 
 # A lead brief: every lead row, continuation lines kept, MODEL CALLS not mistaken for MODE.
 rc, out, err, calls = go(brief(LEAD, "lead.md"), "--repo", "name:acme", "--name", "acme-lead", "--no-parent")
@@ -167,7 +196,7 @@ assert go(brief(WORKER.replace(CLOSE, "KEEP: reused for the next ticket"), "keep
 # The deny queues it like the hook does; the same `skills-sync card` run again once load drops finds that entry.
 LEVEL["now"] = "danger"
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x")
-assert rc == 3 and "[gate:pressure]" in err and err.startswith("[skills-sync card]") and not calls, (rc, err, calls)
+assert rc == 3 and "[gate:pressure]" in err and err.startswith("[skills-sync card]") and not creates(calls), (rc, err, calls)
 (entry,) = pressure.queue_read().values()
 assert entry["state"] == "waiting" and entry["session"] == "term_me" and f"queue wait {entry['id']}" in err, (entry, err)
 os.environ["AGENT_SKILLS_PRESSURE_GATE"] = "0"
@@ -179,7 +208,7 @@ assert pressure.queue_read()[entry["id"]]["state"] == "done", pressure.queue_rea
 
 # A failed create is exit 4 with orca's reason; a failed log after a create is exit 5, the create output still printed.
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="create-fails")
-assert rc == 4 and "no repo x" in err and len(calls) == 1, (rc, err)
+assert rc == 4 and "no repo x" in err and len(creates(calls)) == 1, (rc, err)
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="sent-fails")
 assert rc == 5 and "disk full" in err and json.loads(out)["worktree"]["path"] == str(CARD_DIR), (rc, err)
 
@@ -217,7 +246,8 @@ assert start[start.index("--worktree") + 1] == "new-child" and start[start.index
 assert start[start.index("--timeout-ms") + 1] == "840000", start
 assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [["reference", "add", URL, "--worktree", f"path:{CARD_DIR}", "--json"]]
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
-assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"}}, out
+assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"},
+                                   "parent": "id:repo1::/wt/me"}, out
 # A failed reference after the start is exit 5: the worker runs, so it is not started again.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="ref-fails")
 assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["kind"] == "worker", (rc, err)
@@ -227,10 +257,12 @@ assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["
 assert not any(c["argv"][:2] == ["reference", "add"] for c in calls)
 # A REPORT row continued onto a second line is read whole.
 assert card.report_to("REPORT: orca orchestration send \\\n  --to term_x --type status\n") == ["term_x"]
-# From a terminal outside a worktree Orca manages, new-child is refused before anything exists: new-top-level instead.
+# From a terminal outside a worktree Orca manages, new-child is refused before anything exists: it stops there with
+# the choices, never retried as new-top-level (a card with no parent).
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="unmanaged")
 starts = [c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"]]
-assert rc == 0 and [s[s.index("--worktree") + 1] for s in starts] == ["new-child", "new-top-level"], (rc, err, starts)
+assert rc == 4 and [s[s.index("--worktree") + 1] for s in starts] == ["new-child"], (rc, err, starts)
+assert "Nothing was created" in err and "--no-parent" in err and "request-show" not in err, err
 # --no-parent asks for no lineage: new-top-level from the start.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--no-parent")
 starts = [c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"]]
@@ -258,16 +290,23 @@ assert rc == 4 and "timed out" in err and "worker-list" in err.splitlines()[-1],
 # A create failure carries no request id, so no request-show line.
 rc, out, err, calls = go(path, "--repo", "r", "--name", "x", mode="create-fails")
 assert rc == 4 and "request-show" not in err, err
-# No Run bound: a /goal card with a warning, the reference on the create. --card forces a card too.
-rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="no-run")
-create = next(c["argv"] for c in calls if c["argv"][:2] == ["worktree", "create"])
-assert rc == 0 and "bound to none" in err and create[:2] == ["worktree", "create"] and create[create.index("--reference") + 1] == URL, (err, calls)
-rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--card")
-assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and json.loads(out)["card"]["handle"] == "term_new"
+# No Run bound, another Run than the brief's, or Orca silent: nothing created, the choices printed. Only --card makes
+# a /goal card, with the reference on the create.
+for mode, brief_text, want in (("no-run", SUPERVISED, "run-use --id run_me"),
+                               ("", SUPERVISED.replace("run:run_me", "run:run_other"), "works for run:run_me"),
+                               ("orca-down", SUPERVISED, "did not say"),
+                               ("", SUPERVISED + "PARENT: orca orchestration send --to run:run_other\n", "run:run_me and run:run_other")):
+    rc, out, err, calls = go(brief(brief_text, "sup-x.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode=mode)
+    assert rc == 6 and want in err and "--card" in err and not creates(calls) and not out, (mode, rc, err, calls)
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, "--card", mode="no-run")
+create = creates(calls)[0]
+assert rc == 0 and create[:2] == ["worktree", "create"] and create[create.index("--reference") + 1] == URL, (err, calls)
+assert json.loads(out)["card"]["handle"] == "term_new" and json.loads(out)["card"]["run"] is None
+assert not any(c["argv"][:2] == ["orchestration", "run-current"] for c in calls)
 # A lead brief reporting to a Run: a dispatched worker once Nested worker depth reaches 3 (its workers' helpers sit
 # at depth 3), its spec carrying every lead row; below that, or with Orca's settings unreadable, a /goal card that
 # says why and what to change.
-LEAD_RUN = LEAD.replace("CLOSE       Once", "PARENT      orca orchestration send --to run:run_top\nCLOSE       Once")
+LEAD_RUN = LEAD.replace("CLOSE       Once", "PARENT      orca orchestration send --to run:run_me\nCLOSE       Once")
 orca_depth(3)
 rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead")
 start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "worker-start"])
@@ -281,15 +320,19 @@ for depth, want in ((2, "Nested worker depth"), (None, "unread")):
 assert "3으로" in card.orca_settings.suggestions({"nestedWorkerMaxDepth": 2})[0]
 orca_depth(3)
 rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--card")
-assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"], calls
+assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"], calls
 # A human-gate program lands through Orca gates, which a dispatched lead cannot create: a card at any depth.
 rc, out, err, calls = go(brief(LEAD_RUN + "Merge policy: human-gate.\n", "lead-gate.md"), "--repo", "r", "--name", "acme-lead")
-assert rc == 0 and calls[0]["argv"][:2] == ["worktree", "create"] and "worker_cannot_coordinate_own_run" in err, (err, calls)
+assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"] and "worker_cannot_coordinate_own_run" in err, (err, calls)
 assert card.HUMAN_GATE.search("--merge-policy human-gate") and card.HUMAN_GATE.search("Merge policy is human-gate.") and not card.HUMAN_GATE.search("No human-gate here; merge policy: auto.")
 # A lead that is itself a dispatched worker (run-current null) starts its units as workers on the Run it works for.
-rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
+SUP_TOP = SUPERVISED.replace("run:run_me", "run:run_top")
+rc, out, err, calls = go(brief(SUP_TOP, "sup-top.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
 assert rc == 0 and any(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls), (err, calls)
 assert json.loads(out)["card"]["run"] == {"id": "run_top", "via": "own_dispatch"}, out
+# Its own Dispatch's Run is compared too: a brief naming another Run stops.
+rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
+assert rc == 6 and "works for run:run_top" in err and not creates(calls), (rc, err)
 # A report address that is a terminal handle dies with its terminal: refused before anything runs, in any line.
 rc, out, err, calls = go(brief(WORKER + "REPORT: `orca orchestration send --to term_abc --type status`\n", "term.md"), "--repo", "r", "--name", "x")
 assert rc == 2 and "term_abc" in err and not calls, (rc, err)

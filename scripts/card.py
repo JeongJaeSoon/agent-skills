@@ -5,17 +5,24 @@ Usage:
   skills-sync card <brief.md> --repo <selector> --name <name> [--display-name <title>] [--comment <text>]
                    [--reference <ticket URL or Jira key>]... [--parent-worktree <selector> | --no-parent] [--card]
 
-Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to a Run or
-itself a dispatched worker (a lead started with worker-start, whose `run-current` is null), starts a supervised
+Which kind of card: a brief whose REPORT or PARENT line sends to `run:<id>`, from a session bound to that Run or
+itself a dispatched worker on it (a lead started with worker-start, whose `run-current` is null), starts a supervised
 worker (`orca orchestration worker-start --worktree new-child`, so Orca records this session's worktree as its
-parent; `new-top-level` with --no-parent or when this session is not in a worktree Orca manages; any other
---parent-worktree is ignored, since worker-start takes none): a Dispatch, so the card's worker_done, escalation and
-ask reach this session and Orca watches it for prompts. Its spec is the prompt below without the leading `/goal`.
+parent; `new-top-level` with --no-parent; any other --parent-worktree is ignored, since worker-start takes none): a
+Dispatch, so the card's worker_done, escalation and ask reach this session and Orca watches it for prompts. Its spec
+is the prompt below without the leading `/goal`. When this session is bound to no Run, works for another Run than the
+brief names, or Orca does not answer, nothing is created (exit 6): the lines printed say how to bind it
+(`orca orchestration run-use`) or to make a /goal card on purpose (--card). A refused new-child is not retried as
+new-top-level.
+
+The parent: the worktree of the terminal running this (`orca terminal show`'s worktreeId, passed as
+`--parent-worktree id:<it>`), never the focused one or a `path:` selector, which resolves to a repo's main worktree
+when several Orca workspaces share its path. No terminal handle, or no worktree for it, creates nothing (exit 6).
+--no-parent skips the lookup; an explicit --parent-worktree other than `path:` is passed as given.
 A lead's brief starts that way too when Orca's Nested worker depth is 3 or more (`orch doctor`, orca_settings.py),
 so the lead's workers' helpers still fit; below that it is a `/goal` card, with the one-line settings proposal as a
 warning. A lead's brief that names the `human-gate` merge policy stays a `/goal` card at any depth: its landings wait on
-Orca gates, and Orca lets no dispatched worker create a Task or gate on the Run it works for. Anything else (a handoff, or --card) is a `/goal` card from `orca worktree create`. A brief reporting to
-`run:` from a session with no Run is a `/goal` card, with a warning. A brief that sends anything to a `term_…`
+Orca gates, and Orca lets no dispatched worker create a Task or gate on the Run it works for. Anything else (a handoff, or --card) is a `/goal` card from `orca worktree create`. A brief that sends anything to a `term_…`
 handle (`orchestration send --to term_…`, in any line) is refused: a handle dies with its terminal, so the mail is
 lost on a restart (`terminal_not_found`), and while it lives the mail is only stored.
 --reference links the ticket in Orca (linkedItems): on create for a card, by `orca reference add` right after the
@@ -33,12 +40,14 @@ the file and checks them itself, with the hook's own patterns. The card is creat
 sees that `orca worktree create`: the pressure gate's decision is taken here instead.
 
 The created output is printed with a `card` object: kind (worker | card), path, handle (launch.outcome.handle, else
-agentTerminalHandle) and run.
+agentTerminalHandle), run and parent (the `id:` selector, or None with --no-parent).
 
-Exit codes: 0 created; 2 usage, unreadable brief, a missing line or a `term_` report address; 3 the pressure gate
-refused (wait as its reason says, then run this again); 4 the create or worker-start failed (its whole receipt,
-with any recovery commands, goes to stderr); 5 the card exists but linking, logging or naming it failed, or a
-started worker's receipt names no worktree (the create output is still printed; do not create it again).
+Exit codes: 0 created; 2 usage, unreadable brief, a missing line, a `term_` report address or a `path:` parent;
+3 the pressure gate refused (wait as its reason says, then run this again); 4 the create or worker-start failed
+(its whole receipt, with any recovery commands and the choices for a refused parent, goes to stderr); 5 the card
+exists but linking, logging or naming it failed, or a started worker's receipt names no worktree (the create
+output is still printed; do not create it again); 6 nothing created because the Run or the parent did not check
+out (the choices are printed).
 """
 import itertools, json, os, pathlib, re, shlex, subprocess, sys
 
@@ -181,8 +190,19 @@ def github_repo(worktree):
     return m and m.group(1)
 
 
-# Orca's refusal of `--worktree new-child` from a terminal whose workspace is not a git worktree it manages.
-UNMANAGED = "could not be resolved to a git worktree Orca manages"
+# What to do when Orca refuses the start over its parent or depth, by a code or text in its refusal; Orca checks
+# both before it creates anything.
+REFUSED_UNSTARTED = {
+    "could not be resolved to a git worktree Orca manages":
+        "this terminal's worktree is not one Orca manages, so new-child has no parent: run this from a terminal in "
+        "the worktree that should be the parent, or pass --no-parent for a card with no parent",
+    "LINEAGE_PARENT_NOT_FOUND":
+        "the parent selector names no worktree Orca knows: pass the right `--parent-worktree id:<worktree id>` "
+        "(`orca worktree show --worktree active --json`), or --no-parent for a card with no parent",
+    "nested_worker_depth_exceeded":
+        "Orca's Nested worker depth leaves no room for this worker: start it as a /goal card with --card, or put "
+        "`orch doctor`'s settings line before the human",
+}
 
 
 def run(cmd, stdin=None, timeout=120):
@@ -193,13 +213,52 @@ def run(cmd, stdin=None, timeout=120):
     return p, (p.stderr or p.stdout).strip()[:400]
 
 
-def run_current():
-    """The Run this session coordinates (`run-current`), or None: unbound, or Orca did not answer."""
-    p, _ = run([ORCA, "orchestration", "run-current", "--json"], timeout=30)
+def stop(why, *choices):
+    lines = "\n".join(f"  {i}. {c}" for i, c in enumerate(choices, 1))
+    return Refuse(6, f"[{ME}] nothing was created: {why}. Choose one, then run this again:\n{lines}")
+
+
+def supervisor(wanted):
+    """The Run this card's worker goes to: this session's bound Run, else the Run of its own Dispatch. Refuse(6)
+    unless that is the one Run the brief reports to, or Orca cannot say."""
+    card = "pass --card for a /goal card with no Dispatch (its reports go to the Run as `--type question`)"
+    bound = orca_settings.binding()
+    if bound == "unknown":
+        raise stop("Orca did not say which Run this terminal is bound to (`orca orchestration run-current --json` "
+                   "failed, or ORCA_TERMINAL_HANDLE is unset)", "run this from an Orca terminal once that command "
+                   "answers", card)
+    own = None if bound else orca_settings.own_dispatch(ORCA)
+    have = (bound or {}).get("id") or (own or {}).get("runId")
+    want = " and ".join(f"run:{w}" for w in sorted(wanted))
+    if not have:
+        raise stop(f"the brief reports to {want}, but this session is bound to no Run and is no dispatched worker",
+                   f"bind this terminal: `orca orchestration run-use --id {sorted(wanted)[0]}` "
+                   "(orchestrate references/top-level.md \"Your Run\")", card)
+    if wanted != {have}:
+        raise stop(f"the brief reports to {want}, but this session works for run:{have}",
+                   f"fix the brief's REPORT or PARENT line to run:{have}",
+                   "run this from the session that coordinates the brief's Run", card)
+    return bound or {"id": have, "via": "own_dispatch"}
+
+
+def caller_worktree():
+    """`id:<worktree id>` of the terminal running this, or Refuse(6). Not `active` or a path: the parent is the
+    session that makes the card, which `orca terminal show` names for this terminal's handle."""
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    choices = ("run this from an Orca terminal in the worktree that should be the parent",
+               "pass `--parent-worktree id:<worktree id>` (`orca worktree show --worktree active --json`)",
+               "pass --no-parent for a card with no parent")
+    if not me:
+        raise stop("ORCA_TERMINAL_HANDLE is unset, so this terminal's worktree cannot be looked up", *choices)
+    p, err = run([ORCA, "terminal", "show", "--terminal", me, "--json"], timeout=30)
     try:
-        return (json.loads(p.stdout).get("result") or {}).get("run") if p and not p.returncode else None
+        wt = ((json.loads(p.stdout).get("result") or {}).get("terminal") or {}).get("worktreeId") \
+            if p and not p.returncode else None
     except (ValueError, AttributeError):
-        return None
+        wt = None
+    if not isinstance(wt, str) or not wt:
+        raise stop(f"`orca terminal show` named no worktree for this terminal ({err or 'no answer'})", *choices)
+    return f"id:{wt}"
 
 
 def worktree_path(res):
@@ -257,7 +316,12 @@ def create(argv):
     opts, refs = parse_args(argv[1:])
     prompt = compose(brief)
     text = FENCE.sub("", pathlib.Path(brief).expanduser().read_text())
-    to_run = any(a.startswith("run:") for a in report_to(text))
+    wanted = {a[len("run:"):] for a in report_to(text) if a.startswith("run:")}
+    to_run = bool(wanted)
+    if (opts.get("--parent-worktree") or "").startswith("path:"):
+        raise Refuse(2, f"[{ME}] --parent-worktree {opts['--parent-worktree']}: a path selector resolves to the "
+                        "repo's main worktree when several Orca workspaces share that path. Pass `id:<worktree id>` "
+                        "(`orca worktree show --worktree <it> --json`), or leave it out for this terminal's worktree.")
     lead = guard.is_lead(text)
     if lead and to_run and not opts.get("--card"):
         settings, why = orca_settings.read()
@@ -270,15 +334,10 @@ def create(argv):
             to_run = False
             fix = "; ".join(orca_settings.suggestions(settings)) if settings else f"Orca's settings unread: {why}"
             print(f"[{ME}] the lead starts as a /goal card: {fix}", file=sys.stderr)
-    run_id = None
-    if to_run and not opts.get("--card"):
-        own = None if (run_id := run_current()) else orca_settings.own_dispatch(ORCA)
-        run_id = run_id or own and own.get("runId") and {"id": own["runId"], "via": "own_dispatch"}
-        if not run_id:
-            print(f"[{ME}] warning: the brief reports to a Run but this session is bound to none and is no "
-                  "dispatched worker, so the card starts as a /goal card with no Dispatch "
-                  "(`orca orchestration run-current`; dispatch-card §3)", file=sys.stderr)
+    run_id = supervisor(wanted) if to_run and not opts.get("--card") else None
     worker = bool(run_id)
+    parent = None if opts.get("--no-parent") else (
+        opts["--parent-worktree"] if opts.get("--parent-worktree") and not worker else caller_worktree())
     if worker:
         # Orca delivers a worker's spec as its task, after its own preamble: a leading /goal would not run there.
         spec = re.sub(r"^/goal[ \t]+", "", prompt, count=1)
@@ -291,7 +350,7 @@ def create(argv):
         cmd += ["--display-name", opts["--display-name"]] if opts.get("--display-name") else []
     else:
         cmd = [ORCA, "worktree", "create", "--repo", opts["--repo"], "--name", opts["--name"]]
-        cmd += ["--no-parent"] if opts.get("--no-parent") else ["--parent-worktree", opts.get("--parent-worktree", "active")]
+        cmd += ["--parent-worktree", parent] if parent else ["--no-parent"]
         cmd += ["--agent", "claude", "--prompt", prompt]
         for r in refs:
             cmd += ["--reference", r]
@@ -303,11 +362,6 @@ def create(argv):
         raise Refuse(3, f"[{ME}] not created, the pressure gate refused it (for `queue wait`, run this same "
                         f"`skills-sync card` command again once it ends with 0): {reason}")
     p, err = run(cmd, timeout=900 if worker else 120)
-    at = cmd.index("--worktree") + 1 if worker else None
-    if worker and cmd[at] == "new-child" and p and p.returncode and UNMANAGED in p.stdout + p.stderr:
-        # Refused while resolving the parent, before anything was created: start it without lineage instead.
-        cmd[at] = "new-top-level"
-        p, err = run(cmd, timeout=900)
     try:
         out = json.loads(p.stdout) if p else None
     except ValueError:
@@ -317,7 +371,8 @@ def create(argv):
     started = bool(p and not p.returncode and out and out.get("ok") is not False)
     if worker and started and not path:  # it runs: a retry would start a second worker
         mark("done")
-        print(json.dumps({**res, "card": {"kind": "worker", "path": None, "handle": handle_of(res), "run": run_id}},
+        print(json.dumps({**res, "card": {"kind": "worker", "path": None, "handle": handle_of(res), "run": run_id,
+                                          "parent": parent}},
                          ensure_ascii=False, indent=1))
         raise Refuse(5, f"[{ME}] the worker started but its receipt names no worktree, so nothing was linked. "
                         "Do not create it again; find it with `orca orchestration worker-list`.")
@@ -335,7 +390,10 @@ def create(argv):
             f"orca orchestration worker-show --dispatch {data['dispatchId']} --json" if data.get("dispatchId") else
             f"orca orchestration request-show --request {data['orchestrationRequestId']} --json"
             if data.get("orchestrationRequestId") else None)
-        if worker and p is None:
+        refused = next((v for k, v in REFUSED_UNSTARTED.items() if p and k in p.stdout + p.stderr), None)
+        if refused:  # refused before anything was created; a start without the parent is the caller's choice
+            hint = f"Nothing was created: {refused}"
+        elif worker and p is None:
             hint = ("Orca did not answer in time, so the worker may be starting: read `orca orchestration "
                     "worker-list` and `orca worktree ps` before starting it again")
         else:
@@ -343,7 +401,7 @@ def create(argv):
         raise Refuse(4, f"[{ME}] {verb} failed: {err}" + (f". {hint}" if hint else ""))
     mark("done")
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle_of(res),
-                                      "run": run_id}}, ensure_ascii=False, indent=1))
+                                      "run": run_id, "parent": parent}}, ensure_ascii=False, indent=1))
     failed = []
     if worker and refs and path:  # worker-start takes no link flag; only this new card is written
         p, err = run([ORCA, "reference", "add", *refs, "--worktree", f"path:{path}", "--json"])
