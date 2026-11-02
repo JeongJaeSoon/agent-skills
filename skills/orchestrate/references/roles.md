@@ -137,7 +137,7 @@ FORBIDDEN   Touching a program's tickets, PRs or workers. Code another worker is
             (a session Orca dispatched: its prompt carries Orca's worker preamble) reports to the
             orchestrator or lead that dispatched it, as an orchestration message of type escalation (its terminal
             is not read), a subagent to the session that started it, in its result; a card with no
-            Dispatch (escalation and worker_done need one) as `--type status` to the `run:<id>` its
+            Dispatch (Orca refuses escalation, `ask` and worker_done from it) as `--type question` to the `run:<id>` its
             brief's REPORT line names, or with none, to the human in its own chat, with its Human only batch. A message
             sent from Bash carries the command as the path of a file you wrote with the Write tool,
             never quoted: a hook that matched the command's text blocks a message quoting it. That

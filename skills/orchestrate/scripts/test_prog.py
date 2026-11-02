@@ -594,7 +594,14 @@ with contextlib.redirect_stdout(out):
 assert [c[2:5] for c in calls] == [("--ack", "dv8"), ("--peek", "--wait", "--timeout-ms"), ()], calls
 assert 3290000 < int(calls[1][5]) <= 3300000, calls
 lines = out.getvalue().splitlines()
-assert lines[0].startswith("INBOX id=m1 type=status") and "body=PR ready see link" in lines[0] and len(lines) == 2, lines
+assert lines[0].startswith("INBOX id=m1 type=status") and lines[0].endswith("body=PR ready") and lines[1] == "    see link", lines
+lines = lines[1:]
+# A long question or worker_done body comes through whole, with the reply's thread and the whole payload.
+long = "options " + "x" * 3000 + " END"
+line = prog.inbox_line({"id": "m7", "type": "status", "thread_id": "m6", "body": long,
+                        "payload": {"dispatchId": "ctx_1", "note": "y" * 300}})
+assert line.endswith(" END") and " thread=m6 " in line and '"note": "' + "y" * 300 + '"' in line, line
+assert 'payload={"dispatchId": "ctx_1"}' in prog.inbox_line({"id": "m8", "payload": '{"dispatchId":"ctx_1"}'})
 assert lines[1] == "1 of 2 to act on (the rest heartbeats or refusals); then: orch inbox --ack dv9 --wait", lines
 calls, queue = [], [{"deliveryId": None, "messages": []}]
 out = io.StringIO()

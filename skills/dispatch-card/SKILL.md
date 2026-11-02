@@ -79,6 +79,19 @@ session as not the human's, so an approval sent afterwards is refused. The brief
 - **Human only** — what stays the human's: permission dialogs, logins, payments, document
   submissions, and any irreversible or outward act not under Approved. The card puts these to
   the human in one batched message and keeps doing the rest.
+- **Questions** — only for a brief that reports to `run:<id>` and goes out as a `/goal` card (§3
+  says which): one line telling the card how to ask what Approved leaves open. Orca refuses
+  `ask` and `--type escalation` from a session with no Dispatch, so the card sends
+  `orca orchestration send --to run:<id> --type question --subject … --body …`; a status wakes
+  no inbox wait and stays off the dashboard's Needs you. The answer is the `reply` to it: a
+  `status` message whose `thread_id` is the question's id, read with `orca orchestration check
+  --wait --types status --timeout-ms 1800000` once nothing else can move, again after each empty
+  wait. A card that coordinates a Run of its own (a lead) gets the reply in that Run's inbox:
+  read it in the one inbox wait it already runs (`orch wait` or `orch inbox`, the line with
+  `thread=<question id>`), never in a second check loop beside it.
+  To look again, `check --all` and match `thread_id`; never a list you sort or cut yourself (a
+  card sorting by a field the rows do not have, `createdAt` for `created_at`, missed two replies).
+  A supervised worker needs no such line: its preamble's `ask` does this.
 - **Model calls** — one line: "다른 모델 호출(서브에이전트, API)은 필요할 때만 하고, 모델은 그때
   고른다. 무엇을 왜 불렀는지는 마지막 보고에 적는다". Never name a model in the brief: the card reads
   a named model as an order and calls it whether or not the task needs it. The calls go in the
@@ -170,8 +183,10 @@ skills-sync close-setup "<result.worktree.path>"
   missing line (add it to the brief), 3 is the pressure gate's reason (wait as it says, then run
   the same command), 4 is Orca's create or `worker-start` error, with Orca's whole receipt on
   stderr (Orca can fail a launch whose outcome it could not confirm: follow the receipt's recovery
-  commands, or check `orca worktree ps` and `orca orchestration worker-list`, before running it
-  again), 5 means the card exists but its link, log or name failed (do that step by hand; do not
+  commands, and for a `worker-start` the `request-show` line the helper prints, before running it
+  again; `completed` or `pending` there means it took or may still take effect, and `absent` is
+  no proof that nothing started, so check `orca worktree ps` and `orca orchestration worker-list`
+  too), 5 means the card exists but its link, log or name failed (do that step by hand; do not
   create it again). The `term_` refusal is a 2. An inline brief with no file goes
   straight to `orca worktree create --prompt`, its lines written out.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in

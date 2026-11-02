@@ -162,7 +162,8 @@ Repair it within scope or report the unresolved gap and use direct checks that p
 acceptance criteria; never claim a pass from a stale harness.
 
 After the test suite and E2E check, push and open a PR with `gh pr create` in the draft/ready state the user requested.
-In an Orca card, right after it: `orca worktree set --worktree current --workspace-status in-review --json`
+In an Orca card, once it returns, as its own Bash call (never chained to `gh pr create` with `&&`: a refusal takes every act in the call with it):
+`orca worktree set --worktree current --workspace-status in-review --json`
 (the card's board column; Orca links the PR to the card by itself, from the branch, so no `--pr`).
 `Closes #n` links a GitHub issue; a Linear ticket ignores it, so attach the PR to the ticket
 with `orca linear attach --current --url <pr> --title "PR"` when the card links a Linear issue

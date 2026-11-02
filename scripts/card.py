@@ -328,7 +328,19 @@ def create(argv):
         if out:  # a failed or outcome_unknown start names its stage, its effects and the recovery commands
             print(json.dumps(out, ensure_ascii=False, indent=1), file=sys.stderr)
         verb = "orca orchestration worker-start" if worker else "orca worktree create"
-        raise Refuse(4, f"[{ME}] {verb} failed: {err}")
+        data = e.get("data") or {}
+        # Orca's own recovery query: worker-show when it names the Dispatch, request-show otherwise.
+        query = (data.get("recovery") or {}).get("queryCommand")
+        query = shlex.join(query) if isinstance(query, list) and query else (
+            f"orca orchestration worker-show --dispatch {data['dispatchId']} --json" if data.get("dispatchId") else
+            f"orca orchestration request-show --request {data['orchestrationRequestId']} --json"
+            if data.get("orchestrationRequestId") else None)
+        if worker and p is None:
+            hint = ("Orca did not answer in time, so the worker may be starting: read `orca orchestration "
+                    "worker-list` and `orca worktree ps` before starting it again")
+        else:
+            hint = f"Before starting it again, ask Orca whether this start took effect: {query}" if query else ""
+        raise Refuse(4, f"[{ME}] {verb} failed: {err}" + (f". {hint}" if hint else ""))
     mark("done")
     print(json.dumps({**res, "card": {"kind": "worker" if worker else "card", "path": path, "handle": handle_of(res),
                                       "run": run_id}}, ensure_ascii=False, indent=1))
