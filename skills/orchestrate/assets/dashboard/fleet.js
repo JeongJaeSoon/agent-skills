@@ -1085,7 +1085,8 @@ document.addEventListener("click", (e) => {
   const fold = e.target.closest("[data-stage-fold]");
   if (fold) { const id = fold.dataset.stageFold; F.stageFold.has(id) ? F.stageFold.delete(id) : F.stageFold.add(id); renderView(); }
   const job = e.target.closest("[data-job-open]");
-  if (job) { const id = job.dataset.jobOpen; F.jobOpen.has(id) ? F.jobOpen.delete(id) : F.jobOpen.add(id); renderView(); }  if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
+  if (job) { const id = job.dataset.jobOpen; F.jobOpen.has(id) ? F.jobOpen.delete(id) : F.jobOpen.add(id); renderView(); }
+  if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
   const ack = e.target.closest("[data-ack]");
   if (ack) idsAction(ack, "/api/fleet/ack", ack.dataset.ack, "ackError");
   const done = e.target.closest("[data-done]");

@@ -869,7 +869,6 @@ class FakeFleetWorld:
             (0.15, "item_question", "wt-export", "CSV or JSON for the export?", {}),
             (0.2, "prompt", "wt-login", "Rebase on main and rerun the login tests", {}),
             (0.3, "pr_approved", "wt-login", "#41 feat: login flow · reviewer-a", {**pr(41), "actor": "reviewer-a"}),
-            (0.4, "request_link", "wt-coord", "r3: lead-login/export", {}),
             (0.5, "pr_review_comment", "wt-docs", "#43 docs: setup guide · reviewer-b", {**pr(43), "actor": "reviewer-b"}),
             (0.7, "turn_done", "wt-docs", "Setup guide drafted; screenshots still to add.", {}),
             (0.9, "item_resolved", "wt-docs", "answered: Which port should the guide use?", {}),
