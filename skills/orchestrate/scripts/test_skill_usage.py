@@ -74,6 +74,11 @@ def skill_call(t, name, attribution=None, session="s1", cwd="/work/alpha"):
     return row
 
 
+def tool_call(t, name, inp, session="s1"):
+    return {"type": "assistant", "timestamp": t, "sessionId": session, "cwd": "/work/alpha",
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": name, "input": inp}]}}
+
+
 def write(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows) + "not json\n")  # compact, as Claude Code writes
@@ -94,6 +99,13 @@ write(projects / "-work-alpha" / "s1.jsonl", [
     skill_call(ts(1, 31), "lint", attribution="agent-skills:tidy"),
     skill_call(ts(1, 32), "simplify"),
     human(ts(1, 33), "<task-notification>ship it</task-notification>"),
+    # The moments how and why could have run: Explore called directly and history dug by hand.
+    tool_call(ts(1, 34), "Agent", {"subagent_type": "Explore", "prompt": "map the runtime"}),
+    tool_call(ts(1, 35), "Agent", {"subagent_type": "general-purpose", "prompt": "x"}),
+    tool_call(ts(1, 36), "Bash", {"command": 'git log -p -S"pickaxe-term" -- a.py'}),
+    tool_call(ts(1, 37), "Bash", {"command": "git -C ../repo blame a.py | head"}),
+    tool_call(ts(1, 38), "Bash", {"command": "git log -L10,20:a.py"}),
+    tool_call(ts(1, 39), "Bash", {"command": "git log --since=1.week --oneline && git status -s"}),
 ])
 # A compaction summary quotes old prompts and an interruption marker is not a prompt: neither opens a turn or
 # counts a miss, so tidy's chained call after them still belongs to the turn that loaded ship.
@@ -110,12 +122,16 @@ write(projects / "-work-alpha" / "s4.jsonl", [
     human(ts(3, 20), "<pasted_content id=x>quoted: ship it, 정리해줘</pasted_content> 배포해줘", session="s4"),
     human(ts(3, 25), "lint this를 해줘", session="s4"),
     human(ts(3, 30), "done", session="s4"),
+    skill_call(ts(3, 31), "agent-skills:architect", session="s4"),
+    skill_call(ts(3, 32), "agent-skills:arena", session="s4"),
 ])
 write(projects / "-work-beta" / "s2.jsonl", [
     human(ts(20), "<command-name>/agent-skills:ship</command-name>", session="s2", cwd="/work/beta"),
     human(ts(20, 5), "정리해줘", session="s2", cwd="/work/beta"),
     human(ts(20, 6), "정리해줘 again", session="s2", cwd="/work/beta"),
     human(ts(20, 7), "done", session="s2", cwd="/work/beta"),
+    skill_call(ts(20, 8), "agent-skills:architect", session="s2", cwd="/work/beta"),
+    tool_call(ts(20, 9), "Task", {"subagent_type": "Explore", "prompt": "x"}, session="s2"),
 ])
 write(projects / "-work-alpha" / "s1" / "subagents" / "agent-1.jsonl", [
     human(ts(2), "ship it", session="s1"),
@@ -138,6 +154,25 @@ assert rows["simplify"]["source"] == "other" and rows["simplify"]["uses_30d"] ==
 assert "mcp" not in rows and "agent-skills:mcp" not in rows, rows.keys()
 assert rows["notes"]["uses_30d"] == 0 and rows["notes"]["uses_total"] == 1 and rows["notes"]["last_used"] == ts(40, 1), rows["notes"]
 assert ship["last_used"] == ts(1, 1), ship
+# Only git run as a command counts: global options and quoting are read, a mention inside a string is not a run,
+# a path after "--" is not an option, and a skill of the same name from another plugin is not this one.
+for cmd, n in [("git blame a.py", 1), ("git --no-pager blame a.py", 1), ("git --no-pager log -Sneedle -- a.py", 1),
+               ('git -C "../sample repo" blame a.py', 1), ("printf '%s\\n' 'git blame a.py'", 0), ("git log -- -Sample.py", 0),
+               ("git log -Sneedle -- a.py; git blame a.py", 2), ("cd x && GIT_PAGER=cat git log -G'x|y' | head", 1),
+               ("git log --since=1.week --stat", 0), ("echo git log -Sx", 0), ("git log -S'unbalanced", 0),
+               ('printf "%s" ";" "git" "blame"', 0), ('git -C ";" blame a.py', 1), ("# inspect history\ngit blame a.py", 1),
+               ("git \\\nblame a.py", 1), ("git log --grep -Something", 0), ("git log --grep x -S y", 1),
+               ("git blame a.py # and git log -Sx", 1), ("git log -S y\ngit blame b", 2),
+               ("git log --pretty -Sneedle -- a.py", 1), ("git log --format=%h -G x", 1)]:
+    assert su.git_history_cmds(cmd) == n, (cmd, su.git_history_cmds(cmd))
+foreign = [[ts(1), "other-plugin:architect", "auto", "s9", "h"], [ts(1), "agent-skills:arena", "auto", "s9", "h"]]
+assert su.denominators(foreign, [], NOW)["7d"]["architect_sessions"] == 0, su.denominators(foreign, [], NOW)
+# A subagent prompt carrying a trigger counts apart from human misses and raises no flag of its own.
+assert ship["subagent_misses_30d"] == 1 and tidy["subagent_misses_30d"] == 0, (ship, tidy)
+assert su.flags({**ship, "misses_30d": 0, "subagent_misses_30d": 9}, 1) == [], "subagent misses alone are not flagged"
+assert rep["denominators"] == {
+    "7d": {"explore_calls": 1, "git_history_cmds": 3, "architect_sessions": 1, "architect_sessions_with_arena": 1},
+    "30d": {"explore_calls": 2, "git_history_cmds": 3, "architect_sessions": 2, "architect_sessions_with_arena": 1}}, rep["denominators"]
 
 assert rows["agent-skills:quiet"]["flags"] == ["unused_30d"], rows["agent-skills:quiet"]
 assert rows["notes"]["flags"] == ["unused_30d"], rows["notes"]
@@ -150,13 +185,17 @@ assert [s["source"] for s in rep["sources"]] == ["agent-skills", "acme-tools", "
 # A miss keeps the description's phrase it matched (public text) and the session to resume, never the prompt.
 assert tidy["miss_phrases"] == [["정리해줘", 2]] and tidy["miss_sessions_30d"] == 1 and tidy["last_miss"] == ts(20, 6), tidy
 blob = json.dumps(rep, ensure_ascii=False) + cache.read_text()
-for secret in ("ship it now", "quoted:", "lint this please", "/work/alpha", "/work/beta", "again"):
+for secret in ("ship it now", "quoted:", "pickaxe-term", "map the runtime", "lint this please", "/work/alpha", "/work/beta", "again"):
     assert secret not in blob, secret
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     assert su.list_misses("agent-skills:tidy", cache, NOW) == 0
 assert out.getvalue().splitlines() == [f'{ts(20, 6)}  s2  "정리해줘"', f'{ts(20, 5)}  s2  "정리해줘"',
                                        "2 misses of agent-skills:tidy in 30 days (claude --resume <session> opens one)"], out.getvalue()
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    su.list_misses("agent-skills:ship", cache, NOW)
+assert f'{ts(2)}  s1  "ship it"  (subagent)' in out.getvalue().splitlines(), out.getvalue()
 # A skill that fires on most prompts carrying its phrases is not flagged for the few it missed.
 assert su.flags({**ship, "misses_30d": 4, "auto_30d": 40}, 1) == [] and su.flags({**ship, "misses_30d": 4, "auto_30d": 10}, 1) == ["misses"]
 
@@ -227,7 +266,7 @@ assert rep6["files"] == rep5["files"] - 1, (rep6["files"], rep5["files"])
 # Rows whose message is not an object are skipped, not fatal.
 odd = root / "odd.jsonl"
 write(odd, [{"type": "user", "message": "x"}, {"type": "assistant", "message": "Skill"}, {"type": "assistant", "message": {"content": "Skill"}}])
-assert su.scan_file(odd, inv, su.resolver(inv)) == {"events": [], "misses": []}
+assert su.scan_file(odd, inv, su.resolver(inv)) == {"events": [], "misses": [], "sub_misses": [], "probes": []}
 # A ledger line that is JSON but not an object does not stop the idempotency check.
 with ledger.open("a") as f:
     f.write("[]\n")

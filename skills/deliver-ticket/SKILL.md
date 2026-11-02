@@ -29,7 +29,8 @@ Pick the procedure by the shape of the work:
   build on) → `architect`, which runs `arena` and publishes its plan page without waiting for
   answers.
 - An unfamiliar subsystem → `how` before the first edit. Code whose reason you do not know →
-  `why` before you change it.
+  `why` before you change it. When either ran, the constraints it found (what to preserve,
+  change, avoid) go in the plan comment.
 
 ## 2. Implement
 
@@ -38,7 +39,7 @@ one; starting by hand, create one first. The ticket carries the what and the imp
 hints; how you get there is your call. One invariant: **no commit of non-trivial logic without a runnable
 test** written alongside the change and actually run. A bug fix starts from a test that reproduces
 the failure and fails before the fix — watch it fail, then make it pass (`tdd`,
-Fix Root Causes in `principles`).
+[Fix Root Causes](../principles/references/principle-fix-root-causes.md)).
 
 **Evidence decides what ships.**
 
