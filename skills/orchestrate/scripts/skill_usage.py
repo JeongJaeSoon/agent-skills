@@ -23,9 +23,11 @@ EDITABLE = (REPO_PLUGIN, "user")
 SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
 MISS_SHARE = 0.2  # misses as a share of the prompts that carried a trigger phrase (misses + auto + chained fires)
-SCAN_VERSION = 4  # raise when scan_file counts differently, so cached transcripts are read again
+SCAN_VERSION = 5  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
+# History digging done by hand where `why` could have run: pickaxe (-S/-G), line history (-L) and blame.
+GIT_HISTORY_RE = re.compile(r"\bgit\b(?:\s+-C\s+\S+)?\s+(?:blame\b|log\b[^|;&\n]*?\s-[SGL])")
 # Only these flags become signals. unused_30d alone stays on the dashboard: zero uses in one window is not a reason
 # to touch a skill (retire_candidate is).
 SUGGEST = {"slash_only": ["rewrite-description"], "misses": ["rewrite-description"],
@@ -190,17 +192,18 @@ def _hash(s):
 
 def scan_file(path, inv, resolve):
     prompted_by_model = "subagents" in pathlib.Path(path).parts
-    events, misses = [], []
+    # A subagent's prompt is written by the model that delegated, so its misses are kept apart from human ones.
+    events, misses, sub_misses, probes = [], [], [], []
     turn = {"ts": None, "hits": {}, "loaded": set(), "session": None}
 
     def close():
         for s in turn["hits"].keys() - turn["loaded"]:
-            misses.append([turn["ts"], s, turn["hits"][s], turn["session"]])
+            (sub_misses if prompted_by_model else misses).append([turn["ts"], s, turn["hits"][s], turn["session"]])
 
     with open(path, errors="replace") as f:
         for line in f:
-            if '"Skill"' not in line and "<command-name>" not in line and not (
-                    '"type":"user"' in line and '"tool_use_id"' not in line):
+            if '"Skill"' not in line and "<command-name>" not in line and '"Explore"' not in line and not (
+                    '"Bash"' in line and "git" in line) and not ('"type":"user"' in line and '"tool_use_id"' not in line):
                 continue
             try:
                 d = json.loads(line)
@@ -217,7 +220,7 @@ def scan_file(path, inv, resolve):
                     name = resolve(val)
                     turn["loaded"].add(name)
                     events.append([ts, name, "slash", session, cwd])
-                elif not prompted_by_model:
+                else:
                     low = re.sub(r"<pasted_content[^>]*>.*?</pasted_content>", " ", val, flags=re.S).lower()
                     # the phrase that matched, so a miss says which trigger the prompt carried
                     turn["hits"] = {n: p for n, s in inv.items() for p in [next((p for p in s["phrases"] if phrase_in(p, low)), None)] if p}
@@ -226,7 +229,14 @@ def scan_file(path, inv, resolve):
                 continue
             content = _content(d)
             for b in content if isinstance(content, list) else []:
-                if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill"):
+                if not (isinstance(b, dict) and b.get("type") == "tool_use"):
+                    continue
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                if b.get("name") in ("Agent", "Task") and inp.get("subagent_type") == "Explore":
+                    probes.append([ts, "explore", session])
+                elif b.get("name") == "Bash" and GIT_HISTORY_RE.search(str(inp.get("command") or "")):
+                    probes.append([ts, "git_history", session])
+                if b.get("name") != "Skill":
                     continue
                 name = resolve((b.get("input") or {}).get("skill"))
                 if not name:
@@ -238,7 +248,7 @@ def scan_file(path, inv, resolve):
                 turn["loaded"].add(name)
                 events.append([ts, name, trigger, session, cwd])
     close()
-    return {"events": events, "misses": misses}
+    return {"events": events, "misses": misses, "sub_misses": sub_misses, "probes": probes}
 
 
 def transcripts(projects_dir):
@@ -279,6 +289,7 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
         parsed += 1
     events = [e for f in files.values() for e in f["events"]]
     misses = [m for f in files.values() for m in f["misses"]]
+    sub_misses = [m for f in files.values() for m in f["sub_misses"]]
     called = {e[1] for e in events if e[2] != "slash"}
     rows = {n: _row(n, s["source"]) for n, s in inv.items()}
     for ts, name, trig, session, cwd in events:
@@ -309,6 +320,10 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
             r["_miss_phrases"][phrase] = r["_miss_phrases"].get(phrase, 0) + 1
             r["_miss_sessions"].add(session)
             r["last_miss"] = max(r["last_miss"] or "", ts)
+    for ts, name, _, _ in sub_misses:
+        t = parse_ts(ts)
+        if t and name in rows and (now - t).days < LONG:
+            rows[name]["subagent_misses_30d"] += 1
     owners = {}
     for n, s in inv.items():
         for ph in s["phrases"]:
@@ -339,12 +354,31 @@ def collect(projects_dir=None, inv=None, cache_path=None, now=None, miss_thresho
                for s in order if any(r["source"] == s for r in skills)]
     return {"generated_at": iso(now), "windows": {"short": SHORT, "long": LONG}, "miss_threshold": miss_threshold,
             "editable": list(EDITABLE), "files": len(files), "files_parsed": parsed,
-            "scan_seconds": round(time.monotonic() - t0, 2), "sources": sources, "skills": skills}
+            "scan_seconds": round(time.monotonic() - t0, 2), "sources": sources, "skills": skills,
+            "denominators": denominators(events, [p for f in files.values() for p in f["probes"]], now)}
+
+
+def denominators(events, probes, now):
+    """Moments where how, why or arena could have run, per window: the base their use counts are read against."""
+    def within(ts, days):
+        t = parse_ts(ts)
+        return bool(t) and (now - t).days < days
+
+    def short(name):
+        return name.rsplit(":", 1)[-1]
+    out = {}
+    for label, days in ((f"{SHORT}d", SHORT), (f"{LONG}d", LONG)):
+        architect = {e[3] for e in events if short(e[1]) == "architect" and within(e[0], days)}
+        arena = {e[3] for e in events if short(e[1]) == "arena" and within(e[0], days)}
+        out[label] = {"explore_calls": sum(p[1] == "explore" and within(p[0], days) for p in probes),
+                      "git_history_cmds": sum(p[1] == "git_history" and within(p[0], days) for p in probes),
+                      "architect_sessions": len(architect), "architect_sessions_with_arena": len(architect & arena)}
+    return out
 
 
 def _row(name, source):
     return {"name": name, "source": source, "uses_7d": 0, "uses_30d": 0, "uses_total": 0, "auto_30d": 0,
-            "slash_30d": 0, "chained_30d": 0, "last_used": None, "misses_30d": 0, "last_miss": None, "_sessions": set(),
+            "slash_30d": 0, "chained_30d": 0, "last_used": None, "misses_30d": 0, "subagent_misses_30d": 0, "last_miss": None, "_sessions": set(),
             "_repos": set(), "_miss_sessions": set(), "_miss_phrases": {}}
 
 
@@ -564,10 +598,11 @@ def list_misses(skill, cache_path=None, now=None):
     except (OSError, ValueError):
         print("no scan cache yet: run skill_usage.py once")
         return 1
-    rows = sorted((m for f in files.values() for m in f.get("misses", [])
+    rows = sorted(([*m, by] for f in files.values() for key, by in (("misses", ""), ("sub_misses", "  (subagent)"))
+                   for m in f.get(key, [])
                    if len(m) == 4 and m[1] == skill and (t := parse_ts(m[0])) and (now - t).days < LONG), reverse=True)
-    for ts, _, phrase, session in rows:
-        print(f"{ts}  {session or '-'}  \"{phrase}\"")
+    for ts, _, phrase, session, by in rows:
+        print(f"{ts}  {session or '-'}  \"{phrase}\"{by}")
     print(f"{len(rows)} misses of {skill} in {LONG} days (claude --resume <session> opens one)")
     return 0
 
@@ -606,6 +641,9 @@ def main(argv):
     print(f"skills: {len(rep['skills'])} across {len(rep['sources'])} sources · {rep['files']} transcripts "
           f"({rep['files_parsed']} parsed in {rep['scan_seconds']}s) · {len(flagged)} flagged"
           + (f" · {rep['signals']['added']} new signals" if rep.get("signals") else ""))
+    d = rep["denominators"][f"{SHORT}d"]
+    print(f"last {SHORT} days: {d['explore_calls']} Explore calls, {d['git_history_cmds']} git history commands, "
+          f"{d['architect_sessions_with_arena']} of {d['architect_sessions']} architect sessions ran arena")
 
 
 if __name__ == "__main__":

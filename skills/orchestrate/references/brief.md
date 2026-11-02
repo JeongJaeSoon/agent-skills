@@ -17,7 +17,9 @@ SCOPE       Paths this unit may write and paths it may not. Its own worktree and
             name a task-specific directory in this SCOPE; do not assume an unset variable is a path.
             Base: origin/main | origin/feat/<topic> | stacked on #<PR> (gh stack link <lower> <this> --base main).
 CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full when this
-            unit depends on them. A fact you state here (something is absent from the base,
+            unit depends on them. When the unit changes a subsystem no upstream report
+            covers, name `how` (simple mode) for the worker; when it deletes or loosens
+            code whose reason is unknown, name `why` (narrow mode). A fact you state here (something is absent from the base,
             an evidence id) comes from a check that could have come out the other way:
             `git merge-base --is-ancestor <commit> <base>`, or a search that also finds a
             symbol known to exist. An empty `git grep -E` proves nothing (`\b` is a GNU
