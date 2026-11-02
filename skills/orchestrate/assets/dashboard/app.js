@@ -1079,6 +1079,8 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) poll
 setInterval(pollState, POLL_MS);
 setInterval(() => { if (isFleet() && BRIEF_FED.includes(S.section) && !document.hidden) pollBrief(); }, POLL_MS);
 setInterval(() => { if (isFleet() && S.section === "sent" && !document.hidden) pollSent(); }, POLL_MS);
+// Its own timer: pollState skips the render when the fleet is unchanged, and the pressure round records regardless.
+setInterval(() => { if (isFleet() && S.section === "overview" && !document.hidden) pollPressure(); }, POLL_MS);
 setInterval(pollPrograms, PROGRAMS_MS);
 setInterval(pollHealth, PROGRAMS_MS);
 setInterval(tick, 1000);

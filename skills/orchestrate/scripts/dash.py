@@ -1375,6 +1375,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/fleet/jobs":
             # Read on every poll, not folded into state.json: a tick that fails never rewrites state.json.
             return self.send_cached(json.dumps(jobs.snapshot(JOBS), ensure_ascii=False).encode())
+        if path == "/api/fleet/pressure":
+            hours = re.search(r"[?&]hours=(\d{1,2})\b", self.path)
+            return self.send_cached(json.dumps(pressure_report(int(hours.group(1)) if hours else 6), ensure_ascii=False).encode())
         if path in ("/api/fleet/flow", "/api/fleet/changes"):
             return self.send_cached(flow_report(path.rsplit("/", 1)[1]))
         if path == "/api/fleet/brief":
@@ -1715,6 +1718,25 @@ def periodic_report():
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
     return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok", "done", "open", "table_rows")} | {"closed": closed_recent()}
+
+
+PRESSURE = HERE.parents[1] / "reap-resources" / "scripts" / "pressure.py"
+
+
+def pressure_report(hours=6):
+    """reap-resources' pressure history, run per request like the brief: its files, thresholds and config are that
+    script's, so this server keeps no copy of them. It reads files only; the LaunchAgent's round does the measuring."""
+    try:
+        r = subprocess.run([sys.executable, str(PRESSURE), "history", "--hours", str(hours)], capture_output=True,
+                           text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return {"error": "pressure.py history timed out after 15 s"}
+    except OSError as e:
+        return {"error": f"pressure.py history: {e}"}
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return {"error": (r.stderr.strip().splitlines() or [f"pressure.py history exited {r.returncode}"])[-1]}
 
 
 def closed_recent(days=7):

@@ -285,6 +285,11 @@ sample while it is younger than `sample_fresh_minutes` (7). An older sample is l
 - Never: `compose down -v`, `docker system prune`, volume or image removal, a kill by pattern, anything of a card or
   lead that is still working (reap's own rules keep those).
 
+Every round that saves also appends one point (level, the charted metrics, the held-queue count) to
+`<state>/pressure-history.jsonl`, which keeps the last 24 hours. `pressure.py history [--hours H]` prints those points
+with the last round, the thresholds and the queue as JSON, reading files only; the orchestrate dashboard's Overview
+draws its PC load panel from it.
+
 `hooks/pressure_gate.py` (PreToolUse, Bash) denies `orch heavy`, `docker compose … up` and `orca worktree create`
 while the level is danger, and at warn until a round ran its scan in the last `gate_fresh_minutes` (15; a failed scan
 counts, so warn never holds for good). At danger the deny puts the command in a queue

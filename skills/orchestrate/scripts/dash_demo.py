@@ -528,11 +528,38 @@ def build(root, now=None):
     t = now.timestamp() - 7 * 60  # reap-hard's last pass, as scripts/reap_hard.py writes it
     (root / "reap-hard-last.json").write_text(json.dumps({"t": t, "at": _ago(now, 7 / 60), "run": "demo", "dry_run": False, "acted": 2,
                                                           "skipped": 0, "failed": 0, "kept": 5, "notes": [], "dark": []}))
+    seed_pressure(root, now.timestamp())
     # The fleet collector must never write the real ~/.local/state or read the real config from a demo or test.
     return {"ORCH_FLEET_STATE": str(root / "fleet-state"), "ORCH_FLEET_CONFIG": str(root / "fleet-config.json"),
             "PROGRAMS_HOME": str(root / "programs"), "AGENT_SKILLS_STATE": str(root), "CLAUDE_PROJECTS_DIR": str(projects), "ORCH_SKILLS": "off", "ORCH_PR_STATS": "off", "ORCH_TOKENS": "off", "DASH_DEMO_FIXTURES": str(root / "fixtures"),
             "TRACKER_FIXTURES": str(root / "fixtures" / "tracker"), "TRACKER_PY": str(bin_ / "tracker.py"),
             "PATH": f"{bin_}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
+def seed_pressure(root, now):
+    """A day of reap-resources pressure rounds (pressure.py's file shapes): a build storm two hours ago that went to
+    danger and held a start, still in the queue, over a quiet baseline."""
+    import math
+    rows, step = [], 180
+    for i in range(24 * 3600 // step, -1, -1):
+        t = now - i * step
+        if 5 * 3600 < i * step < 5.5 * 3600:
+            continue  # a sleep: the chart breaks its line here
+        storm = max(0.0, 1 - abs(i * step - 2 * 3600) / 2400)
+        load = round(0.45 + 0.15 * math.sin(i / 17) + 1.9 * storm + (0.9 if i * step < 1200 else 0), 2)
+        mem = round(58 - 30 * storm + 4 * math.cos(i / 23))
+        level = "danger" if load >= 2.0 else "warn" if load >= 1.3 or mem <= 20 else "ok"
+        rows.append({"t": t, "level": level, "queued": 1 if storm > 0.6 or i * step < 600 else 0, "load_per_cpu": load,
+                     "cpu_idle_pct": round(max(1.0, 70 - 60 * storm), 1), "mem_free_pct": mem, "swap_gb": 3.2,
+                     "swapout_pps": round(400 * storm, 1), "containers": 12 + round(26 * storm), "docker_mem_pct": 41.0,
+                     "disk_free_gb": 212.4})
+    (root / "pressure-history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    last = rows[-1]
+    metrics = {k: v for k, v in last.items() if k not in ("t", "level", "queued")} | {"cpus": 18, "load5": round(last["load_per_cpu"] * 18, 1)}
+    (root / "pressure.json").write_text(json.dumps({"t": last["t"], "level": last["level"], "why": [f"load_per_cpu {last['load_per_cpu']:g} ≥ 1.3"], "metrics": metrics}))
+    (root / "pressure-queue.json").write_text(json.dumps({"q-0fake001": {
+        "id": "q-0fake001", "session": "demo", "command": "docker compose up -d", "what": "docker compose up", "why": "load_per_cpu 2.3 ≥ 2", 
+        "added": now - 420, "deadline": now + 480, "attempts": 1, "state": "waiting"}}))
 
 
 def seed_holds(root, now=None):

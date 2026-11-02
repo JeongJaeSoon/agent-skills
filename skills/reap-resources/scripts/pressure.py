@@ -11,6 +11,9 @@ Usage:
   pressure.py queue | queue wait <id>
                      the heavy starts the hook held at danger; wait exits 0 once the hook would let that one through
                      (its session runs the same command again), 3 when it should not run (deadline passed, or gone)
+  pressure.py history [--hours H]
+                     JSON for the dashboard: the last round's level and metrics, the thresholds, the queue, and one
+                     point per round over the last H hours (default 6, at most 24). Reads files only, measures nothing
   pressure.py install [--here] | uninstall | status
                      macOS LaunchAgent running `round` every `interval` seconds
 
@@ -31,6 +34,11 @@ PLIST = pathlib.Path(f"~/Library/LaunchAgents/{LABEL}.plist").expanduser()
 STATE_FILE = reap.STATE / "pressure.json"
 PLAN = reap.STATE / "pressure-plan.json"
 LOG = reap.STATE / "pressure.log"
+# One line per round, rewritten down to HISTORY_KEEP_S once its oldest line is an hour past it.
+HISTORY = reap.STATE / "pressure-history.jsonl"
+HISTORY_KEEP_S = 24 * 3600
+HISTORY_FIELDS = ("load_per_cpu", "cpu_idle_pct", "mem_free_pct", "swap_gb", "swapout_pps", "containers",
+                  "docker_mem_pct", "disk_free_gb")
 # Left by uninstall so `skills-sync setup apply` keeps a job the user turned off off; install removes it.
 DISABLED = reap.STATE / "pressure-disabled"
 
@@ -306,6 +314,58 @@ def log(msg):
     reap.STATE.mkdir(parents=True, exist_ok=True)
     with LOG.open("a") as f:
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}\n")
+
+
+def history_read(since=0, path=None):
+    out = []
+    with contextlib.suppress(OSError):
+        for line in (path or HISTORY).read_text().splitlines():
+            with contextlib.suppress(ValueError):
+                row = json.loads(line)
+                if isinstance(row, dict) and isinstance(row.get("t"), (int, float)) and row["t"] >= since:
+                    out.append(row)
+    return out
+
+
+def history_add(record, queued, path=None):
+    """Append this round's point. Only a round writes, under pressure.lock, so the rewrite races no other writer."""
+    path = path or HISTORY
+    row = {"t": record["t"], "level": record["level"], "queued": queued,
+           **{k: record["metrics"].get(k) for k in HISTORY_FIELDS}}
+    reap.STATE.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps(row) + "\n")
+    first = None
+    with path.open() as f, contextlib.suppress(ValueError, TypeError, KeyError):
+        first = float(json.loads(f.readline())["t"])
+    # A first line that does not parse is rewritten away as well.
+    if first is None or first < record["t"] - HISTORY_KEEP_S - 3600:
+        kept = history_read(record["t"] - HISTORY_KEEP_S, path)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("".join(json.dumps(r) + "\n" for r in kept))
+        tmp.replace(path)
+
+
+def queued_count(q=None):
+    return sum(e["state"] in ("waiting", "retrying") for e in (queue_read() if q is None else q).values())
+
+
+def history_report(cfg, hours=6, now=None):
+    """What the dashboard's PC load panel draws. The current values are the last round's, not a fresh measure: a
+    page poll must not run docker."""
+    now = now or time.time()
+    hours = max(1, min(int(hours), HISTORY_KEEP_S // 3600))
+    st = load_state()
+    q = queue_read()
+    return {"now": now, "hours": hours, "interval": cfg["interval"], "installed": PLIST.exists(),
+            "last": {k: st.get(k) for k in ("t", "level", "why", "metrics")} if st.get("t") else None,
+            # A danger of inf means warn only, like None; JSON has no inf.
+            "thresholds": {k: [t if t is None or math.isfinite(float(t)) else None for t in cfg[k][:2]]
+                           for k, _ in CHECKS},
+            "higher_worse": {k: higher for k, higher in CHECKS},
+            "queue": [{k: e.get(k) for k in ("id", "what", "why", "state", "added", "deadline")}
+                      for e in sorted(q.values(), key=lambda e: e["added"]) if e["state"] in ("waiting", "retrying")],
+            "series": history_read(now - hours * 3600)}
 
 
 # ---------------------------------------------------------------- reap and consumers
@@ -718,6 +778,8 @@ def round_once(cfg, dry_run, out=print, now=None, measure_fn=measure, sample_fn=
             out(f"- 대기열 {e['id']} 포기(기한 지남): {e['what']}")
     if not dry_run:  # before the sweep, which can take minutes: the hook and check judge this sample meanwhile
         save_state({**st, **record})
+        with contextlib.suppress(OSError):  # the chart's point is not worth failing the round over
+            history_add(record, queued_count())
     if level == "ok":
         if not dry_run:
             if st.get("level") not in (None, "ok"):
@@ -887,7 +949,7 @@ def overrides(argv):
 
 def main(argv):
     cmd = argv[0] if argv else ""
-    cfg = config(overrides(argv)) if cmd in ("check", "round", "queue") else None
+    cfg = config(overrides(argv)) if cmd in ("check", "round", "queue", "history") else None
     if cmd == "check":
         m = snapshot(cfg, load_state())
         level, why = judge(m, cfg)
@@ -910,6 +972,10 @@ def main(argv):
             return 3
     if cmd == "queue":
         return cmd_queue(argv[1:], cfg)
+    if cmd == "history":
+        hours = argv[argv.index("--hours") + 1] if "--hours" in argv[:-1] else 6
+        print(json.dumps(history_report(cfg, hours if str(hours).isdigit() else 6), ensure_ascii=False))
+        return 0
     if cmd == "install":
         return cmd_install("--here" in argv)
     if cmd == "uninstall":
