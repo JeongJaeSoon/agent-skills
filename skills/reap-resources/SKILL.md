@@ -308,7 +308,7 @@ ends overdue entries. `python3 "$P" queue` lists entries for a week. A queue tha
 3 seconds, unwritable state) still denies, with the old wait on `check`. Danger from disk alone asks for space to be
 freed instead of a wait, and queues nothing. Each simple command of the line is read on its own (quotes, `sudo`, `env`, `bash -c` included).
 The same hook holds two more things at any level. A line that runs a whole test suite (`tests.sh`, a `for` loop over
-five or more test files, `npm test`, a bare `bun test` or `pytest`, `go test ./...`), an E2E (`playwright test`,
+five or more test files, `npm test`, a bare `bun test`, `pytest`, `jest` or `vitest`, `go test ./...`), an E2E (`playwright test`,
 `cypress run`, an `e2e` script) or a headless Chrome outside `orch heavy` is denied with the same line wrapped in
 `orch heavy - -- bash -c '…'`, so the two machine-wide slots cap what already-running cards run, not only what
 starts. A new card (`orca worktree create`, a worker into a new worktree) is denied while Orca

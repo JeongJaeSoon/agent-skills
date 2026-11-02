@@ -40,10 +40,31 @@ POST = {"PostToolUse": "done", "PostToolUseFailure": "failed"}
 NEW_CARD = ("orca worktree create", "orca orchestration worker-start")
 
 
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1")
+
+
+def drop_heredocs(cmd):
+    """cmd without the bodies of its here-documents, which are data (`cat > a.md <<EOF`), except where a shell
+    reads the body as commands (`bash <<EOF`)."""
+    out, lines = [], iter(cmd.split("\n"))
+    for line in lines:
+        out.append(line)
+        m = HEREDOC.search(line)
+        words = line.split()
+        if not m or words and os.path.basename(words[0]) in SHELLS:
+            continue
+        for body in lines:
+            if (body.lstrip("\t") if line[m.start():].startswith("<<-") else body) == m.group(2):
+                out.append(body)
+                break
+    return "\n".join(out)
+
+
 def segments(cmd):
     """The simple commands of a shell line as argv lists, split on unquoted ; & | ( ) and newlines.
-    A `bash -c '<text>'` is read as its own line. Unparsable text gives no segments."""
-    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();&|\n")
+    A `bash -c '<text>'` is read as its own line; a here-document body is not read. Unparsable text gives no
+    segments."""
+    lex = shlex.shlex(drop_heredocs(cmd), posix=True, punctuation_chars="();&|\n")
     lex.whitespace, lex.whitespace_split = " \t\r", True
     out, cur = [], []
     try:
@@ -127,7 +148,8 @@ LOOPERS = {"for", "python", "python3", "pytest", "node", "bun", "deno", "go"}
 # A redirection (`> out.txt`, `2>`, `&>`) and its target select no test.
 REDIRECT = re.compile(r"\d*(>>?|<<?|&>>?|>&)")
 # A runner given a test path (`tests/`, `tests/unit`, `a.test.ts`, `x.py::t`) or a name filter runs a subset.
-FILTERS = {"-k", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter"}
+FILTERS = {"-k", "-t", "-g", "--grep", "--testNamePattern", "--test-name-pattern", "-run", "--filter",
+           "--testPathPattern", "--testPathPatterns", "--findRelatedTests", "--changed", "--onlyChanged", "-o"}
 TEST_DIR = re.compile(r"(.*/)?(tests?|specs?|__tests__)(/.*)?", re.I)
 # Options of pytest, bun, jest and vitest whose next word is a value (an output path, a count), never a test.
 VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "--cov", "--cov-report",
@@ -172,7 +194,7 @@ def runs_tests(argv):
         else:
             kept.append(w)
     words = [w for w in kept if w]
-    if not words or "--help" in words:
+    if not words or {"--help", "--version"} & set(words):
         return None
     head = os.path.basename(words[0])
     if head in SHELLS and len(words) > 1 and not words[1].startswith("-"):
@@ -201,6 +223,8 @@ def runs_tests(argv):
             return "test suite"
     if head == "make" and args:
         return "E2E" if any(E2E.fullmatch(a) for a in args) else "test suite" if "test" in args else None
+    if head in ("jest", "vitest") and not narrowed([w for w in words[1:] if w not in ("run", "watch")]):
+        return "test suite"
     if head == "pytest" and not narrowed(words[1:]) or head == "go" and args[:2] == ["test", "./..."]:
         return "test suite"
     return None

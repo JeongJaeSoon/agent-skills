@@ -64,7 +64,10 @@ for cmd, what in (("bash tests.sh", "test suite"), ("cd /w && ./scripts/run-test
                   ("if true; then pytest; fi", "test suite"),
                   # Only an assignment in front of the command is the user's go-ahead, not text that mentions it.
                   ('echo "AGENT_SKILLS_PRESSURE_GATE=0"; npm test', "test suite"),
-                  ("for t in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do "$t"; done', "test suite")):
+                  ("for t in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do "$t"; done', "test suite"),
+                  ("npx vitest run", "test suite"), ("npx jest --runInBand", "test suite"), ("vitest", "test suite"),
+                  ("jest", "test suite"), ("bash <<'EOF'\nnpm test\nEOF", "test suite"),
+                  ("cat > a.md <<'EOF'\nx\nEOF\nnpm test", "test suite")):
     assert g.unwrapped_tests(cmd) == what, (cmd, g.unwrapped_tests(cmd))
 for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -- a.test.ts", "pytest tests/test_a.py",
             "go test ./pkg/a", "npx playwright install chromium", "orch heavy - -- bash tests.sh",
@@ -75,7 +78,9 @@ for cmd in ("python3 hooks/test_guard.py", "bun test src/a.test.ts", "npm test -
             "pytest -x tests/", "pytest tests/unit", "bun test --bail src/a.spec.ts",
             "python3 -m pytest tests/test_a.py", "uv run pytest -k slow", "for f in a b; do echo $f; done",
             "for f in " + " ".join(f"test_{i}.py" for i in range(6)) + '; do cat "$f"; done',
-            "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'cd app && npx playwright test'"):
+            "AGENT_SKILLS_PRESSURE_GATE=0 bash -c 'cd app && npx playwright test'",
+            "cat > README.md <<'EOF'\nnpm test\nEOF", "cat <<-EOF > a.md\n\tpytest\n\tEOF",
+            "npx vitest run src/a.test.ts", "jest -t login", "npx jest --testPathPattern auth", "vitest --version"):
     assert g.unwrapped_tests(cmd) is None, cmd
 wrapped = g.wrap_reason("cd /w && bash tests.sh", "test suite")
 assert wrapped.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) ") and "run_in_background" in wrapped
