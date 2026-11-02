@@ -77,6 +77,19 @@ def orca_all(*args):
     return out.get("result", out) if out.get("ok", True) else {}
 
 
+def all_workers(deadline):
+    """Every page of worker-list over every Run; a list cut short by the budget is a failure, not a smaller fleet."""
+    workers, cursor = [], None
+    while True:
+        if time.time() > deadline - 30:
+            raise TimeoutError("worker-list pages left unread")
+        res = orca_all("orchestration", "worker-list", "--limit", "100", *(["--cursor", cursor] if cursor else []))
+        workers += res.get("workers") or []
+        cursor = (res.get("page") or {}).get("nextCursor")
+        if not (res.get("page") or {}).get("hasMore") or not cursor:
+            return workers
+
+
 def card_name(path):
     return (path or "").rstrip("/").rsplit("/", 1)[-1]
 
@@ -179,29 +192,33 @@ def gather(now, deadline, memo):
     """Everything a round judges, read once. Each source that fails leaves its part empty and says so in notes."""
     facts, notes = {"now": now}, []
 
-    def take(name, fn, default):
+    failed = facts["failed"] = set()
+
+    def take(name, fn, default, source=None):
         try:
             return fn()
         except (SystemExit, Exception) as e:  # one unreadable source must not cost the rest of the round
             notes.append(f"{name} not read: {type(e).__name__}: {str(e)[:120]}")
+            if source:
+                failed.add(source)
             return default
 
-    facts["terminals"] = take("orca terminal list", lambda: prog.orca_json("terminal", "list").get("terminals") or [], [])
+    facts["terminals"] = take("orca terminal list", lambda: prog.orca_json("terminal", "list")["terminals"], [], "terminals")
     facts["waits"] = take("orca worktree ps --agent-wait", prog.agent_waits, {})
-    facts["workers"] = take("orca worker-list", lambda: orca_all("orchestration", "worker-list", "--limit", "100")
-                            .get("workers") or [], [])
+    facts["workers"] = take("orca worker-list", lambda: all_workers(deadline), [], "workers")
     st = fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
     at = fleet.parse(st.get("generated_at")) if st.get("generated_at") else None
     if not at or (fleet.utcnow() - at).total_seconds() > 600:
         notes.append("collector state.json missing or 10+ min old: parents, PRs and the board not judged")
+        failed.add("state")
         st = {}
     facts["sessions"] = st.get("sessions") or []
     facts["prs"] = {p.get("key"): p for p in st.get("prs") or [] if p.get("key")}
     facts["board"] = fleet.read_json(fleet.state_dir() / "board.json", {}) or {} if st else {}
     facts["state"] = st
-    facts["supersedes"] = take("orch sent log", lambda: sent_supersedes(fleet.utcnow()), [])
+    facts["supersedes"] = take("orch sent log", lambda: sent_supersedes(fleet.utcnow()), [], "sent")
     facts["level"], _ = pressure_level()
-    facts["consumers"] = take("pressure consumers", consumers, []) if facts["level"] in ("warn", "danger") else []
+    facts["consumers"] = take("pressure consumers", consumers, [], "consumers") if facts["level"] in ("warn", "danger") else []
     paths = {t.get("worktreePath") for t in facts["terminals"] if t.get("worktreePath")}
     paths |= {s.get("path") for s in facts["sessions"] if s.get("path")}
     facts["tails"] = {p: transcript_tail(p) for p in paths if p}
@@ -216,6 +233,7 @@ def gather(now, deadline, memo):
             break
         screens[h] = take(f"screen {h}", lambda: prog.read_screen(h), None)
     facts["screens"] = {h: s for h, s in screens.items() if s is not None}
+    facts["fresh"] = set(facts["screens"])  # screens with new output; an idle candidate's read later is not
     facts["read"] = prog.read_screen
     facts["watchers"] = {}
     for s in facts["sessions"]:
@@ -281,8 +299,9 @@ def judge(facts, memo):
                 add("X", path, (w.get("dispatchId"),), f"worker {w.get('dispatchId')} exited with its task in progress: "
                     f"worker-read --source transcript, then worker-stop or worker-abandon on positive evidence only",
                     w.get("agentTerminalHandle"))
+    failed = facts.get("failed") or set()
     for path, (motion, last) in facts["tails"].items():
-        if path in run_paths or not path:
+        if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             continue
         handle = next((t["handle"] for t in agents if t.get("worktreePath") == path), None)
         if path not in agent_paths:
@@ -316,7 +335,7 @@ def judge(facts, memo):
         det = facts["prs"].get(pr) or {}
         if s.get("agents") or s.get("path") in agent_paths or (det.get("state") or "").upper() != "OPEN":
             continue
-        if det.get("reviewers") or str(det.get("ci") or "").lower() in ("pending", "running", "in_progress", "queued"):
+        if any(r.get("requested") for r in det.get("reviewers") or []) or str(det.get("ci") or "").lower() in ("pending", "running", "in_progress", "queued"):
             continue
         h = first_seen(f"O:{s.get('path')}:{pr}")
         if h >= ORPHAN_H:
@@ -339,16 +358,18 @@ def judge(facts, memo):
                 handle=iid)
     # E: one error line in ERROR_ROUNDS rounds in a row, each with new output.
     hist = memo.get("errors") or {}
+    fresh = facts.get("fresh", set(facts["screens"]))
     for t in agents:
         h = t.get("handle")
-        if h in facts["screens"]:
-            keys = error_keys(facts["screens"][h])
-            runs = [set(x) for x in (hist.get(h) or [])][-(ERROR_ROUNDS - 1):] + [keys]
-            new_memo["errors"][h] = [sorted(x) for x in runs]
-            for k in sorted(set.intersection(*runs) if len(runs) >= ERROR_ROUNDS else ()):
-                add("E", t.get("worktreePath"), (k,), f"❔ the same error in {ERROR_ROUNDS} rounds: {k[:120]}", h)
-        elif h in hist:
-            new_memo["errors"][h] = hist[h]
+        if h in fresh:
+            runs = [set(x) for x in (hist.get(h) or [])][-(ERROR_ROUNDS - 1):] + [error_keys(facts["screens"][h])]
+        elif h in hist:  # no new output: the run neither grows nor breaks, and a standing E stays
+            runs = [set(x) for x in hist[h]]
+        else:
+            continue
+        new_memo["errors"][h] = [sorted(x) for x in runs]
+        for k in sorted(set.intersection(*runs) if len(runs) >= ERROR_ROUNDS else ()):
+            add("E", t.get("worktreePath"), (k,), f"❔ the same error in {ERROR_ROUNDS} rounds: {k[:120]}", h)
     # L: at warn or danger, a top consumer held by a card that is not working.
     load = []
     for c in facts["consumers"]:
@@ -357,6 +378,8 @@ def judge(facts, memo):
         if v in VERDICT_OF.values():
             add("L", c["card"], (c["what"], facts["level"]), f"PC {facts['level']}: {c['what']} "
                 f"(CPU {c.get('cpu') or 0:.0f}%) held by a card judged {v}")
+    if "state" in failed:  # O and D could not look: their day-long clocks keep running
+        new_memo["first_seen"] = dict(memo.get("first_seen") or {})
     # W: the orchestrator's screen watch.
     for h, last in facts["watchers"].items():
         if not last or now - last[0] > WATCH_DOWN_MIN * 60:
@@ -378,21 +401,33 @@ def open_findings(rows=None):
     for r in rows if rows is not None else log_rows():
         if r.get("op") == "found":
             out[r["id"]] = r
+        elif r.get("op") == "owner" and r["id"] in out:
+            out[r["id"]] = {**out[r["id"]], "owner": r.get("owner")}
         elif r.get("op") in ("clear", "ack"):
             out.pop(r["id"], None)
     return out
 
 
-def write_round(findings, verdicts, dry, now):
-    """Append what is new, clear what went away, keep Needs you in step. (new, cleared)."""
+# The sources each rule reads: a finding whose source failed this round is kept, not cleared.
+DEPENDS = {"I": {"terminals", "workers"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
+           "O": {"state", "terminals"}, "D": {"state"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers"},
+           "W": {"state"}}
+
+
+def write_round(findings, verdicts, dry, now, failed=()):
+    """Append what is new, clear what went away, keep Needs you in step, and move a finding to its current owner
+    (the session that started its card, or nobody once that session is gone). (new, cleared)."""
     rows = log_rows()
     live, acked = open_findings(rows), {r["id"] for r in rows if r.get("op") == "ack"}
     at = fleet.iso(dt.datetime.fromtimestamp(now, dt.timezone.utc))
     ids = {f["id"] for f in findings}
     new = [f for f in findings if f["id"] not in live and f["id"] not in acked]
-    gone = [r for i, r in live.items() if i not in ids]
+    gone = [r for i, r in live.items() if i not in ids and not DEPENDS.get(r.get("code"), set()) & set(failed)]
+    moved = [f for f in findings if f["id"] in live and live[f["id"]].get("owner") != f.get("owner")]
     if dry:
         return new, gone
+    for f in moved:
+        fleet.append_line(LOG, {"op": "owner", "id": f["id"], "owner": f.get("owner"), "at": at})
     for f in new:
         fleet.append_line(LOG, {"op": "found", **f, "title": fleet.mask(f["title"], 300), "detected_at": at})
         if f["code"] in NEEDS_YOU:
@@ -450,8 +485,8 @@ def due(memo, level, now):
     return rose or now - (memo.get("t") or 0) >= DUE_S
 
 
-class Budget(Exception):
-    pass
+class Budget(BaseException):
+    """The round's 120 seconds ran out. Not an Exception, so no per-source handler swallows it."""
 
 
 def round_once(dry=False, if_due=False, now=None, gather_fn=gather):
@@ -463,7 +498,7 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather):
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
-    new, gone = write_round(findings, verdicts, dry, now)
+    new, gone = write_round(findings, verdicts, dry, now, facts.get("failed") or ())
     if not dry:
         fleet.write_atomic(MEMO, json.dumps(memo2))
     agents = [t for t in facts["terminals"] if t.get("agentIdentity")]

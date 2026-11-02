@@ -2445,6 +2445,10 @@ def cmd_wait(argv):
             print("\n".join(stalled), flush=True)
             print("STALLED: a worker stopped with its ticket open and nothing will wake it; wake it now", flush=True)
             return
+        if watched := watch_lines(me, False):  # each shows at most once per 30 minutes, so this ends no wait twice
+            print("\n".join(watched), flush=True)
+            print("PATROL: act on the lines above, then wait again", flush=True)
+            return
     print_sweep(run_id, p.dir / "self-check.json")
     print_stuck(p, run_id)
     print_reviews(p)

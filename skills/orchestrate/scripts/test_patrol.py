@@ -78,14 +78,19 @@ assert v["cards"]["/w/a"] == "superseded"
 sess = [{"id": "s1", "path": "/w/p", "agents": [], "linked_pr": {"key": "acme/app#1"}},
         {"id": "s2", "path": "/w/q", "agents": [], "linked_pr": {"key": "acme/app#2"}}]
 prs = {"acme/app#1": {"state": "OPEN", "reviewers": [], "ci": "success"},
-       "acme/app#2": {"state": "OPEN", "reviewers": [{"login": "someone"}], "ci": "success"}}
+       "acme/app#2": {"state": "OPEN", "reviewers": [{"login": "someone", "requested": True}], "ci": "success"},
+       "acme/app#3": {"state": "OPEN", "reviewers": [{"login": "bot", "requested": False, "status": "commented"}], "ci": "success"}}
+sess.append({"id": "s3", "path": "/w/r", "agents": [], "linked_pr": {"key": "acme/app#3"}})
 f = facts(sessions=sess, prs=prs)
 found, _, memo = patrol.judge(f, {})
-assert found == [] and memo["first_seen"] == {"O:/w/p:acme/app#1": NOW}, memo
+assert found == [] and memo["first_seen"] == {"O:/w/p:acme/app#1": NOW, "O:/w/r:acme/app#3": NOW}, memo
 found, _, memo = patrol.judge({**f, "now": NOW + 25 * 3600}, memo)
-assert codes(found) == [("O", "p")] and found[0]["session"] == "s1", found
+assert codes(found) == [("O", "p"), ("O", "r")] and found[0]["session"] == "s1", "a past review is nobody waiting"
+_, _, kept = patrol.judge(facts(failed={"state"}), memo)
+assert kept["first_seen"] == memo["first_seen"], "a stale collector does not restart the day-long clock"
+memo = {"first_seen": {"O:/w/p:acme/app#1": NOW, "O:/w/r:acme/app#3": NOW}}
 found, _, memo2 = patrol.judge({**f, "prs": {**prs, "acme/app#1": {**prs["acme/app#1"], "state": "MERGED"}}}, memo)
-assert found == [] and memo2["first_seen"] == {}, "a PR that moved on forgets its first sighting"
+assert found == [] and list(memo2["first_seen"]) == ["O:/w/r:acme/app#3"], "a PR that moved on forgets its first sighting"
 
 # D: a doing item that names no PR or card, a day on; one naming a PR is tidy's to judge.
 board = {"doing": [{"title": "follow up with infra", "owner": "someone", "next": "ask"},
@@ -110,6 +115,17 @@ assert patrol.error_keys(["⏺ quoting: Error: x", "✻ Running… (esc to inter
 assert patrol.error_keys(["  ⎿  Error: old", "⏺ Fixed it.", "❯ "]) == set(), "only lines after the last turn mark"
 _, _, m3 = patrol.judge(facts(terminals=[term("h1", "/w/a")]), memo)
 assert m3["errors"]["h1"] == memo["errors"]["h1"], "a round that read no screen keeps the history"
+f3 = facts(terminals=[term("h1", "/w/a")])
+assert [x["code"] for x in patrol.judge(f3, memo)[0]] == ["E"], "a standing E stays while no new output comes"
+memo = {}
+for t in (3, 4, 5):  # read only as an idle candidate: not new output, so the run does not grow
+    _, _, memo = patrol.judge(facts(terminals=[term("h1", "/w/a")], screens={"h1": scr(t)}, fresh=set()), memo)
+assert memo["errors"] == {}, memo
+
+# Without the Run list, no card is judged idle: a worker would look like one.
+f4 = facts(terminals=[term("h1", "/w/a")], tails={"/w/a": (idle(40), None)}, failed={"workers"})
+assert patrol.judge(f4, {})[0] == []
+assert issubclass(patrol.Budget, BaseException) and not issubclass(patrol.Budget, Exception), "no handler swallows it"
 
 # L: at warn or danger, a top consumer held by a card judged idle; a working card's is shown, not raised.
 f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b")], tails={"/w/a": (idle(40), None), "/w/b": (idle(1), None)},
@@ -142,6 +158,11 @@ assert patrol.pending_lines("hl", False, T) == [], "not again within 30 minutes"
 assert patrol.pending_lines("hl", False, T + dt.timedelta(minutes=31))[0].startswith("PATROL X Xabc")
 assert [l.split()[2] for l in patrol.pending_lines("ho", True, T)[:-1]] == ["Iabc"], "the unowned go to the orchestrator"
 assert patrol.pending_lines("hz", False, T) == []
+new, gone = patrol.write_round([x], verd, False, NOW + 90, failed={"workers"})
+assert gone == [], "a finding whose source failed this round is kept, not cleared"
+new, gone = patrol.write_round([{**x, "owner": None}, i], verd, False, NOW + 100)
+assert patrol.open_findings()["Xabc"]["owner"] is None, "its starter gone, the finding goes to the orchestrator"
+assert "Xabc" in " ".join(patrol.pending_lines("ho", True, T + dt.timedelta(hours=1)))
 new, gone = patrol.write_round([x], verd, False, NOW + 120)
 assert [r["id"] for r in gone] == ["Iabc"] and "Iabc" not in patrol.open_findings()
 assert patrol.ack(["Xabc", "nope"]) == ["Xabc"] and patrol.open_findings() == {}
