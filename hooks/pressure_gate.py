@@ -212,7 +212,9 @@ TEST_DIR = re.compile(r"(.*/)?(tests?|specs?|__tests__)(/.*)?", re.I)
 VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "--cov", "--cov-report",
               "--basetemp", "--rootdir", "--durations", "--maxfail", "--tb", "--log-file", "--html", "--timeout",
               "--coverage-dir", "--coverage-reporter", "--preload", "--rerun-each", "--reporter", "--reporter-outfile",
-              "--outputFile", "--coverageDirectory", "--config", "--workers", "--maxWorkers"}
+              "--outputFile", "--coverageDirectory", "--config", "--workers", "--maxWorkers", "--confcutdir",
+              "--ignore", "--ignore-glob", "--deselect", "--cov-config", "--override-ini", "--import-mode", "--color",
+              "--capture", "-r", "--cache-dir", "--junit-prefix", "--log-level", "--log-cli-level", "--setup-timeout"}
 # Shell words before the command a loop or branch runs: `for d in a b; do npm test; done`.
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 
@@ -254,8 +256,11 @@ def runs_tests(argv):
         return None
     head = ""
     while head != (head := os.path.basename(words[0])):  # peel launchers until the program shows: `uv run python -m pytest`
-        if head in SHELLS and len(words) > 1 and not words[1].startswith("-"):
-            words = words[1:]
+        if head in SHELLS and len(words) > 1:  # `bash -eux tests.sh`; a `-c` body was read by segments()
+            rest = words[1:]
+            while rest and rest[0].startswith("-") and not (rest[0][1:2] != "-" and "c" in rest[0][1:]):
+                rest = rest[2 if rest[0] in ("-o", "+o", "-O", "+O") else 1:]
+            words = rest if rest and not rest[0].startswith("-") else words
         elif head in ("python", "python3") and words[1:3] == ["-m", "pytest"]:
             words = ["pytest"] + words[3:]
         elif head in ("uv", "poetry", "pipenv") and words[1:2] == ["run"] and len(words) > 2:
