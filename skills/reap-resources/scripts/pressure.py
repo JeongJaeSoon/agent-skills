@@ -193,7 +193,7 @@ def judge(m, cfg):
 
 def active_turns(run=sh):
     """Agent turns Orca shows in progress (state "working") over every card; None when Orca cannot say."""
-    out = run(["orca", "worktree", "ps", "--limit", "500", "--json"], timeout=5) if shutil.which("orca") else None
+    out = run(["orca", "worktree", "ps", "--limit", "500", "--json"], timeout=5)  # sh gives None when orca is missing
     try:
         data = json.loads(out or "")
     except ValueError:

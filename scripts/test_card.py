@@ -74,6 +74,7 @@ LEVEL = {"now": "ok"}
 pressure.snapshot = lambda cfg, st, *a, **k: {"load_per_cpu": 3.1}
 pressure.judge = lambda m, cfg: (LEVEL["now"], ["load_per_cpu 3.1"])
 pressure.blocked_by = lambda m, cfg: ["load_per_cpu"]
+pressure.active_turns = lambda run=None: 0  # the new-card turn cap would read this machine's Orca
 sys.path.insert(0, str(HERE))
 import card  # noqa: E402
 import sqlite3  # noqa: E402

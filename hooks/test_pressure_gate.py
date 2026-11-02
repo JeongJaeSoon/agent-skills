@@ -87,6 +87,10 @@ for n, card, compose in ((9, "deny", "none"), (8, "none", "none"), (None, "none"
     assert gate("orca worktree create --repo x", OK) == card, n
     assert gate("orca orchestration worker-start --spec x --worktree new-top-level", OK) == card, n
     assert gate("docker compose up -d", OK) == compose, n
+    # A card started after another heavy start on the line, or inside `orch heavy`, is still a new card.
+    assert gate("docker compose up -d && orca worktree create --repo x", OK) == card, n
+    assert gate("orch heavy - -- orca worktree create --repo x", OK) == card, n
+    assert gate("orch heavy - -- bash -c 'orca worktree create --repo x'", OK) == card, n
 pressure.active_turns = lambda: 12
 turns = g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure)[1]
 assert "12개" in turns and "상한 9개" in turns and "turns --wait 15" in turns and "Monitor" in turns, turns
@@ -94,6 +98,9 @@ pressure.active_turns, pressure.turn_cap = real_turns, real_cap
 assert pressure.active_turns(run=lambda *a, **k: json.dumps({"ok": True, "result": {"worktrees": [
     {"agents": [{"state": "working"}, {"state": "done"}]}, {"agents": [{"state": "working"}]}, {"agents": None}]}})) == 2
 assert pressure.active_turns(run=lambda *a, **k: None) is None
+real_which, pressure.shutil.which = pressure.shutil.which, lambda name: None  # an injected runner needs no orca
+assert pressure.active_turns(run=lambda *a, **k: json.dumps({"worktrees": [{"agents": [{"state": "working"}]}]})) == 1
+pressure.shutil.which = real_which
 assert pressure.active_turns(run=lambda *a, **k: "not json") is None
 ticks = iter([100.0, 100.0, 200.0, 2000.0])
 said = []

@@ -101,6 +101,17 @@ def heavy(cmd):
     return next(filter(None, map(starts_heavy, segments(cmd))), None)
 
 
+def new_card(cmd):
+    """The new-card start a line runs anywhere in it, the command `orch heavy` runs included; None when it runs none."""
+    for seg in segments(cmd):
+        what = starts_heavy(seg)
+        if what in NEW_CARD:
+            return what
+        if what == "orch heavy" and "--" in seg and (inner := new_card(shlex.join(seg[seg.index("--") + 1:]))):
+            return inner
+    return None
+
+
 # A suite script (`tests.sh`, `run-tests.sh`), a test file (`test_x.py`, `x_test.go`, `x.spec.ts`) and the package
 # script names an E2E or browser run goes by.
 SUITE = re.compile(r"(run[-_])?tests?([-_]all)?\.sh")
@@ -220,7 +231,8 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
     level, why = p.judge(metrics, cfg)
     now = now or time.time()
     if p.gate_open(level, state, cfg, now):
-        if what not in NEW_CARD:
+        what = new_card(cmd)
+        if not what:
             return None
         n, cap = p.active_turns(), p.turn_cap(cfg)
         if None in (n, cap) or n < cap:
