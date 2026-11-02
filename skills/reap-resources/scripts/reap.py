@@ -21,15 +21,14 @@ action for its class.
 the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "load_cooldown_minutes": 60, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
-"user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "done_card_hours": 2, "inbox_to": "run:<id>", "plan_repeat": 2,
-"regenerated_untracked": true, "preview_ports": [4500, 4599]}.
+"user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "inbox_to": "run:<id>", "plan_repeat": 2,
+"preview_ports": [4500, 4599]}.
 Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack;
 `--kinds janitor`): card is every Orca card, judged by cards.py; the rest cover only
-what the ledger lists, an Orca orchestration worker made, or Orca records as made by `orca worktree create`
-(cliProvenance created-by-cli, with or without --parent-worktree), never a worktree an Orca automation runs in. user-folder covers only top-level entries of explicitly configured reap.user_folders
+what the ledger lists or an Orca orchestration worker made. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
-default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set. orca-worktree and done-card (a nudge asking an idle session to close itself) are the
-card kinds before card, run only when named in --kinds. reap moves files to the trash and never empties it (the OS may: scan
+default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set.
+orca-worktree and done-card, the card kinds before card, are gone: --kinds or a plan naming them is refused. reap moves files to the trash and never empties it (the OS may: scan
 alerts when Finder's auto-empty is on), and leaves a chrome-window to the agent's browser tools. $AGENT_SKILLS_TRASH replaces the trash with a plain folder.
 The ledger is --ledger or $AGENT_SKILLS_LEDGER, default <state>/ledger.jsonl (state: --state or $AGENT_SKILLS_STATE,
 default ~/.local/state/agent-skills). program moves a closed program untouched for
@@ -41,7 +40,7 @@ planned reap.plan_repeat times with no reap since, retried once a day, with one 
 first exits 1 unless the 5-minute load is at reap.load_limit, the periodic janitor is on, and no precheck ran
 within reap.load_cooldown_minutes (default 60). schedule prints the `orca automations create` command (--load: the load job); only --write runs it.
 """
-import concurrent.futures, contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
+import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
 
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ( "orphan", "docker", "branch", "worktree")
@@ -463,13 +462,10 @@ def scan(kinds, hours, cfg, repo_list):
                               if (x := judge_worktree(repo, w, hours, cwd_of, time.time(), projects_dir, orca))]
             except RuntimeError as e:
                 notes.append(f"{repo}: {e}")
-    if (set(JANITOR) | set(CARD_LEGACY)) & kinds:
+    if set(JANITOR) & kinds:
         items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
-                              regenerated=cfg.get("regenerated_untracked", True) is not False,
                               evidence_roots=cfg.get("evidence_roots"),
-                              done_idle_s=float(cfg.get("done_card_hours") or 2) * 3600,
-                              preview=tuple(cfg.get("preview_ports") or (4500, 4599)),
-                              shell_idle_s=float(cfg.get("idle_minutes") or 30) * 60)
+                              preview=tuple(cfg.get("preview_ports") or (4500, 4599)))
     if "user-folder" in kinds:
         days = user_folder_days(cfg, notes)
         shot_days = days and user_folder_days(cfg, notes, "user_folder_screenshot_days", 1,
@@ -503,9 +499,11 @@ JANITOR = ("card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidenc
            "compose-stack")
 # What the scheduled run covers: the janitor kinds, the user's download and desktop folders, closed programs and hook state.
 SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
-# The card kinds before `card`: asked for by name only. Their ledger lines stay valid.
-CARD_LEGACY = ("orca-worktree", "done-card")
-LEDGER_KINDS = CARD_LEGACY + tuple(k for k in JANITOR if k != "card")
+# The card kinds before `card`, no longer scanned. A plan or --kinds naming them is refused rather than run as nothing.
+# reap.act's "orca-worktree" removal stays: cards.py and reap_hard.py call it.
+RETIRED_KINDS = ("orca-worktree", "done-card")
+# What `ledger add` accepts: the kinds whose scan reads the ledger. `card` reads Orca instead.
+LEDGER_KINDS = tuple(k for k in JANITOR if k != "card")
 # Kinds that would find something new every round; the precheck looks at them once a day.
 DAILY = ("user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
@@ -748,93 +746,6 @@ def judge_orca_worker(rows):
              "how": [f"orca orchestration worker-release --dispatch {w['dispatchId']} --json"]} for w in rows]
 
 
-def judge_orca_worktree(path, source, facts, pr_state, min_age=0):
-    """facts: the git and process state of one checkout, read by worktree_facts. A checkout with no PR goes only when
-    its HEAD is on the remote default branch (end-session §4) and its sessions' transcripts have been quiet for
-    min_age: a new card, and a lead or a read-only card still at work, sit there too."""
-    base = {"kind": "orca-worktree", "key": f"orca-worktree:{path}", "name": path,
-            "how": [f"git -C {shlex.quote(path)} ls-files --others --ignored --exclude-standard --directory 의 항목을 휴지통으로",
-                    f"orca worktree rm --worktree {shlex.quote('path:' + path)} --run-hooks --json"]}
-    if facts.get("regenerated"):
-        base["regenerated"] = facts["regenerated"]
-        base["how"].insert(0, "다시 판정한 뒤 재생성 사본 " + " ".join(shlex.quote(c) for c in facts["regenerated"]) + " 을 휴지통으로")
-    shells = ""
-    if facts.get("shells"):
-        base["shells"], base["terminals"] = facts["shells"], facts.get("terminals") or []
-        for h in base["terminals"]:
-            base["how"].insert(-1, f"orca terminal close --terminal {shlex.quote(h)} --json")
-        shells = f", 프롬프트에 멈춘 셸 {len(facts['shells'])}개는 터미널째 닫음"
-    ref = facts.get("pr")
-    s = pr_state(ref) if ref else None
-    idle = facts.get("idle")
-    if facts.get("live"):
-        why = facts["live"]
-    elif facts.get("shells") and (facts.get("children") or facts.get("children_unread")):
-        # done-card's guard: a lead's shell idles at its prompt while its workers run.
-        why = "자식 카드가 열려 있음" if facts.get("children") else "자식 카드 목록을 읽지 못함"
-    elif not ref and facts.get("pr_unread"):
-        why = "브랜치의 PR 을 읽지 못함(gh)"
-    elif not ref and facts.get("landed") is None:
-        why = "연결된 PR 없음, 기본 브랜치(origin/HEAD)를 모름"
-    elif not ref and not facts["landed"]:
-        why = "연결된 PR 없음"
-    elif ref and s is None:
-        why = f"PR {ref} 상태를 읽지 못함"
-    elif ref and s["state"] == "OPEN":
-        why = f"열린 PR {ref}"
-    elif facts.get("unreadable"):
-        why = "git 상태를 읽지 못함"
-    elif facts.get("dirty"):
-        why = "변경 있음(추적 안 되는 파일 포함)"
-    elif not ref and not facts.get("worker_card"):
-        # A lead or a card opened by hand also sits on the default branch with no PR; only a PR tells it is done.
-        why = "연결된 PR 없음(워커가 만든 카드가 아님)"
-    elif (not ref or facts.get("quiet_needed")) and (idle is None or idle < min_age):
-        why = (f"PR {ref} {s['state'].lower()}" if ref else "연결된 PR 없음") + ", 세션이 " + \
-            ("조용한지 알 수 없음" if idle is None else f"{age(idle)} 만 조용")
-    elif not ref:
-        return {**base, "why": f"PR 없음, HEAD 가 기본 브랜치에 있고 세션이 {age(idle)} 조용 ({source}){shells}", "target": True}
-    elif facts.get("unpushed") and facts.get("head") != s.get("headRefOid"):
-        why = "원격에 없는 커밋"
-    else:
-        return {**base, "why": f"PR {ref} {s['state'].lower()} ({source}){shells}", "target": True}
-    return {**base, "why": why, "target": False}
-
-
-def judge_done_card(path, source, facts, pr_state, quiet, idle_s, asked):
-    """A card only a process keeps (its Claude session idle at the prompt) that would otherwise be an orca-worktree
-    target: the session is asked once to close itself by end-session §8. A card with no PR whose HEAD is on the
-    default branch is asked too. Never a lead or the orchestrator, or a card whose child cards are open or unknown:
-    those wait idle on their workers. None when something else keeps it."""
-    if (facts.get("turn") or not facts.get("users") or facts.get("claude") is False or facts.get("unreadable")
-            or facts.get("dirty") or facts.get("coordinator") or facts.get("children") or facts.get("children_unread")):
-        return None
-    if facts.get("pr"):
-        settled = judge_orca_worktree(path, source, {**facts, "live": None}, pr_state)
-        if not settled["target"]:
-            return None
-        why = settled["why"]
-    elif facts.get("landed"):
-        why = f"PR 없음, HEAD 가 기본 브랜치에 있음 ({source})"
-    else:
-        return None
-    line = close_line(why)
-    base = {"kind": "done-card", "key": f"done-card:{path}", "name": path, "line": line,
-            "how": [f"skills-sync nudge <이 카드의 claude 터미널> {shlex.quote(line)}"]}
-    if asked:
-        return {**base, "why": f"닫기를 이미 요청함({asked}), 아직 열려 있음", "target": False}
-    quiet_s = quiet(path)
-    if quiet_s is None or quiet_s < idle_s:
-        return {**base, "why": "세션이 " + ("조용한지 알 수 없음" if quiet_s is None else f"{age(quiet_s)} 만 조용"),
-                "target": False}
-    return {**base, "why": f"{why}, 세션이 {age(quiet_s)} 조용", "target": True}
-
-
-def close_line(why):
-    return (f"[reap-resources] 이 카드의 일은 끝난 것으로 보인다({why}). 남은 일이 없으면 end-session §8 로 지금 닫고, "
-            "남은 일이 있으면 그것을 한 줄로 답한다")
-
-
 COORDINATOR_ARGV = re.compile(r"--agent[ =]agent-skills:(lead|orchestrator)\b|--name[ =]lead:")
 COORDINATOR_ROLES = ("lead", "orchestrator")
 
@@ -899,30 +810,6 @@ def orca_shell(pid, rows):
     return False
 
 
-def idle_shells(pids, rows):
-    """The pids are only Orca terminal shells sitting at their prompt: a terminal nobody runs anything in."""
-    return (bool(pids) and all(human_shell(q, rows) for p in pids for q in tree(p, rows))
-            and all(orca_shell(p, rows) for p in pids))
-
-
-def shell_sessions(pids, rows):
-    """The outermost shells among pids: one per terminal, whichever app opened it."""
-    return [p for p in pids if rows[p]["ppid"] not in pids]
-
-
-def terminals_silent(path, now, window, sessions):
-    """The handles of the card's Orca terminals when none wrote output for window seconds; False when one did. None
-    when that is unknown: the list unreadable or cut short, an output time or handle missing, a terminal an agent
-    holds (its process may have moved out of the card), or Orca terminals not one per shell session (Terminal, tmux
-    or ssh holds one that `orca terminal close` would not close, or a terminal runs something that is not a shell)."""
-    res = orca_json("terminal", "list", "--worktree", f"path:{path}")
-    terms = res.get("terminals") if isinstance(res, dict) and not res.get("truncated") else None
-    if (not terms or len(terms) != sessions
-            or any(not t.get("lastOutputAt") or not t.get("handle") or t.get("agentIdentity") for t in terms)):
-        return None
-    return all(now - t["lastOutputAt"] / 1000 >= window for t in terms) and [t["handle"] for t in terms]
-
-
 def regenerated_copies(path, git=run):
     """Untracked `.agents/skills/<name>/` directories whose `.claude/skills/<name>` is tracked: Orca regenerates them
     from the tracked skill. [] when nothing is untracked; None when anything else is, or a read failed."""
@@ -968,7 +855,7 @@ def branch_pr(path, git=run, head=None):
     return (m and f"{m.group(1)}#{m.group(2)}") or None, unread
 
 
-def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, regenerated=True):
+def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
     common = git(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=False)
     if common is None:
         return None
@@ -990,7 +877,7 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, regenerated=T
     # Untracked files count: `orca worktree rm` would take new, never-added work with it.
     status = git(["git", "-C", path, "status", "--porcelain"], check=False)
     copies = None
-    if regenerated and status and all(line.startswith("?? ") for line in status.splitlines()):
+    if status and all(line.startswith("?? ") for line in status.splitlines()):
         copies = regenerated_copies(path, git)
     ahead = git(["git", "-C", path, "rev-list", "-n1", "HEAD", "--not", "--remotes"], check=False)
     return {"main": False, "repo": main, "pr": ref, "pr_unread": pr_unread, "landed": landed, "turn": live_turn, "users": users,
@@ -998,22 +885,6 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run, regenerated=T
             # None is a failed read, not an empty answer.
             "unreadable": status is None or ahead is None,
             "dirty": bool(status) and not copies, "regenerated": copies or [], "unpushed": bool(ahead), "head": head}
-
-
-NO_PR_MIN_HOURS = 2
-
-
-def cli_cards(res):
-    """Real paths of worktrees an agent made with `orca worktree create`. Orca records cliProvenance "created-by-cli"
-    with or without --parent-worktree (lineage origin "cli" only with it); the app's own New Worktree records neither.
-    None when the list is unreadable or truncated."""
-    if not isinstance(res, dict) or res.get("truncated"):
-        return None
-    return {real(w["path"]) for w in res.get("worktrees") or []
-            if w.get("path") and not w.get("isMainWorktree") and not w.get("isPinned")
-            and w.get("hostId", "local") == "local"
-            and ((w.get("cliProvenance") or {}).get("kind") == "created-by-cli"
-                 or ((w.get("lineage") or {}).get("origin") == "cli" and (w.get("lineage") or {}).get("parentWorktreeId")))}
 
 
 def orca_json(*args):
@@ -1061,11 +932,6 @@ def worker_worktrees(workers):
         if (w.get("projection") or {}).get("outcome") == "in_progress":
             live[p] = f"살아 있는 워커 턴({w.get('dispatchId')})"
     return live, made, users
-
-
-# Each checkout costs a `gh pr list` and a few git reads, about a second; one after another, 40 cards ran past the
-# automation's precheck timeout.
-FACT_WORKERS = 8
 
 
 def docker_ts(s):
@@ -1185,7 +1051,7 @@ def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599)):
 
 
 def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now=None, evidence_roots=None,
-                 done_idle_s=2 * 3600, quiet=None, regenerated=True, preview=(4500, 4599), shell_idle_s=30 * 60):
+                 preview=(4500, 4599)):
     pr_state = pr_state or pr_reader()
     items = []
     if "card" in kinds:
@@ -1200,8 +1066,8 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
             notes.append("compose-stack: docker 를 읽지 못함, 건너뜀")
         items += judge_compose(entries, stacks or {}, functools.partial(stack_owner, pr_state=pr_state), hours,
                                now or time.time(), preview)
-    rows = processes() if {"gui-app", "tmpdir", "orca-worktree", "done-card"} & kinds else {}
-    cwd_of = cwds() if {"tmpdir", "orca-worktree", "done-card"} & kinds else {}
+    rows = processes() if {"gui-app", "tmpdir"} & kinds else {}
+    cwd_of = cwds() if "tmpdir" in kinds else {}
     if "tmpdir" in kinds:
         items += judge_tmpdirs(entries, pr_state, cwd_of, rows)
     if "gui-app" in kinds:
@@ -1222,78 +1088,6 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         if reclaim is None:
             notes.append("orca-worker: worker-list 를 읽지 못함, 건너뜀")
         items += judge_orca_worker(reclaim or [])
-    if {"orca-worktree", "done-card"} & kinds:
-        workers = orca_workers() if shutil.which("orca") else []
-        if workers is None:
-            notes.append("orca-worktree: 오케스트레이션 워커 목록을 읽지 못함, ledger worktree 는 보존한다")
-        live, made, users = worker_worktrees(workers or [])
-        listing = orca_json("worktree", "list", "--limit", "10000") if shutil.which("orca") else {}
-        cards = cli_cards(listing)
-        if cards is None:
-            notes.append("orca-worktree: orca worktree list 를 읽지 못함, CLI 로 만든 카드는 ledger 에 있는 것만 본다")
-        cards = cards or set()
-        kids = None if not isinstance(listing, dict) or listing.get("truncated") else \
-            {real(w["path"]): [c for i in w.get("childWorktreeIds") or () if os.path.isdir(c := i.split("::")[1] if "::" in i else "")]
-             for w in listing.get("worktrees") or () if w.get("path")}
-        runners = automation_workspaces(orca_json("automations", "list")) if shutil.which("orca") else set()
-        if runners is None:
-            notes.append("orca-worktree: orca automations list 를 읽지 못함, automation 이 도는 worktree 를 가려내지 못한다")
-        ledger = {real(e["id"]): e for e in latest(entries, "orca-worktree")}
-        # A done-card line in the ledger only records that the card was asked once.
-        asked = {real(e["id"]): e.get("ts") for e in latest(entries, "done-card")}
-        projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
-        quiet = quiet or transcript_quiet(projects, now or time.time())
-        repos_real = {real(r) for r in repo_list}
-
-        def read(path):
-            e = ledger.get(path)
-            facts = worktree_facts(path, e and (e.get("links") or {}).get("pr"), live.get(path), cwd_of or {},
-                                   regenerated=regenerated)
-            if facts and facts.get("pr"):
-                pr_state(facts["pr"])  # fills the reader's cache here, in parallel
-            if facts and facts.get("users") and not facts.get("turn"):
-                # Without a Claude session in it there is no one for done-card to ask.
-                facts["claude"] = None if any(p not in rows for p in facts["users"]) else \
-                    any(is_claude(rows[p]["cmd"]) for p in facts["users"])
-                if idle_shells(facts["users"], rows):
-                    # Orca's terminal shell at its prompt holds the card only while someone is using it.
-                    silent = terminals_silent(path, now or time.time(), shell_idle_s,
-                                              len(shell_sessions(facts["users"], rows)))
-                    if silent:
-                        facts.update(shells=facts["users"], terminals=silent, users=[], live=None)
-                    elif silent is False:
-                        facts["live"] = f"셸 터미널 출력이 {int(shell_idle_s // 60)}분 안에 있음"
-                else:
-                    facts["coordinator"] = coordinator_in(path, rows, cwd_of or {}, projects)
-            return facts
-        paths = [p for p in sorted((set(ledger) | made | cards) - users - (runners or set())) if os.path.isdir(p)]
-        with concurrent.futures.ThreadPoolExecutor(FACT_WORKERS) as pool:
-            all_facts = list(pool.map(read, paths))
-        for path, facts in zip(paths, all_facts):
-            e = ledger.get(path)
-            if not facts or facts["main"] or (repos_real and real(facts["repo"]) not in repos_real):
-                continue
-            if cwd_of is None and not facts["live"]:
-                facts["live"] = "프로세스 cwd 를 읽지 못함"
-            if workers is None and not facts["live"]:
-                # Without the list, a user's takeover and a live turn look the same as a finished worker.
-                facts["live"] = "워커 목록을 읽지 못함"
-            if runners is None and not facts["live"]:
-                facts["live"] = "automation 목록을 읽지 못함"
-            source = "ledger" if e else "오케스트레이션 워커" if path in made else "CLI 로 만든 카드"
-            facts["worker_card"] = path in made
-            facts["children"] = (kids or {}).get(path) or []
-            facts["children_unread"] = kids is None
-            # A PR found by branch name alone may be an old merged one whose name a lead reused: such a card waits for quiet.
-            facts["quiet_needed"] = path not in made and not (e and (e.get("links") or {}).get("pr"))
-            if facts["quiet_needed"] or (not facts.get("pr") and facts["worker_card"]):
-                facts["idle"] = quiet(path)
-            if "orca-worktree" in kinds:
-                # `--hours 0` must not let a card that just went quiet go.
-                items.append(judge_orca_worktree(path, source, facts, pr_state, max(hours, NO_PR_MIN_HOURS) * 3600))
-            if "done-card" in kinds and workers is not None and runners is not None and (d := judge_done_card(path, source, facts, pr_state, quiet, done_idle_s,
-                                                              asked.get(path))):
-                items.append(d)
     return items
 
 
@@ -1928,22 +1722,6 @@ def kill_tree(item, notes):
     return "종료(SIGKILL 포함)"
 
 
-SKILLS_SYNC = pathlib.Path(__file__).resolve().parents[3] / "bin" / "skills-sync"
-
-
-def nudge_card(item):
-    """Type the close request into the card's idle Claude session once; skills-sync refuses a busy screen."""
-    res = orca_json("terminal", "list", "--worktree", f"path:{item['name']}")
-    handles = [t["handle"] for t in (res or {}).get("terminals") or [] if t.get("agentIdentity") == "claude"]
-    if len(handles) != 1:
-        raise RuntimeError(f"claude 터미널이 {len(handles)}개, 보내지 않음")
-    out = subprocess.run([str(SKILLS_SYNC), "nudge", handles[0], item["line"]], capture_output=True, text=True)
-    if out.returncode:
-        raise RuntimeError(f"보내지 않음: {(out.stdout or out.stderr).strip()[:200]}")
-    ledger_add(ledger_path(), "done-card", item["name"], by="reap")
-    return f"{handles[0]} 에 닫기를 한 번 요청함(ledger 에 기록)"
-
-
 def act(item, notes):
     k, kind = item["key"], item["kind"]
     if kind in ("tmpdir", "evidence", "user-folder"):
@@ -1968,8 +1746,6 @@ def act(item, notes):
         # Handed to the agent once: retired here so the next run does not ask about the same id again.
         ledger_add(ledger_path(), "chrome-window", item["name"], url=item.get("url"), by="reap", retired=True)
         return item["how"][0] + " (ledger 에서 내림)"
-    if kind == "done-card":
-        return nudge_card(item)
     if kind == "card":
         import cards
         return cards.act({**item, "path": item["name"]}, config())
@@ -2027,9 +1803,11 @@ def main():
         sys.exit("use --kinds VALUE with supported kinds; --kinds=VALUE is not supported")
     if "--kinds" in sys.argv:
         requested = opt("--kinds") if sys.argv.index("--kinds") + 1 < len(sys.argv) else None
-        if not requested or set(requested.split(",")) - set(KINDS + SCHEDULED + CARD_LEGACY + ("janitor",)):
+        if retired := [k for k in (requested or "").split(",") if k in RETIRED_KINDS]:
+            sys.exit(f"--kinds {','.join(retired)}: removed; the card kind replaces them (--kinds card)")
+        if not requested or set(requested.split(",")) - set(KINDS + SCHEDULED + ("janitor",)):
             sys.exit("--kinds requires a comma-separated list of supported kinds: " +
-                     ",".join(dict.fromkeys(KINDS + SCHEDULED + CARD_LEGACY + ("janitor",))))
+                     ",".join(dict.fromkeys(KINDS + SCHEDULED + ("janitor",))))
     cmd = sys.argv[1] if len(sys.argv) > 1 else "scan"
     cfg = config()
     if cmd == "reap":
@@ -2040,6 +1818,10 @@ def main():
         if path.name == "janitor-plan.json":
             for key in [k for k, i in wanted.items() if i["kind"] not in SCHEDULED]:
                 print(f"- 건너뜀 {wanted.pop(key)['key']}: janitor 계획에 들어갈 수 없는 종류")
+        if retired := sorted(i["key"] for i in wanted.values() if i["kind"] in RETIRED_KINDS):
+            # A re-scan finds none of them, which would read as "no longer a target" and reap nothing in silence.
+            sys.exit(f"reap: 이 계획에 더는 지원하지 않는 종류가 있어 아무것도 하지 않았다: {', '.join(retired)}. "
+                     "scan --kinds card 로 계획을 다시 만든다")
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []
@@ -2136,7 +1918,7 @@ def main():
         stamp_round(STATE)
     names =(opt("--kinds") or ",".join(SCHEDULED if cmd == "precheck" else KINDS)).split(",")
     names = [k for n in names for k in (JANITOR if n == "janitor" else (n,))]
-    kinds = set(names) & set(KINDS + SCHEDULED + CARD_LEGACY)
+    kinds = set(names) & set(KINDS + SCHEDULED)
     pre_notes = []
     for k in DAILY:
         if cmd == "precheck" and k in kinds and not user_folder_due(STATE, kind=k):
@@ -2144,14 +1926,14 @@ def main():
             pre_notes.append(f"{k}: 하루 한 번만 정리한다, 이번 회차는 건너뜀")
     hours = float(opt("--hours") or cfg.get("hours") or 6)
     repo_list = repos([a for i, a in enumerate(sys.argv) if i and sys.argv[i - 1] == "--repo"]) \
-        if {"branch", "worktree", "card", "orca-worktree", "done-card"} & kinds else []
+        if {"branch", "worktree", "card"} & kinds else []
     items, notes = scan(kinds, hours, cfg, repo_list)
     notes = pre_notes + notes
     msgs, totals = alerts(items, {**ALERT, **(cfg.get("alert") or {})})
     if trash_auto_empty():
         msgs.append("휴지통 자동 비움 켜짐(Finder: 30일 지난 항목 제거): 휴지통으로 옮긴 것은 30일 뒤 영구 삭제된다")
     data ={"at": dt.datetime.now().astimezone().isoformat(timespec="minutes"), "hours": hours,
-            "kinds": [k for k in KINDS + SCHEDULED + CARD_LEGACY if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
+            "kinds": [k for k in KINDS + SCHEDULED if k in kinds], "repos": repo_list, "items": items, "notes": notes, "alerts": msgs, "totals": totals}
     if cmd == "precheck":
         (STATE / "janitor-plan.json").write_text(json.dumps(data, ensure_ascii=False, indent=1))
         command = round_cmd(pathlib.Path(__file__).resolve(), STATE, ledger_path(), "reap", "--plan", str(STATE / "janitor-plan.json"))
