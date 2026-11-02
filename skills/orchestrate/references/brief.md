@@ -73,6 +73,11 @@ VERIFY      Exact commands, or the repo's .claude/skills/verify-<app> feature to
             gets a keep reason and deadline in the reap ledger (reap-resources, compose-stack).
             A browser check runs `orch hold browser --note "<what it checks>"` first and opens
             the browser only once that prints held; `orch release browser` when done.
+            A step on a running stack gets its address and keys from the command VERIFY names
+            for them (the verify skill's helper sourced with the run id, then its variables),
+            written here before the first stack command. A command never names the run's state
+            file: a secret-file deny pattern can match its name as text, and switching to the
+            helper after that block is a retry.
             A check that needs a read a guard blocks (env inside a pod or container, a file that
             holds secrets) is planned here by the brief's writer: a script the lead puts
             to the human as a run_command, which writes only the derived result (present or
@@ -137,6 +142,11 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             glob or a path built from a variable: it stops on a permission prompt, and an empty
             variable widens the target (any other path built from one is written `${VAR:?}`).
             No wrapper scripts for evidence: run the commands VERIFY names, one by one.
+            A subagent whose result you would only wait for runs in the foreground, so its report
+            returns as the tool result. Never end a turn with background subagents as the only
+            thing you wait on: their completion notice arrives as a prompt that a hook can drop,
+            and then nothing wakes you. A notice with no report: read the report in the
+            subagent's transcript (its hand-back), then the diff; never ask for a resend.
             An act refused by a permission prompt, the auto-mode classifier (including an error that
             returns no verdict), a Claude Code hook or the human is not tried again in any form: not
             re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
