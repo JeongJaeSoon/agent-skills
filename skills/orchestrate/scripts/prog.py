@@ -28,6 +28,10 @@ Usage: orch <command> <slug> [options]
                                      B's branch), or one found after dispatch. Start-after edges are
                                      Orca task deps (task-create --deps), read from the Run
   queue <slug> [--json]              the land order and why each PR is not moving
+  overlap <slug> [--paths P,P]       open program PRs with no land-after relation that change one file
+                                     (or one exclusive_paths glob): stack the later on the earlier. With
+                                     --paths, the open PRs a unit not started yet would collide with.
+                                     status prints the same OVERLAP lines
   land <slug> --pr N [--class main-fix|gate|urgent|normal] [--wait-minutes M] [--onto-lower]
                                      the one way a program PR reaches its base. Normal lane: lands
                                      as soon as it is ready (verdict patch-id, CI green at head, no
@@ -698,6 +702,123 @@ def is_exclusive(cfg, files):
     return sorted(f for f in files if any(fnmatch.fnmatch(f, g) for g in pats))
 
 
+def rest_files(repo, pr):
+    # pr view stops at 100 files; the REST listing pages up to 3000.
+    out = run(["gh", "api", f"repos/{repo}/pulls/{pr}/files", "--paginate", "--jq", ".[].filename"], check=False)
+    return [f for f in out.stdout.split("\n") if f] if out.returncode == 0 else None
+
+
+def program_prs(events, rows, tickets):
+    """{open PR: ticket or None} for the program: PRs the ledger names, plus open PRs whose head branch or title
+    carries a program ticket. The ledger learns a PR only at `ready`, and two parallel PRs collide before that."""
+    led, open_ = pr_ticket(events), {r["number"]: r for r in rows}
+    landed = {s["pr"] for s in pr_state(events).values() if "landed" in s}
+    out = {pr: led.get(pr) for pr in pr_state(events) if pr in open_ and pr not in landed}
+    for n, r in open_.items():
+        text = f"{r.get('headRefName') or ''} {r.get('title') or ''}".upper()
+        hit = next((t for t in sorted(tickets, key=len, reverse=True)
+                    if re.search(rf"(?<![A-Z0-9]){re.escape(t.upper())}(?!\d)", text)), None)
+        if hit and n not in landed:
+            out[n] = out.get(n) or hit
+    return out
+
+
+def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
+    """OVERLAP lines for two open PRs that change one file, or files under one exclusive_paths glob, with no
+    land-after relation: whichever merges first leaves the other in conflict, and the fix push dismisses its
+    approval. A is the lower PR number, which the remedy keeps as the base.
+
+    files {pr: [paths]}, prs {pr: ticket or None}, after {ticket: tickets it lands after}. PRs are related
+    through `orch dep` / Orca deps, one GitHub stack, or one PR's base being the other's head, transitively,
+    so the ends of a chain A <- B <- C are not reported, even when B is not a program PR."""
+    root = {n: n for n in [*files, *(r["number"] for r in rows), *(m for s in (stacks or {}).values() for m in s)]}
+
+    def find(n):
+        while root[n] != n:
+            n = root[n]
+        return n
+
+    def join(a, b):
+        if a in root and b in root:
+            root[find(a)] = find(b)
+    by_ticket = {}
+    for n, t in prs.items():
+        by_ticket.setdefault(t, []).append(n)
+    for t, below in after.items():
+        for b in below:
+            for x in by_ticket.get(t, []):
+                for y in by_ticket.get(b, []):
+                    join(x, y)
+    for members in (stacks or {}).values():
+        for x, y in zip(members, members[1:]):
+            join(x, y)
+    head = {r.get("headRefName"): r["number"] for r in rows}
+    for r in rows:
+        join(r["number"], head.get(r.get("baseRefName")))
+    pats = knob(cfg, "exclusive_paths")
+    out = []
+    for a in sorted(files):
+        for b in sorted(files):
+            if b <= a or find(a) == find(b):
+                continue
+            shared = sorted(set(files[a]) & set(files[b]))
+            if not shared:
+                shared = [g for g in pats if any(fnmatch.fnmatch(f, g) for f in files[a])
+                          and any(fnmatch.fnmatch(f, g) for f in files[b])]
+            if not shared:
+                continue
+            more = f" (+{len(shared) - 1} more)" if len(shared) > 1 else ""
+            ra = next((r for r in rows if r["number"] == a), {})
+            # A merge, not a rebase: the conflict is settled once now, before review, and nothing is force-pushed.
+            out.append(f"OVERLAP #{a} #{b} {shared[0]}{more} → stack #{b} on #{a} (orch dep): "
+                       f"in #{b}'s worktree git merge origin/{ra.get('headRefName') or f'<#{a} branch>'} and push;"
+                       f" gh stack link {a} {b} --base {ra.get('baseRefName') or 'main'};"
+                       f" orch dep {slug} --ticket {prs.get(b) or '<ticket>'} --after {prs.get(a) or '<ticket>'}")
+    return out
+
+
+def plan_overlaps(slug, paths, files, prs, cfg, rows):
+    """OVERLAP lines for a unit not started yet: the open PRs that change one of its planned paths (a file, a
+    directory or a glob), or a file under the same exclusive_paths glob. The unit is to be stacked on that PR."""
+    pats = knob(cfg, "exclusive_paths")
+
+    def hit(p, f):
+        return f == p or fnmatch.fnmatch(f, p) or f.startswith(p.rstrip("/") + "/")
+    out = []
+    for n in sorted(files):
+        shared = sorted({p for p in paths for f in files[n] if hit(p, f)})
+        if not shared:
+            shared = [g for g in pats if any(fnmatch.fnmatch(p, g) for p in paths)
+                      and any(fnmatch.fnmatch(f, g) for f in files[n])]
+        if shared:
+            more = f" (+{len(shared) - 1} more)" if len(shared) > 1 else ""
+            branch = next((r.get("headRefName") for r in rows if r["number"] == n), None) or f"<#{n}'s branch>"
+            out.append(f"OVERLAP plan #{n} {shared[0]}{more} → stack the unit on #{n} (orch dep): "
+                       f"Base: stacked on #{n} ({branch}); orch dep {slug} --ticket <ticket> --after {prs.get(n) or '<ticket>'}")
+    return out
+
+
+def program_files(cfg, events, rows, tasks):
+    """({open program PR: ticket or None}, {PR: changed files}); a PR whose files gh cannot list is left out."""
+    tickets = (set(cfg.get("predicate") or []) | set(pr_ticket(events).values()) | {ticket_of(t) for t in tasks}) - {None}
+    prs = program_prs(events, rows, tickets)
+    files = {n: f for n in prs for f in [rest_files(cfg["repo"], n)] if f is not None}
+    return prs, files
+
+
+def cmd_overlap(argv):
+    p = Program(argv[0])
+    rows, tasks = open_rows(p.cfg["repo"]), run_tasks(p.cfg["run"])
+    prs, files = program_files(p.cfg, p.events(), rows, tasks)
+    paths = [x for x in (opt(argv, "--paths") or "").split(",") if x]
+    if paths:
+        lines = plan_overlaps(p.slug, paths, files, prs, p.cfg, rows)
+    else:
+        lines = path_overlaps(p.slug, files, prs, p.cfg, rows, dep_map(p.events(), deps_from_tasks(tasks)),
+                              repo_stacks(p.cfg["repo"]))
+    print("\n".join(lines) or f"no overlap among {len(files)} open program PR(s)")
+
+
 TEST_RESULTS = "<!-- test-results -->"
 NO_VISUAL = "no-visual-change"
 FAILED_RUN = ("failure", "timed_out", "startup_failure")
@@ -1142,7 +1263,8 @@ def cmd_status(argv):
     hours = max((tnow - t0).total_seconds() / 3600, 0.25)
     rate = len([e for e in events if e["ev"] == "landed"]) / hours
     tasks = run_tasks(cfg["run"])
-    order = land_order(events, open_rows(cfg["repo"]), cfg, tnow, repo_stacks(cfg["repo"]), deps_from_tasks(tasks))
+    rows, stacks, deps = open_rows(cfg["repo"]), repo_stacks(cfg["repo"]), deps_from_tasks(tasks)
+    order = land_order(events, rows, cfg, tnow, stacks, deps)
     order = [e for e in order if e["state"] != "gone"]
     gaps = sorted(parse_ts(b["ts"]) - parse_ts(a["ts"]) for a, b in zip(landed_recent, landed_recent[1:]))
     interval = (gaps[len(gaps) // 2].total_seconds() / 60 if gaps else knob(cfg, "land_interval_minutes"))
@@ -1170,6 +1292,8 @@ def cmd_status(argv):
         lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
                      + (f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
                         else f"released, but its card is still there: {rm}"))
+    prs, files = program_files(cfg, events, rows, tasks)
+    lines += [f"  {x}" for x in path_overlaps(p.slug, files, prs, cfg, rows, dep_map(events, deps), stacks)]
 
     # 3. growth
     admitted = {e["ticket"] for e in events if e["ev"] == "admitted" and e.get("ticket")}
@@ -2741,7 +2865,7 @@ def cmd_sent(argv):
 
 
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
-            "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
+            "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
             "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
