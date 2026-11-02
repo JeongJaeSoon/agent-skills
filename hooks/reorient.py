@@ -27,11 +27,19 @@ On a prompt the line also carries one stage-table warning when the table is not 
 (the lead's own, or any for the orchestrator): no work row, or rows the fleet tick has not rewritten in the dashboard
 config's `board.stage_warn_h` hours (stage_auto.warning). The Brief's stage table sat empty for weeks once while every
 row waited on a hand-written `orch stage add`.
+
+With `reflect.orchestrator_feedback` true in ~/.claude/agent-skills.json, an orchestrator session's transcript path is
+registered in $AGENT_SKILLS_STATE/transcripts/<session_id>.json with the span it held the role (`since`, `until` once
+`ROLE: none` clears it), so standing reflect reads the owner's corrections from that span only and never globs
+~/.claude/projects. Off, nothing is written. The span lives apart from the roles file so the role logic above stays
+the same whether or not the feature is on.
 """
-import json, os, pathlib, re, sys
+import datetime, json, os, pathlib, re, sys
 
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
-ROLES = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "roles"
+STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
+ROLES, TRANSCRIPTS = STATE / "roles", STATE / "transcripts"
+CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
 SESSION = re.compile(r"[\w-]{1,128}")
 ROLE = re.compile(r"^[ \t]*ROLE:?[ \t]+(orchestrator|lead[ \t]+([\w.-]+)|none)[ \t]*$", re.M)
 LEAD_TITLE = re.compile(r"lead:([\w.-]+)")
@@ -189,6 +197,37 @@ def resolve(event, record):
     return None
 
 
+def feedback_on():
+    try:
+        return json.loads(CONFIG.read_text()).get("reflect", {}).get("orchestrator_feedback") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def register(event, session, entry, record):
+    """Keeps the orchestrator span of this session's transcript for standing reflect, when the feature is on."""
+    path = event.get("transcript_path")
+    if not isinstance(path, str) or not path or not feedback_on():
+        return
+    file = TRANSCRIPTS / f"{session}.json"
+    try:
+        old = json.loads(file.read_text())
+    except (OSError, ValueError):
+        old = None
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if entry and entry["role"] == "orchestrator":
+        # A span reopened after `ROLE: none` starts again now: the conversation in between was not the orchestrator's.
+        since = old["since"] if old and old.get("since") and not old.get("until") else now
+        new = {"role": "orchestrator", "transcript": path, "since": since, "until": None}
+    elif record and record.get("role") == "none" and old and not old.get("until"):
+        new = {**old, "until": now}
+    else:
+        return
+    if new != old:
+        TRANSCRIPTS.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(new))
+
+
 def main():
     try:
         event = json.load(sys.stdin)
@@ -205,6 +244,10 @@ def main():
         except OSError:
             record = had
         entry = resolve(event, record)
+        try:
+            register(event, session, entry, record)
+        except OSError:
+            pass
         if record and record.get("role") == "none":
             if had != record and resolve(event, had):
                 text = "ROLE cleared: this session no longer gets the orchestrate reminder."
@@ -215,7 +258,13 @@ def main():
         if text and entry and (warn := stage_warning(entry)):
             text += " " + warn
     elif kind == "SessionStart" and event.get("source") in ("startup", "resume", "compact", "fork"):
-        if entry := resolve(event, declared(session)):
+        record = declared(session)
+        entry = resolve(event, record)
+        try:
+            register(event, session, entry, record)
+        except OSError:
+            pass
+        if entry:
             text = role_long(entry, event.get("source") == "compact")
             if entry["role"] == "orchestrator":
                 text += name_check(event)

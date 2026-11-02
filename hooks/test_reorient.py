@@ -16,7 +16,7 @@ ORCH, LEAD = "agent-skills:orchestrator", "agent-skills:lead"
 
 
 def hook(event="UserPromptSubmit", session="s1", prompt="hi", source="startup", agent=None, title=None,
-         handle="term_me"):
+         handle="term_me", transcript=None):
     env = {"PATH": f"{TMP / 'bin'}:/usr/bin:/bin", "HOME": str(TMP / "home"), "AGENT_SKILLS_STATE": str(TMP / "state"),
            "PROGRAMS_HOME": str(TMP / "programs"), "ORCA_TERMINAL_HANDLE": handle,
            "ORCH_FLEET_STATE": str(TMP / "fleet"), "ORCH_FLEET_CONFIG": str(TMP / "none.json")}
@@ -29,6 +29,8 @@ def hook(event="UserPromptSubmit", session="s1", prompt="hi", source="startup", 
         payload["agent_type"] = agent
     if title:
         payload["session_title"] = title
+    if transcript:
+        payload["transcript_path"] = transcript
     out = subprocess.run([sys.executable, HERE / "reorient.py"], input=json.dumps(payload),
                          capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
@@ -138,4 +140,50 @@ assert hook(session="../u3", prompt="ROLE: orchestrator") is None
 assert not (TMP / "state/u3.json").exists()
 assert hook(event="Stop") is None
 assert not (TMP / "orca-called").exists(), "the hook ran orca"
+
+# 4. reflect.orchestrator_feedback: an orchestrator's transcript span is registered only when it is on.
+REG = TMP / "state/transcripts"
+CFG = TMP / "home/.claude/agent-skills.json"
+CFG.parent.mkdir(parents=True)
+
+
+def reg(session):
+    path = REG / f"{session}.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+T = "/x/t.jsonl"
+assert hook(session="f1", prompt="ROLE: orchestrator", transcript=T).startswith("You are the top-level")
+assert reg("f1") is None, "no config: nothing registered"
+CFG.write_text(json.dumps({"reflect": {"orchestrator_feedback": False}}))
+assert hook(session="f1", transcript=T) == hook(session="f1") and reg("f1") is None, "off: same output, no file"
+CFG.write_text(json.dumps({"reflect": {"orchestrator_feedback": True}}))
+assert hook(session="f1", transcript=T).startswith("ROLE: orchestrator."), "the reminder is unchanged"
+first = reg("f1")
+assert first["role"] == "orchestrator" and first["transcript"] == T and first["until"] is None, first
+assert first["since"].endswith("Z") and len(first["since"]) == 20, first
+assert json.loads((TMP / "state/roles/f1.json").read_text()) == {"role": "orchestrator"}, "the roles file is untouched"
+assert hook(session="f1", prompt="next", transcript=T) and reg("f1")["since"] == first["since"], "since stays"
+hook(**START, source="resume", agent=ORCH, session="f2", transcript=T)
+assert reg("f2")["role"] == "orchestrator", "agent_type at SessionStart"
+hook(**START, source="resume", title="orchestrator", session="f3", transcript=T)
+assert reg("f3")["transcript"] == T, "title only, at SessionStart"
+hook(title="orchestrator", session="f3b", transcript=T)
+assert reg("f3b") is None, "a prompt with only the title is not an orchestrator"
+assert "ROLE cleared" in hook(session="f1", prompt="ROLE: none", transcript=T)
+cleared = reg("f1")
+assert cleared["until"] and cleared["since"] == first["since"], cleared
+assert hook(session="f1", transcript=T) is None and reg("f1") == cleared, "until is written once"
+hook(session="f1", prompt="ROLE: orchestrator", transcript=T)
+assert reg("f1")["until"] is None and reg("f1")["since"] >= cleared["until"], "a reopened span starts now"
+hook(session="f4", prompt="ROLE: lead p", transcript=T)
+hook(agent=LEAD, title="lead:p", session="f5", transcript=T)
+assert reg("f4") is None and reg("f5") is None, "a lead is not registered"
+assert hook(session="f6", prompt="ROLE: orchestrator").startswith("You are the top-level") and reg("f6") is None, \
+    "no transcript_path: as before"
+hook(session="u9", prompt="hello", transcript=T)
+assert reg("u9") is None, "undeclared"
+CFG.write_text("not json")
+hook(session="f7", prompt="ROLE: orchestrator", transcript=T)
+assert reg("f7") is None, "unreadable config counts as off"
 print("reorient: all pass")
