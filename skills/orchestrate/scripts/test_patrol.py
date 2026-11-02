@@ -150,7 +150,7 @@ i = {"id": "Iabc", "code": "I", "card": "b", "path": "/w/b", "handle": "h2", "se
 verd = {"cards": {"/w/a": "exited"}, "doing_noref": [], "load": []}
 new, gone = patrol.write_round([x, i], verd, False, NOW)
 assert [f["id"] for f in new] == ["Xabc", "Iabc"] and gone == []
-assert [k["key"] for k in fleet.external_items()] == ["ext:patrol:Xabc"], fleet.external_items()
+assert [k["key"] for k in fleet.external_items()] == [f"ext:patrol:Xabc:{fleet.iso(T)}"], fleet.external_items()
 new, gone = patrol.write_round([x, i], verd, False, NOW + 60)
 assert new == [] and gone == [], "a finding still there is not new again"
 assert patrol.pending_lines("hl", False, T)[0].startswith("PATROL X Xabc a → hl"), "routed to its owner"
@@ -170,6 +170,63 @@ assert fleet.external_items() == [], "ack resolves its Needs you item"
 new, _ = patrol.write_round([x], verd, False, NOW + 180)
 assert new == [], "an acked finding is not raised again while it lasts"
 assert json.loads(patrol.VERDICTS.read_text())["cards"] == {"/w/a": "exited"}
+new, gone = patrol.write_round([], verd, False, NOW + 240)
+assert [r["id"] for r in gone] == ["Xabc"], "an acked finding still clears when its condition goes"
+new, _ = patrol.write_round([x], verd, False, NOW + 300)
+assert [f["id"] for f in new] == ["Xabc"], "after it cleared, the same condition is a new occurrence"
+assert [k["key"].split(":")[2] for k in fleet.external_items()] == ["Xabc"]
+# A found row whose Needs you item never went in (the round cut short) is added by the next sync; one acked in
+# between is resolved.
+y = {**x, "id": "Eyyy", "code": "E"}
+fleet.append_line(patrol.LOG, {"op": "found", **y, "detected_at": ago(0)})
+patrol.sync_needs_you()
+assert sorted(k["key"].split(":")[2] for k in fleet.external_items()) == ["Eyyy", "Xabc"]
+fleet.append_line(patrol.LOG, {"op": "ack", "id": "Eyyy", "at": ago(0)})
+patrol.write_round([x, y], verd, False, NOW + 360)
+assert [k["key"].split(":")[2] for k in fleet.external_items()] == ["Xabc"], "an ack written beside a round is resolved"
+fleet.inbox_resolve(fleet.external_items()[0]["key"][4:])
+patrol.sync_needs_you()
+assert fleet.external_items() == [], "one dismissed on the dashboard is not added again"
+patrol.ack(["--all"])
+patrol.write_round([], verd, False, NOW + 420)
+
+# A failed Orca listing raises, so the round marks its source failed instead of seeing an empty fleet.
+class P:
+    def __init__(self, out, rc=0):
+        self.stdout, self.returncode = out, rc
+run0 = patrol.subprocess.run
+for out, rc in (('{"ok": false, "error": "no runtime"}', 0), ('{"ok": true, "result": {}}', 0), ("", 1)):
+    patrol.subprocess.run = lambda *a, **k: P(out, rc)
+    try:
+        patrol.all_workers(time.time() + 120)
+        raise AssertionError(f"no raise for {out!r}")
+    except RuntimeError:
+        pass
+patrol.subprocess.run = lambda *a, **k: P('{"ok": true, "result": {"workers": [{"dispatchId": "d"}], "page": {}}}')
+assert patrol.all_workers(time.time() + 120) == [{"dispatchId": "d"}]
+patrol.subprocess.run = run0
+
+# An unreadable board.json fails the board source: D is kept and its clocks keep running.
+(tmp / "dashboard" / "board.json").write_text("{not json")
+try:
+    patrol.read_board()
+    raise AssertionError("bad board read")
+except ValueError:
+    pass
+(tmp / "dashboard" / "board.json").unlink()
+assert patrol.read_board() == {}
+memo0 = {"first_seen": {"D:item": NOW - 3600}}
+_, _, m = patrol.judge(facts(failed={"board"}), memo0)
+assert m["first_seen"] == memo0["first_seen"]
+assert "board" in patrol.DEPENDS["D"]
+
+# Output marks move only past screens read; a failed terminal list keeps the error runs and marks.
+f = facts(terminals=[term("ha", "/w/a", last=5), term("hb", "/w/b", last=7)], screens={"ha": ["x"]}, fresh={"ha"})
+_, _, m = patrol.judge(f, {"last_output": {"hb": 3}})
+assert m["last_output"] == {"ha": 5, "hb": 3}, m["last_output"]
+hist = {"ha": [["Error: x"], ["Error: x"]]}
+_, _, m = patrol.judge(facts(failed={"terminals"}), {"errors": hist, "last_output": {"ha": 5}})
+assert m["errors"] == hist and m["last_output"] == {"ha": 5}
 
 # --if-due: 25 minutes, or pressure rising to warn or danger.
 assert patrol.due({}, "ok", NOW)

@@ -74,7 +74,10 @@ def orca_all(*args):
     env = {**os.environ, "ORCA_TERMINAL_HANDLE": ""}
     p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, env=env, timeout=30)
     out = json.loads(p.stdout or "{}")
-    return out.get("result", out) if out.get("ok", True) else {}
+    if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
+        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(out.get('error') if isinstance(out, dict) else out)[:120]}"
+                           f" (exit {p.returncode})")
+    return out.get("result", out)
 
 
 def all_workers(deadline):
@@ -84,7 +87,9 @@ def all_workers(deadline):
         if time.time() > deadline - 30:
             raise TimeoutError("worker-list pages left unread")
         res = orca_all("orchestration", "worker-list", "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers") or []
+        if not isinstance(res.get("workers"), list):
+            raise RuntimeError("worker-list answered without a workers list")
+        workers += res["workers"]
         cursor = (res.get("page") or {}).get("nextCursor")
         if not (res.get("page") or {}).get("hasMore") or not cursor:
             return workers
@@ -188,6 +193,18 @@ def consumers():
             + [{"what": f"compose {g['project']}", "cpu": g.get("cpu"), "card": g.get("card")} for g in projects])
 
 
+def read_board():
+    """board.json, {} when there is none; an unreadable one raises, so D keeps its findings and clocks."""
+    try:
+        text = (fleet.state_dir() / "board.json").read_text()
+    except FileNotFoundError:
+        return {}
+    board = json.loads(text)
+    if not isinstance(board, dict):
+        raise ValueError("board.json is not an object")
+    return board
+
+
 def gather(now, deadline, memo):
     """Everything a round judges, read once. Each source that fails leaves its part empty and says so in notes."""
     facts, notes = {"now": now}, []
@@ -214,7 +231,7 @@ def gather(now, deadline, memo):
         st = {}
     facts["sessions"] = st.get("sessions") or []
     facts["prs"] = {p.get("key"): p for p in st.get("prs") or [] if p.get("key")}
-    facts["board"] = fleet.read_json(fleet.state_dir() / "board.json", {}) or {} if st else {}
+    facts["board"] = take("board.json", read_board, {}, "board") if st else {}
     facts["state"] = st
     facts["supersedes"] = take("orch sent log", lambda: sent_supersedes(fleet.utcnow()), [], "sent")
     facts["level"], _ = pressure_level()
@@ -272,8 +289,13 @@ def judge(facts, memo):
     agent_paths = {t.get("worktreePath") for t in agents}
     own = owners(facts["sessions"])
     run_paths, findings, verdicts = set(), [], {}
-    new_memo = {"last_output": {t["handle"]: t.get("lastOutputAt") or 0 for t in agents if t.get("handle")},
-                "first_seen": {}, "errors": {}, "level": facts["level"], "t": now}
+    failed = facts.get("failed") or set()
+    fresh = facts.get("fresh", set(facts["screens"]))
+    # An output mark moves only past a screen this round read; one skipped by the budget or a failed read is read next.
+    seen = memo.get("last_output") or {}
+    marks = {t["handle"]: seen[t["handle"]] for t in agents if t.get("handle") in seen}
+    marks.update({t["handle"]: t.get("lastOutputAt") or 0 for t in agents if t.get("handle") in fresh})
+    new_memo = {"last_output": marks, "first_seen": {}, "errors": {}, "level": facts["level"], "t": now}
 
     def add(code, path, key, title, handle=None, session=None):
         sid, owner = own.get(path, (None, None))
@@ -299,7 +321,6 @@ def judge(facts, memo):
                 add("X", path, (w.get("dispatchId"),), f"worker {w.get('dispatchId')} exited with its task in progress: "
                     f"worker-read --source transcript, then worker-stop or worker-abandon on positive evidence only",
                     w.get("agentTerminalHandle"))
-    failed = facts.get("failed") or set()
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             continue
@@ -358,7 +379,6 @@ def judge(facts, memo):
                 handle=iid)
     # E: one error line in ERROR_ROUNDS rounds in a row, each with new output.
     hist = memo.get("errors") or {}
-    fresh = facts.get("fresh", set(facts["screens"]))
     for t in agents:
         h = t.get("handle")
         if h in fresh:
@@ -378,8 +398,10 @@ def judge(facts, memo):
         if v in VERDICT_OF.values():
             add("L", c["card"], (c["what"], facts["level"]), f"PC {facts['level']}: {c['what']} "
                 f"(CPU {c.get('cpu') or 0:.0f}%) held by a card judged {v}")
-    if "state" in failed:  # O and D could not look: their day-long clocks keep running
-        new_memo["first_seen"] = dict(memo.get("first_seen") or {})
+    if failed & {"state", "board"}:  # O or D could not look: their day-long clocks keep running
+        new_memo["first_seen"] = {**(memo.get("first_seen") or {}), **new_memo["first_seen"]}
+    if "terminals" in failed:  # no terminal list: keep the error runs and output marks for the next round
+        new_memo["errors"], new_memo["last_output"] = dict(hist), dict(seen)
     # W: the orchestrator's screen watch.
     for h, last in facts["watchers"].items():
         if not last or now - last[0] > WATCH_DOWN_MIN * 60:
@@ -395,22 +417,44 @@ def log_rows():
     return [r for r in fleet.read_lines(LOG) if isinstance(r, dict) and r.get("id")]
 
 
-def open_findings(rows=None):
-    """id -> finding row, for those neither cleared nor acked."""
+def standing(rows=None):
+    """id -> finding row for each occurrence not yet cleared, acked ones with "acked" set. An ack covers the
+    occurrence: once its condition clears, the same id can be found again."""
     out = {}
     for r in rows if rows is not None else log_rows():
         if r.get("op") == "found":
             out[r["id"]] = r
-        elif r.get("op") == "owner" and r["id"] in out:
-            out[r["id"]] = {**out[r["id"]], "owner": r.get("owner")}
-        elif r.get("op") in ("clear", "ack"):
+        elif r.get("op") in ("owner", "ack") and r["id"] in out:
+            out[r["id"]] = {**out[r["id"]], **({"owner": r.get("owner")} if r["op"] == "owner" else {"acked": True})}
+        elif r.get("op") == "clear":
             out.pop(r["id"], None)
     return out
 
 
+def open_findings(rows=None):
+    """id -> finding row, for those neither cleared nor acked."""
+    return {i: r for i, r in standing(rows).items() if not r.get("acked")}
+
+
+def sync_needs_you(rows=None):
+    """Bring the dashboard's patrol items in step with the log: one cut short by the budget is added, one acked or
+    cleared elsewhere is resolved. An item once added and dismissed on the dashboard is not added again."""
+    # One key per occurrence, so a recurrence after a clear is a new item.
+    want = {f"patrol:{i}:{f.get('detected_at')}": f for i, f in open_findings(rows).items() if f.get("code") in NEEDS_YOU}
+    added = {r.get("key") for r in fleet.read_lines(fleet.state_dir() / "inbox-external.jsonl")
+             if r.get("op") == "add" and str(r.get("key", "")).startswith("patrol:")}
+    shown = {i["key"][4:] for i in fleet.external_items() if i["key"].startswith("ext:patrol:")}
+    for key, f in want.items():
+        if key not in added:
+            fleet.inbox_add("patrol", f"순찰 {f['code']} {f['card']}: {f['title']}", session=f.get("session"),
+                            command=f"orch patrol ack {f['id']}", key=key, source="patrol")
+    for key in shown - set(want):
+        fleet.inbox_resolve(key)
+
+
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
-           "O": {"state", "terminals"}, "D": {"state"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers"},
+           "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers"},
            "W": {"state"}}
 
 
@@ -418,10 +462,10 @@ def write_round(findings, verdicts, dry, now, failed=()):
     """Append what is new, clear what went away, keep Needs you in step, and move a finding to its current owner
     (the session that started its card, or nobody once that session is gone). (new, cleared)."""
     rows = log_rows()
-    live, acked = open_findings(rows), {r["id"] for r in rows if r.get("op") == "ack"}
+    live = standing(rows)
     at = fleet.iso(dt.datetime.fromtimestamp(now, dt.timezone.utc))
     ids = {f["id"] for f in findings}
-    new = [f for f in findings if f["id"] not in live and f["id"] not in acked]
+    new = [f for f in findings if f["id"] not in live]
     gone = [r for i, r in live.items() if i not in ids and not DEPENDS.get(r.get("code"), set()) & set(failed)]
     moved = [f for f in findings if f["id"] in live and live[f["id"]].get("owner") != f.get("owner")]
     if dry:
@@ -430,13 +474,9 @@ def write_round(findings, verdicts, dry, now, failed=()):
         fleet.append_line(LOG, {"op": "owner", "id": f["id"], "owner": f.get("owner"), "at": at})
     for f in new:
         fleet.append_line(LOG, {"op": "found", **f, "title": fleet.mask(f["title"], 300), "detected_at": at})
-        if f["code"] in NEEDS_YOU:
-            fleet.inbox_add("patrol", f"순찰 {f['code']} {f['card']}: {f['title']}", session=f.get("session"),
-                            command=f"orch patrol ack {f['id']}", key=f"patrol:{f['id']}", source="patrol")
     for r in gone:
         fleet.append_line(LOG, {"op": "clear", "id": r["id"], "at": at})
-        if r.get("code") in NEEDS_YOU:
-            fleet.inbox_resolve(f"patrol:{r['id']}")
+    sync_needs_you()
     fleet.write_atomic(VERDICTS, json.dumps({"at": at, "t": now, **verdicts}, ensure_ascii=False))
     return new, gone
 
@@ -449,10 +489,23 @@ def ack(ids, now=None):
         if i not in live:
             continue
         fleet.append_line(LOG, {"op": "ack", "id": i, "at": at})
-        if live[i].get("code") in NEEDS_YOU:
-            fleet.inbox_resolve(f"patrol:{i}")
         done.append(i)
+    sync_needs_you()
     return done
+
+
+@contextlib.contextmanager
+def round_lock(wait):
+    """patrol.lock, held by a round and by ack so neither writes between the other's read and write. Yields False
+    when not waiting and another holds it."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "patrol.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        yield True
 
 
 def line(f):
@@ -498,6 +551,7 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather):
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
+    signal.alarm(0)  # the budget is for reading; the writes below run to the end so the log and Needs you agree
     new, gone = write_round(findings, verdicts, dry, now, facts.get("failed") or ())
     if not dry:
         fleet.write_atomic(MEMO, json.dumps(memo2))
@@ -536,7 +590,8 @@ def main(argv):
         ids = argv[1:]
         if not ids:
             sys.exit("usage: orch patrol ack <id>... | --all")
-        done = ack(ids)
+        with round_lock(wait=True):
+            done = ack(ids)
         print(f"acked {len(done)}: {' '.join(done)}" if done else "nothing open by those ids")
         return
     if argv[:1] == ["list"]:
@@ -548,11 +603,8 @@ def main(argv):
         return
     if set(argv) - {"--once", "--if-due", "--dry-run", "--json"}:
         sys.exit(__doc__)
-    STATE.mkdir(parents=True, exist_ok=True)
-    with open(STATE / "patrol.lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+    with round_lock(wait=False) as got:
+        if not got:
             print("patrol: another round is running")
             return
 
@@ -563,7 +615,7 @@ def main(argv):
         try:
             res = round_once("--dry-run" in argv, "--if-due" in argv)
         except Budget:
-            print(f"patrol: gave up at {BUDGET_S}s; nothing written this round")
+            print(f"patrol: gave up at {BUDGET_S}s while reading; nothing written this round")
             return
         finally:
             signal.alarm(0)
