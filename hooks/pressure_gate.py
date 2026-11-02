@@ -94,7 +94,7 @@ def drop_heredocs(cmd):
         out.append(line)
         m, quote = heredoc_at(line, quote)
         # Kept whenever a shell appears on the line (`FOO=1 bash <<EOF`, `cd x && env bash <<EOF`).
-        if not m or any(os.path.basename(w) in SHELLS for w in line.split()):
+        if not m or any(os.path.basename(w.strip("'\"")) in SHELLS for w in line.split()):
             continue
         body, end = [], None
         for row in lines:
@@ -290,15 +290,27 @@ def head_word(argv):
     return os.path.basename(words[0]) if words else ""
 
 
+def loop_runs(rest):
+    """Whether the body of a `for` loop, the segments up to its `done`, runs a program on its files."""
+    for seg in rest:
+        if seg and seg[0] == "done":
+            return False
+        h = head_word(seg)
+        if h in LOOPERS - {"for"} or h.startswith("$"):
+            return True
+    return False
+
+
 def unwrapped_tests(cmd):
     """What a line runs that belongs in an `orch heavy` slot, None when it runs none or already runs in one."""
     segs = list(segments(cmd))  # a command passed to `orch heavy` is that segment's words, never a segment of its own
     found = next(filter(None, map(runs_tests, segs)), None)
-    # A `for` list counts only when the loop body runs a test file (`python3 "$t"`, `"$t"`), not `cat "$f"`.
-    runs = any(h in LOOPERS - {"for"} or h.startswith("$") for h in map(head_word, segs))
-    # A glob (`hooks/test_*.py`) may expand to any number of files, so it counts as a whole list.
-    if not found and sum(TEST_FILE.fullmatch(w) and (SUITE_FILES if set(w) & set("*?[") else 1) or 0 for s in segs if s and (
-            s[0] == "for" and runs or os.path.basename(s[0]) in LOOPERS - {"for"}) for w in s) >= SUITE_FILES:
+    # A `for` list counts only when its own body (up to `done`) runs a program on the files, not `cat "$f"`;
+    # a glob (`hooks/test_*.py`) may expand to any number of files, so it counts as a whole list.
+    if not found and sum(TEST_FILE.fullmatch(w) and (SUITE_FILES if set(w) & set("*?[") else 1) or 0
+                         for k, s in enumerate(segs) if s and (s[0] == "for" and loop_runs(segs[k + 1:]) or
+                                                               os.path.basename(s[0]) in LOOPERS - {"for"})
+                         for w in s) >= SUITE_FILES:
         found = "test suite"
     return found
 
