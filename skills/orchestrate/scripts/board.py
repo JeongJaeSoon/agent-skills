@@ -16,7 +16,6 @@ import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys
 
 import fleet
 import acks
-import owner_requests
 import stages
 import tidy
 from stages import with_descendants
@@ -136,7 +135,6 @@ def put(store, rid, fields):
             raise ValueError(f"a top-level {kind} row needs --repo")
         if not parent and not fields.get("repo"):
             raise ValueError(f"a lead row ({rid}) needs --repo")
-        # created_at and by let the fleet tick link the row to the owner request that terminal was answering.
         row = {"id": rid, "kind": kind, "title": rid.rsplit("/", 1)[-1], "parent": parent, "status": "moving", "next": "",
                "created_at": fleet.iso(fleet.utcnow()), "by": os.environ.get("ORCA_TERMINAL_HANDLE")}
         rows[rid] = row
@@ -836,7 +834,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                     kid_status += task_lines(f"{k}@{tsec[0]}", tsec, [t])
             lines[at]["status"] = worst(st, kid_status)
 
-    lines, done, hidden = drop_acked(lines, prs, rows, have := acks.acked())
+    lines, done, hidden = drop_acked(lines, prs, rows, acks.acked())
 
     # A ✅ row merged (or marked done) over done_fold_h ago leaves the table for one count per section; the dashboard
     # keeps it. A head stays while any row under it stays, and a row with no time to judge by stays.
@@ -925,9 +923,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if collected:
         facts.append(collected)
     stage_line = stages.pointer(*stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state), tg)
-    shown = {k: q for k, q in owner_requests.fold(owner_requests.read()).items() if f"req:{k}" not in have}
     queued = [l for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"]
-    lists_line = lists_pointer(len(upcoming), len(queued), owner_requests.summary(now, shown)["open"], tg)
+    lists_line = lists_pointer(len(upcoming), len(queued), tg)
     if sum(folded.values()):
         facts.append(f"접음 완료 {sum(folded.values())} (대시보드)")
 
@@ -1132,14 +1129,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             "snapshot": {"v": 1, "ts": fleet.iso(now), "rows": snap, "decisions": [d["id"] for d in decisions]}}
 
 
-def lists_pointer(todos, queued, asked, tg=False):
-    """The brief's one line in place of the to-do list, the held queue and the requests: how many of each, and where
-    they are (the dashboard's To-do page, whose Overview has the requests; on Telegram the commands, as
-    stages.pointer does)."""
-    parts = [f"{w} {n}건{tail}" for w, n, tail in (("📅 할 일", todos, ""), ("⏸️ 보류 큐", queued, ""), ("📨 요청", asked, " 열림")) if n]
+def lists_pointer(todos, queued, tg=False):
+    """The brief's one line in place of the to-do list and the held queue: how many of each, and where they are (the
+    dashboard's To-do page; on Telegram the command, as stages.pointer does)."""
+    parts = [f"{w} {n}건" for w, n in (("📅 할 일", todos), ("⏸️ 보류 큐", queued)) if n]
     if not parts:
         return None
-    where = "orch board todo list --telegram · orch req list" if tg else stages.dash_url("todo") or "`orch board todo list` · `orch req list`"
+    where = "orch board todo list --telegram" if tg else stages.dash_url("todo") or "`orch board todo list`"
     return " · ".join(parts + [where])
 
 

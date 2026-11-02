@@ -452,42 +452,23 @@ function fleetOverview(st) {
   const ss = st.sessions || [], items = st.items || [];
   const n = (p) => ss.filter((s) => s.phase === p).length;
   const open = (st.prs || []).filter((p) => p.state === "OPEN");
-  const missed = items.filter((i) => i.missed).length, rq = st.requests || {};
-  return `<div class="kpis" style="--n:4">
+  const missed = items.filter((i) => i.missed).length;
+  return `<div class="kpis" style="--n:3">
       ${kpi("Sessions", `${ss.length}`, phaseLegend(["working", "waiting", "idle"], n), { src: "orca" })}
       ${kpi("Needs you", `${items.length}${missed ? ` ${tag(`${missed} missed`, "bad", "alert")}` : ""}`, Object.entries(st.counts || {}).map(([t, c]) => `${itemMeta(t)[0]} ${c}`).join(" · ") || "inbox empty")}
       ${kpi("Open PRs", `${open.length}`, `${open.filter((p) => p.ci === "failure").length} CI failing · ${open.filter((p) => p.decision === "APPROVED").length} approved`, { src: "github" })}
-      ${kpi("Your requests", `${rq.open || 0}${(rq.unlinked || []).length ? ` ${tag(`${rq.unlinked.length} unlinked`, "warn", "alert")}` : ""}`, `${rq.open ? `oldest ${agoSpan(rq.items.find((q) => !q.acked).ts)}` : "none open"}${rq.expired ? ` · ${rq.expired} expired` : ""}`)}
     </div>
     ${projectChips(st)}
     <div class="grid fill">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items, { limit: 8 })}</div>
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
-      ${requestCard(st)}
       ${leadCard(st)}
       <div class="card span2" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside">${prUpdated(st)}<a class="go" href="#/fleet/prs">All ${open.length} ${icon("arrow")}</a></span></div>${prRows(st, open.slice(0, 8))}</div>
       <div class="card"><div class="card-head"><h3>Timeline</h3><span class="aside"><a class="go" href="#/fleet/timeline">All ${icon("arrow")}</a></span></div>${timelineList(st, (st.timeline || []).slice(0, 12))}</div>
     </div>`;
 }
 
-// The owner's open requests to an orchestrator or lead (orch req, hooks/request_log.py); one unlinked for 30 min is amber. The
-// fleet tick links and closes them (owner_requests.reconcile); one unlinked for 12 h has expired and is not listed. A PR
-// closed unmerged does not close its request, so its link is tagged for the orchestrator or lead.
-// A prompt pasted in arrives wrapped in <pasted_content id=…> tags; the page shows what was pasted without them.
-const unpaste = (text) => String(text).replace(/<\/?pasted_content\b[^>]*>/g, " ").replace(/[ \t]{2,}/g, " ").trim();
-function requestCard(st) {
-  const rq = st.requests || {}, late = new Set((rq.unlinked || []).map((q) => q.id));
-  if (!(rq.items || []).length) return "";
-  const { shown, head } = ackSplit(rq.items.map((q) => ({ ...q, ack: q.acked ? "acked" : "ackable", key: `req:${q.id}` })), "open request");
-  // Eight until Show all. The text takes the row's width and opens in place; links and age go on the line under it.
-  const more = shown.length > 8 ? `<button class="chip" type="button" data-req-all aria-pressed="${!!F.reqShowAll}">${F.reqShowAll ? "Show 8" : `Show all ${shown.length}`}</button>` : "";
-  const rows = (F.reqShowAll ? shown : shown.slice(0, 8)).map((q) => `<li class="${q.acked ? "is-acked" : ""}">${tag(q.id, late.has(q.id) ? "warn" : "")}<div class="grow">${expandable(`req:${q.id}`, unpaste(q.text), "req-text")}
-    <div class="sub muted full">${q.links.length ? q.links.map((l) => esc(l) + ((q.closed || []).includes(l) ? ` ${tag("closed", "warn")}` : "")).join(", ") : "not linked"} · ${relSpan(q.ts)}</div></div>${ackBtn(q)}</li>`).join("");
-  return `<div class="card"><div class="card-head"><h3>Your requests</h3><span class="aside">${rq.open} open${rq.expired ? ` · ${rq.expired} expired` : ""} · <code>orch req list</code>${head}${more}</span></div>
-    ${ackNote()}<ul class="rows reqs">${rows || '<li class="muted">Every open request is acked.</li>'}</ul></div>`;
-}
-
-// Acks (acks.py, `orch-dash ack`): the owner's "checked, stop showing it" on finished rows and on their requests. The
+// Acks (acks.py, `orch-dash ack`): the owner's "checked, stop showing it" on finished rows. The
 // server decides what may be acked; the page offers it only where the server listed it, and shows a refusal's reason.
 const ackBtn = (it) => !it.ack ? "" : `<button class="chip ack" type="button" data-ack="${esc(it.key)}"${it.ack === "acked" ? " data-undo" : ""}
   title="${it.ack === "acked" ? "Show it again" : "Checked: hide it here and in the brief (orch-dash ack)"}">${it.ack === "acked" ? "Unack" : "Ack"}</button>`;
@@ -513,7 +494,7 @@ async function idsAction(t, url, ids, err) {
     if (undo) F.undo = null;
     else if (row && (out.written || []).length) F.undo = { attr: url.endsWith("ack") ? "ack" : "done", ids, label: row.dataset.rowLabel };
     F.briefEtag = null;
-    await pollBrief();  // the requests card follows fleetPost's own state refresh
+    await pollBrief();
   } catch (e) { F[err] = String(e.message || e); }
   t.disabled = false;
   renderView();
@@ -1104,9 +1085,7 @@ document.addEventListener("click", (e) => {
   const fold = e.target.closest("[data-stage-fold]");
   if (fold) { const id = fold.dataset.stageFold; F.stageFold.has(id) ? F.stageFold.delete(id) : F.stageFold.add(id); renderView(); }
   const job = e.target.closest("[data-job-open]");
-  if (job) { const id = job.dataset.jobOpen; F.jobOpen.has(id) ? F.jobOpen.delete(id) : F.jobOpen.add(id); renderView(); }
-  if (e.target.closest("[data-req-all]")) { F.reqShowAll = !F.reqShowAll; renderView(); }
-  if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
+  if (job) { const id = job.dataset.jobOpen; F.jobOpen.has(id) ? F.jobOpen.delete(id) : F.jobOpen.add(id); renderView(); }  if (e.target.closest("[data-ack-show]")) { F.showAcked = !F.showAcked; renderView(); }
   const ack = e.target.closest("[data-ack]");
   if (ack) idsAction(ack, "/api/fleet/ack", ack.dataset.ack, "ackError");
   const done = e.target.closest("[data-done]");

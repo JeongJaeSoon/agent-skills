@@ -82,16 +82,6 @@ Usage: orch <command> <slug> [options]
                                      dashboard until done or dropped; add prints its id. Each option is a
                                      button that closes it with that answer, then types
                                      "decision <id>: <label>" into this terminal once it is idle
-  req list [--all] [--json] | link <id>... <WHERE> [--done [--evidence T]] | done <id>... --evidence T
-  req drop <id>... --reason T
-                                     no slug: the owner's requests to this session, logged by the
-                                     request_log hook from each human prompt of an orchestrator or lead.
-                                     link says where they went (board row, card:<name>, owner/repo#N,
-                                     ticket; nothing is written to the tracker), --done closes them too;
-                                     done and drop close them. The fleet tick links what the asking
-                                     session started next, closes ones whose links all finished, and
-                                     drops unlinked ones whose terminal is gone. One unlinked for 12 h
-                                     expires: out of the counts and list (--all shows it), still closable
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]
@@ -2750,47 +2740,10 @@ def cmd_sent(argv):
         sys.exit(f"{e}\n{usage}")
 
 
-def cmd_req(argv):
-    import itertools, owner_requests as req
-    sub, rest = argv[0], argv[1:]
-    ids = list(itertools.takewhile(lambda a: not a.startswith("--"), rest))
-    note = opt(rest, "--reason" if sub == "drop" else "--evidence")
-    try:
-        if sub == "list":
-            now = req.fleet.utcnow()
-            qs = [q for q in req.fold(req.read()).values()
-                  if "--all" in rest or req.visible(q, now)]
-            if "--json" in rest:
-                print(json.dumps(qs, ensure_ascii=False, indent=1))
-                return
-            for q in qs:
-                where = " → " + ", ".join(q["links"]) if q["links"] else ""
-                state = (" [expired]" if req.expired(q, now) else "" if q["status"] == "open"
-                         else f" [{q['status']}: {q.get('note') or ''}]")
-                print(f"{q['id']}  {req.ago(req.age_min(q, now))}  {q['text']}{where}{state}")
-            print(req.line(req.summary(now)) or "열린 요청 없음")
-        elif sub == "link" and len(ids) >= 2:
-            *rids, where = ids
-            for rid in rids:
-                req.close(rid, "link", to=where)
-                if "--done" in rest:
-                    req.close(rid, "done", note=note or f"settled at {where}")
-            print(f"{' '.join(rids)} → {where}" + (" (done)" if "--done" in rest else ""))
-        elif sub in ("done", "drop") and ids and note:
-            for rid in ids:
-                req.close(rid, sub, note=note)
-            print(f"{sub}: {' '.join(ids)}")
-        else:
-            sys.exit("usage: orch req list [--all] [--json] | link <id>... <WHERE> [--done [--evidence T]] | done <id>... --evidence T | "
-                     "drop <id>... --reason T")
-    except (ValueError, OSError) as e:
-        sys.exit(str(e))
-
-
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "req": cmd_req, "release": lambda argv: cmd_hold(argv, release=True),
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
             "doctor": lambda argv: __import__("orca_settings").main(argv)}

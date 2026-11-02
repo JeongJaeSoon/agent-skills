@@ -67,7 +67,6 @@ ANTHROPIC_API_KEY=… python3 scripts/skill_tokens.py calibrate        # 새 계
 | `onboard.py` | SessionStart | 설정이 적용되지 않은 프로필에서, 적용하거나 거절할 때까지 |
 | `reorient.py` | SessionStart, UserPromptSubmit | 역할(orchestrator·lead)이 선언된 세션의 프롬프트마다, 그리고 세션 시작 |
 | `decision.py` | UserPromptSubmit | Orca 터미널에 그 터미널이 등록한 열린 결정이 있을 때 프롬프트마다 |
-| `request_log.py` | UserPromptSubmit | 역할 세션의 사람 프롬프트마다 |
 | `prose_check.py` | PreToolUse | 커밋·PR·트래커 쓰기의 문장이 write-plainly에 걸릴 때 |
 | 나머지 다섯 개 | PreToolUse 등 | 넣지 않는다. 막거나 거부할 때 그 이유만 |
 

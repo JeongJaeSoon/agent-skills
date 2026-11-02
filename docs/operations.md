@@ -113,7 +113,6 @@ skills-sync setup disable janitor        # 하나 끄기. 어느 것이든 apply
 | `onboard.py` | 세션 시작 | 설정되지 않은 PC에서 `setup-pc`를 제안한다. 거절하면 그 프로필에서는 다시 묻지 않고(`onboard.py --decline`), `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다 |
 | `reorient.py` | 세션 시작, 프롬프트 | `--agent agent-skills:orchestrator`·`lead`나 `ROLE:` 줄로 선언한 세션에 다시 읽을 규칙과 매 프롬프트 한 줄을 넣는다 |
 | `decision.py` | 프롬프트 | 터미널에서 답한 대시보드 결정을 닫는다 |
-| `request_log.py` | 프롬프트 | 오케스트레이터·리드 세션이 받은 사람의 요청을 요청 원장에 열린 항목으로 남겨, 여러 요청이 한꺼번에 와도 빠지지 않게 한다 |
 | `permission.py` | 권한 창 | 대시보드에서 답할 수 있게 권한 창을 기록한다. 결정은 내리지 않는다 |
 
 hook마다의 판정 세부는 [skills.md](skills.md#hook).
