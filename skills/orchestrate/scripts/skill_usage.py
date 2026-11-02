@@ -23,7 +23,7 @@ EDITABLE = (REPO_PLUGIN, "user")
 SHORT, LONG = 7, 30
 MISS_THRESHOLD = 3
 MISS_SHARE = 0.2  # misses as a share of the prompts that carried a trigger phrase (misses + auto + chained fires)
-SCAN_VERSION = 6  # raise when scan_file counts differently, so cached transcripts are read again
+SCAN_VERSION = 7  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
 # Only these flags become signals. unused_30d alone stays on the dashboard: zero uses in one window is not a reason
@@ -185,9 +185,10 @@ def _prompt(d):
 
 
 GIT_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
-# git log options whose value is the next word, so a value such as "--grep -Sx" is not read as a pickaxe.
+# git log options that take the next word as their value, so a value such as "--grep -Sx" is not read as a pickaxe.
+# --pretty, --format and --encoding take theirs only after "=".
 LOG_OPTS_WITH_VALUE = {"--grep", "--author", "--committer", "--since", "--until", "--after", "--before", "-n",
-                       "--max-count", "--skip", "--format", "--pretty", "--date", "--encoding", "--grep-reflog"}
+                       "--max-count", "--skip", "--date", "--grep-reflog"}
 SHELL_OPS = ";&|()\n"
 
 
