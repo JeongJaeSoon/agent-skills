@@ -212,4 +212,11 @@ assert "gone-lead/t" in brief()["changed"]
 board.set_row("wt-pr", title="untitled-fix", repo="acme/plugins", status="moving", worktree="s4")
 linked_row = next(x for x in sum(brief()["table_rows"], []) if "untitled-fix" in x["label"])
 assert linked_row["session"]["pr"] == "acme/plugins#630", linked_row
+
+# A quiet row with no PR whose --worktree card is working is not stale: the card is its evidence.
+quiet_store = {"rows": {"q": {"id": "q", "title": "untitled", "status": "moving", "reported_at": ago(9), "worktree": "w-titled"}}}
+assert "row:q" not in tidy.assess(quiet_store, probe_state, {}, now=now), tidy.assess(quiet_store, probe_state, {}, now=now)
+# A board lead row linked to a lead session with --worktree holds that session: no second fleet lead row.
+rows_, _ = board.fleet_rows(probe_state, {}, {"L": {"id": "L", "kind": "lead", "worktree": "lead1"}})
+assert not any(r["kind"] == "lead" for r in rows_.values()) and all(r.get("parent") == "L" for r in rows_.values()), rows_
 print("test_brief_rows: ok")

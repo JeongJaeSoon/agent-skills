@@ -157,7 +157,7 @@ def assess(store, state, prs, me=None, now=None):
             put(item_id("todo", t), "done", "pr_over", ev, t)
     for rid, r in (store.get("rows") or {}).items():
         at = fleet.parse(r.get("reported_at"))
-        card = named(f"{rid} {r.get('title') or ''}", cards)
+        card = cards.get(r.get("worktree")) or named(f"{rid} {r.get('title') or ''}", cards)  # `--worktree` first
         if (r.get("status") == "moving" and not r.get("pr") and not (card and (card["pr"] or card["id"] in live))
                 and at and (now - at).total_seconds() > STALE_H * 3600):
             put(f"row:{rid}", "check", "stale", f"{int((now - at).total_seconds() // 3600)}h 갱신 없음 · 근거 PR·작업 중 세션 없음",

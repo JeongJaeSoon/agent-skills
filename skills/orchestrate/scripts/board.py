@@ -530,6 +530,7 @@ def fleet_rows(state, leads, board_rows):
     # A worktree a board row or board lead links (`--worktree`) is that row's work, not a row of its own.
     linked = {r.get("worktree") for r in board_rows.values()} - {None}
     lead_wt = {l["worktree"]: name for name, l in leads.items() if l.get("worktree")}
+    lead_wt.update({r["worktree"]: rid for rid, r in board_rows.items() if r.get("worktree") and r.get("kind") == "lead"})
     pr_of, under = {}, {}
     for s in sessions:  # Orca's own link first
         if isinstance(s.get("linked_pr"), dict) and s["linked_pr"].get("key"):
