@@ -380,6 +380,14 @@ def narrowed(rest, any_path=False, any_word=False):
     return False
 
 
+def runner_cmd(words):
+    """Where a package manager's subcommand or script sits, past its options and their values (`npm --prefix app`)."""
+    k = 1
+    while k < len(words) and words[k].startswith("-"):
+        k += 2 if words[k] in RUNNER_VALUE else 1
+    return k
+
+
 def runs_tests(argv):
     """'test suite', 'E2E' or 'browser' for one simple command that runs a whole suite, an E2E or a headless browser,
     else None. One named test file, or a runner given a path, is not a suite."""
@@ -412,9 +420,9 @@ def runs_tests(argv):
             while rest and rest[0].startswith("-"):
                 rest = rest[2 if rest[0] in UV_VALUE else 1:]
             words = rest or words
-        elif head in ("npx", "bunx", "pnpx") or head in RUNNERS and words[1:2] in (["exec"], ["dlx"], ["x"]):
-            # `pnpm exec playwright test`, `npx --package @playwright/test playwright test`
-            rest = words[1 if head in ("npx", "bunx", "pnpx") else 2:]
+        elif head in ("npx", "bunx", "pnpx") or head in RUNNERS and words[runner_cmd(words):][:1] in (["exec"], ["dlx"], ["x"]):
+            # `pnpm exec playwright test`, `pnpm --dir app exec …`, `npx --package @playwright/test playwright test`
+            rest = words[1 if head in ("npx", "bunx", "pnpx") else runner_cmd(words) + 1:]
             while rest and rest[0].startswith("-"):
                 rest = rest[2 if rest[0] in LAUNCHER_VALUE else 1:]
             words = rest or words
