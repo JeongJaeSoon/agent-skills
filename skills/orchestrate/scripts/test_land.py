@@ -85,6 +85,7 @@ def pr(n, mss="CLEAN", base="main", stacked=False, files=None, behind=0):
 
 
 FAKE_DOCKER = r'''#!/bin/sh
+[ -n "$FAKE_DOCKER_FAIL" ] && exit 1
 cat "$FAKE_DOCKER_STATE" 2>/dev/null || echo "[]"
 '''
 
@@ -350,6 +351,19 @@ r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--wait-minu
 rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
 assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[2:]] == [("verify-3", "acme/app#7")], (rows, r.stderr)
 assert not list((d / "programs" / "_heavy").glob("*.stacks")), "the outer run removes the inner run's list"
+# Three levels: the middle run, with its own PR, leaves the deepest run's registration alone too.
+after4 = json.dumps(json.loads(after3) + [{"Name": "verify-4", "Status": "running(1)", "ConfigFiles": f"{wt}/compose.yaml"}])
+deep = [sys.executable, str(HERE / "prog.py"), "heavy", "-", "--pr", "acme/app#9", "--", "sh", "-c",
+        f"printf '%s' '{after4}' > {d / 'docker.json'}"]
+middle = [sys.executable, str(HERE / "prog.py"), "heavy", "-", "--pr", "acme/app#8", "--", *deep]
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--wait-minutes", "0", "--", *middle],
+                   env=heavy_env, cwd=wt, capture_output=True, text=True)
+rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
+assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[3:]] == [("verify-4", "acme/app#9")], (rows, r.stderr)
+# With Docker unreadable a nested run still ends with its command's exit code.
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--", "sh", "-c", "exit 3"],
+                   env=dict(heavy_env, ORCH_HEAVY_SLOT=str(d / "slot-x"), FAKE_DOCKER_FAIL="1"), cwd=wt, capture_output=True, text=True)
+assert r.returncode == 3 and "Traceback" not in r.stderr, r.stderr
 
 # status and queue run end to end on the same fakes.
 d, env = setup({"17": pr(17), "18": pr(18, files=["db/migrations/9.sql"])})

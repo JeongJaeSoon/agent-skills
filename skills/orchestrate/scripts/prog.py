@@ -2552,7 +2552,7 @@ def register_stacks(before, owner, pr, skip=()):
     have started one meanwhile."""
     after = compose_projects()
     if before is None or after is None:
-        return
+        return []
     top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     wt = os.path.realpath(top.stdout.strip() if top.returncode == 0 else os.getcwd())
     done = []
@@ -2580,14 +2580,13 @@ def heavy_run(cmd, env, owner, pr, nested=False):
         return subprocess.run(cmd, env=env).returncode
     finally:
         try:
-            if nested:
-                names = register_stacks(before, owner, pr)
+            inner = log.read_text().split() if log.exists() else []
+            names = register_stacks(before, owner, pr, skip=inner)
+            if nested:  # every level skips what a deeper one registered; only the outermost removes the list
                 with log.open("a") as f:
                     f.writelines(f"{n}\n" for n in names)
             else:
-                inner = log.read_text().split() if log.exists() else []
                 log.unlink(missing_ok=True)
-                register_stacks(before, owner, pr, skip=inner)
         except (OSError, subprocess.SubprocessError) as e:
             # The command's exit code is the result; a failed registration is only reported.
             print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
