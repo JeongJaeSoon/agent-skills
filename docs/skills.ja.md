@@ -1,4 +1,4 @@
-<!-- translated-from: 361c34d434cd2af255782b4f6bc1fc45c499b1e1 -->
+<!-- translated-from: MERGE -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -536,7 +536,7 @@ PR を受け持つスキルとマージする主体:
 ### オーケストレーター・リードの再確認
 `hooks/onboard.py`（SessionStart `startup|clear`）。このプロファイルのユーザー設定（`env.CLAUDE_CODE_PLUGIN_DIRS`。Orca のプロファイルごとに別々に見ます）もセッションの同じ環境変数もチェックアウトを読み込んでいないときだけ、インストール画面の値とともに `setup-pc` を提案するよう促す段落を入れます。`-p` セッション（`CLAUDE_CODE_ENTRYPOINT` が `sdk-cli`）には入れません。Agent SDK のセッション（`sdk-ts`・`sdk-py`）は人が入力する GUI かもしれないので入れ、最初の依頼がブリーフや自動化のプロンプトなら無視するよう段落に書いてあります。URL の認証情報は消してから入れます。人が断ればエージェントが `onboard.py --decline` を実行し、そのプロファイルでは二度と尋ねません。`AGENT_SKILLS_ONBOARD=0` ですべて無効になります。
 
-`hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。操作を止めず外部コマンドも実行しません。オーケストレーターのセッション名（`session_title`）が `orchestrator` でなければ、SessionStart の案内の最後に、人に `/rename orchestrator` を頼み自分の Orca タブの名前を変える（`orca terminal rename`）よう促す行を付けます。
+`hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。compact 後の SessionStart では、orchestrate の SKILL.md 冒頭にある「Core rules」の一覧（最初の項目は委任）をそのまま読んで案内に添えます。スキルが大きく compaction の再注入では戻らず、「再ロードせよ」という一文だけではロードされなかったためです。操作を止めず外部コマンドも実行しません。オーケストレーターのセッション名（`session_title`）が `orchestrator` でなければ、SessionStart の案内の最後に、人に `/rename orchestrator` を頼み自分の Orca タブの名前を変える（`orca terminal rename`）よう促す行を付けます。
 
 ### ターミナルで答えた決定のクローズ
 `hooks/decision.py`（UserPromptSubmit）。`orch decide add` で決定を登録したターミナル（`$ORCA_TERMINAL_HANDLE`）に人が入力したプロンプトだけを見ます。1 行目が id で始まる（`d3 許可`、`decision d3: 許可`）か、そのターミナルの開いている決定のうち一つにしかない選択肢名で始まると、その決定を答えとともに done でクローズし、オーケストレーターかリードに伝えます。曖昧なときはクローズせず、開いている決定の一覧をリマインダーとして差し込むだけです。ほかのターミナル（ワーカー）の入力ではクローズせず、エラーはすべて exit 0 です。すでに起動しているセッションには `/reload-plugins` か再起動のあとから効きます。
