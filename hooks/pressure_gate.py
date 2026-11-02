@@ -223,9 +223,20 @@ def substitutions(cmd, quotes=True):
                 j = len(cmd) if j < 0 else j
                 found.append(cmd[i + 1:j])
             else:
-                depth, j = 1, i + 2
+                depth, j, inner = 1, i + 2, ""  # quotes inside the substitution hide its parentheses: `$(printf ')')`
                 while j < len(cmd) and depth:
-                    depth += {"(": 1, ")": -1}.get(cmd[j], 0)
+                    d = cmd[j]
+                    if inner:
+                        if d == "\\" and inner == '"':
+                            j += 1
+                        elif d == inner:
+                            inner = ""
+                    elif d == "\\":
+                        j += 1
+                    elif d in "'\"":
+                        inner = d
+                    else:
+                        depth += {"(": 1, ")": -1}.get(d, 0)
                     j += 1
                 found.append(cmd[i + 2:j - 1])
                 j -= 1
