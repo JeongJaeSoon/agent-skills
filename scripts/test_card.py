@@ -71,7 +71,8 @@ os.environ.update(AGENT_SKILLS_STATE=str(tmp / "state"), AGENT_SKILLS_CONFIG=str
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import pressure  # noqa: E402
 LEVEL = {"now": "ok"}
-pressure.snapshot = lambda cfg, st, *a, **k: {"load_per_cpu": 3.1}
+SNAP = []  # the kwargs each gate check measured with
+pressure.snapshot = lambda cfg, st, *a, **k: SNAP.append(k) or {"load_per_cpu": 3.1}
 pressure.judge = lambda m, cfg: (LEVEL["now"], ["load_per_cpu 3.1"])
 pressure.blocked_by = lambda m, cfg: ["load_per_cpu"]
 pressure.active_turns = lambda run=None: 0  # the new-card turn cap would read this machine's Orca
@@ -202,6 +203,8 @@ rc, out, err, calls = go(path, "--repo", "r", "--name", "x")
 assert rc == 3 and "[gate:pressure]" in err and err.startswith("[skills-sync card]") and not creates(calls), (rc, err, calls)
 (entry,) = pressure.queue_read().values()
 assert entry["state"] == "waiting" and entry["session"] == "term_me" and f"queue wait {entry['id']}" in err, (entry, err)
+# It measures CPU idle now, as the hook and `queue wait` do, so a dispatch the queue released is not refused on a stale rate.
+assert SNAP and callable(SNAP[-1].get("idle_fn")), SNAP
 os.environ["AGENT_SKILLS_PRESSURE_GATE"] = "0"
 assert go(path, "--repo", "r", "--name", "y")[0] == 0
 del os.environ["AGENT_SKILLS_PRESSURE_GATE"]

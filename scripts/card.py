@@ -167,8 +167,8 @@ def pressure_check(cmd):
         import pressure
         cfg = pressure.config()
         state = pressure.load_state()
-        out = pressure_gate.gate(cmd, pressure.snapshot(cfg, state), state, cfg, p=pressure, session=session,
-                                 cwd=os.getcwd())
+        out = pressure_gate.gate(cmd, pressure.snapshot(cfg, state, idle_fn=pressure.live(cfg)), state, cfg, p=pressure,
+                                 session=session, cwd=os.getcwd())
     except Exception:
         return None, none
     if out and out[0] == "deny":
