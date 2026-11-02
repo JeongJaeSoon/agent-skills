@@ -119,4 +119,29 @@ python3 <reap.py 절대 경로> schedule --write   # 실제로 만든다
 orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 이미 있는 automation 의 프롬프트만 바꾼다
 ```
 
-주기는 3시간(`17 */3 * * *`)이다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load`)가 같은 회차를 한 번 더 돈다. janitor를 꺼 두었거나 지운 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 janitor가 등록돼 켜져 있고(Orca 앱에서 끄거나 지운 것도, automation 목록을 못 읽은 것도 꺼짐으로 본다) 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 쿨다운은 부하 job만 멈추고, 3시간 job은 늘 제 시각에 돈다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 같은 계획이 reap 없이 쌓이면 모델을 깨우지 않는 규칙(`reap.plan_repeat`)은 두 job이 함께 쓴다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
+주기는 3시간(`17 */3 * * *`)이다. #190 이전에 등록한 PC에는 옛 30분 주기(`7,37 * * * *`)가 그대로 남고 `janitor-load`도 없다. `skills-sync setup`이 이 경우를 `reap schedule 과 다름: trigger, prompt (enable 로 맞춤)`으로 보여 주며, 오너가 메인 체크아웃에서 `skills-sync setup enable janitor`를 실행하면 3시간 주기로 고쳐지고 `janitor-load`가 함께 등록된다. 등록된 실제 주기는 `orca automations list --json`의 `rrule`로 확인한다. 그 사이에 PC 부하가 높아지면 두 번째 automation `janitor-load`(`27,57 * * * *`, `precheck --load`)가 같은 회차를 한 번 더 돈다. janitor를 꺼 두었거나 지운 PC에는 만들지 않고, janitor가 옮겨 간 worktree에 만든다. 이 precheck는 5분 load만 읽고, load가 `reap.load_limit`(기본 CPU 수) 이상이며 janitor가 등록돼 켜져 있고(Orca 앱에서 끄거나 지운 것도, automation 목록을 못 읽은 것도 꺼짐으로 본다) 두 job 어느 쪽도 `reap.load_cooldown_minutes`(기본 60분) 안에 precheck를 돌리지 않았을 때만 전체 precheck로 넘어간다. 쿨다운은 부하 job만 멈추고, 3시간 job은 늘 제 시각에 돈다. 부하가 높을 때가 끝난 카드와 compose 스택(`compose-stack`: `orch heavy`가 등록한 것)이 가장 비싼 때이기 때문이다. pressure-watch LaunchAgent가 없는 PC에서도 Orca가 돌린다. 같은 계획이 reap 없이 쌓이면 모델을 깨우지 않는 규칙(`reap.plan_repeat`)은 두 job이 함께 쓴다. 규칙과 ledger 형식은 [reap-resources SKILL.md](../skills/reap-resources/SKILL.md).
+
+## 세션 순찰 (`orch patrol`)
+
+모델 없이 도는 한 라운드다. reap-hard LaunchAgent가 회차를 마칠 때마다 `orch patrol --if-due`를 별도 프로세스로 띄우고, 순찰은 마지막 라운드가 25분 넘게 지났을 때만 돈다(그래서 15분 박자에서 두 번에 한 번, 30분). pressure 회차가 경고나 위험으로 바뀌면 그 회차도 같은 명령을 띄워 바로 한 번 더 돈다. 한 라운드는 120초가 지나면 그 자리에서 멈춘다. 그때까지 쓴 발견 기록은 남고, 대시보드 Needs you 항목은 다음 라운드가 기록에 맞춘다. 새로 등록할 LaunchAgent는 없다. reap-hard와 pressure가 메인 체크아웃의 코드를 그대로 읽기 때문이다.
+
+읽는 순서는 Orca 명령이 먼저다(`orca terminal list`, `orca worktree ps --agent-wait`, 모든 Run의 `orca orchestration worker-list`). 그다음 collector의 `state.json`(카드의 부모, 연결 PR, 보드), 카드별 세션 기록 끝부분, `orch sent` 기록, 직전 pressure 회차를 읽는다. PR은 collector가 모은 것을 쓰고 `gh`를 새로 부르지 않는다. 화면은 직전 라운드 뒤로 출력이 생긴 에이전트 터미널만 읽는다.
+
+| 코드 | 경우 |
+|---|---|
+| I | Run 밖 카드의 턴이 15분 넘게 끝나 있고 스스로 깨어날 장치(ScheduleWakeup, Monitor, 백그라운드 명령)가 없다. 사람 대기 프롬프트는 `orch watch-cards`가 맡는다 |
+| X | Orca가 `exited`로 본 진행 중 워커, 또는 에이전트가 사라진 Run 밖 카드의 세션 기록이 API 오류나 오류 알림으로 끝났다 |
+| S | `orch sent add --kind supersede`로 대체를 기록한 지 30분이 지났는데 그 카드에 에이전트가 남아 있다 |
+| O | 에이전트 없는 카드의 PR이 24시간 열려 있고 리뷰 요청도 진행 중인 CI도 없다 |
+| D | 보드 doing 항목이 PR도 카드도 가리키지 않은 채 24시간 그대로다. 보드에 ❔로 보인다 |
+| E | 같은 에러 줄이 출력이 새로 생긴 라운드 세 번 연속으로 보인다. ❔ 표시만 한다 |
+| L | 경고·위험 회차에 상위 소비자가 I·X·S·O로 판정된 카드에 속한다 |
+| W | 오케스트레이터의 `orch watch-cards`가 1시간 넘게 회차를 마치지 않았다. 대시보드 Needs you에는 collector가 올린다 |
+
+결과는 `<state>/patrol.jsonl`(발견, 해소, ack), `<state>/patrol-verdicts.json`(카드별 판정)에 남는다. X·E·L·O는 대시보드 Needs you에 올라가고 조건이 풀리거나 ack하면 빠진다. `orch inbox`와 `orch wait`는 그 카드를 띄운 세션(없으면 오케스트레이터)에 ack되지 않은 발견을 30분마다 다시 보여 준다. 처리한 세션은 `orch patrol ack <id>`로 닫는다. 순찰은 화면 입력, nudge, 터미널 닫기, 워커 종료, 카드 삭제를 하지 않는다. reap-hard와 pressure는 판정을 카드를 남기는 쪽으로만 쓴다(작업 중, 사람 대기, Run 워커).
+
+```bash
+orch patrol --once --dry-run   # 한 라운드를 판정만 하고 아무것도 쓰지 않는다
+orch patrol list               # 이 터미널로 온(그리고 주인 없는) 미처리 발견
+orch patrol ack <id>...        # 처리한 발견을 닫는다
+```

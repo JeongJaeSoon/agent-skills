@@ -2,7 +2,7 @@
 """Close what finished cards left behind, by rules fixed in code, with no model in the loop.
 
 Usage:
-  reap-hard run [--dry-run] [--json]     one pass; --dry-run decides and logs, and touches nothing (no argument: usage)
+  reap-hard run [--dry-run] [--json] [--no-patrol]   one pass; --dry-run decides and logs, and touches nothing (no argument: usage)
   reap-hard last                         the last pass in one line (`orch brief` shows it)
   reap-hard install [--here] | uninstall | status   macOS LaunchAgent, a pass every `interval` seconds
 
@@ -24,6 +24,8 @@ Before any rule, the protect file is read; without it nothing runs (exit 2). It 
 compose projects in reap.pressure.always_on and anything a person's shell started are always kept.
 Each decision that acts, or would act under --dry-run, and each failure is one JSON line in
 <state>/reap-hard.jsonl; the pass's summary is <state>/reap-hard-last.json.
+After a pass that is not a dry run, `orch patrol --if-due` starts detached (every other pass, 30 minutes); a card
+it judged working within the hour is kept, and nothing it judged becomes a target.
 Settings: "reap-hard" in ~/.claude/agent-skills.json (DEFAULTS).
 """
 import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
@@ -364,8 +366,11 @@ def scan_cards(cfg, protect, now):
     if not isinstance(wt, dict) or wt.get("truncated"):
         notes.append("orca worktree list 를 읽지 못함 또는 잘림: 카드는 건너뜀")
     elif m["cwd_of"] is not None and m["listening"] is not None:
+        working = reap.patrol_working(now)
         for w in local_cards(wt, root):
             ok, why, facts = card_verdict(w, m, cfg, protect, now)
+            if ok and reap.real(w["path"]) in working:
+                ok, why = False, "순찰 판정: 작업 중(orch patrol)"
             item = {"kind": "card", "id": reap.real(w["path"]), "target": ok, "why": why}
             if ok:
                 item.update(head=facts["head"], regenerated=facts.get("regenerated") or [])
@@ -630,6 +635,9 @@ def main(argv):
     if cmd == "run":
         with locked():
             res, code = run_pass("--dry-run" in argv)
+        if "--dry-run" not in argv and "--no-patrol" not in argv:
+            # Patrol keeps this beat: it runs itself every other pass (--if-due), apart, so a slow round never holds this one.
+            reap.spawn_patrol("reap-hard")
         if "--json" in argv:
             print(json.dumps(res, ensure_ascii=False, indent=1))
         else:
