@@ -146,8 +146,13 @@ def lead_session(agent, session, transcript):
 
 def command_text(cmd):
     """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
-    comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them."""
-    out, n, opened = list(cmd), len(cmd), set()  # opened: just past an opening backtick, where a word starts
+    comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them.
+    From a construct this parser does not follow (`${…}`, whose quotes nest; `case` in `$(…)`) on, nothing is blanked."""
+    out, n = list(cmd), len(cmd)
+    opened, closed = set(), set()  # just past an opening backtick (a word starts) and past a closing `)` or backtick
+
+    class Unsure(Exception):
+        pass
 
     def blank(i, j):
         out[i:j] = " " * (j - i)
@@ -158,6 +163,8 @@ def command_text(cmd):
             c = cmd[i]
             if c == close:
                 return i + 1
+            if cmd.startswith("${", i):
+                raise Unsure(i)
             if c == "\\":
                 blank(i, min(i + 2, end))
                 i += 2
@@ -199,8 +206,8 @@ def command_text(cmd):
 
         while i >= 2 and cmd[i - 1] == "\n" and escaped(i - 1):
             i -= 2
-        # Not after `)` or a closing backtick: in `$(x)#` and `` `x`# `` the # is inside a word.
-        return i == 0 or i in opened or (cmd[i - 1] in " \t\n;&|(" and not escaped(i - 1))  # `\\ #` is a comment, `\ #` is not
+        # A subshell's `)` ends a word, a substitution's does not: `(x)#` is a comment, `$(x)#` and `` `x`# `` are not.
+        return i == 0 or i in opened or (cmd[i - 1] in " \t\n;&|()" and i not in closed and not escaped(i - 1))
 
     def heredoc(i):
         """The delimiter word after `<<` at i, quotes removed: (index after it, (strip tabs, word, expands) or None)."""
@@ -241,7 +248,10 @@ def command_text(cmd):
         while i < n:
             c = cmd[i]
             if c == close and (close != ")" or depth == 0):
+                closed.add(i + 1)
                 return i + 1
+            if cmd.startswith("${", i) or close == ")" and re.match(r"case\b", cmd[i:]) and starts_word(i):
+                raise Unsure(i)
             if c == "(":
                 depth += 1
             elif c == ")" and depth:
@@ -283,7 +293,10 @@ def command_text(cmd):
                 i += 1
         return n
 
-    command(0, None)
+    try:
+        command(0, None)
+    except Unsure as e:
+        return "".join(out[:e.args[0]]) + cmd[e.args[0]:]
     return "".join(out)
 
 

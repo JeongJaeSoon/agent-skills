@@ -262,6 +262,11 @@ assert bash(f"echo \\\\ # don't\nskills-sync card {H / 'noclose.md'}") == "deny"
 assert bash(f"echo a\\\\\n# don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # `\\` then a real newline
 assert bash(f"echo `# don't\nskills-sync card {H / 'noclose.md'}\n`") == "deny"  # a comment opening a substitution
 assert bash(f"echo $(# don't\nskills-sync card {H / 'noclose.md'}\n)") == "deny"
+assert bash(f"(true)# don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # a subshell's ) ends a word
+# Past a `${…}` (its quotes nest) or a `case` in `$(…)`, nothing is blanked.
+assert bash(f"echo \"${{x:-\"it's ready\"}}\"\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo ${{x:-\"it's\"}}\nskills-sync card {H / 'noclose.md'}") == "deny"
+assert bash(f"echo \"$(case a in a) echo \"it's\";; esac)\"\nskills-sync card {H / 'noclose.md'}") == "deny"
 for word in ("`x`", "$(x)", "a\\\\\\ "):  # a # inside a word is not a comment
     assert bash(f"echo {word}#; skills-sync card {H / 'noclose.md'}") == "deny", word
 assert bash(f"cat <<true\ntr\\\nue\nskills-sync card {H / 'noclose.md'}\ntrue") == "deny"  # bash ends the body at tr\ue
