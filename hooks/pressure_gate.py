@@ -127,7 +127,7 @@ def segments(cmd):
         return []
     out.append(cur)
     for argv in [a for a in out if a]:
-        words = argv[skip_prefix(argv):]  # `FOO=1 env bash -c`, `nice -n 5 bash -c`
+        words = argv[skip_prefix(argv, keywords=True):]  # `FOO=1 env bash -c`, `do nice -n 5 bash -c`
         j, run_c = 1, False
         while words and os.path.basename(words[0]) in SHELLS and j < len(words) and words[j].startswith("-"):
             run_c |= not words[j].startswith("--") and "c" in words[j][1:]  # `-c`, `-lc`, `-l -c`
@@ -144,7 +144,7 @@ def starts_heavy(argv):
     """`orch heavy`, `orca worktree create` or `docker compose … up` for one simple command, else None.
     A leading AGENT_SKILLS_PRESSURE_GATE=0 or a --help also gives None."""
     words, i = list(argv), 0
-    i = skip_prefix(words)
+    i = skip_prefix(words, keywords=True)
     if OVERRIDE in words[:i]:
         return None
     words = words[i:]
@@ -190,6 +190,7 @@ SUITE = re.compile(r"(run[-_])?tests?([-_]all)?\.sh")
 TEST_FILE = re.compile(r"(.*/)?(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?)")
 E2E = re.compile(r"(.*[-_:./])?(e2e|playwright|cypress)([-_:.].*)?", re.I)
 RUNNERS = {"npm", "pnpm", "yarn", "bun"}
+RUNNER_VALUE = {"--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"}
 # This many test files in a `for` list or on one runner's line is a suite, the CONTRIBUTING loop among them;
 # `git add` or `cat` of as many is not.
 SUITE_FILES = 5
@@ -268,7 +269,14 @@ def runs_tests(argv):
         return "E2E"
     if "chrom" in head.lower() and any(w.startswith("--headless") for w in words):
         return "browser"
-    if head in RUNNERS:
+    if head in RUNNERS:  # `npm --prefix app test`: an option's value is not the script
+        args, k = [], 1
+        while k < len(words):
+            if words[k] in RUNNER_VALUE:
+                k += 1
+            elif not words[k].startswith("-"):
+                args.append(words[k])
+            k += 1
         script = args[1] if args[:1] == ["run"] and len(args) > 1 else args[0] if args else ""
         if E2E.fullmatch(script):
             return "E2E"
