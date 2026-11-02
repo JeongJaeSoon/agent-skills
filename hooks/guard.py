@@ -244,10 +244,14 @@ def command_text(cmd):
 
     def command(i, close):
         depth, arith, pending = 0, 0, []
+        # Bash cuts a backtick substitution at the next backtick before parsing it: nothing in it runs past there.
+        end, prev = (cmd.find("`", i) % (n + 1) if close == "`" else n), i
         if close == "`":
             opened.add(i)
         while i < n:
-            c = cmd[i]
+            if i > end:
+                raise Unsure(prev)
+            c, prev = cmd[i], i
             if c == close and (close != ")" or depth == 0):
                 closed.add(i + 1)
                 return i + 1
@@ -294,6 +298,8 @@ def command_text(cmd):
                 i, pending = bodies(i + 1, pending), []
             else:
                 i += 1
+        if close == "`":  # the scan ran out before the closing backtick
+            raise Unsure(prev)
         return n
 
     try:

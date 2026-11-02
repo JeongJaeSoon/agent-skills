@@ -267,6 +267,8 @@ assert bash(f"(true)# don't\nskills-sync card {H / 'noclose.md'}") == "deny"  # 
 assert bash(f"echo \"${{x:-\"it's ready\"}}\"\nskills-sync card {H / 'noclose.md'}") == "deny"
 assert bash(f"echo ${{x:-\"it's\"}}\nskills-sync card {H / 'noclose.md'}") == "deny"
 assert bash(f"echo \"`echo \\\"it's ready\\\"`\"\nskills-sync card {H / 'noclose.md'}") == "deny"  # \" in backticks
+for sub in ("echo '", "printf \"%s"):  # an unclosed quote ends with the backtick substitution
+    assert bash(f"echo `{sub}`\nskills-sync card {H / 'noclose.md'}") == "deny", sub
 assert bash(f"echo \"$(case a in a) echo \"it's\";; esac)\"\nskills-sync card {H / 'noclose.md'}") == "deny"
 for word in ("`x`", "$(x)", "a\\\\\\ "):  # a # inside a word is not a comment
     assert bash(f"echo {word}#; skills-sync card {H / 'noclose.md'}") == "deny", word
