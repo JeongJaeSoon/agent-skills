@@ -154,6 +154,15 @@ assert rows["simplify"]["source"] == "other" and rows["simplify"]["uses_30d"] ==
 assert "mcp" not in rows and "agent-skills:mcp" not in rows, rows.keys()
 assert rows["notes"]["uses_30d"] == 0 and rows["notes"]["uses_total"] == 1 and rows["notes"]["last_used"] == ts(40, 1), rows["notes"]
 assert ship["last_used"] == ts(1, 1), ship
+# Only git run as a command counts: global options and quoting are read, a mention inside a string is not a run,
+# a path after "--" is not an option, and a skill of the same name from another plugin is not this one.
+for cmd, n in [("git blame a.py", 1), ("git --no-pager blame a.py", 1), ("git --no-pager log -Sneedle -- a.py", 1),
+               ('git -C "../sample repo" blame a.py', 1), ("printf '%s\\n' 'git blame a.py'", 0), ("git log -- -Sample.py", 0),
+               ("git log -Sneedle -- a.py; git blame a.py", 2), ("cd x && GIT_PAGER=cat git log -G'x|y' | head", 1),
+               ("git log --since=1.week --stat", 0), ("echo git log -Sx", 0), ("git log -S'unbalanced", 0)]:
+    assert su.git_history_cmds(cmd) == n, (cmd, su.git_history_cmds(cmd))
+foreign = [[ts(1), "other-plugin:architect", "auto", "s9", "h"], [ts(1), "agent-skills:arena", "auto", "s9", "h"]]
+assert su.denominators(foreign, [], NOW)["7d"]["architect_sessions"] == 0, su.denominators(foreign, [], NOW)
 # A subagent prompt carrying a trigger counts apart from human misses and raises no flag of its own.
 assert ship["subagent_misses_30d"] == 1 and tidy["subagent_misses_30d"] == 0, (ship, tidy)
 assert su.flags({**ship, "misses_30d": 0, "subagent_misses_30d": 9}, 1) == [], "subagent misses alone are not flagged"

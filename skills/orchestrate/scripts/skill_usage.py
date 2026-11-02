@@ -26,8 +26,6 @@ MISS_SHARE = 0.2  # misses as a share of the prompts that carried a trigger phra
 SCAN_VERSION = 5  # raise when scan_file counts differently, so cached transcripts are read again
 PHRASE_RE = re.compile(r'"([^"\n]{2,80})"|「([^」\n]{2,80})」|(?:^|[\s(,])\'([^\'\n]{2,80})\'')
 RULED_OUT_SENTENCE_RE = re.compile(r"(?:not|don't|do not|never)\b", re.I)
-# History digging done by hand where `why` could have run: pickaxe (-S/-G), line history (-L) and blame.
-GIT_HISTORY_RE = re.compile(r"\bgit\b(?:\s+-C\s+\S+)?\s+(?:blame\b|log\b[^|;&\n]*?\s-[SGL])")
 # Only these flags become signals. unused_30d alone stays on the dashboard: zero uses in one window is not a reason
 # to touch a skill (retire_candidate is).
 SUGGEST = {"slash_only": ["rewrite-description"], "misses": ["rewrite-description"],
@@ -186,6 +184,45 @@ def _prompt(d):
     return "human", c
 
 
+GIT_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+
+
+def git_history_cmds(command):
+    """Git commands in one shell command line that dig history by hand where `why` could have run: blame, and log
+    with a pickaxe (-S/-G) or line-history (-L) option. Text that only mentions git (an echoed string) is not one."""
+    lex = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        tokens = list(lex)
+    except ValueError:  # an unbalanced quote: the line cannot be read reliably, so it is not counted
+        return 0
+    count, seg = 0, []
+    for tok in tokens + [";"]:
+        if tok and set(tok) <= set(";&|()"):
+            count += _is_git_history(seg)
+            seg = []
+        else:
+            seg.append(tok)
+    return count
+
+
+def _is_git_history(seg):
+    while seg and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", seg[0]):  # VAR=value prefixes
+        seg = seg[1:]
+    if not seg or os.path.basename(seg[0]) != "git":
+        return False
+    i = 1
+    while i < len(seg) and seg[i].startswith("-"):
+        i += 2 if seg[i] in GIT_OPTS_WITH_VALUE else 1
+    sub, args = (seg[i], seg[i + 1:]) if i < len(seg) else (None, [])
+    if sub == "blame":
+        return True
+    if sub != "log":
+        return False
+    args = args[:args.index("--")] if "--" in args else args
+    return any(re.match(r"-[SGL]", a) for a in args)
+
+
 def _hash(s):
     return hashlib.sha1((s or "").encode()).hexdigest()[:12]
 
@@ -234,8 +271,8 @@ def scan_file(path, inv, resolve):
                 inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                 if b.get("name") in ("Agent", "Task") and inp.get("subagent_type") == "Explore":
                     probes.append([ts, "explore", session])
-                elif b.get("name") == "Bash" and GIT_HISTORY_RE.search(str(inp.get("command") or "")):
-                    probes.append([ts, "git_history", session])
+                elif b.get("name") == "Bash":
+                    probes.extend([ts, "git_history", session] for _ in range(git_history_cmds(str(inp.get("command") or ""))))
                 if b.get("name") != "Skill":
                     continue
                 name = resolve((b.get("input") or {}).get("skill"))
@@ -364,12 +401,11 @@ def denominators(events, probes, now):
         t = parse_ts(ts)
         return bool(t) and (now - t).days < days
 
-    def short(name):
-        return name.rsplit(":", 1)[-1]
+    architect_skill, arena_skill = f"{REPO_PLUGIN}:architect", f"{REPO_PLUGIN}:arena"
     out = {}
     for label, days in ((f"{SHORT}d", SHORT), (f"{LONG}d", LONG)):
-        architect = {e[3] for e in events if short(e[1]) == "architect" and within(e[0], days)}
-        arena = {e[3] for e in events if short(e[1]) == "arena" and within(e[0], days)}
+        architect = {e[3] for e in events if e[1] == architect_skill and within(e[0], days)}
+        arena = {e[3] for e in events if e[1] == arena_skill and within(e[0], days)}
         out[label] = {"explore_calls": sum(p[1] == "explore" and within(p[0], days) for p in probes),
                       "git_history_cmds": sum(p[1] == "git_history" and within(p[0], days) for p in probes),
                       "architect_sessions": len(architect), "architect_sessions_with_arena": len(architect & arena)}
