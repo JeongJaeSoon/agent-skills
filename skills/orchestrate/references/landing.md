@@ -106,7 +106,7 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.
 
-Main CI is every push-triggered run at the merge commit. Watch it with the lines `land` prints (`gh run list --commit <sha>`, then `gh run watch <id> --exit-status` for each run id), and record `main_green` or `main_red` only after every one has completed. A run cancelled by a newer push is no result. The "CI runs" ids `land` prints are the PR's runs, never main's. A watcher script of your own that parses run text can record red over green runs (a workflow name with a space shifts the columns); when one gives a false signal, fix or delete it in the same wake and record from the per-run conclusions.
+Main CI is every push-triggered run at the merge commit. Watch it with the lines `land` prints (`gh run list --commit <sha>`, then `gh run watch <id> --exit-status` for each run id), and record `main_green` or `main_red` only after every one has completed. A run cancelled by a newer push is no result; any other cancelled job is read as below before it counts. The "CI runs" ids `land` prints are the PR's runs, never main's. A watcher script of your own that parses run text can record red over green runs (a workflow name with a space shifts the columns); when one gives a false signal, fix or delete it in the same wake and record from the per-run conclusions.
 
 `land` and `land-check` also read the PR's sticky `<!-- test-results -->` comment (`deliver-ticket` §5):
 
@@ -124,7 +124,7 @@ A standing **main guardian** worker (`references/roles.md`) owns red main. It re
 
   It never mechanically reverts a migration or a commit later PRs depend on. It lands the repair with `--class main-fix`, records `main_green`, and tells the culprit's card, the affected cards and the lead.
 
-With no guardian running, whoever is about to record `main_red` does its read first: re-run a failed run once, a run cancelled by a newer push is not red, and a deploy refused because another deploy was in progress gets one re-run before it counts. A red only in a deploy or advisory job is recorded as that in the digest and freezes nothing. When a fix landed outside `land` clears main, the ledger's `main_red` still stops every lane: record the fix with `orch landed <slug> --pr <fix>`, then `orch record <slug> main_green --pr <fix> --sha <its merge commit>` once main CI at that sha is green.
+With no guardian running, whoever is about to record `main_red` does its read first: re-run a failed run once, a run cancelled by a newer push is not red, a job cancelled with no newer push gets the same single re-run, and a deploy refused because another deploy was in progress gets one re-run before it counts. GitHub reports a job that hit its `timeout-minutes` as `cancelled`, so compare that job's duration with its limit: at the limit, it is a time budget running out, not an unrelated flake, and it goes to the digest as LATER with its trigger even when the re-run is green. A red only in a deploy or advisory job is recorded as that in the digest and freezes nothing. When a fix landed outside `land` clears main, the ledger's `main_red` still stops every lane: record the fix with `orch landed <slug> --pr <fix>`, then `orch record <slug> main_green --pr <fix> --sha <its merge commit>` once main CI at that sha is green.
 
 ## What the lead does
 
