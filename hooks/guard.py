@@ -164,7 +164,7 @@ def command_text(cmd):
             c = cmd[i]
             if c == close:
                 return i + 1
-            if cmd.startswith("${", i):
+            if cmd.startswith(("${", "$((", "$["), i):
                 raise Unsure(i)
             if c == "\\":
                 blank(i, min(i + 2, end))
