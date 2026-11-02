@@ -110,6 +110,9 @@ lines = [
      "attachment": {"type": "queued_command", "prompt": "you merged before review again", "origin": HUMAN}},
     {"type": "attachment", "uuid": "u-queued-task", "timestamp": ts(2, 10),
      "attachment": {"type": "queued_command", "prompt": "<task-notification/>", "origin": {"kind": "task-notification"}}},
+    {"type": "attachment", "uuid": "u-queued-img", "timestamp": ts(2, 10),
+     "attachment": {"type": "queued_command", "origin": HUMAN,
+                    "prompt": [{"type": "text", "text": "[Image #2] why is this not under the run?"}, {"type": "image"}]}},
     {"type": "queue-operation", "operation": "enqueue", "timestamp": ts(2, 9), "content": "you merged before review again"},
     user("u-summary", "This session is being continued", ts(2, 11), origin=None, isCompactSummary=True),
     user("u-stop", "[Request interrupted by user]", ts(2, 12), origin=None),
@@ -123,7 +126,9 @@ write(T2, lines)
 register("s1", T2)
 code, out = run("digest")
 got = {r["event"].split(":")[1]: r for r in rows(out)}
-assert list(got) == ["u-plain", "u-blocks", "u-tagged", "u-chat", "u-queued", "u-legacy", "u-cmd"], list(got)
+assert list(got) == ["u-plain", "u-blocks", "u-tagged", "u-chat", "u-queued", "u-queued-img", "u-legacy", "u-cmd"], \
+    list(got)
+assert got["u-queued-img"]["prompt"] == "[Image #2] why is this not under the run?", got["u-queued-img"]
 assert got["u-blocks"]["prompt"] == "[Image #1] this border is wrong"
 assert got["u-tagged"]["prompt"] == "and keep the lineage under the run" and "machine" not in got["u-tagged"]["prompt"]
 assert got["u-chat"]["prompt"] == "use the recommended defaults"
@@ -264,6 +269,36 @@ commit(out)
 assert done == {"big0:b0", "big1:b1", "big2:b2"}, done
 of.MAX_BYTES = saved
 
+# 7d. A closed span is done only once a complete line past `until` was read; a line still being written is not that.
+for p in REG.glob("*.json"):
+    p.unlink()
+TC = TMP / "tc.jsonl"
+write(TC, [user("c1", "in span", ts(1, 1))], tail=json.dumps(user("c2", "last words", ts(1, 2)))[:25])
+register("sc", TC, since=ts(5), until=ts(1, 3))
+code, out = run("digest")
+assert [r["event"] for r in rows(out)] == ["sc:c1"], rows(out)
+commit(out)
+assert of.wake(NOW + dt.timedelta(days=2)) == ["sc: grew since " + of.iso(NOW)], "the unread tail keeps it open"
+write(TC, [user("c1", "in span", ts(1, 1)), user("c2", "last words", ts(1, 2))])
+assert of.wake(NOW + dt.timedelta(days=2)) == ["sc: grew since " + of.iso(NOW)], "the finished line still wakes"
+code, out = run("digest")
+assert [r["event"] for r in rows(out)] == ["sc:c2"], rows(out)
+commit(out)
+with TC.open("a") as f:
+    f.write(json.dumps(user("c3", "after the role ended", ts(1, 9))) + "\n")
+code, out = run("digest")
+assert out["rows"] == 0 and json.loads((HOME / "orchestrator-cursor.json").read_text()) is not None
+commit(out)
+with TC.open("a") as f:
+    f.write(json.dumps(user("c4", "more unrelated talk", ts(0, 1))) + "\n")
+assert of.wake(NOW + dt.timedelta(days=2)) == [], "read past until: growth does not wake"
+assert "sc" not in run("digest")[1]["sessions"], "nor is the transcript opened again"
+register("sc", TC, since=ts(0, 0), until=ts(0, 5))  # reopened and closed again before any scan
+assert of.wake(NOW + dt.timedelta(days=2)) == ["sc: grew since " + of.iso(NOW)], "a new span is read again"
+code, out = run("digest")
+assert [r["event"] for r in rows(out)] == ["sc:c4"], rows(out)
+commit(out)
+
 # 8. Registry edge cases.
 for p in REG.glob("*.json"):
     p.unlink()
@@ -277,4 +312,10 @@ assert run("advance", "--round", "orch-20260320T120000Z-00000000", "--expect", o
     .startswith("no proposed cursor")
 assert run("advance", "--round", "../x", "--expect", "none")[0] == 2
 assert run("bogus")[0] == 2
+config(orchestrator_feedback=True)
+assert run("wake") == (1, "skipped: reflect.ledger is not set: orchestrator feedback skipped")
+config(orchestrator_feedback=True, ledger="Project/x/learnings.md")
+assert run("wake") == (1, "nothing to read"), "a lead, and a transcript that is missing"
+register("s11", T2)
+assert run("wake") == (0, "s11: new session")
 print("orchestrator_feedback: all pass")

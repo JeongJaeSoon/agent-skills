@@ -3,6 +3,7 @@
 
 Usage: orchestrator_feedback.py digest
        orchestrator_feedback.py advance --round ROUND --expect PREVIOUS_ROUND
+       orchestrator_feedback.py wake      why a standing round should read orchestrator feedback now; exit 0 if any
 
 An orchestrator session runs for weeks and is never closed, so the session-mode reflect that runs at the end of a
 session never sees the owner's corrections there. digest reads the transcripts the reorient hook registered
@@ -26,6 +27,7 @@ import datetime as dt, fcntl, json, os, pathlib, re, secrets, shutil, subprocess
 MAX_ROWS, MAX_BYTES = 200, 200_000  # per round, shared across sessions
 FIRST_DAYS = 7  # how far back a session's first round reads
 STALE_DAYS = 30  # a session fully read and untouched this long is not opened again
+CATCH_UP_HOURS = 24  # a session the cursor has caught up with is read at most this often
 PROMPT_CHARS, BEFORE_CHARS, ARG_CHARS, CONTEXT_IDS, TOOLS = 2000, 600, 120, 20, 30
 HUMAN = {"human", "channel"}  # origin kinds the owner typed; a channel is the owner's chat bridge
 # Machine-written elements removed with their content; the owner's text around them stays.
@@ -123,7 +125,10 @@ def owner_text(o):
         a = o.get("attachment") or {}
         if a.get("type") != "queued_command" or (a.get("origin") or {}).get("kind") not in HUMAN:
             return ""
-        return clean(str(a.get("prompt") or ""))
+        prompt = a.get("prompt")
+        if isinstance(prompt, list):  # a prompt sent with an image arrives as content blocks
+            prompt = "\n".join(b.get("text") or "" for b in prompt if isinstance(b, dict) and b.get("type") == "text")
+        return clean(prompt if isinstance(prompt, str) else "")
     if o.get("type") != "user" or o.get("isCompactSummary") or o.get("isSidechain"):
         return ""
     content = (o.get("message") or {}).get("content")
@@ -211,6 +216,7 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
     carry = carry or {}
     before, tools, ids = carry.get("before", ""), list(carry.get("tools", [])), list(carry.get("ids", []))
     count = line_at(path, start) if line is None else line  # lines before pos
+    passed = False  # a complete line at or after hi was read, so everything inside the span was
     with open(path, "rb") as f:
         f.seek(start)
         while True:
@@ -227,6 +233,8 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
                 continue
             text = owner_text(o)
             ts = parse_ts(o.get("timestamp"))
+            if hi and ts and ts >= hi and not pending:
+                passed = True
             if o.get("type") == "assistant":
                 for b in (o.get("message") or {}).get("content") or []:
                     if not isinstance(b, dict):
@@ -261,7 +269,13 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
             pos, count = pos + len(raw), count + 1
     carry = {"before": before[-BEFORE_CHARS:], "tools": tools[-TOOLS:], "ids": list(dict.fromkeys(ids))[-CONTEXT_IDS:]}
     return rows, {"scan_end": pos, "line": count, "uuid": last[0], "uuid_at": last[1], "pending": pending,
-                  "carry": carry}
+                  "carry": carry, "passed_until": passed}
+
+
+def span_done(reg, mark):
+    """The span closed (`until`) and a scan read a complete line past that very `until`, so later growth is not the
+    orchestrator's. A span reopened and closed again has a new `until` and is read again."""
+    return bool(reg.get("until") and mark and mark.get("passed_until") == reg["until"] and not mark.get("pending"))
 
 
 def digest(now=None):
@@ -288,8 +302,9 @@ def digest(now=None):
             report[session] = {"note": "transcript missing"}
             continue
         mark = marks.get(session)
-        if mark and not mark.get("pending") and mark.get("inode") == st.st_ino and mark.get("scan_end") == st.st_size \
-                and now.timestamp() - st.st_mtime > STALE_DAYS * 86400:
+        same = mark and mark.get("inode") == st.st_ino and st.st_size >= mark.get("scan_end", 0)
+        if same and (span_done(reg, mark) or (not mark.get("pending") and mark.get("scan_end") == st.st_size
+                                              and now.timestamp() - st.st_mtime > STALE_DAYS * 86400)):
             continue
         live.append((session, reg, path, st, mark))
     # The session that moved least recently goes first, so a share too small for one row cannot starve a session.
@@ -312,6 +327,8 @@ def digest(now=None):
         rows += found
         if not new["uuid"]:  # no message read: keep the anchor that places scan_end
             new["uuid"], new["uuid_at"] = anchor
+        crossed = new["passed_until"] or (mark and not note and mark.get("passed_until") == reg.get("until"))
+        new["passed_until"] = reg.get("until") if crossed and until else None
         moved = new["scan_end"] != start or not mark
         new["moved_at"] = iso(now) if moved else (mark or {}).get("moved_at")
         marks[session] = {**new, "inode": st.st_ino, "scanned_at": iso(now)}
@@ -330,6 +347,39 @@ def digest(now=None):
                       "sessions": report, **({} if entries else {"note": "no orchestrator transcript registered"})},
                      ensure_ascii=False))
     return 0
+
+
+def wake(now=None, home=None):
+    """Reasons to wake a standing round for orchestrator feedback, from file metadata only; [] with the feature off.
+
+    A pending session, or one the cursor does not know yet, wakes at once; a session that grew wakes once its last scan
+    is CATCH_UP_HOURS old; a replaced or shrunk transcript wakes so the round recovers it."""
+    now = now or now_utc()
+    if gate(config()):
+        return []
+    base = home / "_standing" / "reflect" if home else standing()
+    marks = read_json(base / "orchestrator-cursor.json", {}).get("sessions") or {}
+    out = []
+    for file in sorted(registry().glob("*.json")):
+        reg = read_json(file, {})
+        if not (isinstance(reg, dict) and reg.get("role") == "orchestrator" and reg.get("transcript")):
+            continue
+        try:
+            st = pathlib.Path(reg["transcript"]).expanduser().stat()
+        except OSError:
+            continue
+        session, mark = file.stem, marks.get(file.stem)
+        if not mark:
+            out.append(f"{session}: new session")
+        elif mark.get("pending"):
+            out.append(f"{session}: pending")
+        elif mark.get("inode") != st.st_ino or st.st_size < mark.get("scan_end", 0):
+            out.append(f"{session}: transcript replaced or truncated")
+        elif st.st_size > mark.get("scan_end", 0) and not span_done(reg, mark):
+            scanned = parse_ts(mark.get("scanned_at"))
+            if not scanned or now - scanned >= dt.timedelta(hours=CATCH_UP_HOURS):
+                out.append(f"{session}: grew since {mark.get('scanned_at')}")
+    return out
 
 
 def trash(path):
@@ -382,10 +432,18 @@ def advance(round_id, expect):
 def main(argv):
     if argv[:1] == ["digest"]:
         return digest()
+    if argv[:1] == ["wake"]:
+        stop = gate(config())
+        if stop:
+            print(f"skipped: {stop[1]}")
+            return stop[0] or 1
+        reasons = wake()
+        print("\n".join(reasons) or "nothing to read")
+        return 0 if reasons else 1
     if argv[:1] == ["advance"] and "--round" in argv and "--expect" in argv:
         opt = lambda k: argv[argv.index(k) + 1] if argv.index(k) + 1 < len(argv) else ""
         return advance(opt("--round"), opt("--expect"))
-    print("\n".join(__doc__.splitlines()[2:4]), file=sys.stderr)
+    print("\n".join(__doc__.splitlines()[2:5]), file=sys.stderr)
     return 2
 
 
