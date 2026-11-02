@@ -103,20 +103,23 @@ def binding():
         return "unknown"
 
 
-def own_dispatch(orca=None):
+def own_dispatch(orca=None, failed=None):
     """This terminal's own active Dispatch when it is a dispatched worker (a lead started with worker-start, whose
-    `run-current` is null), else None. Unbound, worker-list spans every Run; only active terminals can be this one."""
+    `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
+    Run; only active terminals can be this one."""
     me, cursor = os.environ.get("ORCA_TERMINAL_HANDLE"), None
     while me:
         try:
             p = subprocess.run([orca or os.environ.get("SKILLS_SYNC_ORCA", "orca"), "orchestration", "worker-list",
                                 "--terminal-state", "active", "--limit", "100", *(["--cursor", cursor] if cursor else []),
                                 "--json"], capture_output=True, text=True, timeout=30)
-            res = (json.loads(p.stdout).get("result") or {}) if not p.returncode else {}
+            if p.returncode:
+                return failed
+            res = json.loads(p.stdout).get("result") or {}
             mine = next((w for w in res.get("workers") or [] if w.get("agentTerminalHandle") == me), None)
             page = res.get("page") or {}
         except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
-            return None
+            return failed
         if mine:
             return mine
         cursor = page.get("nextCursor")

@@ -149,8 +149,8 @@ skills-sync close-setup "<result.worktree.path>"
   Without the summary the new card redoes or undoes finished work; left open, the old card waits
   on a question about work the new card already did.
 - Which card it makes. A brief whose REPORT or PARENT line sends to `run:<id>` is work this session waits
-  on: from a session bound to a Run (`orca orchestration run-current`; bind one as in
-  `orchestrate` references/top-level.md "Your Run"), or itself a dispatched worker (a lead started
+  on: from a session bound to that Run (`orca orchestration run-current`; bind one as in
+  `orchestrate` references/top-level.md "Your Run"), or itself a dispatched worker on it (a lead started
   as one; `orch doctor` says which), `skills-sync card` starts it as a supervised
   worker with `orca orchestration worker-start --worktree new-child` (your worktree becomes its Orca parent; `new-top-level` with `--no-parent`). It is then a Dispatch:
   its escalation, `ask` and `worker_done` reach your Run, and Orca watches it for a prompt only a
@@ -158,9 +158,10 @@ skills-sync close-setup "<result.worktree.path>"
   spec as the task after its own preamble). Everything else is a `/goal` card from `orca
   worktree create`: a brief with no Run report (fire-and-forget), a lead's brief while Orca's
   Nested worker depth is below 3 (the lead's workers' helpers would not fit; the helper prints the
-  setting to change), a session with no Run (the helper warns), or
-  `--card`. The printed output ends in a `card` object: `kind` (worker or card), `path`,
-  `handle`, `run`.
+  setting to change), or `--card`. A Run brief from a session bound to no Run, or to another Run
+  than the brief's `run:<id>`, creates nothing (exit 6): bind the brief's Run (`orca orchestration
+  run-use --id <id>`), fix the brief's Run, or pass `--card` for a `/goal` card on purpose. The
+  printed output ends in a `card` object: `kind` (worker or card), `path`, `handle`, `run`, `parent`.
 - A brief that sends to a `term_…` handle, in any line, is refused (exit 2): the handle dies with
   its terminal, so a report sent after a restart is refused (`terminal_not_found`), and until then
   it is only stored. Write `orca orchestration send --to run:<your run id>`.
@@ -186,15 +187,20 @@ skills-sync close-setup "<result.worktree.path>"
   commands, and for a `worker-start` the `request-show` line the helper prints, before running it
   again; `completed` or `pending` there means it took or may still take effect, and `absent` is
   no proof that nothing started, so check `orca worktree ps` and `orca orchestration worker-list`
-  too), 5 means the card exists but its link, log or name failed (do that step by hand; do not
-  create it again). The `term_` refusal is a 2. An inline brief with no file goes
+  too; a 4 for a refused parent or depth lists the choices instead, and nothing was created), 5
+  means the card exists but its link, log or name failed (do that step by hand; do not create it
+  again), 6 means nothing was created because the Run or the parent did not check out (pick one of
+  the printed choices, never `--no-parent` or `--card` just to get past it). The `term_` refusal is a 2. An inline brief with no file goes
   straight to `orca worktree create --prompt`, its lines written out.
 - `--repo` is required. Omitted, Orca infers the current worktree's repo and the card lands in
   the wrong place.
 - `--name` is `<target>-<topic>`, e.g. `blog-launch-post`. A ticket-backed card uses the
   ticket ID in its display name: `"ENG-123 <short title>"`.
-- `--parent-worktree active` is the default lineage; `--no-parent` only for work with no
-  relation to this session.
+- The parent is this terminal's own worktree by default: the helper looks it up (`orca terminal
+  show --terminal $ORCA_TERMINAL_HANDLE --json`, `result.terminal.worktreeId`) and passes
+  `--parent-worktree id:<it>`; no handle or no answer creates nothing (exit 6). Name another parent
+  only as `id:<worktree id>`, never `path:` (refused: Orca workspaces sharing a path resolve to the
+  repo's main worktree). `--no-parent` only for work with no relation to this session.
 - Omit `--base-branch`; the target repo's default base is the right one.
 
 ## 4. Confirm the start, then go back to work
@@ -222,7 +228,7 @@ return to what this session was doing. The `--card` check reports about four min
 card can lose its login a few turns in; on `STUCK`, read its screen, and for a lost login or a
 missing `/goal` start a new card on the same brief and supersede this one (§3, first rule). `ENDED`
 and `CLOSED` are a card that finished or stopped inside the window: read its report or screen first, and
-start it again only when that shows the work is not done. `--parent-worktree active` is how this session finds the
+start it again only when that shows the work is not done. The card's Orca parent is how this session finds the
 card again when it ends (`end-session` §3); a `--no-parent` card goes in the worklog instead. Results are fire-and-forget by default: do not loop on
 `tui-idle`, do not block repo A on repo B.
 

@@ -185,8 +185,7 @@ A precheck prints what it could not read (`gh`, `orca`) and the alerts to stderr
 `worker-list` without `--run` sees only the bound Run from a run-bound terminal,
 so a scan there can see fewer workers than the automation does. What keeps a card from removal is
 [references/cards.md](references/cards.md); `orca-worker` reports a reclaimable worker terminal. The kinds `card`
-replaced, `orca-worktree` and `done-card` (a nudge asking an idle session to close itself), run only when named in
-`--kinds`; their rule is [references/janitor-kinds.md](references/janitor-kinds.md). `card` and reap-hard
+replaced, `orca-worktree` and `done-card`, are gone: `--kinds` or a saved plan naming them is refused. `card` and reap-hard
 are sweeps for cards that neither closed themselves nor were closed by the session that started them
 (`end-session` §8, "Who closes a finished card"). Which device fits which job:
 [docs/automation.md](../../docs/automation.md).
@@ -334,8 +333,8 @@ Paths of a particular project's test cache stay here, not in this repo:
 ```json
 {"reap": {"hours": 6, "orphan_paths": ["/private/tmp/<project>-uv-cache"], "evidence_roots": ["/tmp"], "user_folder_days": 7, "user_folder_screenshot_days": 1,
           "program_days": 7, "state_days": 7, "log_max_kb": 512,
-          "inbox_to": "run:<id>", "plan_repeat": 2, "done_card_hours": 2, "idle_minutes": 30, "load_cooldown_minutes": 60,
-          "user_folders": [], "regenerated_untracked": true, "preview_ports": [4500, 4599], "alert": {"orphan_procs": 5,
+          "inbox_to": "run:<id>", "plan_repeat": 2, "idle_minutes": 30, "load_cooldown_minutes": 60,
+          "user_folders": [], "preview_ports": [4500, 4599], "alert": {"orphan_procs": 5,
                     "dangling_volumes": 50, "stale_branches": 30, "stale_worktrees": 10},
           "pressure": {"interval": 180, "load_per_cpu": [1.3, 2.0], "load_idle_pct": 10, "mem_free_pct": [20, 10],
                        "vm_pressure": [2, 4], "swapout_pps": [300, 1500], "swap_gb": [16, null],

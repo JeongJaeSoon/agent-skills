@@ -50,6 +50,11 @@ PEERS       Who to settle shared files and landing order with directly, and abou
             it waits it shows in the dashboard's Needs you. `--type escalation` is for a blocker
             the lead must act on, not for a choice. Never send a question as a status and end
             your turn: a status wakes no wait, and waking an idle agent on mail is best-effort.
+LINEAGE     A card or helper you start sits under you: `skills-sync card <brief>` (dispatch-card
+            §3), or a raw `orca orchestration worker-start` with `--worktree new-child` only.
+            No `new-top-level`, `--no-parent` or `path:` parent unless this brief names it. When
+            the helper stops (exit 6, or a 4 that says nothing was created), report its choices; do
+            not pick `--no-parent` or `--card` to get past it.
 ACCEPTANCE  Checkable criteria, one per line. A criterion that rests on how a party outside the
             repo behaves (a client, an upstream) adds a line observing that real party, on dev
             or in a recorded trace; a test built on the brief's model of it shares the
@@ -231,6 +236,7 @@ LAND        A change: its normal flow (deliver-ticket), or the push the owner al
 WAITING     `ask` what you cannot decide, and after a timeout (exit 1) the resume command Orca
             prints, or the preamble's `ask` with `--resume <messageId> --timeout-ms 1800000`,
             until it is answered.
+LINEAGE     As above.
 REPORT      worker_done once: what changed or what was found, the VERIFY output you saw, what remains.
             Load end-session §7 before you send it; it picks worker_done and the closing calls.
 KEEP        <optional, as above>
@@ -281,6 +287,11 @@ PARENT      The Run of the session writing this brief, as `orca orchestration se
             started as a `/goal` card (Orca refuses escalation without a Dispatch). A status wakes
             no wait. Decisions go by GATE. A send to it
             that fails is the routing gap HUMAN ONLY names; never guess another address.
+START       How you were started, as the writer expects it: a dispatched worker on run:<id> (the
+            PARENT Run, `worker-start --worktree new-child` from that Run's session) or a `/goal`
+            card under <the writer's session>. `skills-sync card` checks the first against the
+            starting session and stops before creating anything when it does not hold.
+LINEAGE     As in the worker brief above; your units sit under you and you under PARENT's session.
 PERMISSIONS The autoMode rules for each outward act the predicate needs (merge, deploy, edits
             to tracker items or PRs an earlier session made), quoted, or "missing" (your
             Frame asks the human for them). An act refused in your session or a card under you
@@ -320,6 +331,7 @@ CLOSE       Once the predicate holds and the program's Close is done: `end-sessi
 - Size the brief to the unit. A one-command unit collapses to a paragraph that still names the goal, the scope, the verify command, the LAND line and the report shape.
 - Work on personal data (filters, masking, affected-user lists) verifies with synthetic inputs, or lets a script judge the real data and report counts. A step where the model reads real records, such as the text a filter dropped, is refused by the classifier at run time.
 - Save the exact text to `~/.claude/programs/<slug>/briefs/<ticket>.md` with the Write tool before `worker-start` (a heredoc puts the brief into a Bash command, which hooks refuse for a word in it). No `orch record … spawned` line: `orch` reads the Dispatch and its ticket from the Orca Task (the spec's first line). Record one only when the unit's ticket is not the ID the spec opens with (a sub-unit such as `ABC-1-K4`): `orch record <slug> spawned --ticket <id> --note <dispatchId>`.
+- **Lineage and supervision.** Every brief carries the LINEAGE row, so each card lands under the session that started it (orchestrator, then lead, then its workers). A brief whose unit must be supervised names the Run in its REPORT or PARENT line (`run:<id>`, the Run the session that will start it is bound to) and, for a lead, its START form. Start it from that Run's session: `skills-sync card` compares the brief's Run with the starting session's, and stops on no binding, another Run or no answer from Orca. A `/goal` card on purpose is `--card`; a handoff with no relation to this session is `--no-parent`.
 - A dependency is a context relay: paste the upstream worker's report into the downstream brief.
 - Direction in CONTEXT is labelled by origin. The owner's words are quoted verbatim as the owner's; a proposal of yours, a lead's or a reviewer's is labelled as such, never as the owner's recommendation. No advice on getting an act past a prompt, the classifier or a hook, even when the layer above calls it the owner's intent ("Refused acts").
 - **Plan reuse with `KEEP`.** A worker closes its own session once it settles (`end-session` §7). A terminal or card you mean to give the next task needs a `KEEP` line naming that task; without one, a landed, clean card is gone by the time you read its `worker_done`.
