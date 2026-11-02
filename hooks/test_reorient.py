@@ -93,6 +93,42 @@ assert "ROLE cleared" in hook(agent=ORCH, session="a1", prompt="ROLE: none")
 assert hook(agent=ORCH, session="a1") is None and hook(**START, source="compact", agent=ORCH, session="a1") is None
 assert hook(**START, source="resume", title="orchestrator", session="a1") is None
 
+# 3a. After a compaction an orchestrator or a lead gets orchestrate's core rules as text, verbatim from SKILL.md.
+SKILL_TEXT = (HERE.parent / "skills/orchestrate/SKILL.md").read_text()
+block = SKILL_TEXT[SKILL_TEXT.index("\n1. Delegate.") + 1:SKILL_TEXT.index("\n\n", SKILL_TEXT.index("\n1. Delegate."))]
+RULES = block.splitlines()
+assert 8 <= len(RULES) <= 12 and RULES[-1].startswith(f"{len(RULES)}. "), RULES
+assert RULES[0].startswith("1. Delegate.") and "one layer down" in RULES[0], RULES[0]
+sys.path.insert(0, str(HERE))
+import reorient
+fixture = TMP / "SKILL.md"
+fixture.write_text("# x\n\nCore rules. Intro:\n\n1. One\n   wrapped.\n2. Two.\n\nBody, not a rule.\n3. Not a rule.\n")
+assert reorient.core_rules(fixture) == "1. One\n   wrapped.\n2. Two.", reorient.core_rules(fixture)
+assert reorient.core_rules(TMP / "missing.md") == ""
+fixture.write_text("# x\nno list here\n")
+assert reorient.core_rules(fixture) == ""
+assert any("skills-sync card" in r and "new-child" in r and "new-top-level" in r for r in RULES)
+assert any("orch brief render" in r for r in RULES) and any("one `--json` read" in r for r in RULES)
+for agent, title, session in ((ORCH, "orchestrator", "c1"), (LEAD, "lead:p", "c2")):
+    text = hook(**START, source="compact", agent=agent, title=title, session=session)
+    assert "\n".join(RULES) in text and "just compacted" in text, text
+    # Claude Code caps a hook's additionalContext at 10,000 characters; stay well under it.
+    assert len(text.encode()) < 4000, len(text.encode())
+assert "\n".join(RULES) in hook(**START, source="compact", session="r1")
+for source in ("startup", "resume", "fork"):
+    assert RULES[0] not in hook(**START, source=source, agent=ORCH, title="orchestrator", session="c1"), source
+for session in ("u9", "a1"):  # undeclared, and ROLE: none
+    assert hook(**START, source="compact", session=session) is None
+assert hook(**START, source="compact", agent=ORCH, session="a1") is None
+# The per-prompt line repeats rules 1 and 2 and says nothing looser.
+for line in (hook(agent=ORCH, session="c1"), hook(agent=LEAD, title="lead:p", session="c2")):
+    assert "one layer down at once" in line and "one `--json` read" in line and "coordination" in line \
+        and "only the human's session may take" in line and "seconds-long" not in line, line
+assert "Acts only the human's session may take" in RULES[1], "rule 2 keeps the human-session acts"
+# A lead hands its own project to its workers; rule 4 must not forbid that.
+assert any("a lead sends its own project's work to its workers" in r for r in RULES)
+assert any("--worktree id:" in r for r in RULES), "attaching a Dispatch to an existing card stays allowed"
+
 # 3. Nothing declared: nothing said, whatever the terminal, and no external command run.
 assert hook(session="u1") is None and hook(**START, session="u1") is None
 for text in ("use ROLE: orchestrator here", "ROLE: lead <slug>", "ROLE: admin", "ROLES: orchestrator"):
