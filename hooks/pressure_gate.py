@@ -105,12 +105,17 @@ def segments(cmd):
     out.append(cur)
     for argv in [a for a in out if a]:
         words = argv[:]
-        while words and ASSIGN.match(words[0]):
-            words.pop(0)
-        if len(words) >= 3 and words[0] in SHELLS and words[1] == "-c":
+        while words and (ASSIGN.match(words[0]) or words[0] in WRAPPERS or
+                         len(words) < len(argv) and argv[len(argv) - len(words) - 1] in WRAPPERS and words[0].startswith("-")):
+            words.pop(0)  # `FOO=1 env bash -c`, `nice -n 5 bash -c`
+        j, run_c = 1, False
+        while words and os.path.basename(words[0]) in SHELLS and j < len(words) and words[j].startswith("-"):
+            run_c |= not words[j].startswith("--") and "c" in words[j][1:]  # `-c`, `-lc`, `-l -c`
+            j += 1
+        if run_c and j < len(words):
             # The user's go-ahead before `bash -c` covers every command of its body.
             lead = [w for w in argv[:len(argv) - len(words)] if w == "AGENT_SKILLS_PRESSURE_GATE=0"]
-            yield from (lead + inner for inner in segments(words[2]))
+            yield from (lead + inner for inner in segments(words[j]))
         else:
             yield argv
 
@@ -186,9 +191,10 @@ VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 
 
-def narrowed(rest):
-    """Whether a runner's arguments pick tests: a test file or directory, `x.py::t`, or a name filter. An option's
-    value (`-n 8`, `--junitxml test-results.xml`) is neither, so it leaves a whole suite."""
+def narrowed(rest, any_path=False):
+    """Whether a runner's arguments pick tests: a test file or directory, `x.py::t`, or a name filter; with any_path
+    (pytest, which runs whatever path it is given) any argument. An option's value (`-n 8`,
+    `--junitxml test-results.xml`) is neither, so it leaves a whole suite."""
     skip = False
     for w in rest:
         if skip:
@@ -197,7 +203,7 @@ def narrowed(rest):
             return True
         elif w in VALUE_OPTS:
             skip = True
-        elif not w.startswith("-") and ("::" in w or TEST_FILE.fullmatch(w) or TEST_DIR.fullmatch(w.rstrip("/"))):
+        elif not w.startswith("-") and (any_path or "::" in w or TEST_FILE.fullmatch(w) or TEST_DIR.fullmatch(w.rstrip("/"))):
             return True
     return False
 
@@ -257,7 +263,7 @@ def runs_tests(argv):
         return "E2E" if any(E2E.fullmatch(a) for a in args) else "test suite" if "test" in args else None
     if head in ("jest", "vitest") and not narrowed([w for w in words[1:] if w not in ("run", "watch")]):
         return "test suite"
-    if head == "pytest" and not narrowed(words[1:]) or head == "go" and args[:2] == ["test", "./..."]:
+    if head == "pytest" and not narrowed(words[1:], any_path=True) or head == "go" and args[:2] == ["test", "./..."]:
         return "test suite"
     return None
 
