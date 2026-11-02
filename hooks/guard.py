@@ -216,20 +216,21 @@ def command_text(cmd):
         i += strip
         while i < n and cmd[i] in " \t":
             i += 1
-        # A delimiter whose escapes bash would rewrite ("…\…", $'…\…', \<newline>) is not read (None), since a
-        # misread delimiter could match a later line and blank the commands before it.
-        word, quoted, sure, ansi = "", False, True, False
+        # A delimiter with a `$` ($'…', $"…", $$) or an escape bash would rewrite ("…\…", \<newline>) is not read
+        # (None), since a misread delimiter could match a later line and blank the commands before it.
+        word, quoted, sure = "", False, True
         while i < n and cmd[i] not in " \t\n;&|<>()":
             c = cmd[i]
-            if c == "$" and cmd[i + 1:i + 2] in ("'", '"'):  # $'EOF' and $"EOF" delimit with EOF
-                ansi = cmd[i + 1] == "'"
+            if c == "$":
+                sure = False
+                word += c
                 i += 1
             elif c in "'\"":
                 j = cmd.find(c, i + 1)
                 j = n if j < 0 else j
                 part = cmd[i + 1:j]
-                sure = sure and not ((c == '"' or ansi) and "\\" in part)
-                word, quoted, ansi = word + part, True, False
+                sure = sure and not (c == '"' and "\\" in part)
+                word, quoted = word + part, True
                 blank(i + 1, j)
                 i = j + 1
             elif c == "\\":

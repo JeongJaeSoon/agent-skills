@@ -253,9 +253,10 @@ assert bash(f"cat <<<hello\nskills-sync card {H / 'noclose.md'}") == "deny"  # a
 assert bash(f"echo $[1<<2]\nskills-sync card {H / 'noclose.md'}") == "deny"
 # A heredoc whose terminator line is not found takes nothing after it for a body.
 assert bash(f"cat <<EO\\\nF\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny"
-for delim in ('E"OF"', "E\\OF", "'EOF'", '"EOF"', "\\EOF", "$'EOF'"):  # bash's delimiter is EOF in each
+for delim in ('E"OF"', "E\\OF", "'EOF'", '"EOF"', "\\EOF"):  # bash's delimiter is EOF in each
     assert bash(f"cat <<{delim}\ntext\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny", delim
     assert bash(f"cat <<{delim}\nskills-sync card /\nEOF") == "none", delim
+assert bash(f"if false; then\ncat <<$$'EOF'\ntext\n$$EOF\nfi\nskills-sync card {H / 'noclose.md'}\n$EOF") == "deny"
 assert bash(f"(cat <<'EOF'\nit's ready\nEOF\n)\nskills-sync card {H / 'noclose.md'}") == "deny"  # a subshell's heredoc
 assert bash(f"cat << \\\n'EOF'\nit's ready\nEOF\nskills-sync card {H / 'noclose.md'}") == "deny"  # an unread delimiter
 assert bash(f"echo \\ #; skills-sync card {H / 'noclose.md'}") == "deny"  # an escaped space does not start a comment
