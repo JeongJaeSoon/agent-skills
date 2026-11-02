@@ -89,8 +89,8 @@ def heredocs_at(line, quote):
         elif line.startswith("((", i):
             end = line.find("))", i + 2)
             i = len(line) if end < 0 else end + 1
-        elif c in ";&|(":
-            start = i + 1
+        elif c in ";&|(" and not (c == "&" and (line[i - 1:i] in ("<", ">") or line[i + 1:i + 2] == ">")):
+            start = i + 1  # `2>&1` and `&>` are redirections, not a command boundary
         elif m := HEREDOC.match(line, i):
             found.append((m, start))
             i = m.end()
@@ -120,7 +120,14 @@ def stdin_shell(words):
                 return None
             stdin |= "s" in w[1:]
         k += 2 if w in SHELL_VALUE else 1
-    return i if stdin or not [w for w in words[k:] if not REDIRECT.match(w)] else None
+    operands, rest = [], iter(words[k:])
+    for w in rest:  # `bash > out.log <<EOF`: a redirection and its target are no script
+        if m := REDIRECT.match(w):
+            if m.end() == len(w):
+                next(rest, None)
+        else:
+            operands.append(w)
+    return i if stdin or not operands else None
 
 
 def drop_heredocs(cmd, slotted=False):
@@ -140,8 +147,9 @@ def drop_heredocs(cmd, slotted=False):
             shell = stdin_shell(words)
             if shell is not None and slotted and words[skip_prefix(words, keywords=True):][:2] == ["orch", "heavy"]:
                 shell = None  # `orch heavy - -- bash <<EOF`: the body runs in the slot
-            quoted = m.group(4) is None
-            delim = m.group(2) if m.group(2) is not None else m.group(3) if quoted else m.group(4).replace("\\", "")
+            quoted = m.group(4) is None or "\\" in m.group(4)  # `<<'EOF'`, `<<"EOF"`, `<<\EOF`
+            delim = next(g for g in (m.group(2), m.group(3), m.group(4)) if g is not None).replace("\\", "") \
+                if m.group(2) is None else m.group(2)
             body, end = [], None
             for row in lines:
                 if (row.lstrip("\t") if m.group(1) else row) == delim:
