@@ -277,4 +277,10 @@ assert run("advance", "--round", "orch-20260320T120000Z-00000000", "--expect", o
     .startswith("no proposed cursor")
 assert run("advance", "--round", "../x", "--expect", "none")[0] == 2
 assert run("bogus")[0] == 2
+config(orchestrator_feedback=True)
+assert run("wake") == (1, "skipped: reflect.ledger is not set: orchestrator feedback skipped")
+config(orchestrator_feedback=True, ledger="Project/x/learnings.md")
+assert run("wake") == (1, "nothing to read"), "a lead, and a transcript that is missing"
+register("s11", T2)
+assert run("wake") == (0, "s11: new session")
 print("orchestrator_feedback: all pass")

@@ -298,6 +298,8 @@ cfg.write_text(json.dumps({"rare": ["notes"]}))
 assert su.rare_config(cfg) == {"notes"} and su.rare_config(root / "missing.json") == set()
 
 # precheck: wake on a row after the cursor, skip once the cursor has moved past it or while a round holds the lock.
+# The orchestrator-feedback check reads its own config and registry: point both at nothing, so it is off here.
+os.environ["AGENT_SKILLS_CONFIG"], os.environ["AGENT_SKILLS_STATE"] = str(root / "no-config.json"), str(root / "as")
 home = root / "programs"
 write(home / "acme" / "ledger.jsonl", [{"ts": "2026-09-20T00:00:00+00:00", "ev": "signal", "kind": "stall"},
                                        {"ts": "2026-09-21T00:00:00+00:00", "ev": "verdict", "result": "pass"}])
@@ -341,6 +343,47 @@ try:
 finally:
     os.environ["PATH"] = path
 waiting.unlink()
+
+# Orchestrator feedback (reflect.orchestrator_feedback): off, the precheck is as above; on, a registered orchestrator
+# transcript wakes it with no ledger finding, from file metadata only.
+assert su.precheck(home, collect_first=False) == 1
+transcript = root / "orch.jsonl"
+transcript.write_text('{"type": "user"}\n')
+(root / "as" / "transcripts").mkdir(parents=True)
+(root / "as" / "transcripts" / "o1.json").write_text(json.dumps({"role": "orchestrator", "transcript": str(transcript),
+                                                                  "since": "2026-09-01T00:00:00Z", "until": None}))
+assert su.precheck(home, collect_first=False) == 1, "registered, but the feature is off"
+(root / "no-config.json").write_text(json.dumps({"reflect": {"orchestrator_feedback": True}}))
+assert su.precheck(home, collect_first=False) == 1, "on without reflect.ledger: nothing is read"
+(root / "no-config.json").write_text(json.dumps({"reflect": {"orchestrator_feedback": True, "ledger": "L/learnings.md"}}))
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    assert su.precheck(home, collect_first=False) == 0
+assert "wake: orchestrator feedback, o1: new session" in out.getvalue(), out.getvalue()
+ocur = home / "_standing" / "reflect" / "orchestrator-cursor.json"
+st = transcript.stat()
+recent = su.iso(dt.datetime.now(dt.timezone.utc))
+old = su.iso(dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=25))
+
+
+def mark(**kw):
+    m = {"scan_end": st.st_size, "inode": st.st_ino, "pending": False, "scanned_at": recent, **kw}
+    ocur.write_text(json.dumps({"round": "r", "sessions": {"o1": m}}))
+
+
+for kw, code, why in (({}, 1, "caught up"), ({"pending": True}, 0, "pending"), ({"scan_end": 5}, 1, "grew, read today"),
+                      ({"scan_end": 5, "scanned_at": old}, 0, "grew, last read 25 hours ago"),
+                      ({"scan_end": st.st_size + 1}, 0, "shrank"), ({"inode": st.st_ino + 1}, 0, "replaced")):
+    mark(**kw)
+    assert su.precheck(home, collect_first=False) == code, why
+mark()
+(home / "_standing" / "reflect" / "lock").mkdir()
+mark(pending=True)
+assert su.precheck(home, collect_first=False) == 1, "the lock still wins"
+(home / "_standing" / "reflect" / "lock").rmdir()
+assert su.precheck(home, collect_first=False, orchestrator=lambda h: 1 / 0) == 0, "a failing check wakes, as above"
+assert (home / "_standing" / "reflect" / "cursor.json").exists() and not waiting.exists(), "the other files are untouched"
+(root / "no-config.json").unlink()
 
 # schedule only prints; the command runs the precheck by absolute path in an existing workspace.
 cmd = su.schedule_cmd(pathlib.Path("/repo/skills/orchestrate/scripts/skill_usage.py"), "path:/repo")

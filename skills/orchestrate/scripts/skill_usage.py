@@ -10,8 +10,10 @@ Writes an aggregate report (default <fleet state>/skills.json) and appends one `
 per ISO week to the signals ledger (default $PROGRAMS_HOME/_skill-usage/ledger.jsonl) for the improvement loop.
 Aggregates only: no prompt or message text leaves the transcripts, and working directories are kept as hashes.
 
-precheck collects, then exits 0 only when a ledger under $PROGRAMS_HOME has a row reflect's standing mode would read
-as new (after its cursor) and no standing round holds the lock; otherwise 1. It is the Orca automation's precheck, so
+precheck collects, then exits 0 only when no standing round holds the lock and a ledger under $PROGRAMS_HOME has a row
+reflect's standing mode would read as new (after its cursor), a waiting standing PR closed, or, with
+`reflect.orchestrator_feedback` on, an orchestrator transcript has something to read (orchestrator_feedback.py wake);
+otherwise 1. It is the Orca automation's precheck, so
 the agent wakes only when there is something to reflect on. schedule prints the `orca automations create` command;
 only --write runs it.
 """
@@ -626,7 +628,13 @@ def waiting_pr(home, pr_state=gh_pr_state):
     return None if state == "OPEN" else (url, state or "unreadable")
 
 
-def precheck(home=None, collect_first=True, pr_state=gh_pr_state):
+def orchestrator_wake(home):
+    sys.path.insert(0, str(HERE.parents[1] / "reflect" / "scripts"))
+    import orchestrator_feedback
+    return orchestrator_feedback.wake(home=home)
+
+
+def precheck(home=None, collect_first=True, pr_state=gh_pr_state, orchestrator=orchestrator_wake):
     """0 to wake the agent, 1 to skip this run. No model is called."""
     home = home or programs_home()
     if collect_first:
@@ -649,9 +657,15 @@ def precheck(home=None, collect_first=True, pr_state=gh_pr_state):
     waiting = waiting_pr(home, pr_state)
     if waiting:
         print(f"wake: waiting lessons, standing PR {waiting[0]} is {waiting[1].lower()}")
-    if not (new or waiting):
+    try:
+        feedback = orchestrator(home)
+    except Exception as e:  # same reason as the ledger check: a crash must not silence the loop
+        feedback = [f"the orchestrator check failed ({e!r}); the round runs it itself"]
+    for reason in feedback:
+        print(f"wake: orchestrator feedback, {reason}")
+    if not (new or waiting or feedback):
         print("skip: nothing new since the reflect cursor")
-    return 0 if new or waiting else 1
+    return 0 if new or waiting or feedback else 1
 
 
 def runner_hint(checkout):

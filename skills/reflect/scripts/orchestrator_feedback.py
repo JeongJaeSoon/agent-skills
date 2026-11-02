@@ -3,6 +3,7 @@
 
 Usage: orchestrator_feedback.py digest
        orchestrator_feedback.py advance --round ROUND --expect PREVIOUS_ROUND
+       orchestrator_feedback.py wake      why a standing round should read orchestrator feedback now; exit 0 if any
 
 An orchestrator session runs for weeks and is never closed, so the session-mode reflect that runs at the end of a
 session never sees the owner's corrections there. digest reads the transcripts the reorient hook registered
@@ -26,6 +27,7 @@ import datetime as dt, fcntl, json, os, pathlib, re, secrets, shutil, subprocess
 MAX_ROWS, MAX_BYTES = 200, 200_000  # per round, shared across sessions
 FIRST_DAYS = 7  # how far back a session's first round reads
 STALE_DAYS = 30  # a session fully read and untouched this long is not opened again
+CATCH_UP_HOURS = 24  # a session the cursor has caught up with is read at most this often
 PROMPT_CHARS, BEFORE_CHARS, ARG_CHARS, CONTEXT_IDS, TOOLS = 2000, 600, 120, 20, 30
 HUMAN = {"human", "channel"}  # origin kinds the owner typed; a channel is the owner's chat bridge
 # Machine-written elements removed with their content; the owner's text around them stays.
@@ -332,6 +334,39 @@ def digest(now=None):
     return 0
 
 
+def wake(now=None, home=None):
+    """Reasons to wake a standing round for orchestrator feedback, from file metadata only; [] with the feature off.
+
+    A pending session, or one the cursor does not know yet, wakes at once; a session that grew wakes once its last scan
+    is CATCH_UP_HOURS old; a replaced or shrunk transcript wakes so the round recovers it."""
+    now = now or now_utc()
+    if gate(config()):
+        return []
+    base = home / "_standing" / "reflect" if home else standing()
+    marks = read_json(base / "orchestrator-cursor.json", {}).get("sessions") or {}
+    out = []
+    for file in sorted(registry().glob("*.json")):
+        reg = read_json(file, {})
+        if not (isinstance(reg, dict) and reg.get("role") == "orchestrator" and reg.get("transcript")):
+            continue
+        try:
+            st = pathlib.Path(reg["transcript"]).expanduser().stat()
+        except OSError:
+            continue
+        session, mark = file.stem, marks.get(file.stem)
+        if not mark:
+            out.append(f"{session}: new session")
+        elif mark.get("pending"):
+            out.append(f"{session}: pending")
+        elif mark.get("inode") != st.st_ino or st.st_size < mark.get("scan_end", 0):
+            out.append(f"{session}: transcript replaced or truncated")
+        elif st.st_size > mark.get("scan_end", 0):
+            scanned = parse_ts(mark.get("scanned_at"))
+            if not scanned or now - scanned >= dt.timedelta(hours=CATCH_UP_HOURS):
+                out.append(f"{session}: grew since {mark.get('scanned_at')}")
+    return out
+
+
 def trash(path):
     folder = os.environ.get("AGENT_SKILLS_TRASH")
     if not folder and os.access("/usr/bin/trash", os.X_OK):
@@ -382,10 +417,18 @@ def advance(round_id, expect):
 def main(argv):
     if argv[:1] == ["digest"]:
         return digest()
+    if argv[:1] == ["wake"]:
+        stop = gate(config())
+        if stop:
+            print(f"skipped: {stop[1]}")
+            return stop[0] or 1
+        reasons = wake()
+        print("\n".join(reasons) or "nothing to read")
+        return 0 if reasons else 1
     if argv[:1] == ["advance"] and "--round" in argv and "--expect" in argv:
         opt = lambda k: argv[argv.index(k) + 1] if argv.index(k) + 1 < len(argv) else ""
         return advance(opt("--round"), opt("--expect"))
-    print("\n".join(__doc__.splitlines()[2:4]), file=sys.stderr)
+    print("\n".join(__doc__.splitlines()[2:5]), file=sys.stderr)
     return 2
 
 
