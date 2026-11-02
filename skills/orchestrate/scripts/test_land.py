@@ -334,6 +334,13 @@ assert isinstance(rows[0]["pid"], int) and "down" in r.stderr and "-v 금지" in
 # A project that was there before is not this run's.
 r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--", "true"], env=heavy_env, cwd=wt, capture_output=True, text=True)
 assert r.returncode == 0 and len((d / "reap-ledger.jsonl").read_text().splitlines()) == 1, r.stderr
+# A nested `orch heavy` inside a slot takes no slot but still registers the stacks its own command starts.
+after2 = json.dumps(json.loads(after) + [{"Name": "verify-2", "Status": "running(1)", "ConfigFiles": f"{wt}/compose.yaml"}])
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--pr", "acme/app#6", "--", "sh", "-c",
+                    f"printf '%s' '{after2}' > {d / 'docker.json'}"], env=dict(heavy_env, ORCH_HEAVY_SLOT="/outer/slot-0"),
+                   cwd=wt, capture_output=True, text=True)
+rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
+assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[1:]] == [("verify-2", "acme/app#6")], (rows, r.stderr)
 
 # status and queue run end to end on the same fakes.
 d, env = setup({"17": pr(17), "18": pr(18, files=["db/migrations/9.sql"])})

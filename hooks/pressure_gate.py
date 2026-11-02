@@ -61,7 +61,9 @@ def segments(cmd):
         while words and ASSIGN.match(words[0]):
             words.pop(0)
         if len(words) >= 3 and words[0] in SHELLS and words[1] == "-c":
-            yield from segments(words[2])
+            # The user's go-ahead before `bash -c` covers every command of its body.
+            lead = [w for w in argv[:len(argv) - len(words)] if w == "AGENT_SKILLS_PRESSURE_GATE=0"]
+            yield from (lead + inner for inner in segments(words[2]))
         else:
             yield argv
 
@@ -134,7 +136,6 @@ VALUE_OPTS = {"-n", "-m", "-p", "-c", "-o", "-W", "--junitxml", "--junit-xml", "
               "--outputFile", "--coverageDirectory", "--config", "--workers", "--maxWorkers"}
 # Shell words before the command a loop or branch runs: `for d in a b; do npm test; done`.
 KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
-OVERRIDE = re.compile(r"(?<![\w$])AGENT_SKILLS_PRESSURE_GATE=0(?![\w])")
 
 
 def narrowed(rest):
@@ -205,14 +206,20 @@ def runs_tests(argv):
     return None
 
 
+def head_word(argv):
+    """The program a simple command runs, past assignments, wrappers and shell keywords; "" when none."""
+    words = [w for w in argv if not (ASSIGN.match(w) or w in WRAPPERS or w in KEYWORDS)]
+    return os.path.basename(words[0]) if words else ""
+
+
 def unwrapped_tests(cmd):
     """What a line runs that belongs in an `orch heavy` slot, None when it runs none or already runs in one."""
-    if OVERRIDE.search(cmd):  # the user's go-ahead covers a `bash -c` body too, whose parse drops the assignment
-        return None
     segs = list(segments(cmd))  # a command passed to `orch heavy` is that segment's words, never a segment of its own
     found = next(filter(None, map(runs_tests, segs)), None)
-    if not found and sum(
-            bool(TEST_FILE.fullmatch(w)) for s in segs if s and os.path.basename(s[0]) in LOOPERS for w in s) >= SUITE_FILES:
+    # A `for` list counts only when the loop body runs a test file (`python3 "$t"`, `"$t"`), not `cat "$f"`.
+    runs = any(h in LOOPERS - {"for"} or h.startswith("$") for h in map(head_word, segs))
+    if not found and sum(bool(TEST_FILE.fullmatch(w)) for s in segs if s and (
+            s[0] == "for" and runs or os.path.basename(s[0]) in LOOPERS - {"for"}) for w in s) >= SUITE_FILES:
         found = "test suite"
     return found
 

@@ -2567,6 +2567,19 @@ def register_stacks(before, owner, pr):
               if r.returncode == 0 else f"heavy: compose 스택 {name} 등록 실패: {r.stderr.strip()}", file=sys.stderr)
 
 
+def heavy_run(cmd, env, owner, pr):
+    """Run cmd and register the compose stacks it started; its exit code."""
+    before = compose_projects()
+    try:
+        return subprocess.run(cmd, env=env).returncode
+    finally:
+        try:
+            register_stacks(before, owner, pr)
+        except (OSError, subprocess.SubprocessError) as e:
+            # The command's exit code is the result; a failed registration is only reported.
+            print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
+
+
 def cmd_heavy(argv):
     """Docker stacks from parallel cards starved the whole machine (Orca UI included), so heavy local work
     queues on slots shared by every program on this machine, like CI shares its runners."""
@@ -2574,9 +2587,10 @@ def cmd_heavy(argv):
         sys.exit("heavy <slug|-> [--wait-minutes 60] [--pr owner/repo#N] -- <command…>")
     cut = argv.index("--")
     cmd = argv[cut + 1:]
-    if os.environ.get("ORCH_HEAVY_SLOT"):  # already inside a slot: taking a second would wait on itself
-        sys.exit(subprocess.run(cmd).returncode)
     cfg, owner = ({}, "-") if argv[0] == "-" else (Program(argv[0]).cfg, argv[0])
+    pr = opt(argv[:cut], "--pr")
+    if os.environ.get("ORCH_HEAVY_SLOT"):  # already inside a slot: taking a second would wait on itself
+        sys.exit(heavy_run(cmd, os.environ, owner, pr))
     slots = HOME / "_heavy"
     slots.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + 60 * float(opt(argv[:cut], "--wait-minutes", "60"))
@@ -2593,16 +2607,10 @@ def cmd_heavy(argv):
                 continue
             os.write(fd, json.dumps({"pid": os.getpid(), "program": owner, "cmd": " ".join(cmd)[:200], "ts": now()}).encode())
             os.close(fd)
-            before = compose_projects()
             try:
-                sys.exit(subprocess.run(cmd, env={**os.environ, "ORCH_HEAVY_SLOT": str(path)}).returncode)
+                sys.exit(heavy_run(cmd, {**os.environ, "ORCH_HEAVY_SLOT": str(path)}, owner, pr))
             finally:
                 path.unlink(missing_ok=True)
-                try:
-                    register_stacks(before, owner, opt(argv[:cut], "--pr"))
-                except (OSError, subprocess.SubprocessError) as e:
-                    # The command's exit code is the result; a failed registration is only reported.
-                    print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
         holders, freed = [], False
         for f in sorted(slots.glob("slot-*")):
             try:
