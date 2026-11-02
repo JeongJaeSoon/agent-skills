@@ -382,9 +382,11 @@ closed = {**json.loads(reg.read_text()), "until": su.iso(dt.datetime.now(dt.time
 reg.write_text(json.dumps(closed))
 mark(scan_end=5, scanned_at=old)
 assert su.precheck(home, collect_first=False) == 0, "not yet read past the span's end"
-mark(scan_end=5, scanned_at=old, passed_until=True)
+mark(scan_end=5, scanned_at=old, passed_until=closed["until"])
 assert su.precheck(home, collect_first=False) == 1, "read past the span's end: growth is not orchestrator conversation"
-mark(scan_end=5, scanned_at=recent, passed_until=True, pending=True)
+mark(scan_end=5, scanned_at=old, passed_until="2026-01-01T00:00:00Z")
+assert su.precheck(home, collect_first=False) == 0, "a span closed again since: read it"
+mark(scan_end=5, scanned_at=recent, passed_until=closed["until"], pending=True)
 assert su.precheck(home, collect_first=False) == 0, "still pending"
 mark(scanned_at=recent, inode=st.st_ino + 1)
 assert su.precheck(home, collect_first=False) == 0, "replaced: recover"

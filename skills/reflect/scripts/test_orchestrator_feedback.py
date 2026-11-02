@@ -293,6 +293,11 @@ with TC.open("a") as f:
     f.write(json.dumps(user("c4", "more unrelated talk", ts(0, 1))) + "\n")
 assert of.wake(NOW + dt.timedelta(days=2)) == [], "read past until: growth does not wake"
 assert "sc" not in run("digest")[1]["sessions"], "nor is the transcript opened again"
+register("sc", TC, since=ts(0, 0), until=ts(0, 5))  # reopened and closed again before any scan
+assert of.wake(NOW + dt.timedelta(days=2)) == ["sc: grew since " + of.iso(NOW)], "a new span is read again"
+code, out = run("digest")
+assert [r["event"] for r in rows(out)] == ["sc:c4"], rows(out)
+commit(out)
 
 # 8. Registry edge cases.
 for p in REG.glob("*.json"):

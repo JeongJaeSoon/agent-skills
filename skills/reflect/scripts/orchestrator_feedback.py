@@ -273,8 +273,9 @@ def scan(session, path, start, lo, hi, max_rows, max_bytes, seen, budget, carry=
 
 
 def span_done(reg, mark):
-    """The span closed (`until`) and a scan read a complete line past it, so later growth is not the orchestrator's."""
-    return bool(reg.get("until") and mark and mark.get("passed_until") and not mark.get("pending"))
+    """The span closed (`until`) and a scan read a complete line past that very `until`, so later growth is not the
+    orchestrator's. A span reopened and closed again has a new `until` and is read again."""
+    return bool(reg.get("until") and mark and mark.get("passed_until") == reg["until"] and not mark.get("pending"))
 
 
 def digest(now=None):
@@ -326,8 +327,8 @@ def digest(now=None):
         rows += found
         if not new["uuid"]:  # no message read: keep the anchor that places scan_end
             new["uuid"], new["uuid_at"] = anchor
-        if mark and not note and mark.get("passed_until") and until:  # the boundary was already crossed
-            new["passed_until"] = True
+        crossed = new["passed_until"] or (mark and not note and mark.get("passed_until") == reg.get("until"))
+        new["passed_until"] = reg.get("until") if crossed and until else None
         moved = new["scan_end"] != start or not mark
         new["moved_at"] = iso(now) if moved else (mark or {}).get("moved_at")
         marks[session] = {**new, "inode": st.st_ino, "scanned_at": iso(now)}
