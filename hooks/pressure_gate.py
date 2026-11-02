@@ -40,6 +40,29 @@ POST = {"PostToolUse": "done", "PostToolUseFailure": "failed"}
 NEW_CARD = ("orca worktree create", "orca orchestration worker-start")
 
 
+# Wrapper options whose next word is their value: `nice -n 5`, `sudo -u app`, `env -u HOME`, `time -o out`.
+WRAPPER_VALUE = {"nice": {"-n"}, "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-U"}, "env": {"-u", "-C", "-S", "-P"},
+                 "time": {"-o", "-f"}}
+OVERRIDE = "AGENT_SKILLS_PRESSURE_GATE=0"
+
+
+def skip_prefix(words, keywords=False):
+    """How many leading words come before the program: assignments, wrappers with their options and values, and with
+    keywords the shell words a loop or branch starts with."""
+    i, wrapper = 0, None
+    while i < len(words):
+        w = words[i]
+        if ASSIGN.match(w) or keywords and w in KEYWORDS:
+            i += 1
+        elif w in WRAPPERS:
+            wrapper, i = w, i + 1
+        elif wrapper and w.startswith("-"):
+            i += 2 if w in WRAPPER_VALUE.get(wrapper, ()) else 1
+        else:
+            break
+    return min(i, len(words))
+
+
 HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)(\w+)\2")  # not a here-string (`<<<word`)
 
 
@@ -104,17 +127,14 @@ def segments(cmd):
         return []
     out.append(cur)
     for argv in [a for a in out if a]:
-        words = argv[:]
-        while words and (ASSIGN.match(words[0]) or words[0] in WRAPPERS or
-                         len(words) < len(argv) and argv[len(argv) - len(words) - 1] in WRAPPERS and words[0].startswith("-")):
-            words.pop(0)  # `FOO=1 env bash -c`, `nice -n 5 bash -c`
+        words = argv[skip_prefix(argv):]  # `FOO=1 env bash -c`, `nice -n 5 bash -c`
         j, run_c = 1, False
         while words and os.path.basename(words[0]) in SHELLS and j < len(words) and words[j].startswith("-"):
             run_c |= not words[j].startswith("--") and "c" in words[j][1:]  # `-c`, `-lc`, `-l -c`
             j += 1
         if run_c and j < len(words):
             # The user's go-ahead before `bash -c` covers every command of its body.
-            lead = [w for w in argv[:len(argv) - len(words)] if w == "AGENT_SKILLS_PRESSURE_GATE=0"]
+            lead = [w for w in argv[:len(argv) - len(words)] if w == OVERRIDE]
             yield from (lead + inner for inner in segments(words[j]))
         else:
             yield argv
@@ -124,11 +144,9 @@ def starts_heavy(argv):
     """`orch heavy`, `orca worktree create` or `docker compose … up` for one simple command, else None.
     A leading AGENT_SKILLS_PRESSURE_GATE=0 or a --help also gives None."""
     words, i = list(argv), 0
-    while i < len(words) and (ASSIGN.match(words[i]) or words[i] in WRAPPERS or
-                              (i and words[i - 1] in WRAPPERS and words[i].startswith("-"))):
-        if words[i] == "AGENT_SKILLS_PRESSURE_GATE=0":
-            return None
-        i += 1
+    i = skip_prefix(words)
+    if OVERRIDE in words[:i]:
+        return None
     words = words[i:]
     if not words or "--help" in words:
         return None
@@ -193,7 +211,7 @@ KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{"}
 
 def narrowed(rest, any_path=False):
     """Whether a runner's arguments pick tests: a test file or directory, `x.py::t`, or a name filter; with any_path
-    (pytest, which runs whatever path it is given) any argument. An option's value (`-n 8`,
+    (pytest, which runs whatever path it is given) any path-shaped argument, never an option's value like `yes`. An option's value (`-n 8`,
     `--junitxml test-results.xml`) is neither, so it leaves a whole suite."""
     skip = False
     for w in rest:
@@ -203,7 +221,7 @@ def narrowed(rest, any_path=False):
             return True
         elif w in VALUE_OPTS:
             skip = True
-        elif not w.startswith("-") and (any_path or "::" in w or TEST_FILE.fullmatch(w) or TEST_DIR.fullmatch(w.rstrip("/"))):
+        elif not w.startswith("-") and (any_path and ("/" in w or w.endswith(".py")) or "::" in w or TEST_FILE.fullmatch(w) or TEST_DIR.fullmatch(w.rstrip("/"))):
             return True
     return False
 
@@ -212,11 +230,9 @@ def runs_tests(argv):
     """'test suite', 'E2E' or 'browser' for one simple command that runs a whole suite, an E2E or a headless browser,
     else None. One named test file, or a runner given a path, is not a suite."""
     words, i = list(argv), 0
-    while i < len(words) and (ASSIGN.match(words[i]) or words[i] in WRAPPERS or words[i] in KEYWORDS or
-                              (i and words[i - 1] in WRAPPERS and words[i].startswith("-"))):
-        if words[i] == "AGENT_SKILLS_PRESSURE_GATE=0":
-            return None
-        i += 1
+    i = skip_prefix(words, keywords=True)
+    if OVERRIDE in words[:i]:
+        return None
     words, kept = words[i:], []
     for w in words:
         if kept and kept[-1] is None:
@@ -270,7 +286,7 @@ def runs_tests(argv):
 
 def head_word(argv):
     """The program a simple command runs, past assignments, wrappers and shell keywords; "" when none."""
-    words = [w for w in argv if not (ASSIGN.match(w) or w in WRAPPERS or w in KEYWORDS)]
+    words = argv[skip_prefix(argv, keywords=True):]
     return os.path.basename(words[0]) if words else ""
 
 

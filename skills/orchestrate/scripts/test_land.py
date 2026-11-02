@@ -337,10 +337,19 @@ assert r.returncode == 0 and len((d / "reap-ledger.jsonl").read_text().splitline
 # A nested `orch heavy` inside a slot takes no slot but still registers the stacks its own command starts.
 after2 = json.dumps(json.loads(after) + [{"Name": "verify-2", "Status": "running(1)", "ConfigFiles": f"{wt}/compose.yaml"}])
 r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--pr", "acme/app#6", "--", "sh", "-c",
-                    f"printf '%s' '{after2}' > {d / 'docker.json'}"], env=dict(heavy_env, ORCH_HEAVY_SLOT="/outer/slot-0"),
+                    f"printf '%s' '{after2}' > {d / 'docker.json'}"], env=dict(heavy_env, ORCH_HEAVY_SLOT=str(d / "slot-x")),
                    cwd=wt, capture_output=True, text=True)
 rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
 assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[1:]] == [("verify-2", "acme/app#6")], (rows, r.stderr)
+# The outer run sees the inner run's stack as new too, and leaves its registration (and PR link) alone.
+after3 = json.dumps(json.loads(after2) + [{"Name": "verify-3", "Status": "running(1)", "ConfigFiles": f"{wt}/compose.yaml"}])
+inner = [sys.executable, str(HERE / "prog.py"), "heavy", "-", "--pr", "acme/app#7", "--", "sh", "-c",
+         f"printf '%s' '{after3}' > {d / 'docker.json'}"]
+r = subprocess.run([sys.executable, HERE / "prog.py", "heavy", "-", "--wait-minutes", "0", "--", *inner],
+                   env=heavy_env, cwd=wt, capture_output=True, text=True)
+rows = [json.loads(l) for l in (d / "reap-ledger.jsonl").read_text().splitlines()]
+assert r.returncode == 0 and [(x["id"], x["links"]["pr"]) for x in rows[2:]] == [("verify-3", "acme/app#7")], (rows, r.stderr)
+assert not list((d / "programs" / "_heavy").glob("*.stacks")), "the outer run removes the inner run's list"
 
 # status and queue run end to end on the same fakes.
 d, env = setup({"17": pr(17), "18": pr(18, files=["db/migrations/9.sql"])})

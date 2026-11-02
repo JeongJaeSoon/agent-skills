@@ -2546,7 +2546,7 @@ def compose_projects():
         return None
 
 
-def register_stacks(before, owner, pr):
+def register_stacks(before, owner, pr, skip=()):
     """A stack left running after verification held gigabytes until someone downed it by hand: the ones this run
     created go to the reap ledger. Only a project with a config file in this worktree: the other slot's card may
     have started one meanwhile."""
@@ -2555,7 +2555,8 @@ def register_stacks(before, owner, pr):
         return
     top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     wt = os.path.realpath(top.stdout.strip() if top.returncode == 0 else os.getcwd())
-    for name in sorted(set(after) - set(before)):
+    done = []
+    for name in sorted(set(after) - set(before) - set(skip)):
         if not any(os.path.realpath(f).startswith(wt + os.sep) for f in after[name]):
             print(f"heavy: compose 스택 {name} 은 이 worktree 밖에서 떠서 등록하지 않음", file=sys.stderr)
             continue
@@ -2565,16 +2566,28 @@ def register_stacks(before, owner, pr):
                            capture_output=True, text=True)
         print(f"heavy: compose 스택 {name} 을 reap ledger 에 등록했다. 검증이 끝나면 `docker compose -p {name} down`(-v 금지)"
               if r.returncode == 0 else f"heavy: compose 스택 {name} 등록 실패: {r.stderr.strip()}", file=sys.stderr)
+        if r.returncode == 0:
+            done.append(name)
+    return done
 
 
-def heavy_run(cmd, env, owner, pr):
-    """Run cmd and register the compose stacks it started; its exit code."""
+def heavy_run(cmd, env, owner, pr, nested=False):
+    """Run cmd and register the compose stacks it started; its exit code. A nested `orch heavy` lists what it
+    registered beside the slot so the outer run, which sees the same new stacks, keeps the inner owner and PR."""
+    log = pathlib.Path(env["ORCH_HEAVY_SLOT"] + ".stacks")
     before = compose_projects()
     try:
         return subprocess.run(cmd, env=env).returncode
     finally:
         try:
-            register_stacks(before, owner, pr)
+            if nested:
+                names = register_stacks(before, owner, pr)
+                with log.open("a") as f:
+                    f.writelines(f"{n}\n" for n in names)
+            else:
+                inner = log.read_text().split() if log.exists() else []
+                log.unlink(missing_ok=True)
+                register_stacks(before, owner, pr, skip=inner)
         except (OSError, subprocess.SubprocessError) as e:
             # The command's exit code is the result; a failed registration is only reported.
             print(f"heavy: compose 스택 등록 실패: {e}", file=sys.stderr)
@@ -2590,7 +2603,7 @@ def cmd_heavy(argv):
     cfg, owner = ({}, "-") if argv[0] == "-" else (Program(argv[0]).cfg, argv[0])
     pr = opt(argv[:cut], "--pr")
     if os.environ.get("ORCH_HEAVY_SLOT"):  # already inside a slot: taking a second would wait on itself
-        sys.exit(heavy_run(cmd, os.environ, owner, pr))
+        sys.exit(heavy_run(cmd, os.environ, owner, pr, nested=True))
     slots = HOME / "_heavy"
     slots.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + 60 * float(opt(argv[:cut], "--wait-minutes", "60"))
