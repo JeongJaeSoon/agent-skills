@@ -25,7 +25,11 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             A subagent's file:line citation is a claim, not that check. So is a contract value
             you write into acceptance criteria (a status code, a field or column name) until the
             route or schema shows it, and an owner decision's technical premise, checked when the
-            decision enters the predicate. A fact left unchecked is marked unverified.
+            decision enters the predicate. Before telling a worker to delete, rename or empty a
+            file, search for what reads it; its contents say nothing about its readers. A
+            verification step you prescribe (how the system uploads, pushes, routes) comes from
+            reading that code path, not from the owner's approval of the act. A fact left
+            unchecked is marked unverified.
 DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
             a schema, a config key, a message format): name the contract and those units. Run
             `architect` on it before the first edit and put the sketch in the ticket's plan
