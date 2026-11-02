@@ -34,7 +34,7 @@ OWNER_NAMES = ("오너", "owner")
 COLS = 78
 LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
-HEADER = ["", "리드/Phase", "PR", "진행"]
+HEADER = ["", "리드/Phase", "PR", "진행", "세션"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
 UNNAMED = "(프로젝트 미지정)"
 SKILLS_CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
@@ -100,12 +100,21 @@ def progress_of(text):
     return [n, m]
 
 
-def lead_add(name, handle, repo, run=None, stale_min=None, program=None):
+def worktree_of(handle):
+    """The Orca worktree whose terminal the handle is, from the fleet collector's last state; None when not seen."""
+    state = fleet.read_json(fleet.state_dir() / "state.json", None) or {}
+    return next((s["id"] for s in state.get("sessions") or [] for t in s.get("terminals") or [] if t.get("handle") == handle), None)
+
+
+def lead_add(name, handle, repo, run=None, stale_min=None, program=None, worktree=None):
     if not name or not handle or not repo:
         raise ValueError("board lead add needs a name, --handle and --repo")
+    # A handle changes when the lead's terminal restarts; its worktree does not, so the brief links the lead by that.
+    worktree = worktree or worktree_of(handle)
 
     def go(store):
         store["leads"][name] = {"name": name, "handle": handle, "repo": repo, "run": run, "started_at": fleet.iso(fleet.utcnow()),
+                                **({"worktree": worktree} if worktree else {}),
                                 **({"stale_after_min": int(stale_min)} if stale_min else {})}
         if name not in store["rows"]:
             put(store, name, {"kind": "lead", "repo": repo, "program": program, "status": "moving"})
@@ -469,6 +478,40 @@ def pr_num(key):
     return "#" + key.rsplit("#", 1)[-1]
 
 
+# A row's session as the 세션 column says it: its agent is working, it stopped (a prompt waits on a person, or its turn
+# ended STALL_MIN ago), or no session runs it (ended, agent exited, or the row links none).
+SESSION_WORD = {"working": "작업 중", "stalled": "멈춤", "none": "세션 없음"}
+STALL_MIN = 15  # dash.py IDLE_MIN: a turn that ended this long ago is a stop, not a pause between turns
+
+
+def session_state(s, now):
+    if not s or s.get("phase") not in ("working", "waiting", "idle"):
+        return "none"
+    if s["phase"] == "working":
+        return "working"
+    at = fleet.parse(s.get("last_activity"))
+    return "stalled" if s["phase"] == "waiting" or not at or (now - at).total_seconds() >= STALL_MIN * 60 else "working"
+
+
+def last_report(s):
+    """(line, at) a session last reported: its report file's newest milestone, else its agent's last reply."""
+    rep = s.get("report") or {}
+    if rep.get("next"):
+        return rep["next"], rep.get("at")
+    a = next((a for a in s.get("agents") or [] if a.get("last")), None)
+    return (fleet.first_line(a["last"]), a.get("updated")) if a else (None, None)
+
+
+# The dispatch convention puts the goal sentence and its brief's path on the spec's first line, which Orca makes the
+# task's name: that is an instruction, not a name, so such a card goes by its worktree's name.
+BRIEF_POINTER_RE = re.compile(r"(?:브리프|[Bb]rief)\s*[:：]\s*[~/]|^/goal\b")
+
+
+def card_title(s):
+    task = s.get("task_title")
+    return s.get("name") if not task or BRIEF_POINTER_RE.search(task) and s.get("name") else task
+
+
 # A session's phase (fleet.py phase_of) read as a board status and next step.
 PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료"), "waiting": ("owner", "확인 대기"),
              "open": ("held", "에이전트 없음"), "offline": ("held", "세션 꺼짐")}
@@ -484,6 +527,10 @@ def fleet_rows(state, leads, board_rows):
     sessions = state.get("sessions") or []
     held = {l.get("handle"): name for name, l in leads.items()}
     on_board = {r.get("pr") for r in board_rows.values()} - {None}
+    # A worktree a board row or board lead links (`--worktree`) is that row's work, not a row of its own.
+    linked = {r.get("worktree") for r in board_rows.values()} - {None}
+    lead_wt = {l["worktree"]: name for name, l in leads.items() if l.get("worktree")}
+    lead_wt.update({r["worktree"]: rid for rid, r in board_rows.items() if r.get("worktree") and r.get("kind") == "lead"})
     pr_of, under = {}, {}
     for s in sessions:  # Orca's own link first
         if isinstance(s.get("linked_pr"), dict) and s["linked_pr"].get("key"):
@@ -501,7 +548,7 @@ def fleet_rows(state, leads, board_rows):
         if rep.get("next") and s.get("phase") != "offline":
             nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
-        title = s.get("name") if kind == "lead" else s.get("task_title") or s.get("name")
+        title = s.get("name") if kind == "lead" else card_title(s)
         rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": status, "next": one_line(nxt),
                      "session": s.get("id"),
                      # a lead's digest links its cards' PRs, which are the cards' rows
@@ -513,12 +560,15 @@ def fleet_rows(state, leads, board_rows):
 
     def shown(s):
         pr = pr_of.get(s.get("id")) or (s.get("report") or {}).get("pr")
-        return (s.get("phase") != "offline" or pr) and pr not in on_board
+        # A dispatch that completed with no PR has reported to its dispatcher and has nothing left to land.
+        over = s.get("dispatch_status") == "completed" and not pr
+        return (s.get("phase") != "offline" or pr) and pr not in on_board and not over and s.get("id") not in linked
 
     for lead in sessions:
         if lead.get("kind") != "orchestration":
             continue
-        board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held), None)
+        board_lead = next((held[t.get("handle")] for t in lead.get("terminals") or [] if t.get("handle") in held),
+                          lead_wt.get(lead.get("id")))  # a restarted terminal has a new handle, the same worktree
         if board_lead and board_lead not in board_rows:  # its rows were dropped from the board on purpose
             continue
         lid = f"fleet:{lead['id']}"
@@ -612,6 +662,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     prs = {k: {**v["detail"], "probed_at": v.get("probed_at")} for k, v in (prs_file.get("prs") or {}).items() if v.get("detail")}
     state = fleet.read_json(sd / "state.json", None)
     live = None if state is None else {t.get("handle") for s in state.get("sessions") or [] for t in s.get("terminals") or []}
+    sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
+    wt_of_handle = {t.get("handle"): sid for sid, s in sessions.items() for t in s.get("terminals") or []}
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
     shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
@@ -620,7 +672,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     todo_held = {k for k, (kind, _) in hold_why.items() if kind == "do"}
     for rid, r in store["rows"].items():
         # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
-        if card := tidy.named(f"{rid} {r.get('title') or ''}", cards):
+        # The card is the one `--worktree` links, else the one the row's id and title name.
+        if card := cards.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards):
             r["linked"] = card["id"]
             r["pr"] = r.get("pr") or card["pr"]
     if fill:
@@ -639,6 +692,22 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         while r.get("parent") in rows:
             r = rows[r["parent"]]
         return r
+
+    def lead_session(lead):
+        """The lead's worktree: the one lead add recorded while Orca still lists it, else the one its handle is now in."""
+        wt = lead.get("worktree")
+        return wt if wt in sessions else wt_of_handle.get(lead.get("handle")) or wt
+
+    def session_of(r):
+        """The worktree a row's work runs in: a fleet row's own, one `board set --worktree` gave, the card the row
+        names, a board lead's; else its parent's, since a phase or task row with none is its lead's work."""
+        while r is not None:
+            lead = store["leads"].get(r["id"]) if r["kind"] == "lead" else None
+            sid = r.get("session") or r.get("worktree") or r.get("linked") or (lead and lead_session(lead))
+            if sid:
+                return sid
+            r = rows.get(r.get("parent"))
+        return None
 
     if scope != "top-level":
         rows = {k: r for k, r in rows.items() if up(r, "program") == scope}
@@ -680,7 +749,12 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                                           f"`orch board later add \"<할 일> {r['pr']}\" --trigger <날짜>` 로 ⏸️)",
                                   "since": r.get("since") or p.get("created")}
         lead = store["leads"].get(lead_of(r)["id"])
-        if status == "moving" and live is not None and lead and not lead.get("closed_at") and lead["handle"] not in live:
+        # The session the row itself links (session_of falls back to its lead's), by worktree since a restarted terminal
+        # has a new handle: gone once Orca no longer lists it or none of its terminals lives.
+        row_sid = lead and session_of(r)
+        gone = live is not None and lead and (row_sid not in sessions or sessions[row_sid].get("phase") == "offline"
+                                              if row_sid else lead["handle"] not in live)
+        if status == "moving" and lead and not lead.get("closed_at") and gone:
             status, nxt = "blocked", "세션 없음"
         if status in ("waiting", "owner") and r["id"] not in waits:
             status, waits[r["id"]] = blocker(r, status, p, me)
@@ -883,6 +957,15 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         if seen:
             bases[sec] = max(dict.fromkeys(seen), key=seen.count)
     for l in lines:
+        r = rows.get(l["key"])
+        sid = session_of(r) if r and not l["fold"] else None
+        st = session_state(sessions.get(sid), now) if state is not None and (sid or r) else None
+        l["session"] = None if l["status"] in (None, "done") or st is None else {"id": sid if sid in sessions else None,
+                                                                                   "state": st, "word": SESSION_WORD[st]}
+        if l["session"] and l["session"]["id"]:
+            s = sessions[sid]
+            line_, at = last_report(s)
+            l["session"].update(name=s.get("name"), last=line_, at=at, pr=(r or {}).get("pr"))
         l["pr_state"] = pr_status(l["pr"], bases.get(l["sec"])) if l["pr"] else ""
         if l["fold"]:  # the numbers, each with its base when not the section's; the states go to the snapshot only
             to = [(prs.get(k) or {}).get("base") for k in l["fold"]]
@@ -892,11 +975,11 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         else:
             l["cell"] = f"{pr_text(l['pr'])} {l['pr_state']}".strip() if l["pr"] else ""
 
-    # Bold: a row the last report did not have, or whose status, progress, next or PR state changed.
+    # Bold: a row the last report did not have, or whose status, progress, next, PR state or session changed.
     snap = {}
     for l in lines:
         snap[l["key"]] = {"status": l["status"], "progress": l["progress"], "next": l["next"],
-                          "pr": l["pr_state"]}
+                          "pr": l["pr_state"], "session": l["session"] and l["session"]["state"]}
         prev = (last_rows or {}).get(l["key"])
         # A fleet row (--fill) is not in a report the board committed, so only a change to one already seen counts.
         if last_rows is None:
@@ -1056,20 +1139,23 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
                 if l["status"] is None:  # the lead's name over its sub-tasks in another repository
                     out.append(name)
                     continue
-                out.append(("└ " if l["depth"] else "") + f"{mark(l, l['status'])} {name} — {l['progress']}")
+                out.append(("└ " if l["depth"] else "") + f"{mark(l, l['status'])} {name} — {l['progress']}"
+                           + (f" · {l['session']['word']}" if l["session"] else ""))
         elif mine:  # a section of folded bullets only has no table
             def dress(i, c, s):
                 l = mine[i - 1]
                 return ("└ " if l["depth"] else "") + (f"**{s}**" if l["key"] in changed else s) if c == 1 else s
             # Only a name is cut to fit, and its whole text goes in the numbered list under the table. A table the
             # other cells alone make too wide overflows, and the render reports it.
-            table, notes = table_width.fit([HEADER] + [[mark(l, l["status"]), l["name"], l["cell"] or "—", l["progress"]]
+            table, notes = table_width.fit([HEADER] + [[mark(l, l["status"]), l["name"], l["cell"] or "—", l["progress"],
+                                                        l["session"]["word"] if l["session"] else "—"]
                                                        for l in mine], COLS, (1,), deco=dress)
             width_ok &= table_width.table_width(table) <= COLS
-            out += ["", "| | 리드/Phase | PR | 진행 |", "|---|---|---|---|"]
+            out += ["", "| " + " | ".join(HEADER).strip() + " |", "|---" * len(HEADER) + "|"]
             out += ["| " + " | ".join(c.replace("|", "\\|") for c in row) + " |" for row in table[1:]]
             # Done only on 🙋 ❔ 🔴 rows: 🔄 ⏳ ⏸️ are still moving.
-            table_rows.append([{"label": l["name"], "ack": f"board:{l['key']}" if f"board:{l['key']}" in ackable else None,
+            table_rows.append([{"label": l["name"], "status": mark(l, l["status"]), "session": l["session"],
+                                "ack": f"board:{l['key']}" if f"board:{l['key']}" in ackable else None,
                                 "done": item_of(rows[l["key"]]) if l["key"] in rows and l["own"] in ("owner", "check", "blocked")
                                 else None} for l in mine])
             out += [""] + [f"- [{n}] {t}" for n, t in enumerate(notes, 1)] if notes else []

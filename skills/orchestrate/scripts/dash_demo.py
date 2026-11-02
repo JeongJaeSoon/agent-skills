@@ -577,9 +577,12 @@ def seed_board():
     import board, fleet
     board.lead_add("lead-login", "term_0FAKE1", "acme/launchpad")
     board.set_row("lead-login", title="로그인 개편", status="moving", progress="3/5", next="CI · 워커", pr="acme/launchpad#41")
+    # Linked to their cards by worktree id, so the brief's 세션 column shows one working and one stopped at a prompt;
+    # the lead's handle is not live, so its own row shows 세션 없음.
     board.set_row("lead-login/export", title="청구 내보내기", status="blocked", progress="1/3", next="리뷰 지적 반영 · 워커",
-                  pr="acme/launchpad#42")
-    board.set_row("lead-login/docs", title="설치 가이드", status="waiting", next="리뷰 · 사람", pr="acme/launchpad#43")
+                  pr="acme/launchpad#42", worktree="wt-export")
+    board.set_row("lead-login/docs", title="설치 가이드", status="waiting", next="리뷰 · 사람", pr="acme/launchpad#43",
+                  worktree="wt-docs")
     board.lead_add("lead-tools", "term_0FAKE2", "acme/tools")
     board.set_row("lead-tools", title="릴리스 도구", status="done", progress="2/2", next="—", pr="acme/tools#6")
     board.doing_add("결제 팀 API 답변 대기", "사람", "10/14 회신")

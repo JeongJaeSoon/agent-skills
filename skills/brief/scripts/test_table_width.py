@@ -25,7 +25,7 @@ blocks = re.findall(r"```markdown\n(.*?)```", skill, re.S)
 assert len(blocks) >= 2, len(blocks)
 widths = [table_width(rows) for block in blocks for _, rows in tables(block)]
 assert len(widths) >= 3 and max(widths) <= 78, widths
-periodic = [rows for block in blocks for _, rows in tables(block) if rows[0] == ["", "리드/Phase", "PR", "진행"]]
+periodic = [rows for block in blocks for _, rows in tables(block) if rows[0] == ["", "리드/Phase", "PR", "진행", "세션"]]
 assert len(periodic) >= 2, len(periodic)
 
 # Each sub-task of a lead gets its own └ row right under it, so some lead in the example shows at least two.

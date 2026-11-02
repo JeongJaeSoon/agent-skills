@@ -1821,7 +1821,7 @@ class Fleet:
                             "text": f"{'reload_delivered' if h in terms else 'reload_dropped'}: {title}"})
         syncs = [i for i in syncs if i["type"] != "reload_pending" or RELOAD_FAILS.get(i["terminal"], 0) >= tries]
         mem["reload_shown"] = {i["terminal"]: i["title"] for i in syncs if i["type"] == "reload_pending"}
-        items += kept + syncs + list(self.checks)
+        items += kept + syncs + watcher_items(sessions, now) + list(self.checks)
         for it in sticky.values():
             if it.get("open"):
                 items.append(it)
@@ -1968,6 +1968,35 @@ def sync_items(now, terms=None):
             out.append({"key": f"reload:{handle}:{pending.get('since')}", "type": "reload_pending", "session": sid,
                         "terminal": handle, "at": pending.get("since"), "source": "skills-sync",
                         "title": f"Reload not sent: {mask(title or handle, 80)}", "detail": mask((why or {}).get("reason"), 200)})
+    return out
+
+
+WATCH_DOWN_S = 3600
+
+
+def watcher_items(sessions, now, last_scan=None):
+    """An orchestrator whose `orch watch-cards` has not finished a round for an hour, or never ran one: cards outside
+    a Run then sit on a prompt with nobody told, and the orchestrator itself may be asleep. One item per watcher
+    stop, so dismissing it does not hide the next one."""
+    if last_scan is None:
+        import card_watch
+        last_scan = card_watch.last_scan
+    out = []
+    for s in sessions.values():
+        if s.get("kind") != "orchestrator":
+            continue
+        for t in s.get("terminals") or []:
+            if not (t.get("agent") and t.get("handle")):
+                continue
+            last = last_scan(t["handle"])
+            if last and now.timestamp() - last[0] < WATCH_DOWN_S:
+                continue
+            ago = f"{int((now.timestamp() - last[0]) // 60)}분 전" if last else "기록 없음"
+            out.append({"key": f"watch:{t['handle']}:{int(last[0]) if last else 0}", "type": "watcher_down",
+                        "session": s["id"], "at": iso(dt.datetime.fromtimestamp(last[0], dt.timezone.utc)) if last else iso(now),
+                        "title": f"오케스트레이터 순찰 꺼짐: orch watch-cards 마지막 회차 {ago}",
+                        "detail": "오케스트레이터가 orch watch-cards 를 run_in_background 로, 파이프 없이 다시 띄운다",
+                        "source": "watch-cards"})
     return out
 
 
@@ -2161,6 +2190,27 @@ def send(session_id, text, handle=None, sender=None):
             # This one reason means the line was typed and Enter pressed: a retry would send it twice.
             typed = ok or (reason or "").startswith("sent, but")
             code, out = 200, {"ok": ok, "reason": reason, "typed": typed, "fallback": None if typed else "copy"}
+    append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
+    return code, out
+
+
+def open_session(session_id, switch=None):
+    """Bring a fleet session's terminal to the front in Orca, for the dashboard's Orca button. The page names the
+    session by its worktree id; the handle is looked up now, since a restarted terminal has a new one. Its agent
+    terminal first, else any connected one. Returns (status, body) for the HTTP reply; every attempt is logged."""
+    state = read_json(state_dir() / "state.json", {}) or {}
+    s = next((x for x in state.get("sessions") or [] if x["id"] == session_id), None)
+    terms = [t for t in (s or {}).get("terminals") or [] if t.get("connected")]
+    term = next((t for t in terms if t.get("agent")), terms[0] if terms else None)
+    row = {"at": iso(utcnow()), "session": session_id, "handle": term and term["handle"], "text": "open"}
+    if not term:
+        code, out = 409, {"ok": False, "reason": "no connected terminal in this session"}
+    else:
+        try:
+            (switch or (lambda h: orca("terminal", "switch", "--terminal", h)))(term["handle"])
+            code, out = 200, {"ok": True, "reason": None}
+        except SourceError as e:
+            code, out = 200, {"ok": False, "reason": str(e)}
     append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
     return code, out
 

@@ -266,7 +266,7 @@ PR を受け持つスキルとマージする主体:
 ## 文章
 
 ### brief
-進行中・他の人の待ち・判断事項・オーナーが今やること・保留を、根拠とともに報告します。レポートは要求時も定期も `orch brief render --commit`（定期は `--periodic`、Telegram は `--telegram`）の出力を手を加えずにそのまま送り、間違った行は記録（`orch board set`、`orch stage set`）を直してから描き直します。行は board だけでなく、生きている Orca のカード・リード・Run、カードの REPORT 行が指す報告ファイル、GitHub の PR の状態から毎回作り直します。人を待つ行は、オーナーが解くもの（🙋）と他の人のレビュー・返事待ち（⏳）に分かれます。段階表は1行のリンクで `stage` スキルを、予定（📅）・保留キュー（⏸️）の件数は1行で `todo` スキルとダッシュボードを指します。モデルが渡すのは判断だけで、見出しの一文・推奨付きの判断事項・Insight・定期の回で飛ばした行動です。手で書くのは、レンダラーが失敗したときと、一つのセッションが自分の作業一つを報告するとき（`end-session` §6、`references/hand-format.md`）だけです。
+進行中・他の人の待ち・判断事項・オーナーが今やること・保留を、根拠とともに報告します。レポートは要求時も定期も `orch brief render --commit`（定期は `--periodic`、Telegram は `--telegram`）の出力を手を加えずにそのまま送り、間違った行は記録（`orch board set`、`orch stage set`）を直してから描き直します。行は board だけでなく、生きている Orca のカード・リード・Run、カードの REPORT 行が指す報告ファイル、GitHub の PR の状態から毎回作り直します。各行のセッション列は、その行を担うセッションが作業中（`작업 중`）・停止（`멈춤`）・なし（`세션 없음`）のどれかを、端末ハンドルではなく Orca の worktree でつないで示します。人を待つ行は、オーナーが解くもの（🙋）と他の人のレビュー・返事待ち（⏳）に分かれます。段階表は1行のリンクで `stage` スキルを、予定（📅）・保留キュー（⏸️）の件数は1行で `todo` スキルとダッシュボードを指します。モデルが渡すのは判断だけで、見出しの一文・推奨付きの判断事項・Insight・定期の回で飛ばした行動です。手で書くのは、レンダラーが失敗したときと、一つのセッションが自分の作業一つを報告するとき（`end-session` §6、`references/hand-format.md`）だけです。
 
 ### stage
 - **いつ:** 「단계표 보여줘」（段階表を見せて）、`/agent-skills:stage`。`brief` は段階表を1行のリンクでしか見せないので、表そのものが必要なときに呼びます。
@@ -536,7 +536,7 @@ PR を受け持つスキルとマージする主体:
 ### オーケストレーター・リードの再確認
 `hooks/onboard.py`（SessionStart `startup|clear`）。このプロファイルのユーザー設定（`env.CLAUDE_CODE_PLUGIN_DIRS`。Orca のプロファイルごとに別々に見ます）もセッションの同じ環境変数もチェックアウトを読み込んでいないときだけ、インストール画面の値とともに `setup-pc` を提案するよう促す段落を入れます。`-p` セッション（`CLAUDE_CODE_ENTRYPOINT` が `sdk-cli`）には入れません。Agent SDK のセッション（`sdk-ts`・`sdk-py`）は人が入力する GUI かもしれないので入れ、最初の依頼がブリーフや自動化のプロンプトなら無視するよう段落に書いてあります。URL の認証情報は消してから入れます。人が断ればエージェントが `onboard.py --decline` を実行し、そのプロファイルでは二度と尋ねません。`AGENT_SKILLS_ONBOARD=0` ですべて無効になります。
 
-`hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。操作を止めず外部コマンドも実行しません。オーケストレーターのセッション名（`session_title`）が `orchestrator` でなければ、SessionStart の案内の最後に、人に `/rename orchestrator` を頼み自分の Orca タブの名前を変える（`orca terminal rename`）よう促す行を付けます。
+`hooks/reorient.py` は SessionStart と UserPromptSubmit で宣言済みの役割だけを処理します。ホストの `agent_type`、resume/fork 時のセッション名、明示した `ROLE: orchestrator` / `ROLE: lead <slug>` を読みます。`ROLE: none` で無効化できます。ROLE だけで宣言したセッションの fork は再宣言が必要です。状態は `$AGENT_SKILLS_STATE/roles/` に置き、ターミナルの handle から推測しません。開始時に役割の案内、各プロンプトにリマインダーを加えます。compact 後の SessionStart では、orchestrate の SKILL.md 冒頭にある「Core rules」の一覧（最初の項目は委任）をそのまま読んで案内に添えます。スキルが大きく compaction の再注入では戻らず、「再ロードせよ」という一文だけではロードされなかったためです。操作を止めず外部コマンドも実行しません。オーケストレーターのセッション名（`session_title`）が `orchestrator` でなければ、SessionStart の案内の最後に、人に `/rename orchestrator` を頼み自分の Orca タブの名前を変える（`orca terminal rename`）よう促す行を付けます。
 
 ### ターミナルで答えた決定のクローズ
 `hooks/decision.py`（UserPromptSubmit）。`orch decide add` で決定を登録したターミナル（`$ORCA_TERMINAL_HANDLE`）に人が入力したプロンプトだけを見ます。1 行目が id で始まる（`d3 許可`、`decision d3: 許可`）か、そのターミナルの開いている決定のうち一つにしかない選択肢名で始まると、その決定を答えとともに done でクローズし、オーケストレーターかリードに伝えます。曖昧なときはクローズせず、開いている決定の一覧をリマインダーとして差し込むだけです。ほかのターミナル（ワーカー）の入力ではクローズせず、エラーはすべて exit 0 です。すでに起動しているセッションには `/reload-plugins` か再起動のあとから効きます。

@@ -14,7 +14,9 @@ stopped goal (auth), a select menu, a permission prompt or an interrupted turn (
 it waits on a human; the screen only where Orca has no verdict), a full disk, an API retry loop,
 a `/goal` card with no output for --idle-min minutes, a card once seen under `/goal` that sits on an empty
 prompt without it for --goal-lost-min minutes, or free disk under --min-free-gb. A finding still on screen is
-not reported again, also across restarts (--state); once it clears, the next one is new. It never types into a
+not reported again, also across restarts (--state); once it clears, the next one is new. Each round stamps
+`last_scan_at` in --state, which `orch inbox`, `orch wait`, `orch patrol` and the dashboard read to tell a watcher
+that ended (a finding, QUIET, a killed session) from one still running. It never types into a
 terminal: what to answer is the call of the orchestrator or lead that started the card. Exit 0 always; the
 output says why it ended (STUCK lines, QUIET or OK).
 
@@ -22,7 +24,7 @@ output says why it ended (STUCK lines, QUIET or OK).
 STARTED when the screen shows `/goal active` and the card has written output since the check began, ENDED
 when `/goal` was on and is off now, CLOSED when its terminal went away after it was seen, else STUCK.
 """
-import argparse, hashlib, json, os, pathlib, re, shutil, sys, tempfile, time
+import argparse, contextlib, hashlib, json, os, pathlib, re, shutil, sys, tempfile, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import prog
@@ -164,6 +166,42 @@ def check_start(handle, read, listing, within, interval, clock=time.time, sleep=
             f"  orca terminal read --terminal {handle} --screen"]
 
 
+DOWN_GRACE_S = 300  # the orchestrator restarts a watcher that ended in the same wake; this covers that turn
+DOWN_RENOTIFY_S = 1800
+
+
+def last_scan(handle, state_dir=None):
+    """(time of the watcher's last finished round, its interval), or None when this terminal never ran one. A state
+    file written before last_scan_at existed is stamped by its mtime, as every round saves it."""
+    path = (state_dir or STATE_DIR) / f"{handle}.json"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    seen = load(path)
+    return float(seen.get("last_scan_at") or mtime), int(seen.get("interval") or 180)
+
+
+def down_line(handle, now=None, state_dir=None):
+    """`WATCH-CARDS DOWN` when the watcher this terminal ran has not finished a round in two intervals and the grace,
+    shown again every 30 minutes while it lasts; None otherwise, and for a terminal that never ran one."""
+    now = now or time.time()
+    last = handle and last_scan(handle, state_dir)
+    if not last or now - last[0] <= 2 * last[1] + DOWN_GRACE_S:
+        return None
+    mark = (state_dir or STATE_DIR) / f".down-{handle}"
+    try:
+        shown = float(mark.read_text())
+    except (OSError, ValueError):
+        shown = 0
+    if shown > last[0] and now - shown < DOWN_RENOTIFY_S:
+        return None
+    with contextlib.suppress(OSError):
+        mark.write_text(str(now))
+    return (f"WATCH-CARDS DOWN: its last round ended {int((now - last[0]) // 60)} min ago; start it again "
+            "(orch watch-cards, run_in_background, no pipe)")
+
+
 def load(path):
     try:
         seen = json.loads(path.read_text())
@@ -204,6 +242,7 @@ def main(argv):
         free_gb = shutil.disk_usage(pathlib.Path.home()).free / 2**30
         lines = scan(terms, seen, prog.read_screen, time.time() * 1000, a.idle_min, free_gb, a.min_free_gb,
                      a.goal_lost_min, prog.agent_waits())
+        seen.update(last_scan_at=time.time(), interval=a.interval)
         save(state, seen)
         if lines:
             print("\n".join(lines), flush=True)

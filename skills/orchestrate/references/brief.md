@@ -29,9 +29,11 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             route or schema shows it, and an owner decision's technical premise, checked when the
             decision enters the predicate. A fact left unchecked is marked unverified.
 DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
-            a schema, a config key, a message format): name the contract and those units. Run
-            `architect` on it before the first edit and put the sketch in the ticket's plan
-            comment (deliver-ticket §1); the units that build on it get that sketch in CONTEXT.
+            a schema, a config key, a message format): name the contract and those units. Before
+            the first edit, run `how` (simple mode) on the existing code paths the contract
+            changes or plugs into (skip what an upstream report covers), then `architect` on the
+            contract. Put the sketch in the ticket's plan comment (deliver-ticket §1); the units
+            that build on it get that sketch in CONTEXT.
 ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (stack / orch dep).
             Class: normal | urgent | gate.
             Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
@@ -122,7 +124,12 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             VERIFY names (`--write`, `--fix`) is a tool run, not a hand edit. Give each Bash act
             that changes a file or its mode its own call, so a refusal names it. Never chain a
             check or probe with other acts in one Bash call either: a refusal takes every act in
-            the call with it, and each of them then counts as refused.
+            the call with it, and each of them then counts as refused. Hooks match the whole
+            command text, so text a hook may read as a command (a prompt for another agent CLI,
+            a hook's test inputs) goes in a file written with the Write tool and passed on stdin
+            (`codex exec - < prompt.md`) or named in a short inline line that says to read it;
+            the text itself is never inline. Bash runs the user's shell; under zsh, quote a word
+            that starts with `=`, and call each item explicitly rather than splitting an unquoted `$var`.
             Write no file or script outside the worktree except under SCOPE's scratch root, its
             named temporary download directory, or the one refusal-report file below (which you
             leave in place); list what you put there (checkouts, files, compose projects) in the report and tear it down
