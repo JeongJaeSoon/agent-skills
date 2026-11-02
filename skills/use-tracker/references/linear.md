@@ -1,7 +1,10 @@
 # Linear: operation → tool
 
-Order of preference in an agent session: Linear MCP (`mcp__claude_ai_Linear__*`) when connected,
-else `orca linear`, else `tracker.py`. Scripts always call `tracker.py`.
+Order of preference in an agent session: Linear MCP when connected, else `orca linear`, else
+`tracker.py`. Scripts always call `tracker.py`. The MCP tools are the same under either prefix:
+a local server (`mcp__linear__*`) or the claude.ai connector (`mcp__claude_ai_Linear__*`).
+Use whichever the session has; with both, use the local server. The tables below name tools
+without the prefix.
 
 ## Config (`~/.claude/agent-skills.json` → `tracker.linear`)
 

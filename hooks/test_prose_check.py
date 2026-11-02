@@ -1,6 +1,6 @@
 """prose_check.py: notes write-plainly's fixed-string patterns in text a PR, commit or ticket save publishes; never blocks.
 Run: python3 hooks/test_prose_check.py"""
-import json, pathlib, subprocess, sys, tempfile
+import json, pathlib, re, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 TMP = pathlib.Path(tempfile.mkdtemp())
@@ -53,16 +53,22 @@ heredoc = "git commit -F - <<'EOF'\nfeat(x): add y\n\nThis change serves as a cr
 n = bash(heredoc)
 assert n and "serves as" in n and "crucial" in n, n
 assert "것 같" in bash('git commit -m "$(cat <<\'EOF\'\nfix: 캐시 문제인 것 같습니다\nEOF\n)"')
-assert "효율적으로" in hook("mcp__claude_ai_Linear__save_issue", {"id": "ABC-1", "description": "요청을 효율적으로 처리한다."})
+# The same Linear tools arrive as a local server (mcp__linear__) or the claude.ai connector (mcp__claude_ai_Linear__).
+LINEAR = ("mcp__linear__", "mcp__claude_ai_Linear__")
+matchers = [m["matcher"] for m in json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
+            if "prose_check.py" in m["hooks"][0]["command"]]
+for prefix in LINEAR:
+    assert any(re.fullmatch(m, prefix + "save_issue") for m in matchers), (prefix, matchers)
+    assert "효율적으로" in hook(prefix + "save_issue", {"id": "ABC-1", "description": "요청을 효율적으로 처리한다."})
+    assert "bold label" in hook(prefix + "save_comment", {"issueId": "x", "body": "**성능:** 성능이 좋아졌다"})
+    assert hook(prefix + "get_issue", {"id": "다양한"}) is None
+    assert hook(prefix + "save_issue", {"id": "다양한", "description": "Linear와 Jira를 지원한다."}) is None
 assert "In order to" in hook("mcp__atlassian__addCommentToJiraIssue", {"issueIdOrKey": "ABC-1", "commentBody": "In order to ship"})
-assert "bold label" in hook("mcp__claude_ai_Linear__save_comment", {"issueId": "x", "body": "**성능:** 성능이 좋아졌다"})
 
 assert bash('gh pr create --title "fix(sync): 실패한 요청을 세 번까지 다시 보낸다" --body "## 왜\n\n`orch land`만 머지한다."') is None
 assert bash('git commit -m "docs: `--body` 와 ```\n다양한 —\n``` 은 코드다"') is None
 assert bash("echo '다양한 — 해당 '") is None and bash("git log --grep '다양한'") is None
 assert hook("Edit", {"file_path": "/r/a.md", "new_string": "다양한"}) is None
-assert hook("mcp__claude_ai_Linear__get_issue", {"id": "다양한"}) is None
-assert hook("mcp__claude_ai_Linear__save_issue", {"id": "다양한", "description": "Linear와 Jira를 지원한다."}) is None
 assert hook("Bash", {"command": 'git commit -m "다양한"'}, env={"AGENT_SKILLS_PROSE_CHECK": "0"}) is None
 assert hook("Bash", {}, raw="not json") is None
 print("test_prose_check: ok")

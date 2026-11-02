@@ -16,8 +16,9 @@ says how. They name Linear only for things outside the adapter (a `--linear-issu
 
 ## How to do an operation
 
-- **Agent in a session:** prefer the tracker's MCP tools when connected (Linear:
-  `mcp__claude_ai_Linear__*`; Jira: an Atlassian MCP server). For Linear without MCP, use
+- **Agent in a session:** prefer the tracker's MCP tools when connected (Linear: a local
+  server, `mcp__linear__*`, or the claude.ai connector, `mcp__claude_ai_Linear__*`, the same
+  tools under either prefix; Jira: an Atlassian MCP server). For Linear without MCP, use
   `orca linear ... --json`. Otherwise use `tracker.py`.
 - **Scripts:** always `tracker.py`, never an MCP tool, a tracker CLI, or a tracker API.
 - **A write delegate:** hand every write (create, comment, label, transition, relate) to the
