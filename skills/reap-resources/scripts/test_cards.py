@@ -193,6 +193,21 @@ parked = lambda: dict(branch_prs=[PR], terminals=[term("a1", True, 2 * 3600)])
 assert verdict(machine(prs=MERGED), **parked())[0] == cards.REMOVE
 v = verdict(machine(prs=MERGED, patrol={CARD}), **parked())
 assert v[0] == cards.KEEP and "orch patrol" in v[1], v
+# read_machine takes m["patrol"] from patrol-verdicts.json itself, once per read.
+stubs = {n: getattr(reap, n) for n in ("orca_workers", "processes", "cwds", "orca_json", "pr_reader", "transcript_quiet",
+                                        "STATE", "patrol_working")}
+reap.orca_workers, reap.processes, reap.cwds = lambda: [], lambda: {}, lambda: {}
+reap.orca_json, reap.pr_reader, reap.transcript_quiet = lambda *a: {"automations": []}, lambda: {}.get, lambda *a, **k: None
+reap.STATE = pathlib.Path(tmp) / "state"
+reap.STATE.mkdir()
+(reap.STATE / "patrol-verdicts.json").write_text(json.dumps({"t": NOW, "cards": {CARD: "waiting"}}))
+reads = []
+reap.patrol_working = lambda now=None: reads.append(now) or stubs["patrol_working"](now)
+m = cards.read_machine({}, now=NOW)
+assert m["patrol"] == {CARD} and reads == [NOW], (m["patrol"], reads)
+assert cards.judge(cards.gather({"path": CARD}, {**m, "pr_state": MERGED.get}, fake(**parked())), IDLE)[0] == cards.KEEP
+for n, f in stubs.items():
+    setattr(reap, n, f)
 
 # Protected cards are never read further: the main checkout, a pinned card, a lead by name, this session's own card,
 # an automation's runner, a live worker turn.
@@ -229,6 +244,7 @@ assert cards.act({**item, "head": PRHEAD}, {}).startswith("건너뜀") and not c
 assert cards.act({**item, "verdict": cards.REMOVE}, {}).startswith("건너뜀") and not closed
 # F4: a re-read that cannot see what scan needs keeps the card, before any terminal closes.
 cards.cards_listing = lambda repo_list=(): None
+assert cards.reread(CARD, {})[:2] == (cards.KEEP, cards.BLIND), "unreadable, not gone"
 assert cards.act(item, {}).startswith("건너뜀") and not closed
 cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
 for broken in ({"cwd_of": None}, {"workers_unread": True}, {"runners": None}):
