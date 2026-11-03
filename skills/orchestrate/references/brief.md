@@ -151,7 +151,9 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             An act refused by a permission prompt, the auto-mode classifier (including an error that
             returns no verdict), a Claude Code hook or the human is not tried again in any form: not
             re-run, not moved into a script or another tool (Bash after an Edit got no verdict), not
-            aimed at a renamed target, not handed to a subagent or another session. Report it in the
+            aimed at a renamed target, not handed to a subagent or another session. Work the
+            orchestrator handed down after its own `[gate:delegate]` block is not such an act: that
+            block refuses only the orchestrator doing it itself. Report a refusal in the
             same turn to whoever gave you this work, with what the act was for, the refusal's
             category (`no verdict` when the classifier gave none) and the exact command: a worker
             (a session Orca dispatched: its prompt carries Orca's worker preamble) reports to the

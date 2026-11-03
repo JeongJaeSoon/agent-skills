@@ -28,6 +28,8 @@ Bind this terminal to a Run. Orca types its notice ("Injected notices") only for
 
 Every request leaves your turn within one short tool call.
 
+The plugin's `hooks/delegate_gate.py` enforces this: it denies this session's own tool calls outside coordination (the commands and paths its docstring lists) with a `[gate:delegate]` reason, and the table below is where each one goes instead. An act in "Acts only the human's session may take" is blocked too and never delegated: the human runs it as a `!` line here. The owner turns the gate off with `orchestrate.delegate_gate: false` in `~/.claude/agent-skills.json`.
+
 | The request | Goes to |
 |---|---|
 | A question you can answer from what is already in context, or one `--json` read | You, now |
