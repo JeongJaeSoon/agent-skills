@@ -477,6 +477,14 @@ try:
     raise AssertionError("strict raises, so patrol records the source as failed")
 except SystemExit:
     pass
+for answer in ({}, {"worktrees": None, "terminals": None}):
+    prog.orca_json = lambda *a, r=answer: r
+    assert prog.agent_waits() == {}
+    try:
+        prog.agent_waits(strict=True)
+        raise AssertionError(f"strict raises on a listing without its list: {answer}")
+    except ValueError:
+        pass
 prog.orca_json = saved_oj
 # A new prompt ends the wait early: nobody watches a worker's terminal.
 prog.orca_json = lambda *a: {"deliveryId": None, "messages": []}

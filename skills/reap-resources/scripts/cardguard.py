@@ -96,14 +96,25 @@ def _orch(name):
     return __import__(name)
 
 
+def transcript_dirs(path):
+    """Where a card's transcripts may be: dash's (CLAUDE_PROJECTS_DIR) and the cleaners' (CLAUDE_CONFIG_DIR/projects)."""
+    mangled = re.sub(r"[^A-Za-z0-9]", "-", path)
+    config = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects" / mangled
+    return list(dict.fromkeys([_orch("dash").transcript_dir(path), config]))
+
+
 def transcript_tail(path, strict=False):
     """(motion, last row) from the tail of the newest transcript of a card, or (None, None) without one. motion is
-    dash.step_motion's: {"state": "idle"|..., "since", "parked"}. A transcript that cannot be read is (None, None)
-    too, or raises with strict."""
+    dash.step_motion's: {"state": "idle"|..., "since", "parked"}. A transcript or its folder that cannot be read is
+    (None, None) too, or raises with strict."""
     dash = _orch("dash")
-    d = dash.transcript_dir(path)
     try:
-        files = list(d.glob("*.jsonl")) if d.is_dir() else []
+        files = []
+        for d in transcript_dirs(path):
+            try:
+                files += [d / n for n in os.listdir(d) if n.endswith(".jsonl")]  # glob would hide a denied folder
+            except (FileNotFoundError, NotADirectoryError):
+                continue
         if not files:
             return None, None
         newest = max(files, key=lambda f: f.stat().st_mtime)

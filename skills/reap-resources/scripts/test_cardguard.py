@@ -114,6 +114,21 @@ except OSError:
     pass
 assert cardguard.transcript_tail("/w/parked") == (None, None)
 (d / "s.jsonl").chmod(0o644)
+d.chmod(0)
+try:
+    cardguard.transcript_tail("/w/parked", strict=True)
+    raise AssertionError("a folder that cannot be listed raises under strict, not 'no transcript'")
+except OSError:
+    pass
+d.chmod(0o755)
+# The cleaners read CLAUDE_CONFIG_DIR/projects; the guard reads there too, not only dash's CLAUDE_PROJECTS_DIR.
+cfg_home = tmp / "cfg"
+(cfg_home / "projects" / "-w-parked").mkdir(parents=True)
+(d / "s.jsonl").rename(cfg_home / "projects" / "-w-parked" / "s.jsonl")
+os.environ["CLAUDE_CONFIG_DIR"] = str(cfg_home)
+motion, _ = cardguard.transcript_tail("/w/parked", strict=True)
+assert motion and motion["parked"], motion
+del os.environ["CLAUDE_CONFIG_DIR"]
 
 # Shared facts: busy shells and child cards.
 row = lambda pid, cmd, ppid=1: {"pid": pid, "ppid": ppid, "cmd": cmd}
