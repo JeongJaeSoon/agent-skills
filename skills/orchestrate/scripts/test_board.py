@@ -15,7 +15,8 @@ tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-board-"))
 state = tmp / "dashboard"
 env = {**os.environ, "ORCH_FLEET_STATE": str(state), "ORCH_BRIEF_LAST": str(tmp / "brief-last"),
        "ORCH_FLEET_CONFIG": str(tmp / "none.json"), "AGENT_SKILLS_STATE": str(tmp / "state"), "TZ": "UTC",
-       "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "PROGRAMS_HOME": str(tmp / "programs")}
+       "AGENT_SKILLS_CONFIG": str(tmp / "none.json"), "PROGRAMS_HOME": str(tmp / "programs"),
+       "ORCA_TERMINAL_HANDLE": "term_0FAKE1"}  # a decision's reply route: a terminal the fixture fleet has
 T0 = "2026-10-13T14:00:00Z"
 NOW = "2026-10-13T14:30:00Z"
 
@@ -164,8 +165,9 @@ def pr(key, state_="OPEN", reviewers=(), ci="success", merged=None, probed="2026
     pr("acme/ops#61", reviewers=["rev-b"]), pr("acme/ops#62", reviewers=["rev-b"]),
     pr("acme/ops#70", reviewers=["octo-owner"]), pr("acme/ops#71", reviewers=["octo-owner"]),
 ])}))
-(state / "state.json").write_text(json.dumps({"sessions": [
-    {"id": s, "phase": "working", "terminals": [{"handle": h}]} for s, h in (("s1", "term_0FAKE1"), ("s2", "term_0FAKE2"), ("s3", "term_0FAKE3"))]}))
+(state / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
+    {"id": s, "phase": "working", "terminals": [{"handle": h, "agent": "claude", "connected": True, "writable": True}]}
+    for s, h in (("s1", "term_0FAKE1"), ("s2", "term_0FAKE2"), ("s3", "term_0FAKE3"))]}))
 
 # ph1 merged 12 days before NOW: its ✅ row folds into the section's count; ph2, merged an hour ago, stays.
 FIRST = orch("brief", "render", "--periodic", "--now", NOW, "--commit", "--skipped", "21:00 이후라 Slack 미전송")
@@ -504,7 +506,8 @@ rok("stage", "env", "--prod", "v1.7.1", "--dev", "v1.7.2")
 rok("stage", "next", "v1.7.2 prod 배포 (사람, 미정)")
 rok("decide", "add", "--title", "재색인 권한", "--option", "서비스 계정::만료 없음", "--option", "개인 토큰", "--recommend", "1")
 (req / "dashboard" / "state.json").write_text(json.dumps({"generated_at": NOW, "sessions": [
-    sess("root", "orchestrator", None, "working"),
+    sess("root", "orchestrator", None, "working",
+         terminals=[{"handle": "term_0FAKE1", "agent": "claude", "connected": True, "writable": True}]),
     sess("c7", "task", "root", "working", task_title="ABC-1 정렬", gh_repo="acme/web",
          report={"next": "CI 통과 → 리뷰 의뢰 · 워커", "pr": "acme/web#45"})],
     "prs": [{"key": "acme/web#40", "state": "MERGED", "merged_at": "2026-10-12T03:00:00Z"}]}))
@@ -604,7 +607,9 @@ mok("board", "set", "L/ph2", "--kind", "phase", "--status", "moving", "--pr", "a
     sess("root", "orchestrator", None, "working"),
     sess("lead", "orchestration", "root", "working", h="term_0FAKEL"),
     sess("c9", "task", "lead", "working", task_title="ABC-9 라이브", gh_repo="acme/web", report={"pr": "acme/web#47"}),
-    sess("c8", "task", "lead", "working", task_title="ABC-8 보드에 있음", gh_repo="acme/web", report={"pr": "acme/web#46"})],
+    sess("c8", "task", "lead", "idle", task_title="ABC-8 보드에 있음", gh_repo="acme/web", report={"pr": "acme/web#46"}),
+    # A card still working after its PR merged is on the next one: its own row, with no PR yet (fleet.current_pr).
+    sess("c10", "task", "lead", "working", task_title="ABC-10 다음 PR", gh_repo="acme/web", report={"pr": "acme/web#46"})],
     "prs": []}))
 merged = json.loads(mok("brief", "render", "--periodic", "--now", NOW, "--json"))
 text = merged["text"]
@@ -613,6 +618,7 @@ assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in 
 assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | — |" in text and "- PR 닫힘 → L ph2" in text, text
 assert "| 🔄 | └ ABC-9 라이브 | #47 ? | — |" in text and "- └ 🔄 ABC-9 라이브 — 작업 중" in text, text
 assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
+assert "| 🔄 | └ ABC-10 다음 PR | — | — | 작업 중 |" in text, text
 
 
 class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old
