@@ -1050,6 +1050,8 @@ SUBAGENT_STALE_H = 3           # a start this old with no stop is "확인 필요
 SUBAGENT_EVENTS = {"SubagentStart": "start", "SubagentStop": "stop"}
 SUBAGENT_FIELDS = ("claude_session", "type", "handle", "cwd", "desc")
 SUBAGENTS_SHOWN = 20           # per session, newest first
+SUBAGENT_LOCK_S = 1.0          # the longest a hook waits for the log's lock before it drops its event
+SUBAGENT_CARRY_D = 7           # a start with no stop older than this is not carried over a rotation
 AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,100}")
 _subagents = {}                # path -> (signature, folded)
 
@@ -1066,7 +1068,8 @@ def subagent_desc(event):
         dirs.append(pathlib.Path(event["transcript_path"]).with_suffix("") / "subagents")
     for d in dirs:
         for n in names:
-            desc = (read_json(d / n, {}) or {}).get("description") if (d / n).is_file() else None
+            meta = read_json(d / n, None) if (d / n).is_file() else None
+            desc = meta.get("description") if isinstance(meta, dict) else None
             if isinstance(desc, str) and desc.strip():
                 return desc
     return None
@@ -1082,24 +1085,40 @@ def subagent_log(event, handle=None, now=None):
 
     def text(v, limit):
         return mask(v, limit) or None if isinstance(v, str) else None
+    try:
+        desc = subagent_desc(event)
+    except Exception:  # an optional, undocumented source never costs the event
+        desc = None
     row = {"v": 1, "event": kind, "at": iso(now or utcnow()), "agent": aid,
            "claude_session": text(event.get("session_id"), 100), "type": text(event.get("agent_type"), 120),
            "handle": handle if isinstance(handle, str) and AGENT_ID_RE.fullmatch(handle) else None,
-           "cwd": text(event.get("cwd"), 500), "desc": text(subagent_desc(event), 200)}
+           "cwd": text(event.get("cwd"), 500), "desc": text(desc, 200)}
     path = state_dir() / SUBAGENTS
     path.parent.mkdir(parents=True, exist_ok=True)
-    # One lock file, apart from the log's inode, orders appends and the rotation, which moves the log under them.
+    # One lock file, apart from the log's inode, orders appends and the rotation. A hook never waits on it for
+    # long: past SUBAGENT_LOCK_S the event is dropped rather than holding up the subagent.
     with open(path.with_name(path.name + ".lock"), "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        deadline = time.monotonic() + SUBAGENT_LOCK_S
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    return None
+                time.sleep(0.02)
         with contextlib.suppress(FileNotFoundError):
             if path.stat().st_size > SUBAGENTS_ROTATE:
-                # The open starts move to the new file, so a long-running agent outlives the rotation.
+                # The old file is copied to .1 first and the new one, holding the open starts so a long-running agent
+                # outlives the rotation, replaces it in one rename: a failure at any step leaves a whole log behind.
+                cut = iso((now or utcnow()) - dt.timedelta(days=SUBAGENT_CARRY_D))
                 carried = [{"v": 1, "event": "start", "at": a["started_at"], "agent": a["agent"],
                             **{k: a[k] for k in SUBAGENT_FIELDS}}
-                           for a in subagents(path).values() if a["started_at"] and not a["stopped_at"]]
-                os.replace(path, path.with_name(path.name + ".1"))
-                for r in carried:
-                    append_line(path, r)
+                           for a in subagents(path).values()
+                           if a["started_at"] and not a["stopped_at"] and a["started_at"] >= cut]
+                write_atomic(path.with_name(path.name + ".1"), path.read_bytes())
+                write_atomic(path, "".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
+                                           for r in carried))
         append_line(path, row)
     return row
 
@@ -1113,8 +1132,18 @@ def subagents(path=None):
     hit = _subagents.get(str(path))
     if hit and hit[0] == sig:
         return hit[1]
+    try:
+        raw = path.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        raw = []
+    except OSError:  # unreadable for now: the last good fold, uncached, so the next read tries again
+        return hit[1] if hit else {}
     out = {}
-    for r in read_lines(path):
+    for line in raw:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
         if (not isinstance(r, dict) or r.get("v") != 1 or r.get("event") not in ("start", "stop")
                 or not isinstance(r.get("agent"), str) or not isinstance(r.get("at"), str) or not parse(r["at"])):
             continue
@@ -1140,21 +1169,32 @@ def subagent_stale_s(cfg=None):
     return float(((cfg if cfg is not None else config()).get("board") or {}).get("subagent_stale_h", SUBAGENT_STALE_H)) * 3600
 
 
-def attach_subagents(sessions, ledger, now, stale_s):
+def attach_subagents(sessions, ledger, now, stale_s, known=None):
     """Give each session "subagents": [{agent, type, desc, started_at, stale}], newest first, for the agents with no
-    stop. An agent belongs to the session holding the terminal its hook ran in (handle); one whose terminal Orca no
-    longer lists is left out rather than guessed onto another session in the same folder."""
+    stop. An agent belongs to the session holding the terminal its hook ran in (handle), and stays with it once its
+    terminals are gone (known: agent id -> session id, kept between collects, updated here), so an offline session's
+    agent shows as stale rather than vanishing. One never matched is left out rather than guessed onto another session
+    in the same folder."""
     by_handle = {t.get("handle"): sid for sid, s in sessions.items() for t in s.get("terminals") or [] if t.get("handle")}
+    known = {} if known is None else known
     for s in sessions.values():
         s["subagents"] = []
+    open_ids = set()
     for a in sorted(ledger.values(), key=lambda a: a.get("started_at") or "", reverse=True):
-        if a.get("stopped_at") or not a.get("started_at") or not (sid := by_handle.get(a.get("handle"))):
+        if a.get("stopped_at") or not a.get("started_at"):
             continue
+        open_ids.add(a["agent"])
+        sid = by_handle.get(a.get("handle")) or known.get(a["agent"])
+        if sid not in sessions:
+            continue
+        known[a["agent"]] = sid
         s = sessions[sid]
         if len(s["subagents"]) < SUBAGENTS_SHOWN:
             s["subagents"].append({"agent": a["agent"], "type": a.get("type"), "desc": a.get("desc"),
                                    "started_at": a["started_at"],
                                    "stale": subagent_stale(a, s.get("phase"), now, stale_s)})
+    for aid in set(known) - open_ids:  # stopped, or rotated out with no start: forget the link
+        del known[aid]
 
 
 # ---------------------------------------------------------------- inbox classification
@@ -1648,7 +1688,8 @@ class Fleet:
                 parent_terms = {t.get("handle") for t in (sessions.get(s.get("parent")) or {}).get("terminals") or []}
                 s["report"] = report_of(s.get("comment"), s, self.fast.get("messages"), coordinators,
                                         [rid for rid, h in coordinators.items() if h and h in parent_terms])
-            attach_subagents(sessions, subagents(), self.now(), subagent_stale_s(cfg))
+            attach_subagents(sessions, subagents(), self.now(), subagent_stale_s(cfg),
+                             self.mem.setdefault("subagent_host", {}))
             # A session whose phase changed (a turn ended, a worker started) may just have merged, pushed or
             # answered a review: its PRs are probed now rather than when their tier comes round.
             phases = self.mem.setdefault("session_phase", {})

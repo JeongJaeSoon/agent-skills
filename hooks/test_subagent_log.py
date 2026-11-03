@@ -94,6 +94,46 @@ assert [(x["agent"], x["event"]) for x in kept] == [("a3", "start"), ("a7", "sta
 assert (STATE / "subagents.jsonl.1").stat().st_size > fleet.SUBAGENTS_ROTATE
 assert set(fleet.subagents(LOG)) == {"a3", "a7"}
 
+# A rotation that cannot finish (.1 cannot be written) leaves the whole log where it was.
+before = LOG.read_bytes()
+filled = before + ((filler + "\n") * (fleet.SUBAGENTS_ROTATE // len(filler) + 1)).encode()
+LOG.write_bytes(filled)
+(STATE / "subagents.jsonl.1").unlink()
+(STATE / "subagents.jsonl.1").mkdir()
+hook({**start, "agent_id": "a8"})
+assert LOG.read_bytes() == filled and set(fleet.subagents(LOG)) >= {"a3", "a7"}
+(STATE / "subagents.jsonl.1").rmdir()
+LOG.write_bytes(before)
+
+# A held lock costs the hook at most SUBAGENT_LOCK_S, then it drops its event and still exits 0 with no output.
+import fcntl, time  # noqa: E402
+with open(STATE / "subagents.jsonl.lock", "a") as held:
+    fcntl.flock(held, fcntl.LOCK_EX)
+    t0 = time.monotonic()
+    hook({**start, "agent_id": "a9"})
+    assert time.monotonic() - t0 < 4 and "a9" not in fleet.subagents(LOG)
+hook({**start, "agent_id": "a9"})
+assert "a9" in fleet.subagents(LOG)
+
+# A meta file that is not an object costs only the description.
+(parent.with_suffix("") / "subagents" / "agent-a10.meta.json").write_text("[1, 2]")
+hook({**start, "agent_id": "a10"})
+assert fleet.subagents(LOG)["a10"]["desc"] is None and fleet.subagents(LOG)["a10"]["started_at"]
+
+# A log unreadable for a moment gives the last good fold and is read again once readable.
+good = fleet.subagents(LOG)
+os.chmod(LOG, 0)
+try:
+    if not os.access(LOG, os.R_OK):  # root reads it anyway
+        assert fleet.subagents(LOG) == good
+        fleet._subagents.clear()  # nothing read yet: empty, and not kept for the unchanged file
+        assert fleet.subagents(LOG) == {}
+finally:
+    os.chmod(LOG, 0o600)
+assert fleet.subagents(LOG) == good
+fleet.append_line(LOG, {"v": 1, "event": "stop", "at": "2026-11-03T00:00:00Z", "agent": "a9"})
+assert fleet.subagents(LOG)["a9"]["stopped_at"] == "2026-11-03T00:00:00Z"
+
 # Registered for both events, after claim_check on SubagentStop.
 reg = json.loads((HERE / "hooks.json").read_text())["hooks"]
 cmd = lambda ev: [h["command"] for m in reg[ev] for h in m["hooks"]]  # noqa: E731

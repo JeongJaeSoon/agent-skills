@@ -326,7 +326,9 @@ A subagent is its session's work, so it is never written to the board: the plugi
  "type": "Explore", "handle": "<terminal handle>", "cwd": "<cwd>", "desc": "<the Agent call's description>"}
 ```
 
-`agent`, `type`, `claude_session` and `cwd` come from the hook's documented input fields (`agent_id`, `agent_type`, `session_id`, `cwd`). `desc` does not: it comes from the `agent-<id>.meta.json` Claude Code keeps beside the subagent's transcript, and is null when that file or its `description` is missing. A field the event lacks is null; an event with no usable `agent_id` writes nothing. `fleet.subagents()` is the only reader: it folds the lines per agent (a start sets `started_at` and clears `stopped_at`, a stop sets `stopped_at`) and skips any line that is not a well-formed version 1 row. Each collect puts the agents with no stop on the session holding their terminal, as `subagents: [{agent, type, desc, started_at, stale}]`; an agent whose terminal Orca no longer lists is left out rather than guessed onto another session in the same folder.
+`agent`, `type`, `claude_session` and `cwd` come from the hook's documented input fields (`agent_id`, `agent_type`, `session_id`, `cwd`). `desc` does not: it comes from the `agent-<id>.meta.json` Claude Code keeps beside the subagent's transcript, and is null when that file or its `description` is missing. A field the event lacks is null; an event with no usable `agent_id` writes nothing. `fleet.subagents()` is the only reader: it folds the lines per agent (a start sets `started_at` and clears `stopped_at`, a stop sets `stopped_at`) and skips any line that is not a well-formed version 1 row; a log it cannot read gives the last fold it read. Each collect puts the agents with no stop on the session holding their terminal, as `subagents: [{agent, type, desc, started_at, stale}]`. The collector remembers that session, so an agent stays on it, as stale, after its terminals close; the link is dropped once the agent stops. An agent never seen under a listed terminal is left out rather than guessed onto another session in the same folder.
+
+Writers take `subagents.jsonl.lock`. A hook that cannot get it within a second drops its event rather than wait. Past 1 MiB the log is copied to `.1`, then rewritten with only the starts of the last 7 days that have no stop; if either step fails, the log stays as it was.
 
 Hooks of one event run in parallel, so the logger cannot see whether `claim_check.py` blocked the same stop. It runs claim_check's own judge and writes no stop for a stop claim_check blocks, since the subagent goes on working. A stop another plugin blocks is still written. Whether resuming an agent fires a new `SubagentStart` is not verified; until one arrives, a resumed agent reads as ended. The hook prints nothing and exits 0 on any error, a failed write included, so it never holds up a subagent. It is loaded when a session starts: a session already running needs `/reload-plugins` or a restart first.
 
@@ -352,7 +354,7 @@ State lives outside every repository, in `$ORCH_FLEET_STATE` or `~/.local/state/
 | `jobs.json` | Each orch-dash job's last run (orch-dash jobs, above) |
 | `sends.jsonl`, `adoption.jsonl` | Send and prompt-answer attempts; adoption writes and undos |
 | `prompts/` | The latest permission request per terminal, from `hooks/permission.py`; dropped after a day or once answered |
-| `subagents.jsonl`, `.1`, `.lock` | Each subagent start and stop `hooks/subagent_log.py` observed (Subagents, above); past 1 MiB the file moves to `.1` and its open starts are copied over |
+| `subagents.jsonl`, `.1`, `.lock` | Each subagent start and stop `hooks/subagent_log.py` observed (Subagents, above); past 1 MiB the file is copied to `.1` and keeps only its open starts of the last 7 days |
 | `avatars/` | Reviewer avatars |
 
 The optional config is `$ORCH_FLEET_CONFIG` or `~/.config/agent-skills/dashboard/config.json`:

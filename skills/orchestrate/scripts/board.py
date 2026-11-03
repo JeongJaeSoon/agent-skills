@@ -629,7 +629,9 @@ def subagent_rows(sessions, every, rows, order, lead_row, now=None, stale_s=None
                          "why": stale and ("세션 꺼짐, 종료 기록 없음" if s.get("phase") == "offline"
                                            else "종료 기록 없음"),
                          "session": None, "pr": None, "reported_at": a.get("started_at"), "parent": parent,
-                         "repo": None if parent else s.get("gh_repo") or s.get("project") or "—", "program": None}
+                         # a row of its own takes its host row's section and program, so a program's report keeps it
+                         "repo": None if parent else (host or {}).get("repo") or s.get("gh_repo") or s.get("project") or "—",
+                         "program": None if parent else (host or {}).get("program")}
             order.append(rid)
 
 
@@ -861,7 +863,8 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         suffix = ""
         at = fleet.parse(r.get("reported_at"))
         limit = (lead or {}).get("stale_after_min") or limits["row_min"]
-        if status != "done" and at and (now - at).total_seconds() > limit * 60:
+        # A ❔ subagent's age is the evidence for its ❔, so it shows whatever row_min says.
+        if status != "done" and at and ((now - at).total_seconds() > limit * 60 or status == "check" and r.get("subagent")):
             suffix = f" · {ago((now - at).total_seconds())}"
             stale.append(r["id"])
             if not r["id"].startswith(FILLED):  # a fleet row's age is its session's quiet, not a record left behind

@@ -56,6 +56,18 @@ assert [a["stale"] for a in sessions["lead"]["subagents"]] == [False, True]
 sessions["lead"]["phase"] = "offline"
 fleet.attach_subagents(sessions, fleet.subagents(), now, 1e9)
 assert all(a["stale"] for a in sessions["lead"]["subagents"])
+# Once its terminals are gone (Orca still lists the worktree, offline) the agent stays with the session it was seen
+# under, as stale; once it stops, the link is forgotten.
+known = {}
+sessions["lead"]["phase"] = "working"
+fleet.attach_subagents(sessions, fleet.subagents(), now, 1e9, known)
+assert known == {"a1": "lead", "a2": "lead"}, known
+sessions["lead"].update(phase="offline", terminals=[])
+fleet.attach_subagents(sessions, fleet.subagents(), now, 1e9, known)
+assert [(a["agent"], a["stale"]) for a in sessions["lead"]["subagents"]] == [("a2", True), ("a1", True)]
+fleet.append_line(LOG, {"v": 1, "event": "stop", "at": ago(0.1), "agent": "a2"})
+fleet.attach_subagents(sessions, fleet.subagents(), now, 1e9, known)
+assert known == {"a1": "lead"} and [a["agent"] for a in sessions["lead"]["subagents"]] == ["a1"]
 assert fleet.subagent_stale_s({}) == fleet.SUBAGENT_STALE_H * 3600
 assert fleet.subagent_stale_s({"board": {"subagent_stale_h": 0.5}}) == 1800
 
@@ -114,11 +126,21 @@ write_state([sess("lead-x", "orchestration", "working", orca_parent="root", run=
              sess("worker-z", "task", "working", parent="lead-x", dispatch="ctx_z", dispatch_status="completed")])
 assert "보고서에 없는 세션 1 (worker-z)" in render()["headline_facts"]
 
-# The stale cut-off is the dashboard config's board.subagent_stale_h.
+# A top-level card's subagent stays in the report of the program the card's board row is in.
+import board  # noqa: E402
+write_state([sess("top-card", "standalone", "working", orca_parent="root", subagents=[agent("t1", "Check the docs", 0.1)])])
+board.set_row("ABC-2", title="top-card 문서", status="moving", next="작업 중", repo="acme/app", program="prog-a")
+scoped = render("--scope", "prog-a")["snapshot"]["rows"]
+assert "agent:t1" in scoped and "agent:r1" not in scoped, scoped
+board.drop("ABC-2")
+
+# The stale cut-off is the dashboard config's board.subagent_stale_h; a ❔ subagent shows its age even under row_min.
 (tmp / "config.json").write_text(json.dumps({"board": {"subagent_stale_h": 0.1}}))
 write_state([])
-snap = render()["snapshot"]["rows"]
+out = render()
+snap = out["snapshot"]["rows"]
 assert snap["agent:r1"]["status"] == "check" and snap["agent:r2"]["status"] == "check", snap
+assert "❔ Find unsent text — 확인 필요: 종료 기록 없음 · 12분 전" in out["text"], out["text"]
 (tmp / "config.json").write_text(json.dumps({"board": {"subagent_stale_h": 10}}))
 assert render()["snapshot"]["rows"]["agent:r2"]["status"] == "moving"
 # --no-fill leaves every derived row out, subagents too.
