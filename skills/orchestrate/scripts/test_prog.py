@@ -218,6 +218,8 @@ assert prog.landed_but_open(ev + later, wk, tasks, wts) == [("A-1", "ctx_a1", Fa
 blind = [{k: v for k, v in w.items() if k != "terminalState"} if w["dispatchId"] == "d1" else w for w in workers]
 assert prog.landed_but_open(ev, blind, tasks, wts) == [("A-1", "d1", None, "/w/1"), ("A-2", "d2", True, "/w/2")], \
     prog.landed_but_open(ev, blind, tasks, wts)
+empty = [dict(w, terminalState="") if w["dispatchId"] == "d1" else w for w in workers]
+assert prog.landed_but_open(ev, empty, tasks, wts)[0] == ("A-1", "d1", None, "/w/1"), "an empty terminalState is as unknown"
 # orch wait says what to do with each worker_done's card; it offers removal only for a finished card nobody uses.
 def co(payload, workers=workers):
     return prog.close_out([{"type": "worker_done", "payload": payload}], workers, wts + [{"id": "wx", "path": "/w/a b"}])
@@ -248,6 +250,15 @@ for outcome in ("succeeded", "failed"):
                                    "  orca orchestration worker-release --dispatch dl"], mine(outcome, "wx")
     assert not any("orca worktree rm" in l for l in mine(outcome, None)), mine(outcome, None)
 assert mine("succeeded", "w1")[-1] == "  orca worktree rm --worktree path:'/w/a b'"
+# Own worktree unreadable and the worker failed: the retry line still comes, and no rm line.
+unread = mine("failed", None)
+assert "--retry-of dl " in unread[0] and not any(l.strip().startswith("orca worktree rm") for l in unread), unread
+# landed_but_open leaves out the caller's own worktree: a `--worktree current` worker's card is the lead's.
+lead_ws = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "reclaimable", "resource": {"worktreeId": "LEAD"}}]
+lead_wt = [{"id": "LEAD", "path": "/w/lead"}]
+assert prog.landed_but_open(ev, lead_ws, tasks, lead_wt) == [("A-1", "d1", False, "/w/lead")], "unchecked: listed"
+assert prog.landed_but_open(ev, lead_ws, tasks, lead_wt, here="LEAD") == [], prog.landed_but_open(ev, lead_ws, tasks, lead_wt, here="LEAD")
+assert prog.landed_but_open(ev, lead_ws, tasks, lead_wt, here="other") == [("A-1", "d1", False, "/w/lead")]
 env = prog.os.environ
 _oj, _env = prog.orca_json, env.get("ORCA_TERMINAL_HANDLE")
 try:
@@ -551,13 +562,32 @@ assert "STALLED" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.get
 (_pdir / "dashboard" / "state.json").write_text(json.dumps({"generated_at": prog.dt.datetime.now(prog.dt.timezone.utc).isoformat(),
     "landed_open": [{"ticket": "T-8", "dispatch": "a8", "active": False, "path": "/w/8"},
                     {"ticket": "T-7", "dispatch": "a7", "active": True, "path": "/w/7"},
-                    {"ticket": "T-6", "dispatch": "a6", "active": None, "path": "/w/6"}]}))
+                    {"ticket": "T-6", "dispatch": "a6", "active": None, "path": "/w/6"},
+                    {"ticket": "T-5", "dispatch": "a5", "active": False, "path": "/w/lead"}]}))
+_wait_oj = prog.orca_json
+prog.orca_json = lambda *a: ({"terminal": {"worktreeId": "LEAD"}} if a[:2] == ("terminal", "show")
+                             else {"worktrees": [{"id": "LEAD", "path": "/w/lead"}]} if a[:2] == ("worktree", "list")
+                             else _wait_oj(*a))
+prog.os.environ["ORCA_TERMINAL_HANDLE"] = "term_lead"
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_wait(["s", "--rounds", "2"])
 assert "LANDED-BUT-OPEN T-8 (dispatch a8)" in out.getvalue() and "path:/w/8" in out.getvalue() \
     and "T-7" not in out.getvalue() and "EMPTY x2" in out.getvalue(), out.getvalue()
 assert "T-6" not in out.getvalue(), "a card whose worker state is unknown is not called released"
+assert "T-5" not in out.getvalue(), "this session's own worktree is never offered for removal"
+# Its id read but its path not listed: no card can be ruled out as its own, so no rm command.
+prog.orca_json = lambda *a: ({"terminal": {"worktreeId": "LEAD"}} if a[:2] == ("terminal", "show")
+                             else {"worktrees": []} if a[:2] == ("worktree", "list") else _wait_oj(*a))
+seen_file = _pdir / "leftovers-seen.json"
+seen_text = seen_file.read_text()
+seen_file.unlink()
+nopath = io.StringIO()
+with contextlib.redirect_stdout(nopath):
+    prog.cmd_wait(["s", "--rounds", "1"])
+assert "LANDED-BUT-OPEN T-8" in nopath.getvalue() and "worktree rm" not in nopath.getvalue(), nopath.getvalue()
+seen_file.write_text(seen_text)
+prog.orca_json = _wait_oj
 assert out.getvalue().count("LANDED-BUT-OPEN") == 1, out.getvalue()
 # wait keeps the collector on the current code: STALLED lines are only as new as its server.
 saved_ensure, prog.ensure_dash = prog.ensure_dash, lambda: "dashboard started: http://127.0.0.1:4780/"

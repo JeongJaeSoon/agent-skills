@@ -508,9 +508,11 @@ def ticket_of(task):
 OPEN_STATES = {"triage", "backlog", "unstarted", "started"}
 
 
-def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
+def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None, here="", unjudged=()):
     """Cards left behind: (ticket, dispatch, terminal still active, path) for each Orca worktree whose every
-    dispatch worked a ticket that has landed. A released worker's card stays until `orca worktree rm`.
+    dispatch worked a ticket that has landed. A released worker's card stays until `orca worktree rm`. here: the
+    caller's own worktree id (own_worktree_id), left out: a `--worktree current` worker reports it as its card.
+    unjudged: dispatches whose rows the caller could not judge (row_gaps); their cards come back with active None.
 
     A ticket can take several PRs, a backfilled landing among them: while the tracker says it is open,
     a landing is not its live worker's end. Without the tracker, a landing is, except for a card spawned after it."""
@@ -532,7 +534,7 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
     cards = {}
     for w in workers:
         wt = (w.get("resource") or {}).get("worktreeId")
-        if wt in present:
+        if wt in present and not (here and wt == here):
             cards.setdefault(wt, []).append(w)
     out = []
     for wt, ws in cards.items():
@@ -540,7 +542,7 @@ def landed_but_open(events, workers, tasks, worktrees, issues_by_id=None):
         later = any(spawned.get(w.get("dispatchId"), "") > last_land.get(ticket_by_task.get(w.get("taskId")), "~")
                     for w in ws)
         if tickets <= landed and not later:
-            if any(w.get("terminalState") is None or not w.get("dispatchId") for w in ws):
+            if any(not w.get("terminalState") or not w.get("dispatchId") or w["dispatchId"] in unjudged for w in ws):
                 # A row without terminalState is not known to be released: active None, so no rm is offered.
                 out.append((sorted(tickets)[0], next((w["dispatchId"] for w in reversed(ws) if w.get("dispatchId")), "?"),
                             None, present[wt]))
@@ -1286,8 +1288,20 @@ def new_leftovers(pdir, renotify=dt.timedelta(minutes=30)):
         state.write_text(json.dumps({k: v for k, v in keep.items() if v}))
     except OSError:
         pass
+    if not fresh:
+        return []
+    # The collector runs in its own process and cannot leave out this session's worktree; do it here.
+    here = own_worktree_id()
+    try:
+        mine = {w.get("path") for w in orca_json("worktree", "list").get("worktrees", []) if here and w.get("id") == here}
+    except (SystemExit, Exception):
+        mine, here = set(), None
+    if here and not mine:  # its id is known but its path is not: any card may be this session's own
+        here = None
     return [f"  LANDED-BUT-OPEN {c.get('ticket') or '?'} (dispatch {c['dispatch']}): released, but its card is still"
-            f" there: `orca worktree rm --worktree path:{c['path']}`" for c in fresh]
+            + (f" there: `orca worktree rm --worktree path:{c['path']}`" if here is not None else
+               f" there: remove {c['path']} only once it is not this session's own worktree (`orca terminal show` could not be read)")
+            for c in fresh if c.get("path") not in mine]
 
 
 def ensure_dash():
@@ -1351,14 +1365,15 @@ def inbox_wait(p):
 
 
 def row_gaps(w, named, task_ids):
-    """The fields a status judgment needs that this worker row lacks; named: the dispatches the ledger ties to a
-    ticket without the row's taskId; task_ids: the Tasks status read, through which a taskId names a ticket."""
+    """The fields a status judgment needs that this worker row lacks; named: dispatch -> ticket, from the ledger or the
+    row's Task; task_ids: the Tasks status read (a listed Task that names no ticket holds no program PR)."""
     gaps = [k for k in ("dispatchId", "terminalState") if not w.get(k)]
     if w.get("terminalState") == "active" and w.get("dispatchId") not in named and w.get("taskId") not in task_ids:
         # An active worker whose ticket cannot be found may hold any PR.
         gaps.append("taskId" if not w.get("taskId") else "taskId in task-list")
     if w.get("terminalState") == "retained":
-        # "resource": null is Orca saying the worker holds none, so nothing retains it for a user; an absent key is a gap.
+        # Read "resource": null as no resource, so not retained for a user (seen on settled rows with --full); this only
+        # gates the self-check ask, never release, rm or LAND. An absent key is a gap.
         res = w.get("resource")
         reason = ("resource" in w and res is None) or (isinstance(res, dict) and res.get("retainedReason"))
         gaps += [k for k, v in (("workerState", w.get("workerState")), ("resource.retainedReason", reason),
@@ -1389,7 +1404,8 @@ def taken_over_lines(workers, state, now=None, unknown=()):
         out += [f"  TAKEN OVER {d} ({w['workerState']}): worker-release refuses it; ask it to check for work left and close itself",
                 f"    orca terminal send --terminal {worker_terminal(w)} --text {shlex.quote(SELF_CHECK)} --enter"]
     live = {w["dispatchId"] for w in filter(taken_over, workers)}
-    keep = {d: t for d, t in asked.items() if d in live or d in unknown}
+    # None in unknown: a row without dispatchId may be any of them, so every ask is kept.
+    keep = {d: t for d, t in asked.items() if d in live or d in unknown or None in unknown}
     if keep == before:
         return out
     try:
@@ -1471,19 +1487,22 @@ def cmd_status(argv):
                      f"gh pr close {e['pr']} --repo {cfg['repo']} --comment '<what replaced it>', "
                      f"or `orch record {p.slug} admitted --pr {e['pr']}` to land it")
     worktrees = orca_json("worktree", "list").get("worktrees", [])
-    leftover = landed_but_open(events, workers, tasks, worktrees, by_id)
+    named = {**dispatch_tickets(workers, tasks), **{d: e["ticket"] for e in events if e["ev"] == "spawned" and e.get("ticket")
+                                                    for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or ""))}}
+    task_ids = {t.get("id") for t in tasks} - {None}
+    gaps = [(w, g) for w in workers if (g := row_gaps(w, named, task_ids))]
+    judged = [w for w in workers if not row_gaps(w, named, task_ids)]
+    here = own_worktree_id()
+    leftover = landed_but_open(events, workers, tasks, worktrees, by_id, here=here or "",
+                               unjudged={w.get("dispatchId") for w, _ in gaps} - {None, ""})
     for tk, dispatch, active, path in leftover:
-        rm = f"`orca worktree rm --worktree path:{path}`"
+        rm = (f"`orca worktree rm --worktree path:{path}`" if here is not None else
+              f"remove {path} only once it is not this session's own worktree (`orca terminal show` could not be read)")
         lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
                      + ("worker state unknown (row below); release and remove nothing on this line" if active is None
                         else f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
                         else f"released, but its card is still there: {rm}"))
-    named = {d: e.get("ticket") for e in events if e["ev"] == "spawned"
-             for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or ""))}
-    task_ids = {t.get("id") for t in tasks} - {None}
-    gaps = [(w, g) for w in workers if (g := row_gaps(w, named, task_ids))]
-    judged = [w for w in workers if not row_gaps(w, named, task_ids)]
-    lines += taken_over_lines(judged, p.dir / "status-self-check.json", unknown={w.get("dispatchId") for w, _ in gaps})
+    lines += taken_over_lines(judged, p.dir / "status-self-check.json", unknown={w.get("dispatchId") or None for w, _ in gaps})
     # A row status cannot judge may hold any PR its ticket names, or any PR at all when its ticket is unknown.
     unknown = {named.get(w.get("dispatchId")) or "*" for w, g in gaps if HOLDS_FIELDS & set(g)}
     lines += [f"  {x}" for x in review_lines(p, workers, tasks, unknown)]
@@ -2264,13 +2283,15 @@ def close_out(msgs, workers, worktrees, here=""):
         elif here and wt == here:
             out += [f"CLOSE OUT {d}: release it and close its terminal; its card is this session's own worktree"
                     " (`--worktree current`), so it stays", release]
-        elif here is None:
-            out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
-                    f" so remove its card ({shlex.quote(p)}) by hand only once it is not this session's", release]
         elif payload.get("outcome") != "succeeded":
             out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
                     f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])"
-                    " or remove the card", release]
+                    + (" or remove the card" if here is not None
+                       else "; this session's own worktree could not be read, so remove the card only once it is not this session's"),
+                    release]
+        elif here is None:
+            out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
+                    f" so remove its card ({shlex.quote(p)}) by hand only once it is not this session's", release]
         else:
             out += [f"CLOSE OUT {d}: release it, close its terminals and remove its card (checks and --run-hooks in end-session §4),"
                     " unless its next task starts there", release, f"  orca worktree rm --worktree path:{shlex.quote(p)}"]
@@ -2609,7 +2630,10 @@ def review_lines(p, workers=None, tasks=None, unknown=frozenset()):
         spawned = {d: e["ticket"] for e in with_orca_spawns(events, workers, tasks)
                    if e["ev"] == "spawned" and e.get("ticket")
                    for d in re.findall(r"ctx_[0-9a-f]+", str(e.get("note") or ""))}
-        active = {spawned.get(w.get("dispatchId")) for w in workers if w.get("terminalState") == "active"}
+        # A Task without created_at gets no spawned line from with_orca_spawns; its ticket still names the holder.
+        by_task = dispatch_tickets(workers, tasks)
+        active = {spawned.get(w.get("dispatchId")) or by_task.get(w.get("dispatchId"))
+                  for w in workers if w.get("terminalState") == "active"}
         repo = p.cfg["repo"]
         fields = "state,reviewDecision,mergeStateStatus,isDraft,labels,statusCheckRollup,headRefOid"
         lines = review_sweep(events, lambda n: gh_json("pr", "view", str(n), "--repo", repo, "--json", fields),

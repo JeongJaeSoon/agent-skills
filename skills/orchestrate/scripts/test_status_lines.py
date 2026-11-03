@@ -145,6 +145,20 @@ prog.run_tasks = lambda run: [{"id": "unlisted_task", "display_name": "QA lead"}
 lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b), unlisted])
 assert any(l.startswith("  LAND #11") for l in lines) and not any("WARN" in l for l in lines), lines
 prog.run_tasks = lambda run: []
+# A listed Task naming a ticket ties its worker to that PR even without created_at: that PR waits, the other lands.
+prog.run_tasks = lambda run: [{"id": "tc", "display_name": "ABC-1 implementation"}]
+c3 = {"dispatchId": "ctx_c3", "taskId": "tc", "terminalState": "active", "workerState": "running"}
+lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b), c3])
+assert not any(l.startswith("  LAND #11") for l in lines) and any(l.startswith("  LAND #12") for l in lines), lines
+prog.run_tasks = lambda run: []
+# A ledger spawn naming no ticket (a role) does not tie its worker to a ticket: with its Task unlisted, nothing lands.
+LEDGER.append({"ts": "2026-11-01T01:30:00+00:00", "ev": "spawned", "role": "reviewer", "note": "ctx_c4"})
+program("run-lead")
+c4 = {"dispatchId": "ctx_c4", "taskId": "tr", "terminalState": "active", "workerState": "running"}
+lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b), c4])
+assert not any(l.startswith("  LAND #") for l in lines), lines
+LEDGER.pop()
+program("run-lead")
 # A row without dispatchId is printed with its WARN, not a crash.
 nameless = {"terminalState": "active", "taskId": "ta", "projection": {"outcome": "in_progress"}}
 lines, code = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b), nameless])
@@ -157,6 +171,12 @@ status("flaky", workers=full_t)
 status("flaky", workers=lambda run: [{k: v for k, v in taken.items() if k != "workerState"}, dict(done_a), dict(done_b)])
 lines, _ = status("flaky", workers=full_t)
 assert any("self-check asked at" in l for l in lines) and not any("orca terminal send" in l for l in lines), lines
+status("flaky", workers=lambda run: [{k: v for k, v in taken.items() if k != "dispatchId"}, dict(done_a), dict(done_b)])
+lines, _ = status("flaky", workers=full_t)
+assert not any("orca terminal send" in l for l in lines), "a row without dispatchId keeps every earlier ask"
+status("flaky", workers=lambda run: [dict(taken, dispatchId=""), dict(done_a), dict(done_b)])
+lines, _ = status("flaky", workers=full_t)
+assert not any("orca terminal send" in l for l in lines), "an empty dispatchId is as missing"
 # A retained row without its reason is not called taken over; it holds no PR, so both PRs still land.
 vague = {k: v for k, v in taken.items() if k != "resource"}
 lines, _ = status("run-lead", workers=lambda run: [vague, dict(done_a), dict(done_b)])
@@ -172,11 +192,28 @@ assert not any("TAKEN OVER" in l or "WARN" in l for l in lines), lines
 LEDGER.append({"ts": "2026-11-01T03:00:00+00:00", "ev": "landed", "pr": 11, "ticket": "ABC-1", "sha": "m11"})
 program("run-lead")
 prog.run_tasks = lambda run: [{"id": "ta", "display_name": "ABC-1 a"}, {"id": "tb", "display_name": "ABC-2 b"}]
-prog.orca_json = lambda *a: ({"worktrees": [{"id": "wa", "path": "/work/card-a"}]} if a[:2] == ("worktree", "list") else {})
+HERE = {"terminal": {"worktreeId": "wlead"}}
+prog.orca_json = lambda *a: ({"worktrees": [{"id": "wa", "path": "/work/card-a"}]} if a[:2] == ("worktree", "list")
+                             else HERE if a[:2] == ("terminal", "show") else {})
 lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b)])
 assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): released, but its card is still there: `orca worktree rm --worktree path:/work/card-a`" in lines, lines
+# The card is this session's own worktree (a `--worktree current` worker): no line at all.
+HERE = {"terminal": {"worktreeId": "wa"}}
+lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b)])
+assert not any("LANDED-BUT-OPEN" in l for l in lines), lines
+# Its own worktree unreadable: the card is named, the rm command is not.
+HERE = {}
+lines, _ = status("run-lead", workers=lambda run: [dict(done_a), dict(done_b)])
+assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): released, but its card is still there: remove /work/card-a only once it" \
+       " is not this session's own worktree (`orca terminal show` could not be read)" in lines, lines
+HERE = {"terminal": {"worktreeId": "wlead"}}
 lines, _ = status("run-lead", workers=lambda run: [blind_a, dict(done_b)])
 assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): worker state unknown (row below); release and remove nothing on this line" in lines, lines
 assert not any("worktree rm" in l for l in lines), lines
 assert "  WARN status: worker row not judged (missing terminalState)" in lines, lines
+# A retained row missing what TAKEN OVER needs is not judged either: its card is not called released.
+half = {"dispatchId": "ctx_a1", "taskId": "ta", "terminalState": "retained", "workerState": "succeeded", "resource": {"worktreeId": "wa"}}
+lines, _ = status("run-lead", workers=lambda run: [half, dict(done_b)])
+assert "  LANDED-BUT-OPEN ABC-1 (dispatch ctx_a1): worker state unknown (row below); release and remove nothing on this line" in lines, lines
+assert not any("worktree rm" in l or "close out" in l for l in lines), lines
 print("test_status_lines: ok")
