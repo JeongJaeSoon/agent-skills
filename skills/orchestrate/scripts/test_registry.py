@@ -145,6 +145,10 @@ assert len(v) == 3, v
 elsewhere = [registry.Write("board", "change", 1, ("elsewhere/board.json",))]
 v = registry.check(writes=real + elsewhere)
 assert [(x["kind"], x["key"]) for x in v] == [("unregistered", "elsewhere/board.json")], v
+# `path.with_name(path.name + ".lock")` names a file of its own: dropping its store is caught.
+for gone, name in (("subagentslock", "dashboard/subagents.jsonl.lock"), ("subagentsold", "dashboard/subagents.jsonl.1")):
+    v = registry.check(stores=[s for s in registry.STORES if s.id != gone], writes=real)
+    assert ("unregistered", name) in [(x["kind"], x["key"]) for x in v], (gone, v)
 # Registered, the same writes pass.
 fixed = [dataclasses.replace(s, writers=s.writers + ("fx_rogue:sneak",)) if s.id == "tidy" else s for s in registry.STORES]
 fixed.append(Store("fxnotes", "D/mystery.json", {"fx.note": CANONICAL}, ("fx_rogue:keep_notes",), ("nobody",)))

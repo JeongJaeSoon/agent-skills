@@ -58,6 +58,10 @@ assert not cons["page"]["starved"] and not cons["brief"]["starved"], cons["brief
 assert {c["fact"] for c in rep["conflicts"]} == set(flow.registry.DUAL_CANONICAL), rep["conflicts"]
 rule = cons["brief"]["rule"]
 assert "decisions.json" in rule and "tidy.jsonl" in rule and "REPORT" in rule, rule
+assert "subagents.jsonl" in rule and "board.subagent_stale_h" in rule, rule
+# Every file the rule names is a store the brief reads.
+brief_in = {s.path.rsplit("/", 1)[-1] for s in flow.registry.STORES if "brief" in s.readers}
+assert {"state.json", "prs.json", "board.json", "decisions.json", "tidy.jsonl", "subagents.jsonl"} <= brief_in, brief_in
 
 # An unreadable directory under a glob is an error, not a store never written.
 (tmp / "state" / "roles").chmod(0)
@@ -66,6 +70,12 @@ try:
 finally:
     (tmp / "state" / "roles").chmod(0o755)
 assert roles["state"] == "error" and "roles" in roles["error"], roles
+(tmp / "programs" / "a").chmod(0)  # a glob ending in a fixed name (`*/ledger.jsonl`)
+try:
+    led = {s["id"]: s for s in flow.flow()["stores"]}["progledger"]
+finally:
+    (tmp / "programs" / "a").chmod(0o755)
+assert led["state"] == "error", led
 
 # The programs home sharing the shared-state directory: the shared stores' directories are still walked.
 os.environ["PROGRAMS_HOME"] = str(tmp / "state")

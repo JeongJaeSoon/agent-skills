@@ -32,7 +32,9 @@ def programs():
     return pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 
 
-BRIEF_RULE = ("rows = sessions in state.json (orchestrator → lead → card); a card's progress is its own report "
+BRIEF_RULE = ("rows = sessions in state.json (orchestrator → lead → card), and under each the subagents with a start "
+              "and no stop in subagents.jsonl (❔ when the start is older than board.subagent_stale_h or its session "
+              "is offline); a card's progress is its own report "
               "(the file its brief's REPORT line names, else its newest milestone message to its Run) and its PR the "
               "current-PR rule over prs.json; board.json adds rows' phase and progress, leads Orca cannot see, "
               "to-dos, held items and doing lines; decisions come from decisions.json, closures from tidy.jsonl, "
@@ -119,7 +121,16 @@ def _glob(p):
             except OSError as e:
                 bad.append(f"{shown(f)}: {e.strerror or e}")
         found = nxt
-    return sorted(f for f in found if os.path.lexists(f)), bad
+    out = []
+    for f in found:  # a literal tail (`*/ledger.jsonl`) under an unreadable directory is an error too
+        try:
+            os.lstat(f)
+            out.append(f)
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        except OSError as e:
+            bad.append(f"{shown(f)}: {e.strerror or e}")
+    return sorted(out), bad
 
 
 def stat_node(p, stale_s, now):

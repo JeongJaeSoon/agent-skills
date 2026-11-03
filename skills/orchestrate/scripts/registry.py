@@ -576,6 +576,10 @@ class _Scan:
             if not left:
                 return right
             return tuple(dict.fromkeys(x if not isinstance(x, str) else _tail(f"{lf}/{x}") for x in right for lf in left))
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):  # path.name + ".lock"
+            left = [x for x in r(expr.left) if isinstance(x, str)]
+            right = [x for x in r(expr.right) if isinstance(x, str)]
+            return tuple(dict.fromkeys(_tail(a + b) for a in left for b in right))
         if isinstance(expr, ast.Name):
             local = self._local(fn, expr.id, expr.lineno)
             got = r(local) if local is not None else ()
@@ -587,6 +591,8 @@ class _Scan:
                 return self.resolve(mod, None, mod.consts[expr.id], seen)
             return ()
         if isinstance(expr, ast.Attribute):
+            if expr.attr == "name":  # a Path's file name
+                return tuple(dict.fromkeys(x.rsplit("/", 1)[-1] for x in r(expr.value) if isinstance(x, str)))
             if isinstance(expr.value, ast.Name) and expr.value.id == "self" and expr.attr in mod.attrs:
                 return self.resolve(mod, None, mod.attrs[expr.attr], seen)
             if isinstance(expr.value, ast.Name) and expr.value.id in self.mods:
