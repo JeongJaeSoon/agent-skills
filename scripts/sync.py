@@ -5,7 +5,8 @@ Usage:
   skills-sync sync [--no-broadcast]      fetch, fast-forward or push, then broadcast a needed reload
   skills-sync broadcast [--skills|--plugins] [--dry-run] [--terminal <handle>]
                                          send the pending (or the given) reload to idle Claude sessions,
-                                         or to one of them
+                                         or to one of them; first /restart (or /reload-plugins) each idle one
+                                         whose screen shows it runs on what changed under it, once
   skills-sync nudge <terminal> <one line>
                                          type one line into a session, only if it is idle at an empty prompt
   skills-sync close-setup <worktree path>
@@ -197,7 +198,8 @@ def sync(broadcast_after=True):
         kind = reload_kind(paths)
         if kind:
             queue_reload(kind)
-        if broadcast_after and (STATE / "reload-pending.json").exists():
+        waiting = any("waiting" in v for v in read_json(STATE / "restarts.json", {}).values())
+        if broadcast_after and ((STATE / "reload-pending.json").exists() or waiting):
             broadcast_locked(None)
     return 0 if ok else 1
 
@@ -214,6 +216,12 @@ DIALOG = ("Do you want to proceed?", "Esc to cancel", "Tab to amend", "Enter to 
 CHOICE_CURSOR = re.compile(r"^❯ \d+\.")
 PLACEHOLDER = re.compile(r'^Try ".*"$')
 ORDER = [None, "skills", "plugins"]  # a plugin reload also reloads skills
+UNCONFIRMED = "sent, but the screen does not show it was taken"
+# Claude Code's own wording, matched loosely; a screen with neither is not judged (stale_signal).
+RESTART_NOTICE = re.compile(r"(?<![\w/])/restart\b.*\bto apply\b", re.I)
+HOOK_ERROR = re.compile(r"\bhook (?:error|returned (?:a )?blocking error)\b|\bcan't open file\b.*/hooks/", re.I)
+# The notice names /restart; a hook error alone names no command, and /reload-plugins re-reads hooks.json.
+STALE_COMMAND = {"restart": "/restart", "hook": RELOAD["plugins"]}
 
 
 def norm(lines):
@@ -258,6 +266,33 @@ def classify(lines, title, draft=""):
     if text and not PLACEHOLDER.match(text):
         return "the human is typing"
     return None
+
+
+def stale_signal(lines):
+    """(kind, line) when a session's screen shows it runs on what changed under it, else None.
+
+    "restart": Claude Code says an installed update waits on /restart, anywhere on the screen. "hook": a hook failed
+    in the last turn shown (below the last `❯ <prompt>` above the box), as one that runs a file an update removed
+    does on every tool call. Only that wording counts: a screen without it is not judged."""
+    lines = norm(lines or [])
+    for l in lines:
+        if RESTART_NOTICE.search(l):
+            return "restart", l.strip()[:160]
+    box = prompt_box(lines)
+    body = lines[:box[0]] if box else lines
+    start = max((i for i, l in enumerate(body) if l.strip().startswith("❯ ")), default=-1)
+    for l in body[start + 1:]:
+        if HOOK_ERROR.search(l):
+            return "hook", l.strip()[:160]
+    return None
+
+
+def stale_cleared(before, after, text):
+    """After a /restart or /reload-plugins: the screen changed and either the signal is gone or the command was
+    taken as the last message."""
+    i, inside = last_message(after)
+    taken = i is not None and norm(after)[i].strip() == f"❯ {text}" and inside != text
+    return after != before and (taken or stale_signal(after) is None)
 
 
 def last_message(lines):
@@ -332,7 +367,7 @@ def send_to(handle, text, confirmed):
     time.sleep(CONFIRM_S)
     after, _ = screen(handle)
     if not confirmed(second, after, text):
-        return "sent, but the screen does not show it was taken"
+        return UNCONFIRMED
     return None
 
 
@@ -436,6 +471,54 @@ def opened_after(since, terms):
             and created[t.get("worktreeId")] > cutoff}
 
 
+def restart_stale(terms, dry_run=False, keep_others=False):
+    """Type STALE_COMMAND into each idle session whose screen shows stale_signal, once per session while its signal
+    lasts. A busy one waits: it is written to restarts.json as waiting, and the next sync runs the broadcast again.
+    An entry goes once its screen no longer shows the signal, so a later one is new; an unreadable screen keeps it.
+    keep_others leaves the entries of terminals not in `terms` as they are. Returns the handles typed into (in a dry
+    run, those it would type into)."""
+    path = STATE / "restarts.json"
+    seen = read_json(path, {})
+    out = {h: v for h, v in seen.items() if h not in terms} if keep_others else {}
+    typed = set()
+    for h in terms:
+        old = seen.get(h) or {}
+        try:
+            lines, reason = screen(h)
+        except Stop as e:
+            out.update({h: old} if old else {})
+            print(f"{h}  stale check not read: {e}")
+            continue
+        sig = stale_signal(lines)
+        if not sig:
+            continue
+        kind, line = sig
+        cmd = STALE_COMMAND[kind]
+        if old.get("sent"):
+            out[h] = old
+            print(f"{h}  {cmd} was sent at {old['sent']}; not again: {line[:60]}")
+            continue
+        if dry_run:
+            print(f"{h}  {reason and 'waits: ' + reason or 'would send ' + cmd}: {line[:60]}")
+            typed |= set() if reason else {h}
+            continue
+        try:
+            reason = reason or send_to(h, cmd, stale_cleared)
+        except Stop as e:
+            reason = str(e)
+        if reason and reason != UNCONFIRMED:
+            out[h] = {"waiting": reason, "kind": kind, "line": line}
+            print(f"{h}  waits before {cmd}: {reason}")
+            continue
+        out[h] = {"sent": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "command": cmd, "kind": kind, "line": line,
+                  **({"unconfirmed": True} if reason else {})}
+        typed.add(h)
+        print(f"{h}  {reason or 'sent ' + cmd}: {line[:60]}")
+    if not dry_run and (out or path.exists()):
+        write_json(path, out)
+    return typed
+
+
 def broadcast_locked(kind, dry_run=False, only=None):
     path = STATE / "reload-pending.json"
     pending = read_json(path, {})
@@ -446,23 +529,25 @@ def broadcast_locked(kind, dry_run=False, only=None):
         pending = dict(pending, done=[], failed={}, head=head, since=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     queued = pending.get("kind")
     kind = max(kind, queued if queued in ORDER else "plugins", key=ORDER.index)  # unreadable: the safe superset
-    if not kind:
-        print("nothing to reload")
-        return 0
     try:
         listed = [t for t in orca("terminal", "list")["terminals"]
                   if t.get("agentIdentity") == "claude" and t.get("connected") and t.get("writable")]
         terms = [t["handle"] for t in listed]
     except (Stop, KeyError, TypeError) as e:
-        print(f"cannot list Orca terminals, reload stays pending: {e}")
+        print(f"cannot list Orca terminals{', reload stays pending' if kind else ''}: {e}")
         return 1
-    newer = opened_after(pending.get("since"), listed)
     if only:
         if only not in terms:
             print(f"{only}  not a connected, writable Claude terminal")
             return 1
         terms = [only]
-    done, failed = set(pending.get("done", [])), {}
+    # Both commands load the plugin afresh, so a session typed into here needs no reload after it.
+    restarted = restart_stale(terms, dry_run, keep_others=bool(only))
+    if not kind:
+        print("nothing to reload")
+        return 0
+    newer = opened_after(pending.get("since"), listed)
+    done, failed = set(pending.get("done", [])) | restarted, {}
     for h in terms:
         if h in done:
             continue

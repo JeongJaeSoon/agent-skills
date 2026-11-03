@@ -232,6 +232,8 @@ STORES = [
     Store("synclock", "S/sync.lock", {"sync.result": LOCK}, ("sync:locked",)),
     Store("reload", "S/reload-pending.json", {"sync.reload_pending": CANONICAL},
           ("sync:queue_reload", "sync:broadcast_locked"), ("fleet",), rule="reloads not yet sent, per terminal"),
+    Store("restarts", "S/restarts.json", {"sync.stale_restart": CANONICAL}, ("sync:restart_stale",), ("sync",),
+          rule="per terminal: the /restart or /reload-plugins typed once for a stale screen, or why it waits"),
     Store("synclog", "S/sync.log*", {"sync.output": CANONICAL}, ("ext:launchd", "reap:reap_state_file"), ("nobody",),
           rule="launchd stdout; the janitor rotates it"),
     Store("refusals", "S/refusals.jsonl", {"refusal.act": CANONICAL},

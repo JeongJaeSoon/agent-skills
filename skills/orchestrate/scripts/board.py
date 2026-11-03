@@ -517,15 +517,28 @@ def card_title(s):
 # A session's phase (fleet.py phase_of) read as a board status and next step.
 PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료"), "waiting": ("owner", "확인 대기"),
              "open": ("held", "에이전트 없음"), "offline": ("held", "세션 꺼짐")}
+PATROL_CHECK_S = 3600  # patrol rounds every 30 min; a `check` older than two of them says nothing of now
 
 
-def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None):
+def patrol_checks(now):
+    """Card path -> why, for the cards the last patrol round found stalled on screen or in a repeat (patrol.py H, R:
+    patrol-verdicts.json `check`); {} when that round is over PATROL_CHECK_S old or unreadable."""
+    v = fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json", {}) or {}
+    t, check = v.get("t"), v.get("check")
+    if not isinstance(t, (int, float)) or not isinstance(check, dict) or now.timestamp() - t > PATROL_CHECK_S:
+        return {}
+    return {k: str(w) for k, w in check.items() if k}
+
+
+def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, checks=None):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the orchestrator dispatched
     itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
     current PR (fleet.current_pr; details: prs.json's); a card whose PR a board row already has is left to that row.
     Then each session's started subagents (subagent_rows). Returns (rows, order); reported_at is the session's last
-    activity, so a quiet one shows its age like a stale board row."""
+    activity, so a quiet one shows its age like a stale board row. checks (patrol_checks) turns a moving row of a card
+    patrol found stalled into ❔ with patrol's reason, ahead of the card's own last milestone."""
+    checks = checks or {}
     state = state or {}
     sessions = state.get("sessions") or []
     held = {l.get("handle"): name for name, l in leads.items()}
@@ -548,9 +561,11 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None):
         rep = s.get("report") or {}
         if rep.get("next") and s.get("phase") != "offline":
             nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
+        why = checks.get(s.get("path")) if status == "moving" else None
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else card_title(s)
-        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": status, "next": one_line(nxt),
+        rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": "check" if why else status,
+                     "next": one_line(nxt), **({"why": one_line(why)} if why else {}),
                      "session": s.get("id"),
                      # a lead's digest links its cards' PRs, which are the cards' rows
                      "pr": pr_of.get(s.get("id")) if kind != "lead"
@@ -766,7 +781,7 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
             r["pr"] = fleet.current_pr(card, by_session, prs, extra=[r["pr"]] if r.get("pr") else ())
     if fill:
         extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs, now,
-                                        float(limits["subagent_stale_h"]) * 3600)
+                                        float(limits["subagent_stale_h"]) * 3600, patrol_checks(now))
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 

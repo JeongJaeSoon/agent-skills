@@ -28,6 +28,13 @@ RELOAD_DONE = [" ▝▝   ▝▝   ~/w", "❯ /reload-plugins",
                "❯ /reload-skills", "  ⎿  Reloaded skills: 91 skills available (no changes)", RULE, "❯", RULE,
                "  ~/w\xa0⎇\xa0main\xa0|\xa0Haiku\xa04.5", "  ⏸ manual mode on · ← for agents"]
 
+# A session whose hooks.json names a script an update removed: every tool call fails on the hook.
+HOOK_BLOCKED = ["❯ run the tests", "⏺ Bash(make test)",
+                "  ⎿  PreToolUse:Bash hook error: python3: can't open file '/w/plugin/hooks/gone.py': [Errno 2] No such file",
+                "⏺ Every tool call is blocked by a hook error, so I stop here.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+RESTART_NOTE = ["⏺ Goal achieved.", RULE, "❯", RULE, "  ~/w ⎇ main", "  ✓ Update installed · /restart to apply"]
+OLD_HOOK_ERROR = ["❯ first", "  ⎿  PreToolUse:Bash hook error: x", "❯ second", "⏺ done", RULE, "❯", RULE]
+
 FAKE_ORCA = r'''#!/usr/bin/env python3
 import json, os, sys
 path = os.environ["FAKE_ORCA_STATE"]
@@ -290,8 +297,85 @@ def test_broadcast():
     shutil.rmtree(tmp)
 
 
+def test_stale_signal():
+    check("a hook error in the last turn is a stale signal",
+          (sync.stale_signal(HOOK_BLOCKED) or ("",))[0] == "hook", sync.stale_signal(HOOK_BLOCKED))
+    check("the update notice is a stale signal", (sync.stale_signal(RESTART_NOTE) or ("",))[0] == "restart")
+    check("a hook error before the last prompt is not", sync.stale_signal(OLD_HOOK_ERROR) is None)
+    check("a screen without the wording is not judged",
+          all(sync.stale_signal(s) is None for s in (IDLE, BUSY, FRESH, RELOAD_DONE, PRESS_ENTER, [], None)))
+    check("a restart notice does not make the session busy", sync.classify(RESTART_NOTE, "✳ a") is None)
+
+
+def test_restart():
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+
+    def term(title, *screens):
+        return {"agentIdentity": "claude", "connected": True, "writable": True, "title": title, "screens": list(screens)}
+    busy_note = BUSY[:-2] + RESTART_NOTE[1:]
+    terms = {"hooked": term("✳ a", HOOK_BLOCKED), "notice": term("✳ b", RESTART_NOTE),
+             "busy": term("◑ c", busy_note), "clean": term("✳ d", IDLE), "old": term("✳ e", OLD_HOOK_ERROR)}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    state = tmp / "state"; state.mkdir()
+    head = subprocess.run(["git", "-C", str(HERE.parent), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    (state / "reload-pending.json").write_text(json.dumps({"kind": "skills", "done": ["notice", "busy", "old"], "head": head}))
+    env = dict(AGENT_SKILLS_STATE=str(state), SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st),
+               SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+
+    def sent():
+        return json.loads(st.read_text())["sent"]
+    try:
+        sync.broadcast(None, dry_run=True)
+        dry = (sent(), (state / "restarts.json").exists())
+        first = sync.broadcast(None, dry_run=False)
+        after_first = sent()
+        restarts = json.loads((state / "restarts.json").read_text())
+        second = sync.broadcast(None, dry_run=False)
+        after_second = sent()
+        cur = json.loads(st.read_text())
+        cur["terms"]["busy"] = term("✳ c", RESTART_NOTE)
+        st.write_text(json.dumps(cur))
+        sync.broadcast(None, dry_run=False, only="busy")
+        after_idle = sent()
+        kept = json.loads((state / "restarts.json").read_text())
+        calls = []
+        real = (sync.pull_or_push, sync.broadcast_locked)
+        sync.pull_or_push, sync.broadcast_locked = (lambda: ("up to date", [])), (lambda k: calls.append(k))
+        try:
+            (state / "restarts.json").write_text(json.dumps({"x": {"waiting": "turn in progress"}}))
+            sync.sync()
+            (state / "restarts.json").write_text(json.dumps({"x": {"sent": "t"}}))
+            sync.sync()
+        finally:
+            sync.pull_or_push, sync.broadcast_locked = real
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    check("a dry run types nothing and writes nothing", dry == ([], False), dry)
+    check("an idle session with a hook error gets /reload-plugins and no second reload; the notice gets /restart",
+          first == 0 and after_first == [["hooked", "/reload-plugins"], ["notice", "/restart"], ["clean", "/reload-skills"]],
+          after_first)
+    check("a busy session waits, recorded as waiting",
+          "waiting" in restarts.get("busy", {}) and not any(h == "busy" for h, _ in after_first), restarts)
+    check("no stale signal, no entry", set(restarts) == {"hooked", "notice", "busy"}, restarts)
+    check("a session is sent the command once while its screen still shows the signal",
+          second == 0 and after_second == after_first, after_second)
+    check("the waiting session gets it once idle", after_idle[len(after_first):] == [["busy", "/restart"]], after_idle)
+    check("--terminal keeps the other sessions' entries", "notice" in kept and "sent" in kept["busy"], kept)
+    check("a sync runs the broadcast while a session waits, and not for one already sent", calls == [None], calls)
+    shutil.rmtree(tmp)
+
+
 def test_close_setup():
-    runner = "/r/.git/worktrees/card/orca/setup-runner.sh"
+    runner ="/r/.git/worktrees/card/orca/setup-runner.sh"
     done = ["$ bash " + runner, " ERR_PNPM_NO_PKG_MANIFEST  No package.json found", "  ~/w/card on  main", "$"]
     check("the setup script is found on its screen", sync.setup_runner(done) == runner)
     check("a hand-opened shell has no setup script", sync.setup_runner(["$ ls", "$"]) is None)
@@ -328,6 +412,8 @@ if __name__ == "__main__":
     test_confirm()
     test_sync()
     test_broadcast()
+    test_stale_signal()
+    test_restart()
     test_close_setup()
     print(f"\n{len(failures)} failure(s)" if failures else "\nall passed")
     sys.exit(1 if failures else 0)

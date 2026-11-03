@@ -512,6 +512,7 @@ f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b")],
 found, v, memo = patrol.judge(f, {})
 assert codes(found) == [("R", "a"), ("R", "b")], found
 assert v["cards"] == {"/w/a": "stalled", "/w/b": "working"}, v["cards"]
+assert v["check"] == {"/w/a": "같은 답 3턴 반복"}, "the brief's ❔ row: the stalled card, not the parked one"
 assert "assistant in 3 turns" in found[0]["title"] and "acme/app#1" in found[0]["title"], found[0]["title"]
 again, _, memo2 = patrol.judge(f, memo)
 assert [x["id"] for x in again] == [x["id"] for x in found], "a streak that lasts stays the same finding"
@@ -545,5 +546,43 @@ r = {**found[0], "owner": "hr"}
 patrol.write_round([r], {"cards": {}}, False, NOW + 200)
 assert patrol.pending_lines("hr", False, T)[0].startswith("PATROL R"), "shown to its owner"
 assert patrol.pending_lines("hr", False, T + dt.timedelta(hours=3)) == [], "R is shown once, not every 30 minutes"
+
+# H: an ended turn whose screen shows a hook error in its last turn or Claude Code's restart notice. Run workers too;
+# a screen without that wording, a turn still running, a prompt waiting on a human or an unread screen is not judged.
+RULE = "─" * 40
+hooked = ["❯ run the tests", "⏺ Bash(make test)",
+          "  ⎿  PreToolUse:Bash hook error: python3: can't open file '/w/plugin/hooks/gone.py': [Errno 2] No such file",
+          "⏺ Every tool call is blocked by a hook error.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+notice = ["⏺ Goal achieved.", RULE, "❯", RULE, "  ~/w ⎇ main", "  ✓ Update installed · /restart to apply"]
+plain = ["⏺ Done.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+shown = {"h1": hooked, "h2": notice, "h3": plain, "h4": hooked, "h5": notice, "h6": hooked}
+f = facts(terminals=[term(f"h{n}", f"/w/{c}") for n, c in enumerate("abcdef", 1)],
+          tails={"/w/a": (idle(5), None), "/w/b": (idle(300), None), "/w/c": (idle(5), None),
+                 "/w/d": ({"state": "working", "since": ago(1)}, None), "/w/e": (idle(5), None), "/w/f": (idle(5), None)},
+          waits={"h5": {"kind": "permission"}},
+          workers=[{"dispatchId": "d1", "resource": {"worktreeId": "x::/w/f"},
+                    "projection": {"outcome": "in_progress", "liveness": {"verdict": "live"}}}],
+          read=lambda h: shown[h])
+found, v, _ = patrol.judge(f, {})
+stale = sorted((x for x in found if x["code"] == "H"), key=lambda x: x["card"])
+assert codes(stale) == [("H", "a"), ("H", "b"), ("H", "f")], found
+assert v["check"] == {"/w/a": "hook 오류로 도구가 막힘", "/w/b": "업데이트가 /restart 를 기다림",
+                      "/w/f": "hook 오류로 도구가 막힘"}, v["check"]
+assert v["cards"]["/w/a"] == "stalled" and v["cards"]["/w/c"] == "working" and v["cards"]["/w/f"] == "run", v["cards"]
+assert v["cards"]["/w/b"] == "idle", "15+ min idle is told as I too, and neither keeps the card"
+assert "--terminal h1" in stale[0]["title"] and "/reload-plugins" in stale[0]["title"], stale[0]["title"]
+assert "/restart" in stale[1]["title"], stale[1]["title"]
+assert [x["id"] for x in patrol.judge(f, {})[0] if x["code"] == "H"] == [x["id"] for x in stale], "the same screen, the same finding"
+
+
+def unreadable(h):
+    raise OSError("no screen")
+
+
+assert not [x for x in patrol.judge({**f, "screens": {}, "read": unreadable}, {})[0] if x["code"] == "H"], \
+    "an unread screen is not judged"
+assert not [x for x in patrol.judge({**f, "failed": {"waits"}}, {})[0] if x["code"] == "H"], \
+    "without Orca's wait list a prompt for a human cannot be ruled out"
+assert patrol.DEPENDS["H"] == {"terminals", "waits"}
 
 print("test_patrol: ok")

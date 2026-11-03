@@ -24,6 +24,11 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                that tell the same thing with the same work (dash.repeat_turns: one error, one last message, one
                prompt such as a nudge, or /reload-* only); its card is "stalled", not "working", unless parked. Shown
                once to its owner, and never raised again for the same session and text (shown as ❔)
+  H  stale     an agent card, Run workers included, whose session ended its turn, not waiting on a human, with a
+               screen that shows it runs on what changed under it (sync.stale_signal: a hook error in the last turn,
+               as when its hooks.json names a script an update removed, or Claude Code's "/restart to apply");
+               its card is "stalled" (a Run worker stays "run"). A screen without that wording is not judged.
+               `skills-sync broadcast` types the fix once the session is idle (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
@@ -34,7 +39,8 @@ by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` sho
 (the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
 Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
 (run, waiting, working, idle, exited, stalled), `hints` what a finding said of it (superseded, pr_open_no_session,
-idle, exited, stalled), and `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
+idle, exited, stalled), `check` the cards H and R found, each with the reason the brief shows on its ❔ row, and
+`failed` the sources this round could not read. A finding never overwrites run, waiting or working in
 `cards`. reap-hard, the pressure round and the janitor read `cards` only to keep a card judged working; no verdict
 makes anything a target, and a card missing from it, in a failed round above all, is not evidence it is safe.
 
@@ -51,6 +57,13 @@ import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secret
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
 import card_watch, cardguard, dash, fleet, prog  # noqa: E402
+try:  # dash put the repo's scripts/ on the path
+    from sync import STALE_COMMAND, stale_signal  # noqa: E402
+except ImportError:  # an install without the repo's scripts/: H judges nothing
+    STALE_COMMAND = {}
+
+    def stale_signal(lines):
+        return None
 
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
 LOG = STATE / "patrol.jsonl"
@@ -77,8 +90,12 @@ RENOTIFY = dt.timedelta(minutes=30)
 SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
-         "L": "load", "W": "watcher down", "R": "repeat"}
-VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled"}
+         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale"}
+VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
+# H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
+STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
+              "restart": ("a Claude Code update waits on /restart", "업데이트가 /restart 를 기다림")}
+REPEAT_WORD = {"error": "에러", "assistant": "답", "user": "입력", "reload": "reload"}
 SHOW_ONCE = {"R"}  # pending_lines shows these once, not every RENOTIFY
 # A stalled card loses patrol's protection, so reap closes it within days; no session stays open this long.
 REPEATS_KEEP_DAYS = 90
@@ -285,7 +302,7 @@ def judge(facts, memo):
     agents = [t for t in terms if t.get("agentIdentity") and t.get("connected", True)]
     agent_paths = {t.get("worktreePath") for t in agents}
     own = owners(facts["sessions"])
-    run_paths, findings, verdicts, hints, act = set(), [], {}, {}, {}
+    run_paths, findings, verdicts, hints, act, check = set(), [], {}, {}, {}, {}
     failed = facts.get("failed") or set()
     fresh = facts.get("fresh", set(facts["screens"]))
     # An output mark moves only past a screen this round read; one skipped by the budget or a failed read is read next.
@@ -325,6 +342,23 @@ def judge(facts, memo):
                 add("X", path, (w.get("dispatchId"),), f"worker {w.get('dispatchId')} exited with its task in progress: "
                     f"worker-read --source transcript, then worker-stop or worker-abandon on positive evidence only",
                     prog.worker_terminal(w))  # its card stays "run": the lead decides, not a cleaner
+    # H: an ended turn whose screen says the session runs on what changed under it. A Run worker too: one whose
+    # every tool call a hook blocks cannot send worker_done.
+    for t in agents if "waits" not in failed else ():
+        path, handle = t.get("worktreePath"), t.get("handle")
+        motion = (facts["tails"].get(path) or (None, None))[0]
+        if not (path and handle) or not motion or motion.get("state") != "idle" or motion.get("parked") \
+                or isinstance(facts["waits"].get(handle), dict):
+            continue
+        sig = stale_signal(screen_of(facts, handle))
+        if not sig:
+            continue
+        kind, text = sig
+        what, why = STALE_WHAT[kind]
+        add("H", path, (kind, VOLATILE.sub("#", text)), f"❔ {what}: {text[:120]} · `skills-sync broadcast --terminal "
+            f"{handle}` types {STALE_COMMAND.get(kind, 'the fix')} once it is idle", handle)
+        check[path] = why
+        activity(path, "stalled")
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             if path and path not in run_paths:
@@ -356,6 +390,7 @@ def judge(facts, memo):
                                         "live": old is None or bool(old.get("live"))}
             if not motion.get("parked"):  # a wake-up it armed may still bring news: parked stays protected
                 activity(path, "stalled")
+                check.setdefault(path, f"같은 {REPEAT_WORD.get(rep['kind'], rep['kind'])} {rep['count']}턴 반복")
         if motion and motion.get("state") == "idle" and not motion.get("parked") and "waits" not in failed:
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
@@ -438,8 +473,8 @@ def judge(facts, memo):
             add("W", None, (int(last[0]) if last else 0,), "orch watch-cards " + (
                 f"last finished a round {int((now - last[0]) // 60)} min ago" if last else "never ran here")
                 + ": the orchestrator restarts it (run_in_background, no pipe)", h)
-    return findings, {"cards": verdicts, "hints": hints, "failed": sorted(failed), "doing_noref": doing_noref,
-                      "load": load, "activity": act}, new_memo
+    return findings, {"cards": verdicts, "hints": hints, "check": check, "failed": sorted(failed),
+                      "doing_noref": doing_noref, "load": load, "activity": act}, new_memo
 
 
 # ---------------------------------------------------------------- the log
@@ -486,7 +521,7 @@ def sync_needs_you(rows=None):
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
-           "W": {"state"}, "R": {"terminals", "workers", "waits"}}
+           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):

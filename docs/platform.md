@@ -107,6 +107,8 @@ reload-skills:  "Pick up skills added or changed on disk during this session"
 
 `/reload-plugins`는 다른 플러그인의 MCP 서버까지 다시 붙인다(출력의 "6 plugin MCP servers"). 그래서 스킬만 바뀐 경우에는 가벼운 `/reload-skills`를 쓴다.
 
+hooks.json은 세션이 읽어 둔 것을 쓰고, 그 안의 스크립트는 부를 때마다 디스크에서 읽는다. 그래서 hooks.json에서 뺀 스크립트를 지우면, reload하지 않은 세션은 없는 파일을 부른다. `python3 <없는 파일>`은 종료 코드 2를 내고, Claude Code는 PreToolUse hook의 2를 차단으로 읽는다. 그 세션의 모든 Bash·Read가 hook 오류로 막힌다(2026-11-02 `orchestrator_guard.py`를 지운 뒤 실제로 일어났다). 그래서 hooks.json에서 뺀 스크립트는 그 자리에 아무것도 하지 않고 0으로 끝나는 파일로 남긴다. `hooks/test_retired.py`가 git 이력의 hooks.json이 부른 적 있는 경로마다 파일이 있는지, 지금 hooks.json의 명령이 모두 `${CLAUDE_PLUGIN_ROOT}` 아래 스크립트인지 확인한다.
+
 MCP 서버 하나가 끊겼을 때는 재인증이 아니라 `/mcp`에서 그 서버의 Reconnect를 먼저 한다. 같은 서버 URL을 쓰는 세션들은 저장된 토큰 하나를 같이 쓰므로, 한 세션에서 재인증하면 그 토큰이 지워져 다른 세션들도 함께 끊긴다. 토큰 갱신이 실제로 실패했을 때(갱신 뒤에도 401)만 한 세션에서 한 번 재인증하고, 나머지 세션은 Reconnect한다.
 
 편집은 지금처럼 worktree 브랜치에서 한다. 로드되는 것은 메인 체크아웃이므로, worktree의 변경은 메인 체크아웃에 fast-forward되는 순간 반영 대상이 된다. 메인 체크아웃을 직접 고치면 그 즉시 대상이 되지만, 그동안 자동 pull은 멈춘다(§3).
@@ -206,6 +208,21 @@ README의 옛 문장("작업 중인 세션이면 대기열에 들어갔다가 �
 - 성공은 exit 0뿐이다. `--dry-run`은 바쁠 때도 0을 돌려주고, 사유 문자열로 성공을 고르면 아래 실패를 성공으로 센다.
 - `sent, but the screen does not show it was taken`이면 다시 보내지 않는다. 실측(2026-10-23)에서 이 사유가 난 전송은 명령이 아니라 앞에 개행이 붙은 평문 사용자 메시지(`\n/reload-plugins`)로 들어가 턴을 하나 시작했고, reload는 일어나지 않았다. 원인은 아직 확인하지 못했다. Claude에는 Orca의 재제출(`submitRetryDelayMs`)이 없어서 두 번째 Enter 때문은 아니다. 이 기기의 transcript에서 명령으로 실행된 reload는 수천 건이고 이 실패는 1건이다. 이렇게 끝나면 사람에게 그 세션에서 직접 치라고 부탁한다.
 - Orca 밖 세션은 `$ORCA_TERMINAL_HANDLE`이 없으니 예전처럼 사람에게 부탁한다.
+
+### 바뀐 것 위에서 멈춘 세션 (2026-11-04)
+
+`broadcast`는 reload를 보내기 전에 대상 터미널마다 화면을 읽고, 그 세션이 바뀌기 전 것으로 돌고 있다는 문구를 찾는다(`sync.stale_signal`).
+
+| 화면 | 보내는 것 |
+|---|---|
+| Claude Code의 업데이트 안내(`/restart to apply`), 화면 어디든 | `/restart` |
+| 마지막 턴(입력칸 위 마지막 `❯ <프롬프트>` 아래)의 hook 오류(`hook error`, `hook returned blocking error`, hooks 아래 파일을 열지 못함) | `/reload-plugins`(hooks.json을 다시 읽는다. 안내 문구가 `/restart`를 말하지 않으면 그 명령이 있다고 기대지 않는다) |
+
+- 두 문구가 없는 화면은 판정하지 않는다. Claude Code 버전마다 분기하지 않는다.
+- 보내는 조건은 reload와 같다(위 "대상과 안전장치"). 바쁜 세션은 보내지 않고 `~/.local/state/agent-skills/restarts.json`에 기다림으로 남긴다. 기다리는 세션이 있으면 다음 `sync`가 broadcast를 다시 돌린다.
+- 한 세션에는 한 번만 친다. 보낸 뒤에도 화면에 그 문구가 남아 있으면 다시 보내지 않는다. 문구가 사라지면 기록을 지우므로 다음에 다시 생기면 새로 친다.
+- 이렇게 친 세션은 그 회차의 reload 대상에서 뺀다. 두 명령 모두 플러그인을 새로 읽는다.
+- `orch patrol`은 같은 판정을 H로 올리고 brief의 그 카드 행을 ❔로 만든다. 순찰은 치지 않는다(docs/automation.md "세션 순찰").
 
 ### 셋업 터미널 닫기 (`skills-sync close-setup <카드 경로>`, 2026-09-29)
 
