@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """Where the dashboard's data comes from and where it goes, and what agent-skills changed about itself.
 
-flow(): a static map of producers -> local state files -> consumers, filled with what stat says now: path, last
-change, size or line count, the last row's writer, and three problems: a store older than its producer's interval
-(stale), a file in a state directory the map does not know (unread), a consumer with none of its inputs (starved).
+flow(): the registry (registry.STORES) drawn as producers -> stores -> consumers, filled with what stat says now: path,
+last change, size or line count, the last row's writer. Each store is present, off (its feature's config key is
+missing), not yet (never written) or error (unreadable, or a directory where a file belongs); a consumer with no
+input present is starved for the worst of those. Also: a store older than its interval (stale), a file under a state
+root no store names (unread), a fact with two canonical stores (conflicts).
 changes(): skill changes from git log (bounded by days and count), open PRs from the collector's prs.json and the
 improvement loop's signals ledger (tail only). No model call, no file read whole except the small prs.json.
 
 Usage: flow.py flow | flow.py changes [--days N]      (prints the JSON the dashboard serves)
 """
-import datetime as dt, json, os, pathlib, re, subprocess, sys, time
+import datetime as dt, fnmatch, json, os, pathlib, re, stat, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import fleet  # noqa: E402
+import fleet, registry  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -30,80 +32,41 @@ def programs():
     return pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
 
 
-PRODUCERS = {
-    "fleet": "fleet collector · dash serve loop",
-    "skills": "skill usage collect · dash serve, 15 min",
-    "prstats": "PR stats collect · dash serve",
-    "tokens": "token usage collect · dash serve, 15 min",
-    "orch": "orch CLI · board, decide, stage, sent, brief --commit",
-    "permission": "permission hook",
-    "rolehook": "reorient hook · ROLE lines",
-    "watchprs": "watch-prs round · automation",
-    "mentions": "watch-mentions round · automation",
-    "sync": "skills-sync · launchd",
-    "programs": "program leads · orch ledger",
-    "cards": "card sessions · report files",
-    "human": "you · config",
-}
-CONSUMERS = {
-    "page": "dashboard · Overview, Inbox, PRs, Sessions, Graph, Timeline, Automations",
-    "brief": "orch brief render · Brief and Stages pages, /brief",
-    "skillspage": "dashboard · Skills",
-    "statspage": "dashboard · PR stats",
-    "tokenspage": "dashboard · Tokens",
-    "sentpage": "dashboard · Sent",
-    "fleet": "fleet collector (its own memory)",
-    "programview": "dashboard · program views, measure-delivery",
-    "reflect": "reflect precheck · improvement loop",
-    "watchprs": "watch-prs round",
-    "reorient": "reorient hook",
-    "skillsrc": "every skill reading its config",
-}
-BRIEF_RULE = ("rows = sessions in state.json (orchestrator → lead → card) + the newest block of each card's report "
-              "file (the brief's REPORT line); board.json adds only phase, progress, decisions, holds and corrections; "
-              "PR state is joined from prs.json at render")
-# id, path (relative to its root), root, writers, readers, the interval past which it is stale (s), derivation rule
-STORES = [
-    ("state", "state.json", "dash", ["fleet"], ["page", "brief"], 300, "sessions, PRs, inbox, timeline: one collect"),
-    ("prs", "prs.json", "dash", ["fleet"], ["brief", "page"], 1800, "open PRs of every session, refreshed by turn"),
-    ("events", "events.jsonl", "dash", ["fleet"], ["fleet"], None, "phase changes; the timeline reads its tail"),
-    ("prevents", "pr-events.jsonl", "dash", ["fleet"], ["fleet"], None, "review and CI changes per PR"),
-    ("memory", "memory.json", "dash", ["fleet"], ["fleet"], 300, "prompt hashes, last states, sticky inbox"),
-    ("jobs", "jobs.json", "dash", ["fleet", "skills", "prstats", "tokens"], ["page"], 300, "each orch-dash job's last run, written as it runs"),
-    ("avatars", "avatars", "dash", ["fleet"], ["page"], None, None),
-    ("prompts", "prompts", "dash", ["permission"], ["fleet"], None, "one file per pending permission prompt"),
-    ("decisions", "decisions.json", "dash", ["orch"], ["fleet", "brief"], None, "`orch decide` records"),
-    ("inbox", "inbox-external.jsonl", "dash", ["orch"], ["fleet"], None, "items added from outside a session"),
-    ("sends", "sends.jsonl", "dash", ["fleet"], ["fleet"], None, "text sent from the page"),
-    ("sent", "sent", "dash", ["orch"], ["sentpage"], None, "`orch sent` log"),
-    ("board", "board.json", "dash", ["orch"], ["brief"], None, "only what cannot be derived: " + BRIEF_RULE),
-    ("stages", "stages.json", "dash", ["orch"], ["brief"], None, "`orch stage` cells and rows outside a program; win over stages-auto"),
-    ("stagesauto", "stages-auto.json", "dash", ["fleet"], ["brief", "reorient"], None,
-     "stage rows per program, from its ledger, Run cards and PRs, built each tick and written when they change"),
-    ("skillsj", "skills.json", "dash", ["skills"], ["skillspage"], 3600, "usage per skill from transcripts"),
-    ("skillcache", "skill-usage-cache.json", "dash", ["skills"], ["skills"], 3600, "per-transcript counts, by size+mtime"),
-    ("tokensj", "tokens.json", "dash", ["tokens"], ["tokenspage", "brief"], 3600,
-     "token use per who, skill and turn origin, with warnings; the brief shows one line when there are warnings"),
-    ("tokencache", "token-usage-cache.json", "dash", ["tokens"], ["tokens"], 3600,
-     "per-transcript byte offsets and day buckets: numbers and names only"),
-    ("prstats", "pr-stats.json", "dash", ["prstats"], ["statspage"], 86400, None),
-    ("brieflast", "brief-last", "base", ["orch"], ["brief"], None, "the last sent table, for bold = changed"),
-    ("syncj", "sync.json", "base", ["sync"], ["fleet"], 3600, "last skills-sync result"),
-    ("reload", "reload-pending.json", "base", ["sync"], ["fleet"], None, "reloads not yet sent, per terminal"),
-    ("prsledger", "prs/ledger.json", "base", ["watchprs"], ["watchprs"], None, "what watch-prs already acted on"),
-    ("sendlog", "prs/sendlog.jsonl", "base", ["watchprs"], ["watchprs"], None, "reminders sent"),
-    ("mseen", "mentions/seen.json", "base", ["mentions"], ["watchprs"], None, "threads already picked up"),
-    ("roles", "roles", "base", ["rolehook"], ["reorient"], None, "one file per session's role"),
-    ("signals", "_skill-usage/ledger.jsonl", "programs", ["skills"], ["reflect"], None,
-     "one row per flagged editable skill per week"),
-    ("ledgers", "*/ledger.jsonl", "programs", ["programs"], ["programview"], None, "one ledger per program"),
-    ("config", "agent-skills.json", "claude", ["human"], ["skillsrc"], None, None),
-]
+BRIEF_RULE = ("rows = sessions in state.json (orchestrator → lead → card), and under each the subagents with a start "
+              "and no stop in subagents.jsonl (❔ when the start is older than board.subagent_stale_h or its session "
+              "is offline); a card's progress is its own report "
+              "(the file its brief's REPORT line names, else its newest milestone message to its Run) and its PR the "
+              "current-PR rule over prs.json; board.json adds rows' phase and progress, leads Orca cannot see, "
+              "to-dos, held items and doing lines; decisions come from decisions.json, closures from tidy.jsonl, "
+              "bold from brief-last")
+SCAN_DEPTH = 4       # directories below a state root the unregistered-file walk enters
+# Roles drawn as boxes in the map; locks, backups and removed stores are listed in the table only.
+DRAWN = {registry.CANONICAL, registry.DERIVED, registry.CACHE, registry.LOG, registry.HAND}
 
 
 def root(name):
-    return {"dash": fleet.state_dir(), "base": base(), "programs": programs(),
-            "claude": pathlib.Path("~/.claude").expanduser()}[name]
+    xdg = os.environ.get("XDG_STATE_HOME")
+    return {"D": fleet.state_dir(), "S": base(), "P": programs(), "C": pathlib.Path("~/.claude").expanduser(),
+            "K": pathlib.Path("~/.config/agent-skills").expanduser(),
+            "X": pathlib.Path(xdg).expanduser() if xdg else pathlib.Path("~/.local/state").expanduser(),
+            "H": pathlib.Path.home()}[name]
+
+
+def place(store):
+    """(root key, path pattern below it) for a file store; None for an outside source or a DB column."""
+    if store.path.startswith(("ext:", "db:")):
+        return None
+    r, _, rel = store.path.partition("/")
+    return r, rel
+
+
+def config_has(key, cfg):
+    cur = cfg
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False
+        cur = cur[part]
+    return True
 
 
 def shown(p):
@@ -138,59 +101,210 @@ def last_row(p, size):
     return " · ".join(str(row[k]) for k in ("ev", "kind", "skill", "type", "action") if isinstance(row.get(k), str))[:80] or None
 
 
+def _glob(p):
+    """Path.glob without swallowing errors: (sorted matches, ["dir: reason", ...]). A missing directory is no match;
+    an unreadable one is an error."""
+    found, bad = [pathlib.Path(p.anchor)], []
+    parts = p.parts[1:]
+    for i, part in enumerate(parts):
+        last = i == len(parts) - 1
+        if not any(c in part for c in "*?["):
+            found = [f / part for f in found]
+            continue
+        nxt = []
+        for f in found:
+            try:
+                with os.scandir(f) as it:
+                    nxt += [f / e.name for e in it if fnmatch.fnmatchcase(e.name, part) and (last or e.is_dir())]
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+            except OSError as e:
+                bad.append(f"{shown(f)}: {e.strerror or e}")
+        found = nxt
+    out = []
+    for f in found:  # a literal tail (`*/ledger.jsonl`) under an unreadable directory is an error too
+        try:
+            os.lstat(f)
+            out.append(f)
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        except OSError as e:
+            bad.append(f"{shown(f)}: {e.strerror or e}")
+    return sorted(out), bad
+
+
 def stat_node(p, stale_s, now):
-    """Stat only; a directory or glob is its entry count and newest entry, a .jsonl also its line count and last row."""
-    entries = sorted(pathlib.Path(p.anchor).glob(str(p)[len(p.anchor):])) if "*" in str(p) else None
-    if entries is None and p.is_dir():
-        entries = list(p.iterdir())
-    if entries is not None:
-        mt = [e.stat().st_mtime for e in entries if e.exists()]
-        out = {"exists": bool(entries) or p.exists(), "entries": len(entries), "mtime": max(mt) if mt else None}
+    """Stat only; a glob is its entry count and newest entry, a .jsonl also its line count and last row. state: present,
+    error (unreadable, or a directory where a file belongs), or None when nothing is there."""
+    if "*" in str(p):
+        entries, bad = _glob(p)
+        # A pattern with an extension names files; `dir/*` may hold directories too.
+        files_only = "." in p.name.lstrip("*")
+        mt = []
+        for e in entries:
+            try:
+                st = e.stat()
+            except OSError as err:
+                bad.append(f"{e.name}: {err.strerror or err}")
+                continue
+            if files_only and stat.S_ISDIR(st.st_mode):
+                bad.append(f"{e.name}: a directory where a file belongs")
+            elif not stat.S_ISDIR(st.st_mode) and not os.access(e, os.R_OK):
+                bad.append(f"{e.name}: not readable")
+            mt.append(st.st_mtime)
+        out = {"exists": bool(entries), "entries": len(entries), "mtime": max(mt) if mt else None}
+        if bad:
+            return {**out, "state": registry.ERROR, "error": "; ".join(bad[:3]) + (f" (+{len(bad) - 3})" if len(bad) > 3 else "")}
     else:
         try:
             st = p.stat()
-        except OSError:
-            return {"exists": False}
+        except FileNotFoundError:
+            return {"exists": False, "state": None}
+        except OSError as e:
+            return {"exists": False, "state": registry.ERROR, "error": str(e)}
+        if stat.S_ISDIR(st.st_mode):
+            return {"exists": True, "state": registry.ERROR, "error": "a directory where a file belongs", "mtime": st.st_mtime}
         out = {"exists": True, "size": st.st_size, "mtime": st.st_mtime}
+        if not os.access(p, os.R_OK):  # its reader would fail, so it is not there for the consumer
+            return {**out, "state": registry.ERROR, "error": "not readable"}
         if p.suffix == ".jsonl":
-            out["lines"], out["last"] = line_count(p, st), last_row(p, st.st_size)
+            try:
+                out["lines"], out["last"] = line_count(p, st), last_row(p, st.st_size)
+            except OSError as e:
+                return {**out, "state": registry.ERROR, "error": str(e)}
+    out["state"] = registry.PRESENT if out["exists"] else None
     age = now - out["mtime"] if out.get("mtime") else None
     out["age"] = round(age) if age is not None else None
     out["stale"] = bool(stale_s and age is not None and age > stale_s)
     return out
 
 
-def flow(sessions=None, now=None):
+def producers_of(store):
+    by = {m: pid for pid, (_, mods) in registry.PRODUCERS.items() for m in mods}
+    return sorted({by.get(w if w.startswith("ext:") else w.split(":", 1)[0], "human") for w in store.writers})
+
+
+def unregistered(stores):
+    """Files under the state roots no store pattern names. Program directories are a lead's own files (registered as
+    hand files), so only the programs home's top level and its `_` directories are walked."""
+    # Roots that are one directory (an override can point two at the same place) are walked once, with every
+    # pattern of each.
+    tops = {}
+    for key in ("D", "S", "P"):
+        tops.setdefault(os.path.realpath(root(key)), set()).add(key)
+    pats = {t: [] for t in tops}
+    for s in stores:
+        if (pl := place(s)) and pl[0] in ("D", "S", "P"):
+            t = os.path.realpath(root(pl[0]))
+            pats[t].append((pl[0], pl[1]))
+    out, problems = [], []
+    for top, keys in tops.items():
+        others = {t for t in tops if t != top}
+        # Top-level directories a D or S pattern names when P shares their directory: walked as theirs, not as programs.
+        named = {p.split("/", 1)[0] for k, p in pats[top] if k != "P" and "/" in p}
+        for dirpath, dirnames, filenames in os.walk(top, onerror=lambda e: problems.append(f"{shown(e.filename)}: {e.strerror}")):
+            d = pathlib.Path(dirpath)
+            rel_d = d.relative_to(top)
+            depth = len(rel_d.parts)
+            first = (rel_d.parts[:1] or ("",))[0]
+            if "P" in keys and depth == 0:
+                dirnames[:] = [n for n in dirnames if n.startswith("_") or any(fnmatch.fnmatchcase(n, x) for x in named)]
+            own = [p for k, p in pats[top]
+                   # `P/*/...` names a program's files; the `_` directories beside the programs, and D or S
+                   # directories sharing the programs home, need their own pattern.
+                   if not (k == "P" and p.startswith("*/") and (first.startswith("_")
+                                                                  or any(fnmatch.fnmatchcase(first, x) for x in named)))]
+            # Another root is walked as itself; a directory a `dir/*` pattern names whole is not entered.
+            dirnames[:] = [n for n in dirnames if os.path.realpath(d / n) not in others
+                           and str(rel_d / n if depth else pathlib.Path(n)) + "/*" not in own]
+            if depth >= SCAN_DEPTH and dirnames:
+                problems.append(f"{shown(d)}: deeper than {SCAN_DEPTH} levels, not walked")
+                dirnames[:] = []
+            here = str(rel_d) if depth else ""
+            names = [b for pd, _, b in (p.rpartition("/") for p in own)
+                     if (bool(pd) and fnmatch.fnmatchcase(here, pd) if depth else not pd)]
+            for n in sorted(filenames):
+                rel = str(rel_d / n) if depth else n
+                if any(fnmatch.fnmatchcase(rel, p) for p in own) or _scratch(n, names):
+                    continue
+                out.append(shown(d / n))
+    return out, problems
+
+
+TEMP_PREFIXES = (".card-watch-", ".self-check-", ".stuck-", ".settings-")
+
+
+def _scratch(name, registered):
+    """A writer's temporary: mkstemp names it `.<file>.xxx` or `.<file>-xxx` after a file a store pattern in this
+    directory names, or with a writer's own prefix. Also Finder's folder file."""
+    if name == ".DS_Store" or name.startswith(TEMP_PREFIXES):
+        return True
+    rest = name[1:]
+    return name.startswith(".") and any(c in ".-" and fnmatch.fnmatchcase(rest[:i], b)
+                                        for i, c in enumerate(rest) if i for b in registered)
+
+
+def flow(sessions=None, now=None, stores=None):
     now = now or time.time()
-    stores = []
-    for sid, rel, r, writers, readers, stale_s, rule in STORES:
-        p = root(r) / rel
-        stores.append({"id": sid, "name": rel, "path": shown(p), "writers": writers, "readers": readers, "stale_after": stale_s,
-                       "rule": rule, **stat_node(p, stale_s, now)})
-    reports = sorted({(s.get("report") or {}).get("path") for s in sessions or [] if (s.get("report") or {}).get("path")})
-    if reports:
-        st = [stat_node(pathlib.Path(x), None, now) for x in reports]
-        mt = [x["mtime"] for x in st if x.get("mtime")]
-        stores.append({"id": "reports", "name": "report files", "path": f"{len(reports)} report files named by briefs", "writers": ["cards"],
-                       "readers": ["fleet", "brief"], "rule": "newest heading or bullet block, its 다음/Next line, last PR ref",
-                       "exists": True, "entries": len(reports), "mtime": max(mt) if mt else None,
-                       "age": round(now - max(mt)) if mt else None, "stale": False,
-                       "files": [{"path": shown(x), "age": s.get("age")} for x, s in zip(reports, st)]})
-    known = {pathlib.Path(root(r) / rel).name for _, rel, r, *_ in STORES if "/" not in rel}
-    unread = []
-    for d in (fleet.state_dir(), base()):
-        try:
-            names = sorted(e.name for e in os.scandir(d) if e.is_file())
-        except OSError:
+    stores = registry.STORES if stores is None else stores
+    cfg = fleet.read_json(root("C") / "agent-skills.json", {}) or {}
+    out = []
+    for s in stores:
+        pl = place(s)
+        node = {"id": s.id, "name": s.path.split("/", 1)[-1] if pl else s.path, "store": s.path,
+                "facts": s.facts, "writers": producers_of(s), "writer_fns": list(s.writers), "readers": list(s.readers),
+                "stale_after": s.stale_s, "rule": s.rule, "feature": s.feature,
+                "drawn": any(r in DRAWN for r in s.facts.values())}
+        off = bool(s.feature) and not config_has(s.feature, cfg)
+        if s.path.startswith("ext:"):
+            node.update(path=s.path, exists=not off, state=registry.OFF if off else "outside")
+        elif s.path.startswith("db:"):
+            node.update(path=s.path, exists=False, state=registry.NOT_YET)
+        else:
+            p = root(pl[0]) / pl[1]
+            node.update(path=shown(p), **stat_node(p, s.stale_s, now))
+            if node["state"] is None:
+                node["state"] = registry.OFF if off else registry.NOT_YET
+        if s.id == "reports":
+            node.update(report_files(sessions, now))
+        out.append(node)
+    states = {n["id"]: n["state"] for n in out}
+    consumers = []
+    for cid, label in registry.CONSUMERS.items():
+        ins = [n for n in out if cid in n["readers"]]
+        if cid == "nobody" or not ins:
             continue
-        unread += [shown(d / n) for n in names if n not in known and not n.startswith(".") and not n.endswith((".lock", ".1"))
-                   and not re.search(r"\.prev\.|\.bak", n)]
-    fed = {c: [s["id"] for s in stores if c in s["readers"] and s.get("exists")] for c in CONSUMERS}
+        got = {st: [n["id"] for n in ins if n["state"] == st] for st in (registry.PRESENT, "outside", registry.ERROR,
+                                                                          registry.NOT_YET, registry.OFF)}
+        # Fed by anything present; otherwise starved for the worst reason: an error, then a store never written,
+        # then a feature switched off.
+        state = registry.PRESENT if got[registry.PRESENT] or got["outside"] else next(
+            st for st in (registry.ERROR, registry.NOT_YET, registry.OFF) if got[st])
+        consumers.append({"id": cid, "label": label, "state": state, "starved": state != registry.PRESENT,
+                          "inputs": {k: v for k, v in got.items() if v},
+                          "rule": BRIEF_RULE if cid == "brief" else None})
+    canon = {}
+    for s in stores:
+        for f, role in s.facts.items():
+            if role == registry.CANONICAL:
+                canon.setdefault(f, []).append(s.id)
+    known = lambda f, ids: (registry.DUAL_CANONICAL.get(f) or ((), None))[1] if set(  # noqa: E731
+        (registry.DUAL_CANONICAL.get(f) or ((),))[0]) == set(ids) else None
+    conflicts = [{"fact": f, "stores": ids, "known": known(f, ids)} for f, ids in sorted(canon.items()) if len(ids) > 1]
+    unread, problems = unregistered(stores)
     return {"generated_at": fleet.utcnow().isoformat(timespec="seconds").replace("+00:00", "Z"),
-            "producers": [{"id": k, "label": v} for k, v in PRODUCERS.items()],
-            "consumers": [{"id": k, "label": v, "starved": not fed[k], "rule": BRIEF_RULE if k == "brief" else None}
-                          for k, v in CONSUMERS.items()],
-            "stores": stores, "unread": unread}
+            "producers": [{"id": k, "label": v[0]} for k, v in registry.PRODUCERS.items()],
+            "consumers": consumers, "stores": out, "states": states, "conflicts": conflicts,
+            "unread": unread, "scan_problems": problems}
+
+
+def report_files(sessions, now):
+    """The report files the sessions' briefs name, as entries of the card-report source."""
+    reports = sorted({(s.get("report") or {}).get("path") for s in sessions or [] if (s.get("report") or {}).get("path")})
+    st = [stat_node(pathlib.Path(x), None, now) for x in reports]
+    mt = [x["mtime"] for x in st if x.get("mtime")]
+    return {"entries": len(reports), "mtime": max(mt) if mt else None, "age": round(now - max(mt)) if mt else None,
+            "files": [{"path": shown(x), "age": s.get("age")} for x, s in zip(reports, st)]}
 
 
 # ------------------------------------------------------------ skill changes

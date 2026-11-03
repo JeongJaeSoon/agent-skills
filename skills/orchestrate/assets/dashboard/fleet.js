@@ -817,13 +817,18 @@ async function pollJson(key, url, keepMs, view = key) {
 }
 const isoOf = (sec) => sec ? new Date(sec * 1000).toISOString() : null;
 const bytes = (n) => n == null ? "" : n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`;
-const storeMeta = (s) => !s.exists ? "missing" : [s.age != null ? rel(isoOf(s.mtime)) : "", s.lines != null ? `${s.lines} lines` : "",
-  s.entries != null ? `${s.entries} files` : bytes(s.size)].filter(Boolean).join(" · ");
-const storeTone = (s) => !s.exists ? "" : s.stale ? "warn" : "good";
+// A store is present, off (its feature's config key is missing), not yet (never written) or error; outside sources
+// (Orca, GitHub, transcripts) are read, never written here.
+const STORE_STATE = { present: "present", off: "off: config key missing", "not yet": "not yet written", error: "error", outside: "outside source" };
+const storeMeta = (s) => s.state === "outside" ? "outside" : s.state === "error" ? `error: ${s.error || ""}`
+  : s.state !== "present" ? STORE_STATE[s.state] : [s.age != null ? rel(isoOf(s.mtime)) : "", s.lines != null ? `${s.lines} lines` : "",
+    s.entries != null ? `${s.entries} files` : bytes(s.size)].filter(Boolean).join(" · ");
+const storeTone = (s) => s.state === "error" ? "bad" : s.state === "outside" ? "accent" : s.state !== "present" ? "" : s.stale ? "warn" : "good";
+const factList = (s) => Object.entries(s.facts).map(([f, r]) => `${f} (${r})`).join(", ");
 
 function flowGraph(rep) {
-  const RH = 36, W = 1080, X = [8, 310, 780], BW = [250, 400, 290];
-  const stores = rep.stores, ys = {};
+  const RH = 32, W = 1080, X = [8, 310, 780], BW = [250, 400, 290];
+  const stores = rep.stores.filter((s) => s.drawn), ys = {};
   stores.forEach((s, i) => { ys[s.id] = 30 + i * RH; });
   const H = 30 + stores.length * RH;
   // A producer or consumer sits at the mean height of its stores, then is pushed down so no two overlap.
@@ -838,46 +843,56 @@ function flowGraph(rep) {
   const out = [];
   const curve = (x0, y0, x1, y1, cls) => `<path class="edge ${cls}" d="M${x0} ${y0} C ${x0 + 50} ${y0}, ${x1 - 50} ${y1}, ${x1} ${y1}"/>`;
   prods.forEach((p) => p.mine.forEach((s) => out.push(curve(X[0] + BW[0], p.y + 13, X[1], ys[s.id] + 13, `tone-${storeTone(s)}`))));
-  cons.forEach((c) => c.mine.forEach((s) => out.push(curve(X[1] + BW[1], ys[s.id] + 13, X[2], c.y + 13, s.exists ? "" : "req"))));
+  cons.forEach((c) => c.mine.forEach((s) => out.push(curve(X[1] + BW[1], ys[s.id] + 13, X[2], c.y + 13, s.state === "present" || s.state === "outside" ? "" : "req"))));
   const box = (x, y, w, label, sub, tone, tip, dashed) => `<g class="fl-node${dashed ? " missing" : ""}"><rect class="box" x="${x}" y="${y}" width="${w}" height="26" rx="6"/>
     ${tone ? `<rect class="bar tone-${tone}" x="${x}" y="${y}" width="3" height="26" rx="1.5"/>` : ""}
     <text x="${x + 10}" y="${y + 17}">${esc(clip(label, sub ? 28 : 40))}${sub ? ` <tspan class="muted">${esc(clip(sub, 30))}</tspan>` : ""}</text><title>${esc(tip)}</title></g>`;
   prods.forEach((p) => out.push(box(X[0], p.y, BW[0], p.label, "", "", p.label)));
   stores.forEach((s) => out.push(box(X[1], ys[s.id], BW[1], s.name, storeMeta(s), storeTone(s),
-    [s.path, storeMeta(s), s.stale ? `stale: older than ${s.stale_after} s` : "", s.last ? `last row: ${s.last}` : "", s.rule || ""].filter(Boolean).join("\n"), !s.exists)));
-  cons.forEach((c) => out.push(box(X[2], c.y, BW[2], c.label, "", c.starved ? "bad" : "", c.starved ? `${c.label}: none of its inputs exist` : c.rule || c.label, c.starved)));
+    [s.path, storeMeta(s), factList(s), s.stale ? `stale: older than ${s.stale_after} s` : "", s.last ? `last row: ${s.last}` : "",
+      s.feature ? `turned on by ${s.feature}` : "", s.rule || ""].filter(Boolean).join("\n"), s.state !== "present" && s.state !== "outside")));
+  const starvedTip = (c) => `${c.label}: starved, ${STORE_STATE[c.state]}\n` + Object.entries(c.inputs).map(([k, v]) => `${STORE_STATE[k] || k}: ${v.join(", ")}`).join("\n");
+  cons.forEach((c) => out.push(box(X[2], c.y, BW[2], c.label, c.starved ? c.state : "", c.state === "error" ? "bad" : c.starved ? "warn" : "",
+    c.starved ? starvedTip(c) : c.rule || c.label, c.starved)));
   const h = Math.max(H, ...prods.map((p) => p.y + RH), ...cons.map((c) => c.y + RH));
-  return `<div class="relgraph"><svg viewBox="0 0 ${W} ${h}" style="min-width:860px;max-width:${W}px" role="img" aria-label="Producers, state files and consumers">
-    <text class="muted" x="${X[0]}" y="16">PRODUCERS</text><text class="muted" x="${X[1]}" y="16">STATE FILES</text><text class="muted" x="${X[2]}" y="16">CONSUMERS</text>${out.join("")}</svg></div>
-    <div class="legend" style="padding:0 var(--s4) var(--s3)"><span><i class="key tone-good" style="background:var(--tone)"></i>fresh</span><span><i class="key tone-warn" style="background:var(--tone)"></i>stale: older than its producer's interval</span><span><i class="key req"></i>read but missing</span><span>hover a box for its path, last row and rule</span></div>`;
+  return `<div class="relgraph"><svg viewBox="0 0 ${W} ${h}" style="min-width:860px;max-width:${W}px" role="img" aria-label="Producers, stores and consumers">
+    <text class="muted" x="${X[0]}" y="16">PRODUCERS</text><text class="muted" x="${X[1]}" y="16">STORES</text><text class="muted" x="${X[2]}" y="16">CONSUMERS</text>${out.join("")}</svg></div>
+    <div class="legend" style="padding:0 var(--s4) var(--s3)"><span><i class="key tone-good" style="background:var(--tone)"></i>present</span><span><i class="key tone-warn" style="background:var(--tone)"></i>stale: older than its interval</span><span><i class="key tone-bad" style="background:var(--tone)"></i>error</span><span><i class="key tone-accent" style="background:var(--tone)"></i>outside source</span><span><i class="key req"></i>off or not yet written</span><span>hover a box for its path, facts and rule</span></div>`;
 }
 
 function fleetFlow() {
   pollJson("flow", "/api/fleet/flow", 30e3);
   const rep = F.flow;
-  const head = `<div class="view-head"><div><h2>Data flow</h2><p>Who writes each local state file and who reads it. The map is fixed in flow.py; the values are stat, line counts kept incrementally, and the last row of each log. Nothing here calls a model.</p></div>
+  const head = `<div class="view-head"><div><h2>Data flow</h2><p>Every fact agent-skills keeps, the store that holds it and who writes and reads it, drawn from the registry in registry.py (the same one its tests check the code against). The values are stat, line counts kept incrementally, and the last row of each log. Nothing here calls a model.</p></div>
     ${rep && !rep.error ? `<div class="aside muted">Collected ${relSpan(rep.generated_at)}</div>` : ""}</div>`;
   if (!rep) return head + '<div class="loading">Loading…</div>';
   if (rep.error) return head + `<div class="card"><div class="empty-chart">${esc(rep.error)}</div></div>`;
-  const stale = rep.stores.filter((s) => s.stale), missing = rep.stores.filter((s) => !s.exists), starved = rep.consumers.filter((c) => c.starved);
+  const local = rep.stores.filter((s) => s.state !== "outside"), by = (st) => local.filter((s) => s.state === st);
+  const stale = rep.stores.filter((s) => s.stale), starved = rep.consumers.filter((c) => c.starved);
   const reports = rep.stores.find((s) => s.id === "reports");
-  const kpis = `<div class="kpis" style="--n:4">
-    ${kpi("State files", `${rep.stores.length - missing.length}<small>/${rep.stores.length}</small>`, missing.length ? `${missing.length} missing on this machine` : "all present")}
+  const absent = ["off", "not yet", "error"].map((st) => by(st).length ? `${by(st).length} ${STORE_STATE[st]}` : "").filter(Boolean).join(" · ");
+  const kpis = `<div class="kpis" style="--n:5">
+    ${kpi("Stores", `${by("present").length}<small>/${local.length}</small>`, absent || "all present")}
     ${kpi("Stale", `${stale.length}`, stale.map((s) => s.name).join(", ") || "every loop on time")}
-    ${kpi("Not in the map", `${rep.unread.length}`, "files no known consumer reads")}
-    ${kpi("Starved consumers", `${starved.length}`, starved.map((c) => c.label).join(", ") || "every consumer has input")}</div>`;
-  const rules = rep.stores.filter((s) => s.rule).map((s) => `<tr><td class="mono">${esc(s.path)}</td><td>${esc(s.writers.join(", "))}</td><td>${esc(s.rule)}</td></tr>`).join("");
+    ${kpi("Starved consumers", `${starved.length}`, starved.map((c) => `${c.label} (${c.state})`).join(", ") || "every consumer has input")}
+    ${kpi("Not registered", `${rep.unread.length}`, "files under the state roots no store names")}
+    ${kpi("Two canonical stores", `${rep.conflicts.length}`, rep.conflicts.map((c) => c.fact).join(", ") || "one per fact")}</div>`;
+  const rows = rep.stores.map((s) => `<tr><td class="mono">${esc(s.path)}</td><td>${tag(s.state, storeTone(s))}</td><td class="mono">${esc(factList(s))}</td>
+    <td class="mono">${esc(s.writer_fns.join(", ") || "—")}</td><td>${esc(s.readers.join(", "))}</td><td>${esc(s.rule || "")}</td></tr>`).join("");
   const brief = rep.consumers.find((c) => c.id === "brief");
   return head + kpis + `<div class="card">${flowGraph(rep)}</div>
     ${brief ? `<div class="card"><div class="card-head"><h3>How the Brief's rows are derived</h3></div><p style="padding:0 var(--s4) var(--s3)">${esc(brief.rule)}</p></div>` : ""}
     <div class="grid">
-      <div class="card"><div class="card-head"><h3>Not in the map</h3><span class="aside">${rep.unread.length}</span></div>
-        <ul class="rows">${rep.unread.map((p) => `<li class="mono">${esc(p)}</li>`).join("") || '<li class="muted">Every file has a known reader.</li>'}</ul></div>
+      <div class="card"><div class="card-head"><h3>Two canonical stores</h3><span class="aside">${rep.conflicts.length}</span></div>
+        <ul class="rows">${rep.conflicts.map((c) => `<li><span class="mono">${esc(c.fact)}</span>: ${esc(c.stores.join(", "))}${c.known ? ` <span class="muted">— ${esc(c.known)}</span>` : ""}</li>`).join("") || '<li class="muted">Every fact has one canonical store.</li>'}</ul></div>
+      <div class="card"><div class="card-head"><h3>Not registered</h3><span class="aside">${rep.unread.length}</span></div>
+        <ul class="rows">${rep.unread.map((p) => `<li class="mono">${esc(p)}</li>`).join("") || '<li class="muted">Every file is in the registry.</li>'}
+          ${(rep.scan_problems || []).map((p) => `<li class="muted">not checked: <span class="mono">${esc(p)}</span></li>`).join("")}</ul></div>
       <div class="card"><div class="card-head"><h3>Report files</h3><span class="aside">${reports ? reports.entries : 0}</span></div>
-        <ul class="rows">${reports ? reports.files.map((f) => `<li><span class="mono">${esc(f.path)}</span> <span class="muted">${f.age != null ? rel(new Date(Date.now() - f.age * 1000).toISOString()) : "missing"}</span></li>`).join("")
+        <ul class="rows">${reports && reports.files.length ? reports.files.map((f) => `<li><span class="mono">${esc(f.path)}</span> <span class="muted">${f.age != null ? rel(new Date(Date.now() - f.age * 1000).toISOString()) : "missing"}</span></li>`).join("")
           : '<li class="muted">No session names a brief with a REPORT line.</li>'}</ul></div></div>
-    <div class="card table-wrap"><div class="card-head"><h3>Derivation rules and inputs</h3></div>
-      <table><thead><tr><th>Path</th><th>Written by</th><th>What it holds</th></tr></thead><tbody>${rules}</tbody></table></div>`;
+    <div class="card table-wrap"><div class="card-head"><h3>Registry</h3><span class="aside">${rep.stores.length} stores</span></div>
+      <table><thead><tr><th>Store</th><th>State</th><th>Facts (role)</th><th>Writers</th><th>Readers</th><th>What it holds</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 const CHANGE_STATUS = { proposed: "accent", applied: "good", "in PR": "warn", merged: "good" };
