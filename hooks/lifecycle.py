@@ -20,7 +20,7 @@ this covers the Agent tool. `false` or `"off"` turns it off.
 A check that cannot read the transcript or raises lets the call through (a line in guard-errors.jsonl for an
 exception).
 """
-import json, pathlib, re, sys
+import json, os, pathlib, re, sys
 
 import roles
 from lib import config, shell
@@ -130,8 +130,12 @@ def removes_own(cmd, cwd):
         target = flag(c.words, "--worktree")
         if target in (None, "current", "active") or not target.startswith("path:"):
             return True
-        path = target[len("path:"):].rstrip("/")
-        if isinstance(cwd, str) and path and (cwd == path or cwd.startswith(path + "/")):
+        path = target[len("path:"):]
+        # A path the shell still expands ($PWD, ~, `…`) or a relative one may well be this card.
+        if not path.startswith("/") or any(ch in path for ch in "$`~*?[") or not isinstance(cwd, str):
+            return True
+        path, here = os.path.normpath(path), os.path.normpath(cwd)
+        if here == path or here.startswith(path.rstrip("/") + "/"):
             return True
     return False
 

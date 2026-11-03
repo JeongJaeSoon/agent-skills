@@ -110,6 +110,10 @@ check("removing another card by path is not checked", out == {}, out)
 own = "orca worktree rm --worktree path:/wt/me --json"
 out = hook([user(PREAMBLE), use("m1", "tu_rm", own)], {**rm_event(cmd=own), "cwd": "/wt/me/sub"}, DENY)
 check("removing its own card by path is checked", decision(out) == "deny", out)
+for target in ("path:$PWD", "path:.", "path:/wt/me/sub/..", "path:~/wt/me"):
+    cmd = f"orca worktree rm --worktree {target} --json"
+    out = hook([user(PREAMBLE), use("m1", "tu_rm", cmd)], {**rm_event(cmd=cmd), "cwd": "/wt/me"}, DENY)
+    check(f"{target} may be its own card and is checked", decision(out) == "deny", out)
 # A dispatched lead ends like a worker.
 lead_worker = PREAMBLE + "\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"
 out = hook([user(lead_worker), use("m1", "tu_done", DONE), use("m1", "tu_rm", RM)], rm_event(), DENY)
