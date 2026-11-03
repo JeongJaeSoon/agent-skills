@@ -273,16 +273,53 @@ log = (state_dir / "sends.jsonl").read_text()
 assert len(log.splitlines()) == 8 and secret not in log, log
 
 # The brief's Orca button names a session by its worktree id: the handle is the one its agent terminal has now.
+# `orca terminal switch` moves only the desktop on the machine that runs it, so a switch Orca confirms is still the
+# host's alone, and one it does not confirm is no success. Every reply carries what to type or find on another device.
+export = next(s for s in st["sessions"] if s["id"] == "wt-export")
+where = f"workspace: {export['name']}\nterminal: term_export\nworktree: {export['path']}"
 switched = []
-assert fleet.open_session("wt-export", switch=switched.append) == (200, {"ok": True, "reason": None}) and switched == ["term_export"]
-assert fleet.open_session("wt-nowhere", switch=switched.append)[0] == 409 and switched == ["term_export"]
+
+
+def switch_to(focus):
+    """Orca's whole `terminal switch --json` reply around this focus, as the default switch returns it."""
+    return lambda h: switched.append(h) or {"ok": True, "result": {"focus": focus}}
+
+
+code, out = fleet.open_session("wt-export", switch=switch_to({"handle": "term_export", "tabId": "t1", "navigated": True}))
+assert (code, out["ok"], out["navigated"], out["copy"]) == (200, True, True, where) and switched == ["term_export"], out
+assert "host" in out["reason"] and out["warning"] is None, out
+code, out = fleet.open_session("wt-export", switch=switch_to({"handle": "term_export", "tabId": "t1", "navigated": False}))
+assert (out["ok"], out["navigated"], out["copy"]) == (False, False, where) and out["reason"], out
+# A reply without the field is passed through as the CLI printed it, with one warning line: unknown is not success.
+raw = {"ok": True, "result": {"focus": {"handle": "term_export", "tabId": "t1"}}}
+fleet.run_json, real_run_json = (lambda cmd, timeout: switched.append(cmd[-2]) or raw), fleet.run_json
+code, out = fleet.open_session("wt-export")
+fleet.run_json = real_run_json
+assert (out["ok"], out["navigated"], out["result"], out["copy"]) == (False, None, raw, where), out
+assert out["warning"] and "\n" not in out["warning"], out
+# A long reply reaches the page whole; the log keeps a cut copy under its 4 KiB line cap.
+big = {"ok": True, "result": {"focus": {"handle": "term_export"}, "extra": "x" * 5000}}
+code, out = fleet.open_session("wt-export", switch=lambda h: switched.append(h) or big)
+assert out["result"] == big and len(json.loads((state_dir / "sends.jsonl").read_text().splitlines()[-1])["result"]) <= 1001, out["warning"]
+switched.pop()
+code, out = fleet.open_session("wt-export", switch=lambda h: switched.append(h))
+assert (out["ok"], out["navigated"], out["result"]) == (False, None, None) and out["warning"], out
+assert fleet.open_session("wt-nowhere", switch=switched.append)[0] == 409 and switched == ["term_export"] * 4
 
 
 def refuse(handle):
     raise fleet.SourceError("no such terminal")
 
 
-assert fleet.open_session("wt-export", switch=refuse) == (200, {"ok": False, "reason": "no such terminal"})
+code, out = fleet.open_session("wt-export", switch=refuse)
+assert (code, out["ok"], out["reason"], out["copy"]) == (200, False, "no such terminal", where), out
+# With the paired server's name set, the copy is the command that switches the device it is typed on.
+pathlib.Path(os.environ["ORCH_FLEET_CONFIG"]).write_text(json.dumps({"orca_environment": "home server"}))
+code, out = fleet.open_session("wt-export", switch=switch_to({"navigated": True}))
+assert out["copy"] == "orca terminal switch --environment 'home server' --terminal term_export", out
+pathlib.Path(os.environ["ORCH_FLEET_CONFIG"]).write_text(json.dumps({"orca_environment": ""}))
+assert fleet.open_session("wt-export", switch=switch_to({"navigated": True}))[1]["copy"] == where
+pathlib.Path(os.environ["ORCH_FLEET_CONFIG"]).unlink()
 (state_dir / "sends.jsonl").write_text(log)  # the counts below are of sends
 
 # Permission prompts. Fake screens in the shape Claude Code 2.1.282 draws (measured); every name here is invented.
@@ -953,6 +990,41 @@ process.stdout.write(JSON.stringify({{page: fleetBrief()}}));"""
     assert 'href="#/fleet/session/wt-busy"' in cells[2] and 'data-open-session="wt-busy"' in cells[2], cells[2]
     assert "PR 열고 &lt;리뷰&gt; 대기" in cells[2] and 'data-rel="2026-10-28T09:00:00Z"' in cells[2], cells[2]
     assert "bsess" not in second.split("<tbody>")[1] and "멈춤" in second, second
+    # The Orca button's last outcome: a confirmed switch says it was the host's window only, an unconfirmed one says so
+    # with Orca's reply; both offer what to type or find on another device, escaped.
+    copy = "workspace: <b>w</b>\nterminal: term_x\nworktree: /tmp/\"w\""
+    notes = {"host": {"ok": True, "navigated": True, "reason": "switched in the host's Orca window only", "warning": None, "copy": copy, "name": "<i>n</i>"},
+             "unknown": {"ok": False, "navigated": None, "reason": "switch not confirmed", "copy": copy, "name": "n",
+                         "warning": "Orca's reply to terminal switch has no navigated field", "result": {"focus": {"tabId": "<t>"}}},
+             "none": {"ok": False, "reason": "no connected terminal in this session", "name": "n"}}
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const n = {json.dumps(notes)};
+process.stdout.write(JSON.stringify({{host: openNote(n.host), unknown: openNote(n.unknown), none: openNote(n.none), unset: openNote(null)}}));"""
+    got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert "host&#39;s Orca window only" in got["host"] and "tone-warn" in got["host"] and "not switched" not in got["host"], got["host"]
+    assert "&lt;i&gt;n&lt;/i&gt;" in got["host"], got["host"]
+    assert "n: not switched (switch not confirmed)." in got["unknown"] and "tone-bad" in got["unknown"], got["unknown"]
+    assert "no navigated field" in got["unknown"] and "&lt;t&gt;" in got["unknown"], got["unknown"]
+    for k in ("host", "unknown"):
+        assert got[k].count("data-copy=") == 1 and "<b>" not in got[k] and '/tmp/"w"' not in got[k], got[k]
+        assert "workspace: &lt;b&gt;w&lt;/b&gt;\nterminal: term_x" in got[k] and "data-open-close" in got[k], got[k]
+    assert "data-copy" not in got["none"] and "no connected terminal" in got["none"] and got["unset"] == "", got
+    # Two clicks whose replies come back in the opposite order: the note stays the last click's.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const pending = {{}};
+fleetPost = (path, body) => new Promise((resolve) => {{ pending[body.session] = resolve; }});
+showOpenNote = () => {{}};
+(async () => {{
+  const a = openSession({{dataset: {{openSession: "A"}}}}), b = openSession({{dataset: {{openSession: "B"}}}});
+  pending.B({{ok: true, copy: "terminal B"}}); await b;
+  pending.A({{ok: true, copy: "terminal A"}}); await a;
+  process.stdout.write(JSON.stringify(F.open));
+}})();"""
+    ctx_s = ctx.replace("sb = {process,", "sb = {process, S: {state: {sessions: []}},")
+    got = json.loads(subprocess.run(["node", "-e", ctx_s], input=js, capture_output=True, text=True, check=True).stdout)
+    assert (got["name"], got["copy"]) == ("B", "terminal B"), got
     # The session page lists the rows that session runs, with their PR and when it last reported.
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
