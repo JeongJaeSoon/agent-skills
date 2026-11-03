@@ -75,15 +75,19 @@ def scan(terms, seen, read, now_ms, idle_min, free_gb, min_free_gb, goal_lost_mi
     goals = set(seen.get("goals") or []) & {t["handle"] for t in terms}
     for t in terms:
         h = t["handle"]
+        waited = waits.get(h, prog.NOT_LOOKED)
         try:
             lines = read(h)
         except (SystemExit, Exception):
-            continue
+            # Orca's agentWait needs no screen: a wait it found is reported even when the pane cannot be read.
+            if not isinstance(waited, dict):
+                continue
+            lines = None
         name = (t.get("worktreePath") or "").rstrip("/").rsplit("/", 1)[-1] or h
-        tail = lines[-25:]
+        tail = (lines or [])[-25:]
         idle = (now_ms - (t.get("lastOutputAt") or now_ms)) / 60000
         auth = auth_line(tail) if idle >= AUTH_QUIET_MIN else None
-        hit = prog.judge_wait(waits.get(h, prog.NOT_LOOKED), lines)
+        hit = prog.judge_wait(waited, lines)
         goal = under_goal(t, tail)
         if goal:
             goals.add(h)
