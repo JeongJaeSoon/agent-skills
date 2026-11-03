@@ -42,6 +42,13 @@ within reap.load_cooldown_minutes (default 60). schedule prints the `orca automa
 """
 import contextlib, datetime as dt, functools, hashlib, json, os, pathlib, re, shlex, shutil, signal, stat, subprocess, sys, time, unicodedata
 
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "scripts"))
+try:
+    from sync import reload_row
+except ImportError:  # an install without the repo's scripts/
+    def reload_row(row):
+        return False
+
 CONFIG = pathlib.Path("~/.claude/agent-skills.json").expanduser()
 KINDS = ( "orphan", "docker", "branch", "worktree")
 ALERT = { "orphan_procs": 5, "dangling_volumes": 50,
@@ -1796,8 +1803,12 @@ class Unreadable(Exception):
 def last_entry_time(path):
     """Time of the newest entry with a timestamp in a transcript's tail. An idle Claude session appends untimed
     metadata lines (`atis-latch`) about every 30 minutes, which move the file's mtime without any work; with no
-    timestamp in the tail, the mtime stands, which reads as recent and keeps the card. None when the file is gone;
-    Unreadable when it or its newest timestamp cannot be read, since an older entry would read as quieter."""
+    timestamp in the tail, the mtime stands, which reads as recent and keeps the card. A /reload-* row
+    (sync.reload_row) is not an entry: the skills-sync broadcast types those into finished sessions; nor is the
+    `pr-link` metadata row a reload rewrites. None when the file is gone, and when the tail's only timed entries are
+    such rows: the time of the work is not there to read,
+    and the mtime is the last reload's; the cwd's other transcripts and the terminals decide then. Unreadable when the
+    file or its newest timestamp cannot be read, since an older entry would read as quieter."""
     try:
         with open(path, "rb") as f:
             f.seek(max(0, os.fstat(f.fileno()).st_size - TAIL_BYTES))
@@ -1807,19 +1818,22 @@ def last_entry_time(path):
         return None
     except OSError as e:
         raise Unreadable(f"세션 기록 {path.name} 을 읽지 못함({type(e).__name__})") from e
-    times = []
+    times, skipped = [], False
     for line in lines:
         try:
-            ts = json.loads(line).get("timestamp")
+            row = json.loads(line)
+            ts = row.get("timestamp")
         except (ValueError, AttributeError):
             continue  # the tail's cut first line, or a non-object line
-        if ts:
+        if ts and (reload_row(row) or row.get("type") == "pr-link"):  # pr-link: rewritten when a reload runs
+            skipped = True
+        elif ts:
             try:
                 times.append(parse_ts(ts))
             except (ValueError, TypeError, AttributeError) as e:
                 raise Unreadable(f"세션 기록 {path.name} 의 시각 {str(ts)[:40]!r} 을 읽지 못함") from e
     # A line appended later can carry an older time; the last line's would read the session as quieter.
-    return max(times, default=mtime)
+    return max(times, default=None if skipped else mtime)
 
 
 def session_files(d, subagents=True):

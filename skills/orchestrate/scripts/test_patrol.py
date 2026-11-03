@@ -440,4 +440,110 @@ scans["ho"] = (NOW - 60, 180)
 assert fleet.watcher_items(sessions, T, scans.get) == []
 assert fleet.watcher_items(sessions, T, lambda h: None)[0]["key"] == "watch:ho:0"
 
+# R: the same thing told over and over with nothing changing in between (dash.repeat_turns).
+dash = patrol.dash
+def prompt(t, text):
+    return {"type": "user", "timestamp": t, "message": {"content": text}}
+def reply(t, text, **kw):
+    return {"type": "assistant", "timestamp": t, "message": {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}, **kw}
+def use(t, i, cmd):
+    return {"type": "assistant", "timestamp": t, "message": {"content": [{"type": "tool_use", "id": i, "name": "Bash", "input": {"command": cmd}}]}}
+def res(t, i, out):
+    return {"type": "user", "timestamp": t, "message": {"content": [{"type": "tool_result", "tool_use_id": i, "content": out}]}}
+def nudges(n, gap, said=lambda k: f"Waiting on owner approval for acme/app#1 (asked {10 + k}:05, msg_{k}abcdefgh)."):
+    rows = []
+    for k in range(n):
+        rows += [prompt(ago(gap * (n - k)), "status?"), reply(ago(gap * (n - k) - 1), said(k))]
+    return rows
+rep = dash.repeat_turns(nudges(3, 20))
+assert (rep["kind"], rep["count"], rep["since"]) == ("assistant", 3, ago(60)), rep
+assert dash.repeat_turns(nudges(2, 30)) is None, "two turns are not a streak"
+assert dash.repeat_turns(nudges(4, 5)) is None, "four turns in 20 minutes are too short to say"
+assert dash.repeat_turns(nudges(3, 20, lambda k: f"Waiting on approval: {k} of 3 checks pass.")) is None, \
+    "a number other than a time or an id is progress"
+# A different nudge with the same answer still counts; the same nudge with work that changed does not.
+assert dash.repeat_turns(nudges(3, 20)[:-2] + [prompt(ago(19), "any news?"), reply(ago(18), "Waiting on owner approval for acme/app#1 (asked 12:05, msg_9abcdefgh).")])["kind"] == "assistant"
+def polls(outs, gap=20):
+    rows = []
+    for k, out in enumerate(outs):
+        at = gap * (len(outs) - k)
+        rows += [prompt(ago(at), "check CI"), use(ago(at - 1), f"u{k}", "gh pr checks 1"), res(ago(at - 2), f"u{k}", out),
+                 reply(ago(at - 3), "CI still running.")]
+    return rows
+assert dash.repeat_turns(polls(["pending 3/7", "pending 4/7", "pending 6/7"])) is None, "a result that changes is progress"
+assert dash.repeat_turns(polls(["pending 3/7"] * 3))["count"] == 3, "the same call and the same result are not"
+assert dash.repeat_turns(polls(["pending 3/7"] * 3) + [prompt(ago(0), "check CI"), use(ago(0), "u9", "gh pr checks 1")]) is None, \
+    "a turn still running ends the streak: long work never reads as one"
+swapped = polls(["pending 3/7"] * 3)
+swapped[5] = use(ago(39), "u1", "gh pr checks 2")
+assert dash.repeat_turns(swapped) is None, "a tool call that changed is progress"
+assert dash.repeat_turns(nudges(3, 20, lambda k: f"Processed {k + 1}000000 records.")) is None, "a long count is no id"
+stamped = polls(["pending 3/7"] * 3)
+for k, i in ((1, 1), (5, 5), (9, 9)):
+    stamped[k] = use(stamped[k]["timestamp"], f"u{i}", f"gh pr checks 1 --since {stamped[k]['timestamp']}")
+assert dash.repeat_turns(stamped)["count"] == 3, "a time in a tool's input is no change"
+pins = polls(["ok"] * 3)
+for k, sha in ((1, "1a2b3c4d5e6f7"), (5, "2b3c4d5e6f7a8"), (9, "3c4d5e6f7a8b9")):
+    pins[k] = use(pins[k]["timestamp"], f"u{k}", f"git checkout {sha}")
+assert dash.repeat_turns(pins) is None, "another commit in a tool's input is other work"
+shot = lambda data: [{"type": "image", "source": {"type": "base64", "data": data}}]
+assert dash.repeat_turns(polls([shot("AAAA"), shot("BBBB"), shot("CCCC")])) is None, "a screenshot that changed is a change"
+pic = {"type": "user", "timestamp": ago(0), "message": {"content": shot("DDDD")}}
+assert dash.repeat_turns(polls(["pending 3/7"] * 3) + [pic]) is None, "an image sent with no text is a new prompt"
+long = "x" * 5000
+assert dash.repeat_turns(polls([long + "3/7", long + "4/7", long + "6/7"])) is None, "a result is compared whole"
+errs = [r for k in range(3) for r in (prompt(ago(90 - 30 * k), "continue"),
+        reply(ago(89 - 30 * k), "API Error: 529 overloaded (req_01ABCDEFGHJK)", isApiErrorMessage=True))]
+assert dash.repeat_turns(errs)["kind"] == "error", dash.repeat_turns(errs)
+tail = [json.loads(l) for l in (pathlib.Path(__file__).parent / "testdata" / "reload-tail.jsonl").read_text().splitlines()]
+rep = dash.repeat_turns([r for r in tail if r.get("timestamp")])
+assert (rep["kind"], rep["count"], rep["text"]) == ("reload", 3, "/reload-plugins /reload-skills"), "one turn per reload, not per row"
+assert dash.repeat_turns([prompt("2026-11-03T10:30:00Z", "fix the bug")] + [r for r in tail if r.get("timestamp")][3:]) is None, \
+    "reloads after a prompt still unanswered: the turn may be working"
+mixed = nudges(3, 20)
+mixed.insert(2, [r for r in tail if r.get("timestamp")][5])
+assert dash.repeat_turns(mixed)["kind"] == "assistant", "a reload in between is no turn of the session's"
+
+# R in a round: a stalled card is not working, a parked one stays protected; raised once per session and text.
+rep = {**dash.repeat_turns(nudges(3, 20)), "session": "s1"}
+f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b")],
+          tails={"/w/a": ({"state": "working", "since": ago(1), "repeat": rep}, None),
+                 "/w/b": ({"state": "working", "since": ago(1), "parked": True, "repeat": {**rep, "session": "s2"}}, None)})
+found, v, memo = patrol.judge(f, {})
+assert codes(found) == [("R", "a"), ("R", "b")], found
+assert v["cards"] == {"/w/a": "stalled", "/w/b": "working"}, v["cards"]
+assert "assistant in 3 turns" in found[0]["title"] and "acme/app#1" in found[0]["title"], found[0]["title"]
+again, _, memo2 = patrol.judge(f, memo)
+assert [x["id"] for x in again] == [x["id"] for x in found], "a streak that lasts stays the same finding"
+_, v3, memo3 = patrol.judge(facts(terminals=f["terminals"], tails={"/w/a": (idle(1), None), "/w/b": (idle(1), None)}), memo2)
+back, v4, _ = patrol.judge(f, memo3)
+assert back == [] and v4["cards"]["/w/a"] == "stalled", "the same text again is not raised again, but is still no work"
+assert patrol.judge(f, patrol.judge({**f, "tails": {}}, memo, )[2])[0] == [], "nor after a round that did not see it"
+_, _, kept = patrol.judge({**f, "failed": {"waits"}}, memo)
+assert kept["repeats"] == memo["repeats"], "a round that could not look ends no streak"
+assert patrol.judge({**f, "waits": {"h1": {"kind": "permission"}}}, {})[1]["cards"]["/w/a"] == "waiting"
+# From the real motion: a session idle after the streak is told of it too, and stays idle.
+rows = nudges(3, 20)
+m = dash.step_motion({}, rows[0])
+for row in rows[1:]:
+    m = dash.step_motion(m, row)
+m = {**m, "repeat": {**dash.repeat_turns(rows), "session": "s3"}}
+fi = facts(terminals=[term("h1", "/w/a")], tails={"/w/a": ({**m, "since": ago(19)}, None)}, read=lambda h: ["❯ "])
+found_i, vi, _ = patrol.judge(fi, {})
+assert codes(found_i) == [("I", "a"), ("R", "a")] and vi["cards"] == {"/w/a": "idle"}, (found_i, vi)
+# Never again for the same key, however many other sessions were told since.
+key = f"s3:{m['repeat']['kind']}:{m['repeat']['digest']}"
+crowd = {f"s{n}:assistant:x": {"at": NOW - 86400, "live": False} for n in range(5000)}
+_, _, kept = patrol.judge(fi, {"repeats": {**crowd, key: {"at": NOW - 10 * 86400, "live": False}}})
+assert key in kept["repeats"] and codes(patrol.judge(fi, kept)[0]) == [("I", "a")], "only I: R was raised before"
+# Kept 90 days from when it was last seen, not from when it was first raised.
+_, _, gone_round = patrol.judge({**fi, "tails": {}}, {"repeats": {key: {"at": NOW - 91 * 86400, "seen": NOW - 600, "live": True}}})
+assert key in gone_round["repeats"] and codes(patrol.judge(fi, gone_round)[0]) == [("I", "a")]
+_, _, old_round = patrol.judge({**fi, "tails": {}}, {"repeats": {key: {"at": NOW - 200 * 86400, "seen": NOW - 91 * 86400, "live": False}}})
+assert old_round["repeats"] == {}
+r = {**found[0], "owner": "hr"}
+patrol.write_round([r], {"cards": {}}, False, NOW + 200)
+assert patrol.pending_lines("hr", False, T)[0].startswith("PATROL R"), "shown to its owner"
+assert patrol.pending_lines("hr", False, T + dt.timedelta(hours=3)) == [], "R is shown once, not every 30 minutes"
+
 print("test_patrol: ok")

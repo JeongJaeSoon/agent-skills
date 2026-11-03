@@ -20,6 +20,10 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
   O  orphan PR  a card with no agent and an open PR, 24h so, with no review requested and no CI running
   D  no ref    a board doing item naming no PR and no card, unchanged 24h; tidy shows it as ❔
   E  error loop  the same error line in three rounds in a row, each with new output (shown as ❔, never acted on)
+  R  repeat    a card outside any Run, not waiting on a human, whose transcript ends in 3+ finished turns over 30+ min
+               that tell the same thing with the same work (dash.repeat_turns: one error, one last message, one
+               prompt such as a nudge, or /reload-* only); its card is "stalled", not "working", unless parked. Shown
+               once to its owner, and never raised again for the same session and text (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
@@ -29,8 +33,8 @@ go to <state>/patrol.jsonl with detected_at, are cleared there when a later roun
 by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` show the unacked ones routed to them
 (the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
 Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
-(run, waiting, working, idle, exited), `hints` what a finding said of it (superseded, pr_open_no_session, idle,
-exited), and `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
+(run, waiting, working, idle, exited, stalled), `hints` what a finding said of it (superseded, pr_open_no_session,
+idle, exited, stalled), and `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
 `cards`. reap-hard, the pressure round and the janitor read `cards` only to keep a card judged working; no verdict
 makes anything a target, and a card missing from it, in a failed round above all, is not evidence it is safe.
 
@@ -73,8 +77,11 @@ RENOTIFY = dt.timedelta(minutes=30)
 SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
-         "L": "load", "W": "watcher down"}
-VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session"}
+         "L": "load", "W": "watcher down", "R": "repeat"}
+VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled"}
+SHOW_ONCE = {"R"}  # pending_lines shows these once, not every RENOTIFY
+# A stalled card loses patrol's protection, so reap closes it within days; no session stays open this long.
+REPEATS_KEEP_DAYS = 90
 ACTIVE = ("run", "waiting", "working")  # what a card's activity verdict keeps; reap.PATROL_KEEP reads the same three
 # An error a tool or the CLI printed, at the start of a line once Claude Code's marks are gone.
 ERROR_LINE = re.compile(r"^(?:Error\b|error(?:\[\w+\])?:|ERROR\b|FAILED\b|FAIL\b|Traceback\b|fatal:|panic:|"
@@ -286,6 +293,9 @@ def judge(facts, memo):
     marks = {t["handle"]: seen[t["handle"]] for t in agents if t.get("handle") in seen}
     marks.update({t["handle"]: t.get("lastOutputAt") or 0 for t in agents if t.get("handle") in fresh})
     new_memo = {"last_output": marks, "first_seen": {}, "errors": {}, "level": facts["level"], "t": now}
+    # R raised once per session and text: an entry stays (live False) after its streak ends, so a recurrence is not new.
+    old_repeats = memo.get("repeats") or {}
+    new_memo["repeats"] = {k: {**v, "live": False} for k, v in old_repeats.items()}
 
     def add(code, path, key, title, handle=None, session=None):
         sid, owner = own.get(path, (None, None))
@@ -336,6 +346,16 @@ def judge(facts, memo):
         # Without Orca's wait list a prompt for a human cannot be ruled out: such a card stays working.
         if "waits" in failed:
             act[path] = {"state": "unknown", "why": "agent-wait list not read: a prompt for a human cannot be ruled out"}
+        if (rep := (motion or {}).get("repeat")) and "waits" not in failed:  # before I: an idle one is told too
+            key = f"{rep.get('session')}:{rep['kind']}:{rep['digest']}"
+            old = old_repeats.get(key)
+            if old is None or old.get("live"):
+                add("R", path, (key,), f"❔ the same {rep['kind']} in {rep['count']} turns since {rep['since'][:16]}, "
+                    f"nothing changed in between: {rep['text'][:120]}", handle)
+            new_memo["repeats"][key] = {"at": (old or {}).get("at", now), "seen": now,
+                                        "live": old is None or bool(old.get("live"))}
+            if not motion.get("parked"):  # a wake-up it armed may still bring news: parked stays protected
+                activity(path, "stalled")
         if motion and motion.get("state") == "idle" and not motion.get("parked") and "waits" not in failed:
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
@@ -407,6 +427,11 @@ def judge(facts, memo):
             new_memo["first_seen"].setdefault(k, at)
     if "terminals" in failed:  # no terminal list: keep the error runs and output marks for the next round
         new_memo["errors"], new_memo["last_output"] = dict(hist), dict(seen)
+    if DEPENDS["R"] & failed:  # a round that could not look ends no streak
+        new_memo["repeats"] = dict(old_repeats)
+    # No count cap: a cap would forget a session that is still open. A key goes once its streak is long over.
+    new_memo["repeats"] = {k: v for k, v in new_memo["repeats"].items()
+                           if v.get("live") or now - v.get("seen", v.get("at", now)) < REPEATS_KEEP_DAYS * 86400}
     # W: the orchestrator's screen watch.
     for h, last in facts["watchers"].items():
         if not last or now - last[0] > WATCH_DOWN_MIN * 60:
@@ -461,7 +486,7 @@ def sync_needs_you(rows=None):
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
-           "W": {"state"}}
+           "W": {"state"}, "R": {"terminals", "workers", "waits"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):
@@ -521,12 +546,13 @@ def line(f):
 
 def pending_lines(me, unowned, now=None):
     """Unacked findings routed to terminal `me` (and those routed to nobody, for the orchestrator), each shown again
-    every 30 minutes until acked or cleared."""
+    every 30 minutes until acked or cleared; a SHOW_ONCE code only the first time."""
     now = now or fleet.utcnow()
     mine = [f for f in open_findings().values() if f.get("owner") == me or (unowned and not f.get("owner"))]
     shown = fleet.read_json(SHOWN, {}) or {}
     seen = shown.get(me or "-") or {}
-    due = [f for f in mine if f["id"] not in seen or now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
+    due = [f for f in mine if f["id"] not in seen
+           or f.get("code") not in SHOW_ONCE and now - fleet.parse(seen[f["id"]]) >= RENOTIFY]
     if due:
         keep = {f["id"]: seen.get(f["id"]) for f in mine if seen.get(f["id"])}
         keep.update({f["id"]: fleet.iso(now) for f in due})

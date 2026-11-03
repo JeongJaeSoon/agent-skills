@@ -115,7 +115,8 @@ def transcript_dirs(path):
 
 def transcript_tail(path, strict=False, folder=None):
     """(motion, last row) from the tail of the newest transcript of a card in folder (dash's by default), or
-    (None, None) without one. motion is dash.step_motion's: {"state": "idle"|..., "since", "parked"}. A transcript or
+    (None, None) without one. motion is dash.step_motion's: {"state": "idle"|..., "since", "parked"}, with "repeat"
+    (dash.repeat_turns and the transcript's session id) when the session keeps telling the same thing. A transcript or
     a folder that cannot be read is (None, None) too, or raises with strict."""
     dash = _orch("dash")
     folder = folder or dash.transcript_dir(path)
@@ -134,14 +135,19 @@ def transcript_tail(path, strict=False, folder=None):
         if strict:
             raise
         return None, None
-    motion, last = {}, None
+    motion, last, rows = {}, None, []
     for line in raw:
         try:
             row = json.loads(line)
         except ValueError:
             continue
         if isinstance(row, dict) and row.get("timestamp"):
-            motion, last = dash.step_motion(motion, row), row
+            rows.append(row)
+            # A reload, or the pr-link row it rewrites, is not what the session ended on: an error end stays last.
+            if not dash.reload_row(row) and row.get("type") != "pr-link":
+                motion, last = dash.step_motion(motion, row), row
+    if (repeat := dash.repeat_turns(rows)):
+        motion = {**motion, "repeat": {**repeat, "session": newest.stem}}
     return motion or None, last
 
 
