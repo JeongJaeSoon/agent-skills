@@ -14,8 +14,8 @@ recorded.
   `worker_done` sent as the only command of its call (closed when the send succeeded, as of the moment it was
   checked), and from this turn's text when a close command is checked.
 - PreToolUse (Bash) checks, at `guard.record_check`: a `worker_done` whose `--body` has no record line (a body that
-  is not literal text counts as none), a target and a close command (`orca worktree rm`, `orca terminal close`) in
-  one call, a `cd` before a close command in one call, and a close command while an obligation of this session, or of a session whose directory is under the
+  is not plain quoted text, such as a variable, a substitution or `$'…'`, counts as none), a target and a close command (`orca worktree rm`, `orca terminal close`) in
+  one call, a `cd` before any close command in one call, and a close command while an obligation of this session, or of a session whose directory is under the
   closed path, is open with no record line in this turn's text since.
 - Stop and SubagentStop: an open obligation and no record line in the final reply.
 
@@ -267,7 +267,7 @@ def pre_tool(event, cfg, lvl):
         problems.append("this call both records a milestone and closes a session; run the close as its own call after "
                         "the report")
     elif closes and any(c.words and os.path.basename(c.words[0]) in CHDIR
-                        for c in cmds[:min(cmds.index(c) for c, _ in closes)]):
+                        for c in cmds[:max(cmds.index(c) for c, _ in closes)]):
         problems.append("this call changes directory before a close, so the closed path cannot be checked; run the "
                         "close as its own call")
     for _, (own, closed) in closes:

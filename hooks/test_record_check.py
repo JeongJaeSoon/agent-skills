@@ -257,6 +257,9 @@ reset()
 check("close with nothing open: passes", pre("orca worktree rm --worktree current", session="lead", cwd=str(TMP)) == {})
 check("cd before a close: warn", ctx(pre(f"cd {CARD} && orca worktree rm --worktree current", session="lead",
                                          cwd=str(TMP)), "PreToolUse"))
+check("cd between two closes: warn",
+      ctx(pre(f"orca worktree rm --worktree current; cd {CARD}; orca worktree rm --worktree current", session="lead",
+              cwd=str(TMP)), "PreToolUse"))
 check("cd after a close: not judged by that",
       pre("orca worktree rm --worktree current && cd /", session="lead", cwd=str(TMP)) == {})
 # This turn's report since the obligation clears the close.
