@@ -549,26 +549,20 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.slash_send` | deny | Typing `/reload…` or `/model` with `orca terminal send` |
 | `guard.deny.prompt_substitution` | deny | A command substitution (`$(…)`, backticks) in `orca worktree create --prompt` |
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
-| `guard.deny.owner_only` | deny | `orch refusal clear`, `orch exempt`, and writing the refused-act ledger (`refusals.jsonl`) directly. The human types them as a `!` line in their own chat. With the key off, both are allowed like any other `orch` command |
+| `guard.deny.owner_only` | deny | `orch exempt`. The human types it as a `!` line in their own chat. With the key off, it is allowed like any other `orch` command |
 | `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
 | `guard.ask.pressure_bypass` | ask | An `AGENT_SKILLS_PRESSURE_GATE=0` assignment before the command or through `env` or `export`. An `echo` that prints the text is not covered |
 | `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |
 | `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |
 | `guard.warn.run_download` | warn | `gh run download` without `-D` or `--dir` |
 | `guard.warn.tailscale` | warn | `tailscale serve` or `funnel` from a worker |
-| `guard.refusal_registry` | deny | An act that matches an open refusal in the refused-act ledger (below). `warn` records and only warns; `false` or `off` records nothing |
 | `orchestrate.ask_user_question` | deny | AskUserQuestion in the main conversation of an orchestrator, lead or worker. Subagents and general sessions are not covered |
 | `orchestrate.wait_foreground` | deny | An orchestrator or lead running `orch wait`, `orch inbox --wait`, `orch watch-cards` or `orca orchestration check\|inbox --wait` without `run_in_background`, or cutting a background wait with `\| tail` or `\| head`. A worker's `check --wait` is not covered |
 | `orchestrate.send_devnull` | deny | An orchestrator, lead or worker sending the output of `orca orchestration send\|reply` to `/dev/null`. `2>/dev/null` alone is not covered |
 
 When the hook's own check raises, the call goes through with a warning, and `$AGENT_SKILLS_STATE/guard-errors.jsonl` gets the time, the hook, the exception type and where it was raised (never the command text). An unreadable settings file means the defaults.
 
-The refused-act ledger (`hooks/refusals.py`, on PermissionDenied, PreToolUse, Stop and SubagentStop). A call the auto mode classifier refused with a category (`Reason: [category]`), or the human refused in the permission dialog, goes into `$AGENT_SKILLS_STATE/refusals.jsonl`, and every session is refused the same act until the human lifts it.
-- Recording: a classifier refusal is recorded on the PermissionDenied event. The human's refusals, and any refusal that event missed, are read from the end of the transcript by the next PreToolUse and by Stop. Both key on the tool call id, so each is written once. Refusals from before the ledger existed aren't collected. When it is read from the transcript, parallel calls sent in the same message as the refused one are not blocked. One run of the hook finishes within 7 seconds; past that it warns and lets the call through.
-- Not recorded: a hook's block, a `<tool_use_error>`, read-only tools, and a classifier refusal with no category (no verdict and the like; one warning line instead). A call whose target can't be read isn't recorded either, with a warning.
-- An act is a verb and a target: a deleted path by its real parent folder and its own name (a symlink is itself), a written file by its real path, a PR as `host/owner/repo#n`, a branch as `host/owner/repo:branch`. Deleting one path is the same act whichever command does it (`rm -rf`, `git worktree remove`, `orca worktree rm`), and deleting a folder that holds it matches too. The shapes read today are `rm`, `git worktree remove`, `git reset --hard`, `git push` (plain, forced and delete as separate verbs), `gh pr merge|close`, `gh api …/pulls/N/merge`, `orca worktree rm`, and Edit, Write, MultiEdit and NotebookEdit. A `--dry-run` push and a GET API call are not acts. Anything that can't be pinned to one target (a PR gh couldn't turn into a number, `git push --all`, a relative path after a `cd` in a subshell, a path built from a variable) is neither recorded nor matched.
-- The ledger holds only the time, the call id, the session, the terminal, the Run, the verb and the target. Never the command text or other argument values. Writes happen under an `fcntl` lock.
-- Only the human lifts a refusal. `orch refusal report` lists the open ones, and the human runs `!orch refusal clear <id>` in their own chat. `guard.deny.owner_only` refuses an agent's `orch refusal clear` and direct writes to the ledger. Refusals don't expire. Once a refusal has been cleared for 30 days, the next clear shrinks it to a single `done` line that keeps only its id, so a transcript that still holds it doesn't record it again.
+No hook records a refused act to block it again. The rule against retrying a refused act in another form lives in the skills' text (`orchestrate`'s "Refused acts", `tune-automode`). A `$AGENT_SKILLS_STATE/refusals.jsonl` left by an earlier version is no longer read, and nothing deletes it; the human removes it if they want it gone.
 
 Roles come from one module, `hooks/roles.py`. There are four: orchestrator, lead, worker and general.
 1. A `ROLE: none` record turns every role off (general).
@@ -651,7 +645,7 @@ Of pstack's 58 skills (24 principles and 34 others), we took all 24 principles a
 - **Running projects:** `orchestrate`'s `orch` ledger, the landing gate and exclusive lane, human-gate, the main guardian, the QA lead, and the `orch-dash` dashboard. The shape follows pstack's playbooks, but it was built fresh on top of Orca Runs and GitHub stacks.
 - **Measurement and adapters:** `measure-delivery`, `use-tracker`, `use-notes`.
 - **Machine upkeep:** `reap-resources`, `tune-automode`, `skills-config`, `setup-pc`.
-- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), prose checks (`prose_check.py`), and keeping refused acts from being done again (`refusals.py`).
+- **Hooks:** permission decisions (`guard.py`), re-orienting the orchestrator and leads (`reorient.py`), offering setup on a PC that was never set up (`onboard.py`), recording permission prompts for the dashboard to answer (`permission.py`), closing decisions answered in the terminal (`decision.py`), completion claim checks (`claim_check.py`), a load check before a heavy start (`pressure_gate.py`), and prose checks (`prose_check.py`).
 
 ### Upstream sync status
 - **Last sync:** 2026-10-26, from `b42effe` (0.15.3) to `99b609a` (0.15.32). Upstream added 74 commits to pstack in between.
