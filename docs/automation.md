@@ -140,8 +140,11 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 
 결과는 `<state>/patrol.jsonl`(발견, 해소, ack), `<state>/patrol-verdicts.json`에 남는다. 이 파일의 `cards`는 카드별 활동 판정(run·waiting·working·idle·exited), `hints`는 발견이 그 카드에 대해 한 말(superseded 등), `failed`는 그 라운드에 못 읽은 소스다. 발견은 run·waiting·working 판정을 덮어쓰지 않는다. X·E·L·O는 대시보드 Needs you에 올라가고 조건이 풀리거나 ack하면 빠진다. `orch inbox`와 `orch wait`는 그 카드를 띄운 세션(없으면 오케스트레이터)에 ack되지 않은 발견을 30분마다 다시 보여 준다. 처리한 세션은 `orch patrol ack <id>`로 닫는다. 순찰은 화면 입력, nudge, 터미널 닫기, 워커 종료, 카드 삭제를 하지 않는다. reap-hard와 pressure는 판정을 카드를 남기는 쪽으로만 쓴다(작업 중, 사람 대기, Run 워커). 판정에 없는 카드, 특히 `failed`가 있는 라운드에서 빠진 카드를 안전하다는 근거로 쓰지 않는다.
 
+같은 파일에는 정리 체계 v2의 그림자 필드도 함께 쓴다. 아직 아무도 읽지 않고, 위 필드의 이름과 타입은 그대로다. `round`는 회차 id, `sources`는 소스별 ok·failed·skipped, `activity`는 `cards`가 담지 못하는 상태(parked, unknown)다. `candidates`는 지금 정리 주체들(janitor의 `reap.py scan`, reap-hard, pressure의 안전 종류)이 이번 회차에 대상으로 판정한 것을 규칙 이름(`card:landed`, `card:strict`, `stack:gone` 같은 것)과 함께 옮긴 목록이다. 새로 판정하지 않으므로 지금 대상보다 많아지지 않는다. 기댄 소스를 이번 회차에 읽지 못한 후보와 모델이 닫던 Chrome 창은 `reports`(보고만)로, 사람이 정할 카드는 `alerts`로 간다. 후보 단계는 본 회차가 잠금을 놓은 뒤 240초 예산으로 돌고, 끝까지 가야 `complete: true`가 된다. 스캔을 시작한 시각은 `candidates_t`에, 후보마다 그 후보를 낸 스캔이 시작한 시각은 `seen`에 남는다. 위험 단계에서는 건너뛴다. 회차마다 소스별 시간이 `<state>/patrol-rounds.jsonl`에 남고 `orch patrol timing`이 p50·p95를 보여 준다.
+
 ```bash
 orch patrol --once --dry-run   # 한 라운드를 판정만 하고 아무것도 쓰지 않는다
 orch patrol list               # 이 터미널로 온(그리고 주인 없는) 미처리 발견
 orch patrol ack <id>...        # 처리한 발견을 닫는다
+orch patrol timing             # 최근 회차의 소스별 시간 p50·p95
 ```

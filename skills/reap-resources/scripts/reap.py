@@ -55,12 +55,21 @@ def opt(name, default=None):
     return a[a.index(name) + 1] if name in a else default
 
 
+# None waits for every command; patrol's candidate round sets seconds, so one hung command fails its source instead
+# of the round.
+RUN_TIMEOUT = None
+
+
 def run(cmd, cwd=None, check=True):
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=ENV)
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=ENV, timeout=RUN_TIMEOUT)
     except FileNotFoundError:
         if check:
             raise RuntimeError(f"{cmd[0]}: not installed")
+        return None
+    except subprocess.TimeoutExpired:
+        if check:
+            raise RuntimeError(f"{' '.join(cmd[:4])}: timed out after {RUN_TIMEOUT}s")
         return None
     if check and r.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd[:4])}: {r.stderr.strip()[:200]}")
@@ -370,7 +379,11 @@ def branch_scan(repo, notes):
         return []
 
     def is_ancestor(a, b):
-        return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=repo, capture_output=True).returncode == 0
+        try:
+            return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=repo, capture_output=True,
+                                  timeout=RUN_TIMEOUT).returncode == 0
+        except subprocess.TimeoutExpired:
+            return False  # not shown to be on the PR: the branch stays
     return judge_branches(repo, branches, checked, default, json.loads(prs), is_ancestor)
 
 
