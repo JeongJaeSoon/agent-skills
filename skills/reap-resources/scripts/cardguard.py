@@ -53,29 +53,28 @@ def child_cards(w):
     return sorted(c for c in ((i or "").split("::")[1] if "::" in (i or "") else "" for i in ids) if c and os.path.isdir(c))
 
 
-def _orca_every_run(args):
-    """An Orca listing over every Run: with this terminal's handle set, worker-list scopes to its bound Run. Run from
-    the checkout: outside a git directory (launchd starts in /) Orca was seen binding the list to one Run anyway."""
-    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30,
-                       env={**os.environ, "ORCA_TERMINAL_HANDLE": ""}, cwd=REPO)
-    out = json.loads(p.stdout or "{}")
-    if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
-        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(out.get('error') if isinstance(out, dict) else out)[:120]}"
-                           f" (exit {p.returncode})")
-    return out.get("result", out)
-
-
-def _orca_as_seen(*args):
-    """An Orca listing as this terminal sees it; raises with Orca's error, which worker_list reads."""
-    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30)
+def _orca(args, **kw):
+    """An Orca listing's result; raises with Orca's JSON error, else its stderr (worker_list reads either)."""
+    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30, **kw)
     try:
         out = json.loads(p.stdout or "{}")
     except ValueError:
         out = None
     if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
-        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(out.get('error') if isinstance(out, dict) else p.stderr)[:120]}"
-                           f" (exit {p.returncode})")
+        why = (out.get("error") if isinstance(out, dict) else None) or p.stderr.strip() or p.stdout.strip()
+        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(why)[:200]} (exit {p.returncode})")
     return out.get("result", out)
+
+
+def _orca_every_run(args):
+    """An Orca listing over every Run: with this terminal's handle set, worker-list scopes to its bound Run. Run from
+    the checkout: outside a git directory (launchd starts in /) Orca was seen binding the list to one Run anyway."""
+    return _orca(args, env={**os.environ, "ORCA_TERMINAL_HANDLE": ""}, cwd=REPO)
+
+
+def _orca_as_seen(*args):
+    """An Orca listing as this terminal sees it."""
+    return _orca(args)
 
 
 def worker_pages(state=None, every_run=True, deadline=None):

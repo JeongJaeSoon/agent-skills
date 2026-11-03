@@ -103,7 +103,7 @@ def binding():
         return "unknown"
 
 
-# Orca 1.4.246 answers worker-list with a concise view unless given --full; an older Orca has no --full and always
+# Orca 1.4.246 answers worker-list and run-list with a concise view unless given --full; an older Orca has no --full and always
 # answers with the full record. Emptied once an Orca refuses the flag, so the rest of the process asks without it.
 FULL = ["--full"]
 
@@ -129,37 +129,51 @@ def worker_row(row, run=None):
     return w
 
 
-def worker_list(call, *args):
-    """Every page of `orca orchestration worker-list <args>` read with --full, as (rows, result, more) per page, the
-    rows through worker_row. call(*argv) returns the result object of `orca <argv> --json` and raises or exits on an
-    error; an error naming an unknown --full is an Orca from before the flag, asked again without it. One call per
-    page either way: --full makes each answer larger, not more numerous. Raises RuntimeError when a page says more
-    follow but gives no cursor: a list cut short is not a smaller list."""
+def pages(call, command, *args, error=RuntimeError):
+    """Every page of `orca orchestration <command> <args>` read with --full, as (result, more) per page.
+    call(*argv) returns the result object of `orca <argv> --json` and raises or exits on an error; an error naming an
+    unknown --full is an Orca from before the flag, asked again without it. One call per page either way: --full
+    makes each answer larger, not more numerous. The page is `page.nextCursor`/`hasMore`, or the concise view's
+    top-level `nextCursor`. Raises error (the caller's own failure type) when a page says more follow but gives no
+    cursor: a list cut short is not a smaller list."""
     cursor = None
     while True:
-        argv = ("orchestration", "worker-list", *args, *(("--cursor", cursor) if cursor else ()))
+        argv = ("orchestration", command, *args, *(("--cursor", cursor) if cursor else ()))
+        flags = tuple(FULL)  # another thread may empty FULL while this call is out
         try:
-            res = call(*argv, *FULL)
+            res = call(*argv, *flags)
         except (Exception, SystemExit) as e:
-            if not FULL or not re.search(r"[Uu]nknown (flag|option)\W+--full\b", str(e)):
+            if not flags or not re.search(r"[Uu]nknown (flag|option)\W+--full\b", str(e)):
                 raise
             FULL.clear()
             res = call(*argv)
         res = res if isinstance(res, dict) else {}
         page = res.get("page") if isinstance(res.get("page"), dict) else {}
-        cursor = page.get("nextCursor", res.get("nextCursor"))  # the concise view has no page object
+        cursor = page.get("nextCursor", res.get("nextCursor"))
         more = bool(page.get("hasMore", cursor))
         if more and not cursor:
-            raise RuntimeError("worker-list has more pages and no cursor to them")
-        run = (res.get("scope") or {}).get("run")
-        yield [worker_row(w, run) for w in res.get("workers") or []], res, more
+            raise error(f"{command} has more pages and no cursor to them")
+        yield res, more
         if not more:
             return
 
 
-def all_workers(call, *args):
+def worker_list(call, *args, error=RuntimeError):
+    """pages() of worker-list as (rows, result, more), the rows through worker_row."""
+    for res, more in pages(call, "worker-list", *args, error=error):
+        run = (res.get("scope") or {}).get("run")
+        yield [worker_row(w, run) for w in res.get("workers") or []], res, more
+
+
+def all_workers(call, *args, error=RuntimeError):
     """worker_list's rows from every page."""
-    return [w for rows, _, _ in worker_list(call, *args) for w in rows]
+    return [w for rows, _, _ in worker_list(call, *args, error=error) for w in rows]
+
+
+def all_runs(call, error=RuntimeError):
+    """Every Run of run-list, every page. From 1.4.246 only --full carries coordinator_handle and legacy, and the
+    default page is 10 Runs."""
+    return [r for res, _ in pages(call, "run-list", "--limit", "100", error=error) for r in res.get("runs") or []]
 
 
 def own_dispatch(orca=None, failed=None):

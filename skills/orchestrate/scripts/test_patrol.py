@@ -222,7 +222,7 @@ patrol.write_round([], verd, False, NOW + 420)
 # A failed Orca listing raises, so the round marks its source failed instead of seeing an empty fleet.
 class P:
     def __init__(self, out, rc=0):
-        self.stdout, self.returncode = out, rc
+        self.stdout, self.stderr, self.returncode = out, "", rc
 run0 = patrol.subprocess.run
 for out, rc in (('{"ok": false, "error": "no runtime"}', 0), ('{"ok": true, "result": {}}', 0), ("", 1)):
     patrol.subprocess.run = lambda *a, **k: P(out, rc)

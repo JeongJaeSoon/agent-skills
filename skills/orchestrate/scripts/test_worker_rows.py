@@ -1,16 +1,28 @@
-"""Every reader of `orca orchestration worker-list` gets the same rows from an Orca that answers with the full record
-(older Orca, which has no --full) and from Orca 1.4.246, whose default answer is a concise view without runId,
-dispatchStatus, resource or projection, and without page.hasMore. Run: python3 test_worker_rows.py"""
+"""Every reader of `orca orchestration worker-list` and `run-list` gets the same rows from an Orca that answers with the
+full record (older Orca, which has no --full) and from Orca 1.4.246, whose default answer is a concise view: worker
+rows without runId, dispatchStatus, resource or projection, Runs without coordinator_handle or legacy, and no
+page.hasMore. Each reader runs its own `orca` adapter against this file standing in as the `orca` binary on PATH.
+Run: python3 test_worker_rows.py"""
 import contextlib, copy, io, json, os, pathlib, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 DATA = {k: json.loads((HERE / "testdata" / f"worker-list-{k}.json").read_text()) for k in ("full", "concise")}
+RUNS = {k: json.loads((HERE / "testdata" / f"run-list-{k}.json").read_text()) for k in ("full", "concise")}
 UNKNOWN_FULL = "error: invalid_argument: Unknown flag --full for command: orchestration worker-list"
 
 
 def answer(version, argv):
     """`orca <argv> --json`'s result as an Orca of that version gives it; raises its error."""
     argv = [a for a in argv if a != "--json"]
+    if argv[:2] == ["worktree", "list"]:
+        return {"worktrees": []}
+    if argv[:2] == ["terminal", "list"]:
+        return {"terminals": [{"handle": "term_coord"}]}
+    if argv[:2] == ["orchestration", "run-list"]:
+        full = "--full" in argv
+        if full and version.startswith("old"):
+            raise RuntimeError(UNKNOWN_FULL.replace("worker-list", "run-list"))
+        return copy.deepcopy(RUNS["full" if full or version.startswith("old") else "concise"][1 if "--cursor" in argv else 0])
     if argv[:2] == ["orchestration", "run-current"]:
         return {"run": None}
     if argv[:2] in (["orchestration", "task-list"], ["orchestration", "gate-list"]):
@@ -19,9 +31,9 @@ def answer(version, argv):
         return {"run": {"id": "run_demo"}}
     assert argv[:2] == ["orchestration", "worker-list"], argv
     full = "--full" in argv
-    if full and version == "old":
+    if full and version.startswith("old"):
         raise RuntimeError(UNKNOWN_FULL)
-    res = copy.deepcopy(DATA["full" if full or version == "old" else "concise"][1 if "--cursor" in argv else 0])
+    res = copy.deepcopy(DATA["full" if full or version.startswith("old") else "concise"][1 if "--cursor" in argv else 0])
     if "--terminal-state" in argv:
         res["workers"] = [w for w in res["workers"] if w["terminalState"] == argv[argv.index("--terminal-state") + 1]]
     if "--run" not in argv:  # every Run: Orca names no Run, and the concise rows carry none
@@ -29,11 +41,13 @@ def answer(version, argv):
     return res
 
 
-if sys.argv[1:2] == ["--orca"]:  # this file as the `orca` binary, for the readers that run a subprocess
+if sys.argv[1:2] == ["--orca"]:  # this file as the `orca` binary
+    version = os.environ["WORKER_ROWS_ORCA"]
     try:
-        print(json.dumps({"ok": True, "result": answer(os.environ["WORKER_ROWS_ORCA"], sys.argv[2:])}))
+        print(json.dumps({"ok": True, "result": answer(version, sys.argv[2:])}))
     except RuntimeError as e:
-        print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": str(e)}}))
+        if version != "old-stderr":  # an Orca that says why on stderr alone
+            print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": str(e)}}))
         print(e, file=sys.stderr)
         sys.exit(1)
     sys.exit(0)
@@ -43,7 +57,8 @@ fake_orca = tmp / "orca"
 fake_orca.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{pathlib.Path(__file__).resolve()}" --orca "$@"\n')
 fake_orca.chmod(0o755)
 os.environ.update(AGENT_SKILLS_STATE=str(tmp), ORCH_FLEET_STATE=str(tmp / "dashboard"), AGENT_SKILLS_PATROL="off",
-                  PROGRAMS_HOME=str(tmp / "programs"), SKILLS_SYNC_ORCA=str(fake_orca))
+                  PROGRAMS_HOME=str(tmp / "programs"), SKILLS_SYNC_ORCA=str(fake_orca),
+                  PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}")
 (tmp / "dashboard").mkdir()
 sys.path[:0] = [str(HERE), str(HERE.parents[1] / "reap-resources" / "scripts"), str(HERE.parents[2] / "scripts")]
 import card, cardguard, dash, fleet, orca_settings, patrol, prog, reap  # noqa: E402
@@ -59,20 +74,8 @@ def results(version):
             return fn(*a)
         orca_settings.FULL[:] = ["--full"]
         got = fn(*a)
-        assert orca_settings.FULL == ([] if version == "old" else ["--full"]), (fn, version)
+        assert orca_settings.FULL == ([] if version.startswith("old") else ["--full"]), (fn, version)
         return got
-
-    def call(*a):
-        try:
-            return answer(version, list(a))
-        except RuntimeError as e:
-            sys.exit(f"orca {' '.join(a[:2])}: {e}")  # prog.orca_json's failure
-    prog.orca_json = call
-    fleet.orca = lambda *a, timeout=30: answer(version, list(a))
-    dash.orca_result = lambda *a: answer(version, ["orchestration", *a])
-    dash.sh = lambda cmd, timeout=45: {"result": {"worktrees": []}}
-    cardguard._orca_every_run = lambda args: answer(version, list(args))
-    cardguard._orca_as_seen = lambda *a: answer(version, list(a))
 
     out = {}
     rows = fresh(prog.all_workers, "run_demo")
@@ -116,6 +119,10 @@ def results(version):
     got = fresh(fleet.fetch_run, {"id": "run_demo"}, True)
     out["fleet"] = ([(w.get("dispatchId"), w.get("runId"), w.get("dispatchStatus")) for w in got["workers"]],
                     fleet.settled_run(got))
+    fleet.RUN_CACHE.clear()
+    runs = fresh(fleet.fetch_runs)
+    out["fleet_runs"] = ([(r["id"], r.get("coordinator_handle")) for r in runs["runs"]],
+                         sorted({w.get("runId") for w in runs["workers"]}))
     out["dash"] = [w.get("dispatchId") for w in fresh(dash.fetch_orca, {"run": "run_demo", "lead_dispatch": "ctx_lead"})["workers"]]
     return out
 
@@ -138,10 +145,37 @@ assert old["fleet"] == ([("ctx_lead", "run_demo", "dispatched"), ("ctx_a", "run_
                          ("ctx_b", "run_demo", "completed"), ("ctx_c", "run_demo", "completed"),
                          ("ctx_x", "run_demo", "dispatched")], False), old
 assert old["dash"] == ["ctx_a", "ctx_b", "ctx_c"], old
+# Both run-list pages are read; the legacy Run is left out and run_demo keeps its coordinator.
+assert old["fleet_runs"] == ([("run_demo", "term_coord")], ["run_demo"]), old
 
-new = results("new")
-differ = [k for k in old if new[k] != old[k]]
-assert not differ, "\n".join(f"{k}: {new[k]!r}" for k in differ)
+for version in ("old-stderr", "new"):
+    got = results(version)
+    differ = [k for k in old if got[k] != old[k]]
+    assert not differ, version + "\n" + "\n".join(f"{k}: {got[k]!r}" for k in differ)
+
+# The concise view's own paging: a top-level nextCursor, no page object, none on the last page.
+orca_settings.FULL.clear()
+assert [(w["dispatchId"], w["runId"]) for w in orca_settings.all_workers(lambda *a: answer("new", list(a)), "--run", "r")] \
+    == [(d, "run_demo") for d in ("ctx_lead", "ctx_a", "ctx_b", "ctx_c", "ctx_x")]
+# Another thread emptied FULL while this call was out: its own refusal of --full is still asked again without it.
+orca_settings.FULL[:] = ["--full"]
+
+
+def racing(*a):
+    if "--full" in a:
+        orca_settings.FULL.clear()
+        raise RuntimeError(UNKNOWN_FULL)
+    return {"workers": [{"dispatchId": "d"}]}
+
+
+assert orca_settings.all_workers(racing) == [{"dispatchId": "d"}]
+# More pages and no cursor fail with the caller's own error type, so its handler keeps the source as failed.
+for err in (RuntimeError, fleet.SourceError, dash.SourceError, SystemExit):
+    try:
+        orca_settings.all_workers(lambda *a: {"workers": [], "page": {"hasMore": True}}, error=err)
+        raise AssertionError("a list cut short is not a smaller list")
+    except err:
+        pass
 
 # A concise row alone (an Orca that gave no full record) still reads as far as it goes, in the full record's names.
 row = orca_settings.worker_row(DATA["concise"][0]["workers"][1], run="run_demo")

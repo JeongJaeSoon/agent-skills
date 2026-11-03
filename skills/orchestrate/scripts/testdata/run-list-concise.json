@@ -1,0 +1,4 @@
+[
+ {"runs": [{"id": "run_demo", "objective": "demo program"}], "nextCursor": "run-cursor-2"},
+ {"runs": [{"id": "run_old", "objective": "an imported legacy run"}]}
+]

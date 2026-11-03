@@ -212,7 +212,8 @@ def settled_run(got):
 
 
 def fetch_runs():
-    listed = orca("orchestration", "run-list").get("runs", [])
+    import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
+    listed = orca_settings.all_runs(orca, error=SourceError)
     runs = [r for r in listed if not r.get("legacy") and r.get("id") != "run_legacy_local"]
     live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
     out = {"runs": runs, "workers": [], "tasks": [], "gates": []}
@@ -234,7 +235,7 @@ def fetch_run(r, full):
     # Without --run, worker-list is scoped to the Run bound to the calling terminal: a server started from a
     # coordinator's terminal saw only that Run's workers, and mail from every other Run's settled worker stayed open.
     import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
-    workers = orca_settings.all_workers(orca, "--run", r["id"], "--limit", "100")
+    workers = orca_settings.all_workers(orca, "--run", r["id"], "--limit", "100", error=SourceError)
     if not full:
         return {"workers": workers, "tasks": [], "gates": []}
     return {"workers": workers, "tasks": orca("orchestration", "task-list", "--run", r["id"]).get("tasks", []),

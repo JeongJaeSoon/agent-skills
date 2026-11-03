@@ -290,7 +290,8 @@ def fetch_orca(cfg):
     wts = sh(["orca", "worktree", "list", "--json"])
     import orca_settings  # a lead started as a worker shares its coordinator's Run: only the units under it
     # worker-list pages at 100 rows; one run passed 86 in two days
-    workers = orca_settings.all_workers(lambda *a: orca_result(*a[1:]), "--run", cfg["run"], "--limit", "100")
+    workers = orca_settings.all_workers(lambda *a: orca_result(*a[1:]), "--run", cfg["run"], "--limit", "100",
+                                        error=SourceError)
     tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
     workers = orca_settings.lead_scope(workers, cfg.get("lead_dispatch"))
     return {"workers": workers,
