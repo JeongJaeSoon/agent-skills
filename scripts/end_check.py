@@ -29,7 +29,7 @@ otherwise.
 Exit codes: 0 the verdict printed (and applied); 2 usage; 3 --apply refused: the Dispatch has not settled or could
 not be read; 4 an applied command failed (its output is printed).
 """
-import datetime, json, os, pathlib, re, subprocess, sys
+import datetime, json, math, os, pathlib, re, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
@@ -149,10 +149,14 @@ def card_facts(me, mode="card", dispatch=None):
     return f
 
 
-def when(value):
-    """Epoch seconds of an ISO time (`Z` or none: UTC) or of epoch milliseconds; None when unreadable."""
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value / 1000
+def when(value, ms=False):
+    """Epoch seconds of an ISO time string (`Z` or none: UTC), or with ms=True of a finite epoch-milliseconds
+    number; None for anything else."""
+    if ms:
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 1e11
+        return value / 1000 if ok else None
+    if not isinstance(value, str):
+        return None
     try:
         t = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
@@ -184,8 +188,10 @@ def waiting_questions(senders, since=None):
     page = res.get("page")
     more = res.get("hasMore") or res.get("nextCursor") or (
         isinstance(page, dict) and (page.get("hasMore") or page.get("nextCursor")))
-    times, start = [when(m.get("created_at")) for m in msgs], when(since) if since is not None else None
-    covers = bool(msgs) and start is not None and None not in times and min(times) <= start
+    # Strictly older, by more than a second: a row stamped to the second, or at the card's own instant, may share the
+    # boundary with rows left on the next page.
+    times, start = [when(m.get("created_at")) for m in msgs], when(since, ms=True)
+    covers = bool(msgs) and start is not None and None not in times and min(times) < start - 1
     if (len(msgs) >= int(INBOX_LIMIT) or more) and not covers:
         print(f"[{ME}] warning: the inbox has more than one page and its oldest row is not older than this card; "
               "questions waiting are unknown", file=sys.stderr)

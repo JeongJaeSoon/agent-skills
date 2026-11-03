@@ -124,6 +124,16 @@ with contextlib.redirect_stderr(io.StringIO()):
     assert end_check.waiting_questions(ME, card_ms) is None
     os.environ["FAKE_INBOX"] = json.dumps([dict(Q, created_at="not a time")])
     assert end_check.waiting_questions(ME, card_ms) is None
+    # At the boundary (the card's own second) the next page may hold the same instant: not covered.
+    for at in ("2026-01-01T10:00:00Z", "2026-01-01T09:59:59.500Z"):
+        os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x", created_at=at)])
+        assert end_check.waiting_questions(ME, card_ms) is None, at
+    # Times of the wrong kind are unread: a number for created_at, seconds or infinity for the card's creation.
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x", created_at=1767250000)])
+    assert end_check.waiting_questions(ME, card_ms) is None
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x", created_at="2026-01-01T09:00:00Z")])
+    assert end_check.waiting_questions(ME, 1767261600) is None
+    assert end_check.waiting_questions(ME, float("inf")) is None
     end_check.INBOX_LIMIT = limit
     os.environ["FAKE_PAGE"] = '{"hasMore": true, "nextCursor": "c2"}'
     assert end_check.waiting_questions(ME) is None
