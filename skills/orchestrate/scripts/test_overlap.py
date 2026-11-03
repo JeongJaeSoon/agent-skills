@@ -71,4 +71,148 @@ assert prog.plan_overlaps("p", ["db/migrations/003.sql"], files, prs, CFG, rows)
     "OVERLAP plan #2 *migrations/*")
 assert prog.plan_overlaps("p", ["src/"], files, prs, CFG, rows) == []
 
+# Across programs: this program's open PRs against other programs' open PRs in the same repo. Warnings only:
+# no stack or `orch dep` command, since neither lead can tie its PR to another program's ticket.
+import json, tempfile, traceback
+
+xrows = [row(1, "abc-1-fix"), row(2, "abc-2-fix"), row(40, "other-40"), row(41, "other-41")]
+WARN = "→ warning: settle the landing order with the other lead through PARENT"
+
+
+def no_command(lines):
+    assert lines and not any("orch dep" in x or "stack" in x or "git merge" in x for x in lines), lines
+
+
+def test_cross_program_overlap():
+    # One line per shared file, and no command.
+    out = prog.cross_overlaps({1: ["a", "b", "c"], 2: ["z"]}, {"other": {40: ["b", "a"], 41: ["y"]}}, xrows)
+    assert out == [f"OVERLAP other #1 #40 a {WARN}", f"OVERLAP other #1 #40 b {WARN}"], out
+    no_command(out)
+
+
+def test_cross_program_plan_overlap():
+    # Planned paths (--paths) against another program's open PRs, one line per planned path it touches.
+    out = prog.cross_overlaps({}, {"other": {40: ["skills/x/a.py", "skills/x/b.py", "d"]}}, xrows,
+                              paths=["skills/x/", "skills/*.py", "c"])
+    assert out == [f"OVERLAP other plan #40 skills/x/a.py {WARN}", f"OVERLAP other plan #40 skills/x/b.py {WARN}"], out
+    no_command(out)
+
+
+def test_cross_program_no_overlap():
+    assert prog.cross_overlaps({1: ["a"]}, {"other": {40: ["b"]}}, xrows) == []
+    assert prog.cross_overlaps({1: ["a"]}, {"other": {}}, xrows) == []
+
+
+def test_cross_program_stack_excluded():
+    # Already related through a GitHub stack, or one PR's base being the other's head: no line.
+    assert prog.cross_overlaps({1: ["a"]}, {"other": {40: ["a"]}}, xrows, stacks={"s": [1, 40]}) == []
+    assert prog.cross_overlaps({1: ["a"]}, {"other": {40: ["a"]}},
+                               [row(1, "abc-1-fix"), row(40, "o", base="abc-1-fix")]) == []
+
+
+def test_cross_program_unreadable_is_unknown():
+    # A file list gh could not read, or a program whose state could not be read, is UNKNOWN, never "no overlap".
+    out = prog.cross_overlaps({1: ["a"]}, {"other": {40: None, 41: ["a"]}}, xrows)
+    assert out == ["OVERLAP UNKNOWN other #40 → its file list could not be read; compare it by hand",
+                   f"OVERLAP other #1 #41 a {WARN}"], out
+    assert prog.cross_overlaps({1: ["a"]}, {"broken": None}, xrows) == [
+        "OVERLAP UNKNOWN broken → its program state could not be read; compare it by hand"]
+    # Even with no open PR of this program: the broken program's PRs are unknown, not absent.
+    assert prog.cross_overlaps({}, {"broken": None}, xrows) == [
+        "OVERLAP UNKNOWN broken → its program state could not be read; compare it by hand"]
+    # This program's own PR whose file list could not be read, with or without another program's open PR.
+    own = ["OVERLAP UNKNOWN #2 → this program's file list for it could not be read; compare it by hand"]
+    assert prog.cross_overlaps({}, {"other": {40: ["a"]}}, xrows, unread=[2]) == own
+    assert prog.cross_overlaps({}, {"other": {}}, xrows, unread=[2]) == own
+    # Another program's unreadable PR, with no PR or planned path of this program to compare.
+    assert prog.cross_overlaps({}, {"other": {40: None}}, []) == [
+        "OVERLAP UNKNOWN other #40 → its file list could not be read; compare it by hand"]
+
+
+def test_other_programs_from_their_state():
+    # Same repo only; open PRs the other program's ledger names and has not seen land. A PR that only carries a
+    # ticket-like name is not counted: short ids repeat across programs.
+    with tempfile.TemporaryDirectory() as d:
+        home = pathlib.Path(d)
+
+        def program(slug, repo, ledger, predicate=()):
+            (home / slug).mkdir()
+            (home / slug / "program.json").write_text(json.dumps({"slug": slug, "repo": repo, "predicate": list(predicate)}))
+            (home / slug / "ledger.jsonl").write_text("".join(json.dumps(e) + "\n" for e in ledger))
+        program("me", "acme/app", [{"ts": T, "ev": "ready", "pr": 1, "ticket": "ABC-1"}])
+        program("other", "acme/app", [{"ts": T, "ev": "ready", "pr": 40, "ticket": "XYZ-1"},
+                                      {"ts": T, "ev": "ready", "pr": 41, "ticket": "XYZ-2"},
+                                      {"ts": T, "ev": "landed", "pr": 41},
+                                      {"ts": T, "ev": "ready", "pr": 99, "ticket": "XYZ-3"}], predicate=["ABC-2"])
+        program("elsewhere", "acme/web", [{"ts": T, "ev": "ready", "pr": 40, "ticket": "W-1"}])
+        program("broken", "acme/app", [])
+        (home / "broken" / "ledger.jsonl").write_text("{not json\n")
+        (home / "_archive").mkdir()
+        rows_ = [row(1, "abc-1-fix"), row(2, "abc-2-fix"), row(40, "xyz-1"), row(41, "xyz-2")]
+        calls = []
+
+        def listed(repo, n):
+            calls.append((repo, n))
+            return {40: ["a"]}.get(n)
+        old, prog.HOME = prog.HOME, home
+        try:
+            got = prog.other_program_files("me", "acme/app", {1}, rows_, listed)
+            # A PR this program already counts as its own is not compared with itself.
+            mine = prog.other_program_files("me", "acme/app", {1, 40}, rows_, listed)
+        finally:
+            prog.HOME = old
+        # #2 is not claimed by `other` though its predicate names ABC-2; #41 landed; #99 is not open.
+        assert got == {"broken": None, "other": {40: ["a"]}}, got
+        assert calls == [("acme/app", 40)], calls
+        assert mine == {"broken": None, "other": {}}, mine
+        # A ledger row without the shape the ledger has is unreadable state too, whatever its repo.
+        program("shapeless2", "acme/app", [{"pr": 40}])
+        program("mixed", "acme/app", [{"ts": T, "ev": "ready", "pr": 40}, {"ts": T, "ev": "ready", "pr": "41"}])
+        prog.HOME = home
+        try:
+            got = prog.other_program_files("me", "acme/app", {1}, rows_, listed)
+            assert got["shapeless2"] is None and got["mixed"] is None, got
+            # No repo in program.json, or a ledger row with no event: unreadable state, not "another repo".
+            (home / "norepo").mkdir()
+            (home / "norepo" / "program.json").write_text("{}")
+            program("emptyrow", "acme/app", [{}])
+            # A repo name is matched case-insensitively, as GitHub does.
+            program("cased", "Acme/App", [{"ts": T, "ev": "ready", "pr": 40}])
+            got = prog.other_program_files("me", "acme/app", {1}, rows_, listed)
+            assert got["norepo"] is None and got["emptyrow"] is None and got["cased"] == {40: ["a"]}, got
+            # The open-PR list hit its limit: a ledger PR missing from it may still be open, so it is UNKNOWN.
+            full = [row(n, f"b{n}") for n in range(1000, 1000 + prog.OPEN_LIMIT)]
+            assert prog.other_program_files("me", "acme/app", {1}, full, listed)["other"] == {40: None, 99: None}
+        finally:
+            prog.HOME = old
+
+
+def test_other_ledger_wins_over_ticket_guess():
+    # #40's branch carries this program's ticket, but another program's ledger names it: it is theirs, compared
+    # across programs and kept out of this program's own OVERLAP lines; #3 could not be listed and is unread.
+    with tempfile.TemporaryDirectory() as d:
+        home = pathlib.Path(d)
+        (home / "other").mkdir()
+        (home / "other" / "program.json").write_text(json.dumps({"repo": "acme/app"}))
+        (home / "other" / "ledger.jsonl").write_text(json.dumps({"ts": T, "ev": "ready", "pr": 40}) + "\n")
+        old, prog.HOME = prog.HOME, home
+        try:
+            got = prog.cross_inputs("me", "acme/app", [{"ts": T, "ev": "ready", "pr": 1, "ticket": "ABC-1"}],
+                                    [row(1, "abc-1-a"), row(3, "abc-1-c"), row(40, "abc-1-b")],
+                                    {1: "ABC-1", 3: "ABC-1", 40: "ABC-1"}, {1: ["a"], 40: ["a"]},
+                                    lambda repo, n: ["a"])
+        finally:
+            prog.HOME = old
+        assert got == ({1: "ABC-1", 3: "ABC-1"}, {1: ["a"]}, {"other": {40: ["a"]}}, [3]), got
+
+
+failed = []
+for name, fn in [(k, v) for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]:
+    try:
+        fn()
+    except Exception:
+        failed.append(name)
+        print(f"FAIL {name}\n{traceback.format_exc(limit=1)}")
+if failed:
+    sys.exit(f"{len(failed)} failed: {', '.join(failed)}")
 print("prog.py path overlap: all pass")
