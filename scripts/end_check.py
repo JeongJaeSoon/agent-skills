@@ -290,6 +290,8 @@ def judge(f, mode, outcome=None, keep=None, ticket_done=False):
         holds.append("linked ticket: its state is not read here; pass --ticket-done once it is completed")
     if mode == "card" and f.get("tickets") is None:
         unknown.append("linked ticket")
+    if f.get("archive_hook", False) is None:
+        unknown.append("orca.yaml (its archive hook)")
     reasons = holds + dirty + [f"cannot read: {u}" for u in unknown]
     if dirty and mode == "user" and not holds:
         return "ask", reasons
@@ -406,7 +408,7 @@ def main(argv):
     # The git facts come from the card Orca would remove, not from wherever this ran.
     git = git_facts(card["path"]) if card["path"] else dict.fromkeys(("tracked", "untracked", "caches", "on_main",
                                                                        "open_prs", "branch"))
-    facts = {**git, **card}
+    facts = {**git, **card, "archive_hook": archive_hook(card["path"]) if card["path"] else None}
     verdict, reasons = judge(facts, mode, opts.get("--outcome"), keep_row(opts), bool(opts.get("--ticket-done")))
     print(json.dumps({"verdict": verdict, "mode": mode, "reasons": reasons, "facts": facts}, ensure_ascii=False,
                      indent=1))

@@ -19,6 +19,9 @@ def judge(mode="worker", outcome="succeeded", keep=False, ticket_done=False, **f
 # Remove: every criterion holds (build caches do not count as dirt).
 assert judge() == ("remove", ["the Remove row holds"]), judge()
 assert judge(mode="card")[0] == "remove" and judge(mode="user", keep=None)[0] == "remove"
+# An orca.yaml that exists but cannot be read keeps the card before any rm: a direct rm would skip its archive hook.
+assert judge(mode="card", archive_hook=None) == ("keep", ["cannot read: orca.yaml (its archive hook)"])
+assert judge(mode="card", archive_hook=True)[0] == "remove"
 # The keep rows, each alone.
 rows = {
     "failed outcome": dict(outcome="failed"),
@@ -285,6 +288,7 @@ with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
     rc = end_check.main(["--worker", "--outcome", "succeeded", "--no-keep", "--dispatch", "ctx_1"])
 res = json.loads(out.getvalue())
 assert rc == 0 and res["verdict"] == "keep" and any("a.txt" in r for r in res["reasons"]), res
+assert res["facts"]["archive_hook"] is False, res["facts"]
 # No card path from Orca: every git fact is unread, so it keeps.
 os.environ["FAKE_WT"] = json.dumps({"isMainWorktree": False, "linkedItems": []})
 out = io.StringIO()

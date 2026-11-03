@@ -31,6 +31,7 @@ PARAGRAPH = re.compile(r"An act refused by a permission prompt.*?fix\s+the\s+cau
 DISPATCH = re.compile(r"--dispatch-id[ =]+(ctx_\w+)\b")
 OK = re.compile(r'"ok"\s*:\s*true|\bmessageId=msg_')
 SOURCE = "(agent-skills hooks/lifecycle.py, {key})"
+WARNING = re.compile(r"(\[[^\]\n]*\] )?warning: ")
 
 
 def paragraph():
@@ -69,7 +70,9 @@ def text_of(e):
 
 def result_text(b):
     c = b.get("content")
-    return c if isinstance(c, str) else " ".join(x.get("text") or "" for x in c or [] if isinstance(x, dict))
+    if isinstance(c, str):
+        return c
+    return " ".join(str(x.get("text") or "") for x in c if isinstance(x, dict)) if isinstance(c, list) else ""
 
 
 def calls(rows):
@@ -150,12 +153,16 @@ def end_check_remove(cmd, out):
     cs = shell.commands(cmd)
     if not (len(cs) == 1 and cs[0].name == "skills-sync" and cs[0].words[1:2] == ["end-check"]):
         return False
-    m = re.search(r"(?m)^\{", out or "")  # warnings on stderr come first, one line each
+    m = re.search(r"(?m)^\{", out) if isinstance(out, str) else None
+    # Warnings on stderr come first, one line each; anything else around the JSON leaves the output unread.
+    if not m or not all(WARNING.match(line) for line in out[:m.start()].splitlines()):
+        return False
     try:
-        res = json.JSONDecoder().raw_decode(out, m.start())[0] if m else None
+        res, end = json.JSONDecoder().raw_decode(out, m.start())
     except ValueError:
         return False
-    return isinstance(res, dict) and res.get("mode") == "card" and res.get("verdict") == "remove"
+    return (not out[end:].strip() and isinstance(res, dict) and res.get("mode") == "card"
+            and res.get("verdict") == "remove")
 
 
 def exit_order(event, s, lvl):
@@ -213,14 +220,15 @@ def main():
     if not isinstance(event, dict) or event.get("hook_event_name", "PreToolUse") != "PreToolUse":
         return 0
     out = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
+    tool = event.get("tool_name")
+    cmd = (event.get("tool_input") or {}).get("command") if isinstance(event.get("tool_input"), dict) else None
+    lvl = "warn"
     try:
         cfg = config.load()
-        tool = event.get("tool_name")
-        cmd = (event.get("tool_input") or {}).get("command") if isinstance(event.get("tool_input"), dict) else None
         if tool == "Bash" and not (isinstance(cmd, str) and "worktree" in cmd and removes(cmd)):
             return 0  # the role is read from the transcript only for an rm
-        s = roles.session(event)
         lvl = config.level(cfg, "guard.exit_order", "warn")
+        s = roles.session(event)
         # Unread, the transcript cannot say whether this is a card that must report first: it does not pass as one
         # that need not.
         blind = (tool == "Bash" and lvl != "off" and not event.get("agent_id") and removes_own(cmd, event.get("cwd"))
@@ -232,12 +240,9 @@ def main():
                                      "its worker_done or end-check came back first is unknown (end-session §7, §8). "
                                 + SOURCE.format(key="guard.exit_order")) if blind else \
                 exit_order(event, s, lvl) if lvl != "off" else (None, None)
-            if decision == "deny":
-                out["hookSpecificOutput"].update(permissionDecision="deny", permissionDecisionReason=reason)
-            elif decision:
-                out["systemMessage"] = out["hookSpecificOutput"]["additionalContext"] = reason
-            else:
+            if not decision:
                 return 0
+            hold(out, decision, reason)
         elif tool in ("Agent", "Task") and roles.applies("agent_forbidden", s):
             updated = attach(event, cfg)
             if not updated:
@@ -251,9 +256,25 @@ def main():
             return 0
     except Exception as e:
         config.log_error("lifecycle", e)
-        return 0
+        # A failure while judging an rm of this very card does not let the rm through.
+        try:
+            if not (tool == "Bash" and lvl != "off" and not event.get("agent_id") and isinstance(cmd, str)
+                    and removes_own(cmd, event.get("cwd"))):
+                return 0
+        except Exception:
+            pass
+        hold(out, lvl, f"`orca worktree rm` of this card while this hook could not judge it ({type(e).__name__}), "
+                       "so whether its worker_done or end-check came back first is unknown (end-session §7, §8). "
+                       + SOURCE.format(key="guard.exit_order"))
     print(json.dumps(out, ensure_ascii=False))
     return 0
+
+
+def hold(out, decision, reason):
+    if decision == "deny":
+        out["hookSpecificOutput"].update(permissionDecision="deny", permissionDecisionReason=reason)
+    else:
+        out["systemMessage"] = out["hookSpecificOutput"]["additionalContext"] = reason
 
 
 if __name__ == "__main__":

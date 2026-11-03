@@ -154,6 +154,13 @@ check("end-check beside another command does not count", decision(hook(stale, rm
 later_keep = card[:3] + [use("m2", "tu_ec2", EC), result("tu_ec2", '{"verdict": "keep", "mode": "card"}'),
                          use("m3", "tu_rm", RM)]
 check("a later keep takes back an earlier remove", decision(hook(later_keep, rm_event(), DENY)) == "deny")
+# Output that is not wholly warnings and one JSON object is unread: a cut-off second verdict, a stray line first,
+# or a result whose content is no text at all.
+for name, text in (("a trailing unread verdict", '{"mode": "card", "verdict": "remove"}\n{unread later verdict'),
+                   ("a line that is no warning", 'note\n{"mode": "card", "verdict": "remove"}'),
+                   ("a number for content", 7)):
+    out = hook(card[:2] + [result("tu_ec", text)] + card[3:], rm_event(), DENY)
+    check(f"{name} in end-check's result denies the rm", decision(out) == "deny", out)
 # A broken line after an earlier remove may be a later keep, and bytes that are not UTF-8 are no transcript at all.
 for name, tail in (("a broken line", b"{a later end-check result\n"), ("bad UTF-8", b'{"type": "user", "x": "\xff"}\n')):
     body = "".join(json.dumps(r) + "\n" for r in card[:3]).encode() + tail + (json.dumps(card[3]) + "\n").encode()
