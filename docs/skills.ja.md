@@ -1,4 +1,4 @@
-<!-- translated-from: bf3fceada8f2b4a226c4a3ffbd175f8cebdacb9e -->
+<!-- translated-from: a7255e35ef7581db488d0b530bf22e4f89417d30 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -566,11 +566,11 @@ PR を受け持つスキルとマージする主体:
 hook 自身の判定が例外を出したら、その呼び出しは通し、警告とともに `$AGENT_SKILLS_STATE/guard-errors.jsonl` に時刻・hook・例外の種類・発生位置だけを残します（コマンドの原文は残しません）。設定ファイルが読めなければ既定値を使います。
 
 拒否台帳（`hooks/refusals.py`、PermissionDenied・PreToolUse・Stop・SubagentStop）。自動モードの分類器が範疇（`Reason: [範疇]`）付きで拒否した呼び出しと、人が権限ダイアログで拒否した呼び出しを `$AGENT_SKILLS_STATE/refusals.jsonl` に残し、人が解除するまでどのセッションにも同じ行動を拒否します。
-- 記録: 分類器の拒否は PermissionDenied イベントでその場で残します。人の拒否と、そのイベントが来なかった拒否は、次の PreToolUse と Stop が transcript の末尾を読んで残します。どちらもツール呼び出しの id で一度だけ書きます。transcript から読む場合、拒否された呼び出しと同じメッセージで送った並列の呼び出しは止められません。
+- 記録: 分類器の拒否は PermissionDenied イベントでその場で残します。人の拒否と、そのイベントが来なかった拒否は、次の PreToolUse と Stop が transcript の末尾を読んで残します。どちらもツール呼び出しの id で一度だけ書きます。台帳ができる前の拒否は集めません。hook は一回 7 秒以内に終え、超えたら警告して通します。transcript から読む場合、拒否された呼び出しと同じメッセージで送った並列の呼び出しは止められません。
 - 記録しないもの: hook の拒否、`<tool_use_error>`、読み取り専用のツール、範疇のない分類器の拒否（判定なしなど。警告一行だけ）。対象を読めなかった呼び出しも記録せず、警告します。
-- 行動は動詞と対象です。パスは実パス、PR は `host/owner/repo#n`、ブランチは `host/owner/repo:branch`。同じパスの削除はコマンドが違っても（`rm -rf`、`git worktree remove`、`orca worktree rm`）同じ行動で、そのパスを含む上位フォルダの削除も該当します。いま読む形は `rm`、`git worktree remove`、`git reset --hard`、`git push`（通常・強制・削除は別の動詞）、`gh pr merge|close`、`gh api …/pulls/N/merge`、`orca worktree rm`、Edit・Write・MultiEdit・NotebookEdit です。
+- 行動は動詞と対象です。削除するパスは実際の親フォルダと自分の名前（symlink はそれ自身）、書き込むファイルは実パス、PR は `host/owner/repo#n`、ブランチは `host/owner/repo:branch`。同じパスの削除はコマンドが違っても（`rm -rf`、`git worktree remove`、`orca worktree rm`）同じ行動で、そのパスを含む上位フォルダの削除も該当します。いま読む形は `rm`、`git worktree remove`、`git reset --hard`、`git push`（通常・強制・削除は別の動詞）、`gh pr merge|close`、`gh api …/pulls/N/merge`、`orca worktree rm`、Edit・Write・MultiEdit・NotebookEdit です。`--dry-run` の push と GET の API 呼び出しは行動ではありません。対象を一つに決められないもの（gh が番号にできなかった PR、`git push --all`、サブシェルの `cd` の後の相対パス、変数で作ったパス）は記録も照合もしません。
 - 台帳に書くのは時刻、呼び出し id、セッション、ターミナル、Run、動詞、対象だけです。コマンドの原文やほかの引数の値は書きません。書き込みは `fcntl` のロックの下で行います。
-- 解除は人だけが行います。`orch refusal report` が開いている拒否を見せ、人が自分のチャットで `!orch refusal clear <id>` を打ちます。エージェントの `orch refusal clear` と台帳への直接の書き込みは `guard.deny.owner_only` が拒否します。期限切れで解除されることはなく、解除した記録だけが 30 日後の次の解除のときに消えます。
+- 解除は人だけが行います。`orch refusal report` が開いている拒否を見せ、人が自分のチャットで `!orch refusal clear <id>` を打ちます。エージェントの `orch refusal clear` と台帳への直接の書き込みは `guard.deny.owner_only` が拒否します。期限切れで解除されることはありません。解除から 30 日たった拒否は、次の解除のときに id だけを残した `done` の一行に縮め、transcript に残る同じ拒否を再び記録しないようにします。
 
 ロールは `hooks/roles.py` ひとつが決めます。ロールは orchestrator、lead、worker、general の四つです。
 1. `ROLE: none` の記録があれば、すべてのロールがオフになります（general）。
