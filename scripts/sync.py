@@ -218,6 +218,7 @@ CHOICE_CURSOR = re.compile(r"^❯ \d+\.")
 PLACEHOLDER = re.compile(r'^Try ".*"$')
 ORDER = [None, "skills", "plugins"]  # a plugin reload also reloads skills
 UNCONFIRMED = "sent, but the screen does not show it was taken"
+GONE = "what the command was for is no longer on the screen"
 # Claude Code's own wording, matched loosely; a screen with neither is not judged (stale_signal).
 RESTART_NOTICE = re.compile(r"(?<![\w/])/restart\b.*\bto apply\b", re.I)
 HOOK_ERROR = re.compile(r"\bhook (?:error|returned (?:a )?blocking error)\b", re.I)
@@ -375,8 +376,9 @@ def screen(handle):
     return tail, classify(tail, meta.get("title") or "", t.get("draft") or "")
 
 
-def send_to(handle, text, confirmed):
-    """Return None once `text` was typed into an idle session and the screen shows it was taken."""
+def send_to(handle, text, confirmed, still=None):
+    """Return None once `text` was typed into an idle session and the screen shows it was taken. `still(screen)`,
+    when given, must hold on the last read before typing, else nothing is typed and the reason is GONE."""
     first, reason = screen(handle)
     if reason:
         return reason
@@ -386,6 +388,8 @@ def send_to(handle, text, confirmed):
         return reason
     if second != first:
         return "screen changed between two reads (someone may be typing)"
+    if still and not still(second):
+        return GONE
     orca("terminal", "send", "--terminal", handle, "--text", text, "--enter")
     time.sleep(CONFIRM_S)
     try:
@@ -552,9 +556,12 @@ def restart_stale(terms, dry_run=False, keep_others=False):
             typed |= set() if reason else {h}
             continue
         try:
-            reason = reason or send_to(h, cmd, stale_cleared)
+            reason = reason or send_to(h, cmd, stale_cleared, still=lambda s: (stale_signal(s) or ("",))[0] == kind)
         except Stop as e:
             reason = str(e)
+        if reason == GONE:  # cleared between the reads: nothing to fix, nothing to keep
+            print(f"{h}  {reason}")
+            continue
         if reason and reason != UNCONFIRMED:
             out[h] = {"waiting": reason, "since": old.get("since") or _now(), "kind": kind, "line": line}
             print(f"{h}  waits before {cmd}: {reason}")

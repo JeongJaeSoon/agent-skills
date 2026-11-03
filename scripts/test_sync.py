@@ -442,6 +442,10 @@ def test_restart_entries():
         reads["a"] = [IDLE]
         sync.restart_stale(["a"])
         check("a screen without the signal ends it", json.loads((tmp / "restarts.json").read_text()) == {})
+        reads["a"] = [RESTART_NOTE, IDLE, IDLE]
+        sync.restart_stale(["a"])
+        check("a signal gone by the reads just before typing types nothing",
+              typed == ["a", "a"] and json.loads((tmp / "restarts.json").read_text()) == {}, typed)
         (tmp / "restarts.json").write_text(json.dumps({"gone": {"sent": "2020-01-01T00:00:00+0000"},
                                                        "waits": {"waiting": "busy", "since": "2020-01-01T00:00:00+0000"}}))
         sync.restart_stale([])
