@@ -1411,6 +1411,16 @@ function fleetGraph(st) {
     ${projectChips(st)}<div class="card" data-src="github">${relGraph(st)}</div>`;
 }
 
+// A session's started subagents (subagents.jsonl, attached by the collector) as rows under it. Not sessions: no link,
+// PR or Needs you of their own, and not counted with the sessions. A stale one has no stop on record for
+// board.subagent_stale_h hours, or its session is offline: "check", not running.
+function subagentRows(s, d) {
+  return (s.subagents || []).map((a) => `<tr class="dim"><td><span class="tree-cell" style="--d:${Math.min(d + 1, 4)}">${esc(a.desc || a.type || "subagent")}</span></td>
+      <td>${tag("subagent")}${a.type ? ` <span class="muted">${esc(a.type)}</span>` : ""}</td>
+      <td>${a.stale ? tag("check: no stop recorded", "warn") : "running"}</td>
+      <td class="hide-md"></td><td class="hide-sm"></td><td></td><td class="num"></td><td class="num hide-sm when">${relSpan(a.started_at)}</td></tr>`).join("");
+}
+
 function fleetSessions(st) {
   const rows = sessionTree(st).filter(([s]) => inProject(s.project)).map(([s, d]) => {
     const pr = (st.prs || []).find((p) => p.session === s.id);
@@ -1423,9 +1433,10 @@ function fleetSessions(st) {
     return `<tr><td><a class="tree-cell" style="--d:${Math.min(d, 4)}" href="${sessionHref(s.id)}">${phaseDot(s)}<b>${esc(s.name)}</b></a></td>
       <td>${kindTag(st, s)}</td><td>${esc(s.phase)}${board}</td>
       <td class="hide-md">${projBadge(s.project)}<span class="mono dim">${s.branch ? esc(s.branch) : ""}</span></td>
-      <td class="hide-sm">${tickets}</td><td>${prCell}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`;
+      <td class="hide-sm">${tickets}</td><td>${prCell}</td><td class="num">${badge(s.unread, s.missed)}</td><td class="num hide-sm when">${relSpan(s.last_activity)}</td></tr>`
+      + subagentRows(s, d);
   }).join("");
-  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the board column (shown when not in-progress) are the card's own Orca fields.</p></div>${phaseLegend()}</div>
+  return `<div class="view-head"><div><h2>Sessions</h2><p>Every Orca worktree, placed under the orchestrator or lead whose run dispatched it, else under its Orca parent, else under the root. A lead is a session under the root with its own run; the sessions under it are its workers. Ticket, PR and the board column (shown when not in-progress) are the card's own Orca fields. A subagent a session started and has not been seen to stop sits under it, dimmed.</p></div>${phaseLegend()}</div>
     ${projectChips(st)}<div class="card table-wrap"><table><thead><tr><th>Session</th><th>Kind</th><th>Phase</th><th class="hide-md">Project · branch</th><th class="hide-sm">Ticket</th><th>PR</th><th class="num">Needs you</th><th class="num hide-sm">Active</th></tr></thead><tbody>${rows}</tbody></table></div>
     ${holdsCard(st)}`;
 }

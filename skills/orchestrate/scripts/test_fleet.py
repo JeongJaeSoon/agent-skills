@@ -44,6 +44,16 @@ assert {w: ss[w]["phase"] for w in ss} == {"wt-coord": "working", "wt-login": "i
 assert ss["wt-login"]["task_title"] == "ACME-101 login flow" and ss["wt-login"]["terminal"] == "term_login"
 assert all(v["ok"] for v in st["sources"].values()), st["sources"]
 
+# A subagent the hook logged from a session's terminal comes back on that session; one that stopped does not.
+assert all(s["subagents"] == [] for s in st["sessions"]), st["sessions"]
+for row in ({"event": "start", "agent": "sub1", "handle": "term_login", "type": "Explore", "desc": "Read the login flow"},
+            {"event": "start", "agent": "sub2", "handle": "term_login"}, {"event": "stop", "agent": "sub2"}):
+    fleet.append_line(state_dir / fleet.SUBAGENTS, {"v": 1, "at": fleet.iso(now), **row})
+ss = {s["id"]: s for s in f.tick(force=True)["sessions"]}
+assert ss["wt-login"]["subagents"] == [{"agent": "sub1", "type": "Explore", "desc": "Read the login flow",
+                                        "started_at": fleet.iso(now), "stale": False}], ss["wt-login"]
+(state_dir / fleet.SUBAGENTS).unlink()
+
 # Every row names its project: Orca's project for a session, the task's worktree for a gate, the terminal for a decision.
 assert {s["id"]: s["project"] for s in st["sessions"]} == {"wt-coord": "platform", "wt-login": "launchpad", "wt-export": "launchpad",
                                                          "wt-docs": "launchpad", "wt-scratch": "tools", "wt-old": "tools",
