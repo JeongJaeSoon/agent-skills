@@ -7,24 +7,26 @@ Recording:
 - PermissionDenied (auto mode refusals) records the call at once.
 - The human's refusals never reach PermissionDenied. They, and a classifier refusal when that event did not come, are
   read from the transcript's tail on the next PreToolUse (any tool) and at Stop. Both paths key on the tool use id,
-  so a refusal is written once.
+  so a refusal is written once. Refusals from before the ledger began are not collected.
 Limit of the transcript path: calls sent in the same message as the refused one run before it is read, so they are
 not blocked. A refusal whose text Claude Code words differently is not recorded.
 
 Not recorded: a hook's block, a `<tool_use_error>`, a read-only tool, and a classifier refusal with no category (one
 warning line instead: the parent may take such an edit back, orchestrate's refused-act rule). A refused call whose
-target this ledger cannot read is not recorded either, with a warning.
+target this ledger cannot read is not recorded either, with a warning; a call whose target cannot be read is not
+checked, silently, since most such calls were never refused.
 
 Blocking: PreToolUse denies a call whose (verb, target) an open refusal holds, whichever session refused it.
 Key `guard.refusal_registry` in ~/.claude/agent-skills.json: `deny` (default), `warn` (record, and only warn on a
-match) or `off` (neither). A broken input or a check that raises lets the call through with a warning and a line in
-guard-errors.jsonl.
+match) or `off` (neither). A broken input, a missing field or a check that raises or runs out of time lets the call
+through with a warning (and a line in guard-errors.jsonl for an exception).
 """
 import json, os, sys
 
 from lib import config, refusals
 
 SOURCE = "(agent-skills hooks/refusals.py, guard.refusal_registry)"
+BUDGET_S = 7  # under the 10 s timeout hooks.json gives this hook
 
 
 def say(event_name, warnings, decision=None, reason=None):
@@ -48,23 +50,25 @@ def store(event_id, tool, args, cwd, session, k, warnings):
             warnings.append(f"A {tool or 'tool'} call was refused by auto mode with no category (no verdict); the "
                             f"refused-act ledger does not record it. Report it as the refused-act rule says. {SOURCE}")
         return
-    found = refusals.acts(tool, args, cwd)
-    if not found and tool is not None and not refusals.changes(tool):
-        refusals.record(event_id, [], session)
-        return
+    found, unknown = refusals.acts(tool, args, cwd) if tool else ([], ["the call is not in the transcript tail"])
+    if not found and not unknown and tool not in refusals.READ_ONLY:
+        unknown = ["no shape the ledger reads"]
     written = refusals.record(event_id, found, session, os.environ.get("ORCA_TERMINAL_HANDLE"),
                               refusals.run_id() if found else None)
-    if written and not found:
-        warnings.append(f"A refused {tool or 'tool'} call was not recorded in the refused-act ledger: its target "
-                        f"could not be read. Do not do it again in any form; report it. {SOURCE}")
+    if written and unknown:
+        warnings.append(f"A refused {tool or 'tool'} call was {'only partly ' if found else 'not '}recorded in the "
+                        f"refused-act ledger: its target could not be read ({'; '.join(unknown)}). Do not do it again "
+                        f"in any form; report it. {SOURCE}")
 
 
 def backfill(event, warnings):
     path = event.get("agent_transcript_path") or event.get("transcript_path")
     if not isinstance(path, str) or not os.path.isfile(path):
         return
-    done = refusals.seen()
-    for event_id, tool, args, cwd, session, k, _ in refusals.denials(refusals.tail(path)):
+    since = refusals.start()
+    rows = refusals.rows()
+    done = refusals.seen(rows)
+    for event_id, tool, args, cwd, session, k, _ in refusals.denials(refusals.tail(path), since):
         if event_id not in done:
             store(event_id, tool, args, cwd or event.get("cwd"), session or event.get("session_id"), k, warnings)
 
@@ -76,14 +80,19 @@ def permission_denied(event, warnings):
                         f"not recorded now; the next tool call reads it from the transcript. {SOURCE}")
         return
     k, _ = refusals.reason_kind(event.get("reason"))
-    # A reason with no bracketed category may still be a categorized refusal worded differently: leave it to the
-    # transcript, which has the full text.
-    if k == "refused":
-        store(event_id, tool, args, event.get("cwd"), event.get("session_id"), k, warnings)
+    if k != "refused":
+        # The transcript has the full text: a categorized refusal worded differently here is still read there.
+        warnings.append("The PermissionDenied reason had no [category]; the refusal is left to the transcript "
+                        f"check of the next tool call. {SOURCE}")
+        return
+    store(event_id, tool, args, event.get("cwd"), event.get("session_id"), k, warnings)
 
 
 def pre_tool_use(event, lvl, warnings):
-    found = refusals.acts(event.get("tool_name"), event.get("tool_input"), event.get("cwd"))
+    found, unknown = refusals.acts(event.get("tool_name"), event.get("tool_input"), event.get("cwd"))
+    bad = [u for u in unknown if u.startswith(refusals.MISSING + " ")]
+    if bad:
+        warnings.append(f"The tool input had {'; '.join(bad)}, so the refused-act ledger did not check this call. {SOURCE}")
     hits = refusals.blocked(found) if found else []
     if not hits:
         return None, None
@@ -114,6 +123,7 @@ def main():
     lvl = refusals.level(config.load())
     if lvl == "off":
         return
+    refusals.set_deadline(BUDGET_S)
     decision = reason = None
     try:
         if name == "PermissionDenied":
@@ -122,6 +132,10 @@ def main():
             backfill(event, warnings)
             if name == "PreToolUse":
                 decision, reason = pre_tool_use(event, lvl, warnings)
+        else:
+            warnings.append(f"agent-skills hooks/refusals.py got no known hook_event_name and did nothing. {SOURCE}")
+    except TimeoutError:
+        warnings.append(f"agent-skills hooks/refusals.py ran out of time and let this through unchecked. {SOURCE}")
     except Exception as e:
         config.log_error("refusals", e)
         warnings.append(f"agent-skills hooks/refusals.py could not finish ({type(e).__name__}) and let this through "

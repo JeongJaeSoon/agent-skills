@@ -598,11 +598,11 @@ PR 을 맡는 스킬과 머지 주체:
 hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
 
 거부 원장(`hooks/refusals.py`, PermissionDenied·PreToolUse·Stop·SubagentStop). 자동 모드 분류기가 범주(`Reason: [범주]`)를 붙여 거부했거나 사람이 권한 창에서 거부한 호출을 `$AGENT_SKILLS_STATE/refusals.jsonl`에 남기고, 사람이 풀 때까지 어느 세션이든 같은 행동을 거부한다.
-- 기록: 분류기 거부는 PermissionDenied 이벤트에서 바로 남긴다. 사람의 거부와 그 이벤트가 오지 않은 거부는 다음 PreToolUse와 Stop이 transcript 끝을 읽어 남긴다. 둘 다 도구 호출 id로 한 번만 쓴다. transcript로 읽는 경우, 거부된 호출과 같은 메시지에 보낸 병렬 호출은 막지 못한다.
+- 기록: 분류기 거부는 PermissionDenied 이벤트에서 바로 남긴다. 사람의 거부와 그 이벤트가 오지 않은 거부는 다음 PreToolUse와 Stop이 transcript 끝을 읽어 남긴다. 둘 다 도구 호출 id로 한 번만 쓴다. 원장이 생기기 전의 거부는 모으지 않는다. transcript로 읽는 경우, 거부된 호출과 같은 메시지에 보낸 병렬 호출은 막지 못한다. hook 하나는 7초 안에 끝내고, 넘기면 경고하고 통과시킨다.
 - 기록하지 않는 것: hook의 거부, `<tool_use_error>`, 읽기 전용 도구, 범주 없는 분류기 거부(판정 없음 등, 경고 한 줄만). 대상을 읽지 못한 호출도 기록하지 않고 경고한다.
-- 행동은 동사와 대상이다. 경로는 실제 경로, PR은 `host/owner/repo#n`, 브랜치는 `host/owner/repo:branch`. 같은 경로를 지우는 것은 명령이 달라도(`rm -rf`, `git worktree remove`, `orca worktree rm`) 같은 행동이고, 그 경로를 품은 상위 폴더를 지우는 것도 걸린다. 지금 읽는 모양은 `rm`, `git worktree remove`, `git reset --hard`, `git push`(일반·강제·삭제를 다른 동사로), `gh pr merge|close`, `gh api …/pulls/N/merge`, `orca worktree rm`, Edit·Write·MultiEdit·NotebookEdit다.
+- 행동은 동사와 대상이다. 지우는 경로는 실제 상위 폴더와 자기 이름(symlink는 그 자신), 쓰는 파일은 실제 경로, PR은 `host/owner/repo#n`, 브랜치는 `host/owner/repo:branch`. 같은 경로를 지우는 것은 명령이 달라도(`rm -rf`, `git worktree remove`, `orca worktree rm`) 같은 행동이고, 그 경로를 품은 상위 폴더를 지우는 것도 걸린다. 지금 읽는 모양은 `rm`, `git worktree remove`, `git reset --hard`, `git push`(일반·강제·삭제를 다른 동사로), `gh pr merge|close`, `gh api …/pulls/N/merge`, `orca worktree rm`, Edit·Write·MultiEdit·NotebookEdit다. `--dry-run` push와 GET API는 행동이 아니다. 대상을 하나로 정하지 못하는 것(gh가 번호로 풀지 못한 PR, `git push --all`, 서브셸 `cd` 뒤의 상대 경로, 변수로 만든 경로)은 기록하지도 맞춰 보지도 않는다.
 - 원장에는 시각, 호출 id, 세션, 터미널, Run, 동사, 대상만 쓴다. 명령 원문과 다른 인자 값은 쓰지 않는다. 쓰기는 `fcntl` 잠금 아래에서 한다.
-- 해제는 사람만 한다. `orch refusal report`가 열린 거부를 보여 주고, 사람이 자기 채팅에서 `!orch refusal clear <id>`로 푼다. 에이전트의 `orch refusal clear`와 원장 직접 쓰기는 `guard.deny.owner_only`가 거부한다. 기간이 지나 풀리지는 않고, 해제한 기록만 30일 뒤 다음 해제 때 지운다.
+- 해제는 사람만 한다. `orch refusal report`가 열린 거부를 보여 주고, 사람이 자기 채팅에서 `!orch refusal clear <id>`로 푼다. 에이전트의 `orch refusal clear`와 원장 직접 쓰기는 `guard.deny.owner_only`가 거부한다. 기간이 지나 풀리지는 않는다. 해제한 지 30일이 지난 거부는 다음 해제 때 id만 남긴 `done` 한 줄로 줄여, transcript에 남은 같은 거부를 다시 기록하지 않는다.
 
 역할은 `hooks/roles.py` 하나가 정한다. 역할은 orchestrator, lead, worker, general 넷이다.
 1. `ROLE: none` 기록이 있으면 모든 역할이 꺼진다(general).

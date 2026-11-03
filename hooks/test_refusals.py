@@ -4,11 +4,14 @@ import json, multiprocessing, os, pathlib, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
-TMP = pathlib.Path(tempfile.mkdtemp())
+TMP = pathlib.Path(os.path.realpath(tempfile.mkdtemp()))
 STATE = TMP / "state"
 WT = TMP / "worktrees" / "card-a"
 WT.mkdir(parents=True)
 LEDGER = STATE / "refusals.jsonl"
+os.environ["AGENT_SKILLS_STATE"] = str(STATE)
+sys.path.insert(0, str(HERE))
+from lib import refusals  # noqa: E402
 
 # Tool result texts as Claude Code writes them (2.1.x transcripts), the classifier's and the human's.
 CLASSIFIER = ("Permission for this action was denied by the Claude Code auto mode classifier. Reason: [Irreversible "
@@ -55,14 +58,15 @@ def denied(tool_use_id, tool, tool_input, reason="[Irreversible Local Destructio
                  "tool_use_id": tool_use_id, "reason": reason, "session_id": session, "cwd": str(TMP)})
 
 
-def transcript(name, calls):
+def transcript(name, calls, stamp=None):
     """A transcript of calls (id, tool, input, result text) each refused with that text."""
     path = TMP / f"{name}.jsonl"
     lines = []
     for i, tool, args, text in calls:
-        lines.append({"type": "assistant", "sessionId": "s-a", "cwd": str(TMP),
+        extra = {"timestamp": stamp} if stamp else {}
+        lines.append({"type": "assistant", "sessionId": "s-a", "cwd": str(TMP), **extra,
                       "message": {"content": [{"type": "tool_use", "id": i, "name": tool, "input": args}]}})
-        lines.append({"type": "user", "sessionId": "s-a", "cwd": str(TMP), "message": {"content": [
+        lines.append({"type": "user", "sessionId": "s-a", "cwd": str(TMP), **extra, "message": {"content": [
             {"type": "tool_result", "tool_use_id": i, "is_error": True, "content": text}]}})
     path.write_text("".join(json.dumps(x) + "\n" for x in lines))
     return str(path)
@@ -70,6 +74,10 @@ def transcript(name, calls):
 
 def rows():
     return [json.loads(l) for l in LEDGER.read_text().splitlines()] if LEDGER.exists() else []
+
+
+def refused():
+    return [r for r in rows() if r["op"] == "refuse"]
 
 
 def reset(cfg=None):
@@ -81,6 +89,10 @@ def reset(cfg=None):
 def orch(*args):
     return subprocess.run([sys.executable, ROOT / "skills/orchestrate/scripts/prog.py", "refusal", *args],
                           capture_output=True, text=True, env=env(), stdin=subprocess.DEVNULL)
+
+
+def shape(cmd, cwd=TMP):
+    return refusals.acts("Bash", {"command": cmd}, str(cwd))
 
 
 # 1. PermissionDenied: the classifier refused `rm -rf <worktree>` in session a; session b's `git worktree remove` of the
@@ -99,8 +111,9 @@ assert "toolu_1" in reason and "s-a" in reason and "orch refusal report" in reas
 # The ledger keeps the act, never the command text or another argument's value.
 raw = LEDGER.read_text()
 assert "abc123" not in raw and "SECRET_TOKEN" not in raw and "rm -rf" not in raw
-assert set(rows()[0]) == {"op", "at", "id", "session", "terminal", "run", "verb", "target"}, rows()[0]
-assert rows()[0]["verb"] == "delete" and rows()[0]["target"] == os.path.realpath(WT)
+assert set(refused()[0]) == {"op", "at", "id", "session", "terminal", "run", "verb", "target"}, refused()[0]
+assert refused()[0]["verb"] == "delete" and refused()[0]["target"] == str(WT)
+assert rows()[0]["op"] == "start"
 
 # 2. The transcript path: the next PreToolUse of the refusing session records it, and dedupes against PermissionDenied.
 reset()
@@ -115,8 +128,7 @@ t = transcript("t2", [("toolu_2", "Bash", {"command": f"rm -rf {WT}"}, CLASSIFIE
 decision, out = bash("git status", session="s-a", transcript=t)
 assert decision == "none"
 assert "no category" in out["systemMessage"], out
-refused = [r for r in rows() if r["op"] == "refuse"]
-assert [(r["id"], r["verb"]) for r in refused] == [("toolu_2", "delete"), ("toolu_3", "write")], refused
+assert [(r["id"], r["verb"]) for r in refused()] == [("toolu_2", "delete"), ("toolu_3", "write")], refused()
 assert sum(r["id"] == "toolu_2" for r in rows()) == 1  # PermissionDenied and the transcript wrote it once
 assert not any(r["id"] in ("toolu_5", "toolu_6") for r in rows())  # a hook's block and an input error are not refusals
 assert {r["id"] for r in rows() if r["op"] == "skip"} == {"toolu_4", "toolu_7", "toolu_8"}
@@ -125,37 +137,64 @@ assert pre("Write", {"file_path": str(TMP / "notes.txt"), "content": "x"}, sessi
 assert pre("Read", {"file_path": str(TMP / "notes.txt")}, session="s-c")[0] == "none"
 assert bash(f"rm -rf {TMP / 'other'}")[0] == "none"
 # Read again: nothing new, no second warning.
+n = len(rows())
 decision, out = bash("git status", session="s-a", transcript=t)
-assert "systemMessage" not in out and len(rows()) == 5
+assert "systemMessage" not in out and len(rows()) == n
+# A refusal stamped before the ledger began is not collected.
+old = transcript("t-old", [("toolu_old", "Bash", {"command": f"rm -rf {TMP / 'x'}"}, CLASSIFIER)],
+                 stamp="2020-01-01T00:00:00.000Z")
+bash("git status", session="s-a", transcript=old)
+assert not any(r["id"] == "toolu_old" for r in rows())
 
-# 3. PRs and branches by their canonical key, whatever form names them.
+# 3. PRs and branches by their canonical key, whatever form names them; read-only forms are no act.
 reset()
 denied("toolu_9", "Bash", {"command": "gh pr merge 12 --squash -R acme/app"}, reason="[Merge Without Review]")
 assert bash("gh pr merge https://github.com/acme/app/pull/12 --merge")[0] == "deny"
 assert bash("gh api -X PUT repos/acme/app/pulls/12/merge")[0] == "deny"
+assert bash("gh api repos/acme/app/pulls/12/merge")[0] == "none"  # a GET reads whether it merged
 assert bash("gh pr merge 13 -R acme/app")[0] == "none"
 assert bash("gh pr view 12 -R acme/app")[0] == "none"
 denied("toolu_10", "Bash", {"command": "git push --force https://github.com/acme/app.git feature-x"})
 assert bash("git push -f git@github.com:acme/app.git HEAD:refs/heads/feature-x")[0] == "deny"
+assert bash("git push --force --repo=https://github.com/acme/app.git feature-x")[0] == "deny"
 assert bash("git push https://github.com/acme/app.git feature-x")[0] == "none"  # a plain push is another verb
+assert bash("git push --dry-run --force https://github.com/acme/app.git feature-x")[0] == "none"
+assert shape("git push --force --repo=https://github.com/acme/other.git main") == (
+    [("force-push", "github.com/acme/other:main")], [])
+assert shape("git push --all https://github.com/acme/app.git")[0] == []
+assert shape("git push --all https://github.com/acme/app.git")[1]
 
-# 4. A refused call whose target cannot be read is not recorded, with a warning; a PermissionDenied with no category
-#    leaves it to the transcript.
+# 4. Paths as the shell means them: a subshell's `cd` does not leak, `-C` stacks, a quoted `$` stays, a symlink is
+#    itself.
+(TMP / "a" / "b").mkdir(parents=True)
+assert shape(f"(cd {TMP / 'a'} && rm -rf x); rm -rf y")[0] == []  # relative paths after a scoped cd: not read
+assert shape(f"(cd {TMP / 'a'} && rm -rf x); rm -rf y")[1]
+assert shape(f"git -C {TMP / 'a'} -C b worktree remove c")[0] == [("delete", str(TMP / "a" / "b" / "c"))]
+assert shape(f"rm -rf '{TMP}/$literal'")[0] == [("delete", f"{TMP}/$literal")]
+assert shape("rm -rf $DIR/x")[0] == [] and shape("rm -rf $DIR/x")[1]
+(TMP / "link").symlink_to(WT)
+assert shape(f"rm {TMP / 'link'}")[0] == [("delete", str(TMP / "link"))]
+
+# 5. A refused call whose target cannot be read is not recorded, with a warning; a PermissionDenied with no category
+#    warns and leaves it to the transcript; a missing field warns.
 reset()
 out = denied("toolu_11", "Bash", {"command": "curl -X POST https://example.test/hook"})
-assert "not recorded" in out["systemMessage"] and rows()[0]["op"] == "skip"
-assert denied("toolu_12", "Bash", {"command": f"rm -rf {WT}"}, reason="judged dangerous (it gave no explanation)") == {}
-assert not any(r["id"] == "toolu_12" for r in rows())
+assert "not recorded" in out["systemMessage"] and rows()[-1]["op"] == "skip"
+out = denied("toolu_11b", "Bash", {"command": "gh pr merge some-branch -R acme/app"}, reason="[Merge Without Review]")
+assert "not recorded" in out["systemMessage"] and not refused()  # gh cannot name the PR here: no stand-in key
+out = denied("toolu_12", "Bash", {"command": f"rm -rf {WT}"}, reason="judged dangerous (it gave no explanation)")
+assert "no [category]" in out["systemMessage"] and not any(r["id"] == "toolu_12" for r in rows())
 out = denied("toolu_13", "Bash", "not a dict")
 assert "not recorded now" in out["systemMessage"]
+decision, out = pre("Bash", {"command": 5})
+assert decision == "none" and "no Bash command" in out["systemMessage"]
 
-# 5. Broken input lets the call through with a warning.
+# 6. Broken input lets the call through with a warning.
 for bad in ("{not json", "[1, 2]"):
     out = hook(bad)
     assert "could not read its input" in out["systemMessage"] and "hookSpecificOutput" not in out
-assert hook({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": 5}}) == {}
 
-# 6. The key: off records and blocks nothing, warn records and only warns, deny (default) refuses.
+# 7. The key: off records and blocks nothing, warn records and only warns, deny (default) refuses.
 reset({"guard": {"refusal_registry": "off"}})
 denied("toolu_14", "Bash", {"command": f"rm -rf {WT}"})
 assert rows() == []
@@ -168,17 +207,18 @@ assert bash(f"git worktree remove {WT}") == ("none", {})
 (TMP / "cfg.json").write_text(json.dumps({"guard": {"refusal_registry": "deny"}}))
 assert bash(f"git worktree remove {WT}")[0] == "deny"
 
-# 7. Only the human clears: the guard refuses `orch refusal clear` and a direct write of the ledger from an agent.
+# 8. Only the human clears: the guard refuses `orch refusal clear` and a direct write of the ledger from an agent.
 guard = lambda tool, args: (hook({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": args,
                                   "session_id": "s-b", "cwd": str(TMP)}, "guard.py").get("hookSpecificOutput") or {}
                             ).get("permissionDecision", "none")
 assert guard("Bash", {"command": "orch refusal clear toolu_15"}) == "deny"
 assert guard("Bash", {"command": "orch refusal report"}) == "allow"
 assert guard("Bash", {"command": f"echo '{{}}' >> {LEDGER}"}) == "deny"
+assert guard("Bash", {"command": ': > "$AGENT_SKILLS_STATE/refusals.jsonl"'}) == "deny"
 assert guard("Write", {"file_path": str(LEDGER), "content": ""}) == "deny"
 assert guard("Edit", {"file_path": str(TMP / "notes.txt")}) == "none"
 
-# 8. `orch refusal report` for the human, then the human's clear (a `!` line runs no hook) lifts the block.
+# 9. `orch refusal report` for the human, then the human's clear (a `!` line runs no hook) lifts the block.
 p = orch("report")
 assert p.returncode == 0 and "toolu_15" in p.stdout and "delete" in p.stdout and "!orch refusal clear" in p.stdout, p
 print(p.stdout)
@@ -188,26 +228,32 @@ assert p.returncode == 0 and "cleared toolu_15" in p.stdout, p
 assert rows()[-1] == {**rows()[-1], "op": "clear", "id": "toolu_15", "tty": False}
 assert bash(f"git worktree remove {WT}")[0] == "none"
 assert "no open refusals" in orch("report").stdout
-# A clear over 30 days old leaves the file at the next clear, its refusal with it.
+# A clear over 30 days old shrinks to a `done` row at the next clear; its id stays, so the transcript that still holds
+# the refusal does not bring it back.
 denied("toolu_16", "Bash", {"command": f"rm -rf {TMP / 'b'}"})
 LEDGER.write_text(LEDGER.read_text().replace('"op": "clear", "at": "20', '"op": "clear", "at": "19'))
 orch("clear", "toolu_16")
-assert not any(r["id"] == "toolu_15" for r in rows()) and any(r["id"] == "toolu_16" for r in rows())
+assert [r["op"] for r in rows() if r["id"] == "toolu_15"] == ["done"], rows()
+t = transcript("t15", [("toolu_15", "Bash", {"command": f"rm -rf {WT}"}, CLASSIFIER)])
+assert bash("git status", session="s-a", transcript=t)[0] == "none"
+assert bash(f"git worktree remove {WT}")[0] == "none"
 
-# 9. Concurrent appends under the lock: every row whole, each event id once.
-sys.path.insert(0, str(HERE))
-os.environ["AGENT_SKILLS_STATE"] = str(STATE)
-from lib import refusals  # noqa: E402
+# 10. Concurrent appends and clears under the lock: every row whole, each event id once.
 
 
 def write(i):
-    refusals.record(f"toolu_c{i % 40}", [("delete", f"/tmp/c{i}")], "s", None, None)
+    if i % 5 == 4:
+        refusals.clear(f"toolu_c{(i - 1) % 40}", False)
+    else:
+        refusals.record(f"toolu_c{i % 40}", [("delete", f"/tmp/c{i}")], "s", None, None)
 
 
 reset()
 with multiprocessing.get_context("fork").Pool(16) as pool:
     pool.map(write, range(200))
-ids = [r["id"] for r in rows()]
-assert len(ids) == 40 and len(set(ids)) == 40, len(ids)
+ids = [r["id"] for r in rows() if r["op"] == "refuse"]
+want = {f"toolu_c{i % 40}" for i in range(200) if i % 5 != 4}
+assert len(ids) == len(want) and set(ids) == want, len(ids)
+assert sum(r["op"] == "start" for r in rows()) == 1
 
 print("ok")
