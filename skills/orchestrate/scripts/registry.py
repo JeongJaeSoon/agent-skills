@@ -148,6 +148,10 @@ STORES = [
     Store("subagentsold", "D/subagents.jsonl.1", {"work.subagent": BACKUP}, ("fleet:subagent_log",), ("nobody",),
           rule="the generation before the last rotation; open starts are carried into the new file"),
     Store("subagentslock", "D/subagents.jsonl.lock", {"work.subagent": LOCK}, ("fleet:subagent_log",)),
+    Store("eventsold", "D/events.jsonl.1", {"timeline.event": BACKUP}, ("fleet:Fleet.event",), ("nobody",),
+          rule="the generation before the last rotation"),
+    Store("preventsold", "D/pr-events.jsonl.1", {"timeline.event": BACKUP}, ("fleet:Fleet.emit_pr_event",), ("nobody",),
+          rule="the generation before the last rotation"),
     Store("prevents", "D/pr-events.jsonl", {"timeline.event": LOG}, ("fleet:Fleet.emit_pr_event",), ("nobody",),
           rule="the events.jsonl pr_* rows again; nothing reads it"),
     Store("jobs", "D/jobs.json", {"job.last_run": CANONICAL}, ("jobs:record",), ("page",), 300,
@@ -177,6 +181,8 @@ STORES = [
     Store("boardlock", "D/board.lock", {"board.todo": LOCK}, ("board:change", "orca_migrate:board_lock")),
     Store("tidy", "D/tidy.jsonl", {"board.closure": CANONICAL}, ("tidy:append",), ("brief", "fleet", "tidy"),
           rule="done and reopen lines for board items, rows and cards"),
+    Store("tidyold", "D/tidy.jsonl.1", {"board.closure": BACKUP}, ("tidy:append",), ("nobody",),
+          rule="the generation before the last rotation"),
     Store("tidylock", "D/tidy.lock", {"board.closure": LOCK}, ("tidy:locked",)),
     Store("migrate", "D/backup-orca-v2-*/*", {"board.todo": BACKUP, "board.closure": BACKUP},
           ("orca_migrate:backup", "orca_migrate:apply"), ("nobody",), rule="`orch migrate` copies and its undo list"),
@@ -577,9 +583,10 @@ class _Scan:
                 return right
             return tuple(dict.fromkeys(x if not isinstance(x, str) else _tail(f"{lf}/{x}") for x in right for lf in left))
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):  # path.name + ".lock"
-            left = [x for x in r(expr.left) if isinstance(x, str)]
+            left = r(expr.left)
             right = [x for x in r(expr.right) if isinstance(x, str)]
-            return tuple(dict.fromkeys(_tail(a + b) for a in left for b in right))
+            return tuple(dict.fromkeys(_tail(a + b) if isinstance(a, str) else (a[0], a[1] + b)
+                                       for a in left if isinstance(a, (str, tuple)) for b in right))
         if isinstance(expr, ast.Name):
             local = self._local(fn, expr.id, expr.lineno)
             got = r(local) if local is not None else ()
@@ -591,8 +598,9 @@ class _Scan:
                 return self.resolve(mod, None, mod.consts[expr.id], seen)
             return ()
         if isinstance(expr, ast.Attribute):
-            if expr.attr == "name":  # a Path's file name
-                return tuple(dict.fromkeys(x.rsplit("/", 1)[-1] for x in r(expr.value) if isinstance(x, str)))
+            if expr.attr == "name":  # a Path's file name; a parameter's name is (index, "") until a suffix is added
+                return tuple(dict.fromkeys(x.rsplit("/", 1)[-1] if isinstance(x, str) else (x, "") if isinstance(x, int)
+                                           else x for x in r(expr.value)))
             if isinstance(expr.value, ast.Name) and expr.value.id == "self" and expr.attr in mod.attrs:
                 return self.resolve(mod, None, mod.attrs[expr.attr], seen)
             if isinstance(expr.value, ast.Name) and expr.value.id in self.mods:
@@ -608,6 +616,11 @@ class _Scan:
                 arg = tuple(x for x in r(expr.args[0]) if isinstance(x, str))
                 parent = [b.rsplit("/", 1)[0] + "/" for b in base if isinstance(b, str) and "/" in b] or [""]
                 if f.attr == "with_name":
+                    # `p.with_name(p.name + ".1")` on a parameter: the caller's path with ".1" added.
+                    renamed = tuple(x for x in r(expr.args[0]) if isinstance(x, tuple) and x[0] in params and x[1]
+                                    and not _temp("x" + x[1]))
+                    if renamed:
+                        return renamed
                     if arg and not all(_temp(a) for a in arg):
                         return tuple(_tail(p + a) for a in arg for p in parent)
                     return params or tuple(_tail(p + a) for a in arg for p in parent)
@@ -721,10 +734,15 @@ class _Scan:
         if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
             return [UNKNOWN]
         out = []
-        for i in sorted(self.sinks[key]):
+        for i, suffix in sorted(self.sinks[key]):
             j = i - shift
             given = call.args[j] if 0 <= j < len(call.args) else next(
                 (k.value for k in call.keywords if k.arg == params[i]), None)
+            if given is not None and suffix:  # the sink renames it: given.with_name(given.name + suffix)
+                given = ast.copy_location(ast.Call(
+                    func=ast.Attribute(value=given, attr="with_name", ctx=ast.Load()),
+                    args=[ast.BinOp(left=ast.Attribute(value=given, attr="name", ctx=ast.Load()), op=ast.Add(),
+                                    right=ast.Constant(value=suffix))], keywords=[]), given)
             if given is not None:
                 out.append(given)
             elif _default(fn, i) is None:
@@ -774,15 +792,15 @@ class _Scan:
     def _site(self, mod, qual, fn, node, expr):
         got = self.resolve(mod, fn, expr)
         names = tuple(x for x in got if isinstance(x, str))
-        params = [x for x in got if isinstance(x, int)]
+        params = [(x, "") if isinstance(x, int) else x for x in got if isinstance(x, (int, tuple))]
         if params:
             # The function writes where its caller says: each call becomes a write site. A parameter's default is
             # written here when a caller passes none.
             self.sinks.setdefault((mod.name, qual), set()).update(params)
-            for i in params:
+            for i, suffix in params:
                 default = _default(fn, i)
                 if default is not None:
-                    names += tuple(x for x in self.resolve(mod, None, default) if isinstance(x, str))
+                    names += tuple(_tail(x + suffix) for x in self.resolve(mod, None, default) if isinstance(x, str))
             if names:
                 self.defaulted.add((mod.name, qual))
                 yield Write(mod.name, qual, node.lineno, tuple(dict.fromkeys(names)))

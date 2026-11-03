@@ -65,7 +65,7 @@ assert len(got) == 4, got
 # Forms that once hid a write: a bound method's argument, a wrapper writing two paths, a reassigned path,
 # with_name on a parameter, open() with keywords or from io.
 forms = module("fx_forms", '''
-    import io, pathlib
+    import io, os, pathlib
     D = pathlib.Path("/d")
 
     class Box:
@@ -99,14 +99,22 @@ forms = module("fx_forms", '''
 
     def spans():
         (SPANS / "fx.json").write_text("{}")
+
+    def roll(path):
+        os.replace(path, path.with_name(path.name + ".1"))
+
+    def log_roll():
+        roll(D / "fx-log.jsonl")
 ''')
 got = {(w.writer, w.targets) for w in registry.scan([forms])}
 for want in [("fx_forms:Box.go", ("d/fx-bound.json",)), ("fx_forms:call_two", ("d/fx-a.json",)),
              ("fx_forms:call_two", ("d/fx-b.json",)), ("fx_forms:again", ("d/fx-first.json",)),
              ("fx_forms:again", ("d/fx-second.json",)), ("fx_forms:side", ("fx-side.json",)),
              ("fx_forms:opens", ("d/fx-kw.json",)), ("fx_forms:opens", ("d/fx-io.json",)),
-             ("fx_forms:spans", ("spans/fx.json",))]:  # `A, B = x, y` at module level
+             ("fx_forms:spans", ("spans/fx.json",)),  # `A, B = x, y` at module level
+             ("fx_forms:log_roll", ("d/fx-log.jsonl.1",))]:  # a sink renaming its parameter
     assert want in got, (want, got)
+assert ("fx_forms:log_roll", ("d/fx-log.jsonl",)) not in got, got
 
 # (1) a fact with two canonical stores
 two = registry.STORES + [Store("fxcopy", "D/fx-copy.json", {"decision.item": CANONICAL}, (), ("brief",))]
@@ -146,7 +154,10 @@ elsewhere = [registry.Write("board", "change", 1, ("elsewhere/board.json",))]
 v = registry.check(writes=real + elsewhere)
 assert [(x["kind"], x["key"]) for x in v] == [("unregistered", "elsewhere/board.json")], v
 # `path.with_name(path.name + ".lock")` names a file of its own: dropping its store is caught.
-for gone, name in (("subagentslock", "dashboard/subagents.jsonl.lock"), ("subagentsold", "dashboard/subagents.jsonl.1")):
+for gone, name in (("subagentslock", "dashboard/subagents.jsonl.lock"), ("subagentsold", "dashboard/subagents.jsonl.1"),
+                   # fleet.rotate(path) renames its parameter: the caller's file with ".1" added
+                   ("eventsold", "dashboard/events.jsonl.1"), ("preventsold", "dashboard/pr-events.jsonl.1"),
+                   ("tidyold", "dashboard/tidy.jsonl.1")):
     v = registry.check(stores=[s for s in registry.STORES if s.id != gone], writes=real)
     assert ("unregistered", name) in [(x["kind"], x["key"]) for x in v], (gone, v)
 # Registered, the same writes pass.
