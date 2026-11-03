@@ -32,6 +32,9 @@ def ok(*args):
     return out
 
 
+ok("db", "import", "--apply", "--rehearsal")  # decisions live in agent-skills.db; a fresh state imports an empty one
+
+
 def stamp(at=T0, **older):
     """Every row confirmed at `at`, except the ids given, confirmed at their own time; a wait started then too."""
     p = state / "board.json"
@@ -499,6 +502,9 @@ def rok(*args):
     return out
 
 
+rok("db", "import", "--apply", "--rehearsal")
+
+
 rok("stage", "add", "login", "--title", "로그인 개선", "--pr", "acme/web#40")
 rok("stage", "set", "login", "--col", "dev", "--mark", "ok", "--evidence", "v1.7.2")
 rok("stage", "set", "login", "--col", "prod", "--mark", "checking", "--by", "QA")
@@ -644,6 +650,9 @@ def wok(*args):
     code, out, err = orch_env(wenv, *args)
     assert code == 0, (args, out, err)
     return out
+
+
+wok("db", "import", "--apply", "--rehearsal")
 
 
 def section(text, head):

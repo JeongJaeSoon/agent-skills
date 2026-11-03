@@ -17,6 +17,7 @@ import datetime as dt, difflib, fcntl, json, os, pathlib, re, shutil, sys
 import fleet
 import acks
 import stages
+import store as store_db  # `store` is the board dict everywhere below
 import tidy
 from stages import with_descendants
 
@@ -65,6 +66,7 @@ def change(fn):
     path().parent.mkdir(parents=True, exist_ok=True)
     with (fleet.state_dir() / "board.lock").open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
+        store_db.guard_legacy_write("board write")  # under the lock: the 4b import holds it while it records 4b-board
         store = read()
         for t in store["todo"]:  # a to-do from before the stamp: its M/D reads against this write
             t.setdefault("added", fleet.iso(fleet.utcnow()))
@@ -1127,7 +1129,13 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     if missing and not isinstance(missing, str):
         names = [one_line(sessions[m].get("name") or m) for m in missing]
         facts.append(f"보고서에 없는 세션 {len(missing)} ({', '.join(names[:3])}{' 외' if len(names) > 3 else ''})")
-    open_dec = fleet.open_decisions()
+    try:
+        open_dec = fleet.open_decisions()
+    except store_db.NotMigrated:
+        open_dec = []
+        facts.append("이행 대기: 결정 DB (`orch db cutover-plan 4a`)")
+    if traces := store_db.legacy_traces():
+        facts.append(f"옛 코드가 쓴 흔적 {', '.join(traces)}")
     old = [d for d in open_dec if (at := fleet.parse(fleet.decision_age_from(d)))
            and (now - at).total_seconds() > limits["decision_stale_h"] * 3600]
     if old:
@@ -1316,7 +1324,10 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         out += ["", "⏳ 다른 사람 대기" if tg else "⏳ **다른 사람 대기**", ""] + [it if tg else f"- {it}" for it in theirs]
     if insight:
         out += ["", insight.strip()]
-    own, decisions = list(decisions), fleet.open_decisions()
+    try:
+        own, decisions = list(decisions), fleet.open_decisions()
+    except store_db.NotMigrated:  # the headline already says 이행 대기
+        own, decisions = list(decisions), []
     asked = set((last or {}).get("decisions") or []) if last_rows is not None else set()
     if decisions or own:
         items = []

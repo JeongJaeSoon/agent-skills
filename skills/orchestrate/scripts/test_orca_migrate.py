@@ -45,7 +45,10 @@ board_store = {"v": 1, "rows": {}, "order": [], "doing": doing, "later": [], "to
                          "lead:old": {"name": "lead:old", "handle": "term_gone", "repo": "acme/app", "closed_at": "2026-01-01T00:00:00Z"}}}
 (sd / "state.json").write_text(json.dumps(state))
 (sd / "board.json").write_text(json.dumps(board_store, ensure_ascii=False))
-(sd / "decisions.json").write_text(json.dumps({"decisions": {"d1": {"id": "d1", "title": "배포 시각", "status": "open"}}}))
+(sd / "decisions.json").write_text(json.dumps({"decisions": {"d1": {"id": "d1", "title": "배포 시각", "status": "open",
+                                                                   "created_at": "2026-01-01T00:00:00Z"}}}))
+import store  # noqa: E402
+store.import_apply(checks=False)  # decisions.json is now an empty directory and the decision is in agent-skills.db
 first, owned = tidy.item_id("doing", doing[0]), tidy.item_id("doing", doing[5])
 
 
@@ -78,10 +81,15 @@ backups = [d for d in sd.iterdir() if d.name.startswith("backup-orca-v2-")]
 assert len(backups) == 1, backups
 bk = backups[0]
 assert stat.S_IMODE(bk.stat().st_mode) == 0o700
-for name in ("board.json", "decisions.json"):
-    assert (bk / name).read_bytes() == before[name], name
+for name in ("board.json", store.DB_NAME):
     assert stat.S_IMODE((bk / name).stat().st_mode) == 0o600
+assert (bk / "board.json").read_bytes() == before["board.json"]
 assert not (bk / "tidy.jsonl").exists()  # there was none before
+assert not (bk / "decisions.json").exists()  # the tombstone directory is not copied; the DB copy holds the decision
+was = os.environ["ORCH_FLEET_STATE"]
+os.environ["ORCH_FLEET_STATE"] = str(bk)
+assert [d["id"] for d in store.decisions()] == ["d1"]  # the backup is a whole, readable DB
+os.environ["ORCH_FLEET_STATE"] = was
 assert json.loads((bk / "migrate.json").read_text())["closed"] == [first, owned]
 assert (sd / "board.json").read_bytes() == before["board.json"]
 cur = tidy.latest()[first]

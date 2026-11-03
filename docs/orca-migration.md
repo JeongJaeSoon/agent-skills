@@ -39,6 +39,40 @@ Do this when no merge or card start is in flight. Nothing here touches a running
 
 ## Undoing it
 
-- **State:** `orch migrate --restore <backup dir>` reopens what that run closed and leaves anything the owner changed since. With older code loaded, run the `orch board reopen` line `--apply` printed instead. The backup holds the `board.json`, `tidy.jsonl` and `decisions.json` from before, as 0600 files.
+- **State:** `orch migrate --restore <backup dir>` reopens what that run closed and leaves anything the owner changed since. With older code loaded, run the `orch board reopen` line `--apply` printed instead. The backup holds the `board.json` and `tidy.jsonl` from before, `decisions.json` while it is still a file, and a copy of `agent-skills.db` once decisions moved there, all as 0600 files.
 - **Code:** check out the previous release tag in the loaded checkout and `/reload-plugins` again.
 - **Orca values:** a card sets its own `workspaceStatus` (`in-review` once its PR is open, `completed` when it closes), and links go only on cards the new code starts. To put a status back, `orca worktree set --worktree <sel> --workspace-status in-progress`.
+
+# Decisions move into agent-skills.db (2026-11-04)
+
+From this release `orch decide` and the dashboard's answers keep decisions in `agent-skills.db`, a SQLite file in the fleet state directory (`$ORCH_FLEET_STATE`), instead of `decisions.json`. The board and tidy files stay as they are for now; a later release moves them into the same file.
+
+## What changes
+
+- Closed decisions are no longer deleted after 7 days. They stay in the table and every reader filters on their status.
+- Each change to a decision writes its before and after into the `event` table in the same transaction.
+- Only `orch db import` creates the file. Until it has run, `orch decide` stops with a pointer to `orch db cutover-plan 4a`, the decision hook does nothing, and the brief's headline shows `이행 대기: 결정 DB`.
+- `orch db dump [table]` prints the tables as JSON. Open the file yourself only with `sqlite3 -readonly`.
+- Copy the database with `orch db backup <file>`, never with `cp`: a copy of the file without its `-wal` can lose the latest writes. Keep the state directory on a local disk, not in a synced folder.
+
+## Switch-over order
+
+Older code still writes `decisions.json`, so it must not run while the data moves. `orch db cutover-plan 4a` prints these steps as the commands to run on your machine; it runs none of them.
+
+1. Stop the dashboard server (it relays answers from the page). On macOS that is `launchctl bootout` of its LaunchAgent.
+2. Fast-forward the loaded main checkout.
+3. Restart, or `/reload-plugins` in, every live Claude session, because each one runs the decision hook it loaded.
+4. `orch db import --dry-run` shows how many decisions move and whether `--apply` would refuse.
+5. `orch db import --apply`. It refuses while a process runs the scripts, wrappers or hooks from another checkout or from before the fast-forward, while a live session in any Claude home started before it, while the plugin loads a copy at another commit or a session loads another checkout with `--plugin-dir`, while a LaunchAgent is still loaded (even without a pid) that is the dashboard's under this shell's label or is any agent in `~/Library/LaunchAgents` running an agent-skills script, wrapper or hook, or while any uncommented crontab line runs one of them, even from the updated checkout (comment it out for the cutover). When it cannot tell, it refuses too: `ps` or `crontab -l` fails (a user with no crontab, or no `crontab` command, is fine), or a process's directory or the checkout's update time cannot be read. Then it takes the board, tidy and decision locks, copies `decisions.json` to `backup-db-<time>/` (0700, files 0600) with its sha256, builds the database under a temporary name, checks it, renames it into place, and leaves an empty `decisions.json` directory in its place so older code fails to write there.
+6. Start the dashboard server again (`orch-dash install-agent` on macOS).
+
+Running `--apply` again is safe. If the import committed but the empty directory was not laid yet, the re-run lays it only when `decisions.json` still has the sha256 it had at import; if the file changed in between, it stops and names the conflict, and nothing is replaced. If a file appears where the empty directory was after the switch, the brief shows `옛 코드가 쓴 흔적`.
+
+## Undoing it
+
+1. Stop the writers as in step 1, then `orch db backup <file>`. The backup keeps everything, including the event history the old format has no place for.
+2. `orch db export --legacy --target pre-4a <dir>` writes the `decisions.json` older code reads, and reports whether the database's write-ahead log was checkpointed. If it reports busy, a connection is still open: stop it first.
+3. Move `agent-skills.db` together with its `-wal` and `-shm` out of the state directory, remove the empty `decisions.json` directory, and put `<dir>/decisions.json` in its place.
+4. Revert to the previous release, fast-forward, and start the writers again.
+
+To move the state to another computer, `orch db backup <file>` there and `orch db restore <file>` on the new one. `restore` runs the same checks as `--apply`, and refuses while a `decisions.json` file sits in the new state directory.

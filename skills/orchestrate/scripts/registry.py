@@ -54,7 +54,7 @@ PRODUCERS = {
     "tokens": ("token usage collect · 15 min", ("token_usage",)),
     "prstats": ("PR stats collect", ("pr_stats",)),
     "orch": ("orch CLI · board, decide, stage, sent, ack, hold, brief --commit", (
-        "board", "stages", "sent", "acks", "holds", "jobs", "orca_migrate")),
+        "board", "stages", "sent", "acks", "holds", "jobs", "orca_migrate", "store")),
     "tidy": ("tidy · each tick and orch board done", ("tidy",)),
     "programs": ("program leads · orch land, wait, heavy", ("prog",)),
     "patrol": ("patrol round", ("patrol",)),
@@ -164,9 +164,29 @@ STORES = [
     Store("avatars", "D/avatars/*.png", {"pr.author": CACHE}, ("fleet:Fleet.fetch_avatars",), ("page",)),
     Store("prompts", "D/prompts/*.json", {"permission.prompt": CANONICAL}, ("permission:main",), ("fleet",),
           rule="one file per pending permission prompt"),
-    Store("decisions", "D/decisions.json", {"decision.item": CANONICAL}, ("fleet:change_decisions",),
-          ("fleet", "brief", "reorient"), rule="`orch decide` and the page's answers; moves to db:decision in PR 4a"),
-    Store("decisionslock", "D/decisions.lock", {"decision.item": LOCK}, ("fleet:change_decisions",)),
+    Store("decisions", "D/decisions.json", {"decision.item": REMOVED}, ("store:export_legacy",), ("nobody",),
+          rule="decisions before PR 4a; `orch db import` leaves an empty directory here so older code fails to write, "
+               "and `orch db export --legacy` writes one for a rollback"),
+    Store("decisionslock", "D/decisions.lock", {"decision.item": LOCK}, ("store:_locks",)),
+    # -- D: agent-skills.db, every connection through store.py (check() refuses one anywhere else)
+    Store("db", "D/agent-skills.db", {"db.file": CANONICAL}, ("store:import_apply", "store:restore"),
+          ("fleet", "brief", "reorient"), rule="SQLite (WAL) holding the db: tables below; only `orch db import` "
+                                                "creates it"),
+    Store("dbwal", "D/agent-skills.db-*", {"db.file": LOCK}, ("ext:sqlite",), ("nobody",),
+          rule="SQLite's -wal and -shm beside the DB: part of it, never copied alone (`orch db backup`)"),
+    Store("dbbackup", "D/backup-db-*/*", {"decision.item": BACKUP}, ("store:import_apply",), ("nobody",),
+          rule="the legacy files `orch db import` replaced, as they were, with their sha256 in db:migration"),
+    Store("decision", "db:decision.status", {"decision.item": CANONICAL},
+          ("store:change_decisions", "store:_insert_decision", "store:restore"), ("fleet", "brief", "reorient"),
+          rule="`orch decide` and the page's answers; closed ones stay, filtered by status and closed_at"),
+    Store("counter", "db:counter.next", {"decision.id": CANONICAL}, ("store:change_decisions", "store:import_apply",
+                                                                     "store:restore"), ("fleet",),
+          rule="the next d<N>; never reused"),
+    Store("migration", "db:migration.stage", {"db.migration": CANONICAL},
+          ("store:import_apply", "store:_set_stage", "store:restore"), ("fleet", "brief"),
+          rule="data steps imported (4a-decisions) with the legacy files' sha256; the access gate reads it"),
+    Store("dbevent", "db:event.seq", {"decision.item": LOG, "db.migration": LOG}, ("store:_event", "store:restore"),
+          ("nobody",), rule="each change's before and after, in the same transaction; import keeps the legacy original"),
     Store("inbox", "D/inbox-external.jsonl", {"inbox.external_item": CANONICAL, "pressure.queue_item": LOG},
           ("fleet:inbox_add", "fleet:inbox_resolve", "pressure:dash_note"), ("fleet",),
           rule="items added from outside a session; pressure waits copied here too"),
@@ -182,12 +202,12 @@ STORES = [
           rule="to-dos, held items, doing lines, rows' phase and progress, leads Orca cannot see"),
     Store("boardprev", "D/board.prev.json", {"board.todo": BACKUP}, ("board:change",), ("nobody",),
           rule="the board before its last write"),
-    Store("boardlock", "D/board.lock", {"board.todo": LOCK}, ("board:change", "orca_migrate:board_lock")),
+    Store("boardlock", "D/board.lock", {"board.todo": LOCK}, ("board:change", "orca_migrate:board_lock", "store:_locks")),
     Store("tidy", "D/tidy.jsonl", {"board.closure": CANONICAL}, ("tidy:append",), ("brief", "fleet", "tidy"),
           rule="done and reopen lines for board items, rows and cards"),
     Store("tidyold", "D/tidy.jsonl.1", {"board.closure": BACKUP}, ("tidy:append",), ("nobody",),
           rule="the generation before the last rotation"),
-    Store("tidylock", "D/tidy.lock", {"board.closure": LOCK}, ("tidy:locked",)),
+    Store("tidylock", "D/tidy.lock", {"board.closure": LOCK}, ("tidy:locked", "store:_locks")),
     Store("migrate", "D/backup-orca-v2-*/*", {"board.todo": BACKUP, "board.closure": BACKUP},
           ("orca_migrate:backup", "orca_migrate:apply"), ("nobody",), rule="`orch migrate` copies and its undo list"),
     Store("adoption", "D/adoption.jsonl", {"work.parent_adopted": CANONICAL}, ("fleet:adopt",), ("fleet",),
@@ -358,6 +378,7 @@ OUTSIDE = {
     "pstack-sync:main": "vendors a pinned upstream into the repo",
     "shots:upload": "a PR screenshot to the path its caller names",
     "measure:main": "a report to the --out path",
+    "store:main": "`orch db backup FILE`: a copy of the DB to the path the owner names",
     "ui_measure:main": "a measurement to the --out path",
     "skill_tokens:measure_ref": "a tar in its own temporary directory",
     "reap:trash": "moves a reaped target to the trash",
@@ -420,10 +441,13 @@ def _outside(writer):
     return any(fnmatch.fnmatchcase(writer, k) for k in OUTSIDE)
 
 
-def check(stores=None, writes=None, dual=None, modules=None):
+def check(stores=None, writes=None, dual=None, modules=None, db=None):
     """Violations: [{kind, key, detail}]. kind: registry (the map itself is wrong), dual (two canonical stores for a
-    fact), unregistered (a write to a file no store names), writer (a write from a function its store does not list)."""
+    fact), unregistered (a write to a file no store names), writer (a write from a function its store does not list),
+    db (db_violations). db: precomputed (kind, key, detail) rows; the scripts are scanned when writes is None too."""
     stores = STORES if stores is None else stores
+    if writes is not None and db is None:
+        db = []
     writes = scan() if writes is None else writes
     dual = DUAL_CANONICAL if dual is None else dual
     out = []
@@ -493,6 +517,71 @@ def check(stores=None, writes=None, dual=None, modules=None):
             elif not any(w.writer in s.writers for s in hit):
                 bad("writer", w.writer, f"line {w.line}: writes {t} ({', '.join(s.id for s in hit)}) without being "
                                         "its writer")
+
+    for kind, key, detail in (db_violations(stores) if db is None else db):
+        bad(kind, key, detail)
+    return out
+
+
+# Modules allowed to import sqlite3, and why. agent-skills.db is store.py's alone.
+DB_CONNECT = {"store": "agent-skills.db", "orca_settings": "Orca's own database, read-only (mode=ro)"}
+# UPDATE needs its SET so that prose ("Update the checkout") is not read as SQL; keywords in any case.
+# A table may carry a schema (main.decision) and any of SQLite's quotes ("x", [x], `x`).
+_TABLE = r"\s+(?:[\"\[`]?\w+[\"\]`]?\s*\.\s*)?[\"\[`]?(\w+)[\"\]`]?"
+SQL_WRITE = re.compile(rf"(?<!DO )\b(?:(?:INSERT(?:\s+OR\s+\w+)?|REPLACE)\s+INTO{_TABLE}|DELETE\s+FROM{_TABLE}"
+                       rf"|UPDATE(?:\s+OR\s+\w+)?{_TABLE}\s+SET\b)", re.I)
+
+
+def _strings(node):
+    for n in ast.walk(node):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            yield n.value
+
+
+def _importer(func):
+    """Whether a call's target is __import__ or some import_module (importlib's, under any name)."""
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+    return name in ("__import__", "import_module")
+
+
+def db_scan(paths=None):
+    """(connects, sql writes): [(module, line)] of every import of sqlite3 (under any name, or through __import__ or
+    importlib), since a module that cannot import it cannot connect; and [(module:qualname, table, line)] of every
+    SQL statement in store.py that changes a table."""
+    connects, sql = [], []
+    for p, name in _names(paths if paths is not None else sources()).items():
+        tree = ast.parse(p.read_text(), str(p))
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import) and any(a.name.split(".")[0] == "sqlite3" for a in n.names) or \
+                    isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "sqlite3" or \
+                    isinstance(n, ast.Call) and _importer(n.func) and \
+                    any(isinstance(a, ast.Constant) and str(a.value).split(".")[0] == "sqlite3"
+                        for a in [*n.args, *(k.value for k in n.keywords)]):
+                connects.append((name, n.lineno))
+        if name != "store":
+            continue
+        for qual, fn in _Module(name, tree).funcs.items():
+            for s in _strings(fn):
+                for m in SQL_WRITE.finditer(s):
+                    sql.append((f"store:{qual}", next(g for g in m.groups() if g).lower(), fn.lineno))
+    return connects, sql
+
+
+def db_violations(stores, scanned=None):
+    """kind db: a connection outside DB_CONNECT, or a store.py function changing a table whose db: store does not
+    list it as a writer (so going through store.py is not a licence to change any table from anywhere)."""
+    connects, sql = db_scan() if scanned is None else scanned
+    out = [("db", f"{m}:{line}", "sqlite3 imported outside store.py: agent-skills.db goes through store.py only")
+           for m, line in connects if m not in DB_CONNECT]
+    tables = {}
+    for s in stores:
+        if s.path.startswith("db:"):
+            tables.setdefault(s.path[3:].split(".")[0], set()).update(s.writers)
+    for writer, table, line in sql:
+        if table not in tables:
+            out.append(("db", f"db:{table}", f"{writer} line {line}: no store names this table"))
+        elif writer not in tables[table]:
+            out.append(("db", writer, f"line {line}: changes table {table} without being its writer"))
     return out
 
 

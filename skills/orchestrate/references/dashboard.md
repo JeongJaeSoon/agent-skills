@@ -148,7 +148,7 @@ Every change a full read finds is appended to `pr-events.jsonl` in the state dir
 
 ### Decisions the orchestrator or lead waits on you for
 
-A decision the orchestrator or lead reaches in its own analysis, or hears from a subagent, never becomes Orca mail. The orchestrator or lead registers it with `orch decide` (`scripts/prog.py`, stored in `decisions.json` in the state directory, masked on write):
+A decision the orchestrator or lead reaches in its own analysis, or hears from a subagent, never becomes Orca mail. The orchestrator or lead registers it with `orch decide` (`scripts/prog.py`, stored in the `decision` table of `agent-skills.db` in the state directory through `scripts/store.py`, masked on write):
 
 ```sh
 orch decide add --title "Export format for the first release" --body-file /tmp/why.md \
@@ -159,7 +159,7 @@ orch decide drop d7                  # no longer needed
 orch decide keep d7                  # checked, still stands: sets checked_at
 ```
 
-A closed decision stays in `decisions.json` for 7 days after it closed, then the next `add` or close drops it. `keep` changes nothing but `checked_at`; the brief counts an open decision as `오래된 결정` once `board.decision_stale_h` hours (12) passed since the later of `created_at` and `checked_at`, as `등록 터미널 없음` while the terminal that added it is not in the fleet and the relay falls back to the root's writable agent terminal, and as `응답 경로 없음` when the terminal the relay would type into has no running, writable agent or there is none (one added outside Orca always goes to the root).
+A closed decision stays in the table; readers filter on its status. Before `orch db import` has run, `orch decide` stops and names `orch db cutover-plan 4a`, and the brief's headline shows `이행 대기: 결정 DB` (docs/orca-migration.md). `keep` changes nothing but `checked_at`; the brief counts an open decision as `오래된 결정` once `board.decision_stale_h` hours (12) passed since the later of `created_at` and `checked_at`, as `등록 터미널 없음` while the terminal that added it is not in the fleet and the relay falls back to the root's writable agent terminal, and as `응답 경로 없음` when the terminal the relay would type into has no running, writable agent or there is none (one added outside Orca always goes to the root).
 
 The item sits on the session whose terminal ran `add` (`$ORCA_TERMINAL_HANDLE`), or on the root. It shows the title, its age, the body's first line, and one button per option, the recommended one with a check; an option's description is its button's tooltip. A line under them shows how to answer in the orchestrator's or lead's terminal instead (`d1: <answer>`, with the recommended option as the answer when there is one). Nothing expands in place. An option button, or the answer box, takes a second click and then answers it through `POST /api/fleet/decide` (same Host, Origin and token guard as the send box). The answer is recorded first: the decision is closed as `done` with that answer, as `orch decide done` would, and leaves Needs you on the next poll. Then `decision <id>: <answer>` goes to that terminal (or the root's agent terminal) through the send box's idle check and log below. A busy orchestrator or lead does not fail the answer: the page says "Recorded; will relay to the orchestrator or lead when it is idle", the decision keeps `delivered: false`, and each later collect retries the line, skipping while the session is working, until it is typed once (a line typed but not confirmed counts as delivered, so it is never sent twice). `orch decide list` prints such answers, the orchestrator's or lead's own `done` stops the retry, and `drop` cancels it. Dismiss only hides the item on this page.
 
@@ -370,7 +370,9 @@ State lives outside every repository, in `$ORCH_FLEET_STATE` or `~/.local/state/
 | `events.jsonl` | The timeline |
 | `pr-events.jsonl` | PR events (above) |
 | `inbox-external.jsonl` | Items added and resolved with `orch-dash inbox` |
-| `decisions.json` | Decisions from `orch decide`; closed ones are dropped after a week |
+| `agent-skills.db` (with `-wal`, `-shm`) | Decisions from `orch decide`, closed ones included, and each change's event; only `orch db import` creates it, copy it with `orch db backup` |
+| `decisions.json` | Before `orch db import`, the decisions; after it, an empty directory so older code cannot write there |
+| `backup-db-<time>/` | The `decisions.json` that `orch db import` replaced, as it was |
 | `requests.jsonl` | Left by the removed owner-request ledger; nothing reads or writes it |
 | `stages.json`, `stages-auto.json` | The stage table: what `orch stage` recorded, and the rows each tick generates per program (The stage table, above) |
 | `jobs.json` | Each orch-dash job's last run (orch-dash jobs, above) |

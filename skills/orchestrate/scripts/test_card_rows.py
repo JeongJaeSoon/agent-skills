@@ -124,6 +124,11 @@ assert "누락 검사 안 함: 세션 목록 2h 전 기준" in facts, facts
 # ---- decisions: stale after decision_stale_h from max(created_at, checked_at), and with no route back
 usable_root = {"handle": "term_root", "agent": "claude", "connected": True, "writable": True}
 write_state([], root_term=usable_root)
+# Before `orch db import` the brief says the decisions wait on it, and still renders.
+assert any(f.startswith("이행 대기: 결정 DB") for f in render()["headline_facts"])
+import store  # noqa: E402
+store.import_apply(checks=False)
+assert not any(f.startswith("이행 대기") for f in render()["headline_facts"])
 d_old = fleet.decision_add("오래된 질문", handle="term_root")
 d_gone = fleet.decision_add("떠난 터미널의 질문", handle="term_gone")
 
@@ -152,17 +157,24 @@ fleet.change_decisions(lambda st: st["decisions"][d_bare["id"]].update(closed_at
 r = subprocess.run([sys.executable, str(HERE / "prog.py"), "decide", "keep", d_old["id"]], capture_output=True, text=True,
                    env=env)
 assert r.returncode == 0 and r.stdout.startswith(f"{d_old['id']} checked "), (r.stdout, r.stderr)
-kept = fleet.read_json(sd / "decisions.json")["decisions"][d_old["id"]]
+kept = {d["id"]: d for d in store.decisions()}[d_old["id"]]
 assert kept["status"] == "open" and kept["checked_at"] >= fleet.iso(now), kept  # keep closes nothing
 assert not any(f.startswith("오래된 결정") for f in render()["headline_facts"])
 r = subprocess.run([sys.executable, str(HERE / "prog.py"), "decide", "keep", "d999"], capture_output=True, text=True,
                    env=env)
 assert r.returncode != 0 and "no decision d999" in r.stderr, r.stderr
-# A close drops what closed over a week ago, as an add always did.
+# Closed decisions stay in the table, however old: readers filter on status (no 7-day delete since PR 4a).
 fleet.decision_close(d_gone["id"], "dropped")
 backdate(d_gone["id"], closed_at=ago(8 * 24))
 fleet.decision_close(d_old["id"], "done", "yes")
-assert set(fleet.read_json(sd / "decisions.json")["decisions"]) == {d_old["id"]}
+assert {d["id"] for d in store.decisions()} == {d_old["id"], d_gone["id"], d_bare["id"]}
+assert fleet.open_decisions() == []
+# A legacy decisions.json back where the tombstone was: old code wrote after the cutover.
+(sd / "decisions.json").rmdir()
+(sd / "decisions.json").write_text("{}")
+assert "옛 코드가 쓴 흔적 decisions.json (a file again)" in render()["headline_facts"]
+(sd / "decisions.json").unlink()
+(sd / "decisions.json").mkdir()
 
 # ---- a `run:` card's milestone comes from Orca's inbox
 brief = tmp / "brief.md"
