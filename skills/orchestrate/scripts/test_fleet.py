@@ -280,21 +280,24 @@ where = f"workspace: {export['name']}\nterminal: term_export\nworktree: {export[
 switched = []
 
 
-def switch_to(reply):
-    return lambda h: switched.append(h) or reply
+def switch_to(focus):
+    """Orca's whole `terminal switch --json` reply around this focus, as the default switch returns it."""
+    return lambda h: switched.append(h) or {"ok": True, "result": {"focus": focus}}
 
 
-code, out = fleet.open_session("wt-export", switch=switch_to({"focus": {"handle": "term_export", "tabId": "t1", "navigated": True}}))
+code, out = fleet.open_session("wt-export", switch=switch_to({"handle": "term_export", "tabId": "t1", "navigated": True}))
 assert (code, out["ok"], out["navigated"], out["copy"]) == (200, True, True, where) and switched == ["term_export"], out
 assert "host" in out["reason"] and out["warning"] is None, out
-code, out = fleet.open_session("wt-export", switch=switch_to({"focus": {"handle": "term_export", "tabId": "t1", "navigated": False}}))
+code, out = fleet.open_session("wt-export", switch=switch_to({"handle": "term_export", "tabId": "t1", "navigated": False}))
 assert (out["ok"], out["navigated"], out["copy"]) == (False, False, where) and out["reason"], out
-# A reply without the field is passed through as it came, with one warning line: unknown is not success.
-raw = {"focus": {"handle": "term_export", "tabId": "t1"}}
-code, out = fleet.open_session("wt-export", switch=switch_to(raw))
+# A reply without the field is passed through as the CLI printed it, with one warning line: unknown is not success.
+raw = {"ok": True, "result": {"focus": {"handle": "term_export", "tabId": "t1"}}}
+fleet.run_json, real_run_json = (lambda cmd, timeout: switched.append(cmd[-2]) or raw), fleet.run_json
+code, out = fleet.open_session("wt-export")
+fleet.run_json = real_run_json
 assert (out["ok"], out["navigated"], out["result"], out["copy"]) == (False, None, raw, where), out
 assert out["warning"] and "\n" not in out["warning"], out
-code, out = fleet.open_session("wt-export", switch=switch_to(None))
+code, out = fleet.open_session("wt-export", switch=lambda h: switched.append(h))
 assert (out["ok"], out["navigated"], out["result"]) == (False, None, None) and out["warning"], out
 assert fleet.open_session("wt-nowhere", switch=switched.append)[0] == 409 and switched == ["term_export"] * 4
 
@@ -307,10 +310,10 @@ code, out = fleet.open_session("wt-export", switch=refuse)
 assert (code, out["ok"], out["reason"], out["copy"]) == (200, False, "no such terminal", where), out
 # With the paired server's name set, the copy is the command that switches the device it is typed on.
 pathlib.Path(os.environ["ORCH_FLEET_CONFIG"]).write_text(json.dumps({"orca_environment": "home server"}))
-code, out = fleet.open_session("wt-export", switch=switch_to({"focus": {"navigated": True}}))
+code, out = fleet.open_session("wt-export", switch=switch_to({"navigated": True}))
 assert out["copy"] == "orca terminal switch --environment 'home server' --terminal term_export", out
 pathlib.Path(os.environ["ORCH_FLEET_CONFIG"]).write_text(json.dumps({"orca_environment": ""}))
-assert fleet.open_session("wt-export", switch=switch_to({"focus": {"navigated": True}}))[1]["copy"] == where
+assert fleet.open_session("wt-export", switch=switch_to({"navigated": True}))[1]["copy"] == where
 pathlib.Path(os.environ["ORCH_FLEET_CONFIG"]).unlink()
 (state_dir / "sends.jsonl").write_text(log)  # the counts below are of sends
 
@@ -1002,6 +1005,21 @@ process.stdout.write(JSON.stringify({{host: openNote(n.host), unknown: openNote(
         assert got[k].count("data-copy=") == 1 and "<b>" not in got[k] and '/tmp/"w"' not in got[k], got[k]
         assert "workspace: &lt;b&gt;w&lt;/b&gt;\nterminal: term_x" in got[k] and "data-open-close" in got[k], got[k]
     assert "data-copy" not in got["none"] and "no connected terminal" in got["none"] and got["unset"] == "", got
+    # Two clicks whose replies come back in the opposite order: the note stays the last click's.
+    js = f"""{helpers}
+{(assets / "fleet.js").read_text()}
+const pending = {{}};
+fleetPost = (path, body) => new Promise((resolve) => {{ pending[body.session] = resolve; }});
+showOpenNote = () => {{}};
+(async () => {{
+  const a = openSession({{dataset: {{openSession: "A"}}}}), b = openSession({{dataset: {{openSession: "B"}}}});
+  pending.B({{ok: true, copy: "terminal B"}}); await b;
+  pending.A({{ok: true, copy: "terminal A"}}); await a;
+  process.stdout.write(JSON.stringify(F.open));
+}})();"""
+    ctx_s = ctx.replace("sb = {process,", "sb = {process, S: {state: {sessions: []}},")
+    got = json.loads(subprocess.run(["node", "-e", ctx_s], input=js, capture_output=True, text=True, check=True).stdout)
+    assert (got["name"], got["copy"]) == ("B", "terminal B"), got
     # The session page lists the rows that session runs, with their PR and when it last reported.
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}

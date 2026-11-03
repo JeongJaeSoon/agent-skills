@@ -320,7 +320,7 @@ A Brief row's session cell has an `Orca` button. It POSTs `/api/fleet/open` with
 
 - `navigated: true` in Orca's reply: `ok: true`, and the page says it switched in the host's Orca window only.
 - `navigated: false`, a refused switch, or a reply without the field: `ok: false`. A reply without `navigated` comes back as `result`, as Orca sent it, with one `warning` line; an unknown outcome is never reported as success.
-- Every reply with a terminal carries `copy`, and the page shows it under the row with a `Copy` button: the switch command to type on the other device when the config sets `orca_environment`, else the session's workspace name, terminal handle and worktree path, to find it by hand.
+- Every reply with a terminal carries `copy`, and the page shows the last click's outcome in a note fixed at the bottom right (a table row keeps its height), with a `Copy` button, until its close button; a reply to an earlier click that arrives late does not replace it. The copy is the switch command to type on the other device when the config sets `orca_environment`, else the session's workspace name, terminal handle and worktree path, to find it by hand.
 
 `orca_environment` is the name (or id) the other device saved for this host's Orca server (`orca environment add --name <name>`, listed by `orca environment list` on that device). With it, `copy` is `orca terminal switch --environment <name> --terminal <handle>`, which moves the desktop app of the device it is typed on. It is unset by default, and then the copy is the workspace, handle and path. Each attempt is appended to `sends.jsonl` (`text: "open"`).
 

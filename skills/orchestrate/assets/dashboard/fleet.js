@@ -1075,10 +1075,12 @@ function briefRowsCard(s, st) {
 }
 async function openSession(t) {
   const id = t.dataset.openSession, name = ((S.state || {}).sessions || []).find((s) => s.id === id)?.name || id;
+  const seq = (F.openSeq = (F.openSeq || 0) + 1);
   F.open = { busy: true, name };
   showOpenNote();
   let out;
   try { out = await fleetPost("/api/fleet/open", { session: id }); } catch (e) { out = { ok: false, reason: String(e.message || e) }; }
+  if (seq !== F.openSeq) return;  // a later click's note is showing; this reply is not the last click's
   F.open = { ...out, name };
   showOpenNote();
 }

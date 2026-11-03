@@ -445,8 +445,9 @@ td.when { white-space: nowrap; }
 .icon-btn.done { color: var(--good); border-color: var(--good); }
 /* The Orca button's last outcome, fixed so a table row keeps its height, until it is closed. */
 .open-note { position: fixed; right: var(--s4); bottom: var(--s4); z-index: 40; width: min(480px, calc(100vw - 2 * var(--s4)));
+  max-height: calc(100vh - 2 * var(--s4)); overflow-y: auto;
   padding: var(--s3); display: grid; gap: var(--s2); font-size: var(--t-sm); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
-.open-note-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.open-note-head { position: sticky; top: 0; background: var(--panel); display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
 .open-note-copy { display: flex; align-items: center; gap: var(--s2); }
 .open-note-copy pre { flex: 1; min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .open-note .sub { overflow-wrap: anywhere; }

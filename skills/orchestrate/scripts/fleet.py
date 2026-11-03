@@ -189,10 +189,16 @@ def run_json(cmd, timeout=30):
     return out
 
 
-def orca(*args, timeout=30):
+def orca_reply(*args, timeout=30):
+    """Orca's whole JSON reply, envelope included; a refusal raises."""
     out = run_json(["orca", *args, "--json"], timeout)
     if isinstance(out, dict) and out.get("ok") is False:
         raise SourceError(mask(json.dumps(out.get("error"))[:300]))
+    return out
+
+
+def orca(*args, timeout=30):
+    out = orca_reply(*args, timeout=timeout)
     return out.get("result", out) if isinstance(out, dict) else {}
 
 
@@ -2491,11 +2497,12 @@ def open_session(session_id, switch=None):
     else:
         code, out = 200, {"ok": False, "navigated": None, "warning": None, "copy": open_copy(s, term["handle"])}
         try:
-            got = (switch or (lambda h: orca("terminal", "switch", "--terminal", h)))(term["handle"])
+            got = (switch or (lambda h: orca_reply("terminal", "switch", "--terminal", h)))(term["handle"])
         except SourceError as e:
             out["reason"] = str(e)
         else:
-            focus = got.get("focus") if isinstance(got, dict) else None
+            result = got.get("result") if isinstance(got, dict) else None
+            focus = result.get("focus") if isinstance(result, dict) else None
             nav = focus.get("navigated") if isinstance(focus, dict) else None
             if nav is True:
                 out.update(ok=True, navigated=True, reason="switched in the host's Orca window only")
