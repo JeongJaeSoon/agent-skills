@@ -260,4 +260,10 @@ import guard  # noqa: E402
 with guard.hold([("card", reap.real("/w/same"))]) as outer, cardguard.card_lock("/w/same") as inner:
     assert outer and inner
     assert guard.lock_file("card", reap.real("/w/same")).name.startswith("card-")
+# The folder a cleaner acts on: same path and HEAD, but made again since, is kept.
+facts = {"patrol": False, "head": "h", "terminals": [], "ino": 5}
+assert cardguard.check(facts, "h", set(), ino=5) == (True, "확인함")
+assert cardguard.check(facts, "h", set(), final=True, ino=4) == (False, "판정 뒤 카드 폴더가 다시 만들어짐")
+assert cardguard.check({**facts, "ino": None}, "h", set(), ino=4)[0] is False
+assert cardguard.check(facts, "h", set())[0] is True  # a caller that does not know the inode is not checked on it
 print("test_cardguard: ok")

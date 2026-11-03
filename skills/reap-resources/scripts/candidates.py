@@ -29,7 +29,7 @@ HARD_RULE = {"card": "card:strict", "stack": "stack:gone", "listener": "proc:lis
 REPORT_ONLY = ("chrome-window",)  # the janitor's model closed these after a URL check; v2 only reports them
 # What a card candidate relies on besides its scan: patrol's own activity reads of this round.
 CARD_NEEDS = ("terminals", "waits", "workers")
-IDENTITY = ("head", "tip", "verdict", "pid", "start", "cmd", "created", "flag", "port", "local", "close")
+IDENTITY = tuple(dict.fromkeys(reap.ACT_IDENTITY + ("verdict", "close")))
 # How today's scans word a part they could not read.
 UNREAD = ("읽지 못함", "실패", "응답 없음", "not read", "timed out")
 RUN_TIMEOUT_S = 60
