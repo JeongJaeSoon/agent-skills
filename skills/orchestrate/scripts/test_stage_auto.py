@@ -330,6 +330,17 @@ made, _, held = stage_auto.build([kappa], {"tasks": [], "sources": {"runs": {"ok
 assert (made["kappa/K-1"]["stopped"], made["kappa/K-1"]["done_at"]) == ("card ended", fleet.iso(now)), made["kappa/K-1"]
 made, _, _ = stage_auto.build([kappa], {"tasks": card("dispatched"), "sources": {"runs": {"ok": True}}}, now, held)
 assert not made["kappa/K-1"]["done_at"] and "stopped" not in made["kappa/K-1"]
+# The card's end is kept apart from its PR: reopened while the Run read fails, the row is open; closed again, it
+# stops at the card's first end, not a new time.
+pr_k = lambda s: [{"key": "acme/k#3", "repo": "acme/k", "state": s, "session": "s-k1", "created": ago(4)}]  # noqa: E731
+seen = {"tasks": card("completed"), "sessions": [{"id": "s-k1", "run": "run_k", "task": "task_k1"}], "sources": {"runs": {"ok": True}}}
+made, _, held = stage_auto.build([kappa], {**seen, "prs": pr_k("CLOSED")}, now)
+assert made["kappa/K-1"]["done_at"] == fleet.iso(now)
+blind = {"tasks": [], "sessions": [{"id": "s-k1", "run": "run_k", "task": "task_k1"}], "sources": {"runs": {"ok": False}}}
+made, _, held = stage_auto.build([kappa], {**blind, "prs": pr_k("OPEN")}, now + dt.timedelta(hours=1), held)
+assert not made["kappa/K-1"]["done_at"] and held["kappa"]["cards"]["task_k1"]["ended"] == fleet.iso(now)
+made, _, _ = stage_auto.build([kappa], {**blind, "prs": pr_k("CLOSED")}, now + dt.timedelta(hours=2), held)
+assert made["kappa/K-1"]["done_at"] == fleet.iso(now), made["kappa/K-1"]
 md = stages.render_md(stages.of_program(stages.table(th), "theta"))
 assert "| T-5: probe (중단) |" in md and "| T-1 (끝남) | acme/th#31 | ✅ 3333333 | 해당 없음 | 해당 없음 |" in md, md
 # stages-auto.json is written only when its content changes: the same tick five minutes on leaves it (and the ended

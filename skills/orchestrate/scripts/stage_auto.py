@@ -211,16 +211,19 @@ def build(programs, state, now, held=None):
                 if c not in deploy:
                     cells[c] = {"mark": "na", "auto": True, "from": "program.json stages"}
             stopped = end_at = None
+            tid = card_of.get(k)
+            if tid and k not in items:
+                had = kept.get(tid, {}).get("ended")
+                # The card's end is kept whatever its PR does: only the card read working again lifts it, and a
+                # failed Run read that cannot see the card keeps it.
+                if (live[tid].get("status") in ENDED) if tid in live else bool(runs_ok or had):
+                    ended[tid] = had or fleet.iso(now)
             # Only no PR or a closed one: a PR whose state this tick does not know may be open.
             if not merge and (not pr or (prs.get(pr) or {}).get("state") == "CLOSED"):
-                w, tid = words.get(k), card_of.get(k)
-                had = kept.get(tid, {}).get("ended")
-                # A card read as working again lifts its stop; one a failed Run read cannot see keeps it.
-                gone = (live[tid].get("status") in ENDED) if tid in live else bool(runs_ok or had)
+                w = words.get(k)
                 if w and w["ev"] in STOP:
                     stopped, end_at = w["ev"], w["ts"]
-                elif tid and k not in items and gone:
-                    ended[tid] = had or fleet.iso(now)
+                elif tid in ended:
                     stopped, end_at = "card ended", ended[tid]
             rid = f"{slug}/{k}"
             nums = {int(x.rsplit("#", 1)[1]) for x in keys if x.startswith(f"{repo}#")}
