@@ -39,6 +39,40 @@
 
 ## 되돌리기
 
-- **상태:** `orch migrate --restore <백업 디렉터리>`는 그 실행이 닫은 줄을 다시 열고, 그 뒤 오너가 바꾼 것은 그대로 둔다. 옛 코드가 로드된 상태라면 `--apply`가 출력한 `orch board reopen` 줄을 대신 돌린다. 백업에는 실행 전의 `board.json`, `tidy.jsonl`, `decisions.json`이 0600 파일로 있다.
+- **상태:** `orch migrate --restore <백업 디렉터리>`는 그 실행이 닫은 줄을 다시 열고, 그 뒤 오너가 바꾼 것은 그대로 둔다. 옛 코드가 로드된 상태라면 `--apply`가 출력한 `orch board reopen` 줄을 대신 돌린다. 백업에는 실행 전의 `board.json`·`tidy.jsonl`, 아직 파일일 때의 `decisions.json`, 결정이 옮겨 간 뒤라면 `agent-skills.db` 사본이 모두 0600 파일로 있다.
 - **코드:** 로드되는 체크아웃을 이전 릴리스 태그로 돌리고 다시 `/reload-plugins`.
 - **Orca 값:** `workspaceStatus`는 카드가 자기 칸에만 쓰고(PR을 열면 `in-review`, 닫을 때 `completed`), 링크는 새 코드가 띄운 카드에만 붙는다. 상태를 되돌리려면 `orca worktree set --worktree <sel> --workspace-status in-progress`.
+
+# 결정을 agent-skills.db로 옮기기 (2026-11-04)
+
+이 릴리스부터 `orch decide`와 대시보드의 답은 결정을 `decisions.json`이 아니라 fleet 상태 디렉터리(`$ORCH_FLEET_STATE`)의 SQLite 파일 `agent-skills.db`에 둔다. 보드와 tidy 파일은 아직 그대로이고, 뒤 릴리스에서 같은 파일로 옮긴다.
+
+## 바뀌는 것
+
+- 닫힌 결정을 7일 뒤에 지우지 않는다. 테이블에 남고, 읽는 쪽이 상태로 거른다.
+- 결정을 바꿀 때마다 바뀌기 전후 값을 같은 트랜잭션에서 `event` 테이블에 남긴다.
+- 파일은 `orch db import`만 만든다. 그 전에는 `orch decide`가 `orch db cutover-plan 4a`를 안내하고 멈추며, decision hook은 아무것도 하지 않고, brief headline에 `이행 대기: 결정 DB`가 보인다.
+- 표를 볼 때는 `orch db dump [table]`(JSON 출력)를 쓴다. 파일을 직접 열 때는 `sqlite3 -readonly`로만 연다.
+- DB 사본은 `cp`가 아니라 `orch db backup <file>`로 만든다. `-wal` 없이 복사한 파일은 마지막 쓰기를 잃을 수 있다. 상태 디렉터리는 동기화 폴더가 아니라 로컬 디스크에 둔다.
+
+## 전환 순서
+
+옛 코드는 여전히 `decisions.json`에 쓰므로 데이터를 옮기는 동안 돌면 안 된다. `orch db cutover-plan 4a`가 아래 단계를 이 PC에서 칠 명령으로 출력한다. 그 명령은 아무것도 실행하지 않는다.
+
+1. 대시보드 서버를 멈춘다(페이지의 답을 전달하는 곳이다). macOS에서는 그 LaunchAgent를 `launchctl bootout`한다.
+2. 로드되는 메인 체크아웃을 fast-forward한다.
+3. 살아 있는 Claude 세션을 모두 재시작하거나 `/reload-plugins`한다. 세션마다 자기가 로드한 decision hook을 부르기 때문이다.
+4. `orch db import --dry-run`으로 옮길 결정 수와 `--apply`가 거부할지를 본다.
+5. `orch db import --apply`. 다음 중 하나라도 있으면 거부한다. 다른 체크아웃의 스크립트·래퍼·hook을 실행 중이거나 fast-forward 전부터 그것들을 실행해 온 프로세스, 어느 Claude home에서든 그 전에 시작한 살아 있는 세션, 다른 커밋의 사본을 로드하는 plugin이나 `--plugin-dir`로 다른 체크아웃을 로드한 세션, 아직 로드된 LaunchAgent(pid가 없어도)로서 이 셸의 label을 쓰는 대시보드이거나 `~/Library/LaunchAgents`에서 agent-skills의 스크립트·래퍼·hook을 실행하는 것, 그것들을 실행하는 주석 처리되지 않은 crontab 줄(갱신된 체크아웃을 가리켜도 해당하니 전환하는 동안 주석 처리한다). 확인하지 못할 때도 거부한다: `ps`나 `crontab -l`이 실패했을 때(crontab이 없는 사용자나 `crontab` 명령이 없는 경우는 괜찮다), 프로세스의 디렉터리나 체크아웃의 갱신 시각을 읽지 못했을 때. 통과하면 board·tidy·decision 잠금을 잡고, `decisions.json`을 sha256과 함께 `backup-db-<시각>/`(0700, 파일 0600)에 복사하고, 임시 이름으로 DB를 만들어 검사한 뒤 제자리로 rename하고, `decisions.json` 자리에 빈 디렉터리를 남겨 옛 코드의 쓰기가 실패하게 한다.
+6. 대시보드 서버를 다시 올린다(macOS는 `orch-dash install-agent`).
+
+`--apply`는 다시 돌려도 안전하다. import가 커밋됐지만 빈 디렉터리를 아직 놓지 못했다면, 다시 돌렸을 때 `decisions.json`의 sha256이 import 때와 같을 때만 빈 디렉터리를 놓는다. 그 사이 파일이 바뀌었으면 충돌을 보이고 멈추며 아무것도 바꾸지 않는다. 전환 뒤 빈 디렉터리 자리에 파일이 생기면 brief에 `옛 코드가 쓴 흔적`이 보인다.
+
+## 되돌리기 (결정)
+
+1. 전환 순서 1단계처럼 writer를 멈추고 `orch db backup <file>`. 옛 형식에 자리가 없는 이벤트 이력까지 모두 남는다.
+2. `orch db export --legacy --target pre-4a <dir>`가 옛 코드가 읽는 `decisions.json`을 쓰고, WAL checkpoint가 됐는지 알린다. busy라고 나오면 아직 열린 연결이 있으니 먼저 멈춘다.
+3. `agent-skills.db`를 `-wal`·`-shm`과 함께 상태 디렉터리 밖으로 옮기고, 빈 `decisions.json` 디렉터리를 지운 뒤 `<dir>/decisions.json`을 그 자리에 둔다.
+4. 이전 릴리스로 되돌리고 fast-forward한 뒤 writer를 다시 올린다.
+
+다른 PC로 옮길 때는 원래 PC에서 `orch db backup <file>`, 새 PC에서 `orch db restore <file>`. `restore`도 `--apply`와 같은 검사를 하고, 새 상태 디렉터리에 `decisions.json` 파일이 있으면 거부한다.

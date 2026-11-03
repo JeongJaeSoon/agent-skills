@@ -22,6 +22,7 @@ and each id's last line is carried into the new one ("carried": true), so no clo
 import contextlib, fcntl, json, pathlib, re
 
 import fleet
+import store
 
 POST_MERGE = re.compile(r"릴리스|배포|apply|deploy|release|rollout|롤아웃", re.I)
 MERGE_WORD = re.compile(r"머지|merge", re.I)
@@ -186,10 +187,12 @@ def assess(store, state, prs, me=None, now=None):
 
 @contextlib.contextmanager
 def locked():
-    """The ledger's lock, yielding latest() as it stands under it."""
+    """The ledger's lock, yielding latest() as it stands under it. Every tidy write and its side effects (the inbox
+    resolve and revive) run under it, so the guard here stops them all before the first."""
     path().parent.mkdir(parents=True, exist_ok=True)
     with (path().parent / "tidy.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        store.guard_legacy_write("tidy write")  # under the lock: the 4b import holds it while it records 4b-board
         yield latest()
 
 
@@ -201,6 +204,7 @@ def fits(row):
 
 def append(rows, have):
     """Append rows; have is latest() under the lock, carried into the new file when this one rotates."""
+    store.guard_legacy_write("tidy append")
     was = path().exists()
     fleet.rotate(path())
     if was and not path().exists():

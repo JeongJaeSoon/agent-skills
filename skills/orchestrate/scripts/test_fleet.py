@@ -476,25 +476,36 @@ st = f.tick(force=True)
 assert sorted(i["key"] for i in items(st, "question")) == ["mail:m1", "mail:m10", "mail:m2", "mail:m7"], items(st, "question")
 assert fleet.answered_mail(world.messages) == {"m3", "m5"}
 
-# Decisions: `orch decide` keeps them in decisions.json; the fleet shows the open ones on the terminal that added them.
+# Decisions: `orch decide` keeps them in agent-skills.db; the fleet shows the open ones on the terminal that added them.
+import store  # noqa: E402
 dec_state = pathlib.Path(tempfile.mkdtemp(prefix="test-decide-"))
 body_file = dec_state / "body.md"
 body_file.write_text(f"Pick one.\n<img src=x onerror=alert(1)>\nGH_TOKEN={secret}\n")
 env = {**os.environ, "ORCH_FLEET_STATE": str(dec_state), "ORCA_TERMINAL_HANDLE": "term_coord"}
 
 
-def orch(*args):
-    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "prog.py"), "decide", *args],
+def orch(*args, cmd="decide"):
+    r = subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "prog.py"), cmd, *args],
                        capture_output=True, text=True, env=env)
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
+def saved_decision(did):
+    return {d["id"]: d for d in json.loads(orch("dump", "decision", cmd="db")[1])["decision"]}[did]
+
+
+# The access gate: before `orch db import` nothing reads or writes decisions, and no DB appears.
+code, _, err = orch("add", "--title", "Too early", "--option", "A")
+assert code == 1 and "orch db" in err and not (dec_state / store.DB_NAME).exists(), err
+assert orch("list")[0] == 1
+assert orch("import", "--apply", "--rehearsal", cmd="db")[0] == 0
+assert (dec_state / "decisions.json").is_dir()  # the tombstone: older code's write_atomic fails on it
 assert orch("add", "--title", "Export format", "--body-file", str(body_file), "--option", "CSV::finance uses sheets",
             "--option", "JSON", "--recommend", "1", "--link", "https://example.com/t/1") == (0, "d1", "")
 assert orch("add", "--title", "Second", "--option", "A") == (0, "d2", "")
 code, out, _ = orch("list")
 assert code == 0 and out.splitlines()[1:3] == ["    1. CSV (recommended) — finance uses sheets", "    2. JSON"], out
-saved = json.loads((dec_state / "decisions.json").read_text())["decisions"]["d1"]
+saved = saved_decision("d1")
 assert saved["handle"] == "term_coord" and saved["status"] == "open" and secret not in saved["body"], saved
 assert orch("add", "--title", "x", "--option", "A", "--recommend", "2")[0] == 1
 assert orch("add", "--option", "A")[0] == 1  # no title
@@ -503,11 +514,15 @@ assert orch("done", "d1")[2] == "d1 is already done" and orch("drop", "d9")[2] =
 assert orch("drop", "d2") == (0, "d2 dropped", "")
 assert orch("drop", "d2")[2] == "d2 is already dropped"
 assert orch("drop", "d1") == (0, "d1 dropped", "")  # a done decision can be taken back (a misread answer)
-saved = json.loads((dec_state / "decisions.json").read_text())["decisions"]["d1"]
+saved = saved_decision("d1")
 assert saved["status"] == "dropped" and saved["answer"] == "CSV", saved
 assert orch("list")[1] == ""
+# Closed decisions stay in the table (no 7-day delete); each change left its event in the same transaction.
+events = json.loads(orch("dump", "event", cmd="db")[1])["event"]
+assert [(e["id"], e["ev"]) for e in events if e["entity"] == "decision"] == [
+    ("d1", "add"), ("d2", "add"), ("d1", "done"), ("d2", "dropped"), ("d1", "dropped")], events
 
-fleet.write_atomic(state_dir / "decisions.json", json.dumps({"next": 1}))
+fleet.decision_close("d1", "dropped")  # the demo world's own decision, so only this test's show below
 d = fleet.decision_add("Ship the export?", "See https://example.com/x", ["Yes::now", "No"], 1, handle="term_coord")
 lost = fleet.decision_add("From a closed terminal", handle="term_gone")
 st = f.tick(force=True)
@@ -524,7 +539,7 @@ busy = Sender((False, "title shows the agent is busy"))
 code, out = fleet.decision_answer(lost["id"], "  Yes,\n  ship it ", sender=busy)
 assert code == 200 and out["ok"] and not out["delivered"] and out["reason"] == "title shows the agent is busy", out
 assert busy.calls == [("term_coord", f"decision {lost['id']}: Yes, ship it")], busy.calls  # the root's terminal
-saved = json.loads((state_dir / "decisions.json").read_text())["decisions"][lost["id"]]
+saved = {x["id"]: x for x in store.decisions()}[lost["id"]]
 assert saved["status"] == "done" and saved["answer"] == "Yes, ship it" and saved["delivered"] is False, saved
 assert not items(f.tick(force=True), "decision")
 assert fleet.decision_answer(lost["id"], "No", sender=busy)[0] == 409  # a second tab, or a double click
