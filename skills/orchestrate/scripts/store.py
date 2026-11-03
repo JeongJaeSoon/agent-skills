@@ -303,8 +303,16 @@ def launch_labels():
             spec = plistlib.loads(p.read_bytes())
         except (OSError, plistlib.InvalidFileException, ValueError):
             continue
-        argv = " ".join(map(str, spec.get("ProgramArguments") or [spec.get("Program") or ""]))
-        if spec.get("Label") and spec["Label"] not in out and (CRON.search(argv) or next(_words(argv, names), None)):
+        args = [str(a) for a in [spec.get("Program") or "", *(spec.get("ProgramArguments") or [])] if a]
+        cwd = pathlib.Path(str(spec.get("WorkingDirectory") or "/"))
+        hits = []
+        for i, a in enumerate(args):
+            if " " in a:  # a `sh -c` string
+                hits += [w for w, _ in _words(a, names)]
+            else:
+                hits.append(a.replace(".", "/") + ".py" if i and args[i - 1] == "-m" else a)
+        if spec.get("Label") and spec["Label"] not in out and any(
+                pathlib.PurePath(w).name in names and _ours((cwd / pathlib.Path(w).expanduser()).resolve()) for w in hits):
             out.append(spec["Label"])
     return out
 
@@ -344,10 +352,8 @@ def _words(cmd, names):
 
 def _ours(p):
     """Whether a path is an entry point of some agent-skills checkout, this one or another."""
-    if p.parent.name == "bin":
-        return p.name in BINS
-    if p.parent.name == "hooks":
-        return (p.parents[1] / "skills" / "orchestrate").is_dir()  # another plugin's hooks/ is not ours
+    if p.parent.name in ("bin", "hooks"):  # another program's bin/ or hooks/ is not ours
+        return (p.name in BINS or p.parent.name == "hooks") and (p.parents[1] / "skills" / "orchestrate").is_dir()
     return p.parent.as_posix().endswith("/" + SCRIPTS)
 
 
@@ -388,18 +394,20 @@ def check_plugin_dirs(procs):
     for pid, (_, _, cmd) in sorted(procs.items()):
         words = cmd.split()
         for i, w in enumerate(words):
-            d = w.split("=", 1)[1] if w.startswith("--plugin-dir=") else \
-                words[i + 1] if w == "--plugin-dir" and i + 1 < len(words) else None
-            if d is None:
+            if w.startswith("--plugin-dir="):
+                rest = [w.split("=", 1)[1], *words[i + 1:]]
+            elif w == "--plugin-dir" and i + 1 < len(words):
+                rest = words[i + 1:]
+            else:
                 continue
-            p = pathlib.Path(d).expanduser()
-            if not p.is_absolute():
-                cwd = _cwd(pid)
-                if cwd is None:
-                    out.append(f"pid {pid} loads --plugin-dir {d} from a directory that cannot be read")
-                    continue
-                p = cwd / p
-            p = p.resolve()
+            cwd = None if pathlib.Path(rest[0]).expanduser().is_absolute() else _cwd(pid)
+            if cwd is None and not pathlib.Path(rest[0]).expanduser().is_absolute():
+                out.append(f"pid {pid} loads --plugin-dir {rest[0]} from a directory that cannot be read")
+                continue
+            # ps joins argv with spaces, so a directory with a space in it spans words: take the longest that exists.
+            tries = [(cwd or pathlib.Path("/")) / pathlib.Path(" ".join(rest[:n])).expanduser()
+                     for n in range(len(rest), 0, -1)]
+            p = next((t for t in tries if t.is_dir()), tries[-1]).resolve()
             if p != REPO and (p / "skills" / "orchestrate").is_dir():
                 out.append(f"pid {pid} loads agent-skills from {p} with --plugin-dir, not {REPO}: end it")
     return out

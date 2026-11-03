@@ -408,26 +408,39 @@ finally:
 # A session started after the update that loads another checkout with --plugin-dir runs that checkout's hooks.
 old_co = tmp / "old-checkout"
 (old_co / "skills" / "orchestrate").mkdir(parents=True)
+spaced = tmp / "Old Checkout"
+(spaced / "skills" / "orchestrate").mkdir(parents=True)
 pd = {301: (1, "", f"claude --plugin-dir {old_co} --name x"), 302: (1, "", f"claude --plugin-dir={repo}"),
-      303: (1, "", "claude --plugin-dir old-checkout"), 304: (1, "", f"claude --plugin-dir {tmp}")}
+      303: (1, "", "claude --plugin-dir old-checkout"), 304: (1, "", f"claude --plugin-dir {tmp}"),
+      305: (1, "", f"claude --plugin-dir {spaced} --name y")}   # ps shows argv joined by spaces
 real_cwd, store._cwd = store._cwd, {303: tmp}.get
 try:
     why = store.check_plugin_dirs(pd)
 finally:
     store._cwd = real_cwd
-assert [w.split()[1] for w in why] == ["301", "303"], why
+assert [w.split()[1] for w in why] == ["301", "303", "305"], why
 # A dashboard installed under another label (from another shell's ORCH_DASH_LABEL) is found by what it runs.
 agents = tmp / "fakehome" / "Library" / "LaunchAgents"
 agents.mkdir(parents=True)
 import plistlib  # noqa: E402
-(agents / "example.orch-dash.plist").write_bytes(plistlib.dumps(
-    {"Label": "example.orch-dash", "ProgramArguments": ["python3", "/x/agent-skills/skills/orchestrate/scripts/dash.py", "serve"]}))
-(agents / "example.other.plist").write_bytes(plistlib.dumps({"Label": "example.other", "ProgramArguments": ["/bin/true"]}))
+(old_co / "bin").mkdir()
+for label, spec in {
+        "a.orch-dash": {"ProgramArguments": ["python3", "/x/agent-skills/skills/orchestrate/scripts/dash.py", "serve"]},
+        "b.program": {"Program": str(old_co / "bin" / "orch-dash"), "ProgramArguments": ["dashboard", "serve"]},
+        "c.module": {"ProgramArguments": ["python3", "-m", "dash", "serve"],
+                     "WorkingDirectory": str(old_co / "skills" / "orchestrate" / "scripts")},
+        "d.shell": {"ProgramArguments": ["/bin/sh", "-c", f"exec python3 {old_co}/hooks/decision.py"]},
+        # Not ours: an entry point's file name somewhere else, or in another program's hooks/.
+        "e.other": {"ProgramArguments": ["/bin/true"]},
+        "f.same-name": {"ProgramArguments": ["python3", "/opt/example/dash.py"]},
+        "g.other-hooks": {"ProgramArguments": ["python3", "/opt/example/hooks/refresh.py"]},
+        "h.other-bin": {"ProgramArguments": ["/opt/example/bin/orch"]}}.items():
+    (agents / f"{label}.plist").write_bytes(plistlib.dumps({"Label": label, **spec}))
 (agents / "broken.plist").write_text("not a plist")
 real_home = os.environ["HOME"]
 os.environ["HOME"] = str(tmp / "fakehome")
 try:
-    assert store.launch_labels()[1:] == ["example.orch-dash"], store.launch_labels()
+    assert store.launch_labels()[1:] == ["a.orch-dash", "b.program", "c.module", "d.shell"], store.launch_labels()
 finally:
     os.environ["HOME"] = real_home
 # backup never replaces the live DB or its sidecars.
