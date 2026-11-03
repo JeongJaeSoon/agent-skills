@@ -564,4 +564,19 @@ code, out = prog(env, "record", "t", "spawned", "--note", "--ticket", "T-1")
 assert code == 1 and "--note needs a value" in out, out
 assert (len(ledger(d)) if led.exists() else 0) == n
 
+# A dispatched lead (its terminal is a worker on the Run) cannot land under human-gate: no Orca gate, so no
+# `approved`. init refuses before writing program.json; `orch decide add` is no landing path, so no message offers it.
+d, env = setup({})
+st = json.loads((d / "state.json").read_text())
+(d / "state.json").write_text(json.dumps(dict(st, workers=[{"dispatchId": "ctx_lead", "terminal": "term_lead"}])))
+lead_env = dict(env, ORCA_TERMINAL_HANDLE="term_lead")
+code, out = prog(lead_env, "init", "hg", "--repo", "o/r", "--run", "run_x", "--merge-policy", "human-gate")
+assert code != 0 and "/goal card" in out and "autonomous" in out, out
+assert "decide add" not in out, out
+assert not (d / "programs" / "hg" / "program.json").exists()
+code, out = prog(lead_env, "init", "au", "--repo", "o/r", "--run", "run_x")
+assert code == 0 and "lead is dispatch ctx_lead" in out, out
+src = (HERE / "prog.py").read_text()
+assert "decide add` per PR" not in src, "prog.py still offers `orch decide add` per PR as a way to land"
+
 print("prog.py land against fake gh: all pass")
