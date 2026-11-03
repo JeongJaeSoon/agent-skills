@@ -112,7 +112,7 @@ STORES = [
     Store("machine", "ext:machine", {"machine.resource": CANONICAL, "machine.load": CANONICAL}, ("ext:os",),
           ("janitor", "pressure"), rule="processes, disk, containers, memory"),
     Store("transcripts", "C/projects/*/*.jsonl", {"session.transcript": CANONICAL}, ("ext:claude-code",),
-          ("skillspage", "tokenspage", "fleet", "patrol", "reflect"), rule="Claude Code transcripts"),
+          ("skillspage", "tokenspage", "fleet", "patrol", "reflect", "janitor"), rule="Claude Code transcripts"),
     Store("claudesessions", "C/sessions/*.json", {"session.live": CANONICAL}, ("ext:claude-code",), ("fleet",)),
     Store("plugins", "C/plugins/installed_plugins.json", {"skill.installed": CANONICAL}, ("ext:claude-code",),
           ("skillspage",)),
