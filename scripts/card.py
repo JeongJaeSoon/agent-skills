@@ -227,8 +227,8 @@ def forbidden_paragraph(template=None):
 
 def place_forbidden(text, paragraph):
     """(text, how): the brief with its FORBIDDEN section set to `paragraph`. Between the markers it is replaced, never
-    appended to; with no markers, an old copy of the paragraph that opens the FORBIDDEN row (through its last
-    sentence) is replaced and wrapped in markers; with no such copy the marked section goes first in the row; with
+    appended to; with no markers, an unmarked copy identical to the current paragraph is wrapped in markers, and any
+    other text (an older or edited copy included) stays while the marked section goes first in the row; with
     no row, a new row goes before REPORT (else at the end). Lines outside the section (a repository's data-sharing
     restriction, the unit's own bans) stay as they are. how: unchanged | replaced | inserted."""
     lines = text.splitlines()
@@ -246,13 +246,16 @@ def place_forbidden(text, paragraph):
         span = row_span(lines, "FORBIDDEN", skip)
         if span:
             first, end = span
-            # An old copy is known only by the paragraph's own first sentence at a line's start; anything else in the
-            # row (a repository's restriction before or after it) stays, and an unrecognized copy is left, not cut.
+            # An unmarked copy is replaced only when it is the current paragraph word for word (wrapped differently);
+            # an older or edited copy may hold a repository's own restriction, so it stays and the section goes first.
             opening = paragraph[0].split(".")[0] + "."
             strip = lambda l: re.sub(r"^\s*`?FORBIDDEN`?\s*:?\s*", "", l).strip()  # noqa: E731
             s = next((i for i in range(first, end) if strip(lines[i]).startswith(opening)), None)
             old = next((i for i in range(s, end) if lines[i].rstrip().endswith(PARAGRAPH_END)), None) \
                 if s is not None else None
+            words = lambda ls: " ".join(" ".join(strip(l) for l in ls).split())  # noqa: E731
+            if old is not None and words(lines[s:old + 1]) != words(paragraph):
+                old = None
             if old is not None and s == first:
                 new = lines[:first] + block + lines[old + 1:]
             elif old is not None:

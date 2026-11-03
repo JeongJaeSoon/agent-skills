@@ -424,18 +424,26 @@ text, how = card.place_forbidden(MARKED, PARA)
 assert how == "replaced" and "an old paragraph" not in text and SHARE in text and text.count(card.BEGIN) == 1, text
 assert text.index(card.END) < text.index(SHARE) < text.index("REPORT      worker_done"), text
 assert card.place_forbidden(text, PARA) == (text, "unchanged")  # a second start adds nothing
-# No markers, an old hand-made copy opening the row: replaced through its last sentence, the row's own lines kept.
-OLD = (f"/goal x\n{CLOSE}\nFORBIDDEN   Do not start other tickets. An older wording\n            that ends: fix the cause "
-       f"and run it again.\n{SHARE}\nREPORT      worker_done once.\n")
-text, how = card.place_forbidden(OLD, PARA)
-assert how == "inserted" and "An older wording" not in text and SHARE in text and text.count(card.BEGIN) == 1, text
+# No markers, an unmarked copy that is the current paragraph word for word (wrapped otherwise): wrapped in markers,
+# not doubled; the row's own lines kept.
+PASTED = "\n".join("            " + l for l in " ".join(PARA).replace(". ", ".\n").splitlines())
+EXACT = f"/goal x\n{CLOSE}\nFORBIDDEN   {PASTED.strip()}\n{SHARE}\nREPORT      worker_done once.\n"
+text, how = card.place_forbidden(EXACT, PARA)
+assert how == "inserted" and text.count("Do not start other tickets") == 1 and SHARE in text, text
 assert card.place_forbidden(text, PARA)[1] == "unchanged"
-# A restriction before the old copy in the same row stays; only the copy is replaced.
+# An older or edited copy may hold a repository's own restriction: it stays, and the section goes first in the row.
+OLD = (f"/goal x\n{CLOSE}\nFORBIDDEN   Do not start other tickets. 저장소 데이터 공유 제한: acme/app의 로그를 밖에 "
+       f"쓰지 않는다.\n            that ends: fix the cause and run it again.\n{SHARE}\nREPORT      worker_done once.\n")
+text, how = card.place_forbidden(OLD, PARA)
+assert how == "inserted" and "acme/app의 로그" in text and SHARE in text and text.count(card.BEGIN) == 1, text
+assert text.index(card.END) < text.index("acme/app의 로그"), text
+assert card.place_forbidden(text, PARA)[1] == "unchanged"
+# A restriction line before the copy in the same row stays first.
 OWN = "FORBIDDEN   저장소 데이터 공유 제한: acme/app의 로그를 밖에 쓰지 않는다."
-BEFORE = (f"/goal x\n{OWN}\n            Do not start other tickets. An older wording\n            that ends: fix the "
-          f"cause and run it again.\nREPORT      worker_done once.\n")
+BEFORE = f"/goal x\n{OWN}\n{PASTED}\nREPORT      worker_done once.\n"
 text, how = card.place_forbidden(BEFORE, PARA)
-assert how == "inserted" and OWN in text and "An older wording" not in text and text.index(OWN) < text.index(card.BEGIN), text
+assert how == "inserted" and OWN in text and text.count("Do not start other tickets") == 1, text
+assert text.index(OWN) < text.index(card.BEGIN), text
 # An unrecognized copy is not cut: the section goes first and the old text stays.
 ODD = f"/goal x\nFORBIDDEN   {SHARE.strip()}\n            Some other ban; run it again.\nREPORT      x\n"
 text, how = card.place_forbidden(ODD, PARA)
