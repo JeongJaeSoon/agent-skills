@@ -232,6 +232,31 @@ left = co({"dispatchId": "dl", "outcome": "succeeded"}, [{"dispatchId": "dl", "t
 assert left[0].startswith("CLOSE OUT dl: release it, close its terminals and remove its card") and left[-1] == "  orca worktree rm --worktree path:'/w/a b'", left
 spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktreeId": "wx"}}]
 assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"
+# A `--worktree current` worker reports the caller's own card: release it, never offer to remove it. The caller's
+# worktree is its terminal's, not the cwd; when that cannot be read, no rm line is offered for any card.
+def mine(outcome, here):
+    return prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "dl", "outcome": outcome}}],
+                          [{"dispatchId": "dl", "terminalState": "reclaimable", "resource": {"worktreeId": "wx"}}],
+                          wts + [{"id": "wx", "path": "/w/a b"}], here=here)
+for outcome in ("succeeded", "failed"):
+    assert mine(outcome, "wx") == ["CLOSE OUT dl: release it and close its terminal; its card is this session's own"
+                                   " worktree (`--worktree current`), so it stays",
+                                   "  orca orchestration worker-release --dispatch dl"], mine(outcome, "wx")
+    assert not any("orca worktree rm" in l for l in mine(outcome, None)), mine(outcome, None)
+assert mine("succeeded", "w1")[-1] == "  orca worktree rm --worktree path:'/w/a b'"
+env = prog.os.environ
+_oj, _env = prog.orca_json, env.get("ORCA_TERMINAL_HANDLE")
+try:
+    env["ORCA_TERMINAL_HANDLE"] = "term_x"
+    prog.orca_json = lambda *a: {"terminal": {"worktreeId": "wx"}} if a[:3] == ("terminal", "show", "--terminal") else {}
+    assert prog.own_worktree_id() == "wx"
+    def refused(*a):
+        sys.exit("orca terminal show: failed")
+    prog.orca_json = refused
+    assert prog.own_worktree_id() is None
+finally:
+    prog.orca_json = _oj
+    env.pop("ORCA_TERMINAL_HANDLE", None) if _env is None else env.__setitem__("ORCA_TERMINAL_HANDLE", _env)
 assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
                        {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
 settled = [

@@ -181,6 +181,10 @@ Usage: orch <command> <slug> [options]
                                      holds it and refreshes your own; a hold idle past --ttl (120) is
                                      broken. WHO defaults to $ORCA_TERMINAL_HANDLE. --list shows these
                                      and the exclusive landing lanes
+  refusal report [--json] | refusal clear <id>
+                                     no slug: the refused-act ledger (hooks/refusals.py). report lists the open
+                                     refusals every session is blocked from doing again; clear is the human's,
+                                     typed as a `!` line (the guard hook refuses it from an agent)
 
 Store: ~/.claude/programs/<slug>/ (program.json holds identifiers only; ledger.jsonl is
 append-only). Events: spawned, ready, verdict, landed, main_green, main_red, land_failed,
@@ -219,7 +223,10 @@ def run(cmd, check=True):
     except subprocess.TimeoutExpired:
         r = subprocess.CompletedProcess(cmd, 124, "", f"timed out after {RUN_TIMEOUT}s")
     if check and r.returncode != 0:
-        sys.exit(f"{' '.join(cmd[:4])} … failed ({r.returncode}): {r.stderr.strip()[:400]}")
+        # Orca 1.4.240 puts its error, "Unknown flag --full" included, on stdout with stderr empty; with_full
+        # reads this message to decide whether to retry without the flag.
+        said = " | ".join(s.strip()[:400] for s in (r.stderr, r.stdout) if s and s.strip())
+        sys.exit(f"{' '.join(cmd[:4])} … failed ({r.returncode}): {said}")
     return r
 
 
@@ -2126,9 +2133,22 @@ def payload_of(m):
     return payload if isinstance(payload, dict) else {}
 
 
-def close_out(msgs, workers, worktrees):
+def own_worktree_id():
+    """The worktree Orca attaches this terminal to, not the cwd: a lead may run `orch wait` from another checkout."""
+    me = os.environ.get("ORCA_TERMINAL_HANDLE")
+    try:
+        wt = (orca_json("terminal", "show", "--terminal", me).get("terminal") or {}).get("worktreeId") if me else None
+    except (SystemExit, ValueError, AttributeError, OSError, subprocess.SubprocessError):
+        return None
+    return wt if isinstance(wt, str) and wt else None
+
+
+def close_out(msgs, workers, worktrees, here=""):
     """What to do with each worker_done's card, printed beside the message: after a compaction a lead kept
-    releasing workers but dropped `worktree rm`, and eight cards stayed open."""
+    releasing workers but dropped `worktree rm`, and eight cards stayed open. `here` is the worktree id of the
+    caller's own terminal (None: it could not be read, so no rm line at all; "": not checked): a worker started
+    with `--worktree current` reports that card, and Orca lists no worker for the caller itself, so without it
+    the line told five leads to remove the worktree they ran in."""
     card = {w["dispatchId"]: (w.get("resource") or {}).get("worktreeId") for w in workers}
     task = {w["dispatchId"]: w.get("taskId") or "<task>" for w in workers}
     path = {w["id"]: w.get("path") for w in worktrees if not w.get("isMainWorktree")}
@@ -2149,6 +2169,12 @@ def close_out(msgs, workers, worktrees):
             out += [f"CLOSE OUT {d}: release it; its card is not in `orca worktree list`", release]
         elif busy:
             out += [f"CLOSE OUT {d}: release it; its card stays, {', '.join(busy)} works on it", release]
+        elif here and wt == here:
+            out += [f"CLOSE OUT {d}: release it and close its terminal; its card is this session's own worktree"
+                    " (`--worktree current`), so it stays", release]
+        elif here is None:
+            out += [f"CLOSE OUT {d}: release it; this session's own worktree could not be read (`orca terminal show`),"
+                    f" so remove its card ({shlex.quote(p)}) by hand only once it is not this session's", release]
         elif payload.get("outcome") != "succeeded":
             out += [f"CLOSE OUT {d} ({payload.get('outcome') or 'no outcome'}): release it, then retry on its card"
                     f" (worker-start --retry-of {d} --task {task[d]} --worktree path:{shlex.quote(p)} --agent <agent> [--model <id>])"
@@ -2536,7 +2562,8 @@ def cmd_wait(argv):
             closed = {payload_of(m).get("dispatchId") for m in work if m.get("type") == "worker_done"}
             if closed:
                 try:
-                    lines = close_out(work, run_workers(run_id), orca_json("worktree", "list").get("worktrees", []))
+                    lines = close_out(work, run_workers(run_id), orca_json("worktree", "list").get("worktrees", []),
+                                      here=own_worktree_id())
                 except SystemExit as e:  # the batch and its ack line matter more than the hint
                     lines = [f"CLOSE OUT: could not read the cards ({e}); `orch status` lists them"]
                 print("\n".join(lines))
@@ -3068,10 +3095,35 @@ def cmd_sent(argv):
         sys.exit(f"{e}\n{usage}")
 
 
+def cmd_refusal(argv):
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
+    from lib import refusals
+    usage = "usage: orch refusal report [--json] | refusal clear <id>  (no slug)"
+    if argv[:1] == ["report"]:
+        rows = refusals.open_refusals()
+        if "--json" in argv:
+            print(json.dumps(rows, ensure_ascii=False, indent=1))
+            return
+        if not rows:
+            print("no open refusals")
+        for r in rows:
+            print(f"{r['id']}  {r.get('at')}  {r.get('verb')} {r.get('target')}\n"
+                  f"    session {r.get('session') or '?'}  terminal {r.get('terminal') or '-'}  run {r.get('run') or '-'}")
+        if rows:
+            print("\nEach is blocked for every session until you clear it: !orch refusal clear <id>")
+    elif argv[:1] == ["clear"] and len(argv) == 2:
+        hit = refusals.clear(argv[1], sys.stdin.isatty())
+        if not hit:
+            sys.exit(f"{argv[1]} is not an open refusal (orch refusal report lists them)")
+        print("\n".join(f"cleared {r['id']}: {r.get('verb')} {r.get('target')}" for r in hit))
+    else:
+        sys.exit(usage)
+
+
 COMMANDS = {"init": cmd_init, "set": cmd_set, "status": cmd_status, "record": cmd_record, "verdict": cmd_verdict,
             "gate": cmd_gate, "dep": cmd_dep, "queue": cmd_queue, "overlap": cmd_overlap, "land": cmd_land, "land-check": cmd_land_check,
             "landed": cmd_landed, "heavy": cmd_heavy, "wait": cmd_wait, "inbox": cmd_inbox, "backfill": cmd_backfill, "decide": cmd_decide,
-            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "release": lambda argv: cmd_hold(argv, release=True),
+            "stage": cmd_stage, "board": cmd_board, "brief": cmd_brief, "hold": cmd_hold, "sent": cmd_sent, "refusal": cmd_refusal, "release": lambda argv: cmd_hold(argv, release=True),
             "watch-cards": lambda argv: __import__("card_watch").main(argv),
             "patrol": lambda argv: __import__("patrol").main(argv),
             "migrate": lambda argv: __import__("orca_migrate").main(argv),
