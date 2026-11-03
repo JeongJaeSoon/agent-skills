@@ -92,4 +92,11 @@ assert s.scope_tasks(tasks, [{"taskId": "t1"}], "ctx_L") == [{"id": "t1"}] and s
 with tempfile.TemporaryDirectory() as tmp:
     (pathlib.Path(tmp) / "orca-profile-index.json").write_text("[]")
     assert s.read(pathlib.Path(tmp))[0] is None
+# A worker row names its agent's terminal as `terminal` (newer Orca) or `agentTerminalHandle` (older Orca).
+assert s.worker_terminal({"dispatchId": "d1", "terminal": "term_new"}) == "term_new"
+assert s.worker_terminal({"dispatchId": "d1", "agentTerminalHandle": "term_old"}) == "term_old"
+assert s.worker_terminal({"agentTerminalHandle": "term_old", "terminal": "term_new"}) == "term_old"
+assert s.worker_terminal({"agentTerminalHandle": None, "terminal": "term_new"}) == "term_new"
+assert s.worker_terminal({"dispatchId": "d1"}) is None and s.worker_terminal({}) is None
+assert s.worker_terminal({"terminal": {"worktreeId": "x"}}) is None  # `terminal show`'s object is no handle
 print("test_orca_settings: ok")
