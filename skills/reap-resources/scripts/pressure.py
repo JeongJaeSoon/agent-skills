@@ -493,22 +493,32 @@ def plan_targets(kinds, plan_path, run=subprocess.run, cards=None, cwd_of=None):
     notes = data.get("notes") or []
     if not targets:
         return targets, notes
+    if keep_live(targets, notes, cards, cwd_of) is None:
+        return None, notes
+    plan_path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+    return [i for i in targets if i["target"]], notes
+
+
+def keep_live(targets, notes, cards=None, cwd_of=None):
+    """Turn off each target that lies in a card with a live terminal or one `orch patrol` judged working, noting it.
+    None when the card list or the process cwds could not be read: then nothing may be reaped."""
     cards = orca_cards() if cards is None else cards
     if cards is None:
-        return None, notes + ["orca worktree ps 를 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음"]
+        notes.append("orca worktree ps 를 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음")
+        return None
     # A card `orch patrol` judged working is kept too: its verdict only ever keeps.
     live = [c["path"] for c in cards if c["live"]] + sorted(reap.patrol_working())
     cwd_of = reap.cwds() if cwd_of is None else cwd_of
     if cwd_of is None and any("pid" in i for i in targets):
-        return None, notes + ["프로세스 cwd 를 모두 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음"]
+        notes.append("프로세스 cwd 를 모두 읽지 못해 활동 중인 카드를 가릴 수 없음: 정리하지 않음")
+        return None
     cwd_of = cwd_of or {}
     for i in targets:
         card = next(filter(None, (card_of(x, live) for x in item_paths(i, cwd_of))), None)
         if card:
             i.update(target=False, why=f"활동 중인 카드 {os.path.basename(card)} 안: {i['why']}")
             notes.append(f"남김 {reap.label(i)}")
-    plan_path.write_text(json.dumps(data, ensure_ascii=False, indent=1))
-    return [i for i in targets if i["target"]], notes
+    return targets
 
 
 def item_paths(i, cwd_of):

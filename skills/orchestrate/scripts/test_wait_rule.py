@@ -29,8 +29,12 @@ lead = brief[brief.index("## Lead"):brief.index("## Rules for filling it")]
 assert re.search(r"^INBOX\s", lead, re.M), "Lead brief template lost its INBOX line"
 assert "`INBOX`" in lead.split("```", 1)[0], "Lead first prompt does not carry INBOX"
 card = (root.parent / "dispatch-card" / "SKILL.md").read_text()
-assert "`MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `TASKS` and `GATE` lines" in card, \
-    "dispatch-card: a lead's prompt does not carry ROLE and INBOX"
+assert "`MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `MERGE`, `TASKS` and `GATE` lines" in card, \
+    "dispatch-card: a lead's prompt does not carry ROLE, INBOX and MERGE"
+# skills-sync card reads the MERGE row to start a human-gate lead as a /goal card
+assert re.search(r"^MERGE\s+merge_policy autonomous, or merge_policy human-gate", lead, re.M) \
+    and "`MERGE`" in lead.split("```", 1)[0], "Lead brief lost its MERGE row"
+assert "a digest line in this brief's note" in " ".join(lead.split()),"Lead brief: a dispatched lead's start order has no written place"
 assert re.search(r"^ROLE: lead <slug>$", lead, re.M), "Lead brief template lost its ROLE line"
 for row in ("TASKS", "GATE"):  # the lead keeps start-after order and human waits in Orca, not its memory
     assert re.search(rf"^{row}\s", lead, re.M) and f"`{row}`" in lead.split("```", 1)[0], f"Lead brief lost its {row} row"

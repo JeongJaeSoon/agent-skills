@@ -137,6 +137,21 @@ assert bash("ls") == "deny"
 CONFIG.write_text("not json")
 assert bash("ls") == "deny"
 
+# The pressure gate's wait: this plugin's pressure.py, `queue wait <id>` or `turns --wait <n>`, in the background.
+PRESSURE = HERE.parent / "skills" / "reap-resources" / "scripts" / "pressure.py"
+for args in ("queue wait q-66a001f1", "turns --wait 15", "turns --wait 7.5"):
+    cmd = f"python3 {PRESSURE} {args}"
+    assert run("Bash", {"command": cmd, "run_in_background": True}) == "none", cmd
+    assert run("Bash", {"command": cmd}) == "deny", ("foreground", cmd)
+OTHER = TMP / "skills" / "reap-resources" / "scripts" / "pressure.py"
+for cmd in (f"python3 {PRESSURE} round", f"python3 {PRESSURE} check", f"python3 {PRESSURE} queue wait q-66a001f1 x",
+            f"python3 {PRESSURE} queue wait q-XYZ", f"python3 {OTHER} queue wait q-66a001f1",
+            f"python3 {PRESSURE} queue wait q-66a001f1; rm -rf x", f"python {PRESSURE} queue wait q-66a001f1",
+            f"python3 {PRESSURE} turns '--wait 15'",
+            f"cd {HERE.parent} && python3 skills/reap-resources/scripts/pressure.py queue wait q-66a001f1"):
+    assert run("Bash", {"command": cmd, "run_in_background": True}) == "deny", cmd
+assert run("Monitor", {"command": f"python3 {PRESSURE} queue wait q-66a001f1"}) == "deny"
+
 # The hook is wired for every tool.
 wired = json.loads((HERE / "hooks.json").read_text())["hooks"]["PreToolUse"]
 assert any("delegate_gate.py" in h["command"] and "matcher" not in entry for entry in wired for h in entry["hooks"])

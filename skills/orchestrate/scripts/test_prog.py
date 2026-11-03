@@ -628,7 +628,9 @@ prog.orca_json = lambda *a: (calls.append(a), queue.pop(0))[1]
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_inbox(["--ack", "dv8", "--wait"])
-assert [c[2:5] for c in calls] == [("--ack", "dv8"), ("--peek", "--wait", "--timeout-ms"), ()], calls
+assert all(c[-1] == "--full" for c in calls), "Orca 1.4.246's concise check has no deliveryId"
+first = lambda c: next((x for x in c[2:3] if x != "--full"), "check")  # a check's first flag, "check" when bare
+assert [tuple(x for x in c[2:5] if x != "--full") for c in calls] == [("--ack", "dv8"), ("--peek", "--wait", "--timeout-ms"), ()], calls
 assert 3290000 < int(calls[1][5]) <= 3300000, calls
 lines = out.getvalue().splitlines()
 assert lines[0].startswith("INBOX id=m1 type=status") and lines[0].endswith("body=PR ready") and lines[1] == "    see link", lines
@@ -654,7 +656,7 @@ for after_ack, want in (([{"deliveryId": None, "messages": []}, {}, work], ["--a
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         prog.cmd_inbox(["--ack", "dv0", "--wait"])
-    assert [(c[2:3] or ("check",))[0] for c in calls] == want, calls
+    assert [first(c) for c in calls] == want, calls
     assert ("--ack", "dv1") in [c[2:4] for c in calls], calls
     lines = out.getvalue().splitlines()
     assert lines[0].startswith("INBOX id=m3 type=question") and lines[1].endswith("orch inbox --ack dv3 --wait"), lines
@@ -675,7 +677,7 @@ prog.orca_json = fake
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     prog.cmd_inbox(["--ack", "dv-old", "--wait"])
-assert [(c[2:3] or ("check",))[0] for c in calls] == ["--ack", "check", "--peek", "check"], calls
+assert [first(c) for c in calls] == ["--ack", "check", "--peek", "check"], calls
 lines = out.getvalue().splitlines()
 assert lines[0].startswith("ack dv-old failed (") and lines[1].startswith("INBOX id=m3"), lines
 prog.orca_json = lambda *a: (_ for _ in ()).throw(SystemExit("orca down"))

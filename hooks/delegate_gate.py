@@ -8,20 +8,23 @@ outside the list below, with a reason that names the delegation paths.
 It acts only when all of these hold:
 - the call is the main conversation's, not a subagent's or a teammate's: the input has no `agent_id`. Subagents share
   the parent's `session_id`, so the role record alone would catch them.
-- the session is the orchestrator, resolved exactly as reorient.py does: `agent_type` agent-skills:orchestrator, or a
-  `ROLE: orchestrator` record; a `ROLE: none` record clears it.
+- the session is the orchestrator by roles.py: `agent_type` agent-skills:orchestrator, or a `ROLE: orchestrator`
+  record; a `ROLE: none` record clears it.
 - `orchestrate.delegate_gate` in ~/.claude/agent-skills.json is not `false`. The orchestrator cannot flip it from its
   own turn: that file is outside the write list and no Bash command reaches it.
 
 Allowed (orchestrate references/top-level.md, "Routing", and SKILL.md "Stay answerable"):
-- delegation and session tools: Agent, SendMessage, TaskStop, TaskOutput, tasks, cron, Skill, ToolSearch, questions
-  to the human, Telegram reply/react/edit/download
+- delegation and session tools: Agent, SendMessage, TaskStop, TaskOutput, tasks, cron, Skill, ToolSearch, plan
+  mode, Telegram reply/react/edit/download. AskUserQuestion is left to guard.py: it denies the tool for every role
+  session (top-level.md "Asking the human"), and its key `orchestrate.ask_user_question` turns that off.
 - Bash, when every command in it is coordination: `orch` (not `heavy`, which runs any command), `orch-dash
   inbox|ensure|note`, `skills-sync`, `orca` coordination groups and `orca skills get|list` (not browser, computer use
-  or emulator), `gh pr merge|ready`, a `gh … --json` read, `git worktree list|remove`, `cd`, and `jq <filter>` after
-  a pipe. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
+  or emulator), `gh pr merge|ready`, a `gh … --json` read, `git worktree list|remove`, `cd`, `jq <filter>` after
+  a pipe, and the pressure gate's wait (`python3 <this plugin>/skills/reap-resources/scripts/pressure.py queue wait
+  q-<id>` or `turns --wait <n>`) with run_in_background, which pressure_gate.py's block names. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
   `--body "$(cat <absolute path>)"` of a file this hook lets the session write; no other substitution, variable, glob, backtick, `$'…'`, line continuation, or
-  redirection other than `2>&1` and to /dev/null.
+  redirection other than `2>&1` and to /dev/null. guard.py still denies a send or reply to /dev/null
+  (`orchestrate.send_devnull`).
 - Read under the session's own state: ~/.claude, ~/.local/state/agent-skills, ~/share, background task output
   (claude-<uid> temp dirs) and this plugin.
 - Edit/Write of a Markdown or text file (a brief, a message body, a memory) under ~/.claude/projects/*/memory,
@@ -34,13 +37,14 @@ A guardrail against the orchestrator's habit, not a sandbox: an allowed command'
 import json, os, pathlib, re, shlex, sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import reorient  # noqa: E402  same role resolution as the reminder
+import roles  # noqa: E402
+from lib import config  # noqa: E402
 
 MARK = "[gate:delegate]"
 SOURCE = "(agent-skills hooks/delegate_gate.py)"
 TOOLS = {"Agent", "Task", "SendMessage", "TaskStop", "TaskOutput", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
-         "TodoWrite", "CronCreate", "CronDelete", "CronList", "Skill", "ToolSearch", "AskUserQuestion",
-         "EnterPlanMode", "ExitPlanMode"}
+         "TodoWrite", "CronCreate", "CronDelete", "CronList", "Skill", "ToolSearch", "EnterPlanMode", "ExitPlanMode",
+         "AskUserQuestion"}  # guard.py's rule, not this gate, decides AskUserQuestion
 TELEGRAM = re.compile(r"mcp__plugin_telegram_telegram__(reply|react|edit_message|download_attachment)")
 ORCA = {"orchestration", "terminal", "worktree", "file", "status", "agent", "host", "reference", "automations"}
 DASH = {"inbox", "ensure", "note"}
@@ -144,7 +148,24 @@ def segments(cmd):
         return None
 
 
-def coordination(words, piped):
+# The pressure gate's wait, the one way it leaves an orchestrator to wait for a queued heavy run: this plugin's
+# pressure.py by real path, only these two forms, and only in the background (as every wait of a role session).
+PRESSURE = pathlib.Path(__file__).resolve().parents[1] / "skills" / "reap-resources" / "scripts" / "pressure.py"
+
+
+def pressure_wait(words, background):
+    """The path must be absolute: a `cd` earlier in the command would move a relative one."""
+    if not (background and words[:1] == ["python3"] and len(words) == 5 and os.path.isabs(words[1])
+            and real(words[1]) == real(PRESSURE)):
+        return False
+    verb, flag, value = words[2:]
+    return ((verb, flag) == ("queue", "wait") and bool(re.fullmatch(r"q-[0-9a-f]{8}", value))
+            or (verb, flag) == ("turns", "--wait") and bool(re.fullmatch(r"\d+(\.\d+)?", value)))
+
+
+def coordination(words, piped, background=False):
+    if pressure_wait(words, background):
+        return True
     name = os.path.basename(words[0])
     if "/" in words[0] and name not in ("orch", "skills-sync"):
         return False
@@ -170,16 +191,16 @@ def coordination(words, piped):
     return False
 
 
-def bash_ok(cmd):
+def bash_ok(cmd, background=False):
     parts = segments(cmd)
-    return bool(parts) and all(coordination(words, piped) for piped, words in parts)
+    return bool(parts) and all(coordination(words, piped, background) for piped, words in parts)
 
 
 def allowed(tool, args):
     if tool in TOOLS or TELEGRAM.fullmatch(tool or ""):
         return True
     if tool == "Bash":
-        return bash_ok(str(args.get("command") or ""))
+        return bash_ok(str(args.get("command") or ""), args.get("run_in_background") is True)
     path = args.get("file_path")
     if not isinstance(path, str) or not path:
         return False
@@ -191,20 +212,13 @@ def allowed(tool, args):
 
 
 def gate_on():
-    try:
-        cfg = json.loads(reorient.CONFIG.read_text())
-    except (OSError, ValueError):
-        return True
-    section = cfg.get("orchestrate") if isinstance(cfg, dict) else None
-    return not (isinstance(section, dict) and section.get("delegate_gate") is False)
+    return config.get(config.load(), "orchestrate.delegate_gate") is not False
 
 
 def is_orchestrator(event):
     if event.get("agent_id"):
         return False
-    session = str(event.get("session_id") or "")
-    record = reorient.declared(session) if reorient.SESSION.fullmatch(session) else None
-    entry = reorient.resolve(event, record)
+    entry = roles.declared_role(event)
     return bool(entry) and entry.get("role") == "orchestrator"
 
 

@@ -18,6 +18,9 @@ directory), and is masked when shown.
 """
 import collections, concurrent.futures, contextlib, datetime as dt, fcntl, glob, hashlib, io, json, os, pathlib, re, shlex, subprocess, sys, tempfile, threading, time
 
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
+import roles  # noqa: E402  the plugin's one role resolution
+
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
 RUNS_EVERY = 120         # runs, workers, tasks, gates
@@ -212,7 +215,8 @@ def settled_run(got):
 
 
 def fetch_runs():
-    listed = orca("orchestration", "run-list").get("runs", [])
+    import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
+    listed = orca_settings.run_list(orca, error=SourceError)
     runs = [r for r in listed if not r.get("legacy") and r.get("id") != "run_legacy_local"]
     live = {t.get("handle") for t in orca("terminal", "list").get("terminals", [])}
     out = {"runs": runs, "workers": [], "tasks": [], "gates": []}
@@ -233,14 +237,8 @@ def fetch_runs():
 def fetch_run(r, full):
     # Without --run, worker-list is scoped to the Run bound to the calling terminal: a server started from a
     # coordinator's terminal saw only that Run's workers, and mail from every other Run's settled worker stayed open.
-    workers, cursor = [], None
-    while True:
-        res = orca("orchestration", "worker-list", "--run", r["id"], "--limit", "100",
-                   *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            break
+    import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
+    workers = orca_settings.all_workers(orca, "--run", r["id"], "--limit", "100", error=SourceError)
     if not full:
         return {"workers": workers, "tasks": [], "gates": []}
     return {"workers": workers, "tasks": orca("orchestration", "task-list", "--run", r["id"]).get("tasks", []),
@@ -457,15 +455,14 @@ def live_sessions(procs):
 
 def declared_roles(procs):
     """[(cwd, session name, "orchestrator" | "lead")] for each live Claude Code session that declared a role: the
-    `ROLE:` line hooks/reorient.py recorded in roles/<session id>.json, else a `--name orchestrator` or `lead:<slug>`."""
-    base = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()  # as reorient.py
+    `ROLE:` line hooks/reorient.py recorded in roles/<session id>.json, else a `--name orchestrator` or `lead:<slug>`
+    (roles.resolve, as at SessionStart; `ROLE: none` clears both)."""
     out = []
     for sid, s in live_sessions(procs).items():
         name = s.get("name") or ""
-        role = (read_json(base / "roles" / f"{sid}.json", {}) or {}).get("role") \
-            or ("orchestrator" if name == "orchestrator" else "lead" if name.startswith("lead:") else None)
-        if role in ("orchestrator", "lead"):
-            out.append((s["cwd"], name, role))
+        entry = roles.resolve({"hook_event_name": "SessionStart", "session_title": name}, roles.declared(sid))
+        if entry:
+            out.append((s["cwd"], name, entry["role"]))
     return out
 
 

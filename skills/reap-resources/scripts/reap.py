@@ -55,12 +55,22 @@ def opt(name, default=None):
     return a[a.index(name) + 1] if name in a else default
 
 
-def run(cmd, cwd=None, check=True):
+# None waits for every command; patrol's candidate round sets seconds, so one hung command fails its source instead
+# of the round.
+RUN_TIMEOUT = None
+
+
+def run(cmd, cwd=None, check=True, env=None, timeout=None):
+    timeout = timeout or RUN_TIMEOUT
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=ENV)
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env or ENV, timeout=timeout)
     except FileNotFoundError:
         if check:
             raise RuntimeError(f"{cmd[0]}: not installed")
+        return None
+    except subprocess.TimeoutExpired:
+        if check:
+            raise RuntimeError(f"{' '.join(cmd[:4])}: timed out after {timeout}s")
         return None
     if check and r.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd[:4])}: {r.stderr.strip()[:200]}")
@@ -370,7 +380,11 @@ def branch_scan(repo, notes):
         return []
 
     def is_ancestor(a, b):
-        return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=repo, capture_output=True).returncode == 0
+        try:
+            return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=repo, capture_output=True,
+                                  timeout=RUN_TIMEOUT).returncode == 0
+        except subprocess.TimeoutExpired:
+            return False  # not shown to be on the PR: the branch stays
     return judge_branches(repo, branches, checked, default, json.loads(prs), is_ancestor)
 
 
@@ -520,9 +534,13 @@ def patrol_working(now=None):
     return patrol_read(now) or set()
 
 
-def patrol_read(now=None):
+PATROL_KEEP_ACTIVITY = ("parked", "unknown")  # v2 `activity`: a session that wakes itself, or one patrol could not tell
+
+
+def patrol_read(now=None, activity=False):
     """patrol_working, but None when the verdicts file exists and cannot be read: a guard keeps the card then. No file,
-    or one over an hour old, is an empty set."""
+    or one over an hour old, is an empty set. activity adds the cards the round's `activity` keeps (PATROL_KEEP_ACTIVITY),
+    which only the guard right before a close reads."""
     try:
         v = json.loads((STATE / "patrol-verdicts.json").read_text())
     except FileNotFoundError:
@@ -532,12 +550,100 @@ def patrol_read(now=None):
     try:
         if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
             return set()
-        return {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
+        kept = {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
+        if activity:
+            act = v.get("activity")
+            act = {} if act is None else act  # a file from before v2 has none
+            if not isinstance(act, dict) or not all(isinstance(x, dict) and isinstance(x.get("state"), str)
+                                                    for x in act.values()):
+                return None  # an activity row that cannot be read is no proof the card may go
+            kept |= {real(p) for p, x in act.items() if x["state"] in PATROL_KEEP_ACTIVITY}
+        return kept
     except (ValueError, TypeError, AttributeError):
         return None
 
 
 ORCH = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "prog.py"
+
+
+# Results that say nothing was done: the second look left it, or it was gone, or a close-only card had no terminal.
+NOOP_PREFIX = ("건너뜀", "사라졌거나", "거부됨", "실패", "dry-run")
+NOOP_RESULT = re.compile(r"^터미널 0개 닫음, worktree 는 남김")
+# What names one target, beyond its key: logged with each act and compared by `sweep diff` (a list is the files or
+# terminals one act covers). Patrol's candidates carry the same fields.
+ACT_IDENTITY = ("head", "tip", "ino", "dir", "pid", "start", "cmd", "created", "flag", "port", "local", "paths")
+
+
+def dir_ino(path):
+    """The inode of a card's folder: a card made again on the same path (even at the same HEAD) has another one."""
+    try:
+        return os.stat(path).st_ino
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def acted(result):
+    s = str(result or "")
+    return bool(s) and not s.startswith(NOOP_PREFIX) and not NOOP_RESULT.match(s)
+
+
+def act_identity(item):
+    return {k: item[k] for k in ACT_IDENTITY if item.get(k) not in (None, "")}
+
+
+REMOVED = "worktree 는 orca worktree rm 으로 제거"  # the orca-worktree act's own words, at the end of every removal
+CARD_EFFECT = {"card:strict": "card:remove", "card:landed": "card:remove", "card:close-idle": "card:close"}
+
+
+def act_effect(rule, kind, result):
+    """What an act really did, by its result: a card removed, a card's terminals closed (its removal skipped, or
+    close-only), the rule's own effect for any other kind; None when nothing was done."""
+    s = str(result or "")
+    if not acted(s):
+        return None
+    if kind not in ("card", "orca-worktree"):
+        return rule
+    if REMOVED in s:
+        return "card:remove"
+    m = re.match(r"터미널 (\d+)개 닫음", s)
+    return "card:close" if m and int(m.group(1)) else None
+
+
+def log_action(item, result, ok, rule=None, closed=None):
+    """One line in <state>/reap-actions.jsonl per target reap --plan or cards.py apply acted on (or failed): what
+    `sweep diff` matches the shadow's plan against. ok only when it raised nothing and its result says it did
+    something. closed: the terminal handles the act really closed (a card). A line that cannot be written is let go."""
+    kind = item.get("kind", "card")
+    row = {"t": time.time(), "key": item.get("key") or f"card:{item.get('path')}", "kind": kind, "rule": rule,
+           "identity": act_identity(item), "result": str(result)[:200], "ok": ok and acted(result),
+           "effect": act_effect(rule, kind, result) if ok else None}
+    if closed is not None:
+        row["handles"] = sorted(closed)
+    with contextlib.suppress(Exception):  # a log line is never worth an act left half-reported
+        line = json.dumps(row, ensure_ascii=False, default=str) + "\n"
+        STATE.mkdir(parents=True, exist_ok=True)
+        with open(STATE / "reap-actions.jsonl", "a", encoding="utf-8", errors="backslashreplace") as f:
+            f.write(line)
+
+
+SWEEP = pathlib.Path(__file__).resolve().parent / "sweep.py"
+
+
+def spawn_sweep_shadow(reason, python=None):
+    """Start `sweep.py run --shadow` detached after a cleaner's pass; it decides on the newest complete patrol round
+    and acts on nothing. False when it could not start, or AGENT_SKILLS_SWEEP=off (tests)."""
+    if os.environ.get("AGENT_SKILLS_SWEEP") == "off":
+        return False
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with open(STATE / "sweep.log", "a") as out:
+            out.write(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} {reason}\n")
+            out.flush()
+            subprocess.Popen([python or sys.executable, str(SWEEP), "run", "--shadow"], stdout=out, stderr=out,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except OSError:
+        return False
 
 
 def spawn_patrol(reason, python=None):
@@ -936,8 +1042,8 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
             "dirty": bool(status) and not copies, "regenerated": copies or [], "unpushed": bool(ahead), "head": head}
 
 
-def orca_json(*args):
-    out = run(["orca", *args, "--json"], check=False) if shutil.which("orca") else None
+def orca_json(*args, env=None, cwd=None, timeout=None):
+    out = run(["orca", *args, "--json"], cwd=cwd, check=False, env=env, timeout=timeout) if shutil.which("orca") else None
     try:
         return json.loads(out)["result"] if out else None
     except (ValueError, KeyError):
@@ -1203,7 +1309,8 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
         found, card_notes = cards.scan(config(), repo_list)
         notes += card_notes
         items += [{"kind": "card", "key": f"card:{c['path']}", "name": c["path"], "target": c["verdict"] in cards.ACTING,
-                   **{k: c[k] for k in ("verdict", "why", "head", "close", "pr", "state")}} for c in found]
+                   **{k: c[k] for k in ("verdict", "why", "head", "close", "pr", "state")},
+                   **({"ino": c["ino"]} if c.get("ino") is not None else {})} for c in found]
     if "compose-stack" in kinds:
         stacks = compose_stacks()
         if stacks is None:
@@ -1405,7 +1512,7 @@ def judge_programs(home, days, now, touched=last_touch):
         path = home / name
         if not SLUG_RE.fullmatch(name) or not (path / "program.json").is_file():
             continue
-        base = {"kind": "program", "key": f"program:{name}", "name": str(path),
+        base = {"kind": "program", "key": f"program:{name}", "name": str(path), "dir": real(str(path)),
                 "how": [f"mv {shlex.quote(str(path))} {shlex.quote(str(home / '_archive'))}/"]}
         try:
             names_in = os.listdir(path)
@@ -1873,7 +1980,8 @@ def kill_tree(item, notes):
     return "종료(SIGKILL 포함)"
 
 
-def act(item, notes):
+def act(item, notes, done=None):
+    """done, when given, gets what a card act really closed ("closed": handles)."""
     k, kind = item["key"], item["kind"]
     if kind in ("tmpdir", "evidence", "user-folder"):
         for how in item.get("how") or ():
@@ -1899,8 +2007,18 @@ def act(item, notes):
         return item["how"][0] + " (ledger 에서 내림)"
     if kind == "card":
         import cards
-        return cards.act({**item, "path": item["name"]}, config())
+        return cards.act({**item, "path": item["name"]}, config(), done=done)
     if kind == "compose-stack":
+        stacks = compose_stacks()  # read again: what is really brought down, for `sweep diff`
+        if stacks is None:
+            return "건너뜀: docker 를 다시 읽지 못함"
+        st = stacks.get(item["name"])
+        if st is None:
+            return "건너뜀: 스택이 이미 없음"
+        if item.get("start") not in (None, "") and str(st.get("last")) != item["start"]:
+            return "건너뜀: 판정 뒤 스택이 바뀜"
+        if done is not None:
+            done["identity"] = {"start": str(st.get("last"))}
         # No -v: the stack's volumes are data, and stay.
         run(["docker", "compose", "-p", item["name"], "down"])
         ledger_add(ledger_path(), "compose-stack", item["name"], by="reap", retired=True)
@@ -1981,20 +2099,43 @@ def main():
         if path.name == "janitor-plan.json":
             for key in [k for k, i in wanted.items() if i["kind"] not in SCHEDULED]:
                 print(f"- 건너뜀 {wanted.pop(key)['key']}: janitor 계획에 들어갈 수 없는 종류")
+        import guard
+        try:
+            guard.ownership()
+            protect = guard.read_protect(guard.protect_file(), missing_ok=True)
+        except (guard.Unreadable, guard.NoProtect) as e:
+            print(f"- 아무것도 하지 않았다: {e}")
+            return
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
-            if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip", "head", "verdict")):
+            if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip", "head", "ino", "dir", "verdict", "created")):
                 print(f"- 건너뜀 {label(old)}: 더는 정리 대상이 아님")
                 continue
-            try:
-                print(f"- {label(new)}: {act(new, notes)}")
-            except (RuntimeError, OSError) as e:
-                failed.append(key)
-                print(f"- 실패 {label(new)}: {e}")
+            # The plan's terminals are what the judgment saw: one opened since keeps the card.
+            if new["kind"] == "card" and set(new.get("close") or ()) - set(old.get("close") or ()):
+                print(f"- 건너뜀 {label(old)}: 판정 뒤 터미널이 새로 열림")
+                continue
+            with guard.hold(guard.targets(new)) as got:
+                why = guard.keep(new, protect, notes=notes) if got else guard.LOCK_BUSY
+                if why:
+                    print(f"- 건너뜀 {label(new)}: {why}")
+                    continue
+                done = {}
+                try:
+                    got = act(new, notes, done)
+                except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
+                    log_action({**new, **(done.get("identity") or {})}, e, False, guard.rule(new), done.get("closed"))
+                    if not isinstance(e, (RuntimeError, OSError)):
+                        raise
+                    failed.append(key)
+                    print(f"- 실패 {label(new)}: {e}")
+                else:
+                    log_action({**new, **(done.get("identity") or {})}, got, True, guard.rule(new), done.get("closed"))
+                    print(f"- {label(new)}: {got}")
         if set(plan.get("kinds") or ()) & set(SCHEDULED):
             record_reap(STATE, failed)
         for k in set(DAILY) & set(plan.get("kinds") or ()):
@@ -2073,6 +2214,12 @@ def main():
             sys.exit(1)
         print(f"부하 회차: {why}")
     if cmd == "precheck":
+        import guard
+        try:
+            guard.ownership()
+        except guard.Unreadable as e:
+            print(f"소유권 파일을 읽지 못함, 이번 회차는 건너뜀: {e}")
+            sys.exit(1)
         # Stamped before the scan, which takes seconds: a precheck starting meanwhile must already see it.
         stamp_round(STATE)
     names =(opt("--kinds") or ",".join(SCHEDULED if cmd == "precheck" else KINDS)).split(",")

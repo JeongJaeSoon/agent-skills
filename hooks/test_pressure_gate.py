@@ -165,7 +165,8 @@ for n, card, compose in ((9, "deny", "none"), (8, "none", "none"), (None, "none"
     assert gate("orch heavy - -- bash -c 'orca worktree create --repo x'", OK) == card, n
 pressure.active_turns = lambda: 12
 turns = g.gate("orca worktree create --repo x", OK, {}, cfg, now=1.0, p=pressure)[1]
-assert "12개" in turns and "상한 9개" in turns and "turns --wait 15" in turns and "Monitor" in turns, turns
+assert "12개" in turns and "상한 9개" in turns and "turns --wait 15" in turns and "Monitor" in turns
+assert "Bash run_in_background" in turns, turns
 pressure.active_turns, pressure.turn_cap = real_turns, real_cap
 assert pressure.active_turns(run=lambda *a, **k: json.dumps({"ok": True, "result": {"worktrees": [
     {"agents": [{"state": "working"}, {"state": "done"}]}, {"agents": [{"state": "working"}]}, {"agents": None}]}})) == 2
@@ -210,7 +211,7 @@ assert reason.startswith("[gate:pressure] (agent-skills hooks/pressure_gate.py) 
 assert g.gate("docker compose up -d", WARN, {}, cfg, now=1.0, p=pressure)[1].startswith(
     "[gate:pressure] (agent-skills hooks/pressure_gate.py) ")
 assert "round" not in g.gate("orch heavy x -- make", DANGER, {"scan_t": 1.0}, cfg, now=2.0, p=pressure)[1] \
-    .split("Monitor")[0], "a fresh sweep does not ask for another round"
+    .split("Bash run_in_background")[0], "a fresh sweep does not ask for another round"
 
 # The hook process: off by environment, silent for other tools and plain commands.
 def hook(tool, cmd, **env):
@@ -273,6 +274,7 @@ held = pre(CARD, "s1", "danger")
 e = entry(CARD, "s1")
 assert e and e["state"] == "waiting" and e["cwd"] == "/w" and e["attempts"] == 1, e
 assert f"queue wait {e['id']}" in held and "Monitor" in held and "같은 명령을 그대로 다시 실행" in held, held
+assert "Bash run_in_background" in held, held
 assert held.startswith("[gate:pressure] "), held
 row = dash_rows()[-1]
 assert row["op"] == "add" and row["key"] == f"pressure:queue:{e['id']}" and e["id"] in row["title"], row

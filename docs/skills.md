@@ -552,7 +552,7 @@ PR 을 맡는 스킬과 머지 주체:
 ## hook
 
 ### 권한 결정
-`hooks/guard.py`(PreToolUse, `Bash|Skill`). 플러그인은 권한 규칙을 설정으로 실을 수 없어서 hook이 대신 결정한다. 목적은 워커가 스킬을 읽고 몇 시간 뒤 명령을 실행할 때 확인 창에서 멈추지 않게 하는 것이다.
+`hooks/guard.py`(PreToolUse, `Bash|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion`). 플러그인은 권한 규칙을 설정으로 실을 수 없어서 hook이 대신 결정한다. 목적은 워커가 스킬을 읽고 몇 시간 뒤 명령을 실행할 때 확인 창에서 멈추지 않게 하는 것이다. 아래 표보다 먼저 [위험 명령과 역할 세션 규칙](#위험-명령과-역할-세션-규칙)을 보고, 거기서 거부되면 그것이 이긴다.
 
 | 결정 | 대상 |
 |---|---|
@@ -565,12 +565,51 @@ PR 을 맡는 스킬과 머지 주체:
 
 허용은 셸 연산자, 리다이렉션, 치환, 변수가 없는 단일 명령에만 준다. 변수는 `$ORCA_TERMINAL_HANDLE` 하나만 예외다. 명령 이름 바로 뒤에 하위 명령이 와야 하고, 플래그가 먼저 오면 판정하지 않는다. 판정하지 않은 호출은 평소 권한 흐름(auto mode 분류기, 사용자의 규칙)을 탄다.
 
+### 위험 명령과 역할 세션 규칙
+같은 `guard.py`가 `hooks/lib/danger.py`와 `hooks/lib/coordination.py`의 규칙을 먼저 본다. 명령은 bash가 실제로 실행하는 단어만 명령으로 읽고(따옴표 안, heredoc 본문, 주석은 글), 그 명령의 인자는 원문을 `shlex`로 나눠 읽는다. 그래서 `echo pkill`, 커밋 메시지, 따옴표 안의 프롬프트는 걸리지 않는다. `bash -c`, `eval`, 스크립트 파일 안의 명령은 보지 않는다. 가드레일이지 샌드박스가 아니다. 스크립트는 같은 판정 함수(`danger.check_bash`, `danger.external_review`)를 직접 부를 수 있다.
+
+규칙마다 `~/.claude/agent-skills.json`에 키가 있다. 값은 `"deny"`·`"ask"`·`"warn"`·`"off"` 가운데 하나이고, `false`는 `"off"`, `true`는 기본값이다. 끄면 그 규칙이 생기기 전 동작으로 돌아간다. warn은 막지 않고 사람에게 보이는 알림(`systemMessage`)과 모델에 주는 맥락으로 남는다.
+
+| 키 | 기본 | 대상 |
+|---|---|---|
+| `guard.deny.pattern_kill` | deny | `pkill`, `killall`, `kill $(pgrep …)`, `pgrep … \| xargs kill`. PID로 죽이거나 reap-resources를 쓴다 |
+| `guard.deny.prune` | deny | `docker`·`podman`의 `system`·`volume`·`image`·`container`·`network`·`builder prune`, `compose … down -v`·`--volumes`, `git worktree prune` |
+| `guard.deny.worktree_rm` | deny | `orca worktree rm`의 `--force`·`--allow-failed-archive-hook`, 메인 worktree에서의 `--worktree current`(Orca가 `isMainWorktree`를 답할 때만) |
+| `guard.deny.automode_reset` | deny | `claude auto-mode reset` |
+| `guard.deny.keychain` | deny | `security find-*-password`의 `-w`·`-g`, `security dump-keychain` |
+| `guard.deny.url_credentials` | deny | 인자에 `scheme://user:secret@`가 든 URL |
+| `guard.deny.user_settings` | deny | 사용자 설정 쓰기: `~/.claude/settings.json`·`settings.local.json`(`$CLAUDE_CONFIG_DIR`도), `~/.claude/agent-skills.json`, secure-fill의 `allow.json`. Edit·Write·MultiEdit·NotebookEdit와 Bash의 리다이렉션·`tee`·`cp`·`mv`·`sed -i`·`rm` 등. 프로젝트의 `.claude/settings.json`은 대상이 아니다 |
+| `guard.deny.plugin_apply` | deny | 이 플러그인의 `setup.py`·`config_emit.py`·`automode_rule.py`와 그 사본의 `--apply`, `bootstrap.py --write`. 사본은 "runs --apply, never the agent" 문장으로 알아본다. 다른 저장소의 `setup.py`는 대상이 아니다 |
+| `guard.deny.slash_send` | deny | `orca terminal send`로 `/reload…`·`/model` 입력 |
+| `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt`의 명령 치환(`$(…)`, 백틱) |
+| `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
+| `guard.deny.owner_only` | deny | `orch refusal clear`, `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
+| `guard.deny.external_review` | deny | `codex` 호출인데 작업 폴더(또는 `-C`)의 origin 저장소가 `repos.<owner/repo>.external_llm: false`. 그 키가 없으면 판정하지 않는다 |
+| `guard.ask.pressure_bypass` | ask | 명령 앞이나 `env`·`export`의 `AGENT_SKILLS_PRESSURE_GATE=0` 대입. 그 글자를 출력하는 `echo`는 대상이 아니다 |
+| `guard.warn.rm_expansion` | warn | 따옴표 없는 glob이나 변수로 만든 `rm` 경로. `${VAR:?}`는 제외 |
+| `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
+| `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |
+| `guard.warn.tailscale` | warn | 워커의 `tailscale serve`·`funnel` |
+| `orchestrate.ask_user_question` | deny | 오케스트레이터·리드·워커 본 대화의 AskUserQuestion. 서브에이전트와 일반 세션은 대상이 아니다 |
+| `orchestrate.wait_foreground` | deny | 오케스트레이터·리드가 `orch wait`, `orch inbox --wait`, `orch watch-cards`, `orca orchestration check\|inbox --wait`를 `run_in_background` 없이 실행, 또는 배경 대기를 `\| tail`·`\| head`로 자름. 워커의 `check --wait`는 대상이 아니다 |
+| `orchestrate.send_devnull` | deny | 오케스트레이터·리드·워커가 `orca orchestration send\|reply`의 출력을 `/dev/null`로 보냄. `2>/dev/null`만은 대상이 아니다 |
+
+hook 자신의 판정이 예외를 내면 그 호출은 통과시키고, 경고와 함께 `$AGENT_SKILLS_STATE/guard-errors.jsonl`에 시각·hook·예외 종류·위치만 남긴다(명령 원문은 남기지 않는다). 설정 파일을 읽지 못하면 기본값을 쓴다.
+
+역할은 `hooks/roles.py` 하나가 정한다. 역할은 orchestrator, lead, worker, general 넷이다.
+1. `ROLE: none` 기록이 있으면 모든 역할이 꺼진다(general).
+2. 선언이 먼저다: `agent_type`, `ROLE:` 기록, (SessionStart에서만) 세션 이름, 그리고 리드 브리프 모양의 첫 프롬프트. Orca가 Dispatch로 띄운 리드도 lead다.
+3. 선언이 없고 첫 프롬프트에 Orca의 Dispatch 프리앰블이나 카드의 `CLOSE`·`KEEP` 행이 있으면 worker다. Dispatch 워커와 `/goal` 카드가 같은 역할이다.
+4. 나머지는 general이다. 사람이 연 세션은 worker가 되지 않는다.
+
+감독 여부(프리앰블), CLOSE·KEEP는 역할이 아니라 속성이다. Orca 실행 깊이와 lineage는 역할 판정에 쓰지 않는다. 서브에이전트(입력에 `agent_id`)는 부모 역할을 갖고, 규칙마다 적용 행렬(`roles.MATRIX`)이 서브에이전트에 닿는지 정한다. `reorient.py`, `delegate_gate.py`, `guard.py`, 대시보드(`fleet.declared_roles`), 토큰 집계(`token_usage.py`)가 이 모듈을 쓴다.
+
 ### 오케스트레이터·리드 재정렬
 `hooks/onboard.py`(SessionStart `startup|clear`). 이 프로필의 사용자 설정(`env.CLAUDE_CODE_PLUGIN_DIRS`, Orca 프로필마다 따로 본다)도 세션의 같은 환경 변수도 체크아웃을 로드하지 않을 때만, 설치 창의 값과 함께 `setup-pc`를 제안하라는 문단을 넣는다. `-p` 세션(`CLAUDE_CODE_ENTRYPOINT`가 `sdk-cli`)에는 넣지 않는다. Agent SDK 세션(`sdk-ts`·`sdk-py`)은 사람이 입력하는 GUI 일 수도 있어 넣고, 첫 요청이 브리프·자동화 프롬프트면 무시하라고 문단이 말한다. URL의 인증 정보는 지우고 넣는다. 사람이 거절하면 에이전트가 `onboard.py --decline`을 돌려 그 프로필에서는 다시 묻지 않는다. `AGENT_SKILLS_ONBOARD=0`으로 모두 끈다.
 
 `hooks/reorient.py`(SessionStart `startup|resume|compact|fork`, UserPromptSubmit). 역할을 선언한 세션에만 안내를 넣고, 아니면 아무것도 넣지 않는다. 차단하지 않고, 외부 명령도 부르지 않는다. compact 뒤 SessionStart에서는 orchestrate SKILL.md 맨 위 "Core rules" 목록(위임이 첫 항목)을 그대로 읽어 안내에 붙인다. 스킬이 커서 compaction 재주입으로 돌아오지 않고, "다시 로드하라"는 문장만으로는 로드되지 않았기 때문이다. 오케스트레이터의 세션 이름(`session_title`)이 `orchestrator`가 아니면 SessionStart 안내 끝에 사람에게 `/rename orchestrator`를 청하고 자기 Orca 탭 이름을 바꾸라(`orca terminal rename`)는 줄을 붙인다.
 
-역할은 터미널로 추측하지 않고 선언으로 정한다. 판정 순서는 다음과 같다.
+역할은 터미널로 추측하지 않고 선언으로 정한다(`hooks/roles.py`의 `resolve`). 판정 순서는 다음과 같다.
 1. hook 입력의 `agent_type`. 세션을 `claude --agent agent-skills:orchestrator --name orchestrator`나 `claude --agent agent-skills:lead --name lead:<slug>`로 띄우면 들어온다. 플러그인의 `agents/orchestrator.md`·`agents/lead.md`는 본문이 비어 있다(본문이 있으면 기본 시스템 프롬프트를 대체한다). 리드의 slug는 세션 이름 `lead:<slug>`에서, 없으면 ROLE 줄에서 읽는다. 실측(Claude Code 2.1.296): `agent_type`은 첫 프롬프트, compact 뒤 SessionStart, resume·fork 뒤 모든 프롬프트에 들어오지만 resume·fork의 SessionStart에는 빠진다. 그 둘에서는 세션 이름(`session_title`)이 `orchestrator`나 `lead:<slug>`이면 그것으로 대신한다.
 2. 프롬프트 한 줄 `ROLE: orchestrator` / `ROLE: lead <slug>`. hook이 `$AGENT_SKILLS_STATE/roles/<session_id>.json`에 기록한다. 이미 돌고 있는 세션을 편입할 때와, 플래그를 넘길 수 없는 리드 카드(`orca worktree create --agent`는 Orca 에이전트 id만 받는다)에 쓴다. 리드 카드는 첫 프롬프트에 이 줄이 들어간다(guard가 없으면 거부한다). `ROLE: none`은 `--agent`로 띄운 세션까지 끈다. fork는 session_id가 새로 생기고 입력에 부모 id가 없어서, ROLE 줄로만 선언한 세션의 fork는 다시 선언해야 한다.
 3. 둘 다 없으면 아무것도 넣지 않는다.
@@ -604,7 +643,7 @@ PR 을 맡는 스킬과 머지 주체:
 Bash의 `sed`나 heredoc으로 고친 파일은 수정으로 세지 않는다. 오류는 모두 exit 0이다. 착안은 [superpowers](https://github.com/obra/superpowers)(Jesse Vincent, MIT)의 `verification-before-completion`이다. 그 스킬의 신선도·범위·red-green 규칙은 `write-plainly`와 `deliver-ticket`에 흡수했다.
 
 ### 무거운 시작 전 사용량 확인
-`hooks/pressure_gate.py`(PreToolUse, Bash). 명령 위치에 `orch heavy`, `docker compose … up`, `docker-compose … up`, `orca worktree create`가 있을 때만 `reap-resources`의 `pressure.py`로 머신을 잰다(CPU idle을 그 자리에서 2초 재므로 2.3초 안팎). 위험이면 거부하고(swap·디스크는 몇 시간씩 높게 남아 경고까지만 센다), 경고면 최근 15분(`reap.pressure.gate_fresh_minutes`) 안에 정리 회차가 없을 때만 거부한다. 거부 이유에는 먼저 돌릴 `pressure.py round`가 들어간다. 위험이면 그 명령을 세션·명령 단위 대기열(`pressure.py queue`)과 대시보드 Needs you에 남기고(기한 `reap.pressure.queue_minutes`, 기본 15분), `Monitor`로 `pressure.py queue wait <id>`를 기다렸다가 0으로 끝나면 같은 세션이 같은 명령을 다시 실행하게 한다. 대기열은 명령을 직접 실행하지 않는다. 재시도의 성공·실패는 같은 스크립트가 PostToolUse·PostToolUseFailure에서 기록하고, 기한이 지난 항목은 포기로 남긴다. 남의 카드·프로세스는 종료하지 않는다. 측정이 실패하면 결정을 내리지 않는다. 사용자가 지금 실행하라고 했을 때만 명령 앞에 `AGENT_SKILLS_PRESSURE_GATE=0`을 붙인다. 수준과 상관없이 두 가지를 더 막는다. 전체 테스트 스위트(`tests.sh`, 테스트 파일 5개 이상을 도는 `for` 루프, `npm test`, 인자 없는 `bun test`·`pytest`·`jest`·`vitest`, `go test ./...`), E2E(`playwright test`, `cypress run`, `e2e` 스크립트), headless Chrome을 `orch heavy` 밖에서 돌리면 거부하고 `orch heavy - -- bash -c '…'`로 감싼 같은 명령을 알려 준다. 새 카드(`orca worktree create`, 새 worktree로 가는 worker-start)는 Orca가 보여 주는 진행 중 에이전트 턴이 CPU당 `reap.pressure.active_turns_per_cpu`(기본 0.5, 18코어면 9개, null이면 끔)에 닿으면 거부하고, `Monitor`로 `pressure.py turns --wait 15`를 기다리게 한다.
+`hooks/pressure_gate.py`(PreToolUse, Bash). 명령 위치에 `orch heavy`, `docker compose … up`, `docker-compose … up`, `orca worktree create`가 있을 때만 `reap-resources`의 `pressure.py`로 머신을 잰다(CPU idle을 그 자리에서 2초 재므로 2.3초 안팎). 위험이면 거부하고(swap·디스크는 몇 시간씩 높게 남아 경고까지만 센다), 경고면 최근 15분(`reap.pressure.gate_fresh_minutes`) 안에 정리 회차가 없을 때만 거부한다. 거부 이유에는 먼저 돌릴 `pressure.py round`가 들어간다. 위험이면 그 명령을 세션·명령 단위 대기열(`pressure.py queue`)과 대시보드 Needs you에 남기고(기한 `reap.pressure.queue_minutes`, 기본 15분), `pressure.py queue wait <id>`를 `run_in_background`로 실행하거나 `Monitor`로 기다렸다가 0으로 끝나면 같은 세션이 같은 명령을 다시 실행하게 한다. 대기열은 명령을 직접 실행하지 않는다. 재시도의 성공·실패는 같은 스크립트가 PostToolUse·PostToolUseFailure에서 기록하고, 기한이 지난 항목은 포기로 남긴다. 남의 카드·프로세스는 종료하지 않는다. 측정이 실패하면 결정을 내리지 않는다. 사용자가 지금 실행하라고 했을 때만 명령 앞에 `AGENT_SKILLS_PRESSURE_GATE=0`을 붙인다. 수준과 상관없이 두 가지를 더 막는다. 전체 테스트 스위트(`tests.sh`, 테스트 파일 5개 이상을 도는 `for` 루프, `npm test`, 인자 없는 `bun test`·`pytest`·`jest`·`vitest`, `go test ./...`), E2E(`playwright test`, `cypress run`, `e2e` 스크립트), headless Chrome을 `orch heavy` 밖에서 돌리면 거부하고 `orch heavy - -- bash -c '…'`로 감싼 같은 명령을 알려 준다. 새 카드(`orca worktree create`, 새 worktree로 가는 worker-start)는 Orca가 보여 주는 진행 중 에이전트 턴이 CPU당 `reap.pressure.active_turns_per_cpu`(기본 0.5, 18코어면 9개, null이면 끔)에 닿으면 거부하고, `pressure.py turns --wait 15`를 같은 방법으로 기다리게 한다. 오케스트레이터도 이 두 대기는 `run_in_background`로 실행할 수 있다(`delegate_gate.py`).
 
 ### 문체 검사
 `hooks/prose_check.py`(PreToolUse, `Bash`와 Linear·Jira MCP). `gh pr create|edit`(`--title`, `--body`, `--body-file`), `git commit`(`-m`, `-F`, heredoc), Linear·Jira에 이슈·댓글·문서를 저장하는 호출의 본문에서 `write-plainly`의 결정적 금지 패턴(em dash, 둥근 따옴표, 굵은 라벨+콜론, "다양한"·"를 통해"·"해당" 같은 상투어와 번역투, 영어 AI 어휘와 군더더기)을 찾는다. 코드 블록과 인라인 코드는 보지 않는다. 걸리면 `additionalContext`로 알리기만 하고 호출을 막거나 권한을 결정하지 않는다. 이 알림은 모델에게 "PreToolUse:Bash hook additional context: …"로 보인다(헤드리스 세션에서 확인). `AGENT_SKILLS_PROSE_CHECK=0`으로 끈다.

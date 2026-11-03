@@ -14,7 +14,7 @@ closing anything, guard() and card_lock() here:
 
 guard() keeps the card whenever it cannot see what it checks.
 """
-import contextlib, fcntl, hashlib, json, os, pathlib, re, subprocess, sys, time
+import json, os, pathlib, re, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import reap  # noqa: E402
@@ -53,42 +53,51 @@ def child_cards(w):
     return sorted(c for c in ((i or "").split("::")[1] if "::" in (i or "") else "" for i in ids) if c and os.path.isdir(c))
 
 
+def _orca(args, **kw):
+    """An Orca listing's result; raises with Orca's JSON error, else its stderr (worker_list reads either)."""
+    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30, **kw)
+    try:
+        out = json.loads(p.stdout or "{}")
+    except ValueError:
+        out = None
+    if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
+        why = (out.get("error") if isinstance(out, dict) else None) or p.stderr.strip() or p.stdout.strip()
+        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(why)[:200]} (exit {p.returncode})")
+    return out.get("result", out)
+
+
 def _orca_every_run(args):
     """An Orca listing over every Run: with this terminal's handle set, worker-list scopes to its bound Run. Run from
     the checkout: outside a git directory (launchd starts in /) Orca was seen binding the list to one Run anyway."""
-    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30,
-                       env={**os.environ, "ORCA_TERMINAL_HANDLE": ""}, cwd=REPO)
-    out = json.loads(p.stdout or "{}")
-    if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
-        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(out.get('error') if isinstance(out, dict) else out)[:120]}"
-                           f" (exit {p.returncode})")
-    return out.get("result", out)
+    return _orca(args, env={**os.environ, "ORCA_TERMINAL_HANDLE": ""}, cwd=REPO)
+
+
+def _orca_as_seen(*args):
+    """An Orca listing as this terminal sees it."""
+    return _orca(args)
 
 
 def worker_pages(state=None, every_run=True, deadline=None):
     """Every page of `orca orchestration worker-list`. Raises when a page fails, the budget runs out (deadline; with
     none, the page cap), or (every_run) the list is scoped to one Run: a list cut short is a failure, not a smaller
     fleet. every_run=False reads as the caller's terminal sees it, unchecked."""
-    rows, cursor, n = [], None, 0
-    while deadline or n < WORKER_PAGES:
-        n += 1
-        if deadline and time.time() > deadline - 30:
-            raise TimeoutError("worker-list pages left unread")
-        args = ("orchestration", "worker-list", "--limit", "100", *(["--terminal-state", state] if state else []),
-                *(["--cursor", cursor] if cursor else []))
-        res = _orca_every_run(args) if every_run else reap.orca_json(*args)
-        if not isinstance(res, dict) or not isinstance(res.get("workers"), list):
+    if deadline and time.time() > deadline - 30:
+        raise TimeoutError("worker-list pages left unread")
+    rows, call = [], (lambda *a: _orca_every_run(a)) if every_run else _orca_as_seen
+    for n, (page, res, more) in enumerate(_orch("orca_settings").worker_list(
+            call, "--limit", "100", *(["--terminal-state", state] if state else [])), 1):
+        if not isinstance(res.get("workers"), list):
             raise RuntimeError("worker-list answered without a workers list")
         if every_run and (res.get("scope") or {}).get("source", "all") != "all":
             raise RuntimeError(f"worker-list scoped to {res['scope']}, not every Run")
-        rows += res["workers"]
-        page = res.get("page") or {}
-        cursor = page.get("nextCursor")
-        if page.get("hasMore") is False or (not cursor and not page.get("hasMore")):
+        rows += page
+        if not more:
             return rows
-        if not cursor:
-            raise RuntimeError("worker-list has more pages and no cursor to them")
-    raise RuntimeError(f"worker-list has more than {WORKER_PAGES} pages")
+        if deadline and time.time() > deadline - 30:
+            raise TimeoutError("worker-list pages left unread")
+        if not deadline and n >= WORKER_PAGES:
+            raise RuntimeError(f"worker-list has more than {WORKER_PAGES} pages")
+    return rows
 
 
 def _orch(name):
@@ -149,9 +158,10 @@ def observe(path):
             return fn()
         except (SystemExit, Exception):  # any failure is "could not see", which keeps the card
             return None
-    kept = reap.patrol_read()
+    kept = reap.patrol_read(activity=True)
     f = {"patrol": None if kept is None else path in kept,
-         "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None)}
+         "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None),
+         "ino": reap.dir_ino(path)}
     res = reap.orca_json("terminal", "list", "--worktree", f"path:{path}")
     f["terminals"] = res["terminals"] if isinstance(res, dict) and not res.get("truncated") \
         and isinstance(res.get("terminals"), list) else None
@@ -169,7 +179,7 @@ def observe(path):
 QUESTION = [re.compile(p) for p in QUESTION_PATTERNS]
 
 
-def check(f, head, handles, final=False):
+def check(f, head, handles, final=False, ino=None):
     """(ok, why) for closing what was judged at HEAD head with its terminals handles, from observe()'s facts. final:
     after those terminals were closed, before `worktree rm`: their sessions are gone, so only patrol, HEAD and new
     terminals are looked at."""
@@ -181,6 +191,8 @@ def check(f, head, handles, final=False):
         return False, "HEAD 를 읽지 못함"
     if f["head"] != head:
         return False, "판정 뒤 HEAD 가 바뀜"
+    if ino is not None and f.get("ino") != ino:  # the same path and HEAD, but a folder made again since
+        return False, "판정 뒤 카드 폴더가 다시 만들어짐"
     if f.get("terminals") is None:
         return False, "터미널 목록을 읽지 못함"
     if (new := [t.get("handle") for t in f["terminals"] if t.get("handle") not in handles]):
@@ -205,21 +217,14 @@ def check(f, head, handles, final=False):
     return True, "확인함"
 
 
-def guard(path, head, handles, final=False):
-    """check() over facts observe() reads now."""
-    return check(observe(path), head, set(handles), final)
+def guard(path, head, handles, final=False, ino=None):
+    """check() over facts observe() reads now. ino: the card folder's inode the caller acts on, when it knows it."""
+    return check(observe(path), head, set(handles), final, ino)
 
 
-@contextlib.contextmanager
 def card_lock(path):
     """<state>/locks/card-<hash>.lock, held from the judgement again to `worktree rm`. Yields False when another
-    cleaner holds it: that card is skipped this pass, never waited on."""
-    d = reap.STATE / "locks"
-    d.mkdir(parents=True, exist_ok=True)
-    with open(d / f"card-{hashlib.sha1(reap.real(path).encode()).hexdigest()[:16]}.lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
-        yield True
+    cleaner holds it: that card is skipped this pass, never waited on. It is guard.hold's card lock, so a cleaner
+    that already holds it for the same card (guard.hold at the top of its loop) goes on without taking it twice."""
+    import guard
+    return guard.hold([("card", reap.real(path))])

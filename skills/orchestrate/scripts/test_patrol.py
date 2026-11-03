@@ -1,6 +1,6 @@
 """patrol.py rules, its log and delivery, and the watcher-down signals in card_watch and fleet.
 Run: python3 test_patrol.py"""
-import datetime as dt, json, os, pathlib, sys, tempfile, time
+import datetime as dt, json, os, pathlib, signal, sys, tempfile, time
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 os.environ["AGENT_SKILLS_STATE"] = str(tmp)
@@ -9,7 +9,7 @@ os.environ["AGENT_SKILLS_PATROL"] = "off"
 (tmp / "dashboard").mkdir()
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
-import card_watch, fleet, patrol, reap, sent, tidy  # noqa: E402
+import card_watch, fleet, patrol, prog, reap, sent, tidy  # noqa: E402
 
 NOW = 1_800_000_000.0
 T = dt.datetime.fromtimestamp(NOW, dt.timezone.utc)
@@ -222,7 +222,7 @@ patrol.write_round([], verd, False, NOW + 420)
 # A failed Orca listing raises, so the round marks its source failed instead of seeing an empty fleet.
 class P:
     def __init__(self, out, rc=0):
-        self.stdout, self.returncode = out, rc
+        self.stdout, self.stderr, self.returncode = out, "", rc
 run0 = patrol.subprocess.run
 for out, rc in (('{"ok": false, "error": "no runtime"}', 0), ('{"ok": true, "result": {}}', 0), ("", 1)):
     patrol.subprocess.run = lambda *a, **k: P(out, rc)
@@ -298,6 +298,101 @@ res = patrol.round_once(dry=True, now=NOW + 999, gather_fn=lambda now, dl, memo:
                         tails={"/w/z": (idle(99), None)}), []))
 assert [f["code"] for f in res["findings"]] == ["I"] and patrol.LOG.read_text() == before
 assert "NEW PATROL I" in "\n".join(patrol.report(res))
+
+# v2 fields: the old ones keep their names and types, so reap.patrol_working reads the same set from a v2 file.
+v2f = facts(now=NOW, terminals=[term("h1", "/w/a"), term("h2", "/w/b"), term("h3", "/w/p")],
+            tails={"/w/a": ({"state": "busy", "since": ago(1)}, None), "/w/b": (idle(40), None),
+                   "/w/p": (idle(40, parked=True), None)}, timings={"terminals": 0.4, "waits": 0.2})
+patrol.VERDICTS.unlink(missing_ok=True)
+res = patrol.round_once(now=v2f["now"], gather_fn=lambda now, dl, memo: (v2f, []))
+on_file = json.loads(patrol.VERDICTS.read_text())
+assert on_file["cards"] == {"/w/a": "working", "/w/b": "idle", "/w/p": "working"} and on_file["hints"] == {"/w/b": "idle"}, on_file
+assert isinstance(on_file["failed"], list) and isinstance(on_file["doing_noref"], list) and isinstance(on_file["load"], list)
+assert on_file["schema"] == 2 and on_file["round"].startswith("r-") and on_file["complete"] is False
+assert on_file["activity"] == {"/w/p": {"state": "parked", "why": on_file["activity"]["/w/p"]["why"]}}, on_file["activity"]
+assert on_file["sources"]["terminals"] == "ok" and on_file["sources"]["consumers"] == "skipped", on_file["sources"]
+assert on_file["candidates"] == [] and on_file["timings"] == {"terminals": 0.4, "waits": 0.2}
+v1 = {k: on_file[k] for k in ("t", "cards")}
+assert reap.patrol_working() == {reap.real("/w/a"), reap.real("/w/p")}
+patrol.VERDICTS.write_text(json.dumps(v1))
+assert reap.patrol_working() == {reap.real("/w/a"), reap.real("/w/p")}, "the same set from the old shape"
+patrol.VERDICTS.write_text(json.dumps(on_file))
+# Unread sources make the card unknown in activity, never a different `cards` value.
+_, v, _ = patrol.judge(facts(terminals=[term("h1", "/w/a")], tails={"/w/a": (idle(40), None)}, failed={"waits"}), {})
+assert v["cards"] == {"/w/a": "working"} and v["activity"]["/w/a"]["state"] == "unknown"
+_, v, _ = patrol.judge(facts(terminals=[term("h1", "/w/a")], tails={"/w/a": (idle(40), None)}, failed={"workers"}), {})
+assert v["cards"] == {} and v["activity"]["/w/a"]["state"] == "unknown"
+
+# The candidate phase fills the round it belongs to, and leaves a file a newer round wrote alone.
+fake = {"sources": {**on_file["sources"], "reap_scan": "ok"}, "timings": {"reap_scan": 1.5},
+        "candidates": [{"rule": "card:landed", "kind": "card", "key": "card:/w/b", "needs": ["reap_scan"], "item": {}}],
+        "reports": [], "alerts": [{"kind": "card", "key": "card:/w/b", "path": "/w/b", "decide": "질문"}], "notes": []}
+res["owners"] = {"/w/b": "hb"}
+before = time.time()
+patrol.candidates_phase(res, collect=lambda sources, **k: json.loads(json.dumps(fake)))
+on_file = json.loads(patrol.VERDICTS.read_text())
+assert before <= on_file["candidates_t"] <= time.time()
+assert on_file["complete"] is True and [c["key"] for c in on_file["candidates"]] == ["card:/w/b"]
+assert on_file["alerts"][0]["to"] == "hb" and on_file["timings"]["reap_scan"] == 1.5 and "candidates" in on_file["timings"]
+assert on_file["cards"]["/w/a"] == "working" and reap.patrol_working() == {reap.real("/w/a"), reap.real("/w/p")}
+row = json.loads(patrol.ROUNDS.read_text().splitlines()[-1])
+assert row["round"] == on_file["round"] and row["complete"] is True and row["failed"] == []
+assert patrol.timing_lines()[0].startswith("patrol timing over 1 rounds"), patrol.timing_lines()
+patrol.VERDICTS.write_text(json.dumps({**on_file, "round": "r-newer", "candidates": []}))
+patrol.candidates_phase(res, collect=lambda sources, **k: json.loads(json.dumps(fake)))
+assert json.loads(patrol.VERDICTS.read_text())["candidates"] == [], "a newer round's file is not overwritten"
+# Danger skips the scans; a budget cut leaves the round incomplete, never with half the candidates.
+patrol.VERDICTS.write_text(json.dumps({**on_file, "complete": False, "candidates": []}))
+out = patrol.candidates_phase({**res, "level": "danger", "notes": []}, collect=lambda s, **k: 1 / 0)
+assert out["complete"] is False and out["sources"]["candidates"] == "skipped" and out["candidates"] == []
+
+
+def slow_scan(sources, progress):
+    """Reads one source, then hangs on the next until the real alarm fires."""
+    progress.update(sources={**sources, "reap_scan": "ok"}, timings={"reap_scan": 0.5})
+    time.sleep(5)
+    raise AssertionError("the alarm did not fire")
+
+
+signal.signal(signal.SIGALRM, patrol.give_up)
+signal.alarm(1)
+out = patrol.candidates_phase({**res, "notes": []}, collect=slow_scan)
+assert out["complete"] is False and out["sources"]["candidates"] == "timeout" and out["candidates"] == []
+assert out["sources"]["reap_scan"] == "ok" and out["timings"]["reap_scan"] == 0.5, "what was read before the cut stays"
+assert json.loads(patrol.VERDICTS.read_text())["complete"] is False
+assert len(patrol.ROUNDS.read_text().splitlines()) == 4
+assert json.loads(patrol.ROUNDS.read_text().splitlines()[-1])["failed"] == ["candidates"]
+# A main round the budget cut: the earlier round's fields stay, under the new id and incomplete.
+patrol.VERDICTS.write_text(json.dumps({**on_file, "complete": True, "candidates": [{"key": "old"}]}))
+orca0 = patrol.prog.orca_json
+patrol.prog.orca_json = lambda *a: time.sleep(5)  # the first source hangs until the real alarm
+signal.alarm(1)
+try:
+    patrol.gather(NOW, time.time() + 100, {})
+    raise AssertionError("the alarm did not fire")
+except patrol.Budget:
+    pass
+finally:
+    signal.alarm(0)
+    patrol.prog.orca_json = orca0
+assert patrol.CURRENT["failed"] == {"terminals"} and patrol.CURRENT["timings"]["terminals"] >= 0.9, patrol.CURRENT
+patrol.mark_cut("r-cut0", 1.0)
+assert json.loads(patrol.VERDICTS.read_text())["sources"]["terminals"] == "failed", "a source the budget cut is not ok"
+patrol.CURRENT.update(timings={"terminals": 0.3, "workers": 119.0}, failed={"workers"})
+patrol.mark_cut("r-cut", 120.2)
+cut = json.loads(patrol.VERDICTS.read_text())
+assert cut["round"] == "r-cut" and cut["complete"] is False and cut["candidates"] == [] and cut["cards"] == on_file["cards"]
+assert cut["sources"]["round"] == "timeout" and cut["sources"]["workers"] == "failed" and cut["sources"]["terminals"] == "ok"
+assert cut["timings"] == {"terminals": 0.3, "workers": 119.0}, "this round's timings, not the earlier round's"
+row = json.loads(patrol.ROUNDS.read_text().splitlines()[-1])
+assert row["round"] == "r-cut" and row["seconds"] == 120.2 and row["complete"] is False and "round" in row["failed"]
+assert "workers: p50" in "\n".join(patrol.timing_lines()), "a slow cut round counts in the percentiles"
+patrol.VERDICTS.write_text(json.dumps(on_file))
+# prog.run waits forever unless the patrol round set a timeout; then a hung command is a failed read.
+assert prog.RUN_TIMEOUT is None
+prog.RUN_TIMEOUT = 0.2
+assert prog.run(["sleep", "2"], check=False).returncode == 124
+prog.RUN_TIMEOUT = None
 
 # reap reads the verdicts only to keep, and only while fresh.
 patrol.VERDICTS.write_text(json.dumps({"t": time.time(), "cards": {"/w/a": "working", "/w/b": "idle", "/w/c": "run"}}))

@@ -209,8 +209,15 @@ def parse_ts(s):
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+# None waits for every command; `orch patrol` sets seconds for its own round.
+RUN_TIMEOUT = None
+
+
 def run(cmd, check=True):
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        r = subprocess.CompletedProcess(cmd, 124, "", f"timed out after {RUN_TIMEOUT}s")
     if check and r.returncode != 0:
         sys.exit(f"{' '.join(cmd[:4])} … failed ({r.returncode}): {r.stderr.strip()[:400]}")
     return r
@@ -226,13 +233,8 @@ def orca_json(*args):
 def all_workers(run_id):
     """Every Dispatch of the Run. worker-list pages at 100, newest first, and a program passed 86 in two days:
     one page would drop the oldest cards from LANDED-BUT-OPEN."""
-    workers, cursor = [], None
-    while True:
-        res = orca_json("orchestration", "worker-list", "--run", run_id, "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            return workers
+    import orca_settings
+    return orca_settings.all_workers(orca_json, "--run", run_id, "--limit", "100", error=SystemExit)
 
 
 # The program's lead Dispatch (program.json `lead_dispatch`) once a Program is loaded: set for a lead started with
@@ -1187,14 +1189,16 @@ def cmd_init(argv):
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
+    if mine and policy == "human-gate":
+        sys.exit(f"orch init: this lead is dispatch {mine.get('dispatchId')} on {run_id}, and a dispatched lead cannot "
+                 "land under human-gate: Orca lets no worker create a gate on the Run it works for, so `orch land` "
+                 "never sees `approved`. Ask PARENT to restart this lead as a /goal card (its brief's MERGE line "
+                 "says human-gate), or init with --merge-policy autonomous.")
     if mine:
         # A lead started with worker-start: its units are the Dispatches under its own, and its mail is its Dispatch's.
         cfg["lead_dispatch"] = mine.get("dispatchId")
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
-        if policy == "human-gate":
-            print("warning: human-gate needs Orca gates, which this lead cannot create; `orch gate` will refuse. "
-                  "Use `orch decide add` per PR, or restart the lead as a /goal card")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
     (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     print(f"initialised {d}")
@@ -1950,8 +1954,8 @@ def cmd_gate(argv):
         sys.exit("gates are for merge_policy human-gate; autonomous programs land with orch land")
     if p.cfg.get("lead_dispatch"):
         sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
-                 "for (worker_cannot_coordinate_own_run). Ask the human with `orch decide add` per PR, or have the "
-                 "orchestrator restart this lead as a /goal card (`skills-sync card --card`)")
+                 "for (worker_cannot_coordinate_own_run), so `orch land` never sees `approved`. Have the orchestrator "
+                 "restart this lead as a /goal card (`skills-sync card`, its brief's MERGE line saying human-gate)")
     if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
         gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
@@ -2086,6 +2090,13 @@ def write_backfill(p, text, events, rows, dry_run):
         tmp.write_text(body)
         os.replace(tmp, p.ledger_path)
     print(f"written; the old ledger is kept beside it as {p.dir.name}/ledger.jsonl.bak-*")
+
+
+def check(*args):
+    """`orca orchestration check` with the full record: Orca 1.4.246's concise view drops deliveryId, payload and
+    from_handle, and a wait that cannot tell its batch was delivered takes the next, empty one."""
+    import orca_settings
+    return orca_settings.with_full(orca_json, "orchestration", "check", *args)
 
 
 def batch(res):
@@ -2511,12 +2522,11 @@ def cmd_wait(argv):
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
     for i in range(rounds):
-        res = orca_json("orchestration", "check", *box, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
-                        "--timeout-ms", timeout)
+        res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
         did, msgs = batch(res)
-        if not did:
+        if not did and not msgs:
             # A typed wait never wakes for heartbeats, so they pile up in the FIFO; pull that batch.
-            did, msgs = batch(orca_json("orchestration", "check", *box))
+            did, msgs = batch(check(*box))
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
         for m in msgs:
             if revoked_echo(m):
@@ -2537,7 +2547,7 @@ def cmd_wait(argv):
                   f"orca orchestration check {' '.join(box)} --ack {did} --json")
             return
         if did:
-            orca_json("orchestration", "check", *box, "--ack", did)
+            check(*box, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
         if print_stuck(p, run_id, only_new=True):
             print_sweep(run_id, p.dir / "self-check.json")
@@ -2593,12 +2603,12 @@ def cmd_inbox(argv):
     whole JSON batches, and a top-level session read each of them in full."""
     acked = opt(argv, "--ack")
     try:
-        did, msgs = batch(orca_json("orchestration", "check", *(["--ack", acked] if acked else [])))
+        did, msgs = batch(check(*(["--ack", acked] if acked else [])))
     except SystemExit as e:  # a stale delivery id must not cost the wait the caller is about to rely on
         if not acked:
             raise
         print(f"ack {acked} failed ({e}); taking the inbox without it", flush=True)
-        did, msgs = batch(orca_json("orchestration", "check"))
+        did, msgs = batch(check())
     deadline, skipped = time.monotonic() + int(opt(argv, "--timeout-ms", "3300000")) / 1000, 0
     work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
     # Like orch wait: a batch of only heartbeats or refusals is acked and the wait goes on, until the deadline.
@@ -2608,10 +2618,10 @@ def cmd_inbox(argv):
             break
         if did:
             skipped += len(msgs)
-            did, msgs = batch(orca_json("orchestration", "check", "--ack", did))
+            did, msgs = batch(check("--ack", did))
         else:
-            orca_json("orchestration", "check", "--peek", "--wait", "--timeout-ms", str(left))
-            did, msgs = batch(orca_json("orchestration", "check"))
+            check("--peek", "--wait", "--timeout-ms", str(left))
+            did, msgs = batch(check())
             if not msgs:
                 break
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
