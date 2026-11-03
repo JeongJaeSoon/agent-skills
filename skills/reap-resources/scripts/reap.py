@@ -60,16 +60,17 @@ def opt(name, default=None):
 RUN_TIMEOUT = None
 
 
-def run(cmd, cwd=None, check=True):
+def run(cmd, cwd=None, check=True, env=None, timeout=None):
+    timeout = timeout or RUN_TIMEOUT
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=ENV, timeout=RUN_TIMEOUT)
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env or ENV, timeout=timeout)
     except FileNotFoundError:
         if check:
             raise RuntimeError(f"{cmd[0]}: not installed")
         return None
     except subprocess.TimeoutExpired:
         if check:
-            raise RuntimeError(f"{' '.join(cmd[:4])}: timed out after {RUN_TIMEOUT}s")
+            raise RuntimeError(f"{' '.join(cmd[:4])}: timed out after {timeout}s")
         return None
     if check and r.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd[:4])}: {r.stderr.strip()[:200]}")
@@ -533,9 +534,13 @@ def patrol_working(now=None):
     return patrol_read(now) or set()
 
 
-def patrol_read(now=None):
+PATROL_KEEP_ACTIVITY = ("parked", "unknown")  # v2 `activity`: a session that wakes itself, or one patrol could not tell
+
+
+def patrol_read(now=None, activity=False):
     """patrol_working, but None when the verdicts file exists and cannot be read: a guard keeps the card then. No file,
-    or one over an hour old, is an empty set."""
+    or one over an hour old, is an empty set. activity adds the cards the round's `activity` keeps (PATROL_KEEP_ACTIVITY),
+    which only the guard right before a close reads."""
     try:
         v = json.loads((STATE / "patrol-verdicts.json").read_text())
     except FileNotFoundError:
@@ -545,7 +550,15 @@ def patrol_read(now=None):
     try:
         if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
             return set()
-        return {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
+        kept = {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
+        if activity:
+            act = v.get("activity")
+            act = {} if act is None else act  # a file from before v2 has none
+            if not isinstance(act, dict) or not all(isinstance(x, dict) and isinstance(x.get("state"), str)
+                                                    for x in act.values()):
+                return None  # an activity row that cannot be read is no proof the card may go
+            kept |= {real(p) for p, x in act.items() if x["state"] in PATROL_KEEP_ACTIVITY}
+        return kept
     except (ValueError, TypeError, AttributeError):
         return None
 
@@ -949,8 +962,8 @@ def worktree_facts(path, ledger_pr, live_turn, users_cwd, git=run):
             "dirty": bool(status) and not copies, "regenerated": copies or [], "unpushed": bool(ahead), "head": head}
 
 
-def orca_json(*args):
-    out = run(["orca", *args, "--json"], check=False) if shutil.which("orca") else None
+def orca_json(*args, env=None, cwd=None, timeout=None):
+    out = run(["orca", *args, "--json"], cwd=cwd, check=False, env=env, timeout=timeout) if shutil.which("orca") else None
     try:
         return json.loads(out)["result"] if out else None
     except (ValueError, KeyError):
@@ -1994,20 +2007,36 @@ def main():
         if path.name == "janitor-plan.json":
             for key in [k for k, i in wanted.items() if i["kind"] not in SCHEDULED]:
                 print(f"- 건너뜀 {wanted.pop(key)['key']}: janitor 계획에 들어갈 수 없는 종류")
+        import guard
+        try:
+            guard.ownership()
+            protect = guard.read_protect(guard.protect_file(), missing_ok=True)
+        except (guard.Unreadable, guard.NoProtect) as e:
+            print(f"- 아무것도 하지 않았다: {e}")
+            return
         kinds = {i["kind"] for i in wanted.values()}
         fresh, notes = scan(kinds, plan["hours"], cfg, plan["repos"])
         failed = []
         now = {i["key"]: i for i in fresh if i["target"]}
         for key, old in wanted.items():
             new = now.get(key)
-            if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip", "head", "verdict")):
+            if not new or any(new.get(k) != old.get(k) for k in ("cmd", "start", "tip", "head", "verdict", "created")):
                 print(f"- 건너뜀 {label(old)}: 더는 정리 대상이 아님")
                 continue
-            try:
-                print(f"- {label(new)}: {act(new, notes)}")
-            except (RuntimeError, OSError) as e:
-                failed.append(key)
-                print(f"- 실패 {label(new)}: {e}")
+            # The plan's terminals are what the judgment saw: one opened since keeps the card.
+            if new["kind"] == "card" and set(new.get("close") or ()) - set(old.get("close") or ()):
+                print(f"- 건너뜀 {label(old)}: 판정 뒤 터미널이 새로 열림")
+                continue
+            with guard.hold(guard.targets(new)) as got:
+                why = guard.keep(new, protect, notes=notes) if got else guard.LOCK_BUSY
+                if why:
+                    print(f"- 건너뜀 {label(new)}: {why}")
+                    continue
+                try:
+                    print(f"- {label(new)}: {act(new, notes)}")
+                except (RuntimeError, OSError) as e:
+                    failed.append(key)
+                    print(f"- 실패 {label(new)}: {e}")
         if set(plan.get("kinds") or ()) & set(SCHEDULED):
             record_reap(STATE, failed)
         for k in set(DAILY) & set(plan.get("kinds") or ()):
@@ -2086,6 +2115,12 @@ def main():
             sys.exit(1)
         print(f"부하 회차: {why}")
     if cmd == "precheck":
+        import guard
+        try:
+            guard.ownership()
+        except guard.Unreadable as e:
+            print(f"소유권 파일을 읽지 못함, 이번 회차는 건너뜀: {e}")
+            sys.exit(1)
         # Stamped before the scan, which takes seconds: a precheck starting meanwhile must already see it.
         stamp_round(STATE)
     names =(opt("--kinds") or ",".join(SCHEDULED if cmd == "precheck" else KINDS)).split(",")

@@ -214,6 +214,12 @@ bin/reap-hard install            # from the main checkout; `status`, `uninstall`
   dev server whose card is gone → SIGTERM to that pid. A `tailscale serve` entry in the preview ranges with no
   listener two passes running → off.
 - Each action is a line in `<state>/reap-hard.jsonl`; `orch brief` shows the last pass and flags one that stopped.
+- Every cleaner (reap-hard, `reap.py reap --plan`, `cards.py apply`, preview-watch's serve off) acts on a target
+  only through `scripts/guard.py`: a non-blocking lock per target under `<state>/locks/`, taken in one fixed order;
+  the ownership file `<state>/sweep-owner.json` read again (a rule the sweep owns is left, unless its last good round
+  is three intervals old; an unreadable file stops the round); and guards that only keep (the protect file, the same
+  process). A card's lock is `cardguard.card_lock`'s, and its guards are `cardguard.guard`'s, which also keep a card
+  patrol's `activity` marks parked or unknown.
 - The rules and settings: [docs/reap-hard.md](../../docs/reap-hard.md).
 
 No cleanup path (orphan, pressure, gui-app, reap-hard) ever stops a process a person started: walking up from it,

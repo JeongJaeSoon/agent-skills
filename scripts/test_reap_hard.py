@@ -250,8 +250,17 @@ for facts_now, why in (({**ok_facts, "patrol": True}, "순찰"), ({**ok_facts, "
     assert got.startswith("건너뜀") and why in got and not ran and not removed, (why, got)
 cg.observe = lambda path: ok_facts
 assert "계획에 없음" in rh.act({k: v for k, v in plan.items() if k != "handles"}, rh.DEFAULTS, P) and not ran
-with cg.card_lock("/ws/app/done") as held:
-    assert held and rh.act(plan, rh.DEFAULTS, P) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not ran
+# Another cleaner's process holds the card's lock (inside this process the same lock is re-entrant).
+import subprocess  # noqa: E402
+lock = rh.guard.lock_file("card", rh.reap.real("/ws/app/done"))
+lock.parent.mkdir(parents=True, exist_ok=True)
+holder = subprocess.Popen([sys.executable, "-c", "import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f, fcntl.LOCK_EX); "
+                           "print('held', flush=True); sys.stdin.read()", str(lock)],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+assert holder.stdout.readline().strip() == "held"
+assert rh.act(plan, rh.DEFAULTS, P) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not ran
+holder.stdin.close()
+holder.wait(10)
 # A terminal opened between the close and the removal stops the removal.
 looks = iter([ok_facts, {**ok_facts, "terminals": [{"handle": "t1"}, {"handle": "t9"}]}])
 cg.observe = lambda path: next(looks)
@@ -296,6 +305,8 @@ outcome = ["건너뜀: 다시 보니 열린 PR acme/app#1"]
 
 
 rh.act = fake_act
+guard_item = rh.guard.item
+rh.guard.item = lambda *a, **k: None  # the shared guards have their own tests below
 res, code = rh.run_pass(True, cfg, now=NOW)
 assert code == 0 and acted == [] and res["acted"] == 2, res
 assert seen_closed[-1] == ["/ws/app/done"]  # a dry-run plans the rest as if the card were closed

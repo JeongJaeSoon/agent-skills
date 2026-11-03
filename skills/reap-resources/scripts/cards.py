@@ -397,15 +397,24 @@ def main(argv):
     cfg = reap.config()
     if cmd == "apply":
         plan = json.loads(pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_text())
+        import guard
+        try:
+            guard.ownership()
+        except guard.Unreadable as e:
+            sys.exit(f"아무것도 하지 않았다: {e}")
         failed = 0
         for item in plan["items"]:
             if item["verdict"] not in ACTING:
                 continue
-            try:
-                print(f"- {item['name']}: {act(item, cfg)}")
-            except (RuntimeError, OSError) as e:
-                failed += 1
-                print(f"- 실패 {item['name']}: {e}")
+            with guard.hold(guard.targets({"kind": "card", "path": item["path"]})) as got:
+                if why := guard.keep({"kind": "card", "verdict": item["verdict"]}, None) if got else guard.LOCK_BUSY:
+                    print(f"- 건너뜀 {item['name']}: {why}")
+                    continue
+                try:
+                    print(f"- {item['name']}: {act(item, cfg)}")
+                except (RuntimeError, OSError) as e:
+                    failed += 1
+                    print(f"- 실패 {item['name']}: {e}")
         sys.exit(1 if failed else 0)
     if cmd != "scan":
         sys.exit(__doc__)

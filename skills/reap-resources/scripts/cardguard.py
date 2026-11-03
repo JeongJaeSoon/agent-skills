@@ -14,7 +14,7 @@ closing anything, guard() and card_lock() here:
 
 guard() keeps the card whenever it cannot see what it checks.
 """
-import contextlib, fcntl, hashlib, json, os, pathlib, re, subprocess, sys, time
+import json, os, pathlib, re, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import reap  # noqa: E402
@@ -149,7 +149,7 @@ def observe(path):
             return fn()
         except (SystemExit, Exception):  # any failure is "could not see", which keeps the card
             return None
-    kept = reap.patrol_read()
+    kept = reap.patrol_read(activity=True)
     f = {"patrol": None if kept is None else path in kept,
          "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None)}
     res = reap.orca_json("terminal", "list", "--worktree", f"path:{path}")
@@ -210,16 +210,9 @@ def guard(path, head, handles, final=False):
     return check(observe(path), head, set(handles), final)
 
 
-@contextlib.contextmanager
 def card_lock(path):
     """<state>/locks/card-<hash>.lock, held from the judgement again to `worktree rm`. Yields False when another
-    cleaner holds it: that card is skipped this pass, never waited on."""
-    d = reap.STATE / "locks"
-    d.mkdir(parents=True, exist_ok=True)
-    with open(d / f"card-{hashlib.sha1(reap.real(path).encode()).hexdigest()[:16]}.lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
-        yield True
+    cleaner holds it: that card is skipped this pass, never waited on. It is guard.hold's card lock, so a cleaner
+    that already holds it for the same card (guard.hold at the top of its loop) goes on without taking it twice."""
+    import guard
+    return guard.hold([("card", reap.real(path))])
