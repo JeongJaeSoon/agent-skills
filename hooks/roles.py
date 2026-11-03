@@ -155,7 +155,8 @@ def session(event, prompt=None):
     record = declared(str(event.get("session_id") or ""))
     if record and record.get("role") == "none":
         return Session("general", actor, declared=True)
-    entry = resolve(event, record)
+    # A subagent's event carries its own agent_type, not its parent's: the parent's role comes from the rest.
+    entry = resolve({k: v for k, v in event.items() if k != "agent_type"} if actor == "subagent" else event, record)
     first = first_prompt(event.get("transcript_path")) if prompt is None else prompt
     attrs = {"supervised": bool(PREAMBLE.search(first)), "close": False, "keep": False}
     for m in CARD_ROW.finditer(first):

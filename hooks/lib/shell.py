@@ -16,6 +16,18 @@ CUT = re.compile(r"\$\(|<\(|>\(|&&|\|\||\|&|(?<![<>])&(?![>&])|(?<!>)\||[;()\n`]
 # the quotes and would otherwise read `">"` as a redirection, and swapped back in the words.
 LITERAL = {"<": "", ">": "", "&": "", "|": ""}
 UNLITERAL = str.maketrans({v: k for k, v in LITERAL.items()})
+# A `$` or `~` bash leaves as text (single-quoted or escaped; `~` quoted at all) keeps a stand-in in the words, so a
+# path check does not expand it.
+TEXT_DOLLAR, TEXT_TILDE = "", ""
+# Marks digits written right against `<` or `>`: only those are a redirection's fd (`2>f`, not `echo 2 > f`).
+FD = ""
+FD_DIGITS = re.compile(r"(?<![^\s;&|(])\d+(?=[<>])")
+# Wrapper options that take the next word as their value.
+WRAPPER_OPTS = {
+    "sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T", "--user", "--group", "--host", "--prompt",
+             "--chdir", "--role", "--type", "--other-user", "--command-timeout", "--close-from"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+}
 
 
 @dataclasses.dataclass
@@ -26,26 +38,31 @@ class Command:
     raw: str  # its original text
     piped_from: bool = False  # a pipe feeds it
     piped_to: bool = False  # it feeds a pipe
+    assigns: list = dataclasses.field(default_factory=list)  # `NAME=value` words before it, `env`'s included
 
     @property
     def name(self):
         return os.path.basename(self.words[0]) if self.words else ""
 
 
-def command_text(cmd, comments=None):
+def command_text(cmd, marks=None):
     """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
     comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them.
     From a construct this parser does not follow (`${…}`, whose quotes nest; arithmetic; `case` in `$(…)`; a
-    backslash in backticks; a heredoc delimiter it cannot read) on, nothing is blanked. Each comment's (start, end)
-    is appended to `comments` when given."""
+    backslash in backticks; a heredoc delimiter it cannot read) on, nothing is blanked. `marks`, when given, gets
+    the (start, end) of each comment ("comment") and of each single-quoted or backslash-escaped run, where `$` and
+    `~` are text ("literal"), and the offset it stopped following at ("unsure")."""
     out, n = list(cmd), len(cmd)
     opened, closed = set(), set()  # just past an opening backtick (a word starts) and past a closing `)` or backtick
+    marks = {"comment": [], "literal": [], "unsure": None} if marks is None else marks
 
     class Unsure(Exception):
         pass
 
-    def blank(i, j):
+    def blank(i, j, literal=False):
         out[i:j] = " " * (j - i)
+        if literal:
+            marks["literal"].append((i, j))
 
     def expanding(i, end, close):
         """Double-quoted text (close='"') or an unquoted heredoc body (close=None) from i; returns the index after it."""
@@ -56,7 +73,7 @@ def command_text(cmd, comments=None):
             if cmd.startswith(("${", "$((", "$["), i):
                 raise Unsure(i)
             if c == "\\":
-                blank(i, min(i + 2, end))
+                blank(i, min(i + 2, end), literal=True)
                 i += 2
             elif cmd.startswith("$(", i):
                 i = command(i + 2, ")")
@@ -156,14 +173,14 @@ def command_text(cmd, comments=None):
             elif c == ")" and depth:
                 depth -= 1
             if c == "\\":
-                blank(i, min(i + 2, n))
+                blank(i, min(i + 2, n), literal=True)
                 i += 2
             elif c == "'":
                 ansi = i > 0 and cmd[i - 1] == "$" and not escaped(i - 1)
                 j = i + 1
                 while j < n and cmd[j] != "'":
                     j += 2 if ansi and cmd[j] == "\\" else 1
-                blank(i + 1, min(j, n))
+                blank(i + 1, min(j, n), literal=True)
                 i = j + 1
             elif c == '"':
                 i = expanding(i + 1, n, '"')
@@ -174,8 +191,7 @@ def command_text(cmd, comments=None):
             elif c == "#" and starts_word(i):
                 eol = cmd.find("\n", i)
                 blank(i, n if eol < 0 else eol)
-                if comments is not None:
-                    comments.append((i, n if eol < 0 else eol))
+                marks["comment"].append((i, n if eol < 0 else eol))
                 i = n if eol < 0 else eol
             elif cmd.startswith("<<<", i):  # a here-string, whose suffix is not a heredoc
                 i += 3
@@ -197,7 +213,32 @@ def command_text(cmd, comments=None):
     try:
         command(0, None)
     except Unsure as e:
+        marks["unsure"] = e.args[0]
         return "".join(out[:e.args[0]]) + cmd[e.args[0]:]
+    return "".join(out)
+
+
+def quotes_only(cmd, literal):
+    """`cmd` with quoted and escaped text blanked by quote characters alone: the fallback past the point
+    command_text stops following, so an operator inside quotes there is not a command boundary. Single-quoted and
+    escaped runs go to `literal`."""
+    out, i, n = list(cmd), 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == "\\":
+            out[i:i + 2] = " " * len(cmd[i:i + 2])
+            literal.append((i, i + 2))
+            i += 2
+        elif c in "'\"":
+            j = i + 1
+            while j < n and cmd[j] != c:
+                j += 2 if c == '"' and cmd[j] == "\\" else 1
+            out[i + 1:min(j, n)] = " " * (min(j, n) - i - 1)
+            if c == "'":
+                literal.append((i + 1, min(j, n)))
+            i = j + 1
+        else:
+            i += 1
     return "".join(out)
 
 
@@ -219,7 +260,7 @@ def split_words(toks):
     while i < len(toks):
         t = toks[i]
         if t in REDIRECT or t.startswith(("<<", ">>")) and set(t) <= set("<>&|-"):
-            fd = words.pop() if words and words[-1].isdigit() and t[0] in "<>" else ""
+            fd = words.pop()[1:] if words and words[-1].startswith(FD) and t[0] in "<>" else ""
             target = toks[i + 1] if i + 1 < len(toks) else ""
             redirects.append((fd, t, target))
             i += 2
@@ -236,10 +277,15 @@ def strip_prefix(words):
         w = words[i]
         if ASSIGN.match(w) or w in KEYWORDS:
             i += 1
-        elif w in ("sudo", "env"):
+        elif w in WRAPPER_OPTS:
             i += 1
             while i < len(words) and (words[i].startswith("-") or ASSIGN.match(words[i])):
-                i += 1
+                if words[i] == "--":
+                    i += 1
+                    while i < len(words) and ASSIGN.match(words[i]):
+                        i += 1
+                    break
+                i += 2 if words[i] in WRAPPER_OPTS[w] else 1
         else:
             break
     return words[i:]
@@ -277,25 +323,39 @@ def lift(cmd, masked):
 def commands(cmd):
     """Each simple command `cmd` would run, the outer ones first, then `$(…)` and backtick contents. A piece this
     reader cannot split is left out: a guardrail, not a sandbox."""
-    comments, out = [], []
-    masked = command_text(cmd, comments)
+    marks, out = {"comment": [], "literal": [], "unsure": None}, []
+    masked = command_text(cmd, marks)
+    if marks["unsure"] is not None:
+        u = marks["unsure"]
+        masked = masked[:u] + quotes_only(cmd, marks["literal"])[u:]
     chars = list(cmd)
-    for s, e in comments:  # shlex is not told about comments: `x # > f` writes nothing
+    for s, e in marks["comment"]:  # shlex is not told about comments: `x # > f` writes nothing
         chars[s:e] = " " * (e - s)
-    text = "".join(LITERAL[c] if c in LITERAL and masked[i] != c else c for i, c in enumerate(chars))
-    for text, masked in lift(text, masked):
+    for s, e in marks["literal"]:
+        for i in range(s, e):
+            chars[i] = TEXT_DOLLAR if chars[i] == "$" else chars[i]
+    for i, c in enumerate(chars):
+        if masked[i] != c and c in LITERAL:
+            chars[i] = LITERAL[c]
+        elif masked[i] != c and c == "~":
+            chars[i] = TEXT_TILDE
+    for text, masked in lift("".join(chars), masked):
         start, prev_op = 0, ""
         cuts = [(m.start(), m.end(), m.group()) for m in CUT.finditer(masked)] + [(len(text), len(text), "")]
         for at, end, op in cuts:
             raw, mask = text[start:at], masked[start:at]
             if mask.strip():
-                toks = tokens(raw)
+                toks = tokens(FD_DIGITS.sub(lambda m: FD + m.group() if mask[m.start():m.end()] == m.group()
+                                            else m.group(), raw))
                 if toks:
                     words, redirects = split_words(toks)
-                    words = [w.translate(UNLITERAL) for w in strip_prefix(words)]
+                    words = [w.replace(FD, "") for w in words]
+                    run = strip_prefix(words)
+                    assigns = [w.translate(UNLITERAL) for w in words[:len(words) - len(run)] if ASSIGN.match(w)]
+                    words = [w.translate(UNLITERAL) for w in run]
                     redirects = [(fd, o, t.translate(UNLITERAL)) for fd, o, t in redirects]
                     if words or redirects:
                         out.append(Command(words, redirects, mask, raw.translate(UNLITERAL),
-                                           piped_from=prev_op == "|", piped_to=op == "|"))
+                                           piped_from=prev_op == "|", piped_to=op == "|", assigns=assigns))
             start, prev_op = end, op
     return out

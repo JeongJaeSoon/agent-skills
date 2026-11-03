@@ -585,7 +585,7 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
 | `guard.deny.owner_only` | deny | `orch refusal clear`, `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
 | `guard.deny.external_review` | deny | `codex` 호출인데 작업 폴더(또는 `-C`)의 origin 저장소가 `repos.<owner/repo>.external_llm: false`. 그 키가 없으면 판정하지 않는다 |
-| `guard.ask.pressure_bypass` | ask | 명령에 `AGENT_SKILLS_PRESSURE_GATE=0` |
+| `guard.ask.pressure_bypass` | ask | 명령 앞이나 `env`·`export`의 `AGENT_SKILLS_PRESSURE_GATE=0` 대입. 그 글자를 출력하는 `echo`는 대상이 아니다 |
 | `guard.warn.rm_expansion` | warn | 따옴표 없는 glob이나 변수로 만든 `rm` 경로. `${VAR:?}`는 제외 |
 | `guard.warn.reset_hard` | warn | 커밋하지 않은 변경이 있는 저장소의 `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`·`--dir` 없는 `gh run download` |

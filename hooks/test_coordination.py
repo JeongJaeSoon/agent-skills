@@ -75,7 +75,8 @@ CONFIG.write_text("{}")
 
 # A send or reply to /dev/null hides whether it went out.
 for cmd in ("orca orchestration send --to run:r --text hi > /dev/null", "orca orchestration send --to run:r --text hi >/dev/null 2>&1",
-            "orca orchestration reply --id m1 --body ok &>/dev/null", "orca orchestration send --text hi 1>/dev/null"):
+            "orca orchestration reply --id m1 --body ok &>/dev/null", "orca orchestration send --text hi 1>/dev/null",
+            "orca orchestration send --text '2' >/dev/null", "orca orchestration send --text 2 >/dev/null"):
     for role in ("orchestrator", "lead", "worker"):
         assert bash(cmd, role) == "deny", (role, cmd)
     assert bash(cmd, "general") == "none", cmd

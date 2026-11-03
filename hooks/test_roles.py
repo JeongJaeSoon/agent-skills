@@ -89,8 +89,9 @@ assert roles.declare("d1", "no role line") == {"role": "orchestrator"}
 assert roles.declare("d1", "ROLE: none") == {"role": "none"}
 
 # Actor: a subagent carries its parent's role; the matrix decides which rules reach it.
-sub = who(agent="agent-skills:orchestrator", agent_id="a1")
-assert (sub.role, sub.actor) == ("orchestrator", "subagent")
+sub = who("r-orch", agent="agent-skills:lead", agent_id="a1")
+assert (sub.role, sub.actor) == ("orchestrator", "subagent"), "the subagent's own agent_type is not its parent's role"
+assert who(agent="agent-skills:orchestrator", agent_id="a1").role == "general"
 assert roles.applies("danger", sub) and not roles.applies("ask_user_question", sub)
 for role in ("orchestrator", "lead", "worker"):
     assert roles.applies("ask_user_question", roles.Session(role)), role

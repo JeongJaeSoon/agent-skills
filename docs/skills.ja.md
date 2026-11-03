@@ -553,7 +553,7 @@ PR を受け持つスキルとマージする主体:
 | `guard.deny.self_exempt_label` | deny | `gh` で `no-visual-change` ラベルを付けること（`pr create --label`、`pr edit --add-label`、`issue edit`、`gh api …/labels`） |
 | `guard.deny.owner_only` | deny | `orch refusal clear`、`orch exempt`。人が自分のチャットで `!` 行として打ちます。キーをオフにすると、ほかの `orch` コマンドと同じく許可します |
 | `guard.deny.external_review` | deny | 作業フォルダ（または `-C`）の origin リポジトリが `repos.<owner/repo>.external_llm: false` の `codex` 呼び出し。このキーがなければ判定しません |
-| `guard.ask.pressure_bypass` | ask | コマンドに `AGENT_SKILLS_PRESSURE_GATE=0` |
+| `guard.ask.pressure_bypass` | ask | コマンドの前、または `env`・`export` での `AGENT_SKILLS_PRESSURE_GATE=0` の代入。その文字列を出力するだけの `echo` は対象外です |
 | `guard.warn.rm_expansion` | warn | 引用符のない glob や変数で作った `rm` のパス。`${VAR:?}` は除きます |
 | `guard.warn.reset_hard` | warn | コミットしていない変更があるリポジトリでの `git reset --hard` |
 | `guard.warn.run_download` | warn | `-D`・`--dir` のない `gh run download` |

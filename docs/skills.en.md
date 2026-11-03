@@ -551,7 +551,7 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
 | `guard.deny.owner_only` | deny | `orch refusal clear` and `orch exempt`. The human types them as a `!` line in their own chat. With the key off, both are allowed like any other `orch` command |
 | `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
-| `guard.ask.pressure_bypass` | ask | `AGENT_SKILLS_PRESSURE_GATE=0` in the command |
+| `guard.ask.pressure_bypass` | ask | An `AGENT_SKILLS_PRESSURE_GATE=0` assignment before the command or through `env` or `export`. An `echo` that prints the text is not covered |
 | `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |
 | `guard.warn.reset_hard` | warn | `git reset --hard` in a repository with uncommitted changes |
 | `guard.warn.run_download` | warn | `gh run download` without `-D` or `--dir` |

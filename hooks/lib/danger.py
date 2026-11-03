@@ -41,7 +41,11 @@ SLASH = re.compile(r"^\s*/(?:reload\S*|model)\b")
 APPLY_MARK = re.compile(r"runs --apply, never the agent")
 APPLY_SCRIPTS = {"setup.py", "config_emit.py", "automode_rule.py"}
 PRUNE_OBJECTS = {"system", "volume", "image", "container", "network", "builder"}
-KILL_PGREP = re.compile(r"""(?:^|[;&|(\s])kill\s+(?:-\S+\s+)*["']?(?:\$\(|`)\s*pgrep\b""", re.M)
+# `kill` in command position only: at the start, after an operator, or after a keyword or sudo.
+KILL_PGREP = re.compile(r"""(?:^|[;&|(`]|\$\(|\b(?:then|do|else|sudo)\s)\s*kill\s+(?:-\S+\s+)*["']?(?:\$\(|`)\s*pgrep\b""",
+                        re.M)
+XARGS_OPTS = {"-I", "-i", "-n", "-P", "-L", "-l", "-s", "-E", "-e", "-d", "-a", "--max-args", "--max-procs",
+              "--delimiter", "--arg-file", "--max-lines", "--max-chars", "--eof", "--replace"}
 # `${VAR:?}` stops bash when VAR is empty, so it cannot widen an rm.
 GUARDED_VAR = re.compile(r"\$\{\w+:\?[^}]*\}")
 KEY_SOURCE = "(agent-skills hooks/guard.py, {key})"
@@ -97,17 +101,27 @@ def verb(args, valued):
 
 def write_targets(c):
     """The files a command writes by its own argument or a redirection."""
-    out = [t for fd, op, t in c.redirects if op in (">", ">>", ">|", "&>", "&>>") and fd in ("", "1", "2")]
+    out = [t for fd, op, t in c.redirects if op in (">", ">>", ">|", "&>", "&>>", "<>")]
     args = [w for w in c.words[1:] if not w.startswith("-")]
     if c.name == "tee":
         out += args
-    elif c.name in ("cp", "mv", "install", "ln", "rsync", "ditto") and len(args) >= 2:
-        dests = [args[-1]] + [w.split("=", 1)[1] for w in c.words if w.startswith("--target-directory=")]
-        sources = args[:-1]
-        # A destination directory receives each source under its own name; mv also removes its sources.
-        out += dests + [os.path.join(d, os.path.basename(s.rstrip("/"))) for d in dests for s in sources]
-        if c.name == "mv":
-            out += sources
+    elif c.name in ("cp", "mv", "install", "ln", "rsync", "ditto"):
+        # `-t DIR` / `--target-directory[=]DIR` names the destination; otherwise it is the last operand.
+        target, operands, rest = None, [], c.words[1:]
+        for i, x in enumerate(rest):
+            if i and rest[i - 1] in ("-t", "--target-directory"):
+                target = x
+            elif x.startswith("--target-directory="):
+                target = x.split("=", 1)[1]
+            elif not x.startswith("-"):
+                operands.append(x)
+        if target is None and len(operands) >= 2:
+            target, operands = operands[-1], operands[:-1]
+        if target is not None:
+            # A destination directory receives each source under its own name; mv also removes its sources.
+            out += [target] + [os.path.join(target, os.path.basename(s.rstrip("/"))) for s in operands]
+            if c.name == "mv":
+                out += operands
     elif c.name in ("sed", "perl") and any(w == "-i" or w.startswith(("-i", "--in-place")) for w in c.words[1:]):
         out += args[1:]
     elif c.name == "truncate":
@@ -128,7 +142,8 @@ def check_command(c, masked, cfg, cwd, session):
         out.append(("guard.deny.pattern_kill", f"`{name}` kills every process whose name matches, other sessions' "
                                                "agents and plugins included. Kill by PID (`kill <pid>` after reading "
                                                "`ps`), or let agent-skills:reap-resources (reap.py) pick the targets."))
-    if name == "xargs" and "kill" in w[1:] and c.piped_from and re.search(r"\bpgrep\b[^;&\n]*\|\s*xargs\b", masked):
+    if (name == "xargs" and verb(w[1:], XARGS_OPTS)[0] == "kill" and c.piped_from
+            and re.search(r"\bpgrep\b[^;&\n]*\|\s*xargs\b", masked)):
         out.append(("guard.deny.pattern_kill", "`pgrep … | xargs kill` kills every process whose name matches. Kill by "
                                                "PID after reading `ps`, or use agent-skills:reap-resources."))
     if name in DOCKER or name == "docker-compose":
@@ -191,7 +206,7 @@ def check_command(c, masked, cfg, cwd, session):
                                              "own chat."))
     if name == "codex" and (reason := external_review(w, cwd, cfg)):
         out.append(("guard.deny.external_review", reason))
-    if any(re.fullmatch(r"AGENT_SKILLS_PRESSURE_GATE=['\"]?0['\"]?", x) for x in c.raw.split()):
+    if any(x == "AGENT_SKILLS_PRESSURE_GATE=0" for x in c.assigns + (w[1:] if name == "export" else [])):
         out.append(("guard.ask.pressure_bypass", "This turns the pressure gate off for one command; only the human "
                                                  "approves that."))
     if name == "rm" and re.search(r"[*?$\[]", GUARDED_VAR.sub("", c.masked.split("rm", 1)[-1])):
@@ -261,7 +276,7 @@ def label_add(w):
     endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
                             "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
     return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
-            and any("no-visual-change" in f for f in fields))
+            and has(f.split("=", 1)[-1] for f in fields))
 
 
 def run(argv, cwd, timeout=3):
