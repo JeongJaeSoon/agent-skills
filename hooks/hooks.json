@@ -5,6 +5,9 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/delegate_gate.py\"", "timeout": 5 }]
       },
       {
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/refusals.py\"", "timeout": 10 }]
+      },
+      {
         "matcher": "Bash|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 5 }]
       },
@@ -27,6 +30,11 @@
       {
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pressure_gate.py\"", "timeout": 5 }]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/refusals.py\"", "timeout": 10 }]
       }
     ],
     "PermissionRequest": [
@@ -54,7 +62,10 @@
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 }]
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 },
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/refusals.py\"", "timeout": 10 }
+        ]
       }
     ],
     "SubagentStart": [
@@ -66,7 +77,8 @@
       {
         "hooks": [
           { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/claim_check.py\"", "timeout": 5 },
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_log.py\"", "timeout": 5 }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent_log.py\"", "timeout": 5 },
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/refusals.py\"", "timeout": 10 }
         ]
       }
     ]
