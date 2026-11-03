@@ -578,12 +578,12 @@ PR 을 맡는 스킬과 머지 주체:
 | `guard.deny.automode_reset` | deny | `claude auto-mode reset` |
 | `guard.deny.keychain` | deny | `security find-*-password`의 `-w`·`-g`, `security dump-keychain` |
 | `guard.deny.url_credentials` | deny | 인자에 `scheme://user:secret@`가 든 URL |
-| `guard.deny.user_settings` | deny | 사용자 설정 쓰기: `~/.claude/settings.json`·`settings.local.json`(`$CLAUDE_CONFIG_DIR`도), `~/.claude/agent-skills.json`, secure-fill의 `allow.json`. Edit·Write·NotebookEdit와 Bash의 리다이렉션·`tee`·`cp`·`mv`·`sed -i`·`rm` 등. 프로젝트의 `.claude/settings.json`은 대상이 아니다 |
+| `guard.deny.user_settings` | deny | 사용자 설정 쓰기: `~/.claude/settings.json`·`settings.local.json`(`$CLAUDE_CONFIG_DIR`도), `~/.claude/agent-skills.json`, secure-fill의 `allow.json`. Edit·Write·MultiEdit·NotebookEdit와 Bash의 리다이렉션·`tee`·`cp`·`mv`·`sed -i`·`rm` 등. 프로젝트의 `.claude/settings.json`은 대상이 아니다 |
 | `guard.deny.plugin_apply` | deny | 이 플러그인의 `setup.py`·`config_emit.py`·`automode_rule.py`와 그 사본의 `--apply`, `bootstrap.py --write`. 사본은 "runs --apply, never the agent" 문장으로 알아본다. 다른 저장소의 `setup.py`는 대상이 아니다 |
 | `guard.deny.slash_send` | deny | `orca terminal send`로 `/reload…`·`/model` 입력 |
 | `guard.deny.prompt_substitution` | deny | `orca worktree create --prompt`의 명령 치환(`$(…)`, 백틱) |
 | `guard.deny.self_exempt_label` | deny | `gh`로 `no-visual-change` 라벨 붙이기(`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
-| `guard.deny.owner_only` | deny | `orch refusal clear`, `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 꺼도 `orch refusal clear`는 자동 허용하지 않는다 |
+| `guard.deny.owner_only` | deny | `orch refusal clear`, `orch exempt`. 사람이 자기 채팅에서 `!`로 친다. 키를 끄면 다른 `orch` 명령처럼 허용된다 |
 | `guard.deny.external_review` | deny | `codex` 호출인데 작업 폴더(또는 `-C`)의 origin 저장소가 `repos.<owner/repo>.external_llm: false`. 그 키가 없으면 판정하지 않는다 |
 | `guard.ask.pressure_bypass` | ask | 명령에 `AGENT_SKILLS_PRESSURE_GATE=0` |
 | `guard.warn.rm_expansion` | warn | 따옴표 없는 glob이나 변수로 만든 `rm` 경로. `${VAR:?}`는 제외 |

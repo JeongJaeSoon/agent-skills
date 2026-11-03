@@ -12,6 +12,10 @@ ASSIGN = re.compile(r"[A-Za-z_]\w*=")
 REDIRECT = {">", ">>", ">|", "&>", "&>>", ">&", "<", "<<<", "<&", "<>"}
 # Operators between commands; `&` and `|` inside a redirection (`2>&1`, `&>`, `>|`) are not.
 CUT = re.compile(r"\$\(|<\(|>\(|&&|\|\||\|&|(?<![<>])&(?![>&])|(?<!>)\||[;()\n`]")
+# A quoted or escaped operator character is text: it is swapped for a private-use stand-in before shlex, which drops
+# the quotes and would otherwise read `">"` as a redirection, and swapped back in the words.
+LITERAL = {"<": "", ">": "", "&": "", "|": ""}
+UNLITERAL = str.maketrans({v: k for k, v in LITERAL.items()})
 
 
 @dataclasses.dataclass
@@ -28,11 +32,12 @@ class Command:
         return os.path.basename(self.words[0]) if self.words else ""
 
 
-def command_text(cmd):
+def command_text(cmd, comments=None):
     """`cmd` with what bash does not run as a command blanked, offsets kept: quoted text, heredoc bodies and
     comments. `$(…)` and backticks inside double quotes or an unquoted heredoc body stay, since bash runs them.
     From a construct this parser does not follow (`${…}`, whose quotes nest; arithmetic; `case` in `$(…)`; a
-    backslash in backticks; a heredoc delimiter it cannot read) on, nothing is blanked."""
+    backslash in backticks; a heredoc delimiter it cannot read) on, nothing is blanked. Each comment's (start, end)
+    is appended to `comments` when given."""
     out, n = list(cmd), len(cmd)
     opened, closed = set(), set()  # just past an opening backtick (a word starts) and past a closing `)` or backtick
 
@@ -169,6 +174,8 @@ def command_text(cmd):
             elif c == "#" and starts_word(i):
                 eol = cmd.find("\n", i)
                 blank(i, n if eol < 0 else eol)
+                if comments is not None:
+                    comments.append((i, n if eol < 0 else eol))
                 i = n if eol < 0 else eol
             elif cmd.startswith("<<<", i):  # a here-string, whose suffix is not a heredoc
                 i += 3
@@ -238,20 +245,57 @@ def strip_prefix(words):
     return words[i:]
 
 
+def lift(cmd, masked):
+    """[(raw, masked)]: `cmd` with each `$(…)`, `<(…)`, `>(…)` and backtick substitution replaced by a same-length
+    `$___` word, then each substitution's body the same way, by position. The outer command then keeps its
+    arguments and redirections whole: `echo "$(cat f)" > out` still writes `out`. An opener without its close is
+    left in place, for `commands` to cut at."""
+    inner = []
+
+    def put(s, e, body):
+        nonlocal cmd, masked
+        inner.append((s, cmd[body[0]:body[1]], masked[body[0]:body[1]]))
+        pad = "$" + "_" * (e - s - 1)
+        cmd, masked = cmd[:s] + pad + cmd[e:], masked[:s] + pad + masked[e:]
+
+    while True:
+        for s in reversed([m.start() for m in re.finditer(r"\$\(|<\(|>\(", masked)]):
+            depth, j = 0, s + 2
+            while j < len(masked) and (masked[j] != ")" or depth):
+                depth += {"(": 1, ")": -1}.get(masked[j], 0)
+                j += 1
+            if j < len(masked):
+                put(s, j + 1, (s + 2, j))
+                break
+        else:
+            break
+    while m := re.search(r"`([^`]*)`", masked):
+        put(m.start(), m.end(), m.span(1))
+    return [(cmd, masked)] + [(r, k) for _, r, k in sorted(inner, key=lambda x: x[0])]
+
+
 def commands(cmd):
-    """Each simple command `cmd` would run, `$(…)` and backtick contents included, in order. A piece this reader
-    cannot split is left out: a guardrail, not a sandbox."""
-    masked = command_text(cmd)
-    out, start, prev_op = [], 0, ""
-    cuts = [(m.start(), m.end(), m.group()) for m in CUT.finditer(masked)] + [(len(cmd), len(cmd), "")]
-    for at, end, op in cuts:
-        raw, mask = cmd[start:at], masked[start:at]
-        if mask.strip():
-            toks = tokens(raw)
-            if toks:
-                words, redirects = split_words(toks)
-                words = strip_prefix(words)
-                if words or redirects:
-                    out.append(Command(words, redirects, mask, raw, piped_from=prev_op == "|", piped_to=op == "|"))
-        start, prev_op = end, op
+    """Each simple command `cmd` would run, the outer ones first, then `$(…)` and backtick contents. A piece this
+    reader cannot split is left out: a guardrail, not a sandbox."""
+    comments, out = [], []
+    masked = command_text(cmd, comments)
+    chars = list(cmd)
+    for s, e in comments:  # shlex is not told about comments: `x # > f` writes nothing
+        chars[s:e] = " " * (e - s)
+    text = "".join(LITERAL[c] if c in LITERAL and masked[i] != c else c for i, c in enumerate(chars))
+    for text, masked in lift(text, masked):
+        start, prev_op = 0, ""
+        cuts = [(m.start(), m.end(), m.group()) for m in CUT.finditer(masked)] + [(len(text), len(text), "")]
+        for at, end, op in cuts:
+            raw, mask = text[start:at], masked[start:at]
+            if mask.strip():
+                toks = tokens(raw)
+                if toks:
+                    words, redirects = split_words(toks)
+                    words = [w.translate(UNLITERAL) for w in strip_prefix(words)]
+                    redirects = [(fd, o, t.translate(UNLITERAL)) for fd, o, t in redirects]
+                    if words or redirects:
+                        out.append(Command(words, redirects, mask, raw.translate(UNLITERAL),
+                                           piped_from=prev_op == "|", piped_to=op == "|"))
+            start, prev_op = end, op
     return out

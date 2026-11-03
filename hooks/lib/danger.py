@@ -46,6 +46,12 @@ KILL_PGREP = re.compile(r"""(?:^|[;&|(\s])kill\s+(?:-\S+\s+)*["']?(?:\$\(|`)\s*p
 GUARDED_VAR = re.compile(r"\$\{\w+:\?[^}]*\}")
 KEY_SOURCE = "(agent-skills hooks/guard.py, {key})"
 DOCKER = {"docker", "podman"}
+# Options that take the next word as their value, before the subcommand.
+DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level", "--tlscacert", "--tlscert",
+               "--tlskey"}
+COMPOSE_OPTS = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi",
+                "--progress", "--parallel"}
+GIT_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
 
 
 def level(cfg, key):
@@ -75,12 +81,18 @@ def expand(word, cwd):
     return os.path.realpath(os.path.join(cwd or ".", word))
 
 
-def after(words, name):
-    """The words after the first `name` among words[1:], or None."""
-    try:
-        return words[words.index(name, 1) + 1:]
-    except ValueError:
-        return None
+def verb(args, valued):
+    """(the first word of args that is not an option, the words after it); an option in `valued` takes the next
+    word as its value. (None, []) when there is none."""
+    i = 0
+    while i < len(args):
+        x = args[i]
+        if x == "--":
+            return (args[i + 1], args[i + 2:]) if i + 1 < len(args) else (None, [])
+        if not x.startswith("-"):
+            return x, args[i + 1:]
+        i += 2 if x in valued else 1
+    return None, []
 
 
 def write_targets(c):
@@ -90,8 +102,12 @@ def write_targets(c):
     if c.name == "tee":
         out += args
     elif c.name in ("cp", "mv", "install", "ln", "rsync", "ditto") and len(args) >= 2:
-        out.append(args[-1])
-        out += [w.split("=", 1)[1] for w in c.words if w.startswith("--target-directory=")]
+        dests = [args[-1]] + [w.split("=", 1)[1] for w in c.words if w.startswith("--target-directory=")]
+        sources = args[:-1]
+        # A destination directory receives each source under its own name; mv also removes its sources.
+        out += dests + [os.path.join(d, os.path.basename(s.rstrip("/"))) for d in dests for s in sources]
+        if c.name == "mv":
+            out += sources
     elif c.name in ("sed", "perl") and any(w == "-i" or w.startswith(("-i", "--in-place")) for w in c.words[1:]):
         out += args[1:]
     elif c.name == "truncate":
@@ -116,21 +132,21 @@ def check_command(c, masked, cfg, cwd, session):
         out.append(("guard.deny.pattern_kill", "`pgrep … | xargs kill` kills every process whose name matches. Kill by "
                                                "PID after reading `ps`, or use agent-skills:reap-resources."))
     if name in DOCKER or name == "docker-compose":
-        rest = w[1:]
-        verbs = [x for x in rest if not x.startswith("-")]
-        if "prune" in verbs and (verbs.index("prune") == 0 or verbs[verbs.index("prune") - 1] in PRUNE_OBJECTS):
+        sub, rest = verb(w[1:], DOCKER_OPTS) if name in DOCKER else ("compose", w[1:])
+        if sub in PRUNE_OBJECTS and verb(rest, set())[0] == "prune":
             out.append(("guard.deny.prune", f"`{' '.join(w[:4])}` deletes what any project on this machine left "
                                             "stopped or unused, other workers' stacks and volumes included. Remove "
                                             "your own containers or volumes by name."))
-        down = after(w, "down")
-        if down is not None and ("compose" in rest or name == "docker-compose") and any(
-                x in ("--volumes", "--volumes=true") or re.fullmatch(r"-[a-zA-Z]*v[a-zA-Z]*", x) for x in down):
+        down, rest = verb(rest, COMPOSE_OPTS) if sub == "compose" else (None, [])
+        rest = rest[:rest.index("--")] if "--" in rest else rest
+        if down == "down" and any(x in ("--volumes", "--volumes=true") or re.fullmatch(r"-[a-zA-Z]*v[a-zA-Z]*", x)
+                                  for x in rest):
             out.append(("guard.deny.prune", "`compose down -v` deletes the project's named volumes, data another "
                                             "worker or the human may still use. Run `down` without -v; remove a "
                                             "volume you created by name."))
     if name == "git":
-        rest = [x for x in w[1:] if not x.startswith("-")]
-        if rest[:2] == ["worktree", "prune"] or "worktree" in rest and rest[rest.index("worktree") + 1:][:1] == ["prune"]:
+        sub, rest = verb(w[1:], GIT_OPTS)
+        if sub == "worktree" and verb(rest, set())[0] == "prune":
             out.append(("guard.deny.prune", "`git worktree prune` drops the records of every worktree whose folder is "
                                             "missing right now, other sessions' included. Remove one worktree by "
                                             "path with `git worktree remove <path>`."))
@@ -233,7 +249,19 @@ def label_add(w):
     vals += [x.split("=", 1)[1] for x in w if x.startswith(("--label=", "--add-label="))]
     if w[1:3] in (["pr", "create"], ["pr", "edit"], ["issue", "edit"], ["issue", "create"]) and has(vals):
         return True
-    return w[1:2] == ["api"] and any("labels" in x for x in w[2:]) and any("no-visual-change" in x for x in w[2:])
+    if w[1:2] != ["api"]:
+        return False
+    # Only a request that adds labels: POST/PUT/PATCH (a field without --method means POST) to …/labels, with the
+    # label in a field. A GET that filters on it or a DELETE of it is not one.
+    method = next((w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-X", "--method")), None)
+    method = next((x.split("=", 1)[1] for x in w if x.startswith("--method=")), method)
+    fields = [w[i + 1] for i, x in enumerate(w[:-1]) if x in ("-f", "-F", "--field", "--raw-field")]
+    fields += [x.split("=", 1)[1] for x in w if x.startswith(("--field=", "--raw-field="))]
+    method = (method or ("POST" if fields or "--input" in w else "GET")).upper()
+    endpoint = verb(w[2:], {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input",
+                            "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"})[0] or ""
+    return (method in ("POST", "PUT", "PATCH") and re.search(r"/labels/?$", endpoint) is not None
+            and any("no-visual-change" in f for f in fields))
 
 
 def run(argv, cwd, timeout=3):
@@ -283,9 +311,13 @@ def external_review(argv, cwd, cfg):
     if not closed:
         return None
     where = cwd
-    for i, x in enumerate(argv[:-1]):
-        if x in ("-C", "--cd"):
+    for i, x in enumerate(argv):
+        if x in ("-C", "--cd") and i + 1 < len(argv):
             where = expand(argv[i + 1], cwd)
+        elif x.startswith("--cd="):
+            where = expand(x[5:], cwd)
+        elif x.startswith("-C") and len(x) > 2 and not x.startswith("--"):
+            where = expand(x[2:], cwd)
     repo = repo_of(where)
     if repo in closed:
         return (f"{repo} sets `repos.{repo}.external_llm: false` in ~/.claude/agent-skills.json: its code does not go "

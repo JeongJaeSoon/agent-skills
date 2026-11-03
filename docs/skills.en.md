@@ -544,12 +544,12 @@ Every rule has a key in `~/.claude/agent-skills.json`. Its value is one of `"den
 | `guard.deny.automode_reset` | deny | `claude auto-mode reset` |
 | `guard.deny.keychain` | deny | `security find-*-password` with `-w` or `-g`; `security dump-keychain` |
 | `guard.deny.url_credentials` | deny | A URL with `scheme://user:secret@` in an argument |
-| `guard.deny.user_settings` | deny | Writes to the user's own settings: `~/.claude/settings.json` and `settings.local.json` (also under `$CLAUDE_CONFIG_DIR`), `~/.claude/agent-skills.json`, and secure-fill's `allow.json`. Covers Edit, Write and NotebookEdit, and Bash redirections, `tee`, `cp`, `mv`, `sed -i`, `rm` and the like. A project's `.claude/settings.json` is not covered |
+| `guard.deny.user_settings` | deny | Writes to the user's own settings: `~/.claude/settings.json` and `settings.local.json` (also under `$CLAUDE_CONFIG_DIR`), `~/.claude/agent-skills.json`, and secure-fill's `allow.json`. Covers Edit, Write, MultiEdit and NotebookEdit, and Bash redirections, `tee`, `cp`, `mv`, `sed -i`, `rm` and the like. A project's `.claude/settings.json` is not covered |
 | `guard.deny.plugin_apply` | deny | `--apply` of this plugin's `setup.py`, `config_emit.py`, `automode_rule.py` and their emitted copies, and `bootstrap.py --write`. A copy is recognized by the line "runs --apply, never the agent". Another repository's `setup.py` is not covered |
 | `guard.deny.slash_send` | deny | Typing `/reload…` or `/model` with `orca terminal send` |
 | `guard.deny.prompt_substitution` | deny | A command substitution (`$(…)`, backticks) in `orca worktree create --prompt` |
 | `guard.deny.self_exempt_label` | deny | Adding the `no-visual-change` label with `gh` (`pr create --label`, `pr edit --add-label`, `issue edit`, `gh api …/labels`) |
-| `guard.deny.owner_only` | deny | `orch refusal clear` and `orch exempt`. The human types them as a `!` line in their own chat. Even with the key off, `orch refusal clear` is never auto-allowed |
+| `guard.deny.owner_only` | deny | `orch refusal clear` and `orch exempt`. The human types them as a `!` line in their own chat. With the key off, both are allowed like any other `orch` command |
 | `guard.deny.external_review` | deny | A `codex` call whose working folder (or `-C`) has an origin repository set to `repos.<owner/repo>.external_llm: false`. Without that key, no decision |
 | `guard.ask.pressure_bypass` | ask | `AGENT_SKILLS_PRESSURE_GATE=0` in the command |
 | `guard.warn.rm_expansion` | warn | An `rm` path built from an unquoted glob or variable. `${VAR:?}` is fine |

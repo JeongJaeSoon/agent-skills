@@ -96,10 +96,12 @@ CASES = [
      ["docker system prune -af", "docker volume prune -f", "docker image prune", "podman system prune",
       "docker compose down -v", "docker compose -p x down --volumes", "docker-compose down -v",
       "docker compose -f a.yml down --rmi all -v", "docker compose down -tv", "git worktree prune",
-      "git -C /repo worktree prune -v", "docker container prune"],
+      "git -C /repo worktree prune -v", "docker container prune", "docker --context x system prune -f",
+      "docker compose --project-name x down -v"],
      ["docker system df", "docker compose down", "docker compose up -d", "docker compose down -t 10",
       "git worktree list", "git worktree remove /x", "echo docker system prune", "git gc",
-      "docker compose logs -v", "grep 'down -v' notes.md"]),
+      "docker compose logs -v", "grep 'down -v' notes.md", "docker run --rm alpine echo system prune",
+      "git log -- worktree prune", "docker ps # system prune", "docker compose run app down -v"]),
     ("guard.deny.worktree_rm", "deny",
      ["orca worktree rm --worktree id:1 --force", "orca worktree rm --worktree id:1 --allow-failed-archive-hook",
       "orca worktree rm --worktree current"],
@@ -119,9 +121,13 @@ CASES = [
      [f"echo '{{}}' > {SETTINGS}", "echo x >> ~/.claude/settings.json", "jq . a > $HOME/.claude/agent-skills.json",
       "cp /tmp/s.json ~/.claude/settings.json", "mv new.json ~/.claude/settings.local.json",
       "tee ~/.claude/settings.json < x", "sed -i '' s/a/b/ ~/.claude/settings.json",
-      "rm ~/.claude/agent-skills.json", f"echo x > {HOME}/.config/secure-fill/allow.json"],
+      "rm ~/.claude/agent-skills.json", f"echo x > {HOME}/.config/secure-fill/allow.json",
+      'echo "$(cat /tmp/new.json)" > ~/.claude/settings.json', "mv ~/.claude/settings.json /tmp/settings.backup",
+      "cp /tmp/settings.json ~/.claude/", "x=`cat a` && echo \"$x\" > ~/.claude/settings.json"],
      ["cat ~/.claude/settings.json", "jq . ~/.claude/settings.json", "cp ~/.claude/settings.json /tmp/backup.json",
-      "echo x > .claude/settings.json", "echo '> ~/.claude/settings.json'", "diff ~/.claude/settings.json x"]),
+      "echo x > .claude/settings.json", "echo '> ~/.claude/settings.json'", "diff ~/.claude/settings.json x",
+      'echo ">" ~/.claude/settings.json', "echo ok # > ~/.claude/settings.json", "echo \\> ~/.claude/settings.json",
+      "cp ~/.claude/settings.json /tmp/"]),
     ("guard.deny.plugin_apply", "deny",
      [f"python3 {REPO}/scripts/setup.py --apply abc123", f"python3 {REPO}/scripts/bootstrap.py --write",
       f"python3 {REPO}/skills/skills-config/scripts/config_emit.py --spec s.json --apply 12ab",
@@ -141,11 +147,14 @@ CASES = [
     ("guard.deny.self_exempt_label", "deny",
      ["gh pr edit 12 --add-label no-visual-change", "gh pr create --title t --body b --label a,no-visual-change",
       "gh api repos/acme/app/issues/12/labels -f 'labels[]=no-visual-change'", "gh issue edit 12 --add-label=no-visual-change"],
-     ["gh pr edit 12 --remove-label no-visual-change", "gh pr view 12 --json labels", "gh pr edit 12 --add-label bug"]),
+     ["gh pr edit 12 --remove-label no-visual-change", "gh pr view 12 --json labels", "gh pr edit 12 --add-label bug",
+      "gh api --method DELETE repos/acme/app/issues/12/labels/no-visual-change",
+      'gh api repos/acme/app/issues/12/labels --jq ".[] | select(.name == \\"no-visual-change\\")"']),
     ("guard.deny.owner_only", "deny", ["orch refusal clear r1", "orch exempt visual 12"],
      ["orch refusal report", "orch status p", "echo orch exempt"]),
     ("guard.deny.external_review", "deny",
-     [(f"codex exec --sandbox read-only - < p.md", REPOX), f"codex exec -C {REPOX} --sandbox read-only -"],
+     [(f"codex exec --sandbox read-only - < p.md", REPOX), f"codex exec -C {REPOX} --sandbox read-only -",
+      (f"codex exec --cd={REPOX} -", CLEAN), (f"codex exec -C{REPOX} -", CLEAN)],
      [(f"codex exec --sandbox read-only -", CLEAN), "echo codex exec", (f"git log", REPOX)]),
     ("guard.ask.pressure_bypass", "ask", ["AGENT_SKILLS_PRESSURE_GATE=0 orch heavy p -- npm test"],
      ["AGENT_SKILLS_PRESSURE_GATE=1 orch heavy p -- npm test", "echo AGENT_SKILLS_PRESSURE_GATE"]),
@@ -216,7 +225,7 @@ configure({})
 assert bash("orch exempt visual 12") == "deny"
 configure(off("guard.deny.owner_only"))
 assert bash("orch exempt visual 12") == "allow"
-assert bash("orch refusal clear r1") == "none", "never allowed past the classifier, even with the rule off"
+assert bash("orch refusal clear r1") == "allow", "off restores the old allow"
 configure({})
 
 # The hook never stops a session over its own fault: a check that raises passes with a warning and a log line.
