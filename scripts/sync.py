@@ -318,13 +318,15 @@ def stale_signal(lines):
 
 def background_running(lines):
     """Why a /restart could end work this screen may be running, else None: a background shell or agent shown under
-    the prompt box or on the finished turn's last lines, or no mode line to show them on (unknown is not none)."""
+    the prompt box or on the finished turn's summary, or no mode line to show them on (unknown is not none)."""
     lines = norm(lines or [])
     box = prompt_box(lines)
     if not box:
         return "no prompt box"
     below = [l.strip() for l in lines[box[1] + 1:] if l.strip()]
-    if any(BACKGROUND.search(l) for l in below + [l.strip() for l in lines[:box[0]] if l.strip()][-2:]):
+    # Above the box only the summary, which may sit under a notice: other output there counts installed agents too.
+    summary = [l for l in [l.strip() for l in lines[:box[0]] if l.strip()][-2:] if TURN_SUMMARY.match(l)]
+    if any(BACKGROUND.search(l) for l in below + summary):
         return "background shells or agents still running"
     if not any(MODE_LINE.search(l) for l in below):
         return "no mode line to show background work on"
@@ -544,7 +546,7 @@ def restart_stale(terms, dry_run=False, keep_others=False):
     An entry goes once its screen no longer shows the signal, so a later one is new; an unreadable screen keeps it,
     and a terminal Orca does not list now keeps it RESTART_KEEP_S (WAITING_KEEP_S when waiting). keep_others leaves
     the entries of terminals not in `terms` as they are. Returns the handles typed into (in a dry run, those it would
-    type into)."""
+    type into) and {handle: reason} for those left waiting."""
     path = STATE / "restarts.json"
     seen = read_json(path, {})
     seen = {h: v for h, v in seen.items() if isinstance(v, dict)} if isinstance(seen, dict) else {}
@@ -552,7 +554,7 @@ def restart_stale(terms, dry_run=False, keep_others=False):
     # pass could not read does. A waiting one stays less, since each sync reruns the broadcast for it.
     out = {h: v for h, v in seen.items() if h not in terms and (
         keep_others or _stamp(v) >= time.time() - (WAITING_KEEP_S if "waiting" in v else RESTART_KEEP_S))}
-    typed = set()
+    typed, held = set(), {}
     for h in terms:
         old = seen.get(h) or {}
         try:
@@ -578,6 +580,7 @@ def restart_stale(terms, dry_run=False, keep_others=False):
         if dry_run:
             print(f"{h}  {reason and 'waits: ' + reason or 'would send ' + cmd}: {line[:60]}")
             typed |= set() if reason else {h}
+            held.update({h: reason} if reason else {})
             continue
         try:
             reason = reason or send_to(h, cmd, stale_cleared, still=lambda s: (
@@ -589,6 +592,7 @@ def restart_stale(terms, dry_run=False, keep_others=False):
             continue
         if reason and reason != UNCONFIRMED:
             out[h] = {"waiting": reason, "since": old.get("since") or _now(), "kind": kind, "line": line}
+            held[h] = reason
             print(f"{h}  waits before {cmd}: {reason}")
             continue
         out[h] = {"sent": _now(), "command": cmd, "kind": kind, "line": line,
@@ -597,7 +601,7 @@ def restart_stale(terms, dry_run=False, keep_others=False):
         print(f"{h}  {reason or 'sent ' + cmd}: {line[:60]}")
     if not dry_run and (out or path.exists()):
         write_json(path, out)
-    return typed
+    return typed, held
 
 
 def broadcast_locked(kind, dry_run=False, only=None):
@@ -623,7 +627,7 @@ def broadcast_locked(kind, dry_run=False, only=None):
             return 1
         terms = [only]
     # Both commands load the plugin afresh, so a session typed into here needs no reload after it.
-    restarted = restart_stale(terms, dry_run, keep_others=bool(only))
+    restarted, held = restart_stale(terms, dry_run, keep_others=bool(only))
     if not kind:
         print("nothing to reload")
         return 0
@@ -631,6 +635,10 @@ def broadcast_locked(kind, dry_run=False, only=None):
     done, failed = set(pending.get("done", [])) | restarted, {}
     for h in terms:
         if h in done:
+            continue
+        if h in held:  # a reload now would reach the work the restart waits on; the restart reloads it anyway
+            failed[h] = {"reason": f"waits for its restart: {held[h]}"}
+            print(f"{h}  {failed[h]['reason']}")
             continue
         if h in newer:
             print(f"{h}  opened after the change, already has it")
@@ -677,14 +685,17 @@ def main(argv):
     if cmd == "sync":
         return sync(broadcast_after="--no-broadcast" not in argv)
     if cmd == "broadcast":
-        known = {"--plugins", "--skills", "--dry-run", "--terminal"}
-        rest = [a for i, a in enumerate(argv[1:], 1) if not (i > 1 and argv[i - 1] == "--terminal")]
-        if any(a not in known for a in rest):  # a mistyped --dry-run must not broadcast for real
+        args, only = list(argv[1:]), None
+        if "--terminal" in args:
+            i = args.index("--terminal")
+            only = args[i + 1] if i + 1 < len(args) else ""
+            del args[i:i + 2]
+        # A mistyped --dry-run, or --terminal without its handle, must not broadcast for real.
+        if only == "" or (only or "").startswith("-") or any(a not in ("--plugins", "--skills", "--dry-run") for a in args):
             print(__doc__)
             return 2
         STATE.mkdir(parents=True, exist_ok=True)
-        kind = "plugins" if "--plugins" in argv else "skills" if "--skills" in argv else None
-        only = argv[argv.index("--terminal") + 1] if "--terminal" in argv[:-1] else None
+        kind = "plugins" if "--plugins" in args else "skills" if "--skills" in args else None
         return broadcast(kind, dry_run="--dry-run" in argv, only=only)
     if cmd == "nudge" and len(argv) == 3:
         return nudge(argv[1], argv[2])

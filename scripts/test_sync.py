@@ -352,6 +352,9 @@ def test_stale_signal():
     check("a background shell on the mode line or the turn's summary is running",
           all(sync.background_running(s) for s in (NOTE_BACKGROUND, NOTE_SUMMARY_SHELL)))
     check("no mode line is not known to be none", sync.background_running(NOTE_NO_MODE) is not None)
+    reloaded_note = RELOAD_DONE[:2] + [RELOAD_DONE[2]] + RESTART_NOTE[1:]
+    check("installed agents counted in a reload's output are no background work",
+          sync.background_running(reloaded_note) is None, sync.background_running(reloaded_note))
 
 
 def test_restart():
@@ -518,6 +521,35 @@ def test_close_setup():
     shutil.rmtree(tmp)
 
 
+def test_restart_holds_reload():
+    """A session left waiting before its /restart gets no plugin reload either: that reaches the same background work."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    keys = ("AGENT_SKILLS_STATE", "SKILLS_SYNC_SETTLE_S", "SKILLS_SYNC_CONFIRM_S")
+    old_env = {k: os.environ.get(k) for k in keys}
+    os.environ.update(AGENT_SKILLS_STATE=str(tmp), SKILLS_SYNC_SETTLE_S="0", SKILLS_SYNC_CONFIRM_S="0")
+    import importlib
+    importlib.reload(sync)
+    typed = []
+
+    def orca(*a):
+        if a[:2] == ("terminal", "list"):
+            return {"terminals": [{"handle": "a", "agentIdentity": "claude", "connected": True, "writable": True}]}
+        if a[:2] == ("terminal", "send"):
+            typed.append(a[5])
+        return {}
+    try:
+        sync.screen, sync.orca = (lambda h: (NOTE_BACKGROUND, sync.classify(NOTE_BACKGROUND, "✳ a"))), orca
+        sync.broadcast_locked("plugins")
+        pending = json.loads((tmp / "reload-pending.json").read_text())
+        check("nothing is typed, and the reload stays pending for it",
+              typed == [] and "a" in pending.get("failed", {}), (typed, pending))
+    finally:
+        for k, v in old_env.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    shutil.rmtree(tmp)
+
+
 def test_main_help():
     calls = []
     real = (sync.broadcast, sync.sync, sync.nudge, sync.status, sync.close_setup)
@@ -532,6 +564,9 @@ def test_main_help():
                                           ["card", "--help"], ["setup", "-h"])]
         check("--help or -h on any subcommand prints help and runs nothing", helped == [0] * 8 and calls == [], (helped, calls))
         check("an unknown broadcast flag broadcasts nothing", sync.main(["broadcast", "--dryrun"]) == 2 and calls == [], calls)
+        check("--terminal without a handle broadcasts nothing",
+              [sync.main(["broadcast", "--terminal"]), sync.main(["broadcast", "--terminal", "--dryrun"])] == [2, 2]
+              and calls == [], calls)
         sync.main(["broadcast", "--terminal", "term_x", "--dry-run"])
         check("known broadcast flags still run",
               calls == [("broadcast", (None,), {"dry_run": True, "only": "term_x"})], calls)
@@ -549,6 +584,7 @@ if __name__ == "__main__":
     test_stale_signal()
     test_restart()
     test_restart_entries()
+    test_restart_holds_reload()
     test_close_setup()
     print(f"\n{len(failures)} failure(s)" if failures else "\nall passed")
     sys.exit(1 if failures else 0)
