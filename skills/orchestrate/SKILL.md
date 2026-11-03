@@ -52,15 +52,15 @@ An index only: each rule lives behind its link.
 
 | Check | Owner | Rule |
 |---|---|---|
-| Tests and an E2E run before push; VERIFY's output in the report | The worker | [deliver-ticket §5](../deliver-ticket/SKILL.md#5-ship), [brief VERIFY, REPORT](references/brief.md) |
-| Review by someone other than the author, and its findings sorted until a pass has no Act-on | The worker; the reviewer is never the author | [deliver-ticket §3](../deliver-ticket/SKILL.md#3-review), [independent review](../deliver-ticket/references/independent-review.md) |
-| What a PR needs to land, and the human-approved exceptions | `orch land`; a standalone card merges its own PR | Core rule 8, [Merge policy](#merge-policy), [landing](references/landing.md) |
+| Tests, the E2E run and VERIFY's output in the report | The worker | [deliver-ticket §5](../deliver-ticket/SKILL.md#5-ship), [brief VERIFY, REPORT](references/brief.md) |
+| The independent review and its findings | The worker | [deliver-ticket §3](../deliver-ticket/SKILL.md#3-review), [independent review](../deliver-ticket/references/independent-review.md) |
+| What a PR needs to land, and the human-approved exceptions | `orch land`; a standalone card merges its own PR | Core rule 8, [Merge policy](#merge-policy), [landing](references/landing.md), [deliver-ticket §6](../deliver-ticket/SKILL.md#6-finish-the-ticket--done-means-its-acceptance-criteria-are-met) |
 | main after a landing; the ticket's remaining criteria after its merge | The lander; red main, the main guardian | Step 8, [deliver-ticket §6](../deliver-ticket/SKILL.md#6-finish-the-ticket--done-means-its-acceptance-criteria-are-met) |
 | VERIFY fixed in the pilot; an independent verifier on a high-blast-radius PR | The lead | Steps 2–3, [brief rules](references/brief.md#rules-for-filling-it) |
 | Landed tickets, periodic E2E on main, design against code | The QA lead (a standing worker) | Step 8, [roles](references/roles.md) |
 | The predicate's final check and its `predicate_verified` record | The lead; the QA lead or a verifier worker runs it | Step 9 Close |
 | A lead's closing report before the human hears "done"; a single-PR card's review | The orchestrator, through a background subagent | [Starting a lead](references/top-level.md#starting-a-lead) |
-| Acts only the human may take, and what only they can judge | The owner; the agent names each with its command or URL | [brief HUMAN ONLY](references/brief.md), [deliver-ticket §6](../deliver-ticket/SKILL.md#6-finish-the-ticket--done-means-its-acceptance-criteria-are-met), [Asking the human](references/top-level.md#asking-the-human) |
+| Acts only the human may take, and what only they can judge | The owner | [brief HUMAN ONLY](references/brief.md), [deliver-ticket §6](../deliver-ticket/SKILL.md#6-finish-the-ticket--done-means-its-acceptance-criteria-are-met), [Asking the human](references/top-level.md#asking-the-human) |
 
 ## Stay answerable
 
