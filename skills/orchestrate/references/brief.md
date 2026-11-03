@@ -25,9 +25,18 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             symbol known to exist. An empty `git grep -E` proves nothing (`\b` is a GNU
             extension that BSD/macOS regex does not honour; use `-w`). A corrected fact reopens the decisions built on it.
             A subagent's file:line citation is a claim, not that check. So is a contract value
-            you write into acceptance criteria (a status code, a field or column name) until the
-            route or schema shows it, and an owner decision's technical premise, checked when the
-            decision enters the predicate. A fact left unchecked is marked unverified.
+            you write into acceptance criteria or a VERIFY row (a status or error code, refused
+            versus allowed, a field or column name) until the route, schema or design sentence
+            that defines it shows it, and an owner decision's technical premise, checked when the
+            decision enters the predicate. A retry of the unit re-reads these as well. Before
+            telling a worker to delete, rename or empty a file, search for what reads it; its
+            contents say nothing about its readers. A verification step you prescribe (how the
+            system uploads, pushes, routes) comes from reading that code path, not from the
+            owner's approval of the act. A unit that runs on a stack or service the program did
+            not start states, from a read-only probe you run before dispatch, what it needs
+            there: a session the worker can reach without a human, the loaded config or catalog
+            accepting the target, and the source and commit the service actually runs. A probe
+            that fails holds the dispatch. A fact left unchecked is marked unverified.
 DESIGN      Only when later units will build on a contract this unit sets (a function boundary,
             a schema, a config key, a message format): name the contract and those units. Before
             the first edit, run `how` (simple mode) on the existing code paths the contract
@@ -328,9 +337,13 @@ PERMISSIONS The autoMode rules for each outward act the predicate needs (merge, 
             session is not the human's approval.
 APPROVED    The acts the human already approved for this project, with their words and date.
             Decisions inside them are yours and your workers': the recommended default, then a
-            report. Copy the lines a worker's unit needs into its brief.
+            report. At launch, copy here every authority the human has stated that the program
+            will need (merge, ticket creation, rerunning a blocked step), word for word and never
+            read wider than it was said; authority given later goes on a new card, never typed
+            into a running session. Copy the lines a worker's unit needs into its brief.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
-            any irreversible or outward act not under APPROVED. Batched into one message, sent once
+            any irreversible or outward act not under APPROVED; a design or implementation choice
+            is not one, and goes to PARENT as status. Batched into one message, sent once
             to PARENT, which puts it before the human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
             when the blocker or evidence changes, create a replacement with `orch decide add`
             whose body names the old decision id and changed evidence. After creation succeeds,
