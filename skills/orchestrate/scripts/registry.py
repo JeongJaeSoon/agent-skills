@@ -213,7 +213,7 @@ STORES = [
     Store("requests", "D/requests.jsonl", {"order.request": REMOVED}, (), ("nobody",),
           rule="the removed request ledger; nothing writes or reads it"),
     # -- S: hooks, watchers and the janitor
-    Store("roles", "S/roles/*.json", {"session.role": CANONICAL}, ("roles:declare",), ("reorient", "fleet", "janitor"),
+    Store("roles", "S/roles/*.json", {"session.role": CANONICAL}, ("roles:declare",), ("reorient", "fleet", "janitor", "patrol"),
           rule="the role a session declared with a ROLE: line"),
     Store("rolespans", "S/transcripts/*.json", {"session.transcript": DERIVED}, ("reorient:register",), ("reflect",),
           rule="where an orchestrator's transcript starts"),
@@ -299,9 +299,9 @@ STORES = [
     Store("oldlog", "S/orch-dash.log*", {"dash.old_output": REMOVED}, (), ("nobody",), rule="stopped; now P/.dash.log"),
     # -- P: programs
     Store("program", "P/*/program.json", {"program.config": CANONICAL}, ("prog:Program.update", "prog:cmd_init"),
-          ("programview", "fleet", "watchprs"),
+          ("programview", "fleet", "watchprs", "reorient"),
           rule="repo, Run, predicate, merge policy; stages (`orch set`, cmd_set through Program.update), which "
-               "stage_auto reads in the collector"),
+               "stage_auto reads in the collector and, for a lead not yet in stages-auto, in the hook"),
     Store("progledger", "P/*/ledger.jsonl", {"program.event": CANONICAL}, ("prog:Program.append", "prog:write_backfill"),
           ("programview", "fleet", "reflect", "skillspage"), rule="one ledger per program"),
     Store("progledgerlock", "P/*/ledger.lock", {"program.event": LOCK}, ("prog:Program.locked",)),
