@@ -399,6 +399,24 @@ m = motion([call("t1", "u3", "ScheduleWakeup", {}), result("t2", "u3", err=True)
 assert (m["state"], m["parked"]) == ("idle", False), m  # a refused wake-up arms nothing
 m = motion([call("t1", "u4", "Bash", {"command": "sleep 99", "run_in_background": True}), result("t2", "u4"), end("t3")])
 assert m["parked"], m
+# The skills-sync broadcast types /reload-* into finished sessions and nothing answers: the turn stays ended.
+assert dash.reload_row.__module__ == "sync", "the repo's scripts/sync.py must load, not the fallback"
+RELOAD_TAIL = [json.loads(l) for l in (pathlib.Path(__file__).parent / "testdata" / "reload-tail.jsonl").read_text().splitlines()]
+RELOAD_TAIL = [r for r in RELOAD_TAIL if r.get("timestamp")]
+m = motion(RELOAD_TAIL)
+assert (m["state"], m["since"]) == ("idle", "2026-11-03T10:05:00.000Z"), m
+assert motion(RELOAD_TAIL[3:]) == {}, "a tail of reloads only says nothing about the session"
+# A cache scanned under the old rules held such a session at working: it is read again once.
+fixture = pathlib.Path(__file__).parent / "testdata" / "reload-tail.jsonl"
+size = fixture.stat().st_size
+old = lambda **kw: {"offset": size, "committed": {}, "motion": {"state": "working", "since": "2026-11-03T13:00:00.000Z"}, **kw}
+assert dash.scan_transcript(fixture, old(), "")["motion"]["state"] == "idle"
+assert dash.scan_transcript(fixture, old(motion_v=dash.MOTION_V), "")["motion"]["state"] == "working", \
+    "a cache under the current rules is not read again"
+other = [{"type": "user", "timestamp": "t9", "isMeta": True, "message": {"content": "<local-command-caveat>x</local-command-caveat>"}},
+         {"type": "user", "timestamp": "t9", "message": {"content": "<command-name>/compact</command-name>"}}]
+m = motion(other, motion(RELOAD_TAIL))
+assert (m["state"], m["since"]) == ("working", "t9"), "any other slash command is still the session at work"
 
 # A retry of a ticket is dated by its own spawn row, not the ticket's first.
 ev_r = [{"ts": "2026-01-01T00:00:00Z", "ev": "spawned", "ticket": "X-1", "note": "ctx_01"},

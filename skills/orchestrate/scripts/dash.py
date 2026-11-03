@@ -55,6 +55,12 @@ import acks  # noqa: E402
 import tidy  # noqa: E402
 import board  # noqa: E402
 import jobs  # noqa: E402
+sys.path.append(str(HERE.parents[2] / "scripts"))
+try:
+    from sync import reload_row  # noqa: E402
+except ImportError:  # an install without the repo's scripts/
+    def reload_row(row):
+        return False
 
 ASSETS = HERE.parent / "assets" / "dashboard"
 SOURCES = ("tracker", "stages", "github", "orca")
@@ -601,13 +607,19 @@ def _add(a, b):
 
 
 PARKING_TOOLS = {"ScheduleWakeup", "Monitor"}
+MOTION_V = 2  # raise when step_motion's rules change, so a cached motion is read again (scan_transcript)
 
 
 def step_motion(m, row):
     """What the session does after this row: works on a turn, waits on a tool call, or has ended its turn.
 
     `parked` marks a turn that armed its own wake-up (ScheduleWakeup, Monitor, a background command) and got a
-    result that is not an error, so a finished turn is waiting on purpose rather than for someone to type."""
+    result that is not an error, so a finished turn is waiting on purpose rather than for someone to type.
+
+    A /reload-* row (sync.reload_row) leaves it as it was: the skills-sync broadcast types those into idle sessions,
+    and no reply follows, so counting one would hold a finished session at working until its next real turn."""
+    if reload_row(row):
+        return m
     t, kind = row.get("timestamp"), row.get("type")
     msg = row.get("message") if isinstance(row.get("message"), dict) else {}
     content = msg.get("content")
@@ -633,6 +645,121 @@ def step_motion(m, row):
     return m if m.get("state") == "working" else {**m, "state": "working", "since": t}
 
 
+REPEAT_TURNS = 3
+REPEAT_MIN = 30
+# What differs between two tellings of the same thing: times, durations and ids. Any other number (a ticket, an exit
+# code, a count of checks) is kept, since a change there is progress. In a tool's input or result an id or a hash is
+# the work itself (another commit, another file), so there only times go.
+_TIMES = r"\d{4}-\d\d-\d\dT[\d:.]+Z?|\b\d{1,2}:\d\d(?::\d\d)?\b|\b\d+(?:\.\d+)?\s?(?:ms|s|sec|m|min|h)\b"
+_IDS = (r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"
+        r"|\b[a-z]+_[A-Za-z0-9]{8,}\b")
+REPEAT_VOLATILE = re.compile(f"{_TIMES}|{_IDS}")
+WORK_VOLATILE = re.compile(_TIMES)
+
+
+def _norm(text, volatile=REPEAT_VOLATILE):
+    return volatile.sub("#", " ".join(str(text or "").split()))
+
+
+def _work(content):
+    return _digest(_norm(_flat(content), WORK_VOLATILE))
+
+
+def _digest(text):
+    return hashlib.sha1(text.encode()).hexdigest()
+
+
+def _flat(content):
+    """The whole of a row's content as text, images and other blocks included, so a change in any of them shows."""
+    return content if isinstance(content, str) else json.dumps(content, sort_keys=True, default=str)
+
+
+def repeat_turns(rows):
+    """The session telling the same thing over and over with nothing changing in between, or None.
+
+    Rows are a transcript's timed rows in order. A turn starts at a prompt (or a typed /reload-*, a turn of its own
+    with nothing in it); its tool calls, their inputs and their results are its work. A streak is REPEAT_TURNS or more
+    turns at the transcript's end, each ended, with the same work and the same error, else the same last assistant
+    text, else the same prompt and reply (after _norm), spanning REPEAT_MIN minutes or more. A turn still running ends any streak,
+    so long work never reads as one. Returns {kind, text, count, since, digest}; kind is error, assistant, user or
+    reload."""
+    turns = []
+    for row in rows:
+        t, kind = row.get("timestamp") or "", row.get("type")
+        msg = row.get("message") if isinstance(row.get("message"), dict) else {}
+        content = msg.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        if reload_row(row):
+            if kind == "user" and not row.get("isMeta"):  # one turn per command, not per row it leaves
+                turns.append({"reload": content.split("</command-name>")[0].split(">")[-1], "at": t, "end": t})
+            continue
+        real = next((x for x in reversed(turns) if "reload" not in x), None)
+        if kind == "user" and not row.get("isMeta"):
+            results = [b for b in blocks if b.get("type") == "tool_result"]
+            text = content if isinstance(content, str) else " ".join(str(b.get("text") or "") for b in blocks
+                                                                     if b.get("type") == "text")
+            if (text.strip() or blocks) and not results:  # an image with no text is a prompt too
+                turns.append({"user": _norm(text if text.strip() else _flat(blocks)), "assistant": "", "error": "",
+                              "work": [], "at": t, "end": t, "ended": False})
+            elif real and results:
+                real["work"] += [("result", _work(b.get("content")), bool(b.get("is_error"))) for b in results]
+                real.update(end=t, ended=False)
+            continue
+        if not real:  # the tail starts inside a turn whose prompt it cut off
+            continue
+        if kind == "assistant":
+            tools = [b for b in blocks if b.get("type") == "tool_use"]
+            real["work"] += [("tool", b.get("name"), _work(b.get("input"))) for b in tools]
+            text = " ".join(str(b.get("text") or "") for b in blocks if b.get("type") == "text")
+            if text.strip():
+                real["assistant"] = _norm(text)
+            if row.get("isApiErrorMessage"):
+                real.update(error=_norm(text), ended=True)
+            elif msg.get("stop_reason") == "end_turn":
+                real["ended"] = True
+            elif tools:
+                real["ended"] = False
+            real["end"] = t
+        elif kind == "system" and row.get("level") == "error":
+            real.update(error=_norm(_flat(row.get("content"))), ended=True, end=t)
+        elif kind == "system" and row.get("subtype") == "turn_duration":
+            real["ended"] = True
+
+    def span_ok(streak):
+        if len(streak) < REPEAT_TURNS:
+            return False
+        a, b = fleet.parse(streak[0]["at"]), fleet.parse(streak[-1]["end"])
+        return bool(a and b) and (b - a).total_seconds() >= REPEAT_MIN * 60
+
+    def found(kind, text, streak):
+        return {"kind": kind, "text": text[:160], "count": len(streak), "since": streak[0]["at"],
+                "digest": _digest(f"{kind}|{text}")[:12]}
+
+    real = [x for x in turns if "reload" not in x]
+    after = real[-1]["end"] if real else ""
+    reloads = [x for x in turns if "reload" in x and x["at"] > after]
+    if real and not real[-1]["ended"]:
+        return None
+    if span_ok(reloads):
+        return found("reload", " ".join(dict.fromkeys(x["reload"] for x in reloads)), reloads)
+    if not real:
+        return None
+    for kind in ("error", "assistant", "user"):
+        text, work = real[-1][kind], real[-1]["work"]
+        if not text:
+            continue
+        streak = []
+        for x in reversed(real):
+            # The same prompt with a reply that changed may be news: only an unchanged (or absent) reply counts.
+            if not x["ended"] or x[kind] != text or x["work"] != work \
+                    or kind == "user" and x["assistant"] != real[-1]["assistant"]:
+                break
+            streak.append(x)
+        if span_ok(streak[::-1]):
+            return found(kind, text, streak[::-1])
+    return None
+
+
 def scan_transcript(path, entry, since):
     """Parse only the bytes appended since the last scan.
 
@@ -644,7 +771,9 @@ def scan_transcript(path, entry, since):
         entry = {}
     entry.setdefault("offset", 0)
     entry.setdefault("committed", {})
-    if entry["offset"] and "motion" not in entry:  # a cache written before motion existed: read the tail once
+    # A cache written before motion existed, or before step_motion's rules last changed: read the tail once.
+    if entry["offset"] and entry.get("motion_v") != MOTION_V:
+        entry["motion"] = None
         with path.open("rb") as f:
             f.seek(max(0, entry["offset"] - 262144))
             for line in f.read(entry["offset"] - f.tell()).splitlines()[1:]:
@@ -654,7 +783,7 @@ def scan_transcript(path, entry, since):
                     continue
                 if isinstance(row, dict) and row.get("timestamp"):
                     entry["motion"] = step_motion(entry.get("motion") or {}, row)
-        entry.setdefault("motion", None)
+    entry["motion_v"] = MOTION_V
     with path.open("rb") as f:
         f.seek(entry["offset"])
         chunk = f.read(size - entry["offset"])
