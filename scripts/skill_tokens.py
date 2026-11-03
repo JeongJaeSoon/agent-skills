@@ -43,6 +43,7 @@ HOOKS = {
     "decision.py": "Orca terminals with an open dashboard decision they registered: each prompt",
     "prose_check.py": "a commit, PR or tracker write whose text breaks write-plainly",
     "guard.py": REFUSAL_ONLY,
+    "delegate_gate.py": REFUSAL_ONLY,
     "pressure_gate.py": REFUSAL_ONLY,
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
