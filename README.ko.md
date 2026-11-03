@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/4989f7f2-54d3-493a-8692-e0a4157199b0
 선택:
 
 - [Orca](https://github.com/stablyai/orca): 여러 세션을 다루는 스킬과 정기 회차
-- Linear 또는 Jira: 트래커 스킬(설정이 없으면 Linear)
+- Linear, Jira, 또는 로컬 Markdown 폴더(티켓 하나가 파일 하나이고, Obsidian 칸반 보드로 볼 수 있다): 트래커 스킬(설정이 없으면 Linear)
 - Obsidian 또는 평범한 Markdown 폴더: 노트 스킬
 - tailscale, caddy: `preview-watch`와 `share-server`
 
@@ -109,7 +109,7 @@ https://github.com/JeongJaeSoon/agent-skills 의 Claude Code 플러그인을 설
 | [프로젝트 하나](docs/skills.md#프로젝트-하나-orca-워커-여러-개) | `orchestrate`, `measure-delivery` | 여러 티켓을 Orca 워커로 병렬 처리해 머지하고, 끝난 뒤 실제로 어땠는지 잰다 |
 | [머신 하나](docs/skills.md#머신-하나) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 끝난 세션의 잔여물 정리, 에이전트가 보지 않는 비밀값 입력, autoMode 규칙 초안, 설정 키 변경, PC 설치·갱신 |
 | [채팅·GitHub](docs/skills.md#채팅) | `watch-mentions`, `watch-prs` | 나와 관련된 채팅과 PR을 작업으로 모은다 |
-| [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira 티켓, Obsidian·Markdown 노트 |
+| [어댑터](docs/skills.md#어댑터) | `use-tracker`, `use-notes` | Linear·Jira·Markdown 폴더 티켓, Obsidian·Markdown 노트 |
 | [글쓰기](docs/skills.md#글쓰기) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 현황 보고, 단계표, 할 일·보류 큐, 제품 기능 지도, 문체, diff 주석 정리, 스킬 작성 점검 |
 | [pstack](docs/skills.md#pstack-스킬-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 설계, 비교, 영향 범위, 검증, 설명, 회고 |
 

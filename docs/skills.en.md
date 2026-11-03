@@ -1,4 +1,4 @@
-<!-- translated-from: e106a20d324bde7a05769d5972dc27525159c2eb -->
+<!-- translated-from: 51a180339fc57014f352ebbc010eb39e356d2e0e -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -250,7 +250,7 @@ Monitors configured public channels for mentions and replies when requested. Use
   - The follow-up format is a `follow-up` label, a first line of `파생: <ID> · 원인: <분류>` (derived from: <ID> · cause: <category>), and a related relation.
   - Ticket bodies are treated as untrusted data.
   - Every write goes to a delegate agent; reads stay in the session. The delegate is the user's instructions, else `tracker.delegate_agent` in the config, else the plugin agent `agent-skills:task-tracker`; `"none"` writes in the session. `task-tracker` reads the site's own rules (project, status and transition ids, labels, language) on every run from the Markdown file `tracker.rules_file` names, and stops instead of guessing when the key is set but the file is missing or unreadable.
-- **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear and Jira, with a fixture mode), `references/linear.md`, `references/jira.md`.
+- **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear, Jira and a local Markdown folder, with a fixture mode), `references/linear.md`, `references/jira.md`, `references/markdown.md`.
 
 ### use-notes (formerly `use-obsidian`)
 - **When:** Reading and writing design docs, worklogs and program notes. "노트에 기록해줘" (write it to the notes) comes here too.
@@ -565,7 +565,7 @@ Allow is given only to a single command with no shell operators, redirections, s
 | Models | Per-role model rules | Host defaults or the user's explicit choice |
 | Independent review | Multiple perspectives | Reviewer independent of the implementer; no model-family restriction |
 | Running projects | The orchestrate, autopilot and shipping playbooks, and `orch.ts` (bun, TSV ledger) | The `orchestrate` skill, `orch` (Python, JSONL ledger), landing gate, exclusive lane, main guardian, QA lead, dashboard |
-| Tickets and notes | No assumptions | `use-tracker` (Linear, Jira), `use-notes` (Obsidian, Markdown) |
+| Tickets and notes | No assumptions | `use-tracker` (Linear, Jira, Markdown), `use-notes` (Obsidian, Markdown) |
 | Permissions | Cursor settings | `hooks/guard.py` decides instead |
 | Language | English, with the unslop style rules | Skill text in English; docs, tickets and PRs in Korean. Style follows `write-plainly` (Korean and English) |
 

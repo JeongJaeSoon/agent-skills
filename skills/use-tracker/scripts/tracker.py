@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Ticket-tracker adapter: one CLI and one issue schema over Linear (via `orca linear`) and Jira.
+"""Ticket-tracker adapter: one CLI and one issue schema over Linear (via `orca linear`), Jira and a local
+Markdown folder (one file per ticket, one subfolder per project).
 
-    tracker.py [--adapter linear|jira] [--config PATH] list --project P [--since ISO8601] [--limit N]
+    tracker.py [--adapter linear|jira|markdown] [--config PATH] list --project P [--since ISO8601] [--limit N]
     tracker.py [...] get ID
     tracker.py [...] children [ID] [--project P]   (ID's direct children; no ID: P's top-level issues)
     tracker.py [...] create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
@@ -21,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +34,7 @@ DEFAULT_CONFIG = {
         "linear": {"workspace": None, "review_status": None},
         "jira": {"base_url": None, "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN",
                  "issue_type": "Task", "review_status": None},
+        "markdown": {"root": None},
     },
 }
 DEFAULT_CONFIG_PATH = "~/.claude/agent-skills.json"
@@ -617,6 +620,224 @@ class JiraAdapter:
                 "state_type": review_type if target == "review" else target}
 
 
+# ---------------------------------------------------------------- markdown (local folder)
+
+# One Markdown file per ticket: <root>/<project>/<KEY>-<n>.md, KEY being the folder name in capitals.
+# The frontmatter carries the fields; the body is the description, then an optional "## Comments" section.
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+TICKET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*-\d+$")
+MD_STATE_TYPE = {"triage": "triage", "backlog": "backlog", "todo": "unstarted", "started": "started",
+                 "review": "started", "completed": "completed", "canceled": "canceled"}
+MD_KEYS = ("id", "title", "state", "labels", "parent", "related", "assignee", "priority",
+           "created_at", "updated_at", "completed_at", "canceled_at")
+COMMENTS = "## Comments"
+COMMENTS_LINE = re.compile(r"^## Comments[ \t]*$", re.M)
+
+
+def now_z():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def unlink(value):
+    """'[[ABC-1]]' (an Obsidian link) -> 'ABC-1'."""
+    return value[2:-2] if isinstance(value, str) and value.startswith("[[") and value.endswith("]]") else value
+
+
+def yaml_scalar(text):
+    """The YAML scalars this adapter and Obsidian write: JSON-style double quotes, single quotes, plain words."""
+    text = text.strip()
+    if text.startswith(("\"", "[", "{")):
+        return json.loads(text)
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("''", "'")
+    if text in ("", "null", "~"):
+        return None
+    if text in ("true", "false"):
+        return text == "true"
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    return float(text) if re.fullmatch(r"-?\d+(\.\d+)?([eE][+-]?\d+)?", text) else text
+
+
+def parse_ticket(path, text):
+    """(frontmatter dict in file order, body). Anything outside the subset above is an error naming the file."""
+    lines = text.split("\n")
+    if lines[0].strip() != "---" or "---" not in [l.strip() for l in lines[1:]]:
+        raise TrackerError(f"{path}: no YAML frontmatter between --- lines")
+    end = 1 + [l.strip() for l in lines[1:]].index("---")
+    meta, key = {}, None
+    for n, line in enumerate(lines[1:end], 2):
+        try:
+            if line.lstrip().startswith("- ") and key is not None and isinstance(meta[key], (list, type(None))):
+                # An empty "key:" is null until a list item follows it.
+                meta[key] = (meta[key] or []) + [yaml_scalar(line.lstrip()[2:])]
+            elif re.match(r"^[^\s#-][^:]*:(\s|$)", line):
+                key, rest = line.split(":", 1)
+                meta[key] = yaml_scalar(rest)
+            elif line.strip():
+                raise ValueError("not a 'key: value' line")
+        except ValueError as exc:
+            raise TrackerError(f"{path}: frontmatter line {n} unreadable ({exc}): {line}")
+    state = meta.get("state")
+    if state not in MD_STATE_TYPE:
+        raise TrackerError(f"{path}: state {state!r} is not one of {', '.join(MD_STATE_TYPE)}")
+    return meta, "\n".join(lines[end + 1:])
+
+
+def render_ticket(meta, body):
+    lines = ["---"]
+    for key in [k for k in MD_KEYS if k in meta] + [k for k in meta if k not in MD_KEYS]:
+        if meta[key] is not None:
+            lines.append(f"{key}: {json.dumps(meta[key], ensure_ascii=False)}")
+        elif key not in MD_KEYS:
+            lines.append(f"{key}:")  # a property the user left empty stays in the file
+    return "\n".join(lines + ["---", body.lstrip("\n")])
+
+
+class MarkdownAdapter:
+    def __init__(self, cfg):
+        root = (cfg or {}).get("root")
+        if not root:
+            raise TrackerError("markdown adapter: tracker.markdown.root is not set in the config")
+        self.root = os.path.expanduser(root)
+        if not os.path.isdir(self.root):
+            raise TrackerError(f"markdown adapter: tracker.markdown.root is not a folder: {self.root}")
+
+    @staticmethod
+    def _check(value, pattern, what):
+        if not pattern.match(value or ""):
+            raise TrackerError(f"invalid {what}: {value!r}")
+        return value
+
+    def _project_dir(self, project):
+        path = os.path.join(self.root, self._check(project, NAME, "project folder name"))
+        if not os.path.isdir(path):
+            raise TrackerError(f"project folder not found: {path}")
+        return path
+
+    def _key_dir(self, key, project=None):
+        """The one project folder whose name in capitals is `key` (None if there is none)."""
+        dirs = sorted(p for p in os.listdir(self.root) if p.upper() == key and os.path.isdir(os.path.join(self.root, p)))
+        # A project not on disk yet would be a second folder; on a case-insensitive disk "ABC" already is "abc".
+        names = set(dirs) | ({project} if project and not os.path.isdir(os.path.join(self.root, project)) else set())
+        if len(names) > 1:
+            raise TrackerError(f"project folders {', '.join(sorted(names))} share the key {key}; rename one")
+        return os.path.join(self.root, dirs[0]) if dirs else None
+
+    def _path(self, issue_id):
+        self._check(issue_id, TICKET_ID, "ticket id")
+        folder = self._key_dir(issue_id.rsplit("-", 1)[0])
+        path = os.path.join(folder or self.root, issue_id + ".md")
+        if not folder or not os.path.isfile(path):
+            raise TrackerError(f"get {issue_id}: no {issue_id}.md under {self.root}")
+        return path
+
+    def _read(self, path):
+        with open(path, encoding="utf-8") as fh:
+            return parse_ticket(path, fh.read())
+
+    def _issue(self, path):
+        meta, body = self._read(path)
+        out = issue_template()
+        out.update({k: meta.get(k) for k in out if meta.get(k) is not None})
+        out.update({
+            "id": os.path.basename(path)[:-3], "url": "file://" + urllib.parse.quote(path),
+            "state_type": MD_STATE_TYPE[meta["state"]], "labels": [str(l) for l in meta.get("labels") or []],
+            "parent": unlink(meta.get("parent")), "description": COMMENTS_LINE.split(body)[0].strip(),
+        })
+        return out
+
+    def _tickets(self, folder):
+        names = sorted(n for n in os.listdir(folder) if n.endswith(".md") and TICKET_ID.match(n[:-3]))
+        return [self._issue(os.path.join(folder, n)) for n in names]
+
+    def _all(self):
+        return [t for p in sorted(os.listdir(self.root)) if NAME.match(p) and os.path.isdir(os.path.join(self.root, p))
+                for t in self._tickets(os.path.join(self.root, p))]
+
+    def _update(self, issue_id, change):
+        """Read, change and rewrite one ticket under a lock, replacing the file whole.
+        `change` returns None to leave the file as it is."""
+        import fcntl  # Unix only; imported here so the other adapters still run without it
+        path = self._path(issue_id)
+        # ponytail: one lock for the whole root; per-ticket locks if many workers write at once.
+        with open(os.path.join(self.root, ".tracker.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            changed = change(*self._read(path))
+            if changed is None:
+                return
+            meta, body = changed
+            meta["updated_at"] = now_z()
+            tmp = os.path.join(os.path.dirname(path), f".{issue_id}.md.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(render_ticket(meta, body))
+            os.replace(tmp, path)
+
+    def list(self, project, since=None, limit=None):
+        return finish_list(self._tickets(self._project_dir(project)), since, limit)
+
+    def children(self, parent, project=None):
+        issues = self._tickets(self._project_dir(project)) if project else self._all()
+        return finish_list([i for i in issues if i["parent"] == parent], None, None)
+
+    def get(self, issue_id):
+        return self._issue(self._path(issue_id))
+
+    def create(self, project, title, body_file, labels=(), parent=None, related=None):
+        folder = os.path.join(self.root, self._check(project, NAME, "project folder name"))
+        key, stamp = project.upper(), now_z()
+        self._key_dir(key, project)
+        os.makedirs(folder, exist_ok=True)
+        meta = {"title": title, "state": "backlog", "labels": list(labels),
+                "parent": f"[[{parent}]]" if parent else None, "related": [f"[[{related}]]"] if related else None,
+                "created_at": stamp, "updated_at": stamp}
+        body, umask = read_body(body_file), os.umask(0)
+        os.umask(umask)
+        while True:
+            taken = [int(n[len(key) + 1:-3]) for n in os.listdir(folder) if re.fullmatch(re.escape(key) + r"-\d+\.md", n)]
+            issue_id = f"{key}-{max(taken, default=0) + 1}"
+            # A fresh temp file each try: a leftover one may be a hard link to a ticket already published.
+            fd, tmp = tempfile.mkstemp(dir=folder, prefix=".new-", suffix=".md.tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(render_ticket(dict(meta, id=issue_id), body))
+                os.chmod(tmp, 0o666 & ~umask)  # mkstemp makes 0600; a ticket gets what open() would give it
+                # link never replaces: two workers creating at once never get the same number,
+                # and the ticket appears whole or not at all.
+                os.link(tmp, os.path.join(folder, issue_id + ".md"))
+            except FileExistsError:
+                continue
+            finally:
+                os.remove(tmp)
+            return self.get(issue_id)
+
+    def label(self, issue_id, labels):
+        self._update(issue_id, lambda m, b: (dict(m, labels=list(dict.fromkeys((m.get("labels") or []) + list(labels)))), b))
+        return {"ok": True, "op": "label", "id": issue_id, "added": list(labels)}
+
+    def comment(self, issue_id, body_file):
+        text = read_body(body_file).strip()
+
+        def add(meta, body):
+            head = body.rstrip("\n") + ("" if COMMENTS_LINE.search(body) else f"\n\n{COMMENTS}")
+            return meta, f"{head}\n\n### {now_z()}\n\n{text}\n"
+        self._update(issue_id, add)
+        return {"ok": True, "op": "comment", "id": issue_id}
+
+    def transition(self, issue_id, target):
+        closed = {f"{target}_at": now_z()} if target in ("completed", "canceled") else {}
+        seen = {}
+
+        def move(meta, body):
+            # Decided on the state read under the lock, so a concurrent close is never undone.
+            seen.update(state=meta["state"], state_type=MD_STATE_TYPE[meta["state"]])
+            return None if already_there(seen, target, target) else (dict(meta, state=target, **closed), body)
+        self._update(issue_id, move)
+        if already_there(seen, target, target):
+            return unchanged(issue_id, seen)
+        return {"ok": True, "op": "transition", "id": issue_id, "state": target, "state_type": MD_STATE_TYPE[target]}
+
+
 # ---------------------------------------------------------------- CLI
 
 def make_adapter(name, config):
@@ -628,12 +849,14 @@ def make_adapter(name, config):
         return LinearAdapter(tracker_cfg.get("linear"))
     if name == "jira":
         return JiraAdapter(tracker_cfg.get("jira"))
-    raise TrackerError(f"unknown tracker adapter: {name!r} (expected linear or jira)")
+    if name == "markdown":
+        return MarkdownAdapter(tracker_cfg.get("markdown"))
+    raise TrackerError(f"unknown tracker adapter: {name!r} (expected linear, jira or markdown)")
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="tracker.py", description="Ticket-tracker adapter (Linear, Jira).")
-    p.add_argument("--adapter", choices=["linear", "jira"], help="override tracker.adapter from the config")
+    p = argparse.ArgumentParser(prog="tracker.py", description="Ticket-tracker adapter (Linear, Jira, Markdown).")
+    p.add_argument("--adapter", choices=["linear", "jira", "markdown"], help="override tracker.adapter from the config")
     p.add_argument("--config", help=f"config path (default {DEFAULT_CONFIG_PATH})")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("list")

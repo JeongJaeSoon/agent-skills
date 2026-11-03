@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/206c4624-dca8-448d-8179-69c08ecc511c
 任意:
 
 - [Orca](https://github.com/stablyai/orca): 複数セッションのスキルと定期実行
-- Linear または Jira: トラッカーのスキル(設定がなければ Linear)
+- Linear、Jira、またはローカルの Markdown フォルダー(チケット 1 件が 1 ファイルで、Obsidian のカンバンボードとして見られます): トラッカーのスキル(設定がなければ Linear)
 - Obsidian またはただの Markdown フォルダ: ノートのスキル
 - tailscale と caddy: `preview-watch` と `share-server`
 
@@ -109,7 +109,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 | [プロジェクト1件](docs/skills.ja.md#プロジェクト1件orca-ワーカー複数) | `orchestrate`, `measure-delivery` | 複数のチケットを Orca のワーカーで並行してマージし、終わったあと実際どうだったかを測る |
 | [マシン1台](docs/skills.ja.md#マシン1台) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 残り物の片付け、エージェントが見ない秘密値の入力、autoMode ルールの下書き、設定キーの変更、インストールと更新 |
 | [チャットとレビュー](docs/skills.ja.md#チャットとレビュー) | `watch-mentions`, `watch-prs` | 自分に関係するチャットと PR を作業として集める |
-| [アダプター](docs/skills.ja.md#アダプター) | `use-tracker`, `use-notes` | Linear と Jira のチケット、Obsidian と Markdown のノート |
+| [アダプター](docs/skills.ja.md#アダプター) | `use-tracker`, `use-notes` | Linear・Jira・Markdown フォルダーのチケット、Obsidian と Markdown のノート |
 | [文章](docs/skills.ja.md#文章) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | 状況報告、段階表、やること・保留のキュー、機能マップ、文体、コメント整理、スキル作成のチェック |
 | [pstack](docs/skills.ja.md#pstack-スキルlauren-tanmit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | 設計、比較、影響範囲、検証、説明、振り返り |
 
