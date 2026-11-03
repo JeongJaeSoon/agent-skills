@@ -97,13 +97,14 @@ b = brief()
 text, rows = b["text"], {o["label"]: o["status"] for o in b["open"]}
 moving, theirs, turn, held = (section(text, h) for h in ("🔄", "⏳", "🙋", "⏸️"))
 
-# acme/app#363: 🙋, a review to ask for, not ❔ 세션 꺼짐 · PR ❗리뷰.
-assert rows["plugins-reference"] == "owner", rows
-assert "리뷰 요청 · [#363](https://example.test/363) → plugins-reference" in turn, turn
-# acme/api#550: no held item names it, so 🙋 with what to do and how to hold it instead, not ❔ 세션 꺼짐 · PR 초안.
-assert rows["headless-apitoken"] == "owner", rows
-assert ("초안 — ready 로 만들지 정하기 (카드 세션 꺼짐; 보류라면 `orch board later add \"<할 일> acme/api#550\" --trigger <날짜>` 로 ⏸️)"
-        " · [#550](https://example.test/550) → headless-apitoken") in turn, turn
+notes = [l[l.index("] ") + 2:] for l in text.splitlines() if l.startswith("- [")]
+# acme/app#363: nothing on the PR is the agent's to fix and nobody is asked, but who merges it is not recorded (not the
+# owner's repository, no program, no agent_merges): ❔ for the agent to record, never 🙋 on a guess.
+assert rows["plugins-reference"] == "check", rows
+assert "에이전트 조치 필요: 머지 주체 기록 없음 · 5h 전" in notes and not any("plugins-reference" in t for t in turn), (notes, turn)
+# acme/api#550: a draft no session works on and no held item names: ❔ for the agent to resume or hold, not 🙋.
+assert rows["headless-apitoken"] == "check", rows
+assert "에이전트 조치 필요: 초안 · 세션 없음 — 재개하거나 보류로 기록 · 5h 전" in notes, notes
 # acme/plugins#633: the held item naming #633 holds the row: ⏸️ in the table, one 보류 line with the row's name.
 assert rows["headless-skill"] == "held" and "| ⏸️ | headless-skill | [#633](https://example.test/633) 초안 수정요청 | — |" in text, text
 assert f"{soon} prod 전환 확인 후 → headless-skill" in held, held  # the held item itself is counted on the pointer line
@@ -119,11 +120,10 @@ assert not any("#640" in h for h in held), held  # a queue item, not a ⏸️ ro
 # acme/api#641: the row would be ❔ (수정요청 받음), so its held item holds it, under one 보류 line.
 assert rows["api-cr"] == "held" and f"{soon} 배포 뒤 · 수정 반영 → api-cr" in held, held
 assert not any("api-cr" in m for m in moving + turn + theirs), (moving, turn, theirs)
-# Waiting on a review: the next step is whose review, not the card's session.
-assert "team:app-dev · 리뷰 [#630](https://example.test/630) · 12h 전부터 → shared-files-fix · 다음: team:app-dev 리뷰 대기" in theirs, theirs
-assert ("rev-h, team:app-dev · 리뷰 [#631](https://example.test/631) · 12h 전부터 → eval-migrate · 다음: rev-h, team:app-dev 리뷰 대기"
-        in theirs), theirs
-assert any(t.startswith("team:app-dev · 리뷰 [#182]") and t.endswith("다음: team:app-dev 리뷰 대기") for t in theirs), theirs
+# Waiting on a review (a team's counts): the item says whose review, and no next step repeats it.
+assert "team:app-dev · 리뷰 [#630](https://example.test/630) · 12h 전부터 → shared-files-fix" in theirs, theirs
+assert "rev-h, team:app-dev · 리뷰 [#631](https://example.test/631) · 12h 전부터 → eval-migrate" in theirs, theirs
+assert any(t.startswith("team:app-dev · 리뷰 [#182]") and t.endswith("→ flows-revert") for t in theirs), theirs
 assert not any(w in t for t in theirs for w in ("세션 꺼짐", "에이전트 없음")), theirs
 assert any("#182 다시 보기" in k for k in rows) and rows["flows-revert"] == "waiting", rows  # still in the queue
 
@@ -140,11 +140,13 @@ assert st["later"][-1]["title"] == " ".join(LONG.split()) and st["later"][-1]["t
 assert st["doing"][-1]["next"].endswith("금: 전환") and st["rows"]["long"]["title"] == st["rows"]["long"]["next"] == " ".join(LONG.split())
 row = next(r for r in stages.table()["rows"] if r["id"] == "long")
 assert row["title"] == row["cells"]["prod"]["evidence"] == " ".join(LONG.split()), row
-# The table cuts the long name to fit 78 columns, and the whole name is listed right under it; the API keeps it whole.
+# The table cuts the long name and next step to fit 78 columns, and each whole text is listed right under it; the API
+# keeps it whole.
 b = brief()
 lines = b["text"].splitlines()
-cut = next(l for l in lines if l.startswith("| 🔄 | acme/app#877"))
-assert cut.endswith("…[1] | — | — | 세션 없음 |") and f"- [1] {' '.join(LONG.split())}" in lines, b["text"]
+cut = next((l for l in lines if l.startswith("| 🔄 | ac…[1] | — | — | acme/app#877")), None)
+assert cut and cut.endswith("…[2] | 세션 없음 |"), b["text"]
+assert f"- [1] {' '.join(LONG.split())}" in lines and f"- [2] {' '.join(LONG.split())}" in lines, b["text"]
 assert lines.index(f"- [1] {' '.join(LONG.split())}") - lines.index(cut) <= 3, b["text"]
 assert b["width_ok"] and {o["label"] for o in b["open"]} >= {" ".join(LONG.split())}, b["open"]
 # Orca cuts a task's name to a head and "...": the spec's first line is the whole of it, and nothing else replaces it.
@@ -188,7 +190,7 @@ st["sessions"].append(card("s-task", "task-card", "working", "acme/app"))
 fleet.write_atomic(sd / "state.json", json.dumps(st))
 board.lead_add("gone-lead", "term_gone", "acme/app", worktree="s-gone")
 board.set_row("gone-lead/t", kind="task", parent="gone-lead", title="linked-task", status="moving", worktree="s-task")
-by_label = {x["label"]: x for x in sum(brief()["table_rows"], [])}
+by_label = {x["label"]: x for t in brief()["table_rows"] for x in t["rows"]}
 assert by_label["t linked-task"]["session"]["word"] == "작업 중" and by_label["t linked-task"]["status"] != "🔴", by_label["t linked-task"]
 assert by_label["gone-lead"]["status"] == "🔴" and by_label["gone-lead"]["session"]["word"] == "세션 없음", by_label["gone-lead"]
 
@@ -210,7 +212,7 @@ assert "gone-lead/t" in brief()["changed"]
 
 # A row linked by --worktree to a card whose PR its title never names takes that PR, since the card's own row is gone.
 board.set_row("wt-pr", title="untitled-fix", repo="acme/plugins", status="moving", worktree="s4")
-linked_row = next(x for x in sum(brief()["table_rows"], []) if "untitled-fix" in x["label"])
+linked_row = next(x for t in brief()["table_rows"] for x in t["rows"] if "untitled-fix" in x["label"])
 assert linked_row["session"]["pr"] == "acme/plugins#630", linked_row
 
 # A quiet row with no PR whose --worktree card is working is not stale: the card is its evidence.

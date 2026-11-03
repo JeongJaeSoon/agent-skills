@@ -195,49 +195,47 @@ PR: ❗ 사람이 풀 것 · CI✗ CI 실패 · CI… CI 진행 · 7자리=머�
 
 **acme/web — 검색 개선 → main**
 
-| | 리드/Phase | PR | 진행 | 세션 |
-|---|---|---|---|---|
-| ✅ | **ph2** | [#42](https://example.test/42) 42c0ffe | ████████ 8/8 | — |
-| 🔄 | ph3 | — | ███░░░░░ 3/8 | 작업 중 |
-| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | 작업 중 |
-| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗ | ████░░░░ 4/8 | 작업 중 |
-| ⏸️ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | 작업 중 |
+| | 리드/Phase | PR | 진행 | 다음 | 세션 |
+|---|---|---|---|---|---|
+| ✅ | **ph2** | [#42](https://example.test/42) 42c0ffe | ████████ 8/8 | — | — |
+| 🔄 | ph3 | — | ███░░░░░ 3/8 | 하위 3건 · 워커 | 작업 중 |
+| 🔄 | └ w2 색인 | — | ██░░░░░░ 2/8 | PR 작성 · 워커 | 작업 중 |
+| 🔄 | └ 정렬 | [#45](https://example.test/45) CI✗ | ████░░░░ 4/8 | CI 재실행 · 워커 | 작업 중 |
+| ⏸️ | ph4 · ph5 | — | ░░░░░░░░ 0/8 | ↓ 보류 | 작업 중 |
 
 ✅ 그 전 완료 1건 (대시보드)
 
 **acme/ops — (프로젝트 미지정) → main**
 
-| | 리드/Phase | PR | 진행 | 세션 |
-|---|---|---|---|---|
-| — | 검색 개선 | — | — | — |
-| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 작업 중 |
-| ⏳ | 분류 | — | — | 작업 중 |
-| ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — | — |
-| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 세션 없음 |
+| | 리드/Phase | PR | 진행 | 다음 | 세션 |
+|---|---|---|---|---|---|
+| — | 검색 개선 | — | — | — | — |
+| 🔄 | └ 재색인 | [#88](https://example.test/88)⚠️ ❗리뷰 CI… | ██░░░░░░ 2/8 | 권한…[1] | 작업 중 |
+| ⏳ | 분류 | — | — | 에이…[2] | 작업 중 |
+| ⏳ | └ rev-b 대기 | [#61](https://example.test/61)·#62 | — | ↓ 대기 | — |
+| 🔴 | 정리 작업 | — | ███░░░░░ 1/3 | 재개…[3] | 세션 없음 |
+
+- [1] 권한 · 결정 1
+- [2] 에이전트 조치 필요: 누구 대기인지 기록 없음
+- [3] 재개·정리 · 3h 전
 
 - 🙋 2건 오너 리뷰 — 분야 로그·대시보드
 
 **acme/web — 알림 정리 → feature/notify**
 
-| | 리드/Phase | PR | 진행 | 세션 |
-|---|---|---|---|---|
-| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | 작업 중 |
-| 🔄 | └ 문구 다듬기와 길이 정리 | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | 작업 중 |
-| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | — |
+| | 리드/Phase | PR | 진행 | 다음 | 세션 |
+|---|---|---|---|---|---|
+| 🙋 | 알림 정리 | [#50](https://example.test/50) ❗DIRTY→main | ██████░░ 3/4 | ↓ 오너 | 작업 중 |
+| 🔄 | └ 문구 다듬…[1] | [#54](https://example.test/54) ❗리뷰 CI✗ | ████░░░░ 2/4 | CI…[2] | 작업 중 |
+| ⏳ | └ rev-a 대기 | [#51](https://example.test/51)·#52·#53 | ██████░░ 3/4 | ↓ 대기 | — |
+
+- [1] 문구 다듬기와 길이 정리
+- [2] CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
 
 21:00 이후라 Slack 미전송
 
-🔄 **진행 중**
+🔄 **표 밖 진행**
 
-- 🔄 검색 개선 ph3 — 하위 3건 · 워커
-- └ 🔄 w2 색인 — PR 작성 · 워커
-- └ 🔄 정렬 — CI 재실행 · 워커
-- 검색 개선
-- └ 🔄 재색인 — 권한 · 결정 1
-- ❔ 분류 — 확인 필요: 누구 대기인지 기록 없음
-- 🔴 정리 작업 — 세션 없음 · 3h 전
-- 알림 정리
-- └ 🔄 문구 다듬기와 길이 정리 — CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커
 - 🔄 로그 누락 조사 — 원인 보고 · 워커
 
 ⏳ **다른 사람 대기**
@@ -275,10 +273,13 @@ code, tg, err = TG
 assert code == 0, err
 assert not any(m in tg for m in ("**", "|", "](")), tg
 assert "✅ ph2 #42 42c0ffe (바뀜) — ████████ 8/8" in tg.splitlines(), tg
-assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4" in tg.splitlines(), tg
-assert "└ 🔄 문구 다듬기와 길이 정리 — CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커" in tg.splitlines(), tg
-assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "🙋 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4 · 작업 중" in tg.splitlines(), tg
-assert "🔴 정리 작업 — ███░░░░░ 1/3 · 세션 없음" in tg.splitlines(), tg  # each open row says whether a session runs it
+assert "└ ⏳ #51·#52·#53 rev-a 대기 — ██████░░ 3/4 · ↓ 대기" in tg.splitlines(), tg
+# A row's next step is on its own line, never repeated in a list below.
+assert "└ 🔄 문구 다듬기와 길이 정리 #54 ❗리뷰 CI✗ — ████░░░░ 2/4 · CI 재실행 뒤 리뷰 의뢰 다시 보내기 · 워커 · 작업 중" \
+    in tg.splitlines(), tg
+assert tg.count("CI 재실행 뒤 리뷰 의뢰 다시 보내기") == 1, tg
+assert "📋 acme/web — 알림 정리 → feature/notify" in tg.splitlines() and "🙋 알림 정리 #50 ❗DIRTY→main — ██████░░ 3/4 · ↓ 오너 · 작업 중" in tg.splitlines(), tg
+assert "🔴 정리 작업 — ███░░░░░ 1/3 · 재개·정리 · 3h 전 · 세션 없음" in tg.splitlines(), tg  # each open row says whether a session runs it
 assert tg.splitlines()[0] == "14:30 · 바뀐 행 1 · PR 상태 3h 전 기준 · 오래된 board 행 1 (3h 전) · 접음 완료 1 (대시보드)"
 assert "⏳ 다른 사람 대기\n\nrev-b · 리뷰 #61·#62 · 30분 전부터 → p61·p62\n" in tg, tg
 
@@ -396,11 +397,10 @@ prs_json["prs"].update(dict([pr("acme/wide#1201", merge_state="DIRTY", decision=
 code, wide, err = orch("brief", "render", "--periodic", "--now", NOW, "--json", "--scope", "넓은 표")
 wide = json.loads(wide)
 assert code == 1 and wide["width_ok"] is False and err == "a table is wider than 78 columns", (code, err, wide)
-assert "| 🔴 | 긴 이름의 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 | ████████ 100/100 | 세션 없음 |" \
+assert ("| 🔴 | 긴 이름의 리드 작업 | [#1201](https://example.test/1201) ❗DIRTY→release/2026-10 | ████████ 100/100 "
+        "| 재개·정리 | 세션 없음 |") in wide["text"].splitlines(), wide["text"]
+assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1124→feature/long-target·#1125 | — | ↓ 대기 | — |" \
     in wide["text"].splitlines(), wide["text"]
-assert "| ⏳ | └ rev-d 대기 | [#1123](https://example.test/1123)·#1124→feature/long-target·#1125 | — | — |" \
-    in wide["text"].splitlines(), wide["text"]
-assert "- 🔴 긴 이름의 리드 작업 — 세션 없음" in wide["text"].splitlines(), wide["text"]
 assert not any(m in wide["text"] for m in "¹²³…"), wide["text"]
 ok("board", "drop", "wide")
 
@@ -433,14 +433,11 @@ fill_rows = [l for l in filled.splitlines() if "acme/fill" in l or "acme/other" 
              or "c2" in l or "c4" in l]
 assert fill_rows == [
     "**acme/fill — 정산 리드 → main**",
-    "| 🙋 | 정산 리드 | — | — | 작업 중 |",
-    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — | 작업 중 |",
-    "| 🙋 | └ c2 | — | — | 멈춤 |",
+    "| 🙋 | 정산 리드 | — | — | — | 작업 중 |",
+    "| 🔄 | └ FILL-1 영수증 | [#5](https://example.test/5) ❗리뷰 CI… | — | — | 작업 중 |",
+    "| 🙋 | └ c2 | — | — | ↓ 오너 | 멈춤 |",
     "**acme/fill**",
-    "| 🔄 | c4 | — | — | 작업 중 |",
-    "- 🔄 정산 리드 — 턴 종료",
-    "- └ 🔄 FILL-1 영수증 — 작업 중",
-    "- 🔄 c4 — 작업 중 · 3h 전",
+    "| 🔄 | c4 | — | — | 3h 전 | 작업 중 |",
     "- 확인 대기 → c2"], filled
 assert "held" not in filled and "c3" not in filled and "c5" not in filled, filled
 # The last committed report never had fleet rows (it ran without --fill): they are not bold as new on every poll.
@@ -474,7 +471,9 @@ assert fleet.report_of(str(briefs / "c.md"))["next"] == "2026-10-13 착수"
     sess("runner", "standalone", "root", "idle", name="automations-runner")], "prs": []}))
 (tmp / "brief-last" / "top-level.json").unlink()
 carded = ok("brief", "render", "--periodic", "--now", NOW)
-assert "| 🔄 | 관측 카드 | #77 ? | — |" in carded and "- 🔄 관측 카드 — 리뷰 대기 · rev-a" in carded and "runner" not in carded, carded
+# Its PR is not collected yet: a fact the row needs is unknown, so it stops at ❔ for the agent (rowstate rule 1).
+assert "| ❔ | 관측 카드 | #77 ? | — | 에이전트 조치 필요: PR …[1] | 작업 중 |" in carded and "runner" not in carded, carded
+assert "- [1] 에이전트 조치 필요: PR 상태 모름" in carded, carded
 
 # A requests.jsonl left by the removed owner-request ledger is not read: the pointer line counts no requests.
 (state / "requests.jsonl").write_text(json.dumps({"ev": "open", "id": "r1", "ts": "2026-10-13T13:30:00Z", "text": "merge acme/web#77"}) + "\n")
@@ -532,13 +531,11 @@ PR: ❗ 사람이 풀 것 · CI… CI 진행
 
 **acme/web → main**
 
-| | 리드/Phase | PR | 진행 | 세션 |
-|---|---|---|---|---|
-| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | — | 작업 중 |
+| | 리드/Phase | PR | 진행 | 다음 | 세션 |
+|---|---|---|---|---|---|
+| 🔄 | ABC-1 정렬 | [#45](https://example.test/45) ❗리뷰 CI… | — | CI 통과 → 리뷰 의…[1] | 작업 중 |
 
-🔄 **진행 중**
-
-- 🔄 ABC-1 정렬 — CI 통과 → 리뷰 의뢰 · 워커
+- [1] CI 통과 → 리뷰 의뢰 · 워커
 
 ★ 정렬은 CI 가 끝나면 리뷰로 간다
 
@@ -561,7 +558,7 @@ periodic = rok("brief", "render", "--periodic", "--now", NOW)
 assert "| 작업 |" not in periodic and "단계표 1행 · `orch stage show`" in periodic.splitlines(), periodic
 tg_req = rok(*REQUEST, "--telegram")
 assert not any(m in tg_req for m in ("**", "|", "](", "`", "📋 작업별")), tg_req
-assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — — · 작업 중" in tg_req.splitlines(), tg_req
+assert "단계표 1행 · orch stage show --telegram" in tg_req.splitlines() and "🔄 ABC-1 정렬 #45 ❗리뷰 CI… — — · CI 통과 → 리뷰 의뢰 · 워커 · 작업 중" in tg_req.splitlines(), tg_req
 (tmp / "programs").mkdir(exist_ok=True)
 (tmp / "programs" / ".dash.json").write_text(json.dumps({"pid": os.getpid(), "port": 4799}))
 assert "단계표 1행 · http://127.0.0.1:4799/#/fleet/stages" in rok(*REQUEST).splitlines()
@@ -622,9 +619,10 @@ text = merged["text"]
 assert "| ✅ | ph1 | [#45](https://example.test/45) 45c0ffe | — |" in text, text
 assert "| ✅ | └ 하위 | [#46](https://example.test/46) 46c0ffe | — |" in text, text
 assert "| ⏸️ | ph2 | [#48](https://example.test/48) 닫힘 | — |" in text and "- PR 닫힘 → L ph2" in text, text
-assert "| 🔄 | └ ABC-9 라이브 | #47 ? | — |" in text and "- └ 🔄 ABC-9 라이브 — 작업 중" in text, text
+assert "| ❔ | └ ABC-9 라이브 | #47 ? | — | 에이전트 조치 …[1] | 작업 중 |" in text, text
+assert "- [1] 에이전트 조치 필요: PR 상태 모름" in text, text
 assert "머지 대기" not in text and "ABC-8" not in text and "fleet:lead" not in merged["snapshot"]["rows"], text
-assert "| 🔄 | └ ABC-10 다음 PR | — | — | 작업 중 |" in text, text
+assert "| 🔄 | └ ABC-10 다음 PR | — | — | — | 작업 중 |" in text, text
 
 
 class GhDown:  # sessions collected, the PR list not: the headline says the PR states are old
@@ -675,14 +673,15 @@ stamp_dir, state = state, wd / "dashboard"
 stamp()
 state = stamp_dir
 text = wok("brief", "render", "--periodic", "--now", NOW)
-mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "🔄 **진행 중**")
+mine, theirs, moving = section(text, "🙋 **지금 오너가 할 일**"), section(text, "⏳ **다른 사람 대기**"), section(text, "🔄 **표 밖 진행**")
 assert "| 🙋 | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | — |" in text, text
 assert "| ⏳ | └ 남 리뷰 | [#92](https://example.test/92) ❗리뷰 | — |" in text, text
 assert "| ⏳ | └ reply 디자인 답변 | — | — |" in text and "| ❔ | └ ask 누구 대기 | — | — |" in text, text
 assert mine == ["- 리뷰 · [#91](https://example.test/91) → 내 리뷰"], mine
 assert theirs == ["- rev-x · 리뷰 [#92](https://example.test/92) · 30분 전부터 → 남 리뷰",
                   "- 디자인팀 · 30분 전부터 → reply 디자인 답변 · 다음: 10/15 리마인드"], theirs
-assert "- └ ❔ ask 누구 대기 — 확인 필요: 누구 대기인지 기록 없음" in moving, moving
+assert "| ❔ | └ ask 누구 대기 | — | — | 에이전트 조치…[1] | 작업 중 |" in text and not moving, text
+assert "- [1] 에이전트 조치 필요: 누구 대기인지 기록 없음" in text, text
 assert not any(w in l for l in mine + moving for w in ("남 리뷰", "디자인 답변")), (mine, moving)
 assert not any(w in l for l in theirs + moving for w in ("내 리뷰", "캐시 정책")) and "누구 대기" not in "".join(mine + theirs)
 assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in text and "캐시 정책" not in "".join(mine), text
@@ -690,7 +689,8 @@ assert "❓ **결정 필요** — 1. (d1) 캐시 정책 → 추천: TTL 1h" in t
 del who_prs["me"]
 (wd / "dashboard" / "prs.json").write_text(json.dumps(who_prs))
 text = wok("brief", "render", "--periodic", "--now", NOW)
-assert "- └ ❔ 내 리뷰 — 확인 필요: 오너 login 모름" in text and "→ 내 리뷰" not in text, text
+assert "| ❔ | └ 내 리뷰 | [#91](https://example.test/91) ❗리뷰 | — | 에이전트 조치…[1] |" in text \
+    and "- [1] 에이전트 조치 필요: 오너 login 모름" in text and "→ 내 리뷰" not in text, text
 # A waiting row on the owner by name, a check status nobody may set, and 🙋 as a status shorthand.
 assert board.is_owner("오너", None) and board.is_owner("@Octo-Owner", "octo-owner") and not board.is_owner("rev-x", "octo-owner")
 assert board.status_of("🙋") == "owner" and orch("board", "set", "search", "--status", "check")[2].startswith("--status is one of")

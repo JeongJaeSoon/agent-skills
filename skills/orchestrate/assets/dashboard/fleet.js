@@ -959,7 +959,7 @@ const uncut = (cell, notes) => cell.replace(/^((?:[└ㄴ] )?(?:\*\*)?)(.*)…\[
 // too. split: what parts a line falls into, in order: [separator, column name] — the text before the first separator
 // is the first column. A line without the separator leaves the rest empty.
 const BRIEF_SECTIONS = {
-  "진행 중": [["", "항목"], [" — ", "상황"]],
+  "표 밖 진행": [["", "항목"], [" — ", "상황"]],
   "다른 사람 대기": [["", "누구 · 무엇 · 언제"], [" → ", "항목"], [" · 다음: ", "다음"]],
   "결정 필요": [["", "결정"], [" → 추천: ", "추천"]],
   "지금 오너가 할 일": [["", "할 일"], [" → ", "항목"]],
@@ -968,8 +968,8 @@ const BRIEF_SECTIONS = {
 const STATUS_MARK = /^(└ )?(🔄|🙋|⏳|⏸️|📅|⏰|✅|❔|❓|🔴|📝|\d+\.)\s+/u;  // a row under a lead keeps its └ in the item
 // A row the orchestrator or a lead wrote ends with who wrote it; the old role name reads as today's.
 const roleNow = (s) => s.replace(/(^|· )coordinator$/, "$1orchestrator").replace(/(^|· )코디네이터$/, "$1오케스트레이터");
-function sectionTable(name, items) {
-  const split = BRIEF_SECTIONS[name] || [["", "항목"]];
+function sectionTable(name, items, ids = []) {
+  const split = BRIEF_SECTIONS[name] || [["", "항목"]], acts = ids.some(Boolean);
   const rows = items.map((it) => {
     const t = roleNow(it), m = t.match(STATUS_MARK), rest = m ? (m[1] || "") + t.slice(m[0].length) : t;
     const cells = [];
@@ -981,13 +981,19 @@ function sectionTable(name, items) {
     return [m ? m[2] : "", ...cells];
   });
   const marked = rows.some((r) => r[0]);  // a section with no mark on any line gets no mark column
-  return `<div class="table-wrap"><table class="brief-table bsec"><thead><tr>${marked ? "<th></th>" : ""}${split.map(([, h]) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
-    <tbody>${rows.map((r) => `<tr>${(marked ? r : r.slice(1)).map((c, i) => `<td${marked && !i ? ' class="bmark"' : ""}>${briefInline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="brief-table bsec"><thead><tr>${marked ? "<th></th>" : ""}${split.map(([, h]) => `<th>${esc(h)}</th>`).join("")}${acts ? "<th></th>" : ""}</tr></thead>
+    <tbody>${rows.map((r, k) => `<tr>${(marked ? r : r.slice(1)).map((c, i) => `<td${marked && !i ? ' class="bmark"' : ""}>${briefInline(c)}</td>`).join("")}${acts ? `<td class="bact">${ids[k] ? doneBtn(ids[k]) : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
 }
-// tableRows (the reply's table_rows): per repository table, per row, the id its Ack or Done posts. A table whose row
-// count differs gets no buttons rather than a button on the wrong row. placed collects the Ack ids that did get one.
-function briefHtml(text, tableRows = [], placed = new Set()) {
+// A repository table's name cell as the reply's table_rows labels it: its whole text, without the └ and the bold.
+const rowLabel = (cell, notes) => uncut(cell, notes).replace(/^[└ㄴ] /, "").replace(/^\*\*(.*)\*\*$/, "$1");
+// tableRows (the reply's table_rows): per repository table, {table, rows}, each row {id, label, ack, done, session}.
+// A row's buttons go to the table row with its label (render() makes labels unique in a report); a row no entry names
+// gets none. listRows (list_rows): the items of the lists under the tables; an item with no table row of its own gets
+// its Done in the list. placed collects the Ack ids that got a button, closed the Done ids, so no card lists them again.
+function briefHtml(text, tableRows = [], placed = new Set(), listRows = {}, closed = new Set()) {
   const out = [], lines = text.split("\n");
+  const rowIds = new Set(tableRows.flatMap((x) => (x.rows || []).map((r) => r.id)));
+  const listed = Object.values(listRows || {}).flat().filter((e) => e && e.id && !rowIds.has(e.id));
   let i = 0, t = 0;
   const blank = () => { while (i < lines.length && !lines[i].trim()) i++; };
   while (i < lines.length) {
@@ -1002,14 +1008,17 @@ function briefHtml(text, tableRows = [], placed = new Set()) {
       for (let m; i < lines.length && (m = lines[i].match(/^- \[(\d+)\] (.*)$/)); i++) notes[m[1]] = m[2];
       if (!Object.keys(notes).length) i = at;
       const [head, ...body] = rows;
-      // A repository table (`| | name | PR | progress | session |`) gets one shared set of column widths; a cell too long
-      // for its column scrolls sideways within itself instead of being cut.
-      const repo = head.length === 5 && !head[0], acts = repo && tableRows[t++], btns = acts && acts.length === body.length ? acts : null;
-      (btns || []).forEach((x) => x.ack && placed.add(x.ack));
-      const act = (x) => `<td class="bact" data-row-label="${esc(x.label || "")}">${x.ack ? ackBtn({ ack: "ackable", key: x.ack }) : x.done ? doneBtn(x.done) : ""}</td>`;
-      out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr"><col class="bprog"><col class="bsess">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
+      // A repository table (`| | name | PR | progress | next | session |`) gets one shared set of column widths; a cell
+      // too long for its column scrolls sideways within itself instead of being cut.
+      const repo = head.length === 6 && !head[0], acts = repo && tableRows[t++];
+      const byLabel = new Map(((acts && acts.rows) || []).map((x) => [x.label, x]));
+      const found = body.map((r) => byLabel.get(rowLabel(r[1] || "", notes)) || null);
+      const btns = found.some(Boolean) ? found : null;
+      (btns || []).forEach((x) => { if (x && x.ack) placed.add(x.ack); else if (x && x.done) closed.add(x.done); });
+      const act = (x) => x ? `<td class="bact" data-row-label="${esc(x.label || "")}">${x.ack ? ackBtn({ ack: "ackable", key: x.ack }) : x.done ? doneBtn(x.done) : ""}</td>` : '<td class="bact"></td>';
+      out.push(`<div class="table-wrap"><table class="brief-table${repo ? " brepo" : ""}">${repo ? `<colgroup><col class="bmark"><col><col class="bpr"><col class="bprog"><col class="bnext"><col class="bsess">${btns ? '<col class="bact">' : ""}</colgroup>` : ""}
         <thead><tr>${head.map((c) => `<th>${briefInline(c)}</th>`).join("")}${btns ? "<th></th>" : ""}</tr></thead>
-        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === 4 && btns ? `<td class="bsess">${sessCell(btns[k].session, c)}</td>`
+        <tbody>${body.map((r, k) => `<tr>${r.map((c, n) => repo && n === 5 && btns && btns[k] ? `<td class="bsess">${sessCell(btns[k].session, c)}</td>`
           : `<td${repo && !n ? ' class="bmark"' : ""}>${repo && n ? `<div class="slide">${briefInline(uncut(c, notes))}</div>` : briefInline(uncut(c, notes))}</td>`).join("")}${btns ? act(btns[k]) : ""}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
@@ -1019,7 +1028,12 @@ function briefHtml(text, tableRows = [], placed = new Set()) {
       i++;
       for (blank(); i < lines.length && /^(- |\d+\. )/.test(lines[i]); i++, blank()) items.push(lines[i].replace(/^- /, ""));
       out.push(`<h4 class="bhead">${briefInline(`${sec[1]} ${sec[2]}`)}${sec[3] === "없음" ? ' <span class="muted">— 없음</span>' : ""}</h4>`);
-      if (items.length) out.push(sectionTable(sec[2], items));
+      const ids = items.map((it) => {
+        const e = listed.find((x) => !closed.has(x.id) && x.label && it.includes(x.label));
+        if (e) closed.add(e.id);
+        return e ? e.id : null;
+      });
+      if (items.length) out.push(sectionTable(sec[2], items, ids));
       continue;
     }
     if (line.trim()) out.push(`<p>${briefInline(line)}</p>`);
@@ -1060,7 +1074,7 @@ function showOpenNote() {
   }
   el.innerHTML = openNote(F.open);
 }
-const sessionRowsOf = (id) => ((F.brief || {}).table_rows || []).flat().filter((x) => x.session && x.session.id === id);
+const sessionRowsOf = (id) => ((F.brief || {}).table_rows || []).flatMap((t) => t.rows || []).filter((x) => x.session && x.session.id === id);
 function briefRowsCard(s, st) {
   if (!F.brief) pollBrief();
   const rows = sessionRowsOf(s.id), at = rows.map((x) => x.session.at).filter(Boolean).sort().pop();
@@ -1095,13 +1109,13 @@ function fleetBrief() {
   if (!b.text) return headHtml + ackNote() + stage + `<div class="card"><div class="empty-chart">${esc(b.message || "Nothing to report.")}</div></div>`;
   // A row with its Ack in the table is not listed again: the card keeps the acked rows, those folded out of the table
   // and those of a table that got no buttons.
-  const inTable = new Set(), report = briefHtml(b.text, b.table_rows, inTable);
+  const inTable = new Set(), closable = new Set(), report = briefHtml(b.text, b.table_rows, inTable, b.list_rows, closable);
   const { shown, head } = ackSplit((b.done || []).map((d) => ({ ...d, key: d.id, ack: d.acked ? "acked" : "ackable" })), "finished row");
   const rest = shown.filter((d) => !inTable.has(d.id));
   const finished = rest.length || head ? `<div class="card"><div class="card-head"><h3>Finished rows</h3><span class="aside">${head}</span></div>
     <ul class="rows">${rest.map((d) => `<li class="${d.acked ? "is-acked" : ""}"><span class="grow full">${esc(d.label)}</span><span class="acts muted">${d.at ? relSpan(d.at) : ""}</span>${ackBtn(d)}</li>`).join("")
       || '<li class="muted">Every finished row is in the table above or acked.</li>'}</ul></div>` : "";
-  return headHtml + ackNote() + undoNote() + stage + `<div class="card"><div class="brief card-body">${report}</div></div>` + finished + doneCards(b);
+  return headHtml + ackNote() + undoNote() + stage + `<div class="card"><div class="brief card-body">${report}</div></div>` + finished + doneCards(b, closable);
 }
 
 // Done (tidy.py, `orch board done`): close a row, card or board item that is over, or reopen one. The collector closes
@@ -1109,14 +1123,16 @@ function fleetBrief() {
 const DONE_KIND = { row: "row", doing: "in progress", later: "held", do: "to-do", todo: "you, now" };
 const doneBtn = (id, undo) => `<button class="chip ack" type="button" data-done="${esc(id)}"${undo ? " data-undo" : ""}
   title="${undo ? "Reopen: show it again (orch board reopen)" : "Done: close it here and in the brief (orch board done)"}">${undo ? "Reopen" : "Done"}</button>`;
-function doneCards(b) {
-  const open = (b.open || []).map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}${o.due ? tag("due", "accent", "clock") : ""}<span class="grow full" title="${esc(o.label)}">${esc(o.label)}</span>
+// Open items lists what got no Done button in the report above (shown: the ids that did), so each id has one button.
+function doneCards(b, shown = new Set()) {
+  const rest = (b.open || []).filter((o) => !shown.has(o.id));
+  const open = rest.map((o) => `<li>${tag(DONE_KIND[o.kind] || o.kind, o.check ? "warn" : "")}${o.due ? tag("due", "accent", "clock") : ""}<span class="grow full" title="${esc(o.label)}">${esc(o.label)}</span>
     ${o.check ? `<span class="acts muted full" title="${esc(o.check)}">check: ${esc(o.check)}</span>` : ""}${doneBtn(o.id)}</li>`).join("");
   const shut = (b.closed || []).map((c) => `<li class="is-acked">${tag(c.by === "auto" ? "auto" : "you", c.by === "auto" ? "accent" : "")}<span class="grow full" title="${esc(c.label || c.id)}">${esc(c.label || c.id)}</span>
     <span class="acts muted full" title="${esc(c.evidence || "")}">${esc(c.rule || "")}: ${esc(c.evidence || "")} · ${relSpan(c.ts)}</span>${c.reopen ? doneBtn(c.id, true) : ""}</li>`).join("");
   const note = F.doneError ? `<div class="ack-note">${tag("not closed", "warn", "alert")} ${esc(F.doneError)}</div>` : "";
-  return `<div class="card"><div class="card-head"><h3>Open items</h3><span class="aside muted">${(b.open || []).length}</span></div>${note}
-    <ul class="rows">${open || '<li class="muted">Nothing open.</li>'}</ul></div>`
+  return `<div class="card"><div class="card-head"><h3>Open items</h3><span class="aside muted">${rest.length}${rest.length < (b.open || []).length ? ` · ${(b.open || []).length - rest.length} with Done above` : ""}</span></div>${note}
+    <ul class="rows">${open || `<li class="muted">${(b.open || []).length ? "Every open item has its Done above." : "Nothing open."}</li>`}</ul></div>`
     + (shut ? `<div class="card"><div class="card-head"><h3>Closed in the last 7 days</h3><span class="aside muted">${(b.closed || []).length}</span></div><ul class="rows">${shut}</ul></div>` : "");
 }
 
@@ -1141,6 +1157,8 @@ function stageCell(c, refs) {
 }
 // Each program (a group row, or a top-level row of its own) is a block: its open rows always, its folded rows behind
 // its own "▸ N folded" toggle (F.stageFold), so a finished program reads as one line instead of a hundred.
+// A row's `now` (stages.with_now): the brief's status of the board row its PR links, drawn with the brief's icons.
+const NOW_ICON = { moving: "🔄", owner: "🙋", waiting: "⏳", check: "❔", held: "⏸️", blocked: "🔴", done: "✅" };
 const STAGE_COLS = [["Work", ""], ["PR", ""], ["Merged", "merge"], ["dev check", "dev"], ["prod check", "prod"]];
 function stageSection(w) {
   if (!w) return "";
@@ -1157,7 +1175,7 @@ function stageSection(w) {
   const level = {};
   all.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
   const row = (r) => `<tr class="${r.done_at ? "is-done" : ""}">
-      <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title_full || r.title, refs)}${r.done_at ? ` <span class="muted">· ${r.stopped ? "stopped" : "done"} ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
+      <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${r.now ? `<span class="wnow" title="Now, as the brief judges its board row">${briefInline(NOW_ICON[r.now] || "")}</span> ` : ""}${linkRefs(r.title_full || r.title, refs)}${r.done_at ? ` <span class="muted">· ${r.stopped ? "stopped" : "done"} ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
       <td class="mono wpr" data-label="PR">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
       ${STAGE_COLS.slice(2).map(([l, c]) => `<td data-label="${l}"${(r.cells || {})[c] ? "" : ' class="wempty"'}>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
   const blocks = {};

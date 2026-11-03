@@ -254,17 +254,30 @@ def ref_urls(rows, nxt, prs):
             for t in texts for m in REF.finditer(t)}
 
 
-def current(t, now, idle_s, state=None):
+ACT = ("owner", "check", "blocked")  # a 지금 that needs someone to act keeps its row in the table however quiet
+
+
+def with_now(t, by_pr):
+    """t with each work row's `now`: the brief's status of the one board row its PR links (rowstate.by_pr), or None."""
+    by_pr = by_pr or {}
+    return {**t, "rows": [r if r.get("group") else {**r, "now": by_pr.get(r.get("pr"))} for r in t["rows"]]}
+
+
+def current(t, now, idle_s, state=None, by_pr=None):
     """table() without the rows the report has no use for: finished (`done`, or every column ✅ or 해당 없음) or
     unchanged for idle_s, its PR's merge in state's PR list counting as a change. A row with a ❌, ⚠️ or 🔄 cell is
-    stuck, not finished, and stays however quiet. A row stays while a row under it stays, and with no time to judge by. Returns (table, how many work rows left); with no row left, 다음 순서 goes
-    too. The dashboard reads table() whole."""
+    stuck, not finished, and stays however quiet; so does one whose 지금 (by_pr, the brief's judgment) needs someone to
+    act. A row stays while a row under it stays, and with no time to judge by. Returns (table, how many work rows
+    left); with no row left, 다음 순서 goes too. The dashboard reads table() whole."""
+    t = with_now(t, by_pr)
     rows = {r["id"]: r for r in t["rows"]}
     merged = {p.get("key"): p.get("merged_at") for p in (state or {}).get("prs") or []}
 
     def live(r):
         if r.get("group") or r.get("done_at"):
             return False
+        if r.get("now") in ACT:
+            return True
         marks = {(r["cells"].get(c) or {}).get("mark") for c in COLUMNS}
         if marks & {"fail", "partial", "checking"}:
             return True
@@ -290,12 +303,12 @@ def idle_s():
     return {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"] * 86400
 
 
-def counted(t, state, now=None):
+def counted(t, state, now=None, by_pr=None):
     """The table whole for the Stages page, counted by current() as the brief's line counts it: each row's `open`
-    (current() keeps it), `open` (the line's N) and `folded` (its 접음)."""
-    cur, gone = current(t, now or fleet.utcnow(), idle_s(), state)
+    (current() keeps it) and `now`, `open` (the line's N) and `folded` (its 접음)."""
+    cur, gone = current(t, now or fleet.utcnow(), idle_s(), state, by_pr)
     keep = {r["id"] for r in cur["rows"]}
-    return {**t, "rows": [{**r, "open": r["id"] in keep} for r in t["rows"]],
+    return {**t, "rows": [{**r, "open": r["id"] in keep} for r in with_now(t, by_pr)["rows"]],
             "open": sum(1 for r in cur["rows"] if not r.get("group")), "folded": gone}
 
 
@@ -339,25 +352,34 @@ def env_line(env):
     return " · ".join(parts)
 
 
+def now_mark(r):
+    """A work row's 지금 cell: the brief's icon for the one board row its PR links (rowstate), else –."""
+    import rowstate
+    return rowstate.ICON.get(r.get("now"), "–")
+
+
 def render_md(t):
     if not t["rows"]:
         return ""
-    header = ["작업", "feature·대표 PR", "PR 머지", "dev 확인", "prod 확인"]
-    lines = [l for l in (env_line(t["env"]), LEGEND) if l] + ["", "| " + " | ".join(header) + " |", "|---|---|---|---|---|"]
+    # 지금 only when a row has one: the brief's judgment of the board row its PR links, never one of this table's own.
+    now = any(r.get("now") for r in t["rows"])
+    header = (["지금"] if now else []) + ["작업", "feature·대표 PR", "PR 머지", "dev 확인", "prod 확인"]
+    lines = [l for l in (env_line(t["env"]), LEGEND) if l] + ["", "| " + " | ".join(header) + " |", "|---" * len(header) + "|"]
     groups = {r["id"] for r in t["rows"] if r.get("group")}
     body = []
     for r in t["rows"]:
         if r.get("group"):
-            body.append([r["title"], "", "", "", ""])
+            body.append(([""] if now else []) + [r["title"], "", "", "", ""])
             continue
         name = f"ㄴ {r['title']}" if r.get("parent") not in (None, *groups) else r["title"]
         if r.get("done_at"):
             name += " (중단)" if r.get("stopped") else " (끝남)"
-        body.append([name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS])
+        body.append(([now_mark(r)] if now else []) + [name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS])
     # Only the name and PR cells are cut to fit (the PR column is a plain key here, not a link), as in the brief's
     # tables, each whole text in the list under it. A table its stage cells alone make too wide overflows.
-    rows, notes = table_width.fit([header] + body, COLS, (0, 1),
-                                  deco=lambda i, c, x: f"**{x}**" if c == 0 and t["rows"][i - 1].get("group") else x)
+    at = 1 if now else 0
+    rows, notes = table_width.fit([header] + body, COLS, (at, at + 1),
+                                  deco=lambda i, c, x: f"**{x}**" if c == at and t["rows"][i - 1].get("group") else x)
     lines += ["| " + " | ".join(x.replace("|", "\\|") for x in row) + " |" for row in rows[1:]]
     lines += [""] + [f"- [{n}] {x}" for n, x in enumerate(notes, 1)] if notes else []
     if t["next"]:
@@ -376,6 +398,7 @@ def render_telegram(t):
             lines.append(f"[{r['title']}]")
             continue
         head = f"ㄴ {r['title']}" if r.get("parent") not in (None, *groups) else f"- {r['title']}"
+        head += f" {now_mark(r)}" if r.get("now") else ""
         pr = f" ({r['pr']})" if r.get("pr") else ""
         cells = " · ".join(f"{label} {cell_text(r['cells'].get(c))}" for c, label in zip(COLUMNS, ("머지", "dev", "prod")))
         lines.append(f"{head}{pr} — {cells}")

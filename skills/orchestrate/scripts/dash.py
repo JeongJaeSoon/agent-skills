@@ -1827,7 +1827,8 @@ def cmd_serve(argv):
 
 
 def brief_report():
-    return periodic_report() | {"stages": stage_report()}
+    rep = periodic_report()
+    return rep | {"stages": stage_report(rep.get("now_by_pr"))}
 
 
 def periodic_report():
@@ -1845,7 +1846,9 @@ def periodic_report():
         out = json.loads(r.stdout)
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
-    return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok", "done", "open", "table_rows")} | {"closed": closed_recent()}
+    keys = ("text", "changed", "stale", "width_ok", "done", "open", "table_rows", "list_rows", "placement", "duplicates",
+            "missing", "now_by_pr")
+    return {k: out.get(k) for k in keys} | {"closed": closed_recent()}
 
 
 PRESSURE = HERE.parents[1] / "reap-resources" / "scripts" / "pressure.py"
@@ -1874,12 +1877,13 @@ def closed_recent(days=7):
                   key=lambda r: r.get("ts") or "", reverse=True)
 
 
-def stage_report():
+def stage_report(by_pr=None):
     """The stage table whole, generated rows and recorded ones, for the Stages page: the brief's text has only a line pointing here.
-    Read per request, so an `orch stage set` shows on the next poll. Counted by stages.counted(), the brief line's count."""
+    Read per request, so an `orch stage set` shows on the next poll. Counted by stages.counted(), the brief line's count.
+    by_pr: the same render's now_by_pr, each row's 지금."""
     try:
         state = fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
-        return acks.mark_stages(stages.counted(stages.table(state), state))
+        return acks.mark_stages(stages.counted(stages.table(state), state, by_pr=by_pr))
     except (OSError, ValueError) as e:
         return {"error": f"stages: {type(e).__name__}: {e}"}
 

@@ -1,0 +1,463 @@
+"""Row state: the one judgment of what a brief row waits on, and of where the report shows it.
+
+judge(row, facts) is the only place a row's status is decided: 🔄 the agent acts next, 🙋 only the owner can unblock
+it, ⏳ another person, ⏸️ a condition (a held item, a preceding PR, a machine wait, a closed PR), ❔ a gap in the record
+the agent fills, 🔴 its lead session is gone, ✅ done. Rules run top to bottom and the first that applies decides;
+a later rule never rewrites an earlier one's result, and what later rules also found stays in `also`. A fact a rule
+needs and cannot read is unknown, not false: the rule stops there with ❔ and names what is missing.
+
+gather() is the one adapter that reads the facts (board, tidy, state, prs, decisions, the external inbox, the pressure
+queue, program files and ledgers). PR 4b-1 swaps it for one that reads agent-skills.db; judge() and place() do not
+change. brief render, the dashboard's Brief and Stages and `orch stage show` all read states through snapshot() or
+judge(); none of them decides a status of its own.
+"""
+import fnmatch, json, os, pathlib, re
+
+import fleet
+
+ICON = {"moving": "🔄", "owner": "🙋", "waiting": "⏳", "check": "❔", "held": "⏸️", "blocked": "🔴", "done": "✅"}
+OWNER_NAMES = ("오너", "owner")
+# What a merged PR's row may still have to do (tidy.POST_MERGE): the row stays open on it.
+POST_MERGE = re.compile(r"릴리스|배포|apply|deploy|release|rollout|롤아웃", re.I)
+OWNER_TYPES = ("approval", "run_command", "login", "verify_failed", "question")  # fleet.STICKY_TYPES
+AGENT_ACTION = "에이전트 조치 필요"
+# The lists below the tables, and the word a row's 다음 cell points at them with.
+POINTER = {"owner": "↓ 오너", "waiting": "↓ 대기", "held": "↓ 보류"}  # short: the 78-column table cuts at 8
+
+
+class RowState(dict):
+    """status, next, why, who, what, since, hold (the PR key a held item holds it by), also (later rules that matched
+    too), unknown (facts it could not read)."""
+
+    def __init__(self, status, next_="", why="", **kw):
+        super().__init__(status=status, next=next_ or "", why=why or "", who=kw.get("who"), what=kw.get("what"),
+                         since=kw.get("since"), hold=kw.get("hold"), also=list(kw.get("also") or ()),
+                         unknown=list(kw.get("unknown") or ()))
+
+    def __getattr__(self, k):
+        try:
+            return self[k]
+        except KeyError:
+            raise AttributeError(k) from None
+
+
+def is_owner(who, me):
+    w = (who or "").strip().lstrip("@").lower()
+    if w.startswith("team:"):
+        return False
+    return w in OWNER_NAMES or bool(me) and w == me.lower()
+
+
+def merged(p):
+    return bool(p) and (p.get("state") == "MERGED" or bool(p.get("merged_at")))
+
+
+def who_state(login, me):
+    """The status of a wait on one person: the owner's, another's, or ❔ when the owner's login is not known."""
+    if not me:
+        return "check"
+    return "owner" if is_owner(login, me) else "waiting"
+
+
+def asked(p):
+    """The people and teams (no bots) a PR has requested a review from. A team is never the owner."""
+    return [x["login"] for x in (p or {}).get("reviewers") or [] if x.get("requested") and not x.get("bot")]
+
+
+def reviewable(p):
+    """An open PR a requested review is the next event of: not a draft, CI not failing, no change request."""
+    return (p.get("state") == "OPEN" and not p.get("draft") and p.get("ci") != "failure"
+            and p.get("decision") != "CHANGES_REQUESTED")
+
+
+# ---------------------------------------------------------------- facts (the file adapter; 4b-1 reads the DB)
+
+def gate_of(evs, open_gates):
+    """A PR's landing gate from its ledger events and the open Orca gate ids the collector saw (None: runs not read):
+    none (never opened), pending (its newest gate is in the open list), approved (approved or landed after the
+    newest gate), else unknown. A gate missing from the open list is no evidence of an answer: it may have been
+    answered, cancelled, or opened after the last collect."""
+    opened = [i for i, e in enumerate(evs) if e.get("ev") == "gate_opened"]
+    if not opened:
+        return "none"
+    last = opened[-1]
+    if any(e.get("ev") in ("approved", "landed") for e in evs[last + 1:]):
+        return "approved"
+    return "pending" if open_gates is not None and evs[last].get("gate") in open_gates else "unknown"
+
+
+def program_facts(open_gates=None, home=None):
+    """{PR key: [{"program", "policy", "gate", "verdict"}]} for every PR a program's ledger names, read from
+    $PROGRAMS_HOME/<slug>/program.json and ledger.jsonl. policy None: no valid merge_policy. gate: gate_of(), or
+    "unknown" when the ledger cannot be read. verdict: the newest verdict's {sha, pass} for that PR, or None."""
+    home = pathlib.Path(home or os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
+    out = {}
+    try:
+        dirs = sorted(d for d in home.iterdir() if d.is_dir() and not d.name.startswith(("_", ".")))
+    except OSError:
+        return out
+    for d in dirs:
+        cfg = fleet.read_json(d / "program.json", None)
+        if not isinstance(cfg, dict) or not cfg.get("repo"):
+            continue
+        policy = cfg.get("merge_policy") if cfg.get("merge_policy") in ("autonomous", "human-gate") else None
+        try:
+            lines = (d / "ledger.jsonl").read_text().splitlines() if (d / "ledger.jsonl").exists() else []
+            events = [json.loads(l) for l in lines if l.strip()]
+        except (OSError, ValueError):
+            events = None
+        per = {}
+        for e in events or []:
+            if isinstance(e, dict) and isinstance(e.get("pr"), int):
+                per.setdefault(e["pr"], []).append(e)
+        for n, evs in per.items():
+            v = next((e for e in reversed(evs) if e.get("ev") == "verdict"), None)
+            verdict = v and {"sha": v.get("sha") or "", "pass": str(v.get("result") or "pass").lower() in ("pass", "ok")}
+            out.setdefault(f"{cfg['repo']}#{n}", []).append(
+                {"program": d.name, "policy": policy, "verdict": verdict,
+                 "gate": gate_of(evs, open_gates) if events is not None else "unknown"})
+    return out
+
+
+def pressure_facts(sessions, now):
+    """{worktree id: [queue entries]} for the pressure queue entries whose cwd is exactly one session's worktree path
+    (reap-resources' pressure.py, read only), or None when the queue cannot be read. An entry two sessions match is
+    linked to neither. The link is by path only: a session restarted in the same worktree inherits a waiting entry
+    until its deadline (queue_minutes) turns it into gave_up."""
+    try:
+        import sys
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
+        import pressure
+        q = pressure.queue_read()
+    except Exception:  # an install without reap-resources, or a queue that cannot be read
+        return None
+    by_path = {}
+    for sid, s in sessions.items():
+        if s.get("path"):
+            by_path.setdefault(os.path.realpath(s["path"]), []).append(sid)
+    out = {}
+    for e in q.values():
+        hit = by_path.get(os.path.realpath(e.get("cwd") or "")) if e.get("cwd") else None
+        if hit and len(hit) == 1:
+            out.setdefault(hit[0], []).append(queue_state(e, now))
+    return out
+
+
+def queue_state(e, now):
+    """The entry with its state as of now: past its deadline a waiting entry has given up and a retrying one has
+    failed, whether or not pressure's own round has run since to write that down."""
+    try:
+        late = float(e.get("deadline")) < now.timestamp()
+    except (TypeError, ValueError):
+        late = False
+    if late and e.get("state") in ("waiting", "retrying"):
+        return {**e, "state": "gave_up" if e["state"] == "waiting" else "failed"}
+    return e
+
+
+def agent_merges(cfg=None):
+    """agent-skills.json → board.agent_merges: repository patterns (owner/repo, globs) whose PRs the agent merges when
+    no program says otherwise. None by default."""
+    path = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
+    try:
+        cfg = cfg if cfg is not None else json.loads(path.read_text())
+        pats = (cfg.get("board") or {}).get("agent_merges") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [p for p in pats if isinstance(p, str)]
+
+
+def gather(*, now, prs, me, shut, verdicts, holds, hold_why, leads, state, decisions, owner_items=None,
+           programs=None, pressure=None, merges=None, state_min=5):
+    """The facts judge() reads, from what the render already holds plus the program, pressure and config files."""
+    sessions = {s.get("id"): s for s in (state or {}).get("sessions") or []}
+    src = (state or {}).get("sources") or {}
+    at = fleet.parse((state or {}).get("generated_at"))
+    known = (state is not None and not (src.get("orca") or {}).get("error")
+             and (at is None or (now - at).total_seconds() <= state_min * 60))
+    live = None if state is None else {t.get("handle") for s in sessions.values() for t in s.get("terminals") or []}
+    # The open Orca gates the collector saw this tick; None when its runs source failed or there is no state.
+    open_gates = None if state is None or (src.get("runs") or {}).get("error") else {
+        i["key"].removeprefix("gate:") for i in state.get("items") or [] if str(i.get("key", "")).startswith("gate:")}
+    if pressure is None:
+        pressure = pressure_facts(sessions, now)
+    return {"now": now, "me": me, "prs": prs, "shut": shut, "verdicts": verdicts, "holds": holds, "hold_why": hold_why,
+            "leads": leads, "sessions": sessions, "sessions_known": known, "live": live, "decisions": decisions,
+            "owner_items": owner_items if owner_items is not None else
+            [i for i in fleet.external_items(now) if i["type"] in OWNER_TYPES and i.get("session")],
+            "programs": programs if programs is not None else program_facts(open_gates),
+            "pressure": pressure or {}, "pressure_known": pressure is not None,
+            "agent_merges": merges if merges is not None else agent_merges()}
+
+
+# ---------------------------------------------------------------- judge
+
+def canonical(r):
+    """The id a row is closed by (tidy): its card for a fleet row, else the board row."""
+    return f"card:{r['session']}" if r.get("session") else f"row:{r['id']}"
+
+
+def merge_actor(key, f):
+    """Who merges an open PR once nothing else stands in its way: "agent", "owner" (its gate waits on the owner), or
+    None (unknown). A program's policy comes first; two programs naming the PR with different policies are unknown."""
+    progs = f["programs"].get(key) or []
+    if progs:
+        prog = program_of(key, f)
+        if prog is None or prog["policy"] is None:
+            return None
+        if prog["policy"] == "autonomous":
+            return "agent"
+        return {"none": "agent", "approved": "agent", "pending": "owner"}.get(prog["gate"])
+    repo = key.rsplit("#", 1)[0]
+    if any(fnmatch.fnmatchcase(repo, p) for p in f["agent_merges"]):
+        return "agent"
+    if f["me"] and repo.split("/", 1)[0].lower() == f["me"].lower():
+        return "agent"
+    return None
+
+
+def program_of(key, f):
+    """The one program record for a PR, or None when programs naming it disagree on the policy."""
+    progs = f["programs"].get(key) or []
+    if len({p["policy"] for p in progs}) != 1:
+        return None
+    return progs[-1]
+
+
+def merge_next(key, p, f):
+    """The agent's next step on a PR it merges, from the evidence: never 머지 without a passing review of the head."""
+    if p.get("draft"):
+        return "초안 → ready"
+    if p.get("merge_state") == "DIRTY":
+        return "충돌 해소"
+    if p.get("decision") == "CHANGES_REQUESTED":
+        return "리뷰 지적 반영"
+    if p.get("ci") in ("failure", "pending"):
+        return "체크"
+    prog = program_of(key, f)
+    if not prog:
+        return "리뷰·머지"
+    v = prog.get("verdict")
+    head = p.get("head") or ""
+    if not v or not head or not v["sha"] or not (head.startswith(v["sha"]) or v["sha"].startswith(head)):
+        return "리뷰"
+    if not v["pass"]:
+        return "리뷰 지적 반영"
+    return "머지" if p.get("ci") == "success" and p.get("merge_state") in ("CLEAN", "HAS_HOOKS") else "체크"
+
+
+def judge(r, f, lead=None, sid=None):
+    """The RowState of one row. lead: the board lead the row hangs under (None for fleet rows with none); sid: the
+    worktree the row's work runs in (its own, else its lead's)."""
+    me, now = f["me"], f["now"]
+    status, nxt = r.get("status") or "moving", r.get("next") or ""
+    key = r.get("pr")
+    p = f["prs"].get(key) if key else None
+    tid = canonical(r)
+    s = f["sessions"].get(r.get("session") or sid) if (r.get("session") or sid) else None
+    busy = bool(s) and s.get("phase") in ("working", "waiting")
+    since = r.get("since") or (p or {}).get("created")
+    found = []  # (status, kwargs) of every rule that applies, first one decides
+
+    def hit(st, nx="", why="", **kw):
+        found.append((st, dict(next_=nx, why=why, since=kw.pop("since", since), **kw)))
+
+    def stop_unknown(*missing):
+        return RowState("check", f"{AGENT_ACTION}: {' · '.join(missing)}", " · ".join(missing), unknown=missing,
+                        since=since, also=[st for st, _ in found])
+
+    # 1 ✅: only a confirmed completion returns here; a merged PR with work left goes on through the rules below. A row
+    # marked done whose PR closed unmerged is not: GitHub outranks the board, and rule 3 holds it as PR 닫힘.
+    if tid in f["shut"] or status == "done" and not (p and p.get("state") == "CLOSED" and not merged(p)):
+        return RowState("done")
+    if key and p is None:
+        return stop_unknown("PR 상태 모름")
+    left = None
+    if merged(p):
+        if busy and r.get("session"):
+            left = "PR 머지됨 · 작업 중"
+        elif POST_MERGE.search(nxt):
+            left = nxt
+        else:
+            return RowState("done")
+    is_open = bool(p) and p.get("state") == "OPEN"
+    queue = f["pressure"].get(sid, []) if sid else []
+
+    # 2 🙋 only the owner can unblock it
+    for d in f["decisions"]:
+        link = d.get("link") or ""
+        if key and (link == key or key in fleet.pr_refs(link) or p.get("url") and link == p["url"]) or link == f"row:{r['id']}":
+            hit("owner", nxt, what=f"결정 {d['id']}: {d.get('title') or ''}".strip(), since=d.get("created_at"))
+    for it in f["owner_items"]:
+        if sid and it.get("session") == sid:
+            hit("owner", nxt, what=it.get("title") or it.get("type"), since=it.get("at"))
+    prog = program_of(key, f) if is_open else None
+    if prog and prog["policy"] == "human-gate" and prog["gate"] == "pending":
+        hit("owner", nxt, what="gate 응답")
+    if is_open and not p.get("draft"):
+        people = asked(p)
+        if people and not me:
+            return stop_unknown("오너 login 모름") if not found else _first(found, unknown=["오너 login 모름"])
+        if any(is_owner(a, me) for a in people):
+            hit("owner", nxt, what="리뷰")
+    if r.get("owner") and is_owner(r["owner"], me) or status == "owner" and not r.get("owner"):
+        hit("owner", nxt, what=nxt or "응답")
+
+    # 3 ⏸️ a condition holds it
+    if p and p.get("state") == "CLOSED":
+        hit("held", "PR 닫힘")
+    if is_open and (h := f["holds"].get(key)):
+        own = fleet.drop_date(nxt, f["hold_why"].get(key, (None, None))[1], now)
+        hit("held", h if own in GENERIC_NEXT or own == h else f"{h} · {own}", hold=key)
+    if r.get("after"):
+        pa = f["prs"].get(r["after"])
+        if pa is None:
+            if not found:
+                return stop_unknown(f"선행 {r['after']} 상태 모름")
+        elif not merged(pa) and pa.get("state") == "OPEN":
+            hit("held", f"선행 {r['after']} 머지 대기")
+        elif not merged(pa):
+            hit("check", f"{AGENT_ACTION}: 선행 {r['after']} 닫힘", f"선행 {r['after']} 닫힘")
+    for e in queue:
+        if e.get("state") == "waiting":
+            hit("held", f"기계 대기: {e.get('what')}")
+    if status == "held" and not (r.get("session") and is_open):  # a fleet row's held is its phase, not a hold
+        hit("held", nxt)
+
+    # 4 ⏳ another person
+    if is_open and reviewable(p):
+        others = [a for a in asked(p) if not is_owner(a, me)]
+        if others:
+            who = ", ".join(others)
+            hit("waiting", "" if nxt in GENERIC_NEXT else nxt, who=who, what="리뷰")
+    if r.get("owner") and not is_owner(r["owner"], me):
+        hit("waiting", nxt, who=r["owner"])
+
+    # 5 🔴 its lead's session is gone
+    if status == "moving" and lead and not lead.get("closed_at"):
+        if not f["sessions_known"]:
+            pass  # unknown: never 🔴 on a list that cannot be trusted
+        else:
+            gone = (sid not in f["sessions"] or f["sessions"][sid].get("phase") == "offline") if sid \
+                else f["live"] is not None and lead.get("handle") not in f["live"]
+            if gone:
+                hit("blocked", "재개·정리")  # the 세션 column already says the session is gone
+
+    # 6 ❔ a gap the agent fills
+    v = f["verdicts"].get(tid)
+    if v and v.get("verdict") == "check":
+        hit("check", f"{AGENT_ACTION}: {v['evidence']}", v["evidence"])
+    if status == "check":
+        hit("check", f"{AGENT_ACTION}: {r.get('why') or '상태 모름'}", r.get("why") or "상태 모름")
+    for e in queue:
+        if e.get("state") in ("gave_up", "failed"):
+            hit("check", f"{AGENT_ACTION}: pressure {e['state']} {e.get('what')}", f"pressure {e['state']}")
+    # The PR's own facts come before the row's word: a ready PR the agent merges is 🔄 whatever "waiting" the row says.
+    if is_open:
+        quiet = not busy and bool(r.get("session") or status in ("held", "waiting"))
+        if p.get("draft") and quiet:
+            hit("check", f"{AGENT_ACTION}: 초안 · 세션 없음 — 재개하거나 보류로 기록", "초안 · 세션 없음")
+        elif ready(p):
+            # Nothing on the PR is the agent's to fix: who merges it is what decides whether it moves.
+            actor = merge_actor(key, f)
+            if actor is None and prog and prog["policy"] == "human-gate" and prog["gate"] == "unknown":
+                hit("check", f"{AGENT_ACTION}: gate 상태 확인 필요 — orch land 로 응답 읽기", "gate 상태 모름")
+            elif actor is None:
+                hit("check", f"{AGENT_ACTION}: 머지 주체 기록 없음", "머지 주체 기록 없음")
+            elif actor == "agent":  # its next step comes from the evidence, never from a word like 머지 대기
+                hit("moving", merge_next(key, p, f))
+        elif quiet:  # no agent on it now, and the PR has the agent's work left (CI, a conflict, a review to answer)
+            hit("moving", merge_next(key, p, f))
+    if status == "waiting" and not r.get("owner") and not (is_open and asked(p)):
+        hit("check", f"{AGENT_ACTION}: 누구 대기인지 기록 없음", "누구 대기인지 기록 없음")
+
+    # 7 🔄
+    hit("moving", left or nxt)
+    return _first(found)
+
+
+def judge_item(kind, item, f, iid):
+    """The RowState of a list item that is not a table row: a doing item, a held item (later), an arrived to-do (do).
+    The same rules as judge(), on the facts such an item has."""
+    if iid in f["shut"]:
+        return RowState("done")
+    v = f["verdicts"].get(iid)
+    if v and v.get("verdict") == "check":
+        return RowState("check", f"{AGENT_ACTION}: {v['evidence']}", v["evidence"])
+    if kind == "later":
+        return RowState("held", item.get("trigger") or "")
+    who = item.get("owner") if kind == "doing" else item.get("who")
+    nxt = item.get("next") or ""
+    if who and is_owner(who, f["me"]):
+        return RowState("owner", nxt, what=nxt)
+    if kind == "doing" and item.get("waiting"):
+        if not f["me"]:
+            return RowState("check", f"{AGENT_ACTION}: 오너 login 모름", "오너 login 모름", unknown=["오너 login 모름"])
+        return RowState("waiting", nxt, who=who, since=item.get("since"))
+    return RowState("moving", nxt, who=who)
+
+
+def ready(p):
+    """An open PR nothing on it is the agent's to fix: not a draft, no conflict, no change request, CI passed or none,
+    and no human reviewer requested."""
+    return (reviewable(p) and p.get("ci") in ("success", None) and p.get("merge_state") != "DIRTY"
+            and not asked(p))
+
+
+def _first(found, unknown=()):
+    st, kw = found[0]
+    return RowState(st, also=[x for x, _ in found[1:] if x != st], unknown=unknown, **kw)
+
+
+# The next steps a session's phase writes (board.PHASE_ROW): they say nothing a hold or a merge step would not.
+GENERIC_NEXT = {"작업 중", "턴 종료", "확인 대기", "에이전트 없음", "세션 꺼짐", ""}
+
+
+# ---------------------------------------------------------------- place
+
+def place(st):
+    """Where a row with this state shows: always its repository table, once. The lists below hold references only."""
+    return "table"
+
+
+def ref_list(st):
+    """The list that references a row (🙋 ⏳ ⏸️), or None: 🔄 ❔ 🔴 ✅ rows say their next step in the table."""
+    return {"owner": "owner", "waiting": "waiting", "held": "held"}.get(st["status"])
+
+
+def cell_next(st, suffix=""):
+    """The row's 다음 cell: its next step, or a pointer to the list that says it."""
+    if st["status"] == "done":
+        return "—"
+    if st["status"] in POINTER:
+        return POINTER[st["status"]]
+    return (st["next"] or "—") + suffix
+
+
+def by_pr(states, rows):
+    """{PR key: status} for each PR exactly one judged row links, or several that agree: the stage table's 지금 cell.
+    A PR rows disagree on has none, never a pick."""
+    seen = {}
+    for rid, st in states.items():
+        if (pr := (rows.get(rid) or {}).get("pr")):
+            seen.setdefault(pr, set()).add(st["status"])
+    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+
+def snapshot(now=None):
+    """The brief's states without its text, for a reader that is not the brief (`orch stage show`): {"rows": {row id:
+    RowState}, "by_pr": by_pr()}. The same render() the brief and the dashboard run, so no reader judges on its own."""
+    import board  # board imports this module
+    out = board.render(now=now, fill=True, periodic=False)
+    return {"rows": out["states"], "by_pr": out["now_by_pr"]}
+
+
+def check_placement(placement, expected):
+    """(duplicates, missing, unexpected): ids placed in a table or list more than once, expected ids placed nowhere,
+    and placed ids nothing expected. placement: {id: ["table:…" | "list:…" | "ref:…", ...]}."""
+    shown = {i: [w for w in ws if not w.startswith("ref:")] for i, ws in placement.items()}
+    dup = sorted(i for i, ws in shown.items() if len(ws) > 1)
+    dup += sorted(i for i, ws in placement.items() if sum(w.startswith("ref:") for w in ws) > 1)
+    missing = sorted(set(expected) - {i for i, ws in shown.items() if ws})
+    unexpected = sorted({i for i, ws in shown.items() if ws} - set(expected))
+    return dup, missing, unexpected
