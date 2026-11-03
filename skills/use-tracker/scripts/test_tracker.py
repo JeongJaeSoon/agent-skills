@@ -701,7 +701,7 @@ class MarkdownCli(unittest.TestCase):
         self.assertTrue(text.endswith("\nbody\n"))
 
     def test_scalar_types_empty_values_and_the_comments_heading(self):
-        self.write("abc/ABC-1.md", "---\nid: ABC-1\ntitle: t\nstate: backlog\nparent:\nchecked: false\nestimate: 1.5\n---\n"
+        self.write("abc/ABC-1.md", "---\nid: ABC-1\ntitle: t\nstate: backlog\nparent:\nchecked: false\nestimate: 1.5\ntiny: 1e-07\ndue date:\n---\n"
                    "Write `## Comments` inline, keep it.\n### Comments\nstill description\n")
         self.assertEqual([i["id"] for i in self.ok("children", "--project", "abc")], ["ABC-1"])
         got = self.ok("get", "ABC-1")
@@ -712,6 +712,8 @@ class MarkdownCli(unittest.TestCase):
         text = self.read("abc", "ABC-1.md")
         self.assertIn("checked: false\n", text)
         self.assertIn("estimate: 1.5\n", text)
+        self.assertIn("tiny: 1e-07\n", text)
+        self.assertIn("due date:\n", text)
         self.assertEqual(text.count("\n## Comments\n"), 1)
         self.assertIn("still description", self.ok("get", "ABC-1")["description"])
         self.assertNotIn("first", self.ok("get", "ABC-1")["description"])

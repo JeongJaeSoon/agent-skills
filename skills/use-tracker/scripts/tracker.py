@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -655,7 +656,7 @@ def yaml_scalar(text):
         return text == "true"
     if re.fullmatch(r"-?\d+", text):
         return int(text)
-    return float(text) if re.fullmatch(r"-?\d+\.\d+", text) else text
+    return float(text) if re.fullmatch(r"-?\d+(\.\d+)?([eE][+-]?\d+)?", text) else text
 
 
 def parse_ticket(path, text):
@@ -688,6 +689,8 @@ def render_ticket(meta, body):
     for key in [k for k in MD_KEYS if k in meta] + [k for k in meta if k not in MD_KEYS]:
         if meta[key] is not None:
             lines.append(f"{key}: {json.dumps(meta[key], ensure_ascii=False)}")
+        elif key not in MD_KEYS:
+            lines.append(f"{key}:")  # a property the user left empty stays in the file
     return "\n".join(lines + ["---", body.lstrip("\n")])
 
 
@@ -788,23 +791,24 @@ class MarkdownAdapter:
         meta = {"title": title, "state": "backlog", "labels": list(labels),
                 "parent": f"[[{parent}]]" if parent else None, "related": [f"[[{related}]]"] if related else None,
                 "created_at": stamp, "updated_at": stamp}
-        body, tmp = read_body(body_file), os.path.join(folder, f".new-{os.getpid()}.md.tmp")
-        try:
-            while True:
-                taken = [int(n[len(key) + 1:-3]) for n in os.listdir(folder) if re.fullmatch(re.escape(key) + r"-\d+\.md", n)]
-                issue_id = f"{key}-{max(taken, default=0) + 1}"
-                with open(tmp, "w", encoding="utf-8") as fh:
+        body = read_body(body_file)
+        while True:
+            taken = [int(n[len(key) + 1:-3]) for n in os.listdir(folder) if re.fullmatch(re.escape(key) + r"-\d+\.md", n)]
+            issue_id = f"{key}-{max(taken, default=0) + 1}"
+            # A fresh temp file each try: a leftover one may be a hard link to a ticket already published.
+            fd, tmp = tempfile.mkstemp(dir=folder, prefix=".new-", suffix=".md.tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(render_ticket(dict(meta, id=issue_id), body))
-                try:
-                    # link never replaces: two workers creating at once never get the same number,
-                    # and the ticket appears whole or not at all.
-                    os.link(tmp, os.path.join(folder, issue_id + ".md"))
-                    return self.get(issue_id)
-                except FileExistsError:
-                    continue
-        finally:
-            if os.path.exists(tmp):
+                os.chmod(tmp, 0o644)
+                # link never replaces: two workers creating at once never get the same number,
+                # and the ticket appears whole or not at all.
+                os.link(tmp, os.path.join(folder, issue_id + ".md"))
+            except FileExistsError:
+                continue
+            finally:
                 os.remove(tmp)
+            return self.get(issue_id)
 
     def label(self, issue_id, labels):
         self._update(issue_id, lambda m, b: (dict(m, labels=list(dict.fromkeys((m.get("labels") or []) + list(labels)))), b))
