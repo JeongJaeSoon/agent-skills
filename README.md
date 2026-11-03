@@ -9,7 +9,7 @@ Claude Code skills that take a ticket to a merged PR, with you deciding where a 
 
 ## What it is
 
-agent-skills is a Claude Code plugin: 41 skills, 4 agent definitions, 8 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
+agent-skills is a Claude Code plugin: 42 skills, 4 agent definitions, 8 hooks and a few commands. It covers two flows. One takes a single ticket from the first edit to a merged PR and a closed ticket. The other runs a whole project on several Orca workers at once, one ticket each, and lands their PRs in order.
 
 It is for developers who hand ticket work in GitHub repositories to Claude Code and want to choose, point by point, whether a human approves each step (human in the loop, HITL) or the agent goes ahead while the human watches and steps in on exceptions (human on the loop, HOTL). Writes to your user settings and irreversible actions always wait for you.
 
@@ -106,7 +106,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | Group | Skills | What they do |
 |---|---|---|
 | [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | Write a ticket, deliver it, hand the next one to a fresh card, close the session, record progress |
-| [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `measure-delivery` | Land many tickets in parallel on Orca workers, then measure how it actually went |
+| [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `reboot`, `measure-delivery` | Land many tickets in parallel on Orca workers, put back what a restart dropped, then measure how it actually went |
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |
 | [Adapters](docs/skills.en.md#adapters) | `use-tracker`, `use-notes` | Linear and Jira tickets, Obsidian and Markdown notes |
@@ -140,7 +140,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout and the rules f
 There is no CI. Run every test file before sending a change:
 
 ```bash
-for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py; do python3 "$t"; done
+for t in skills/orchestrate/scripts/test_*.py skills/use-tracker/scripts/test_tracker.py skills/measure-delivery/scripts/test_measure.py skills/reap-resources/scripts/test_reap.py skills/reap-resources/scripts/test_cards.py skills/reap-resources/scripts/test_pressure.py skills/watch-mentions/scripts/test_mentions.py skills/watch-prs/scripts/test_prs.py skills/watch-prs/scripts/test_review_wait.py skills/watch-prs/scripts/test_notify.py skills/secure-fill/scripts/test_secure_fill.py skills/tune-automode/scripts/test_automode_rule.py skills/skills-config/scripts/test_config_emit.py skills/setup-pc/scripts/test_setup_check.py scripts/test_setup.py skills/brief/scripts/test_table_width.py skills/reflect/scripts/test_lesson_ids.py skills/deliver-ticket/scripts/test_shots.py skills/ui-review/scripts/test_ui_measure.py skills/reboot/scripts/test_reboot.py hooks/test_*.py scripts/test_sync.py scripts/test_card.py scripts/test_preview_watch.py scripts/test_automations.py scripts/test_share_server.py scripts/test_reap_hard.py scripts/test_public_shapes.py scripts/test_skill_tokens.py; do python3 "$t"; done
 bash scripts/pstack-sync-test.sh
 ```
 
