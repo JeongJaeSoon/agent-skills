@@ -75,7 +75,8 @@ with open(os.environ["FAKE_CALLS"], "a") as f:
 mode = os.environ.get("FAKE_MODE", "")
 if a[:2] == ["orchestration", "inbox"]:
     rows = json.loads(os.environ["FAKE_INBOX"])
-    print(json.dumps({"ok": True, "result": {"messages": rows, "page": json.loads(os.environ.get("FAKE_PAGE", "{}"))}}))
+    print(json.dumps({"ok": True, "result": {"messages": rows, "page": json.loads(os.environ.get("FAKE_PAGE", "{}")),
+                                             **json.loads(os.environ.get("FAKE_TOP", "{}"))}}))
 elif a[:2] == ["orchestration", "worker-show"]:
     if mode == "orca-down":
         sys.exit(1)
@@ -117,6 +118,9 @@ with contextlib.redirect_stderr(io.StringIO()):
     os.environ["FAKE_PAGE"] = '{"hasMore": true, "nextCursor": "c2"}'
     assert end_check.waiting_questions(ME) is None
     os.environ["FAKE_PAGE"] = "{}"
+    os.environ["FAKE_TOP"] = '{"nextCursor": "c2"}'
+    assert end_check.waiting_questions(ME) is None
+    os.environ["FAKE_TOP"] = "{}"
 # A worker's question can come from its Dispatch.
 os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="dispatch:ctx_1")])
 assert end_check.waiting_questions({"term_me", "dispatch:ctx_1"}) == ["m1"]

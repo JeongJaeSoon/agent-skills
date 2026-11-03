@@ -101,9 +101,11 @@ def this_message(rows, tool_use_id):
 
 def flag(words, name):
     """The value of `name` in argv words (`--x v` or `--x=v`) when it is given exactly once, else None."""
-    vals = [words[i + 1] for i, w in enumerate(words) if w == name and i + 1 < len(words)]
-    vals += [w[len(name) + 1:] for w in words if w.startswith(name + "=")]
-    return vals[0] if len(vals) == 1 else None
+    at = [i for i, w in enumerate(words) if w == name or w.startswith(name + "=")]
+    if len(at) != 1:
+        return None
+    w = words[at[0]]
+    return w[len(name) + 1:] if w != name else words[at[0] + 1] if at[0] + 1 < len(words) else None
 
 
 def worker_done_for(cmd, dispatch):
@@ -118,18 +120,22 @@ def removes(cmd):
     return any(c.name == "orca" and c.words[1:3] == ["worktree", "rm"] for c in shell.commands(cmd))
 
 
+def is_end_check(cmd):
+    return any(c.name == "skills-sync" and c.words[1:2] == ["end-check"] for c in shell.commands(cmd))
+
+
 def end_check_remove(cmd, out):
-    """True when `cmd` is only `skills-sync end-check --card` and the JSON it printed has the verdict `remove`."""
+    """True when `cmd` is only a `skills-sync end-check` and the JSON it printed says mode `card`, verdict `remove`
+    (the mode it really ran in, not a `--card` word that was some flag's value)."""
     cs = shell.commands(cmd)
-    if not (len(cs) == 1 and cs[0].name == "skills-sync" and cs[0].words[1:2] == ["end-check"]
-            and "--card" in cs[0].words):
+    if not (len(cs) == 1 and cs[0].name == "skills-sync" and cs[0].words[1:2] == ["end-check"]):
         return False
     m = re.search(r"(?m)^\{", out or "")  # warnings on stderr come first, one line each
     try:
         res = json.JSONDecoder().raw_decode(out, m.start())[0] if m else None
     except ValueError:
         return False
-    return isinstance(res, dict) and res.get("verdict") == "remove"
+    return isinstance(res, dict) and res.get("mode") == "card" and res.get("verdict") == "remove"
 
 
 def exit_order(event, s, lvl):
@@ -156,7 +162,9 @@ def exit_order(event, s, lvl):
                      "output shows \"ok\": true, in a later message, remove the card; a send and an rm in one message "
                      f"run together and the rm wins even when the send is refused (end-session §7). {key}")
     if s.close:
-        if any(end_check_remove(c[2], c[3]) for c in earlier):
+        # The latest end-check decides: a later keep or unread fact takes back an earlier remove.
+        checks = [c for c in calls(rows) if c[0] != mine and is_end_check(c[2])]
+        if checks and checks[-1][3] is not None and not checks[-1][4] and end_check_remove(checks[-1][2], checks[-1][3]):
             return None, None
         return lvl, ("`orca worktree rm` from a CLOSE card before `skills-sync end-check --card` said `remove` "
                      f"(end-session §8). Run it first, as its own call. {key}")

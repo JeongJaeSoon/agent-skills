@@ -168,7 +168,8 @@ def waiting_questions(senders):
               "are unknown", file=sys.stderr)
         return None
     page = res.get("page")
-    more = isinstance(page, dict) and (page.get("hasMore") or page.get("nextCursor"))
+    more = res.get("hasMore") or res.get("nextCursor") or (
+        isinstance(page, dict) and (page.get("hasMore") or page.get("nextCursor")))
     if len(msgs) >= int(INBOX_LIMIT) or more:
         print(f"[{ME}] warning: the inbox has more than one page; questions waiting are unknown", file=sys.stderr)
         return None

@@ -301,15 +301,23 @@ def test_close_setup():
     st = tmp / "orca.json"
     terms = {"agent": {"agentIdentity": "claude", "screens": [IDLE]}, "setup": {"agentIdentity": None, "screens": [done]},
              "busy": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/other/orca/setup-runner.sh"]]},
-             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]}}
+             "mine": {"agentIdentity": None, "screens": [["$ ls", "$"]]},
+             # No agentIdentity field: not known to be a shell. A failed `ps`: not known to be finished.
+             "noid": {"screens": [done]},
+             "psfail": {"agentIdentity": None, "screens": [["$ bash /r/.git/worktrees/psfail/orca/setup-runner.sh"]]}}
     st.write_text(json.dumps({"terms": terms, "sent": []}))
     env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     import importlib
     importlib.reload(sync)
+
+    def running(path):
+        if "psfail" in path:
+            raise OSError("ps failed")
+        return "other" in path
     try:
-        sync.running = lambda path: "other" in path
+        sync.running = running
         code = sync.close_setup("/w/card", timeout_s=2, grace_s=0.5)
     finally:
         for k, v in old.items():

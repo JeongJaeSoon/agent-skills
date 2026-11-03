@@ -378,7 +378,10 @@ def setup_runner(lines):
 
 
 def running(path):
+    """Whether a process runs the script; a failed `ps` raises, so the terminal stays open."""
     p = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True, timeout=10)
+    if p.returncode != 0:
+        raise OSError(f"ps failed: {p.stderr.strip()[:80]}")
     return any(path in l for l in p.stdout.splitlines()[1:])
 
 
@@ -426,8 +429,12 @@ def close_setup(worktree, timeout_s=1800, grace_s=120, agent=None):
         if state != "started":
             rc = 1
     try:
-        handles = [t["handle"] for t in orca("terminal", "list", "--worktree", f"path:{worktree}")["terminals"]
-                   if not t.get("agentIdentity")]
+        terms = orca("terminal", "list", "--worktree", f"path:{worktree}")["terminals"]
+        # Only a row that says it has no agent is a shell; one with no agentIdentity field at all is left open.
+        handles = [t["handle"] for t in terms if "agentIdentity" in t and not t["agentIdentity"]]
+        unknown = [t.get("handle") for t in terms if "agentIdentity" not in t]
+        if unknown:
+            print(f"warning: no agentIdentity on {', '.join(map(str, unknown))}; left open")
     except (Stop, KeyError, TypeError) as e:
         print(f"cannot list the card's terminals: {e}")
         print("result: failed")

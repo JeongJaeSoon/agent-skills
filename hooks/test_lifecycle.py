@@ -117,15 +117,24 @@ out = hook([user(PREAMBLE + "\nKEEP        the review round")] + later[1:], rm_e
 check("a KEEP card's rm is denied", decision(out) == "deny" and "KEEP" in out["hookSpecificOutput"]["permissionDecisionReason"], out)
 # A CLOSE card: rm only after end-check --card said remove, in an earlier message.
 EC = "skills-sync end-check --card --no-keep"
-card = [user(CLOSE_CARD), use("m1", "tu_ec", EC), result("tu_ec", '{"verdict": "remove", "reasons": []}'), use("m2", "tu_rm", RM)]
+card = [user(CLOSE_CARD), use("m1", "tu_ec", EC), result("tu_ec", '{"verdict": "remove", "mode": "card", "reasons": []}'), use("m2", "tu_rm", RM)]
 check("CLOSE card rm after end-check remove passes", hook(card, rm_event(), DENY) == {})
 out = hook(card[:2] + [result("tu_ec", '{"verdict": "keep", "reasons": ["open PR"]}')] + card[3:], rm_event(), DENY)
 check("CLOSE card rm after end-check keep is denied", decision(out) == "deny", out)
-warned = card[:2] + [result("tu_ec", '[skills-sync end-check] warning: x\n{"verdict": "remove",\n "reasons": []}')] + card[3:]
+warned = card[:2] + [result("tu_ec", '[skills-sync end-check] warning: x\n{"verdict": "remove",\n "mode": "card", "reasons": []}')] + card[3:]
 check("a warning line before the JSON is read past", hook(warned, rm_event(), DENY) == {})
 stale = [user(CLOSE_CARD), use("m1", "tu_ec", EC + "; cat old.json"),
          result("tu_ec", '{"verdict": "keep"}\n{"verdict": "remove"}'), use("m2", "tu_rm", RM)]
 check("end-check beside another command does not count", decision(hook(stale, rm_event(), DENY)) == "deny")
+later_keep = card[:3] + [use("m2", "tu_ec2", EC), result("tu_ec2", '{"verdict": "keep", "mode": "card"}'),
+                         use("m3", "tu_rm", RM)]
+check("a later keep takes back an earlier remove", decision(hook(later_keep, rm_event(), DENY)) == "deny")
+asbrief = [user(CLOSE_CARD), use("m1", "tu_ec", "skills-sync end-check --brief --card"),
+           result("tu_ec", '{"verdict": "remove", "mode": "user"}'), use("m2", "tu_rm", RM)]
+check("an end-check that ran in user mode does not count", decision(hook(asbrief, rm_event(), DENY)) == "deny")
+out = hook([user(PREAMBLE), use("m1", "tu_done", DONE + " --type"), result("tu_done", '{"ok": true}'),
+            use("m2", "tu_rm", RM)], rm_event(), DENY)
+check("a repeated --type with no value does not count", decision(out) == "deny", out)
 out = hook([user(CLOSE_CARD), use("m2", "tu_rm", RM)], rm_event(), DENY)
 check("CLOSE card rm without end-check is denied", decision(out) == "deny" and "end-check" in out["hookSpecificOutput"]["permissionDecisionReason"], out)
 # Not a worker: a human's session, or a subagent, is not checked; other commands are not either.
