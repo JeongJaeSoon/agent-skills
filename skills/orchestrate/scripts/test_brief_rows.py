@@ -234,9 +234,14 @@ moving, rows = section(b["text"], "🔄"), {o["label"]: o["status"] for o in b["
 assert any(m.startswith("❔ stuck-card — 확인 필요: hook 오류로 도구가 막힘") for m in moving), moving
 assert rows["stuck-card"] == "check" and rows["fine-card"] == "moving", rows
 assert any(m.startswith("🔄 fine-card — 턴 종료") for m in moving), moving
-rows_, _ = board.fleet_rows({"sessions": [SESSIONS[0], {**st["sessions"][-2], "phase": "working"}]}, {}, {},
-                            checks={"/w/stuck": "hook 오류로 도구가 막힘"})
-assert [r["status"] for r in rows_.values()] == ["moving"], "a session at work again has got past what patrol saw"
+judged = {"/w/stuck": ("hook 오류로 도구가 막힘", now - dt.timedelta(minutes=10))}
+stuck = st["sessions"][-2]
+for s, why in (({**stuck, "phase": "working"}, "a session at work again has got past what patrol saw"),
+               ({**stuck, "last_activity": ago(0.1)}, "and so has one that ended another turn since")):
+    rows_, _ = board.fleet_rows({"sessions": [SESSIONS[0], s]}, {}, {}, checks=judged)
+    assert [r["status"] for r in rows_.values()] == ["moving"], why
+rows_, _ = board.fleet_rows({"sessions": [SESSIONS[0], stuck]}, {}, {}, checks=judged)
+assert [r["status"] for r in rows_.values()] == ["check"], rows_
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 2 * board.PATROL_CHECK_S,
                                          "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 assert {o["label"]: o["status"] for o in brief()["open"]}["stuck-card"] == "moving", "a stale round says nothing of now"

@@ -521,13 +521,15 @@ PATROL_CHECK_S = 3600  # patrol rounds every 30 min; a `check` older than two of
 
 
 def patrol_checks(now):
-    """Card path -> why, for the cards the last patrol round found stalled on screen or in a repeat (patrol.py H, R:
-    patrol-verdicts.json `check`); {} when that round is over PATROL_CHECK_S old or unreadable."""
+    """Card path -> (why, when the round judged it), for the cards the last patrol round found stalled on screen or in
+    a repeat (patrol.py H, R: patrol-verdicts.json `check`); {} when that round is over PATROL_CHECK_S old or
+    unreadable."""
     v = fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json", {}) or {}
     t, check = v.get("t"), v.get("check")
     if not isinstance(t, (int, float)) or not isinstance(check, dict) or now.timestamp() - t > PATROL_CHECK_S:
         return {}
-    return {k: str(w) for k, w in check.items() if k}
+    at = dt.datetime.fromtimestamp(t, dt.timezone.utc)
+    return {k: (str(w), at) for k, w in check.items() if k}
 
 
 def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, checks=None):
@@ -561,8 +563,11 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
         rep = s.get("report") or {}
         if rep.get("next") and s.get("phase") != "offline":
             nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
-        # Only while the turn is still ended: a session at work again has got past what patrol saw.
-        why = checks.get(s.get("path")) if s.get("phase") == "idle" else None
+        # Only while the turn patrol saw is still the last: a session at work again, or active since, got past it.
+        why, judged = checks.get(s.get("path")) or (None, None)
+        active = fleet.parse(s.get("last_activity")) if s.get("last_activity") else None
+        if s.get("phase") != "idle" or active and judged and active > judged:
+            why = None
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else card_title(s)
         rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": "check" if why else status,

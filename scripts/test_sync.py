@@ -45,6 +45,11 @@ STUCK_SHOT = ["● Stopped here: a hook names a file that is not there.", "", "�
 SAID = ["❯ what does the footer say?", "⏺ It says /restart to apply the update.", RULE, "❯", RULE]
 SAID_WRAPPED = ["❯ what does the footer say?", "⏺ The footer reads: update installed, and then", "  /restart to apply it.",
                 RULE, "❯", RULE]
+SAID_AFTER_BLANK = ["❯ what changed?", "⏺ Two things:", "", "/restart to apply the update.", RULE, "❯", RULE]
+SAID_LIST = ["❯ what changed?", "⏺ Two things:", "* Update installed", "/restart to apply it.", RULE, "❯", RULE]
+# A guard's deny as the last result, then a reply about some other missing file.
+DENY_THEN_REPLY = ["❯ build", "  ⎿  PreToolUse:Bash hook error: [gate:x] run in a slot",
+                   "⏺ The build failed: No such file or directory.", RULE, "❯", RULE]
 # A hook error the session got past: a tool ran after it in the same turn.
 RECOVERED = ["❯ go", "  ⎿  PreToolUse:Bash hook error: can't open file '/w/plugin/hooks/gone.py'", "⏺ Bash(make test)",
              "  ⎿  12 passed", "⏺ Done.", RULE, "❯", RULE]
@@ -320,7 +325,8 @@ def test_stale_signal():
     check("a hook error before the last prompt is not", sync.stale_signal(OLD_HOOK_ERROR) is None)
     check("a guard's deny is not", sync.stale_signal(GUARD_DENY) is None)
     check("the notice under the turn's summary is", (sync.stale_signal(STUCK_SHOT) or ("",))[0] == "restart")
-    check("the words in a reply are not", sync.stale_signal(SAID) is None and sync.stale_signal(SAID_WRAPPED) is None)
+    check("the words in a reply are not", all(sync.stale_signal(s) is None for s in (SAID, SAID_WRAPPED, SAID_AFTER_BLANK, SAID_LIST)))
+    check("a missing file in the reply after a guard's deny is not", sync.stale_signal(DENY_THEN_REPLY) is None)
     check("a hook error the session got past is not", sync.stale_signal(RECOVERED) is None)
     check("a missing file wrapped onto the next line is", (sync.stale_signal(WRAPPED) or ("",))[0] == "hook")
     check("a screen without the wording is not judged",
@@ -424,6 +430,9 @@ def test_restart_entries():
         reads["a"] = [[]]
         sync.restart_stale(["a"])
         check("an unread screen keeps the entry", "a" in json.loads((tmp / "restarts.json").read_text()))
+        reads["a"] = [PERMISSION]
+        sync.restart_stale(["a"])
+        check("so does a dialog with no prompt box", "sent" in json.loads((tmp / "restarts.json").read_text()).get("a", {}))
         sync.restart_stale([])
         check("a terminal Orca does not list now keeps it a while", "a" in json.loads((tmp / "restarts.json").read_text()))
         reads["a"] = [IDLE]

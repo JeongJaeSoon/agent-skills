@@ -224,7 +224,8 @@ HOOK_ERROR = re.compile(r"\bhook (?:error|returned (?:a )?blocking error)\b", re
 # A guard's deny reads "hook error" too; only a hook that could not find its own file is stale.
 MISSING_FILE = re.compile(r"can't open file|No such file or directory|\bENOENT\b|Cannot find module", re.I)
 MESSAGE_MARKS = ("⏺", "●", "❯", "⎿")  # a reply, a prompt, a tool's result
-OWN_MARKS = ("✻", "✶", "✳", "✢", "✽", "*", "·", "✔", "✓")  # a turn's summary or a notice
+# A finished turn's summary ("✻ Worked for 2m 7s · done 5:48 AM"): a mark, one word, "for" and a duration.
+TURN_SUMMARY = re.compile(r"^[✻✶✳✢✽*] \S+ for \d+(?:\.\d+)?\s?[hms]\b")
 # The notice names /restart; a hook error alone names no command, and /reload-plugins re-reads hooks.json.
 STALE_COMMAND = {"restart": "/restart", "hook": RELOAD["plugins"]}
 
@@ -276,10 +277,11 @@ def classify(lines, title, draft=""):
 def stale_signal(lines):
     """(kind, line) when a session's screen shows it runs on what changed under it, else None.
 
-    "restart": Claude Code says an installed update waits on /restart where it writes its own notices: the last line
-    above the prompt box (after the turn's summary) or a status line below it, never the conversation. "hook": the
-    last tool result of the last turn shown (the last `⎿` line below the last `❯ <prompt>`) is a hook error that says
-    its file is missing (on that line or the two it wraps onto), as on every tool call of a session whose hooks.json
+    "restart": Claude Code says an installed update waits on /restart where it writes its own notices: the line right
+    under the finished turn's summary, last above the prompt box, or a status line below the box; never the
+    conversation. "hook": the last tool result of the last turn shown (the last `⎿` line below the last `❯ <prompt>`)
+    is a hook error that says its file is missing (on that line or the two it wraps onto, short of the next message
+    or a blank line), as on every tool call of a session whose hooks.json
     names a script an update removed; a tool that ran after it means the session got past it. Only that wording
     counts: a screen without it, or a guard's deny, is not judged."""
     lines = norm(lines or [])
@@ -288,25 +290,23 @@ def stale_signal(lines):
         return None
     body = lines[:box[0]]
     notices = [l.strip() for l in lines[box[1] + 1:] if l.startswith(" ")]
-    # The last line above the box, unless it is part of a message: a reply wraps onto lines that start with no mark,
-    # so look up through the lines above it until a blank line, Claude Code's own mark (the turn's summary), or a
-    # message's mark.
-    filled = [l.strip() for l in body]
-    end = max((i for i, l in enumerate(filled) if l), default=None)
-    if end is not None and filled[end][:1] not in MESSAGE_MARKS:
-        i = end - 1
-        while i >= 0 and filled[i] and filled[i][:1] not in OWN_MARKS + MESSAGE_MARKS:
-            i -= 1
-        if i < 0 or not filled[i] or filled[i][:1] in OWN_MARKS:
-            notices.append(filled[end])
+    # Above the box, only the line right under the finished turn's summary: a reply always comes before that line.
+    filled = [l.strip() for l in body if l.strip()]
+    if len(filled) >= 2 and TURN_SUMMARY.match(filled[-2]):
+        notices.append(filled[-1])
     for l in notices:
         if RESTART_NOTICE.search(l):
             return "restart", l[:160]
     start = max((i for i, l in enumerate(body) if l.strip().startswith("❯ ")), default=-1)
     last = max((i for i in range(start + 1, len(body)) if body[i].strip().startswith("⎿")), default=None)
-    if last is not None and HOOK_ERROR.search(body[last]) and MISSING_FILE.search(" ".join(body[last:last + 3])):
-        return "hook", body[last].strip()[:160]
-    return None
+    if last is None or not HOOK_ERROR.search(body[last]):
+        return None
+    result = [body[last]]  # the result and the lines it wraps onto, up to the next message or blank line
+    for l in body[last + 1:last + 3]:
+        if not l.strip() or l.strip()[:1] in MESSAGE_MARKS:
+            break
+        result.append(l)
+    return ("hook", body[last].strip()[:160]) if MISSING_FILE.search(" ".join(result)) else None
 
 
 def stale_cleared(before, after, text):
@@ -532,7 +532,8 @@ def restart_stale(terms, dry_run=False, keep_others=False):
             lines, reason = screen(h)
         except Stop as e:
             lines, reason = [], str(e)
-        if not lines:  # unread is no evidence the signal went
+        # Unread, or no prompt box to read it by (a dialog): no evidence the signal went.
+        if not lines or not prompt_box(norm(lines)):
             out.update({h: old} if old else {})
             print(f"{h}  stale check not read: {reason}")
             continue
