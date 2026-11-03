@@ -221,7 +221,12 @@ UNCONFIRMED = "sent, but the screen does not show it was taken"
 GONE = "what the command was for is no longer on the screen"
 # Claude Code's own wording, matched loosely; a screen with neither is not judged (stale_signal).
 RESTART_NOTICE = re.compile(r"(?<![\w/])/restart\b.*\bto apply\b", re.I)
-HOOK_ERROR = re.compile(r"\bhook (?:error|returned (?:a )?blocking error)\b", re.I)
+# Only Claude Code's own result line ("⎿  PreToolUse:Bash hook error: …"); a tool's output that quotes it does not count.
+HOOK_ERROR = re.compile(r"^⎿\s+\w+:\w+ hook (?:error|returned (?:a )?blocking error)\b", re.I)
+# Claude Code's status line while a background shell or agent of the session still runs (shared with patrol.py).
+BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")
+# The line under the prompt box that counts those: the permission mode, or the shortcuts hint in default mode.
+MODE_LINE = re.compile(r"\bmode on\b|\? for shortcuts")
 # A guard's deny reads "hook error" too; only a hook that could not find its own file is stale.
 MISSING_FILE = re.compile(r"can't open file|No such file or directory|\bENOENT\b|Cannot find module", re.I)
 MESSAGE_MARKS = ("⏺", "●", "❯", "⎿")  # a reply, a prompt, a tool's result
@@ -301,7 +306,7 @@ def stale_signal(lines):
             return "restart", l[:160]
     start = max((i for i, l in enumerate(body) if l.strip().startswith("❯ ")), default=-1)
     last = max((i for i in range(start + 1, len(body)) if body[i].strip().startswith("⎿")), default=None)
-    if last is None or not HOOK_ERROR.search(body[last]):
+    if last is None or not HOOK_ERROR.search(body[last].strip()):
         return None
     result = [body[last]]  # the result and the lines it wraps onto, up to the next message or blank line
     for l in body[last + 1:last + 3]:
@@ -309,6 +314,21 @@ def stale_signal(lines):
             break
         result.append(l)
     return ("hook", body[last].strip()[:160]) if MISSING_FILE.search(" ".join(result)) else None
+
+
+def background_running(lines):
+    """Why a /restart could end work this screen may be running, else None: a background shell or agent shown under
+    the prompt box or on the finished turn's last lines, or no mode line to show them on (unknown is not none)."""
+    lines = norm(lines or [])
+    box = prompt_box(lines)
+    if not box:
+        return "no prompt box"
+    below = [l.strip() for l in lines[box[1] + 1:] if l.strip()]
+    if any(BACKGROUND.search(l) for l in below + [l.strip() for l in lines[:box[0]] if l.strip()][-2:]):
+        return "background shells or agents still running"
+    if not any(MODE_LINE.search(l) for l in below):
+        return "no mode line to show background work on"
+    return None
 
 
 def stale_cleared(before, after, text):
@@ -378,7 +398,7 @@ def screen(handle):
 
 def send_to(handle, text, confirmed, still=None):
     """Return None once `text` was typed into an idle session and the screen shows it was taken. `still(screen)`,
-    when given, must hold on the last read before typing, else nothing is typed and the reason is GONE."""
+    when given, runs on the last read before typing: a reason it returns is returned, with nothing typed."""
     first, reason = screen(handle)
     if reason:
         return reason
@@ -388,8 +408,9 @@ def send_to(handle, text, confirmed, still=None):
         return reason
     if second != first:
         return "screen changed between two reads (someone may be typing)"
-    if still and not still(second):
-        return GONE
+    reason = still and still(second)
+    if reason:
+        return reason
     orca("terminal", "send", "--terminal", handle, "--text", text, "--enter")
     time.sleep(CONFIRM_S)
     try:
@@ -518,7 +539,8 @@ def _stamp(entry):
 
 def restart_stale(terms, dry_run=False, keep_others=False):
     """Type STALE_COMMAND into each idle session whose screen shows stale_signal, once per session while its signal
-    lasts. A busy one waits: it is written to restarts.json as waiting, and the next sync runs the broadcast again.
+    lasts, of each kind. A busy one, or one whose background work the command would end (background_running), waits:
+    it is written to restarts.json as waiting, and the next sync runs the broadcast again.
     An entry goes once its screen no longer shows the signal, so a later one is new; an unreadable screen keeps it,
     and a terminal Orca does not list now keeps it RESTART_KEEP_S (WAITING_KEEP_S when waiting). keep_others leaves
     the entries of terminals not in `terms` as they are. Returns the handles typed into (in a dry run, those it would
@@ -547,16 +569,19 @@ def restart_stale(terms, dry_run=False, keep_others=False):
             continue
         kind, line = sig
         cmd = STALE_COMMAND[kind]
-        if old.get("sent"):
+        if old.get("sent") and old.get("kind") == kind:
             out[h] = old
             print(f"{h}  {cmd} was sent at {old['sent']}; not again: {line[:60]}")
             continue
+        # Either command restarts or reloads the session under its background shells and agents.
+        reason = reason or background_running(lines)
         if dry_run:
             print(f"{h}  {reason and 'waits: ' + reason or 'would send ' + cmd}: {line[:60]}")
             typed |= set() if reason else {h}
             continue
         try:
-            reason = reason or send_to(h, cmd, stale_cleared, still=lambda s: (stale_signal(s) or ("",))[0] == kind)
+            reason = reason or send_to(h, cmd, stale_cleared, still=lambda s: (
+                GONE if (stale_signal(s) or ("",))[0] != kind else background_running(s)))
         except Stop as e:
             reason = str(e)
         if reason == GONE:  # cleared between the reads: nothing to fix, nothing to keep

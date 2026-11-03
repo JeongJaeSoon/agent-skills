@@ -123,7 +123,7 @@ transcript_tail = cardguard.transcript_tail
 
 # Claude Code's status line while a background shell or agent of the session still runs. A message typed in after the
 # command was armed resets the transcript's record of it, so only the screen still shows it.
-BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? still running")
+BACKGROUND = fleet.load_sync().BACKGROUND
 
 
 def background(lines):
