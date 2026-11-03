@@ -225,13 +225,8 @@ def orca_json(*args):
 def all_workers(run_id):
     """Every Dispatch of the Run. worker-list pages at 100, newest first, and a program passed 86 in two days:
     one page would drop the oldest cards from LANDED-BUT-OPEN."""
-    workers, cursor = [], None
-    while True:
-        res = orca_json("orchestration", "worker-list", "--run", run_id, "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            return workers
+    import orca_settings
+    return orca_settings.all_workers(orca_json, "--run", run_id, "--limit", "100")
 
 
 # The program's lead Dispatch (program.json `lead_dispatch`) once a Program is loaded: set for a lead started with

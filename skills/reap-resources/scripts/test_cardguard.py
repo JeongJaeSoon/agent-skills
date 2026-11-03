@@ -201,12 +201,18 @@ try:
 except TimeoutError:
     pass
 cardguard._orca_every_run = saved_every
-saved_oj = reap.orca_json
-reap.orca_json = lambda *a: None
+saved_seen = cardguard._orca_as_seen
+
+
+def orca_down(*a):
+    raise RuntimeError("orca orchestration worker-list failed: connect ECONNREFUSED (exit 1)")
+
+
+cardguard._orca_as_seen = orca_down
 assert reap.orca_workers() is None and reap.orca_workers("reclaimable") is None
-reap.orca_json = lambda *a: {"workers": [{"dispatchId": "r"}], "scope": {"source": "bound"}}
+cardguard._orca_as_seen = lambda *a: {"workers": [{"dispatchId": "r"}], "scope": {"source": "bound"}}
 assert reap.orca_workers("reclaimable") == [{"dispatchId": "r"}], "the janitor's own reclaim list keeps its scope"
-reap.orca_json = saved_oj
+cardguard._orca_as_seen = saved_seen
 # The real reader clears this terminal's handle, so worker-list is not bound to the caller's Run.
 saved_run = cardguard.subprocess.run
 got = {}

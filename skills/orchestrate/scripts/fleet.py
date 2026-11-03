@@ -233,14 +233,8 @@ def fetch_runs():
 def fetch_run(r, full):
     # Without --run, worker-list is scoped to the Run bound to the calling terminal: a server started from a
     # coordinator's terminal saw only that Run's workers, and mail from every other Run's settled worker stayed open.
-    workers, cursor = [], None
-    while True:
-        res = orca("orchestration", "worker-list", "--run", r["id"], "--limit", "100",
-                   *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            break
+    import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
+    workers = orca_settings.all_workers(orca, "--run", r["id"], "--limit", "100")
     if not full:
         return {"workers": workers, "tasks": [], "gates": []}
     return {"workers": workers, "tasks": orca("orchestration", "task-list", "--run", r["id"]).get("tasks", []),

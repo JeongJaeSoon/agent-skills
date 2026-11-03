@@ -65,30 +65,40 @@ def _orca_every_run(args):
     return out.get("result", out)
 
 
+def _orca_as_seen(*args):
+    """An Orca listing as this terminal sees it; raises with Orca's error, which worker_list reads."""
+    p = subprocess.run(["orca", *args, "--json"], capture_output=True, text=True, timeout=30)
+    try:
+        out = json.loads(p.stdout or "{}")
+    except ValueError:
+        out = None
+    if p.returncode or not isinstance(out, dict) or out.get("ok") is False:
+        raise RuntimeError(f"orca {' '.join(args[:2])} failed: {str(out.get('error') if isinstance(out, dict) else p.stderr)[:120]}"
+                           f" (exit {p.returncode})")
+    return out.get("result", out)
+
+
 def worker_pages(state=None, every_run=True, deadline=None):
     """Every page of `orca orchestration worker-list`. Raises when a page fails, the budget runs out (deadline; with
     none, the page cap), or (every_run) the list is scoped to one Run: a list cut short is a failure, not a smaller
     fleet. every_run=False reads as the caller's terminal sees it, unchecked."""
-    rows, cursor, n = [], None, 0
-    while deadline or n < WORKER_PAGES:
-        n += 1
-        if deadline and time.time() > deadline - 30:
-            raise TimeoutError("worker-list pages left unread")
-        args = ("orchestration", "worker-list", "--limit", "100", *(["--terminal-state", state] if state else []),
-                *(["--cursor", cursor] if cursor else []))
-        res = _orca_every_run(args) if every_run else reap.orca_json(*args)
-        if not isinstance(res, dict) or not isinstance(res.get("workers"), list):
+    if deadline and time.time() > deadline - 30:
+        raise TimeoutError("worker-list pages left unread")
+    rows, call = [], (lambda *a: _orca_every_run(a)) if every_run else _orca_as_seen
+    for n, (page, res, more) in enumerate(_orch("orca_settings").worker_list(
+            call, "--limit", "100", *(["--terminal-state", state] if state else [])), 1):
+        if not isinstance(res.get("workers"), list):
             raise RuntimeError("worker-list answered without a workers list")
         if every_run and (res.get("scope") or {}).get("source", "all") != "all":
             raise RuntimeError(f"worker-list scoped to {res['scope']}, not every Run")
-        rows += res["workers"]
-        page = res.get("page") or {}
-        cursor = page.get("nextCursor")
-        if page.get("hasMore") is False or (not cursor and not page.get("hasMore")):
+        rows += page
+        if not more:
             return rows
-        if not cursor:
-            raise RuntimeError("worker-list has more pages and no cursor to them")
-    raise RuntimeError(f"worker-list has more than {WORKER_PAGES} pages")
+        if deadline and time.time() > deadline - 30:
+            raise TimeoutError("worker-list pages left unread")
+        if not deadline and n >= WORKER_PAGES:
+            raise RuntimeError(f"worker-list has more than {WORKER_PAGES} pages")
+    return rows
 
 
 def _orch(name):

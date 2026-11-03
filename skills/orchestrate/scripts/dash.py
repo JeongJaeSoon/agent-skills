@@ -288,14 +288,9 @@ def orca_result(*args):
 def fetch_orca(cfg):
     """Workers, tasks, the Run's objective and the worktrees (cards) still on disk: local, read-only CLI calls."""
     wts = sh(["orca", "worktree", "list", "--json"])
-    workers, cursor = [], None
-    while True:  # worker-list pages at 100 rows; one run passed 86 in two days
-        res = orca_result("worker-list", "--run", cfg["run"], "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            break
     import orca_settings  # a lead started as a worker shares its coordinator's Run: only the units under it
+    # worker-list pages at 100 rows; one run passed 86 in two days
+    workers = orca_settings.all_workers(lambda *a: orca_result(*a[1:]), "--run", cfg["run"], "--limit", "100")
     tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
     workers = orca_settings.lead_scope(workers, cfg.get("lead_dispatch"))
     return {"workers": workers,
