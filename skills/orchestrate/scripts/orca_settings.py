@@ -103,6 +103,15 @@ def binding():
         return "unknown"
 
 
+def worker_terminal(row):
+    """The agent terminal handle of a worker row (worker-list, worker-show, worker-start): `agentTerminalHandle` on
+    older Orca, `terminal` from 1.4.246. Only a string counts: `orca terminal show` puts an object under `terminal`."""
+    for key in ("agentTerminalHandle", "terminal"):
+        if isinstance(h := (row or {}).get(key), str) and h:
+            return h
+    return None
+
+
 # Orca 1.4.246 answers worker-list and run-list with a concise view unless given --full; an older Orca has no --full and always
 # answers with the full record. Emptied once an Orca refuses the flag, so the rest of the process asks without it.
 FULL = ["--full"]
@@ -117,7 +126,7 @@ def worker_row(row, run=None):
         return row
     w = dict(row)
     for key, value in (("runId", run), ("workerState", row.get("state")),
-                       ("agentTerminalHandle", row.get("terminal") if isinstance(row.get("terminal"), str) else None),
+                       ("agentTerminalHandle", worker_terminal(row)),
                        ("resource", {"worktreeId": row["workspace"]} if isinstance(row.get("workspace"), str) else None)):
         if value is not None and key not in w:
             w[key] = value
@@ -191,7 +200,7 @@ def own_dispatch(orca=None, failed=None):
         return json.loads(p.stdout).get("result") or {}
     try:
         for rows, _, _ in worker_list(call, "--terminal-state", "active", "--limit", "100") if me else ():
-            mine = next((w for w in rows if w.get("agentTerminalHandle") == me), None)
+            mine = next((w for w in rows if worker_terminal(w) == me), None)
             if mine:
                 return mine
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError, RuntimeError):

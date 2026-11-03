@@ -872,13 +872,14 @@ def build_sessions(fast, runs, cfg, declared=()):
                   if coord_of_run.get(r["id"]) in sessions and role_of.get(coord_of_run[r["id"]]) != "lead"]
         root = next((c for c in coords if not dispatcher(c)), coords[0] if coords else None)
 
+    import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
     for sid, s in sessions.items():
         w = by_wt.get(sid, (None, False))[0]
         if w:
             t = tasks.get(w.get("taskId")) or {}
             s.update(run=w.get("runId"), dispatch=w.get("dispatchId"), dispatch_status=w.get("dispatchStatus"),
                      task=w.get("taskId"), task_title=task_name(t),
-                     dispatch_live=by_wt[sid][1], terminal=w.get("agentTerminalHandle"))
+                     dispatch_live=by_wt[sid][1], terminal=orca_settings.worker_terminal(w))
         if sid == root:
             s["kind"] = "orchestrator"
         elif sid in coord_of_run.values():
@@ -1380,13 +1381,16 @@ def held_refs(text, prs):
 
 def board_prs():
     """The PR keys board.json's rows name, and every full owner/repo#N in its doing, later, todo and owner_todo text and in
-    the external inbox."""
-    b = read_json(state_dir() / "board.json", {}) or {}
-    text = [f"{d.get('title')} {d.get('next')}" for d in b.get("doing") or []]
-    text += [f"{l.get('title')} {l.get('trigger')}" for l in b.get("later") or []] + list(b.get("owner_todo") or [])
-    text += [f"{t.get('title')} {t.get('after') or ''}" for t in b.get("todo") or []]
-    text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({})]
-    return ({r.get("pr") for r in (b.get("rows") or {}).values() if isinstance(r, dict)} | set(pr_refs(" ".join(text)))) - {None}
+    the external inbox, from the items tidy.jsonl has not closed: a closed item no longer holds its PR in prs.json."""
+    import tidy
+    b, shut = read_json(state_dir() / "board.json", {}) or {}, tidy.closed()
+    open_ = lambda kind, items: [x for x in items or [] if tidy.item_id(kind, x) not in shut]  # noqa: E731
+    text = [f"{d.get('title')} {d.get('next')}" for d in open_("doing", b.get("doing"))]
+    text += [f"{l.get('title')} {l.get('trigger')}" for l in open_("later", b.get("later"))] + open_("todo", b.get("owner_todo"))
+    text += [f"{t.get('title')} {t.get('after') or ''}" for t in open_("do", b.get("todo"))]
+    text += [f"{i.get('title')} {i.get('url')} {i.get('command')}" for i in external_items({}) if i["key"] not in shut]
+    rows = {r.get("pr") for k, r in (b.get("rows") or {}).items() if isinstance(r, dict) and f"row:{k}" not in shut}
+    return (rows | set(pr_refs(" ".join(text)))) - {None}
 
 
 def program_prs(now):
@@ -1718,18 +1722,20 @@ class Fleet:
                     self.ok("github", str(e))
                 self.last["prs"] = mono
             self.state = self.compose(sessions, root, cfg)
+            self.stage_rows()
             self.save(**{"state.json": json.dumps(self.state, ensure_ascii=False),
                          "prs.json": json.dumps({"prs": self.prs, "branch_pr": self.branch_pr, "me": self.me}),
                          "memory.json": json.dumps(self.mem, ensure_ascii=False)})
-            self.stage_rows()
             return self.state
 
     def stage_rows(self):
-        """The stage table's generated rows, from this state and the program ledgers (stage_auto.py)."""
+        """The stage table's generated rows, from this state and the program ledgers (stage_auto.py). Runs before
+        save so memory.json carries `stage_auto_at`, the freshness stage_auto.warning() reads."""
         try:
             import stage_auto  # beside this file; it imports this module
             stage_auto.refresh(self.state)
             self.mem.pop("stage_auto_error", None)
+            self.mem["stage_auto_at"] = iso(utcnow())
         except Exception as e:
             self.stage_auto_failed(e)
 

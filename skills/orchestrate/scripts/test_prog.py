@@ -260,6 +260,10 @@ assert sweep == ["SETTLED s1 (succeeded): release it; no open PR, nothing unpush
                  "KEEP s2 (failed): open PR #7",
                  "KEEP t2 (failed): open PR #7"], sweep
 assert asked == {"t1": "T0"}, asked
+# A newer Orca names the terminal `terminal`: the same nudge line.
+newer = lambda rows: [{k: v for k, v in r.items() if k != "agentTerminalHandle"}
+                      | ({"terminal": r["agentTerminalHandle"]} if "agentTerminalHandle" in r else {}) for r in rows]
+assert prog.settle_sweep(newer(settled), wts, skip={"s6", "t1"}, holds=held.get, asked={}, now="T0") == sweep
 again = prog.settle_sweep(settled, wts, holds=held.get, asked=asked, now="T1")
 assert "TAKEN OVER t1 (succeeded): self-check asked at T0; wait for its answer" in again and not any("term_t1" in l for l in again), again
 assert prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "t1"}}], settled, wts) == []
@@ -420,6 +424,7 @@ assert first[0].startswith('STUCK a1 (a select menu): "Which base branch should 
 assert "  orca terminal read --terminal h1 --screen" in first
 assert any("orch record s signal --kind stall --evidence a1" in l for l in first), first
 assert list(seen) == ["a1"] and not any("a2" in l or "a3" in l or "a4" in l for l in first), first
+assert prog.stuck_sweep(newer(live), "s", {}, read=read) == first
 assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == []
 screens["h1"] = menu + ["  Session: 23hr 4m"]
 assert prog.stuck_sweep(live, "s", seen, read=read, only_new=True) == [], "a ticking status bar is the same prompt"
@@ -555,6 +560,22 @@ with contextlib.redirect_stdout(io.StringIO()):
     prog.cmd_wait(["s", "--rounds", "1"])
 checks = [a for a in calls if a[:2] == ("orchestration", "check")]
 assert checks and all(a[2:4] == ("--terminal", "term_L") and "--run" not in a for a in checks), checks
+# A newer Orca's row names the terminal `terminal` alone: the same lead, the same mailbox.
+newer_rows = newer(fleet_rows)
+calls.clear()
+prog.orca_json = lambda *a: (calls.append(a), {"workers": newer_rows} if a[:2] == ("orchestration", "worker-list") else {})[1]
+with contextlib.redirect_stdout(io.StringIO()):
+    prog.cmd_wait(["s", "--rounds", "1"])
+checks = [a for a in calls if a[:2] == ("orchestration", "check")]
+assert checks and all(a[2:4] == ("--terminal", "term_L") for a in checks), checks
+assert prog.own_worker(newer_rows, "term_L")["dispatchId"] == "ctx_L"
+prog.os.environ["ORCA_TERMINAL_HANDLE"] = "term_other"
+try:
+    prog.cmd_wait(["s", "--rounds", "1"])
+    raise AssertionError("another terminal must still be refused")
+except SystemExit as e:
+    assert "not lead dispatch ctx_L" in str(e) and "its terminal is term_L" in str(e), e
+prog.orca_json = lead_orca
 # Another worker of that Run (a standing role) is refused, as before.
 prog.os.environ["ORCA_TERMINAL_HANDLE"] = "term_role"
 fleet_rows.append(row("ctx_role", "tr", "tL", h="term_role"))
@@ -564,7 +585,8 @@ try:
 except SystemExit as e:
     assert "not lead dispatch ctx_L" in str(e), e
 # The lead's Dispatch released, or its terminal not yet attached: refused, never the coordinator's Run inbox.
-for rows, me in ((fleet_rows[1:], "term_L"), ([dict(fleet_rows[0], agentTerminalHandle=None)], "term_L")):
+no_key = {k: v for k, v in fleet_rows[0].items() if k != "agentTerminalHandle"}
+for rows, me in ((fleet_rows[1:], "term_L"), ([dict(fleet_rows[0], agentTerminalHandle=None)], "term_L"), ([no_key], "term_L")):
     calls.clear()
     prog.orca_json = lambda *a, rows=rows: (calls.append(a), {"workers": rows} if a[:2] == ("orchestration", "worker-list") else {})[1]
     prog.os.environ["ORCA_TERMINAL_HANDLE"] = me
@@ -595,6 +617,8 @@ moves = prog.next_moves([
 assert [m.split()[0] for m in moves] == ["w1", "w2", "w3", "w4"], moves
 assert "reply: orca x" in moves[0] and "worker-abandon" in moves[1] and "worker-read --dispatch w3" in moves[2] \
     and moves[3] == "  w4 idle: orchestration send --to dispatch:w4, then nudge h4", moves
+assert prog.next_moves(newer([
+    {"dispatchId": "w4", "agentTerminalHandle": "h4", "projection": pj(stage={"activity": "idle"})}])) == moves[3:], "newer Orca's `terminal`"
 # orch inbox: one call per wake. It acks what was handled, peek-waits only when nothing is queued, and prints the
 # batch as lines with the next command; heartbeats are counted, not printed.
 calls, queue = [], [{"deliveryId": None, "messages": []}, {},

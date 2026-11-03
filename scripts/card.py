@@ -40,7 +40,7 @@ the file and checks them itself, with the hook's own patterns. The card is creat
 sees that `orca worktree create`: the pressure gate's decision is taken here instead.
 
 The created output is printed with a `card` object: kind (worker | card), path, handle (launch.outcome.handle, else
-agentTerminalHandle), run and parent (the `id:` selector, or None with --no-parent).
+the worker's terminal field), run and parent (the `id:` selector, or None with --no-parent).
 
 Exit codes: 0 created; 2 usage, unreadable brief, a missing line, a `term_` report address or a `path:` parent;
 3 the pressure gate refused (wait as its reason says, then run this again); 4 the create or worker-start failed
@@ -286,9 +286,9 @@ def worktree_path(res):
 
 
 def handle_of(res):
-    """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older agentTerminalHandle."""
-    return ((((res.get("launch") or {}).get("outcome") or {}).get("handle")) or res.get("agentTerminalHandle")
-            or ((res.get("worker") or {}).get("agentTerminalHandle")) or ((res.get("dispatch") or {}).get("assigneeHandle"))
+    """The new agent's handle: launch.outcome.handle (a chat or a terminal), else the older worker terminal fields."""
+    return ((((res.get("launch") or {}).get("outcome") or {}).get("handle")) or orca_settings.worker_terminal(res)
+            or orca_settings.worker_terminal(res.get("worker")) or ((res.get("dispatch") or {}).get("assigneeHandle"))
             or next((e.get("id") for e in res.get("effects") or [] if isinstance(e, dict)
                      and e.get("kind") == "terminal" and e.get("role") == "agent"), None))
 

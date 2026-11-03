@@ -25,13 +25,16 @@ elif a[:2] == ["terminal", "show"]:
 elif a[:2] == ["orchestration", "run-current"]:
     if mode == "orca-down":
         print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
-    print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead", "worker-list-down") else {"id": "run_me"}}}))
+    print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead", "worker-lead-terminal", "worker-list-down") else {"id": "run_me"}}}))
 elif a[:2] == ["orchestration", "worker-list"] and mode == "worker-list-down":
     print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
 elif a[:2] == ["orchestration", "worker-list"]:
     # A lead started with worker-start: unbound (run-current null), its own Dispatch on its coordinator's Run.
-    mine = [{"agentTerminalHandle": "term_me", "runId": "run_top", "dispatchId": "ctx_lead"}] if mode == "worker-lead" else []
-    print(json.dumps({"ok": True, "result": {"workers": [{"agentTerminalHandle": "term_other", "runId": "run_x"}] + mine}}))
+    mine = [{"agentTerminalHandle": "term_me", "runId": "run_top", "dispatchId": "ctx_lead"}] if mode.startswith("worker-lead") else []
+    rows = [{"agentTerminalHandle": "term_other", "runId": "run_x"}] + mine
+    if mode == "worker-lead-terminal":  # Orca 1.4.246 names the handle `terminal`
+        rows = [{"terminal": r.pop("agentTerminalHandle"), **r} for r in rows]
+    print(json.dumps({"ok": True, "result": {"workers": rows}}))
 elif a[:2] == ["orchestration", "worker-start"]:
     if mode == "unmanaged" and "new-child" in a:
         print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": "The dispatching terminal's "
@@ -345,6 +348,8 @@ SUP_TOP = SUPERVISED.replace("run:run_me", "run:run_top")
 rc, out, err, calls = go(brief(SUP_TOP, "sup-top.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
 assert rc == 0 and any(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls), (err, calls)
 assert json.loads(out)["card"]["run"] == {"id": "run_top", "via": "own_dispatch"}, out
+rc, out, err, calls = go(brief(SUP_TOP, "sup-top2.md"), "--repo", "r", "--name", "abc-2", mode="worker-lead-terminal")
+assert rc == 0 and json.loads(out)["card"]["run"] == {"id": "run_top", "via": "own_dispatch"}, (err, out)
 # Its own Dispatch's Run is compared too: a brief naming another Run stops.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
 assert rc == 6 and "works for run:run_top" in err and not creates(calls), (rc, err)
