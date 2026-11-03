@@ -576,7 +576,12 @@ assert "decide add" not in out, out
 assert not (d / "programs" / "hg" / "program.json").exists()
 code, out = prog(lead_env, "init", "au", "--repo", "o/r", "--run", "run_x")
 assert code == 0 and "lead is dispatch ctx_lead" in out, out
-src = (HERE / "prog.py").read_text()
+# A program.json from before the init refusal (a dispatched lead on human-gate): gate refuses and points at a card lead.
+cfg_path = d / "programs" / "au" / "program.json"
+cfg_path.write_text(json.dumps(dict(json.loads(cfg_path.read_text()), merge_policy="human-gate")))
+code, out = prog(lead_env, "gate", "au", "--pr", "1")
+assert code != 0 and "/goal card" in out and "decide add" not in out, out
+src =(HERE / "prog.py").read_text()
 assert "decide add` per PR" not in src, "prog.py still offers `orch decide add` per PR as a way to land"
 
 print("prog.py land against fake gh: all pass")

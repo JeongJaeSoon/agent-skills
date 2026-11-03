@@ -61,13 +61,12 @@ ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
 LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS", "GATE")
-MERGE_VALUE = re.compile(r"merge_policy (autonomous|human-gate)\b")
+MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
 ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP")
 FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
 ME = "skills-sync card"
-HUMAN_GATE = re.compile(r"(?i)merge[ _-]?policy\W{0,20}(?:(?:is|=|:)\W{0,5})?human-gate|--merge-policy[ =]human-gate")
 
 
 class Refuse(Exception):
@@ -93,6 +92,12 @@ def row(text, key):
                 out.append(nxt.rstrip())
             return "\n".join(out)
     return None
+
+
+def merge_policy(merge_row):
+    """The one merge policy a MERGE row names, else None (it names both or neither)."""
+    found = set(MERGE_VALUE.findall(" ".join((merge_row or "").split())))
+    return found.pop() if len(found) == 1 else None
 
 
 SEND_TO = re.compile(r"orchestration\s+send\b(?:[^\n]|\\\n)*?--to[ =]+[`'\"]?([\w:.@<>-]+)")
@@ -131,7 +136,7 @@ def compose(brief_path):
         missing += [f"{k} row" for k in LEAD_ROWS if not rows[k]]
         if rows["ROLE"] and not guard.LEAD_ROLE.search(rows["ROLE"]):
             missing.append("`ROLE: lead <slug>` (the ROLE row names no slug)")
-        if rows["MERGE"] and len(set(MERGE_VALUE.findall(rows["MERGE"]))) != 1:
+        if rows["MERGE"] and not merge_policy(rows["MERGE"]):
             missing.append("MERGE row with exactly one of `merge_policy autonomous` or `merge_policy human-gate` "
                            "(the template's row names both; keep the one this program lands by)")
     if missing:
@@ -335,7 +340,7 @@ def create(argv):
     checked = supervisor(wanted) if to_run and not opts.get("--card") else None
     if lead and to_run and not opts.get("--card"):
         settings, why = orca_settings.read()
-        if HUMAN_GATE.search(row(text, "MERGE")):
+        if merge_policy(row(text, "MERGE")) == "human-gate":
             to_run = False
             print(f"[{ME}] the lead starts as a /goal card: its program merges through Orca gates (human-gate), and a "
                   "dispatched worker can create no Task or gate on the Run it works for "

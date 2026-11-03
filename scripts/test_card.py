@@ -356,7 +356,19 @@ orca_depth(2)
 rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", mode="orca-down")
 assert rc == 6 and "did not say" in err and not creates(calls), (rc, err)
 orca_depth(3)
-assert card.HUMAN_GATE.search("--merge-policy human-gate") and card.HUMAN_GATE.search("Merge policy is human-gate.") and not card.HUMAN_GATE.search("No human-gate here; merge policy: auto.")
+# The MERGE row is read once, whitespace normalised, for both the check and the form: a value wrapped onto a
+# continuation line counts, two values across lines are refused, and other text naming human-gate is not a value.
+assert card.merge_policy("MERGE  merge_policy\n       human-gate") == "human-gate"
+assert card.merge_policy("MERGE  merge_policy autonomous, or merge_policy\n       human-gate") is None
+assert card.merge_policy("MERGE  merge_policy autonomous\n       Do not use --merge-policy human-gate") == "autonomous"
+assert card.merge_policy("MERGE  merge policy: human-gate") is None and card.merge_policy(None) is None
+rc, out, err, calls = go(brief(LEAD_RUN.replace("merge_policy autonomous",
+                                                "merge_policy autonomous\n            (not --merge-policy human-gate)"),
+                               "lead-note.md"), "--repo", "r", "--name", "acme-lead")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"], (err, calls)
+rc, out, err, calls = go(brief(LEAD_RUN.replace("merge_policy autonomous", "merge_policy autonomous, or merge_policy\n"
+                                                "            human-gate"), "lead-two.md"), "--repo", "r", "--name", "x")
+assert rc == 2 and "exactly one of" in err and not calls, (rc, err)
 # A lead that is itself a dispatched worker (run-current null) starts its units as workers on the Run it works for.
 SUP_TOP = SUPERVISED.replace("run:run_me", "run:run_top")
 rc, out, err, calls = go(brief(SUP_TOP, "sup-top.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
