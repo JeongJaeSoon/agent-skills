@@ -47,6 +47,7 @@ XARGS_OPTS = {"-I", "-i", "-n", "-P", "-L", "-l", "-s", "-E", "-e", "-d", "-a", 
 GUARDED_VAR = re.compile(r"\$\{\w+:\?[^}]*\}")
 KEY_SOURCE = "(agent-skills hooks/guard.py, {key})"
 DOCKER = {"docker", "podman"}
+UNKNOWN_DIR = "\0unknown-dir"
 # Options that take the next word as their value, before the subcommand.
 DOCKER_OPTS = {"-H", "--host", "-c", "--context", "--config", "-l", "--log-level", "--tlscacert", "--tlscert",
                "--tlskey"}
@@ -79,7 +80,18 @@ def expand(word, cwd):
         if value:
             word = word.replace("${" + var + "}", value).replace("$" + var, value)
     word = os.path.expanduser(word)
+    if cwd is UNKNOWN_DIR:  # after a `cd` this reader cannot follow, only an absolute path is known
+        return os.path.realpath(word) if os.path.isabs(word) else ""
     return os.path.realpath(os.path.join(cwd or ".", word))
+
+
+def after_cd(c, here):
+    """The directory a `cd` command leaves the shell in: UNKNOWN_DIR when it cannot be read from the words."""
+    args = [x for x in c.words[1:] if not x.startswith("-") or x == "-"]
+    target = args[0] if args else "~"
+    if target == "-" or "$" in target.replace("$HOME", "").replace("${HOME}", ""):
+        return UNKNOWN_DIR
+    return expand(target, here) or UNKNOWN_DIR
 
 
 def verb(args, valued):
@@ -120,7 +132,8 @@ def write_targets(c):
             out += [target] + [os.path.join(target, os.path.basename(s.rstrip("/"))) for s in operands]
             if c.name == "mv":
                 out += operands
-    elif c.name in ("sed", "perl") and any(w == "-i" or w.startswith(("-i", "--in-place")) for w in c.words[1:]):
+    elif c.name in ("sed", "perl") and any(re.match(r"-[a-zA-Z]*i", w) or w.startswith("--in-place")
+                                           for w in c.words[1:]):  # `-i`, `-i.bak`, `-pi`
         out += args[1:]
     elif c.name == "truncate":
         out += args
@@ -131,12 +144,14 @@ def write_targets(c):
     return out
 
 
-def check_command(c, masked, cfg, cwd, session):
-    """[(key, reason)] for one command."""
+def check_command(c, masked, cfg, cwd, session, here=None):
+    """[(key, reason)] for one command. `here` is the directory its relative paths resolve against (cwd after the
+    line's earlier `cd`s), `cwd` the hook's own."""
+    here = cwd if here is None else here
     out, w, name = [], c.words, c.name
     # Before the argv check: a bare `> file` truncates it with no command at all.
     files = user_files()
-    if any(expand(t, cwd) in files for t in write_targets(c) if t):
+    if any(expand(t, here) in files for t in write_targets(c) if t):
         out.append(("guard.deny.user_settings", USER_SETTINGS))
     if not w:
         return out
@@ -144,10 +159,6 @@ def check_command(c, masked, cfg, cwd, session):
         out.append(("guard.deny.pattern_kill", f"`{name}` kills every process whose name matches, other sessions' "
                                                "agents and plugins included. Kill by PID (`kill <pid>` after reading "
                                                "`ps`), or let agent-skills:reap-resources (reap.py) pick the targets."))
-    if (name == "xargs" and verb(w[1:], XARGS_OPTS)[0] == "kill" and c.piped_from
-            and re.search(r"\bpgrep\b[^;&\n]*\|\s*xargs\b", masked)):
-        out.append(("guard.deny.pattern_kill", "`pgrep … | xargs kill` kills every process whose name matches. Kill by "
-                                               "PID after reading `ps`, or use agent-skills:reap-resources."))
     if name in DOCKER or name == "docker-compose":
         sub, rest = verb(w[1:], DOCKER_OPTS) if name in DOCKER else ("compose", w[1:])
         if sub in PRUNE_OBJECTS and verb(rest, set())[0] == "prune":
@@ -189,7 +200,7 @@ def check_command(c, masked, cfg, cwd, session):
                                                   "an authenticated CLI (`gh`) instead."))
     if PYTHON.fullmatch(name) or name.endswith(".py"):
         script = name_script(w)
-        if script and plugin_apply(script, w, cwd):
+        if script and plugin_apply(script, w, here):
             out.append(("guard.deny.plugin_apply", f"`{os.path.basename(script)}` with --apply/--write changes the "
                                                    "user's settings or scheduled jobs; the user runs that line, never "
                                                    "the agent. Hand them the exact command."))
@@ -339,18 +350,34 @@ def external_review(argv, cwd, cfg):
     return None
 
 
+def upstream(cmds, i):
+    """The commands that feed cmds[i] through its own pipeline."""
+    out = []
+    while cmds[i].piped_from and i > 0 and cmds[i - 1].piped_to:
+        i -= 1
+        out.append(cmds[i])
+    return out
+
+
 def check_bash(cmd, cfg, cwd=None, session=None):
     """[Finding] for a Bash command, rules turned off left out."""
     masked = shell.command_text(cmd)
     out, seen = [], set()
-    cmds = shell.commands(cmd)
-    for c in cmds:
-        found = check_command(c, masked, cfg, cwd, session)
+    cmds, here = shell.commands(cmd), cwd
+    for i, c in enumerate(cmds):
+        found = check_command(c, masked, cfg, cwd, session, here)
+        if c.name == "cd":
+            here = after_cd(c, here)
         # `kill $(pgrep …)`: a pgrep inside this kill command's own substitution.
         if c.name == "kill" and any(d.name == "pgrep" and c.span[0] < d.span[0] and d.span[1] <= c.span[1]
                                     for d in cmds):
             found.append(("guard.deny.pattern_kill", "`kill $(pgrep …)` kills every process whose name matches. Kill "
                                                      "by PID after reading `ps`, or use agent-skills:reap-resources."))
+        # `pgrep … | xargs kill`: a pgrep earlier in this xargs command's own pipeline.
+        if c.name == "xargs" and os.path.basename(verb(c.words[1:], XARGS_OPTS)[0] or "") == "kill" and any(
+                d.name == "pgrep" for d in upstream(cmds, i)):
+            found.append(("guard.deny.pattern_kill", "`pgrep … | xargs kill` kills every process whose name matches. "
+                                                     "Kill by PID after reading `ps`, or use agent-skills:reap-resources."))
         for key, reason in found:
             lvl = level(cfg, key)
             reason = reason.replace(shell.TEXT_DOLLAR, "$").replace(shell.TEXT_TILDE, "~")
