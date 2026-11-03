@@ -288,14 +288,10 @@ def orca_result(*args):
 def fetch_orca(cfg):
     """Workers, tasks, the Run's objective and the worktrees (cards) still on disk: local, read-only CLI calls."""
     wts = sh(["orca", "worktree", "list", "--json"])
-    workers, cursor = [], None
-    while True:  # worker-list pages at 100 rows; one run passed 86 in two days
-        res = orca_result("worker-list", "--run", cfg["run"], "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            break
     import orca_settings  # a lead started as a worker shares its coordinator's Run: only the units under it
+    # worker-list pages at 100 rows; one run passed 86 in two days
+    workers = orca_settings.all_workers(lambda *a: orca_result(*a[1:]), "--run", cfg["run"], "--limit", "100",
+                                        error=SourceError)
     tasks = orca_result("task-list", "--run", cfg["run"]).get("tasks", [])
     workers = orca_settings.lead_scope(workers, cfg.get("lead_dispatch"))
     return {"workers": workers,
@@ -1751,9 +1747,10 @@ def closed_recent(days=7):
 
 def stage_report():
     """The stage table whole, generated rows and recorded ones, for the Stages page: the brief's text has only a line pointing here.
-    Read per request, so an `orch stage set` shows on the next poll."""
+    Read per request, so an `orch stage set` shows on the next poll. Counted by stages.counted(), the brief line's count."""
     try:
-        return acks.mark_stages(stages.table())
+        state = fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
+        return acks.mark_stages(stages.counted(stages.table(state), state))
     except (OSError, ValueError) as e:
         return {"error": f"stages: {type(e).__name__}: {e}"}
 

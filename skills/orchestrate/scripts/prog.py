@@ -6,8 +6,9 @@ Usage: orch <command> <slug> [options]
   init <slug> --repo OWNER/NAME --run RUN_ID [--tracker-project NAME] [--tracker linear|jira]
               [--predicate ID,ID,...] [--merge-policy autonomous|human-gate] [--ceiling 6]
               [--deadline ISO8601] [--note NOTES_PATH] [--final-check TEXT]
-  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths|visual_paths|note|final_check> VALUE
-                                     mirror a change made in the program note
+  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths|visual_paths|note|final_check|stages> VALUE
+                                     mirror a change made in the program note; stages: the deploy steps
+                                     the stage table waits on (dev,prod), unset: dev and prod are 해당 없음
   status <slug>                      predicate, flow, growth and the next move, from live sources
   record <slug> <event> [--ticket T] [--pr N] [--sha S] [--class K] [--role R] [--note TEXT]
                                      `record spawned --role guardian --note <dispatchId>` for a standing
@@ -31,6 +32,9 @@ Usage: orch <command> <slug> [options]
   overlap <slug> [--paths P,P]       open program PRs with no land-after relation that change one file
                                      (or one exclusive_paths glob): stack the later on the earlier. With
                                      --paths, the open PRs a unit not started yet would collide with.
+                                     Also warns, one line per file, where they share a file with an open
+                                     PR another program on the same repo has in its ledger (OVERLAP
+                                     <other-slug> …, no command; UNKNOWN when unreadable).
                                      status prints the same OVERLAP lines
   land <slug> --pr N [--class main-fix|gate|urgent|normal] [--wait-minutes M] [--onto-lower]
                                      the one way a program PR reaches its base. Normal lane: lands
@@ -205,8 +209,15 @@ def parse_ts(s):
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+# None waits for every command; `orch patrol` sets seconds for its own round.
+RUN_TIMEOUT = None
+
+
 def run(cmd, check=True):
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        r = subprocess.CompletedProcess(cmd, 124, "", f"timed out after {RUN_TIMEOUT}s")
     if check and r.returncode != 0:
         sys.exit(f"{' '.join(cmd[:4])} … failed ({r.returncode}): {r.stderr.strip()[:400]}")
     return r
@@ -222,13 +233,8 @@ def orca_json(*args):
 def all_workers(run_id):
     """Every Dispatch of the Run. worker-list pages at 100, newest first, and a program passed 86 in two days:
     one page would drop the oldest cards from LANDED-BUT-OPEN."""
-    workers, cursor = [], None
-    while True:
-        res = orca_json("orchestration", "worker-list", "--run", run_id, "--limit", "100", *(["--cursor", cursor] if cursor else []))
-        workers += res.get("workers", [])
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not (res.get("page") or {}).get("hasMore") or not cursor:
-            return workers
+    import orca_settings
+    return orca_settings.all_workers(orca_json, "--run", run_id, "--limit", "100", error=SystemExit)
 
 
 # The program's lead Dispatch (program.json `lead_dispatch`) once a Program is loaded: set for a lead started with
@@ -244,7 +250,12 @@ def run_workers(run_id):
 
 def own_worker(workers, me):
     """This terminal's own Dispatch among the Run's workers."""
-    return next((w for w in workers if me and w.get("agentTerminalHandle") == me), None)
+    return next((w for w in workers if me and worker_terminal(w) == me), None)
+
+
+def worker_terminal(row):
+    import orca_settings
+    return orca_settings.worker_terminal(row)
 
 
 def lead_scope(workers, lead_dispatch):
@@ -729,15 +740,10 @@ def program_prs(events, rows, tickets):
     return out
 
 
-def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
-    """OVERLAP lines for two open PRs that change one file, or files under one exclusive_paths glob, with no
-    land-after relation: whichever merges first leaves the other in conflict, and the fix push dismisses its
-    approval. A is the lower PR number, which the remedy keeps as the base.
-
-    files {pr: [paths]}, prs {pr: ticket or None}, after {ticket: tickets it lands after}. PRs are related
-    through `orch dep` / Orca deps, one GitHub stack, or one PR's base being the other's head, transitively,
-    so the ends of a chain A <- B <- C are not reported, even when B is not a program PR."""
-    root = {n: n for n in [*files, *(r["number"] for r in rows), *(m for s in (stacks or {}).values() for m in s)]}
+def related(nodes, rows, stacks=None, edges=()):
+    """find(n) over PRs, equal for two PRs tied by an edge, one GitHub stack, or one PR's base being the other's
+    head, transitively."""
+    root = {n: n for n in [*nodes, *(r["number"] for r in rows), *(m for s in (stacks or {}).values() for m in s)]}
 
     def find(n):
         while root[n] != n:
@@ -747,20 +753,36 @@ def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
     def join(a, b):
         if a in root and b in root:
             root[find(a)] = find(b)
-    by_ticket = {}
-    for n, t in prs.items():
-        by_ticket.setdefault(t, []).append(n)
-    for t, below in after.items():
-        for b in below:
-            for x in by_ticket.get(t, []):
-                for y in by_ticket.get(b, []):
-                    join(x, y)
+    for x, y in edges:
+        join(x, y)
     for members in (stacks or {}).values():
         for x, y in zip(members, members[1:]):
             join(x, y)
     head = {r.get("headRefName"): r["number"] for r in rows}
     for r in rows:
         join(r["number"], head.get(r.get("baseRefName")))
+    return find
+
+
+def path_hit(p, f):
+    """A planned path p (a file, a directory or a glob) covers changed file f."""
+    return f == p or fnmatch.fnmatch(f, p) or f.startswith(p.rstrip("/") + "/")
+
+
+def path_overlaps(slug, files, prs, cfg, rows, after, stacks=None):
+    """OVERLAP lines for two open PRs that change one file, or files under one exclusive_paths glob, with no
+    land-after relation: whichever merges first leaves the other in conflict, and the fix push dismisses its
+    approval. A is the lower PR number, which the remedy keeps as the base.
+
+    files {pr: [paths]}, prs {pr: ticket or None}, after {ticket: tickets it lands after}. PRs are related
+    through `orch dep` / Orca deps, one GitHub stack, or one PR's base being the other's head, transitively,
+    so the ends of a chain A <- B <- C are not reported, even when B is not a program PR."""
+    by_ticket = {}
+    for n, t in prs.items():
+        by_ticket.setdefault(t, []).append(n)
+    edges = [(x, y) for t, below in after.items() for b in below
+             for x in by_ticket.get(t, []) for y in by_ticket.get(b, [])]
+    find = related(files, rows, stacks, edges)
     pats = knob(cfg, "exclusive_paths")
     out = []
     for a in sorted(files):
@@ -787,12 +809,9 @@ def plan_overlaps(slug, paths, files, prs, cfg, rows):
     """OVERLAP lines for a unit not started yet: the open PRs that change one of its planned paths (a file, a
     directory or a glob), or a file under the same exclusive_paths glob. The unit is to be stacked on that PR."""
     pats = knob(cfg, "exclusive_paths")
-
-    def hit(p, f):
-        return f == p or fnmatch.fnmatch(f, p) or f.startswith(p.rstrip("/") + "/")
     out = []
     for n in sorted(files):
-        shared = sorted({p for p in paths for f in files[n] if hit(p, f)})
+        shared = sorted({p for p in paths for f in files[n] if path_hit(p, f)})
         if not shared:
             shared = [g for g in pats if any(fnmatch.fnmatch(p, g) for p in paths)
                       and any(fnmatch.fnmatch(f, g) for f in files[n])]
@@ -812,17 +831,87 @@ def program_files(cfg, events, rows, tasks):
     return prs, files
 
 
+def other_program_files(slug, repo, mine, rows, list_files=rest_files):
+    """{other program on repo: {open PR: changed files, or None when unreadable}, or None when its state is
+    unreadable}. Its PRs are the ones its own ledger names, not PRs guessed from a branch or title: short
+    predicate ids repeat across programs, and a PR in `mine` is left to this program."""
+    open_, out = {r["number"] for r in rows}, {}
+    for d in sorted(HOME.iterdir()) if HOME.is_dir() else []:
+        if d.name == slug or d.name.startswith((".", "_")) or not (d / "program.json").is_file():
+            continue
+        try:
+            theirs_repo = json.loads((d / "program.json").read_text())["repo"]
+            if theirs_repo.lower() != repo.lower():
+                continue
+            led = d / "ledger.jsonl"
+            events = [json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else []
+            if not all(isinstance(e.get("ev"), str) for e in events):
+                raise TypeError("a ledger row with no event")
+            states = pr_state(events)
+            if not all(type(n) is int for n in states):
+                raise TypeError("a ledger PR number that is not an integer")
+        except (OSError, ValueError, AttributeError, TypeError, KeyError):
+            out[d.name] = None
+            continue
+        # open_rows stops at OPEN_LIMIT: at the limit, a PR missing from it may still be open.
+        out[d.name] = {n: list_files(repo, n) if n in open_ else None for n in sorted(states)
+                       if (n in open_ or len(rows) >= OPEN_LIMIT) and n not in mine and "landed" not in states[n]}
+    return out
+
+
+def cross_inputs(slug, repo, events, rows, prs, files, list_files=rest_files):
+    """(prs, files, theirs, unread): this program's PRs less those another program's ledger names (a PR matched
+    only by a ticket in its branch or title loses to a ledger), other_program_files, and this program's PRs
+    whose file list could not be read."""
+    theirs = other_program_files(slug, repo, set(pr_state(events)), rows, list_files)
+    claimed = {n for x in theirs.values() for n in x or {}}
+    prs = {n: t for n, t in prs.items() if n not in claimed}
+    return prs, {n: f for n, f in files.items() if n in prs}, theirs, sorted(set(prs) - set(files))
+
+
+def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
+    """Warning lines for this program's open PRs (or planned paths) that change a file another program's open PR
+    changes, one per shared file. No stack or `orch dep` command: a dep names this program's tickets only, and
+    which side lands first is the two leads' call. PRs already stacked are skipped; what could not be read is
+    UNKNOWN, including this program's own PRs in unread. files {pr: [paths]}, theirs from other_program_files."""
+    out = [f"OVERLAP UNKNOWN {other} → its program state could not be read; compare it by hand"
+           for other in sorted(theirs) if theirs[other] is None]
+    out += [f"OVERLAP UNKNOWN #{n} → this program's file list for it could not be read; compare it by hand"
+            for n in unread]
+    out += [f"OVERLAP UNKNOWN {other} #{n} → its file list could not be read; compare it by hand"
+            for other in sorted(theirs) for n, changed in sorted((theirs[other] or {}).items()) if changed is None]
+    if not files and not paths:
+        return out
+    find = related([*files, *(n for prs in theirs.values() for n in prs or {})], rows, stacks)
+    warn = "→ warning: settle the landing order with the other lead through PARENT"
+    for other in sorted(o for o in theirs if theirs[o]):
+        for n, changed in sorted(theirs[other].items()):
+            if changed is None:
+                continue
+            if paths:
+                out += [f"OVERLAP {other} plan #{n} {f} {warn}"
+                        for f in sorted({f for p in paths for f in changed if path_hit(p, f)})]
+            else:
+                out += [f"OVERLAP {other} #{a} #{n} {f} {warn}" for a in sorted(files) if find(a) != find(n)
+                        for f in sorted(set(files[a]) & set(changed))]
+    return out
+
+
 def cmd_overlap(argv):
     p = Program(argv[0])
     rows, tasks = open_rows(p.cfg["repo"]), run_tasks(p.cfg["run"])
-    prs, files = program_files(p.cfg, p.events(), rows, tasks)
+    events = p.events()
+    prs, files, theirs, unread = cross_inputs(p.slug, p.cfg["repo"], events, rows,
+                                              *program_files(p.cfg, events, rows, tasks))
     paths = [x for x in (opt(argv, "--paths") or "").split(",") if x]
+    stacks = repo_stacks(p.cfg["repo"])
     if paths:
         lines = plan_overlaps(p.slug, paths, files, prs, p.cfg, rows)
     else:
-        lines = path_overlaps(p.slug, files, prs, p.cfg, rows, dep_map(p.events(), deps_from_tasks(tasks)),
-                              repo_stacks(p.cfg["repo"]))
-    print("\n".join(lines) or f"no overlap among {len(files)} open program PR(s)")
+        lines = path_overlaps(p.slug, files, prs, p.cfg, rows, dep_map(events, deps_from_tasks(tasks)), stacks)
+    lines += cross_overlaps(files, theirs, rows, stacks, paths, unread)
+    print("\n".join(lines) or f"no overlap among {len(files)} open program PR(s)"
+          f" and {sum(len(x or {}) for x in theirs.values())} open PR(s) of other programs on {p.cfg['repo']}")
 
 
 TEST_RESULTS = "<!-- test-results -->"
@@ -894,8 +983,11 @@ def base_overlap(repo, base, c):
     return sorted(mine & {f["filename"] for f in moved.get("files") or []})
 
 
+OPEN_LIMIT = 200
+
+
 def open_rows(repo):
-    return gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json",
+    return gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", str(OPEN_LIMIT), "--json",
                    "number,title,headRefOid,headRefName,mergeStateStatus,isDraft,statusCheckRollup,baseRefName")
 
 
@@ -1097,14 +1189,16 @@ def cmd_init(argv):
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
+    if mine and policy == "human-gate":
+        sys.exit(f"orch init: this lead is dispatch {mine.get('dispatchId')} on {run_id}, and a dispatched lead cannot "
+                 "land under human-gate: Orca lets no worker create a gate on the Run it works for, so `orch land` "
+                 "never sees `approved`. Ask PARENT to restart this lead as a /goal card (its brief's MERGE line "
+                 "says human-gate), or init with --merge-policy autonomous.")
     if mine:
         # A lead started with worker-start: its units are the Dispatches under its own, and its mail is its Dispatch's.
         cfg["lead_dispatch"] = mine.get("dispatchId")
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
-        if policy == "human-gate":
-            print("warning: human-gate needs Orca gates, which this lead cannot create; `orch gate` will refuse. "
-                  "Use `orch decide add` per PR, or restart the lead as a /goal card")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
     (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     print(f"initialised {d}")
@@ -1298,8 +1392,9 @@ def cmd_status(argv):
         lines.append(f"  LANDED-BUT-OPEN {tk} (dispatch {dispatch}): "
                      + (f"once its main CI is recorded, worker-release, close its terminals and {rm}" if active
                         else f"released, but its card is still there: {rm}"))
-    prs, files = program_files(cfg, events, rows, tasks)
+    prs, files, theirs, unread = cross_inputs(p.slug, cfg["repo"], events, rows, *program_files(cfg, events, rows, tasks))
     lines += [f"  {x}" for x in path_overlaps(p.slug, files, prs, cfg, rows, dep_map(events, deps), stacks)]
+    lines += [f"  {x}" for x in cross_overlaps(files, theirs, rows, stacks, unread=unread)]
 
     # 3. growth
     admitted = {e["ticket"] for e in events if e["ev"] == "admitted" and e.get("ticket")}
@@ -1411,9 +1506,10 @@ def cmd_set(argv):
     if key == "merge_policy" and value not in ("autonomous", "human-gate"):
         sys.exit("merge_policy is autonomous or human-gate")
     split = lambda v: [x for x in v.split(",") if x]
-    conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split}.get(key, str)
-    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check"):
-        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check")
+    conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split, "stages": split}.get(key, str)
+    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check",
+                   "stages"):
+        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
     if key == "visual_paths" and not conv(value):
         sys.exit("visual_paths cannot be empty: the screenshot check has no off switch, only the no-visual-change label")
     if key in ("exclusive_paths", "visual_paths"):
@@ -1858,8 +1954,8 @@ def cmd_gate(argv):
         sys.exit("gates are for merge_policy human-gate; autonomous programs land with orch land")
     if p.cfg.get("lead_dispatch"):
         sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
-                 "for (worker_cannot_coordinate_own_run). Ask the human with `orch decide add` per PR, or have the "
-                 "orchestrator restart this lead as a /goal card (`skills-sync card --card`)")
+                 "for (worker_cannot_coordinate_own_run), so `orch land` never sees `approved`. Have the orchestrator "
+                 "restart this lead as a /goal card (`skills-sync card`, its brief's MERGE line saying human-gate)")
     if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
         gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
@@ -1994,6 +2090,13 @@ def write_backfill(p, text, events, rows, dry_run):
         tmp.write_text(body)
         os.replace(tmp, p.ledger_path)
     print(f"written; the old ledger is kept beside it as {p.dir.name}/ledger.jsonl.bak-*")
+
+
+def check(*args):
+    """`orca orchestration check` with the full record: Orca 1.4.246's concise view drops deliveryId, payload and
+    from_handle, and a wait that cannot tell its batch was delivered takes the next, empty one."""
+    import orca_settings
+    return orca_settings.with_full(orca_json, "orchestration", "check", *args)
 
 
 def batch(res):
@@ -2138,7 +2241,7 @@ def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=
         elif taken:
             asked[d] = now or dt.datetime.now().isoformat(timespec="minutes")
             out += [f"TAKEN OVER {d} ({w.get('workerState')}): worker-release refuses it; ask it to check for work left and close itself",
-                    f"  orca terminal send --terminal {w.get('agentTerminalHandle')} --text {shlex.quote(SELF_CHECK)} --enter"]
+                    f"  orca terminal send --terminal {worker_terminal(w)} --text {shlex.quote(SELF_CHECK)} --enter"]
         else:
             out += [f"SETTLED {d} ({w.get('workerState')}): release it; "
                     + ("no open PR, nothing unpushed" if p else "its card is gone"),
@@ -2246,7 +2349,7 @@ def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=Non
     out, now = [], {}
     waits = agent_waits() if waits is None else waits
     for w in workers:
-        d, h = w.get("dispatchId"), w.get("agentTerminalHandle")
+        d, h = w.get("dispatchId"), worker_terminal(w)
         if w.get("terminalState") != "active" or not d or not h:
             continue
         waited = waits.get(h, NOT_LOOKED)
@@ -2402,9 +2505,9 @@ def cmd_wait(argv):
     lead = p.cfg.get("lead_dispatch")
     if lead:
         row = next((w for w in all_workers(run_id) if w.get("dispatchId") == lead), None)
-        if not row or not me or row.get("agentTerminalHandle") != me:
+        if not row or not me or worker_terminal(row) != me:
             sys.exit(f"orch wait reads the lead's own mailbox, and this terminal is not lead dispatch {lead}"
-                     f" ({'not listed on ' + run_id if not row else 'its terminal is ' + str(row.get('agentTerminalHandle'))})."
+                     f" ({'not listed on ' + run_id if not row else 'its terminal is ' + str(worker_terminal(row))})."
                      " The Run's inbox is its coordinator's: never wait on it from here.")
         box = ["--terminal", me]
     elif me and own_worker(all_workers(run_id), me):
@@ -2419,12 +2522,11 @@ def cmd_wait(argv):
     if watched := watch_lines(me, False):
         print("\n".join(watched), flush=True)
     for i in range(rounds):
-        res = orca_json("orchestration", "check", *box, "--wait", "--types", ",".join(sorted(ACTIONABLE)),
-                        "--timeout-ms", timeout)
+        res = check(*box, "--wait", "--types", ",".join(sorted(ACTIONABLE)), "--timeout-ms", timeout)
         did, msgs = batch(res)
-        if not did:
+        if not did and not msgs:
             # A typed wait never wakes for heartbeats, so they pile up in the FIFO; pull that batch.
-            did, msgs = batch(orca_json("orchestration", "check", *box))
+            did, msgs = batch(check(*box))
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
         for m in msgs:
             if revoked_echo(m):
@@ -2445,7 +2547,7 @@ def cmd_wait(argv):
                   f"orca orchestration check {' '.join(box)} --ack {did} --json")
             return
         if did:
-            orca_json("orchestration", "check", *box, "--ack", did)
+            check(*box, "--ack", did)
         print(f"wait {i + 1}/{rounds}: nothing actionable ({len(msgs)} heartbeat(s) or refusals acked)", flush=True)
         if print_stuck(p, run_id, only_new=True):
             print_sweep(run_id, p.dir / "self-check.json")
@@ -2501,12 +2603,12 @@ def cmd_inbox(argv):
     whole JSON batches, and a top-level session read each of them in full."""
     acked = opt(argv, "--ack")
     try:
-        did, msgs = batch(orca_json("orchestration", "check", *(["--ack", acked] if acked else [])))
+        did, msgs = batch(check(*(["--ack", acked] if acked else [])))
     except SystemExit as e:  # a stale delivery id must not cost the wait the caller is about to rely on
         if not acked:
             raise
         print(f"ack {acked} failed ({e}); taking the inbox without it", flush=True)
-        did, msgs = batch(orca_json("orchestration", "check"))
+        did, msgs = batch(check())
     deadline, skipped = time.monotonic() + int(opt(argv, "--timeout-ms", "3300000")) / 1000, 0
     work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
     # Like orch wait: a batch of only heartbeats or refusals is acked and the wait goes on, until the deadline.
@@ -2516,10 +2618,10 @@ def cmd_inbox(argv):
             break
         if did:
             skipped += len(msgs)
-            did, msgs = batch(orca_json("orchestration", "check", "--ack", did))
+            did, msgs = batch(check("--ack", did))
         else:
-            orca_json("orchestration", "check", "--peek", "--wait", "--timeout-ms", str(left))
-            did, msgs = batch(orca_json("orchestration", "check"))
+            check("--peek", "--wait", "--timeout-ms", str(left))
+            did, msgs = batch(check())
             if not msgs:
                 break
         work = [m for m in msgs if m.get("type") != "heartbeat" and not revoked_echo(m)]
@@ -2543,7 +2645,7 @@ def next_moves(workers):
         pj = w.get("projection") or {}
         if pj.get("outcome") != "in_progress":
             continue
-        d, h, act = w["dispatchId"], w.get("agentTerminalHandle"), pj.get("nextAction") or {}
+        d, h, act = w["dispatchId"], worker_terminal(w), pj.get("nextAction") or {}
         activity = (pj.get("stage") or {}).get("activity") or "unknown"
         if act.get("kind") not in (None, "none"):
             out.append(f"  {d} {act['kind']}: {' '.join(act.get('argv') or [])}")

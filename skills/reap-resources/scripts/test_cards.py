@@ -234,7 +234,7 @@ assert v[0] == cards.KEEP and "PR 을 읽지 못함" in v[1], v
 import cardguard  # noqa: E402
 reap.STATE = pathlib.Path(tmp) / "state"  # card locks
 saved_observe = cardguard.observe
-cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}], "waits": {}, "screens": {}}
+cardguard.observe = lambda path: {"ino": reap.dir_ino(path), "patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}], "waits": {}, "screens": {}}
 saved = cards.read_machine, cards.cards_listing, cards.gather, reap.run
 closed = []
 cards.read_machine = lambda cfg: machine(prs=OPEN)
@@ -269,15 +269,27 @@ reap.act = saved_act
 closed.clear()
 cards.read_machine = lambda cfg: machine(prs=OPEN)
 cards.gather = lambda w, m: saved[2](w, m, fake(branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("t1", True, 2 * 3600)]))
-cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1", "agentIdentity": "claude"}],
+cardguard.observe = lambda path: {"ino": reap.dir_ino(path), "patrol": False, "head": HEAD, "terminals": [{"handle": "t1", "agentIdentity": "claude"}],
                                   "waits": {"t1": {"evidence": "hook"}}, "screens": {"t1": ["❯"]}, "motion": {}}
 got = cards.act(item, {})
 assert got.startswith("건너뜀") and "사람의 답" in got and not closed, got
-cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}, {"handle": "t2"}]}
+cardguard.observe = lambda path: {"ino": reap.dir_ino(path), "patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}, {"handle": "t2"}]}
 assert "새 터미널 t2" in cards.act(item, {}) and not closed
-cardguard.observe = lambda path: {"patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}]}
-with cardguard.card_lock(CARD) as held:
-    assert held and cards.act(item, {}) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not closed
+cardguard.observe = lambda path: {"ino": reap.dir_ino(path), "patrol": False, "head": HEAD, "terminals": [{"handle": "t1"}]}
+# Another cleaner's process holds the card's lock (inside this process the same lock is re-entrant).
+import guard, subprocess  # noqa: E402
+lock = guard.lock_file("card", reap.real(CARD))
+lock.parent.mkdir(parents=True, exist_ok=True)
+holder = subprocess.Popen([sys.executable, "-c", "import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f, fcntl.LOCK_EX); "
+                           "print('held', flush=True); sys.stdin.read()", str(lock)],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+assert holder.stdout.readline().strip() == "held"
+assert cards.act(item, {}) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not closed
+holder.stdin.close()
+holder.wait(10)
+with cardguard.card_lock(CARD) as outer:
+    assert outer and cards.act(item, {}).startswith("터미널 1개 닫음") and closed
+closed.clear()
 assert cards.act(item, {}).startswith("터미널 1개 닫음") and closed
 cardguard.observe = saved_observe
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved

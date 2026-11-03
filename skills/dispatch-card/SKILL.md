@@ -108,7 +108,7 @@ session as not the human's, so an approval sent afterwards is refused. The brief
 
 A card that will run a project for this session through cards of its own (a lead) gets
 `orchestrate` `references/brief.md` "Lead" instead of the list above, and its `--prompt` also
-carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `TASKS` and `GATE` lines; the hook refuses a lead's prompt (a `MODE`
+carries the `MODE`, `ROLE: lead <slug>`, `INBOX`, `DELEGATE`, `PREDICATE`, `MERGE`, `TASKS` and `GATE` lines; the hook refuses a lead's prompt (a `MODE`
 line or a `<project>: lead` head) that lacks `MODE`, `ROLE`, `DELEGATE` or `PREDICATE`. The `ROLE` line binds the
 lead role to the card's session, so the reorient hook reminds it of its program on every prompt. It stands
 in for `claude --agent agent-skills:lead`: `orca worktree create --agent` takes an Orca agent id, not CLI flags. Without these lines a lead reports done and waits for an order that never comes.

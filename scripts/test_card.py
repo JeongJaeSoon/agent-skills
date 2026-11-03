@@ -25,13 +25,16 @@ elif a[:2] == ["terminal", "show"]:
 elif a[:2] == ["orchestration", "run-current"]:
     if mode == "orca-down":
         print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
-    print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead", "worker-list-down") else {"id": "run_me"}}}))
+    print(json.dumps({"ok": True, "result": {"run": None if mode in ("no-run", "worker-lead", "worker-lead-terminal", "worker-list-down") else {"id": "run_me"}}}))
 elif a[:2] == ["orchestration", "worker-list"] and mode == "worker-list-down":
     print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
 elif a[:2] == ["orchestration", "worker-list"]:
     # A lead started with worker-start: unbound (run-current null), its own Dispatch on its coordinator's Run.
-    mine = [{"agentTerminalHandle": "term_me", "runId": "run_top", "dispatchId": "ctx_lead"}] if mode == "worker-lead" else []
-    print(json.dumps({"ok": True, "result": {"workers": [{"agentTerminalHandle": "term_other", "runId": "run_x"}] + mine}}))
+    mine = [{"agentTerminalHandle": "term_me", "runId": "run_top", "dispatchId": "ctx_lead"}] if mode.startswith("worker-lead") else []
+    rows = [{"agentTerminalHandle": "term_other", "runId": "run_x"}] + mine
+    if mode == "worker-lead-terminal":  # Orca 1.4.246 names the handle `terminal`
+        rows = [{"terminal": r.pop("agentTerminalHandle"), **r} for r in rows]
+    print(json.dumps({"ok": True, "result": {"workers": rows}}))
 elif a[:2] == ["orchestration", "worker-start"]:
     if mode == "unmanaged" and "new-child" in a:
         print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": "The dispatching terminal's "
@@ -109,7 +112,8 @@ INBOX       Keep exactly one background inbox wait running (`orch wait acme`).
 DELEGATE    You do not investigate or implement yourself.
             Each goes one layer down.
 PREDICATE   3 PRs merged.
-TASKS       `task-create --deps`, then `task-list --ready`, then `worker-start --task`.
+MERGE       merge_policy autonomous
+TASKS      `task-create --deps`, then `task-list --ready`, then `worker-start --task`.
 GATE        A human decision is `gate-create` on its task.
 MODEL CALLS As in "Single worker".
 CLOSE       Once the predicate holds: `end-session` §8.
@@ -177,7 +181,7 @@ rc, out, err, calls = go(brief(LEAD, "lead.md"), "--repo", "name:acme", "--name"
 assert rc == 0, err
 p = prompt_of(calls)
 for line in ("MODE        Run", "ROLE: lead acme", "INBOX ", "            Each goes one layer down.", "PREDICATE ",
-             "TASKS ", "GATE ", "CLOSE       Once"):
+             "MERGE       merge_policy autonomous", "TASKS ", "GATE ", "CLOSE       Once"):
     assert line in p, (line, p)
 assert "MODEL CALLS" not in p and "--parent-worktree" not in calls[0]["argv"] and "--no-parent" in calls[0]["argv"]
 
@@ -186,7 +190,13 @@ for text, want in [(WORKER.replace(CLOSE, "## Close"), "CLOSE or KEEP"),
                    (WORKER.replace("/goal ", "goal: "), "/goal"),
                    (LEAD.replace("GATE ", "NOTE "), "GATE row"),
                    (LEAD.replace("TASKS ", "NOTE "), "TASKS row"),
-                   (LEAD.replace("ROLE: lead acme", "ROLE: lead <slug>"), "ROLE: lead <slug>")]:
+                   (LEAD.replace("ROLE: lead acme", "ROLE: lead <slug>"), "ROLE: lead <slug>"),
+                   # the merge policy is set before the lead starts: no MERGE row, or one naming both values or none
+                   (LEAD.replace("MERGE ", "NOTE "), "MERGE row"),
+                   (LEAD.replace("merge_policy autonomous", "merge_policy autonomous, or merge_policy human-gate"),
+                    "exactly one of `merge_policy autonomous` or `merge_policy human-gate`"),
+                   (LEAD.replace("merge_policy autonomous", "TBD"),
+                    "exactly one of `merge_policy autonomous` or `merge_policy human-gate`")]:
     rc, out, err, calls = go(brief(text, "bad.md"), "--repo", "name:acme", "--name", "x")
     assert rc == 2 and want in err and not calls, (want, rc, err, calls)
 assert go(str(tmp / "absent.md"), "--repo", "r", "--name", "x")[0] == 2
@@ -320,6 +330,7 @@ start = next(c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "wor
 spec = start[start.index("--spec") + 1]
 assert rc == 0 and start[start.index("--worktree") + 1] == "new-child", (rc, err, calls)
 assert spec.startswith("run the acme program") and "ROLE: lead acme" in spec and "DELEGATE " in spec and "CLOSE " in spec, spec
+assert "MERGE       merge_policy autonomous" in spec, spec
 for depth, want in ((2, "Nested worker depth"), (None, "unread")):
     orca_depth(depth)
     rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--no-parent")
@@ -328,23 +339,43 @@ assert "3으로" in card.orca_settings.suggestions({"nestedWorkerMaxDepth": 2})[
 orca_depth(3)
 rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", "--card")
 assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"], calls
-# A human-gate program lands through Orca gates, which a dispatched lead cannot create: a card at any depth.
-rc, out, err, calls = go(brief(LEAD_RUN + "Merge policy: human-gate.\n", "lead-gate.md"), "--repo", "r", "--name", "acme-lead")
+# A human-gate program lands through Orca gates, which a dispatched lead cannot create: its MERGE row makes it a card
+# at any depth, with that row in its first prompt. Prose elsewhere in the brief does not decide the form.
+LEAD_GATE = LEAD_RUN.replace("merge_policy autonomous", "merge_policy human-gate")
+rc, out, err, calls = go(brief(LEAD_GATE, "lead-gate.md"), "--repo", "r", "--name", "acme-lead")
 assert rc == 0 and creates(calls)[0][:2] == ["worktree", "create"] and "worker_cannot_coordinate_own_run" in err, (err, calls)
+assert "MERGE       merge_policy human-gate" in prompt_of(calls)
+rc, out, err, calls = go(brief(LEAD_RUN + "Merge policy: human-gate, as discussed.\n", "lead-prose.md"), "--repo", "r",
+                         "--name", "acme-lead")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"], (err, calls)
 # A lead that will start as a /goal card still reports to the Run: it is checked before the form is picked.
-rc, out, err, calls = go(brief(LEAD_RUN.replace("run:run_me", "run:run_other") + "Merge policy: human-gate.\n", "lead-gate.md"),
+rc, out, err, calls = go(brief(LEAD_GATE.replace("run:run_me", "run:run_other"), "lead-gate.md"),
                          "--repo", "r", "--name", "acme-lead")
 assert rc == 6 and "works for run:run_me" in err and not creates(calls), (rc, err)
 orca_depth(2)
 rc, out, err, calls = go(brief(LEAD_RUN, "lead-run.md"), "--repo", "r", "--name", "acme-lead", mode="orca-down")
 assert rc == 6 and "did not say" in err and not creates(calls), (rc, err)
 orca_depth(3)
-assert card.HUMAN_GATE.search("--merge-policy human-gate") and card.HUMAN_GATE.search("Merge policy is human-gate.") and not card.HUMAN_GATE.search("No human-gate here; merge policy: auto.")
+# The MERGE row is read once, whitespace normalised, for both the check and the form: a value wrapped onto a
+# continuation line counts, two values across lines are refused, and other text naming human-gate is not a value.
+assert card.merge_policy("MERGE  merge_policy\n       human-gate") == "human-gate"
+assert card.merge_policy("MERGE  merge_policy autonomous, or merge_policy\n       human-gate") is None
+assert card.merge_policy("MERGE  merge_policy autonomous\n       Do not use --merge-policy human-gate") == "autonomous"
+assert card.merge_policy("MERGE  merge policy: human-gate") is None and card.merge_policy(None) is None
+rc, out, err, calls = go(brief(LEAD_RUN.replace("merge_policy autonomous",
+                                                "merge_policy autonomous\n            (not --merge-policy human-gate)"),
+                               "lead-note.md"), "--repo", "r", "--name", "acme-lead")
+assert rc == 0 and creates(calls)[0][:2] == ["orchestration", "worker-start"], (err, calls)
+rc, out, err, calls = go(brief(LEAD_RUN.replace("merge_policy autonomous", "merge_policy autonomous, or merge_policy\n"
+                                                "            human-gate"), "lead-two.md"), "--repo", "r", "--name", "x")
+assert rc == 2 and "exactly one of" in err and not calls, (rc, err)
 # A lead that is itself a dispatched worker (run-current null) starts its units as workers on the Run it works for.
 SUP_TOP = SUPERVISED.replace("run:run_me", "run:run_top")
 rc, out, err, calls = go(brief(SUP_TOP, "sup-top.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
 assert rc == 0 and any(c["argv"][:2] == ["orchestration", "worker-start"] for c in calls), (err, calls)
 assert json.loads(out)["card"]["run"] == {"id": "run_top", "via": "own_dispatch"}, out
+rc, out, err, calls = go(brief(SUP_TOP, "sup-top2.md"), "--repo", "r", "--name", "abc-2", mode="worker-lead-terminal")
+assert rc == 0 and json.loads(out)["card"]["run"] == {"id": "run_top", "via": "own_dispatch"}, (err, out)
 # Its own Dispatch's Run is compared too: a brief naming another Run stops.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", mode="worker-lead")
 assert rc == 6 and "works for run:run_top" in err and not creates(calls), (rc, err)

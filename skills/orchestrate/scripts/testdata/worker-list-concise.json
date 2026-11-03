@@ -1,0 +1,21 @@
+[
+ {"workers": [
+   {"dispatchId": "ctx_lead", "taskId": "task_lead", "state": "ready", "outcome": "in_progress", "liveness": "live", "agent": "claude",
+    "terminal": "term_lead", "terminalState": "active", "workspace": "repo-1::/work/acme/lead", "host": "local"},
+   {"dispatchId": "ctx_a", "taskId": "task_a", "state": "ready", "outcome": "in_progress", "liveness": "exited", "agent": "claude",
+    "terminal": "term_a", "terminalState": "active", "workspace": "repo-1::/work/acme/card-a", "host": "local"},
+   {"dispatchId": "ctx_b", "taskId": "task_b", "state": "succeeded", "outcome": "succeeded", "liveness": "live", "agent": "claude",
+    "terminal": "term_b", "terminalState": "reclaimable", "workspace": "repo-1::/work/acme/card-b", "host": "local"}
+  ],
+  "scope": {"run": "run_demo", "source": "flag"},
+  "nextCursor": "cursor-2",
+  "warnings": ["Showing 3 of 5 Dispatches, newest first; more are on later pages. Follow page.nextCursor with --cursor."]},
+ {"workers": [
+   {"dispatchId": "ctx_c", "taskId": "task_c", "state": "succeeded", "outcome": "succeeded", "liveness": "live", "agent": "claude",
+    "terminal": "term_c", "terminalState": "retained", "workspace": "repo-1::/work/acme/card-c", "host": "local"},
+   {"dispatchId": "ctx_x", "taskId": "task_x", "state": "ready", "outcome": "in_progress", "liveness": "live", "agent": "codex",
+    "terminal": "term_x", "terminalState": "active", "workspace": "repo-1::/work/acme/other", "host": "local"}
+  ],
+  "scope": {"run": "run_demo", "source": "flag"},
+  "warnings": []}
+]
