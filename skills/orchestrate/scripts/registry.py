@@ -317,6 +317,8 @@ STORES = [
     Store("progwait", "P/*/*.json", {"program.wait_memo": CANONICAL},
           ("prog:cmd_wait", "prog:print_stuck", "prog:new_stalls", "prog:new_leftovers"), ("programview",),
           rule="`orch wait` memos: self-check, stuck, stalls and leftovers seen"),
+    Store("progstatus", "P/*/status-self-check.json", {"program.status_memo": CANONICAL}, ("prog:cmd_status",),
+          ("programview",), rule="`orch status` TAKEN OVER memo: when each self-check was asked, apart from `orch wait`'s"),
     Store("progbackup", "P/*/ledger.jsonl.bak-*", {"program.event": BACKUP}, ("prog:write_backfill",), ("nobody",)),
     Store("progdash", "P/*/dashboard/*", {"program.event": DERIVED, "pr.state": DERIVED}, ("dash:_merge", "dash:fetch_stages",
           "dash:collect_usage", "dash:cmd_note"), ("programview",), rule="one collect per program: state, PR rows, tree, history"),
