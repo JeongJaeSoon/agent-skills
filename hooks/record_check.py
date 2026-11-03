@@ -15,7 +15,7 @@ recorded.
   checked), and from this turn's text when a close command is checked.
 - PreToolUse (Bash) checks, at `guard.record_check`: a `worker_done` whose `--body` has no record line (a body that
   is not literal text counts as none), a target and a close command (`orca worktree rm`, `orca terminal close`) in
-  one call, and a close command while an obligation of this session, or of a session whose directory is under the
+  one call, a `cd` before a close command in one call, and a close command while an obligation of this session, or of a session whose directory is under the
   closed path, is open with no record line in this turn's text since.
 - Stop and SubagentStop: an open obligation and no record line in the final reply.
 
@@ -41,6 +41,8 @@ RECORD_MD = ROOT / "skills" / "end-session" / "references" / "record.md"
 LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?[*_]*(?:기록[ \t]*못[ \t]*함|기록|not recorded|recorded)[*_]*[ \t]*[:：](.*)$",
                   re.I | re.M)
 EMPHASIS = re.compile(r"[*_~\s]+")
+NEGATION = re.compile(r"(?:^|[\s;&|(`{])!(?=\s|$)")
+CHDIR = {"cd", "pushd", "popd"}
 GH_VALUE_OPTS = {"-R", "--repo", "--hostname"}
 
 
@@ -73,7 +75,9 @@ def target(words):
                 rest.append(w)
         if rest[:1] == ["pr"] and rest[1:2] == ["create"]:
             return "create"
-        if rest[:1] == ["pr"] and rest[1:2] == ["merge"] and not {"--auto", "--disable-auto"} & set(args):
+        flags = {n for w in args for n, _, v in [w.partition("=")]
+                 if n in ("--auto", "--disable-auto") and v.lower() not in ("false", "0")}
+        if rest[:1] == ["pr"] and rest[1:2] == ["merge"] and not flags:
             return "merge"
         return None
     if head.startswith("python") and args and os.path.basename(args[0]) == "orch.py":
@@ -221,8 +225,9 @@ def post_tool(event, cfg, failed):
     cmds = shell.commands(raw)
     session, agent, tid = event.get("session_id"), event.get("agent_id") or "", event.get("tool_use_id") or ""
     existing = rows()
-    # `! cmd` inverts the exit status shell.commands drops: the call's outcome says nothing about the command's.
-    negated = bool(re.match(r"\s*!(\s|$)", raw))
+    # `!` inverts an exit status and shell.commands drops it; with one anywhere (`( ! x )`, `time ! x`), the call's
+    # outcome says nothing about a command's.
+    negated = bool(NEGATION.search(shell.command_text(raw)))
     if not failed and not negated and len(cmds) == 1 and is_worker_done(cmds[0].words):
         for r in existing:
             if r.get("event") == "report" and r.get("id") == tid and tid:
@@ -261,6 +266,10 @@ def pre_tool(event, cfg, lvl):
     if targets and closes:
         problems.append("this call both records a milestone and closes a session; run the close as its own call after "
                         "the report")
+    elif closes and any(c.words and os.path.basename(c.words[0]) in CHDIR
+                        for c in cmds[:min(cmds.index(c) for c, _ in closes)]):
+        problems.append("this call changes directory before a close, so the closed path cannot be checked; run the "
+                        "close as its own call")
     for _, (own, closed) in closes:
         keep = lambda r: ((r.get("session"), r.get("agent") or "") == (session, agent) and own) or (
             closed is not None and r.get("cwd") and _under(r["cwd"], closed))

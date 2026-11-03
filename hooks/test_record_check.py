@@ -125,12 +125,14 @@ check("notes only: names notes, not tracker", "notes store" in msg and "the trac
 
 # Commands that are not milestones, or not run.
 reset()
-for cmd in ["gh pr create --help", "gh pr merge 3 --auto", "gh pr merge 3 --disable-auto", "orch land demo --dry-run",
+for cmd in ["gh pr create --help", "gh pr merge 3 --auto", "gh pr merge 3 --disable-auto", "gh pr merge 3 --auto=true",
+            "gh pr merge 3 --disable-auto=true", "orch land demo --dry-run",
             "echo 'gh pr merge 3'", "gh pr view 3", "git commit -m 'gh pr merge'", "# gh pr merge 3"]:
     check(f"not a milestone: {cmd}", post(cmd, tid=cmd) == {})
 check("not a milestone: nothing opened", rows() == [])
 for cmd in ["gh --repo acme/app pr merge 3", "/opt/bin/gh pr merge 3 --merge",
-            "python3 skills/orchestrate/scripts/orch.py land demo --pr 3", "cd x && gh pr create -t a -b b"]:
+            "python3 skills/orchestrate/scripts/orch.py land demo --pr 3", "cd x && gh pr create -t a -b b",
+            "gh pr merge 3 --auto=false"]:
     check(f"milestone: {cmd}", ctx(post(cmd, tid=cmd), "PostToolUse"))
 
 # A failed call opens an obligation only when it held more than one command.
@@ -185,8 +187,18 @@ post("gh pr merge 5", tid="m1")
 pre("! " + ok_body, tid="w5")
 post("! " + ok_body, tid="w5")
 check("negated worker_done that succeeded: does not close", "systemMessage" in stop("idle"))
+for i, wrap in enumerate(["( ! {} )", "time ! {}"]):
+    reset()
+    post("gh pr merge 5", tid="m1")
+    pre(wrap.format(ok_body), tid=f"w6{i}")
+    post(wrap.format(ok_body), tid=f"w6{i}")
+    check(f"worker_done negated as {wrap}: does not close", "systemMessage" in stop("idle"))
+    reset()
+    check(f"merge negated as {wrap} that failed: opens",
+          ctx(post(wrap.format("gh pr merge 3"), tid=f"n{i}", failed=True), "PostToolUseFailure"))
 reset()
 check("negated merge that failed: opens", ctx(post("! gh pr merge 3", tid="n1", failed=True), "PostToolUseFailure"))
+check("quoted ! is not a negation", post("echo '!' ; false", tid="n2", failed=True) == {})
 
 
 def add_row(row):
@@ -241,6 +253,12 @@ post("gh pr merge 6", tid="m2", session="other")
 check("close of a path holding another session's obligation: warn",
       ctx(pre(f"orca worktree rm --worktree path:{CARD} --json", session="lead", cwd=str(TMP)), "PreToolUse"))
 check("close of an id selector: not judged", pre("orca worktree rm --worktree id:abc", session="lead") == {})
+reset()
+check("close with nothing open: passes", pre("orca worktree rm --worktree current", session="lead", cwd=str(TMP)) == {})
+check("cd before a close: warn", ctx(pre(f"cd {CARD} && orca worktree rm --worktree current", session="lead",
+                                         cwd=str(TMP)), "PreToolUse"))
+check("cd after a close: not judged by that",
+      pre("orca worktree rm --worktree current && cd /", session="lead", cwd=str(TMP)) == {})
 # This turn's report since the obligation clears the close.
 reset()
 post("gh pr merge 7", tid="m3")
