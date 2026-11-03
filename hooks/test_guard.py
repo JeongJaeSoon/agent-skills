@@ -207,7 +207,8 @@ H = pathlib.Path(HOME)
 (H / "worker.md").write_text("/goal fix X\nCLOSE: §8\n")
 (H / "noclose.md").write_text("/goal fix X\n## Close\n§8\n")
 (H / "lead.md").write_text("app: lead\n/goal run app\nMODE: orchestrate\nROLE: lead app\nINBOX  orch wait app\n"
-                           "DELEGATE  nothing yourself\nPREDICATE  ENG-1 Done\nTASKS  task-create --deps\nGATE  gate-create\nCLOSE: §8\n")
+                           "DELEGATE  nothing yourself\nPREDICATE  ENG-1 Done\nMERGE  merge_policy autonomous\n"
+                           "TASKS  task-create --deps\nGATE  gate-create\nCLOSE: §8\n")
 HELPER = "skills-sync card {} --repo name:app --name app-x"
 assert bash(HELPER.format("worker.md")) == "none"  # relative to the event's cwd
 assert bash(HELPER.format(H / "worker.md"), session="joined") == "none"
