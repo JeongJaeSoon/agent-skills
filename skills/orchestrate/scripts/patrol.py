@@ -138,7 +138,10 @@ def background(lines):
 # A last message that says the session waits on a background task still to finish (English or Korean). A launch
 # ("started it in the background"), a report of one that finished ("waited for it, then applied", "기다리던 중 완료
 # 알림을 받아") or a wait denied ("no need to wait") is not one: only a present or future wait counts.
-BG_WAIT = re.compile(r"\bwait(?:ing|s)?\s+(?:on|for|until)\b.{0,60}?\bbackground\b"
+# English counts a wait only as the session's state now: at the sentence's start, or after a present or future marker
+# ("I'm", "still", "I'll"), so "after waiting …" or "while waiting …" is not one.
+BG_WAIT = re.compile(r"(?:^|\b(?:I'm|I am|am|is|are|still|now|I'll|I will|will|keep|just)\s+)wait(?:ing|s)?\s+"
+                     r"(?:on|for|until)\b.{0,60}?\bbackground\b"
                      r"|\b(?:until|once|when)\b.{0,20}?\bbackground\b.{0,60}?\b(?:finishes|completes|is done|ends)\b"
                      r"|백그라운드.{0,60}?(?:기다립니다|기다리는 중|기다리고 있|기다릴게|기다린다|대기 중|끝나면|끝나기를 기다"
                      r"|완료되면)", re.I)
@@ -159,7 +162,7 @@ def bgwait_signal(lines):
     if start is None:
         return None
     text = " ".join(card_watch.GLYPHS.sub("", l.strip()) for l in body[start:] if l.strip() and not set(l.strip()) <= {"─"})
-    waits = any(BG_WAIT.search(s) and not NO_WAIT.search(s) for s in SENTENCE.split(text))
+    waits = any(BG_WAIT.search(s.strip()) and not NO_WAIT.search(s) for s in SENTENCE.split(text))
     return text[:300] if waits else None
 
 
