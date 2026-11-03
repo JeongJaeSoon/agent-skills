@@ -1,6 +1,6 @@
 # agent-skills
 
-[English](README.md) · [日本語](README.ja.md) · 한국어
+[English](README.md) · [日本語](README.ja.md) · 한국어 · [简体中文](README.zh-CN.md)
 
 티켓 하나를 머지된 PR까지 끌고 가는 Claude Code 스킬 모음. 사람이 어디서 승인할지는 직접 고른다.
 

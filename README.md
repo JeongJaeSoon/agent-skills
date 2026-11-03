@@ -1,6 +1,6 @@
 # agent-skills
 
-English · [日本語](README.ja.md) · [한국어](README.ko.md)
+English · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md)
 
 Claude Code skills that take a ticket to a merged PR, with you deciding where a human approves.
 

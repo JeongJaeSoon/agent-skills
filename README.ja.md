@@ -1,6 +1,6 @@
 # agent-skills
 
-[English](README.md) · 日本語 · [한국어](README.ko.md)
+[English](README.md) · 日本語 · [한국어](README.ko.md) · [简体中文](README.zh-CN.md)
 
 チケット1件をマージ済みの PR まで運ぶ Claude Code のスキル集です。どこで人が承認するかは自分で決められます。
 
