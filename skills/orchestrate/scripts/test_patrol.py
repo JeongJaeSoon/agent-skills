@@ -94,6 +94,14 @@ f = facts(terminals=[term("h1", "/w/a")], tails={"/w/a": (idle(40), None)}, fail
 found, v, _ = patrol.judge(f, {})
 assert found == [] and v["cards"] == {"/w/a": "working"} and v["failed"] == ["waits"], (found, v)
 assert "waits" in patrol.DEPENDS["I"], "a standing I is not cleared by a round that could not read the waits"
+f = facts(terminals=[term("h1", "/w/a")], tails={"/w/a": (idle(40), None)}, level="danger",
+          consumers=[{"what": "pid 1 demo", "cpu": 80, "card": "/w/a"}])
+prior = patrol.judge(f, {})[0]
+assert sorted(x["code"] for x in prior) == ["I", "L"], prior
+saved_rows, patrol.log_rows = patrol.log_rows, lambda: [{"op": "found", **r} for r in prior]
+current, v, _ = patrol.judge({**f, "failed": {"waits"}}, {})
+assert patrol.write_round(current, v, True, NOW + 60, failed={"waits"}) == ([], []), "neither I nor L clears"
+patrol.log_rows = saved_rows
 
 # O: an open PR with no session for a day and nobody on it; a requested review or running CI is someone on it.
 sess = [{"id": "s1", "path": "/w/p", "agents": [], "linked_pr": {"key": "acme/app#1"}},
