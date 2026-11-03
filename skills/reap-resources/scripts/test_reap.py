@@ -107,6 +107,18 @@ with tempfile.TemporaryDirectory() as tmp:
     main.write_text('{"type":"user","timestamp":"2026-10-25T07:20:36Z"}\n{"type":"x","timestamp":"2026-10-24T07:20:36Z"}\n')
     assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") == now - reap.parse_ts("2026-10-25T07:20:36Z"), \
         "an older time appended last does not make the session quieter"
+    # /reload-* rows the skills-sync broadcast typed, and the pr-link row a reload rewrites, are not work.
+    assert reap.reload_row.__module__ == "sync", "the repo's scripts/sync.py must load, not the fallback"
+    tail = (pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "testdata" / "reload-tail.jsonl").read_text()
+    main.write_text(tail)
+    assert reap.last_entry_time(main) == reap.parse_ts("2026-11-03T10:05:01.000Z"), reap.last_entry_time(main)
+    lines = tail.splitlines(keepends=True)
+    main.write_text("".join(lines[4:]))
+    os.utime(main, (now - 60, now - 60))
+    assert reap.last_entry_time(main) is None, "reloads only: unknown, not the last reload's mtime"
+    assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") is None, "an unknown time keeps nothing by itself"
+    main.write_text("".join(lines) + '{"type":"user","timestamp":"2026-11-03T14:00:00Z","message":{"content":"<command-name>/compact</command-name>"}}\n')
+    assert reap.last_entry_time(main) == reap.parse_ts("2026-11-03T14:00:00Z"), "any other slash command is work"
     main.write_text('{"type":"user","timestamp":"soon"}\n')
     assert reap.transcript_quiet(pathlib.Path(tmp), now)("/w/my_repo.x") is None, "an unreadable time is unknown, not quiet"
     assert reap.transcript_quiet(pathlib.Path(tmp), now, reasons=True)("/w/my_repo.x").endswith("을 읽지 못함")

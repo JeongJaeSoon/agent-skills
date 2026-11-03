@@ -30,6 +30,8 @@ STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-
 ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 BRANCH = "main"
 RELOAD = {"skills": "/reload-skills", "plugins": "/reload-plugins"}
+RELOAD_TAGS = tuple(f"<command-name>{c}</command-name>" for c in RELOAD.values())
+CAVEAT_TAG = "<local-command-caveat>"
 SETTLE_S = float(os.environ.get("SKILLS_SYNC_SETTLE_S", "1.5"))
 CONFIRM_S = float(os.environ.get("SKILLS_SYNC_CONFIRM_S", "3"))
 INTERVAL_S = 900  # launchd StartInterval written by bootstrap.py; readers use it to tell a stalled sync
@@ -47,6 +49,24 @@ def git(*args, timeout=60, env=None):
     if p.returncode:
         raise Stop(f"git {' '.join(args)} failed: {(p.stderr or p.stdout).strip()[:300]}")
     return p.stdout.strip()
+
+
+def reload_row(row):
+    """Whether a transcript row is what a typed /reload-skills or /reload-plugins leaves behind: its command row, its
+    output row, or the caveat Claude Code writes before any local command. None of them is work by the session, so
+    the broadcast's own reloads must not read as activity. The caveat says nothing about which command follows; the
+    command row after it still counts for every other command."""
+    if not isinstance(row, dict):
+        return False
+    if row.get("type") == "system" and row.get("subtype") == "local_command":
+        run = row.get("commandRun") if isinstance(row.get("commandRun"), dict) else {}
+        return "/" + str(run.get("command") or "") in RELOAD.values()
+    msg = row.get("message") if isinstance(row.get("message"), dict) else {}
+    content = msg.get("content")
+    if row.get("type") != "user" or not isinstance(content, str):
+        return False
+    text = content.lstrip()
+    return text.startswith(RELOAD_TAGS) or bool(row.get("isMeta")) and text.startswith(CAVEAT_TAG)
 
 
 def reload_kind(paths):
