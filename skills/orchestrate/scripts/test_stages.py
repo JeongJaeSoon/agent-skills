@@ -56,7 +56,8 @@ assert rows[:3] == [
     "| ㄴ 인덱스 재구축 | acme/ops#88 | ✅ 10/2 | – | 해당 없음 |",
     "| ㄴ 정렬 버그 | acme/web#45 | ❌ CI 실패 | ⚠️ a\\|b | – |",
 ], rows
-assert rows[3].startswith("| 로그인 개선 | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token=") and "…[" not in md, md
+# Every cell ✅: the row has ended, at its latest cell's time, without anyone running `orch stage done`.
+assert rows[3].startswith("| 로그인 개선 (끝남) | acme/web#40 | ✅ 9/28 | ✅ v1.7.2 | ✅ token=") and "…[" not in md, md
 assert not any(l.startswith("- [") for l in lines), lines
 assert lines[-2:] == ["1. acme/web#45 리뷰 → 머지 (에이전트, 오늘)", "2. v1.8.0 prod 배포 (사람, 미정)"], lines[-2:]
 
@@ -70,7 +71,8 @@ t = json.loads(js)
 assert [r["id"] for r in t["rows"]] == ["search", "reindex", "sort", "login"]
 # Without --all, --json folds like the table: login, every cell ✅, is finished.
 assert [r["id"] for r in json.loads(orch("show", "--json")[1])["rows"]] == ["search", "reindex", "sort"]
-assert t["rows"][0]["cells"]["merge"] == {"mark": "ok", "evidence": "10/2", "auto": True}
+# Its merge time rides along, so a row ending on its cells ends no earlier than its merge.
+assert t["rows"][0]["cells"]["merge"] == {"mark": "ok", "evidence": "10/2", "auto": True, "at": "2026-10-02T03:00:00Z"}
 
 # done marks a row finished and keeps it a week; drop removes it with its children.
 # Without --all, show prints what the brief's line counts: the finished row folds into one line.

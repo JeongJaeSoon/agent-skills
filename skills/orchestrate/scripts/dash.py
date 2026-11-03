@@ -1751,9 +1751,10 @@ def closed_recent(days=7):
 
 def stage_report():
     """The stage table whole, generated rows and recorded ones, for the Stages page: the brief's text has only a line pointing here.
-    Read per request, so an `orch stage set` shows on the next poll."""
+    Read per request, so an `orch stage set` shows on the next poll. Counted by stages.counted(), the brief line's count."""
     try:
-        return acks.mark_stages(stages.table())
+        state = fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
+        return acks.mark_stages(stages.counted(stages.table(state), state))
     except (OSError, ValueError) as e:
         return {"error": f"stages: {type(e).__name__}: {e}"}
 

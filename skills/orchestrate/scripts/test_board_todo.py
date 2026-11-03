@@ -165,7 +165,10 @@ first = do["10/30(금) 09:00 → acme/app#1 머지·배포 · 오너"]
 ok("board", "done", first)
 out = render(AFTER)
 assert "acme/app#1 머지·배포" not in out, out
+# prs.json keeps a PR only while an open item names it: the closed to-do no longer holds acme/app#1 there.
+assert "acme/app#1" not in fleet.board_prs() and "acme/app#2" in fleet.board_prs()
 ok("board", "reopen", first)
+assert "acme/app#1" in fleet.board_prs()
 assert "⏰ acme/app#1 머지·배포" in render(AFTER)
 ok("board", "todo", "drop", "1")
 assert [t["title"] for t in store()["todo"]] == ["acme/app#2 ready로 전환", "릴리스 노트 정리"]

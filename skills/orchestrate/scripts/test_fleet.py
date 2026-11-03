@@ -821,26 +821,38 @@ process.stdout.write(itemList({{sessions: []}}, {json.dumps(rows)}, {{limit: 8}}
     # Nothing in an item is cut: the text wraps.
     assert "ellipsis" not in card and "row0" in card, card
 
-    # The stage table opens on open rows. Each program's finished rows wait behind its own "▸ N finished", and a program
+    # The stage table opens on the rows stages.counted() marks `open`, the ones the brief's line counts. Each program's
+    # other rows (finished, stopped, or unchanged past stage_idle_d) wait behind its own "▸ N folded", and a program
     # with none open is one dimmed heading line after the open ones; Ack all sits inside an opened program, not on top.
     stage = {"rows": [{"id": "g2", "title": "past group", "group": True, "done_at": fleet.iso(now)},
                       {"id": "g2/a", "parent": "g2", "title": "past row", "cells": {}, "done_at": fleet.iso(now), "ack": "ackable"},
-                      {"id": "g2/b", "parent": "g2", "title": "past row two", "cells": {}, "done_at": fleet.iso(now), "ack": "ackable"},
-                      {"id": "g1", "title": "live group", "group": True}, {"id": "g1/a", "parent": "g1", "title": "open row", "cells": {}},
+                      {"id": "g2/b", "parent": "g2", "title": "past row two", "cells": {}, "done_at": fleet.iso(now), "ack": "ackable",
+                       "stopped": "released"},
+                      {"id": "g1", "title": "live group", "group": True, "open": True},
+                      {"id": "g1/a", "parent": "g1", "title": "open row", "cells": {}, "open": True},
+                      {"id": "g1/c", "parent": "g1", "title": "idle row", "cells": {}, "open": False},
+                      # Done a month ago with an open row under it: counted open, so shown however old.
+                      {"id": "g1/old", "parent": "g1", "title": "old parent", "cells": {}, "open": True,
+                       "done_at": fleet.iso(now - dt.timedelta(days=30))},
+                      {"id": "g1/old/kid", "parent": "g1/old", "title": "open kid", "cells": {}, "open": True},
                       {"id": "g1/b", "parent": "g1", "title": "finished row", "cells": {}, "done_at": fleet.iso(now)}],
-             "refs": {}, "env": {"prod": "v9.9.9", "at": fleet.iso(now - dt.timedelta(days=17))}}
+             "refs": {}, "env": {"prod": "v9.9.9", "at": fleet.iso(now - dt.timedelta(days=17))}, "open": 3, "folded": 4}
     js = f"""{helpers}
 {(assets / "fleet.js").read_text()}
 const S = {{filters: {{}}}};
 const out = {{open: stageSection({json.dumps(stage)})}};
+F.brief = {{stages: {json.dumps(stage)}}}; out.count = stageOpen();
 F.stageFold.add("g1"); F.stageFold.add("g2"); out.all = stageSection({json.dumps(stage)});
 process.stdout.write(JSON.stringify(out));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
+    assert got["count"] == 3, "the sidebar and the overview card count what the server counted"
     assert "open row" in got["open"] and "live group" in got["open"] and "past group" in got["open"], got["open"]
+    assert "old parent" in got["open"] and "open kid" in got["open"], got["open"]
     assert got["open"].index("live group") < got["open"].index("past group"), "a program with open rows comes first"
-    assert "▸ 1 finished" in got["open"] and "▸ 2 finished" in got["open"] and "Ack all" not in got["open"], got["open"]
-    assert not any(t in got["open"] for t in ("finished row", "past row")), got["open"]
-    assert all(t in got["all"] for t in ("finished row", "past row", "past row two")) and "Ack all 2" in got["all"], got["all"]
+    assert "▸ 2 folded" in got["open"] and "Ack all" not in got["open"], got["open"]
+    assert not any(t in got["open"] for t in ("finished row", "past row", "idle row")), got["open"]
+    assert all(t in got["all"] for t in ("finished row", "past row", "past row two", "idle row")) and "Ack all 2" in got["all"], got["all"]
+    assert "· stopped" in got["all"], got["all"]
     assert "Feature/epic" not in got["open"] and got["open"].count("<th>") == 5, "no always-empty first column"
     # An env line nobody re-recorded for 7 days folds into a closed details, still readable when opened.
     assert "<details class=\"meta\">" in got["open"] and "v9.9.9" in got["open"], got["open"]
@@ -852,7 +864,7 @@ const S = {{filters: {{}}}};
 F.brief = {{text: "x", stages: {json.dumps(stage)}, done: [], open: [], closed: []}};
 process.stdout.write(JSON.stringify({{brief: fleetBrief(), stages: fleetStages(), moved: fleetSection("work")}}));"""
     got = json.loads(subprocess.run(["node", "-e", ctx], input=js, capture_output=True, text=True, check=True).stdout)
-    assert 'href="#/fleet/stages"' in got["brief"] and "1 in progress" in got["brief"] and "open row" not in got["brief"], got["brief"]
+    assert 'href="#/fleet/stages"' in got["brief"] and "3 in progress" in got["brief"] and "open row" not in got["brief"], got["brief"]
     assert "open row" in got["stages"] and got["moved"] == "stages", got
 
     # The To-do page lists the brief answer's "do" items, one that has come first (⏰), then by date, undated last,
@@ -1110,6 +1122,13 @@ fleet.write_atomic(state_dir / "board.json", json.dumps({"rows": {"x": {"id": "x
                                                         "later": [{"title": "t", "trigger": "acme/tools#7 머지"}]}))
 assert fleet.board_prs() == {"acme/tools#8", "acme/tools#7"}, fleet.board_prs()
 assert next(p for p in pr_tick(viewed=True)["prs"] if p["number"] == 8)["state"] == "CLOSED"
+# A board item tidy.jsonl closed no longer holds its PR: prs.json drops it on the next PR tick.
+import tidy  # noqa: E402
+held = {"row:x": "x", tidy.item_id("later", {"title": "t", "trigger": "acme/tools#7 머지"}): "t"}
+assert tidy.write(list(held), can=held)[0] == list(held)
+assert fleet.board_prs() == set(), fleet.board_prs()
+assert 8 not in {p["number"] for p in pr_tick(viewed=True)["prs"]}
+assert tidy.write(list(held), undo=True)[0] == list(held)
 (state_dir / "board.json").unlink()
 # Nor while a program's ledger names it: the stage table reads a landed PR's branch from here once its card is gone.
 prog_dir = root / "no-programs" / "p1"
