@@ -47,6 +47,7 @@ HOOKS = {
     "pressure_gate.py": REFUSAL_ONLY,
     "permission.py": REFUSAL_ONLY,
     "claim_check.py": REFUSAL_ONLY,
+    "subagent_log.py": REFUSAL_ONLY,
 }
 
 
