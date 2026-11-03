@@ -196,29 +196,35 @@ def known(here):
 def full_path(word, here):
     """The absolute path a word names: a leading `~` and $HOME expanded, a quoted `$` or `~` kept as written. Unknown
     when bash would expand any other part (a variable, a glob)."""
-    word = HOME_VAR.sub("~", word)
-    if "$" in word or set(word) & set("*?[") or "~" in word[1:]:
+    if "~" in word[1:]:
+        raise Unknown("expanded path")
+    home = os.path.expanduser("~")
+    word = HOME_VAR.sub(lambda _: home, word)  # the value itself: `$HOME.old` is a sibling of home, not inside it
+    if "$" in word or set(word) & set("*?["):
         raise Unknown("expanded path")
     word = os.path.expanduser(word).replace(shell.TEXT_DOLLAR, "$").replace(shell.TEXT_TILDE, "~")
     return word if os.path.isabs(word) else os.path.join(known(here), word)
 
 
 def directory(word, here):
-    """The real directory a `cd` or `git -C` word names; Unknown when it cannot be read."""
+    """The real directory a `git -C` word names (git changes directory physically); Unknown when it cannot be read."""
     return os.path.realpath(full_path(word, here))
 
 
 def changed_dir(c, here):
-    """The directory a `cd` leaves the shell in, UNKNOWN_DIR when it cannot be read from its words."""
+    """The directory a `cd` leaves the shell in, UNKNOWN_DIR when it cannot be read from its words. Logical, as bash's
+    `cd` is without -P: `cd link; cd ..` returns to the link's own parent."""
+    opts = [x for x in c.words[1:] if x.startswith("-") and x != "-"]
     args = [x for x in c.words[1:] if not x.startswith("-") or x == "-"]
     if not args:
         return os.path.expanduser("~")
     if args[0] == "-":
         return danger.UNKNOWN_DIR
     try:
-        return directory(args[0], here)
+        p = full_path(args[0], here)
     except Unknown:
         return danger.UNKNOWN_DIR
+    return os.path.realpath(p) if any("P" in x for x in opts) else os.path.normpath(p)
 
 
 def deleted(word, here):
@@ -275,10 +281,31 @@ def git_dir(w, here):
     return None, [], here
 
 
+def removed_worktrees(words, here, unknown):
+    """[("delete", key)] for each `git worktree remove` operand, as git picks it from its own worktree list: the path,
+    or a trailing part of one worktree's path (git accepts `victim` for `/elsewhere/victim`)."""
+    listed = [line[9:] for line in git(["worktree", "list", "--porcelain"], known(here)).splitlines()
+              if line.startswith("worktree ")]
+    out = []
+    for x in words:
+        try:
+            full = os.path.realpath(full_path(x, here))
+        except Unknown as e:
+            unknown.append(str(e))
+            continue
+        hits = [p for p in listed if os.path.realpath(p) == full]
+        hits = hits or [p for p in listed if ("/" + p.rstrip("/")).endswith("/" + x.strip("/"))]
+        if len(hits) == 1:
+            out.append(("delete", deleted(hits[0], here)))
+        else:
+            unknown.append("worktree not in git's list")
+    return out
+
+
 def git_acts(w, here, unknown):
     sub, rest, here = git_dir(w, here)
     if sub == "worktree" and rest[:1] in (["remove"], ["rm"]):
-        return each_deleted(operands(rest[1:]), here, unknown)
+        return removed_worktrees(operands(rest[1:]), here, unknown)
     if sub == "reset" and "--hard" in rest:
         return [("reset-hard", os.path.realpath(git(["rev-parse", "--show-toplevel"], known(here))))]
     if sub != "push" or any(x in ("-n", "--dry-run") for x in rest):

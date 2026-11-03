@@ -7,7 +7,11 @@ ROOT = HERE.parent
 TMP = pathlib.Path(os.path.realpath(tempfile.mkdtemp()))
 STATE = TMP / "state"
 WT = TMP / "worktrees" / "card-a"
-WT.mkdir(parents=True)
+MAIN = TMP / "main"
+MAIN.mkdir()
+for args in (["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q",
+             "--allow-empty", "-m", "init"], ["worktree", "add", "-q", "-b", "card-a", str(WT)]):
+    subprocess.run(["git", *args], cwd=MAIN, check=True)
 LEDGER = STATE / "refusals.jsonl"
 os.environ["AGENT_SKILLS_STATE"] = str(STATE)
 sys.path.insert(0, str(HERE))
@@ -45,7 +49,7 @@ def hook(event, script="refusals.py", **extra):
 
 def pre(tool, tool_input, session="s-b", transcript=None, cwd=None):
     out = hook({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input, "session_id": session,
-                "cwd": str(cwd or TMP), "transcript_path": transcript})
+                "cwd": str(cwd or MAIN), "transcript_path": transcript})
     return (out.get("hookSpecificOutput") or {}).get("permissionDecision", "none"), out
 
 
@@ -100,6 +104,8 @@ def shape(cmd, cwd=TMP):
 reset()
 assert denied("toolu_1", "Bash", {"command": f"SECRET_TOKEN=abc123 rm -rf {WT}"}) == {}
 assert bash(f"git worktree remove --force {WT}")[0] == "deny"
+assert bash("git worktree remove card-a")[0] == "deny"  # git picks it by its last path part
+assert bash(f"git -C {MAIN} worktree remove --force card-a", cwd=TMP)[0] == "deny"
 assert bash(f"cd {WT.parent} && rm -rf card-a")[0] == "deny"
 assert bash(f"orca worktree rm --worktree path:{WT}")[0] == "deny"
 assert bash(f"rm -rf {WT.parent}")[0] == "deny"  # its parent holds it
@@ -169,7 +175,7 @@ assert shape("git push --all https://github.com/acme/app.git")[1]
 (TMP / "a" / "b").mkdir(parents=True)
 assert shape(f"(cd {TMP / 'a'} && rm -rf x); rm -rf y")[0] == []  # relative paths after a scoped cd: not read
 assert shape(f"(cd {TMP / 'a'} && rm -rf x); rm -rf y")[1]
-assert shape(f"git -C {TMP / 'a'} -C b worktree remove c")[0] == [("delete", str(TMP / "a" / "b" / "c"))]
+assert shape(f"git -C {TMP} -C main worktree remove card-a", TMP / "a")[0] == [("delete", str(WT))]
 assert shape(f"rm -rf '{TMP}/$literal'")[0] == [("delete", f"{TMP}/$literal")]
 assert shape("rm -rf $DIR/x")[0] == [] and shape("rm -rf $DIR/x")[1]
 (TMP / "link").symlink_to(WT)
@@ -183,11 +189,16 @@ assert shape(f"cd '{TMP}/$literal'; rm victim")[0] == [("delete", f"{TMP}/$liter
 found, unknown = shape(f'rm {TMP}/refused "$DIR"')
 assert found == [("delete", f"{TMP}/refused")] and unknown
 assert shape("rm $HOME_BACKUP/victim")[0] == []
+home = os.path.realpath(pathlib.Path.home())
+assert shape('rm "$HOME.old/victim"')[0] == [("delete", f"{os.path.realpath(home + '.old')}/victim")]
 assert shape("rm $HOME/victim")[0] == [("delete", os.path.join(os.path.realpath(pathlib.Path.home()), "victim"))]
 # `..` after a symlink is resolved through it, as the kernel does.
 (TMP / "physical" / "nested").mkdir(parents=True)
 (TMP / "via").symlink_to(TMP / "physical" / "nested")
 assert shape(f"rm -rf {TMP}/via/../victim")[0] == [("delete", f"{TMP}/physical/victim")]
+# `cd` is logical: `cd link; cd ..` comes back to the link's own parent.
+assert shape(f"cd {TMP}/via; cd ..; rm victim")[0] == [("delete", f"{TMP}/victim")]
+assert shape(f"cd -P {TMP}/via; cd ..; rm victim")[0] == [("delete", f"{TMP}/physical/victim")]
 
 # 4b. git push follows the push URL and a remote's own push refspecs; gh api reads attached option forms.
 repo = TMP / "repo"
