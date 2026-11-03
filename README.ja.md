@@ -105,7 +105,7 @@ https://github.com/JeongJaeSoon/agent-skills の Claude Code プラグインを�
 
 | グループ | スキル | 役割 |
 |---|---|---|
-| [チケット1件](docs/skills.ja.md#チケット1件) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | チケットを書き、届け、次のチケットを新しいカードに渡し、セッションを閉じ、進捗を記録する |
+| [チケット1件](docs/skills.ja.md#チケット1件) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | チケットを書き、届け、次のチケットを新しいカードに渡し、進捗を記録してセッションを閉じる |
 | [プロジェクト1件](docs/skills.ja.md#プロジェクト1件orca-ワーカー複数) | `orchestrate`, `measure-delivery` | 複数のチケットを Orca のワーカーで並行してマージし、終わったあと実際どうだったかを測る |
 | [マシン1台](docs/skills.ja.md#マシン1台) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | 残り物の片付け、エージェントが見ない秘密値の入力、autoMode ルールの下書き、設定キーの変更、インストールと更新 |
 | [チャットとレビュー](docs/skills.ja.md#チャットとレビュー) | `watch-mentions`, `watch-prs` | 自分に関係するチャットと PR を作業として集める |

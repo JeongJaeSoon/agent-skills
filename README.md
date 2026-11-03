@@ -105,7 +105,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 
 | Group | Skills | What they do |
 |---|---|---|
-| [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session`, `record-progress` | Write a ticket, deliver it, hand the next one to a fresh card, close the session, record progress |
+| [One ticket](docs/skills.en.md#one-ticket) | `write-ticket`, `deliver-ticket`, `ui-review`, `handoff-ticket`, `dispatch-card`, `end-session` | Write a ticket, deliver it, hand the next one to a fresh card, record progress and close the session |
 | [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `measure-delivery` | Land many tickets in parallel on Orca workers, then measure how it actually went |
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |

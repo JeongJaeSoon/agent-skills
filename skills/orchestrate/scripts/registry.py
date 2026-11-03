@@ -261,6 +261,9 @@ STORES = [
     Store("refusalslock", "S/refusals.lock", {"refusal.act": LOCK}, ("lib/refusals:locked",)),
     Store("guarderrors", "S/guard-errors.jsonl", {"hook.error": CANONICAL}, ("config:log_error",), ("nobody",),
           rule="a hook's own exception, let through; read by a person"),
+    Store("recordcheck", "S/record-check.jsonl", {"record.obligation": CANONICAL}, ("record_check:append",),
+          ("nobody",), rule="merges, lands and PR opens that still owe a record line, their closes, and the warn "
+                            "rows a week of observation reads before guard.record_check goes to deny"),
     Store("onboard", "S/onboard-declined.json", {"onboard.declined": CANONICAL}, ("onboard:decline",), ("reorient",)),
     Store("ledger", "S/ledger.jsonl", {"resource.made": CANONICAL}, ("reap:act", "reap:main"), ("janitor",),
           rule="what agents made, retired when reaped"),
