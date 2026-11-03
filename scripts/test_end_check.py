@@ -1,6 +1,6 @@
 """`skills-sync end-check`: end-session §4/§7/§8's table, one test per row, and --apply against a fake orca.
 Run: python3 scripts/test_end_check.py"""
-import contextlib, io, json, os, pathlib, subprocess, sys, tempfile
+import contextlib, io, json, os, pathlib, subprocess, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-end-check-")).resolve()
@@ -75,7 +75,8 @@ with open(os.environ["FAKE_CALLS"], "a") as f:
 mode = os.environ.get("FAKE_MODE", "")
 if a[:2] == ["orchestration", "inbox"]:
     rows = json.loads(os.environ["FAKE_INBOX"])
-    print(json.dumps({"ok": True, "result": {"messages": rows, "page": json.loads(os.environ.get("FAKE_PAGE", "{}")),
+    print(json.dumps({"ok": os.environ.get("FAKE_OK") != "false",
+                      "result": {"messages": rows, "page": json.loads(os.environ.get("FAKE_PAGE", "{}")),
                                              **json.loads(os.environ.get("FAKE_TOP", "{}"))}}))
 elif a[:2] == ["orchestration", "worker-show"]:
     if mode == "orca-down":
@@ -96,14 +97,38 @@ else:
 CALLS = tmp / "calls.jsonl"
 os.environ.update(FAKE_CALLS=str(CALLS))
 end_check.ORCA = str(tmp / "orca")
-Q = {"id": "m1", "type": "question", "from_handle": "term_me", "to_handle": "run:r", "created_at": "2026-01-01 10:00"}
+Q = {"id": "m1", "type": "question", "from_handle": "term_me", "to_handle": "run:r",
+     "created_at": "2026-01-01 10:00:00"}
 ME = {"term_me"}
+REPLY = {"id": "m2", "type": "status", "thread_id": "m1", "from_handle": "term_lead", "to_handle": "term_me",
+         "created_at": "2026-01-01 10:05:00"}
 os.environ["FAKE_INBOX"] = json.dumps([Q])
 assert end_check.waiting_questions(ME) == ["m1"]
-os.environ["FAKE_INBOX"] = json.dumps([Q, {"id": "m2", "type": "status", "thread_id": "m1", "from_handle": "term_lead",
-                                           "created_at": "2026-01-01 10:05"}])
+os.environ["FAKE_INBOX"] = json.dumps([Q, REPLY])
 assert end_check.waiting_questions(ME) == []
+# Not an answer: addressed to someone else (a heartbeat to the run), from this card's own other handle, at the same
+# second or earlier, or an ISO time in another zone that is really earlier.
+for r in (dict(REPLY, to_handle="run:r"), dict(REPLY, from_handle="dispatch:ctx_1", to_handle="term_me"),
+          dict(REPLY, created_at="2026-01-01 10:00:00"), dict(REPLY, created_at="2026-01-01T18:30:00+09:00")):
+    os.environ["FAKE_INBOX"] = json.dumps([Q, r])
+    assert end_check.waiting_questions({"term_me", "dispatch:ctx_1"}) == ["m1"], r
 with contextlib.redirect_stderr(io.StringIO()):
+    # Duplicate ids, a thread_id that is not a string, minute-only times, malformed paging, or ok:false: unknown.
+    for rows in ([Q, dict(REPLY, id="m1")], [Q, dict(REPLY, thread_id=1)], [dict(Q, created_at="2026-01-01 10:00")]):
+        os.environ["FAKE_INBOX"] = json.dumps(rows)
+        assert end_check.waiting_questions(ME) is None, rows
+    os.environ["FAKE_INBOX"] = "[]"
+    os.environ["FAKE_PAGE"] = '["nextCursor", "c2"]'
+    assert end_check.waiting_questions(ME) is None
+    os.environ["FAKE_PAGE"] = "{}"
+    os.environ["FAKE_OK"] = "false"
+    assert end_check.waiting_questions(ME) is None
+    os.environ.pop("FAKE_OK")
+    # A card creation time in the future does not prove a full page covers it.
+    limit, end_check.INBOX_LIMIT = end_check.INBOX_LIMIT, "1"
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x", created_at="2026-01-01T09:00:00Z")])
+    assert end_check.waiting_questions(ME, (time.time() + 3600) * 1000) is None
+    end_check.INBOX_LIMIT = limit
     os.environ["FAKE_INBOX"] = json.dumps([{"id": "m3", "type": "question"}])
     assert end_check.waiting_questions(ME) is None
     # One row without a sender is enough to make the rest unknown; so is no messages list, or a full page.
@@ -115,8 +140,7 @@ with contextlib.redirect_stderr(io.StringIO()):
     os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle=None)])
     assert end_check.waiting_questions(ME) is None
     no_time = {k: v for k, v in Q.items() if k != "created_at"}
-    os.environ["FAKE_INBOX"] = json.dumps([no_time, {"id": "m0", "type": "status", "thread_id": "m1",
-                                                     "from_handle": "term_lead", "created_at": "2025-12-31 10:00"}])
+    os.environ["FAKE_INBOX"] = json.dumps([no_time, dict(REPLY, created_at="2025-12-31 10:00:00")])
     assert end_check.waiting_questions(ME) is None
     os.environ["FAKE_INBOX"] = "null"
     assert end_check.waiting_questions(ME) is None
@@ -171,6 +195,10 @@ with contextlib.redirect_stderr(io.StringIO()):
     assert end_check.card_facts("term_me")["other_agents"] is None
 os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "s", "agentIdentity": null}]'
 assert end_check.card_facts("term_me")["other_agents"] == []
+# A question another terminal on the same card left waiting holds the card too.
+os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="s")])
+assert end_check.card_facts("term_me")["questions"] == ["m1"]
+os.environ["FAKE_INBOX"] = "[]"
 os.environ.pop("FAKE_TERMS")
 
 # --apply: a worker's remove waits for its Dispatch to settle (worker_done arrived); unread is refused too.

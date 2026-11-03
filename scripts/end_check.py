@@ -29,7 +29,7 @@ otherwise.
 Exit codes: 0 the verdict printed (and applied); 2 usage; 3 --apply refused: the Dispatch has not settled or could
 not be read; 4 an applied command failed (its output is printed).
 """
-import datetime, json, math, os, pathlib, re, subprocess, sys
+import datetime, json, math, os, pathlib, re, subprocess, sys, time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
@@ -61,7 +61,8 @@ def orca_json(*args):
     if code != 0:
         return None
     try:
-        res = json.loads(out).get("result")
+        doc = json.loads(out)
+        res = doc.get("result") if doc.get("ok") is not False else None
     except (ValueError, AttributeError):
         return None
     return res if isinstance(res, dict) else None
@@ -142,33 +143,60 @@ def card_facts(me, mode="card", dispatch=None):
             print(f"[{ME}] warning: an Orca terminal row has no agentIdentity; other agents on the card are unknown",
                   file=sys.stderr)
         f["other_agents"] = None
-    f["questions"] = waiting_questions({me, f"dispatch:{dispatch}"} if dispatch else {me},
-                                       wt.get("createdAt")) if me else None
+    # Every terminal still on the card asks for it, not only this one; a closed terminal's handle is gone from Orca.
+    card_handles = {t["handle"] for t in rows if isinstance(t, dict) and isinstance(t.get("handle"), str)} \
+        if isinstance(rows, list) else None
+    senders = {me, *(card_handles or ())} | ({f"dispatch:{dispatch}"} if dispatch else set())
+    f["questions"] = waiting_questions(senders, wt.get("createdAt")) if me and card_handles is not None else None
     if mode == "worker" and not dispatch:
         f["questions"] = None  # its questions may come from dispatch:<id>, which is not known
     return f
 
 
+ISO_SECONDS = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d")
+
+
 def when(value, ms=False):
-    """Epoch seconds of an ISO time string (`Z` or none: UTC), or with ms=True of a finite epoch-milliseconds
-    number; None for anything else."""
+    """Epoch seconds of an ISO time string with seconds (`Z` or none: UTC), or with ms=True of an epoch-milliseconds
+    number from 2000 up to a minute from now; None for anything else."""
     if ms:
-        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 1e11
-        return value / 1000 if ok else None
-    if not isinstance(value, str):
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        return value / 1000 if ok and 946684800 <= value / 1000 <= time.time() + 60 else None
+    if not isinstance(value, str) or not ISO_SECONDS.match(value):
         return None
     try:
-        t = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        t = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
     return (t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)).timestamp()
 
 
+def inbox_rows(res):
+    """The rows when every one is whole (unique non-empty string id, type and from_handle; a string or no thread_id
+    and to_handle; a created_at to the second) and the paging fields are readable; else None. Also whether more
+    pages follow."""
+    msgs, page = res.get("messages"), res.get("page", {})
+    flags = [res.get("hasMore"), res.get("nextCursor")] + ([page.get("hasMore"), page.get("nextCursor")]
+                                                           if isinstance(page, dict) else [])
+    if not isinstance(msgs, list) or not isinstance(page, dict) or any(
+            f is not None and not isinstance(f, (bool, str)) for f in flags):
+        return None, None
+    text = lambda m, k: isinstance(m.get(k), str) and m[k]  # noqa: E731
+    if not all(isinstance(m, dict) and text(m, "id") and text(m, "type") and text(m, "from_handle")
+               and all(m.get(k) is None or isinstance(m[k], str) for k in ("thread_id", "to_handle"))
+               and when(m.get("created_at")) is not None for m in msgs):
+        return None, None
+    if len({m["id"] for m in msgs}) != len(msgs):
+        return None, None
+    return msgs, any(flags)
+
+
 def waiting_questions(senders, since=None):
     """Ids of `question` mail one of these senders sent that nobody answered, or None when the inbox could not be
-    read whole or a row names no sender. A page cut short still covers the card when its oldest row is older than
-    `since` (the card's creation): the card's questions, and their replies, all came after it."""
-    import fleet, orca_settings
+    read whole. A page cut short still covers the card when its oldest row is more than a second older than `since`
+    (the card's creation): the card's questions, and their replies, all came after it. A question counts as answered
+    only by a message in its thread, from outside `senders`, addressed to one of them, and strictly later."""
+    import orca_settings
 
     def call(*argv):
         res = orca_json(*argv)
@@ -179,27 +207,23 @@ def waiting_questions(senders, since=None):
         res = orca_settings.with_full(call, "orchestration", "inbox", "--limit", INBOX_LIMIT)
     except RuntimeError:
         return None
-    msgs = res.get("messages")
-    filled = lambda m: all(isinstance(m.get(k), str) and m[k] for k in ("id", "type", "from_handle"))  # noqa: E731
-    if not isinstance(msgs, list) or not all(isinstance(m, dict) and filled(m) and when(m.get("created_at"))
-                                             is not None for m in msgs):
-        print(f"[{ME}] warning: Orca's inbox has no messages list, or a row without a readable id, type, "
-              "from_handle or created_at; questions waiting are unknown", file=sys.stderr)
+    msgs, more = inbox_rows(res)
+    if msgs is None:
+        print(f"[{ME}] warning: Orca's inbox has a row or paging field this cannot read whole; questions waiting "
+              "are unknown", file=sys.stderr)
         return None
-    page = res.get("page")
-    more = res.get("hasMore") or res.get("nextCursor") or (
-        isinstance(page, dict) and (page.get("hasMore") or page.get("nextCursor")))
-    # Strictly older, by more than a second: a row stamped to the second, or at the card's own instant, may share the
-    # boundary with rows left on the next page.
-    times, start = [when(m.get("created_at")) for m in msgs], when(since, ms=True)
-    covers = bool(msgs) and start is not None and min(times) < start - 1
+    start = when(since, ms=True)
+    covers = bool(msgs) and start is not None and min(when(m["created_at"]) for m in msgs) < start - 1
     if (len(msgs) >= int(INBOX_LIMIT) or more) and not covers:
         print(f"[{ME}] warning: the inbox has more than one page and its oldest row is not older than this card; "
               "questions waiting are unknown", file=sys.stderr)
         return None
-    answered = fleet.answered_mail(msgs)
-    return [m.get("id") for m in msgs if m.get("from_handle") in senders and m.get("type") == "question"
-            and m.get("id") not in answered]
+
+    def answered(q):
+        threads = {q["id"], q.get("thread_id")} - {None}
+        return any(r.get("thread_id") in threads and r["from_handle"] not in senders and r.get("to_handle") in senders
+                   and when(r["created_at"]) > when(q["created_at"]) for r in msgs)
+    return [m["id"] for m in msgs if m["from_handle"] in senders and m["type"] == "question" and not answered(m)]
 
 
 def keep_row(opts):
