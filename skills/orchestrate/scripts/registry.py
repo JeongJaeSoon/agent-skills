@@ -244,7 +244,8 @@ STORES = [
           ("reap:stamp_user_folder", "reap:record_reap", "reap_hard:write_last"), ("janitor", "brief"),
           rule="daily sweep stamps and the last reap-hard pass"),
     Store("patrolverdicts", "S/patrol-verdicts.json", {"card.verdict": CANONICAL},
-          ("patrol:write_round", "patrol:candidates_phase", "patrol:mark_cut"), ("janitor", "pressure", "tidy", "brief"),
+          ("patrol:write_round", "patrol:candidates_phase", "patrol:mark_cut"),
+          ("janitor", "pressure", "tidy", "brief", "patrol"),
           rule="each card's keep or remove verdict, one round; the cleanup v2 shadow fields (round, sources, "
                "activity, candidates), which sweep reads"),
     Store("patrolrounds", "S/patrol-rounds.jsonl", {"patrol.round_timing": CANONICAL}, ("patrol:log_round",),

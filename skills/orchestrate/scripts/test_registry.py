@@ -64,26 +64,29 @@ assert not any(w[0] == "fx_scan:write_json" for w in got), got  # the wrapper's 
 assert len(got) == 4, got
 
 # Two scripts sharing a stem keep their own names, and `import <stem>` reaches the one in the caller's directory.
-for d, lockname in (("skills/fx-a/scripts", "a.lock"), ("hooks", "h.lock")):
+# Only the caller's sibling writes through put(), so the write lands on the caller only when the call resolves there.
+for d, state, put in (("skills/fx-a/scripts", "/s", 'open(path, "w")'), ("hooks", "/h", "return path")):
     (tmp / d).mkdir(parents=True)
     (tmp / d / "fx_twin.py").write_text(textwrap.dedent(f'''
         import pathlib
-        STATE = pathlib.Path("/s")
+        STATE = pathlib.Path("{state}")
 
         def hold():
-            open(STATE / "{lockname}", "w")
+            open(STATE / "twin.lock", "w")
+
+        def put(path):
+            {put}
     '''))
 (tmp / "skills/fx-a/scripts/fx_user.py").write_text(textwrap.dedent('''
     import fx_twin
 
     def take():
-        fx_twin.hold()
-        open(fx_twin.STATE / "u.json", "w")
+        fx_twin.put(fx_twin.STATE / "u.json")
 '''))
-twins = [tmp / "skills/fx-a/scripts/fx_twin.py", tmp / "hooks/fx_twin.py", tmp / "skills/fx-a/scripts/fx_user.py"]
+twins = [tmp / "hooks/fx_twin.py", tmp / "skills/fx-a/scripts/fx_twin.py", tmp / "skills/fx-a/scripts/fx_user.py"]
 assert sorted(registry._names(twins).values()) == ["fx-a/fx_twin", "fx_user", "hooks/fx_twin"]
 got = {(w.writer, w.targets) for w in registry.scan(twins)}
-assert got == {("fx-a/fx_twin:hold", ("s/a.lock",)), ("hooks/fx_twin:hold", ("s/h.lock",)),
+assert got == {("fx-a/fx_twin:hold", ("s/twin.lock",)), ("hooks/fx_twin:hold", ("h/twin.lock",)),
                ("fx_user:take", ("s/u.json",))}, got
 
 # Forms that once hid a write: a bound method's argument, a wrapper writing two paths, a reassigned path,
