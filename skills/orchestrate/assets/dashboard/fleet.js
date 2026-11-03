@@ -76,7 +76,7 @@ const EDGE = {
 };
 const CI_TONE = { success: "good", failure: "bad", pending: "warn" };
 
-const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, tlShow: {}, tlOpen: new Set(), stageFold: new Set(), jobOpen: new Set() };
+const F = { token: null, draft: {}, confirm: null, chat: {}, arm: null, prompt: {}, decide: {}, open: null, tlShow: {}, tlOpen: new Set(), stageFold: new Set(), jobOpen: new Set() };
 
 // route() hands over "#/fleet/<section>[/<arg>]"; the only argument is a session id.
 // The Work page's stage table is the Stages page now: an old #/fleet/work link opens it.
@@ -1034,9 +1034,31 @@ const SESSION_TONE = { working: "accent", stalled: "warn", none: "bad" };
 function sessCell(s, text) {
   if (!s) return esc(text);
   const word = tag(s.word, SESSION_TONE[s.state] || "", "");
-  const open = s.id && s.state !== "none" ? `<button class="chip" type="button" data-open-session="${esc(s.id)}" title="Bring this session's terminal to the front in Orca">${icon("arrow")}Orca</button>` : "";
+  const open = s.id && s.state !== "none" ? `<button class="chip" type="button" data-open-session="${esc(s.id)}" title="Bring this session's terminal to the front in the host's Orca window">${icon("arrow")}Orca</button>` : "";
   const last = s.last ? `<span class="bsess-last muted" title="${esc(s.last)}">${esc(s.last)}${s.at ? ` · ${relSpan(s.at)}` : ""}</span>` : "";
   return `<div class="bsess-head">${s.id ? `<a href="${sessionHref(s.id)}" title="${esc(`Session ${s.name || ""}`)}">${word}</a>` : word}${open}${last}</div>`;
+}
+// The server switches only the host's Orca window and cannot tell which device clicked, so the last click's outcome
+// stays in a fixed note, with what to type or look for on another device, until it is closed.
+function openNote(r) {
+  if (!r) return "";
+  if (r.busy) return `<span class="muted">Switching ${esc(r.name || "")}…</span>`;
+  const msg = r.ok ? `${r.name || "Session"}: switched in the host's Orca window only. On another device:`
+    : `${r.name || "Session"}: not switched (${r.reason || "unknown"}).${r.copy ? " Open it yourself:" : ""}`;
+  return `<div class="open-note-head"><span class="toned tone-${r.ok ? "warn" : "bad"}">${esc(msg)}</span>
+      <button class="icon-btn" type="button" data-open-close title="Close">${icon("x")}</button></div>
+    ${r.copy ? `<div class="open-note-copy"><pre class="mono">${esc(r.copy)}</pre><button class="chip" type="button" data-copy="${esc(r.copy)}">${icon("copy")}Copy</button></div>` : ""}
+    ${r.warning ? `<div class="sub muted">${esc(r.warning)}${r.result !== undefined ? `: <span class="mono">${esc(JSON.stringify(r.result))}</span>` : ""}</div>` : ""}`;
+}
+function showOpenNote() {
+  let el = document.querySelector("#open-note");
+  if (!F.open) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "open-note"; el.className = "card open-note"; el.setAttribute("role", "status");
+    document.body.appendChild(el);
+  }
+  el.innerHTML = openNote(F.open);
 }
 const sessionRowsOf = (id) => ((F.brief || {}).table_rows || []).flat().filter((x) => x.session && x.session.id === id);
 function briefRowsCard(s, st) {
@@ -1052,12 +1074,13 @@ function briefRowsCard(s, st) {
     <ul class="rows">${list || `<li class="muted">${F.brief ? "No brief row is linked to this session." : "Loading…"}</li>`}</ul></div>`;
 }
 async function openSession(t) {
-  t.disabled = true;
+  const id = t.dataset.openSession, name = ((S.state || {}).sessions || []).find((s) => s.id === id)?.name || id;
+  F.open = { busy: true, name };
+  showOpenNote();
   let out;
-  try { out = await fleetPost("/api/fleet/open", { session: t.dataset.openSession }); } catch (e) { out = { ok: false, reason: String(e.message || e) }; }
-  t.disabled = false;
-  t.title = out.ok ? "Opened in Orca." : `Not opened: ${out.reason}`;
-  if (!out.ok) t.classList.add("tone-bad");
+  try { out = await fleetPost("/api/fleet/open", { session: id }); } catch (e) { out = { ok: false, reason: String(e.message || e) }; }
+  F.open = { ...out, name };
+  showOpenNote();
 }
 
 function fleetBrief() {
@@ -1647,6 +1670,7 @@ document.addEventListener("click", async (e) => {
   if (chat) { chatAction(chat.dataset.chat); return; }
   const opener = e.target.closest("[data-open-session]");
   if (opener) { openSession(opener); return; }
+  if (e.target.closest("[data-open-close]")) { F.open = null; showOpenNote(); return; }
   const answer = e.target.closest("[data-prompt]");
   if (answer) { promptAction(answer.dataset.key, answer.dataset.prompt); return; }
   const decide = e.target.closest("[data-decide]");

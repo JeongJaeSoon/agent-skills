@@ -2466,10 +2466,21 @@ def send(session_id, text, handle=None, sender=None):
     return code, out
 
 
+def open_copy(s, handle):
+    """What to type or look for on a device other than the host. With the config's `orca_environment` (the name that
+    device saved for this host's Orca server) it is the switch command for that device, else where the session is."""
+    env = config().get("orca_environment")
+    if isinstance(env, str) and env.strip():
+        return f"orca terminal switch --environment {shlex.quote(env.strip())} --terminal {handle}"
+    return f"workspace: {s.get('name')}\nterminal: {handle}\nworktree: {s.get('path')}"
+
+
 def open_session(session_id, switch=None):
     """Bring a fleet session's terminal to the front in Orca, for the dashboard's Orca button. The page names the
     session by its worktree id; the handle is looked up now, since a restarted terminal has a new one. Its agent
-    terminal first, else any connected one. Returns (status, body) for the HTTP reply; every attempt is logged."""
+    terminal first, else any connected one. Returns (status, body) for the HTTP reply; every attempt is logged.
+    `orca terminal switch` moves only the desktop app of the machine it runs on, and the server cannot tell which
+    device clicked, so even a confirmed switch is reported as the host's, and every reply carries `copy`."""
     state = read_json(state_dir() / "state.json", {}) or {}
     s = next((x for x in state.get("sessions") or [] if x["id"] == session_id), None)
     terms = [t for t in (s or {}).get("terminals") or [] if t.get("connected")]
@@ -2478,11 +2489,21 @@ def open_session(session_id, switch=None):
     if not term:
         code, out = 409, {"ok": False, "reason": "no connected terminal in this session"}
     else:
+        code, out = 200, {"ok": False, "navigated": None, "warning": None, "copy": open_copy(s, term["handle"])}
         try:
-            (switch or (lambda h: orca("terminal", "switch", "--terminal", h)))(term["handle"])
-            code, out = 200, {"ok": True, "reason": None}
+            got = (switch or (lambda h: orca("terminal", "switch", "--terminal", h)))(term["handle"])
         except SourceError as e:
-            code, out = 200, {"ok": False, "reason": str(e)}
+            out["reason"] = str(e)
+        else:
+            focus = got.get("focus") if isinstance(got, dict) else None
+            nav = focus.get("navigated") if isinstance(focus, dict) else None
+            if nav is True:
+                out.update(ok=True, navigated=True, reason="switched in the host's Orca window only")
+            elif nav is False:
+                out.update(navigated=False, reason="Orca did not switch its window (navigated: false)")
+            else:
+                out.update(result=got, reason="switch not confirmed",
+                           warning="Orca's reply to terminal switch has no navigated field; passed through as it came")
     append_line(state_dir() / "sends.jsonl", {**row, **out, "code": code})
     return code, out
 

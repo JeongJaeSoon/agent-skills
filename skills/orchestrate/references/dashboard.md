@@ -314,6 +314,16 @@ The session page has a send box for its agent terminal. It is off the network by
 
 The send box never answers a dialog: its idle check refuses while one is open.
 
+### The Orca button
+
+A Brief row's session cell has an `Orca` button. It POSTs `/api/fleet/open` with the session's worktree id under the same Host, Origin and token guard, and the server runs `orca terminal switch --terminal <handle>` for that session's agent terminal (else any connected one), looked up at the click. That command moves only the Orca desktop app of the machine the dashboard runs on. Orca's CLI has no switch that moves another device's window from here, and the server cannot tell which device clicked, so the reply never claims the clicking device switched:
+
+- `navigated: true` in Orca's reply: `ok: true`, and the page says it switched in the host's Orca window only.
+- `navigated: false`, a refused switch, or a reply without the field: `ok: false`. A reply without `navigated` comes back as `result`, as Orca sent it, with one `warning` line; an unknown outcome is never reported as success.
+- Every reply with a terminal carries `copy`, and the page shows it under the row with a `Copy` button: the switch command to type on the other device when the config sets `orca_environment`, else the session's workspace name, terminal handle and worktree path, to find it by hand.
+
+`orca_environment` is the name (or id) the other device saved for this host's Orca server (`orca environment add --name <name>`, listed by `orca environment list` on that device). With it, `copy` is `orca terminal switch --environment <name> --terminal <handle>`, which moves the desktop app of the device it is typed on. It is unset by default, and then the copy is the workspace, handle and path. Each attempt is appended to `sends.jsonl` (`text: "open"`).
+
 ### Answering a permission prompt
 
 The human decides; nothing answers a prompt on its own. The plugin's `PermissionRequest` hook (`hooks/permission.py`) writes the tool name and its masked string arguments to `prompts/<terminal handle>.json`, keyed by `$ORCA_TERMINAL_HANDLE`. It prints no decision, so the permission flow is unchanged. `PermissionRequest` rather than the `Notification` hook's `permission_prompt`: the notification fires only after about six seconds without typing and carries only "Claude needs your permission", while `PermissionRequest` fires when the dialog opens and carries the tool input to show and to match.
@@ -373,8 +383,11 @@ The optional config is `$ORCH_FLEET_CONFIG` or `~/.config/agent-skills/dashboard
 
 ```json
 {"root_worktree": "<orca worktree id>", "adopt": {"write_orca_parent": false},
- "include_main_worktrees": false, "bots_in_inbox": false, "reload_alert_tries": 3, "board": {"stage_warn_h": 6}}
+ "include_main_worktrees": false, "bots_in_inbox": false, "reload_alert_tries": 3, "board": {"stage_warn_h": 6},
+ "orca_environment": "<the name another device saved for this host's Orca server>"}
 ```
+
+`orca_environment` turns the Orca button's copy into a switch command for that device (The Orca button, above); unset, the copy is where the session is.
 
 `board` holds the brief renderer's limits (`state_min`, `done_fold_h`, `stage_idle_d`, `subagent_stale_h`, … in `scripts/board.py` `LIMITS`; the collector reads `subagent_stale_h` too) and `stage_warn_h`, the hours after which the reorient hook says a program's generated stage rows are stale (default 6).
 
