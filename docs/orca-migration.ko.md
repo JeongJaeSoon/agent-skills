@@ -63,7 +63,7 @@
 2. 로드되는 메인 체크아웃을 fast-forward한다.
 3. 살아 있는 Claude 세션을 모두 재시작하거나 `/reload-plugins`한다. 세션마다 자기가 로드한 decision hook을 부르기 때문이다.
 4. `orch db import --dry-run`으로 옮길 결정 수와 `--apply`가 거부할지를 본다.
-5. `orch db import --apply`. 다른 체크아웃이나 fast-forward 전부터 스크립트·래퍼·hook을 실행 중인 프로세스, 어느 Claude home에서든 그 전에 시작한 살아 있는 세션, 다른 커밋의 사본을 로드하는 plugin이나 `--plugin-dir`로 다른 체크아웃을 로드한 세션, 아직 로드된 대시보드 LaunchAgent(label이 무엇이든, pid가 없어도), 그중 하나를 실행하는 crontab 줄이 하나라도 있으면 거부한다. 검사 자체가 돌지 못해도(`ps`, `crontab -l`) 거부한다. 통과하면 board·tidy·decision 잠금을 잡고, `decisions.json`을 sha256과 함께 `backup-db-<시각>/`(0700, 파일 0600)에 복사하고, 임시 이름으로 DB를 만들어 검사한 뒤 제자리로 rename하고, `decisions.json` 자리에 빈 디렉터리를 남겨 옛 코드의 쓰기가 실패하게 한다.
+5. `orch db import --apply`. 다음 중 하나라도 있으면 거부한다. 다른 체크아웃의 스크립트·래퍼·hook을 실행 중이거나 fast-forward 전부터 그것들을 실행해 온 프로세스, 어느 Claude home에서든 그 전에 시작한 살아 있는 세션, 다른 커밋의 사본을 로드하는 plugin이나 `--plugin-dir`로 다른 체크아웃을 로드한 세션, 아직 로드된 LaunchAgent(pid가 없어도)로서 이 셸의 label을 쓰는 대시보드이거나 `~/Library/LaunchAgents`에서 agent-skills의 스크립트·래퍼·hook을 실행하는 것, 그것들을 실행하는 주석 처리되지 않은 crontab 줄(갱신된 체크아웃을 가리켜도 해당하니 전환하는 동안 주석 처리한다). 확인하지 못할 때도 거부한다: `ps`나 `crontab -l`이 실패했을 때(crontab이 없는 사용자나 `crontab` 명령이 없는 경우는 괜찮다), 프로세스의 디렉터리나 체크아웃의 갱신 시각을 읽지 못했을 때. 통과하면 board·tidy·decision 잠금을 잡고, `decisions.json`을 sha256과 함께 `backup-db-<시각>/`(0700, 파일 0600)에 복사하고, 임시 이름으로 DB를 만들어 검사한 뒤 제자리로 rename하고, `decisions.json` 자리에 빈 디렉터리를 남겨 옛 코드의 쓰기가 실패하게 한다.
 6. 대시보드 서버를 다시 올린다(macOS는 `orch-dash install-agent`).
 
 `--apply`는 다시 돌려도 안전하다. import가 커밋됐지만 빈 디렉터리를 아직 놓지 못했다면, 다시 돌렸을 때 `decisions.json`의 sha256이 import 때와 같을 때만 빈 디렉터리를 놓는다. 그 사이 파일이 바뀌었으면 충돌을 보이고 멈추며 아무것도 바꾸지 않는다. 전환 뒤 빈 디렉터리 자리에 파일이 생기면 brief에 `옛 코드가 쓴 흔적`이 보인다.
