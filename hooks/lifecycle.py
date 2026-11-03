@@ -39,18 +39,18 @@ def paragraph():
 
 
 def entries(path):
-    """The transcript's entries in order; [] when it cannot be read."""
+    """The transcript's entries in order; None when any line of it cannot be read."""
     out = []
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
-                try:
-                    e = json.loads(line)
-                except ValueError:
+                if not line.strip():
                     continue
-                if isinstance(e, dict):
-                    out.append(e)
-    except (OSError, TypeError):
+                e = json.loads(line)
+                if not isinstance(e, dict):
+                    return None
+                out.append(e)
+    except (OSError, TypeError, ValueError):
         return None
     return out
 

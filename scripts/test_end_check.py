@@ -115,7 +115,17 @@ assert end_check.waiting_questions(ME) == []
 for r in (dict(REPLY, to_handle="run:r"), dict(REPLY, type="question"), dict(REPLY, from_handle="dispatch:ctx_1", to_handle="term_me"),
           dict(REPLY, created_at="2026-01-01 10:00:00"), dict(REPLY, created_at="2026-01-01T18:30:00+09:00")):
     os.environ["FAKE_INBOX"] = json.dumps([Q, r])
-    assert end_check.waiting_questions({"term_me", "dispatch:ctx_1"}) == ["m1"], r
+    assert end_check.waiting_questions({"term_me", "dispatch:ctx_1"}, None, "term_me") == ["m1"], r
+# Another terminal of the same card answering this one's question does answer it; this session's own Dispatch
+# answering its own terminal, or a reply addressed to some other card terminal, does not.
+CARD = {"term_me", "term_b", "dispatch:ctx_1"}
+os.environ["FAKE_INBOX"] = json.dumps([dict(REPLY, from_handle="term_b"), Q])
+assert end_check.waiting_questions(CARD, None, "term_me") == []
+os.environ["FAKE_INBOX"] = json.dumps([dict(REPLY, to_handle="term_b"), Q])
+assert end_check.waiting_questions(CARD, None, "term_me") == ["m1"]
+os.environ["FAKE_INBOX"] = json.dumps([dict(REPLY, from_handle="dispatch:ctx_1", to_handle="term_me"),
+                                       dict(Q, from_handle="dispatch:ctx_1")])
+assert end_check.waiting_questions(CARD, None, "term_me") == ["m1"]
 with contextlib.redirect_stderr(io.StringIO()):
     # Duplicate ids, a thread_id that is not a string, minute-only times, malformed paging, or ok:false: unknown.
     for rows in ([Q, dict(REPLY, id="m1")], [Q, dict(REPLY, thread_id=1)], [dict(Q, created_at="2026-01-01 10:00")]):

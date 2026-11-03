@@ -154,6 +154,14 @@ check("end-check beside another command does not count", decision(hook(stale, rm
 later_keep = card[:3] + [use("m2", "tu_ec2", EC), result("tu_ec2", '{"verdict": "keep", "mode": "card"}'),
                          use("m3", "tu_rm", RM)]
 check("a later keep takes back an earlier remove", decision(hook(later_keep, rm_event(), DENY)) == "deny")
+# A broken line after an earlier remove may be a later keep, and bytes that are not UTF-8 are no transcript at all.
+for name, tail in (("a broken line", b"{a later end-check result\n"), ("bad UTF-8", b'{"type": "user", "x": "\xff"}\n')):
+    body = "".join(json.dumps(r) + "\n" for r in card[:3]).encode() + tail + (json.dumps(card[3]) + "\n").encode()
+    (tmp / "odd.jsonl").write_bytes(body)
+    p = subprocess.run([sys.executable, str(HERE / "lifecycle.py")], capture_output=True, text=True, env=ENV, timeout=30,
+                       input=json.dumps({"hook_event_name": "PreToolUse", "session_id": "s1", **rm_event(),
+                                         "transcript_path": str(tmp / "odd.jsonl")}))
+    check(f"{name} after an earlier remove denies the rm", decision(json.loads(p.stdout or "{}")) == "deny", p.stdout)
 asbrief = [user(CLOSE_CARD), use("m1", "tu_ec", "skills-sync end-check --brief --card"),
            result("tu_ec", '{"verdict": "remove", "mode": "user"}'), use("m2", "tu_rm", RM)]
 check("an end-check that ran in user mode does not count", decision(hook(asbrief, rm_event(), DENY)) == "deny")

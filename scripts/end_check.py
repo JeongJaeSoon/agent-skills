@@ -153,7 +153,7 @@ def card_facts(me, mode="card", dispatch=None):
                                            for t in rows)
     card_handles = {t["handle"] for t in rows} if whole else None  # a row with no handle: its questions are unknown
     senders = {me, *(card_handles or ())} | ({f"dispatch:{dispatch}"} if dispatch else set())
-    f["questions"] = waiting_questions(senders, wt.get("createdAt")) if me and card_handles is not None else None
+    f["questions"] = waiting_questions(senders, wt.get("createdAt"), me) if me and card_handles is not None else None
     if mode == "worker" and not dispatch:
         f["questions"] = None  # its questions may come from dispatch:<id>, which is not known
     return f
@@ -200,11 +200,12 @@ def inbox_rows(res):
     return msgs, any(flags)
 
 
-def waiting_questions(senders, since=None):
+def waiting_questions(senders, since=None, me=None):
     """Ids of `question` mail one of these senders sent that nobody answered, or None when the inbox could not be
     read whole. A page cut short still covers the card when its oldest row is more than a second older than `since`
     (the card's creation): the card's questions, and their replies, all came after it. A question counts as answered
-    only by a message in its thread, from outside `senders`, addressed to one of them, and strictly later."""
+    only by a `status` in its thread, addressed to the asker by anyone else, and later. `me` and the `dispatch:`
+    handles in `senders` are one asker; each other card terminal is its own."""
     import orca_settings
 
     def call(*argv):
@@ -233,10 +234,14 @@ def waiting_questions(senders, since=None):
         tr, tq = when(r["created_at"]), when(q["created_at"])
         return tr > tq or tr == tq and msgs.index(r) < msgs.index(q)
 
+    own = {me} | {s for s in senders if s.startswith("dispatch:")}
+
     def answered(q):
+        # The asker is this session under any of its handles, or one other terminal of the card.
+        asker = own if q["from_handle"] in own else {q["from_handle"]}
         threads = {q["id"], q.get("thread_id")} - {None}
-        return any(r["type"] == "status" and r.get("thread_id") in threads and r["from_handle"] not in senders
-                   and r.get("to_handle") in senders and later(r, q) for r in msgs)
+        return any(r["type"] == "status" and r.get("thread_id") in threads and r["from_handle"] not in asker
+                   and r.get("to_handle") in asker and later(r, q) for r in msgs)
     return [m["id"] for m in msgs if m["from_handle"] in senders and m["type"] == "question" and not answered(m)]
 
 
