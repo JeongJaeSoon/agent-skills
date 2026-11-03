@@ -3,7 +3,7 @@ full record (older Orca, which has no --full) and from Orca 1.4.246, whose defau
 rows without runId, dispatchStatus, resource or projection, Runs without coordinator_handle or legacy, and no
 page.hasMore. Each reader runs its own `orca` adapter against this file standing in as the `orca` binary on PATH.
 Run: python3 test_worker_rows.py"""
-import contextlib, copy, io, json, os, pathlib, sys, tempfile
+import atexit, contextlib, copy, io, json, os, pathlib, shutil, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 DATA = {k: json.loads((HERE / "testdata" / f"worker-list-{k}.json").read_text()) for k in ("full", "concise")}
@@ -53,6 +53,7 @@ if sys.argv[1:2] == ["--orca"]:  # this file as the `orca` binary
     sys.exit(0)
 
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-worker-rows-"))
+atexit.register(shutil.rmtree, tmp, True)
 fake_orca = tmp / "orca"
 fake_orca.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{pathlib.Path(__file__).resolve()}" --orca "$@"\n')
 fake_orca.chmod(0o755)
@@ -184,4 +185,49 @@ assert (row["runId"], row["workerState"], row["agentTerminalHandle"], row["resou
     ("run_demo", "ready", "term_a", "repo-1::/work/acme/card-a", "in_progress", "exited"), row
 full_row = DATA["full"][0]["workers"][1]
 assert orca_settings.worker_row(full_row) == full_row, "a full record is left as it is"
+
+
+# orch wait on a lead's mailbox. A consuming check hands its batch over once. Orca 1.4.246's concise answer
+# carries no deliveryId or payload; with --full it has both. An older Orca refuses --full and answers in full.
+def mailbox(version):
+    done = {"id": "msg_done", "type": "worker_done", "from_handle": "term_b", "subject": "READY", "body": "done",
+            "payload": json.dumps({"dispatchId": "ctx_b", "outcome": "succeeded"})}
+    queue, acks = [[done]], []
+
+    def orca_json(*a):
+        a = list(a)
+        if a[:2] == ["orchestration", "check"]:
+            full = "--full" in a
+            if full and version == "old":
+                sys.exit(f"orca orchestration check: {UNKNOWN_FULL.replace('worker-list', 'check')}")
+            if "--ack" in a:
+                acks.append(a[a.index("--ack") + 1])
+                return {}
+            msgs = queue.pop(0) if queue else []
+            if full or version == "old":
+                return {"deliveryId": "delivery_1" if msgs else None, "messages": msgs, "count": len(msgs)}
+            return {"messages": [{"id": m["id"], "type": m["type"], "from": m["from_handle"], "subject": m["subject"],
+                                  "body": m["body"]} for m in msgs]}
+        if a[:2] == ["worktree", "list"]:
+            return {"worktrees": [{"id": "repo-1::/work/acme/card-b", "path": "/work/acme/card-b"}]}
+        return answer("old" if version == "old" else "new", a)
+    return orca_json, acks
+
+
+prog.ensure_dash = lambda: None
+prog.watch_lines = lambda *a: []
+prog.print_sweep = lambda *a, **k: None
+prog.print_stuck = lambda *a, **k: False
+prog.print_reviews = lambda p: None
+os.environ["ORCA_TERMINAL_HANDLE"] = "term_lead"
+for version in ("old", "new"):
+    orca_settings.FULL[:] = ["--full"]
+    prog.orca_json, acks = mailbox(version)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        prog.cmd_wait([f"init-{version}", "--rounds", "1", "--timeout-ms", "10"])
+    text = out.getvalue()
+    assert "INBOX id=msg_done type=worker_done from=term_b" in text and '"dispatchId": "ctx_b"' in text, (version, text)
+    assert "CLOSE OUT ctx_b: release it" in text and "ACTIONABLE delivery=delivery_1 (1 of 1)" in text, (version, text)
+    assert "nothing actionable" not in text, (version, text)
 print("test_worker_rows: ok")

@@ -112,7 +112,7 @@ def worker_terminal(row):
     return None
 
 
-# Orca 1.4.246 answers worker-list and run-list with a concise view unless given --full; an older Orca has no --full and always
+# Orca 1.4.246 answers worker-list, run-list and check with a concise view unless given --full; an older Orca has no --full and always
 # answers with the full record. Emptied once an Orca refuses the flag, so the rest of the process asks without it.
 FULL = ["--full"]
 
@@ -138,24 +138,29 @@ def worker_row(row, run=None):
     return w
 
 
+def with_full(call, *argv):
+    """call(*argv, "--full"): the full record. An error naming an unknown --full is an Orca from before the flag,
+    whose default answer is already the full record: asked again without it, and FULL emptied for the process."""
+    flags = tuple(FULL)  # another thread may empty FULL while this call is out
+    try:
+        return call(*argv, *flags)
+    except (Exception, SystemExit) as e:
+        if not flags or not re.search(r"[Uu]nknown (flag|option)\W+--full\b", str(e)):
+            raise
+        FULL.clear()
+        return call(*argv)
+
+
 def pages(call, command, *args, error=RuntimeError):
     """Every page of `orca orchestration <command> <args>` read with --full, as (result, more) per page.
-    call(*argv) returns the result object of `orca <argv> --json` and raises or exits on an error; an error naming an
-    unknown --full is an Orca from before the flag, asked again without it. One call per page either way: --full
+    call(*argv) returns the result object of `orca <argv> --json` and raises or exits on an error (with_full). One
+    call per page either way: --full
     makes each answer larger, not more numerous. The page is `page.nextCursor`/`hasMore`, or the concise view's
     top-level `nextCursor`. Raises error (the caller's own failure type) when a page says more follow but gives no
     cursor: a list cut short is not a smaller list."""
     cursor = None
     while True:
-        argv = ("orchestration", command, *args, *(("--cursor", cursor) if cursor else ()))
-        flags = tuple(FULL)  # another thread may empty FULL while this call is out
-        try:
-            res = call(*argv, *flags)
-        except (Exception, SystemExit) as e:
-            if not flags or not re.search(r"[Uu]nknown (flag|option)\W+--full\b", str(e)):
-                raise
-            FULL.clear()
-            res = call(*argv)
+        res = with_full(call, "orchestration", command, *args, *(("--cursor", cursor) if cursor else ()))
         res = res if isinstance(res, dict) else {}
         page = res.get("page") if isinstance(res.get("page"), dict) else {}
         cursor = page.get("nextCursor", res.get("nextCursor"))
