@@ -120,6 +120,22 @@ assert [(x["agent"], x["event"]) for x in map(json.loads, LOG.read_text().splitl
 assert (STATE / "subagents.jsonl.1").read_bytes() == filled
 LOG.write_bytes(before)
 
+# A line an earlier writer left half-written costs only itself: the next event starts on a line of its own.
+with open(LOG, "a") as f:
+    f.write('{"v":1,"even')
+hook({**start, "agent_id": "c1"})
+assert LOG.read_text().endswith('{"v":1,"even\n' + LOG.read_text().splitlines()[-1] + "\n")
+assert "c1" in fleet.subagents(LOG) and {"a3", "a7"} <= set(fleet.subagents(LOG))
+LOG.write_bytes(before)
+
+# Temp files a rotation cut off mid-way left behind are cleared by the next rotation.
+(STATE / ".subagents.jsonl.1.abc123").write_text("x")
+(STATE / ".subagents.jsonl.def456").write_text("x")
+LOG.write_bytes(filled)
+hook({**start, "agent_id": "c2"})
+assert not list(STATE.glob(".subagents.jsonl.*")) and "c2" in fleet.subagents(LOG)
+LOG.write_bytes(before)
+
 # A stdin that never closes costs the hook BUDGET_S, then it exits 0 with no output.
 p = subprocess.Popen([sys.executable, HERE / "subagent_log.py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                      stderr=subprocess.PIPE, text=True, env=ENV)

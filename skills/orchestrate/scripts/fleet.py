@@ -1113,7 +1113,9 @@ def subagent_log(event, handle=None, now=None):
                 # outlives the rotation, replaces it in one rename: a failure at any step leaves a whole log behind.
                 # Both come from the one read, so the starts carried are the ones in the copy.
                 data = path.read_bytes()
-                cut = iso((now or utcnow()) - dt.timedelta(days=SUBAGENT_CARRY_D))
+                for left in path.parent.glob(f".{path.name}.*"):  # temp files of a rotation cut off mid-way
+                    left.unlink(missing_ok=True)
+                cut =iso((now or utcnow()) - dt.timedelta(days=SUBAGENT_CARRY_D))
                 carried = [{"v": 1, "event": "start", "at": a["started_at"], "agent": a["agent"],
                             **{k: a[k] for k in SUBAGENT_FIELDS}}
                            for a in _fold(data.decode(errors="replace").splitlines()).values()
@@ -1121,6 +1123,13 @@ def subagent_log(event, handle=None, now=None):
                 write_atomic(path.with_name(path.name + ".1"), data)
                 write_atomic(path, "".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
                                            for r in carried))
+        # A line an earlier writer left half-written (a full disk, a hook cut off) is ended here, so it is one bad
+        # line the reader skips rather than the start of this one.
+        with contextlib.suppress(FileNotFoundError), open(path, "rb+") as f:
+            if f.seek(0, os.SEEK_END):
+                f.seek(-1, os.SEEK_END)
+                if f.read(1) != b"\n":
+                    f.write(b"\n")
         append_line(path, row)
     return row
 
