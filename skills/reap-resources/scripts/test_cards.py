@@ -15,7 +15,7 @@ def row(pid, cmd, ppid=1):
 
 
 def machine(rows=None, cwd_of=None, quiet=3 * 3600, prs=None, **kw):
-    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {},
+    return {"now": NOW, "st": cards.settings({}), "rows": rows or {}, "cwd_of": cwd_of or {}, "live": {}, "patrol": set(), "workers_unread": False,
             "runners": set(), "self": None, "projects": pathlib.Path(tmp) / "projects",
             "pr_state": (prs or {}).get, "quiet": lambda p: quiet, **kw}
 
@@ -72,6 +72,8 @@ def fake(branch_prs=(), terminals=(), local_landed=False, compare=None, ahead=""
         if cmd[:3] == ["orca", "terminal", "list"]:
             return json.dumps({"result": {"terminals": list(terminals), "truncated": False}})
         if cmd[:3] == ["orca", "terminal", "read"]:
+            if screens.get(cmd[cmd.index("--terminal") + 1]) == "UNREADABLE":
+                return None
             return json.dumps({"result": {"terminal": {"tail": screens.get(cmd[cmd.index("--terminal") + 1]) or ["❯"]}}})
         raise AssertionError(f"unexpected command {cmd}")
     return run
@@ -178,6 +180,35 @@ assert v[0] == cards.KEEP and "Claude 세션이 있음" in v[1], v
 v = verdict(m, local_landed=True, status=" M a.py\n", terminals=[term("a1", True, 20 * 60, done)])
 assert v[0] == cards.KEEP and "변경" in v[1], v
 
+# F3: an agent screen that could not be read may hide a question: the card stays, whatever else says it is done.
+v = verdict(machine(prs=MERGED), branch_prs=[PR], terminals=[term("a1", True, 2 * 3600, "UNREADABLE")])
+assert v[0] == cards.KEEP and "화면을 읽지 못함" in v[1], v
+v = verdict(machine(prs=OPEN), branch_prs=[{**PR, "state": "OPEN"}], terminals=[term("a1", True, 2 * 3600, "UNREADABLE")])
+assert v[0] == cards.KEEP, "not even its terminals close"
+assert verdict(machine(prs=MERGED), branch_prs=[PR], terminals=[term("a1", True, 2 * 3600)])[0] == cards.REMOVE
+
+# F2: a merged-PR card whose session only armed a wakeup (no shell child, transcript quiet) reads idle here; patrol
+# judged it working, waiting or a Run worker, so it stays. reap.patrol_working feeds m["patrol"].
+parked = lambda: dict(branch_prs=[PR], terminals=[term("a1", True, 2 * 3600)])
+assert verdict(machine(prs=MERGED), **parked())[0] == cards.REMOVE
+v = verdict(machine(prs=MERGED, patrol={CARD}), **parked())
+assert v[0] == cards.KEEP and "orch patrol" in v[1], v
+# read_machine takes m["patrol"] from patrol-verdicts.json itself, once per read.
+stubs = {n: getattr(reap, n) for n in ("orca_workers", "processes", "cwds", "orca_json", "pr_reader", "transcript_quiet",
+                                        "STATE", "patrol_working")}
+reap.orca_workers, reap.processes, reap.cwds = lambda: [], lambda: {}, lambda: {}
+reap.orca_json, reap.pr_reader, reap.transcript_quiet = lambda *a: {"automations": []}, lambda: {}.get, lambda *a, **k: None
+reap.STATE = pathlib.Path(tmp) / "state"
+reap.STATE.mkdir()
+(reap.STATE / "patrol-verdicts.json").write_text(json.dumps({"t": NOW, "cards": {CARD: "waiting"}}))
+reads = []
+reap.patrol_working = lambda now=None: reads.append(now) or stubs["patrol_working"](now)
+m = cards.read_machine({}, now=NOW)
+assert m["patrol"] == {CARD} and reads == [NOW], (m["patrol"], reads)
+assert cards.judge(cards.gather({"path": CARD}, {**m, "pr_state": MERGED.get}, fake(**parked())), IDLE)[0] == cards.KEEP
+for n, f in stubs.items():
+    setattr(reap, n, f)
+
 # Protected cards are never read further: the main checkout, a pinned card, a lead by name, this session's own card,
 # an automation's runner, a live worker turn.
 assert verdict(w={"isPinned": True})[0] == cards.KEEP
@@ -211,6 +242,25 @@ assert cards.act(item, {}).startswith("터미널 1개 닫음") and closed[0][:4]
 closed.clear()
 assert cards.act({**item, "head": PRHEAD}, {}).startswith("건너뜀") and not closed
 assert cards.act({**item, "verdict": cards.REMOVE}, {}).startswith("건너뜀") and not closed
+# F4: a re-read that cannot see what scan needs keeps the card, before any terminal closes.
+cards.cards_listing = lambda repo_list=(): None
+assert cards.reread(CARD, {})[:2] == (cards.KEEP, cards.BLIND), "unreadable, not gone"
+assert cards.act(item, {}).startswith("건너뜀") and not closed
+cards.cards_listing = lambda repo_list=(): [{"path": CARD}]
+for broken in ({"cwd_of": None}, {"workers_unread": True}, {"runners": None}):
+    cards.read_machine = lambda cfg, b=broken: {**machine(prs=OPEN), **b}
+    assert cards.reread(CARD, {})[:2] == (cards.KEEP, cards.BLIND), broken
+    assert cards.act(item, {}).startswith("건너뜀") and not closed, broken
+# F4: HEAD moving between the terminals closing and the removal stops the removal.
+heads = iter([HEAD, PRHEAD])
+cards.read_machine = lambda cfg: machine(prs=MERGED)
+cards.gather = lambda w, m: {**saved[2](w, m, fake(branch_prs=[PR], terminals=[term("t1", True, 2 * 3600)])),
+                             "head": next(heads)}
+removed = []
+saved_act, reap.act = reap.act, lambda *a, **k: removed.append(a) or "removed"
+got = cards.act({**item, "verdict": cards.REMOVE}, {}, wait=0)
+assert "HEAD 가 바뀜" in got and not removed and closed, got
+reap.act = saved_act
 cards.read_machine, cards.cards_listing, cards.gather, reap.run = saved
 
 # janitor integration: card is the scheduled kind, the old card kinds are not.

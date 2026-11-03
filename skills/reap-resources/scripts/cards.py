@@ -8,7 +8,9 @@ Usage:
 Each card gets one verdict: 삭제 (close its listed terminals, ignored files to the trash, `orca worktree rm
 --run-hooks`), 터미널만 닫기 (an open PR: the worktree stays, its idle terminals go), 남김, or 사람 결정 (nothing is
 done; the reason says what to decide). The rules are in ../references/cards.md and in judge() below.
-`apply` reads the card again and acts only when the verdict and HEAD are what the plan says.
+`apply` reads the card again and acts only when the verdict and HEAD are what the plan says, before closing its
+terminals and again before removing it. What cannot be read keeps the card: an agent's screen, the worktree,
+worker or automation list, process cwds.
 The janitor's `card` kind (reap.py) is this module.
 Config: ~/.claude/agent-skills.json → "reap": {"idle_minutes": 30, "cards": {"protect_prefixes": ["lead-"],
 "done_patterns": [...], "question_patterns": [...]}}.
@@ -160,6 +162,8 @@ def gather(w, m, run=None):
         return {**f, "protected": "automation runner worktree"}
     if p in m["live"]:
         return {**f, "protected": m["live"][p]}
+    if p in m["patrol"]:
+        return {**f, "protected": "순찰 판정: 작업 중·사람 대기·Run 워커(orch patrol)"}
     if (children := [c for c in map(lambda i: (i or "").split("::")[1] if "::" in (i or "") else "",
                                     w.get("childWorktreeIds") or ()) if c and os.path.isdir(c)]):
         return {**f, "protected": f"하위 카드 {os.path.basename(children[0])} 가 열려 있음(리드)"}
@@ -205,7 +209,7 @@ def gather(w, m, run=None):
             try:
                 screen = classify_screen(json.loads(out)["result"]["terminal"]["tail"], m["st"])
             except (TypeError, ValueError, KeyError):
-                screen = None
+                screen = "unreadable"
         f["terminals"].append({"handle": t["handle"], "agent": agent, "silent": silent, "screen": screen})
     return f
 
@@ -224,6 +228,8 @@ def judge(f, idle_s):
         return KEEP, "에이전트 턴 진행 중", []
     if any(t["screen"] == "question" for t in agents):
         return ASK, "에이전트가 사람의 답을 기다림(화면)", []
+    if (unread := [t for t in agents if t["screen"] == "unreadable"]):
+        return KEEP, f"에이전트 화면을 읽지 못함({unread[0]['handle']}): 질문이 없다고 볼 수 없음", []
     if f.get("other"):
         return KEEP, f"카드 안에 프로세스 pid {f['other'][0]}", []
     if (loud := [t for t in shells if t["silent"] < idle_s]):
@@ -278,7 +284,7 @@ def read_machine(cfg, now=None):
     top = sh(["git", "rev-parse", "--show-toplevel"])
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     return {"now": now, "st": settings(cfg), "rows": reap.processes(), "cwd_of": reap.cwds(), "live": live,
-            "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
+            "patrol": reap.patrol_working(now), "workers_unread": workers is None, "runners": reap.automation_workspaces(reap.orca_json("automations", "list")),
             "self": top and reap.real(top.strip()), "pr_state": reap.pr_reader(), "projects": projects,
             "quiet": reap.transcript_quiet(projects, now, reasons=True)}
 
@@ -297,12 +303,19 @@ def cards_listing(repo_list=()):
     return rows
 
 
+BLIND = "orca worktree·워커·automation 목록이나 프로세스 cwd 를 읽지 못함"
+
+
+def blind(m, rows):
+    return rows is None or m["cwd_of"] is None or m["workers_unread"] or m["runners"] is None
+
+
 def scan(cfg, repo_list=(), notes=None):
     notes = [] if notes is None else notes
     m = read_machine(cfg)
     rows = cards_listing(repo_list)
-    if rows is None or m["cwd_of"] is None or m["workers_unread"] or m["runners"] is None:
-        notes.append("orca worktree·워커·automation 목록이나 프로세스 cwd 를 읽지 못함: 카드는 판정하지 않는다")
+    if blind(m, rows):
+        notes.append(BLIND + ": 카드는 판정하지 않는다")
         return [], notes
     items = []
     for w in rows:
@@ -330,9 +343,13 @@ def report(items, notes):
 
 
 def reread(path, cfg):
-    """(verdict, why, handles, facts) for the card at path, read fresh; None when Orca no longer lists it."""
+    """(verdict, why, handles, facts) for the card at path, read fresh; None when Orca no longer lists it. What scan
+    would not judge on is a KEEP here."""
     m = read_machine(cfg)
-    row = next((w for w in cards_listing() or () if reap.real(w["path"]) == path), None)
+    rows = cards_listing()
+    if blind(m, rows):
+        return KEEP, BLIND, [], {"head": None}
+    row = next((w for w in rows if reap.real(w["path"]) == path), None)
     if row is None:
         return None
     f = gather(row, m)
@@ -358,6 +375,8 @@ def act(item, cfg, wait=5.0):
         time.sleep(1)
     if not got or got[0] != REMOVE:
         return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: {got[1] if got else '다시 찾지 못함'}"
+    if got[3]["head"] != item["head"]:
+        return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: 판정 뒤 HEAD 가 바뀜"
     out = reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{item['path']}", "name": item["path"],
                     "regenerated": got[3].get("regenerated")}, [])
     return (f"터미널 {len(close)}개 닫음, " if close else "") + out
