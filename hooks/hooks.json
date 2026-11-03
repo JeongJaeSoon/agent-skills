@@ -8,7 +8,7 @@
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/refusals.py\"", "timeout": 10 }]
       },
       {
-        "matcher": "Bash|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion",
+        "matcher": "Bash|Monitor|Skill|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"", "timeout": 5 }]
       },
       {
