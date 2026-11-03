@@ -101,9 +101,10 @@ def git_facts(cwd):
         code, out, _ = run([GH, "pr", "list", "--head", branch, "--state", state, "--json", "number,url,headRefOid,baseRefName"],
                            cwd) if branch else (None, "", "")
         try:
-            prs[state] = json.loads(out) if code == 0 else None
+            got = json.loads(out) if code == 0 else None
         except ValueError:
-            prs[state] = None
+            got = None
+        prs[state] = got if isinstance(got, list) and all(isinstance(p, dict) for p in got) else None
     f["open_prs"] = prs["open"]
     code, head, _ = run(["git", "rev-parse", "HEAD"], cwd)
     head = head.strip() if code == 0 else None
@@ -144,8 +145,9 @@ def card_facts(me, mode="card", dispatch=None):
                   file=sys.stderr)
         f["other_agents"] = None
     # Every terminal still on the card asks for it, not only this one; a closed terminal's handle is gone from Orca.
-    card_handles = {t["handle"] for t in rows if isinstance(t, dict) and isinstance(t.get("handle"), str)} \
-        if isinstance(rows, list) else None
+    whole = isinstance(rows, list) and all(isinstance(t, dict) and isinstance(t.get("handle"), str) and t["handle"]
+                                           for t in rows)
+    card_handles = {t["handle"] for t in rows} if whole else None  # a row with no handle: its questions are unknown
     senders = {me, *(card_handles or ())} | ({f"dispatch:{dispatch}"} if dispatch else set())
     f["questions"] = waiting_questions(senders, wt.get("createdAt")) if me and card_handles is not None else None
     if mode == "worker" and not dispatch:
@@ -187,6 +189,9 @@ def inbox_rows(res):
                and when(m.get("created_at")) is not None for m in msgs):
         return None, None
     if len({m["id"] for m in msgs}) != len(msgs):
+        return None, None
+    count = res.get("count", len(msgs))
+    if not isinstance(count, int) or isinstance(count, bool) or count != len(msgs):
         return None, None
     return msgs, any(flags)
 

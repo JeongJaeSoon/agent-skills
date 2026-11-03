@@ -121,6 +121,10 @@ with contextlib.redirect_stderr(io.StringIO()):
     os.environ["FAKE_PAGE"] = '["nextCursor", "c2"]'
     assert end_check.waiting_questions(ME) is None
     os.environ["FAKE_PAGE"] = "{}"
+    for top in ('{"count": 1}', '{"count": {}}'):  # a count that disagrees with the rows, or is not a number
+        os.environ["FAKE_TOP"] = top
+        assert end_check.waiting_questions(ME) is None, top
+    os.environ["FAKE_TOP"] = "{}"
     os.environ["FAKE_OK"] = "false"
     assert end_check.waiting_questions(ME) is None
     os.environ.pop("FAKE_OK")
@@ -198,6 +202,9 @@ assert end_check.card_facts("term_me")["other_agents"] == []
 # A question another terminal on the same card left waiting holds the card too.
 os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="s")])
 assert end_check.card_facts("term_me")["questions"] == ["m1"]
+# A terminal row without a handle: whose questions they are is unknown.
+os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"agentIdentity": null}]'
+assert end_check.card_facts("term_me")["questions"] is None
 os.environ["FAKE_INBOX"] = "[]"
 os.environ.pop("FAKE_TERMS")
 
@@ -293,6 +300,11 @@ assert end_check.git_facts(str(clone))["on_main"] is True
 git("add", "c.txt")
 git("commit", "-q", "-m", "after the merge")
 assert end_check.git_facts(str(clone))["on_main"] is False
+# A gh answer that is not a list of PR rows is unread, not "no PRs".
+for bad in ("{}", '""'):
+    os.environ["FAKE_MERGED"] = bad
+    f = end_check.git_facts(str(clone))
+    assert f["on_main"] is None, bad
 git("remote", "set-url", "origin", str(tmp / "nowhere.git"))
 assert end_check.git_facts(str(clone))["on_main"] is None
 
