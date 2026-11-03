@@ -50,8 +50,6 @@ PR_URL = re.compile(r"https?://([^/\s]+)/([\w.-]+)/([\w.-]+)/pull/(\d+)")
 REMOTE = re.compile(r"(?:^[\w+.-]+://(?:[^@/]+@)?|^[^@/:]+@|^)([^/:]+)[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 API_MERGE = re.compile(r"^/?repos/([\w.-]+)/([\w.-]+)/pulls/(\d+)/merge$")
 PUSH_VALUED = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
-GH_API_VALUED = {"-X", "--method", "-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
-                 "-t", "--template", "--hostname", "--cache", "-p", "--preview"}
 
 # Every lookup a hook makes shares one deadline (set_deadline), so the hook ends before Claude Code's timeout.
 _deadline = None
@@ -109,14 +107,25 @@ def reason_kind(reason):
 
 
 def git(args, cwd):
-    """stdout of a git command; Unknown when it fails, since every caller needs the answer."""
-    try:
-        p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=left(3))
-    except (OSError, subprocess.SubprocessError) as e:
-        raise Unknown(f"git {args[0]}") from e
+    """stdout of a git command; Unknown when it fails, since every caller needs the answer. Running out of time is a
+    TimeoutError, which the hook reports."""
+    p = command(["git", *args], cwd, 3)
+    if p is None:
+        raise Unknown(f"git {args[0]}")
     if p.returncode or not p.stdout.strip():
         raise Unknown(f"git {args[0]}")
     return p.stdout.strip()
+
+
+def command(argv, cwd, cap):
+    """The finished process, None when it could not start; TimeoutError when it outran the hook's time."""
+    timeout = left(cap)
+    try:
+        return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise TimeoutError(f"{argv[0]} {argv[1]} took over {timeout:.1f} s") from e
+    except OSError:
+        return None
 
 
 def repo_key(url):
@@ -125,8 +134,15 @@ def repo_key(url):
     return f"{m.group(1).lower()}/{m.group(2)}/{m.group(3)}" if m else None
 
 
-def remote_repo(remote, cwd):
-    key = repo_key(remote) if "/" in remote or ":" in remote else repo_key(git(["remote", "get-url", remote], cwd))
+def remote_repo(remote, cwd, push=False):
+    """`host/owner/repo` of a remote name or URL; with push, the URL a push goes to (one only)."""
+    if "/" in remote or ":" in remote:
+        url = remote
+    else:
+        url = git(["remote", "get-url", *(["--push"] if push else []), remote], cwd)
+        if "\n" in url:
+            raise Unknown("remote with several push URLs")
+    key = repo_key(url)
     if not key:
         raise Unknown("remote")
     return key
@@ -177,15 +193,31 @@ def known(here):
 
 
 def full_path(word, here):
-    """The absolute path a word names, `~` and $HOME expanded but quoted `$`/`~` kept as written."""
-    if shell.TEXT_DOLLAR in word or shell.TEXT_TILDE in word:
-        word = word.replace(shell.TEXT_DOLLAR, "$").replace(shell.TEXT_TILDE, "~")
-    else:
-        word = word.replace("${HOME}", "~").replace("$HOME", "~")
-        if "$" in word or set(word) & set("*?["):
-            raise Unknown("expanded path")
-        word = os.path.expanduser(word)
+    """The absolute path a word names: a leading `~` and $HOME expanded, a quoted `$` or `~` kept as written. Unknown
+    when bash would expand any other part (a variable, a glob)."""
+    word = word.replace("${HOME}", "~").replace("$HOME", "~")
+    if "$" in word or set(word) & set("*?[") or "~" in word[1:]:
+        raise Unknown("expanded path")
+    word = os.path.expanduser(word).replace(shell.TEXT_DOLLAR, "$").replace(shell.TEXT_TILDE, "~")
     return word if os.path.isabs(word) else os.path.join(known(here), word)
+
+
+def directory(word, here):
+    """The real directory a `cd` or `git -C` word names; Unknown when it cannot be read."""
+    return os.path.realpath(full_path(word, here))
+
+
+def changed_dir(c, here):
+    """The directory a `cd` leaves the shell in, UNKNOWN_DIR when it cannot be read from its words."""
+    args = [x for x in c.words[1:] if not x.startswith("-") or x == "-"]
+    if not args:
+        return os.path.expanduser("~")
+    if args[0] == "-":
+        return danger.UNKNOWN_DIR
+    try:
+        return directory(args[0], here)
+    except Unknown:
+        return danger.UNKNOWN_DIR
 
 
 def deleted(word, here):
@@ -205,13 +237,9 @@ def pr_target(arg, repo, cwd):
     repo = repo()
     if arg and arg.lstrip("#").isdigit():
         return f"{repo}#{arg.lstrip('#')}"
-    try:
-        p = subprocess.run(["gh", "pr", "view", *([arg] if arg else []), "-R", repo, "--json", "url", "-q", ".url"],
-                           cwd=cwd if cwd is not danger.UNKNOWN_DIR else None, capture_output=True, text=True,
-                           timeout=left(4))
-    except (OSError, subprocess.SubprocessError) as e:
-        raise Unknown("gh pr view") from e
-    if p.returncode == 0 and (m := PR_URL.match(p.stdout.strip())):
+    p = command(["gh", "pr", "view", *([arg] if arg else []), "-R", repo, "--json", "url", "-q", ".url"],
+                cwd if cwd is not danger.UNKNOWN_DIR else None, 4)
+    if p and p.returncode == 0 and (m := PR_URL.match(p.stdout.strip())):
         return f"{m.group(1).lower()}/{m.group(2)}/{m.group(3)}#{m.group(4)}"
     raise Unknown("gh pr view")
 
@@ -222,7 +250,7 @@ def git_dir(w, here):
     while i < len(w):
         x = w[i]
         if x == "-C" and i + 1 < len(w):
-            here = danger.expand(w[i + 1], here) or danger.UNKNOWN_DIR
+            here = directory(w[i + 1], here)
             i += 2
         elif x in danger.GIT_OPTS:
             i += 2
@@ -250,14 +278,17 @@ def git_acts(w, here):
         repo_arg, args = args[0], args[1:]
     branch = None
     if not args:
-        branch = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+        branch = git(["symbolic-ref", "--short", "HEAD"], cwd)  # a detached HEAD has none: Unknown
         # With no refspec git pushes by push.default; only the current branch's own name is certain.
         if git_config("push.default", cwd) not in (None, "simple", "current"):
             raise Unknown("git push with push.default")
     if repo_arg is None:
         repo_arg = git_config(f"branch.{branch}.pushRemote", cwd) or git_config("remote.pushDefault", cwd) or \
             git_config(f"branch.{branch}.remote", cwd) or "origin"
-    repo = remote_repo(repo_arg, cwd)
+    # A remote's own push refspecs win over push.default when none is given.
+    if not args and "/" not in repo_arg and ":" not in repo_arg and git_config(f"remote.{repo_arg}.push", cwd):
+        raise Unknown("git push with remote push refspecs")
+    repo = remote_repo(repo_arg, cwd, push=True)
     force = any(x in ("-f", "--force", "--force-if-includes") or x.startswith("--force-with-lease") or
                 re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", x) for x in rest)
     delete = any(x in ("-d", "--delete") for x in rest)
@@ -267,7 +298,7 @@ def git_acts(w, here):
         src, colon, dst = spec.lstrip("+").partition(":")
         dst = (dst if colon else src).removeprefix("refs/heads/")
         if dst == "HEAD":
-            dst = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+            dst = git(["symbolic-ref", "--short", "HEAD"], cwd)
         if not dst or dst.startswith("refs/") or "*" in dst:
             raise Unknown("refspec")
         v = "delete-branch" if delete or (colon and not src) else "force-push" if force or plus else "push"
@@ -289,12 +320,15 @@ def gh_acts(w, here):
                                           "--match-head-commit", "-c", "--comment"})
         return [(w[2], pr_target(args[0] if args else None, repo, here))]
     if w[1:2] == ["api"]:
-        endpoint = danger.verb(w[2:], GH_API_VALUED)[0] or ""
-        if not (m := API_MERGE.match(endpoint)):
+        m = next((m for x in w[2:] if (m := API_MERGE.match(x))), None)
+        if not m:
             return []
-        fields = any(x in ("-f", "-F", "--field", "--raw-field", "--input") or x.startswith(("--field=", "--raw-field="))
+        # Attached forms count too: `-XPUT`, `-fkey=v`, `--input=f`.
+        fields = any(x in ("-f", "-F", "--field", "--raw-field", "--input") or
+                     x.startswith(("--field=", "--raw-field=", "--input=")) or re.fullmatch(r"-[fF].+", x)
                      for x in w[2:])
-        method = (opt_value(w[2:], {"-X", "--method"}) or ("POST" if fields else "GET")).upper()
+        attached = next((x[2:] for x in w[2:] if re.fullmatch(r"-X.+", x)), None)
+        method = (opt_value(w[2:], {"-X", "--method"}) or attached or ("POST" if fields else "GET")).upper()
         if method == "GET":
             return []
         host = opt_value(w, {"--hostname"}) or os.environ.get("GH_HOST") or "github.com"
@@ -306,11 +340,12 @@ def bash_acts(cmd, cwd):
     """([(verb, target)], [what could not be read])."""
     out, unknown, here = [], [], cwd or danger.UNKNOWN_DIR
     # A `cd` inside a subshell or substitution changes only that scope, which this reader does not follow.
-    scoped = "(" in shell.command_text(cmd)
+    masked = shell.command_text(cmd)
+    scoped = "(" in masked or "`" in masked
     for c in shell.commands(cmd):
         w = c.words
-        if c.name == "cd":
-            here = danger.UNKNOWN_DIR if scoped else danger.after_cd(c, here)
+        if c.name in ("cd", "pushd", "popd"):
+            here = danger.UNKNOWN_DIR if scoped or c.name != "cd" else changed_dir(c, here)
             continue
         if not w:
             continue

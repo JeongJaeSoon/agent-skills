@@ -174,6 +174,36 @@ assert shape(f"rm -rf '{TMP}/$literal'")[0] == [("delete", f"{TMP}/$literal")]
 assert shape("rm -rf $DIR/x")[0] == [] and shape("rm -rf $DIR/x")[1]
 (TMP / "link").symlink_to(WT)
 assert shape(f"rm {TMP / 'link'}")[0] == [("delete", str(TMP / "link"))]
+# One quoted character does not vouch for the rest of the word, nor for a `-C` or `cd` directory.
+for cmd in ("rm -rf '$literal'/$DIR/x", "rm -rf '~'/*", 'git -C "$DIR" worktree remove victim',
+            "echo `cd /tmp; rm a` `rm b`", "pushd /tmp && rm b"):
+    assert shape(cmd)[0] == [] and shape(cmd)[1], cmd
+assert shape(f"cd '{TMP}/$literal'; rm victim")[0] == [("delete", f"{TMP}/$literal/victim")]
+
+# 4b. git push follows the push URL and a remote's own push refspecs; gh api reads attached option forms.
+repo = TMP / "repo"
+repo.mkdir()
+for args in (["init", "-q", "-b", "topic"], ["remote", "add", "origin", "https://github.com/acme/app.git"]):
+    subprocess.run(["git", *args], cwd=repo, check=True)
+assert shape("git push --force", repo)[0] == [("force-push", "github.com/acme/app:topic")]
+subprocess.run(["git", "remote", "set-url", "--push", "origin", "https://github.com/acme/fork.git"], cwd=repo, check=True)
+assert shape("git push --force origin topic", repo)[0] == [("force-push", "github.com/acme/fork:topic")]
+subprocess.run(["git", "config", "remote.origin.push", "HEAD:deploy"], cwd=repo, check=True)
+assert shape("git push --force", repo)[0] == [] and shape("git push --force", repo)[1]
+assert shape("gh api -XPUT repos/acme/app/pulls/12/merge")[0] == [("merge", "github.com/acme/app#12")]
+assert shape("gh api --input=body.json repos/acme/app/pulls/12/merge")[0] == [("merge", "github.com/acme/app#12")]
+assert shape("gh api -XGET repos/acme/app/pulls/12/merge")[0] == []
+
+# 4c. Running out of time is reported, not passed silently as an unreadable target.
+fake = TMP / "bin"
+fake.mkdir()
+(fake / "gh").write_text("#!/bin/sh\nexec sleep 30\n")
+(fake / "gh").chmod(0o755)
+p = subprocess.run([sys.executable, HERE / "refusals.py"], input=json.dumps(
+    {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "gh pr merge topic -R acme/app"},
+     "session_id": "s", "cwd": str(TMP)}), capture_output=True, text=True,
+    env=env(PATH=f"{fake}:{os.environ['PATH']}"), timeout=20)
+assert "ran out of time" in json.loads(p.stdout)["systemMessage"], p.stdout
 
 # 5. A refused call whose target cannot be read is not recorded, with a warning; a PermissionDenied with no category
 #    warns and leaves it to the transcript; a missing field warns.
