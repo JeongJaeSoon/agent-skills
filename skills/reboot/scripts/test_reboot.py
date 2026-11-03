@@ -115,6 +115,13 @@ class Waits(unittest.TestCase):
         self.assertIn("stop pid 301", out[0])
         self.assertNotIn("then start", out[0])
 
+    def test_an_orchestrator_waiting_on_a_program_is_told_to_replace_it(self):
+        procs = wait_proc(200, "orch wait acme") + wait_proc(300, "orch watch-cards")
+        out = does(run("top", run_id="run_1", orca=Orca(run="run_1"), procs=procs))
+        self.assertEqual(len(out), 1)
+        self.assertIn("stop pid 201", out[0])
+        self.assertIn("then start `orch inbox --wait`", out[0])
+
     def test_a_worker_is_not_asked_to_wait(self):
         self.assertEqual(does(run()), [])
 
@@ -176,6 +183,15 @@ class Workers(unittest.TestCase):
         self.assertIn("--retry-of d1 --task t1 --worktree id:repo::/work/card --agent claude`", out[0])
         self.assertIn("add `--model <id>`", out[0])  # a retry does not inherit the model
 
+    def test_an_active_worker_with_no_terminal_is_not_called_live(self):
+        workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active"},
+                   {"dispatchId": "d2", "taskId": "t2", "terminalState": "active", "agentTerminalHandle": None}]
+        out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers),
+                       procs=wait_proc(200, "orch wait acme")))
+        self.assertEqual(len(out), 2)
+        self.assertIn("worker-show --dispatch d1", out[0])
+        self.assertIn("has no terminal on record", out[1])
+
     def test_a_card_path_with_a_space_stays_one_argument(self):
         workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active", "agentTerminalHandle": "term_dead",
                     "resource": {"worktreeId": "repo::/work/My Project"}, "projection": {"provider": {"id": "claude"}}}]
@@ -226,7 +242,7 @@ class Queue(unittest.TestCase):
         out = does(run(queue=q))
         self.assertEqual(len(out), 4)
         self.assertIn(f"python3 {reboot.PRESSURE} queue wait q-1", out[0])
-        self.assertIn("run the held command again: `orch heavy acme -- make test`", out[0])
+        self.assertIn(f"run the held command again from {ROOT}/sub: `orch heavy acme -- make test`", out[0])
         self.assertIn("deadline passed", out[1])
         for line in out[2:]:  # the retry was started: no wait, the result first
             self.assertNotIn("queue wait", line)

@@ -169,8 +169,9 @@ def check_waits(role, slug, table, pid):
     inbox, cards = waits(table, root)
     out = []
     start = f"orch wait {slug}" if role == "lead" else "orch inbox --wait"
-    # A lead's one wait is `orch wait <its slug>`; any other inbox watcher in its session is a wrong one.
-    wrong = [(p, c) for p, c in inbox if role == "lead" and (WAIT_SLUG.findall(c) or [None])[0] != slug]
+    # A lead's one wait is `orch wait <its slug>`, the orchestrator's `orch inbox --wait`; any other is a wrong one.
+    want = slug if role == "lead" else None
+    wrong = [(p, c) for p, c in inbox if role and (WAIT_SLUG.findall(c) or [None])[0] != want]
     right = [w for w in inbox if w not in wrong]
     if wrong:
         then = "" if right else f", then start `{start}` under run_in_background"
@@ -205,20 +206,27 @@ def check_workers(run, call, lead_dispatch=None, me=None):
     own_task = next((w.get("taskId") for w in workers if w.get("dispatchId") == lead_dispatch), None)
     for w in workers:
         h = orca_settings.worker_terminal(w)
-        if w.get("terminalState") != "active" or not h or h == me:
+        if w.get("terminalState") != "active" or (h and h == me):
             continue
-        try:
-            call("terminal", "show", "--terminal", h)
-            continue
-        except OrcaError as e:
-            if not GONE.search(e.code):
-                raise
+        if h:
+            try:
+                call("terminal", "show", "--terminal", h)
+                continue
+            except OrcaError as e:
+                if not GONE.search(e.code):
+                    raise
         d = w.get("dispatchId") or "<dispatch>"
         task = w.get("taskId") or "<task>"
+        lost = f"lost its terminal {h}" if h else "has no terminal on record"
         parent = by_task.get(((w.get("projection") or {}).get("parent") or {}).get("taskId"))
         if parent and parent.get("taskId") != own_task:  # a unit under another lead is that lead's to restart
-            out.append(("do", f"worker {d} (task {task}) lost its terminal {h}; it sits under {parent.get('dispatchId')}: "
+            out.append(("do", f"worker {d} (task {task}) {lost}; it sits under {parent.get('dispatchId')}: "
                               "send that lead this line, and it restarts its own worker"))
+            continue
+        if not h:
+            out.append(("do", f"worker {d} (task {task}) {lost}: read it with "
+                              f"`{shlex.join(['orca', 'orchestration', 'worker-show', '--dispatch', d])}`; with no live "
+                              "terminal there, restart it with the stop and retry pair of a lost terminal"))
             continue
         card = (w.get("resource") or {}).get("worktreeId") or "<its worktree>"
         provider = (w.get("projection") or {}).get("provider") or {}
@@ -249,7 +257,8 @@ def check_queue(root, read=None):
         head = f"pressure queue {e['id']} ({e['what']}) {e['state']}"
         if e["state"] == "waiting":
             out.append(("do", f"{head}: watch `python3 {shlex.quote(str(PRESSURE))} queue wait {e['id']}` with "
-                              f"Monitor again; once it exits 0, run the held command again: `{e.get('command')}`"))
+                              f"Monitor again; once it exits 0, run the held command again from {shlex.quote(cwd)}: "
+                              f"`{e.get('command')}`"))
         elif e["state"] == "gave_up":
             out.append(("do", f"{head}: its deadline passed before it ran; your brief's rule for a held start "
                               "decides, otherwise report it"))
