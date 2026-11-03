@@ -7,7 +7,7 @@ and the state lives outside the repository:
 
   $ORCH_FLEET_STATE  (default ~/.local/state/agent-skills/dashboard)   state.json, prs.json, inbox.json, events,
                                                                        prompts/<terminal>.json (hooks/permission.py),
-                                                                       decisions.json (`orch decide`)
+                                                                       agent-skills.db (`orch decide`, store.py)
   $PROGRAMS_HOME/_locks (default ~/.claude/programs/_locks)            who holds a landing lane or a shared resource
                                                                        (`orch hold`), listed into state.json
   $ORCH_FLEET_CONFIG (default ~/.config/agent-skills/dashboard/config.json)
@@ -2195,11 +2195,15 @@ def mail_dispatch(m):
 
 
 def decision_items(by_handle, root):
-    """Open decisions from `orch decide`, on the session whose terminal registered them (else the root)."""
+    """Open decisions from `orch decide`, on the session whose terminal registered them (else the root). None before
+    `orch db import`: the brief's headline says 이행 대기."""
+    import store as db_store
     out = []
-    for d in (read_json(state_dir() / "decisions.json", {}) or {}).get("decisions", {}).values():
-        if d.get("status") != "open":
-            continue
+    try:
+        found = db_store.decisions("open")
+    except db_store.NotMigrated:
+        found = []
+    for d in found:
         sid = by_handle.get(d.get("handle"))
         out.append({"key": f"decision:{d['id']}", "type": "decision", "session": sid or root, "handle": d.get("handle") if sid else None,
                     "decision": d["id"], "title": mask(d.get("title"), 200), "detail": first_line(d.get("body")),
@@ -2607,19 +2611,13 @@ def inbox_resolve(key):
 
 DECISION_BODY_MAX = 4000
 DECISION_ANSWER_MAX = 1900  # the page's answer box; "decision <id>: " plus this stays inside send()'s 2000
-DECISION_KEEP_S = 7 * 86400  # closed decisions are kept this long, then dropped from the file
 
 
 def change_decisions(change):
-    """Run change(store) on decisions.json under a lock and replace the file whole; returns what change returns."""
-    path = state_dir() / "decisions.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with (state_dir() / "decisions.lock").open("a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        store = read_json(path, {}) or {}
-        out = change(store)
-        write_atomic(path, json.dumps(store, ensure_ascii=False, indent=1) + "\n")
-        return out
+    """Run change(store) on the decision table ({"next", "decisions"} as decisions.json held them) in one write
+    transaction; returns what change returns. store.NotMigrated before `orch db import`."""
+    import store as db_store
+    return db_store.change_decisions(change)
 
 
 def decision_add(title, body="", options=(), recommend=None, link=None, handle=None):
@@ -2641,17 +2639,9 @@ def decision_add(title, body="", options=(), recommend=None, link=None, handle=N
         n = store.get("next", 1)
         d = {"id": f"d{n}", "title": one_line(title, 200), "body": mask(body.strip(), DECISION_BODY_MAX), "options": opts,
              "recommend": recommend, "link": mask(link, 500), "handle": handle, "created_at": iso(now), "status": "open"}
-        prune_decisions(store, now)
         store.update(next=n + 1, decisions={**store.get("decisions", {}), d["id"]: d})
         return d
     return change_decisions(add)
-
-
-def prune_decisions(store, now):
-    """Drop the decisions closed over DECISION_KEEP_S ago, on add and on close."""
-    cutoff = iso(now - dt.timedelta(seconds=DECISION_KEEP_S))
-    store["decisions"] = {k: v for k, v in store.get("decisions", {}).items()
-                          if v.get("status") == "open" or (v.get("closed_at") or "") >= cutoff}
 
 
 def decision_keep(did):
@@ -2692,19 +2682,20 @@ def decision_close(did, status, answer=None, relay=False):
             d.update(status=status)
         else:
             raise ValueError(f"{did} is already {d.get('status')}")
-        prune_decisions(store, utcnow())
         return d
     return change_decisions(close)
 
 
 def open_decisions():
-    return [d for d in (read_json(state_dir() / "decisions.json", {}) or {}).get("decisions", {}).values() if d.get("status") == "open"]
+    """Open decisions; store.NotMigrated before `orch db import`. Closed ones stay in the table and are filtered here."""
+    import store as db_store
+    return db_store.decisions("open")
 
 
 def pending_relays():
     """Decisions answered on the page whose answer has not reached the coordinator's terminal yet."""
-    return [d for d in (read_json(state_dir() / "decisions.json", {}) or {}).get("decisions", {}).values()
-            if d.get("status") == "done" and d.get("delivered") is False]
+    import store as db_store
+    return [d for d in db_store.decisions("done") if d.get("delivered") is False]
 
 
 def decision_target(d, state):
@@ -2762,8 +2753,13 @@ def decision_answer(did, answer, sender=None):
 
 def relay_decisions(sender=None):
     """Retry every answer the coordinator has not received, skipping a coordinator whose session is working (its
-    title would refuse anyway). Called after each collect; returns the ids delivered."""
-    if not pending_relays() or not RELAY_LOCK.acquire(blocking=False):
+    title would refuse anyway). Called after each collect; returns the ids delivered. Before `orch db import` there is
+    nothing to relay: the brief shows 이행 대기."""
+    import store as db_store
+    try:
+        if not pending_relays() or not RELAY_LOCK.acquire(blocking=False):
+            return []
+    except db_store.NotMigrated:
         return []
     try:
         sender = sender or load_sync()

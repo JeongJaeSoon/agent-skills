@@ -937,9 +937,11 @@ class FakeFleetWorld:
 
     def fleet(self, clock=None):
         """A fleet.Fleet wired to this world (ORCH_FLEET_STATE must already point at a scratch directory)."""
-        import fleet
+        import fleet, store
         fleet.write_atomic(fleet.state_dir() / "prompts" / "term_docs.json", json.dumps(self.prompt))
-        fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
+        if not store.path().exists():  # the demo's decisions go in as a cutover moves a real decisions.json
+            fleet.write_atomic(fleet.state_dir() / "decisions.json", json.dumps(self.decisions))
+            store.import_apply(checks=False)
         f = fleet.Fleet(fetch_fast=self.fetch_fast, fetch_runs=self.fetch_runs, graphql=self.graphql, now=clock or fleet.utcnow,
                         read_screen=self.read_screen, fetch_automations=self.fetch_automations,
                         fetch_monitors=self.fetch_monitors, fetch_sent=self.fetch_sent, ps_table=lambda: {},
