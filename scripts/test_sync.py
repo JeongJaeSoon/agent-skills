@@ -549,6 +549,10 @@ def test_restart_holds_reload():
         check("nor when the waiting session's stale check could not be read", typed == [], typed)
         (tmp / "restarts.json").write_text(json.dumps({"a": {"sent": sync._now(), "kind": "restart", "command": "/restart"}}))
         sync.screen = lambda h: (NOTE_BACKGROUND, sync.classify(NOTE_BACKGROUND, "✳ a"))
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()) as dry:
+            sync.broadcast_locked("plugins", dry_run=True)
+        check("a dry run says so too", "would send" not in dry.getvalue() and "background" in dry.getvalue(), dry.getvalue())
         sync.broadcast_locked("plugins")
         check("nor when its /restart was sent before and the notice still shows", typed == [], typed)
         (tmp / "restarts.json").write_text("{}")
