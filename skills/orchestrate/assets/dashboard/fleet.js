@@ -528,13 +528,16 @@ const TICKET_STATES = [["backlog", ""], ["todo", ""], ["started", "accent"], ["r
 async function pollTickets() {
   if (F.ticketsBusy || (F.tickets && Date.now() - F.ticketsAt < 20e3)) return;
   F.ticketsBusy = true;
+  const was = JSON.stringify(F.tickets);
   try {
     const r = await fetch("/api/fleet/tickets", { cache: "no-store" });
     F.tickets = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
   } catch (e) { F.tickets = { error: String(e.message || e) }; }
   F.ticketsAt = Date.now(); F.ticketsBusy = false;
-  if (isFleet() && S.section === "overview") renderView();
+  if (isFleet() && S.section === "overview" && JSON.stringify(F.tickets) !== was) renderView();
 }
+// The fleet poll skips rendering while sessions are unchanged, so tickets keep their own clock on the Overview.
+setInterval(() => { if (isFleet() && S.section === "overview" && !document.hidden) pollTickets(); }, 20e3);
 function ticketsCard() {
   pollTickets();
   const rep = F.tickets;
@@ -548,7 +551,7 @@ function ticketsCard() {
     const counts = states.map((s) => tag(`${s} ${p.counts[s]}`, tone[s] || "")).join(" ");
     const active = p.active.map((t) => `<li class="sub">${tag(t.state, tone[t.state] || "")}<span class="mono">${link(t.url, esc(t.id))}</span>
       <span class="grow ellipsis" title="${esc(t.title || "")}">${esc(t.title || "")}</span></li>`).join("");
-    return `<li><b class="mono">${esc(p.key)}</b><span class="grow muted">${esc(p.name)}</span><span class="end">${counts || "no tickets"}</span></li>${active}`;
+    return `<li><b class="mono">${esc(p.key)}</b><span class="grow muted">${esc(p.name)}</span><span class="end wrap">${counts || "no tickets"}</span></li>${active}`;
   }).join("");
   return `<div class="card">${head}<ul class="rows">${rows}</ul></div>`;
 }
