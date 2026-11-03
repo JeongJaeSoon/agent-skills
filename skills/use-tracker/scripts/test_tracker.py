@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -698,6 +699,45 @@ class MarkdownCli(unittest.TestCase):
         self.assertIn('due date: "2026-11-10"', text)
         self.assertIn('담당: "나"', text)
         self.assertTrue(text.endswith("\nbody\n"))
+
+    def test_scalar_types_empty_values_and_the_comments_heading(self):
+        self.write("abc/ABC-1.md", "---\nid: ABC-1\ntitle: t\nstate: backlog\nparent:\nchecked: false\nestimate: 1.5\n---\n"
+                   "Write `## Comments` inline, keep it.\n### Comments\nstill description\n")
+        self.assertEqual([i["id"] for i in self.ok("children", "--project", "abc")], ["ABC-1"])
+        got = self.ok("get", "ABC-1")
+        self.assertEqual(got["parent"], None)
+        self.assertIn("still description", got["description"])
+        note = self.env.file("note.md", "first\n")
+        self.ok("comment", "ABC-1", "--body-file", note)
+        text = self.read("abc", "ABC-1.md")
+        self.assertIn("checked: false\n", text)
+        self.assertIn("estimate: 1.5\n", text)
+        self.assertEqual(text.count("\n## Comments\n"), 1)
+        self.assertIn("still description", self.ok("get", "ABC-1")["description"])
+        self.assertNotIn("first", self.ok("get", "ABC-1")["description"])
+
+    def test_transition_decides_on_the_state_read_under_the_lock(self):
+        self.ok("create", "--project", "abc", "--title", "t", "--body-file", self.body)
+        adapter = tracker.MarkdownAdapter({"root": self.root})
+        stale = adapter.get("ABC-1")  # backlog, read before another writer closed the ticket
+        adapter.transition("ABC-1", "completed")
+        adapter.get = lambda _id: stale
+        self.assertTrue(adapter.transition("ABC-1", "started")["unchanged"])
+        self.assertIn('state: "completed"', self.read("abc", "ABC-1.md"))
+
+    def test_create_leaves_no_temp_file_and_refuses_a_shared_key(self):
+        self.ok("create", "--project", "abc", "--title", "t", "--body-file", self.body)
+        self.assertEqual(sorted(os.listdir(self.path("abc"))), ["ABC-1.md"])
+        os.makedirs(self.path("ABC"), exist_ok=True)
+        if len([p for p in os.listdir(self.root) if p.upper() == "ABC"]) < 2:
+            # A case-insensitive disk: ABC is the abc folder, so it is the same project.
+            self.assertEqual(self.ok("create", "--project", "ABC", "--title", "t", "--body-file", self.body)["id"], "ABC-2")
+        # A case-sensitive disk holds abc and ABC as two folders; listdir stands in for one here.
+        adapter, real = tracker.MarkdownAdapter({"root": self.root}), os.listdir
+        with mock.patch.object(tracker.os, "listdir", lambda d: ["ABC", "abc"] if d == self.root else real(d)):
+            for call in (lambda: adapter.get("ABC-1"), lambda: adapter._key_dir("ABC", "ABC")):
+                with self.assertRaisesRegex(tracker.TrackerError, "abc share the key ABC"):
+                    call()
 
     def test_errors_name_the_problem(self):
         self.assertIn("../x", self.fail("create", "--project", "../x", "--title", "t", "--body-file", self.body))

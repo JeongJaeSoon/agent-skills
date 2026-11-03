@@ -17,7 +17,6 @@ TRACKER_FIXTURES=<dir> serves list/get from <dir>/issues.json and refuses writes
 import argparse
 import base64
 import copy
-import fcntl
 import json
 import os
 import re
@@ -631,6 +630,7 @@ MD_STATE_TYPE = {"triage": "triage", "backlog": "backlog", "todo": "unstarted", 
 MD_KEYS = ("id", "title", "state", "labels", "parent", "related", "assignee", "priority",
            "created_at", "updated_at", "completed_at", "canceled_at")
 COMMENTS = "## Comments"
+COMMENTS_LINE = re.compile(r"^## Comments[ \t]*$", re.M)
 
 
 def now_z():
@@ -651,7 +651,11 @@ def yaml_scalar(text):
         return text[1:-1].replace("''", "'")
     if text in ("", "null", "~"):
         return None
-    return int(text) if re.fullmatch(r"-?\d+", text) else text
+    if text in ("true", "false"):
+        return text == "true"
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    return float(text) if re.fullmatch(r"-?\d+\.\d+", text) else text
 
 
 def parse_ticket(path, text):
@@ -663,11 +667,12 @@ def parse_ticket(path, text):
     meta, key = {}, None
     for n, line in enumerate(lines[1:end], 2):
         try:
-            if line.lstrip().startswith("- ") and key is not None and isinstance(meta[key], list):
-                meta[key].append(yaml_scalar(line.lstrip()[2:]))
+            if line.lstrip().startswith("- ") and key is not None and isinstance(meta[key], (list, type(None))):
+                # An empty "key:" is null until a list item follows it.
+                meta[key] = (meta[key] or []) + [yaml_scalar(line.lstrip()[2:])]
             elif re.match(r"^[^\s#-][^:]*:(\s|$)", line):
                 key, rest = line.split(":", 1)
-                meta[key] = [] if not rest.strip() else yaml_scalar(rest)
+                meta[key] = yaml_scalar(rest)
             elif line.strip():
                 raise ValueError("not a 'key: value' line")
         except ValueError as exc:
@@ -707,13 +712,22 @@ class MarkdownAdapter:
             raise TrackerError(f"project folder not found: {path}")
         return path
 
+    def _key_dir(self, key, project=None):
+        """The one project folder whose name in capitals is `key` (None if there is none)."""
+        dirs = sorted(p for p in os.listdir(self.root) if p.upper() == key and os.path.isdir(os.path.join(self.root, p)))
+        # A project not on disk yet would be a second folder; on a case-insensitive disk "ABC" already is "abc".
+        names = set(dirs) | ({project} if project and not os.path.isdir(os.path.join(self.root, project)) else set())
+        if len(names) > 1:
+            raise TrackerError(f"project folders {', '.join(sorted(names))} share the key {key}; rename one")
+        return os.path.join(self.root, dirs[0]) if dirs else None
+
     def _path(self, issue_id):
         self._check(issue_id, TICKET_ID, "ticket id")
-        for project in sorted(os.listdir(self.root)):
-            path = os.path.join(self.root, project, issue_id + ".md")
-            if os.path.isfile(path):
-                return path
-        raise TrackerError(f"get {issue_id}: no {issue_id}.md under {self.root}")
+        folder = self._key_dir(issue_id.rsplit("-", 1)[0])
+        path = os.path.join(folder or self.root, issue_id + ".md")
+        if not folder or not os.path.isfile(path):
+            raise TrackerError(f"get {issue_id}: no {issue_id}.md under {self.root}")
+        return path
 
     def _read(self, path):
         with open(path, encoding="utf-8") as fh:
@@ -726,7 +740,7 @@ class MarkdownAdapter:
         out.update({
             "id": os.path.basename(path)[:-3], "url": "file://" + urllib.parse.quote(path),
             "state_type": MD_STATE_TYPE[meta["state"]], "labels": [str(l) for l in meta.get("labels") or []],
-            "parent": unlink(meta.get("parent")), "description": body.split(COMMENTS)[0].strip(),
+            "parent": unlink(meta.get("parent")), "description": COMMENTS_LINE.split(body)[0].strip(),
         })
         return out
 
@@ -739,13 +753,17 @@ class MarkdownAdapter:
                 for t in self._tickets(os.path.join(self.root, p))]
 
     def _update(self, issue_id, change):
-        """Read, change and rewrite one ticket under a lock, replacing the file whole."""
+        """Read, change and rewrite one ticket under a lock, replacing the file whole.
+        `change` returns None to leave the file as it is."""
+        import fcntl  # Unix only; imported here so the other adapters still run without it
         path = self._path(issue_id)
         # ponytail: one lock for the whole root; per-ticket locks if many workers write at once.
         with open(os.path.join(self.root, ".tracker.lock"), "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            meta, body = self._read(path)
-            meta, body = change(meta, body)
+            changed = change(*self._read(path))
+            if changed is None:
+                return
+            meta, body = changed
             meta["updated_at"] = now_z()
             tmp = os.path.join(os.path.dirname(path), f".{issue_id}.md.tmp")
             with open(tmp, "w", encoding="utf-8") as fh:
@@ -764,22 +782,29 @@ class MarkdownAdapter:
 
     def create(self, project, title, body_file, labels=(), parent=None, related=None):
         folder = os.path.join(self.root, self._check(project, NAME, "project folder name"))
-        os.makedirs(folder, exist_ok=True)
         key, stamp = project.upper(), now_z()
+        self._key_dir(key, project)
+        os.makedirs(folder, exist_ok=True)
         meta = {"title": title, "state": "backlog", "labels": list(labels),
                 "parent": f"[[{parent}]]" if parent else None, "related": [f"[[{related}]]"] if related else None,
                 "created_at": stamp, "updated_at": stamp}
-        while True:
-            taken = [int(n[len(key) + 1:-3]) for n in os.listdir(folder) if re.fullmatch(re.escape(key) + r"-\d+\.md", n)]
-            issue_id = f"{key}-{max(taken, default=0) + 1}"
-            try:
-                # O_EXCL: two workers creating at once never get the same number.
-                fd = os.open(os.path.join(folder, issue_id + ".md"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-            except FileExistsError:
-                continue
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(render_ticket(dict(meta, id=issue_id), read_body(body_file)))
-            return self.get(issue_id)
+        body, tmp = read_body(body_file), os.path.join(folder, f".new-{os.getpid()}.md.tmp")
+        try:
+            while True:
+                taken = [int(n[len(key) + 1:-3]) for n in os.listdir(folder) if re.fullmatch(re.escape(key) + r"-\d+\.md", n)]
+                issue_id = f"{key}-{max(taken, default=0) + 1}"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(render_ticket(dict(meta, id=issue_id), body))
+                try:
+                    # link never replaces: two workers creating at once never get the same number,
+                    # and the ticket appears whole or not at all.
+                    os.link(tmp, os.path.join(folder, issue_id + ".md"))
+                    return self.get(issue_id)
+                except FileExistsError:
+                    continue
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
     def label(self, issue_id, labels):
         self._update(issue_id, lambda m, b: (dict(m, labels=list(dict.fromkeys((m.get("labels") or []) + list(labels)))), b))
@@ -789,17 +814,22 @@ class MarkdownAdapter:
         text = read_body(body_file).strip()
 
         def add(meta, body):
-            head = body.rstrip("\n") + ("" if COMMENTS in body else f"\n\n{COMMENTS}")
+            head = body.rstrip("\n") + ("" if COMMENTS_LINE.search(body) else f"\n\n{COMMENTS}")
             return meta, f"{head}\n\n### {now_z()}\n\n{text}\n"
         self._update(issue_id, add)
         return {"ok": True, "op": "comment", "id": issue_id}
 
     def transition(self, issue_id, target):
-        current = self.get(issue_id)
-        if already_there(current, target, target):
-            return unchanged(issue_id, current)
         closed = {f"{target}_at": now_z()} if target in ("completed", "canceled") else {}
-        self._update(issue_id, lambda m, b: (dict(m, state=target, **closed), b))
+        seen = {}
+
+        def move(meta, body):
+            # Decided on the state read under the lock, so a concurrent close is never undone.
+            seen.update(state=meta["state"], state_type=MD_STATE_TYPE[meta["state"]])
+            return None if already_there(seen, target, target) else (dict(meta, state=target, **closed), body)
+        self._update(issue_id, move)
+        if already_there(seen, target, target):
+            return unchanged(issue_id, seen)
         return {"ok": True, "op": "transition", "id": issue_id, "state": target, "state_type": MD_STATE_TYPE[target]}
 
 

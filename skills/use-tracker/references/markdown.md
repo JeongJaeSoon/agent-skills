@@ -27,7 +27,8 @@ committing and pushing is the editor's or the user's job (in Obsidian, the Git p
 - A project name is a folder name of letters, digits, `-` and `_`. `create` makes the folder;
   `list` on a missing folder is an error, so a typo never reads as an empty project.
 - An id is the folder name in capitals, `-`, and a number one above the highest file in that
-  folder. Ids are unique across `root`; `get` finds the file in any project.
+  folder. `get` finds the folder from the id. Two folders whose names differ only in case
+  (`abc`, `ABC`) would share a key, so every command refuses them until one is renamed.
 
 ## A ticket file
 
@@ -71,12 +72,14 @@ that heading and adds the heading the first time.
 | Move | `transition ABC-1 --to started\|review\|completed\|canceled`; never moves a ticket back |
 
 Each write rewrites the whole file under a lock on `<root>/.tracker.lock` and replaces it in one
-step, so an editor or a git commit never sees half a file. Frontmatter keys the adapter does not
+step, and a new ticket is written in full before it is linked into place, so an editor or a git
+commit never sees half a file. `transition` decides on the state it reads under that lock. Frontmatter keys the adapter does not
 know (an Obsidian property, a tag) are kept. `tracker.py` writes every value in JSON-style quotes;
 it reads what Obsidian writes back (plain words, single quotes, block lists).
 
 ## Errors
 
 A file the adapter cannot read stops the command with the file's path: no frontmatter, a line it
-cannot parse (a multi-line `|` value, for example), or a `state` outside the list above. Fix the
+cannot parse (a multi-line `|` value, for example), or a `state` outside the list above.
+`true`/`false`, whole numbers and decimals keep their type when a file is rewritten. Fix the
 file; the adapter never guesses a value. Ignore `.tracker.lock` and `.*.md.tmp` in git.
