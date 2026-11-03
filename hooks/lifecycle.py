@@ -13,9 +13,11 @@ send was refused, and its report never arrives (end-session §7). A KEEP row on 
 
 Agent prompts (key `orchestrate.agent_forbidden`, default on): an Agent call from an orchestrator, a lead or a
 worker (its subagents included) whose prompt lacks the refused-act paragraph of orchestrate references/brief.md
-FORBIDDEN gets it appended (`updatedInput`, returned with `allow`, which Claude Code needs to apply it; deny and ask
-rules still hold). The brief says to paste it into every subagent prompt; `skills-sync card` covers card briefs,
-this covers the Agent tool. `false` or `"off"` turns it off.
+FORBIDDEN goes through unchanged with a one-line warning. The paragraph is not appended: a PreToolUse
+`updatedInput` takes effect only with `permissionDecision` `allow` (which skips the permission prompt and auto
+mode's check) or `ask`, and this hook never changes the call's permission outcome. The brief says to paste the
+paragraph into every subagent prompt; `skills-sync card` covers card briefs, this warns on the Agent tool.
+`false` or `"off"` turns it off.
 
 An rm of the session's own card whose transcript cannot be read is treated as unread order: warned or denied at the
 key's level. Any other check that raises lets the call through (a line in guard-errors.jsonl).
@@ -231,18 +233,16 @@ def exit_order(event, s, lvl):
     return None, None
 
 
-def attach(event, cfg):
-    """The Agent call's input with the refused-act paragraph appended, or None when it has it or is not covered."""
+def lacks_paragraph(event, cfg):
+    """Whether the Agent call's prompt lacks the refused-act paragraph (False when it has it or is not covered)."""
     value = config.get(cfg, "orchestrate.agent_forbidden", True)
     if value is False or value == "off":
-        return None
+        return False
     args = event.get("tool_input")
     if not isinstance(args, dict) or not isinstance(args.get("prompt"), str):
-        return None
+        return False
     text = paragraph()
-    if not text or text in " ".join(args["prompt"].split()):
-        return None
-    return {**args, "prompt": args["prompt"].rstrip() + "\n\n" + text}
+    return bool(text) and text not in " ".join(args["prompt"].split())
 
 
 def main():
@@ -277,14 +277,12 @@ def main():
                 return 0
             hold(out, decision, reason)
         elif tool in ("Agent", "Task") and roles.applies("agent_forbidden", s):
-            updated = attach(event, cfg)
-            if not updated:
+            if not lacks_paragraph(event, cfg):
                 return 0
-            out["hookSpecificOutput"].update(
-                permissionDecision="allow", updatedInput=updated,
-                permissionDecisionReason="agent-skills: the refused-act paragraph of orchestrate references/brief.md "
-                                         "FORBIDDEN was appended to the subagent prompt "
-                                         + SOURCE.format(key="orchestrate.agent_forbidden"))
+            # No permissionDecision: the call goes to the same permission check it would without this hook.
+            out["systemMessage"] = out["hookSpecificOutput"]["additionalContext"] = (
+                "This subagent prompt lacks the refused-act paragraph of orchestrate references/brief.md FORBIDDEN; "
+                "paste it into every subagent prompt. " + SOURCE.format(key="orchestrate.agent_forbidden"))
         else:
             return 0
     except Exception as e:

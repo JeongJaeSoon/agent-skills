@@ -1,6 +1,6 @@
 """hooks/lifecycle.py run as Claude Code runs it: the event JSON on stdin, a transcript file beside it.
 Run: python3 hooks/test_lifecycle.py"""
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, re, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 tmp = pathlib.Path(tempfile.mkdtemp(prefix="test-lifecycle-"))
@@ -201,22 +201,34 @@ check("a subagent's rm is not checked", hook(same, {**rm_event(), "agent_id": "a
 check("other commands pass", hook(same, rm_event(cmd="git status"), DENY) == {})
 check("quoted rm text is not an rm", hook(same, rm_event(cmd="echo 'orca worktree rm --worktree current'"), DENY) == {})
 
-# Agent prompts from a role session get the refused-act paragraph appended, once.
+# Agent prompts from a role session that lack the refused-act paragraph get a warning, and nothing else: the hook
+# never sets a permission decision nor rewrites the input, so the call meets the same permission check it would
+# without the hook (an `allow` would skip the user's prompt and auto mode's check).
+PARA = " ".join(re.search(r"An act refused by a permission prompt.*?fix\s+the\s+cause\s+and\s+run\s+it\s+again\.",
+                          (HERE.parent / "skills/orchestrate/references/brief.md").read_text(), re.S).group(0).split())
 agent = {"tool_name": "Agent", "tool_input": {"description": "probe", "prompt": "Read the diff.", "subagent_type": "Explore"}}
+
+
+def unchanged_permission(out):
+    hs = out.get("hookSpecificOutput") or {}
+    return not ({"permissionDecision", "permissionDecisionReason", "updatedInput"} & hs.keys()) and "decision" not in out
+
+
 out = hook([user(PREAMBLE)], agent)
-hs = out.get("hookSpecificOutput") or {}
-upd = hs.get("updatedInput") or {}
-check("a worker's Agent prompt gets the paragraph", hs.get("permissionDecision") == "allow"
-      and upd.get("prompt", "").startswith("Read the diff.\n\nAn act refused by a permission prompt")
-      and upd["prompt"].rstrip().endswith("run it again.") and upd.get("subagent_type") == "Explore", out)
-check("a prompt already carrying it is left alone", hook([user(PREAMBLE)], {**agent, "tool_input": upd}) == {})
-start = {**agent["tool_input"], "prompt": "Read the diff.\n\n" + upd.get("prompt", "")[len("Read the diff.\n\n"):][:200]}
-check("a prompt carrying only its start gets the whole paragraph",
-      "updatedInput" in (hook([user(PREAMBLE)], {**agent, "tool_input": start}).get("hookSpecificOutput") or {}))
+check("a worker's Agent prompt without the paragraph is warned", "refused-act paragraph" in out.get("systemMessage", "")
+      and "refused-act paragraph" in (out.get("hookSpecificOutput") or {}).get("additionalContext", ""), out)
+check("the warning leaves the permission decision and the input as they were", unchanged_permission(out), out)
+with_para = {**agent, "tool_input": {**agent["tool_input"], "prompt": "Read the diff.\n\n" + PARA}}
+check("a prompt already carrying it is left alone", hook([user(PREAMBLE)], with_para) == {})
+start = {**agent, "tool_input": {**agent["tool_input"], "prompt": "Read the diff.\n\n" + PARA[:200]}}
+out = hook([user(PREAMBLE)], start)
+check("a prompt carrying only its start is warned, its permission untouched",
+      "systemMessage" in out and unchanged_permission(out), out)
 check("a general session's Agent call is left alone", hook([user("look at this")], agent) == {})
 check("the key turns it off", hook([user(PREAMBLE)], agent, {"orchestrate": {"agent_forbidden": False}}) == {})
 lead = "acme: lead\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"
-check("a lead's Agent prompt gets it too", "updatedInput" in (hook([user(lead)], agent).get("hookSpecificOutput") or {}))
+out = hook([user(lead)], agent)
+check("a lead's Agent prompt is warned too, its permission untouched", "systemMessage" in out and unchanged_permission(out), out)
 check("a broken input passes", subprocess.run([sys.executable, str(HERE / "lifecycle.py")], input="nope",
                                                capture_output=True, text=True, env=ENV).stdout == "")
 
