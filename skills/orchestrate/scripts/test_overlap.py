@@ -120,10 +120,13 @@ def test_cross_program_unreadable_is_unknown():
     # Even with no open PR of this program: the broken program's PRs are unknown, not absent.
     assert prog.cross_overlaps({}, {"broken": None}, xrows) == [
         "OVERLAP UNKNOWN broken → its program state could not be read; compare it by hand"]
-    # This program's own PR whose file list could not be read, while another program has an open PR.
-    out = prog.cross_overlaps({}, {"other": {40: ["a"]}}, xrows, unread=[2])
-    assert out == ["OVERLAP UNKNOWN #2 → this program's file list for it could not be read; compare it by hand"], out
-    assert prog.cross_overlaps({}, {"other": {}}, xrows, unread=[2]) == []
+    # This program's own PR whose file list could not be read, with or without another program's open PR.
+    own = ["OVERLAP UNKNOWN #2 → this program's file list for it could not be read; compare it by hand"]
+    assert prog.cross_overlaps({}, {"other": {40: ["a"]}}, xrows, unread=[2]) == own
+    assert prog.cross_overlaps({}, {"other": {}}, xrows, unread=[2]) == own
+    # Another program's unreadable PR, with no PR or planned path of this program to compare.
+    assert prog.cross_overlaps({}, {"other": {40: None}}, []) == [
+        "OVERLAP UNKNOWN other #40 → its file list could not be read; compare it by hand"]
 
 
 def test_other_programs_from_their_state():

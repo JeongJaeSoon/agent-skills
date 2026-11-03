@@ -863,10 +863,10 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
     UNKNOWN, including this program's own PRs in unread. files {pr: [paths]}, theirs from other_program_files."""
     out = [f"OVERLAP UNKNOWN {other} → its program state could not be read; compare it by hand"
            for other in sorted(theirs) if theirs[other] is None]
-    if not any(theirs.values()):
-        return out
     out += [f"OVERLAP UNKNOWN #{n} → this program's file list for it could not be read; compare it by hand"
-            for n in ([] if paths else unread)]
+            for n in unread]
+    out += [f"OVERLAP UNKNOWN {other} #{n} → its file list could not be read; compare it by hand"
+            for other in sorted(theirs) for n, changed in sorted((theirs[other] or {}).items()) if changed is None]
     if not files and not paths:
         return out
     find = related([*files, *(n for prs in theirs.values() for n in prs or {})], rows, stacks)
@@ -874,8 +874,8 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
     for other in sorted(o for o in theirs if theirs[o]):
         for n, changed in sorted(theirs[other].items()):
             if changed is None:
-                out.append(f"OVERLAP UNKNOWN {other} #{n} → its file list could not be read; compare it by hand")
-            elif paths:
+                continue
+            if paths:
                 out += [f"OVERLAP {other} plan #{n} {f} {warn}"
                         for f in sorted({f for p in paths for f in changed if path_hit(p, f)})]
             else:
