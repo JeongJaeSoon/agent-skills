@@ -1,5 +1,6 @@
 """No hook keeps a ledger of refused acts: after the classifier refused a call, the same call sent again passes every
-hook hooks.json registers, the other guard rules still deny, and a refusals.jsonl already on disk is left as it is.
+hook hooks.json registers, the other guard rules still deny, and these hooks leave a refusals.jsonl already on disk
+unchanged.
 Run: python3 hooks/test_refusal_retry.py"""
 import json, os, pathlib, re, subprocess, sys, tempfile
 
@@ -43,7 +44,7 @@ def commands(event, tool=None):
 
 def run(command, payload):
     p = subprocess.run(["sh", "-c", command], input=json.dumps(payload), capture_output=True, text=True, env=env(),
-                       cwd=TMP)
+                       cwd=TMP, timeout=60)
     assert p.returncode == 0, (command, p.stderr)
     return json.loads(p.stdout) if p.stdout.strip() else {}
 

@@ -75,7 +75,7 @@ def user_files():
 def expand(word, cwd):
     """A path word as bash would mostly expand it: `~`, $HOME and $CLAUDE_CONFIG_DIR, relative to cwd."""
     home = str(pathlib.Path.home())
-    for var in ("HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "AGENT_SKILLS_CONFIG"):
+    for var in ("HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "AGENT_SKILLS_CONFIG", "AGENT_SKILLS_STATE"):
         value = os.environ.get(var) or (home if var == "HOME" else "")
         if value:
             word = word.replace("${" + var + "}", value).replace("$" + var, value)
