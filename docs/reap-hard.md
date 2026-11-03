@@ -21,7 +21,7 @@ reap-hard는 이 네 가지를 우회하지 않고 대체한다. 등록 여부�
 
 | 대상 | 닫는 조건 | 동작 |
 |---|---|---|
-| 카드 | 그 브랜치의 자기 PR(포크 제외)이 MERGED/CLOSED이고 PR head가 worktree HEAD와 같다. 열린 PR이 없다. 변경 없음(추적 안 되는 파일 포함). 세션 기록이 `idle_minutes`(30분) 넘게 조용하고, Orca 터미널 출력도 그만큼 없다. 세션 기록이 있는 Claude 터미널은 출력 기준이 5분이다. 사람이 띄운 프로세스가 없다. 카드 안 Claude 세션이 돌리는 셸이 없다 | `orca terminal close --worktree path:P --all`, ignored 파일은 휴지통, `orca worktree rm --run-hooks` |
+| 카드 | 그 브랜치의 자기 PR(포크 제외)이 MERGED/CLOSED이고 PR head가 worktree HEAD와 같다. 열린 PR이 없다. 변경 없음(추적 안 되는 파일 포함). 세션 기록이 `idle_minutes`(30분) 넘게 조용하고, Orca 터미널 출력도 그만큼 없다. 세션 기록이 있는 Claude 터미널은 출력 기준이 5분이다. 사람이 띄운 프로세스가 없다. 카드 안 Claude 세션이 돌리는 셸이 없다 | 카드 잠금(janitor와 공유)을 잡고 다시 판정한 뒤 공용 가드(`cardguard.guard`)를 통과하면, 판정 때 본 터미널만 `orca terminal close --terminal H`로 닫는다. 가드를 한 번 더 통과하면 ignored 파일은 휴지통, `orca worktree rm --run-hooks` |
 | 스택 | compose가 만든 컨테이너의 작업 폴더(`com.docker.compose.project.working_dir`)가 모두 없거나 이번 회차에 닫은 카드다 | `docker compose -p P down`. `-v`·prune·볼륨·이미지 삭제는 하지 않는다 |
 | 리스너 | ppid 1인 node·bun·deno·vite가 TCP LISTEN 중이고, `idle_minutes`보다 오래됐고, cwd가 지워졌거나 cwd의 카드가 없다 | 그 pid에만 SIGTERM. pid와 시작 시각을 다시 확인한다 |
 | serve | `tailscale serve` 항목의 로컬 포트가 미리보기 범위(`serve_ranges`, 기본 4500–4599·32768–60999)에 있고 두 회차 연속 리스너가 없다 | `tailscale serve --https=<port> off`(또는 `--tcp`) |

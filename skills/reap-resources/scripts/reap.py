@@ -517,13 +517,24 @@ def patrol_working(now=None):
     """Card paths `orch patrol` judged working (PATROL_KEEP) in a round under an hour old. Read only to keep a card: a patrol
     verdict never makes anything a target, and a path missing here (a round with `failed` sources above all) is not
     evidence the card is safe to close."""
+    return patrol_read(now) or set()
+
+
+def patrol_read(now=None):
+    """patrol_working, but None when the verdicts file exists and cannot be read: a guard keeps the card then. No file,
+    or one over an hour old, is an empty set."""
     try:
         v = json.loads((STATE / "patrol-verdicts.json").read_text())
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        return None
+    try:
         if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
             return set()
         return {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
-    except (OSError, ValueError, TypeError, AttributeError):
-        return set()
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 ORCH = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "prog.py"
@@ -941,17 +952,13 @@ def automation_workspaces(res):
 
 
 def orca_workers(state=None):
-    rows, cursor = [], None
-    for _ in range(50):
-        res = orca_json("orchestration", "worker-list", "--limit", "100",
-                        *(["--terminal-state", state] if state else []), *(["--cursor", cursor] if cursor else []))
-        if not res:
-            return None  # a partial list could miss a retained row and count a user's worktree as made
-        rows += res.get("workers") or []
-        cursor = (res.get("page") or {}).get("nextCursor")
-        if not cursor:
-            break
-    return rows
+    """worker-list as this terminal sees it, every page; None when any page fails: a partial list could miss a retained
+    row and count a user's worktree as made."""
+    import cardguard
+    try:
+        return cardguard.worker_pages(state, every_run=False)
+    except (SystemExit, Exception):
+        return None
 
 
 def worker_worktrees(workers):

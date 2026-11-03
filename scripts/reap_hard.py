@@ -11,8 +11,10 @@ A pass, in order (each later step sees what the earlier ones closed):
             carried the worktree's HEAD, with no open PR on the branch; clean, untracked files included; nothing off
             the remote unless the PR carried HEAD; its sessions' transcripts quiet for `idle_minutes` and every
             Orca terminal silent as long (a Claude terminal whose transcripts are known: 5 minutes); no process in it that a person started from their own shell; no live lead or orchestrator
-            session in it (launch flags or ROLE record), however quiet; no child card left in Orca (a lead's). The whole verdict is taken again right before closing.
-            -> `orca terminal close --worktree path:P --all`, ignored files to the trash, `orca worktree rm --run-hooks`
+            session in it (launch flags or ROLE record), however quiet; no child card left in Orca (a lead's). The whole verdict is taken again right before closing,
+            under the card's lock (cardguard.card_lock, shared with the janitor), then cardguard.guard()
+            -> `orca terminal close --terminal H` for each terminal seen at the judgement, guard() again, ignored
+            files to the trash, `orca worktree rm --run-hooks`
   stack     a compose project (containers compose created) whose working directories, every one absolute and labelled,
             are all gone or cards really closed in this pass -> `docker compose -p P down`. Never -v.
   listener  a node/bun/deno/vite process reparented to pid 1, listening on TCP, at least `idle_minutes` old, whose
@@ -33,6 +35,7 @@ import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, si
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
+import cardguard  # noqa: E402
 import preview_watch as pw  # noqa: E402
 import reap  # noqa: E402
 
@@ -53,7 +56,6 @@ DEFAULTS = {
     "serve_ranges": [[4500, 4599], [32768, 60999]],
 }
 DEV_SERVERS = ("node", "bun", "deno", "vite")
-AGENT_BUSY_S = 5 * 60
 
 
 def config():
@@ -155,7 +157,7 @@ def judge_card(card, facts, pr, terminals, quiet_s, now, idle_s, protect, people
     def window(t):
         # An idle Claude screen still writes to its terminal about every 30 minutes with nothing new on it, so its
         # quiet transcript decides; a working one redraws its spinner every second, which the short window catches.
-        return AGENT_BUSY_S if t.get("agentIdentity") == "claude" and quiet_s is not None else idle_s
+        return cardguard.AGENT_BUSY_S if t.get("agentIdentity") == "claude" and quiet_s is not None else idle_s
     loud = [t for t in terminals if now - (t.get("lastOutputAt") or 0) / 1000 < window(t)]
     if loud:
         return False, f"터미널 {loud[0].get('handle')} 출력이 {int(window(loud[0]) // 60)}분 안에 있음"
@@ -276,15 +278,6 @@ def people_in(path, rows, cwd_of):
     return sorted(p for p in pids if p in rows and reap.human_owned(p, rows) and not reap.human_shell(p, rows))
 
 
-def busy_in(path, rows, cwd_of):
-    """Shells that a live Claude session in path still runs: every Bash call, background shell and Monitor is a
-    shell child of the session. Other children (MCP servers, caffeinate) live as long as the session and say nothing."""
-    inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), path) and pid in rows]
-    claude = {pid for pid in inside if reap.is_claude(rows[pid]["cmd"])}
-    return sorted(q for q, r in rows.items() if r["ppid"] in claude
-                  and os.path.basename((r["cmd"].split() or [""])[0]).lstrip("-") in reap.SHELLS)
-
-
 def port_open(port):
     """Something accepts on the loopback port, whoever owns it: lsof sees only this user's sockets."""
     for host in ("127.0.0.1", "::1"):
@@ -303,11 +296,6 @@ def card_dir(path, root):
 
 def orca(*args):
     return reap.orca_json(*args)
-
-
-def wt_path(wid):
-    """The path in an Orca worktree id `<repo>::<path>[::workspace:<id>]`."""
-    return (wid or "").split("::")[1] if "::" in (wid or "") else ""
 
 
 def transcript_quiet(projects_dir, now):
@@ -339,12 +327,12 @@ def card_verdict(w, m, cfg, protect, now):
     held = {pid for port, pid in m["listening"].items() if port in protect["port"]}
     inside = [pid for pid, c in cwd_of.items() if reap.under(reap.real(c), p)]
     holders = sorted(pid for pid in inside if pid in protect["pid"] or pid in held)
-    children = sorted(c for c in map(wt_path, w.get("childWorktreeIds") or ()) if c and os.path.isdir(c))
+    children = cardguard.child_cards(w)
     projects = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser() / "projects"
     ok, why = judge_card(w, facts, pr, terminals, m["quiet"](p), now, float(cfg["idle_minutes"]) * 60, protect,
                          people_in(p, m["rows"], cwd_of), holders, children,
-                         reap.coordinator_in(p, m["rows"], cwd_of, projects), busy_in(p, m["rows"], cwd_of))
-    return ok, why, facts
+                         reap.coordinator_in(p, m["rows"], cwd_of, projects), cardguard.busy_shells(p, m["rows"], cwd_of))
+    return ok, why, {**(facts or {}), "handles": [t.get("handle") for t in terminals or () if t.get("handle")]}
 
 
 def local_cards(wt, root):
@@ -373,7 +361,7 @@ def scan_cards(cfg, protect, now):
                 ok, why = False, "순찰 판정: 작업 중(orch patrol)"
             item = {"kind": "card", "id": reap.real(w["path"]), "target": ok, "why": why}
             if ok:
-                item.update(head=facts["head"], regenerated=facts.get("regenerated") or [])
+                item.update(head=facts["head"], regenerated=facts.get("regenerated") or [], handles=facts["handles"])
             items.append(item)
     return items, notes, m
 
@@ -433,24 +421,39 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
 
 # ---------------------------------------------------------------- acting
 
+def act_card(item, cfg, protect):
+    """Close one card under its lock. Everything is judged again here: a PR reopened, a session resumed or a person's
+    command since the scan keeps the card; then guard() and only the terminals seen at the scan are closed."""
+    p = item["id"]
+    wt = orca("worktree", "list", "--limit", "10000")
+    row = next((w for w in (wt or {}).get("worktrees") or [] if reap.real(w.get("path") or "") == p), None)
+    if not isinstance(wt, dict) or wt.get("truncated") or row is None:
+        return "건너뜀: orca worktree list 에서 다시 찾지 못함"
+    ok, why, facts = card_verdict(row, read_machine(time.time()), cfg, protect, time.time())
+    if not ok:
+        return f"건너뜀: 다시 보니 {why}"
+    if facts.get("head") != item["head"]:
+        return "건너뜀: 판정 뒤 HEAD 가 바뀜"
+    handles = item.get("handles")
+    if handles is None:  # a plan written before handles were recorded
+        return "건너뜀: 판정 때 본 터미널 목록이 계획에 없음"
+    ok, why = cardguard.guard(p, item["head"], handles)
+    if not ok:
+        return f"건너뜀: {why}"
+    for h in handles:
+        reap.run(["orca", "terminal", "close", "--terminal", h, "--json"])
+    ok, why = cardguard.guard(p, item["head"], handles, final=True)
+    if not ok:
+        return f"터미널 {len(handles)}개 닫음, 삭제는 건너뜀: {why}"
+    return f"터미널 {len(handles)}개 닫음, " + reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{p}", "name": p,
+                                                        "regenerated": facts.get("regenerated")}, [])
+
+
 def act(item, cfg, protect):
     k = item["kind"]
     if k == "card":
-        p = item["id"]
-        # Everything is judged again here: a PR reopened, a session resumed or a person's command since the scan
-        # keeps the card.
-        wt = orca("worktree", "list", "--limit", "10000")
-        row = next((w for w in (wt or {}).get("worktrees") or [] if reap.real(w.get("path") or "") == p), None)
-        if not isinstance(wt, dict) or wt.get("truncated") or row is None:
-            return "건너뜀: orca worktree list 에서 다시 찾지 못함"
-        ok, why, facts = card_verdict(row, read_machine(time.time()), cfg, protect, time.time())
-        if not ok:
-            return f"건너뜀: 다시 보니 {why}"
-        if facts.get("head") != item["head"]:
-            return "건너뜀: 판정 뒤 HEAD 가 바뀜"
-        reap.run(["orca", "terminal", "close", "--worktree", f"path:{p}", "--all", "--json"])
-        return "터미널 닫음, " + reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{p}", "name": p,
-                                           "regenerated": facts.get("regenerated")}, [])
+        with cardguard.card_lock(item["id"]) as mine:
+            return act_card(item, cfg, protect) if mine else "건너뜀: 다른 정리가 이 카드를 처리 중"
     if k == "stack":
         reap.run(["docker", "compose", "-p", item["id"], "down"])  # no -v: volumes are data
         return "docker compose down(볼륨·이미지 유지)"

@@ -34,6 +34,13 @@ once they have exited, moves its ignored files to the trash and runs `orca workt
 terminals close and again before the removal. A re-read that cannot see the worktree, worker or automation list or
 the process cwds (what makes `scan` judge nothing) keeps the card.
 
+Both `apply` here and reap-hard close a card only through `scripts/cardguard.py`: they hold the card's lock
+(`<state>/locks/card-<hash>.lock`, so the janitor and reap-hard never work one card at once; the one that finds it
+held skips the card), and `guard()` must pass before the terminals close and again before `worktree rm`. The guard
+keeps the card when patrol judged it working, HEAD moved, a terminal opened since the judgement, Orca's agent-wait
+or an agent's screen shows a prompt or cannot be read, or the session armed its own wake-up (parked); anything it
+cannot read keeps the card too.
+
 ## Traps the rule covers
 
 - **A stale `origin/HEAD`.** A failed `git fetch` (an SSO re-authorization, a network error) leaves the local
