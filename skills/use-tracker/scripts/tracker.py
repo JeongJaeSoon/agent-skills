@@ -9,6 +9,7 @@ Markdown folder (one file per ticket, one subfolder per project).
     tracker.py [...] label ID --add L [--add L2]
     tracker.py [...] comment ID --body-file F
     tracker.py [...] transition ID --to started|review|completed|canceled
+    tracker.py [...] projects                       (markdown only: project folders and the Obsidian board)
 
 stdout is always JSON; errors go to stderr with a non-zero exit.
 TRACKER_FIXTURES=<dir> serves list/get from <dir>/issues.json and refuses writes.
@@ -745,7 +746,7 @@ class MarkdownAdapter:
         out = issue_template()
         out.update({k: meta.get(k) for k in out if meta.get(k) is not None})
         out.update({
-            "id": os.path.basename(path)[:-3], "url": self.link + urllib.parse.quote(path, safe="" if self.link.startswith("obsidian") else "/"),
+            "id": os.path.basename(path)[:-3], "url": self._url(path),
             "state_type": MD_STATE_TYPE[meta["state"]], "labels": [str(l) for l in meta.get("labels") or []],
             "parent": unlink(meta.get("parent")), "description": COMMENTS_LINE.split(body)[0].strip(),
         })
@@ -780,6 +781,15 @@ class MarkdownAdapter:
 
     def list(self, project, since=None, limit=None):
         return finish_list(self._tickets(self._project_dir(project)), since, limit)
+
+    def projects(self):
+        board = os.path.join(self.root, "Board.base")
+        names = sorted(p for p in os.listdir(self.root) if NAME.match(p) and os.path.isdir(os.path.join(self.root, p)))
+        return {"projects": [{"name": p, "key": p.upper()} for p in names],
+                "board": self._url(board) if os.path.isfile(board) else None}
+
+    def _url(self, path):
+        return self.link + urllib.parse.quote(path, safe="" if self.link.startswith("obsidian") else "/")
 
     def children(self, parent, project=None):
         issues = self._tickets(self._project_dir(project)) if project else self._all()
@@ -889,6 +899,7 @@ def build_parser():
     s = sub.add_parser("transition")
     s.add_argument("id")
     s.add_argument("--to", required=True, choices=TRANSITION_TARGETS)
+    sub.add_parser("projects")
     return p
 
 
@@ -896,6 +907,10 @@ def run(argv):
     args = build_parser().parse_args(argv)
     config = load_config(args.config)
     adapter = make_adapter(args.adapter or (config.get("tracker") or {}).get("adapter") or "linear", config)
+    if args.cmd == "projects":
+        if not hasattr(adapter, "projects"):
+            raise TrackerError("projects: only the markdown adapter lists its projects")
+        return adapter.projects()
     if args.cmd == "list":
         if args.limit is not None and args.limit < 1:
             raise TrackerError("--limit must be >= 1")

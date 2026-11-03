@@ -1380,6 +1380,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_cached(json.dumps(pressure_report(int(hours.group(1)) if hours else 6), ensure_ascii=False).encode())
         if path in ("/api/fleet/flow", "/api/fleet/changes"):
             return self.send_cached(flow_report(path.rsplit("/", 1)[1]))
+        if path == "/api/fleet/tickets":
+            return self.send_cached(tickets_cached())
         if path == "/api/fleet/brief":
             return self.send_cached(json.dumps(brief_report(), ensure_ascii=False).encode())
         if path == "/api/fleet/sent":
@@ -1721,6 +1723,43 @@ def periodic_report():
     except ValueError:  # an empty board, or a renderer this checkout does not have yet: its own words
         return {"message": (r.stdout or r.stderr).strip() or f"orch brief render exited {r.returncode}"}
     return {k: out.get(k) for k in ("text", "changed", "stale", "width_ok", "done", "open", "table_rows")} | {"closed": closed_recent()}
+
+
+ACTIVE_STATES = ("started", "review")
+TICKETS_TTL = 20  # seconds; the page polls faster, and a project folder is read file by file
+
+
+def tickets_report(config=None):
+    """The markdown tracker's project folders: ticket counts per state and the tickets in progress, for the Tickets
+    card. {"unsupported": True} for a tracker that cannot list its projects (Linear, Jira), {"error": ...} when a
+    folder cannot be read."""
+    base = [sys.executable, str(tracker_path())] + (["--config", config] if config else [])
+    try:
+        found = sh(base + ["projects"], timeout=20)
+    except SourceError as e:
+        return {"unsupported": True} if "only the markdown adapter" in str(e) else {"error": str(e)}
+    projects = []
+    for p in found.get("projects") or []:
+        try:
+            issues = sh(base + ["list", "--project", p["name"]], timeout=20)
+        except SourceError as e:
+            return {"error": str(e)}
+        counts = {}
+        for i in issues:
+            counts[i["state"]] = counts.get(i["state"], 0) + 1
+        active = [{k: i.get(k) for k in ("id", "title", "state", "url")} for i in issues if i.get("state") in ACTIVE_STATES]
+        projects.append({"name": p["name"], "key": p["key"], "counts": counts, "active": active})
+    return {"projects": projects, "board": found.get("board")}
+
+
+TICKETS = {"at": 0.0, "body": b""}
+
+
+def tickets_cached():
+    if time.monotonic() - TICKETS["at"] > TICKETS_TTL:
+        TICKETS["body"] = json.dumps(tickets_report(), ensure_ascii=False).encode()
+        TICKETS["at"] = time.monotonic()
+    return TICKETS["body"]
 
 
 PRESSURE = HERE.parents[1] / "reap-resources" / "scripts" / "pressure.py"

@@ -761,6 +761,17 @@ class MarkdownCli(unittest.TestCase):
         self.env.config({"tracker": {"adapter": "markdown", "markdown": {"root": self.root, "link": "web"}}})
         self.assertIn("tracker.markdown.link", self.fail("get", "ABC-1"))
 
+    def test_projects_lists_folders_and_the_board(self):
+        self.ok("create", "--project", "acme", "--title", "t", "--body-file", self.body)
+        os.makedirs(self.path(".obsidian"))
+        os.makedirs(self.path("bad name"))
+        out = self.ok("projects")
+        self.assertEqual(out, {"projects": [{"name": "abc", "key": "ABC"}, {"name": "acme", "key": "ACME"}], "board": None})
+        self.write("Board.base", "views: []\n")
+        self.assertTrue(self.ok("projects")["board"].endswith("/Board.base"))
+        self.env.config({"tracker": {"adapter": "linear"}})
+        self.assertIn("projects", self.fail("projects"))
+
     def test_errors_name_the_problem(self):
         self.assertIn("../x", self.fail("create", "--project", "../x", "--title", "t", "--body-file", self.body))
         self.assertIn("../ABC-1", self.fail("get", "../ABC-1"))

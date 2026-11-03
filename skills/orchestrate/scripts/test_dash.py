@@ -621,6 +621,33 @@ dash.time.sleep, dash.collect = real_sleep, real_collect
 assert collected.count(B) == 2 and A in collected, collected  # the second round reached B through closed()
 (store / B / "ledger.jsonl").write_text(clean)
 
+# Tickets card: one row per project folder of the markdown tracker, counts per state and the tickets in progress.
+tix = pathlib.Path(tempfile.mkdtemp(prefix="test-dash-tickets-"))
+(tix / "vault").mkdir()
+tcfg = tix / "cfg.json"
+tcfg.write_text(json.dumps({"tracker": {"adapter": "markdown", "markdown": {"root": str(tix / "vault"), "link": "obsidian"}}}))
+(tix / "b.md").write_text("x\n")
+# dash_demo points TRACKER_PY at a fake and sets TRACKER_FIXTURES (read-only); this card needs the real adapter.
+demo_env = {k: os.environ.pop(k) for k in ("TRACKER_PY", "TRACKER_FIXTURES") if k in os.environ}
+tpy = [sys.executable, str(dash.tracker_path()), "--config", str(tcfg)]
+for title in ("one", "two", "three"):
+    subprocess.run(tpy + ["create", "--project", "abc", "--title", title, "--body-file", str(tix / "b.md")], check=True, capture_output=True)
+subprocess.run(tpy + ["transition", "ABC-2", "--to", "started"], check=True, capture_output=True)
+subprocess.run(tpy + ["transition", "ABC-3", "--to", "review"], check=True, capture_output=True)
+(tix / "vault" / "empty").mkdir()
+rep = dash.tickets_report(config=str(tcfg))
+assert [p["name"] for p in rep["projects"]] == ["abc", "empty"] and rep["board"] is None, rep
+abc = rep["projects"][0]
+assert abc["key"] == "ABC" and abc["counts"] == {"backlog": 1, "started": 1, "review": 1}, abc
+assert [(t["id"], t["title"], t["state"]) for t in abc["active"]] == [("ABC-2", "two", "started"), ("ABC-3", "three", "review")], abc
+assert abc["active"][0]["url"].startswith("obsidian://open?path="), abc
+assert rep["projects"][1]["counts"] == {} and rep["projects"][1]["active"] == []
+(tix / "vault" / "abc" / "ABC-1.md").write_text("broken\n")
+assert "ABC-1.md" in dash.tickets_report(config=str(tcfg))["error"]
+tcfg.write_text(json.dumps({"tracker": {"adapter": "linear"}}))
+assert dash.tickets_report(config=str(tcfg)) == {"unsupported": True}
+os.environ.update(demo_env)
+
 # safeUrl is the page's only gate on links: web pages and Obsidian ticket links pass, script and file URLs do not.
 if shutil.which("node"):
     line = next(l for l in (pathlib.Path(__file__).resolve().parent.parent / "assets/dashboard/app.js").read_text().splitlines() if l.startswith("const safeUrl"))

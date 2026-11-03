@@ -216,6 +216,8 @@ details[open] > summary.card-head::before { content: "▾"; }
 .rows > li:hover { background: var(--panel-2); }
 .rows .ic { width: 20px; display: grid; place-items: center; color: var(--tone, var(--ink-3)); flex: none; }
 .rows .grow { flex: 1; min-width: 0; }
+.rows > li.sub { padding-left: calc(var(--s4) * 2); }
+.rows .end.wrap { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; white-space: normal; row-gap: var(--s1); }
 .rows .end { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); color: var(--ink-3); font-size: var(--t-sm); white-space: nowrap; flex: none; }
 .go { color: var(--ink-3); display: inline-flex; align-items: center; gap: var(--s1); font-size: var(--t-sm); }
 .go:hover { color: var(--ink); }

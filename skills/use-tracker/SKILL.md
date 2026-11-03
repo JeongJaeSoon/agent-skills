@@ -60,6 +60,7 @@ python3 $T create --project P --title T --body-file F [--label L ...] [--parent 
 python3 $T label ID --add L [--add L2]
 python3 $T comment ID --body-file F
 python3 $T transition ID --to started|review|completed|canceled
+python3 $T projects   # markdown only: {"projects": [{"name", "key"}], "board": url or null}
 ```
 
 Global flags: `--adapter linear|jira|markdown` (overrides config), `--config PATH`.
