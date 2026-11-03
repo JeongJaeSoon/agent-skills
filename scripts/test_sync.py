@@ -47,6 +47,8 @@ SAID_WRAPPED = ["❯ what does the footer say?", "⏺ The footer reads: update i
                 RULE, "❯", RULE]
 SAID_AFTER_BLANK = ["❯ what changed?", "⏺ Two things:", "", "/restart to apply the update.", RULE, "❯", RULE]
 SAID_LIST = ["❯ what changed?", "⏺ Two things:", "* Update installed", "/restart to apply it.", RULE, "❯", RULE]
+SAID_LIKE_SUMMARY = ["❯ what now?", "⏺ Two steps:", "* Wait for 2s before retrying.", "/restart to apply the update.",
+                     RULE, "❯", RULE]
 # A guard's deny as the last result, then a reply about some other missing file.
 DENY_THEN_REPLY = ["❯ build", "  ⎿  PreToolUse:Bash hook error: [gate:x] run in a slot",
                    "⏺ The build failed: No such file or directory.", RULE, "❯", RULE]
@@ -325,7 +327,9 @@ def test_stale_signal():
     check("a hook error before the last prompt is not", sync.stale_signal(OLD_HOOK_ERROR) is None)
     check("a guard's deny is not", sync.stale_signal(GUARD_DENY) is None)
     check("the notice under the turn's summary is", (sync.stale_signal(STUCK_SHOT) or ("",))[0] == "restart")
-    check("the words in a reply are not", all(sync.stale_signal(s) is None for s in (SAID, SAID_WRAPPED, SAID_AFTER_BLANK, SAID_LIST)))
+    check("the words in a reply are not", all(sync.stale_signal(s) is None for s in (SAID, SAID_WRAPPED, SAID_AFTER_BLANK, SAID_LIST, SAID_LIKE_SUMMARY)))
+    check("the summary shapes Claude Code writes are summaries",
+          all(sync.TURN_SUMMARY.match(s) for s in (IDLE[0], STUCK_SHOT[4], "✻ Cooked for 1h 2m 3s · done 11:02 PM")))
     check("a missing file in the reply after a guard's deny is not", sync.stale_signal(DENY_THEN_REPLY) is None)
     check("a hook error the session got past is not", sync.stale_signal(RECOVERED) is None)
     check("a missing file wrapped onto the next line is", (sync.stale_signal(WRAPPED) or ("",))[0] == "hook")

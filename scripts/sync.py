@@ -224,8 +224,9 @@ HOOK_ERROR = re.compile(r"\bhook (?:error|returned (?:a )?blocking error)\b", re
 # A guard's deny reads "hook error" too; only a hook that could not find its own file is stale.
 MISSING_FILE = re.compile(r"can't open file|No such file or directory|\bENOENT\b|Cannot find module", re.I)
 MESSAGE_MARKS = ("⏺", "●", "❯", "⎿")  # a reply, a prompt, a tool's result
-# A finished turn's summary ("✻ Worked for 2m 7s · done 5:48 AM"): a mark, one word, "for" and a duration.
-TURN_SUMMARY = re.compile(r"^[✻✶✳✢✽*] \S+ for \d+(?:\.\d+)?\s?[hms]\b")
+# A finished turn's summary ("✻ Worked for 2m 7s · done 5:48 AM"): a mark, one word, "for", a duration and the
+# clock time it was done at.
+TURN_SUMMARY = re.compile(r"^[✻✶✳✢✽*] \S+ for (?:\d+(?:\.\d+)?[hms] ?)+· done \d{1,2}:\d\d\b")
 # The notice names /restart; a hook error alone names no command, and /reload-plugins re-reads hooks.json.
 STALE_COMMAND = {"restart": "/restart", "hook": RELOAD["plugins"]}
 
