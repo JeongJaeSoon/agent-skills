@@ -101,7 +101,7 @@ Run it under `run_in_background` with `--wait-minutes`. It sleeps through yields
 |---|---|---|
 | 0 | Landed. It printed the merge commit and the main-CI watch command. | Watch main CI, `record main_green\|main_red --sha`, finish the ticket, `worker_done` |
 | 2 | Yield: CI still running, a dependency or the stack top first, another PR holds the exclusive lane, or GitHub did not answer (timeout, 5xx) | Nothing. Keep the `--wait-minutes` loop |
-| 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, missing evidence in the test-results comment, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again. A second "update onto the latest base" in a row means the base moves faster than your CI: ask for a hold (Exclusive lane above) instead of looping |
+| 3 | Act: the message says what (conflicts, failed CI, a changed patch that needs re-review, the base changed your files, missing evidence in the test-results comment, or "you hold the exclusive lane: update onto the latest base") | Do it, then `land` again. On "update onto the latest base", also ask for a hold before that update (Exclusive lane above), so the next attempt is not overtaken again |
 | 1 | Refused: STOP line, main red (only `--class main-fix` lands), or the human gate | Report and stop |
 
 Rebase conflicts change the patch-id. That voids the verdict, so the resolution gets re-reviewed.

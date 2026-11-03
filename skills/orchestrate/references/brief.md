@@ -340,10 +340,11 @@ APPROVED    The acts the human already approved for this project, with their wor
             report. At launch, copy here every authority the human has stated that the program
             will need (merge, ticket creation, rerunning a blocked step), word for word and never
             read wider than it was said; authority given later goes on a new card, never typed
-            into a running session. Copy the lines a worker's unit needs into its brief.
+            into a running session (an act already refused follows `orchestrate` "Refused acts"
+            instead). Copy the lines a worker's unit needs into its brief.
 HUMAN ONLY  Permission dialogs outside APPROVED, logins, payments, document submissions, and
             any irreversible or outward act not under APPROVED; a design or implementation choice
-            is not one, and goes to PARENT as status. Batched into one message, sent once
+            is not one, and goes to PARENT as status for PARENT to settle. Batched into one message, sent once
             to PARENT, which puts it before the human, and registered with `orch decide add`. Do not repeat unchanged waiting notices;
             when the blocker or evidence changes, create a replacement with `orch decide add`
             whose body names the old decision id and changed evidence. After creation succeeds,
