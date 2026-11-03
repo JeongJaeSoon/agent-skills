@@ -48,7 +48,8 @@ if sys.argv[1:2] == ["--orca"]:  # this file as the `orca` binary
     except RuntimeError as e:
         if version != "old-stderr":  # an Orca that says why on stderr alone
             print(json.dumps({"ok": False, "error": {"code": "invalid_argument", "message": str(e)}}))
-        print(e, file=sys.stderr)
+        if version != "old-stdout":  # Orca 1.4.240 says why on stdout alone, stderr empty
+            print(e, file=sys.stderr)
         sys.exit(1)
     sys.exit(0)
 
@@ -149,7 +150,7 @@ assert old["dash"] == ["ctx_a", "ctx_b", "ctx_c"], old
 # run-list's first page only, as before; the legacy Run is left out and run_demo keeps its coordinator.
 assert old["fleet_runs"] == ([("run_demo", "term_coord")], ["run_demo"]), old
 
-for version in ("old-stderr", "new"):
+for version in ("old-stderr", "old-stdout", "new"):
     got = results(version)
     differ = [k for k in old if got[k] != old[k]]
     assert not differ, version + "\n" + "\n".join(f"{k}: {got[k]!r}" for k in differ)
