@@ -109,6 +109,8 @@ with contextlib.redirect_stderr(io.StringIO()):
     # One row without a sender is enough to make the rest unknown; so is no messages list, or a full page.
     os.environ["FAKE_INBOX"] = json.dumps([dict(Q, id="m4", from_handle="term_x"), {"id": "m5", "type": "question"}])
     assert end_check.waiting_questions(ME) is None
+    os.environ["FAKE_INBOX"] = json.dumps([{"id": "q1", "from_handle": "term_me"}])  # no type: maybe a question
+    assert end_check.waiting_questions(ME) is None
     os.environ["FAKE_INBOX"] = "null"
     assert end_check.waiting_questions(ME) is None
     limit, end_check.INBOX_LIMIT = end_check.INBOX_LIMIT, "1"
@@ -182,6 +184,15 @@ with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.St
     rc = end_check.apply("remove", dict(CLEAN_FACTS, path=str(yml)), "card", {}, "term_me")
 assert rc == 3 and CALLS.read_text() == "", rc
 assert end_check.archive_hook(str(tmp / "nowhere")) is False
+# With an archive hook, --run-hooks goes after the --worktree value.
+hooked = tmp / "card-hooked"
+hooked.mkdir()
+(hooked / "orca.yaml").write_text("scripts:\n  archive: make down\n")
+CALLS.write_text("")
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    rc = end_check.apply("remove", dict(CLEAN_FACTS, path=str(hooked)), "card", {}, "term_me")
+calls = [json.loads(l) for l in CALLS.read_text().splitlines()]
+assert rc == 0 and calls == [["worktree", "rm", "--worktree", "current", "--run-hooks", "--json"]], calls
 
 # End to end on a throwaway repo: a dirty card keeps, and the verdict is the printed JSON. The git facts come from
 # the card's path Orca names, not from the directory it ran in.

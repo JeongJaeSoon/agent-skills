@@ -163,9 +163,10 @@ def waiting_questions(senders):
     except RuntimeError:
         return None
     msgs = res.get("messages")
-    if not isinstance(msgs, list) or not all(isinstance(m, dict) and "from_handle" in m for m in msgs):
-        print(f"[{ME}] warning: Orca's inbox has no messages list, or a row without from_handle; questions waiting "
-              "are unknown", file=sys.stderr)
+    if not isinstance(msgs, list) or not all(isinstance(m, dict) and {"id", "type", "from_handle"} <= m.keys()
+                                             for m in msgs):
+        print(f"[{ME}] warning: Orca's inbox has no messages list, or a row without id, type or from_handle; "
+              "questions waiting are unknown", file=sys.stderr)
         return None
     page = res.get("page")
     more = res.get("hasMore") or res.get("nextCursor") or (
@@ -307,8 +308,7 @@ def apply(verdict, f, mode, opts, me):
             except (RuntimeError, OSError) as e:
                 print(f"[{ME}] moving build caches to the trash failed: {e}", file=sys.stderr)
                 return 4
-        cmd = [ORCA, "worktree", "rm", "--worktree", "current", "--json"]
-        cmd[4:4] = ["--run-hooks"] if hooks else []
+        cmd = [ORCA, "worktree", "rm", "--worktree", "current", *(["--run-hooks"] if hooks else []), "--json"]
     elif verdict == "close-terminal":
         cmd = [ORCA, "terminal", "close", "--terminal", me, "--json"]
     elif verdict == "keep" and mode == "worker" and f.get("path"):
