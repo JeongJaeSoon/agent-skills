@@ -10,6 +10,27 @@ a = sys.argv[1:]
 with open(os.environ["FAKE_CARD_CALLS"], "a") as f:
     f.write(json.dumps({"bin": os.path.basename(sys.argv[0]), "argv": a, "stdin": sys.stdin.read() if "-" in a else None}) + "\n")
 mode = os.environ.get("FAKE_CARD_MODE", "")
+if a[:2] == ["repo", "show"]:
+    print(json.dumps({"ok": True, "result": {"repo": {"id": "repo1"}}})); sys.exit(0)
+if a[:2] == ["worktree", "current"]:
+    print(json.dumps({"ok": True, "result": {"worktree": {"repoId": "repo1", "path": "/wt/me"}}})); sys.exit(0)
+if a[:2] == ["worktree", "show"]:
+    print(json.dumps({"ok": True, "result": {"worktree": {"parentWorktreeId": "repo1::/wt/lead"}}})); sys.exit(0)
+if a[:2] == ["worktree", "ps"]:
+    if mode == "ps-down":
+        print("connect ECONNREFUSED", file=sys.stderr); sys.exit(1)
+    print(json.dumps({"ok": True, "result": {"worktrees": json.loads(os.environ.get("FAKE_CARD_PS", "[]"))}})); sys.exit(0)
+if a[:2] == ["terminal", "list"]:
+    print(json.dumps({"ok": True, "result": {"terminals": [{"handle": "term_old", "agentIdentity": "claude"}]}})); sys.exit(0)
+if a[:2] == ["terminal", "wait"]:
+    print(json.dumps({"ok": True, "result": {}})); sys.exit(0)
+if a[:2] == ["terminal", "show"] and a[a.index("--terminal") + 1] == "term_new":
+    print(json.dumps({"ok": True, "result": {"terminal": {"title": "✳ Claude"}}})); sys.exit(0)
+if a[:2] == ["terminal", "read"]:
+    rule = "─" * 20
+    taken = ["❯ /goal ABC-2. CLOSE: …", "", "⏺ Reading the ticket."] if mode != "trust" else []
+    box = ["Do you trust this folder?", "❯ 1. Yes, proceed"] if mode == "trust" else [rule, "❯ ", rule]
+    print(json.dumps({"ok": True, "result": {"terminal": {"tail": taken + box}}})); sys.exit(0)
 if a[:2] == ["worktree", "create"]:
     if mode == "parent-missing":
         print(json.dumps({"ok": False, "error": {"code": "LINEAGE_PARENT_NOT_FOUND", "message": "Parent selector was not found."}})); sys.exit(1)
@@ -82,6 +103,11 @@ pressure.active_turns = lambda run=None: 0  # the new-card turn cap would read t
 sys.path.insert(0, str(HERE))
 import card  # noqa: E402
 import sqlite3  # noqa: E402
+
+# The background close-setup would poll the fake orca after the test moved on: recorded instead.
+SETUPS = []
+REAL_START_CLOSE_SETUP = card.start_close_setup
+card.start_close_setup = lambda path, handle, name: SETUPS.append((path, handle, name)) or {"log": f"{name}.log"}
 
 ORCA_DATA = tmp / "orca-data"  # never the real Orca profile store
 os.environ["AGENT_SKILLS_ORCA_DATA_DIR"] = str(ORCA_DATA)
@@ -263,7 +289,8 @@ assert start[start.index("--timeout-ms") + 1] == "840000", start
 assert [c["argv"] for c in calls if c["argv"][:2] == ["reference", "add"]] == [["reference", "add", URL, "--worktree", f"path:{CARD_DIR}", "--json"]]
 assert not any(c["bin"] == "orch" for c in calls) and not any(c["argv"][:2] == ["worktree", "create"] for c in calls)
 assert json.loads(out)["card"] == {"kind": "worker", "path": str(CARD_DIR), "handle": "term_w", "run": {"id": "run_me"},
-                                   "parent": "id:repo1::/wt/me"}, out
+                                   "parent": "id:repo1::/wt/me", "forbidden": "inserted",
+                                   "close_setup": {"log": "abc-1.log"}}, out
 # A failed reference after the start is exit 5: the worker runs, so it is not started again.
 rc, out, err, calls = go(brief(SUPERVISED, "sup.md"), "--repo", "r", "--name", "abc-1", "--reference", URL, mode="ref-fails")
 assert rc == 5 and "Do not create it again" in err and json.loads(out)["card"]["kind"] == "worker", (rc, err)
@@ -385,5 +412,123 @@ assert rc == 2 and "term_abc" in err and not calls, (rc, err)
 rc, out, err, calls = go(brief(WORKER + "- 보고: orca orchestration send --to term_abc (실패하면 orch inbox)\n", "term2.md"), "--repo", "r", "--name", "x")
 assert rc == 2 and "term_abc" in err and "terminal_not_found" in err and not calls, (rc, err)
 assert card.report_to("REPORT  a digest to ~/r.md\n") == [] and card.report_to("PARENT: send --to run:x\n") == []
+
+# ---- FORBIDDEN: the template's paragraph replaces the marked section, never appended to.
+PARA = card.forbidden_paragraph()
+assert PARA[0].startswith("Do not start other tickets") and PARA[-1].endswith("run it again."), PARA[:1] + PARA[-1:]
+assert not any("<repository data-sharing" in l for l in PARA)
+SHARE = "            저장소 데이터 공유 제한: acme/app은 public이다."
+MARKED = (f"/goal x\n{CLOSE}\nFORBIDDEN   {card.BEGIN}\n            an old paragraph.\n            {card.END}\n"
+          f"{SHARE}\nREPORT      worker_done once.\n")
+text, how = card.place_forbidden(MARKED, PARA)
+assert how == "replaced" and "an old paragraph" not in text and SHARE in text and text.count(card.BEGIN) == 1, text
+assert text.index(card.END) < text.index(SHARE) < text.index("REPORT      worker_done"), text
+assert card.place_forbidden(text, PARA) == (text, "unchanged")  # a second start adds nothing
+# No markers, an old hand-made copy opening the row: replaced through its last sentence, the row's own lines kept.
+OLD = (f"/goal x\n{CLOSE}\nFORBIDDEN   Do not start other tickets. An older wording\n            that ends: fix the cause "
+       f"and run it again.\n{SHARE}\nREPORT      worker_done once.\n")
+text, how = card.place_forbidden(OLD, PARA)
+assert how == "inserted" and "An older wording" not in text and SHARE in text and text.count(card.BEGIN) == 1, text
+assert card.place_forbidden(text, PARA)[1] == "unchanged"
+# No markers and no copy: the section goes first in the row, the row's text kept after it.
+text, how = card.place_forbidden(f"/goal x\nFORBIDDEN   Other work only.\n{SHARE}\n", PARA)
+assert how == "inserted" and text.index(card.END) < text.index("Other work only.") < text.index(SHARE), text
+# No row: a new one before REPORT; a template quoted in a fence is not the brief's row.
+FENCED = f"/goal x\n```\nFORBIDDEN   quoted\n```\nREPORT      worker_done once.\n"
+text, how = card.place_forbidden(FENCED, PARA)
+assert how == "inserted" and "FORBIDDEN   quoted" in text and text.index(card.BEGIN) > text.rindex("```"), text
+assert text.index(card.BEGIN) < text.index("REPORT      worker_done"), text
+# The card writes it into the brief file; a lead's brief and --no-forbidden are left alone, the latter logged.
+path = brief(WORKER + MARKED.split(CLOSE + "\n", 1)[1], "forbid.md")
+rc, out, err, calls = go(path, "--repo", "r", "--name", "fb")
+assert rc == 0 and json.loads(out)["card"]["forbidden"] == "replaced", (rc, err)
+assert "an old paragraph" not in pathlib.Path(path).read_text() and SHARE in pathlib.Path(path).read_text()
+path = brief(WORKER, "noforbid.md")
+rc, out, err, calls = go(path, "--repo", "r", "--name", "nf", "--no-forbidden")
+assert rc == 0 and card.BEGIN not in pathlib.Path(path).read_text() and json.loads(out)["card"]["forbidden"].startswith("skipped")
+assert any(c["bin"] == "orch" and c["argv"][:4] == ["sent", "add", "--to", "nf"] and "--no-forbidden" in c["stdin"]
+           for c in calls), calls
+
+# ---- One card per (repo, reference, role).
+import sync  # noqa: E402
+SENDS = []
+sync.try_send = lambda h, t, *a, **k: SENDS.append((h, t)) or (True, None)
+REF = "https://example.test/ABC-9"
+LIVE = [{"path": "/wt/old", "repoId": "repo1", "displayName": "ABC-9 old", "linkedItems": [{"url": REF}]}]
+os.environ["FAKE_CARD_PS"] = json.dumps(LIVE)
+path = brief(WORKER, "dup.md")
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9", "--reference", REF)
+assert rc == 2 and "already live" in err and "/wt/old" in err and not creates(calls), (rc, err)
+# Another role on the same ticket is another key.
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9-review", "--reference", REF, "--role", "review")
+assert rc == 0 and creates(calls), (rc, err)
+assert json.loads(card.ledger().read_text().splitlines()[-1])["role"] == "review"
+# A card this ledger recorded as review blocks the next review card even without Orca's link.
+os.environ["FAKE_CARD_PS"] = json.dumps([{"path": str(CARD_DIR), "repoId": "repo1", "linkedItems": []}])
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9-review2", "--reference", REF, "--role", "review")
+assert rc == 2 and "role review" in err, (rc, err)
+os.environ["FAKE_CARD_PS"] = json.dumps(LIVE)
+# --supersede starts it, tells the old card to stop, logs and records that.
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9b", "--reference", REF, "--supersede")
+assert rc == 0 and creates(calls), (rc, err)
+assert SENDS and SENDS[-1][0] == "term_old" and SENDS[-1][1].startswith("superseded by abc-9b"), SENDS
+assert any(c["bin"] == "orch" and c["argv"][c["argv"].index("--kind") + 1] == "supersede" for c in calls if c["bin"] == "orch")
+assert card.ledger_rows()["/wt/old"]["superseded_by"] == str(CARD_DIR)
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9c", "--reference", REF)
+assert rc == 0, "a superseded card no longer holds the key"
+# A superseded worker is told through its Dispatch, never typed into (Orca would mark it taken over).
+card.ledger_add(repo="repo1", references=[REF], role="impl", path="/wt/worker", name="w", dispatch="ctx_old")
+os.environ["FAKE_CARD_PS"] = json.dumps([{"path": "/wt/worker", "repoId": "repo1", "linkedItems": []}])
+SENDS.clear()
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9w", "--reference", REF, "--supersede")
+told = [c["argv"] for c in calls if c["argv"][:2] == ["orchestration", "send"]]
+assert rc == 0 and not SENDS and told and told[0][told[0].index("--to") + 1] == "dispatch:ctx_old", (rc, err, told)
+os.environ["FAKE_CARD_PS"] = json.dumps(LIVE)
+# An unreadable card list warns and lets the card through.
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9d", "--reference", "https://example.test/ABC-10", mode="ps-down")
+assert rc == 0 and "duplicate-card check was skipped" in err, (rc, err)
+os.environ["FAKE_CARD_PS"] = "[]"
+
+# ---- close-setup: started for every card; a failure to start it is printed and never fails the card.
+SETUPS.clear()
+rc, out, err, calls = go(brief(WORKER, "cs.md"), "--repo", "r", "--name", "cs")
+assert rc == 0 and SETUPS == [(str(CARD_DIR), "term_new", "cs")], SETUPS
+card.start_close_setup = REAL_START_CLOSE_SETUP
+real_python = sys.executable
+sys.executable = str(tmp / "no-such-python")
+try:
+    rc, out, err, calls = go(brief(WORKER, "cs2.md"), "--repo", "r", "--name", "cs2")
+finally:
+    sys.executable = real_python
+    card.start_close_setup = lambda path, handle, name: SETUPS.append((path, handle, name)) or {"log": f"{name}.log"}
+assert rc == 0 and "error" in json.loads(out)["card"]["close_setup"] and "close-setup did not start" in err, (rc, err)
+
+# ---- handoff: the next ticket's card under this card's parent, its start read from the screen.
+def handoff(*argv, mode=""):
+    os.environ["FAKE_CARD_MODE"] = mode
+    CALLS.write_text("")
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = card.handoff(list(argv))
+    return rc, out.getvalue(), err.getvalue(), [json.loads(l) for l in CALLS.read_text().splitlines()]
+
+
+rc, out, err, calls = handoff("ABC-2", "--title", "next step", "--note", "stack on ABC-1.")
+assert rc == 0, (rc, err)
+make = creates(calls)[0]
+assert make[make.index("--name") + 1] == "abc-2" and make[make.index("--parent-worktree") + 1] == "id:repo1::/wt/lead"
+assert make[make.index("--prompt") + 1] == f"/goal ABC-2. stack on ABC-1.\n{CLOSE}", make
+assert ["worktree", "set", "--worktree", f"path:{CARD_DIR}", "--display-name", "ABC-2 next step", "--json"] in [c["argv"] for c in calls]
+assert json.loads(out)["card"]["start"].startswith("started"), out
+rc, out, err, calls = handoff("ABC-3", mode="trust")
+assert rc == 5 and "start is not confirmed (trust" in err and "Do not create it again" in err, (rc, err)
+# The ticket is the key: a second handoff of a ticket whose card is live stops.
+os.environ["FAKE_CARD_PS"] = json.dumps([{"path": "/wt/abc-2", "repoId": "repo1", "linkedItems": [{"id": "ABC-2"}]}])
+rc, out, err, calls = handoff("ABC-2")
+assert rc == 2 and "already live" in err and not creates(calls), (rc, err)
+os.environ["FAKE_CARD_PS"] = json.dumps([{"path": "/wt/abc-20", "repoId": "repo1", "linkedItems": [{"id": "ABC-20"}]}])
+rc, out, err, calls = handoff("ABC-2", "--name", "abc-2-again")
+assert rc == 0, "ABC-20's card is not ABC-2's"
+os.environ["FAKE_CARD_PS"] = "[]"
 
 print("ok")

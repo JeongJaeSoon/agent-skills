@@ -1,5 +1,5 @@
 """`sync.py` against throwaway git repos and a fake orca. Run: python3 scripts/test_sync.py"""
-import json, os, pathlib, shutil, subprocess, sys, tempfile
+import contextlib, io, json, os, pathlib, shutil, subprocess, sys, tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -322,7 +322,42 @@ def test_close_setup():
     shutil.rmtree(tmp)
 
 
+def test_close_setup_agent():
+    """close-setup --agent: a trust dialog, a permission dialog or no visible start fails it, out loud."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    fake = tmp / "orca"
+    fake.write_text(FAKE_ORCA); fake.chmod(0o755)
+    st = tmp / "orca.json"
+    started = IDLE[:1] + ["❯ /goal ABC-1. CLOSE: …", "⏺ Reading the ticket."] + IDLE[1:]
+    terms = {"trust": {"agentIdentity": "claude", "title": "✳ new", "screens": [TRUST]},
+             "perm": {"agentIdentity": "claude", "title": "✳ new", "screens": [PERMISSION]},
+             "empty": {"agentIdentity": "claude", "title": "✳ new", "screens": [IDLE[1:]]},
+             "busy": {"agentIdentity": "claude", "title": "✳ new", "screens": [BUSY]},
+             "took": {"agentIdentity": "claude", "title": "✳ new", "screens": [started]}}
+    st.write_text(json.dumps({"terms": terms, "sent": []}))
+    env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
+    old = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    import importlib
+    importlib.reload(sync)
+    try:
+        states = {h: sync.watch_start(h, 0.2)[0] for h in terms}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = sync.close_setup("/w/card", timeout_s=0.5, grace_s=0.2, agent="trust")
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        importlib.reload(sync)
+    check("start states read from the screen", states == {"trust": "trust", "perm": "dialog", "empty": "unconfirmed",
+                                                          "busy": "started", "took": "started"}, states)
+    check("a trust dialog fails close-setup and says so", code == 1 and "agent trust" in out.getvalue()
+          and out.getvalue().rstrip().endswith("result: failed"), out.getvalue())
+    shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
+    test_close_setup_agent()
     test_reload_kind()
     test_classify()
     test_confirm()

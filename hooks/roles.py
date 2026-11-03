@@ -43,6 +43,8 @@ MATRIX = {
     "wait_foreground": ({"main"}, {"orchestrator", "lead"}),
     "send_devnull": ({"main"}, {"orchestrator", "lead", "worker"}),
     "worker_only": ({"main"}, {"worker"}),
+    "exit_order": ({"main"}, {"worker"}),
+    "agent_forbidden": ({"main", "subagent"}, {"orchestrator", "lead", "worker"}),
 }
 
 
