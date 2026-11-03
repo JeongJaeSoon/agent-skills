@@ -877,13 +877,14 @@ def build_sessions(fast, runs, cfg, declared=()):
                   if coord_of_run.get(r["id"]) in sessions and role_of.get(coord_of_run[r["id"]]) != "lead"]
         root = next((c for c in coords if not dispatcher(c)), coords[0] if coords else None)
 
+    import orca_settings  # here, not at the top: the hooks that import fleet stay off sqlite3
     for sid, s in sessions.items():
         w = by_wt.get(sid, (None, False))[0]
         if w:
             t = tasks.get(w.get("taskId")) or {}
             s.update(run=w.get("runId"), dispatch=w.get("dispatchId"), dispatch_status=w.get("dispatchStatus"),
                      task=w.get("taskId"), task_title=task_name(t),
-                     dispatch_live=by_wt[sid][1], terminal=w.get("agentTerminalHandle"))
+                     dispatch_live=by_wt[sid][1], terminal=orca_settings.worker_terminal(w))
         if sid == root:
             s["kind"] = "orchestrator"
         elif sid in coord_of_run.values():

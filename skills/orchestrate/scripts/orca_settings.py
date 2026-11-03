@@ -103,6 +103,15 @@ def binding():
         return "unknown"
 
 
+def worker_terminal(row):
+    """The agent terminal handle of a worker row (worker-list, worker-show, worker-start): `agentTerminalHandle` on
+    older Orca, `terminal` from 1.4.246. Only a string counts: `orca terminal show` puts an object under `terminal`."""
+    for key in ("agentTerminalHandle", "terminal"):
+        if isinstance(h := (row or {}).get(key), str) and h:
+            return h
+    return None
+
+
 def own_dispatch(orca=None, failed=None):
     """This terminal's own active Dispatch when it is a dispatched worker (a lead started with worker-start, whose
     `run-current` is null), else None, or `failed` when worker-list did not answer. Unbound, worker-list spans every
@@ -116,7 +125,7 @@ def own_dispatch(orca=None, failed=None):
             if p.returncode:
                 return failed
             res = json.loads(p.stdout).get("result") or {}
-            mine = next((w for w in res.get("workers") or [] if w.get("agentTerminalHandle") == me), None)
+            mine = next((w for w in res.get("workers") or [] if worker_terminal(w) == me), None)
             page = res.get("page") or {}
         except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError, TypeError):
             return failed
