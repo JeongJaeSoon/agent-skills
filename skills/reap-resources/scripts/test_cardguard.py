@@ -113,6 +113,17 @@ rows = [{"type": "assistant", "timestamp": "2026-01-01T00:00:00Z",
 (d / "s.jsonl").write_text("{}\n" + "\n".join(json.dumps(r) for r in rows) + "\n")
 motion, _ = cardguard.transcript_tail("/w/parked")
 assert motion and motion["state"] == "idle" and motion["parked"], motion
+# Reloads after an API error: the error stays the row it ended on, and the reloads are a repeat, not work.
+d2 = projects / "-w-reloaded"
+d2.mkdir(parents=True)
+tail = (pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "testdata" / "reload-tail.jsonl").read_text()
+err = {"type": "assistant", "isApiErrorMessage": True, "timestamp": "2026-11-03T10:06:00.000Z",
+       "message": {"content": [{"type": "text", "text": "API Error: 500"}]}}
+lines = tail.splitlines()
+(d2 / "s9.jsonl").write_text("{}\n" + "\n".join(lines[:3] + [json.dumps(err)] + lines[3:]) + "\n")
+motion, last = cardguard.transcript_tail("/w/reloaded")
+assert last == err, last
+assert motion["since"] == err["timestamp"] and motion["repeat"]["kind"] == "reload" and motion["repeat"]["session"] == "s9", motion
 assert cardguard.transcript_tail("/w/none", strict=True) == (None, None), "no transcript is not a failure"
 assert cardguard.parked("/w/none") is False
 (d / "s.jsonl").chmod(0)
