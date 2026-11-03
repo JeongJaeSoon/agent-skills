@@ -212,9 +212,21 @@ ITEM = {"kind": "tmpdir", "key": "tmpdir:/x", "name": str(tmp / "x"), "target": 
 acted = []
 saved_scan, saved_act, saved_record = reap.scan, reap.act, reap.record_reap
 reap.scan = lambda kinds, hours, cfg, repos: ([dict(ITEM)], [])
-reap.act = lambda i, notes: (acted.append(i["key"]), "휴지통")[1]
+reap.act = lambda i, notes, done=None: (acted.append(i["key"]), "휴지통")[1]
 reap.record_reap = lambda *a: None
 assert "휴지통" in reap_plan([ITEM], []) and acted == ["tmpdir:/x"]
+logged = [json.loads(l) for l in (STATE / "reap-actions.jsonl").read_text().splitlines()]
+assert [(r["key"], r["ok"]) for r in logged] == [("tmpdir:/x", True)]  # what `sweep diff` matches against
+reap.act = lambda i, notes, done=None: (_ for _ in ()).throw(ValueError("unexpected"))
+try:
+    reap_plan([ITEM], [])
+    raise AssertionError("an unexpected error was swallowed")
+except ValueError:
+    pass
+last = json.loads((STATE / "reap-actions.jsonl").read_text().splitlines()[-1])
+assert (last["key"], last["ok"]) == ("tmpdir:/x", False), last  # logged before it went up
+(STATE / "reap-actions.jsonl").write_text("\n".join(json.dumps(r) for r in logged) + "\n")
+reap.act = lambda i, notes, done=None: (acted.append(i["key"]), "휴지통")[1]
 with other_process_holds("other", "tmpdir:/x"):
     out = reap_plan([ITEM], [])
 assert "대상 잠금" in out and acted == ["tmpdir:/x"], out
@@ -265,23 +277,61 @@ def cards_apply(items):
 
 
 ROW = {"path": CARD, "name": "card", "verdict": cards.CLOSE, "close": ["t1"], "head": "h"}
-done = []
+done_paths = []
 saved_cact = cards.act
-cards.act = lambda item, cfg: (done.append(item["path"]), "터미널 1개 닫음")[1]
+cards.act = lambda item, cfg, done=None: (done_paths.append(item["path"]), "터미널 1개 닫음")[1]
 out, code = cards_apply([ROW])
-assert code == 0 and done == [CARD], out
+assert code == 0 and done_paths == [CARD], out
+logged = [json.loads(l) for l in (STATE / "reap-actions.jsonl").read_text().splitlines()]
+assert (logged[-1]["key"], logged[-1]["ok"]) == (f"card:{CARD}", True), logged[-1]
 with other_process_holds("card", CARD):
     out, code = cards_apply([ROW])
-assert "대상 잠금" in out and done == [CARD], out
+assert "대상 잠금" in out and done_paths == [CARD], out
 OWN.write_text(json.dumps({"generation": 3, "rules": {"card:close-idle": "sweep"}}))
 LAST.write_text(json.dumps({"t": time.time()}))
 out, code = cards_apply([ROW])
-assert "sweep 소유" in out and done == [CARD], out
+assert "sweep 소유" in out and done_paths == [CARD], out
 OWN.write_text("not json")
 out, code = cards_apply([ROW])
-assert code and done == [CARD], (out, code)
+assert code and done_paths == [CARD], (out, code)
 OWN.unlink()
+
+
+def act_then_fails(item, cfg, done=None):
+    done["closed"] = ["t1"]  # a terminal closed, then a read failed in a way no handler names
+    raise ValueError("bad JSON from gh")
+
+
+cards.act = act_then_fails
+try:
+    cards_apply([ROW])
+    raise AssertionError("an unexpected error was swallowed")
+except ValueError:
+    pass
+last = json.loads((STATE / "reap-actions.jsonl").read_text().splitlines()[-1])
+assert (last["ok"], last["handles"]) == (False, ["t1"]), last  # the close it did is still on record
 cards.act = saved_cact
+
+# cards.act tells its caller which terminals it really closed: the plan's, less those already gone.
+import cardguard  # noqa: E402
+saved_reread, saved_run2, saved_cg = cards.reread, reap.run, cardguard.guard
+cardguard.guard = lambda *a, **k: (True, "확인함")
+cards.reread = lambda path, cfg: (cards.CLOSE, "w", ["B"], {"head": "h"})
+reap.run = lambda cmd, **k: ""
+done = {}
+assert cards.act({"path": CARD, "verdict": cards.CLOSE, "head": "h", "close": ["A", "B"]}, {}, done=done) == \
+    "터미널 1개 닫음, worktree 는 남김" and done["closed"] == ["B"]
+# A card folder made again since the plan (another inode) is left; the one acted on is the one logged.
+INO_CARD = str(tmp / "ino-card")
+os.makedirs(INO_CARD)
+ino = os.stat(INO_CARD).st_ino
+done = {}
+assert cards.act({"path": INO_CARD, "verdict": cards.CLOSE, "head": "h", "close": ["B"], "ino": ino + 1}, {}, done=done) == \
+    "건너뜀: 판정 뒤 카드 폴더가 다시 만들어짐" and done["closed"] == []
+done = {}
+cards.act({"path": INO_CARD, "verdict": cards.CLOSE, "head": "h", "close": ["B"], "ino": ino}, {}, done=done)
+assert done == {"closed": ["B"], "identity": {"ino": ino}}, done
+cards.reread, reap.run, cardguard.guard = saved_reread, saved_run2, saved_cg
 
 # ---------------------------------------------------------------- reap-hard acts on what it judged, and only that
 
@@ -297,7 +347,9 @@ STACK = {"running": 0, "stopped": 1, "first": NOW - 9e4, "last": NOW - 9e4, "por
 stacks = {"s1": dict(STACK)}
 saved_cs = reap.compose_stacks
 reap.compose_stacks = lambda: stacks
-assert rh.act({"kind": "stack", "id": "s1"}, {}, PROTECT).startswith("docker compose down")
+done = {}
+assert rh.act({"kind": "stack", "id": "s1"}, {}, PROTECT, done).startswith("docker compose down")
+assert done == {"identity": {"start": str(STACK["last"])}}  # the stack read again, the one really brought down
 assert downs == [["docker", "compose", "-p", "s1", "down"]]
 (tmp / "gone").mkdir()  # the folder came back since the scan
 assert rh.act({"kind": "stack", "id": "s1"}, {}, PROTECT).startswith("건너뜀: 다시 보니") and len(downs) == 1
@@ -336,7 +388,7 @@ rh.scan_cards = lambda *a, **k: ([{"kind": "card", "id": CARD, "target": True, "
                                    "handles": ["t1"]}], [], {})
 rh.scan_rest = lambda *a, **k: ([], [], set())
 hard_acts = []
-rh.act = lambda item, cfg, protect: (hard_acts.append(item["id"]), "터미널 닫음")[1]
+rh.act = lambda item, cfg, protect, done=None: (hard_acts.append(item["id"]), "터미널 닫음")[1]
 with other_process_holds("card", CARD):
     res, code = rh.run_pass(False, cfg, now=NOW)
 assert hard_acts == [] and "대상 잠금" in res["items"][0]["result"], res
@@ -350,6 +402,23 @@ assert hard_acts == [] and code and "error" in res, res
 OWN.unlink()
 res, code = rh.run_pass(False, cfg, now=NOW)
 assert hard_acts == [CARD] and code == 0, res
+
+
+def closes_then_breaks(item, cfg, protect, done=None):
+    done["closed"] = ["t1"]
+    raise KeyError("facts")
+
+
+# An error no handler names ends the pass, but the row of what it closed first is logged, with the handles.
+rh.act = closes_then_breaks
+rh.LOG.unlink(missing_ok=True)
+try:
+    rh.run_pass(False, cfg, now=NOW)
+    raise AssertionError("the KeyError was swallowed")
+except KeyError:
+    pass
+row = json.loads(rh.LOG.read_text().splitlines()[-1])
+assert row["id"] == CARD and row["handles"] == ["t1"] and row["error"].startswith("KeyError") and "t" in row, row
 
 # ---------------------------------------------------------------- preview-watch leaves a port reap-hard holds
 

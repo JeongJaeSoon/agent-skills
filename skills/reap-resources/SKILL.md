@@ -220,6 +220,13 @@ bin/reap-hard install            # from the main checkout; `status`, `uninstall`
   is three intervals old; an unreadable file stops the round); and guards that only keep (the protect file, the same
   process). A card's lock is `cardguard.card_lock`'s, and its guards are `cardguard.guard`'s, which also keep a card
   patrol's `activity` marks parked or unknown.
+- `scripts/sweep.py` is the v2 cleaner, in its shadow stage: after each reap-hard pass it reads the newest complete
+  patrol round's `candidates` and records in `<state>/sweep-shadow.jsonl` what it would do after the same checks
+  (sources, guards, `sweep.max_per_round`; it takes no target lock). It closes and deletes nothing; `run` without
+  `--shadow` refuses.
+  `python3 scripts/sweep.py diff --hours 48` compares that with what reap-hard (`reap-hard.jsonl`) and
+  `reap --plan` / `cards.py apply` (`reap-actions.jsonl`) really did: every round's plan should be met by an old
+  cleaner's act of the same effect on the same target within its rule's lag, and `넘침` (excess) should be 0.
 - The rules and settings: [docs/reap-hard.md](../../docs/reap-hard.md).
 
 No cleanup path (orphan, pressure, gui-app, reap-hard) ever stops a process a person started: walking up from it,

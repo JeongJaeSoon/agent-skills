@@ -328,7 +328,8 @@ def scan_cards(cfg, protect, now):
                 ok, why = False, "순찰 판정: 작업 중(orch patrol)"
             item = {"kind": "card", "id": reap.real(w["path"]), "target": ok, "why": why}
             if ok:
-                item.update(head=facts["head"], regenerated=facts.get("regenerated") or [], handles=facts["handles"])
+                item.update(head=facts["head"], regenerated=facts.get("regenerated") or [], handles=facts["handles"],
+                            ino=reap.dir_ino(item["id"]))
             items.append(item)
     return items, notes, m
 
@@ -349,7 +350,8 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
     downing = set()
     for name, st in sorted((stacks or {}).items()):
         ok, why = (False, unread) if unread else judge_stack(name, st, stack_gone(closed), protect, keep)
-        items.append({"kind": "stack", "id": name, "target": ok, "why": why})
+        # start: as the janitor's compose-stack item names the same stack, for `sweep diff`
+        items.append({"kind": "stack", "id": name, "target": ok, "why": why, "start": str(st.get("last"))})
         if ok:
             downing |= st["ports"]
 
@@ -405,7 +407,7 @@ def stack_gone(closed):
 
 # ---------------------------------------------------------------- acting
 
-def act_card(item, cfg, protect):
+def act_card(item, cfg, protect, done):
     """Close one card under its lock. Everything is judged again here: a PR reopened, a session resumed or a person's
     command since the scan keeps the card; then guard() and only the terminals seen at the scan are closed."""
     p = item["id"]
@@ -418,28 +420,36 @@ def act_card(item, cfg, protect):
         return f"건너뜀: 다시 보니 {why}"
     if facts.get("head") != item["head"]:
         return "건너뜀: 판정 뒤 HEAD 가 바뀜"
+    ino = reap.dir_ino(p)
+    if item.get("ino") is not None and ino != item["ino"]:
+        return "건너뜀: 판정 뒤 카드 폴더가 다시 만들어짐"
+    done["identity"] = {"head": item["head"], "ino": ino} if ino is not None else {"head": item["head"]}
     handles = item.get("handles")
     if handles is None:  # a plan written before handles were recorded
         return "건너뜀: 판정 때 본 터미널 목록이 계획에 없음"
-    ok, why = cardguard.guard(p, item["head"], handles)
+    ok, why = cardguard.guard(p, item["head"], handles, ino=ino)
     if not ok:
         return f"건너뜀: {why}"
+    done["closed"] = []
     for h in handles:
         reap.run(["orca", "terminal", "close", "--terminal", h, "--json"])
-    ok, why = cardguard.guard(p, item["head"], handles, final=True)
+        done["closed"].append(h)
+    ok, why = cardguard.guard(p, item["head"], handles, final=True, ino=ino)
     if not ok:
         return f"터미널 {len(handles)}개 닫음, 삭제는 건너뜀: {why}"
     return f"터미널 {len(handles)}개 닫음, " + reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{p}", "name": p,
                                                         "regenerated": facts.get("regenerated")}, [])
 
 
-def act(item, cfg, protect):
+def act(item, cfg, protect, done=None):
     """Act on one target the pass judged, inside its lock, after the shared guards (run_pass): judged again here
-    first, and left when anything changed."""
+    first, and left when anything changed. done, when given, gets the terminal handles really closed ("closed") and
+    the identity of the stack really brought down."""
+    done = {} if done is None else done
     k = item["kind"]
     if k == "card":
         with cardguard.card_lock(item["id"]) as mine:
-            return act_card(item, cfg, protect) if mine else "건너뜀: 다른 정리가 이 카드를 처리 중"
+            return act_card(item, cfg, protect, done) if mine else "건너뜀: 다른 정리가 이 카드를 처리 중"
     if k == "stack":
         # Judged again with the same rule: a working folder made again, or the stack now protected, keeps it.
         st = (reap.compose_stacks() or {}).get(item["id"])
@@ -449,6 +459,7 @@ def act(item, cfg, protect):
         ok, why = judge_stack(item["id"], st, stack_gone(()), protect, always_on())
         if not ok:
             return f"건너뜀: 다시 보니 {why}"
+        done["identity"] = {"start": str(st.get("last"))}  # the stack really brought down, read again just now
         reap.run(["docker", "compose", "-p", item["id"], "down"])  # no -v: volumes are data
         return "docker compose down(볼륨·이미지 유지)"
     if k == "listener":
@@ -516,7 +527,8 @@ def run_pass(dry, cfg=None, now=None):
         for i in batch:
             if not i["target"]:
                 continue
-            row = {"ts": stamp, "run": run_id, "dry_run": dry, "kind": i["kind"], "id": i["id"], "why": i["why"]}
+            row = {"ts": stamp, "run": run_id, "dry_run": dry, "kind": i["kind"], "id": i["id"], "why": i["why"],
+                   "identity": reap.act_identity(i)}
             if dry:
                 row["result"] = "dry-run"
             else:
@@ -525,22 +537,35 @@ def run_pass(dry, cfg=None, now=None):
                     if why:
                         row["result"] = f"건너뜀: {why}"
                     else:
+                        done = {}
                         try:
-                            row["result"] = act(i, cfg, protect)
+                            row["result"] = act(i, cfg, protect, done)
                         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
                             row["error"] = str(e)[:300]
+                        except BaseException as e:  # recorded with what it closed first, then let go up
+                            row["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+                            rows.append(row)
+                            raise
+                        finally:
+                            row["t"] = time.time()  # when the act ended; ts is the pass's start
+                            if done.get("closed"):
+                                row["handles"] = done["closed"]
+                            if done.get("identity"):
+                                row["identity"] = done["identity"]
             i["result"] = row.get("result") or "실패: " + row.get("error", "")
             rows.append(row)
 
-    items, notes, m = scan_cards(cfg, protect, now)
-    do(items)
-    # Only a card that is really gone frees its stack and dev servers; a skipped or failed close keeps them.
-    closed = [i["id"] for i in items if i["target"] and (dry or (not i["result"].startswith(("건너뜀", "실패"))
-                                                                 and not os.path.isdir(i["id"])))]
-    rest, more, dark = scan_rest(cfg, protect, set(last.get("dark") or ()), closed, m, now)
-    do(rest)
-    items, notes = items + rest, notes + more
-    log(rows)
+    try:  # whatever ends the pass early, the rows of what it did are logged
+        items, notes, m = scan_cards(cfg, protect, now)
+        do(items)
+        # Only a card that is really gone frees its stack and dev servers; a skipped or failed close keeps them.
+        closed = [i["id"] for i in items if i["target"] and (dry or (not i["result"].startswith(("건너뜀", "실패"))
+                                                                     and not os.path.isdir(i["id"])))]
+        rest, more, dark = scan_rest(cfg, protect, set(last.get("dark") or ()), closed, m, now)
+        do(rest)
+        items, notes = items + rest, notes + more
+    finally:
+        log(rows)
     summary = {"t": now, "at": stamp, "run": run_id, "dry_run": dry,
                "acted": sum(1 for r in rows if "result" in r and not r["result"].startswith("건너뜀")),
                "skipped": sum(1 for r in rows if r.get("result", "").startswith("건너뜀")), "failed": sum(1 for r in rows if "error" in r),
@@ -641,6 +666,7 @@ def main(argv):
         if "--dry-run" not in argv and "--no-patrol" not in argv:
             # Patrol keeps this beat: it runs itself every other pass (--if-due), apart, so a slow round never holds this one.
             reap.spawn_patrol("reap-hard")
+            reap.spawn_sweep_shadow("reap-hard")  # shadow stage: records what the v2 cleaner would do, does nothing
         if "--json" in argv:
             print(json.dumps(res, ensure_ascii=False, indent=1))
         else:

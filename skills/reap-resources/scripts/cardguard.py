@@ -151,7 +151,8 @@ def observe(path):
             return None
     kept = reap.patrol_read(activity=True)
     f = {"patrol": None if kept is None else path in kept,
-         "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None)}
+         "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None),
+         "ino": reap.dir_ino(path)}
     res = reap.orca_json("terminal", "list", "--worktree", f"path:{path}")
     f["terminals"] = res["terminals"] if isinstance(res, dict) and not res.get("truncated") \
         and isinstance(res.get("terminals"), list) else None
@@ -169,7 +170,7 @@ def observe(path):
 QUESTION = [re.compile(p) for p in QUESTION_PATTERNS]
 
 
-def check(f, head, handles, final=False):
+def check(f, head, handles, final=False, ino=None):
     """(ok, why) for closing what was judged at HEAD head with its terminals handles, from observe()'s facts. final:
     after those terminals were closed, before `worktree rm`: their sessions are gone, so only patrol, HEAD and new
     terminals are looked at."""
@@ -181,6 +182,8 @@ def check(f, head, handles, final=False):
         return False, "HEAD 를 읽지 못함"
     if f["head"] != head:
         return False, "판정 뒤 HEAD 가 바뀜"
+    if ino is not None and f.get("ino") != ino:  # the same path and HEAD, but a folder made again since
+        return False, "판정 뒤 카드 폴더가 다시 만들어짐"
     if f.get("terminals") is None:
         return False, "터미널 목록을 읽지 못함"
     if (new := [t.get("handle") for t in f["terminals"] if t.get("handle") not in handles]):
@@ -205,9 +208,9 @@ def check(f, head, handles, final=False):
     return True, "확인함"
 
 
-def guard(path, head, handles, final=False):
-    """check() over facts observe() reads now."""
-    return check(observe(path), head, set(handles), final)
+def guard(path, head, handles, final=False, ino=None):
+    """check() over facts observe() reads now. ino: the card folder's inode the caller acts on, when it knows it."""
+    return check(observe(path), head, set(handles), final, ino)
 
 
 def card_lock(path):
