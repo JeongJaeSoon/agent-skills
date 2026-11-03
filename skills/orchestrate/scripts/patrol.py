@@ -27,8 +27,11 @@ Patrol records and shows; it never types into a terminal, closes one, stops a wo
 go to <state>/patrol.jsonl with detected_at, are cleared there when a later round no longer sees them, and are acked
 by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` show the unacked ones routed to them
 (the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
-Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json, which reap-hard and the pressure
-round read only to keep a card judged working; no verdict makes anything a target.
+Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
+(run, waiting, working, idle, exited), `hints` what a finding said of it (superseded, pr_open_no_session, idle,
+exited), and `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
+`cards`. reap-hard, the pressure round and the janitor read `cards` only to keep a card judged working; no verdict
+makes anything a target, and a card missing from it, in a failed round above all, is not evidence it is safe.
 
 --if-due runs only when the last round is 25+ minutes old or the pressure level rose to warn or danger since it
 (reap-hard calls this every pass, the pressure round when its level changes). The round gives up at 120 seconds.
@@ -61,6 +64,7 @@ NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
          "L": "load", "W": "watcher down"}
 VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session"}
+ACTIVE = ("run", "waiting", "working")  # what a card's activity verdict keeps; reap.PATROL_KEEP reads the same three
 # An error a tool or the CLI printed, at the start of a line once Claude Code's marks are gone.
 ERROR_LINE = re.compile(r"^(?:Error\b|error(?:\[\w+\])?:|ERROR\b|FAILED\b|FAIL\b|Traceback\b|fatal:|panic:|"
                         r"API Error\b|.*\b(?:Permission denied|command not found|Exit code [1-9]\d*)\b)")
@@ -225,7 +229,7 @@ def gather(now, deadline, memo):
             return default
 
     facts["terminals"] = take("orca terminal list", lambda: prog.orca_json("terminal", "list")["terminals"], [], "terminals")
-    facts["waits"] = take("orca worktree ps --agent-wait", prog.agent_waits, {})
+    facts["waits"] = take("orca worktree ps --agent-wait", lambda: prog.agent_waits(strict=True), {}, "waits")
     facts["workers"] = take("orca worker-list", lambda: all_workers(deadline), [], "workers")
     st = fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
     at = fleet.parse(st.get("generated_at")) if st.get("generated_at") else None
@@ -285,14 +289,15 @@ def owners(sessions):
 
 def judge(facts, memo):
     """(findings, verdicts, memo). A finding: {id, code, card, path, handle, session, owner, title}. memo carries
-    what one round cannot see alone: first sightings (O, D), error-line history (E), output marks."""
+    what one round cannot see alone: first sightings (O, D), error-line history (E), output marks. verdicts["cards"]
+    is activity and verdicts["hints"] what findings said; a finding lands in hints, never over an ACTIVE card."""
     now = facts["now"]
     tnow = dt.datetime.fromtimestamp(now, dt.timezone.utc)
     terms = facts["terminals"]
     agents = [t for t in terms if t.get("agentIdentity") and t.get("connected", True)]
     agent_paths = {t.get("worktreePath") for t in agents}
     own = owners(facts["sessions"])
-    run_paths, findings, verdicts = set(), [], {}
+    run_paths, findings, verdicts, hints = set(), [], {}, {}
     failed = facts.get("failed") or set()
     fresh = facts.get("fresh", set(facts["screens"]))
     # An output mark moves only past a screen this round read; one skipped by the budget or a failed read is read next.
@@ -306,7 +311,11 @@ def judge(facts, memo):
         findings.append({"id": fid(code, path or handle, *key), "code": code, "card": card_name(path) or handle,
                          "path": path, "handle": handle, "session": session or sid, "owner": owner, "title": title})
         if code in VERDICT_OF and path:
-            verdicts[path] = VERDICT_OF[code]
+            hints[path] = VERDICT_OF[code]
+
+    def activity(path, v):
+        if verdicts.get(path) not in ACTIVE:
+            verdicts[path] = v
 
     def first_seen(key):
         at = (memo.get("first_seen") or {}).get(key, now)
@@ -324,7 +333,7 @@ def judge(facts, memo):
             if (pj.get("liveness") or {}).get("verdict") == "exited":
                 add("X", path, (w.get("dispatchId"),), f"worker {w.get('dispatchId')} exited with its task in progress: "
                     f"worker-read --source transcript, then worker-stop or worker-abandon on positive evidence only",
-                    w.get("agentTerminalHandle"))
+                    w.get("agentTerminalHandle"))  # its card stays "run": the lead decides, not a cleaner
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             continue
@@ -333,15 +342,18 @@ def judge(facts, memo):
             err = error_end(last)
             if err and last.get("timestamp", "") >= fleet.iso(tnow - dt.timedelta(days=1)):
                 add("X", path, (last.get("timestamp"),), f"its session ended on an error and nothing came after: {err}")
+                activity(path, "exited")
             continue
         wait = facts["waits"].get(handle)
         if isinstance(wait, dict):
             verdicts[path] = "waiting"
             continue
-        if motion and motion.get("state") == "idle" and not motion.get("parked"):
+        # Without Orca's wait list a prompt for a human cannot be ruled out: such a card stays working.
+        if motion and motion.get("state") == "idle" and not motion.get("parked") and "waits" not in failed:
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
                 add("I", path, (motion["since"],), f"turn ended {int(mins)} min ago, nothing armed to wake it", handle)
+                activity(path, "idle")
                 continue
         verdicts.setdefault(path, "working")
     # S: what a coordinator logged as superseded and still has an agent.
@@ -353,7 +365,6 @@ def judge(facts, memo):
         if hit:
             add("S", hit.get("worktreePath"), (r["ts"],), f"superseded {int((tnow - at).total_seconds() // 60)} min ago "
                 f"and still open: close its terminal (SKILL.md, superseded cards)", hit["handle"])
-            verdicts[hit.get("worktreePath")] = "superseded"
     # O: a card with no agent and an open PR nobody waits on, for a day.
     for s in facts["sessions"]:
         pr = (s.get("linked_pr") or {}).get("key")
@@ -397,7 +408,7 @@ def judge(facts, memo):
     # L: at warn or danger, a top consumer held by a card that is not working.
     load = []
     for c in facts["consumers"]:
-        v = verdicts.get(c.get("card")) or ("no card" if not c.get("card") else "working")
+        v = hints.get(c.get("card")) or verdicts.get(c.get("card")) or ("no card" if not c.get("card") else "working")
         load.append({**c, "verdict": v})
         if v in VERDICT_OF.values():
             add("L", c["card"], (c["what"], facts["level"]), f"PC {facts['level']}: {c['what']} "
@@ -415,7 +426,8 @@ def judge(facts, memo):
             add("W", None, (int(last[0]) if last else 0,), "orch watch-cards " + (
                 f"last finished a round {int((now - last[0]) // 60)} min ago" if last else "never ran here")
                 + ": the orchestrator restarts it (run_in_background, no pipe)", h)
-    return findings, {"cards": verdicts, "doing_noref": doing_noref, "load": load}, new_memo
+    return findings, {"cards": verdicts, "hints": hints, "failed": sorted(failed), "doing_noref": doing_noref,
+                      "load": load}, new_memo
 
 
 # ---------------------------------------------------------------- the log
@@ -460,7 +472,7 @@ def sync_needs_you(rows=None):
 
 
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
-DEPENDS = {"I": {"terminals", "workers"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
+DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers"},
            "W": {"state"}}
 

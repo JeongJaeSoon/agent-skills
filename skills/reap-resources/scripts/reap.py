@@ -515,7 +515,8 @@ PATROL_KEEP = ("working", "waiting", "run")  # a session moving, at a prompt for
 
 def patrol_working(now=None):
     """Card paths `orch patrol` judged working (PATROL_KEEP) in a round under an hour old. Read only to keep a card: a patrol
-    verdict never makes anything a target."""
+    verdict never makes anything a target, and a path missing here (a round with `failed` sources above all) is not
+    evidence the card is safe to close."""
     try:
         v = json.loads((STATE / "patrol-verdicts.json").read_text())
         if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
