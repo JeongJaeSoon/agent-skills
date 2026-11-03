@@ -141,6 +141,11 @@ with state("gate") as sd:
         raise AssertionError("opened without 4a-decisions")
     except store.NotMigrated as e:
         assert "4a-decisions" in str(e), e
+    try:  # an export from it would be an empty decisions.json that old code takes as the whole record
+        store.export_legacy(tmp / "gate-export", "pre-4a")
+        raise AssertionError("exported without 4a-decisions")
+    except store.NotMigrated:
+        assert not (tmp / "gate-export").exists()
     try:
         store.import_apply(checks=False)
         raise AssertionError("imported into an unknown DB")
@@ -232,11 +237,36 @@ with state("guard") as sd:
     (sd / "inbox-external.jsonl").write_text(json.dumps({"v": 1, "op": "add", "key": "k1", "type": "question",
                                                          "title": "x", "at": fleet.iso(fleet.utcnow())}) + "\n")
     tidy.write(["ext:k1"], can={"ext:k1": "x"})
+    snap = {p: p.read_bytes() for p in sd.iterdir() if p.is_file() and not p.name.startswith(store.DB_NAME)}
+    # A writer already waiting on its lock while 4b records its row under that lock still stops: the guard runs
+    # after the lock is taken.
+    import fcntl, time  # noqa: E401
+    held = [(sd / "board.lock").open("a"), (sd / "tidy.lock").open("a")]
+    for f in held:
+        fcntl.flock(f, fcntl.LOCK_EX)
+    stopped = []
+
+    def waiting(write):
+        try:
+            write()
+        except store.LegacyStopped:
+            stopped.append(True)
+    waiters = [threading.Thread(target=waiting, args=(w,)) for w in (
+        lambda: board.change(lambda b: b["todo"].append({"title": "raced 4b"})),
+        lambda: tidy.write(["ext:k1"], undo=True))]
+    for t in waiters:
+        t.start()
+    time.sleep(0.5)
     db = raw()
     db.execute("INSERT INTO migration VALUES ('4b-board', 't', 'b', '{}', 'imported')")
     db.commit()
     db.close()
-    snap = {p: p.read_bytes() for p in sd.iterdir() if p.is_file()}
+    for f in held:
+        f.close()
+    for t in waiters:
+        t.join(10)
+    assert stopped == [True, True], stopped
+    assert {p: p.read_bytes() for p in sd.iterdir() if p.is_file() and not p.name.startswith(store.DB_NAME)} == snap
     for write in (lambda: board.change(lambda b: b["todo"].append({"title": "after 4b"})),
                   lambda: tidy.write(["ext:k1"], undo=True),           # a Reopen would add the inbox item again
                   lambda: tidy.append([{"ev": "done", "id": "x"}], {})):
@@ -245,7 +275,7 @@ with state("guard") as sd:
             raise AssertionError("an old write went through")
         except store.LegacyStopped:
             pass
-    assert {p: p.read_bytes() for p in sd.iterdir() if p.is_file()} == snap  # board, tidy and inbox lines untouched
+    assert {p: p.read_bytes() for p in sd.iterdir() if p.is_file() and not p.name.startswith(store.DB_NAME)} == snap  # board, tidy and inbox lines untouched
     # A decision write still works: 4a's own table is not the board.
     assert fleet.decision_add("still fine")["id"] == "d1"
 
@@ -324,6 +354,34 @@ procs = {
 procs = {k: (v[0], " ".join(v[1].split()), v[2]) for k, v in procs.items()}
 why = store.check_processes(procs, since)
 assert len(why) == 2 and "pid 101" in why[0] and "pid 103" in why[1] and "outside this checkout" in why[1], why
+# A relative path or -m module resolves against the process's own directory; an unreadable one refuses.
+rel = {201: (1, "Wed Nov 4 09:00:00 2026", "python3 prog.py wait"),
+       202: (1, "Wed Nov 4 09:00:00 2026", "python3 -m prog wait"),
+       203: (1, "Wed Nov 4 09:00:00 2026", "python3 hooks/decision.py"),
+       204: (1, "Wed Nov 4 09:00:00 2026", "python3 dash.py serve"),
+       205: (1, "Wed Nov 4 11:00:00 2026", "python3 prog.py wait")}
+cwds = {201: repo / store.SCRIPTS, 202: repo / store.SCRIPTS, 203: repo, 204: None, 205: repo / store.SCRIPTS}
+real_cwd, store._cwd = store._cwd, cwds.get
+try:
+    why = store.check_processes(rel, since)
+finally:
+    store._cwd = real_cwd
+assert [w.split()[1] for w in why] == ["201", "202", "203", "204"] and "cannot be read" in why[3], why
+# A ps that fails with no output lists nothing, not even this process: that refuses instead of passing every check.
+real_ps, fleet.ps_table = fleet.ps_table, lambda: {}
+try:
+    assert any("ps did not list this process" in w for w in store.preflight()), store.preflight()
+finally:
+    fleet.ps_table = real_ps
+# crontab is read on every platform, and a line that runs a script directly counts.
+real_sh = store._sh
+store._sh = lambda cmd: subprocess.CompletedProcess(cmd, 0 if cmd[0] == "crontab" else 1, "* * * * * python3 /x/agent-skills/"
+                                                    "skills/orchestrate/scripts/dash.py tick\n# orch-dash old\n", "")
+try:
+    assert [w for w in store.check_launchers() if "crontab" in w] == [
+        "crontab line still active: * * * * * python3 /x/agent-skills/skills/orchestrate/scripts/dash.py tick"]
+finally:
+    store._sh = real_sh
 real_live = fleet.live_sessions
 fleet.live_sessions = lambda p: {"s-old": {"pids": [102, 101], "cwd": "/w/a", "home": "/h"},
                                  "s-new": {"pids": [102], "cwd": "/w/b", "home": "/h2"}}
@@ -375,5 +433,20 @@ import registry  # noqa: E402
 assert registry.db_violations(registry.STORES) == []
 got = registry.db_violations(registry.STORES, ([("board", 9)], [("store:dump", "decision", 1), ("store:x", "nope", 2)]))
 assert [(k, key) for k, key, _ in got] == [("db", "board:9"), ("db", "store:dump"), ("db", "db:nope")], got
+# The scan reads real source: an aliased or indirect import is still an import, SQL in any case is still SQL, and
+# prose that only starts like SQL is not.
+src = tmp / "scan"
+src.mkdir()
+(src / "board.py").write_text("import sqlite3 as sql\ndef f():\n    return sql.connect('x')\n")
+(src / "tidy.py").write_text("from sqlite3 import connect\n")
+(src / "card.py").write_text("import importlib\nm = importlib.import_module('sqlite3')\n")
+(src / "store.py").write_text('def surprise(db):\n    db.execute("update decision set title=?", ("x",))\n'
+                              'def upsert(db):\n    db.execute("insert or replace into Counter (name) values (1)")\n'
+                              'def prose():\n    """Update the checkout and restart. Delete the file."""\n')
+connects, sql = registry.db_scan(sorted(src.iterdir()))
+assert sorted(connects) == [("board", 1), ("card", 2), ("tidy", 1)], connects
+assert sorted((w, t) for w, t, _ in sql) == [("store:surprise", "decision"), ("store:upsert", "counter")], sql
+got = registry.db_violations(registry.STORES, (connects, sql))
+assert {key for _, key, _ in got} == {"board:1", "card:2", "tidy:1", "store:surprise", "store:upsert"}, got
 
 print("test_store: ok")

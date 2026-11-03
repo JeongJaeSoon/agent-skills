@@ -521,9 +521,11 @@ def check(stores=None, writes=None, dual=None, modules=None, db=None):
     return out
 
 
-# Modules allowed to call sqlite3.connect, and why. agent-skills.db is store.py's alone.
+# Modules allowed to import sqlite3, and why. agent-skills.db is store.py's alone.
 DB_CONNECT = {"store": "agent-skills.db", "orca_settings": "Orca's own database, read-only (mode=ro)"}
-SQL_WRITE = re.compile(r"(?<!DO )\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+\"?(\w+)")  # store.py writes SQL keywords in capitals
+# UPDATE needs its SET so that prose ("Update the checkout") is not read as SQL; keywords in any case.
+SQL_WRITE = re.compile(r"(?<!DO )\b(?:(?:INSERT(?:\s+OR\s+\w+)?|REPLACE)\s+INTO\s+\"?(\w+)|DELETE\s+FROM\s+\"?(\w+)"
+                       r"|UPDATE(?:\s+OR\s+\w+)?\s+\"?(\w+)\"?\s+SET\b)", re.I)
 
 
 def _strings(node):
@@ -533,21 +535,23 @@ def _strings(node):
 
 
 def db_scan(paths=None):
-    """(connects, sql writes): [(module, line)] of every sqlite3.connect, and [(module:qualname, table, line)] of
-    every SQL statement in store.py that changes a table."""
+    """(connects, sql writes): [(module, line)] of every import of sqlite3 (under any name, or through __import__ or
+    importlib), since a module that cannot import it cannot connect; and [(module:qualname, table, line)] of every
+    SQL statement in store.py that changes a table."""
     connects, sql = [], []
     for p, name in _names(paths if paths is not None else sources()).items():
         tree = ast.parse(p.read_text(), str(p))
         for n in ast.walk(tree):
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "connect" and \
-                    isinstance(n.func.value, ast.Name) and n.func.value.id == "sqlite3":
+            if isinstance(n, ast.Import) and any(a.name.split(".")[0] == "sqlite3" for a in n.names) or \
+                    isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "sqlite3" or \
+                    isinstance(n, ast.Call) and any(isinstance(a, ast.Constant) and a.value == "sqlite3" for a in n.args):
                 connects.append((name, n.lineno))
         if name != "store":
             continue
         for qual, fn in _Module(name, tree).funcs.items():
             for s in _strings(fn):
                 for m in SQL_WRITE.finditer(s):
-                    sql.append((f"store:{qual}", m.group(1).lower(), fn.lineno))
+                    sql.append((f"store:{qual}", next(g for g in m.groups() if g).lower(), fn.lineno))
     return connects, sql
 
 
@@ -555,7 +559,7 @@ def db_violations(stores, scanned=None):
     """kind db: a connection outside DB_CONNECT, or a store.py function changing a table whose db: store does not
     list it as a writer (so going through store.py is not a licence to change any table from anywhere)."""
     connects, sql = db_scan() if scanned is None else scanned
-    out = [("db", f"{m}:{line}", "sqlite3.connect outside store.py: agent-skills.db goes through store.py only")
+    out = [("db", f"{m}:{line}", "sqlite3 imported outside store.py: agent-skills.db goes through store.py only")
            for m, line in connects if m not in DB_CONNECT]
     tables = {}
     for s in stores:

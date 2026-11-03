@@ -27,8 +27,9 @@ LEGACY_STOP = "4b-board"         # once this step is in, the board and tidy writ
 BUSY_MS = 5000
 LEGACY = {"4a-decisions": ("decisions.json",)}
 LOCKS = ("board.lock", "tidy.lock", "decisions.lock")
-ENTRY = re.compile(r"(?:^|/)(?:skills/orchestrate/scripts/(?:dash|fleet|patrol|card_watch|prog)\.py|bin/(?:orch|orch-dash|skills-sync)"
-                   r"|hooks/[a-z_]+\.py)(?:\s|$)")
+SCRIPTS = "skills/orchestrate/scripts"
+BINS = ("orch", "orch-dash", "skills-sync")
+CRON = re.compile(r"\b(?:orch-dash|orch|skills-sync)\b|skills/orchestrate/|hooks/[a-z_]+\.py")
 REPO = pathlib.Path(__file__).resolve().parents[3]
 
 SCHEMA = """
@@ -298,22 +299,63 @@ def _ancestors(procs):
     return out
 
 
+def _entry_names():
+    """Every entry point's file name in this checkout: the cheap filter before a process's directory is read."""
+    return {p.name for d in (SCRIPTS, "hooks") for p in (REPO / d).glob("*.py")} | set(BINS)
+
+
+def _cwd(pid):
+    try:
+        return pathlib.Path(os.readlink(f"/proc/{pid}/cwd"))
+    except OSError:
+        pass
+    p = _sh(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"])
+    return next((pathlib.Path(l[1:]) for l in p.stdout.splitlines() if l.startswith("n/")), None)
+
+
+def _words(cmd, names):
+    """The words of a command line that name one of `names`: a path, or the module after -m."""
+    words = cmd.split()
+    for i, w in enumerate(words):
+        if i and words[i - 1] == "-m":
+            w = w.replace(".", "/") + ".py"
+        if pathlib.PurePath(w).name in names:
+            yield w
+
+
+def _ours(p):
+    """Whether a path is an entry point of some agent-skills checkout, this one or another."""
+    if p.parent.name == "bin":
+        return p.name in BINS
+    if p.parent.name == "hooks":
+        return (p.parents[1] / "skills" / "orchestrate").is_dir()  # another plugin's hooks/ is not ours
+    return p.parent.as_posix().endswith("/" + SCRIPTS)
+
+
 def check_processes(procs, since):
-    """Processes running an entry point that writes the state from another checkout or from before `since`."""
-    out, mine = [], _ancestors(procs)
+    """Processes running an entry point from another checkout or from before `since`. A relative path or -m module
+    resolves against the process's own directory; one whose directory cannot be read is a reason too."""
+    out, mine, names = [], _ancestors(procs), _entry_names()
     for pid, (_, start, cmd) in sorted(procs.items()):
-        m = ENTRY.search(cmd)
-        if pid in mine or not m:
+        if pid in mine:
             continue
-        script = next((w for w in cmd.split() if ENTRY.search(w + " ")), "")
-        if "/hooks/" in script and not (pathlib.Path(script).parents[1] / "skills" / "orchestrate").is_dir():
-            continue  # another plugin's hook
-        at = fleet.ps_time(start)
-        where = pathlib.Path(script).resolve()
-        if REPO not in where.parents:
-            out.append(f"pid {pid} runs {script} outside this checkout ({REPO})")
-        elif not at or not since or at < since:
-            out.append(f"pid {pid} started {start} before this checkout's update: {cmd[:120]}")
+        for w in _words(cmd, names):
+            where = pathlib.Path(w)
+            if not where.is_absolute():
+                cwd = _cwd(pid)
+                if cwd is None:
+                    out.append(f"pid {pid} runs {w} from a directory that cannot be read: {cmd[:120]}")
+                    break
+                where = cwd / where
+            where = where.resolve()
+            if not _ours(where):
+                continue
+            at = fleet.ps_time(start)
+            if REPO not in where.parents:
+                out.append(f"pid {pid} runs {where} outside this checkout ({REPO})")
+            elif not at or not since or at < since:
+                out.append(f"pid {pid} started {start} before this checkout's update: {cmd[:120]}")
+            break
     return out
 
 
@@ -353,11 +395,9 @@ def check_launchers():
                            f"launchctl bootout gui/{os.getuid()}/{label}")
             elif p.returncode == 127:
                 out.append(f"launchctl print {label}: {p.stderr.strip()[:120]}")
-    else:
-        p = _sh(["crontab", "-l"])
-        for line in p.stdout.splitlines():
-            if line.strip() and not line.lstrip().startswith("#") and re.search(r"\b(orch-dash|orch|skills-sync)\b", line):
-                out.append(f"crontab line still active: {line.strip()[:120]}")
+    for line in _sh(["crontab", "-l"]).stdout.splitlines():  # cron runs on macOS too
+        if line.strip() and not line.lstrip().startswith("#") and CRON.search(line):
+            out.append(f"crontab line still active: {line.strip()[:120]}")
     return out
 
 
@@ -369,6 +409,8 @@ def preflight():
         procs = fleet.ps_table()
     except fleet.SourceError as e:
         return out + [str(e)]
+    if os.getpid() not in procs:  # ps failed with no output: an empty table would pass every check below
+        return out + ["ps did not list this process: cannot tell which writers run"]
     return (out + check_processes(procs, since) + check_plugin_source(fleet.claude_homes())
             + check_sessions(procs, since) + check_launchers())
 
@@ -645,7 +687,7 @@ def export_legacy(dest, target):
         raise Refused("this code has only the 4a step: --target pre-4a. Undoing 4b alone is 4b code's export")
     if LEGACY_STOP in migrated_steps():
         raise Refused(f"{LEGACY_STOP} is imported: undo 4b first with the 4b code's export --target 4a")
-    db = _raw()
+    db = open_db()  # a DB without the decisions step would export an empty file that old code takes as canonical
     try:
         db.execute("BEGIN")
         rows = decisions(db=db)
@@ -681,9 +723,10 @@ def dump(table=None):
 
 def _stop_start(step):
     uid = os.getuid()
-    stop = [f"launchctl bootout gui/{uid}/{l}" for l in launch_labels()] if sys.platform == "darwin" else \
-        ["crontab -e    # comment out the orch-dash and orch lines"]
-    start = ["orch-dash install-agent" if sys.platform == "darwin" else "crontab -e    # uncomment them again"]
+    stop = [f"launchctl bootout gui/{uid}/{l}" for l in launch_labels()] if sys.platform == "darwin" else []
+    stop.append("crontab -e    # if a line runs orch, orch-dash, skills-sync or an orchestrate script, comment it out")
+    start = (["orch-dash install-agent"] if sys.platform == "darwin" else []) + \
+        ["crontab -e    # uncomment the lines commented out above, if any"]
     if step == "4b":
         stop.append("skills-sync setup disable janitor")
         start.append("skills-sync setup enable janitor")

@@ -189,10 +189,10 @@ def assess(store, state, prs, me=None, now=None):
 def locked():
     """The ledger's lock, yielding latest() as it stands under it. Every tidy write and its side effects (the inbox
     resolve and revive) run under it, so the guard here stops them all before the first."""
-    store.guard_legacy_write("tidy write")
     path().parent.mkdir(parents=True, exist_ok=True)
     with (path().parent / "tidy.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        store.guard_legacy_write("tidy write")  # under the lock: the 4b import holds it while it records 4b-board
         yield latest()
 
 

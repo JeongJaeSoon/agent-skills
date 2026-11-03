@@ -63,10 +63,10 @@ def read():
 
 def change(fn):
     """Run fn(store) on board.json under a lock and replace the file whole, keeping the previous one as board.prev.json."""
-    store_db.guard_legacy_write("board write")
     path().parent.mkdir(parents=True, exist_ok=True)
     with (fleet.state_dir() / "board.lock").open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
+        store_db.guard_legacy_write("board write")  # under the lock: the 4b import holds it while it records 4b-board
         store = read()
         for t in store["todo"]:  # a to-do from before the stamp: its M/D reads against this write
             t.setdefault("added", fleet.iso(fleet.utcnow()))
