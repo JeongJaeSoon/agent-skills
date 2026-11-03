@@ -518,8 +518,9 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
         py = shlex.join(["python3", str(SCRIPT)])
         return ("deny", f"{MARK} {SOURCE} 진행 중인 에이전트 턴이 {n}개로 상한 {cap}개(`reap.pressure.active_turns_per_cpu`)에 "
                         f"닿아 `{what}` 로 새 카드를 시작하지 않는다. 카드마다 테스트·hook·브라우저가 같이 돌아 CPU 가 포화된다. "
-                        f"Monitor 로 `{py} turns --wait {float(cfg['queue_minutes']):g}` 가 0 으로 끝나면 같은 명령을 다시 "
-                        "실행하고, 3 이면 시작하지 말고 그 출력을 보고한다(foreground sleep 루프 금지). 남의 카드·프로세스는 "
+                        f"Bash run_in_background 로 `{py} turns --wait {float(cfg['queue_minutes']):g}` 를 실행해 완료 알림을 "
+                        "기다리거나 Monitor 로 기다린다(foreground sleep 루프 금지). 0 으로 끝나면 같은 명령을 다시 실행하고, "
+                        "3 이면 시작하지 말고 그 출력을 보고한다. 남의 카드·프로세스는 "
                         "종료하지 않는다. 사용자가 지금 시작하라고 했을 때만 명령 앞에 AGENT_SKILLS_PRESSURE_GATE=0 을 붙인다.")
     fresh = p.fresh(state, cfg, now)
     py = shlex.join(["python3", str(SCRIPT)])
@@ -542,7 +543,8 @@ def gate(cmd, metrics, state, cfg, now=None, p=None, session="", cwd=""):
                         "멈추고 check 출력(이유·측정값)을 보고한다. " + tail)
     return ("deny", f"{MARK} {SOURCE} PC 사용량 위험({', '.join(why)})이라 `{what}` 를 지금 시작하지 않고 대기열 {e['id']} 에 "
                     f"넣었다(최대 {float(cfg['queue_minutes']):g}분, 기한 {p.hhmm(e['deadline'])}, 대시보드 Needs you 에 남는다). "
-                    f"{first}Monitor 로 `{py} queue wait {e['id']}` 가 끝날 때까지 기다린다(foreground sleep 루프 금지). "
+                    f"{first}Bash run_in_background 로 `{py} queue wait {e['id']}` 를 실행해 완료 알림을 기다리거나 "
+                    "Monitor 로 기다린다(foreground sleep 루프 금지). "
                     "0 으로 끝나면 이 세션에서 같은 명령을 그대로 다시 실행한다. 0 이 아니면(기한이 지나 포기로 기록됐거나 이미 재시도됨) "
                     "다시 실행하지 말고 그 출력(이유·측정값)을 보고한다. " + tail)
 

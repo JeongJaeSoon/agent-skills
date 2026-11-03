@@ -19,8 +19,9 @@ Allowed (orchestrate references/top-level.md, "Routing", and SKILL.md "Stay answ
   session (top-level.md "Asking the human"), and its key `orchestrate.ask_user_question` turns that off.
 - Bash, when every command in it is coordination: `orch` (not `heavy`, which runs any command), `orch-dash
   inbox|ensure|note`, `skills-sync`, `orca` coordination groups and `orca skills get|list` (not browser, computer use
-  or emulator), `gh pr merge|ready`, a `gh … --json` read, `git worktree list|remove`, `cd`, and `jq <filter>` after
-  a pipe. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
+  or emulator), `gh pr merge|ready`, a `gh … --json` read, `git worktree list|remove`, `cd`, `jq <filter>` after
+  a pipe, and the pressure gate's wait (`python3 <this plugin>/skills/reap-resources/scripts/pressure.py queue wait
+  q-<id>` or `turns --wait <n>`) with run_in_background, which pressure_gate.py's block names. The only expansions are $ORCA_TERMINAL_HANDLE as an option's whole value and top-level.md's
   `--body "$(cat <absolute path>)"` of a file this hook lets the session write; no other substitution, variable, glob, backtick, `$'…'`, line continuation, or
   redirection other than `2>&1` and to /dev/null. guard.py still denies a send or reply to /dev/null
   (`orchestrate.send_devnull`).
@@ -147,7 +148,20 @@ def segments(cmd):
         return None
 
 
-def coordination(words, piped):
+# The pressure gate's wait, the one way it leaves an orchestrator to wait for a queued heavy run: this plugin's
+# pressure.py by real path, only these two forms, and only in the background (as every wait of a role session).
+PRESSURE = pathlib.Path(__file__).resolve().parents[1] / "skills" / "reap-resources" / "scripts" / "pressure.py"
+PRESSURE_WAIT = re.compile(r"queue wait q-[0-9a-f]{8}|turns --wait \d+")
+
+
+def pressure_wait(words, background):
+    return (background and len(words) >= 3 and words[0] in ("python3", "python")
+            and real(words[1]) == real(PRESSURE) and bool(PRESSURE_WAIT.fullmatch(" ".join(words[2:]))))
+
+
+def coordination(words, piped, background=False):
+    if pressure_wait(words, background):
+        return True
     name = os.path.basename(words[0])
     if "/" in words[0] and name not in ("orch", "skills-sync"):
         return False
@@ -173,16 +187,16 @@ def coordination(words, piped):
     return False
 
 
-def bash_ok(cmd):
+def bash_ok(cmd, background=False):
     parts = segments(cmd)
-    return bool(parts) and all(coordination(words, piped) for piped, words in parts)
+    return bool(parts) and all(coordination(words, piped, background) for piped, words in parts)
 
 
 def allowed(tool, args):
     if tool in TOOLS or TELEGRAM.fullmatch(tool or ""):
         return True
     if tool == "Bash":
-        return bash_ok(str(args.get("command") or ""))
+        return bash_ok(str(args.get("command") or ""), args.get("run_in_background") is True)
     path = args.get("file_path")
     if not isinstance(path, str) or not path:
         return False
