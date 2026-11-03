@@ -108,6 +108,41 @@ def verb(args, valued):
     return None, []
 
 
+def inplace_files(c):
+    """The files `sed -i` or `perl -i` edits in place: its file operands, the script operand left out unless an
+    `-e`/`-f` (sed) or `-e`/`-E` (perl) option, attached or separate, gave the script. [] without in-place editing."""
+    perl = c.name == "perl"
+    script_opts = "eE" if perl else "ef"
+    valued = "IMmx" if perl else "l"  # other short options that take a value
+    w, i, files, script, inplace = c.words[1:], 0, [], False, False
+    while i < len(w):
+        x = w[i]
+        i += 1
+        if x == "--":
+            files += w[i:]
+            break
+        if x.startswith("--"):
+            inplace = inplace or x.startswith("--in-place")
+            if x in ("--expression", "--file"):
+                script, i = True, i + 1
+            script = script or x.startswith(("--expression=", "--file="))
+            continue
+        if x.startswith("-") and len(x) > 1:
+            for k, ch in enumerate(x[1:], 1):
+                if ch == "i":  # the rest of the word is a backup suffix
+                    inplace = True
+                    break
+                if ch in script_opts or ch in valued:
+                    script = script or ch in script_opts
+                    i += 0 if x[k + 1:] else 1
+                    break
+            continue
+        files.append(x)
+    if not inplace:
+        return []
+    return files if script else files[1:]
+
+
 def write_targets(c):
     """The files a command writes by its own argument or a redirection."""
     out = [t for fd, op, t in c.redirects if op in (">", ">>", ">|", "&>", "&>>", "<>")
@@ -132,9 +167,8 @@ def write_targets(c):
             out += [target] + [os.path.join(target, os.path.basename(s.rstrip("/"))) for s in operands]
             if c.name == "mv":
                 out += operands
-    elif c.name in ("sed", "perl") and any(re.match(r"-[a-zA-Z]*i", w) or w.startswith("--in-place")
-                                           for w in c.words[1:]):  # `-i`, `-i.bak`, `-pi`
-        out += args[1:]
+    elif c.name in ("sed", "perl"):
+        out += inplace_files(c)
     elif c.name == "truncate":
         out += args
     elif c.name == "dd":
@@ -214,7 +248,7 @@ def check_command(c, masked, cfg, cwd, session, here=None):
     if name == "orch" and (w[1:3] == ["refusal", "clear"] or w[1:2] == ["exempt"]):
         out.append(("guard.deny.owner_only", f"`orch {' '.join(w[1:3])}` is the human's to run, as a `!` line in their "
                                              "own chat."))
-    if name == "codex" and (reason := external_review(w, cwd, cfg)):
+    if name == "codex" and (reason := external_review(w, here, cfg)):
         out.append(("guard.deny.external_review", reason))
     if any(x == "AGENT_SKILLS_PRESSURE_GATE=0" for x in c.assigns + (w[1:] if name == "export" else [])):
         out.append(("guard.ask.pressure_bypass", "This turns the pressure gate off for one command; only the human "
@@ -343,6 +377,8 @@ def external_review(argv, cwd, cfg):
             where = expand(x[5:], cwd)
         elif x.startswith("-C") and len(x) > 2 and not x.startswith("--"):
             where = expand(x[2:], cwd)
+    if where in (UNKNOWN_DIR, ""):  # after a `cd` this reader cannot follow: no decision
+        return None
     repo = repo_of(where)
     if repo in closed:
         return (f"{repo} sets `repos.{repo}.external_llm: false` in ~/.claude/agent-skills.json: its code does not go "
