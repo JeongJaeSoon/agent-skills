@@ -81,11 +81,13 @@ Usage: orch <command> <slug> [options]
                                      one-line proposal per setting to change, and this terminal's Run
                                      (orca_settings.py)
   decide add --title T [--body-file F] [--option "label::description"]... [--recommend N] [--link URL]
-  decide list | done <id> [--answer TEXT] | drop <id>
+  decide list | done <id> [--answer TEXT] | drop <id> | keep <id>
                                      no slug: a decision you wait on the human for, shown on the fleet
                                      dashboard until done or dropped; add prints its id. Each option is a
                                      button that closes it with that answer, then types
-                                     "decision <id>: <label>" into this terminal once it is idle
+                                     "decision <id>: <label>" into this terminal once it is idle. keep: you
+                                     checked it and it still stands (checked_at); the brief counts one
+                                     unchecked for board.decision_stale_h hours as 오래된 결정
   stage add <id> --title T [--pr owner/repo#N] [--parent ID] [--group]
   stage set <id> --col merge|dev|prod --mark ok|fail|partial|checking|na [--evidence TEXT] [--by WHO]
   stage env [--prod V] [--dev V] | next [LINE]... | done <id> | drop <id> | show [--program P] [--all] [--md|--telegram|--json]
@@ -2726,9 +2728,12 @@ def cmd_decide(argv):
         elif sub in ("done", "drop") and rest:
             d = fleet.decision_close(rest[0], "done" if sub == "done" else "dropped", opt(rest, "--answer"))
             print(f"{d['id']} {d['status']}")
+        elif sub == "keep" and rest:
+            d = fleet.decision_keep(rest[0])
+            print(f"{d['id']} checked {d['checked_at']}")
         else:
             sys.exit("usage: orch decide add --title T [--body-file F] [--option 'label::description']... [--recommend N] "
-                     "[--link URL] | list | done <id> [--answer TEXT] | drop <id>")
+                     "[--link URL] | list | done <id> [--answer TEXT] | drop <id> | keep <id>")
     except (ValueError, OSError) as e:
         sys.exit(str(e))
 

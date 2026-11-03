@@ -739,6 +739,43 @@ def orca_links(w):
     return refs, pr
 
 
+def prs_by_session(state_prs):
+    """session id -> [(PR key, state)], newest first, from state.json's PR list (the collector's owner_of)."""
+    out = {}
+    for p in state_prs or []:  # newest first
+        if p.get("session") and p.get("key"):
+            out.setdefault(p["session"], []).append((p["key"], p.get("state")))
+    return out
+
+
+def pr_candidates(s, by_session, extra=()):
+    """([PR key], {key: state seen}) a session is linked to, newest first: Orca's linkedPR, the collector's PRs for
+    the session, the PR its last report names, then extra (a board row's --pr)."""
+    lp = s.get("linked_pr") if isinstance(s.get("linked_pr"), dict) else {}
+    cands = ([(lp["key"], lp.get("state"))] if lp.get("key") else []) + list(by_session.get(s.get("id"), []))
+    cands += [(k, None) for k in [(s.get("report") or {}).get("pr"), *extra] if k]
+    keys, given = list(dict.fromkeys(k for k, _ in cands)), {}
+    for k, st in cands:
+        if st:
+            given.setdefault(k, st)
+    return keys, given
+
+
+def current_pr(s, by_session, details=None, extra=()):
+    """The one PR a card's row shows (its "current PR"): the board rows, tidy's cards and the fleet rows all take it
+    from here. A working or waiting session shows the first of pr_candidates() not merged or closed, else none: a
+    card that merged PR 1 and works on PR 2 is not done. An idle or ended session shows the first.
+    by_session: prs_by_session(); details: prs.json's key -> detail, which outranks the states in state.json."""
+    keys, given = pr_candidates(s, by_session, extra)
+    if s.get("phase") not in ("working", "waiting"):
+        return keys[0] if keys else None
+
+    def final(k):
+        d = (details or {}).get(k) or {}
+        return bool(d.get("merged_at")) or str(d.get("state") or given.get(k) or "").upper() in ("MERGED", "CLOSED")
+    return next((k for k in keys if not final(k)), None)
+
+
 def agent_row(a):
     return {"pane": a.get("paneKey"), "state": a.get("state"), "type": a.get("agentType"),
             "mode": a.get("workingMode"), "tool": a.get("toolName"), "detail": mask(a.get("toolInput"), 140),
@@ -891,8 +928,12 @@ def _sig(path):
     return st.st_size, st.st_mtime_ns
 
 
-def report_path(comment):
-    """The report file a session's brief names, from the brief path in its Orca comment; None when it names none."""
+REPORT_RUN_RE = re.compile(r"\brun:(run_[\w-]+)")
+
+
+def report_target(comment):
+    """Where a session's brief (the path in its Orca comment) says the card reports: ("file", path), ("run", run id)
+    for a REPORT line that sends to `run:<id>` and names no file, or None."""
     m = REPORT_PATH_RE.fullmatch((comment or "").strip())
     if not m:
         return None
@@ -910,10 +951,19 @@ def report_path(comment):
     for line in REPORT_LINE_RE.findall(head):
         found = REPORT_PATH_RE.search(line)
         if found or THIS_NOTE_RE.search(line):
-            out = pathlib.Path(found.group(1)).expanduser() if found else brief
+            out = ("file", pathlib.Path(found.group(1)).expanduser() if found else brief)
+            break
+        if run := REPORT_RUN_RE.search(line):
+            out = ("run", run.group(1))
             break
     _reports[("brief", str(brief))] = (sig, out)
     return out
+
+
+def report_path(comment):
+    """The report file a session's brief names; None when it names none."""
+    t = report_target(comment)
+    return t[1] if t and t[0] == "file" else None
 
 
 def read_report(path):
@@ -938,15 +988,52 @@ def read_report(path):
     latest = re.sub(r"^[#*\-\s]+", "", block[0]) if block else ""
     refs = [m for m in PR_REF_RE.finditer(tail)]
     pr = refs and (pr_key(refs[-1][1], refs[-1][2]) if refs[-1][1] else pr_key(refs[-1][3], refs[-1][4]))
-    out = {"path": str(path), "at": iso(dt.datetime.fromtimestamp(sig[1] / 1e9, dt.timezone.utc)), "size": sig[0],
-           "next": mask(" ".join((nxt or latest).split()), 160) or None, "pr": pr or None}
+    out = {"source": "file", "path": str(path), "at": iso(dt.datetime.fromtimestamp(sig[1] / 1e9, dt.timezone.utc)),
+           "size": sig[0], "next": mask(" ".join((nxt or latest).split()), 160) or None, "pr": pr or None}
     _reports[str(path)] = (sig, out)
     return out
 
 
-def report_of(comment):
-    p = report_path(comment)
-    return read_report(p) if p else None
+# The message kinds that carry a card's milestone. question, escalation and decision_gate ask for something (the
+# decisions' and Inbox's), and a heartbeat says only that the card is alive.
+MILESTONE_TYPES = {"status", "worker_done", "merge_ready", None, ""}
+
+
+def inbox_report(s, run_ids, messages, coordinators=None):
+    """{source: "inbox", id, at, type, next, pr} from the newest milestone message the session's own terminal sent
+    to one of run_ids (`run:<id>`, or that Run's coordinator terminal); None when it sent none. messages: Orca's
+    inbox; coordinators: run id -> its coordinator's terminal handle."""
+    handles = {t.get("handle") for t in s.get("terminals") or []} - {None}
+    panes = {t.get("pane") for t in s.get("terminals") or []} - {None}
+    to = {f"run:{r}" for r in run_ids} | {h for r in run_ids if (h := (coordinators or {}).get(r))}
+    best = None
+    for m in messages or []:
+        if (not isinstance(m, dict) or m.get("type") not in MILESTONE_TYPES or m.get("to_handle") not in to
+                or not isinstance(m.get("created_at"), str)
+                or m.get("from_handle") not in handles and m.get("sender_pane_key") not in panes):
+            continue
+        if best is None or m["created_at"] > best["created_at"]:
+            best = m
+    if best is None:
+        return None
+    text = " · ".join(filter(None, (best.get("subject"), first_line(best.get("body") or "", 400))))
+    refs = list(PR_REF_RE.finditer(f"{best.get('subject') or ''}\n{best.get('body') or ''}"))
+    pr = refs and (pr_key(refs[-1][1], refs[-1][2]) if refs[-1][1] else pr_key(refs[-1][3], refs[-1][4]))
+    return {"source": "inbox", "id": best.get("id"), "at": best["created_at"], "type": best.get("type") or None,
+            "next": mask(" ".join(text.split()), 160) or None, "pr": pr or None}
+
+
+def report_of(comment, s=None, messages=(), coordinators=None, parent_runs=()):
+    """A session's last milestone: its report file's, or for a brief that reports to `run:<id>`, the newest
+    milestone message in Orca's inbox (inbox_report). coordinators: run id -> its coordinator's terminal handle.
+    A session whose comment names no brief (a /goal card, a lead) reports all the same, to the Runs its parent
+    coordinates (parent_runs): mail to any other Run may be an order sent down, not a report."""
+    t = report_target(comment)
+    if not t:
+        return inbox_report(s, parent_runs, messages, coordinators) if s and parent_runs else None
+    if t[0] == "file":
+        return read_report(t[1])
+    return inbox_report(s or {}, [t[1]], messages, coordinators)
 
 
 # ---------------------------------------------------------------- inbox classification
@@ -1433,10 +1520,13 @@ class Fleet:
                 return self.state
             cfg = config()
             sessions, root = build_sessions(self.fast, self.runs, cfg, self.declared)
+            coordinators = {r["id"]: r.get("coordinator_handle") for r in self.runs.get("runs") or [] if r.get("id")}
             for s in sessions.values():
                 s["gh_repo"] = repo_of(s["path"], self.repos) if s.get("path") else None
                 s["project"] = project_of(s.get("path"), s.get("repo_name"), s["gh_repo"])
-                s["report"] = report_of(s.get("comment"))
+                parent_terms = {t.get("handle") for t in (sessions.get(s.get("parent")) or {}).get("terminals") or []}
+                s["report"] = report_of(s.get("comment"), s, self.fast.get("messages"), coordinators,
+                                        [rid for rid, h in coordinators.items() if h and h in parent_terms])
             # A session whose phase changed (a turn ended, a worker started) may just have merged, pushed or
             # answered a review: its PRs are probed now rather than when their tier comes round.
             phases = self.mem.setdefault("session_phase", {})
@@ -1829,9 +1919,9 @@ class Fleet:
         items = [it if it.get("project") else {**it, "project": (sessions.get(it.get("session")) or {}).get("project")}
                  for it in items if it["key"] not in dismissed]
         import tidy
-        held = held_prs(read_json(state_dir() / "board.json", {}) or {}, tidy.closed(),
-                        {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}, now,
-                        tidy.cards_of(read_json(state_dir() / "state.json", {})), why := {})
+        details = {k: e["detail"] for k, e in self.prs.items() if e.get("detail")}
+        held = held_prs(read_json(state_dir() / "board.json", {}) or {}, tidy.closed(), details, now,
+                        tidy.cards_of(read_json(state_dir() / "state.json", {}), details), why := {})
         for i in items:
             if i.get("source") == "github" and i.get("pr") in held:
                 i["held"], i["held_todo"] = held[i["pr"]], why[i["pr"]][0] == "do"
@@ -2339,11 +2429,36 @@ def decision_add(title, body="", options=(), recommend=None, link=None, handle=N
         n = store.get("next", 1)
         d = {"id": f"d{n}", "title": one_line(title, 200), "body": mask(body.strip(), DECISION_BODY_MAX), "options": opts,
              "recommend": recommend, "link": mask(link, 500), "handle": handle, "created_at": iso(now), "status": "open"}
-        cutoff = iso(now - dt.timedelta(seconds=DECISION_KEEP_S))
-        kept = {k: v for k, v in store.get("decisions", {}).items() if v.get("status") == "open" or (v.get("closed_at") or "") >= cutoff}
-        store.update(next=n + 1, decisions={**kept, d["id"]: d})
+        prune_decisions(store, now)
+        store.update(next=n + 1, decisions={**store.get("decisions", {}), d["id"]: d})
         return d
     return change_decisions(add)
+
+
+def prune_decisions(store, now):
+    """Drop the decisions closed over DECISION_KEEP_S ago, on add and on close."""
+    cutoff = iso(now - dt.timedelta(seconds=DECISION_KEEP_S))
+    store["decisions"] = {k: v for k, v in store.get("decisions", {}).items()
+                          if v.get("status") == "open" or (v.get("closed_at") or "") >= cutoff}
+
+
+def decision_keep(did):
+    """`orch decide keep`: the owner or orchestrator checked an open decision and it still stands. checked_at restarts
+    its clock for the brief's 오래된 결정 count; nothing else changes."""
+    def keep(store):
+        d = store.get("decisions", {}).get(did)
+        if not d:
+            raise ValueError(f"no decision {did}")
+        if d.get("status") != "open":
+            raise ValueError(f"{did} is already {d.get('status')}")
+        d["checked_at"] = iso(utcnow())
+        return d
+    return change_decisions(keep)
+
+
+def decision_age_from(d):
+    """When an open decision was last known to stand: max(created_at, checked_at)."""
+    return max(filter(None, (d.get("created_at"), d.get("checked_at"))), default=None)
 
 
 def decision_close(did, status, answer=None, relay=False):
@@ -2365,6 +2480,7 @@ def decision_close(did, status, answer=None, relay=False):
             d.update(status=status)
         else:
             raise ValueError(f"{did} is already {d.get('status')}")
+        prune_decisions(store, utcnow())
         return d
     return change_decisions(close)
 

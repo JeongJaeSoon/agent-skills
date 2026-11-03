@@ -32,7 +32,8 @@ ALIASES = {v: k for k, v in ICON.items() if k != "check"} | {"⏸": "held"}  # V
 WORST = ("blocked", "owner", "waiting", "check", "held", "moving")
 OWNER_NAMES = ("오너", "owner")
 COLS = 78
-LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7}  # overridden by the dashboard config's "board" key
+LIMITS = {"row_min": 90, "pr_warn_min": 30, "pr_stale_min": 120, "state_min": 5, "done_fold_h": 24, "stage_idle_d": 7,
+          "decision_stale_h": 12}  # overridden by the dashboard config's "board" key
 DONE_KEEP_S = 7 * 86400  # a finished lead stays this long with its rows, then leaves the board
 HEADER = ["", "리드/Phase", "PR", "진행", "세션"]
 PR_LEGEND = (("❗", "사람이 풀 것"), ("✓", "머지 가능"), ("CI✗", "CI 실패"), ("CI…", "CI 진행"), ("?", "PR 상태 없음"))
@@ -517,27 +518,26 @@ PHASE_ROW = {"working": ("moving", "작업 중"), "idle": ("moving", "턴 종료
              "open": ("held", "에이전트 없음"), "offline": ("held", "세션 꺼짐")}
 
 
-def fleet_rows(state, leads, board_rows):
+def fleet_rows(state, leads, board_rows, details=None):
     """Board rows built from the fleet collector's sessions (state.json), for what nobody wrote to the board: each lead
     session whose terminal no board lead holds, the cards under it, and the cards the orchestrator dispatched
     itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
-    newest PR; a card whose PR a board row already has is left to that row. Returns
-    (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board row."""
+    current PR (fleet.current_pr; details: prs.json's); a card whose PR a board row already has is left to that row.
+    Returns (rows, order); reported_at is the session's last activity, so a quiet one shows its age like a stale board
+    row."""
     state = state or {}
     sessions = state.get("sessions") or []
     held = {l.get("handle"): name for name, l in leads.items()}
     on_board = {r.get("pr") for r in board_rows.values()} - {None}
-    # A worktree a board row or board lead links (`--worktree`) is that row's work, not a row of its own.
-    linked = {r.get("worktree") for r in board_rows.values()} - {None}
+    # A worktree a board row or board lead links (`--worktree`, or by name in render) is that row's work, not a row of
+    # its own.
+    linked = {w for r in board_rows.values() for w in (r.get("worktree"), r.get("linked"))} - {None}
     lead_wt = {l["worktree"]: name for name, l in leads.items() if l.get("worktree")}
     lead_wt.update({r["worktree"]: rid for rid, r in board_rows.items() if r.get("worktree") and r.get("kind") == "lead"})
-    pr_of, under = {}, {}
-    for s in sessions:  # Orca's own link first
-        if isinstance(s.get("linked_pr"), dict) and s["linked_pr"].get("key"):
-            pr_of[s.get("id")] = s["linked_pr"]["key"]
-    for p in state.get("prs") or []:  # newest first
-        if p.get("session"):
-            pr_of.setdefault(p["session"], p.get("key"))
+    by_session, under = fleet.prs_by_session(state.get("prs")), {}
+    pr_of = {s.get("id"): fleet.current_pr(s, by_session, details) for s in sessions}
+    # Whether a session ever had a PR is evidence of work even once the PR it shows is gone (merged while it works on).
+    had_pr = {s.get("id") for s in sessions if fleet.pr_candidates(s, by_session)[0]}
     for s in sessions:
         under.setdefault(s.get("parent"), []).append(s)
     rows, order = {}, []
@@ -552,16 +552,17 @@ def fleet_rows(state, leads, board_rows):
         rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": status, "next": one_line(nxt),
                      "session": s.get("id"),
                      # a lead's digest links its cards' PRs, which are the cards' rows
-                     "pr": pr_of.get(s.get("id")) or (rep.get("pr") if kind != "lead" else None),
+                     "pr": pr_of.get(s.get("id")) if kind != "lead"
+                     else fleet.current_pr({**s, "report": None}, by_session, details),
                      "reported_at": max(filter(None, (s.get("last_activity"), rep.get("at"))), default=None), "parent": parent,
                      # a card under a lead takes the lead's repo, so the lead heads one section
                      "repo": None if parent else s.get("gh_repo") or s.get("project") or "—", "program": program}
         order.append(rid)
 
     def shown(s):
-        pr = pr_of.get(s.get("id")) or (s.get("report") or {}).get("pr")
+        pr = pr_of.get(s.get("id"))
         # A dispatch that completed with no PR has reported to its dispatcher and has nothing left to land.
-        over = s.get("dispatch_status") == "completed" and not pr
+        over = s.get("dispatch_status") == "completed" and s.get("id") not in had_pr
         return (s.get("phase") != "offline" or pr) and pr not in on_board and not over and s.get("id") not in linked
 
     for lead in sessions:
@@ -579,13 +580,53 @@ def fleet_rows(state, leads, board_rows):
                 add(f"{lid}/{s['id']}", s, "task", board_lead or lid)
     kind = {s.get("id"): s.get("kind") for s in sessions}
     for s in sessions:
-        # A card made with `orca worktree create` and no Run is standalone: it is work when it has a report file, a PR
-        # or a dispatch, not a resident folder such as an automations runner.
+        # A card made with `orca worktree create` and no Run is standalone: it is work when Orca records the
+        # orchestrator as its parent (a /goal card `skills-sync card` started, before it has reported anything), or
+        # when it has a report, a PR or a dispatch; not a resident folder such as an automations runner. The parent
+        # the collector inferred (the root, for anything unparented) is no evidence on its own.
         card = s.get("kind") == "task" or s.get("kind") == "standalone" and (
-            s.get("report") or pr_of.get(s.get("id")) or s.get("dispatch"))
+            kind.get(s.get("orca_parent")) == "orchestrator" or s.get("report") or s.get("id") in had_pr or s.get("dispatch"))
         if card and kind.get(s.get("parent")) == "orchestrator" and shown(s):
             add(f"fleet:{s['id']}", s, "task")
     return rows, order
+
+
+def unlisted(state, sessions, rows, store, cards, shut, lead_session, now, state_min, scope="top-level"):
+    """The sessions the report should show and does not: working or waiting, with a parent Orca recorded (its parent
+    worktree, a Dispatch or a Run of its own), not the orchestrator, under the report's scope; less every session a row,
+    a board lead, a doing item or a tidy close stands for. A string instead when the fleet read cannot be trusted to
+    say what is missing (a source failed, or state.json is older than state_min)."""
+    if state is None:  # no collector here at all: the report has no session rows to miss
+        return []
+    bad = [k for k in ("orca", "runs") if ((state.get("sources") or {}).get(k) or {}).get("error")]
+    if bad:
+        return f"{'·'.join(bad)} 읽기 실패"
+    at = fleet.parse(state.get("generated_at"))
+    if not at or (now - at).total_seconds() > state_min * 60:
+        return f"세션 목록 {ago((now - at).total_seconds()) if at else '시각 없음'} 기준"
+    shown, row_prs = set(), {r.get("pr") for r in rows.values()} - {None}
+    for r in rows.values():
+        shown |= {r.get("session"), r.get("worktree"), r.get("linked")}
+        if r.get("kind") == "lead" and (lead := store["leads"].get(r["id"])):
+            shown.add(lead_session(lead))
+    shown |= {c["id"] for d in store["doing"] if tidy.item_id("doing", d) not in shut
+              and (c := tidy.named(f"{d['title']} {d['next']}", cards))}
+    shown |= {c["id"] for c in cards.values() if c["pr"] and c["pr"] in row_prs}
+    shown |= {k.removeprefix("card:") for k in shut if k.startswith("card:")}
+
+    def in_scope(sid):
+        """A program's report covers what hangs under a session its rows show; the top-level one covers all."""
+        seen = set()
+        while sid and sid not in seen:
+            if sid in shown:
+                return True
+            seen.add(sid)
+            sid = (sessions.get(sid) or {}).get("parent")
+        return False
+    return [sid for sid, s in sessions.items()
+            if s.get("phase") in ("working", "waiting") and s.get("kind") != "orchestrator"
+            and (s.get("orca_parent") or s.get("dispatch") or s.get("run")) and sid not in shown
+            and (scope == "top-level" or in_scope(s.get("parent")))]
 
 
 def item_of(r):
@@ -666,18 +707,20 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
     wt_of_handle = {t.get("handle"): sid for sid, s in sessions.items() for t in s.get("terminals") or []}
     last = fleet.read_json(last_path(scope), None)
     last_rows = last.get("rows") if isinstance(last, dict) and isinstance(last.get("rows"), dict) else None
-    shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state)
+    shut, verdicts, cards = tidy.closed(), tidy.assess(store, state, prs, me, now), tidy.cards_of(state, prs)
+    by_session = fleet.prs_by_session((state or {}).get("prs"))
     holds, held_by = fleet.held_prs(store, shut, prs, now, cards, hold_why := {}), {}  # held_by: row id -> the PR a held item covers
     # The PRs a to-do holds and no held item does (that one's text wins): their rows read 📅, not ⏸️.
     todo_held = {k for k, (kind, _) in hold_why.items() if kind == "do"}
     for rid, r in store["rows"].items():
-        # A board row about a card is the card's row: it takes the card's PR, so the card is not listed a second time.
-        # The card is the one `--worktree` links, else the one the row's id and title name.
+        # A board row about a card is the card's row: it shows the card's current PR (its own --pr is only the last
+        # candidate), so the card is not listed a second time. The card is the one `--worktree` links, else the one
+        # the row's id and title name.
         if card := cards.get(r.get("worktree")) or tidy.named(f"{rid} {r.get('title') or ''}", cards):
             r["linked"] = card["id"]
-            r["pr"] = r.get("pr") or card["pr"]
+            r["pr"] = fleet.current_pr(card, by_session, prs, extra=[r["pr"]] if r.get("pr") else ())
     if fill:
-        extra, extra_order = fleet_rows(state, store["leads"], store["rows"])
+        extra, extra_order = fleet_rows(state, store["leads"], store["rows"], prs)
         store["rows"], store["order"] = {**extra, **store["rows"]}, store["order"] + extra_order
     rows = store["rows"]
 
@@ -1003,8 +1046,32 @@ def render(scope="top-level", channel="terminal", now=None, headline=None, skipp
         facts.append(f"오래된 board 행 {len(stale_board)} ({'' if len(stale_board) == 1 else '최대 '}{ago(max(stale_board))})")
     if hidden:
         facts.append(f"확인함으로 숨긴 행 {len(hidden)}")
+    missing = (unlisted(state, sessions, rows, store, cards, shut, lead_session, now, limits["state_min"], scope)
+               if fill else [])
+    if isinstance(missing, str):  # a failed refresh already says how old the list is
+        facts.append("누락 검사 안 함" if collected else f"누락 검사 안 함: {missing}")
     if collected:
         facts.append(collected)
+    if missing and not isinstance(missing, str):
+        names = [one_line(sessions[m].get("name") or m) for m in missing]
+        facts.append(f"보고서에 없는 세션 {len(missing)} ({', '.join(names[:3])}{' 외' if len(names) > 3 else ''})")
+    open_dec = fleet.open_decisions()
+    old = [d for d in open_dec if (at := fleet.parse(fleet.decision_age_from(d)))
+           and (now - at).total_seconds() > limits["decision_stale_h"] * 3600]
+    if old:
+        facts.append(f"오래된 결정 {len(old)} ({', '.join(d['id'] for d in old)} · `orch decide keep|drop`)")
+    # Judged as the relay judges it: the registering terminal, else the root's writable agent terminal, else nowhere.
+    # A decision added outside Orca has no handle and always goes to the root, so only a missing root terminal counts.
+    # The relay types into the target as it is; a terminal whose agent exited refuses the line, so that is no route.
+    usable = {t.get("handle") for s in (state or {}).get("sessions") or [] for t in s.get("terminals") or []
+              if t.get("agent") and t.get("connected") and t.get("writable")}
+    no_route = [d for d in open_dec if live is not None and fleet.decision_target(d, state)[1] not in usable]
+    rerouted = [d for d in open_dec if live is not None and d.get("handle") and d["handle"] not in live
+                and d not in no_route]
+    if no_route:
+        facts.append(f"응답 경로 없음 {len(no_route)} ({', '.join(d['id'] for d in no_route)})")
+    if rerouted:
+        facts.append(f"등록 터미널 없음 {len(rerouted)} ({', '.join(d['id'] for d in rerouted)} · 답은 오케스트레이터로)")
     stage_line = stages.pointer(*stages.current(stages.table(state), now, limits["stage_idle_d"] * 86400, state), tg)
     queued = [l for l in later if (verdicts.get(tidy.item_id("later", l)) or {}).get("verdict") != "check"]
     lists_line = lists_pointer(len(upcoming), len(queued), tg)

@@ -57,14 +57,12 @@ def closed():
 
 # ---------------------------------------------------------------- evidence
 
-def cards_of(state):
-    """Card sessions by id, each with its newest PR key (or None): Orca's linked PR first, then the collector's."""
-    pr_of = {}
-    for p in (state or {}).get("prs") or []:  # newest first
-        if p.get("session"):
-            pr_of.setdefault(p["session"], p.get("key"))
-    return {s["id"]: {**s, "pr": ((s.get("linked_pr") or {}).get("key") if isinstance(s.get("linked_pr"), dict) else None)
-                      or pr_of.get(s["id"]) or (s.get("report") or {}).get("pr")}
+def cards_of(state, details=None):
+    """Card sessions by id, each with its current PR key (fleet.current_pr) or None, and newest_pr: the newest PR it
+    is linked to whatever its state, the evidence a doing item about a busy card is checked on. details: prs.json's."""
+    by_session = fleet.prs_by_session((state or {}).get("prs"))
+    return {s["id"]: {**s, "pr": fleet.current_pr(s, by_session, details),
+                      "newest_pr": next(iter(fleet.pr_candidates(s, by_session)[0]), None)}
             for s in (state or {}).get("sessions") or [] if s.get("kind") in CARD_KINDS}
 
 
@@ -127,8 +125,8 @@ def assess(store, state, prs, me=None, now=None):
     and PR list, prs.json's details (key -> detail), board.json's store."""
     import board  # imports this module, so not at the top
     now = now or fleet.utcnow()
-    cards = cards_of(state)
-    prs = {**orca_merged(cards, {c["pr"] for c in cards.values()}), **prs}
+    cards = cards_of(state, prs)
+    prs = {**orca_merged(cards, {k for c in cards.values() for k in (c["pr"], c["newest_pr"])}), **prs}
     live = {s["id"] for s in cards.values() if s.get("phase") in ("working", "waiting")}
     # orch patrol's D: doing items that named no PR or card for a day. Shown as ❔, never closed on it.
     noref = set((fleet.read_json(fleet.state_dir().parent / "patrol-verdicts.json", {}) or {}).get("doing_noref") or ())
@@ -142,7 +140,8 @@ def assess(store, state, prs, me=None, now=None):
             continue
         text = f"{d['title']} {d.get('next') or ''}"
         card = named(text, cards)
-        ev = refs_over(fleet.pr_refs(text) + [card and card["pr"]], prs)
+        # A busy card's merged PR is not its current PR, but a line about the card may still be about that PR: ❔.
+        ev = refs_over(fleet.pr_refs(text) + [card and (card["pr"] or card["newest_pr"])], prs)
         if not ev:
             if item_id("doing", d) in noref:
                 put(item_id("doing", d), "check", "no_ref", "PR·카드 참조 없이 24h+ · 참조를 달거나 닫기", d["title"])
