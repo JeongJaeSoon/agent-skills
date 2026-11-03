@@ -244,7 +244,12 @@ def run_workers(run_id):
 
 def own_worker(workers, me):
     """This terminal's own Dispatch among the Run's workers."""
-    return next((w for w in workers if me and w.get("agentTerminalHandle") == me), None)
+    return next((w for w in workers if me and worker_terminal(w) == me), None)
+
+
+def worker_terminal(row):
+    import orca_settings
+    return orca_settings.worker_terminal(row)
 
 
 def lead_scope(workers, lead_dispatch):
@@ -2138,7 +2143,7 @@ def settle_sweep(workers, worktrees, skip=(), holds=card_holds, asked=None, now=
         elif taken:
             asked[d] = now or dt.datetime.now().isoformat(timespec="minutes")
             out += [f"TAKEN OVER {d} ({w.get('workerState')}): worker-release refuses it; ask it to check for work left and close itself",
-                    f"  orca terminal send --terminal {w.get('agentTerminalHandle')} --text {shlex.quote(SELF_CHECK)} --enter"]
+                    f"  orca terminal send --terminal {worker_terminal(w)} --text {shlex.quote(SELF_CHECK)} --enter"]
         else:
             out += [f"SETTLED {d} ({w.get('workerState')}): release it; "
                     + ("no open PR, nothing unpushed" if p else "its card is gone"),
@@ -2246,7 +2251,7 @@ def stuck_sweep(workers, slug, seen, read=read_screen, only_new=False, waits=Non
     out, now = [], {}
     waits = agent_waits() if waits is None else waits
     for w in workers:
-        d, h = w.get("dispatchId"), w.get("agentTerminalHandle")
+        d, h = w.get("dispatchId"), worker_terminal(w)
         if w.get("terminalState") != "active" or not d or not h:
             continue
         waited = waits.get(h, NOT_LOOKED)
@@ -2402,9 +2407,9 @@ def cmd_wait(argv):
     lead = p.cfg.get("lead_dispatch")
     if lead:
         row = next((w for w in all_workers(run_id) if w.get("dispatchId") == lead), None)
-        if not row or not me or row.get("agentTerminalHandle") != me:
+        if not row or not me or worker_terminal(row) != me:
             sys.exit(f"orch wait reads the lead's own mailbox, and this terminal is not lead dispatch {lead}"
-                     f" ({'not listed on ' + run_id if not row else 'its terminal is ' + str(row.get('agentTerminalHandle'))})."
+                     f" ({'not listed on ' + run_id if not row else 'its terminal is ' + str(worker_terminal(row))})."
                      " The Run's inbox is its coordinator's: never wait on it from here.")
         box = ["--terminal", me]
     elif me and own_worker(all_workers(run_id), me):
@@ -2543,7 +2548,7 @@ def next_moves(workers):
         pj = w.get("projection") or {}
         if pj.get("outcome") != "in_progress":
             continue
-        d, h, act = w["dispatchId"], w.get("agentTerminalHandle"), pj.get("nextAction") or {}
+        d, h, act = w["dispatchId"], worker_terminal(w), pj.get("nextAction") or {}
         activity = (pj.get("stage") or {}).get("activity") or "unknown"
         if act.get("kind") not in (None, "none"):
             out.append(f"  {d} {act['kind']}: {' '.join(act.get('argv') or [])}")

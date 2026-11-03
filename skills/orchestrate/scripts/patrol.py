@@ -287,7 +287,7 @@ def judge(facts, memo):
             if (pj.get("liveness") or {}).get("verdict") == "exited":
                 add("X", path, (w.get("dispatchId"),), f"worker {w.get('dispatchId')} exited with its task in progress: "
                     f"worker-read --source transcript, then worker-stop or worker-abandon on positive evidence only",
-                    w.get("agentTerminalHandle"))  # its card stays "run": the lead decides, not a cleaner
+                    prog.worker_terminal(w))  # its card stays "run": the lead decides, not a cleaner
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             continue
