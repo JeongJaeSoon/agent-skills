@@ -1107,16 +1107,18 @@ def subagent_log(event, handle=None, now=None):
                 if time.monotonic() > deadline:
                     return None
                 time.sleep(0.02)
-        with contextlib.suppress(FileNotFoundError):
+        with contextlib.suppress(OSError):
             if path.stat().st_size > SUBAGENTS_ROTATE:
                 # The old file is copied to .1 first and the new one, holding the open starts so a long-running agent
                 # outlives the rotation, replaces it in one rename: a failure at any step leaves a whole log behind.
+                # Both come from the one read, so the starts carried are the ones in the copy.
+                data = path.read_bytes()
                 cut = iso((now or utcnow()) - dt.timedelta(days=SUBAGENT_CARRY_D))
                 carried = [{"v": 1, "event": "start", "at": a["started_at"], "agent": a["agent"],
                             **{k: a[k] for k in SUBAGENT_FIELDS}}
-                           for a in subagents(path).values()
+                           for a in _fold(data.decode(errors="replace").splitlines()).values()
                            if a["started_at"] and not a["stopped_at"] and a["started_at"] >= cut]
-                write_atomic(path.with_name(path.name + ".1"), path.read_bytes())
+                write_atomic(path.with_name(path.name + ".1"), data)
                 write_atomic(path, "".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n"
                                            for r in carried))
         append_line(path, row)
@@ -1138,6 +1140,12 @@ def subagents(path=None):
         raw = []
     except OSError:  # unreadable for now: the last good fold, uncached, so the next read tries again
         return hit[1] if hit else {}
+    out = _fold(raw)
+    _subagents[str(path)] = (sig, out)
+    return out
+
+
+def _fold(raw):
     out = {}
     for line in raw:
         try:
@@ -1154,7 +1162,6 @@ def subagents(path=None):
             a["started_at"], a["stopped_at"] = r["at"], None
         else:
             a["stopped_at"] = r["at"]
-    _subagents[str(path)] = (sig, out)
     return out
 
 

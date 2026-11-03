@@ -9,9 +9,12 @@ nothing is written.
 Hooks of one event run in parallel, so this one cannot see whether claim_check.py blocked the same stop. It asks
 claim_check's own judge instead and writes no stop for a stop claim_check blocks: the subagent goes on working.
 
-It prints nothing, so the subagent runs exactly as it would without it. Any error exits 0 silently.
+It prints nothing, so the subagent runs exactly as it would without it. Any error exits 0 silently, and so does a run
+past BUDGET_S (a stdin left open, a slow disk), well inside the 5 s timeout hooks.json gives it.
 """
-import json, os, pathlib, re, sys
+import json, os, pathlib, re, signal, sys
+
+BUDGET_S = 3
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "skills" / "orchestrate" / "scripts"))
@@ -43,6 +46,8 @@ def main():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
+    signal.alarm(BUDGET_S)
     try:
         main()
     except Exception:

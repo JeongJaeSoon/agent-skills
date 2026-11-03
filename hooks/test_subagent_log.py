@@ -1,7 +1,7 @@
 """subagent_log.py: appends one subagents.jsonl line per observed subagent start and stop, writes no stop for one
 claim_check blocks, and never blocks or prints, whatever its input or the disk does (names invented).
 Run: python3 hooks/test_subagent_log.py"""
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, subprocess, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="test-subagent-log-"))
@@ -94,19 +94,43 @@ assert [(x["agent"], x["event"]) for x in kept] == [("a3", "start"), ("a7", "sta
 assert (STATE / "subagents.jsonl.1").stat().st_size > fleet.SUBAGENTS_ROTATE
 assert set(fleet.subagents(LOG)) == {"a3", "a7"}
 
-# A rotation that cannot finish (.1 cannot be written) leaves the whole log where it was.
+# A rotation that cannot finish (.1 cannot be written) leaves the whole log where it was, and the event still goes in.
 before = LOG.read_bytes()
 filled = before + ((filler + "\n") * (fleet.SUBAGENTS_ROTATE // len(filler) + 1)).encode()
 LOG.write_bytes(filled)
 (STATE / "subagents.jsonl.1").unlink()
 (STATE / "subagents.jsonl.1").mkdir()
 hook({**start, "agent_id": "a8"})
-assert LOG.read_bytes() == filled and set(fleet.subagents(LOG)) >= {"a3", "a7"}
+assert LOG.read_bytes().startswith(filled) and set(fleet.subagents(LOG)) >= {"a3", "a7", "a8"}
 (STATE / "subagents.jsonl.1").rmdir()
 LOG.write_bytes(before)
 
+# The starts carried over are folded from the same read that is copied to .1, never from a separate one that failed.
+LOG.write_bytes(filled)
+fleet._subagents.clear()
+reads = []
+real_read_text = pathlib.Path.read_text
+pathlib.Path.read_text = lambda self, *a, **k: reads.append(self) or (_ for _ in ()).throw(OSError("busy"))
+try:
+    fleet.subagent_log({**start, "agent_id": "b1"}, "term_0FAKE1")
+finally:
+    pathlib.Path.read_text = real_read_text
+assert [(x["agent"], x["event"]) for x in map(json.loads, LOG.read_text().splitlines())] == [
+    ("a3", "start"), ("a7", "start"), ("b1", "start")], LOG.read_text()[:500]
+assert (STATE / "subagents.jsonl.1").read_bytes() == filled
+LOG.write_bytes(before)
+
+# A stdin that never closes costs the hook BUDGET_S, then it exits 0 with no output.
+p = subprocess.Popen([sys.executable, HERE / "subagent_log.py"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE, text=True, env=ENV)
+p.stdin.write("{")
+p.stdin.flush()
+t0 = time.monotonic()
+assert p.wait(timeout=10) == 0 and time.monotonic() - t0 < 4.5 and p.stdout.read() == "" and p.stderr.read() == ""
+p.stdin.close()
+
 # A held lock costs the hook at most SUBAGENT_LOCK_S, then it drops its event and still exits 0 with no output.
-import fcntl, time  # noqa: E402
+import fcntl  # noqa: E402
 with open(STATE / "subagents.jsonl.lock", "a") as held:
     fcntl.flock(held, fcntl.LOCK_EX)
     t0 = time.monotonic()
