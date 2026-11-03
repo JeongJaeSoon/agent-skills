@@ -224,54 +224,60 @@ def quotes_only(cmd, marks):
     command_text stops following, so an operator inside quotes or a comment there is not a command boundary. A
     `$(…)` or backtick substitution inside double quotes stays, since bash runs it. Single-quoted and escaped runs go
     to marks["literal"], comments to marks["comment"]."""
-    out, i, n = list(cmd), 0, len(cmd)
+    out, n = list(cmd), len(cmd)
 
-    def blank(i, j):
+    def blank(i, j, literal=False):
         out[i:j] = " " * (j - i)
+        if literal:
+            marks["literal"].append((i, j))
 
-    def substitution(i):  # index after the `$(…)` or backtick substitution at i
-        if cmd[i] == "`":
-            j = cmd.find("`", i + 1)
-            return n if j < 0 else j + 1
-        depth, j = 0, i + 2
-        while j < n and (cmd[j] != ")" or depth):
-            depth += {"(": 1, ")": -1}.get(cmd[j], 0)
-            j += 1
-        return min(j + 1, n)
+    def scan(i, close):
+        """From i to the `close` that ends this level (`)` of `$(`, a backtick, or the end); the index after it."""
+        depth = 0
+        while i < n:
+            c = cmd[i]
+            if close == ")" and c == ")" and not depth or close == "`" and c == "`":
+                return i + 1
+            if c == "\\":
+                blank(i, min(i + 2, n), literal=True)
+                i += 2
+            elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+                eol = cmd.find("\n", i)
+                eol = n if eol < 0 else eol
+                blank(i, eol)
+                marks["comment"].append((i, eol))
+                i = eol
+            elif c == "'":
+                j = cmd.find("'", i + 1)
+                j = n if j < 0 else j
+                blank(i + 1, j, literal=True)
+                i = j + 1
+            elif c == '"':
+                i = double(i + 1)
+            elif cmd.startswith("$(", i):
+                i = scan(i + 2, ")")
+            elif c == "`":
+                i = scan(i + 1, "`")
+            else:
+                depth += {"(": 1, ")": -1}.get(c, 0) if close == ")" else 0
+                i += 1
+        return n
 
-    while i < n:
-        c = cmd[i]
-        if c == "\\":
-            blank(i, min(i + 2, n))
-            marks["literal"].append((i, min(i + 2, n)))
-            i += 2
-        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
-            eol = cmd.find("\n", i)
-            eol = n if eol < 0 else eol
-            blank(i, eol)
-            marks["comment"].append((i, eol))
-            i = eol
-        elif c == "'":
-            j = cmd.find("'", i + 1)
-            j = n if j < 0 else j
-            blank(i + 1, j)
-            marks["literal"].append((i + 1, j))
-            i = j + 1
-        elif c == '"':
-            j = i + 1
-            while j < n and cmd[j] != '"':
-                if cmd[j] == "\\":
-                    blank(j, min(j + 2, n))
-                    marks["literal"].append((j, min(j + 2, n)))
-                    j += 2
-                elif cmd.startswith("$(", j) or cmd[j] == "`":
-                    j = substitution(j)
-                else:
-                    blank(j, j + 1)
-                    j += 1
-            i = j + 1
-        else:
-            i += 1
+    def double(j):
+        while j < n and cmd[j] != '"':
+            if cmd[j] == "\\":
+                blank(j, min(j + 2, n), literal=True)
+                j += 2
+            elif cmd.startswith("$(", j):
+                j = scan(j + 2, ")")
+            elif cmd[j] == "`":
+                j = scan(j + 1, "`")
+            else:
+                blank(j, j + 1)
+                j += 1
+        return j + 1
+
+    scan(0, None)
     return "".join(out)
 
 

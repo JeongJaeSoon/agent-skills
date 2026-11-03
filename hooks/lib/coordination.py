@@ -39,6 +39,15 @@ def waits(c):
     return c.name == "orca" and w[1:3] in (["orchestration", "check"], ["orchestration", "inbox"]) and "--wait" in w
 
 
+def downstream(cmds, c):
+    """The commands c's own pipeline feeds, in order."""
+    out, i = [], next(i for i, d in enumerate(cmds) if d is c)
+    while cmds[i].piped_to and i + 1 < len(cmds) and cmds[i + 1].piped_from:
+        i += 1
+        out.append(cmds[i])
+    return out
+
+
 def check_bash(cmd, background, s, cfg):
     out, cmds = [], shell.commands(cmd)
     if roles.applies("wait_foreground", s):
@@ -47,14 +56,14 @@ def check_bash(cmd, background, s, cfg):
             out += finding(cfg, "orchestrate.wait_foreground",
                            f"`{' '.join(wait.words[:3])}` blocks this session's turn ({s.role}) until mail arrives. Run the same "
                            "command with run_in_background: true and end your turn; its completion notice wakes you.")
-        elif wait and wait.piped_to and cmds[-1].name in ("tail", "head"):
+        elif wait and wait.piped_to and any(c.name in ("tail", "head") for c in downstream(cmds, wait)):
             out += finding(cfg, "orchestrate.wait_foreground",
                            "A background wait piped into `tail` or `head` shows nothing until it ends. Run it without "
                            "the pipe and read its output file.")
     if roles.applies("send_devnull", s):
         for c in cmds:
             if c.name == "orca" and c.words[1:3] in (["orchestration", "send"], ["orchestration", "reply"]) and any(
-                    t == "/dev/null" and (op in ("&>", "&>>") or op in (">", ">>", ">|") and fd in ("", "1"))
+                    t == "/dev/null" and (op in ("&>", "&>>") or op in (">", ">>", ">|", ">&") and fd in ("", "1"))
                     for fd, op, t in c.redirects):
                 out += finding(cfg, "orchestrate.send_devnull",
                                "Its output says whether the message was delivered (`\"ok\": true`). Keep it: drop "

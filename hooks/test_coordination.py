@@ -64,6 +64,9 @@ for role in ("orchestrator", "lead"):
         assert bash(cmd, role) == "deny", (role, cmd)
         assert bash(cmd, role, background=True) in ("none", "allow"), (role, cmd)
     assert bash("orch wait app | tail -5", role, background=True) == "deny"
+    assert bash("orch wait app | tail -5; orch status app", role, background=True) == "deny"
+    assert bash("orch wait app | jq . | head -3", role, background=True) == "deny"
+    assert bash("orch wait app | jq .; tail -5 /tmp/status.log", role, background=True) != "deny"
     assert bash("orch status app", role) == "allow"
     assert bash("orch inbox --json", role) == "allow"
     assert bash("echo 'orch wait app'", role) == "none"
@@ -76,7 +79,8 @@ CONFIG.write_text("{}")
 # A send or reply to /dev/null hides whether it went out.
 for cmd in ("orca orchestration send --to run:r --text hi > /dev/null", "orca orchestration send --to run:r --text hi >/dev/null 2>&1",
             "orca orchestration reply --id m1 --body ok &>/dev/null", "orca orchestration send --text hi 1>/dev/null",
-            "orca orchestration send --text '2' >/dev/null", "orca orchestration send --text 2 >/dev/null"):
+            "orca orchestration send --text '2' >/dev/null", "orca orchestration send --text 2 >/dev/null",
+            "orca orchestration send --to run:r --text hi >& /dev/null"):
     for role in ("orchestrator", "lead", "worker"):
         assert bash(cmd, role) == "deny", (role, cmd)
     assert bash(cmd, "general") == "none", cmd
