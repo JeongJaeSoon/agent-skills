@@ -232,6 +232,14 @@ left = co({"dispatchId": "dl", "outcome": "succeeded"}, [{"dispatchId": "dl", "t
 assert left[0].startswith("CLOSE OUT dl: release it, close its terminals and remove its card") and left[-1] == "  orca worktree rm --worktree path:'/w/a b'", left
 spaced = [{"dispatchId": "dx", "terminalState": "active", "resource": {"worktreeId": "wx"}}]
 assert co({"dispatchId": "dx", "outcome": "succeeded"}, spaced)[-1] == "  orca worktree rm --worktree path:'/w/a b'"
+# A `--worktree current` worker reports the caller's own card: release it, never offer to remove it.
+for outcome in ("succeeded", "failed"):
+    mine = prog.close_out([{"type": "worker_done", "payload": {"dispatchId": "dl", "outcome": outcome}}],
+                          [{"dispatchId": "dl", "terminalState": "reclaimable", "resource": {"worktreeId": "wx"}}],
+                          wts + [{"id": "wx", "path": "/w/a b"}], here="/w/a b")
+    assert mine == ["CLOSE OUT dl: release it and close its terminal; its card is this session's own worktree"
+                    " (`--worktree current`), so it stays",
+                    "  orca orchestration worker-release --dispatch dl"], mine
 assert prog.close_out([{"type": "question", "payload": {"dispatchId": "d2"}}, {"type": "worker_done", "payload": None},
                        {"type": "worker_done", "payload": "[1]"}], workers, wts) == []
 settled = [
