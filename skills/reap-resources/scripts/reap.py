@@ -22,10 +22,10 @@ the repo of the current directory.
 Config: ~/.claude/agent-skills.json → "reap": {"hours": 6, "orphan_paths": [...], "alert": {...},
 "load_limit": <5-minute load; default the CPU count>, "load_cooldown_minutes": 60, "idle_minutes": 30, "evidence_roots": [...], "user_folders": [], "user_folder_days": 7,
 "user_folder_screenshot_days": 1, "program_days": 7, "state_days": 7, "log_max_kb": 512, "inbox_to": "run:<id>", "plan_repeat": 2,
-"preview_ports": [4500, 4599]}.
-Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack;
-`--kinds janitor`): card is every Orca card, judged by cards.py; the rest cover only
-what the ledger lists or an Orca orchestration worker made. user-folder covers only top-level entries of explicitly configured reap.user_folders
+"preview_ports": [4500, 4599], "stack_volumes": {"prefixes": [...], "label": "...", "protect": [...]}}.
+Janitor kinds (card, orca-worker, tmpdir, gui-app, chrome-window, evidence, remote-branch, compose-stack, stack-volume;
+`--kinds janitor`): card is every Orca card, judged by cards.py; stack-volume only volumes of stacks under
+reap.stack_volumes.prefixes; the rest cover only what the ledger lists or an Orca orchestration worker made. user-folder covers only top-level entries of explicitly configured reap.user_folders
 untouched for reap.user_folder_days (default 7; screenshots and screen recordings reap.user_folder_screenshot_days,
 default 1), and keeps them all while Finder empties the trash on its own, unless $AGENT_SKILLS_TRASH is set.
 orca-worktree and done-card, the card kinds before card, are gone: --kinds or a plan naming them is refused. reap moves files to the trash and never empties it (the OS may: scan
@@ -465,7 +465,7 @@ def scan(kinds, hours, cfg, repo_list):
     if set(JANITOR) & kinds:
         items += janitor_scan(kinds, repo_list, ledger_read(ledger_path()), notes, hours=hours,
                               evidence_roots=cfg.get("evidence_roots"),
-                              preview=tuple(cfg.get("preview_ports") or (4500, 4599)))
+                              preview=tuple(cfg.get("preview_ports") or (4500, 4599)), cfg=cfg)
     if "user-folder" in kinds:
         days = user_folder_days(cfg, notes)
         shot_days = days and user_folder_days(cfg, notes, "user_folder_screenshot_days", 1,
@@ -496,14 +496,14 @@ def trash_auto_empty():
 # Janitor kinds: every Orca card (card, judged by cards.py), and of the rest only what an agent created (the ledger, or
 # an Orca orchestration worker).
 JANITOR = ("card", "orca-worker", "tmpdir", "gui-app", "chrome-window", "evidence", "remote-branch",
-           "compose-stack")
+           "compose-stack", "stack-volume")
 # What the scheduled run covers: the janitor kinds, the user's download and desktop folders, closed programs and hook state.
 SCHEDULED = JANITOR + ("user-folder", "program", "state-file")
 # The card kinds before `card`, no longer scanned. A plan or --kinds naming them is refused rather than run as nothing.
 # reap.act's "orca-worktree" removal stays: cards.py and reap_hard.py call it.
 RETIRED_KINDS = ("orca-worktree", "done-card")
 # What `ledger add` accepts: the kinds whose scan reads the ledger. `card` reads Orca instead.
-LEDGER_KINDS = tuple(k for k in JANITOR if k != "card")
+LEDGER_KINDS = tuple(k for k in JANITOR if k not in ("card", "stack-volume"))
 # Kinds that would find something new every round; the precheck looks at them once a day.
 DAILY = ("user-folder", "program", "state-file")
 MEDIA = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".webm")
@@ -1087,8 +1087,107 @@ def judge_compose(entries, stacks, owner, hours, now, preview=(4500, 4599)):
     return out
 
 
+def stack_volume_spec(cfg):
+    """reap.stack_volumes → (prefixes, label, protect), or a string saying why the kind is off."""
+    spec = cfg.get("stack_volumes")
+    if not spec:
+        return "reap.stack_volumes 가 비어 있어 건너뜀"
+    if not isinstance(spec, dict):
+        return "reap.stack_volumes 는 객체여야 함, 건너뜀"
+    prefixes, label, protect = spec.get("prefixes"), spec.get("label"), spec.get("protect", [])
+    # A short prefix would match stacks nobody declared throwaway.
+    if not isinstance(prefixes, list) or not prefixes or \
+            not all(isinstance(p, str) and len(p) >= 4 and p.endswith("-") for p in prefixes):
+        return "reap.stack_volumes.prefixes 는 '-' 로 끝나는 4자 이상 문자열 목록이어야 함, 건너뜀"
+    if label is not None and (not isinstance(label, str) or not re.fullmatch(r"[\w.-]+", label)
+                              or label.startswith("com.docker.")):
+        return "reap.stack_volumes.label 이 올바르지 않음, 건너뜀"
+    if not isinstance(protect, list) or not all(isinstance(p, str) for p in protect):
+        return "reap.stack_volumes.protect 는 문자열 목록이어야 함, 건너뜀"
+    return tuple(prefixes), label, frozenset(protect)
+
+
+def volume_owners(labels, spec):
+    labels = labels or {}
+    keys = ("com.docker.compose.project", spec[1]) if spec[1] else ("com.docker.compose.project",)
+    return list(dict.fromkeys(labels[k] for k in keys if labels.get(k)))
+
+
+def stack_volume_recheck(item, spec):
+    """Read again right before the rm: the same volume (creation time), the same owners, and still no container of any
+    owner. Returns why it stays, or None."""
+    out = run(["docker", "volume", "inspect", item["name"]], check=False)
+    if out is None:
+        return "볼륨을 다시 읽지 못함"
+    (v,) = json.loads(out)
+    found = volume_owners(v.get("Labels"), spec)
+    if parse_ts(v["CreatedAt"]) != item["created"] or found != item["owners"]:
+        return "다시 만들어졌거나 소유자가 바뀐 볼륨"
+    for o in found:
+        for key in ["com.docker.compose.project"] + ([spec[1]] if spec[1] else []):
+            ids = run(["docker", "ps", "-aq", "--filter", f"label={key}={o}"], check=False)
+            if ids is None:
+                return "컨테이너를 다시 읽지 못함"
+            if ids.strip():
+                return f"컨테이너가 생긴 스택 {o}"
+    return None
+
+
+def judge_stack_volumes(vols, owners, spec, hours, now):
+    """vols: [{name, labels, created}]; owners: every compose project and `label` value any container carries, in any
+    state. Only volumes owned (compose project or `label`) by a stack under a configured prefix are listed at all."""
+    prefixes, _, protect = spec
+    out = []
+    for v in vols:
+        found = volume_owners(v["labels"], spec)
+        if not any(o.startswith(prefixes) and o in v["name"] for o in found):
+            continue
+        owner = " / ".join(found)
+        age = now - v["created"]
+        item = {"kind": "stack-volume", "key": f"stack-volume:{v['name']}", "name": v["name"], "age": age,
+                "created": v["created"], "owners": found, "target": False,
+                "how": [f"docker volume rm {shlex.quote(v['name'])}"]}
+        if not all(o.startswith(prefixes) for o in found):
+            item["why"] = f"소유자 라벨이 엇갈림 {owner}(보고만)"
+        elif protect & set(found):
+            item["why"] = f"보호 목록의 스택 {owner}"
+        elif owners & set(found):
+            item["why"] = f"컨테이너가 남은 스택 {owner}"
+        elif age < hours * 3600:
+            item["why"] = f"{hours:g}시간 미만"
+        else:
+            item.update(target=True, why=f"컨테이너 없는 스택 {owner}")
+        out.append(item)
+    return out
+
+
+def stack_volume_scan(spec, hours, notes, now=None):
+    if not shutil.which("docker"):
+        return []
+    _, label, _ = spec
+    fmt = '{{.Label "com.docker.compose.project"}}' + (f'\t{{{{.Label "{label}"}}}}' if label else "")
+    ps = run(["docker", "ps", "-a", "--no-trunc", "--format", fmt], check=False)
+    names = set()
+    for f in ["label=com.docker.compose.project"] + ([f"label={label}"] if label else []):
+        out = None if ps is None else run(["docker", "volume", "ls", "-q", "--filter", f], check=False)
+        if out is None:
+            notes.append("stack-volume: docker 를 읽지 못함, 건너뜀")
+            return []
+        names |= set(out.split())
+    vols = []
+    if names:
+        found = run(["docker", "volume", "inspect", *sorted(names)], check=False)
+        if found is None:
+            notes.append("stack-volume: docker volume inspect 실패, 건너뜀")
+            return []
+        for v in json.loads(found):
+            vols.append({"name": v["Name"], "labels": v.get("Labels") or {}, "created": parse_ts(v["CreatedAt"])})
+    owners = {o for line in ps.splitlines() for o in line.split("\t") if o}
+    return judge_stack_volumes(vols, owners, spec, hours, now or time.time())
+
+
 def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now=None, evidence_roots=None,
-                 preview=(4500, 4599)):
+                 preview=(4500, 4599), cfg=None):
     pr_state = pr_state or pr_reader()
     items = []
     if "card" in kinds:
@@ -1103,6 +1202,12 @@ def janitor_scan(kinds, repo_list, entries, notes, pr_state=None, hours=6.0, now
             notes.append("compose-stack: docker 를 읽지 못함, 건너뜀")
         items += judge_compose(entries, stacks or {}, functools.partial(stack_owner, pr_state=pr_state), hours,
                                now or time.time(), preview)
+    if "stack-volume" in kinds:
+        spec = stack_volume_spec(cfg or {})
+        if isinstance(spec, str):
+            notes.append(f"stack-volume: {spec}")
+        else:
+            items += stack_volume_scan(spec, hours, notes, now)
     rows = processes() if {"gui-app", "tmpdir"} & kinds else {}
     cwd_of = cwds() if "tmpdir" in kinds else {}
     if "tmpdir" in kinds:
@@ -1792,6 +1897,13 @@ def act(item, notes):
         run(["docker", "compose", "-p", item["name"], "down"])
         ledger_add(ledger_path(), "compose-stack", item["name"], by="reap", retired=True)
         return "docker compose down (볼륨 유지, ledger 에서 내림)"
+    if kind == "stack-volume":
+        spec = stack_volume_spec(config())
+        why = "reap.stack_volumes 를 읽지 못함" if isinstance(spec, str) else stack_volume_recheck(item, spec)
+        if why:
+            return f"건너뜀: {why}"
+        run(["docker", "volume", "rm", item["name"]])
+        return "docker volume rm"
     if kind == "orca-worker":
         run(["orca", "orchestration", "worker-release", "--dispatch", k.split(":", 1)[1], "--json"])
         return "터미널 회수"

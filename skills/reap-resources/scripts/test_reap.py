@@ -1064,6 +1064,97 @@ reap.run, reap.shutil.which = saved
 assert reap.docker_ts("2026-10-25T06:49:59.921306307Z") == reap.parse_ts("2026-10-25T06:49:59+00:00")
 assert "compose-stack" in reap.JANITOR and "compose-stack" in reap.SCHEDULED
 
+# stack-volume: only volumes owned by a stack under a configured prefix, with no container of that stack in any state.
+assert "stack-volume" in reap.SCHEDULED and "stack-volume" not in reap.LEDGER_KINDS
+assert isinstance(reap.stack_volume_spec({}), str)
+for bad in ({"prefixes": ["v-"]}, {"prefixes": ["verify"]}, {"prefixes": []}, {"prefixes": "verify-x-"},
+            {"prefixes": ["verify-x-"], "label": "com.docker.compose.project"}, {"prefixes": ["verify-x-"], "label": 'a"b'},
+            {"prefixes": ["verify-x-"], "protect": "main"}, {"prefixes": ["verify-x-"], "protect": None}, ["verify-x-"]):
+    assert isinstance(reap.stack_volume_spec({"stack_volumes": bad}), str), bad
+SPEC = reap.stack_volume_spec({"stack_volumes": {"prefixes": ["verify-x-"], "label": "app.installation",
+                                                  "protect": ["verify-x-keep"]}})
+assert SPEC == (("verify-x-",), "app.installation", frozenset({"verify-x-keep"})), SPEC
+old = NOW - 7 * H
+vol = lambda name, created=old, **labels: {"name": name, "labels": labels, "created": created}
+P = "com.docker.compose.project"
+vols = [
+    vol("verify-x-1_db", **{P: "verify-x-1"}),                                  # project volume, stack gone
+    vol("ws-verify-x-1-s1", **{"app.installation": "verify-x-1"}),              # workspace volume, stack gone
+    vol("verify-x-2_db", **{P: "verify-x-2"}),                                  # an exited container still there
+    vol("ws-verify-x-3-s1", **{"app.installation": "verify-x-3"}),              # a running worker still there
+    vol("verify-x-4_db", NOW - H, **{P: "verify-x-4"}),                          # too young
+    vol("verify-x-keep_db", **{P: "verify-x-keep"}),                            # protected
+    vol("main_db", **{P: "main"}),                                              # another prefix
+    vol("ws-main-s1", **{"app.installation": "main"}),
+    vol("main-verify-x-1_db", **{P: "main-verify-x-1"}),                        # prefix only inside the name
+    vol("unrelated", **{P: "verify-x-1"}),                                      # label without the owner in its name
+    vol("anon123"),
+    vol("verify-x-5_db", **{P: "verify-x-5", "app.installation": "verify-x-keep"}),   # second owner protected
+    vol("verify-x-6_db", **{P: "verify-x-6", "app.installation": "verify-x-2"}),      # second owner has a container
+    vol("ws-verify-x-7-s1", **{P: "main", "app.installation": "verify-x-7"}),         # owners disagree
+]
+got = {i["name"]: (i["target"], i["why"]) for i in reap.judge_stack_volumes(vols, {"verify-x-2", "verify-x-3", "main"}, SPEC, 6, NOW)}
+assert {n for n, (t, _) in got.items() if t} == {"verify-x-1_db", "ws-verify-x-1-s1"}, got
+assert set(got) == {"verify-x-1_db", "ws-verify-x-1-s1", "verify-x-2_db", "ws-verify-x-3-s1", "verify-x-4_db",
+                    "verify-x-keep_db", "verify-x-5_db", "verify-x-6_db", "ws-verify-x-7-s1"}, got
+assert "보호" in got["verify-x-keep_db"][1] and "컨테이너" in got["ws-verify-x-3-s1"][1], got
+assert "보호" in got["verify-x-5_db"][1] and "컨테이너" in got["verify-x-6_db"][1] and "엇갈림" in got["ws-verify-x-7-s1"][1], got
+
+# The scan reads containers of any state with both owner labels, and the janitor acts with one exact-name rm.
+saved = reap.run, reap.shutil.which
+calls = []
+alive = {}
+def fake_run(cmd, cwd=None, check=True):
+    calls.append(cmd)
+    if cmd[:3] == ["docker", "ps", "-aq"]:
+        return alive.get(cmd[-1], "")
+    if cmd[:2] == ["docker", "ps"]:
+        return "verify-x-2\t\n\tverify-x-3\n"
+    if cmd[:3] == ["docker", "volume", "ls"]:
+        return "verify-x-1_db\nverify-x-2_db\n" if cmd[-1] == f"label={P}" else "ws-verify-x-1-s1\nws-verify-x-3-s1\n"
+    if cmd[:3] == ["docker", "volume", "inspect"]:
+        return json.dumps([{"Name": v["name"], "Labels": v["labels"], "CreatedAt": "2026-10-25T00:00:00Z"}
+                           for v in vols if v["name"] in cmd[3:]])
+reap.shutil.which = lambda name: "/bin/" + name
+reap.run = fake_run
+notes = []
+got = reap.janitor_scan({"stack-volume"}, [], [], notes, pr_state=lambda r: None, hours=6, now=NOW,
+                        cfg={"stack_volumes": {"prefixes": ["verify-x-"], "label": "app.installation"}})
+assert [i["name"] for i in got if i["target"]] == ["verify-x-1_db", "ws-verify-x-1-s1"], got
+assert calls[0][:3] == ["docker", "ps", "-a"] and "app.installation" in calls[0][-1], calls[0]
+assert not any(c[:2] == ["docker", "volume"] and c[2] in ("prune", "rm") for c in calls), calls
+# Right before the rm, the volume and its owner's containers are read again.
+saved_config = reap.config
+reap.config = lambda: {"stack_volumes": {"prefixes": ["verify-x-"], "label": "app.installation"}}
+target = next(i for i in got if i["target"])
+calls.clear()
+assert reap.act(target, []) == "docker volume rm"
+assert calls[-1] == ["docker", "volume", "rm", "verify-x-1_db"], calls
+assert ["docker", "ps", "-aq", "--filter", f"label={P}=verify-x-1"] in calls and \
+    ["docker", "ps", "-aq", "--filter", "label=app.installation=verify-x-1"] in calls, calls
+alive["label=app.installation=verify-x-1"] = "c1\n"
+calls.clear()
+assert reap.act(target, []).startswith("건너뜀: 컨테이너가 생긴"), calls
+assert not any(c[:3] == ["docker", "volume", "rm"] for c in calls), calls
+alive.clear()
+assert reap.act({**target, "created": target["created"] - 1}, []).startswith("건너뜀: 다시 만들어졌"), target
+two = next(i for i in got if i["target"] and i["name"].startswith("ws-"))
+alive["label=com.docker.compose.project=verify-x-1"] = "c2\n"
+assert reap.act(two, []).startswith("건너뜀: 컨테이너가 생긴"), two
+alive.clear()
+reap.run = lambda cmd, cwd=None, check=True: None
+assert reap.act(target, []) == "건너뜀: 볼륨을 다시 읽지 못함"
+reap.run = fake_run
+reap.config = lambda: {}
+assert reap.act(target, []).startswith("건너뜀: reap.stack_volumes"), target
+reap.config = saved_config
+notes = []
+assert reap.janitor_scan({"stack-volume"}, [], [], notes, pr_state=lambda r: None, cfg={}) == [] and notes, notes
+reap.run = lambda cmd, cwd=None, check=True: None
+notes = []
+assert reap.stack_volume_scan(SPEC, 6, notes) == [] and "읽지 못함" in notes[0], notes
+reap.run, reap.shutil.which = saved
+
 # ledger add: a keep needs a deadline, a pid is a number; folded lines keep the owner link.
 with tempfile.TemporaryDirectory() as tmp:
     led = os.path.join(tmp, "ledger.jsonl")
