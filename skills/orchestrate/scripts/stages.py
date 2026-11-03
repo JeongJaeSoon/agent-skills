@@ -148,7 +148,7 @@ def merge_cell(pr, prs):
         return None
     if p.get("merged_at") or p.get("state") == "MERGED":
         at = fleet.parse(p.get("merged_at"))
-        return {"mark": "ok", "evidence": f"{at.month}/{at.day}" if at else "머지됨", "auto": True}
+        return {"mark": "ok", "evidence": f"{at.month}/{at.day}" if at else "머지됨", "auto": True, "at": p.get("merged_at")}
     if p.get("state") == "CLOSED":
         return {"mark": "fail", "evidence": "닫힘", "auto": True}
     why = ("CI 실패" if p.get("ci") == "failure" else "변경 요청" if p.get("decision") == "CHANGES_REQUESTED"
@@ -223,8 +223,22 @@ def table(state=None):
         auto = merge_cell(r.get("pr"), prs) if r.get("pr") and r.get("source") != "auto" else None
         if auto:
             cells["merge"] = auto
-        out.append({**r, "cells": cells})
+        close = (all_rows.get(r.get("program")) or {}).get("done_at") if r.get("source") == "auto" else None
+        out.append({**r, "cells": cells, **finished(r, cells, close)})
     return {"rows": out, "env": store["env"], "next": store["next"], "refs": ref_urls(out, store["next"], prs)}
+
+
+def finished(row, cells, close=None):
+    """The row's end as the table reads it. A stopped row a recorded merge ✅ now covers is not stopped: its end falls
+    back to its program's Close (close). A work row every column of which is ✅ or 해당 없음 ends at its latest cell's
+    time, or the earlier end the row already has (`orch stage done`, a program's Close). {} when nothing changes."""
+    base = {"stopped": None, "done_at": close} if row.get("stopped") and (cells.get("merge") or {}).get("mark") == "ok" else {}
+    if row.get("group") or not {(cells.get(c) or {}).get("mark") for c in COLUMNS} <= {"ok", "na"}:
+        return base
+    at = max(filter(None, (fleet.parse(c.get("at")) for c in cells.values())), default=None)
+    have = fleet.parse(base.get("done_at", row.get("done_at")))
+    end = min(filter(None, (at, have)), default=None) or fleet.parse(row.get("at") or row.get("created_at"))
+    return {"done_at": fleet.iso(end.astimezone(dt.timezone.utc)), "stopped": None} if end else base
 
 
 REF = re.compile(r"\b([\w.-]+/[\w.-]+)#(\d+)\b")
@@ -268,6 +282,21 @@ def current(t, now, idle_s, state=None):
     out = [r for r in t["rows"] if r["id"] in keep]
     gone = sum(1 for r in t["rows"] if not r.get("group") and r["id"] not in keep)
     return {**t, "rows": out, "next": t["next"] if out else []}, gone
+
+
+def idle_s():
+    """`board.stage_idle_d` in seconds, as the brief's renderer reads it."""
+    import board  # it imports this module
+    return {**board.LIMITS, **(fleet.config().get("board") or {})}["stage_idle_d"] * 86400
+
+
+def counted(t, state, now=None):
+    """The table whole for the Stages page, counted by current() as the brief's line counts it: each row's `open`
+    (current() keeps it), `open` (the line's N) and `folded` (its 접음)."""
+    cur, gone = current(t, now or fleet.utcnow(), idle_s(), state)
+    keep = {r["id"] for r in cur["rows"]}
+    return {**t, "rows": [{**r, "open": r["id"] in keep} for r in t["rows"]],
+            "open": sum(1 for r in cur["rows"] if not r.get("group")), "folded": gone}
 
 
 def of_program(t, slug):
@@ -323,7 +352,7 @@ def render_md(t):
             continue
         name = f"ㄴ {r['title']}" if r.get("parent") not in (None, *groups) else r["title"]
         if r.get("done_at"):
-            name += " (끝남)"
+            name += " (중단)" if r.get("stopped") else " (끝남)"
         body.append([name, r.get("pr") or "–"] + [cell_text(r["cells"].get(c)) for c in COLUMNS])
     # Only the name and PR cells are cut to fit (the PR column is a plain key here, not a link), as in the brief's
     # tables, each whole text in the list under it. A table its stage cells alone make too wide overflows.

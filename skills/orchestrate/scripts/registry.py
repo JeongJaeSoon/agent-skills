@@ -140,7 +140,8 @@ STORES = [
     Store("prs", "D/prs.json", {"pr.state": CACHE}, ("fleet:Fleet.tick",),
           ("page", "brief", "tidy", "skillspage"), 1800, rule="PRs any session, board line or ledger names"),
     Store("fleetmem", "D/memory.json", {"fleet.memory": CANONICAL, "inbox.dismissed": CANONICAL},
-          ("fleet:Fleet.tick", "fleet:dismiss"), ("fleet",), 300, rule="phase memory, sticky turn ends, dismissals"),
+          ("fleet:Fleet.tick", "fleet:dismiss"), ("fleet", "reorient"), 300,
+          rule="phase memory, sticky turn ends, dismissals; stage_auto_at, which stage_auto.warning reads in the hook"),
     Store("events", "D/events.jsonl", {"timeline.event": CANONICAL}, ("fleet:Fleet.event",), ("fleet",),
           rule="phase and PR changes; the timeline reads its tail"),
     Store("subagents", "D/subagents.jsonl", {"work.subagent": CANONICAL}, ("fleet:subagent_log",),
@@ -194,8 +195,9 @@ STORES = [
           rule="`orch stage` cells and rows; win over stages-auto"),
     Store("stageslock", "D/stages.lock", {"stage.manual": LOCK}, ("stages:change",)),
     Store("stagesauto", "D/stages-auto.json", {"program.event": DERIVED, "run.dispatch": DERIVED},
-          ("stage_auto:refresh",), ("brief", "reorient"), 300,
-          rule="stage rows per program from its ledger, Run cards and PRs"),
+          ("stage_auto:refresh",), ("brief", "reorient"),
+          rule="stage rows per program from its ledger, Run cards and PRs, built each tick and written when they "
+               "change; its freshness is memory.json stage_auto_at"),
     Store("skillsj", "D/skills.json", {"session.transcript": DERIVED, "skill.signal": DERIVED},
           ("skill_usage:refresh", "skill_usage:main"), ("skillspage",), 3600, rule="usage per skill from transcripts"),
     Store("skillcache", "D/skill-usage-cache.json", {"session.transcript": CACHE}, ("skill_usage:collect",),
@@ -281,7 +283,9 @@ STORES = [
     Store("oldlog", "S/orch-dash.log*", {"dash.old_output": REMOVED}, (), ("nobody",), rule="stopped; now P/.dash.log"),
     # -- P: programs
     Store("program", "P/*/program.json", {"program.config": CANONICAL}, ("prog:Program.update", "prog:cmd_init"),
-          ("programview", "fleet", "watchprs"), rule="repo, Run, predicate, merge policy"),
+          ("programview", "fleet", "watchprs"),
+          rule="repo, Run, predicate, merge policy; stages (`orch set`, cmd_set through Program.update), which "
+               "stage_auto reads in the collector"),
     Store("progledger", "P/*/ledger.jsonl", {"program.event": CANONICAL}, ("prog:Program.append", "prog:write_backfill"),
           ("programview", "fleet", "reflect", "skillspage"), rule="one ledger per program"),
     Store("progledgerlock", "P/*/ledger.lock", {"program.event": LOCK}, ("prog:Program.locked",)),

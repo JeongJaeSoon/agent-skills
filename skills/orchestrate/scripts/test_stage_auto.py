@@ -27,15 +27,17 @@ def program(slug, cfg, events):
 
 # alpha: live. A landed (ledger sha), B merged on GitHub (found by its branch), C open, D nothing yet; a follow-up
 # card outside the predicate gets a row of its own.
-program("alpha", {"repo": "acme/app", "run": "run_a", "created_at": ago(48), "predicate": ["A-1", "A-2", "A-3", "A-4"]}, [
+program("alpha", {"repo": "acme/app", "run": "run_a", "created_at": ago(48), "predicate": ["A-1", "A-2", "A-3", "A-4"],
+                   "stages": ["dev", "prod"]}, [
     {"ts": ago(40), "ev": "spawned", "ticket": "A-1", "note": "ctx_0a"},
     {"ts": ago(30), "ev": "ready", "pr": 11, "ticket": "A-1"},
     {"ts": ago(20), "ev": "landed", "pr": 11, "sha": SHA},
     {"ts": ago(10), "ev": "landed", "pr": 99, "sha": "f" * 40, "onto": 12},  # a fold, not a landing on main
     {"ts": ago(5), "ev": "ready", "pr": 13, "ticket": "A-3"},
 ])
-# beta: finished (predicate_verified after its last landing). gamma: no ledger event in 7 days. _locks: not a program.
-program("beta", {"repo": "acme/lib", "run": "run_b", "created_at": ago(100), "predicate": ["B-1"]}, [
+# beta: finished (predicate_verified after its last landing), no `stages`. gamma: no ledger event in 7 days. _locks:
+# not a program.
+program("beta", {"repo": "acme/lib", "run": "run_b", "created_at": ago(100), "predicate": ["B-1", "B-2"]}, [
     {"ts": ago(60), "ev": "landed", "pr": 5, "sha": "b" * 40, "ticket": "B-1"},
     {"ts": ago(50), "ev": "predicate_verified", "note": "final check on main"}])
 program("gamma", {"repo": "acme/old", "run": "run_c", "created_at": ago(400), "predicate": ["G-1"]},
@@ -62,11 +64,12 @@ by = lambda rid: rows[rid]  # noqa: E731
 
 # Rows: a group per program with work in 7 days, one row per predicate item, then one per other card of its Run.
 assert stage_auto.read()["order"] == ["alpha", "alpha/A-1", "alpha/A-2", "alpha/A-3", "alpha/A-4", "alpha/A-1-fix",
-                                      "alpha/task_3", "beta", "beta/B-1"], stage_auto.read()["order"]
+                                      "alpha/task_3", "beta", "beta/B-1", "beta/B-2"], stage_auto.read()["order"]
 assert by("alpha")["group"] and by("alpha/A-1")["parent"] == "alpha"
 assert by("alpha/A-1")["title"] == "A-1: login form — card" and by("alpha/A-2")["title"] == "A-2"
 
-# Merge: the ledger's landed sha, else GitHub's merge commit; an open PR or no PR leaves it empty. dev and prod: empty.
+# Merge: the ledger's landed sha, else GitHub's merge commit; an open PR or no PR leaves it empty. dev and prod: empty
+# where program.json `stages` names them (alpha), 해당 없음 where it does not (beta).
 assert by("alpha/A-1")["pr"] == "acme/app#11" and by("alpha/A-1")["cells"]["merge"]["evidence"] == SHA[:7]
 assert by("alpha/A-1")["cells"]["merge"]["from"] == "ledger landed"
 assert by("alpha/A-2")["pr"] == "acme/app#12" and by("alpha/A-2")["cells"]["merge"] == {
@@ -74,12 +77,19 @@ assert by("alpha/A-2")["pr"] == "acme/app#12" and by("alpha/A-2")["cells"]["merg
 assert by("alpha/A-3")["pr"] == "acme/app#13" and by("alpha/A-3")["cells"] == {}
 assert by("alpha/A-4")["pr"] is None and by("alpha/A-4")["cells"] == {}
 assert by("alpha/A-1-fix")["pr"] == "acme/app#14" and by("alpha/A-1-fix")["cells"] == {}
-assert all(c not in r["cells"] for r in rows.values() for c in ("dev", "prod"))
-# A finished program's rows carry done_at; the summary says which programs are active.
-assert by("beta/B-1")["done_at"] == ago(50) and by("beta")["done_at"] == ago(50)
+assert all(c not in r["cells"] for k, r in rows.items() if k.startswith("alpha") for c in ("dev", "prod"))
+na = {"mark": "na", "auto": True, "from": "program.json stages"}
+assert by("beta/B-1")["cells"]["dev"] == by("beta/B-1")["cells"]["prod"] == na and by("beta/B-2")["cells"] == {"dev": na, "prod": na}
+# A finished program's Close ends the rows nothing else ended (B-2); the summary says which programs are active.
+assert by("beta/B-2")["done_at"] == ago(50) and by("beta")["done_at"] == ago(50)
 assert by("beta/B-1")["cells"]["merge"]["evidence"] == "bbbbbbb"
 progs = stage_auto.read()["programs"]
-assert {k: (v["active"], v["rows"]) for k, v in progs.items()} == {"alpha": (True, 6), "beta": (False, 1)}, progs
+assert {k: (v["active"], v["rows"]) for k, v in progs.items()} == {"alpha": (True, 6), "beta": (False, 2)}, progs
+# Read as the table, a row whose every cell is ✅ or 해당 없음 ends at its latest cell's time, before the Close (B-1's
+# merge); alpha deploys, so its merged A-2 waits on dev and prod.
+t = {r["id"]: r for r in stages.table({"prs": state["prs"]})["rows"]}
+assert t["beta/B-1"]["done_at"] == ago(60) and t["beta/B-2"]["done_at"] == ago(50), (t["beta/B-1"], t["beta/B-2"])
+assert t["alpha/A-2"]["cells"]["merge"]["mark"] == "ok" and not t["alpha/A-2"].get("done_at")
 
 # The table: generated rows, then recorded ones. A recorded cell on a generated row's id wins over the generated one;
 # a generated row's merge is evidence or nothing, never the PR's state (A-3's open PR stays empty).
@@ -178,10 +188,10 @@ archived = {"tasks": [], "sessions": [], "prs": [
 got, order, _ = stage_auto.build([omega], archived, now)
 assert got["omega/O-1"]["pr"] == "acme/app#21" and got["omega/O-1"]["cells"]["merge"] == {
     "mark": "ok", "evidence": "9999999", "at": ago(19), "auto": True, "from": "ledger landed"}, got["omega/O-1"]
-assert got["omega/O-2"]["pr"] is None and got["omega/O-2"]["cells"] == {}, "no evidence, no cell"
+assert got["omega/O-2"]["pr"] is None and "merge" not in got["omega/O-2"]["cells"], "no evidence, no cell"
 # Without the PR in the list the row has no PR to hang the landing on, and stays empty rather than guessed.
 got, _, _ = stage_auto.build([omega], {"prs": []}, now)
-assert got["omega/O-1"]["pr"] is None and got["omega/O-1"]["cells"] == {}
+assert got["omega/O-1"]["pr"] is None and "merge" not in got["omega/O-1"]["cells"]
 program("omega", omega[0], omega[1])
 assert {"acme/app#21"} <= fleet.program_prs(now) and "acme/old#" not in " ".join(fleet.program_prs(now)), "gamma is quiet"
 
@@ -270,5 +280,108 @@ assert made["eps/E-1"]["title"] == "E-1 follow-up", made["eps/E-1"]
 stage_auto.refresh(first, now)
 stage_auto.refresh(later, now)
 assert stage_auto.read()["rows"]["eps/task_e4"]["title"] == "E-1 follow-up"
+
+# Each row ends on its own, long before theta's Close. No `stages`: a merge alone ends T-1. A ticket whose last ledger
+# word is released (here by the dispatch id its spawned row noted) or parked stops, with nothing merged and no open
+# PR; admitted after parked does not. A card row whose card ended with no PR stops at the first tick that saw it and
+# keeps that time; one whose PR is open (T-6), or whose card works (T-7), stays open.
+program("theta", {"repo": "acme/th", "run": "run_t", "created_at": ago(20), "predicate": ["T-1", "T-2", "T-3", "T-4"]}, [
+    {"ts": ago(19), "ev": "spawned", "ticket": "T-1", "note": "ctx_t1"},
+    {"ts": ago(18), "ev": "landed", "pr": 31, "sha": "3" * 40, "ticket": "T-1"},
+    {"ts": ago(17), "ev": "spawned", "ticket": "T-2", "note": "ctx_t2"},
+    {"ts": ago(16), "ev": "released", "note": "ctx_t2"},
+    {"ts": ago(15), "ev": "parked", "ticket": "T-3", "note": "waits on a decision"},
+    {"ts": ago(14), "ev": "parked", "ticket": "T-4"}, {"ts": ago(13), "ev": "admitted", "ticket": "T-4"}])
+th = {"tasks": [{"id": "task_t5", "run": "run_t", "title": "T-5: probe", "status": "completed"},
+                {"id": "task_t6", "run": "run_t", "title": "T-6: fix", "status": "completed"},
+                {"id": "task_t7", "run": "run_t", "title": "T-7: work", "status": "dispatched"}],
+      "sessions": [], "sources": {"runs": {"ok": True}},
+      "prs": [{"key": "acme/th#31", "repo": "acme/th", "state": "MERGED", "merged_at": ago(18), "merge_sha": "3" * 40},
+              {"key": "acme/th#36", "repo": "acme/th", "state": "OPEN", "branch": "dev/T-6", "created": ago(5)}]}
+stage_auto.refresh(th, now)
+made = stage_auto.read()["rows"]
+assert made["theta/T-1"]["cells"]["dev"] == na and not made["theta/T-1"]["done_at"], made["theta/T-1"]
+assert (made["theta/T-2"]["stopped"], made["theta/T-2"]["done_at"]) == ("released", ago(16)), made["theta/T-2"]
+assert (made["theta/T-3"]["stopped"], made["theta/T-3"]["done_at"]) == ("parked", ago(15)), made["theta/T-3"]
+assert "stopped" not in made["theta/T-4"] and not made["theta/T-4"]["done_at"], made["theta/T-4"]
+assert (made["theta/T-5"]["stopped"], made["theta/T-5"]["done_at"]) == ("card ended", fleet.iso(now)), made["theta/T-5"]
+assert not made["theta/T-6"]["done_at"] and not made["theta/T-7"]["done_at"]
+got = {r["id"]: r for r in stages.table(th)["rows"]}
+assert got["theta/T-1"]["done_at"] == ago(18) and got["theta/T-5"]["stopped"] == "card ended"
+# A recorded merge ✅ over a stopped row: not stopped, and ended by its cells at that cell's time.
+stages.set_cell("theta/T-3", "merge", "ok", "abc1234 merged by hand")
+t3 = {r["id"]: r for r in stages.table(th)["rows"]}["theta/T-3"]
+assert not t3["stopped"] and t3["done_at"] == t3["cells"]["merge"]["at"], t3
+
+# A stop needs to know the PR is not open: released with an open PR, or one the tick has no state for (a failed
+# GitHub read), stays open; a closed one stops.
+iota = ({"slug": "iota", "repo": "acme/io", "run": "run_i", "created_at": ago(10), "predicate": ["I-1"]}, [
+    {"ts": ago(9), "ev": "spawned", "ticket": "I-1", "note": "ctx_i1"}, {"ts": ago(8), "ev": "ready", "ticket": "I-1", "pr": 5},
+    {"ts": ago(7), "ev": "released", "note": "ctx_i1"}])
+io5 = lambda s: {"prs": [{"key": "acme/io#5", "repo": "acme/io", "state": s}] if s else []}  # noqa: E731
+assert [stage_auto.build([iota], io5(s), now)[0]["iota/I-1"].get("stopped") for s in ("OPEN", None, "CLOSED")] \
+    == [None, None, "released"]
+# A card's end, once stamped, survives a failed Run read that cannot see the card; a card read working again lifts it.
+kappa = ({"slug": "kappa", "repo": "acme/k", "run": "run_k", "created_at": ago(10), "predicate": []}, [{"ts": ago(5), "ev": "config"}])
+card = lambda status: [{"id": "task_k1", "run": "run_k", "title": "K-1: probe", "status": status}]  # noqa: E731
+made, _, held = stage_auto.build([kappa], {"tasks": card("completed"), "sources": {"runs": {"ok": True}}}, now)
+assert made["kappa/K-1"]["done_at"] == fleet.iso(now)
+made, _, held = stage_auto.build([kappa], {"tasks": [], "sources": {"runs": {"ok": False}}}, now + dt.timedelta(hours=1), held)
+assert (made["kappa/K-1"]["stopped"], made["kappa/K-1"]["done_at"]) == ("card ended", fleet.iso(now)), made["kappa/K-1"]
+made, _, _ = stage_auto.build([kappa], {"tasks": card("dispatched"), "sources": {"runs": {"ok": True}}}, now, held)
+assert not made["kappa/K-1"]["done_at"] and "stopped" not in made["kappa/K-1"]
+# The card's end is kept apart from its PR: reopened while the Run read fails, the row is open; closed again, it
+# stops at the card's first end, not a new time.
+pr_k = lambda s: [{"key": "acme/k#3", "repo": "acme/k", "state": s, "session": "s-k1", "created": ago(4)}]  # noqa: E731
+seen = {"tasks": card("completed"), "sessions": [{"id": "s-k1", "run": "run_k", "task": "task_k1"}], "sources": {"runs": {"ok": True}}}
+made, _, held = stage_auto.build([kappa], {**seen, "prs": pr_k("CLOSED")}, now)
+assert made["kappa/K-1"]["done_at"] == fleet.iso(now)
+blind = {"tasks": [], "sessions": [{"id": "s-k1", "run": "run_k", "task": "task_k1"}], "sources": {"runs": {"ok": False}}}
+made, _, held = stage_auto.build([kappa], {**blind, "prs": pr_k("OPEN")}, now + dt.timedelta(hours=1), held)
+assert not made["kappa/K-1"]["done_at"] and held["kappa"]["cards"]["task_k1"]["ended"] == fleet.iso(now)
+made, _, _ = stage_auto.build([kappa], {**blind, "prs": pr_k("CLOSED")}, now + dt.timedelta(hours=2), held)
+assert made["kappa/K-1"]["done_at"] == fleet.iso(now), made["kappa/K-1"]
+md = stages.render_md(stages.of_program(stages.table(th), "theta"))
+assert "| T-5: probe (중단) |" in md and "| T-1 (끝남) | acme/th#31 | ✅ 3333333 | 해당 없음 | 해당 없음 |" in md, md
+# stages-auto.json is written only when its content changes: the same tick five minutes on leaves it (and the ended
+# card's time) alone. The collector's stage_auto_at keeps the reorient warning quiet meanwhile.
+written, mtime = stage_auto.read()["generated_at"], stage_auto.path().stat().st_mtime_ns
+stage_auto.refresh(th, now + dt.timedelta(minutes=5))
+assert stage_auto.read()["generated_at"] == written and stage_auto.path().stat().st_mtime_ns == mtime
+assert "not refreshed" in stage_auto.warning("theta", now + dt.timedelta(hours=7))
+fleet.write_atomic(fleet.state_dir() / "memory.json", json.dumps({"stage_auto_at": fleet.iso(now + dt.timedelta(hours=7))}))
+assert stage_auto.warning("theta", now + dt.timedelta(hours=7)) == ""
+# A later spawned of T-2 reopens it; the change rewrites the file.
+with (tmp / "programs" / "theta" / "ledger.jsonl").open("a") as f:
+    f.write(json.dumps({"ts": ago(1), "ev": "spawned", "ticket": "T-2", "note": "ctx_t2b"}) + "\n")
+stage_auto.refresh(th, now + dt.timedelta(minutes=10))
+assert stage_auto.read()["generated_at"] != written and not stage_auto.read()["rows"]["theta/T-2"]["done_at"]
+assert stage_auto.read()["rows"]["theta/T-5"]["done_at"] == fleet.iso(now), "the ended card keeps its first time"
+# `orch set <slug> stages` names the deploy steps, a name the table has no column for kept as written: prod stays
+# 해당 없음, dev waits, and the merged T-1 is open again until dev has its evidence.
+out = subprocess.run([sys.executable, str(HERE / "prog.py"), "set", "theta", "stages", "dev,canary"], capture_output=True, text=True)
+assert out.returncode == 0, out.stderr
+assert json.loads((tmp / "programs" / "theta" / "program.json").read_text())["stages"] == ["dev", "canary"]
+stage_auto.refresh(th, now + dt.timedelta(minutes=10))
+t1 = {r["id"]: r for r in stages.table(th)["rows"]}["theta/T-1"]
+assert "dev" not in t1["cells"] and t1["cells"]["prod"] == na and not t1.get("done_at"), t1
+stages.set_cell("theta/T-1", "dev", "ok", "v3 on staging")
+assert {r["id"]: r for r in stages.table(th)["rows"]}["theta/T-1"]["done_at"], "dev's evidence ends it"
+subprocess.run([sys.executable, str(HERE / "prog.py"), "set", "theta", "stages", ""], capture_output=True, check=True)
+stage_auto.refresh(th, now + dt.timedelta(minutes=10))
+
+# One count for the Stages page and the brief: the page's `open` and `folded` come from stages.counted(), which runs
+# the current() the brief's `단계표 N행 (접음 M)` line runs, so the two numbers are the same.
+fleet.write_atomic(fleet.state_dir() / "state.json", json.dumps(th))
+sys.path.insert(0, str(HERE))
+import dash  # noqa: E402
+page = dash.stage_report()
+assert page["open"] == sum(1 for r in page["rows"] if r["open"] and not r.get("group")) > 0, page["open"]
+assert {r["id"] for r in page["rows"] if r["open"]} >= {"theta/T-2", "theta/T-4", "theta/T-6", "theta/T-7"}
+assert not any(r["open"] for r in page["rows"] if r["id"] in ("theta/T-1", "theta/T-3", "theta/T-5"))
+brief = subprocess.run([sys.executable, str(HERE / "prog.py"), "brief", "render", "--no-refresh"], capture_output=True,
+                       text=True, env={**os.environ, "PATH": "/usr/bin:/bin"})
+line = next((l for l in brief.stdout.splitlines() if l.startswith("단계표 ")), None)
+assert line and line.startswith(f"단계표 {page['open']}행 (접음 {page['folded']}) · "), (line, page["open"], page["folded"], brief.stderr[-500:])
 
 print("test_stage_auto: ok")

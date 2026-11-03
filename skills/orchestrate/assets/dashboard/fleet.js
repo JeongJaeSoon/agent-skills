@@ -1100,8 +1100,10 @@ function doneCards(b) {
 const STAGE_MARK = { ok: ["✅", "good", "done · verified"], fail: ["❌", "bad", "not done · failed"], partial: ["⚠️", "warn", "partial · inferred"],
   checking: ["🔄", "accent", "checking"], na: ["–", "", "n/a"] };
 const STAGE_DONE_KEEP = 7 * 86400e3;  // stages.py DONE_KEEP_S: a file nobody wrote to since can still hold older rows
-const stageShown = (w) => (w.rows || []).filter((r) => !r.done_at || Date.now() - ms(r.done_at) < STAGE_DONE_KEEP);
-const stageOpen = () => { const w = (F.brief || {}).stages; return w && !w.error ? stageShown(w).filter((r) => !r.group && !r.done_at).length : 0; };
+// A row stages.counted() counts open stays however old its done_at, so the page shows every row the count names.
+const stageShown = (w) => (w.rows || []).filter((r) => r.open || !r.done_at || Date.now() - ms(r.done_at) < STAGE_DONE_KEEP);
+// stages.counted() marks each row `open` and counts them as the brief's `단계표 N행` line does: one number for both.
+const stageOpen = () => { const w = (F.brief || {}).stages; return w && !w.error ? w.open || 0 : 0; };
 // owner/repo#N becomes a link to the URL the server resolved (refs: /pull/ for a known PR, else /issues/, which GitHub
 // redirects for a PR); esc() runs first and the pattern holds no markup characters.
 const linkRefs = (text, refs = {}) => esc(text).replace(/\b([\w.-]+\/[\w.-]+)#(\d+)\b/g,
@@ -1112,8 +1114,8 @@ function stageCell(c, refs) {
   const text = [c.evidence && linkRefs(c.evidence, refs), c.by && `<span class="muted">(${esc(c.by)})</span>`].filter(Boolean).join(" ");
   return `<div class="wcell ${tone ? "tone-" + tone : ""}" title="${esc(c.from ? `${label} · ${c.from}` : label)}"><span class="wmark">${mark}</span>${text ? `<span class="wtext">${text}</span>` : ""}</div>`;
 }
-// Each program (a group row, or a top-level row of its own) is a block: its open rows always, its finished rows behind
-// its own "▸ N finished" toggle (F.stageFold), so a finished program reads as one line instead of a hundred.
+// Each program (a group row, or a top-level row of its own) is a block: its open rows always, its folded rows behind
+// its own "▸ N folded" toggle (F.stageFold), so a finished program reads as one line instead of a hundred.
 const STAGE_COLS = [["Work", ""], ["PR", ""], ["Merged", "merge"], ["dev check", "dev"], ["prod check", "prod"]];
 function stageSection(w) {
   if (!w) return "";
@@ -1123,14 +1125,14 @@ function stageSection(w) {
   const { shown: all, seen } = ackSplit(stageShown(w).map((r) => ({ ...r, key: `stage:${r.id}` })), "finished row");
   const byId = Object.fromEntries(all.map((r) => [r.id, r]));
   const topOf = (r) => { let g = r; while (g.parent && byId[g.parent]) g = byId[g.parent]; return g.id; };
-  // A finished row with an open row under it stays open, as its heading does.
+  // A folded row with an open row under it stays open, as its heading does.
   const lit = new Set();
-  all.filter((r) => !r.group && !r.done_at).forEach((r) => { for (let p = r; p && !lit.has(p.id); p = byId[p.parent]) lit.add(p.id); });
+  all.filter((r) => !r.group && r.open).forEach((r) => { for (let p = r; p && !lit.has(p.id); p = byId[p.parent]) lit.add(p.id); });
   // A group's own rows sit flush under it; each level below them gets one └ step.
   const level = {};
   all.forEach((r) => { const p = byId[r.parent]; level[r.id] = !p || p.group ? 0 : (level[p.id] ?? 0) + 1; });
   const row = (r) => `<tr class="${r.done_at ? "is-done" : ""}">
-      <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title_full || r.title, refs)}${r.done_at ? ` <span class="muted">· done ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
+      <td class="wtitle" data-label="Work" style="--lv:${level[r.id]}">${level[r.id] ? '<span class="muted">└ </span>' : ""}${linkRefs(r.title_full || r.title, refs)}${r.done_at ? ` <span class="muted">· ${r.stopped ? "stopped" : "done"} ${relSpan(r.done_at)}</span>` : ""} ${ackBtn(r)}</td>
       <td class="mono wpr" data-label="PR">${r.pr ? linkRefs(r.pr, refs) : '<span class="muted">–</span>'}</td>
       ${STAGE_COLS.slice(2).map(([l, c]) => `<td data-label="${l}"${(r.cells || {})[c] ? "" : ' class="wempty"'}>${stageCell((r.cells || {})[c], refs)}</td>`).join("")}</tr>`;
   const blocks = {};
@@ -1139,7 +1141,7 @@ function stageSection(w) {
     const g = byId[id], work = members.filter((r) => !r.group);
     const done = work.filter((r) => !lit.has(r.id)), open = work.length - done.length, unfolded = F.stageFold.has(id);
     const ackable = done.filter((r) => r.ack === "ackable" && !r.hidden).map((r) => r.key);
-    const fold = done.length ? `<button class="chip mini" type="button" data-stage-fold="${esc(id)}" aria-expanded="${unfolded}">${unfolded ? "▾" : "▸"} ${done.length} finished</button>`
+    const fold = done.length ? `<button class="chip mini" type="button" data-stage-fold="${esc(id)}" aria-expanded="${unfolded}">${unfolded ? "▾" : "▸"} ${done.length} folded</button>`
       + (unfolded && ackable.length > 1 ? `<button class="chip ack" type="button" data-ack="${esc(ackable.join(" "))}" title="Ack every finished row of this program">Ack all ${ackable.length}</button>` : "") : "";
     const head = g.group ? `<tr class="wgroup ${open ? "" : "is-done"}"><td colspan="5"><div class="wghead"><b>${esc(g.title)}</b>
         <span class="muted">${open} open</span>${fold}${ackBtn(g)}</div></td></tr>`
@@ -1203,7 +1205,7 @@ function fleetTodo() {
 }
 function fleetStages() {
   if (!F.brief) pollBrief();
-  const head = `<div class="view-head"><div><h2>Stages</h2><p>One row per predicate item and worker card of each program, generated every tick: merge from the merge sha; dev and prod only from <span class="mono">orch stage set</span>. A program's finished rows stay for 7 days behind its own ▸ N finished.</p></div></div>`;
+  const head = `<div class="view-head"><div><h2>Stages</h2><p>One row per predicate item and worker card of each program, generated every tick: merge from the merge sha; dev and prod only from <span class="mono">orch stage set</span>. A row ends when every cell is ✅ or n/a, or stops with its ticket or card. A program's finished rows, and rows unchanged for 7 days, fold behind its own ▸ N folded, as the brief counts them.</p></div></div>`;
   return head + (F.brief ? ackNote() + stageSection(F.brief.stages) : '<div class="loading">Loading…</div>');
 }
 document.addEventListener("click", (e) => {
