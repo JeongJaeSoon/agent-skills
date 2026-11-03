@@ -116,6 +116,14 @@ with contextlib.redirect_stderr(io.StringIO()):
     limit, end_check.INBOX_LIMIT = end_check.INBOX_LIMIT, "1"
     os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x")])
     assert end_check.waiting_questions(ME) is None
+    # A full page whose oldest row is older than the card covers every question the card sent; a newer one does not.
+    card_ms = 1767261600000  # 2026-01-01T10:00:00Z
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x", created_at="2026-01-01T09:00:00Z")])
+    assert end_check.waiting_questions(ME, card_ms) == []
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, created_at="2026-01-01T11:00:00Z")])
+    assert end_check.waiting_questions(ME, card_ms) is None
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, created_at="not a time")])
+    assert end_check.waiting_questions(ME, card_ms) is None
     end_check.INBOX_LIMIT = limit
     os.environ["FAKE_PAGE"] = '{"hasMore": true, "nextCursor": "c2"}'
     assert end_check.waiting_questions(ME) is None

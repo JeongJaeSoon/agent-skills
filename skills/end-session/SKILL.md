@@ -107,7 +107,8 @@ further actions after worker_done" still holds: only the closing calls follow `w
 the same turn, and nothing runs after them.
 
 Before sending `worker_done`, run `skills-sync end-check --worker --outcome <succeeded|failed>
---brief <brief path>` (`--keep` or `--no-keep` when the task has no brief file). It reads §4's
+--dispatch <the preamble's --dispatch-id> --brief <brief path>` (`--keep` or `--no-keep` when the task
+has no brief file; without `--dispatch` it looks the Dispatch up and keeps the card when it cannot). It reads §4's
 commands, the card's terminals and the questions this terminal left unanswered, and prints the row
 below as `remove`, `close-terminal` or `keep` with its reasons; a fact it could not read is `keep`.
 Also read the `runId` in `orca orchestration check --terminal $ORCA_TERMINAL_HANDLE --json` (the

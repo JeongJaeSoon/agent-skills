@@ -29,7 +29,7 @@ otherwise.
 Exit codes: 0 the verdict printed (and applied); 2 usage; 3 --apply refused: the Dispatch has not settled or could
 not be read; 4 an applied command failed (its output is printed).
 """
-import json, os, pathlib, re, subprocess, sys
+import datetime, json, os, pathlib, re, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "skills" / "orchestrate" / "scripts"))
@@ -142,15 +142,28 @@ def card_facts(me, mode="card", dispatch=None):
             print(f"[{ME}] warning: an Orca terminal row has no agentIdentity; other agents on the card are unknown",
                   file=sys.stderr)
         f["other_agents"] = None
-    f["questions"] = waiting_questions({me, f"dispatch:{dispatch}"} if dispatch else {me}) if me else None
+    f["questions"] = waiting_questions({me, f"dispatch:{dispatch}"} if dispatch else {me},
+                                       wt.get("createdAt")) if me else None
     if mode == "worker" and not dispatch:
         f["questions"] = None  # its questions may come from dispatch:<id>, which is not known
     return f
 
 
-def waiting_questions(senders):
+def when(value):
+    """Epoch seconds of an ISO time (`Z` or none: UTC) or of epoch milliseconds; None when unreadable."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value / 1000
+    try:
+        t = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)).timestamp()
+
+
+def waiting_questions(senders, since=None):
     """Ids of `question` mail one of these senders sent that nobody answered, or None when the inbox could not be
-    read whole or a row names no sender."""
+    read whole or a row names no sender. A page cut short still covers the card when its oldest row is older than
+    `since` (the card's creation): the card's questions, and their replies, all came after it."""
     import fleet, orca_settings
 
     def call(*argv):
@@ -171,8 +184,11 @@ def waiting_questions(senders):
     page = res.get("page")
     more = res.get("hasMore") or res.get("nextCursor") or (
         isinstance(page, dict) and (page.get("hasMore") or page.get("nextCursor")))
-    if len(msgs) >= int(INBOX_LIMIT) or more:
-        print(f"[{ME}] warning: the inbox has more than one page; questions waiting are unknown", file=sys.stderr)
+    times, start = [when(m.get("created_at")) for m in msgs], when(since) if since is not None else None
+    covers = bool(msgs) and start is not None and None not in times and min(times) <= start
+    if (len(msgs) >= int(INBOX_LIMIT) or more) and not covers:
+        print(f"[{ME}] warning: the inbox has more than one page and its oldest row is not older than this card; "
+              "questions waiting are unknown", file=sys.stderr)
         return None
     answered = fleet.answered_mail(msgs)
     return [m.get("id") for m in msgs if m.get("from_handle") in senders and m.get("type") == "question"
