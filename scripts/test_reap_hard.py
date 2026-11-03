@@ -239,9 +239,28 @@ rh.reap.act = lambda item, notes: removed.append(item["name"]) or "worktree 제�
 ok_facts = {"patrol": False, "head": "abc", "terminals": [{"handle": "t1"}], "waits": {}, "screens": {}}
 cg.observe = lambda path: ok_facts
 plan = {"kind": "card", "id": "/ws/app/done", "head": "abc", "handles": ["t1"]}
-assert rh.act(plan, rh.DEFAULTS, P) == "터미널 1개 닫음, worktree 제거", ran
+done = {}
+assert rh.act(plan, rh.DEFAULTS, P, done) == "터미널 1개 닫음, worktree 제거", ran
+assert done == {"closed": ["t1"], "identity": {"head": "abc"}}  # what run_pass logs: handles closed, card acted on
 assert ran == [["orca", "terminal", "close", "--terminal", "t1", "--json"]] and removed == ["/ws/app/done"]
 assert not any("--all" in c for c in ran)
+ran.clear(), removed.clear()
+# A card folder made again since the scan (another inode) is left; the one acted on is the one logged.
+saved_ino = rh.reap.dir_ino
+rh.reap.dir_ino = lambda p: 2
+assert rh.act({**plan, "ino": 1}, rh.DEFAULTS, P) == "건너뜀: 판정 뒤 카드 폴더가 다시 만들어짐" and not ran and not removed
+cg.observe = lambda path: {**ok_facts, "ino": 2}
+done = {}
+rh.act({**plan, "ino": 2}, rh.DEFAULTS, P, done)
+assert done["identity"] == {"head": "abc", "ino": 2} and removed == ["/ws/app/done"], done
+ran.clear(), removed.clear()
+# Made again between closing its terminals and removing it: the removal is left.
+looks = iter([{**ok_facts, "ino": 2}, {**ok_facts, "ino": 3}])
+cg.observe = lambda path: next(looks)
+got = rh.act({**plan, "ino": 2}, rh.DEFAULTS, P)
+assert "삭제는 건너뜀" in got and "다시 만들어짐" in got and not removed, got
+cg.observe = lambda path: ok_facts
+rh.reap.dir_ino = saved_ino
 ran.clear(), removed.clear()
 for facts_now, why in (({**ok_facts, "patrol": True}, "순찰"), ({**ok_facts, "terminals": [{"handle": "t1"}, {"handle": "t9"}]}, "새 터미널"),
                        ({**ok_facts, "terminals": None}, "터미널 목록"), ({**ok_facts, "head": "zzz"}, "HEAD")):
@@ -250,8 +269,17 @@ for facts_now, why in (({**ok_facts, "patrol": True}, "순찰"), ({**ok_facts, "
     assert got.startswith("건너뜀") and why in got and not ran and not removed, (why, got)
 cg.observe = lambda path: ok_facts
 assert "계획에 없음" in rh.act({k: v for k, v in plan.items() if k != "handles"}, rh.DEFAULTS, P) and not ran
-with cg.card_lock("/ws/app/done") as held:
-    assert held and rh.act(plan, rh.DEFAULTS, P) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not ran
+# Another cleaner's process holds the card's lock (inside this process the same lock is re-entrant).
+import subprocess  # noqa: E402
+lock = rh.guard.lock_file("card", rh.reap.real("/ws/app/done"))
+lock.parent.mkdir(parents=True, exist_ok=True)
+holder = subprocess.Popen([sys.executable, "-c", "import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f, fcntl.LOCK_EX); "
+                           "print('held', flush=True); sys.stdin.read()", str(lock)],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+assert holder.stdout.readline().strip() == "held"
+assert rh.act(plan, rh.DEFAULTS, P) == "건너뜀: 다른 정리가 이 카드를 처리 중" and not ran
+holder.stdin.close()
+holder.wait(10)
 # A terminal opened between the close and the removal stops the removal.
 looks = iter([ok_facts, {**ok_facts, "terminals": [{"handle": "t1"}, {"handle": "t9"}]}])
 cg.observe = lambda path: next(looks)
@@ -285,7 +313,7 @@ rh.scan_rest = fake_rest
 acted = []
 
 
-def fake_act(item, cfg, protect):
+def fake_act(item, cfg, protect, done=None):
     acted.append(item["id"])
     if item["kind"] == "stack":
         raise RuntimeError("docker down failed")
@@ -296,6 +324,8 @@ outcome = ["건너뜀: 다시 보니 열린 PR acme/app#1"]
 
 
 rh.act = fake_act
+guard_item = rh.guard.item
+rh.guard.item = lambda *a, **k: None  # the shared guards have their own tests below
 res, code = rh.run_pass(True, cfg, now=NOW)
 assert code == 0 and acted == [] and res["acted"] == 2, res
 assert seen_closed[-1] == ["/ws/app/done"]  # a dry-run plans the rest as if the card were closed
