@@ -31,7 +31,7 @@ for c in now:
         f"a hook command runs a script under the plugin root, so a session resolves it to the loaded copy: {c}"
 
 try:
-    shas = git("log", "--format=%H", "--", "hooks/hooks.json").split()
+    shas = git("log", "--full-history", "--format=%H", "--", "hooks/hooks.json").split()  # every side of a merge
     shallow = git("rev-parse", "--is-shallow-repository").strip() == "true"
 except (OSError, subprocess.CalledProcessError) as e:
     shas, shallow = [], False

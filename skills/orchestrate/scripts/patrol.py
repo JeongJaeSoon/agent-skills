@@ -25,8 +25,9 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                prompt such as a nudge, or /reload-* only); its card is "stalled", not "working", unless parked. Shown
                once to its owner, and never raised again for the same session and text (shown as ❔)
   H  stale     an agent card, Run workers included, whose session ended its turn, not waiting on a human, with a
-               screen that shows it runs on what changed under it (sync.stale_signal: a hook error in the last turn,
-               as when its hooks.json names a script an update removed, or Claude Code's "/restart to apply");
+               screen that shows it runs on what changed under it (sync.stale_signal: a hook error in the last turn
+               saying its file is missing, as when its hooks.json names a script an update removed, or Claude
+               Code's "/restart to apply"; a guard's deny is not one);
                its card is "stalled" (a Run worker stays "run"). A screen without that wording is not judged.
                `skills-sync broadcast` types the fix once the session is idle (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
@@ -344,6 +345,7 @@ def judge(facts, memo):
                     prog.worker_terminal(w))  # its card stays "run": the lead decides, not a cleaner
     # H: an ended turn whose screen says the session runs on what changed under it. A Run worker too: one whose
     # every tool call a hook blocks cannot send worker_done.
+    stale_paths = set()  # H's: an I found on the same card keeps them stalled, the more telling verdict
     for t in agents if "waits" not in failed else ():
         path, handle = t.get("worktreePath"), t.get("handle")
         motion = (facts["tails"].get(path) or (None, None))[0]
@@ -359,6 +361,7 @@ def judge(facts, memo):
             f"{handle}` types {STALE_COMMAND.get(kind, 'the fix')} once it is idle", handle)
         check[path] = why
         activity(path, "stalled")
+        stale_paths.add(path)
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             if path and path not in run_paths:
@@ -395,7 +398,10 @@ def judge(facts, memo):
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
                 add("I", path, (motion["since"],), f"turn ended {int(mins)} min ago, nothing armed to wake it", handle)
-                activity(path, "idle")
+                if path in stale_paths:
+                    hints[path] = "stalled"
+                else:
+                    activity(path, "idle")
                 continue
         verdicts.setdefault(path, "working")
     # S: what a coordinator logged as superseded and still has an agent.

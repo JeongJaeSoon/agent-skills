@@ -569,7 +569,8 @@ assert codes(stale) == [("H", "a"), ("H", "b"), ("H", "f")], found
 assert v["check"] == {"/w/a": "hook 오류로 도구가 막힘", "/w/b": "업데이트가 /restart 를 기다림",
                       "/w/f": "hook 오류로 도구가 막힘"}, v["check"]
 assert v["cards"]["/w/a"] == "stalled" and v["cards"]["/w/c"] == "working" and v["cards"]["/w/f"] == "run", v["cards"]
-assert v["cards"]["/w/b"] == "idle", "15+ min idle is told as I too, and neither keeps the card"
+assert ("I", "b") in codes(found) and v["cards"]["/w/b"] == "stalled" and v["hints"]["/w/b"] == "stalled", \
+    "15+ min idle is told as I too, and the card stays stalled"
 assert "--terminal h1" in stale[0]["title"] and "/reload-plugins" in stale[0]["title"], stale[0]["title"]
 assert "/restart" in stale[1]["title"], stale[1]["title"]
 assert [x["id"] for x in patrol.judge(f, {})[0] if x["code"] == "H"] == [x["id"] for x in stale], "the same screen, the same finding"

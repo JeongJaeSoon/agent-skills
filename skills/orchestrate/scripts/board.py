@@ -536,8 +536,8 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
     itself. A lead the board holds gets no row of its own, but its cards hang under its board row. Each card carries its
     current PR (fleet.current_pr; details: prs.json's); a card whose PR a board row already has is left to that row.
     Then each session's started subagents (subagent_rows). Returns (rows, order); reported_at is the session's last
-    activity, so a quiet one shows its age like a stale board row. checks (patrol_checks) turns a moving row of a card
-    patrol found stalled into ❔ with patrol's reason, ahead of the card's own last milestone."""
+    activity, so a quiet one shows its age like a stale board row. checks (patrol_checks) turns the row of a card
+    patrol found stalled, while its turn is still ended, into ❔ with patrol's reason."""
     checks = checks or {}
     state = state or {}
     sessions = state.get("sessions") or []
@@ -561,7 +561,8 @@ def fleet_rows(state, leads, board_rows, details=None, now=None, stale_s=None, c
         rep = s.get("report") or {}
         if rep.get("next") and s.get("phase") != "offline":
             nxt = rep["next"]  # the card's own last milestone says more than "작업 중"
-        why = checks.get(s.get("path")) if status == "moving" else None
+        # Only while the turn is still ended: a session at work again has got past what patrol saw.
+        why = checks.get(s.get("path")) if s.get("phase") == "idle" else None
         # A lead reads as its session name (as in the sidebar), a card as the task it was dispatched with.
         title = s.get("name") if kind == "lead" else card_title(s)
         rows[rid] = {"id": rid, "kind": kind, "title": one_line(title or rid), "status": "check" if why else status,

@@ -136,7 +136,7 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 | D | 보드 doing 항목이 PR도 카드도 가리키지 않은 채 24시간 그대로다. 보드에 ❔로 보인다 |
 | E | 같은 에러 줄이 출력이 새로 생긴 라운드 세 번 연속으로 보인다. ❔ 표시만 한다 |
 | R | Run 밖에서 사람을 기다리지 않는 카드의 세션 기록이, 끝난 턴 3개 이상(30분 이상)에 걸쳐 같은 말만 하고 끝난다. 같은 에러, 같은 마지막 메시지, 같은 입력(nudge 같은 것), `/reload-*`만 반복한 경우이고, 그 사이 도구 호출·입력·결과가 바뀌었으면 세지 않는다. 카드는 working이 아니라 stalled로 판정한다(스스로 깨어날 장치가 있으면 그대로 둔다). 부모에게 한 번만 보여 주고, 같은 세션의 같은 문구로는 다시 올리지 않는다. ❔ 표시만 한다 |
-| H | 사람을 기다리지 않는 에이전트 카드(Run 워커 포함)의 턴이 끝나 있고, 화면이 그 세션이 바뀌기 전 것으로 돌고 있다고 말한다. 마지막 턴의 hook 오류(`hook error`, hooks 아래 파일을 열지 못함: 갱신이 지운 스크립트를 옛 hooks.json이 부를 때)나 Claude Code의 `/restart to apply` 안내다. 이 문구가 없는 화면은 판정하지 않는다. 카드는 stalled로 판정하고(Run 워커는 run 그대로), brief의 그 카드 행은 ❔ `확인 필요: <이유>`가 된다. 고치는 입력은 `skills-sync broadcast`가 그 세션이 idle일 때 한 번 친다 |
+| H | 사람을 기다리지 않는 에이전트 카드(Run 워커 포함)의 턴이 끝나 있고, 화면이 그 세션이 바뀌기 전 것으로 돌고 있다고 말한다. 마지막 턴의 hook 오류 중 자기 파일이 없다고 말하는 것(`hook error`와 `can't open file`·`No such file or directory` 같은 문구: 갱신이 지운 스크립트를 옛 hooks.json이 부를 때)이나 Claude Code의 `/restart to apply` 안내다. guard hook의 거부도 화면에는 `hook error`로 보이므로 그것만으로는 세지 않는다. 이 문구가 없는 화면은 판정하지 않는다. 카드는 stalled로 판정하고(Run 워커는 run 그대로), brief의 그 카드 행은 ❔ `확인 필요: <이유>`가 된다. 고치는 입력은 `skills-sync broadcast`가 그 세션이 idle일 때 한 번 친다 |
 | L | 경고·위험 회차에 상위 소비자가 I·X·S·O·R·H로 판정된 카드에 속한다 |
 | W | 오케스트레이터의 `orch watch-cards`가 1시간 넘게 회차를 마치지 않았다. 대시보드 Needs you에는 collector가 올린다 |
 

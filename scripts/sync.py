@@ -198,7 +198,8 @@ def sync(broadcast_after=True):
         kind = reload_kind(paths)
         if kind:
             queue_reload(kind)
-        waiting = any("waiting" in v for v in read_json(STATE / "restarts.json", {}).values())
+        restarts = read_json(STATE / "restarts.json", {})
+        waiting = isinstance(restarts, dict) and any(isinstance(v, dict) and "waiting" in v for v in restarts.values())
         if broadcast_after and ((STATE / "reload-pending.json").exists() or waiting):
             broadcast_locked(None)
     return 0 if ok else 1
@@ -219,7 +220,11 @@ ORDER = [None, "skills", "plugins"]  # a plugin reload also reloads skills
 UNCONFIRMED = "sent, but the screen does not show it was taken"
 # Claude Code's own wording, matched loosely; a screen with neither is not judged (stale_signal).
 RESTART_NOTICE = re.compile(r"(?<![\w/])/restart\b.*\bto apply\b", re.I)
-HOOK_ERROR = re.compile(r"\bhook (?:error|returned (?:a )?blocking error)\b|\bcan't open file\b.*/hooks/", re.I)
+HOOK_ERROR = re.compile(r"\bhook (?:error|returned (?:a )?blocking error)\b", re.I)
+# A guard's deny reads "hook error" too; only a hook that could not find its own file is stale.
+MISSING_FILE = re.compile(r"can't open file|No such file or directory|\bENOENT\b|Cannot find module", re.I)
+MESSAGE_MARKS = ("⏺", "●", "❯", "⎿")  # a reply, a prompt, a tool's result
+OWN_MARKS = ("✻", "✶", "✳", "✢", "✽", "*", "·", "✔", "✓")  # a turn's summary or a notice
 # The notice names /restart; a hook error alone names no command, and /reload-plugins re-reads hooks.json.
 STALE_COMMAND = {"restart": "/restart", "hook": RELOAD["plugins"]}
 
@@ -271,19 +276,36 @@ def classify(lines, title, draft=""):
 def stale_signal(lines):
     """(kind, line) when a session's screen shows it runs on what changed under it, else None.
 
-    "restart": Claude Code says an installed update waits on /restart, anywhere on the screen. "hook": a hook failed
-    in the last turn shown (below the last `❯ <prompt>` above the box), as one that runs a file an update removed
-    does on every tool call. Only that wording counts: a screen without it is not judged."""
+    "restart": Claude Code says an installed update waits on /restart where it writes its own notices: the last line
+    above the prompt box (after the turn's summary) or a status line below it, never the conversation. "hook": the
+    last tool result of the last turn shown (the last `⎿` line below the last `❯ <prompt>`) is a hook error that says
+    its file is missing (on that line or the two it wraps onto), as on every tool call of a session whose hooks.json
+    names a script an update removed; a tool that ran after it means the session got past it. Only that wording
+    counts: a screen without it, or a guard's deny, is not judged."""
     lines = norm(lines or [])
-    for l in lines:
-        if RESTART_NOTICE.search(l):
-            return "restart", l.strip()[:160]
     box = prompt_box(lines)
-    body = lines[:box[0]] if box else lines
+    if not box:
+        return None
+    body = lines[:box[0]]
+    notices = [l.strip() for l in lines[box[1] + 1:] if l.startswith(" ")]
+    # The last line above the box, unless it is part of a message: a reply wraps onto lines that start with no mark,
+    # so look up through the lines above it until a blank line, Claude Code's own mark (the turn's summary), or a
+    # message's mark.
+    filled = [l.strip() for l in body]
+    end = max((i for i, l in enumerate(filled) if l), default=None)
+    if end is not None and filled[end][:1] not in MESSAGE_MARKS:
+        i = end - 1
+        while i >= 0 and filled[i] and filled[i][:1] not in OWN_MARKS + MESSAGE_MARKS:
+            i -= 1
+        if i < 0 or not filled[i] or filled[i][:1] in OWN_MARKS:
+            notices.append(filled[end])
+    for l in notices:
+        if RESTART_NOTICE.search(l):
+            return "restart", l[:160]
     start = max((i for i, l in enumerate(body) if l.strip().startswith("❯ ")), default=-1)
-    for l in body[start + 1:]:
-        if HOOK_ERROR.search(l):
-            return "hook", l.strip()[:160]
+    last = max((i for i in range(start + 1, len(body)) if body[i].strip().startswith("⎿")), default=None)
+    if last is not None and HOOK_ERROR.search(body[last]) and MISSING_FILE.search(" ".join(body[last:last + 3])):
+        return "hook", body[last].strip()[:160]
     return None
 
 
@@ -365,7 +387,10 @@ def send_to(handle, text, confirmed):
         return "screen changed between two reads (someone may be typing)"
     orca("terminal", "send", "--terminal", handle, "--text", text, "--enter")
     time.sleep(CONFIRM_S)
-    after, _ = screen(handle)
+    try:
+        after, _ = screen(handle)
+    except Stop:  # typed already: an unread confirmation must not read as never sent
+        return UNCONFIRMED
     if not confirmed(second, after, text):
         return UNCONFIRMED
     return None
@@ -471,23 +496,45 @@ def opened_after(since, terms):
             and created[t.get("worktreeId")] > cutoff}
 
 
+RESTART_KEEP_S, WAITING_KEEP_S = 7 * 86400, 86400
+
+
+def _now():
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def _stamp(entry):
+    """When a restarts.json entry was written (sent, else since waiting), as a Unix time; 0 when unreadable."""
+    try:
+        return datetime.datetime.strptime(entry.get("sent") or entry.get("since") or "", "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except (AttributeError, ValueError):
+        return 0
+
+
 def restart_stale(terms, dry_run=False, keep_others=False):
     """Type STALE_COMMAND into each idle session whose screen shows stale_signal, once per session while its signal
     lasts. A busy one waits: it is written to restarts.json as waiting, and the next sync runs the broadcast again.
-    An entry goes once its screen no longer shows the signal, so a later one is new; an unreadable screen keeps it.
-    keep_others leaves the entries of terminals not in `terms` as they are. Returns the handles typed into (in a dry
-    run, those it would type into)."""
+    An entry goes once its screen no longer shows the signal, so a later one is new; an unreadable screen keeps it,
+    and a terminal Orca does not list now keeps it RESTART_KEEP_S (WAITING_KEEP_S when waiting). keep_others leaves
+    the entries of terminals not in `terms` as they are. Returns the handles typed into (in a dry run, those it would
+    type into)."""
     path = STATE / "restarts.json"
     seen = read_json(path, {})
-    out = {h: v for h, v in seen.items() if h not in terms} if keep_others else {}
+    seen = {h: v for h, v in seen.items() if isinstance(v, dict)} if isinstance(seen, dict) else {}
+    # A terminal missing from this list may be back later with the same screen: its entry stays a while, as one this
+    # pass could not read does. A waiting one stays less, since each sync reruns the broadcast for it.
+    out = {h: v for h, v in seen.items() if h not in terms and (
+        keep_others or _stamp(v) >= time.time() - (WAITING_KEEP_S if "waiting" in v else RESTART_KEEP_S))}
     typed = set()
     for h in terms:
         old = seen.get(h) or {}
         try:
             lines, reason = screen(h)
         except Stop as e:
+            lines, reason = [], str(e)
+        if not lines:  # unread is no evidence the signal went
             out.update({h: old} if old else {})
-            print(f"{h}  stale check not read: {e}")
+            print(f"{h}  stale check not read: {reason}")
             continue
         sig = stale_signal(lines)
         if not sig:
@@ -507,10 +554,10 @@ def restart_stale(terms, dry_run=False, keep_others=False):
         except Stop as e:
             reason = str(e)
         if reason and reason != UNCONFIRMED:
-            out[h] = {"waiting": reason, "kind": kind, "line": line}
+            out[h] = {"waiting": reason, "since": old.get("since") or _now(), "kind": kind, "line": line}
             print(f"{h}  waits before {cmd}: {reason}")
             continue
-        out[h] = {"sent": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "command": cmd, "kind": kind, "line": line,
+        out[h] = {"sent": _now(), "command": cmd, "kind": kind, "line": line,
                   **({"unconfirmed": True} if reason else {})}
         typed.add(h)
         print(f"{h}  {reason or 'sent ' + cmd}: {line[:60]}")
