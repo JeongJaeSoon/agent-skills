@@ -320,7 +320,8 @@ def ps(*agents):
 
 
 turning = [agent("working", main="working"), agent("working", main="working", subs=2)]
-waiting = [agent("working", "monitoring", "done"), agent("working", main="done", subs=1)]
+waiting = [agent("working", "monitoring", "done"), agent("working", main="done", subs=1),
+           agent("working", "monitoring"), agent("working", main="waiting")]  # each field holds on its own
 older = [agent("working"), agent("working")]  # no workingMode, no mainAgent
 assert p.active_turns(run=lambda *a, **k: ps(*turning)) == 2
 assert p.active_turns(run=lambda *a, **k: ps(*waiting)) == 0
