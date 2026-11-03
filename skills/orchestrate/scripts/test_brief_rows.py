@@ -245,5 +245,10 @@ assert [r["status"] for r in rows_.values()] == ["check"], rows_
 fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 2 * board.PATROL_CHECK_S,
                                          "check": {"/w/stuck": "hook 오류로 도구가 막힘"}}))
 assert {o["label"]: o["status"] for o in brief()["open"]}["stuck-card"] == "moving", "a stale round says nothing of now"
+# patrol's B (a card idle on a background task nothing will finish) reaches the same ❔ row with its own reason.
+fleet.write_atomic(verdicts, json.dumps({"t": now.timestamp() - 600,
+                                         "check": {"/w/stuck": "백그라운드 작업을 기다리지만 깨울 작업이 없음"}}))
+moving = section(brief()["text"], "🔄")
+assert any(m.startswith("❔ stuck-card — 확인 필요: 백그라운드 작업을 기다리지만 깨울 작업이 없음") for m in moving), moving
 verdicts.unlink()
 print("test_brief_rows: ok")

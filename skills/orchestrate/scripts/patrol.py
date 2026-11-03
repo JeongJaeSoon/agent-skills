@@ -30,6 +30,10 @@ tail of each card's session transcript, the `orch sent` log and the last pressur
                Code's "/restart to apply"; a guard's deny is not one);
                its card is "stalled" (a Run worker stays "run"). A screen without that wording is not judged.
                `skills-sync broadcast` types the fix once the session is idle (shown as ❔)
+  B  bg wait   an agent card, Run workers included, whose turn ended 15+ min ago, not waiting on a human, whose last
+               message says it waits on a background task (bgwait_signal), while nothing will wake it: the transcript
+               owes no armed background call or Monitor a result (not parked) and Claude Code's status line shows no
+               shell, agent or task running. A screen without that wording is not judged (shown as ❔)
   L  load      at pressure warn or danger, a top consumer whose card is judged I, X, S or O
   W  watcher   an orchestrator whose `orch watch-cards` has not finished a round in an hour (reported here; the
                collector raises it on the dashboard)
@@ -40,7 +44,7 @@ by whoever dealt with them (`orch patrol ack`). `orch inbox` and `orch wait` sho
 (the card's parent session, else the orchestrator) every 30 minutes. X, E, L and O also go to the dashboard's
 Needs you until cleared or acked. Card verdicts go to <state>/patrol-verdicts.json: `cards` holds each card's activity
 (run, waiting, working, idle, exited, stalled), `hints` what a finding said of it (superseded, pr_open_no_session,
-idle, exited, stalled), `check` the cards H and R found, each with the reason the brief shows on its ❔ row, and
+idle, exited, stalled), `check` the cards H, B and R found, each with the reason the brief shows on its ❔ row, and
 `failed` the sources this round could not read. A finding never overwrites run, waiting or working in
 `cards`. reap-hard, the pressure round and the janitor read `cards` only to keep a card judged working; no verdict
 makes anything a target, and a card missing from it, in a failed round above all, is not evidence it is safe.
@@ -91,7 +95,8 @@ RENOTIFY = dt.timedelta(minutes=30)
 SCREEN_READS = 30
 NEEDS_YOU = {"X", "E", "L", "O"}
 LABEL = {"I": "idle", "X": "exited", "S": "superseded", "O": "orphan PR", "D": "no ref", "E": "error loop",
-         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale"}
+         "L": "load", "W": "watcher down", "R": "repeat", "H": "stale", "B": "background wait"}
+BGWAIT_WHY = "백그라운드 작업을 기다리지만 깨울 작업이 없음"  # B's reason on the brief's ❔ row
 VERDICT_OF = {"I": "idle", "X": "exited", "S": "superseded", "O": "pr_open_no_session", "R": "stalled", "H": "stalled"}
 # H's two kinds: what the owner's line says, and the reason on the brief's ❔ row (Korean, as the brief is).
 STALE_WHAT = {"hook": ("a hook error blocks its tools", "hook 오류로 도구가 막힘"),
@@ -128,6 +133,27 @@ BACKGROUND = re.compile(r"\b\d+ (?:shells?|agents?|background tasks?)\b|shells? 
 
 def background(lines):
     return bool(lines) and any(BACKGROUND.search(l) for l in lines[-6:])
+
+
+# A last message that says the session waits on a background task's completion notice (English or Korean). A launch
+# ("started it in the background") or a past one ("the background run completed") is not a wait.
+BG_WAIT = re.compile(r"\bwait(?:ing|s)?\s+(?:on|for|until)\b.{0,60}?\bbackground\b"
+                     r"|\bbackground\b.{0,60}?\b(?:to (?:finish|complete|end)|finishes|completes|completion|notification)\b"
+                     r"|백그라운드.{0,60}?(?:기다|대기|끝나면|끝나기|완료되면|완료 알림)", re.I)
+
+
+def bgwait_signal(lines):
+    """The session's last message, when it says it waits on a background task; else None. Only the last ⏺ block
+    above the input box counts, its wrapped lines joined."""
+    if not lines:
+        return None
+    box = max((i for i, l in enumerate(lines) if l.strip().startswith("❯")), default=len(lines))
+    body = lines[:box]
+    start = max((i for i, l in enumerate(body) if l.strip().startswith("⏺")), default=None)
+    if start is None:
+        return None
+    text = " ".join(card_watch.GLYPHS.sub("", l.strip()) for l in body[start:] if l.strip() and not set(l.strip()) <= {"─"})
+    return text[:300] if BG_WAIT.search(text) else None
 
 
 def screen_of(facts, handle):
@@ -362,6 +388,21 @@ def judge(facts, memo):
         check[path] = why
         activity(path, "stalled")
         stale_paths.add(path)
+    # B: an ended turn that says it waits on a background task while nothing will wake it: the transcript owes no
+    # armed call a result (parked) and Claude Code's status line shows nothing running. A Run worker too.
+    for t in agents if "waits" not in failed else ():
+        path, handle = t.get("worktreePath"), t.get("handle")
+        motion = (facts["tails"].get(path) or (None, None))[0]
+        if not (path and handle) or not motion or motion.get("state") != "idle" or motion.get("parked") \
+                or isinstance(facts["waits"].get(handle), dict):
+            continue
+        mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
+        lines = screen_of(facts, handle) if mins >= IDLE_MIN else None
+        text = None if not lines or background(lines) else bgwait_signal(lines)
+        if text:
+            add("B", path, (motion["since"],), f"❔ its last message waits on a background task, but nothing armed or "
+                f"running will wake it ({int(mins)} min): {text[:120]}", handle)
+            check.setdefault(path, BGWAIT_WHY)
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
             if path and path not in run_paths:
@@ -527,7 +568,7 @@ def sync_needs_you(rows=None):
 # The sources each rule reads: a finding whose source failed this round is kept, not cleared.
 DEPENDS = {"I": {"terminals", "workers", "waits"}, "X": {"terminals", "workers"}, "S": {"terminals", "sent"},
            "O": {"state", "terminals"}, "D": {"state", "board"}, "E": {"terminals"}, "L": {"consumers", "terminals", "workers", "waits"},
-           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}}
+           "W": {"state"}, "R": {"terminals", "workers", "waits"}, "H": {"terminals", "waits"}, "B": {"terminals", "waits"}}
 
 
 def write_round(findings, verdicts, dry, now, failed=()):

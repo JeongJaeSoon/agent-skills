@@ -586,4 +586,43 @@ assert not [x for x in patrol.judge({**f, "failed": {"waits"}}, {})[0] if x["cod
     "without Orca's wait list a prompt for a human cannot be ruled out"
 assert patrol.DEPENDS["H"] == {"terminals", "waits"}
 
+# B: an ended turn, 15+ min, whose last message says it waits on a background task, with nothing that will wake it:
+# the transcript armed no background command or Monitor still owed a result (not parked) and Claude Code's status line
+# shows none running. Run workers too. Still running, parked, a human's prompt, too soon, an unread screen, or a
+# screen without that wording: not judged.
+waiting = ["❯ review it", "⏺ Bash(codex exec --sandbox read-only - < /tmp/p.md)", "  ⎿  Running in the background",
+           "⏺ Waiting on the background Codex run to finish; its completion", "  notice will wake me.", RULE, "❯", RULE,
+           "  ~/w ⎇ main"]
+korean = ["⏺ 백그라운드 Codex 리뷰가 끝나면 완료 알림을 받아 이어서 진행합니다.", RULE, "❯", RULE, "  ~/w ⎇ main"]
+running = waiting[:-1] + ["  ~/w ⎇ main · 1 shell"]
+shown = {"b1": waiting, "b2": korean, "b3": running, "b4": waiting, "b5": plain, "b6": waiting, "b7": waiting,
+         "b8": korean}
+f = facts(terminals=[term(f"b{n}", f"/w/b{n}") for n in range(1, 9)],
+          tails={"/w/b1": (idle(20), None), "/w/b2": (idle(40), None), "/w/b3": (idle(20), None),
+                 "/w/b4": (idle(20, parked=True), None), "/w/b5": (idle(20), None), "/w/b6": (idle(5), None),
+                 "/w/b7": (idle(20), None), "/w/b8": (idle(20), None)},
+          waits={"b7": {"kind": "permission"}},
+          workers=[{"dispatchId": "d8", "resource": {"worktreeId": "x::/w/b8"},
+                    "projection": {"outcome": "in_progress", "liveness": {"verdict": "live"}}}],
+          read=lambda h: shown[h])
+found, v, _ = patrol.judge(f, {})
+bg = sorted((x for x in found if x["code"] == "B"), key=lambda x: x["card"])
+assert codes(bg) == [("B", "b1"), ("B", "b2"), ("B", "b8")], found
+why = "백그라운드 작업을 기다리지만 깨울 작업이 없음"
+assert v["check"] == {"/w/b1": why, "/w/b2": why, "/w/b8": why}, v["check"]
+assert "Waiting on the background Codex run" in bg[0]["title"] and bg[0]["handle"] == "b1", bg[0]["title"]
+assert v["cards"]["/w/b8"] == "run" and v["cards"]["/w/b3"] == "working", v["cards"]
+assert ("I", "b5") in codes(found) and "/w/b5" not in v["check"], "an idle card without that wording stays I only"
+assert [x["id"] for x in patrol.judge(f, {})[0] if x["code"] == "B"] == [x["id"] for x in bg], "the same turn, the same finding"
+assert not [x for x in patrol.judge({**f, "screens": {}, "read": unreadable}, {})[0] if x["code"] == "B"], \
+    "an unread screen is not judged"
+assert not [x for x in patrol.judge({**f, "failed": {"waits"}}, {})[0] if x["code"] == "B"], \
+    "without Orca's wait list a prompt for a human cannot be ruled out"
+for lines in (plain, hooked, notice, ["⏺ Started the review in the background."] + plain[1:],
+              ["⏺ The background run completed; results applied."] + plain[1:],
+              ["⏺ 백그라운드 작업이 완료되어 결과를 반영했습니다."] + plain[1:]):
+    assert patrol.bgwait_signal(lines) is None, lines
+assert patrol.bgwait_signal(waiting).startswith("Waiting on the background Codex run to finish; its completion notice")
+assert patrol.DEPENDS["B"] == {"terminals", "waits"}
+
 print("test_patrol: ok")
