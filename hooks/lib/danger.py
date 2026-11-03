@@ -420,8 +420,13 @@ def check_bash(cmd, cfg, cwd=None, session=None):
             if lvl != "off" and (key, reason) not in seen:
                 seen.add((key, reason))
                 out.append(Finding(key, lvl, f"{reason} {KEY_SOURCE.format(key=key)}"))
-    # `--prompt "$(cat f)"`: the card's first prompt is whatever the file held when the command ran.
-    if re.search(r"(?:^|[;&|(])\s*orca\s+worktree\s+create\b[^\n;&|]*?--prompt\b[^\n;&|]*?(?:\$\(|`)", masked, re.M):
+    # `--prompt "$(cat f)"`: the card's first prompt is whatever the file held when the command ran. shell.lift left
+    # a `$___` word where each substitution was; one inside a quoted prompt is text, written with a stand-in `$`.
+    prompts = [v for c in cmds if c.name == "orca" and c.words[1:3] == ["worktree", "create"]
+               for i, x in enumerate(c.words)
+               for v in ([c.words[i + 1]] if x == "--prompt" and i + 1 < len(c.words) else
+                         [x.split("=", 1)[1]] if x.startswith("--prompt=") else [])]
+    if any(re.search(r"\$_{2,}", v) for v in prompts):
         key = "guard.deny.prompt_substitution"
         if (lvl := level(cfg, key)) != "off":
             out.append(Finding(key, lvl, "The card's --prompt runs a command substitution, so nothing checks what it "
