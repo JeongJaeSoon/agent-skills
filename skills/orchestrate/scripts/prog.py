@@ -1071,6 +1071,10 @@ def local_diff(repo, pr, gh_err):
                    "--src-prefix=a/", "--dst-prefix=b/", mb, v["headRefOid"], env=offline).stdout
 
 
+# No checks already holds (ci_summary), so statusCheckRollup is not among them.
+LAND_CHECK_FIELDS = ("state", "isDraft", "headRefOid", "mergeStateStatus", "url")
+
+
 def pr_view(repo, pr):
     return gh_json("pr", "view", str(pr), "--repo", repo, "--json",
                    "state,isDraft,headRefOid,headRefName,baseRefName,mergeStateStatus,mergeable,statusCheckRollup,mergeCommit,url,title")
@@ -1138,9 +1142,21 @@ def admitted_tickets(events):
     return [t for t, ev in triage.items() if ev == "admitted"]
 
 
+def gate_rows(events, pr, warn=True):
+    """The PR's gate_opened rows that name both their Task and gate. A row missing either is no gate anyone can
+    resolve, so it is skipped (with one warning line) and `orch gate` may open a new one."""
+    rows = [e for e in events if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    good = [e for e in rows if e.get("task") and e.get("gate")]
+    if warn and len(good) < len(rows):
+        bad = [e for e in rows if e not in good]
+        print(f"warning: skipped {len(bad)} gate_opened row(s) for #{pr} with no task or gate: {json.dumps(bad[-1])[:300]}",
+              file=sys.stderr)
+    return good
+
+
 def gate_resolution(cfg, events, pr):
     """The resolution of the newest landing gate opened for this PR, or None while it is pending."""
-    opened = [e for e in events if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    opened = gate_rows(events, pr)
     if not opened:
         return None
     res = orca_json("orchestration", "gate-list", "--task", opened[-1]["task"], "--run", cfg["run"])
@@ -1156,7 +1172,7 @@ GATE_TASK = "Land #"
 def close_gate_task(p, pr, status):
     """No worker settles the lead-owned `Land #N` Task, so it would sit in `task-list --ready` for good:
     completed when the PR lands, failed when the gate is held or the PR is closed. A new gate makes a new Task."""
-    opened = [e for e in p.events() if e["ev"] == "gate_opened" and e.get("pr") == pr]
+    opened = gate_rows(p.events(), pr, warn=False)
     if opened:
         run(["orca", "orchestration", "task-update", "--id", opened[-1]["task"], "--status", status,
              "--run", p.cfg["run"], "--json"], check=False)
@@ -1999,6 +2015,10 @@ def cmd_land_check(argv):
     events = p.events()
     st = pr_state(events).get(pr, {})
     v = pr_view(repo, pr)
+    if unread := [k for k in LAND_CHECK_FIELDS if v.get(k) is None]:
+        print(f"warning: gh returned no {','.join(unread)} for #{pr}: {json.dumps(v)[:400]}", file=sys.stderr)
+        print(f"HOLD: PR state unknown (no {','.join(unread)} from gh); run land-check again")
+        sys.exit(1)
     problems = []
     main = main_state(events)
     if main == "red" and "--main-fix" not in argv:
@@ -2027,7 +2047,7 @@ def cmd_land_check(argv):
         elif resolution:
             close_gate_task(p, pr, "failed")
             problems.append(f"human-gate: the user resolved the gate as '{resolution}'")
-        elif any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in events):
+        elif gate_rows(events, pr, warn=False):
             problems.append("human-gate: gate open in Orca, waiting for the user")
         else:
             problems.append(f"human-gate: open the gate first (orch gate {p.slug} --pr {pr})")
@@ -2036,7 +2056,7 @@ def cmd_land_check(argv):
         problems.append("conflicts with base: fix task in the PR's worktree")
     elif mss == "BEHIND":
         problems.append(f"behind base: gh pr update-branch {pr} --repo {repo}, then wait for CI")
-    failed, pending, runs = ci_summary(v["statusCheckRollup"])
+    failed, pending, runs = ci_summary(v.get("statusCheckRollup"))
     if not failed and not pending:
         pending = runs_unfinished(repo, v["headRefOid"])
     if failed:
@@ -2084,8 +2104,8 @@ def cmd_gate(argv):
         sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
                  "for (worker_cannot_coordinate_own_run), so `orch land` never sees `approved`. Have the orchestrator "
                  "restart this lead as a /goal card (`skills-sync card`, its brief's MERGE line saying human-gate)")
-    if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
-        gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
+    if (opened := gate_rows(p.events(), pr)) and gate_resolution(p.cfg, p.events(), pr) is None:
+        gid = opened[-1]["gate"]
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"
                  f" (or: orca orchestration gate-resolve --id {gid} --resolution land|hold)")
     v = pr_view(p.cfg["repo"], pr)
@@ -2106,14 +2126,17 @@ def cmd_gate(argv):
     task_id = (task.get("task") or task).get("id")
     if not task_id:
         sys.exit(f"orca task-create returned no Task id, so no gate was opened: {json.dumps(task)[:400]}")
-    gate = orca_json("orchestration", "gate-create", "--task", task_id,
-                     "--question", question, "--options", json.dumps(["land", "hold"]))
-    gate_id = (gate.get("gate") or gate).get("id")
-    if not gate_id:
+    try:
+        gate = orca_json("orchestration", "gate-create", "--task", task_id,
+                         "--question", question, "--options", json.dumps(["land", "hold"]))
+        gate_id = (gate.get("gate") or gate).get("id")
+        if not gate_id:
+            sys.exit(f"orca gate-create returned no gate id: {json.dumps(gate)[:400]}")
+    except SystemExit as e:
+        # Unrecorded, the gate-less Task would sit in task-list --ready for good; the next `orch gate` makes a new one.
         run(["orca", "orchestration", "task-update", "--id", task_id, "--status", "failed",
              "--run", p.cfg["run"], "--json"], check=False)
-        sys.exit(f"orca gate-create returned no gate id, so none is recorded and Task {task_id} is marked failed: "
-                 f"{json.dumps(gate)[:400]}")
+        sys.exit(f"{e}. No gate recorded; Task {task_id} marked failed")
     print(json.dumps(p.append("gate_opened", pr=pr, task=task_id, gate=gate_id), ensure_ascii=False))
     print(f"the user resolves it in Orca (or: orca orchestration gate-resolve --id {gate_id} --resolution land)")
 
