@@ -103,18 +103,17 @@ def transcript_dirs(path):
     return list(dict.fromkeys([_orch("dash").transcript_dir(path), config]))
 
 
-def transcript_tail(path, strict=False):
-    """(motion, last row) from the tail of the newest transcript of a card, or (None, None) without one. motion is
-    dash.step_motion's: {"state": "idle"|..., "since", "parked"}. A transcript or its folder that cannot be read is
-    (None, None) too, or raises with strict."""
+def transcript_tail(path, strict=False, folder=None):
+    """(motion, last row) from the tail of the newest transcript of a card in folder (dash's by default), or
+    (None, None) without one. motion is dash.step_motion's: {"state": "idle"|..., "since", "parked"}. A transcript or
+    a folder that cannot be read is (None, None) too, or raises with strict."""
     dash = _orch("dash")
+    folder = folder or dash.transcript_dir(path)
     try:
-        files = []
-        for d in transcript_dirs(path):
-            try:
-                files += [d / n for n in os.listdir(d) if n.endswith(".jsonl")]  # glob would hide a denied folder
-            except (FileNotFoundError, NotADirectoryError):
-                continue
+        try:
+            files = [folder / n for n in os.listdir(folder) if n.endswith(".jsonl")]  # glob hides a denied folder
+        except (FileNotFoundError, NotADirectoryError):
+            files = []
         if not files:
             return None, None
         newest = max(files, key=lambda f: f.stat().st_mtime)
@@ -136,6 +135,12 @@ def transcript_tail(path, strict=False):
     return motion or None, last
 
 
+def parked(path):
+    """Whether the newest transcript in any of the card's transcript folders armed its own wake-up; raises when one
+    cannot be read. Each folder counts on its own, so a second folder never hides what the first one shows."""
+    return any((transcript_tail(path, True, d)[0] or {}).get("parked") for d in transcript_dirs(path))
+
+
 def observe(path):
     """What guard() checks, read now. A part that could not be read is None."""
     def attempt(fn):
@@ -154,7 +159,7 @@ def observe(path):
         prog = attempt(lambda: _orch("prog"))
         f["waits"] = prog and attempt(lambda: prog.agent_waits(strict=True))
         f["screens"] = {h: prog and attempt(lambda h=h: prog.read_screen(h)) for h in agents}
-        f["motion"] = attempt(lambda: transcript_tail(path, strict=True)[0] or {})
+        f["motion"] = attempt(lambda: {"parked": parked(path)})
     return f
 
 

@@ -40,13 +40,13 @@ assert not check(final=True, patrol=True)[0] and not check(final=True, head="c" 
 assert check(handles=("t1", "s1", "gone"), final=True)[0], "a handle already closed is fine"
 
 # observe(): each reader that fails is None, which check() turns into a keep.
-saved = reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.transcript_tail
+saved = reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.parked
 reap.patrol_read = lambda now=None: set()
 reap.run = lambda cmd, **k: H + "\n"
 reap.orca_json = lambda *a: {"terminals": OK["terminals"]}
 prog = types.SimpleNamespace(agent_waits=lambda strict=False: {"t1": None}, read_screen=lambda h: ["❯ "])
 cardguard._orch = lambda name: prog
-cardguard.transcript_tail = lambda path, strict=False: ({"state": "idle", "parked": False}, None)
+cardguard.parked = lambda path: False
 f = cardguard.observe("/w/x")
 assert f["head"] == H and f["waits"] == {"t1": None} and f["screens"] == {"t1": ["❯ "]} and not f["patrol"], f
 assert cardguard.guard("/w/x", H, ["t1", "s1"]) == (True, "확인함")
@@ -61,10 +61,11 @@ for name, broken, why in (("agent_waits", boom, "agent-wait"), ("read_screen", b
     ok, got = cardguard.guard("/w/x", H, ["t1", "s1"])
     assert not ok and why in got, (name, got)
     prog.agent_waits, prog.read_screen = (lambda strict=False: {"t1": None}), (lambda h: ["❯ "])
-cardguard.transcript_tail = boom
+cardguard.parked = boom
 assert "세션 기록" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
-cardguard.transcript_tail = lambda path, strict=False: (None, None)
-assert cardguard.guard("/w/x", H, ["t1", "s1"])[0], "no transcript is nothing armed"
+cardguard.parked = lambda path: True
+assert "parked" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
+cardguard.parked = lambda path: False
 for answer in (None, {}, {"terminals": None}, {"terminals": [], "truncated": True}):
     reap.orca_json = lambda *a, r=answer: r
     assert "터미널 목록" in cardguard.guard("/w/x", H, ["t1", "s1"])[1], answer
@@ -76,7 +77,7 @@ reap.patrol_read = lambda now=None: {"/w/x"}
 assert "순찰 판정:" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
 reap.patrol_read = lambda now=None: None
 assert "순찰 판정 파일을 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
-reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.transcript_tail = saved
+reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.parked = saved
 
 # reap.patrol_read: no file or a stale one is no protection; one that exists and cannot be read is None.
 reap.STATE.mkdir(parents=True, exist_ok=True)
@@ -106,6 +107,7 @@ rows = [{"type": "assistant", "timestamp": "2026-01-01T00:00:00Z",
 motion, _ = cardguard.transcript_tail("/w/parked")
 assert motion and motion["state"] == "idle" and motion["parked"], motion
 assert cardguard.transcript_tail("/w/none", strict=True) == (None, None), "no transcript is not a failure"
+assert cardguard.parked("/w/none") is False
 (d / "s.jsonl").chmod(0)
 try:
     cardguard.transcript_tail("/w/parked", strict=True)
@@ -124,11 +126,25 @@ d.chmod(0o755)
 # The cleaners read CLAUDE_CONFIG_DIR/projects; the guard reads there too, not only dash's CLAUDE_PROJECTS_DIR.
 cfg_home = tmp / "cfg"
 (cfg_home / "projects" / "-w-parked").mkdir(parents=True)
-(d / "s.jsonl").rename(cfg_home / "projects" / "-w-parked" / "s.jsonl")
 os.environ["CLAUDE_CONFIG_DIR"] = str(cfg_home)
-motion, _ = cardguard.transcript_tail("/w/parked", strict=True)
-assert motion and motion["parked"], motion
+assert cardguard.parked("/w/parked"), "parked in dash's folder"
+# A newer, idle session in the other folder does not hide the parked one.
+idle_rows = [{"type": "user", "timestamp": "2026-01-02T00:00:00Z", "message": {"content": "hi"}},
+             {"type": "assistant", "timestamp": "2026-01-02T00:00:01Z", "message": {"stop_reason": "end_turn", "content": []}}]
+(cfg_home / "projects" / "-w-parked" / "new.jsonl").write_text("{}\n" + "\n".join(json.dumps(r) for r in idle_rows) + "\n")
+assert cardguard.parked("/w/parked")
+(d / "s.jsonl").rename(cfg_home / "projects" / "-w-parked" / "s.jsonl")
+os.utime(cfg_home / "projects" / "-w-parked" / "s.jsonl", (time.time() + 60, time.time() + 60))
+assert cardguard.parked("/w/parked"), "parked in the cleaners' folder"
+(cfg_home / "projects" / "-w-parked").chmod(0)
+try:
+    cardguard.parked("/w/parked")
+    raise AssertionError("either folder unreadable raises")
+except OSError:
+    pass
+(cfg_home / "projects" / "-w-parked").chmod(0o755)
 del os.environ["CLAUDE_CONFIG_DIR"]
+assert cardguard.transcript_tail("/w/parked") == (None, None), "patrol still reads dash's folder only"
 
 # Shared facts: busy shells and child cards.
 row = lambda pid, cmd, ppid=1: {"pid": pid, "ppid": ppid, "cmd": cmd}
