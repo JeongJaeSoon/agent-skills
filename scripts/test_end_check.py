@@ -111,6 +111,13 @@ with contextlib.redirect_stderr(io.StringIO()):
     assert end_check.waiting_questions(ME) is None
     os.environ["FAKE_INBOX"] = json.dumps([{"id": "q1", "from_handle": "term_me"}])  # no type: maybe a question
     assert end_check.waiting_questions(ME) is None
+    # A short page still needs every row whole: a null sender, or a question with no time beside its thread.
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle=None)])
+    assert end_check.waiting_questions(ME) is None
+    no_time = {k: v for k, v in Q.items() if k != "created_at"}
+    os.environ["FAKE_INBOX"] = json.dumps([no_time, {"id": "m0", "type": "status", "thread_id": "m1",
+                                                     "from_handle": "term_lead", "created_at": "2025-12-31 10:00"}])
+    assert end_check.waiting_questions(ME) is None
     os.environ["FAKE_INBOX"] = "null"
     assert end_check.waiting_questions(ME) is None
     limit, end_check.INBOX_LIMIT = end_check.INBOX_LIMIT, "1"

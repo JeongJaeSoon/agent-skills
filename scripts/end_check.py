@@ -180,10 +180,11 @@ def waiting_questions(senders, since=None):
     except RuntimeError:
         return None
     msgs = res.get("messages")
-    if not isinstance(msgs, list) or not all(isinstance(m, dict) and {"id", "type", "from_handle"} <= m.keys()
-                                             for m in msgs):
-        print(f"[{ME}] warning: Orca's inbox has no messages list, or a row without id, type or from_handle; "
-              "questions waiting are unknown", file=sys.stderr)
+    filled = lambda m: all(isinstance(m.get(k), str) and m[k] for k in ("id", "type", "from_handle"))  # noqa: E731
+    if not isinstance(msgs, list) or not all(isinstance(m, dict) and filled(m) and when(m.get("created_at"))
+                                             is not None for m in msgs):
+        print(f"[{ME}] warning: Orca's inbox has no messages list, or a row without a readable id, type, "
+              "from_handle or created_at; questions waiting are unknown", file=sys.stderr)
         return None
     page = res.get("page")
     more = res.get("hasMore") or res.get("nextCursor") or (
@@ -191,7 +192,7 @@ def waiting_questions(senders, since=None):
     # Strictly older, by more than a second: a row stamped to the second, or at the card's own instant, may share the
     # boundary with rows left on the next page.
     times, start = [when(m.get("created_at")) for m in msgs], when(since, ms=True)
-    covers = bool(msgs) and start is not None and None not in times and min(times) < start - 1
+    covers = bool(msgs) and start is not None and min(times) < start - 1
     if (len(msgs) >= int(INBOX_LIMIT) or more) and not covers:
         print(f"[{ME}] warning: the inbox has more than one page and its oldest row is not older than this card; "
               "questions waiting are unknown", file=sys.stderr)
