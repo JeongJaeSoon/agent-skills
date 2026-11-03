@@ -56,7 +56,7 @@ def check_bash(cmd, background, s, cfg):
             out += finding(cfg, "orchestrate.wait_foreground",
                            f"`{' '.join(wait.words[:3])}` blocks this session's turn ({s.role}) until mail arrives. Run the same "
                            "command with run_in_background: true and end your turn; its completion notice wakes you.")
-        elif wait and wait.piped_to and any(c.name in ("tail", "head") for c in downstream(cmds, wait)):
+        elif wait and any(c.name in ("tail", "head") for w in cmds if waits(w) for c in downstream(cmds, w)):
             out += finding(cfg, "orchestrate.wait_foreground",
                            "A background wait piped into `tail` or `head` shows nothing until it ends. Run it without "
                            "the pipe and read its output file.")

@@ -231,13 +231,65 @@ def quotes_only(cmd, marks):
         if literal:
             marks["literal"].append((i, j))
 
+    def heredoc(i):
+        """The `<<` delimiter at i: (index after it, (strip tabs, word, expands))."""
+        strip = cmd.startswith("-", i)
+        i += strip
+        while i < n and cmd[i] in " \t":
+            i += 1
+        j = i
+        while j < n and cmd[j] not in " \t\n;&|<>()":
+            j += 1
+        word = cmd[i:j]
+        quoted = any(q in word for q in "'\"\\")
+        return j, (strip, re.sub(r"['\"\\]", "", word), not quoted)
+
+    def bodies(i, pending):
+        """Blank the heredoc bodies from line start i (an expanding body keeps its substitutions); the index after."""
+        for strip, word, expands in pending:
+            start = i
+            while i < n:
+                eol = cmd.find("\n", i)
+                eol = n if eol < 0 else eol
+                if (cmd[i:eol].lstrip("\t") if strip else cmd[i:eol]) == word:
+                    break
+                i = eol + 1
+            body_end = min(i, n)
+            if expands:
+                j = start
+                while j < body_end:
+                    if cmd.startswith("$(", j):
+                        j = scan(j + 2, ")")
+                    elif cmd[j] == "`":
+                        j = scan(j + 1, "`")
+                    else:
+                        blank(j, j + 1)
+                        j += 1
+            else:
+                blank(start, body_end)
+            eol = cmd.find("\n", i)
+            eol = n if eol < 0 else eol
+            blank(i, eol)  # the delimiter line is not a command either
+            i = eol + 1
+        return i
+
     def scan(i, close):
         """From i to the `close` that ends this level (`)` of `$(`, a backtick, or the end); the index after it."""
-        depth = 0
+        depth, pending = 0, []
         while i < n:
             c = cmd[i]
             if close == ")" and c == ")" and not depth or close == "`" and c == "`":
                 return i + 1
+            if cmd.startswith("<<<", i):
+                i += 3
+                continue
+            if cmd.startswith("<<", i):
+                i, doc = heredoc(i + 2)
+                pending.append(doc)
+                continue
+            if c == "\n" and pending:
+                i, pending = bodies(i + 1, pending), []
+                continue
             if c == "\\":
                 blank(i, min(i + 2, n), literal=True)
                 i += 2

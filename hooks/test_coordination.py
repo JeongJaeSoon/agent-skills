@@ -66,6 +66,7 @@ for role in ("orchestrator", "lead"):
     assert bash("orch wait app | tail -5", role, background=True) == "deny"
     assert bash("orch wait app | tail -5; orch status app", role, background=True) == "deny"
     assert bash("orch wait app | jq . | head -3", role, background=True) == "deny"
+    assert bash("orch wait a | jq .; orch wait b | tail -5", role, background=True) == "deny"
     assert bash("orch wait app | jq .; tail -5 /tmp/status.log", role, background=True) != "deny"
     assert bash("orch status app", role) == "allow"
     assert bash("orch inbox --json", role) == "allow"
