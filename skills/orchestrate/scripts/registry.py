@@ -197,7 +197,7 @@ STORES = [
           rule="`orch stage` cells and rows; win over stages-auto"),
     Store("stageslock", "D/stages.lock", {"stage.manual": LOCK}, ("stages:change",)),
     Store("stagesauto", "D/stages-auto.json", {"program.event": DERIVED, "run.dispatch": DERIVED},
-          ("stage_auto:refresh",), ("brief", "reorient"),
+          ("stage_auto:refresh",), ("brief", "reorient", "fleet"),
           rule="stage rows per program from its ledger, Run cards and PRs, built each tick and written when they "
                "change; its freshness is memory.json stage_auto_at"),
     Store("skillsj", "D/skills.json", {"session.transcript": DERIVED, "skill.signal": DERIVED},
@@ -213,7 +213,8 @@ STORES = [
     Store("requests", "D/requests.jsonl", {"order.request": REMOVED}, (), ("nobody",),
           rule="the removed request ledger; nothing writes or reads it"),
     # -- S: hooks, watchers and the janitor
-    Store("roles", "S/roles/*.json", {"session.role": CANONICAL}, ("roles:declare",), ("reorient", "fleet", "janitor", "patrol"),
+    Store("roles", "S/roles/*.json", {"session.role": CANONICAL}, ("roles:declare",), ("reorient", "fleet", "janitor", "patrol",
+                                                                                  "tokenspage"),
           rule="the role a session declared with a ROLE: line"),
     Store("rolespans", "S/transcripts/*.json", {"session.transcript": DERIVED}, ("reorient:register",), ("reflect",),
           rule="where an orchestrator's transcript starts"),
