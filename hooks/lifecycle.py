@@ -60,7 +60,14 @@ def readable(e):
     """A user or assistant entry whose message content is text or a list of blocks."""
     m = e.get("message")
     c = m.get("content") if isinstance(m, dict) else None
-    return isinstance(c, str) or isinstance(c, list) and all(isinstance(b, dict) for b in c)
+    return isinstance(c, str) or isinstance(c, list) and all(isinstance(b, dict) and bash_readable(b) for b in c)
+
+
+def bash_readable(b):
+    """A Bash tool_use block names its command as a string; any other block is not looked into."""
+    if b.get("type") != "tool_use" or b.get("name") != "Bash":
+        return True
+    return isinstance(b.get("input"), dict) and isinstance(b["input"].get("command"), str)
 
 
 def blocks(e):

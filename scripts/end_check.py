@@ -37,7 +37,8 @@ ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 GH = os.environ.get("SKILLS_SYNC_GH", "gh")
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
 CACHE_DIRS = ("__pycache__", ".pytest_cache", "node_modules/.cache")
-STATUS_ROW = re.compile(r"[ MTADRCU?!]{2} .+")  # `git status --porcelain` v1; any other row leaves the tree unread
+# `git status --porcelain` v1: untracked, ignored, or a tracked change; any other row leaves the tree unread.
+STATUS_ROW = re.compile(r"(\?\?|!!|[MTADRCU][ MTADRCU]|[ MTADRCU][MTADRCU]) .+")
 SETTLED = ("completed", "failed")
 INBOX_LIMIT = "2000"
 ME = "skills-sync end-check"

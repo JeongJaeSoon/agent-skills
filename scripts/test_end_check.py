@@ -343,10 +343,12 @@ git("remote", "set-url", "origin", str(tmp / "nowhere.git"))
 assert end_check.git_facts(str(clone))["on_main"] is None
 # A status row that is not porcelain v1 leaves the untracked files unread, not "none".
 real_run = end_check.run
-end_check.run = lambda argv, cwd=None, **kw: (0, "unread status row\n", "") if "--ignored" in argv else real_run(argv, cwd, **kw)
-try:
-    assert end_check.git_facts(str(clone))["untracked"] is None
-finally:
-    end_check.run = real_run
+for row in ("unread status row", "?! unread-path", "   blank-status"):
+    end_check.run = lambda argv, cwd=None, row=row, **kw: \
+        (0, row + "\n", "") if "--ignored" in argv else real_run(argv, cwd, **kw)
+    try:
+        assert end_check.git_facts(str(clone))["untracked"] is None, row
+    finally:
+        end_check.run = real_run
 
 print("ok")
