@@ -165,6 +165,9 @@ check("a later keep takes back an earlier remove", decision(hook(later_keep, rm_
 odd_msg = card[:3] + [{"type": "assistant", "message": {"id": "m9", "content": 7}}] + card[3:]
 check("a message after the remove whose content is unread denies the rm",
       decision(hook(odd_msg, rm_event(), DENY)) == "deny")
+null_text = card[:3] + [{"type": "user", "message": {"content": [{"type": "text", "text": None}]}}] + card[3:]
+check("a user message after the remove whose text is unread denies the rm",
+      decision(hook(null_text, rm_event(), DENY)) == "deny")
 odd_cmd = card[:3] + [use("m9", "tu_x", 7)] + card[3:]
 check("a Bash call after the remove whose command is unread denies the rm",
       decision(hook(odd_cmd, rm_event(), DENY)) == "deny")

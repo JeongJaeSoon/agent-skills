@@ -64,7 +64,10 @@ def readable(e):
 
 
 def bash_readable(b):
-    """A Bash tool_use block names its command as a string; any other block is not looked into."""
+    """A text block carries a string, and a Bash tool_use block names its command as one; other blocks are not
+    looked into."""
+    if b.get("type") == "text":
+        return isinstance(b.get("text"), str)
     if b.get("type") != "tool_use" or b.get("name") != "Bash":
         return True
     return isinstance(b.get("input"), dict) and isinstance(b["input"].get("command"), str)

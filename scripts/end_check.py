@@ -348,7 +348,8 @@ def dispatch_settled(dispatch_id):
 
 
 def archive_hook(path):
-    """Whether the card's orca.yaml has an archive hook; None when the file exists but cannot be read."""
+    """Whether `orca worktree rm` needs --run-hooks: True when the card has an orca.yaml (Orca runs only the archive
+    hooks it defines, so none is harmless), False when it has none, None when one is there but cannot be read."""
     try:
         text = (pathlib.Path(path) / "orca.yaml").read_text()
     except FileNotFoundError:
@@ -356,9 +357,8 @@ def archive_hook(path):
         return None if os.path.lexists(pathlib.Path(path) / "orca.yaml") else False
     except (OSError, TypeError, UnicodeDecodeError):
         return None
-    # Not parsed as YAML: an `archive` key anywhere, in block or flow style, runs the hooks. Text without that key
-    # cannot define the hook, however malformed it is.
-    return re.search(r"\barchive\b[\"']?\s*:", text) is not None
+    # Not parsed as YAML (a key can be spelled many ways): any orca.yaml at all runs the hooks it may define.
+    return True
 
 
 def apply(verdict, f, mode, opts, me):

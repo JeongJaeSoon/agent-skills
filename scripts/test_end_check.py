@@ -271,12 +271,11 @@ dangling = tmp / "card-dangling"
 dangling.mkdir()
 (dangling / "orca.yaml").symlink_to(tmp / "no-such-target.yaml")
 assert end_check.archive_hook(str(dangling)) is None, "a dangling orca.yaml link is there but unread"
-# The archive key is looked for anywhere, flow style or quoted included; text without it defines no hook.
-for text, want in (("scripts: {archive: make down}\n", True), ('scripts:\n  "archive": x\n', True),
-                   ("scripts: [unterminated\n", False), ("scripts:\n  setup: archive-old.sh\n", False)):
+# The YAML is not parsed: any readable orca.yaml, however its key is spelled or broken, runs the hooks.
+for text in ("scripts: {archive: make down}\n", 'scripts:\n  "\\x61rchive": x\n', "scripts: [unterminated\n", ""):
     (dangling / "orca.yaml").unlink()
     (dangling / "orca.yaml").write_text(text)
-    assert end_check.archive_hook(str(dangling)) is want, text
+    assert end_check.archive_hook(str(dangling)) is True, text
 # With an archive hook, --run-hooks goes after the --worktree value.
 hooked = tmp / "card-hooked"
 hooked.mkdir()
