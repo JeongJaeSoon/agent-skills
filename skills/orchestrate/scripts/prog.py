@@ -1182,14 +1182,16 @@ def cmd_init(argv):
     except SystemExit as e:  # guessing "coordinating lead" would scope a worker lead's program to the whole Run
         sys.exit(f"orch init: could not list {run_id}'s workers to tell whether this terminal is a dispatched lead"
                  f" ({e}). Retry when `orca orchestration worker-list --run {run_id}` answers.")
+    if mine and policy == "human-gate":
+        sys.exit(f"orch init: this lead is dispatch {mine.get('dispatchId')} on {run_id}, and a dispatched lead cannot "
+                 "land under human-gate: Orca lets no worker create a gate on the Run it works for, so `orch land` "
+                 "never sees `approved`. Ask PARENT to restart this lead as a /goal card (its brief's MERGE line "
+                 "says human-gate), or init with --merge-policy autonomous.")
     if mine:
         # A lead started with worker-start: its units are the Dispatches under its own, and its mail is its Dispatch's.
         cfg["lead_dispatch"] = mine.get("dispatchId")
         print(f"lead is dispatch {cfg['lead_dispatch']} on {run_id}: `orch wait` reads its own mailbox; start units "
               "with worker-start --spec (Orca refuses a worker's task-create and gate-create on this Run)")
-        if policy == "human-gate":
-            print("warning: human-gate needs Orca gates, which this lead cannot create; `orch gate` will refuse. "
-                  "Use `orch decide add` per PR, or restart the lead as a /goal card")
     (d / "briefs").mkdir(parents=True, exist_ok=True)
     (d / "program.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     print(f"initialised {d}")
@@ -1945,8 +1947,8 @@ def cmd_gate(argv):
         sys.exit("gates are for merge_policy human-gate; autonomous programs land with orch land")
     if p.cfg.get("lead_dispatch"):
         sys.exit("this lead is a dispatched worker, and Orca lets no worker create a Task or gate on the Run it works "
-                 "for (worker_cannot_coordinate_own_run). Ask the human with `orch decide add` per PR, or have the "
-                 "orchestrator restart this lead as a /goal card (`skills-sync card --card`)")
+                 "for (worker_cannot_coordinate_own_run), so `orch land` never sees `approved`. Have the orchestrator "
+                 "restart this lead as a /goal card (`skills-sync card`, its brief's MERGE line saying human-gate)")
     if any(e["ev"] == "gate_opened" and e.get("pr") == pr for e in p.events()) and gate_resolution(p.cfg, p.events(), pr) is None:
         gid = next(e.get("gate") for e in reversed(p.events()) if e["ev"] == "gate_opened" and e.get("pr") == pr)
         sys.exit(f"a gate for #{pr} is already open; the user resolves it in Orca"

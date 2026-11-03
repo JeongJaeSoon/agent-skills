@@ -21,7 +21,7 @@ when several Orca workspaces share its path. No terminal handle, or no worktree 
 --no-parent skips the lookup; an explicit --parent-worktree other than `path:` is passed as given.
 A lead's brief starts that way too when Orca's Nested worker depth is 3 or more (`orch doctor`, orca_settings.py),
 so the lead's workers' helpers still fit; below that it is a `/goal` card, with the one-line settings proposal as a
-warning. A lead's brief that names the `human-gate` merge policy stays a `/goal` card at any depth: its landings wait on
+warning. A lead's brief whose MERGE row says `merge_policy human-gate` stays a `/goal` card at any depth: its landings wait on
 Orca gates, and Orca lets no dispatched worker create a Task or gate on the Run it works for. Anything else (a handoff, or --card) is a `/goal` card from `orca worktree create`. A brief that sends anything to a `term_…`
 handle (`orchestration send --to term_…`, in any line) is refused: a handle dies with its terminal, so the mail is
 lost on a restart (`terminal_not_found`), and while it lives the mail is only stored.
@@ -32,7 +32,7 @@ The prompt is the brief's `/goal` line (with ` 브리프: <brief path>` appended
 its PROGRAM, APPROVED, lead and CLOSE/KEEP rows. A row is a line outside a ``` fence that starts with the key and a
 colon (`CLOSE: …`, `` `CLOSE`: … ``) or the template's wide gap (`DELEGATE    …`), plus the indented lines under it.
 A lead's brief (a MODE row, a `ROLE: lead <slug>` row or a `<project>: lead` head) needs every row of orchestrate
-references/brief.md "Lead"; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
+references/brief.md "Lead", its MERGE row naming exactly one merge_policy; any brief needs CLOSE or KEEP, and one with an Approved heading or bullet needs its
 `APPROVED:` row. The brief is a local file; a note only the notes store can reach is copied to one first.
 
 `--prompt "$(cat brief.md)"` hides those lines from the guard hook, which reads only the command text; this reads
@@ -60,13 +60,13 @@ import orca_settings  # noqa: E402
 ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 ORCH = os.environ.get("SKILLS_SYNC_ORCH", str(REPO / "bin" / "orch"))
 GOAL = re.compile(r"(?m)^/goal[ \t]+\S.*$")
-LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "TASKS", "GATE")
+LEAD_ROWS = ("MODE", "ROLE", "INBOX", "DELEGATE", "PREDICATE", "MERGE", "TASKS", "GATE")
+MERGE_VALUE = re.compile(r"\bmerge_policy (autonomous|human-gate)\b")
 ROWS = ("PROGRAM", "APPROVED", *LEAD_ROWS, "CLOSE", "KEEP")
 FENCE = re.compile(r"(?ms)^[ \t]*```.*?^[ \t]*```[^\n]*$")
 # dispatch-card §2's prose form of the approval, which carries nothing into the prompt without an APPROVED row
 APPROVED_PROSE = re.compile(r"(?im)^[ \t]*(?:#{1,6}[ \t]*|[-*][ \t]+\*\*)approved\b")
 ME = "skills-sync card"
-HUMAN_GATE = re.compile(r"(?i)merge[ _-]?policy\W{0,20}(?:(?:is|=|:)\W{0,5})?human-gate|--merge-policy[ =]human-gate")
 
 
 class Refuse(Exception):
@@ -92,6 +92,12 @@ def row(text, key):
                 out.append(nxt.rstrip())
             return "\n".join(out)
     return None
+
+
+def merge_policy(merge_row):
+    """The one merge policy a MERGE row names, else None (it names both or neither)."""
+    found = set(MERGE_VALUE.findall(" ".join((merge_row or "").split())))
+    return found.pop() if len(found) == 1 else None
 
 
 SEND_TO = re.compile(r"orchestration\s+send\b(?:[^\n]|\\\n)*?--to[ =]+[`'\"]?([\w:.@<>-]+)")
@@ -130,6 +136,9 @@ def compose(brief_path):
         missing += [f"{k} row" for k in LEAD_ROWS if not rows[k]]
         if rows["ROLE"] and not guard.LEAD_ROLE.search(rows["ROLE"]):
             missing.append("`ROLE: lead <slug>` (the ROLE row names no slug)")
+        if rows["MERGE"] and not merge_policy(rows["MERGE"]):
+            missing.append("MERGE row with exactly one of `merge_policy autonomous` or `merge_policy human-gate` "
+                           "(the template's row names both; keep the one this program lands by)")
     if missing:
         raise Refuse(2, f"{path} has no {', no '.join(missing)}. Add it as a line of its own in the brief "
                         "(dispatch-card §2; a lead's rows are orchestrate references/brief.md \"Lead\").")
@@ -331,7 +340,7 @@ def create(argv):
     checked = supervisor(wanted) if to_run and not opts.get("--card") else None
     if lead and to_run and not opts.get("--card"):
         settings, why = orca_settings.read()
-        if HUMAN_GATE.search(text):
+        if merge_policy(row(text, "MERGE")) == "human-gate":
             to_run = False
             print(f"[{ME}] the lead starts as a /goal card: its program merges through Orca gates (human-gate), and a "
                   "dispatched worker can create no Task or gate on the Run it works for "

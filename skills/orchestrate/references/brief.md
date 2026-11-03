@@ -266,7 +266,7 @@ A new task for a worker that already exists takes the same shape. Start the work
 
 ## Lead
 
-A session started through `dispatch-card` to run a project for the session above it (a lead) gets this brief in this format, never one of your own; when to start one, whether it starts as a dispatched worker or a `/goal` card, and what the layer above does after, is `references/top-level.md` "Starting a lead". Its first prompt is `/goal <GOAL>. 브리프: <note path>` (a dispatched worker's spec is the same text without the leading `/goal`) followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE`, `TASKS`, `GATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`; `skills-sync card` writes them all out from the brief file and refuses a lead's brief missing any). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. Without a DELEGATE line, a lead investigates and implements on its own.
+A session started through `dispatch-card` to run a project for the session above it (a lead) gets this brief in this format, never one of your own; when to start one, whether it starts as a dispatched worker or a `/goal` card, and what the layer above does after, is `references/top-level.md` "Starting a lead". Its first prompt is `/goal <GOAL>. 브리프: <note path>` (a dispatched worker's spec is the same text without the leading `/goal`) followed by the brief's `MODE`, `ROLE`, `INBOX`, `DELEGATE`, `PREDICATE`, `MERGE`, `TASKS`, `GATE` and `CLOSE` lines written out (the guard hook refuses a card prompt without `CLOSE` or `KEEP`, and a lead's without `MODE`, `ROLE`, `DELEGATE` and `PREDICATE`; `skills-sync card` writes them all out from the brief file and refuses a lead's brief missing any). The `ROLE: lead <slug>` line is what the reorient hook reads to remind the lead of its program on every prompt. Without a DELEGATE line, a lead investigates and implements on its own.
 
 ```
 <project>: lead
@@ -285,11 +285,18 @@ DELEGATE    You do not investigate, implement, verify or drive a browser yoursel
             or "Single worker"), never this Lead brief; only the human or the top-level starts
             a lead.
 PREDICATE   The countable done condition, and what is out of scope.
+MERGE       merge_policy autonomous, or merge_policy human-gate when each landing waits on the
+            human's Orca gate; keep the one that applies, the value `orch init --merge-policy`
+            gets. `skills-sync card` reads this line and starts a human-gate lead as a `/goal`
+            card with its own Run: a dispatched worker can create no task or gate on the Run it
+            works for.
 TASKS       Each unit you start is an Orca task: `task-create --deps '[…]'` with its start-after
             prerequisites, started from `task-list --ready` with `worker-start --task <id>`
             (SKILL.md Scale). Started as a dispatched worker, you cannot create tasks on the Run
             you work for: start each unit with `worker-start --spec` once its prerequisites have
-            landed. A unit you start as a card instead names why in your next report.
+            landed; until then the unit and what it waits on are a digest line in this brief's
+            note, so a restart finds the order. A unit you start as a card instead names why in
+            your next report.
 GATE        A decision that blocks a task is a `gate-create` on that task only: Orca shows it and
             the human resolves it there (the dashboard lists open gates in Needs you). A decision
             no task waits on, and every decision of a lead started as a dispatched worker, is
