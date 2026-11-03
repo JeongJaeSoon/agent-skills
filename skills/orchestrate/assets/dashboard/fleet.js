@@ -522,6 +522,37 @@ function pressureCard() {
     ${queue ? `<ul class="rows p-queue">${queue}</ul>` : ""}</div>`;
 }
 
+// Tickets (dash.py tickets_report via /api/fleet/tickets): each project folder of the markdown tracker, its ticket
+// counts per state and the tickets in progress, linked to Obsidian. Absent for a tracker that cannot list its projects.
+const TICKET_STATES = [["backlog", ""], ["todo", ""], ["started", "accent"], ["review", "warn"], ["completed", "good"], ["canceled", ""]];
+async function pollTickets() {
+  if (F.ticketsBusy || (F.tickets && Date.now() - F.ticketsAt < 20e3)) return;
+  F.ticketsBusy = true;
+  try {
+    const r = await fetch("/api/fleet/tickets", { cache: "no-store" });
+    F.tickets = r.ok ? await r.json() : { error: `HTTP ${r.status}` };
+  } catch (e) { F.tickets = { error: String(e.message || e) }; }
+  F.ticketsAt = Date.now(); F.ticketsBusy = false;
+  if (isFleet() && S.section === "overview") renderView();
+}
+function ticketsCard() {
+  pollTickets();
+  const rep = F.tickets;
+  if (!rep || rep.unsupported) return "";
+  const head = `<div class="card-head"><h3>Tickets</h3><span class="aside">${rep.board ? link(rep.board, `Board ${icon("arrow")}`, "go") : ""}</span></div>`;
+  if (rep.error) return `<div class="card">${head}<div class="empty">${esc(rep.error)}</div></div>`;
+  if (!(rep.projects || []).length) return `<div class="card">${head}<div class="empty">No project folders yet.</div></div>`;
+  const tone = Object.fromEntries(TICKET_STATES), order = TICKET_STATES.map(([s]) => s);
+  const rows = rep.projects.map((p) => {
+    const states = Object.keys(p.counts).sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+    const counts = states.map((s) => tag(`${s} ${p.counts[s]}`, tone[s] || "")).join(" ");
+    const active = p.active.map((t) => `<li class="sub">${tag(t.state, tone[t.state] || "")}<span class="mono">${link(t.url, esc(t.id))}</span>
+      <span class="grow ellipsis" title="${esc(t.title || "")}">${esc(t.title || "")}</span></li>`).join("");
+    return `<li><b class="mono">${esc(p.key)}</b><span class="grow muted">${esc(p.name)}</span><span class="end">${counts || "no tickets"}</span></li>${active}`;
+  }).join("");
+  return `<div class="card">${head}<ul class="rows">${rows}</ul></div>`;
+}
+
 // ------------------------------------------------------------ views
 
 function fleetOverview(st) {
@@ -537,6 +568,7 @@ function fleetOverview(st) {
     ${projectChips(st)}
     <div class="grid fill">
       <div class="card"><div class="card-head"><h3>Needs you</h3><span class="aside"><a class="go" href="#/fleet/inbox">Inbox ${icon("arrow")}</a></span></div>${itemList(st, items, { limit: 8 })}</div>
+      ${ticketsCard()}
       <div class="card" data-src="orca"><div class="card-head"><h3>Moving now</h3><span class="aside">${n("working")} working</span></div>${sessionRows(st, ss.filter((s) => ["working", "waiting"].includes(s.phase)))}</div>
       ${leadCard(st)}
       <div class="card span2" data-src="github"><div class="card-head"><h3>Open pull requests</h3><span class="aside">${prUpdated(st)}<a class="go" href="#/fleet/prs">All ${open.length} ${icon("arrow")}</a></span></div>${prRows(st, open.slice(0, 8))}</div>

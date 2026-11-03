@@ -117,6 +117,10 @@ the Bases engine (seen on 1.15.0) shaped the file:
   a formula that turns an empty `parent` into `(top level)`.
 - Only the first `sort` key takes effect, so one formula joins the folder and the number.
 
+## Dashboard
+
+The orchestrate dashboard's Overview has a Tickets card for this adapter: per project folder, the count per `state` and the tickets in `started` or `review`, linked through `link`. It reads `tracker.py projects`, which lists the project folders and the board's link (null without `<root>/Board.base`).
+
 ## Errors
 
 A file the adapter cannot read stops the command with the file's path: no frontmatter, a line it
