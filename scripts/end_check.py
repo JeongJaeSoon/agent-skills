@@ -97,7 +97,7 @@ def git_facts(cwd):
     f["branch"] = branch or None
     prs = {}
     for state in ("open", "merged"):
-        code, out, _ = run([GH, "pr", "list", "--head", branch, "--state", state, "--json", "number,url,headRefOid"],
+        code, out, _ = run([GH, "pr", "list", "--head", branch, "--state", state, "--json", "number,url,headRefOid,baseRefName"],
                            cwd) if branch else (None, "", "")
         try:
             prs[state] = json.loads(out) if code == 0 else None
@@ -108,8 +108,9 @@ def git_facts(cwd):
     head = head.strip() if code == 0 else None
     if not fetched or head is None or prs["merged"] is None or prs["open"] is None:
         f["on_main"] = None
-    elif any(isinstance(p, dict) and p.get("headRefOid") == head for p in prs["merged"]):
-        f["on_main"] = True  # after a squash merge the branch's diff still shows; the PR merged at HEAD decides
+    elif any(isinstance(p, dict) and p.get("headRefOid") == head and p.get("baseRefName") == "main"
+             for p in prs["merged"]):
+        f["on_main"] = True  # after a squash merge the branch's diff still shows; the PR merged into main at HEAD
     else:
         code, out, _ = run(["git", "diff", "--stat", "origin/main...HEAD"], cwd)
         f["on_main"] = (not out.strip()) if code == 0 else None
@@ -134,8 +135,13 @@ def card_facts(me, mode="card", dispatch=None):
         f["tickets"] = items + [wt[k] for k in ("linkedLinearIssue", "linkedIssue", "linkedWorkItem") if wt.get(k)]
     terms = orca_json("terminal", "list", "--worktree", "current")
     rows = (terms or {}).get("terminals")
-    f["other_agents"] = ([t.get("handle") for t in rows if isinstance(t, dict) and t.get("agentIdentity")
-                          and t.get("handle") != me] if isinstance(rows, list) and me else None)
+    if isinstance(rows, list) and me and all(isinstance(t, dict) and "agentIdentity" in t for t in rows):
+        f["other_agents"] = [t.get("handle") for t in rows if t.get("agentIdentity") and t.get("handle") != me]
+    else:
+        if isinstance(rows, list):
+            print(f"[{ME}] warning: an Orca terminal row has no agentIdentity; other agents on the card are unknown",
+                  file=sys.stderr)
+        f["other_agents"] = None
     f["questions"] = waiting_questions({me, f"dispatch:{dispatch}"} if dispatch else {me}) if me else None
     if mode == "worker" and not dispatch:
         f["questions"] = None  # its questions may come from dispatch:<id>, which is not known
@@ -161,9 +167,10 @@ def waiting_questions(senders):
         print(f"[{ME}] warning: Orca's inbox has no messages list, or a row without from_handle; questions waiting "
               "are unknown", file=sys.stderr)
         return None
-    if len(msgs) >= int(INBOX_LIMIT):
-        print(f"[{ME}] warning: the inbox filled its {INBOX_LIMIT}-row page; questions waiting are unknown",
-              file=sys.stderr)
+    page = res.get("page")
+    more = isinstance(page, dict) and (page.get("hasMore") or page.get("nextCursor"))
+    if len(msgs) >= int(INBOX_LIMIT) or more:
+        print(f"[{ME}] warning: the inbox has more than one page; questions waiting are unknown", file=sys.stderr)
         return None
     answered = fleet.answered_mail(msgs)
     return [m.get("id") for m in msgs if m.get("from_handle") in senders and m.get("type") == "question"

@@ -75,7 +75,7 @@ with open(os.environ["FAKE_CALLS"], "a") as f:
 mode = os.environ.get("FAKE_MODE", "")
 if a[:2] == ["orchestration", "inbox"]:
     rows = json.loads(os.environ["FAKE_INBOX"])
-    print(json.dumps({"ok": True, "result": {"messages": rows}}))
+    print(json.dumps({"ok": True, "result": {"messages": rows, "page": json.loads(os.environ.get("FAKE_PAGE", "{}"))}}))
 elif a[:2] == ["orchestration", "worker-show"]:
     if mode == "orca-down":
         sys.exit(1)
@@ -83,7 +83,8 @@ elif a[:2] == ["orchestration", "worker-show"]:
 elif a[:2] == ["worktree", "current"]:
     print(json.dumps({"ok": True, "result": {"worktree": json.loads(os.environ["FAKE_WT"])}}))
 elif a[:2] == ["terminal", "list"]:
-    print(json.dumps({"ok": True, "result": {"terminals": [{"handle": "term_me", "agentIdentity": "claude"}]}}))
+    rows = os.environ.get("FAKE_TERMS") or '[{"handle": "term_me", "agentIdentity": "claude"}]'
+    print(json.dumps({"ok": True, "result": {"terminals": json.loads(rows)}}))
 elif a[:2] in (["worktree", "rm"], ["terminal", "close"]):
     print(json.dumps({"ok": True, "result": {}}))
 else:
@@ -113,6 +114,9 @@ with contextlib.redirect_stderr(io.StringIO()):
     os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x")])
     assert end_check.waiting_questions(ME) is None
     end_check.INBOX_LIMIT = limit
+    os.environ["FAKE_PAGE"] = '{"hasMore": true, "nextCursor": "c2"}'
+    assert end_check.waiting_questions(ME) is None
+    os.environ["FAKE_PAGE"] = "{}"
 # A worker's question can come from its Dispatch.
 os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="dispatch:ctx_1")])
 assert end_check.waiting_questions({"term_me", "dispatch:ctx_1"}) == ["m1"]
@@ -130,6 +134,13 @@ f = end_check.card_facts("term_me")
 assert f["tickets"] == [] and f["other_agents"] == [], f
 assert end_check.card_facts("term_me", "worker", None)["questions"] is None
 assert end_check.card_facts("term_me", "worker", "ctx_1")["questions"] == []
+# A terminal row without agentIdentity: other agents on the card are unknown.
+os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "term_other"}]'
+with contextlib.redirect_stderr(io.StringIO()):
+    assert end_check.card_facts("term_me")["other_agents"] is None
+os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "s", "agentIdentity": null}]'
+assert end_check.card_facts("term_me")["other_agents"] == []
+os.environ.pop("FAKE_TERMS")
 
 # --apply: a worker's remove waits for its Dispatch to settle (worker_done arrived); unread is refused too.
 CLEAN_FACTS = dict(CLEAN, caches=[])
@@ -192,7 +203,9 @@ merged_at = git("rev-parse", "HEAD")
 (tmp / "gh").write_text("#!/bin/sh\n[ \"$6\" = merged ] && printf '%s' \"$FAKE_MERGED\" || echo '[]'\n")
 (tmp / "gh").chmod(0o755)
 end_check.GH = str(tmp / "gh")
-os.environ["FAKE_MERGED"] = json.dumps([{"number": 1, "url": "u", "headRefOid": merged_at}])
+os.environ["FAKE_MERGED"] = json.dumps([{"number": 1, "url": "u", "headRefOid": merged_at, "baseRefName": "release"}])
+assert end_check.git_facts(str(clone))["on_main"] is False, "merged into another branch is not on main"
+os.environ["FAKE_MERGED"] = json.dumps([{"number": 1, "url": "u", "headRefOid": merged_at, "baseRefName": "main"}])
 assert end_check.git_facts(str(clone))["on_main"] is True
 (clone / "c.txt").write_text("c\n")
 git("add", "c.txt")

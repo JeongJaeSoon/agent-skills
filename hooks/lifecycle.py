@@ -100,13 +100,10 @@ def this_message(rows, tool_use_id):
 
 
 def flag(words, name):
-    """The value of `name` in argv words (`--x v` or `--x=v`), or None."""
-    for i, w in enumerate(words):
-        if w == name and i + 1 < len(words):
-            return words[i + 1]
-        if w.startswith(name + "="):
-            return w[len(name) + 1:]
-    return None
+    """The value of `name` in argv words (`--x v` or `--x=v`) when it is given exactly once, else None."""
+    vals = [words[i + 1] for i, w in enumerate(words) if w == name and i + 1 < len(words)]
+    vals += [w[len(name) + 1:] for w in words if w.startswith(name + "=")]
+    return vals[0] if len(vals) == 1 else None
 
 
 def worker_done_for(cmd, dispatch):
@@ -122,8 +119,17 @@ def removes(cmd):
 
 
 def end_check_remove(cmd, out):
-    return any(c.name == "skills-sync" and c.words[1:2] == ["end-check"] and "--card" in c.words
-               for c in shell.commands(cmd)) and re.search(r'"verdict"\s*:\s*"remove"', out or "") is not None
+    """True when `cmd` is only `skills-sync end-check --card` and the JSON it printed has the verdict `remove`."""
+    cs = shell.commands(cmd)
+    if not (len(cs) == 1 and cs[0].name == "skills-sync" and cs[0].words[1:2] == ["end-check"]
+            and "--card" in cs[0].words):
+        return False
+    m = re.search(r"(?m)^\{", out or "")  # warnings on stderr come first, one line each
+    try:
+        res = json.JSONDecoder().raw_decode(out, m.start())[0] if m else None
+    except ValueError:
+        return False
+    return isinstance(res, dict) and res.get("verdict") == "remove"
 
 
 def exit_order(event, s, lvl):

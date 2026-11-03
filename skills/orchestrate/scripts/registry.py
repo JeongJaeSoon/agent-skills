@@ -65,7 +65,7 @@ PRODUCERS = {
     "cardwatch": ("card-watch monitor", ("card_watch",)),
     "hooks": ("hooks · reorient, roles, refusals, permission, onboard", (
         "reorient", "roles", "lib/refusals", "config", "permission", "onboard")),
-    "sync": ("skills-sync · launchd", ("sync",)),
+    "sync": ("skills-sync · launchd, card, handoff, end-check", ("sync", "card", "end_check")),
     "preview": ("preview-watch · launchd", ("preview_watch",)),
     "share": ("share-server", ("share_server",)),
     "watchprs": ("watch-prs round", ("prs", "notify")),

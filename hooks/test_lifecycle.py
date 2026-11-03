@@ -94,6 +94,15 @@ mixed = DONE + "; orca worktree list --json"
 out = hook([user(PREAMBLE), use("m1", "tu_done", mixed), result("tu_done", 'refused\n{"ok": true}'),
             use("m2", "tu_rm", RM)], rm_event(), DENY)
 check("an ok printed beside the send in one call does not count", decision(out) == "deny", out)
+out = hook([user(PREAMBLE), use("m1", "tu_done", DONE + " --dispatch-id ctx_2"), result("tu_done", '{"ok": true}'),
+            use("m2", "tu_rm", RM)], rm_event(), DENY)
+check("a send naming two Dispatch ids does not count", decision(out) == "deny", out)
+# A card whose session declared `ROLE: none` is still a dispatched card.
+(tmp / "state" / "roles").mkdir(parents=True, exist_ok=True)
+(tmp / "state" / "roles" / "s1.json").write_text('{"role": "none"}')
+out = hook(same, rm_event(), DENY)
+check("ROLE: none does not lift the exit order", decision(out) == "deny", out)
+(tmp / "state" / "roles" / "s1.json").unlink()
 # A dispatched lead ends like a worker.
 lead_worker = PREAMBLE + "\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"
 out = hook([user(lead_worker), use("m1", "tu_done", DONE), use("m1", "tu_rm", RM)], rm_event(), DENY)
@@ -112,6 +121,11 @@ card = [user(CLOSE_CARD), use("m1", "tu_ec", EC), result("tu_ec", '{"verdict": "
 check("CLOSE card rm after end-check remove passes", hook(card, rm_event(), DENY) == {})
 out = hook(card[:2] + [result("tu_ec", '{"verdict": "keep", "reasons": ["open PR"]}')] + card[3:], rm_event(), DENY)
 check("CLOSE card rm after end-check keep is denied", decision(out) == "deny", out)
+warned = card[:2] + [result("tu_ec", '[skills-sync end-check] warning: x\n{"verdict": "remove",\n "reasons": []}')] + card[3:]
+check("a warning line before the JSON is read past", hook(warned, rm_event(), DENY) == {})
+stale = [user(CLOSE_CARD), use("m1", "tu_ec", EC + "; cat old.json"),
+         result("tu_ec", '{"verdict": "keep"}\n{"verdict": "remove"}'), use("m2", "tu_rm", RM)]
+check("end-check beside another command does not count", decision(hook(stale, rm_event(), DENY)) == "deny")
 out = hook([user(CLOSE_CARD), use("m2", "tu_rm", RM)], rm_event(), DENY)
 check("CLOSE card rm without end-check is denied", decision(out) == "deny" and "end-check" in out["hookSpecificOutput"]["permissionDecisionReason"], out)
 # Not a worker: a human's session, or a subagent, is not checked; other commands are not either.
