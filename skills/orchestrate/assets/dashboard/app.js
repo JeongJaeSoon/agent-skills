@@ -59,7 +59,8 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
-const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? u : null);
+// Web pages, and Obsidian's open action for tickets of the markdown tracker (tracker.markdown.link).
+const safeUrl = (u) => (/^(https?:\/\/|obsidian:\/\/open\?)/i.test(u || "") ? u : null);
 const icon = (name) => `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">${ICON[name] || ""}</svg>`;
 const ms = (iso) => (iso ? Date.parse(iso) : NaN);
 const store = {

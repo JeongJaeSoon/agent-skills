@@ -1,4 +1,4 @@
-<!-- translated-from: 51a180339fc57014f352ebbc010eb39e356d2e0e -->
+<!-- translated-from: c0b04f219300dd4238570d1d5ce9304f16b65231 -->
 # Skill catalog
 
 This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
@@ -250,7 +250,7 @@ Monitors configured public channels for mentions and replies when requested. Use
   - The follow-up format is a `follow-up` label, a first line of `파생: <ID> · 원인: <분류>` (derived from: <ID> · cause: <category>), and a related relation.
   - Ticket bodies are treated as untrusted data.
   - Every write goes to a delegate agent; reads stay in the session. The delegate is the user's instructions, else `tracker.delegate_agent` in the config, else the plugin agent `agent-skills:task-tracker`; `"none"` writes in the session. `task-tracker` reads the site's own rules (project, status and transition ids, labels, language) on every run from the Markdown file `tracker.rules_file` names, and stops instead of guessing when the key is set but the file is missing or unreadable.
-- **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear, Jira and a local Markdown folder, with a fixture mode), `references/linear.md`, `references/jira.md`, `references/markdown.md`.
+- **Bundled:** `scripts/tracker.py` (a stdlib-only adapter for Linear, Jira and a local Markdown folder, with a fixture mode), `references/linear.md`, `references/jira.md`, `references/markdown.md`, `assets/Board.base` (a Bases file that shows the Markdown folder as an Obsidian Kanban board).
 
 ### use-notes (formerly `use-obsidian`)
 - **When:** Reading and writing design docs, worklogs and program notes. "노트에 기록해줘" (write it to the notes) comes here too.

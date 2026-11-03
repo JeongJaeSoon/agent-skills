@@ -653,6 +653,9 @@ class MarkdownCli(unittest.TestCase):
         self.assertEqual((two["id"], two["parent"]), ("ABC-2", "ABC-1"))
         self.assertIn('parent: "[[ABC-1]]"', self.read("abc", "ABC-2.md"))
         self.write("abc/index.md", "# not a ticket\n")
+        # Only <FOLDER IN CAPITALS>-<n>.md is a ticket, the same set Board.base shows.
+        for other in ("abc/notes-1.md", "abc/abc-4.md", "abc/ABC-x.md"):
+            self.write(other, "---\nid: x\ntitle: t\nstate: todo\n---\n")
         self.assertEqual([i["id"] for i in self.ok("list", "--project", "abc")], ["ABC-1", "ABC-2"])
         self.assertEqual([i["id"] for i in self.ok("list", "--project", "abc", "--limit", "1")], ["ABC-2"])
         self.assertEqual([i["id"] for i in self.ok("children", "ABC-1")], ["ABC-2"])
@@ -748,6 +751,15 @@ class MarkdownCli(unittest.TestCase):
             for call in (lambda: adapter.get("ABC-1"), lambda: adapter._key_dir("ABC", "ABC")):
                 with self.assertRaisesRegex(tracker.TrackerError, "abc share the key ABC"):
                     call()
+
+    def test_link_opens_the_ticket_in_obsidian_when_configured(self):
+        self.ok("create", "--project", "abc", "--title", "t", "--body-file", self.body)
+        self.env.config({"tracker": {"adapter": "markdown", "markdown": {"root": self.root, "link": "obsidian"}}})
+        url = self.ok("get", "ABC-1")["url"]
+        self.assertTrue(url.startswith("obsidian://open?path="), url)
+        self.assertTrue(url.endswith("%2Fabc%2FABC-1.md"), url)
+        self.env.config({"tracker": {"adapter": "markdown", "markdown": {"root": self.root, "link": "web"}}})
+        self.assertIn("tracker.markdown.link", self.fail("get", "ABC-1"))
 
     def test_errors_name_the_problem(self):
         self.assertIn("../x", self.fail("create", "--project", "../x", "--title", "t", "--body-file", self.body))

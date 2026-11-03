@@ -1,4 +1,4 @@
-<!-- translated-from: 51a180339fc57014f352ebbc010eb39e356d2e0e -->
+<!-- translated-from: c0b04f219300dd4238570d1d5ce9304f16b65231 -->
 # スキルカタログ
 
 `agent-skills` プラグインに入っているスキル41個（`skills/*/SKILL.md`）、コマンド3個（`orch`、`orch-dash`、`skills-sync`）、フック8個をまとめます。スキルは、description に書かれた状況になるとモデルが自分で呼び出します。直接呼び出すときは `/agent-skills:<名前>` を使い、他のプラグインと名前が重ならなければ `/<名前>` でも呼べます。例外は `brief` です。`/brief` だけを打ってもこのプラグインのスキルには届かないので、`/agent-skills:brief` で呼びます（[brief](#brief)）。
@@ -252,7 +252,7 @@ PR を受け持つスキルとマージする主体:
   - 完了条件は上位チケットの本文（`✅ 완료 조건`、`🚫 범위 밖`、`⏸️ 보류`）に、親のないチケットは受け入れ条件に置きます。NOW に分類したものだけがチケットになります。
   - follow-up の形式は、`follow-up` ラベル、1行目の `파생: <ID> · 원인: <분류>`（派生元: <ID> · 原因: <分類>）、2行目の `완료 조건: <항목>`（完了条件: <項目>）、related relation です。
   - チケットの本文は、信頼しないデータとして扱います。
-- **同梱:** `scripts/tracker.py`（標準ライブラリだけを使う Linear・Jira・ローカル Markdown フォルダーのアダプター、fixture モード付き）、`references/linear.md`、`references/jira.md`、`references/markdown.md`。
+- **同梱:** `scripts/tracker.py`（標準ライブラリだけを使う Linear・Jira・ローカル Markdown フォルダーのアダプター、fixture モード付き）、`references/linear.md`、`references/jira.md`、`references/markdown.md`、`assets/Board.base`（Markdown フォルダーを Obsidian のカンバンボードとして見る Bases ファイル）。
 
 ### use-notes (旧名 `use-obsidian`)
 - **使う場面:** 設計文書、worklog、プログラムノートを読み書きするとき。「노트에 기록해줘」（ノートに記録して）もここに来ます。
