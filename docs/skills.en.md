@@ -1,7 +1,7 @@
-<!-- translated-from: a7255e35ef7581db488d0b530bf22e4f89417d30 -->
+<!-- translated-from: e898f440161649c78ee7b8458498ae0e9a1e6cd1 -->
 # Skill catalog
 
-This page covers the 41 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
+This page covers the 42 skills (`skills/*/SKILL.md`), 3 commands (`orch`, `orch-dash`, `skills-sync`), and 8 hooks that the `agent-skills` plugin ships. The model invokes a skill on its own when the situation described in its description comes up. To invoke a skill directly, use `/agent-skills:<name>`; plain `/<name>` also works when no other plugin uses the same name. The exception is `brief`: a bare `/brief` does not reach this plugin skill, so call it as `/agent-skills:brief` ([brief](#brief)).
 
 Follow the [configuration migration guide](configuration-migration.md) for changed defaults and preservation of existing data. Notes, ledgers and personal folders require explicit configuration; report time defaults to UTC.
 
@@ -15,6 +15,7 @@ One ticket  write-ticket → deliver-ticket → handoff-ticket → end-session
 Project     orchestrate ─ deliver-ticket in each worker ─ orch land
               ─ main guardian · QA lead ─ dashboard
               └ measure-delivery when it's done
+              └ reboot first after a restart or compaction
 Machine     reap-resources (clears processes, Docker leftovers and branches that dead sessions
               left; the resource steward runs it on a schedule)
             secure-fill (a secret into a browser auth field without the agent seeing the value)
@@ -177,6 +178,18 @@ Records verified milestones in the configured tracker or notes store within the 
   - Finds escaped-defect candidates (Bug labels, main CI failures, reverts).
   - Counts tokens from available local transcripts per PR. Unmeasured sessions are not assumed to have zero usage.
   - When exact close times are needed from Linear, it uses a file exported through MCP. It shows the requested numbers first and saves the report to the notes.
+
+### reboot
+- **When:** Right after the session, Orca or the machine restarted, or after a compaction, before any other work: "재시작했어" (I restarted), "Orca 재시작했어" (Orca restarted), "세션 다시 띄웠어" (I brought the session back up), "복구 점검해줘" (check the recovery). Recalling what the work was is `recall`.
+- **What it does:** A restart leaves the work where it was but drops what keeps it moving. `scripts/reboot.py` checks all of that in one read-only pass and prints, for each thing to fix, the command to run (`--slug <slug>` for a lead, `--top` for the orchestrator, neither for a worker).
+  - Whether this terminal's handle went stale when Orca restarted. If it did, it lists the live terminals in this worktree.
+  - The Run binding (`run-current`, and `run-use` when unbound) and the orchestrator's tab title.
+  - Whether exactly one inbox wait (`orch wait`, `orch inbox --wait`) and one `orch watch-cards` run under this session's process. It prints the start command for a missing one and what to stop when there are two.
+  - Workers that lost their terminal, with the `worker-stop` and `worker-start --retry-of` pair that restarts each on the same card.
+  - Heavy starts the pressure gate held for this worktree that are still in the queue.
+  - For what the script cannot see (background tasks and subagents a restart ended, the program's state, relaunching leads after a machine restart, the order after a compaction), SKILL.md only sets the order and points at the `orchestrate` section that holds each rule.
+- **Ships:** `scripts/reboot.py` (the read-only check) and its tests.
+- **Related:** `orchestrate` core rule 6, Drain and Resume hand what to do after a restart to this skill. It reads the pressure queue of `reap-resources`.
 
 ## One machine
 
