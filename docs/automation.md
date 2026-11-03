@@ -138,7 +138,7 @@ orca automations edit <id> --prompt "<schedule 이 출력한 --prompt 값>"   # 
 | L | 경고·위험 회차에 상위 소비자가 I·X·S·O로 판정된 카드에 속한다 |
 | W | 오케스트레이터의 `orch watch-cards`가 1시간 넘게 회차를 마치지 않았다. 대시보드 Needs you에는 collector가 올린다 |
 
-결과는 `<state>/patrol.jsonl`(발견, 해소, ack), `<state>/patrol-verdicts.json`(카드별 판정)에 남는다. X·E·L·O는 대시보드 Needs you에 올라가고 조건이 풀리거나 ack하면 빠진다. `orch inbox`와 `orch wait`는 그 카드를 띄운 세션(없으면 오케스트레이터)에 ack되지 않은 발견을 30분마다 다시 보여 준다. 처리한 세션은 `orch patrol ack <id>`로 닫는다. 순찰은 화면 입력, nudge, 터미널 닫기, 워커 종료, 카드 삭제를 하지 않는다. reap-hard와 pressure는 판정을 카드를 남기는 쪽으로만 쓴다(작업 중, 사람 대기, Run 워커).
+결과는 `<state>/patrol.jsonl`(발견, 해소, ack), `<state>/patrol-verdicts.json`에 남는다. 이 파일의 `cards`는 카드별 활동 판정(run·waiting·working·idle·exited), `hints`는 발견이 그 카드에 대해 한 말(superseded 등), `failed`는 그 라운드에 못 읽은 소스다. 발견은 run·waiting·working 판정을 덮어쓰지 않는다. X·E·L·O는 대시보드 Needs you에 올라가고 조건이 풀리거나 ack하면 빠진다. `orch inbox`와 `orch wait`는 그 카드를 띄운 세션(없으면 오케스트레이터)에 ack되지 않은 발견을 30분마다 다시 보여 준다. 처리한 세션은 `orch patrol ack <id>`로 닫는다. 순찰은 화면 입력, nudge, 터미널 닫기, 워커 종료, 카드 삭제를 하지 않는다. reap-hard와 pressure는 판정을 카드를 남기는 쪽으로만 쓴다(작업 중, 사람 대기, Run 워커). 판정에 없는 카드, 특히 `failed`가 있는 라운드에서 빠진 카드를 안전하다는 근거로 쓰지 않는다.
 
 ```bash
 orch patrol --once --dry-run   # 한 라운드를 판정만 하고 아무것도 쓰지 않는다

@@ -472,6 +472,11 @@ saved_oj, prog.orca_json = prog.orca_json, fake_ps
 assert prog.agent_waits() == {"h1": None, "h2": {"evidence": "hook"}, "h9": None}, prog.agent_waits()
 prog.orca_json = lambda *a: (_ for _ in ()).throw(SystemExit("orca down"))
 assert prog.agent_waits() == {}, "an unreadable listing leaves every terminal to the screen"
+try:
+    prog.agent_waits(strict=True)
+    raise AssertionError("strict raises, so patrol records the source as failed")
+except SystemExit:
+    pass
 prog.orca_json = saved_oj
 # A new prompt ends the wait early: nobody watches a worker's terminal.
 prog.orca_json = lambda *a: {"deliveryId": None, "messages": []}

@@ -47,6 +47,7 @@ f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b"), term("h3", "/w/c"),
 found, v, memo = patrol.judge(f, {})
 assert codes(found) == [("I", "a")], found
 assert v["cards"] == {"/w/a": "idle", "/w/b": "working", "/w/c": "working", "/w/d": "waiting", "/w/e": "run"}, v["cards"]
+assert v["hints"] == {"/w/a": "idle"} and v["failed"] == [], v
 assert patrol.judge(f, {})[0][0]["id"] == found[0]["id"], "the same idle spell is the same finding"
 bar = ["⏺ Waiting on the inbox.", "❯ ", "  ⏵⏵ auto mode on · 1 shell · ← 1 agent"]
 f2 = {**f, "screens": {}, "read": lambda h: bar}
@@ -63,7 +64,8 @@ f = facts(workers=[{"dispatchId": "d9", "agentTerminalHandle": "h9", "resource":
                  "/w/old": (None, {**err, "timestamp": ago(3000)})})
 found, v, _ = patrol.judge(f, {})
 assert codes(found) == [("X", "w"), ("X", "x")], found
-assert v["cards"]["/w/w"] == "exited" and v["cards"]["/w/x"] == "exited" and "/w/y" not in v["cards"]
+assert v["cards"]["/w/w"] == "run" and v["cards"]["/w/x"] == "exited" and "/w/y" not in v["cards"]
+assert v["hints"] == {"/w/w": "exited", "/w/x": "exited"}, v["hints"]
 assert "API Error: 500 overloaded" in next(x for x in found if x["card"] == "x")["title"]
 
 # S: a logged supersede 30+ min old whose card still has an agent; by handle or by card name.
@@ -72,7 +74,34 @@ f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b")],
                       {"ts": ago(10), "to": "h2", "kind": "supersede"}])
 found, v, _ = patrol.judge(f, {})
 assert codes(found) == [("S", "a"), ("S", "b")], found
-assert v["cards"]["/w/a"] == "superseded"
+assert v["hints"] == {"/w/a": "superseded", "/w/b": "superseded"} and "/w/a" not in v["cards"], v
+
+# A finding never takes a card out of run, waiting or working: those stay in cards, the finding goes to hints.
+f = facts(terminals=[term("h1", "/w/a"), term("h2", "/w/b")], waits={"h1": {"kind": "permission"}},
+          tails={"/w/a": (idle(40), None), "/w/b": ({"state": "working", "since": ago(1)}, None)},
+          supersedes=[{"ts": ago(45), "to": "h1", "kind": "supersede"}, {"ts": ago(45), "to": "h2", "kind": "supersede"}],
+          workers=[{"dispatchId": "d9", "agentTerminalHandle": "h9", "resource": {"worktreeId": "x::/w/w"},
+                    "projection": {"outcome": "in_progress", "liveness": {"verdict": "exited"}}}])
+found, v, _ = patrol.judge(f, {})
+assert codes(found) == [("S", "a"), ("S", "b"), ("X", "w")], found
+assert v["cards"] == {"/w/a": "waiting", "/w/b": "working", "/w/w": "run"}, v["cards"]
+assert v["hints"] == {"/w/a": "superseded", "/w/b": "superseded", "/w/w": "exited"}, v["hints"]
+# The same round before the split: every card above would have left reap's keep set.
+assert {p for p, x in v["cards"].items() if x in reap.PATROL_KEEP} == {"/w/a", "/w/b", "/w/w"}
+assert set(patrol.ACTIVE) == set(reap.PATROL_KEEP)
+# Without Orca's wait list a human's prompt cannot be ruled out: no I, the card stays working, the source is failed.
+f = facts(terminals=[term("h1", "/w/a")], tails={"/w/a": (idle(40), None)}, failed={"waits"})
+found, v, _ = patrol.judge(f, {})
+assert found == [] and v["cards"] == {"/w/a": "working"} and v["failed"] == ["waits"], (found, v)
+assert "waits" in patrol.DEPENDS["I"], "a standing I is not cleared by a round that could not read the waits"
+f = facts(terminals=[term("h1", "/w/a")], tails={"/w/a": (idle(40), None)}, level="danger",
+          consumers=[{"what": "pid 1 demo", "cpu": 80, "card": "/w/a"}])
+prior = patrol.judge(f, {})[0]
+assert sorted(x["code"] for x in prior) == ["I", "L"], prior
+saved_rows, patrol.log_rows = patrol.log_rows, lambda: [{"op": "found", **r} for r in prior]
+current, v, _ = patrol.judge({**f, "failed": {"waits"}}, {})
+assert patrol.write_round(current, v, True, NOW + 60, failed={"waits"}) == ([], []), "neither I nor L clears"
+patrol.log_rows = saved_rows
 
 # O: an open PR with no session for a day and nobody on it; a requested review or running CI is someone on it.
 sess = [{"id": "s1", "path": "/w/p", "agents": [], "linked_pr": {"key": "acme/app#1"}},
