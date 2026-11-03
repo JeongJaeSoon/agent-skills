@@ -7,7 +7,8 @@ After an automatic compaction a lead kept draining its inbox but dropped a step 
 and answered progress questions by investigating on its own: it was judged by its terminal handle, which went stale
 when the session resumed in another terminal, and the one injection it did get was buried under the next request.
 
-A role is declared, never guessed from the terminal, and read in this order:
+A role is declared, never guessed from the terminal, and read in this order (roles.resolve, which every hook and
+script shares; roles.session adds the worker and general roles this hook does not remind):
 1. `agent_type` in the hook input: the session was started with `claude --agent agent-skills:orchestrator` or
    `--agent agent-skills:lead --name lead:<slug>`. Claude Code keeps it across resume, compact and fork, but leaves
    it out of SessionStart on resume and fork; there the session title (`--name`) stands in.
@@ -36,14 +37,15 @@ the same whether or not the feature is on.
 """
 import datetime, json, os, pathlib, re, sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import roles  # noqa: E402  the role rules above live there, shared with every hook and script
+
 HOME = pathlib.Path(os.environ.get("PROGRAMS_HOME", "~/.claude/programs")).expanduser()
-STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()
-ROLES, TRANSCRIPTS = STATE / "roles", STATE / "transcripts"
+STATE = roles.state()
+TRANSCRIPTS = STATE / "transcripts"
 CONFIG = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG", "~/.claude/agent-skills.json")).expanduser()
-SESSION = re.compile(r"[\w-]{1,128}")
-ROLE = re.compile(r"^[ \t]*ROLE:?[ \t]+(orchestrator|lead[ \t]+([\w.-]+)|none)[ \t]*$", re.M)
-LEAD_TITLE = re.compile(r"lead:([\w.-]+)")
-AGENTS = {"agent-skills:orchestrator": "orchestrator", "agent-skills:lead": "lead"}
+SESSION = roles.SESSION
+declared, declare, resolve = roles.declared, roles.declare, roles.resolve
 SKILL = pathlib.Path(__file__).resolve().parents[1] / "skills" / "orchestrate" / "SKILL.md"
 # Core rules 1 and 2 of SKILL.md in one line; the per-prompt reminder must never say less than they do.
 DELEGATE = ("Hand each instruction one layer down at once (a worker, a card, a background subagent); your own turn "
@@ -153,48 +155,6 @@ def stage_warning(entry):
         return stage_auto.warning(entry.get("slug"))
     except Exception:  # the reminder still goes out without it
         return ""
-
-
-def declared(session):
-    try:
-        return json.loads((ROLES / f"{session}.json").read_text())
-    except (OSError, ValueError):
-        return None
-
-
-def declare(session, prompt):
-    """Records the prompt's last ROLE line and returns the session's record; None when it never declared."""
-    found = ROLE.findall(prompt or "")
-    if not found:
-        return declared(session)
-    role, slug = found[-1]
-    # "none" is kept, not deleted: it also silences a session started with --agent.
-    entry = {"role": "lead", "slug": slug} if slug else {"role": role}
-    ROLES.mkdir(parents=True, exist_ok=True)
-    (ROLES / f"{session}.json").write_text(json.dumps(entry))
-    return entry
-
-
-def resolve(event, record):
-    """The role in force: `agent_type`, else the ROLE record, else (SessionStart only) the session title."""
-    if record and record.get("role") == "none":
-        return None
-    title = str(event.get("session_title") or "")
-    lead_title = LEAD_TITLE.fullmatch(title)
-    role = AGENTS.get(event.get("agent_type"))
-    if role == "lead":
-        slug = lead_title.group(1) if lead_title else (record or {}).get("slug")
-        return {"role": "lead", "slug": slug}
-    if role:
-        return {"role": role}
-    if record:
-        return record
-    if event.get("hook_event_name") == "SessionStart":
-        if lead_title:
-            return {"role": "lead", "slug": lead_title.group(1)}
-        if title == "orchestrator":
-            return {"role": "orchestrator"}
-    return None
 
 
 def feedback_on():

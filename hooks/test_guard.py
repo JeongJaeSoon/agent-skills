@@ -171,8 +171,10 @@ said = json.loads(subprocess.run(
 assert said == {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
                                        "permissionDecisionReason": said["hookSpecificOutput"]["permissionDecisionReason"]}}, said
 assert "writes no Claude settings" in said["hookSpecificOutput"]["permissionDecisionReason"], said
-for cmd in (f"python3 {SETUP} --settings-only --apply 0123456789ab", f"python3 {SETUP} --actions-only --apply x",
-            f"python3 {SETUP} --actions-only; rm -rf /tmp/x", f"python3 {HOME}/scripts/setup.py --actions-only",
+# --apply is the human's line (guard.deny.plugin_apply, test_danger.py).
+for cmd in (f"python3 {SETUP} --settings-only --apply 0123456789ab", f"python3 {SETUP} --actions-only --apply x"):
+    assert bash(cmd) == "deny", cmd
+for cmd in (f"python3 {SETUP} --actions-only; rm -rf /tmp/x", f"python3 {HOME}/scripts/setup.py --actions-only",
             "python3 scripts/setup.py --actions-only", f"bash -c 'python3 {SETUP} --actions-only'"):
     assert bash(cmd) == "none", cmd
 # Another clone's setup.py still asks, but the dialog vouches for what it does only when the install dialog named it.

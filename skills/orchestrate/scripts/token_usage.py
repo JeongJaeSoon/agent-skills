@@ -68,10 +68,6 @@ def out_path():
     return fleet.state_dir() / "tokens.json"
 
 
-def roles_dir():
-    return pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser() / "roles"
-
-
 def settings():
     p = pathlib.Path(os.environ.get("AGENT_SKILLS_CONFIG") or "~/.claude/agent-skills.json").expanduser()
     cfg = (fleet.read_json(p, {}) or {}).get("token_usage") or {}
@@ -144,11 +140,11 @@ def who_of(text, sid, autos):
     a = autos.get(prompt_key(text))
     if a:
         return "automation:" + a[0]
-    role = fleet.read_json(roles_dir() / f"{sid}.json", None) if sid else None
-    if isinstance(role, dict) and role.get("role") == "orchestrator":
+    entry = fleet.roles.resolve({}, fleet.roles.declared(sid)) if sid else None
+    if entry and entry["role"] == "orchestrator":
         return "orchestrator"
-    if isinstance(role, dict) and role.get("role") == "lead":
-        return "lead:" + str(role.get("slug") or "?")
+    if entry and entry["role"] == "lead":
+        return "lead:" + str(entry.get("slug") or "?")
     return "interactive"
 
 

@@ -18,6 +18,9 @@ directory), and is masked when shown.
 """
 import collections, concurrent.futures, contextlib, datetime as dt, fcntl, glob, hashlib, io, json, os, pathlib, re, shlex, subprocess, sys, tempfile, threading, time
 
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
+import roles  # noqa: E402  the plugin's one role resolution
+
 ORCA_EVERY = 10          # worktree ps, terminal list, inbox: three local calls, ~0.5 s together
 INBOX_LIMIT = 2000       # every message Orca keeps: at 100, heartbeats pushed unanswered questions out of view
 RUNS_EVERY = 120         # runs, workers, tasks, gates
@@ -452,15 +455,14 @@ def live_sessions(procs):
 
 def declared_roles(procs):
     """[(cwd, session name, "orchestrator" | "lead")] for each live Claude Code session that declared a role: the
-    `ROLE:` line hooks/reorient.py recorded in roles/<session id>.json, else a `--name orchestrator` or `lead:<slug>`."""
-    base = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE") or "~/.local/state/agent-skills").expanduser()  # as reorient.py
+    `ROLE:` line hooks/reorient.py recorded in roles/<session id>.json, else a `--name orchestrator` or `lead:<slug>`
+    (roles.resolve, as at SessionStart; `ROLE: none` clears both)."""
     out = []
     for sid, s in live_sessions(procs).items():
         name = s.get("name") or ""
-        role = (read_json(base / "roles" / f"{sid}.json", {}) or {}).get("role") \
-            or ("orchestrator" if name == "orchestrator" else "lead" if name.startswith("lead:") else None)
-        if role in ("orchestrator", "lead"):
-            out.append((s["cwd"], name, role))
+        entry = roles.resolve({"hook_event_name": "SessionStart", "session_title": name}, roles.declared(sid))
+        if entry:
+            out.append((s["cwd"], name, entry["role"]))
     return out
 
 

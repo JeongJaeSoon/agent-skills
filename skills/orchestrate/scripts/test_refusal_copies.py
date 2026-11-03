@@ -35,7 +35,8 @@ assert "The form keeps the act" not in brief, "gate exception reopened the form 
 assert "Monitor tool, which that block also offers, is not part of this exception" in brief, "gate exception no longer excludes Monitor"
 assert "use Monitor only when the one you report to says so" in brief, "Monitor exclusion no longer says when it may be used"
 assert "report before you use it" not in brief, "Monitor exclusion is back to the wording that left the wait open"
-assert "Waiting on the pressure gate's `pressure.py queue wait <id>` with Monitor" in brief, \
+assert ("Waiting on the pressure gate's `pressure.py queue wait <id>` or `turns --wait <n>`, run with "
+        "`run_in_background: true` or watched with Monitor") in brief, \
     "Monitor exclusion reaches the pressure gate's own wait"
 assert "queue wait <id>" in (hooks / "pressure_gate.py").read_text(), "the wait the paragraph names is not the gate's"
 assert "while its queue entry still waits" in brief and "after its entry gave up: report and stop" in brief, \
