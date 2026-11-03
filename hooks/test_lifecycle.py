@@ -103,6 +103,13 @@ check("a send naming two Dispatch ids does not count", decision(out) == "deny", 
 out = hook(same, rm_event(), DENY)
 check("ROLE: none does not lift the exit order", decision(out) == "deny", out)
 (tmp / "state" / "roles" / "s1.json").unlink()
+# Only the caller's own card: a finished child removed by its path is not this card's end.
+child = "orca worktree rm --worktree path:/wt/finished-child --json"
+out = hook([user(PREAMBLE), use("m1", "tu_rm", child)], {**rm_event(cmd=child), "cwd": "/wt/me"}, DENY)
+check("removing another card by path is not checked", out == {}, out)
+own = "orca worktree rm --worktree path:/wt/me --json"
+out = hook([user(PREAMBLE), use("m1", "tu_rm", own)], {**rm_event(cmd=own), "cwd": "/wt/me/sub"}, DENY)
+check("removing its own card by path is checked", decision(out) == "deny", out)
 # A dispatched lead ends like a worker.
 lead_worker = PREAMBLE + "\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"
 out = hook([user(lead_worker), use("m1", "tu_done", DONE), use("m1", "tu_rm", RM)], rm_event(), DENY)

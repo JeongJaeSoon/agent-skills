@@ -120,6 +120,22 @@ def removes(cmd):
     return any(c.name == "orca" and c.words[1:3] == ["worktree", "rm"] for c in shell.commands(cmd))
 
 
+def removes_own(cmd, cwd):
+    """True when an `orca worktree rm` in `cmd` may target the caller's own card: `current`, `active`, no target, a
+    `path:` at or above the session's cwd, or an `id:` (not comparable without asking Orca). A lead removing a
+    finished child card by its path is not its own end."""
+    for c in shell.commands(cmd):
+        if not (c.name == "orca" and c.words[1:3] == ["worktree", "rm"]):
+            continue
+        target = flag(c.words, "--worktree")
+        if target in (None, "current", "active") or not target.startswith("path:"):
+            return True
+        path = target[len("path:"):].rstrip("/")
+        if isinstance(cwd, str) and path and (cwd == path or cwd.startswith(path + "/")):
+            return True
+    return False
+
+
 def is_end_check(cmd):
     return any(c.name == "skills-sync" and c.words[1:2] == ["end-check"] for c in shell.commands(cmd))
 
@@ -141,7 +157,7 @@ def end_check_remove(cmd, out):
 def exit_order(event, s, lvl):
     """(decision, reason) for an `orca worktree rm`, or (None, None)."""
     cmd = (event.get("tool_input") or {}).get("command")
-    if not isinstance(cmd, str) or not removes(cmd):
+    if not isinstance(cmd, str) or not removes_own(cmd, event.get("cwd")):
         return None, None
     key = SOURCE.format(key="guard.exit_order")
     if s.keep:
