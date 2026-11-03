@@ -752,7 +752,8 @@ class MarkdownAdapter:
         return out
 
     def _tickets(self, folder):
-        names = sorted(n for n in os.listdir(folder) if n.endswith(".md") and TICKET_ID.match(n[:-3]))
+        key = re.escape(os.path.basename(folder).upper())
+        names = sorted(n for n in os.listdir(folder) if re.fullmatch(key + r"-\d+\.md", n))
         return [self._issue(os.path.join(folder, n)) for n in names]
 
     def _all(self):

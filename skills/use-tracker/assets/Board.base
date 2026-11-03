@@ -2,6 +2,8 @@ filters:
   and:
     - file.ext == "md"
     - file.hasProperty("state")
+    - /^[A-Z0-9_-]+-\d+$/.matches(file.basename)
+    - file.basename.lower() == file.folder.lower() + "-" + file.basename.replace(/.*-/, "")
 formulas:
   card: file.basename + "  " + if(note.title, note.title, "")
   parent_group: if(note.parent, note.parent.toString(), "(top level)")

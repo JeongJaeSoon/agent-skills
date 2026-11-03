@@ -653,6 +653,9 @@ class MarkdownCli(unittest.TestCase):
         self.assertEqual((two["id"], two["parent"]), ("ABC-2", "ABC-1"))
         self.assertIn('parent: "[[ABC-1]]"', self.read("abc", "ABC-2.md"))
         self.write("abc/index.md", "# not a ticket\n")
+        # Only <FOLDER IN CAPITALS>-<n>.md is a ticket, the same set Board.base shows.
+        for other in ("abc/notes-1.md", "abc/abc-4.md", "abc/ABC-x.md"):
+            self.write(other, "---\nid: x\ntitle: t\nstate: todo\n---\n")
         self.assertEqual([i["id"] for i in self.ok("list", "--project", "abc")], ["ABC-1", "ABC-2"])
         self.assertEqual([i["id"] for i in self.ok("list", "--project", "abc", "--limit", "1")], ["ABC-2"])
         self.assertEqual([i["id"] for i in self.ok("children", "ABC-1")], ["ABC-2"])

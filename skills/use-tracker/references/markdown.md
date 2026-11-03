@@ -22,15 +22,16 @@ committing and pushing is the editor's or the user's job (in Obsidian, the Git p
   abc/                 project "abc": --project abc
     ABC-1.md           ticket ABC-1
     ABC-2.md
-    index.md           any other file is not a ticket and is left alone
+    index.md           any other name is not a ticket and is left alone
   acme/
     ACME-1.md
 ```
 
 - A project name is a folder name of letters, digits, `-` and `_`. `create` makes the folder;
   `list` on a missing folder is an error, so a typo never reads as an empty project.
-- An id is the folder name in capitals, `-`, and a number one above the highest file in that
-  folder. `get` finds the folder from the id. Two folders whose names differ only in case
+- A ticket is a file directly in a project folder named `<FOLDER IN CAPITALS>-<n>.md`; `notes-1.md`
+  or `abc-1.md` in `abc/` is not one. An id is that name without `.md`; a new one takes the number
+  one above the highest file in that folder. `get` finds the folder from the id. Two folders whose names differ only in case
   (`abc`, `ABC`) would share a key, so every command refuses them until one is renamed.
 
 ## A ticket file
@@ -91,7 +92,8 @@ Open `root` as an Obsidian vault (1.14 or later, for the Bases Kanban view) and 
 | By parent | Table grouped by `parent`; tickets without one sit under `(top level)` |
 | All tickets | Every ticket in one table |
 
-All three sort by project folder, then by the ticket number as a number (`ABC-2` before `ABC-10`).
+The board shows the same files `tracker.py` treats as tickets, and all three views sort by project
+folder, then by the ticket number as a number (`ABC-2` before `ABC-10`).
 Moving a card to another column rewrites that ticket's `state`; `tracker.py` reads the change
 like any other edit. A ticket made in Obsidian needs a `<KEY>-<n>.md` name and a `state`, or
 `tracker.py` and the board skip it; asking an agent to file it avoids both.

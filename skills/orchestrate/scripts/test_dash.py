@@ -2,7 +2,7 @@
 
 Run: python3 test_dash.py
 """
-import http.server, json, os, pathlib, re, sys, tempfile, threading, urllib.request, urllib.error
+import http.server, json, os, pathlib, re, shutil, subprocess, sys, tempfile, threading, urllib.request, urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import dash, dash_demo
@@ -620,5 +620,14 @@ except StopIteration:
 dash.time.sleep, dash.collect = real_sleep, real_collect
 assert collected.count(B) == 2 and A in collected, collected  # the second round reached B through closed()
 (store / B / "ledger.jsonl").write_text(clean)
+
+# safeUrl is the page's only gate on links: web pages and Obsidian ticket links pass, script and file URLs do not.
+if shutil.which("node"):
+    line = next(l for l in (pathlib.Path(__file__).resolve().parent.parent / "assets/dashboard/app.js").read_text().splitlines() if l.startswith("const safeUrl"))
+    probe = line + "\nconsole.log(JSON.stringify(%s.map(safeUrl)))" % json.dumps(
+        ["https://x.test/a", "obsidian://open?path=%2Fa%2FABC-1.md", "javascript:alert(1)", "file:///a/ABC-1.md",
+         "obsidian://new?file=x", ""])
+    got = json.loads(subprocess.run(["node", "-e", probe], capture_output=True, text=True, check=True).stdout)
+    assert got == ["https://x.test/a", "obsidian://open?path=%2Fa%2FABC-1.md", None, None, None, None], got
 
 print("dash.py collect/serve: all pass")
