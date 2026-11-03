@@ -17,8 +17,8 @@ FORBIDDEN gets it appended (`updatedInput`, returned with `allow`, which Claude 
 rules still hold). The brief says to paste it into every subagent prompt; `skills-sync card` covers card briefs,
 this covers the Agent tool. `false` or `"off"` turns it off.
 
-A check that cannot read the transcript or raises lets the call through (a line in guard-errors.jsonl for an
-exception).
+An rm of the session's own card whose transcript cannot be read is treated as unread order: warned or denied at the
+key's level. Any other check that raises lets the call through (a line in guard-errors.jsonl).
 """
 import json, os, pathlib, re, sys
 
@@ -169,7 +169,7 @@ def exit_order(event, s, lvl):
                      f"(end-session §7). Send worker_done, then idle. {key}")
     rows = entries(event.get("transcript_path"))
     if rows is None:
-        return None, None
+        return lvl, f"`orca worktree rm` while this card's transcript cannot be read: its order is unknown. {key}"
     mine = this_message(rows, event.get("tool_use_id"))
     earlier = [c for c in calls(rows) if c[0] != mine and c[3] is not None and not c[4]]
     if s.supervised:
@@ -220,10 +220,17 @@ def main():
         if tool == "Bash" and not (isinstance(cmd, str) and "worktree" in cmd and removes(cmd)):
             return 0  # the role is read from the transcript only for an rm
         s = roles.session(event)
+        lvl = config.level(cfg, "guard.exit_order", "warn")
+        # Unread, the transcript cannot say whether this is a card that must report first: it does not pass as one
+        # that need not.
+        blind = (tool == "Bash" and lvl != "off" and not event.get("agent_id") and removes_own(cmd, event.get("cwd"))
+                 and entries(event.get("transcript_path")) is None)
         # A dispatched or CLOSE/KEEP card ends the same way whatever role it declared (a dispatched lead included).
-        if tool == "Bash" and roles.applies("exit_order", s) and (s.supervised or s.close or s.keep):
-            lvl = config.level(cfg, "guard.exit_order", "warn")
-            decision, reason = exit_order(event, s, lvl) if lvl != "off" else (None, None)
+        if blind or (tool == "Bash" and roles.applies("exit_order", s) and (s.supervised or s.close or s.keep)):
+            decision, reason = (lvl, "`orca worktree rm` of this card while its transcript cannot be read, so whether "
+                                     "its worker_done or end-check came back first is unknown (end-session §7, §8). "
+                                + SOURCE.format(key="guard.exit_order")) if blind else \
+                exit_order(event, s, lvl) if lvl != "off" else (None, None)
             if decision == "deny":
                 out["hookSpecificOutput"].update(permissionDecision="deny", permissionDecisionReason=reason)
             elif decision:

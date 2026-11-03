@@ -137,7 +137,10 @@ def card_facts(me, mode="card", dispatch=None):
         f["tickets"] = items + [wt[k] for k in ("linkedLinearIssue", "linkedIssue", "linkedWorkItem") if wt.get(k)]
     terms = orca_json("terminal", "list", "--worktree", "current")
     rows = (terms or {}).get("terminals")
-    if isinstance(rows, list) and me and all(isinstance(t, dict) and "agentIdentity" in t for t in rows):
+    # agentIdentity is an agent's name, or null for a shell; any other value is unread.
+    if isinstance(rows, list) and me and all(isinstance(t, dict) and "agentIdentity" in t
+                                             and (t["agentIdentity"] is None or isinstance(t["agentIdentity"], str))
+                                             for t in rows):
         f["other_agents"] = [t.get("handle") for t in rows if t.get("agentIdentity") and t.get("handle") != me]
     else:
         if isinstance(rows, list):
@@ -190,7 +193,7 @@ def inbox_rows(res):
         return None, None
     if len({m["id"] for m in msgs}) != len(msgs):
         return None, None
-    count = res.get("count", len(msgs))
+    count = res.get("count")
     if not isinstance(count, int) or isinstance(count, bool) or count != len(msgs):
         return None, None
     return msgs, any(flags)
@@ -226,7 +229,8 @@ def waiting_questions(senders, since=None):
 
     def answered(q):
         threads = {q["id"], q.get("thread_id")} - {None}
-        return any(r.get("thread_id") in threads and r["from_handle"] not in senders and r.get("to_handle") in senders
+        return any(r["type"] == "status" and r.get("thread_id") in threads and r["from_handle"] not in senders
+                   and r.get("to_handle") in senders
                    and when(r["created_at"]) > when(q["created_at"]) for r in msgs)
     return [m["id"] for m in msgs if m["from_handle"] in senders and m["type"] == "question" and not answered(m)]
 

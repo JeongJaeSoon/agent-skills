@@ -76,7 +76,8 @@ mode = os.environ.get("FAKE_MODE", "")
 if a[:2] == ["orchestration", "inbox"]:
     rows = json.loads(os.environ["FAKE_INBOX"])
     print(json.dumps({"ok": os.environ.get("FAKE_OK") != "false",
-                      "result": {"messages": rows, "page": json.loads(os.environ.get("FAKE_PAGE", "{}")),
+                      "result": {"messages": rows, "count": len(rows) if isinstance(rows, list) else 0,
+                                 "page": json.loads(os.environ.get("FAKE_PAGE", "{}")),
                                              **json.loads(os.environ.get("FAKE_TOP", "{}"))}}))
 elif a[:2] == ["orchestration", "worker-show"]:
     if mode == "orca-down":
@@ -108,7 +109,7 @@ os.environ["FAKE_INBOX"] = json.dumps([Q, REPLY])
 assert end_check.waiting_questions(ME) == []
 # Not an answer: addressed to someone else (a heartbeat to the run), from this card's own other handle, at the same
 # second or earlier, or an ISO time in another zone that is really earlier.
-for r in (dict(REPLY, to_handle="run:r"), dict(REPLY, from_handle="dispatch:ctx_1", to_handle="term_me"),
+for r in (dict(REPLY, to_handle="run:r"), dict(REPLY, type="question"), dict(REPLY, from_handle="dispatch:ctx_1", to_handle="term_me"),
           dict(REPLY, created_at="2026-01-01 10:00:00"), dict(REPLY, created_at="2026-01-01T18:30:00+09:00")):
     os.environ["FAKE_INBOX"] = json.dumps([Q, r])
     assert end_check.waiting_questions({"term_me", "dispatch:ctx_1"}) == ["m1"], r
@@ -121,7 +122,7 @@ with contextlib.redirect_stderr(io.StringIO()):
     os.environ["FAKE_PAGE"] = '["nextCursor", "c2"]'
     assert end_check.waiting_questions(ME) is None
     os.environ["FAKE_PAGE"] = "{}"
-    for top in ('{"count": 1}', '{"count": {}}'):  # a count that disagrees with the rows, or is not a number
+    for top in ('{"count": 1}', '{"count": {}}', '{"count": null}'):  # wrong, not a number, or missing
         os.environ["FAKE_TOP"] = top
         assert end_check.waiting_questions(ME) is None, top
     os.environ["FAKE_TOP"] = "{}"
@@ -197,6 +198,9 @@ assert end_check.card_facts("term_me", "worker", "ctx_1")["questions"] == []
 os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "term_other"}]'
 with contextlib.redirect_stderr(io.StringIO()):
     assert end_check.card_facts("term_me")["other_agents"] is None
+os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "x", "agentIdentity": {}}]'
+with contextlib.redirect_stderr(io.StringIO()):
+    assert end_check.card_facts("term_me")["other_agents"] is None, "an agentIdentity that is no name nor null"
 os.environ["FAKE_TERMS"] = '[{"handle": "term_me", "agentIdentity": "claude"}, {"handle": "s", "agentIdentity": null}]'
 assert end_check.card_facts("term_me")["other_agents"] == []
 # A question another terminal on the same card left waiting holds the card too.

@@ -114,6 +114,12 @@ for target in ("path:$PWD", "path:.", "path:/wt/me/sub/..", "path:~/wt/me"):
     cmd = f"orca worktree rm --worktree {target} --json"
     out = hook([user(PREAMBLE), use("m1", "tu_rm", cmd)], {**rm_event(cmd=cmd), "cwd": "/wt/me"}, DENY)
     check(f"{target} may be its own card and is checked", decision(out) == "deny", out)
+# An unreadable transcript: the order is unknown, so the rm of its own card is refused at deny.
+blind = {**rm_event(), "transcript_path": str(tmp / "missing.jsonl")}
+(tmp / "cfg.json").write_text(json.dumps(DENY))
+p = subprocess.run([sys.executable, str(HERE / "lifecycle.py")], capture_output=True, text=True, env=ENV, timeout=30,
+                   input=json.dumps({"hook_event_name": "PreToolUse", "session_id": "s1", **blind}))
+check("an unreadable transcript denies its own card's rm", decision(json.loads(p.stdout or "{}")) == "deny", p.stdout)
 # A dispatched lead ends like a worker.
 lead_worker = PREAMBLE + "\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"
 out = hook([user(lead_worker), use("m1", "tu_done", DONE), use("m1", "tu_rm", RM)], rm_event(), DENY)
