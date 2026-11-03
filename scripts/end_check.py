@@ -37,6 +37,7 @@ ORCA = os.environ.get("SKILLS_SYNC_ORCA", "orca")
 GH = os.environ.get("SKILLS_SYNC_GH", "gh")
 STATE = pathlib.Path(os.environ.get("AGENT_SKILLS_STATE", "~/.local/state/agent-skills")).expanduser()
 CACHE_DIRS = ("__pycache__", ".pytest_cache", "node_modules/.cache")
+STATUS_ROW = re.compile(r"[ MTADRCU?!]{2} .+")  # `git status --porcelain` v1; any other row leaves the tree unread
 SETTLED = ("completed", "failed")
 INBOX_LIMIT = "2000"
 ME = "skills-sync end-check"
@@ -86,7 +87,7 @@ def git_facts(cwd):
     f["tracked"] = out.splitlines() if code == 0 else None
     code, out, _ = run(["git", "status", "--porcelain", "--ignored", "--untracked-files=normal"], cwd)
     code2, skills, _ = run(["git", "ls-files", "--directory", ".claude/skills"], cwd)
-    if code == 0 and code2 == 0:
+    if code == 0 and code2 == 0 and all(STATUS_ROW.fullmatch(l) for l in out.splitlines()):
         tracked_skills = {pathlib.PurePath(s).parts[2] for s in skills.splitlines() if len(pathlib.PurePath(s).parts) > 2}
         left = [l[3:] for l in out.splitlines() if l[:2] in ("??", "!!")]
         f["caches"] = [p for p in left if removable(p, tracked_skills)]
@@ -354,7 +355,9 @@ def archive_hook(path):
         return None if os.path.lexists(pathlib.Path(path) / "orca.yaml") else False
     except (OSError, TypeError, UnicodeDecodeError):
         return None
-    return re.search(r"(?m)^\s*archive\s*:", text) is not None
+    # Not parsed as YAML: an `archive` key anywhere, in block or flow style, runs the hooks. Text without that key
+    # cannot define the hook, however malformed it is.
+    return re.search(r"\barchive\b[\"']?\s*:", text) is not None
 
 
 def apply(verdict, f, mode, opts, me):

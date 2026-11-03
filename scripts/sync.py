@@ -382,7 +382,7 @@ def running(path):
     p = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True, timeout=10)
     lines = p.stdout.splitlines()
     # A real listing has its header and at least `ps` itself; anything less is unread, not "nothing runs".
-    if p.returncode != 0 or len(lines) < 2 or lines[0].strip() != "COMMAND":
+    if p.returncode != 0 or not lines or lines[0].strip() != "COMMAND" or not any(l.strip() for l in lines[1:]):
         raise OSError(f"ps failed or printed no process list: {(p.stderr or p.stdout).strip()[:80]}")
     return any(path in l for l in lines[1:])
 

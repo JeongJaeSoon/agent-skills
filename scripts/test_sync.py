@@ -292,7 +292,7 @@ def test_broadcast():
 
 def test_running():
     import unittest.mock as mock
-    for out in ("", "COMMAND\n", "garbage\nbash x\n"):
+    for out in ("", "COMMAND\n", "COMMAND\n\n", "garbage\nbash x\n"):
         with mock.patch.object(sync.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=out, stderr="")):
             try:
                 sync.running("/r/setup-runner.sh")

@@ -162,6 +162,9 @@ check("end-check beside another command does not count", decision(hook(stale, rm
 later_keep = card[:3] + [use("m2", "tu_ec2", EC), result("tu_ec2", '{"verdict": "keep", "mode": "card"}'),
                          use("m3", "tu_rm", RM)]
 check("a later keep takes back an earlier remove", decision(hook(later_keep, rm_event(), DENY)) == "deny")
+odd_msg = card[:3] + [{"type": "assistant", "message": {"id": "m9", "content": 7}}] + card[3:]
+check("a message after the remove whose content is unread denies the rm",
+      decision(hook(odd_msg, rm_event(), DENY)) == "deny")
 # Output that is not wholly warnings and one JSON object is unread: a cut-off second verdict, a stray line first,
 # or a result whose content is no text at all.
 for name, text in (("a trailing unread verdict", '{"mode": "card", "verdict": "remove"}\n{unread later verdict'),

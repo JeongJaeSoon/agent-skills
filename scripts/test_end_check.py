@@ -271,6 +271,12 @@ dangling = tmp / "card-dangling"
 dangling.mkdir()
 (dangling / "orca.yaml").symlink_to(tmp / "no-such-target.yaml")
 assert end_check.archive_hook(str(dangling)) is None, "a dangling orca.yaml link is there but unread"
+# The archive key is looked for anywhere, flow style or quoted included; text without it defines no hook.
+for text, want in (("scripts: {archive: make down}\n", True), ('scripts:\n  "archive": x\n', True),
+                   ("scripts: [unterminated\n", False), ("scripts:\n  setup: archive-old.sh\n", False)):
+    (dangling / "orca.yaml").unlink()
+    (dangling / "orca.yaml").write_text(text)
+    assert end_check.archive_hook(str(dangling)) is want, text
 # With an archive hook, --run-hooks goes after the --worktree value.
 hooked = tmp / "card-hooked"
 hooked.mkdir()
@@ -335,5 +341,12 @@ for bad in ("{}", '""'):
     assert f["on_main"] is None, bad
 git("remote", "set-url", "origin", str(tmp / "nowhere.git"))
 assert end_check.git_facts(str(clone))["on_main"] is None
+# A status row that is not porcelain v1 leaves the untracked files unread, not "none".
+real_run = end_check.run
+end_check.run = lambda argv, cwd=None, **kw: (0, "unread status row\n", "") if "--ignored" in argv else real_run(argv, cwd, **kw)
+try:
+    assert end_check.git_facts(str(clone))["untracked"] is None
+finally:
+    end_check.run = real_run
 
 print("ok")

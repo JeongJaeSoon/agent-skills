@@ -48,12 +48,19 @@ def entries(path):
                 if not line.strip():
                     continue
                 e = json.loads(line)
-                if not isinstance(e, dict):
+                if not isinstance(e, dict) or e.get("type") in ("user", "assistant") and not readable(e):
                     return None
                 out.append(e)
     except (OSError, TypeError, ValueError):
         return None
     return out
+
+
+def readable(e):
+    """A user or assistant entry whose message content is text or a list of blocks."""
+    m = e.get("message")
+    c = m.get("content") if isinstance(m, dict) else None
+    return isinstance(c, str) or isinstance(c, list) and all(isinstance(b, dict) for b in c)
 
 
 def blocks(e):
