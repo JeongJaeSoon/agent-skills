@@ -6,8 +6,9 @@ Usage: orch <command> <slug> [options]
   init <slug> --repo OWNER/NAME --run RUN_ID [--tracker-project NAME] [--tracker linear|jira]
               [--predicate ID,ID,...] [--merge-policy autonomous|human-gate] [--ceiling 6]
               [--deadline ISO8601] [--note NOTES_PATH] [--final-check TEXT]
-  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths|visual_paths|note|final_check> VALUE
-                                     mirror a change made in the program note
+  set <slug> <merge_policy|ceiling|deadline|predicate|exclusive_paths|visual_paths|note|final_check|stages> VALUE
+                                     mirror a change made in the program note; stages: the deploy steps
+                                     the stage table waits on (dev,prod), unset: dev and prod are 해당 없음
   status <slug>                      predicate, flow, growth and the next move, from live sources
   record <slug> <event> [--ticket T] [--pr N] [--sha S] [--class K] [--role R] [--note TEXT]
                                      `record spawned --role guardian --note <dispatchId>` for a standing
@@ -1501,9 +1502,10 @@ def cmd_set(argv):
     if key == "merge_policy" and value not in ("autonomous", "human-gate"):
         sys.exit("merge_policy is autonomous or human-gate")
     split = lambda v: [x for x in v.split(",") if x]
-    conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split}.get(key, str)
-    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check"):
-        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check")
+    conv = {"ceiling": int, "predicate": split, "exclusive_paths": split, "visual_paths": split, "stages": split}.get(key, str)
+    if key not in ("merge_policy", "ceiling", "deadline", "predicate", "exclusive_paths", "visual_paths", "note", "final_check",
+                   "stages"):
+        sys.exit("settable: merge_policy, ceiling, deadline, predicate, exclusive_paths, visual_paths, note, final_check, stages")
     if key == "visual_paths" and not conv(value):
         sys.exit("visual_paths cannot be empty: the screenshot check has no off switch, only the no-visual-change label")
     if key in ("exclusive_paths", "visual_paths"):
