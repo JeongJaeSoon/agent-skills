@@ -163,7 +163,7 @@ assert details == sorted(["unknown root 'Q'", "fx.bad: unknown role 'owner'", "u
 paths = {s.path for s in registry.STORES}
 for p in ("D/tidy.jsonl", "D/acks.jsonl", "S/patrol-verdicts.json", "S/patrol.jsonl", "S/card-watch/*.json",
           "P/_locks/*.lock", "S/pressure-queue.json", "S/janitor-plan.json", "S/reap-hard.jsonl", "S/preview-watch.json",
-          "S/ledger.jsonl", "S/transcripts/*.json", "D/decisions.json", "ext:orca", "ext:github"):
+          "S/ledger.jsonl", "S/transcripts/*.json", "D/decisions.json", "D/subagents.jsonl", "ext:orca", "ext:github"):
     assert p in paths, p
 
 print("test_registry: ok")
