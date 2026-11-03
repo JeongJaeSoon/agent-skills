@@ -836,6 +836,8 @@ def other_program_files(slug, repo, mine, rows, list_files=rest_files):
                 continue
             led = d / "ledger.jsonl"
             states = pr_state([json.loads(l) for l in led.read_text().splitlines() if l.strip()] if led.exists() else [])
+            if not all(type(n) is int for n in states):
+                raise TypeError("a ledger PR number that is not an integer")
         except (OSError, ValueError, AttributeError, TypeError, KeyError):
             out[d.name] = None
             continue
@@ -859,18 +861,17 @@ def cross_overlaps(files, theirs, rows, stacks=None, paths=None, unread=()):
     changes, one per shared file. No stack or `orch dep` command: a dep names this program's tickets only, and
     which side lands first is the two leads' call. PRs already stacked are skipped; what could not be read is
     UNKNOWN, including this program's own PRs in unread. files {pr: [paths]}, theirs from other_program_files."""
-    if not any(prs is None or prs for prs in theirs.values()):
-        return []
-    out = [f"OVERLAP UNKNOWN #{n} → this program's file list for it could not be read; compare it by hand"
-           for n in ([] if paths else unread)]
+    out = [f"OVERLAP UNKNOWN {other} → its program state could not be read; compare it by hand"
+           for other in sorted(theirs) if theirs[other] is None]
+    if not any(theirs.values()):
+        return out
+    out += [f"OVERLAP UNKNOWN #{n} → this program's file list for it could not be read; compare it by hand"
+            for n in ([] if paths else unread)]
     if not files and not paths:
         return out
     find = related([*files, *(n for prs in theirs.values() for n in prs or {})], rows, stacks)
     warn = "→ warning: settle the landing order with the other lead through PARENT"
-    for other in sorted(theirs):
-        if theirs[other] is None:
-            out.append(f"OVERLAP UNKNOWN {other} → its program state could not be read; compare it by hand")
-            continue
+    for other in sorted(o for o in theirs if theirs[o]):
         for n, changed in sorted(theirs[other].items()):
             if changed is None:
                 out.append(f"OVERLAP UNKNOWN {other} #{n} → its file list could not be read; compare it by hand")

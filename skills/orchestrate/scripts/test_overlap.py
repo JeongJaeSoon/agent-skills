@@ -117,6 +117,9 @@ def test_cross_program_unreadable_is_unknown():
                    f"OVERLAP other #1 #41 a {WARN}"], out
     assert prog.cross_overlaps({1: ["a"]}, {"broken": None}, xrows) == [
         "OVERLAP UNKNOWN broken → its program state could not be read; compare it by hand"]
+    # Even with no open PR of this program: the broken program's PRs are unknown, not absent.
+    assert prog.cross_overlaps({}, {"broken": None}, xrows) == [
+        "OVERLAP UNKNOWN broken → its program state could not be read; compare it by hand"]
     # This program's own PR whose file list could not be read, while another program has an open PR.
     out = prog.cross_overlaps({}, {"other": {40: ["a"]}}, xrows, unread=[2])
     assert out == ["OVERLAP UNKNOWN #2 → this program's file list for it could not be read; compare it by hand"], out
@@ -161,9 +164,11 @@ def test_other_programs_from_their_state():
         assert mine == {"broken": None, "other": {}}, mine
         # A ledger row without the shape the ledger has is unreadable state too, whatever its repo.
         program("shapeless2", "acme/app", [{"pr": 40}])
+        program("mixed", "acme/app", [{"ts": T, "ev": "ready", "pr": 40}, {"ts": T, "ev": "ready", "pr": "41"}])
         prog.HOME = home
         try:
-            assert prog.other_program_files("me", "acme/app", {1}, rows_, listed)["shapeless2"] is None
+            got = prog.other_program_files("me", "acme/app", {1}, rows_, listed)
+            assert got["shapeless2"] is None and got["mixed"] is None, got
         finally:
             prog.HOME = old
 
