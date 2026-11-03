@@ -217,16 +217,15 @@ def check_workers(run, call, lead_dispatch=None, me=None):
                     raise
         d = w.get("dispatchId") or "<dispatch>"
         task = w.get("taskId") or "<task>"
-        lost = f"lost its terminal {h}" if h else "has no terminal on record"
+        if not h:  # a worker can run without a terminal, so this alone is no reason to restart it
+            out.append(("info", f"worker {d} (task {task}) has no terminal on record: "
+                                f"`{shlex.join(['orca', 'orchestration', 'worker-show', '--dispatch', d])}` shows "
+                                "whether it is live; restart it only when that shows it is not"))
+            continue
         parent = by_task.get(((w.get("projection") or {}).get("parent") or {}).get("taskId"))
         if parent and parent.get("taskId") != own_task:  # a unit under another lead is that lead's to restart
-            out.append(("do", f"worker {d} (task {task}) {lost}; it sits under {parent.get('dispatchId')}: "
-                              "send that lead this line, and it restarts its own worker"))
-            continue
-        if not h:
-            out.append(("do", f"worker {d} (task {task}) {lost}: read it with "
-                              f"`{shlex.join(['orca', 'orchestration', 'worker-show', '--dispatch', d])}`; with no live "
-                              "terminal there, restart it with the stop and retry pair of a lost terminal"))
+            out.append(("do", f"worker {d} (task {task}) lost its terminal {h}; it sits under "
+                              f"{parent.get('dispatchId')}: send that lead this line, and it restarts its own worker"))
             continue
         card = (w.get("resource") or {}).get("worktreeId") or "<its worktree>"
         provider = (w.get("projection") or {}).get("provider") or {}
@@ -238,8 +237,8 @@ def check_workers(run, call, lead_dispatch=None, me=None):
         out.append(("do", f"worker {d} (task {task}) lost its terminal {h}: restart it on its card, "
                           f"`{shlex.join(['orca', 'orchestration', 'worker-stop', '--dispatch', d])}`, then "
                           f"`{shlex.join(argv)}`{note}"))
-    if not out:
-        out.append(("ok", f"every active worker{' under ' + lead_dispatch if lead_dispatch else ''} of Run {run} "
+    if not any(k == "do" for k, _ in out):
+        out.append(("ok", f"every active worker with a terminal on record{' under ' + lead_dispatch if lead_dispatch else ''} of Run {run} "
                           "has a live terminal"))
     return out
 

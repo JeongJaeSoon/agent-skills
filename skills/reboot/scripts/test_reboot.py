@@ -183,14 +183,15 @@ class Workers(unittest.TestCase):
         self.assertIn("--retry-of d1 --task t1 --worktree id:repo::/work/card --agent claude`", out[0])
         self.assertIn("add `--model <id>`", out[0])  # a retry does not inherit the model
 
-    def test_an_active_worker_with_no_terminal_is_not_called_live(self):
+    def test_an_active_worker_with_no_terminal_is_shown_not_restarted(self):
         workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active"},
                    {"dispatchId": "d2", "taskId": "t2", "terminalState": "active", "agentTerminalHandle": None}]
-        out = does(run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers),
-                       procs=wait_proc(200, "orch wait acme")))
-        self.assertEqual(len(out), 2)
-        self.assertIn("worker-show --dispatch d1", out[0])
-        self.assertIn("has no terminal on record", out[1])
+        lines = run("lead", "acme", "run_1", orca=Orca(run="run_1", workers=workers), procs=wait_proc(200, "orch wait acme"))
+        self.assertEqual(does(lines), [])  # a worker may run without a terminal: no stop or retry on that alone
+        infos = [t for k, t in lines if k == "info" and "worker" in t]
+        self.assertEqual(len(infos), 2)
+        self.assertIn("worker-show --dispatch d1", infos[0])
+        self.assertIn("has no terminal on record", infos[1])
 
     def test_a_card_path_with_a_space_stays_one_argument(self):
         workers = [{"dispatchId": "d1", "taskId": "t1", "terminalState": "active", "agentTerminalHandle": "term_dead",
