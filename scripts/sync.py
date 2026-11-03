@@ -386,13 +386,12 @@ def start_state(handle):
     """(state, detail) of a new card's agent from its screen: `started` (a turn runs, or a message was taken),
     `trust` (the folder trust dialog), `dialog` (a permission or other dialog), or `unconfirmed` (anything else,
     an empty prompt included: a silent screen is not a start)."""
-    meta = orca("terminal", "show", "--terminal", handle)
-    meta = meta.get("terminal", meta)
     tail = orca("terminal", "read", "--terminal", handle, "--screen")["terminal"].get("tail") or []
-    reason = classify(tail, meta.get("title") or "")
+    # Only the screen counts: a title without Claude's idle mark (a missing one included) proves no start.
+    reason = classify(tail, "✳")
     if reason and reason.startswith("dialog open"):
         return ("trust" if "trust this folder" in reason else "dialog"), reason
-    if reason and (reason.startswith("turn in progress") or reason.startswith("title shows")):
+    if reason and reason.startswith("turn in progress"):
         return "started", reason
     if reason is None and last_message(tail)[0] is not None:
         return "started", "a message was taken"

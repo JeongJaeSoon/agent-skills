@@ -97,45 +97,54 @@ def git_facts(cwd):
     f["branch"] = branch or None
     prs = {}
     for state in ("open", "merged"):
-        code, out, _ = run([GH, "pr", "list", "--head", branch, "--state", state, "--json", "number,url"], cwd) \
-            if branch else (None, "", "")
+        code, out, _ = run([GH, "pr", "list", "--head", branch, "--state", state, "--json", "number,url,headRefOid"],
+                           cwd) if branch else (None, "", "")
         try:
             prs[state] = json.loads(out) if code == 0 else None
         except ValueError:
             prs[state] = None
     f["open_prs"] = prs["open"]
-    if prs["merged"]:
-        f["on_main"] = True  # after a squash merge the branch's diff still shows; the merged PR decides
-    elif prs["merged"] is None or prs["open"] is None or not fetched:
+    code, head, _ = run(["git", "rev-parse", "HEAD"], cwd)
+    head = head.strip() if code == 0 else None
+    if not fetched or head is None or prs["merged"] is None or prs["open"] is None:
         f["on_main"] = None
+    elif any(isinstance(p, dict) and p.get("headRefOid") == head for p in prs["merged"]):
+        f["on_main"] = True  # after a squash merge the branch's diff still shows; the PR merged at HEAD decides
     else:
         code, out, _ = run(["git", "diff", "--stat", "origin/main...HEAD"], cwd)
         f["on_main"] = (not out.strip()) if code == 0 else None
     return f
 
 
-def card_facts(me):
+def card_facts(me, mode="card", dispatch=None):
     f = {}
     cur = orca_json("worktree", "current")
     wt = (cur or {}).get("worktree")
     wt = wt if isinstance(wt, dict) else {}
     f["main"] = wt["isMainWorktree"] if isinstance(wt.get("isMainWorktree"), bool) else None
     f["path"] = wt.get("path") if isinstance(wt.get("path"), str) else None
-    links = [wt.get(k) for k in ("linkedItems", "linkedLinearIssue", "linkedIssue", "linkedWorkItem")]
-    f["tickets"] = [l for l in links if l] if wt else None
+    items = wt.get("linkedItems")
+    if not wt:
+        f["tickets"] = None
+    elif not isinstance(items, list):
+        print(f"[{ME}] warning: Orca's worktree has no linkedItems list ({items!r}); its ticket is unknown",
+              file=sys.stderr)
+        f["tickets"] = None
+    else:
+        f["tickets"] = items + [wt[k] for k in ("linkedLinearIssue", "linkedIssue", "linkedWorkItem") if wt.get(k)]
     terms = orca_json("terminal", "list", "--worktree", "current")
     rows = (terms or {}).get("terminals")
     f["other_agents"] = ([t.get("handle") for t in rows if isinstance(t, dict) and t.get("agentIdentity")
                           and t.get("handle") != me] if isinstance(rows, list) and me else None)
-    f["questions"] = waiting_questions(me)
+    f["questions"] = waiting_questions({me, f"dispatch:{dispatch}"} if dispatch else {me}) if me else None
+    if mode == "worker" and not dispatch:
+        f["questions"] = None  # its questions may come from dispatch:<id>, which is not known
     return f
 
 
-def waiting_questions(me):
-    """Ids of `question` mail this terminal sent that nobody answered, or None when the inbox could not be read or
-    its rows name no sender."""
-    if not me:
-        return None
+def waiting_questions(senders):
+    """Ids of `question` mail one of these senders sent that nobody answered, or None when the inbox could not be
+    read whole or a row names no sender."""
     import fleet, orca_settings
 
     def call(*argv):
@@ -147,12 +156,17 @@ def waiting_questions(me):
         res = orca_settings.with_full(call, "orchestration", "inbox", "--limit", INBOX_LIMIT)
     except RuntimeError:
         return None
-    msgs = [m for m in res.get("messages") or [] if isinstance(m, dict)]
-    if msgs and not any("from_handle" in m for m in msgs):
-        print(f"[{ME}] warning: Orca's inbox rows carry no from_handle; questions waiting are unknown", file=sys.stderr)
+    msgs = res.get("messages")
+    if not isinstance(msgs, list) or not all(isinstance(m, dict) and "from_handle" in m for m in msgs):
+        print(f"[{ME}] warning: Orca's inbox has no messages list, or a row without from_handle; questions waiting "
+              "are unknown", file=sys.stderr)
+        return None
+    if len(msgs) >= int(INBOX_LIMIT):
+        print(f"[{ME}] warning: the inbox filled its {INBOX_LIMIT}-row page; questions waiting are unknown",
+              file=sys.stderr)
         return None
     answered = fleet.answered_mail(msgs)
-    return [m.get("id") for m in msgs if m.get("from_handle") == me and m.get("type") == "question"
+    return [m.get("id") for m in msgs if m.get("from_handle") in senders and m.get("type") == "question"
             and m.get("id") not in answered]
 
 
@@ -233,14 +247,18 @@ def parse(argv):
     return opts
 
 
+def own_dispatch_id(given):
+    if given:
+        return given
+    import orca_settings
+    own = orca_settings.own_dispatch(ORCA, failed="unknown")
+    return own.get("dispatchId") if isinstance(own, dict) else None
+
+
 def dispatch_settled(dispatch_id):
     """(True, status) when Orca says the Dispatch settled; (False, why) otherwise."""
     if not dispatch_id:
-        import orca_settings
-        own = orca_settings.own_dispatch(ORCA, failed="unknown")
-        if own == "unknown" or not own:
-            return False, "this terminal's Dispatch could not be found (pass --dispatch <id>)"
-        dispatch_id = own.get("dispatchId")
+        return False, "this terminal's Dispatch could not be found (pass --dispatch <id>)"
     res = orca_json("orchestration", "worker-show", "--dispatch", dispatch_id, "--full")
     status = ((res or {}).get("dispatch") or {}).get("status") if isinstance((res or {}).get("dispatch"), dict) else None
     if status in SETTLED:
@@ -300,7 +318,9 @@ def main(argv):
         return 2
     mode = "worker" if opts.get("--worker") else "card" if opts.get("--card") else "user"
     me = os.environ.get("ORCA_TERMINAL_HANDLE")
-    facts = {**git_facts(os.getcwd()), **card_facts(me)}
+    if mode == "worker":
+        opts["--dispatch"] = own_dispatch_id(opts.get("--dispatch"))
+    facts = {**git_facts(os.getcwd()), **card_facts(me, mode, opts.get("--dispatch"))}
     verdict, reasons = judge(facts, mode, opts.get("--outcome"), keep_row(opts), bool(opts.get("--ticket-done")))
     print(json.dumps({"verdict": verdict, "mode": mode, "reasons": reasons, "facts": facts}, ensure_ascii=False,
                      indent=1))

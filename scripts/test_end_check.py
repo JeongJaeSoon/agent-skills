@@ -80,6 +80,10 @@ elif a[:2] == ["orchestration", "worker-show"]:
     if mode == "orca-down":
         sys.exit(1)
     print(json.dumps({"ok": True, "result": {"dispatch": {"status": os.environ.get("FAKE_STATUS", "dispatched")}}}))
+elif a[:2] == ["worktree", "current"]:
+    print(json.dumps({"ok": True, "result": {"worktree": json.loads(os.environ["FAKE_WT"])}}))
+elif a[:2] == ["terminal", "list"]:
+    print(json.dumps({"ok": True, "result": {"terminals": [{"handle": "term_me", "agentIdentity": "claude"}]}}))
 elif a[:2] in (["worktree", "rm"], ["terminal", "close"]):
     print(json.dumps({"ok": True, "result": {}}))
 else:
@@ -91,13 +95,41 @@ CALLS = tmp / "calls.jsonl"
 os.environ.update(FAKE_CALLS=str(CALLS))
 end_check.ORCA = str(tmp / "orca")
 Q = {"id": "m1", "type": "question", "from_handle": "term_me", "to_handle": "run:r", "created_at": "2026-01-01 10:00"}
+ME = {"term_me"}
 os.environ["FAKE_INBOX"] = json.dumps([Q])
-assert end_check.waiting_questions("term_me") == ["m1"]
+assert end_check.waiting_questions(ME) == ["m1"]
 os.environ["FAKE_INBOX"] = json.dumps([Q, {"id": "m2", "type": "status", "thread_id": "m1", "from_handle": "term_lead",
                                            "created_at": "2026-01-01 10:05"}])
-assert end_check.waiting_questions("term_me") == []
-os.environ["FAKE_INBOX"] = json.dumps([{"id": "m3", "type": "question"}])
-assert end_check.waiting_questions("term_me") is None
+assert end_check.waiting_questions(ME) == []
+with contextlib.redirect_stderr(io.StringIO()):
+    os.environ["FAKE_INBOX"] = json.dumps([{"id": "m3", "type": "question"}])
+    assert end_check.waiting_questions(ME) is None
+    # One row without a sender is enough to make the rest unknown; so is no messages list, or a full page.
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, id="m4", from_handle="term_x"), {"id": "m5", "type": "question"}])
+    assert end_check.waiting_questions(ME) is None
+    os.environ["FAKE_INBOX"] = "null"
+    assert end_check.waiting_questions(ME) is None
+    limit, end_check.INBOX_LIMIT = end_check.INBOX_LIMIT, "1"
+    os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="term_x")])
+    assert end_check.waiting_questions(ME) is None
+    end_check.INBOX_LIMIT = limit
+# A worker's question can come from its Dispatch.
+os.environ["FAKE_INBOX"] = json.dumps([dict(Q, from_handle="dispatch:ctx_1")])
+assert end_check.waiting_questions({"term_me", "dispatch:ctx_1"}) == ["m1"]
+assert end_check.waiting_questions({"term_me", "dispatch:ctx_10"}) == []
+
+# card_facts: a worktree with no linkedItems list leaves its ticket unknown; a worker with no Dispatch id leaves its
+# questions unknown.
+os.environ["FAKE_INBOX"] = "[]"
+os.environ["FAKE_WT"] = json.dumps({"isMainWorktree": False, "path": "/w"})
+with contextlib.redirect_stderr(io.StringIO()):
+    f = end_check.card_facts("term_me")
+assert f["tickets"] is None and f["questions"] == [], f
+os.environ["FAKE_WT"] = json.dumps({"isMainWorktree": False, "path": "/w", "linkedItems": [], "linkedIssue": None})
+f = end_check.card_facts("term_me")
+assert f["tickets"] == [] and f["other_agents"] == [], f
+assert end_check.card_facts("term_me", "worker", None)["questions"] is None
+assert end_check.card_facts("term_me", "worker", "ctx_1")["questions"] == []
 
 # --apply: a worker's remove waits for its Dispatch to settle (worker_done arrived); unread is refused too.
 CLEAN_FACTS = dict(CLEAN, caches=[])
@@ -142,5 +174,31 @@ res = json.loads(out.getvalue())
 assert rc == 0 and res["verdict"] == "keep" and any("a.txt" in r for r in res["reasons"]), res
 with contextlib.redirect_stderr(io.StringIO()):
     assert end_check.main(["--worker", "--card"]) == 2
+
+# on_main: a merged PR counts only when it merged this HEAD; a commit after it, or a failed fetch, does not land.
+origin, clone = tmp / "origin.git", tmp / "clone"
+git = lambda *a, cwd=clone: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.test",  # noqa: E731
+                                            "-c", "commit.gpgsign=false", *a], cwd=cwd, check=True,
+                                           capture_output=True, text=True).stdout.strip()
+subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, capture_output=True)
+git("commit", "-q", "--allow-empty", "-m", "base")
+git("push", "-q", "origin", "main")
+git("switch", "-q", "-c", "feat")
+(clone / "b.txt").write_text("b\n")
+git("add", "b.txt")
+git("commit", "-q", "-m", "work")
+merged_at = git("rev-parse", "HEAD")
+(tmp / "gh").write_text("#!/bin/sh\n[ \"$6\" = merged ] && printf '%s' \"$FAKE_MERGED\" || echo '[]'\n")
+(tmp / "gh").chmod(0o755)
+end_check.GH = str(tmp / "gh")
+os.environ["FAKE_MERGED"] = json.dumps([{"number": 1, "url": "u", "headRefOid": merged_at}])
+assert end_check.git_facts(str(clone))["on_main"] is True
+(clone / "c.txt").write_text("c\n")
+git("add", "c.txt")
+git("commit", "-q", "-m", "after the merge")
+assert end_check.git_facts(str(clone))["on_main"] is False
+git("remote", "set-url", "origin", str(tmp / "nowhere.git"))
+assert end_check.git_facts(str(clone))["on_main"] is None
 
 print("ok")

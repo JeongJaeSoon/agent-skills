@@ -333,7 +333,10 @@ def test_close_setup_agent():
              "perm": {"agentIdentity": "claude", "title": "✳ new", "screens": [PERMISSION]},
              "empty": {"agentIdentity": "claude", "title": "✳ new", "screens": [IDLE[1:]]},
              "busy": {"agentIdentity": "claude", "title": "✳ new", "screens": [BUSY]},
-             "took": {"agentIdentity": "claude", "title": "✳ new", "screens": [started]}}
+             "took": {"agentIdentity": "claude", "title": "✳ new", "screens": [started]},
+             # A title without the idle mark, or none, is no evidence: the screen decides.
+             "notitle": {"agentIdentity": "claude", "title": "", "screens": [TRUST]},
+             "busytitle": {"agentIdentity": "claude", "title": "⠂ new", "screens": [IDLE[1:]]}}
     st.write_text(json.dumps({"terms": terms, "sent": []}))
     env = dict(SKILLS_SYNC_ORCA=str(fake), FAKE_ORCA_STATE=str(st), SKILLS_SYNC_SETUP_POLL_S="0.05")
     old = {k: os.environ.get(k) for k in env}
@@ -350,7 +353,8 @@ def test_close_setup_agent():
             os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
         importlib.reload(sync)
     check("start states read from the screen", states == {"trust": "trust", "perm": "dialog", "empty": "unconfirmed",
-                                                          "busy": "started", "took": "started"}, states)
+                                                          "busy": "started", "took": "started", "notitle": "trust",
+                                                          "busytitle": "unconfirmed"}, states)
     check("a trust dialog fails close-setup and says so", code == 1 and "agent trust" in out.getvalue()
           and out.getvalue().rstrip().endswith("result: failed"), out.getvalue())
     shutil.rmtree(tmp)

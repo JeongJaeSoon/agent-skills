@@ -44,6 +44,8 @@ HOOKS = {
     "prose_check.py": "a commit, PR or tracker write whose text breaks write-plainly",
     "guard.py": "its reason when it denies; one line per warn rule (guard.warn.*) that matched the call",
     "refusals.py": "its reason when it denies a refused act again; one warning line when a refusal is not recorded",
+    "lifecycle.py": "a card's worktree rm before its worker_done or end-check came back (the warning or the denial)"
+                    "; a role session's Agent prompt without the refused-act paragraph (the paragraph, appended)",
     "delegate_gate.py": REFUSAL_ONLY,
     "pressure_gate.py": REFUSAL_ONLY,
     "permission.py": REFUSAL_ONLY,

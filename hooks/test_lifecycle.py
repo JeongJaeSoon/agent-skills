@@ -81,6 +81,23 @@ check("an old Dispatch's worker_done does not count", decision(out) == "deny" an
 chained = [user(PREAMBLE), use("m1", "tu_rm", DONE + " && " + RM)]
 out = hook(chained, rm_event(cmd=DONE + " && " + RM), DENY)
 check("worker_done && rm in one command is denied", decision(out) == "deny", out)
+# The receipt is the exact send's own: another Dispatch id that shares a prefix, the id only in the body, or an ok
+# printed by another command beside the send does not count.
+out = hook([user(PREAMBLE), use("m1", "tu_done", DONE.replace("ctx_1", "ctx_10")), result("tu_done", '{"ok": true}'),
+            use("m2", "tu_rm", RM)], rm_event(), DENY)
+check("worker_done for ctx_10 does not open ctx_1's rm", decision(out) == "deny", out)
+body = DONE.replace("--body x", "--body ctx_1").replace("--dispatch-id ctx_1", "--dispatch-id ctx_0")
+out = hook([user(PREAMBLE), use("m1", "tu_done", body), result("tu_done", '{"ok": true}'), use("m2", "tu_rm", RM)],
+           rm_event(), DENY)
+check("ctx_1 in the body of another Dispatch's send does not count", decision(out) == "deny", out)
+mixed = DONE + "; orca worktree list --json"
+out = hook([user(PREAMBLE), use("m1", "tu_done", mixed), result("tu_done", 'refused\n{"ok": true}'),
+            use("m2", "tu_rm", RM)], rm_event(), DENY)
+check("an ok printed beside the send in one call does not count", decision(out) == "deny", out)
+# A dispatched lead ends like a worker.
+lead_worker = PREAMBLE + "\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"
+out = hook([user(lead_worker), use("m1", "tu_done", DONE), use("m1", "tu_rm", RM)], rm_event(), DENY)
+check("a dispatched lead's parallel rm is denied", decision(out) == "deny", out)
 # The default level is warn: the call goes through with the warning.
 out = hook(same, rm_event())
 check("default warn lets it through with a warning", decision(out) is None and "worker_done" in out.get("systemMessage", ""), out)
@@ -112,6 +129,9 @@ check("a worker's Agent prompt gets the paragraph", hs.get("permissionDecision")
       and upd.get("prompt", "").startswith("Read the diff.\n\nAn act refused by a permission prompt")
       and upd["prompt"].rstrip().endswith("run it again.") and upd.get("subagent_type") == "Explore", out)
 check("a prompt already carrying it is left alone", hook([user(PREAMBLE)], {**agent, "tool_input": upd}) == {})
+start = {**agent["tool_input"], "prompt": "Read the diff.\n\n" + upd.get("prompt", "")[len("Read the diff.\n\n"):][:200]}
+check("a prompt carrying only its start gets the whole paragraph",
+      "updatedInput" in (hook([user(PREAMBLE)], {**agent, "tool_input": start}).get("hookSpecificOutput") or {}))
 check("a general session's Agent call is left alone", hook([user("look at this")], agent) == {})
 check("the key turns it off", hook([user(PREAMBLE)], agent, {"orchestrate": {"agent_forbidden": False}}) == {})
 lead = "acme: lead\nMODE        Run `orchestrate` in program mode.\nROLE: lead acme\n"

@@ -246,9 +246,17 @@ def place_forbidden(text, paragraph):
         span = row_span(lines, "FORBIDDEN", skip)
         if span:
             first, end = span
-            old = next((i for i in range(first, end) if lines[i].rstrip().endswith(PARAGRAPH_END)), None)
-            if old is not None:
+            # An old copy is known only by the paragraph's own first sentence at a line's start; anything else in the
+            # row (a repository's restriction before or after it) stays, and an unrecognized copy is left, not cut.
+            opening = paragraph[0].split(".")[0] + "."
+            strip = lambda l: re.sub(r"^\s*`?FORBIDDEN`?\s*:?\s*", "", l).strip()  # noqa: E731
+            s = next((i for i in range(first, end) if strip(lines[i]).startswith(opening)), None)
+            old = next((i for i in range(s, end) if lines[i].rstrip().endswith(PARAGRAPH_END)), None) \
+                if s is not None else None
+            if old is not None and s == first:
                 new = lines[:first] + block + lines[old + 1:]
+            elif old is not None:
+                new = lines[:s] + [INDENT + BEGIN] + body + [INDENT + END] + lines[old + 1:]
             else:
                 rest = re.sub(r"^\s*`?FORBIDDEN`?\s*:?\s*", "", lines[first])
                 new = lines[:first] + block + ([INDENT + rest] if rest.strip() else []) + lines[first + 1:]
@@ -293,7 +301,8 @@ def card_lock():
 
 
 def ledger_rows():
-    """{worktree path: the merged record} from cards.jsonl; a supersede line adds `superseded_by` to its path."""
+    """{worktree path: the merged record} from cards.jsonl; a supersede line adds `superseded_by` to its path, and a
+    creation line (one with `role`) starts the path's record over, since Orca reuses a removed card's path."""
     out = {}
     try:
         text = ledger().read_text()
@@ -305,7 +314,10 @@ def ledger_rows():
         except ValueError:
             continue
         if isinstance(r, dict) and isinstance(r.get("path"), str):
-            out.setdefault(r["path"], {}).update(r)
+            if "role" in r:
+                out[r["path"]] = dict(r)
+            else:
+                out.setdefault(r["path"], {}).update(r)
     return out
 
 

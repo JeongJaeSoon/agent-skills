@@ -430,6 +430,16 @@ OLD = (f"/goal x\n{CLOSE}\nFORBIDDEN   Do not start other tickets. An older word
 text, how = card.place_forbidden(OLD, PARA)
 assert how == "inserted" and "An older wording" not in text and SHARE in text and text.count(card.BEGIN) == 1, text
 assert card.place_forbidden(text, PARA)[1] == "unchanged"
+# A restriction before the old copy in the same row stays; only the copy is replaced.
+OWN = "FORBIDDEN   저장소 데이터 공유 제한: acme/app의 로그를 밖에 쓰지 않는다."
+BEFORE = (f"/goal x\n{OWN}\n            Do not start other tickets. An older wording\n            that ends: fix the "
+          f"cause and run it again.\nREPORT      worker_done once.\n")
+text, how = card.place_forbidden(BEFORE, PARA)
+assert how == "inserted" and OWN in text and "An older wording" not in text and text.index(OWN) < text.index(card.BEGIN), text
+# An unrecognized copy is not cut: the section goes first and the old text stays.
+ODD = f"/goal x\nFORBIDDEN   {SHARE.strip()}\n            Some other ban; run it again.\nREPORT      x\n"
+text, how = card.place_forbidden(ODD, PARA)
+assert how == "inserted" and SHARE.strip() in text and "Some other ban; run it again." in text, text
 # No markers and no copy: the section goes first in the row, the row's text kept after it.
 text, how = card.place_forbidden(f"/goal x\nFORBIDDEN   Other work only.\n{SHARE}\n", PARA)
 assert how == "inserted" and text.index(card.END) < text.index("Other work only.") < text.index(SHARE), text
@@ -476,6 +486,11 @@ assert any(c["bin"] == "orch" and c["argv"][c["argv"].index("--kind") + 1] == "s
 assert card.ledger_rows()["/wt/old"]["superseded_by"] == str(CARD_DIR)
 rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9c", "--reference", REF)
 assert rc == 0, "a superseded card no longer holds the key"
+# A path Orca reuses for a new card starts its record over: the old superseded_by does not carry over.
+card.ledger_add(repo="repo1", references=[REF], role="impl", path="/wt/old", name="abc-9-again")
+assert "superseded_by" not in card.ledger_rows()["/wt/old"]
+rc, out, err, calls = go(path, "--repo", "name:acme", "--name", "abc-9d", "--reference", REF)
+assert rc == 2 and "/wt/old" in err, (rc, err)
 # A superseded worker is told through its Dispatch, never typed into (Orca would mark it taken over).
 card.ledger_add(repo="repo1", references=[REF], role="impl", path="/wt/worker", name="w", dispatch="ctx_old")
 os.environ["FAKE_CARD_PS"] = json.dumps([{"path": "/wt/worker", "repoId": "repo1", "linkedItems": []}])

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """PreToolUse hook of the agent-skills plugin: a card's end, and what a role session's subagents are told.
 
-Exit order (key `guard.exit_order`, default `warn`): an `orca worktree rm` from a worker's main session (roles.py)
-before its `worker_done` came back. A dispatched worker's rm needs, in an earlier assistant message than the rm's,
-a Bash `orca orchestration send --type worker_done` for its current Dispatch (the last `--dispatch-id` its prompts
-name) whose result is not an error and shows `"ok": true` or a `messageId=`. A `/goal` card with a CLOSE row and no
+Exit order (key `guard.exit_order`, default `warn`): an `orca worktree rm` from a dispatched, CLOSE or KEEP card's
+main session (roles.py; a dispatched lead included) before its `worker_done` came back. A dispatched card's rm needs,
+in an earlier assistant message than the rm's, a Bash call that is only `orca orchestration send --type worker_done
+--dispatch-id <its current Dispatch>` (the last `--dispatch-id` its prompts name) whose result is not an error and
+shows `"ok": true` or a `messageId=`. A `/goal` card with a CLOSE row and no
 Dispatch needs instead an earlier `skills-sync end-check --card` result whose verdict is `remove`. Calls sent in one
 message run together, so a worker_done beside the rm has no result yet: the rm would remove the card even when the
 send was refused, and its report never arrives (end-session §7). A KEEP row on the card refuses the rm outright.
@@ -27,7 +28,7 @@ from lib import config, shell
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BRIEF = ROOT / "skills" / "orchestrate" / "references" / "brief.md"
 PARAGRAPH = re.compile(r"An act refused by a permission prompt.*?fix\s+the\s+cause\s+and\s+run\s+it\s+again\.", re.S)
-DISPATCH = re.compile(r"--dispatch-id[ =]+(ctx_\w+)")
+DISPATCH = re.compile(r"--dispatch-id[ =]+(ctx_\w+)\b")
 OK = re.compile(r'"ok"\s*:\s*true|\bmessageId=msg_')
 SOURCE = "(agent-skills hooks/lifecycle.py, {key})"
 
@@ -98,9 +99,22 @@ def this_message(rows, tool_use_id):
     return newest
 
 
-def sends(cmd, kind):
-    return any(c.name == "orca" and c.words[1:3] == ["orchestration", "send"] and "--type" in c.words
-               and c.words[c.words.index("--type") + 1:][:1] == [kind] for c in shell.commands(cmd))
+def flag(words, name):
+    """The value of `name` in argv words (`--x v` or `--x=v`), or None."""
+    for i, w in enumerate(words):
+        if w == name and i + 1 < len(words):
+            return words[i + 1]
+        if w.startswith(name + "="):
+            return w[len(name) + 1:]
+    return None
+
+
+def worker_done_for(cmd, dispatch):
+    """True when `cmd` is one `orca orchestration send --type worker_done` for exactly this Dispatch and nothing
+    else, so its output is that send's own receipt."""
+    cs = shell.commands(cmd)
+    return (len(cs) == 1 and cs[0].name == "orca" and cs[0].words[1:3] == ["orchestration", "send"]
+            and flag(cs[0].words, "--type") == "worker_done" and flag(cs[0].words, "--dispatch-id") == dispatch)
 
 
 def removes(cmd):
@@ -129,9 +143,7 @@ def exit_order(event, s, lvl):
     if s.supervised:
         ids = [m for e in rows if e.get("type") == "user" for m in DISPATCH.findall(text_of(e))]
         current = ids[-1] if ids else None
-        done = [c for c in earlier if sends(c[2], "worker_done") and OK.search(c[3])
-                and (current is None or current in c[2])]
-        if done:
+        if current and any(worker_done_for(c[2], current) and OK.search(c[3]) for c in earlier):
             return None, None
         return lvl, (f"`orca worktree rm` before this Dispatch's worker_done came back"
                      f"{f' ({current})' if current else ''}. Send worker_done as its own call, and only once its "
@@ -154,7 +166,7 @@ def attach(event, cfg):
     if not isinstance(args, dict) or not isinstance(args.get("prompt"), str):
         return None
     text = paragraph()
-    if not text or text[:120] in " ".join(args["prompt"].split()):
+    if not text or text in " ".join(args["prompt"].split()):
         return None
     return {**args, "prompt": args["prompt"].rstrip() + "\n\n" + text}
 
@@ -174,7 +186,8 @@ def main():
         if tool == "Bash" and not (isinstance(cmd, str) and "worktree" in cmd and removes(cmd)):
             return 0  # the role is read from the transcript only for an rm
         s = roles.session(event)
-        if tool == "Bash" and roles.applies("exit_order", s):
+        # A dispatched or CLOSE/KEEP card ends the same way whatever role it declared (a dispatched lead included).
+        if tool == "Bash" and roles.applies("exit_order", s) and (s.supervised or s.close or s.keep):
             lvl = config.level(cfg, "guard.exit_order", "warn")
             decision, reason = exit_order(event, s, lvl) if lvl != "off" else (None, None)
             if decision == "deny":
