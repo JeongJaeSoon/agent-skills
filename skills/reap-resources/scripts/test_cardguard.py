@@ -40,13 +40,13 @@ assert not check(final=True, patrol=True)[0] and not check(final=True, head="c" 
 assert check(handles=("t1", "s1", "gone"), final=True)[0], "a handle already closed is fine"
 
 # observe(): each reader that fails is None, which check() turns into a keep.
-saved = reap.patrol_working, reap.run, reap.orca_json, cardguard._orch, cardguard.transcript_tail
-reap.patrol_working = lambda now=None: set()
+saved = reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.transcript_tail
+reap.patrol_read = lambda now=None: set()
 reap.run = lambda cmd, **k: H + "\n"
 reap.orca_json = lambda *a: {"terminals": OK["terminals"]}
 prog = types.SimpleNamespace(agent_waits=lambda strict=False: {"t1": None}, read_screen=lambda h: ["❯ "])
 cardguard._orch = lambda name: prog
-cardguard.transcript_tail = lambda path: ({"state": "idle", "parked": False}, None)
+cardguard.transcript_tail = lambda path, strict=False: ({"state": "idle", "parked": False}, None)
 f = cardguard.observe("/w/x")
 assert f["head"] == H and f["waits"] == {"t1": None} and f["screens"] == {"t1": ["❯ "]} and not f["patrol"], f
 assert cardguard.guard("/w/x", H, ["t1", "s1"]) == (True, "확인함")
@@ -63,17 +63,34 @@ for name, broken, why in (("agent_waits", boom, "agent-wait"), ("read_screen", b
     prog.agent_waits, prog.read_screen = (lambda strict=False: {"t1": None}), (lambda h: ["❯ "])
 cardguard.transcript_tail = boom
 assert "세션 기록" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
-cardguard.transcript_tail = lambda path: (None, None)
+cardguard.transcript_tail = lambda path, strict=False: (None, None)
 assert cardguard.guard("/w/x", H, ["t1", "s1"])[0], "no transcript is nothing armed"
-reap.orca_json = lambda *a: None
-assert "터미널 목록" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
+for answer in (None, {}, {"terminals": None}, {"terminals": [], "truncated": True}):
+    reap.orca_json = lambda *a, r=answer: r
+    assert "터미널 목록" in cardguard.guard("/w/x", H, ["t1", "s1"])[1], answer
 reap.orca_json = lambda *a: {"terminals": OK["terminals"]}
 reap.run = boom
 assert "HEAD 를 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
 reap.run = lambda cmd, **k: H + "\n"
-reap.patrol_working = lambda now=None: {"/w/x"}
-assert "순찰" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
-reap.patrol_working, reap.run, reap.orca_json, cardguard._orch, cardguard.transcript_tail = saved
+reap.patrol_read = lambda now=None: {"/w/x"}
+assert "순찰 판정:" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
+reap.patrol_read = lambda now=None: None
+assert "순찰 판정 파일을 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
+reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.transcript_tail = saved
+
+# reap.patrol_read: no file or a stale one is no protection; one that exists and cannot be read is None.
+reap.STATE.mkdir(parents=True, exist_ok=True)
+vf = reap.STATE / "patrol-verdicts.json"
+assert reap.patrol_read() == set()
+vf.write_text("{not json")
+assert reap.patrol_read() is None and reap.patrol_working() == set()
+vf.write_text(json.dumps({"t": time.time(), "cards": {"/w/x": "waiting", "/w/y": "idle"}}))
+assert reap.patrol_read() == {reap.real("/w/x")}
+vf.write_text(json.dumps({"t": time.time() - 7200, "cards": {"/w/x": "waiting"}}))
+assert reap.patrol_read() == set()
+vf.write_text(json.dumps(["not", "a", "dict"]))
+assert reap.patrol_read() is None
+vf.unlink()
 
 # The real transcript reader: a turn that armed ScheduleWakeup and ended is parked.
 projects = tmp / "projects"
@@ -88,6 +105,15 @@ rows = [{"type": "assistant", "timestamp": "2026-01-01T00:00:00Z",
 (d / "s.jsonl").write_text("{}\n" + "\n".join(json.dumps(r) for r in rows) + "\n")
 motion, _ = cardguard.transcript_tail("/w/parked")
 assert motion and motion["state"] == "idle" and motion["parked"], motion
+assert cardguard.transcript_tail("/w/none", strict=True) == (None, None), "no transcript is not a failure"
+(d / "s.jsonl").chmod(0)
+try:
+    cardguard.transcript_tail("/w/parked", strict=True)
+    raise AssertionError("an unreadable transcript raises under strict")
+except OSError:
+    pass
+assert cardguard.transcript_tail("/w/parked") == (None, None)
+(d / "s.jsonl").chmod(0o644)
 
 # Shared facts: busy shells and child cards.
 row = lambda pid, cmd, ppid=1: {"pid": pid, "ppid": ppid, "cmd": cmd}
@@ -118,12 +144,15 @@ try:
     raise AssertionError("a list bound to one Run is not every Run's")
 except RuntimeError:
     pass
-pages["c2"] = {"workers": [], "page": {"hasMore": True, "nextCursor": "c2"}}
-try:
-    cardguard.worker_pages()
-    raise AssertionError("an endless list is cut short, and that is a failure")
-except RuntimeError:
-    pass
+for page in ({"hasMore": True, "nextCursor": "c2"}, {"hasMore": True}):
+    pages["c2"] = {"workers": [], "page": page}
+    try:
+        cardguard.worker_pages()
+        raise AssertionError(f"a list cut short is a failure: {page}")
+    except RuntimeError:
+        pass
+pages["c2"] = {"workers": [], "page": {}}
+assert len(cardguard.worker_pages()) == 1, "no page info and no cursor is the last page"
 cardguard._orca_every_run = saved_every
 saved_oj = reap.orca_json
 reap.orca_json = lambda *a: None

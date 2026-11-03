@@ -83,8 +83,10 @@ def worker_pages(state=None, every_run=True, deadline=None):
         rows += res["workers"]
         page = res.get("page") or {}
         cursor = page.get("nextCursor")
-        if not cursor or page.get("hasMore") is False:
+        if page.get("hasMore") is False or (not cursor and not page.get("hasMore")):
             return rows
+        if not cursor:
+            raise RuntimeError("worker-list has more pages and no cursor to them")
     raise RuntimeError(f"worker-list has more than {WORKER_PAGES} pages")
 
 
@@ -94,20 +96,23 @@ def _orch(name):
     return __import__(name)
 
 
-def transcript_tail(path):
+def transcript_tail(path, strict=False):
     """(motion, last row) from the tail of the newest transcript of a card, or (None, None) without one. motion is
-    dash.step_motion's: {"state": "idle"|..., "since", "parked"}."""
+    dash.step_motion's: {"state": "idle"|..., "since", "parked"}. A transcript that cannot be read is (None, None)
+    too, or raises with strict."""
     dash = _orch("dash")
     d = dash.transcript_dir(path)
     try:
-        newest = max(d.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
-    except (OSError, ValueError):
-        return None, None
-    try:
+        files = list(d.glob("*.jsonl")) if d.is_dir() else []
+        if not files:
+            return None, None
+        newest = max(files, key=lambda f: f.stat().st_mtime)
         with newest.open("rb") as f:
             f.seek(max(0, newest.stat().st_size - TAIL_BYTES))
             raw = f.read().splitlines()[1:]
     except OSError:
+        if strict:
+            raise
         return None, None
     motion, last = {}, None
     for line in raw:
@@ -127,16 +132,18 @@ def observe(path):
             return fn()
         except (SystemExit, Exception):  # any failure is "could not see", which keeps the card
             return None
-    f = {"patrol": path in reap.patrol_working(),
+    kept = reap.patrol_read()
+    f = {"patrol": None if kept is None else path in kept,
          "head": attempt(lambda: reap.run(["git", "-C", path, "rev-parse", "HEAD"]).strip() or None)}
     res = reap.orca_json("terminal", "list", "--worktree", f"path:{path}")
-    f["terminals"] = None if not isinstance(res, dict) or res.get("truncated") else res.get("terminals") or []
+    f["terminals"] = res["terminals"] if isinstance(res, dict) and not res.get("truncated") \
+        and isinstance(res.get("terminals"), list) else None
     agents = [t["handle"] for t in f["terminals"] or () if t.get("agentIdentity")]
     if agents:  # a session with no agent terminal left can neither answer a prompt nor wake itself
         prog = attempt(lambda: _orch("prog"))
         f["waits"] = prog and attempt(lambda: prog.agent_waits(strict=True))
         f["screens"] = {h: prog and attempt(lambda h=h: prog.read_screen(h)) for h in agents}
-        f["motion"] = attempt(lambda: transcript_tail(path)[0] or {})
+        f["motion"] = attempt(lambda: transcript_tail(path, strict=True)[0] or {})
     return f
 
 
@@ -149,7 +156,9 @@ def check(f, head, handles, final=False):
     """(ok, why) for closing what was judged at HEAD head with its terminals handles, from observe()'s facts. final:
     after those terminals were closed, before `worktree rm`: their sessions are gone, so only patrol, HEAD and new
     terminals are looked at."""
-    if f.get("patrol"):
+    if f.get("patrol") is None:
+        return False, "순찰 판정 파일을 읽지 못함"
+    if f["patrol"]:
         return False, "순찰 판정: 작업 중·사람 대기·Run 워커(orch patrol)"
     if not f.get("head"):
         return False, "HEAD 를 읽지 못함"

@@ -517,13 +517,24 @@ def patrol_working(now=None):
     """Card paths `orch patrol` judged working (PATROL_KEEP) in a round under an hour old. Read only to keep a card: a patrol
     verdict never makes anything a target, and a path missing here (a round with `failed` sources above all) is not
     evidence the card is safe to close."""
+    return patrol_read(now) or set()
+
+
+def patrol_read(now=None):
+    """patrol_working, but None when the verdicts file exists and cannot be read: a guard keeps the card then. No file,
+    or one over an hour old, is an empty set."""
     try:
         v = json.loads((STATE / "patrol-verdicts.json").read_text())
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        return None
+    try:
         if (now or time.time()) - float(v.get("t") or 0) > PATROL_FRESH_S:
             return set()
         return {real(p) for p, x in (v.get("cards") or {}).items() if x in PATROL_KEEP}
-    except (OSError, ValueError, TypeError, AttributeError):
-        return set()
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 ORCH = pathlib.Path(__file__).resolve().parents[2] / "orchestrate" / "scripts" / "prog.py"
