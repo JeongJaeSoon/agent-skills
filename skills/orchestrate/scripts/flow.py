@@ -107,13 +107,21 @@ def stat_node(p, stale_s, now):
             entries = sorted(pathlib.Path(p.anchor).glob(str(p)[len(p.anchor):]))
         except OSError as e:
             return {"exists": False, "state": registry.ERROR, "error": str(e)}
-        mt = []
+        # A pattern with an extension names files; `dir/*` may hold directories too.
+        files_only = "." in p.name.lstrip("*")
+        mt, bad = [], []
         for e in entries:
             try:
-                mt.append(e.stat().st_mtime)
-            except OSError:
-                pass
+                st = e.stat()
+            except OSError as err:
+                bad.append(f"{e.name}: {err.strerror or err}")
+                continue
+            if files_only and stat.S_ISDIR(st.st_mode):
+                bad.append(f"{e.name}: a directory where a file belongs")
+            mt.append(st.st_mtime)
         out = {"exists": bool(entries), "entries": len(entries), "mtime": max(mt) if mt else None}
+        if bad:
+            return {**out, "state": registry.ERROR, "error": "; ".join(bad[:3]) + (f" (+{len(bad) - 3})" if len(bad) > 3 else "")}
     else:
         try:
             st = p.stat()
@@ -144,35 +152,50 @@ def producers_of(store):
 def unregistered(stores):
     """Files under the state roots no store pattern names. Program directories are a lead's own files (registered as
     hand files), so only the programs home's top level and its `_` directories are walked."""
-    pats = {}
+    # Roots that are one directory (an override can point two at the same place) are walked once, with every
+    # pattern of each.
+    tops = {}
+    for key in ("D", "S", "P"):
+        tops.setdefault(os.path.realpath(root(key)), set()).add(key)
+    pats = {t: [] for t in tops}
     for s in stores:
         if (pl := place(s)) and pl[0] in ("D", "S", "P"):
-            pats.setdefault(pl[0], []).append(pl[1])
-    out, roots, done = [], {k: root(k) for k in ("D", "S", "P")}, set()
-    for key, top in roots.items():
-        if top in done:
-            continue
-        done.add(top)
-        others = {r for k, r in roots.items() if k != key and r != top}
-        for dirpath, dirnames, filenames in os.walk(top):
+            t = os.path.realpath(root(pl[0]))
+            pats[t].append((pl[0], pl[1]))
+    out, problems = [], []
+    for top, keys in tops.items():
+        others = {t for t in tops if t != top}
+        for dirpath, dirnames, filenames in os.walk(top, onerror=lambda e: problems.append(f"{shown(e.filename)}: {e.strerror}")):
             d = pathlib.Path(dirpath)
             rel_d = d.relative_to(top)
             depth = len(rel_d.parts)
-            if key == "P" and depth == 0:
+            if "P" in keys and depth == 0:
                 dirnames[:] = [n for n in dirnames if n.startswith("_")]
-            dirnames[:] = [n for n in dirnames if d / n not in others]  # another root is walked as itself
-            if depth >= SCAN_DEPTH:
+            own = [p for k, p in pats[top]
+                   # `P/*/...` names a program's files; the `_` directories beside the programs need their own pattern.
+                   if not (k == "P" and (rel_d.parts[:1] or ("",))[0].startswith("_") and p.startswith("*/"))]
+            # Another root is walked as itself; a directory a `dir/*` pattern names whole is not entered.
+            dirnames[:] = [n for n in dirnames if os.path.realpath(d / n) not in others
+                           and str(rel_d / n if depth else pathlib.Path(n)) + "/*" not in own]
+            if depth >= SCAN_DEPTH and dirnames:
+                problems.append(f"{shown(d)}: deeper than {SCAN_DEPTH} levels, not walked")
                 dirnames[:] = []
             for n in sorted(filenames):
                 rel = str(rel_d / n) if depth else n
-                # `P/*/...` names a program's files; the `_` directories beside the programs need their own pattern.
-                own = [p for p in pats.get(key, ()) if not (key == "P" and rel.startswith("_") and p.startswith("*/"))]
-                if any(fnmatch.fnmatchcase(rel, p) for p in own):
+                if any(fnmatch.fnmatchcase(rel, p) for p in own) or _scratch(n, filenames):
                     continue
-                if n.startswith("."):
-                    continue  # a writer's temporary (mkstemp) beside its file
                 out.append(shown(d / n))
-    return out
+    return out, problems
+
+
+TEMP_PREFIXES = (".card-watch-", ".self-check-", ".stuck-", ".settings-")
+
+
+def _scratch(name, siblings):
+    """A writer's temporary (mkstemp names it `.<file>.` or with its own prefix), or Finder's folder file."""
+    if name == ".DS_Store" or name.startswith(TEMP_PREFIXES):
+        return True
+    return name.startswith(".") and any(name[1:].startswith((s + ".", s + "-")) for s in siblings if not s.startswith("."))
 
 
 def flow(sessions=None, now=None, stores=None):
@@ -186,15 +209,15 @@ def flow(sessions=None, now=None, stores=None):
                 "facts": s.facts, "writers": producers_of(s), "writer_fns": list(s.writers), "readers": list(s.readers),
                 "stale_after": s.stale_s, "rule": s.rule, "feature": s.feature,
                 "drawn": any(r in DRAWN for r in s.facts.values())}
+        off = bool(s.feature) and not config_has(s.feature, cfg)
         if s.path.startswith("ext:"):
-            node.update(path=s.path, exists=True, state="outside")
+            node.update(path=s.path, exists=not off, state=registry.OFF if off else "outside")
         elif s.path.startswith("db:"):
             node.update(path=s.path, exists=False, state=registry.NOT_YET)
         else:
             p = root(pl[0]) / pl[1]
             node.update(path=shown(p), **stat_node(p, s.stale_s, now))
             if node["state"] is None:
-                off = s.feature and not config_has(s.feature, cfg)
                 node["state"] = registry.OFF if off else registry.NOT_YET
         if s.id == "reports":
             node.update(report_files(sessions, now))
@@ -219,12 +242,14 @@ def flow(sessions=None, now=None, stores=None):
         for f, role in s.facts.items():
             if role == registry.CANONICAL:
                 canon.setdefault(f, []).append(s.id)
-    conflicts = [{"fact": f, "stores": ids, "known": registry.DUAL_CANONICAL.get(f)}
-                 for f, ids in sorted(canon.items()) if len(ids) > 1]
+    known = lambda f, ids: (registry.DUAL_CANONICAL.get(f) or ((), None))[1] if set(  # noqa: E731
+        (registry.DUAL_CANONICAL.get(f) or ((),))[0]) == set(ids) else None
+    conflicts = [{"fact": f, "stores": ids, "known": known(f, ids)} for f, ids in sorted(canon.items()) if len(ids) > 1]
+    unread, problems = unregistered(stores)
     return {"generated_at": fleet.utcnow().isoformat(timespec="seconds").replace("+00:00", "Z"),
             "producers": [{"id": k, "label": v[0]} for k, v in registry.PRODUCERS.items()],
             "consumers": consumers, "stores": out, "states": states, "conflicts": conflicts,
-            "unread": unregistered(stores)}
+            "unread": unread, "scan_problems": problems}
 
 
 def report_files(sessions, now):

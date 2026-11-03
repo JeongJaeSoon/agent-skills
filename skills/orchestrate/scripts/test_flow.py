@@ -29,6 +29,11 @@ report.write_text("# c\n")
 (tmp / "programs" / "_locks").mkdir()
 (tmp / "programs" / "_locks" / "stray.txt").write_text("")
 (tmp / "programs" / "a" / "notes-by-hand.md").write_text("")  # a lead's own file: registered as a hand file
+(tmp / "state" / ".stray.json").write_text("{}")  # a hidden file no writer makes is still unregistered
+(d / ".board.json.abc123").write_text("")  # a write_atomic temporary beside board.json is not
+(d / "board.json").write_text("{}")
+(tmp / "state" / "card-watch").mkdir()
+(tmp / "state" / "card-watch" / "x.json").mkdir()  # a directory where a card-watch file belongs
 
 rep = flow.flow([{"report": {"path": str(report)}}, {"report": None}, {}])
 by = {s["id"]: s for s in rep["stores"]}
@@ -41,7 +46,9 @@ assert by["orca"]["state"] == "outside" and by["github"]["writers"] == ["outside
 assert by["progledger"]["entries"] == 1, by["progledger"]  # the */ledger.jsonl glob
 assert by["roles"]["entries"] == 1 and by["roles"]["writers"] == ["hooks"], by["roles"]
 assert by["reports"]["entries"] == 1 and by["reports"]["files"][0]["age"] is not None
-assert sorted(pathlib.Path(p).name for p in rep["unread"]) == ["janitor.json", "leftover.json", "stray.txt"], rep["unread"]
+assert sorted(pathlib.Path(p).name for p in rep["unread"]) == [".stray.json", "janitor.json", "leftover.json", "stray.txt"], rep["unread"]
+assert by["cardwatch"]["state"] == "error" and "directory" in by["cardwatch"]["error"], by["cardwatch"]
+assert by["notes"]["state"] == "off", by["notes"]  # reflect.ledger is not set: an outside source switched off
 cons = {c["id"]: c for c in rep["consumers"]}
 assert cons["mentions"]["state"] == "off" and cons["mentions"]["starved"], cons["mentions"]
 assert not cons["page"]["starved"] and not cons["brief"]["starved"], cons["brief"]

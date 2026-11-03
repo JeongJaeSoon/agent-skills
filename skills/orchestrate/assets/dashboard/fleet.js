@@ -886,7 +886,8 @@ function fleetFlow() {
       <div class="card"><div class="card-head"><h3>Two canonical stores</h3><span class="aside">${rep.conflicts.length}</span></div>
         <ul class="rows">${rep.conflicts.map((c) => `<li><span class="mono">${esc(c.fact)}</span>: ${esc(c.stores.join(", "))}${c.known ? ` <span class="muted">— ${esc(c.known)}</span>` : ""}</li>`).join("") || '<li class="muted">Every fact has one canonical store.</li>'}</ul></div>
       <div class="card"><div class="card-head"><h3>Not registered</h3><span class="aside">${rep.unread.length}</span></div>
-        <ul class="rows">${rep.unread.map((p) => `<li class="mono">${esc(p)}</li>`).join("") || '<li class="muted">Every file is in the registry.</li>'}</ul></div>
+        <ul class="rows">${rep.unread.map((p) => `<li class="mono">${esc(p)}</li>`).join("") || '<li class="muted">Every file is in the registry.</li>'}
+          ${(rep.scan_problems || []).map((p) => `<li class="muted">not checked: <span class="mono">${esc(p)}</span></li>`).join("")}</ul></div>
       <div class="card"><div class="card-head"><h3>Report files</h3><span class="aside">${reports ? reports.entries : 0}</span></div>
         <ul class="rows">${reports && reports.files.length ? reports.files.map((f) => `<li><span class="mono">${esc(f.path)}</span> <span class="muted">${f.age != null ? rel(new Date(Date.now() - f.age * 1000).toISOString()) : "missing"}</span></li>`).join("")
           : '<li class="muted">No session names a brief with a REPORT line.</li>'}</ul></div></div>

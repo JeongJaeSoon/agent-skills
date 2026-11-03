@@ -123,13 +123,13 @@ STORES = [
     Store("reports", "ext:card-report", {"card.milestone": CANONICAL}, ("ext:cards",), ("fleet", "brief"),
           rule="a card's own report: the file its brief names, else its newest milestone message to its Run"),
     # -- configuration
-    Store("config", "C/agent-skills.json", {"config.skills": CANONICAL}, ("ext:human", "setup:write", "setup:main"),
+    Store("config", "C/agent-skills.json", {"config.skills": CANONICAL}, ("ext:human", "setup:main"),
           ("skillsrc",), rule="per-skill settings; a missing key turns a feature off"),
     Store("settings", "C/settings.json", {"config.claude": CANONICAL},
-          ("ext:human", "setup:write", "setup:main", "bootstrap:main", "migrate:main", "config_emit:run",
+          ("ext:human", "setup:main", "bootstrap:main", "migrate:main", "config_emit:run",
            "config_emit:main", "automode_rule:main"), ("reorient",), rule="Claude Code settings, through emitted scripts"),
-    Store("settingsbak", "C/settings.json.bak-*", {"config.claude": BACKUP}, ("bootstrap:main", "migrate:main"),
-          ("nobody",)),
+    Store("configbak", "C/*.bak-*", {"config.claude": BACKUP, "config.skills": BACKUP},
+          ("bootstrap:main", "migrate:main", "setup:write"), ("nobody",), rule="a settings file before setup changed it"),
     Store("fleetcfg", "K/dashboard/config.json", {"config.fleet": CANONICAL}, ("ext:human",), ("fleet",)),
     Store("usagecfg", "K/skill-usage.json", {"config.rare_skills": CANONICAL}, ("ext:human",), ("skillspage",)),
     # -- D: the fleet state
@@ -330,23 +330,42 @@ OUTSIDE = {
 }
 
 # Facts with two canonical stores on main today. Each is a known defect a later PR removes; a new one fails check().
+# fact -> (the stores allowed to be canonical for it, why). A third store, or a different pair, fails check().
 DUAL_CANONICAL = {
-    "work.unit": "board doing lines and leads re-type Orca's cards and leads by hand (SSOT design §5 A, PR 4b)",
-    "card.linked_pr": "board rows' --pr re-types a card's PR by hand (SSOT design §5 C, PR 4b)",
-    "program.config": "the program note repeats program.json and `orch set` mirrors it by hand (SSOT design §5 I, PR 8)",
+    "work.unit": (("orca", "board"), "board doing lines and leads re-type Orca's cards and leads by hand "
+                                     "(SSOT design §5 A, PR 4b)"),
+    "card.linked_pr": (("orca", "board"), "board rows' --pr re-types a card's PR by hand (SSOT design §5 C, PR 4b)"),
+    "program.config": (("notes", "program"), "the program note repeats program.json and `orch set` mirrors it by "
+                                            "hand (SSOT design §5 I, PR 8)"),
 }
 TEMP = ("*.tmp", "*.tmp.*", ".*.tmp")
+# The directory name each root has by default, the parent a write's path names for a file at the root's top.
+ROOT_DIRS = {"D": {"dashboard"}, "S": {"agent-skills"}, "P": {"programs"}, "C": {".claude"}, "K": {"agent-skills"},
+             "X": {"state"}, "H": set()}
 
 
 def _base(pattern):
     return pattern.rstrip("/").rsplit("/", 1)[-1]
 
 
+def _either(a, b):
+    return fnmatch.fnmatchcase(a, b) or fnmatch.fnmatchcase(b, a)
+
+
 def _matches(target, store):
+    """A write's `parent/name` against a store's pattern: the name always, the parent when the write names one."""
     if store.path.startswith(("ext:", "db:")):
         return False
-    t, s = _base(target), _base(store.path)
-    return fnmatch.fnmatchcase(t, s) or fnmatch.fnmatchcase(s, t)
+    t = target.split("/")
+    root, _, rel = store.path.partition("/")
+    s = rel.split("/")
+    if not _either(t[-1], s[-1]):
+        return False
+    if len(t) < 2 or t[0] in ("~", "*", ""):
+        return True
+    if len(s) >= 2:
+        return _either(t[0], s[-2])
+    return t[0] in ROOT_DIRS.get(root, set())
 
 
 def _broad(store):
@@ -393,17 +412,28 @@ def check(stores=None, writes=None, dual=None, modules=None):
             if role in (CANONICAL, HAND):  # a hand file is its own source
                 canon[f].append(s.id)
     for f, where in sorted(canon.items()):
-        if len(where) > 1 and f not in dual:
+        if len(where) > 1 and set(where) != set(dual.get(f, ((),))[0]):
             bad("dual", f, f"canonical in {', '.join(where)}")
         elif not where and any(s.facts.get(f) != REMOVED for s in stores if f in s.facts):
             bad("dual", f, "no canonical store")
     for f in sorted(set(dual) - {f for f, w in canon.items() if len(w) > 1}):
         bad("registry", f, "listed in DUAL_CANONICAL but has one canonical store now: drop it from the list")
 
+    # A writer the registry names must write that store where the scan can read the path.
+    by_writer = {}
+    for w in writes:
+        by_writer.setdefault(w.writer, []).append(w)
+    for s in stores:
+        for name in s.writers:
+            sites = by_writer.get(name)
+            if sites and all(w.targets for w in sites) and not any(
+                    _matches(t, s) for w in sites for t in w.targets if not _temp(t)):
+                bad("registry", s.id, f"writer {name} writes no file this store names")
+
     for w in writes:
         if _outside(w.writer):
             continue
-        names = [t for t in w.targets if not any(fnmatch.fnmatchcase(_base(t), p) for p in TEMP)]
+        names = [t for t in w.targets if not _temp(t)]
         if w.targets and not names:
             continue  # a temporary beside the file; the rename that follows is the write
         if not names:
@@ -486,6 +516,18 @@ class _Module:
                                         self.attrs.setdefault(t.attr, a.value)
 
 
+UNKNOWN = ast.Constant(value=None)
+
+
+def _tail(path):
+    """At most the last two components: the scan matches a file by its name and the directory it sits in."""
+    return "/".join(path.rstrip("/").split("/")[-2:])
+
+
+def _temp(path):
+    return any(fnmatch.fnmatchcase(path.rsplit("/", 1)[-1], p) for p in TEMP)
+
+
 def _params(fn):
     a = fn.args
     return [x.arg for x in a.posonlyargs + a.args + a.kwonlyargs]
@@ -503,26 +545,30 @@ def _default(fn, i):
 class _Scan:
     def __init__(self, modules):
         self.mods = modules  # name -> _Module
-        self.sinks = {}      # (module, qualname) -> index of the parameter it writes to
+        self.sinks = {}      # (module, qualname) -> indexes of the parameters it writes to
         self.kw_sinks = set()  # qualnames writing each **kwargs key as a file name (Fleet.save)
 
     # -- resolving a target expression to file-name patterns
 
     def resolve(self, mod, fn, expr, seen=()):
-        """What expr names: file-name patterns (str) and the enclosing function's parameters (int index).
-        () when the code does not say."""
+        """What expr names: path patterns (str, at most `parent/name`) and the enclosing function's parameters
+        (int index). () when the code does not say."""
         if id(expr) in seen:
             return ()
         seen = seen + (id(expr),)
         r = lambda e: self.resolve(mod, fn, e, seen)  # noqa: E731
         if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
-            return (expr.value,)
+            return (_tail(expr.value),)
         if isinstance(expr, ast.JoinedStr):
-            return ("".join(v.value if isinstance(v, ast.Constant) else "*" for v in expr.values),)
+            return (_tail("".join(v.value if isinstance(v, ast.Constant) else "*" for v in expr.values)),)
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
-            return r(expr.right)
+            right = r(expr.right)
+            left = [x for x in r(expr.left) if isinstance(x, str)]
+            if not left:
+                return right
+            return tuple(dict.fromkeys(x if not isinstance(x, str) else _tail(f"{lf}/{x}") for x in right for lf in left))
         if isinstance(expr, ast.Name):
-            local = self._local(fn, expr.id)
+            local = self._local(fn, expr.id, expr.lineno)
             got = r(local) if local is not None else ()
             if got:
                 return got
@@ -544,12 +590,21 @@ class _Scan:
             if isinstance(f, ast.Attribute) and f.attr in ("with_name", "with_suffix") and expr.args:
                 base = r(f.value)
                 params = tuple(x for x in base if isinstance(x, int))
+                arg = tuple(x for x in r(expr.args[0]) if isinstance(x, str))
+                parent = [b.rsplit("/", 1)[0] + "/" for b in base if isinstance(b, str) and "/" in b] or [""]
+                if f.attr == "with_name":
+                    if arg and not all(_temp(a) for a in arg):
+                        return tuple(_tail(p + a) for a in arg for p in parent)
+                    return params or tuple(_tail(p + a) for a in arg for p in parent)
                 if params:
-                    return params  # a temporary beside the parameter's file: the write is the parameter's
-                tail = tuple(x for x in r(expr.args[0]) if isinstance(x, str))
-                if f.attr == "with_name" or not tail:
-                    return tail
-                return tuple(b.rsplit(".", 1)[0] + t for b in base for t in tail)
+                    # A temporary beside the parameter's file is the parameter's write; another suffix is unknown.
+                    return params if arg and all(_temp("x" + a) for a in arg) else ()
+                if not arg:
+                    return ()
+                return tuple(b.rsplit(".", 1)[0] + t for b in base if isinstance(b, str) for t in arg)
+            if isinstance(f, ast.Attribute) and f.attr == "get" and isinstance(f.value, ast.Attribute) \
+                    and f.value.attr == "environ":
+                return r(expr.args[1]) if len(expr.args) > 1 else ()  # os.environ.get(KEY, default)
             if isinstance(f, ast.Attribute) and f.attr in ("expanduser", "resolve", "absolute"):
                 return r(f.value)
             if (isinstance(f, ast.Attribute) and f.attr == "Path") or (isinstance(f, ast.Name) and f.id == "Path"):
@@ -568,23 +623,26 @@ class _Scan:
         return ()
 
     @staticmethod
-    def _local(fn, name):
+    def _local(fn, name, line):
+        """The value of the last assignment to name in fn on a line before `line` (a branch is not followed)."""
         if fn is None:
             return None
+        best = None
         for node in ast.walk(fn):
+            values = []
             if isinstance(node, ast.Assign):
                 for t in node.targets:
                     if isinstance(t, ast.Name) and t.id == name:
-                        return node.value
+                        values.append(node.value)
                     if isinstance(t, ast.Tuple) and isinstance(node.value, ast.Tuple):
-                        for e, v in zip(t.elts, node.value.elts):
-                            if isinstance(e, ast.Name) and e.id == name:
-                                return v
+                        values += [v for e, v in zip(t.elts, node.value.elts) if isinstance(e, ast.Name) and e.id == name]
             if isinstance(node, (ast.With, ast.AsyncWith)):
-                for item in node.items:
-                    if isinstance(item.optional_vars, ast.Name) and item.optional_vars.id == name:
-                        return None
-        return None
+                values += [ast.Constant(value=None, lineno=node.lineno) for item in node.items
+                           if isinstance(item.optional_vars, ast.Name) and item.optional_vars.id == name]
+            for v in values:
+                if node.lineno < line and (best is None or node.lineno >= best[0]):
+                    best = (node.lineno, v)
+        return best[1] if best else None
 
     def _callee(self, mod, f):
         """(module, def) for a call to a function this scan knows: bare name, module.name or self.name."""
@@ -609,39 +667,55 @@ class _Scan:
 
     # -- finding writes
 
-    def target_of(self, mod, call):
-        """The path expression a call writes to, or None when the call writes nothing."""
+    def targets_of(self, mod, call):
+        """The path expressions a call writes to; [] when it writes nothing. UNKNOWN stands for a path the call
+        passes in a way the scan cannot read (*args, a missing argument)."""
         f = call.func
         name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+        recv = f.value.id if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) else None
+        arg = lambda i, *kw: call.args[i] if len(call.args) > i else next(  # noqa: E731
+            (k.value for k in call.keywords if k.arg in kw), None)
         if name in WRITE_METHODS and isinstance(f, ast.Attribute):
-            return f.value
-        if name == "open" and isinstance(f, ast.Name) and call.args and _writes_mode(_mode(call, 1)):
-            return call.args[0]
-        if name == "open" and isinstance(f, ast.Attribute) and _writes_mode(_mode(call, 0)):
-            if not (isinstance(f.value, ast.Name) and f.value.id == "os"):
-                return f.value
-        if name == "open" and isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "os":
-            flags = {n.attr for n in ast.walk(call.args[1]) if isinstance(n, ast.Attribute)} if len(call.args) > 1 else set()
-            if flags & OPEN_FLAGS:
-                return call.args[0]
+            return [f.value]
+        if name == "open" and recv == "os":
+            flags = {n.attr for n in ast.walk(arg(1, "flags") or ast.Constant(0)) if isinstance(n, ast.Attribute)}
+            return [arg(0, "path")] if flags & OPEN_FLAGS and arg(0, "path") is not None else []
+        if name == "open" and (isinstance(f, ast.Name) or recv in ("io", "codecs", "builtins")):
+            mode = arg(1, "mode")
+            if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and _writes_mode(mode.value):
+                return [arg(0, "file", "filename") or UNKNOWN]
+            return []
+        if name == "open" and isinstance(f, ast.Attribute):  # Path.open(mode)
+            mode = arg(0, "mode")
+            return [f.value] if isinstance(mode, ast.Constant) and isinstance(mode.value, str) and _writes_mode(mode.value) else []
         if name in ("replace", "rename") and isinstance(f, ast.Attribute):
-            if isinstance(f.value, ast.Name) and f.value.id == "os" and len(call.args) == 2:
-                return call.args[1]
+            if recv == "os" and len(call.args) == 2:
+                return [call.args[1]]
             if len(call.args) == 1 and not call.keywords:  # Path.replace(target); str.replace takes two
-                return call.args[0]
-        if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "shutil" \
-                and name in ("copy", "copy2", "copyfile", "copytree", "move") and len(call.args) >= 2:
-            return call.args[1]
+                return [call.args[0]]
+        if recv == "shutil" and name in ("copy", "copy2", "copyfile", "copytree", "move"):
+            return [arg(1, "dst") or UNKNOWN]
         key = self._callee_key(mod, f)
-        if key in self.sinks:
-            self.called.add(key)
-            i = self.sinks[key]
-            fn = self.mods[key[0]].funcs[key[1]]
-            if len(call.args) > i:
-                return call.args[i]
-            # No argument: the default, which the writer's own site already records.
-            return next((k.value for k in call.keywords if k.arg == _params(fn)[i]), None)
-        return None
+        if key not in self.sinks:
+            return []
+        self.called.add(key)
+        fn = self.mods[key[0]].funcs[key[1]]
+        params = _params(fn)
+        # A method called on an object gets that object as its first parameter.
+        shift = 1 if "." in key[1] and params[:1] in (["self"], ["cls"]) and isinstance(f, ast.Attribute) else 0
+        if any(isinstance(a, ast.Starred) for a in call.args) or any(k.arg is None for k in call.keywords):
+            return [UNKNOWN]
+        out = []
+        for i in sorted(self.sinks[key]):
+            j = i - shift
+            given = call.args[j] if 0 <= j < len(call.args) else next(
+                (k.value for k in call.keywords if k.arg == params[i]), None)
+            if given is not None:
+                out.append(given)
+            elif _default(fn, i) is None:
+                out.append(UNKNOWN)
+            # else: the default, which the writer's own site already records
+        return out
 
     def kw_targets(self, call):
         f = call.func
@@ -654,13 +728,13 @@ class _Scan:
     def writes(self):
         # A function that writes to its own parameter passes the write to its callers; repeat until nothing changes.
         while True:
-            before = (dict(self.sinks), set(self.kw_sinks))
-            self.called = set()
+            before = ({k: set(v) for k, v in self.sinks.items()}, set(self.kw_sinks))
+            self.called, self.defaulted = set(), set()
             out = list(self._walk())
             if (self.sinks, self.kw_sinks) == before:
                 break
         # A writer only ever called indirectly (passed as a function) keeps its write, as one the code does not name.
-        for m, q in sorted(set(self.sinks) - self.called):
+        for m, q in sorted(set(self.sinks) - self.called - self.defaulted):
             fn = self.mods[m].funcs.get(q)
             out.append(Write(m, q, fn.lineno if fn else 0, ()))
         return out
@@ -679,28 +753,30 @@ class _Scan:
                         if kws:
                             yield Write(mod.name, qual, node.lineno, kws)
                             continue
-                        expr = self.target_of(mod, node)
-                        if expr is None:
-                            continue
-                        got = self.resolve(mod, fn, expr)
-                        names = tuple(x for x in got if isinstance(x, str))
-                        for i in (x for x in got if isinstance(x, int)):
-                            # The function writes where its caller says: each call becomes a write site.
-                            self.sinks[(mod.name, qual)] = i
-                            default = _default(fn, i)
-                            if not names and default is not None:
-                                names = tuple(x for x in self.resolve(mod, None, default) if isinstance(x, str))
-                            if not names:
-                                break
-                        else:
-                            if not got and fn is not None and fn.args.kwarg and isinstance(expr, ast.BinOp) and \
-                                    isinstance(expr.right, ast.Name) and self._is_kwarg_key(fn, expr.right.id):
-                                self.kw_sinks.add(qual)
-                                continue
-                            yield Write(mod.name, qual, node.lineno, names)
-                            continue
-                        if names:
-                            yield Write(mod.name, qual, node.lineno, names)
+                        for expr in self.targets_of(mod, node):
+                            yield from self._site(mod, qual, fn, node, expr)
+
+    def _site(self, mod, qual, fn, node, expr):
+        got = self.resolve(mod, fn, expr)
+        names = tuple(x for x in got if isinstance(x, str))
+        params = [x for x in got if isinstance(x, int)]
+        if params:
+            # The function writes where its caller says: each call becomes a write site. A parameter's default is
+            # written here when a caller passes none.
+            self.sinks.setdefault((mod.name, qual), set()).update(params)
+            for i in params:
+                default = _default(fn, i)
+                if default is not None:
+                    names += tuple(x for x in self.resolve(mod, None, default) if isinstance(x, str))
+            if names:
+                self.defaulted.add((mod.name, qual))
+                yield Write(mod.name, qual, node.lineno, tuple(dict.fromkeys(names)))
+            return
+        if not got and fn is not None and fn.args.kwarg and isinstance(expr, ast.BinOp) and \
+                isinstance(expr.right, ast.Name) and self._is_kwarg_key(fn, expr.right.id):
+            self.kw_sinks.add(qual)
+            return
+        yield Write(mod.name, qual, node.lineno, names)
 
     @staticmethod
     def _is_kwarg_key(fn, name):
