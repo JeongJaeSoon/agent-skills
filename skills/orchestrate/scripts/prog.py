@@ -223,7 +223,10 @@ def run(cmd, check=True):
     except subprocess.TimeoutExpired:
         r = subprocess.CompletedProcess(cmd, 124, "", f"timed out after {RUN_TIMEOUT}s")
     if check and r.returncode != 0:
-        sys.exit(f"{' '.join(cmd[:4])} … failed ({r.returncode}): {r.stderr.strip()[:400]}")
+        # Orca 1.4.240 puts its error, "Unknown flag --full" included, on stdout with stderr empty; with_full
+        # reads this message to decide whether to retry without the flag.
+        said = " | ".join(s.strip()[:400] for s in (r.stderr, r.stdout) if s and s.strip())
+        sys.exit(f"{' '.join(cmd[:4])} … failed ({r.returncode}): {said}")
     return r
 
 
