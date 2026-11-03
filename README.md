@@ -47,7 +47,7 @@ Full setup only:
 Optional:
 
 - [Orca](https://github.com/stablyai/orca), for the multi-session skills and scheduled rounds
-- Linear or Jira, for the tracker skills (Linear unless configured otherwise)
+- Linear, Jira or a local Markdown folder (one file per ticket, readable as an Obsidian Kanban board), for the tracker skills (Linear unless configured otherwise)
 - Obsidian or a plain Markdown folder, for the notes skills
 - tailscale and caddy, for `preview-watch` and `share-server`
 
@@ -109,7 +109,7 @@ When each skill fires, what it does and the files it ships are in the [skill cat
 | [One project](docs/skills.en.md#one-project-several-orca-workers) | `orchestrate`, `measure-delivery` | Land many tickets in parallel on Orca workers, then measure how it actually went |
 | [One machine](docs/skills.en.md#one-machine) | `reap-resources`, `secure-fill`, `tune-automode`, `skills-config`, `setup-pc` | Clean up leftovers, fill secrets the agent never sees, draft autoMode rules, change config keys, install and update |
 | [Chat and reviews](docs/skills.en.md#chat-and-reviews) | `watch-mentions`, `watch-prs` | Turn chat and PRs that concern you into work |
-| [Adapters](docs/skills.en.md#adapters) | `use-tracker`, `use-notes` | Linear and Jira tickets, Obsidian and Markdown notes |
+| [Adapters](docs/skills.en.md#adapters) | `use-tracker`, `use-notes` | Linear, Jira and Markdown-folder tickets, Obsidian and Markdown notes |
 | [Writing](docs/skills.en.md#writing) | `brief`, `stage`, `todo`, `map-features`, `write-plainly`, `prune-comments`, `write-skill` | Status reports, stage tables, to-do and hold queues, feature maps, plain prose, comment cleanup, skill authoring checks |
 | [pstack](docs/skills.en.md#pstack-skills-lauren-tan-mit) | `architect`, `arena`, `blast-radius`, `create-verification-skill`, `figure-it-out`, `how`, `interrogate`, `maintain-verification-skill`, `principles`, `recall`, `reflect`, `show-me-your-work`, `swarm`, `tdd`, `teach`, `why` | Design, comparison, impact analysis, verification, explanation, retrospectives |
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Ticket-tracker adapter: one CLI and one issue schema over Linear (via `orca linear`) and Jira.
+"""Ticket-tracker adapter: one CLI and one issue schema over Linear (via `orca linear`), Jira and a local
+Markdown folder (one file per ticket, one subfolder per project).
 
-    tracker.py [--adapter linear|jira] [--config PATH] list --project P [--since ISO8601] [--limit N]
+    tracker.py [--adapter linear|jira|markdown] [--config PATH] list --project P [--since ISO8601] [--limit N]
     tracker.py [...] get ID
     tracker.py [...] children [ID] [--project P]   (ID's direct children; no ID: P's top-level issues)
     tracker.py [...] create --project P --title T --body-file F [--label L ...] [--parent ID] [--related ID]
@@ -16,6 +17,7 @@ TRACKER_FIXTURES=<dir> serves list/get from <dir>/issues.json and refuses writes
 import argparse
 import base64
 import copy
+import fcntl
 import json
 import os
 import re
@@ -32,6 +34,7 @@ DEFAULT_CONFIG = {
         "linear": {"workspace": None, "review_status": None},
         "jira": {"base_url": None, "email_env": "JIRA_EMAIL", "token_env": "JIRA_API_TOKEN",
                  "issue_type": "Task", "review_status": None},
+        "markdown": {"root": None},
     },
 }
 DEFAULT_CONFIG_PATH = "~/.claude/agent-skills.json"
@@ -617,6 +620,189 @@ class JiraAdapter:
                 "state_type": review_type if target == "review" else target}
 
 
+# ---------------------------------------------------------------- markdown (local folder)
+
+# One Markdown file per ticket: <root>/<project>/<KEY>-<n>.md, KEY being the folder name in capitals.
+# The frontmatter carries the fields; the body is the description, then an optional "## Comments" section.
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+TICKET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*-\d+$")
+MD_STATE_TYPE = {"triage": "triage", "backlog": "backlog", "todo": "unstarted", "started": "started",
+                 "review": "started", "completed": "completed", "canceled": "canceled"}
+MD_KEYS = ("id", "title", "state", "labels", "parent", "related", "assignee", "priority",
+           "created_at", "updated_at", "completed_at", "canceled_at")
+COMMENTS = "## Comments"
+
+
+def now_z():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def unlink(value):
+    """'[[ABC-1]]' (an Obsidian link) -> 'ABC-1'."""
+    return value[2:-2] if isinstance(value, str) and value.startswith("[[") and value.endswith("]]") else value
+
+
+def yaml_scalar(text):
+    """The YAML scalars this adapter and Obsidian write: JSON-style double quotes, single quotes, plain words."""
+    text = text.strip()
+    if text.startswith(("\"", "[", "{")):
+        return json.loads(text)
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("''", "'")
+    if text in ("", "null", "~"):
+        return None
+    return int(text) if re.fullmatch(r"-?\d+", text) else text
+
+
+def parse_ticket(path, text):
+    """(frontmatter dict in file order, body). Anything outside the subset above is an error naming the file."""
+    lines = text.split("\n")
+    if lines[0].strip() != "---" or "---" not in [l.strip() for l in lines[1:]]:
+        raise TrackerError(f"{path}: no YAML frontmatter between --- lines")
+    end = 1 + [l.strip() for l in lines[1:]].index("---")
+    meta, key = {}, None
+    for n, line in enumerate(lines[1:end], 2):
+        try:
+            if line.lstrip().startswith("- ") and key is not None and isinstance(meta[key], list):
+                meta[key].append(yaml_scalar(line.lstrip()[2:]))
+            elif re.match(r"^[^\s#-][^:]*:(\s|$)", line):
+                key, rest = line.split(":", 1)
+                meta[key] = [] if not rest.strip() else yaml_scalar(rest)
+            elif line.strip():
+                raise ValueError("not a 'key: value' line")
+        except ValueError as exc:
+            raise TrackerError(f"{path}: frontmatter line {n} unreadable ({exc}): {line}")
+    state = meta.get("state")
+    if state not in MD_STATE_TYPE:
+        raise TrackerError(f"{path}: state {state!r} is not one of {', '.join(MD_STATE_TYPE)}")
+    return meta, "\n".join(lines[end + 1:])
+
+
+def render_ticket(meta, body):
+    lines = ["---"]
+    for key in [k for k in MD_KEYS if k in meta] + [k for k in meta if k not in MD_KEYS]:
+        if meta[key] is not None:
+            lines.append(f"{key}: {json.dumps(meta[key], ensure_ascii=False)}")
+    return "\n".join(lines + ["---", body.lstrip("\n")])
+
+
+class MarkdownAdapter:
+    def __init__(self, cfg):
+        root = (cfg or {}).get("root")
+        if not root:
+            raise TrackerError("markdown adapter: tracker.markdown.root is not set in the config")
+        self.root = os.path.expanduser(root)
+        if not os.path.isdir(self.root):
+            raise TrackerError(f"markdown adapter: tracker.markdown.root is not a folder: {self.root}")
+
+    @staticmethod
+    def _check(value, pattern, what):
+        if not pattern.match(value or ""):
+            raise TrackerError(f"invalid {what}: {value!r}")
+        return value
+
+    def _project_dir(self, project):
+        path = os.path.join(self.root, self._check(project, NAME, "project folder name"))
+        if not os.path.isdir(path):
+            raise TrackerError(f"project folder not found: {path}")
+        return path
+
+    def _path(self, issue_id):
+        self._check(issue_id, TICKET_ID, "ticket id")
+        for project in sorted(os.listdir(self.root)):
+            path = os.path.join(self.root, project, issue_id + ".md")
+            if os.path.isfile(path):
+                return path
+        raise TrackerError(f"get {issue_id}: no {issue_id}.md under {self.root}")
+
+    def _read(self, path):
+        with open(path, encoding="utf-8") as fh:
+            return parse_ticket(path, fh.read())
+
+    def _issue(self, path):
+        meta, body = self._read(path)
+        out = issue_template()
+        out.update({k: meta.get(k) for k in out if meta.get(k) is not None})
+        out.update({
+            "id": os.path.basename(path)[:-3], "url": "file://" + urllib.parse.quote(path),
+            "state_type": MD_STATE_TYPE[meta["state"]], "labels": [str(l) for l in meta.get("labels") or []],
+            "parent": unlink(meta.get("parent")), "description": body.split(COMMENTS)[0].strip(),
+        })
+        return out
+
+    def _tickets(self, folder):
+        names = sorted(n for n in os.listdir(folder) if n.endswith(".md") and TICKET_ID.match(n[:-3]))
+        return [self._issue(os.path.join(folder, n)) for n in names]
+
+    def _all(self):
+        return [t for p in sorted(os.listdir(self.root)) if NAME.match(p) and os.path.isdir(os.path.join(self.root, p))
+                for t in self._tickets(os.path.join(self.root, p))]
+
+    def _update(self, issue_id, change):
+        """Read, change and rewrite one ticket under a lock, replacing the file whole."""
+        path = self._path(issue_id)
+        # ponytail: one lock for the whole root; per-ticket locks if many workers write at once.
+        with open(os.path.join(self.root, ".tracker.lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            meta, body = self._read(path)
+            meta, body = change(meta, body)
+            meta["updated_at"] = now_z()
+            tmp = os.path.join(os.path.dirname(path), f".{issue_id}.md.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(render_ticket(meta, body))
+            os.replace(tmp, path)
+
+    def list(self, project, since=None, limit=None):
+        return finish_list(self._tickets(self._project_dir(project)), since, limit)
+
+    def children(self, parent, project=None):
+        issues = self._tickets(self._project_dir(project)) if project else self._all()
+        return finish_list([i for i in issues if i["parent"] == parent], None, None)
+
+    def get(self, issue_id):
+        return self._issue(self._path(issue_id))
+
+    def create(self, project, title, body_file, labels=(), parent=None, related=None):
+        folder = os.path.join(self.root, self._check(project, NAME, "project folder name"))
+        os.makedirs(folder, exist_ok=True)
+        key, stamp = project.upper(), now_z()
+        meta = {"title": title, "state": "backlog", "labels": list(labels),
+                "parent": f"[[{parent}]]" if parent else None, "related": [f"[[{related}]]"] if related else None,
+                "created_at": stamp, "updated_at": stamp}
+        while True:
+            taken = [int(n[len(key) + 1:-3]) for n in os.listdir(folder) if re.fullmatch(re.escape(key) + r"-\d+\.md", n)]
+            issue_id = f"{key}-{max(taken, default=0) + 1}"
+            try:
+                # O_EXCL: two workers creating at once never get the same number.
+                fd = os.open(os.path.join(folder, issue_id + ".md"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            except FileExistsError:
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(render_ticket(dict(meta, id=issue_id), read_body(body_file)))
+            return self.get(issue_id)
+
+    def label(self, issue_id, labels):
+        self._update(issue_id, lambda m, b: (dict(m, labels=list(dict.fromkeys((m.get("labels") or []) + list(labels)))), b))
+        return {"ok": True, "op": "label", "id": issue_id, "added": list(labels)}
+
+    def comment(self, issue_id, body_file):
+        text = read_body(body_file).strip()
+
+        def add(meta, body):
+            head = body.rstrip("\n") + ("" if COMMENTS in body else f"\n\n{COMMENTS}")
+            return meta, f"{head}\n\n### {now_z()}\n\n{text}\n"
+        self._update(issue_id, add)
+        return {"ok": True, "op": "comment", "id": issue_id}
+
+    def transition(self, issue_id, target):
+        current = self.get(issue_id)
+        if already_there(current, target, target):
+            return unchanged(issue_id, current)
+        closed = {f"{target}_at": now_z()} if target in ("completed", "canceled") else {}
+        self._update(issue_id, lambda m, b: (dict(m, state=target, **closed), b))
+        return {"ok": True, "op": "transition", "id": issue_id, "state": target, "state_type": MD_STATE_TYPE[target]}
+
+
 # ---------------------------------------------------------------- CLI
 
 def make_adapter(name, config):
@@ -628,12 +814,14 @@ def make_adapter(name, config):
         return LinearAdapter(tracker_cfg.get("linear"))
     if name == "jira":
         return JiraAdapter(tracker_cfg.get("jira"))
-    raise TrackerError(f"unknown tracker adapter: {name!r} (expected linear or jira)")
+    if name == "markdown":
+        return MarkdownAdapter(tracker_cfg.get("markdown"))
+    raise TrackerError(f"unknown tracker adapter: {name!r} (expected linear, jira or markdown)")
 
 
 def build_parser():
-    p = argparse.ArgumentParser(prog="tracker.py", description="Ticket-tracker adapter (Linear, Jira).")
-    p.add_argument("--adapter", choices=["linear", "jira"], help="override tracker.adapter from the config")
+    p = argparse.ArgumentParser(prog="tracker.py", description="Ticket-tracker adapter (Linear, Jira, Markdown).")
+    p.add_argument("--adapter", choices=["linear", "jira", "markdown"], help="override tracker.adapter from the config")
     p.add_argument("--config", help=f"config path (default {DEFAULT_CONFIG_PATH})")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("list")

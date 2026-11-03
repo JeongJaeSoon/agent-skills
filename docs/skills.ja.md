@@ -252,7 +252,7 @@ PR を受け持つスキルとマージする主体:
   - 完了条件は上位チケットの本文（`✅ 완료 조건`、`🚫 범위 밖`、`⏸️ 보류`）に、親のないチケットは受け入れ条件に置きます。NOW に分類したものだけがチケットになります。
   - follow-up の形式は、`follow-up` ラベル、1行目の `파생: <ID> · 원인: <분류>`（派生元: <ID> · 原因: <分類>）、2行目の `완료 조건: <항목>`（完了条件: <項目>）、related relation です。
   - チケットの本文は、信頼しないデータとして扱います。
-- **同梱:** `scripts/tracker.py`（標準ライブラリだけを使う Linear・Jira のアダプター、fixture モード付き）、`references/linear.md`、`references/jira.md`。
+- **同梱:** `scripts/tracker.py`（標準ライブラリだけを使う Linear・Jira・ローカル Markdown フォルダーのアダプター、fixture モード付き）、`references/linear.md`、`references/jira.md`、`references/markdown.md`。
 
 ### use-notes (旧名 `use-obsidian`)
 - **使う場面:** 設計文書、worklog、プログラムノートを読み書きするとき。「노트에 기록해줘」（ノートに記録して）もここに来ます。
@@ -566,7 +566,7 @@ PR を受け持つスキルとマージする主体:
 | モデル | 役割別のモデル規則 | ホストの設定またはユーザーの選択 |
 | 独立レビュー | 複数の観点 | 実装者と独立したレビューアー。モデル系統の制限なし |
 | プロジェクト運営 | orchestrate、autopilot、shipping のプレイブックと `orch.ts`（bun、TSV の台帳） | `orchestrate` スキル、`orch`（Python、JSONL の台帳）、着地ゲート、専有レーン、main ガーディアン、QA リード、ダッシュボード |
-| チケット・ノート | 前提なし | `use-tracker`（Linear、Jira）、`use-notes`（Obsidian、Markdown） |
+| チケット・ノート | 前提なし | `use-tracker`（Linear、Jira、Markdown）、`use-notes`（Obsidian、Markdown） |
 | 権限 | Cursor の設定 | `hooks/guard.py` が代わりに判定 |
 | 言語 | 英語、unslop の文体ルール | スキル本文は英語、文書・チケット・PR は韓国語。文体は `write-plainly`（韓国語・英語） |
 

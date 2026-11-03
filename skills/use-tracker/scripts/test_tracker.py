@@ -607,6 +607,113 @@ class ConfigAndFixtures(unittest.TestCase):
         self.assertEqual(self.env.orca_calls(), [])
 
 
+class MarkdownCli(unittest.TestCase):
+    """The markdown adapter: one file per ticket under <root>/<project>/, state in the frontmatter."""
+
+    def setUp(self):
+        self.env = Env()
+        self.root = os.path.join(self.env.tmp.name, "vault")
+        os.makedirs(os.path.join(self.root, "abc"))
+        self.env.config({"tracker": {"adapter": "markdown", "markdown": {"root": self.root}}})
+        self.body = self.env.file("body.md", "## Done when\n- [ ] it works\n")
+
+    def tearDown(self):
+        self.env.close()
+
+    def ok(self, *argv):
+        proc, out = self.env.run(*argv)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return out
+
+    def fail(self, *argv):
+        proc, _ = self.env.run(*argv)
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        return proc.stderr
+
+    def path(self, *parts):
+        return os.path.join(self.root, *parts)
+
+    def read(self, *parts):
+        with open(self.path(*parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    def write(self, rel, text):
+        with open(self.path(rel), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def test_create_get_list_children(self):
+        one = self.ok("create", "--project", "abc", "--title", "세션 만료", "--body-file", self.body, "--label", "auth")
+        self.assertEqual((one["id"], one["state"], one["state_type"], one["labels"]), ("ABC-1", "backlog", "backlog", ["auth"]))
+        self.assertEqual(one["description"], "## Done when\n- [ ] it works")
+        self.assertTrue(one["url"].startswith("file://") and one["url"].endswith("/abc/ABC-1.md"))
+        self.assertTrue(one["created_at"].endswith("Z"))
+        two = self.ok("create", "--project", "abc", "--title", "child", "--body-file", self.body, "--parent", "ABC-1",
+                      "--related", "ABC-9")
+        self.assertEqual((two["id"], two["parent"]), ("ABC-2", "ABC-1"))
+        self.assertIn('parent: "[[ABC-1]]"', self.read("abc", "ABC-2.md"))
+        self.write("abc/index.md", "# not a ticket\n")
+        self.assertEqual([i["id"] for i in self.ok("list", "--project", "abc")], ["ABC-1", "ABC-2"])
+        self.assertEqual([i["id"] for i in self.ok("list", "--project", "abc", "--limit", "1")], ["ABC-2"])
+        self.assertEqual([i["id"] for i in self.ok("children", "ABC-1")], ["ABC-2"])
+        self.assertEqual([i["id"] for i in self.ok("children", "--project", "abc")], ["ABC-1"])
+        self.assertEqual(self.ok("get", "ABC-2")["title"], "child")
+        # A new project is a new folder; numbering continues after the highest file, gaps included.
+        os.remove(self.path("abc", "ABC-1.md"))
+        self.assertEqual(self.ok("create", "--project", "abc", "--title", "t", "--body-file", self.body)["id"], "ABC-3")
+        self.assertEqual(self.ok("create", "--project", "acme", "--title", "t", "--body-file", self.body)["id"],
+                         "ACME-1")
+
+    def test_transition_label_comment(self):
+        self.ok("create", "--project", "abc", "--title", "t", "--body-file", self.body)
+        self.assertEqual(self.ok("transition", "ABC-1", "--to", "started")["state"], "started")
+        self.assertEqual(self.ok("transition", "ABC-1", "--to", "review")["state_type"], "started")
+        self.assertTrue(self.ok("transition", "ABC-1", "--to", "started")["unchanged"])
+        done = self.ok("transition", "ABC-1", "--to", "completed")
+        self.assertEqual(done["state"], "completed")
+        self.assertTrue(self.ok("transition", "ABC-1", "--to", "canceled")["unchanged"])
+        got = self.ok("get", "ABC-1")
+        self.assertTrue(got["completed_at"] and not got["canceled_at"])
+        self.ok("label", "ABC-1", "--add", "a", "--add", "b")
+        self.ok("label", "ABC-1", "--add", "a")
+        self.assertEqual(self.ok("get", "ABC-1")["labels"], ["a", "b"])
+        note = self.env.file("note.md", "PR opened: acme/app#1\n")
+        self.ok("comment", "ABC-1", "--body-file", note)
+        self.ok("comment", "ABC-1", "--body-file", note)
+        text = self.read("abc", "ABC-1.md")
+        self.assertEqual(text.count("## Comments"), 1)
+        self.assertEqual(text.count("PR opened: acme/app#1"), 2)
+        self.assertEqual(self.ok("get", "ABC-1")["description"], "## Done when\n- [ ] it works")
+
+    def test_reads_what_obsidian_writes_and_keeps_unknown_keys(self):
+        self.write("abc/ABC-7.md", "---\nid: ABC-7\ntitle: 'It''s edited'\nstate: todo\nlabels:\n  - ui\n  - \"two words\"\n"
+                   "parent: \"[[ABC-1]]\"\npriority: 2\ncreated_at: 2026-11-03T10:00:00Z\ncover: pic.png\n"
+                   "tags: []\ndue date: 2026-11-10\n담당: 나\n---\nbody\n")
+        got = self.ok("get", "ABC-7")
+        self.assertEqual((got["title"], got["state_type"], got["labels"], got["parent"], got["priority"]),
+                         ("It's edited", "unstarted", ["ui", "two words"], "ABC-1", 2))
+        self.ok("transition", "ABC-7", "--to", "started")
+        text = self.read("abc", "ABC-7.md")
+        self.assertIn('cover: "pic.png"', text)
+        self.assertIn("tags: []", text)
+        self.assertIn('due date: "2026-11-10"', text)
+        self.assertIn('담당: "나"', text)
+        self.assertTrue(text.endswith("\nbody\n"))
+
+    def test_errors_name_the_problem(self):
+        self.assertIn("../x", self.fail("create", "--project", "../x", "--title", "t", "--body-file", self.body))
+        self.assertIn("../ABC-1", self.fail("get", "../ABC-1"))
+        self.assertIn("project folder not found", self.fail("list", "--project", "nope"))
+        self.assertIn("ABC-5", self.fail("get", "ABC-5"))
+        self.write("abc/ABC-1.md", "no frontmatter\n")
+        self.assertIn("ABC-1.md", self.fail("list", "--project", "abc"))
+        self.write("abc/ABC-1.md", "---\nid: ABC-1\ntitle: t\nstate: doing\n---\n")
+        err = self.fail("get", "ABC-1")
+        self.assertIn("ABC-1.md", err)
+        self.assertIn("doing", err)
+        self.env.config({"tracker": {"adapter": "markdown"}})
+        self.assertIn("tracker.markdown.root", self.fail("list", "--project", "abc"))
+
+
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
     result = unittest.TextTestRunner(verbosity=0, stream=sys.stderr).run(suite)
