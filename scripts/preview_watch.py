@@ -15,7 +15,7 @@ No model or network API is called. One pass runs `lsof` once, and `tailscale` on
 or an entry this opened has to go. Settings live under the "preview-watch" key of ~/.claude/agent-skills.json
 (see DEFAULTS).
 """
-import fcntl, http.client, json, os, pathlib, plistlib, re, shutil, subprocess, sys, threading, time
+import contextlib, fcntl, http.client, json, os, pathlib, plistlib, re, shutil, subprocess, sys, threading, time
 from urllib.parse import urljoin, urlsplit
 
 LABEL = "io.github.jeongjaesoon.preview-watch"
@@ -26,6 +26,7 @@ STATE = STATE_DIR / "preview-watch.json"
 LOG = STATE_DIR / "preview-watch.log"
 APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 
+OFF_RULE = "serve:preview"  # turning off an entry this opened; no other cleaner shares the rule
 DEFAULTS = {
     "interval": 15,
     "ranges": [
@@ -321,10 +322,14 @@ def run_once(cfg):
         save_state(st)  # record before the next command, so a crash never leaves an entry this does not know
         log(f"open  https :{p} -> {t} ({listening[p][1]})")
     for p in closes:
-        if entries(serve_status(cli)).get(p) != st["owned"][p]:  # re-pointed since the first read
-            forget.append(p)
-            continue
-        r = ts(cli, "serve", f"--https={p}", "off")
+        with serve_lock(p) as why:
+            if why:
+                log(f"close {p} left: {why}")
+                continue
+            if entries(serve_status(cli)).get(p) != st["owned"][p]:  # re-pointed since the first read
+                forget.append(p)
+                continue
+            r = ts(cli, "serve", f"--https={p}", "off")
         if r.returncode:
             log(f"close {p} failed: {r.stderr.strip()}")
             continue
@@ -334,6 +339,30 @@ def run_once(cfg):
         del st["owned"][p]
         log(f"forget :{p} (entry changed by someone else; left as is)")
     save_state(st)
+
+
+def guard():
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "skills" / "reap-resources" / "scripts"))
+    import guard
+    return guard
+
+
+@contextlib.contextmanager
+def serve_lock(port):
+    """reap-resources' lock on one serve port, so reap-hard and this never turn the same entry off at once, and its
+    checks: an unreadable ownership file or a protect file that lists the port (or cannot be read) keeps the entry.
+    Yields why to leave it, or None."""
+    g = guard()
+    with g.hold([("serve", str(port))]) as got:
+        if not got:
+            yield g.LOCK_BUSY
+            return
+        try:
+            protect = g.read_protect(g.protect_file(), missing_ok=True)
+        except g.NoProtect as e:
+            yield str(e)
+            return
+        yield g.check_owner(OFF_RULE) or g.port(port, protect)
 
 
 def locked(blocking):
@@ -425,9 +454,10 @@ def close_owned(cli):
     live = entries(serve_status(cli)) if st["owned"] else {}
     for p, t in sorted(st["owned"].items()):
         if live.get(p) == t:
-            if ts(cli, "serve", f"--https={p}", "off").returncode:
-                failed.append(p)
-                continue
+            with serve_lock(p) as why:
+                if why or ts(cli, "serve", f"--https={p}", "off").returncode:
+                    failed.append(p)
+                    continue
             print(f"turned off https :{p}")
         del st["owned"][p]
     save_state(st)

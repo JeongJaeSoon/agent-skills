@@ -4,6 +4,7 @@
 Usage: orch patrol [--once] [--if-due] [--dry-run] [--json]
        orch patrol list [--all]
        orch patrol ack <id>... | --all
+       orch patrol timing
 
 A round reads Orca first (terminal list, worktree ps --agent-wait, worker-list over every Run), then the
 collector's state.json for what Orca does not hold (each card's parent, linked PR and PR details, the board), the
@@ -35,8 +36,13 @@ makes anything a target, and a card missing from it, in a failed round above all
 
 --if-due runs only when the last round is 25+ minutes old or the pressure level rose to warn or danger since it
 (reap-hard calls this every pass, the pressure round when its level changes). The round gives up at 120 seconds.
+
+The same file also carries the cleanup v2 fields, which nothing reads yet: schema, round, complete, sources, activity
+(parked, unknown), timings, and candidates_t (when the scans started) with candidates/reports/alerts from ../../reap-resources/scripts/candidates.py. That phase
+runs after the round lets go of its lock, within 240 seconds, is skipped at pressure danger, and writes only while the
+file still holds its round. `orch patrol timing` shows p50 and p95 per source from <state>/patrol-rounds.jsonl.
 """
-import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, signal, subprocess, sys, time
+import contextlib, datetime as dt, fcntl, hashlib, json, os, pathlib, re, secrets, signal, subprocess, sys, time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 sys.path.insert(1, str(pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"))
@@ -48,10 +54,15 @@ VERDICTS = STATE / "patrol-verdicts.json"
 MEMO = STATE / "patrol-state.json"
 SHOWN = STATE / "patrol-shown.json"
 PRESSURE = STATE / "pressure.json"
+ROUNDS = STATE / "patrol-rounds.jsonl"
 REAP_SCRIPTS = pathlib.Path(__file__).resolve().parents[2] / "reap-resources" / "scripts"
 
 DUE_S = 25 * 60
 BUDGET_S = 120
+CANDIDATE_BUDGET_S = 240
+ROUNDS_KEEP = 1000
+CURRENT = {}  # the running round's timings and failed sources, read by mark_cut
+OWN_SOURCES = ("terminals", "waits", "workers", "state", "board", "sent", "consumers")
 IDLE_MIN = dash.IDLE_MIN
 SUPERSEDE_MIN = 30
 ORPHAN_H = 24
@@ -172,8 +183,11 @@ def gather(now, deadline, memo):
     facts, notes = {"now": now}, []
 
     failed = facts["failed"] = set()
+    timings = facts["timings"] = CURRENT["timings"] = {}  # CURRENT: what a budget cut still records
+    CURRENT["failed"] = failed
 
     def take(name, fn, default, source=None):
+        t0 = time.monotonic()
         try:
             return fn()
         except (SystemExit, Exception) as e:  # one unreadable source must not cost the rest of the round
@@ -181,11 +195,20 @@ def gather(now, deadline, memo):
             if source:
                 failed.add(source)
             return default
+        except Budget:  # the source the budget cut is not read either
+            if source:
+                failed.add(source)
+            raise
+        finally:
+            if source:
+                timings[source] = round(timings.get(source, 0) + time.monotonic() - t0, 2)
 
     facts["terminals"] = take("orca terminal list", lambda: prog.orca_json("terminal", "list")["terminals"], [], "terminals")
     facts["waits"] = take("orca worktree ps --agent-wait", lambda: prog.agent_waits(strict=True), {}, "waits")
     facts["workers"] = take("orca worker-list", lambda: all_workers(deadline), [], "workers")
+    t0 = time.monotonic()
     st = fleet.read_json(fleet.state_dir() / "state.json", {}) or {}
+    timings["state"] = round(time.monotonic() - t0, 2)
     at = fleet.parse(st.get("generated_at")) if st.get("generated_at") else None
     if not at or (fleet.utcnow() - at).total_seconds() > 600:
         notes.append("collector state.json missing or 10+ min old: parents, PRs and the board not judged")
@@ -200,9 +223,12 @@ def gather(now, deadline, memo):
     facts["consumers"] = take("pressure consumers", consumers, [], "consumers") if facts["level"] in ("warn", "danger") else []
     paths = {t.get("worktreePath") for t in facts["terminals"] if t.get("worktreePath")}
     paths |= {s.get("path") for s in facts["sessions"] if s.get("path")}
+    t0 = time.monotonic()
     facts["tails"] = {p: transcript_tail(p) for p in paths if p}
+    timings["tails"] = round(time.monotonic() - t0, 2)
     # Screens only for agent terminals that wrote since the last round, and only while the budget lasts.
     seen_out, screens = memo.get("last_output") or {}, {}
+    t0 = time.monotonic()
     for t in facts["terminals"]:
         h = t.get("handle")
         if not (t.get("agentIdentity") and h) or (t.get("lastOutputAt") or 0) <= seen_out.get(h, 0):
@@ -211,6 +237,7 @@ def gather(now, deadline, memo):
             notes.append("screen reads cut short by the round's budget")
             break
         screens[h] = take(f"screen {h}", lambda: prog.read_screen(h), None)
+    timings["screens"] = round(time.monotonic() - t0, 2)
     facts["screens"] = {h: s for h, s in screens.items() if s is not None}
     facts["fresh"] = set(facts["screens"])  # screens with new output; an idle candidate's read later is not
     facts["read"] = prog.read_screen
@@ -251,7 +278,7 @@ def judge(facts, memo):
     agents = [t for t in terms if t.get("agentIdentity") and t.get("connected", True)]
     agent_paths = {t.get("worktreePath") for t in agents}
     own = owners(facts["sessions"])
-    run_paths, findings, verdicts, hints = set(), [], {}, {}
+    run_paths, findings, verdicts, hints, act = set(), [], {}, {}, {}
     failed = facts.get("failed") or set()
     fresh = facts.get("fresh", set(facts["screens"]))
     # An output mark moves only past a screen this round read; one skipped by the budget or a failed read is read next.
@@ -290,7 +317,11 @@ def judge(facts, memo):
                     prog.worker_terminal(w))  # its card stays "run": the lead decides, not a cleaner
     for path, (motion, last) in facts["tails"].items():
         if path in run_paths or not path or "workers" in failed:  # without the Run list, a worker looks like a card
+            if path and path not in run_paths:
+                act[path] = {"state": "unknown", "why": "worker-list not read: a Run worker cannot be told apart"}
             continue
+        if motion and motion.get("parked"):
+            act[path] = {"state": "parked", "why": "a ScheduleWakeup, Monitor or background command will wake it"}
         handle = next((t["handle"] for t in agents if t.get("worktreePath") == path), None)
         if path not in agent_paths:
             err = error_end(last)
@@ -303,6 +334,8 @@ def judge(facts, memo):
             verdicts[path] = "waiting"
             continue
         # Without Orca's wait list a prompt for a human cannot be ruled out: such a card stays working.
+        if "waits" in failed:
+            act[path] = {"state": "unknown", "why": "agent-wait list not read: a prompt for a human cannot be ruled out"}
         if motion and motion.get("state") == "idle" and not motion.get("parked") and "waits" not in failed:
             mins = (tnow - prog.parse_ts(motion["since"])).total_seconds() / 60
             if mins >= IDLE_MIN and not background(screen_of(facts, handle)):
@@ -381,7 +414,7 @@ def judge(facts, memo):
                 f"last finished a round {int((now - last[0]) // 60)} min ago" if last else "never ran here")
                 + ": the orchestrator restarts it (run_in_background, no pipe)", h)
     return findings, {"cards": verdicts, "hints": hints, "failed": sorted(failed), "doing_noref": doing_noref,
-                      "load": load}, new_memo
+                      "load": load, "activity": act}, new_memo
 
 
 # ---------------------------------------------------------------- the log
@@ -515,7 +548,15 @@ class Budget(BaseException):
     """The round's 120 seconds ran out. Not an Exception, so no per-source handler swallows it."""
 
 
-def round_once(dry=False, if_due=False, now=None, gather_fn=gather):
+def round_id(now=None):
+    return f"r-{int(now or time.time())}-{secrets.token_hex(3)}"
+
+
+def give_up(*_):
+    raise Budget()
+
+
+def round_once(dry=False, if_due=False, now=None, gather_fn=gather, rid=None):
     now = now or time.time()
     memo = fleet.read_json(MEMO, {}) or {}
     level, _ = pressure_level()
@@ -524,6 +565,9 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather):
     t0 = time.monotonic()
     facts, notes = gather_fn(now, time.time() + BUDGET_S, memo)
     findings, verdicts, memo2 = judge(facts, memo)
+    verdicts.update(schema=2, round=rid or round_id(now), complete=False,
+                    sources=own_sources(facts), timings=dict(facts.get("timings") or {}),
+                    candidates=[], reports=[], alerts=[])
     new, gone = write_round(findings, verdicts, dry, now, facts.get("failed") or ())
     if not dry:
         fleet.write_atomic(MEMO, json.dumps(memo2))
@@ -531,7 +575,104 @@ def round_once(dry=False, if_due=False, now=None, gather_fn=gather):
     return {"at": fleet.iso(dt.datetime.fromtimestamp(now, dt.timezone.utc)), "seconds": round(time.monotonic() - t0, 1),
             "terminals": len(agents), "workers": len(facts["workers"]), "screens": len(facts["screens"]),
             "level": facts["level"], "findings": findings, "new": [f["id"] for f in new],
-            "cleared": [r["id"] for r in gone], "verdicts": verdicts, "notes": notes, "dry_run": dry}
+            "cleared": [r["id"] for r in gone], "verdicts": verdicts, "notes": notes, "dry_run": dry,
+            "owners": {p: o for p, (_, o) in owners(facts["sessions"]).items() if p and o}}
+
+
+def mark_cut(rid, seconds):
+    """A round the budget cut short: the file keeps the last round's activity fields as before, under this round's
+    id, incomplete, with this round's own sources and timings so far, so nothing takes the earlier round's
+    candidates or timings for this one. The cut round is logged for `orch patrol timing` too."""
+    on_file = fleet.read_json(VERDICTS, {}) or {}
+    failed = CURRENT.get("failed") or set()
+    timings = dict(CURRENT.get("timings") or {})
+    sources = {k: "failed" if k in failed else "ok" if k in timings else "skipped" for k in OWN_SOURCES}
+    out = {**on_file, "schema": 2, "round": rid, "complete": False, "candidates": [], "reports": [], "alerts": [],
+           "sources": {**sources, "round": "timeout"}, "timings": timings}
+    fleet.write_atomic(VERDICTS, json.dumps(out, ensure_ascii=False, default=str))
+    log_round(out, seconds, 0)
+
+
+def own_sources(facts):
+    """Each of this round's own reads as ok, failed or skipped (not read this round)."""
+    failed = facts.get("failed") or set()
+    read = set(facts.get("timings") or ()) | set(failed)
+    return {s: "failed" if s in failed else "ok" if s in read else "skipped" for s in OWN_SOURCES}
+
+
+# ---------------------------------------------------------------- v2 candidates (nothing reads them yet)
+
+def candidates_phase(res, dry=False, collect=None):
+    """Fill the round's candidates, reports and alerts from today's cleaners' own judging and mark the round complete.
+    Runs after the round's lock is let go, so an ack never waits on it; the file is written only while it still holds
+    this round. At pressure danger the scans are skipped and the round stays incomplete. Returns what it wrote."""
+    v = res["verdicts"]
+    t0, started = time.monotonic(), time.time()
+    got = {"sources": dict(v["sources"]), "timings": {}, "candidates": [], "reports": [], "alerts": [], "notes": []}
+    complete = False
+    partial = {}
+    try:
+        if res["level"] == "danger":
+            got["sources"]["candidates"] = "skipped"
+            got["notes"].append("pressure danger: cleanup scans skipped this round")
+        else:
+            sys.path.insert(0, str(REAP_SCRIPTS))
+            import candidates, reap
+            reap.RUN_TIMEOUT = candidates.RUN_TIMEOUT_S
+            got = (collect or candidates.collect)(v["sources"], progress=partial)
+            for a in got["alerts"]:
+                a["to"] = res.get("owners", {}).get(a.get("path"))
+            complete = True
+    except Budget:
+        got["sources"].update(partial.get("sources") or {})
+        got["timings"] = dict(partial.get("timings") or {})
+        got["sources"]["candidates"] = "timeout"
+        got["notes"].append(f"cleanup scans gave up at {CANDIDATE_BUDGET_S}s")
+    finally:
+        signal.alarm(0)  # the write below must not be cut off halfway
+        seconds = round(time.monotonic() - t0, 1)
+        # candidates_t: the scans started here, so no act before it can be on what they saw
+        out = {**v, "complete": complete, "candidates_t": started, "sources": got["sources"],
+               "timings": {**v.get("timings", {}), **got["timings"], "candidates": seconds},
+               "candidates": got["candidates"], "reports": got["reports"], "alerts": got["alerts"]}
+        res["notes"] += got["notes"]
+        if not dry:
+            with round_lock(wait=True):
+                on_file = fleet.read_json(VERDICTS, {}) or {}
+                if on_file.get("round") == v["round"]:
+                    fleet.write_atomic(VERDICTS, json.dumps({**on_file, **out}, ensure_ascii=False, default=str))
+                log_round(out, res["seconds"], seconds)
+        res["verdicts"] = out
+    return out
+
+
+def log_round(v, seconds, candidate_s, now=None):
+    """One line per round in <state>/patrol-rounds.jsonl, the last ROUNDS_KEEP kept: what `orch patrol timing` reads."""
+    row = {"round": v["round"], "t": now or time.time(), "seconds": seconds, "candidates_s": candidate_s,
+           "complete": v["complete"], "timings": v["timings"],
+           "failed": sorted(k for k, x in v["sources"].items() if x not in ("ok", "skipped"))}
+    with contextlib.suppress(OSError):
+        rows = fleet.read_lines(ROUNDS)[-(ROUNDS_KEEP - 1):] + [row]
+        fleet.write_atomic(ROUNDS, "".join(json.dumps(r) + "\n" for r in rows))
+
+
+def pct(xs, q):
+    xs = sorted(xs)
+    return xs[min(len(xs) - 1, int(q * len(xs)))] if xs else None
+
+
+def timing_lines(rows=None):
+    """p50 and p95 of whole rounds and of each source, slowest first: whether a shorter interval fits the budget."""
+    rows = [r for r in (fleet.read_lines(ROUNDS) if rows is None else rows) if isinstance(r, dict)]
+    if not rows:
+        return ["patrol timing: no round recorded yet"]
+    total = [(r.get("seconds") or 0) + (r.get("candidates_s") or 0) for r in rows]
+    out = [f"patrol timing over {len(rows)} rounds: total p50 {pct(total, .5):.0f}s p95 {pct(total, .95):.0f}s "
+           f"(budget {BUDGET_S}s + {CANDIDATE_BUDGET_S}s) · complete {sum(1 for r in rows if r.get('complete'))}/{len(rows)}"]
+    series = {k: [(r.get("timings") or {}).get(k, 0) for r in rows] for r0 in rows for k in r0.get("timings") or {}}
+    for k, xs in sorted(series.items(), key=lambda kv: -pct(kv[1], .95)):
+        out.append(f"  {k}: p50 {pct(xs, .5):.1f}s p95 {pct(xs, .95):.1f}s")
+    return out
 
 
 def report(res):
@@ -566,6 +707,9 @@ def main(argv):
             done = ack(ids)
         print(f"acked {len(done)}: {' '.join(done)}" if done else "nothing open by those ids")
         return
+    if argv[:1] == ["timing"]:
+        print("\n".join(timing_lines()))
+        return
     if argv[:1] == ["list"]:
         rows = open_findings()
         if "--all" not in argv:
@@ -575,21 +719,29 @@ def main(argv):
         return
     if set(argv) - {"--once", "--if-due", "--dry-run", "--json"}:
         sys.exit(__doc__)
+    prog.RUN_TIMEOUT = 60  # one hung orca or gh fails its source, within the round's own budget
     with round_lock(wait=False) as got:
         if not got:
             print("patrol: another round is running")
             return
-
-        def give_up(*_):
-            raise Budget()
         signal.signal(signal.SIGALRM, give_up)
         signal.alarm(BUDGET_S)
+        rid, t0 = round_id(), time.monotonic()
         try:
-            res = round_once("--dry-run" in argv, "--if-due" in argv)
+            res = round_once("--dry-run" in argv, "--if-due" in argv, rid=rid)
         except Budget:
+            signal.alarm(0)
+            if "--dry-run" not in argv:
+                mark_cut(rid, round(time.monotonic() - t0, 1))
             print(f"patrol: gave up at {BUDGET_S}s; log rows already written stay, and the next round brings "
                   "Needs you in step with them")
             return
+        finally:
+            signal.alarm(0)
+    if res is not None:
+        signal.alarm(CANDIDATE_BUDGET_S)
+        try:
+            candidates_phase(res, "--dry-run" in argv)
         finally:
             signal.alarm(0)
     print(json.dumps(res, ensure_ascii=False, indent=1) if "--json" in argv else "\n".join(report(res)))

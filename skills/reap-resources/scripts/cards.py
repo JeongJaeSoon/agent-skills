@@ -321,7 +321,7 @@ def scan(cfg, repo_list=(), notes=None):
         verdict, why, close = judge(f, m["st"]["idle_s"])
         items.append({"path": f["path"], "name": f["name"], "repo": f["repo"], "branch": f["branch"], "pr": f["pr"],
                       "state": f["state"], "verdict": verdict, "why": why, "close": close, "head": f["head"],
-                      "regenerated": f.get("regenerated") or []})
+                      "ino": reap.dir_ino(f["path"]), "regenerated": f.get("regenerated") or []})
     return items, notes
 
 
@@ -352,28 +352,36 @@ def reread(path, cfg):
     return (*judge(f, m["st"]["idle_s"]), f)
 
 
-def act(item, cfg, wait=5.0):
+def act(item, cfg, wait=5.0, done=None):
     """Judge the card again and do what its plan row says, holding the card's lock. Returns what happened; raises
-    RuntimeError on failure."""
+    RuntimeError on failure. done, when given, gets the handles it really closed ("closed")."""
+    done = {} if done is None else done
+    done["closed"] = []
     with cardguard.card_lock(item["path"]) as mine:
         if not mine:
             return "건너뜀: 다른 정리가 이 카드를 처리 중"
-        return act_locked(item, cfg, wait)
+        return act_locked(item, cfg, wait, done)
 
 
-def act_locked(item, cfg, wait):
+def act_locked(item, cfg, wait, done=None):
+    done = {"closed": []} if done is None else done
     got = reread(item["path"], cfg)
     if got is None:
         return "건너뜀: orca worktree list 에서 다시 찾지 못함"
     verdict, why, close, f = got
     if verdict != item["verdict"] or f["head"] != item["head"]:
         return f"건너뜀: 다시 보니 {verdict}({why})"
+    ino = reap.dir_ino(item["path"])
+    if item.get("ino") is not None and ino != item["ino"]:
+        return "건너뜀: 판정 뒤 카드 폴더가 다시 만들어짐"
+    done["identity"] = {"ino": ino} if ino is not None else {}  # the folder really acted on, for `sweep diff`
     close = [h for h in close if h in item["close"]]
-    ok, why = cardguard.guard(item["path"], item["head"], item["close"])
+    ok, why = cardguard.guard(item["path"], item["head"], item["close"], ino=ino)
     if not ok:
         return f"건너뜀: {why}"
     for h in close:
         reap.run(["orca", "terminal", "close", "--terminal", h, "--json"])
+        done.setdefault("closed", []).append(h)
     if verdict == CLOSE:
         return f"터미널 {len(close)}개 닫음, worktree 는 남김"
     # A closed terminal's shell or session takes a moment to exit; until it does it reads as a process in the card.
@@ -384,7 +392,7 @@ def act_locked(item, cfg, wait):
         return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: {got[1] if got else '다시 찾지 못함'}"
     if got[3]["head"] != item["head"]:
         return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: 판정 뒤 HEAD 가 바뀜"
-    ok, why = cardguard.guard(item["path"], item["head"], item["close"], final=True)
+    ok, why = cardguard.guard(item["path"], item["head"], item["close"], final=True, ino=ino)
     if not ok:
         return f"터미널 {len(close)}개 닫음, 삭제는 건너뜀: {why}"
     out = reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{item['path']}", "name": item["path"],
@@ -397,15 +405,33 @@ def main(argv):
     cfg = reap.config()
     if cmd == "apply":
         plan = json.loads(pathlib.Path(reap.opt("--plan") or sys.exit("apply needs --plan PLAN.json")).read_text())
+        import guard
+        try:
+            guard.ownership()
+        except guard.Unreadable as e:
+            sys.exit(f"아무것도 하지 않았다: {e}")
         failed = 0
         for item in plan["items"]:
             if item["verdict"] not in ACTING:
                 continue
-            try:
-                print(f"- {item['name']}: {act(item, cfg)}")
-            except (RuntimeError, OSError) as e:
-                failed += 1
-                print(f"- 실패 {item['name']}: {e}")
+            with guard.hold(guard.targets({"kind": "card", "path": item["path"]})) as got:
+                if why := guard.keep({"kind": "card", "verdict": item["verdict"]}, None) if got else guard.LOCK_BUSY:
+                    print(f"- 건너뜀 {item['name']}: {why}")
+                    continue
+                done = {}
+                logged = {"key": f"card:{item['path']}", "kind": "card", "head": item.get("head"), "ino": item.get("ino")}
+                rule = guard.rule({"kind": "card", "verdict": item["verdict"]})
+                try:
+                    got = act(item, cfg, done=done)
+                except BaseException as e:  # logged whatever it was: terminals closed before it are still closed
+                    reap.log_action({**logged, **(done.get("identity") or {})}, e, False, rule, done.get("closed"))
+                    if not isinstance(e, (RuntimeError, OSError)):
+                        raise
+                    failed += 1
+                    print(f"- 실패 {item['name']}: {e}")
+                else:
+                    reap.log_action({**logged, **(done.get("identity") or {})}, got, True, rule, done.get("closed"))
+                    print(f"- {item['name']}: {got}")
         sys.exit(1 if failed else 0)
     if cmd != "scan":
         sys.exit(__doc__)

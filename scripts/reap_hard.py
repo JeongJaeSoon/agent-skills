@@ -30,12 +30,13 @@ After a pass that is not a dry run, `orch patrol --if-due` starts detached (ever
 it judged working within the hour is kept, and nothing it judged becomes a target.
 Settings: "reap-hard" in ~/.claude/agent-skills.json (DEFAULTS).
 """
-import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, subprocess, sys, time, uuid
+import contextlib, fcntl, functools, json, os, pathlib, plistlib, re, shutil, signal, socket, stat, subprocess, sys, time, uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "skills" / "reap-resources" / "scripts"))
 import cardguard  # noqa: E402
+import guard  # noqa: E402
 import preview_watch as pw  # noqa: E402
 import reap  # noqa: E402
 
@@ -66,44 +67,10 @@ def config():
     return {**DEFAULTS, **mine}
 
 
-def always_on():
-    try:
-        return set(((json.loads(CONFIG.read_text()).get("reap") or {}).get("pressure") or {}).get("always_on") or ())
-    except (OSError, ValueError):
-        return set()
-
-
-class NoProtect(Exception):
-    pass
-
-
-def read_protect(path):
-    """{"port": {int}, "pid": {int}, "path": [str], "project": {str}}. A missing file or a line it cannot read
-    stops the pass: a guess at what to keep is how a lead's card goes."""
-    try:
-        text = pathlib.Path(path).expanduser().read_text()
-    except OSError as e:
-        raise NoProtect(f"보호 목록 {path} 을 읽지 못함({e.strerror}): 아무것도 하지 않는다")
-    out = {"port": set(), "pid": set(), "path": [], "project": set()}
-    for n, line in enumerate(text.splitlines(), 1):
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        kind, _, value = line.partition(" ")
-        value = value.strip()
-        if kind in ("port", "pid") and value.isdigit():
-            out[kind].add(int(value))
-        elif kind == "path" and value:
-            out["path"].append(reap.real(os.path.expanduser(value)))
-        elif kind == "project" and value:
-            out["project"].add(value)
-        else:
-            raise NoProtect(f"보호 목록 {path}:{n} 을 읽지 못함: {line!r}")
-    return out
-
-
-def protected_path(p, protect):
-    return any(reap.under(p, q) or reap.under(q, p) for q in protect["path"])
+always_on = guard.always_on
+NoProtect = guard.NoProtect
+read_protect = guard.read_protect
+protected_path = guard.protected_path
 
 
 # ---------------------------------------------------------------- judgements (pure)
@@ -361,7 +328,8 @@ def scan_cards(cfg, protect, now):
                 ok, why = False, "순찰 판정: 작업 중(orch patrol)"
             item = {"kind": "card", "id": reap.real(w["path"]), "target": ok, "why": why}
             if ok:
-                item.update(head=facts["head"], regenerated=facts.get("regenerated") or [], handles=facts["handles"])
+                item.update(head=facts["head"], regenerated=facts.get("regenerated") or [], handles=facts["handles"],
+                            ino=reap.dir_ino(item["id"]))
             items.append(item)
     return items, notes, m
 
@@ -374,12 +342,16 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
     stacks = reap.compose_stacks()
     if stacks is None:
         notes.append("docker 를 읽지 못함: 스택은 건너뜀")
-    keep = always_on()
+    try:
+        keep, unread = always_on(), None
+    except ValueError as e:  # the always-on list cannot be read: every stack stays this pass
+        keep, unread = set(), str(e)
+        notes.append(f"{e}: 스택은 건너뜀")
     downing = set()
     for name, st in sorted((stacks or {}).items()):
-        ok, why = judge_stack(name, st, lambda d: not os.path.isdir(d) or any(reap.under(reap.real(d), c) for c in closed),
-                              protect, keep)
-        items.append({"kind": "stack", "id": name, "target": ok, "why": why})
+        ok, why = (False, unread) if unread else judge_stack(name, st, stack_gone(closed), protect, keep)
+        # start: as the janitor's compose-stack item names the same stack, for `sweep diff`
+        items.append({"kind": "stack", "id": name, "target": ok, "why": why, "start": str(st.get("last"))})
         if ok:
             downing |= st["ports"]
 
@@ -419,9 +391,23 @@ def scan_rest(cfg, protect, dark_before, closed, m, now):
     return items, notes, dark
 
 
+def dir_gone(d):
+    """True only for a directory that is not there; one that cannot be looked at (permissions, I/O) is not gone."""
+    try:
+        return not stat.S_ISDIR(os.stat(d).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def stack_gone(closed):
+    return lambda d: dir_gone(d) or any(reap.under(reap.real(d), c) for c in closed)
+
+
 # ---------------------------------------------------------------- acting
 
-def act_card(item, cfg, protect):
+def act_card(item, cfg, protect, done):
     """Close one card under its lock. Everything is judged again here: a PR reopened, a session resumed or a person's
     command since the scan keeps the card; then guard() and only the terminals seen at the scan are closed."""
     p = item["id"]
@@ -434,27 +420,46 @@ def act_card(item, cfg, protect):
         return f"건너뜀: 다시 보니 {why}"
     if facts.get("head") != item["head"]:
         return "건너뜀: 판정 뒤 HEAD 가 바뀜"
+    ino = reap.dir_ino(p)
+    if item.get("ino") is not None and ino != item["ino"]:
+        return "건너뜀: 판정 뒤 카드 폴더가 다시 만들어짐"
+    done["identity"] = {"head": item["head"], "ino": ino} if ino is not None else {"head": item["head"]}
     handles = item.get("handles")
     if handles is None:  # a plan written before handles were recorded
         return "건너뜀: 판정 때 본 터미널 목록이 계획에 없음"
-    ok, why = cardguard.guard(p, item["head"], handles)
+    ok, why = cardguard.guard(p, item["head"], handles, ino=ino)
     if not ok:
         return f"건너뜀: {why}"
+    done["closed"] = []
     for h in handles:
         reap.run(["orca", "terminal", "close", "--terminal", h, "--json"])
-    ok, why = cardguard.guard(p, item["head"], handles, final=True)
+        done["closed"].append(h)
+    ok, why = cardguard.guard(p, item["head"], handles, final=True, ino=ino)
     if not ok:
         return f"터미널 {len(handles)}개 닫음, 삭제는 건너뜀: {why}"
     return f"터미널 {len(handles)}개 닫음, " + reap.act({"kind": "orca-worktree", "key": f"orca-worktree:{p}", "name": p,
                                                         "regenerated": facts.get("regenerated")}, [])
 
 
-def act(item, cfg, protect):
+def act(item, cfg, protect, done=None):
+    """Act on one target the pass judged, inside its lock, after the shared guards (run_pass): judged again here
+    first, and left when anything changed. done, when given, gets the terminal handles really closed ("closed") and
+    the identity of the stack really brought down."""
+    done = {} if done is None else done
     k = item["kind"]
     if k == "card":
         with cardguard.card_lock(item["id"]) as mine:
-            return act_card(item, cfg, protect) if mine else "건너뜀: 다른 정리가 이 카드를 처리 중"
+            return act_card(item, cfg, protect, done) if mine else "건너뜀: 다른 정리가 이 카드를 처리 중"
     if k == "stack":
+        # Judged again with the same rule: a working folder made again, or the stack now protected, keeps it.
+        st = (reap.compose_stacks() or {}).get(item["id"])
+        if st is None:
+            return "건너뜀: 스택을 다시 읽지 못함(이미 내려갔거나 docker 를 읽지 못함)"
+        # The cards closed this pass are gone by now: a working directory that exists again keeps the stack.
+        ok, why = judge_stack(item["id"], st, stack_gone(()), protect, always_on())
+        if not ok:
+            return f"건너뜀: 다시 보니 {why}"
+        done["identity"] = {"start": str(st.get("last"))}  # the stack really brought down, read again just now
         reap.run(["docker", "compose", "-p", item["id"], "down"])  # no -v: volumes are data
         return "docker compose down(볼륨·이미지 유지)"
     if k == "listener":
@@ -508,7 +513,8 @@ def run_pass(dry, cfg=None, now=None):
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))
     try:
         protect = read_protect(cfg["protect_file"])
-    except NoProtect as e:
+        guard.ownership()
+    except (NoProtect, guard.Unreadable) as e:
         summary = {"t": now, "at": stamp, "run": run_id, "dry_run": dry, "error": str(e)}
         if not dry:
             write_last(summary)
@@ -521,26 +527,45 @@ def run_pass(dry, cfg=None, now=None):
         for i in batch:
             if not i["target"]:
                 continue
-            row = {"ts": stamp, "run": run_id, "dry_run": dry, "kind": i["kind"], "id": i["id"], "why": i["why"]}
+            row = {"ts": stamp, "run": run_id, "dry_run": dry, "kind": i["kind"], "id": i["id"], "why": i["why"],
+                   "identity": reap.act_identity(i)}
             if dry:
                 row["result"] = "dry-run"
             else:
-                try:
-                    row["result"] = act(i, cfg, protect)
-                except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
-                    row["error"] = str(e)[:300]
+                with guard.hold(guard.targets(i)) as got:
+                    why = guard.keep(i, protect, "hard") if got else guard.LOCK_BUSY
+                    if why:
+                        row["result"] = f"건너뜀: {why}"
+                    else:
+                        done = {}
+                        try:
+                            row["result"] = act(i, cfg, protect, done)
+                        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
+                            row["error"] = str(e)[:300]
+                        except BaseException as e:  # recorded with what it closed first, then let go up
+                            row["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+                            rows.append(row)
+                            raise
+                        finally:
+                            row["t"] = time.time()  # when the act ended; ts is the pass's start
+                            if done.get("closed"):
+                                row["handles"] = done["closed"]
+                            if done.get("identity"):
+                                row["identity"] = done["identity"]
             i["result"] = row.get("result") or "실패: " + row.get("error", "")
             rows.append(row)
 
-    items, notes, m = scan_cards(cfg, protect, now)
-    do(items)
-    # Only a card that is really gone frees its stack and dev servers; a skipped or failed close keeps them.
-    closed = [i["id"] for i in items if i["target"] and (dry or (not i["result"].startswith(("건너뜀", "실패"))
-                                                                 and not os.path.isdir(i["id"])))]
-    rest, more, dark = scan_rest(cfg, protect, set(last.get("dark") or ()), closed, m, now)
-    do(rest)
-    items, notes = items + rest, notes + more
-    log(rows)
+    try:  # whatever ends the pass early, the rows of what it did are logged
+        items, notes, m = scan_cards(cfg, protect, now)
+        do(items)
+        # Only a card that is really gone frees its stack and dev servers; a skipped or failed close keeps them.
+        closed = [i["id"] for i in items if i["target"] and (dry or (not i["result"].startswith(("건너뜀", "실패"))
+                                                                     and not os.path.isdir(i["id"])))]
+        rest, more, dark = scan_rest(cfg, protect, set(last.get("dark") or ()), closed, m, now)
+        do(rest)
+        items, notes = items + rest, notes + more
+    finally:
+        log(rows)
     summary = {"t": now, "at": stamp, "run": run_id, "dry_run": dry,
                "acted": sum(1 for r in rows if "result" in r and not r["result"].startswith("건너뜀")),
                "skipped": sum(1 for r in rows if r.get("result", "").startswith("건너뜀")), "failed": sum(1 for r in rows if "error" in r),
@@ -641,6 +666,7 @@ def main(argv):
         if "--dry-run" not in argv and "--no-patrol" not in argv:
             # Patrol keeps this beat: it runs itself every other pass (--if-due), apart, so a slow round never holds this one.
             reap.spawn_patrol("reap-hard")
+            reap.spawn_sweep_shadow("reap-hard")  # shadow stage: records what the v2 cleaner would do, does nothing
         if "--json" in argv:
             print(json.dumps(res, ensure_ascii=False, indent=1))
         else:
