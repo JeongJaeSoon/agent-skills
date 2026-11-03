@@ -524,14 +524,22 @@ def check(stores=None, writes=None, dual=None, modules=None, db=None):
 # Modules allowed to import sqlite3, and why. agent-skills.db is store.py's alone.
 DB_CONNECT = {"store": "agent-skills.db", "orca_settings": "Orca's own database, read-only (mode=ro)"}
 # UPDATE needs its SET so that prose ("Update the checkout") is not read as SQL; keywords in any case.
-SQL_WRITE = re.compile(r"(?<!DO )\b(?:(?:INSERT(?:\s+OR\s+\w+)?|REPLACE)\s+INTO\s+\"?(\w+)|DELETE\s+FROM\s+\"?(\w+)"
-                       r"|UPDATE(?:\s+OR\s+\w+)?\s+\"?(\w+)\"?\s+SET\b)", re.I)
+# A table may carry a schema (main.decision) and any of SQLite's quotes ("x", [x], `x`).
+_TABLE = r"\s+(?:[\"\[`]?\w+[\"\]`]?\s*\.\s*)?[\"\[`]?(\w+)[\"\]`]?"
+SQL_WRITE = re.compile(rf"(?<!DO )\b(?:(?:INSERT(?:\s+OR\s+\w+)?|REPLACE)\s+INTO{_TABLE}|DELETE\s+FROM{_TABLE}"
+                       rf"|UPDATE(?:\s+OR\s+\w+)?{_TABLE}\s+SET\b)", re.I)
 
 
 def _strings(node):
     for n in ast.walk(node):
         if isinstance(n, ast.Constant) and isinstance(n.value, str):
             yield n.value
+
+
+def _importer(func):
+    """Whether a call's target is __import__ or some import_module (importlib's, under any name)."""
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+    return name in ("__import__", "import_module")
 
 
 def db_scan(paths=None):
@@ -544,7 +552,9 @@ def db_scan(paths=None):
         for n in ast.walk(tree):
             if isinstance(n, ast.Import) and any(a.name.split(".")[0] == "sqlite3" for a in n.names) or \
                     isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "sqlite3" or \
-                    isinstance(n, ast.Call) and any(isinstance(a, ast.Constant) and a.value == "sqlite3" for a in n.args):
+                    isinstance(n, ast.Call) and _importer(n.func) and \
+                    any(isinstance(a, ast.Constant) and str(a.value).split(".")[0] == "sqlite3"
+                        for a in [*n.args, *(k.value for k in n.keywords)]):
                 connects.append((name, n.lineno))
         if name != "store":
             continue

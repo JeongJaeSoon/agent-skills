@@ -278,6 +278,15 @@ with state("guard") as sd:
     assert {p: p.read_bytes() for p in sd.iterdir() if p.is_file() and not p.name.startswith(store.DB_NAME)} == snap  # board, tidy and inbox lines untouched
     # A decision write still works: 4a's own table is not the board.
     assert fleet.decision_add("still fine")["id"] == "d1"
+# A DB that is there but cannot be read could hold 4b-board: the guard stops rather than guess.
+with state("guard-unreadable") as sd:
+    store.path().write_bytes(b"not a database, but the size of a header..." * 4)
+    try:
+        board.change(lambda b: b["todo"].append({"title": "x"}))
+        raise AssertionError("wrote past an unreadable DB")
+    except store.LegacyStopped as e:
+        assert "cannot tell" in str(e), e
+    assert not (sd / "board.json").exists()
 
 # ---- WAL, the write lock and transaction bounds
 with state("tx") as sd:
@@ -359,14 +368,17 @@ rel = {201: (1, "Wed Nov 4 09:00:00 2026", "python3 prog.py wait"),
        202: (1, "Wed Nov 4 09:00:00 2026", "python3 -m prog wait"),
        203: (1, "Wed Nov 4 09:00:00 2026", "python3 hooks/decision.py"),
        204: (1, "Wed Nov 4 09:00:00 2026", "python3 dash.py serve"),
-       205: (1, "Wed Nov 4 11:00:00 2026", "python3 prog.py wait")}
-cwds = {201: repo / store.SCRIPTS, 202: repo / store.SCRIPTS, 203: repo, 204: None, 205: repo / store.SCRIPTS}
+       205: (1, "Wed Nov 4 11:00:00 2026", "python3 prog.py wait"),
+       206: (1, "Wed Nov 4 11:00:00 2026", "python3 -m dash serve"),       # from PYTHONPATH: where is unknown
+       207: (1, "Wed Nov 4 09:00:00 2026", "python3 notes/prog.py")}       # someone else's prog.py
+cwds = {201: repo / store.SCRIPTS, 202: repo / store.SCRIPTS, 203: repo, 204: None, 205: repo / store.SCRIPTS,
+        206: tmp, 207: tmp}
 real_cwd, store._cwd = store._cwd, cwds.get
 try:
     why = store.check_processes(rel, since)
 finally:
     store._cwd = real_cwd
-assert [w.split()[1] for w in why] == ["201", "202", "203", "204"] and "cannot be read" in why[3], why
+assert [w.split()[1] for w in why] == ["201", "202", "203", "204", "206"] and "cannot be read" in why[3], why
 # A ps that fails with no output lists nothing, not even this process: that refuses instead of passing every check.
 real_ps, fleet.ps_table = fleet.ps_table, lambda: {}
 try:
@@ -374,14 +386,25 @@ try:
 finally:
     fleet.ps_table = real_ps
 # crontab is read on every platform, and a line that runs a script directly counts.
-real_sh = store._sh
-store._sh = lambda cmd: subprocess.CompletedProcess(cmd, 0 if cmd[0] == "crontab" else 1, "* * * * * python3 /x/agent-skills/"
-                                                    "skills/orchestrate/scripts/dash.py tick\n# orch-dash old\n", "")
+# A failed crontab read refuses; "no crontab" is no line at all.
+real_sh, real_which = store._sh, store.shutil.which
+store.shutil.which = lambda name: "/usr/bin/" + name
+
+
+def crontab(code, out, err=""):
+    store._sh = lambda cmd: subprocess.CompletedProcess(cmd, code if cmd[0] == "crontab" else 1, out, err)
+    return [w for w in store.check_launchers() if "crontab" in w]
+
+
 try:
-    assert [w for w in store.check_launchers() if "crontab" in w] == [
-        "crontab line still active: * * * * * python3 /x/agent-skills/skills/orchestrate/scripts/dash.py tick"]
+    assert crontab(0, "* * * * * python3 /x/agent-skills/skills/orchestrate/scripts/dash.py tick\n# orch-dash old\n"
+                   "*/5 * * * * cd /x/agent-skills && python3 -m skills.orchestrate.scripts.dash fleet\n") == [
+        "crontab line still active: * * * * * python3 /x/agent-skills/skills/orchestrate/scripts/dash.py tick",
+        "crontab line still active: */5 * * * * cd /x/agent-skills && python3 -m skills.orchestrate.scripts.dash fleet"]
+    assert crontab(1, "", "crontab: no crontab for someone") == []
+    assert crontab(127, "", "timed out")[0].startswith("crontab -l failed (127)")
 finally:
-    store._sh = real_sh
+    store._sh, store.shutil.which = real_sh, real_which
 real_live = fleet.live_sessions
 fleet.live_sessions = lambda p: {"s-old": {"pids": [102, 101], "cwd": "/w/a", "home": "/h"},
                                  "s-new": {"pids": [102], "cwd": "/w/b", "home": "/h2"}}
@@ -439,14 +462,18 @@ src = tmp / "scan"
 src.mkdir()
 (src / "board.py").write_text("import sqlite3 as sql\ndef f():\n    return sql.connect('x')\n")
 (src / "tidy.py").write_text("from sqlite3 import connect\n")
-(src / "card.py").write_text("import importlib\nm = importlib.import_module('sqlite3')\n")
+(src / "card.py").write_text("import importlib\nm = importlib.import_module(name='sqlite3')\nprint('sqlite3')\n")
 (src / "store.py").write_text('def surprise(db):\n    db.execute("update decision set title=?", ("x",))\n'
                               'def upsert(db):\n    db.execute("insert or replace into Counter (name) values (1)")\n'
+                              'def schema(db):\n    db.execute("UPDATE main.decision SET title=1")\n'
+                              'def bracket(db):\n    db.execute("DELETE FROM [migration] WHERE 1")\n'
                               'def prose():\n    """Update the checkout and restart. Delete the file."""\n')
 connects, sql = registry.db_scan(sorted(src.iterdir()))
 assert sorted(connects) == [("board", 1), ("card", 2), ("tidy", 1)], connects
-assert sorted((w, t) for w, t, _ in sql) == [("store:surprise", "decision"), ("store:upsert", "counter")], sql
+assert sorted((w, t) for w, t, _ in sql) == [("store:bracket", "migration"), ("store:schema", "decision"),
+                                            ("store:surprise", "decision"), ("store:upsert", "counter")], sql
 got = registry.db_violations(registry.STORES, (connects, sql))
-assert {key for _, key, _ in got} == {"board:1", "card:2", "tidy:1", "store:surprise", "store:upsert"}, got
+assert {key for _, key, _ in got} == {"board:1", "card:2", "tidy:1", "store:surprise", "store:upsert", "store:schema",
+                                      "store:bracket"}, got
 
 print("test_store: ok")

@@ -228,25 +228,33 @@ def decisions(status=None, db=None):
 
 # ---------------------------------------------------------------- the guard older board and tidy writes pass
 
-def migrated_steps():
-    """Data steps recorded in the DB, read without creating it; empty when there is no DB yet."""
+def migrated_steps(strict=False):
+    """Data steps recorded in the DB, read without creating it; empty when there is no DB yet. A DB that is there but
+    cannot be read is empty too, or with strict the error."""
     p = path()
     if not p.is_file():
         return {}
     try:
-        db = _connect(p, 1000)
+        db = _connect(p, BUSY_MS if strict else 1000)
         try:
             return {r["step"]: r["stage"] for r in db.execute("SELECT step, stage FROM migration")}
         finally:
             db.close()
     except sqlite3.DatabaseError:
+        if strict:
+            raise
         return {}
 
 
 def guard_legacy_write(what):
     """Board and tidy still write files in 4a. Once 4b moved them into the DB, this (4a) code is the old code: stop
-    before any side effect (a file write, an inbox resolve or revive)."""
-    if LEGACY_STOP in migrated_steps():
+    before any side effect (a file write, an inbox resolve or revive). A DB that cannot be read stops it too."""
+    try:
+        steps = migrated_steps(strict=True)
+    except sqlite3.DatabaseError as e:
+        raise LegacyStopped(f"{what}: cannot tell from {DB_NAME} whether {LEGACY_STOP} is in ({e}), so it writes "
+                            "nothing") from e
+    if LEGACY_STOP in steps:
         raise LegacyStopped(f"{what}: the board and tidy moved into {DB_NAME} ({LEGACY_STOP}); this code is older "
                             f"than that, so it writes nothing. Update the checkout and restart.")
 
@@ -314,13 +322,14 @@ def _cwd(pid):
 
 
 def _words(cmd, names):
-    """The words of a command line that name one of `names`: a path, or the module after -m."""
+    """(word, module) for each word of a command line that names one of `names`: a path, or the module after -m."""
     words = cmd.split()
     for i, w in enumerate(words):
-        if i and words[i - 1] == "-m":
+        module = bool(i) and words[i - 1] == "-m"
+        if module:
             w = w.replace(".", "/") + ".py"
         if pathlib.PurePath(w).name in names:
-            yield w
+            yield w, module
 
 
 def _ours(p):
@@ -339,7 +348,7 @@ def check_processes(procs, since):
     for pid, (_, start, cmd) in sorted(procs.items()):
         if pid in mine:
             continue
-        for w in _words(cmd, names):
+        for w, module in _words(cmd, names):
             where = pathlib.Path(w)
             if not where.is_absolute():
                 cwd = _cwd(pid)
@@ -349,6 +358,9 @@ def check_processes(procs, since):
                 where = cwd / where
             where = where.resolve()
             if not _ours(where):
+                if module:  # -m may load it from PYTHONPATH, which ps does not show
+                    out.append(f"pid {pid} runs -m with an entry point's name from where this cannot see: {cmd[:120]}")
+                    break
                 continue
             at = fleet.ps_time(start)
             if REPO not in where.parents:
@@ -395,8 +407,13 @@ def check_launchers():
                            f"launchctl bootout gui/{os.getuid()}/{label}")
             elif p.returncode == 127:
                 out.append(f"launchctl print {label}: {p.stderr.strip()[:120]}")
-    for line in _sh(["crontab", "-l"]).stdout.splitlines():  # cron runs on macOS too
-        if line.strip() and not line.lstrip().startswith("#") and CRON.search(line):
+    if not shutil.which("crontab"):
+        return out
+    p, names = _sh(["crontab", "-l"]), _entry_names()  # cron runs on macOS too
+    if p.returncode and "no crontab" not in p.stderr.lower():
+        return out + [f"crontab -l failed ({p.returncode}): {p.stderr.strip()[:120]}"]
+    for line in p.stdout.splitlines():
+        if line.strip() and not line.lstrip().startswith("#") and (CRON.search(line) or next(_words(line, names), None)):
             out.append(f"crontab line still active: {line.strip()[:120]}")
     return out
 
