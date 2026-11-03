@@ -24,6 +24,9 @@ CONTEXT     Ticket URL. Files and PRs to read. Upstream reports pasted in full w
             `git merge-base --is-ancestor <commit> <base>`, or a search that also finds a
             symbol known to exist. An empty `git grep -E` proves nothing (`\b` is a GNU
             extension that BSD/macOS regex does not honour; use `-w`). A corrected fact reopens the decisions built on it.
+            A value the worker would otherwise look up (the Orca executable as your preamble
+            names it, an image tag) is written here as a literal, with the line "never probe
+            the environment for these".
             A subagent's file:line citation is a claim, not that check. So is a contract value
             you write into acceptance criteria or a VERIFY row (a status or error code, refused
             versus allowed, a field or column name) until the route, schema or design sentence
@@ -48,7 +51,8 @@ ORDER       Starts after <TICKET…> (Orca deps) · lands after <TICKET…> (sta
             Lane: normal, or exclusive when it touches migrations, CI, Dockerfile, compose or the
             program's exclusive_paths (land handles it; say it here so the worker expects it).
 PEERS       Who to settle shared files and landing order with directly, and about what:
-            `orca orchestration send --to dispatch:<id> --subject … --body …`, plus the exact
+            `orca orchestration send --to dispatch:<id> --subject … --body "$(cat <file>)"`, every
+            message body in a file written with the Write tool, plus the exact
             --from and --dispatch-capability values from your Orca preamble (Orca ties the message
             to your Dispatch only through them; never rebuild them). Tell the
             lead only what changes scope, order or the predicate. Read your own mail with
@@ -227,7 +231,8 @@ FORBIDDEN   Do not start other tickets. Do not file follow-ups: report each find
             <repository data-sharing restrictions, applying to every reviewer and tool>
             <unit-specific bans>
 REPORT      worker_done once, after landing and main CI (or at READY under human-gate).
-            Body: what changed, what was verified and how, what remains. Include the PR URL,
+            Body (a file written with the Write tool, passed as `--body "$(cat <file>)"`): what
+            changed, what was verified and how, what remains. Include the PR URL,
             merge commit, review rounds and who reviewed, the PR body's review-scope line (deliver-ticket §3), the VERIFY output you actually saw,
             the main-CI run you read, and the findings with their proposed class. --outcome succeeded only
             when the ticket's acceptance criteria hold. Load end-session §7 before you send it:
@@ -323,7 +328,9 @@ PARENT      The Run of the session writing this brief, as `orca orchestration se
             escalation` when you started as a dispatched worker, as `--type question` when you
             started as a `/goal` card (Orca refuses escalation without a Dispatch). A status wakes
             no wait. Decisions go by GATE. A send to it
-            that fails is the routing gap HUMAN ONLY names; never guess another address.
+            that fails is the routing gap HUMAN ONLY names; never guess another address. A send
+            that warns "not durable", or is not `"ok": true`, was not delivered: send it again to
+            `run:<id>` that turn, or mark it undelivered in the program state.
 START       How you were started, as the writer expects it: a dispatched worker on run:<id> (the
             PARENT Run, `worker-start --worktree new-child` from that Run's session) or a `/goal`
             card under <the writer's session>. `skills-sync card` checks the first against the

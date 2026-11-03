@@ -42,8 +42,8 @@ ON RED      1. Flake check: re-run the failed jobs once (gh run rerun <id> --fai
             6. On green: orch record <slug> main_green --pr N --sha <sha>.
             7. Tell the culprit's card and the affected cards (orca orchestration send --to
                dispatch:<id>), and the lead: orca orchestration send --to run:<run id>
-               --type status --subject "main <red|green> <sha>" --body "<time, sha, flake|defect,
-               hotfix|revert, PR>". Use --type escalation only when a red main needs the lead
+               --type status --subject "main <red|green> <sha>" --body "$(cat <file>)", the file
+               written with the Write tool: <time, sha, flake|defect, hotfix|revert, PR>. Use --type escalation only when a red main needs the lead
                to act because you cannot repair it yourself: Orca keeps escalation for work that is
                blocked, and it wakes the lead. The lead appends that line to
                guardian-log.tsv; you write nothing outside your worktree except refusal-report
