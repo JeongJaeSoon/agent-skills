@@ -336,8 +336,8 @@ REPORT      Digest lines appended to this brief's note at each milestone and whe
             bound to it, or your dispatch id when you started as a dispatched worker.
             Your last report to PARENT goes out before the closing calls, as `worker_done` when
             you started as a dispatched worker, else `--type status`. It names: predicate N/M;
-            the `predicate_verified` record's revision, the final check's command and the output
-            you saw; where that evidence lives once this card is gone (the program note or
+            the `predicate_verified` record and the commit it checked (`--sha`), the final check's
+            command and the output you saw; where that evidence lives once this card is gone (the program note or
             `~/.claude/programs/<slug>/`, never the worktree); admitted tickets and their state;
             the `보류` lines with their owners; the `reflect` PR, or why there is none.
 CLOSE       Once the predicate holds and the program's Close is done: `end-session` §7 when you
