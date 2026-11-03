@@ -547,6 +547,16 @@ def test_restart_holds_reload():
         sync.screen = lambda h: (lambda s: (s, sync.classify(s, "✳ a")))(reads.pop(0) if len(reads) > 1 else reads[0])
         sync.broadcast_locked("plugins")
         check("nor when the waiting session's stale check could not be read", typed == [], typed)
+        (tmp / "restarts.json").write_text(json.dumps({"a": {"sent": sync._now(), "kind": "restart", "command": "/restart"}}))
+        sync.screen = lambda h: (NOTE_BACKGROUND, sync.classify(NOTE_BACKGROUND, "✳ a"))
+        sync.broadcast_locked("plugins")
+        check("nor when its /restart was sent before and the notice still shows", typed == [], typed)
+        (tmp / "restarts.json").write_text("{}")
+        hook_bg = HOOK_BLOCKED[:-1] + ["  ⏵⏵ auto mode on · 1 shell"]
+        reads = [RESTART_NOTE, hook_bg]
+        sync.screen = lambda h: (lambda s: (s, sync.classify(s, "✳ a")))(reads.pop(0) if len(reads) > 1 else reads[0])
+        sync.broadcast_locked("plugins")
+        check("nor when the signal turned into a hook error with a shell by the read before typing", typed == [], typed)
     finally:
         for k, v in old_env.items():
             os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)

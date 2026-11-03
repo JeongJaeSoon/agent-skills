@@ -649,7 +649,8 @@ def broadcast_locked(kind, dry_run=False, only=None):
                 reason = screen(h)[1]
                 print(f"{h}  {reason or 'would send ' + RELOAD[kind]}")
                 continue
-            reason = send_to(h, RELOAD[kind], reloaded)
+            # A screen still showing a stale signal is one the restart may wait on, by whatever path it got here.
+            reason = send_to(h, RELOAD[kind], reloaded, still=lambda s: stale_signal(s) and background_running(s))
         except Stop as e:
             reason = str(e)
         if reason:
