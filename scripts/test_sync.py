@@ -518,7 +518,29 @@ def test_close_setup():
     shutil.rmtree(tmp)
 
 
+def test_main_help():
+    calls = []
+    real = (sync.broadcast, sync.sync, sync.nudge, sync.status, sync.close_setup)
+    sync.broadcast = lambda *a, **k: calls.append(("broadcast", a, k)) or 0
+    sync.sync = lambda **k: calls.append(("sync", k)) or 0
+    sync.nudge = lambda *a: calls.append(("nudge", a)) or 0
+    sync.status = lambda: calls.append(("status",)) or 0
+    sync.close_setup = lambda *a: calls.append(("close-setup", a)) or 0
+    try:
+        helped = [sync.main(a) for a in (["broadcast", "--help"], ["broadcast", "--plugins", "-h"], ["sync", "--help"],
+                                          ["nudge", "-h"], ["status", "--help"], ["close-setup", "--help"],
+                                          ["card", "--help"], ["setup", "-h"])]
+        check("--help or -h on any subcommand prints help and runs nothing", helped == [0] * 8 and calls == [], (helped, calls))
+        check("an unknown broadcast flag broadcasts nothing", sync.main(["broadcast", "--dryrun"]) == 2 and calls == [], calls)
+        sync.main(["broadcast", "--terminal", "term_x", "--dry-run"])
+        check("known broadcast flags still run",
+              calls == [("broadcast", (None,), {"dry_run": True, "only": "term_x"})], calls)
+    finally:
+        sync.broadcast, sync.sync, sync.nudge, sync.status, sync.close_setup = real
+
+
 if __name__ == "__main__":
+    test_main_help()
     test_reload_kind()
     test_classify()
     test_confirm()

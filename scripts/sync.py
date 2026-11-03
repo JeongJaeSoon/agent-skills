@@ -671,9 +671,17 @@ def status():
 
 def main(argv):
     cmd = argv[0] if argv else ""
+    if any(a in ("-h", "--help") for a in argv):  # every subcommand acts on its own; help must never reach one
+        print(__doc__)
+        return 0
     if cmd == "sync":
         return sync(broadcast_after="--no-broadcast" not in argv)
     if cmd == "broadcast":
+        known = {"--plugins", "--skills", "--dry-run", "--terminal"}
+        rest = [a for i, a in enumerate(argv[1:], 1) if not (i > 1 and argv[i - 1] == "--terminal")]
+        if any(a not in known for a in rest):  # a mistyped --dry-run must not broadcast for real
+            print(__doc__)
+            return 2
         STATE.mkdir(parents=True, exist_ok=True)
         kind = "plugins" if "--plugins" in argv else "skills" if "--skills" in argv else None
         only = argv[argv.index("--terminal") + 1] if "--terminal" in argv[:-1] else None
