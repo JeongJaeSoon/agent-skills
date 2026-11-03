@@ -41,7 +41,7 @@ assert check(handles=("t1", "s1", "gone"), final=True)[0], "a handle already clo
 
 # observe(): each reader that fails is None, which check() turns into a keep.
 saved = reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.parked
-reap.patrol_read = lambda now=None: set()
+reap.patrol_read = lambda now=None, activity=False: set()
 reap.run = lambda cmd, **k: H + "\n"
 reap.orca_json = lambda *a: {"terminals": OK["terminals"]}
 prog = types.SimpleNamespace(agent_waits=lambda strict=False: {"t1": None}, read_screen=lambda h: ["❯ "])
@@ -73,9 +73,9 @@ reap.orca_json = lambda *a: {"terminals": OK["terminals"]}
 reap.run = boom
 assert "HEAD 를 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
 reap.run = lambda cmd, **k: H + "\n"
-reap.patrol_read = lambda now=None: {"/w/x"}
+reap.patrol_read = lambda now=None, activity=False: {"/w/x"}
 assert "순찰 판정:" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
-reap.patrol_read = lambda now=None: None
+reap.patrol_read = lambda now=None, activity=False: None
 assert "순찰 판정 파일을 읽지 못함" in cardguard.guard("/w/x", H, ["t1", "s1"])[1]
 reap.patrol_read, reap.run, reap.orca_json, cardguard._orch, cardguard.parked = saved
 
@@ -89,6 +89,13 @@ vf.write_text(json.dumps({"t": time.time(), "cards": {"/w/x": "waiting", "/w/y":
 assert reap.patrol_read() == {reap.real("/w/x")}
 vf.write_text(json.dumps({"t": time.time() - 7200, "cards": {"/w/x": "waiting"}}))
 assert reap.patrol_read() == set()
+vf.write_text(json.dumps({"t": time.time(), "cards": {"/w/x": "idle"},
+                          "activity": {"/w/p": {"state": "parked"}, "/w/u": {"state": "unknown"}, "/w/i": {"state": "idle"}}}))
+assert reap.patrol_read() == set(), "activity is read only by the guard before a close"
+assert reap.patrol_read(activity=True) == {reap.real("/w/p"), reap.real("/w/u")}
+for bad in ({"/w/x": "parked"}, {"/w/x": {}}, ["parked"], False, 0, "", []):
+    vf.write_text(json.dumps({"t": time.time(), "cards": {}, "activity": bad}))
+    assert reap.patrol_read() == set() and reap.patrol_read(activity=True) is None, bad
 vf.write_text(json.dumps(["not", "a", "dict"]))
 assert reap.patrol_read() is None
 vf.unlink()
@@ -247,4 +254,16 @@ assert results == ["acted", "skipped"], results
 # Another card is not held by it; the same card is free again once released.
 with cardguard.card_lock("/w/same") as a, cardguard.card_lock("/w/other") as b:
     assert a and b
+# A cleaner that took the card's lock through guard.hold at the top of its loop goes on into card_lock, which is the
+# same lock file: a second flock on it in this process would fail and skip every card.
+import guard  # noqa: E402
+with guard.hold([("card", reap.real("/w/same"))]) as outer, cardguard.card_lock("/w/same") as inner:
+    assert outer and inner
+    assert guard.lock_file("card", reap.real("/w/same")).name.startswith("card-")
+# The folder a cleaner acts on: same path and HEAD, but made again since, is kept.
+facts = {"patrol": False, "head": "h", "terminals": [], "ino": 5}
+assert cardguard.check(facts, "h", set(), ino=5) == (True, "확인함")
+assert cardguard.check(facts, "h", set(), final=True, ino=4) == (False, "판정 뒤 카드 폴더가 다시 만들어짐")
+assert cardguard.check({**facts, "ino": None}, "h", set(), ino=4)[0] is False
+assert cardguard.check(facts, "h", set())[0] is True  # a caller that does not know the inode is not checked on it
 print("test_cardguard: ok")
