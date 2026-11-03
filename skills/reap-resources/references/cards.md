@@ -8,10 +8,11 @@ worktree create`, an orchestration worker. The first row that matches decides.
 
 | # | When | Verdict |
 |---|---|---|
-| 1 | Protected: pinned; its directory or display name starts with a `reap.cards.protect_prefixes` entry (default `lead-`); the card this scan runs in; an Orca automation's `--workspace`; a worker turn `in_progress`; a child card still open; a Claude session in it started as a lead or the orchestrator, or that declared that `ROLE` | 남김 |
+| 1 | Protected: pinned; its directory or display name starts with a `reap.cards.protect_prefixes` entry (default `lead-`); the card this scan runs in; an Orca automation's `--workspace`; a worker turn `in_progress`; a child card still open; a Claude session in it started as a lead or the orchestrator, or that declared that `ROLE`; `orch patrol` judged it working, waiting on a human or a Run worker in a round under an hour old | 남김 |
 | 2 | git status, the terminal list or a transcript could not be read | 남김 |
 | 3 | An agent turn is running: a Claude session in the card runs a shell (a Bash call, a background shell, a Monitor), or its agent terminal wrote output in the last 5 minutes | 남김 |
 | 4 | The agent's screen waits on a person (a question or permission dialog) | 사람 결정 |
+| 4a | An agent terminal's screen could not be read: a question cannot be ruled out | 남김 |
 | 5 | Any other process has its cwd in the card (a dev server, a command a person started) | 남김 |
 | 6 | A shell terminal wrote output within `reap.idle_minutes` (default 30) | 남김 |
 | 7 | The branch's PR could not be read (`gh`'s own error is in the reason) | 남김 |
@@ -29,7 +30,9 @@ transcript), or its screen says it is done. A Claude process in the card with no
 
 삭제 closes each listed terminal (`orca terminal close --terminal <handle>`, never `--all`), judges the card again
 once they have exited, moves its ignored files to the trash and runs `orca worktree rm --worktree path:<p>
---run-hooks`. `apply` and the janitor's `reap` act only when the verdict and HEAD are still the plan's.
+--run-hooks`. `apply` and the janitor's `reap` act only when the verdict and HEAD are still the plan's, checked before the
+terminals close and again before the removal. A re-read that cannot see the worktree, worker or automation list or
+the process cwds (what makes `scan` judge nothing) keeps the card.
 
 ## Traps the rule covers
 
